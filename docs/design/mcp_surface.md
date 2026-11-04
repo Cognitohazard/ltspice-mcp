@@ -1142,7 +1142,8 @@ ops                 list[Op] — Appendix A.3
 compare             {reference, anchors?, rtol, mode?} — post-commit netlist
                     compare ("equivalence" | "structural_diff"), inside
                     the transaction; the exported netlist is returned
-                    only when the verdict is not a match
+                    only when the verdict is not a match. A dry run
+                    compares the sheet the batch would write
 dry_run             resolve, validate and return geometry; no write
 return_views        subset ["touched", "pin_legend", "preexisting"],
                     default ["touched"]
@@ -1154,7 +1155,10 @@ view_limit          page size for the paginated views (default 100)
 ```
 
 `compare` takes the same object as `verify_circuit`'s `compare`, with the same
-field names.
+field names. On a dry run, an op-less read included, it compares the sheet the
+batch would write, from the same staged copy, and nothing is saved. When an op
+failed the batch would write nothing, so `verification.compare_error` says the
+sheet was not compared.
 
 **The exported netlist is returned only when the comparison did not match.**
 The compare stage exports the committed sheet to a netlist. It exports a copy,

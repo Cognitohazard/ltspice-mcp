@@ -231,10 +231,9 @@ class EditSchematicInput(ToolInput):
     compare: VerifyCompareSpec | None = Field(
         default=None,
         description=(
-            "Verify the committed sheet against a reference by exporting a "
-            "copy and comparing it the way verify_circuit does "
-            "(same modes, anchors and tolerance). It runs after the commit, so "
-            "a mismatch is reported but not undone."
+            "Check the sheet against a reference as verify_circuit does (same "
+            "modes, anchors and tolerance), on an exported copy. After a commit a "
+            "mismatch is reported, not undone; a dry run checks the sheet it would write."
         ),
     )
     dry_run: bool = Field(
@@ -353,7 +352,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         "netlist": {
             "type": ["string", "null"],
             "description": (
-                "The committed sheet's exported netlist text. Present only when a "
+                "The edited sheet's exported netlist text. Present only when a "
                 "reference comparison did not confirm equivalence: a mismatch, a "
                 "compare error, or no verdict."
             ),
@@ -1099,7 +1098,9 @@ async def _run_reference_stage(
     state: SessionState,
     target: Path,
 ) -> dict:
-    """Export a copy of the committed sheet and compare it to ``ref`` (a path or netlist text).
+    """Export a copy of the sheet ``committed_text`` holds (committed, or on a
+    dry run the one the batch would write) and compare it to ``ref`` (a path or
+    netlist text).
 
     Runs entirely on a COPY under the build's own export directory, so the
     export takes no lock (no reentrancy with the guard-held target lock). Each
@@ -1108,12 +1109,11 @@ async def _run_reference_stage(
     reference path is already resolved — the handler validates it in
     pre-flight, so no path rejection can land here, after the commit. An
     export failure is captured into the returned dict; anything else escapes to
-    the handler, which reports it on a committed envelope. Either way the sheet
-    is already committed and stays so.
+    the handler, which reports it on a committed envelope after a commit and
+    as the call's error on a dry run. Either way the target is as the commit,
+    or the dry run, left it.
     """
-    verification: dict[str, Any] = {
-        "reference": str(ref) if isinstance(ref, Path) else "inline netlist"
-    }
+    verification: dict[str, Any] = {"reference": _reference_label(ref)}
     export_root = state.store.edit_export(build_id)
     # Filled in place: the early returns below carry what is in it by then.
     notes: list[str] = []
@@ -1169,6 +1169,40 @@ async def _run_reference_stage(
         return verification
     finally:
         await asyncio.to_thread(shutil.rmtree, export_root, ignore_errors=True)
+
+
+def _reference_label(ref: str | Path) -> str:
+    """How the verification block names the reference: its path, or that it
+    was netlist text."""
+    return str(ref) if isinstance(ref, Path) else "inline netlist"
+
+
+async def _reference_verdict(
+    sheet_text: str,
+    encoding: str,
+    ref: str | Path,
+    spec: VerifyCompareSpec,
+    build_id: str,
+    state: SessionState,
+    target: Path,
+    *,
+    legend: list[dict],
+    editor: AscEditor,
+    warnings: list[str],
+) -> tuple[dict[str, Any], str | None]:
+    """The reference check of the sheet ``sheet_text`` holds, as a commit and a
+    dry run both report it: the verification block, and the exported netlist
+    when the check did not confirm equivalence (a confirmed match only
+    restates the reference the caller supplied). The export names the
+    legend's unlabelled nets, and its notes join ``warnings``."""
+    verification = await _run_reference_stage(
+        sheet_text, encoding, ref, spec, build_id, state, target
+    )
+    exported = verification.pop("_netlist", None)
+    warnings.extend(verification.pop("_warnings", []))
+    if exported:
+        await _name_nets_as_exported(legend, editor, exported)
+    return verification, exported if comparison_mismatch(verification) else None
 
 
 # ---------------------------------------------------------------------------
@@ -1851,6 +1885,37 @@ async def _evaluate_edit_schematic(
             # --- dry run: validate-only, nothing written, target dir untouched
             if dry_run:
                 state.editors.invalidate(target)
+                # The reference check works on a copy of the sheet the batch
+                # would write, so it runs here as after a commit. With an op
+                # failed the batch would write nothing, so there is nothing to
+                # compare, and the block says so.
+                verification: dict[str, Any] | None = None
+                netlist: str | None = None
+                if reference_path is not None:
+                    assert compare is not None  # reference_path implies it
+                    if failures:
+                        verification = {
+                            "reference": _reference_label(reference_path),
+                            "equivalent": None,
+                            "compare_error": (
+                                "an op failed, so this batch would write nothing to compare"
+                            ),
+                        }
+                    else:
+                        verification, netlist = await _reference_verdict(
+                            committed_text,
+                            encoding,
+                            reference_path,
+                            compare,
+                            build_id,
+                            state,
+                            target,
+                            legend=legend,
+                            editor=editor,
+                            warnings=warnings,
+                        )
+                    if comparison_mismatch(verification):
+                        _failed("reference")
                 neutral_views = _build_edit_views(
                     profile,
                     legend,
@@ -1868,6 +1933,7 @@ async def _evaluate_edit_schematic(
                     EditSchematicEvaluation(
                         data=_envelope(
                             delivered=True,
+                            partial=comparison_mismatch(verification),
                             commit_state="not_committed",
                             target=target,
                             build_id=build_id,
@@ -1878,6 +1944,8 @@ async def _evaluate_edit_schematic(
                             views=presented_views,
                             preexisting=preexisting,
                             rules_run=rules_run,
+                            verification=verification,
+                            netlist=netlist,
                             results=op_results,
                             applied=len(results),
                             warnings=warnings,
@@ -1889,6 +1957,7 @@ async def _evaluate_edit_schematic(
                                     (
                                         _dry_run_hint(bool(args.ops), current is not None),
                                         left_out_hint,
+                                        _verification_hint(verification),
                                     ),
                                 )
                             ),
@@ -1956,25 +2025,23 @@ async def _evaluate_edit_schematic(
             if reference_path is not None:
                 post_commit_stage = "reference"
                 assert compare is not None  # reference_path implies it
-                verification = await _run_reference_stage(
-                    committed_text, encoding, reference_path, compare, build_id, state, target
+                verification, netlist = await _reference_verdict(
+                    committed_text,
+                    encoding,
+                    reference_path,
+                    compare,
+                    build_id,
+                    state,
+                    target,
+                    legend=legend,
+                    editor=editor,
+                    warnings=warnings,
                 )
-                exported = verification.pop("_netlist", None)
-                warnings.extend(verification.pop("_warnings", []))
-                if exported:
-                    await _name_nets_as_exported(legend, editor, exported)
-                mismatch = comparison_mismatch(verification)
                 # The stage is over: a later failure is the response's, never
                 # a second verdict on the reference.
                 post_commit_stage = "response"
-                if mismatch:
+                if comparison_mismatch(verification):
                     _failed("reference")
-                # A confirmed match is the answer, and the exported deck only
-                # restates the reference the caller supplied. A mismatch, a
-                # compare error or no verdict keeps it: it is the sheet's side
-                # of a comparison the caller now has to diagnose.
-                if mismatch:
-                    netlist = exported
 
             # After the reference stage, whose export names the legend's
             # unlabelled nets.
@@ -2365,18 +2432,19 @@ def _post_commit_failure_response(
     )
 
 
+def _verification_hint(verification: dict | None) -> str | None:
+    """What the reference check found, in one sentence; None with no check."""
+    if verification is None:
+        return None
+    if verification.get("export_error"):
+        return f"Reference check could not export: {verification['export_error']}."
+    if verification.get("compare_error"):
+        return f"Reference check could not compare: {verification['compare_error']}."
+    if verification.get("equivalent"):
+        return "Reference netlist verified: equivalent."
+    return "Reference netlist differs — see verification.comparison."
+
+
 def _commit_hint(verification: dict | None, left_out: str | None) -> str:
     """What a committed batch leaves the caller to act on; ``wiring`` has the counts."""
-    parts = ["Committed."]
-    if left_out:
-        parts.append(left_out)
-    if verification is not None:
-        if verification.get("export_error"):
-            parts.append(f"Reference check could not export: {verification['export_error']}.")
-        elif verification.get("compare_error"):
-            parts.append(f"Reference check could not compare: {verification['compare_error']}.")
-        elif verification.get("equivalent"):
-            parts.append("Reference netlist verified: equivalent.")
-        else:
-            parts.append("Reference netlist differs — see verification.comparison.")
-    return " ".join(parts)
+    return " ".join(filter(None, ["Committed.", left_out, _verification_hint(verification)]))
