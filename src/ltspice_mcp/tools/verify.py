@@ -2161,8 +2161,9 @@ def _comparison_unverified(comparison: dict[str, Any] | None) -> bool:
 def _checks_asked_for(args: VerifyCircuitInput, kind: str) -> frozenset[str]:
     """The checks the caller asked for: one that does not run is a shortfall.
 
-    The ``checks`` list when one is given, which are then the only checks that
-    run; otherwise the comparison, when a reference is supplied. A sheet is
+    The ``checks`` list when one is given, which with the export below are
+    then the only checks that run; otherwise the comparison, when a reference
+    is supplied. A sheet is
     compared as its LTspice export, so asking to compare an ``.asc`` asks for
     the export it reads too, either way. The default list means "every check
     that applies", so a check it holds that cannot run here (``export``
@@ -2243,11 +2244,19 @@ def _ltspice_hint(shown: Mapping[str, Any] | None) -> str | None:
 
 def _hint(data: dict[str, Any], asked: Collection[str]) -> str:
     """One concrete thing the caller most needs to know."""
+    # A check the caller asked for that did not run is why the outcome is not
+    # complete, so the headline names it beside a failure or the findings.
+    not_run = set(_asked_for_not_run(data, asked))
+    unmet = [row for row in data["checks_skipped"] if row["check"] in not_run]
+    unmet_text = ", ".join(f"{row['check']} ({row['reason']})" for row in unmet)
     failures = data["failures"]
     if failures:
         first = failures[0]
         remedy = first.get("remedy")
-        return f"{first['stage']} failed: {first['error']}" + (f" — {remedy}" if remedy else "")
+        headline = f"{first['stage']} failed: {first['error']}" + (
+            f" — {remedy}" if remedy else ""
+        )
+        return f"{headline}. Asked for but not run: {unmet_text}." if unmet else headline
     parts: list[str] = []
     # A warning says a result exists only because something was assumed, so it
     # leads: without it "no problems found" reads as a clean bill of health over a
@@ -2255,13 +2264,9 @@ def _hint(data: dict[str, Any], asked: Collection[str]) -> str:
     warnings_channel = data.get("warnings") or []
     if warnings_channel:
         parts.append(warnings_channel[0].rstrip("."))
-    # A check the caller asked for that did not run is why the outcome is not
-    # complete, so the headline names it beside the findings.
-    not_run = set(_asked_for_not_run(data, asked))
-    unmet = [row for row in data["checks_skipped"] if row["check"] in not_run]
     if unmet:
         lead = "no check asked for ran" if data["outcome"] == "failed" else "asked for but not run"
-        parts.append(f"{lead}: " + ", ".join(f"{row['check']} ({row['reason']})" for row in unmet))
+        parts.append(f"{lead}: {unmet_text}")
     errors = [f for f in data["findings"] if f["severity"] == "error"]
     # Findings of warning severity — a different thing from the top-level
     # warnings channel read above, which is why neither is just "warnings".

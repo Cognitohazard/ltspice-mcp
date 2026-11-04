@@ -1553,6 +1553,29 @@ async def test_asc_reference_without_ltspice_fails_the_compare(
     assert data["outcome"] == "partial"
 
 
+async def test_a_failure_does_not_hide_a_check_asked_for_that_did_not_run(
+    state_no_sim, work_dir, asc_symbols
+):
+    """The hint leads with the failure, and still names the check asked for
+    that was skipped, which is the other reason the outcome is partial."""
+    deck = _write(work_dir, "cand.cir", _AMP_BY_HAND)
+    ref = _write(work_dir, "amp.asc", fake_netlister.amp_asc())
+    result = await dispatch(
+        state_no_sim,
+        "verify_circuit",
+        {
+            "path": str(deck),
+            "checks": ["syntax", "export", "compare"],
+            "compare": {"reference": str(ref)},
+        },
+    )
+    data = _assert_schema(result)
+    assert [f["stage"] for f in data["failures"]] == ["compare"]
+    assert data["outcome"] == "partial"
+    assert data["hint"].startswith("compare failed:"), data["hint"]
+    assert "export (not applicable to a netlist file)" in data["hint"], data["hint"]
+
+
 async def test_asc_text_reference_is_refused(exporting_state, work_dir):
     """Schematic text pasted as the reference has no path to export from, and
     lexed as SPICE it is nonsense; the compare fails and names the fix."""

@@ -1554,19 +1554,20 @@ reference copy and a candidate copy that differ.
 Both modes compare netlists. An `.asc` under test is compared as its LTspice
 export, so asking to compare one asks for `export` too, with
 `checks: ["compare"]` as with the default list: the export runs and reports as
-a check that ran, with its `export` block and findings. An `.asc` reference is
-exported the same way, on a staged copy, never beside the caller's file;
-without LTspice the compare fails rather than diffing a schematic's attributes
-against a netlist's cards. `structural_diff` lexes both decks, so a `+`
-continuation belongs to the card it continues, and compares directives as
-parsed rather than as text, so spacing, case, comma separators and assignment
-order in `.model`/`.param` are ignored. It ignores the lines the netlister
-adds to every export, which are `.backanno`, the install-path
-`.lib …/cmp/standard.*`, and a parameterless default model such as
-`.model NMOS NMOS` when the reference declares no model of that name. A
-component's signature is its model or value plus its instance parameters,
-without nodes (`equivalence` is the mode that compares wiring); a parameter
-given twice contributes both copies, so a second copy counts as a change.
+a check that ran, with its `export` block and findings, and is written where
+`export_to` says. An `.asc` reference is exported the same way, on a staged
+copy, never beside the caller's file; without LTspice the compare fails rather
+than diffing a schematic's attributes against a netlist's cards.
+`structural_diff` lexes both decks, so a `+` continuation belongs to the card
+it continues, and compares directives as parsed rather than as text, so
+spacing, case, comma separators and assignment order in `.model`/`.param` are
+ignored. It ignores the lines the netlister adds to every export, which are
+`.backanno`, the install-path `.lib …/cmp/standard.*`, and a parameterless
+default model such as `.model NMOS NMOS` when the reference declares no model
+of that name. A component's signature is its model or value plus its instance
+parameters, without nodes (`equivalence` is the mode that compares wiring); a
+parameter given twice contributes both copies, so a second copy counts as a
+change.
 
 Output: findings in the shared shape, a comparison block per mode, a render
 block `{path, sha256, source_sha256, width, height, downscaled,
