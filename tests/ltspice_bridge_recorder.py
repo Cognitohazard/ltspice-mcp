@@ -892,6 +892,71 @@ def _discard_facts(
     )
 
 
+def _two_windows_facts(
+    recording: _Recording,
+    session: BridgeSession,
+    desktop: HiddenDesktop,
+    command: Sequence[str],
+    exe: Path,
+    ini: Path,
+    pid: int,
+    work: Path,
+) -> None:
+    """What a second LTspice started with a sheet the first has open does: it
+    is a window of its own, with a copy of its own that a Save in the other
+    leaves as it is. The session ends attached to ``pid`` again."""
+    frame = LtspiceFrame(desktop.windows)
+    sheet = work / "twice.asc"
+    shutil.copyfile(INPUTS / f"{EDITED}.asc", sheet)
+    session.open_design(str(sheet))
+
+    def held(window: int) -> str:
+        session.attach(window)
+        return session.design_text(str(sheet))
+
+    def has_it(window: int) -> bool:
+        session.attach(window)
+        return any(Path(spelled) == sheet for spelled in session.open_designs())
+
+    with desktop.start([str(exe), str(sheet), "-ini", str(ini)]) as second:
+        wait_for_window(command, second.pid, sheet)
+        windows = sorted(each.pid for each in session.instances() if each.mode == "gui")
+        recording.fact(
+            "a second LTspice started with a sheet the first has open is a window of "
+            "its own, and both have the sheet open",
+            [windows == sorted([pid, second.pid]), has_it(pid), has_it(second.pid)],
+        )
+        copies = {
+            window: held(window).replace("SYMATTR Value 1k", f"SYMATTR Value {value}")
+            for window, value in ((pid, "4.7k"), (second.pid, "2.2k"))
+        }
+        for window, copy in copies.items():
+            session.attach(window)
+            session.replace_design_text(str(sheet), copy)
+        recording.fact(
+            "each window holds the copy it was handed",
+            [held(window) == copy for window, copy in copies.items()],
+        )
+        session.attach(second.pid)
+        session.bring_to_front(str(sheet))
+        frame.send(second.pid, SAVE)
+        _until(
+            lambda: (
+                file_difference(sheet.read_bytes(), copies[second.pid]) is None
+                or not frame.takes_input(second.pid)
+            ),
+            "saving the sheet from the second window",
+        )
+        recording.fact(
+            "Save in the second writes its copy to the file, and the first still holds its own",
+            [
+                file_difference(sheet.read_bytes(), copies[second.pid]) is None,
+                held(pid) == copies[pid],
+            ],
+        )
+    recording.call(session, "attach to the first window again", "attach", pid=pid)
+
+
 def reader_subjects() -> dict[str, list[str]]:
     """The results files LTspice's reader is asked about, by the build that wrote them.
 
@@ -1122,6 +1187,9 @@ def _record(build: Build, out: Path, desktop: HiddenDesktop) -> None:
                 _tie_and_menu_facts(recording, session, desktop, build, window.pid, work, results)
                 _save_facts(recording, session, desktop, scrub, window.pid, work)
                 _discard_facts(recording, session, desktop, window.pid, work)
+                _two_windows_facts(
+                    recording, session, desktop, command, build.exe, ini, window.pid, work
+                )
                 reader_files, results_read = _reader_replies(session, work, scrub)
 
                 window.kill()

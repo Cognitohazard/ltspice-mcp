@@ -790,6 +790,40 @@
   "observed": true
  },
  {
+  "note": "a second LTspice started with a sheet the first has open is a window of its own, and both have the sheet open",
+  "observed": [
+   true,
+   true,
+   true
+  ]
+ },
+ {
+  "note": "each window holds the copy it was handed",
+  "observed": [
+   true,
+   true
+  ]
+ },
+ {
+  "note": "Save in the second writes its copy to the file, and the first still holds its own",
+  "observed": [
+   true,
+   true
+  ]
+ },
+ {
+  "note": "attach to the first window again",
+  "call": "attach",
+  "arguments": {
+   "pid": 1000
+  },
+  "reply": {
+   "attachedPid": 1000,
+   "ok": true,
+   "port": 50000
+  }
+ },
+ {
   "note": "the window has closed",
   "call": "list_open_designs",
   "arguments": {},
@@ -802,7 +836,7 @@
   "reply": {
    "current": {
     "backendPid": 0,
-    "committed": true,
+    "committed": false,
     "state": "detached"
    },
    "instances": []

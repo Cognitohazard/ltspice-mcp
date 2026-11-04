@@ -215,6 +215,14 @@ class TestRecording:
             "a sheet whose window copy differs from the file is asked about before it closes": True,
             "answered No, it closes and its file is as it was": [True, True],
             "opened again, the window holds the file": True,
+            # What window_pid relies on.
+            "a second LTspice started with a sheet the first has open is a window of its "
+            "own, and both have the sheet open": [True, True, True],
+            "each window holds the copy it was handed": [True, True],
+            "Save in the second writes its copy to the file, and the first still holds its own": [
+                True,
+                True,
+            ],
             "no LTspice was started in its place": True,
         }
 
