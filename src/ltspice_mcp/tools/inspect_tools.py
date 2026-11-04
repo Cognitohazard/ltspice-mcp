@@ -2329,6 +2329,8 @@ class _LogRows(Sequence[dict[str, Any]]):
             for key in ("range_from", "range_to", "at"):
                 value = metadata.get(key)
                 row[key] = value[ordinal] if isinstance(value, list) else value
+            if "unreadable" in metadata:
+                row["unreadable"] = metadata["unreadable"]
             return row
         key = "entry" if metadata["layout"] == "scalar_print" else "row"
         return {**metadata, key: rows[ordinal]}

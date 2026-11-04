@@ -547,7 +547,11 @@ The `measurements` recipe's rows are the MCP rows, rendered by the same code.
 For a run with one value per `.meas`, such as one case of a sweep, the value
 is `row["value"]["measured"][name]`. It is null where the log holds no number
 for that name, and the name is then listed in
-`row["value"]["failed_measurements"]`. Any crossing or `AT` point the log
+`row["value"]["failed_measurements"]`. Where the log printed something other
+than a number for it (a WHEN threshold written as a parameter or an
+expression), `row["value"]["unreadable"][name]` gives the log line and the
+reason, as `measurements()` does on the entry; only that name fails. Any
+crossing or `AT` point the log
 printed is under `row["value"]["at"][name]`. The per-name `stats` block is left
 off the default row; `include={"fields": ["value"]}` returns it. A stepped
 run's row contains only `stats`. Reductions read `stats` either way, so

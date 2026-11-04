@@ -1312,6 +1312,17 @@ def empty_measurements(
     }
 
 
+def _printed_measurement_line(log_text: str, name: str) -> str | None:
+    """The log line that printed measurement ``name``: its ``name: ...`` line,
+    or the ``Measurement: name`` heading of its table in a stepped run."""
+    escaped = re.escape(name)
+    for pattern in (rf"^[ \t]*{escaped}:[^\r\n]*", rf"^Measurement:[ \t]*{escaped}[ \t]*$"):
+        found = re.search(pattern, log_text, re.IGNORECASE | re.MULTILINE)
+        if found:
+            return found.group(0).strip()
+    return None
+
+
 def parse_measurements(
     log_path: Path, reader: LTSpiceLogReader | None = None
 ) -> MeasurementsOutput:
@@ -1366,7 +1377,12 @@ def parse_measurements(
         # tool surfaces the reason.
         return empty_measurements(extract_log_diagnostics(log_path), failed_names)
 
-    def _coerce(values: list) -> list[float | None]:
+    # A value LTspice printed that is not a number (a WHEN's threshold written
+    # as a parameter or an expression) fails its own entry, not the table:
+    # name (as the reader keys it) -> the text it printed.
+    unreadable: dict[str, str] = {}
+
+    def _coerce(values: list, name: str) -> list[float | None]:
         out: list[float | None] = []
         for val in values:
             if val is None or (isinstance(val, str) and val.upper() == "FAILED"):
@@ -1381,7 +1397,7 @@ def parse_measurements(
                 try:
                     out.append(float(val))
                 except (TypeError, ValueError):
-                    logger.warning("Measurement value %r is non-numeric; recording as None", val)
+                    unreadable.setdefault(name, str(val))
                     out.append(None)
         return out
 
@@ -1390,7 +1406,7 @@ def parse_measurements(
     parents: dict[str, list[float | None]] = {}
     metadata: dict[str, dict[str, float | list[float | None] | None]] = {}
     for name in measure_names:
-        coerced = _coerce(reader.dataset.get(name.lower(), []))
+        coerced = _coerce(reader.dataset.get(name.lower(), []), name)
         suffix_match = next(
             ((suffix, key) for suffix, key in _MEAS_METADATA_SUFFIXES if name.endswith(suffix)),
             None,
@@ -1440,6 +1456,19 @@ def parse_measurements(
             override = at_overrides.get(name.lower())
             if override:
                 entry["at"] = override[0] if all(v == override[0] for v in override) else override
+        printed = unreadable.get(name) or next(
+            (
+                unreadable[meta]
+                for suffix, _key in _MEAS_METADATA_SUFFIXES
+                if (meta := name + suffix) in unreadable
+            ),
+            None,
+        )
+        if printed is not None:
+            entry["unreadable"] = {
+                "line": _printed_measurement_line(log_text, name),
+                "reason": f"the log gives {printed!r} where a number belongs",
+            }
         measurements[name] = entry
 
     step_count = len(next(iter(parents.values()))) if parents else 0

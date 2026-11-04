@@ -180,6 +180,14 @@ class LogDiagnostics(TypedDict):
     meas_errors: list[MeasErrorEntry]
 
 
+class UnreadableValue(TypedDict):
+    """Why a measurement's printed value was not read: the log line that
+    printed it (None where no line names it) and the reason."""
+
+    line: str | None
+    reason: str
+
+
 class _MeasurementMetadata(TypedDict, total=False):
     """Optional metadata folded into a .MEAS result.
 
@@ -192,6 +200,7 @@ class _MeasurementMetadata(TypedDict, total=False):
     range_from: float | list[float | None] | None
     range_to: float | list[float | None] | None
     at: float | list[float | None] | None
+    unreadable: UnreadableValue
 
 
 class MeasurementEntry(_MeasurementMetadata):
@@ -202,7 +211,10 @@ class MeasurementEntry(_MeasurementMetadata):
     ``at`` carries the AT/WHEN time/freq for point measurements. Missing when
     not applicable (use ``.get`` rather than ``[]`` to access). When the
     underlying value varies per .step, the field is a list aligned with
-    ``values`` rather than a single scalar.
+    ``values`` rather than a single scalar. ``unreadable`` is set when the log
+    printed something other than a number for the value, such as a WHEN's
+    threshold written as a parameter or an expression: the value is null, and
+    only this entry fails.
     """
 
     values: list[float | None]

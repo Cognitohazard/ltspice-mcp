@@ -261,25 +261,6 @@ def decode_logs(captured: CapturedInputs, directory: Path, *, limits: LogLimits)
                 reader = log_parser.make_log_reader(normalized, scratch_dir=directory)
 
             def measurements() -> Any:
-                for name in reader.get_measure_names():
-                    if name.lower() == "circuit":
-                        continue
-                    for value in reader.dataset.get(name.lower(), []):
-                        if (
-                            value is not None
-                            and not isinstance(value, complex)
-                            and str(value).upper() != "FAILED"
-                            and not (
-                                isinstance(value, str)
-                                and log_parser.printed_measurement(value) is not None
-                            )
-                        ):
-                            try:
-                                float(value)
-                            except (ValueError, TypeError) as exc:
-                                raise LogDecodeError(
-                                    f"Measurement {name!r} is not numeric"
-                                ) from exc
                 value = log_parser.parse_measurements(log_path, reader=reader)
                 named = re.findall(r"^Measurement:\s*(\S+)", body, re.M)
                 if any(name.lower() not in value["measurements"] for name in named):

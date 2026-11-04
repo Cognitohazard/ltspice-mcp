@@ -1127,7 +1127,15 @@ async def measurement_rows(
         if recipe.names is not None:
             chosen = {require_measurement(name, stats) for name in recipe.names}
             stats = {name: entry for name, entry in stats.items() if name in chosen}
-        values.append({"stats": stats})
+        row: dict[str, Any] = {"stats": stats}
+        unreadable = {
+            name: entry["unreadable"]
+            for name, entry in whole["measurements"].items()
+            if "unreadable" in entry and name in stats
+        }
+        if unreadable:
+            row["unreadable"] = unreadable
+        values.append(row)
     zeros = await _zeros_a_failed_step_prints(source, whole, set(values[0]["stats"]))
     if zeros is not None:
         build, zero_steps = zeros

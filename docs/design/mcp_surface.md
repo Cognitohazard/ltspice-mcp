@@ -1027,8 +1027,15 @@ does), its `measurements` row contains `measured: {name: value}`, the number a
 reduction or spec reads for that name; `at: {name: point}` where the log
 printed a crossing or `AT` point with it; and `failed_measurements: [name]`,
 each name the log has no number for (LTspice printed it as FAIL'ed, or
-printed a non-finite value). A failed name's `measured` entry is null, not
-absent, and a null there is always listed in `failed_measurements`. The
+printed a non-finite value, or printed something other than a number). A
+failed name's `measured` entry is null, not absent, and a null there is always
+listed in `failed_measurements`. A value printed as something other than a
+number, such as a WHEN threshold written as a parameter or an expression,
+fails only its own entry: `unreadable: {name: {line, reason}}` gives the log
+line and what it printed, and every other measurement of the log reads. The
+same `unreadable {line, reason}` is on the entry in the summary's
+`measurements`, in `inspect(kind="results", view="measurements")` rows and in
+the Python API's `measurements`. The
 default row omits the per-name `stats` block; `include.fields=["value"]`
 returns it, and reductions and specs read it either way. A stepped run's row
 has only `stats`.

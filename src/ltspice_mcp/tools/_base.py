@@ -528,6 +528,20 @@ MEASUREMENTS_SCHEMA: dict[str, Any] = {
                     "value measurements."
                 ),
             },
+            "unreadable": {
+                "type": "object",
+                "properties": {
+                    "line": {"type": ["string", "null"]},
+                    "reason": {"type": "string"},
+                },
+                "required": ["reason"],
+                "description": (
+                    "Present when the log printed something other than a number for "
+                    "this value, such as a WHEN threshold written as a parameter or "
+                    "an expression: 'values' is null, 'line' is the log line and "
+                    "'reason' says what was printed. Only this entry fails."
+                ),
+            },
         },
         "required": ["values"],
     },

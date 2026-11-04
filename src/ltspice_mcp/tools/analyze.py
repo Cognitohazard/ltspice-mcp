@@ -2061,6 +2061,8 @@ def _measurements_compact(value: dict[str, Any]) -> dict[str, Any]:
     failed = [name for name, number in measured.items() if number is None]
     if failed:
         compact["failed_measurements"] = failed
+    if value.get("unreadable"):
+        compact["unreadable"] = value["unreadable"]
     return compact
 
 
@@ -2778,7 +2780,9 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
                 "The recipe's value. A measurements row whose run holds one value "
                 "per .meas carries 'measured' {name: value}, 'at' {name: reported "
                 "crossing/AT point} and 'failed_measurements', the names whose "
-                "'measured' is null because the log holds no number for them; its "
+                "'measured' is null because the log holds no number for them, and "
+                "'unreadable' {name: {line, reason}} for one whose printed value is "
+                "not a number; its "
                 "'stats' block is left off the default row and returned by "
                 "include.fields=['value']. A stepped run's row is 'stats' alone."
             ),
@@ -2792,6 +2796,17 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
                     "additionalProperties": {"type": ["number", "null"]},
                 },
                 "failed_measurements": {"type": "array", "items": {"type": "string"}},
+                "unreadable": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                            "line": {"type": ["string", "null"]},
+                            "reason": {"type": "string"},
+                        },
+                        "required": ["reason"],
+                    },
+                },
             },
         },
     },
