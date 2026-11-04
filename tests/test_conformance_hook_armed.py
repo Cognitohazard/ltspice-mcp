@@ -76,6 +76,59 @@ async def test_hook_rejects_a_reply_that_carries_fields_that_say_nothing(
         )
 
 
+async def test_hook_rejects_a_finding_that_says_nowhere_where_it_is(
+    state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A finding reaches the client with a line, coordinates or a part
+    reference. With verify_circuit's finding builder made to drop the line, a
+    real check of a real deck emits a finding placed by its file alone, and the
+    hook must refuse it; that proves the rule is armed for every new finding."""
+    from ltspice_mcp.tools import verify as verify_mod
+    from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
+
+    deck = work_dir / "rc.net"
+    deck.write_bytes("* rc\nR1 in out 1k\nC1 out 0 23\u00b5\n.end\n".encode())
+    built = verify_mod._finding
+
+    def unplaced(**kwargs: Any) -> dict[str, Any]:
+        return built(**{**kwargs, "at": {"file": kwargs["at"]["file"]}})
+
+    monkeypatch.setattr(verify_mod, "_finding", unplaced)
+
+    with pytest.raises(AssertionError, match="says nowhere where it is"):
+        await handle_verify_circuit(
+            VerifyCircuitInput.model_validate({"path": str(deck), "checks": ["syntax"]}),
+            state_no_sim,
+        )
+
+
+async def test_hook_rejects_a_list_cut_short_with_no_way_to_read_the_rest(
+    state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A list a reply cuts short gives a cursor, or says how to read the rest.
+    spec.fail_cases has no cursor of its own, and its recipe's warning names
+    the route; with that warning made to name nothing, a real analysis of a
+    real raw emits a cut list with no way on, and the hook must refuse it."""
+    monkeypatch.setattr(analyze_mod, "_FAIL_CASE_PAGE_CAP", 1)
+    monkeypatch.setattr(analyze_mod, "_FAIL_CASES_OMITTED_WARNING", "{omitted} more failed.")
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+    recipe = {
+        "key": "vout",
+        "metric": "value",
+        "expr": "V(out)",
+        "at": "900u",
+        "spec": {"max": -1.0},
+    }
+
+    with pytest.raises(AssertionError, match="was cut short"):
+        await handle_analyze_results(
+            AnalyzeResultsInput.model_validate(
+                {"sources": [{"path": str(raw)}], "recipes": [recipe], "all_steps": True}
+            ),
+            state_no_sim,
+        )
+
+
 def _scenario_tool_names() -> set[str]:
     """Tool names passed to ``session.call_tool(...)`` in the scenario script."""
     source = (Path(__file__).parent / "scenario_active_filter.py").read_text(encoding="utf-8")

@@ -49,6 +49,7 @@ from ltspice_mcp.tools.jobs import (
 )
 from ltspice_mcp.tools.receipts import RUN_EXPERIMENTS_OUTPUT_SCHEMA
 from tests._fake_netlister import install_fixed_exporter
+from tests._mismatch_fixtures import MINI_FET
 from tests.conftest import (
     LIVENESS_S,
     FakeSim,
@@ -2172,6 +2173,41 @@ class TestPerCircuitFailuresAndAccounting:
         ]
         assert [item["run_index"] for item in data["runs"]["items"]] == [0, 1]
         assert data["failures"][0]["case_id"] == "missing-case-0000"
+
+    async def test_a_mismatch_refusal_inside_a_subcircuit_keeps_its_code(
+        self,
+        config: ServerConfig,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """An LTspice run whose mismatch rule reaches a device inside a
+        subcircuit is refused before anything is submitted, and the case
+        carries the refusal's own code rather than submission_failed."""
+        state = SessionState.create(config, available={"ltspice": type("LTspice", (FakeSim,), {})})
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(
+            work_dir / "wrapped.cir",
+            "* wrapped fet\n" + MINI_FET + "XM1 out g 0 0 minifet W=1 L=0.15\n"
+            "V1 out 0 1\nVg g 0 0.9\n.op\n.end\n",
+        )
+        mismatch = {
+            "kind": "random",
+            "runs": 1,
+            "seed": 1,
+            "rules": [{"rule": "mismatch", "prefix": "X", "AVT": 5e-3}],
+        }
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "wrapped-mismatch", lint="off", variations=[mismatch]), state
+            )
+        )
+
+        assert submissions == []
+        (failure,) = data["failures"]
+        assert failure["code"] == "unsupported_backend"
+        assert "requires ngspice" in failure["message"]
 
     async def test_ids_from_file_stems_are_made_valid_and_unique(
         self,

@@ -879,6 +879,35 @@ async def test_reference_outside_sandbox_names_the_text_alternative(state_no_sim
     assert "netlist text itself" in finding["evidence"]["detail"]
 
 
+async def test_a_refused_reference_is_filed_under_the_reference(state_no_sim, work_dir):
+    # It was filed under the circuit, which was allowed and read.
+    deck = _write(work_dir, "cand.cir", _BASE)
+    data = await _run(state_no_sim, path=str(deck), reference="/outside/ref.cir")
+    (finding,) = [f for f in data["findings"] if f["rule_id"] == "path_denied"]
+    assert finding["at"] == {"file": "/outside/ref.cir"}
+    assert finding["subject"] == "/outside/ref.cir"
+
+
+async def test_a_refused_include_is_placed_at_its_directive(
+    state_no_sim, work_dir, tmp_path_factory
+):
+    """A refused include is placed at the line that names it, in the deck or in
+    the included file that holds it, where it was placed at the deck alone."""
+    outside = tmp_path_factory.mktemp("outside")
+    lib = _write(outside, "part.lib", ".subckt PART 1 2\nR9 1 2 1\n.ends\n")
+    nested = _write(work_dir, "nested.lib", f"* models\n\n.include {lib}\n")
+    deck = _write(
+        work_dir,
+        "cand.cir",
+        f"* c\nX1 in out PART\nR1 in out 1k\n.include {lib}\n.include {nested}\n.end\n",
+    )
+
+    data = await _run(state_no_sim, path=str(deck), checks=["compare"], reference=_BASE)
+
+    denied = [f["at"] for f in data["findings"] if f["rule_id"] == "path_denied"]
+    assert denied == [{"file": str(deck), "line": 4}, {"file": str(nested), "line": 3}]
+
+
 async def test_equivalence_reordered(state_no_sim, work_dir):
     deck = _write(work_dir, "cand.cir", _BASE)
     ref = _write(work_dir, "ref.cir", _REORDERED)
@@ -900,6 +929,78 @@ async def test_equivalence_topology_changed(state_no_sim, work_dir):
     data = await _run(state_no_sim, path=str(deck), reference=str(ref))
     assert data["comparison"]["structurally_equivalent"] is False
     assert data["comparison"]["equivalent"] is False
+
+
+_PARAM_DIVIDER = "* divider\n.param rv=1k\nV1 in 0 5\nR1 in out {rv}\nR2 out 0 2k\n.end\n"
+
+
+async def test_equivalence_compares_the_directives_beside_the_wiring(state_no_sim, work_dir):
+    """A changed .param changes the circuit its parts read, though every part's
+    value is still ``{rv}``: the comparison is not equivalent, says the wiring
+    matched and the directives did not, and lists the two directive lines."""
+    deck = _write(work_dir, "cand.cir", _PARAM_DIVIDER)
+    ref = _write(work_dir, "ref.cir", _PARAM_DIVIDER.replace("rv=1k", "rv=2k"))
+    data = await _run(state_no_sim, path=str(deck), reference=str(ref))
+    comparison = data["comparison"]
+    assert comparison["equivalent"] is False
+    assert comparison["structurally_equivalent"] is True
+    assert comparison["directives_equivalent"] is False
+    assert comparison["directives_added"] == [".param rv=1k"]
+    assert comparison["directives_removed"] == [".param rv=2k"]
+    assert data["outcome"] == "partial"
+
+
+async def test_an_equivalent_comparison_carries_only_its_verdict(state_no_sim, work_dir):
+    """Beside ``equivalent: true`` every part matched, so no partial verdict and
+    no difference list is sent."""
+    deck = _write(work_dir, "cand.cir", _PARAM_DIVIDER)
+    data = await _run(state_no_sim, path=str(deck), reference=_PARAM_DIVIDER)
+    assert data["comparison"] == {"mode": "equivalence", "equivalent": True}
+
+
+async def test_equivalence_reads_directives_as_structural_diff_does(state_no_sim, work_dir):
+    """Spelling is not a difference (case, spacing, assignment order), and the
+    lines LTspice's netlister adds to an export are left out, as in a structural
+    diff; a real directive change is listed the same way by both modes."""
+    deck = _write(
+        work_dir,
+        "cand.cir",
+        "* divider\n.PARAM  b=2 a=1\nV1 in 0 5\nR1 in out 1k\nR2 out 0 2k\n"
+        ".TRAN 0 1m\n.lib C:\\LTspice\\lib\\cmp\\standard.res\n.backanno\n.end\n",
+    )
+    ref = "* divider\n.param a=1 b=2\nV1 in 0 5\nR1 in out 1k\nR2 out 0 2k\n.tran 0 1m\n.end\n"
+    data = await _run(state_no_sim, path=str(deck), reference=ref)
+    assert data["comparison"]["equivalent"] is True
+
+    changed = ref.replace(".tran 0 1m", ".tran 0 2m")
+    by_mode = {
+        mode: (await _run(state_no_sim, path=str(deck), reference=changed, compare_mode=mode))[
+            "comparison"
+        ]
+        for mode in ("equivalence", "structural_diff")
+    }
+    for comparison in by_mode.values():
+        assert comparison["equivalent"] is False
+        assert comparison["directives_added"] == [".TRAN 0 1m"]
+        assert comparison["directives_removed"] == [".tran 0 2m"]
+
+
+async def test_equivalence_compares_a_subcircuit_as_wiring_wherever_it_is_defined(
+    state_no_sim, work_dir
+):
+    """A definition moved into an included file is the same wiring, so only the
+    include line is a directive difference; the definition's own lines are not
+    directives here."""
+    block = ".subckt DIV a b\n.param half=1k\nR1 a mid {half}\nR2 mid b {half}\n.ends DIV\n"
+    _write(work_dir, "div.lib", block)
+    deck = _write(work_dir, "cand.cir", "* top\nV1 in 0 5\nX1 in 0 DIV\n.include div.lib\n.end\n")
+    ref = _write(work_dir, "ref.cir", f"* top\nV1 in 0 5\nX1 in 0 DIV\n{block}.end\n")
+    data = await _run(state_no_sim, path=str(deck), reference=str(ref))
+    comparison = data["comparison"]
+    assert comparison["equivalent"] is False
+    assert comparison["structurally_equivalent"] is True
+    assert comparison["directives_added"] == [".include div.lib"]
+    assert "directives_removed" not in comparison
 
 
 # ---------------------------------------------------------------------------

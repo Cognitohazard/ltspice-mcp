@@ -336,6 +336,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                 "reference": {"type": "string"},
                 "equivalent": {"type": ["boolean", "null"]},
                 "structurally_equivalent": {"type": ["boolean", "null"]},
+                "directives_equivalent": {"type": ["boolean", "null"]},
                 "export_error": {"type": ["string", "null"]},
                 "compare_error": {"type": ["string", "null"]},
                 "comparison": COMPARISON_SCHEMA,
@@ -1130,7 +1131,10 @@ async def _run_reference_stage(
             return verification
         assert payload is not None  # a compare without a failure carries its payload
         verification["equivalent"] = payload.get("equivalent")
-        verification["structurally_equivalent"] = payload.get("structurally_equivalent")
+        # The partial verdicts only the equivalence mode gives.
+        for partial in ("structurally_equivalent", "directives_equivalent"):
+            if partial in payload:
+                verification[partial] = payload[partial]
         verification["comparison"] = payload
         return verification
     finally:

@@ -37,6 +37,22 @@ tool-surface changes.
   way. The budget ladder's trim rung no longer lists empty blocks to remove,
   since every reply leaves them out, and `verify_circuit` now says, when it
   skips the comparison for want of a netlist, whether the export ran.
+- The `equivalence` compare of `verify_circuit` and of `edit_schematic`'s
+  reference check also compares the directives, so `equivalent` is true only
+  when the wiring, the parts and values, and the directives all match.
+  Before, it read no directive but the includes it followed for subcircuit
+  definitions, so a changed `.param` that every part still read as `{rv}`
+  came back `equivalent: true`. The directives are read as `structural_diff`
+  reads them, so spelling is not a difference, LTspice's export boilerplate
+  is left out, and the two modes list a directive change the same way. Beside
+  a false verdict, `directives_equivalent` says whether the directives
+  matched, as `structurally_equivalent` does for the wiring, and
+  `directives_added` and `directives_removed` list the difference. A
+  subcircuit definition is compared as wiring wherever it is defined, so its
+  `.subckt` line, `PARAMS:` defaults and body directives are not compared,
+  and moving a definition into an included file shows as the `.include` line
+  added. The `mode` and tool descriptions now say what each mode compares,
+  and that `structural_diff` does not compare nodes.
 
 ### Added
 
@@ -61,6 +77,19 @@ tool-surface changes.
 
 ### Fixed
 
+- An argument refusal names the fix for a field it does not know: an unknown
+  field is answered with the names its place takes, the closest first ("Did
+  you mean 'dry_run' for 'dry_runn'? This tool takes path, base, ..."), where
+  it said only that the field was not permitted. A missing field that chooses
+  a branch is answered with the values it takes (`jobs` without `action`,
+  an `edit_schematic` op without `op`), where pydantic's "Unable to extract
+  tag using discriminator" named neither. The item's fields that no branch
+  takes are refused beside it, so a misspelled `action` or `op` is named
+  (validation stopped at the missing field and never reached them).
+- `verify_circuit` places a refused include at the line of the `.include` or
+  `.lib` that names it, in the deck or in the included file that holds it,
+  where it gave the deck alone. A refused `compare.reference` is filed under
+  the reference, where it was filed under the circuit, which had been read.
 - A Pelgrom `mismatch` rule ignored a device's multiplier `m`. The simulator
   builds m parallel copies from one card and they share its one draw, so
   their area is `m·W·L`, but the draw took the area of a single copy: a device
@@ -73,6 +102,10 @@ tool-surface changes.
   being drawn as one copy. A refusal while drawing for a device one subcircuit
   level down now reaches the caller as a coded error rather than an uncoded
   one.
+- `run_experiments` reported a mismatch rule it refuses for a device inside a
+  subcircuit as `submission_failed`. An LTspice run now reports
+  `unsupported_backend`, and an ngspice run whose device is not a BSIM3 or
+  BSIM4 model reports `unsupported_model`.
 - The `jobs` tool was missing from Claude Code sessions, though the server
   listed it: its input schema put one branch per action under a top-level
   `allOf`, which Claude's API refuses, so the client dropped the tool. Its
@@ -534,6 +567,8 @@ tool-surface changes.
   `window_pid` names the one the user chose to save, the other windows are
   handed the saved sheet, and a save without it, or with a process that
   holds no different copy, fails with `window_not_chosen`.
+  `open_window="save"` replaces `save_open_window=true`, added earlier in
+  this release; a call that still sends `save_open_window` is told so.
 - `jobs(action="place_beside_sheet", job_id | request_id, case_id?)` copies a
   finished case's results beside the `.asc` it ran, under the sheet's name,
   where LTspice keeps a sheet's own results and opens them from: the raw, the

@@ -652,6 +652,11 @@ _COMPARISON: dict[str, Kept] = {
         "so the caller sees which part held; left out beside equivalent: true, "
         "which gives it."
     ),
+    "directives_equivalent": Kept(
+        "The directives-only verdict, kept beside an equivalent that is false or "
+        "null so the caller sees which part held; left out beside equivalent: "
+        "true, which gives it."
+    ),
 }
 
 _SHOWN: dict[str, Kept] = {

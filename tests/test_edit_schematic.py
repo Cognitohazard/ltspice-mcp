@@ -47,7 +47,14 @@ from ltspice_mcp.tools.schematic_edit import (
     handle_edit_schematic,
 )
 from tests import _fake_netlister as fake_netlister
-from tests._asc_ops import apply_ops, file_at, sheet_findings
+from tests._asc_ops import (
+    DIVIDER_DECK,
+    DIVIDER_DECK_REWIRED,
+    DIVIDER_OPS,
+    apply_ops,
+    file_at,
+    sheet_findings,
+)
 from tests._schematic_fixtures import BOX2_ASY, write_file
 from tests.ltspice_recorder import INPUTS
 from tests.test_api_reference import _op_kinds
@@ -84,18 +91,7 @@ def _fingerprint(root: Path) -> dict[str, tuple[int, int]]:
     }
 
 
-# Two resistors side by side; R1.1<->R2.1 wired over the top, R1.2 labeled.
-_DIVIDER_OPS: list[dict] = [
-    {"op": "add_component", "reference": "R1", "symbol": "res", "x": 400, "y": 300},
-    {"op": "add_component", "reference": "R2", "symbol": "res", "x": 700, "y": 300},
-    {
-        "op": "wire_pins",
-        "from_pin": "R1.1",
-        "to_pin": "R2.1",
-        "waypoints": [{"x": 400, "y": 200}, {"x": 700, "y": 200}],
-    },
-    {"op": "add_net_label", "net": "vout", "pin": "R1.2"},
-]
+_DIVIDER_OPS = DIVIDER_OPS
 
 
 async def _build_blank(state: SessionState, name: str, ops: list[dict], **kw) -> dict:
@@ -1764,8 +1760,8 @@ def test_the_arguments_this_tool_no_longer_takes(payload: dict):
 # Post-commit reference stage
 # ---------------------------------------------------------------------------
 
-_REF_DECK = "* divider\nVin in 0 5\nR1 in out 1k\nR2 out 0 2k\n.end\n"
-_REF_DECK_DIFFERENT = "* divider\nVin in 0 5\nR1 in out 1k\nR2 out mid 2k\nR3 mid 0 3k\n.end\n"
+_REF_DECK = DIVIDER_DECK
+_REF_DECK_DIFFERENT = DIVIDER_DECK_REWIRED
 
 
 @pytest.mark.parametrize("as_text", [False, True], ids=["file", "text"])
@@ -1799,6 +1795,25 @@ async def test_an_equivalent_comparison_commits_and_leaves_the_netlist_out(
     assert "netlist" not in data
     # Every stage completed, so none is listed.
     assert "stages" not in data
+
+
+async def test_a_directive_difference_says_the_wiring_matched(asc_state, monkeypatch):
+    """The reference check compares directives too: a sheet wired as the
+    reference but with another analysis is not equivalent, and the verification
+    says which part held."""
+
+    async def fake_export(_copy, _state):
+        return _REF_DECK.replace(".end", ".tran 0 1m\n.end")
+
+    monkeypatch.setattr(se, "_export_asc_to_netlist", fake_export)
+    reference = _REF_DECK.replace(".end", ".tran 0 2m\n.end")
+    data = await _build_blank(asc_state, "refdir", _DIVIDER_OPS, compare={"reference": reference})
+    verification = data["verification"]
+    assert verification["equivalent"] is False
+    assert verification["structurally_equivalent"] is True
+    assert verification["directives_equivalent"] is False
+    assert verification["comparison"]["directives_added"] == [".tran 0 1m"]
+    assert verification["comparison"]["directives_removed"] == [".tran 0 2m"]
 
 
 async def test_reference_outside_sandbox_names_the_text_alternative(asc_state):

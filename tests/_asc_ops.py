@@ -17,6 +17,24 @@ from ltspice_mcp.lib.sheet_findings import Finding
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.schematic_edit import EditSchematicInput, handle_edit_schematic
 
+#: Two resistors side by side on a blank sheet; R1.1<->R2.1 wired over the top,
+#: R1.2 labeled.
+DIVIDER_OPS: list[dict[str, Any]] = [
+    {"op": "add_component", "reference": "R1", "symbol": "res", "x": 400, "y": 300},
+    {"op": "add_component", "reference": "R2", "symbol": "res", "x": 700, "y": 300},
+    {
+        "op": "wire_pins",
+        "from_pin": "R1.1",
+        "to_pin": "R2.1",
+        "waypoints": [{"x": 400, "y": 200}, {"x": 700, "y": 200}],
+    },
+    {"op": "add_net_label", "net": "vout", "pin": "R1.2"},
+]
+#: A divider deck, and one wired otherwise, to compare a built sheet with,
+#: each led by the title line an LTspice export writes and a deck reader skips.
+DIVIDER_DECK = "* divider\nVin in 0 5\nR1 in out 1k\nR2 out 0 2k\n.end\n"
+DIVIDER_DECK_REWIRED = "* divider\nVin in 0 5\nR1 in out 1k\nR2 out mid 2k\nR3 mid 0 3k\n.end\n"
+
 
 def sha_of(path: Path) -> str:
     """Current sha256 of a file, for the revision guard."""

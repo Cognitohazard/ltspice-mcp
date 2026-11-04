@@ -348,7 +348,8 @@ async def test_discovery_to_real_device_operating_point(
     discovered = await _inspect(state, path, **query)
     assert discovered["ok"], discovered
     rows = {tuple(row["instance"]): row for row in discovered["data"]["instances"]}
-    assert discovered["data"]["profile"]["ngbehavior"] == ngbehavior
+    # LTspice has no ngspice mode, and a reply leaves the null out.
+    assert discovered["data"]["profile"].get("ngbehavior") == ngbehavior
     cases = [
         (("XA", "Xleaf"), 0.001, 5000),
         (("XB", "Xleaf"), 0.0015, 4000),
@@ -367,7 +368,7 @@ async def test_discovery_to_real_device_operating_point(
             for ref, resistance in (("R1", 1000), ("R2", 2000))
         ]
     selected.extend(rows[scope] for scope, _ in extra_resistors)
-    saves = sorted({row["address"]["save"] for row in selected} - {None})
+    saves = sorted({row["address"].get("save") for row in selected} - {None})
     path.write_text(text + "\n".join(saves) + "\n.end\n", encoding="utf-8")
     try:
         if backend == "ngspice":
@@ -393,6 +394,19 @@ async def test_discovery_to_real_device_operating_point(
                 assert f"Compatibility modes selected: {modes[ngbehavior]}" in log, log
             else:
                 assert "No compatibility mode selected" in log, log
+
+        async def current(device: str) -> float:
+            """The one current an operating point reports for ``device``, unsigned."""
+            result = await _analyze(
+                state,
+                receipt["job_id"],
+                [{"key": "op", "metric": "operating_point", "device": device}],
+            )
+            op = result["results"]["op"]["values"][0]["value"]
+            currents = {**op.get("currents", {}), **op.get("device_op_points", {})}
+            assert len(currents) == 1, op
+            return abs(next(iter(currents.values())))
+
         for scope, expected_gm, expected_r in cases:
             mos = rows[(*scope, "M0")]
             resistor = rows[(*scope, "R1")]
@@ -405,16 +419,6 @@ async def test_discovery_to_real_device_operating_point(
                         "key": "mos",
                         "metric": "operating_point",
                         "device": mos["address"]["device"],
-                    },
-                    {
-                        "key": "dependent",
-                        "metric": "operating_point",
-                        "device": dependent["address"]["device"],
-                    },
-                    {
-                        "key": "resistor",
-                        "metric": "operating_point",
-                        "device": resistor["address"]["device"],
                     },
                 ],
             )
@@ -434,29 +438,17 @@ async def test_discovery_to_real_device_operating_point(
                 )
             assert all(scope[0].lower() in key.lower() for key in gm)
             assert mos["geometry"]["w"]["value"] == pytest.approx(expected_gm / 0.0001 * 2e-6)
-            op = result["results"]["resistor"]["values"][0]["value"]
-            currents = {**op["currents"], **op["device_op_points"]}
-            assert len(currents) == 1, op
-            assert abs(next(iter(currents.values()))) == pytest.approx(1 / expected_r, rel=1e-5)
+            resistor_current = await current(resistor["address"]["device"])
+            assert resistor_current == pytest.approx(1 / expected_r, rel=1e-5)
             assert resistor["value"]["value"] == expected_r
-            op = result["results"]["dependent"]["values"][0]["value"]
-            currents = {**op["currents"], **op["device_op_points"]}
-            assert len(currents) == 1, op
-            assert abs(next(iter(currents.values()))) == pytest.approx(
-                1 / (2 * expected_r), rel=1e-5
-            )
+            dependent_current = await current(dependent["address"]["device"])
+            assert dependent_current == pytest.approx(1 / (2 * expected_r), rel=1e-5)
             assert dependent["value"]["value"] == 2 * expected_r
         for scope, resistance in extra_resistors:
             row = rows[scope]
-            result = await _analyze(
-                state,
-                receipt["job_id"],
-                [{"key": "r", "metric": "operating_point", "device": row["address"]["device"]}],
+            assert await current(row["address"]["device"]) == pytest.approx(
+                1 / resistance, rel=1e-5
             )
-            op = result["results"]["r"]["values"][0]["value"]
-            currents = {**op["currents"], **op["device_op_points"]}
-            assert len(currents) == 1, op
-            assert abs(next(iter(currents.values()))) == pytest.approx(1 / resistance, rel=1e-5)
             if scope == ("Rpower",) or (scope == ("XS", "R1") and backend == "ngspice"):
                 assert "value" not in row["value"]
                 assert row["value"]["reason"]
