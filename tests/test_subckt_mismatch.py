@@ -13,7 +13,9 @@ from pathlib import Path
 
 import pytest
 
+from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.spice_lex import TokenKind, lex, tokenize_body
+from ltspice_mcp.lib.spice_lex_views import ModelCard
 from ltspice_mcp.lib.subckt_mismatch import (
     ClosureFile,
     MismatchPlanError,
@@ -600,6 +602,53 @@ class TestIdentifierEncoding:
         out = render(files, plan, {"XN0.m.0": MismatchValues(delvto=-0.02)})
         assert instance_line(out[0], "XN0").get_param("mc_delvto__m_2e0") == "-0.02"
         assert "mc_delvto__m.0" not in out[0]
+
+
+#: Ways a ``.model`` card gives its LEVEL, with the level each declares. A
+#: comment is no part of the card, though the card is continued past it.
+_LEVEL_SPELLINGS = [
+    pytest.param("level = 54 vth0 = 0.4\n", 54.0, id="on-the-first-line"),
+    pytest.param(
+        "\n* level=1 was the old model\n+ level = 54 vth0 = 0.4\n",
+        54.0,
+        id="after-a-comment-line",
+    ),
+    pytest.param("level = 54 vth0 = 0.4 ; not level=1\n", 54.0, id="beside-a-comment"),
+    pytest.param("(level=54.0 vth0=0.4)\n", 54.0, id="as-a-decimal"),
+    pytest.param("level = {54} vth0 = 0.4\n", None, id="braced"),
+]
+
+
+@pytest.mark.parametrize(("spelling", "level"), _LEVEL_SPELLINGS)
+def test_every_reader_of_a_model_level_reads_one_level(
+    tmp_path: Path, spelling: str, level: float | None
+):
+    """The model card's view, the hierarchy and the mismatch plan's BSIM
+    gate each read the level the card declares, and the same one."""
+    deck = DECK.replace(
+        ".model minifet_model.0 nmos level = 54 vth0 = 0.7 u0 = 0.06\n",
+        ".model minifet_model nmos " + spelling,
+    )
+    (card,) = [card for card in lex(deck).cards if card.kind == "model"]
+    assert ModelCard.from_card(card).level == level
+
+    path = tmp_path / "deck.cir"
+    path.write_text(deck, encoding="utf-8")
+    hierarchy = load_hierarchy(str(path), [tmp_path], SemanticProfile("ngspice", "hsa"))
+    families = {
+        tuple(m.level for m in row.model_family)
+        for row in hierarchy.instances
+        if row.element == "M"
+    }
+    assert families == {(level,)}
+
+    if level is None:
+        with pytest.raises(MismatchPlanError) as exc:
+            build_plan(closure(deck), prefix="X")
+        assert exc.value.code == "inner_model_unresolved"
+    else:
+        plan = build_plan(closure(deck), prefix="X")
+        assert [t.ref for t in plan.targets] == ["XN0.m0", "XN1.m0"]
 
 
 class TestTrailingComments:

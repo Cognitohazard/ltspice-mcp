@@ -732,9 +732,12 @@ class TestSimulationDegraded:
 
 
 class TestAnalysisDegraded:
-    async def test_missing_raw_file_fails_that_source(self, shared_session: ClientSession):
-        """An unreadable source is a per-call failure item naming the file, not
-        a silent empty result."""
+    async def test_missing_raw_file_is_reported_as_missing_coverage(
+        self, shared_session: ClientSession
+    ):
+        """A path with no file names nothing to read: a coverage row naming the
+        file, coded and hinted as every tool reports a missing result, not a
+        silent empty result."""
         result = await shared_session.call_tool(
             "analyze_results",
             {
@@ -744,11 +747,13 @@ class TestAnalysisDegraded:
         )
         assert not result.is_error
         data = _data(result)
-        assert data["outcome"] == "failed"
+        assert data["outcome"] == "partial"
         assert data["coverage"]["runs_analyzed"] == 0
-        failure = data["failures"][0]
-        assert failure["code"] == "source_unavailable"
-        assert "missing.raw" in failure["message"]
+        assert data.get("failures", []) == []
+        missing = data["coverage"]["missing_cases"]["items"][0]
+        assert missing["code"] == "result_unreadable"
+        assert "missing.raw" in missing["detail"]
+        assert missing["hint"]
 
     async def test_missing_job_source_is_reported_as_missing_coverage(
         self, shared_session: ClientSession

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, TypeVar
@@ -14,7 +14,6 @@ import numpy as np
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import services
 from ltspice_mcp.lib.ac_analysis import log_interp_at, log_interp_complex_at
-from ltspice_mcp.lib.decoded_log import LogSectionName
 from ltspice_mcp.lib.decoded_raw import DecodedRaw
 from ltspice_mcp.lib.device_names import (
     TraceKey,
@@ -24,6 +23,7 @@ from ltspice_mcp.lib.device_names import (
     trace_key,
     writes_xvii_names,
 )
+from ltspice_mcp.lib.log_types import LogSectionName
 from ltspice_mcp.lib.raw_parser import OtherRawKind
 from ltspice_mcp.state import SessionState
 
@@ -251,16 +251,28 @@ class RawResult:
         here, there = self._keyed_traces(), other._keyed_traces()
         names = [trace.name for trace in self._raw.descriptor.traces]
         other_names = [trace.name for trace in other._raw.descriptor.traces]
+        pairs: list[tuple[str, _Read, _Read]]
         if signals is None:
-            pairs = [(index, there[key]) for key, index in here.items() if key in there]
-        else:
-            found = [(self._find(signal), other._find(signal)) for signal in signals]
-            missing = [
-                s for s, (a, b) in zip(signals, found, strict=True) if a is None or b is None
+            pairs = [
+                (names[index], _trace_at(index), _trace_at(there[key]))
+                for key, index in here.items()
+                if key in there
             ]
+        else:
+            pairs, missing, reasons = [], [], []
+            for signal in signals:
+                try:
+                    ours = services.resolve_signal(self._raw, signal)
+                    theirs = services.resolve_signal(other._raw, signal)
+                except ResultError as exc:
+                    missing.append(signal)
+                    reasons.append(str(exc))
+                    continue
+                pairs.append((ours.name, ours.wave, theirs.wave))
             if missing:
-                raise ResultError(f"Not a signal of both results: {', '.join(missing)}")
-            pairs = [(names.index(a), other_names.index(b)) for a, b in found if a and b]
+                raise ResultError(
+                    f"Not a signal of both results: {', '.join(missing)}. {reasons[0]}"
+                )
         has_axis = self._raw.descriptor.axis is not None
         if has_axis != (other._raw.descriptor.axis is not None):
             raise ResultError("One result has a sampled axis and the other has none.")
@@ -282,21 +294,21 @@ class RawResult:
                 )
         compared: dict[str, Any] = {}
         points = 0 if at is None else at.size
-        for index, other_index in pairs:
-            ours = self._raw.get_wave(index, step=step)[select]
+        for name, read_ours, read_theirs in pairs:
+            ours = np.asarray(read_ours(self._raw, step))[select]
             points = ours.size
-            theirs = other._raw.get_wave(other_index, step=other_step)
+            theirs = np.asarray(read_theirs(other._raw, other_step))
             if resample is not None:
                 theirs = resample(theirs)
             elif theirs.size != ours.size:
                 raise ResultError(
-                    f"{names[index]!r} has {ours.size} points here and {theirs.size} in the "
+                    f"{name!r} has {ours.size} points here and {theirs.size} in the "
                     "other result; a plot of no axis compares point by point."
                 )
             difference = np.abs(ours - theirs)
             worst = int(np.argmax(difference))
             peak = float(np.max(np.abs(ours)))
-            compared[names[index]] = {
+            compared[name] = {
                 "max_abs": float(difference[worst]),
                 "max_rel": float(difference[worst]) / peak if peak else None,
                 "at": None if at is None else float(at[worst]),
@@ -311,14 +323,14 @@ class RawResult:
             "points": points,
         }
 
-    def _find(self, signal: str) -> str | None:
-        """The trace ``signal`` names in this result, found as :meth:`trace`
-        finds one."""
-        return services.find_trace(
-            list(self._signals),
-            signal,
-            xvii=writes_xvii_names(self._raw),
-        )
+
+#: One step of a signal of a result: ``read(raw, step)``.
+_Read = Callable[[DecodedRaw, int], np.ndarray]
+
+
+def _trace_at(index: int) -> _Read:
+    """A reader of the trace at ``index`` of a result's selected plot."""
+    return lambda raw, step: np.asarray(raw.get_wave(index, step=step))
 
 
 class _Resampler:

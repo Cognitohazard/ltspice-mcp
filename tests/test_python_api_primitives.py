@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 import ltspice_mcp.api as api_module
-from ltspice_mcp.api import Api, RawResult
+from ltspice_mcp.api import Api, ApiValidationError, RawResult
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import services
 from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw
@@ -110,9 +110,9 @@ def test_raw_result_xor_step_slicing_and_mutation_isolation(
     work_dir: Path,
 ) -> None:
     api = SyncApi(state_no_sim)
-    with pytest.raises(TypeError, match="exactly one"):
+    with pytest.raises(ApiValidationError, match="exactly one"):
         api.load_raw()
-    with pytest.raises(TypeError, match="exactly one"):
+    with pytest.raises(ApiValidationError, match="exactly one"):
         api.load_raw(path="one.raw", job_id="job-one")
 
     raw_path = stage_recorded_fixture(work_dir, "ltspice_step_tran")

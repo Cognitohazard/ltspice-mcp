@@ -106,7 +106,7 @@ def test_roundtrip_preserves_grouped_execution_and_attempt_facts(tmp_path):
         case.recovery, attempt=replace(case.recovery.attempt, launch=intent, outputs=outputs)
     )
     experiment_store.save_job(job)
-    restored = experiment_store.load_job(job.job_id, tmp_path, own_is_alive=True)
+    restored = experiment_store.load_job(job.job_id, tmp_path)
     assert restored is not None
     assert restored.recovery == job.recovery
     assert restored.cases[0].recovery == case.recovery

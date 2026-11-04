@@ -112,7 +112,7 @@ async def handle_foo(args: FooInput, state: SessionState) -> types.CallToolResul
 - A handler that a registered tool delegates to declares its own output schema with `@declare_output_schema(...)`, so the suite checks its `structuredContent` against that schema instead of the delegating tool's; `tests/test_conformance_hook_armed.py` fails a delegation without one.
 - Keep argument descriptions to one or two plain sentences (unit, sign convention, default, interaction with a sibling field). Put longer explanation in a guide section and point to it (`tests/test_guide_delivery.py` checks that pointers resolve).
 - A file argument is named `path`.
-- Raise errors from the hierarchy in `errors.py`. `server.py:call_tool` converts every failure into an `is_error` result, with one recovery hint per error type in `_ERROR_HINTS`.
+- Raise errors from the hierarchy in `errors.py`. `server.py:call_tool` converts every failure into an `is_error` result, with one recovery hint per error family in `errors.ERROR_HINTS` (`errors.error_hint`).
 
 ## Rules the code depends on
 

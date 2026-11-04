@@ -209,7 +209,9 @@ async def test_a_cursor_whose_check_this_call_does_not_run_is_refused(state_no_s
     assert "'layout'" in refusal["error"]
 
 
-async def test_a_cursor_that_is_not_one_is_refused_as_an_argument(state_no_sim, work_dir):
+async def test_a_cursor_that_is_not_one_is_refused_as_every_tool_refuses_one(
+    state_no_sim, work_dir
+):
     result = await dispatch(
         state_no_sim,
         "verify_circuit",
@@ -218,7 +220,7 @@ async def test_a_cursor_that_is_not_one_is_refused_as_an_argument(state_no_sim, 
 
     assert result.is_error
     refusal = result.structured_content
-    assert refusal["code"] == "invalid_arguments"
+    assert refusal["code"] == "invalid_cursor"
     assert "findings_cursor" in refusal["error"]
     assert "next_cursor" in refusal["error"]
 

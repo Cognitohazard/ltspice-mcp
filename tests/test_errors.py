@@ -74,24 +74,24 @@ class TestErrorHierarchy:
 class TestErrorHints:
     def test_hints_reference_tools(self):
         """A hint's job is to name the tool that recovers from the failure."""
-        from ltspice_mcp.server import _get_error_hint
+        from ltspice_mcp.errors import hint_for_type
 
-        hint = _get_error_hint(NetlistError)
+        hint = hint_for_type(NetlistError)
         assert hint is not None
         assert "verify_circuit" in hint
 
     def test_every_error_type_carries_one_hint_string(self):
         """One tool surface, one hint per error type — a hint that is not a
         non-empty string reaches the caller as an empty recovery step."""
-        from ltspice_mcp.server import _ERROR_HINTS
+        from ltspice_mcp.errors import ERROR_HINTS
 
-        for err_type, hint in _ERROR_HINTS.items():
+        for err_type, hint in ERROR_HINTS.items():
             assert isinstance(hint, str), f"{err_type.__name__}: hint is not a string"
             assert hint.strip(), f"{err_type.__name__}: hint is empty"
 
     def test_unhinted_error_type_returns_none(self):
         """PathSecurityError builds its hint dynamically from allowed_paths, so
         the table must not answer for it with a stale generic string."""
-        from ltspice_mcp.server import _get_error_hint
+        from ltspice_mcp.errors import hint_for_type
 
-        assert _get_error_hint(PathSecurityError) is None
+        assert hint_for_type(PathSecurityError) is None

@@ -43,6 +43,7 @@ from ltspice_mcp.config import (
     SIM_SECTION as _SIM_SECTION,
 )
 from ltspice_mcp.errors import SimulationError
+from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.encoding import (
     decode_spice_bytes,
     decode_spice_bytes_with_encoding,
@@ -237,7 +238,7 @@ async def resolve_runnable_netlist(
     A schematic is refused, before LTspice is launched, for a simulator that
     cannot read LTspice's netlist dialect (``simulator.asc_export_refusal``).
     """
-    if netlist_path.suffix.lower() != ".asc":
+    if not is_asc(netlist_path):
         return netlist_path
     from ltspice_mcp.lib.simulator import asc_export_refusal
 
@@ -299,7 +300,7 @@ def stage_sheet(asc_path: Path, dest: Path, data: bytes | None = None) -> tuple[
                 found.append(Path(folder, name))
                 if suffix == ".asy":
                     blocks.add((folder, stem.casefold()))
-            elif suffix == ".asc" and Path(folder, name) != asc_path:
+            elif is_asc(Path(name)) and Path(folder, name) != asc_path:
                 sheets.append((folder, stem.casefold(), name))
     found += (Path(folder, name) for folder, stem, name in sheets if (folder, stem) in blocks)
     found = sorted(path for path in found if path.is_file())

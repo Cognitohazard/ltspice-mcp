@@ -252,7 +252,9 @@ def test_output_limits_refuse_instead_of_truncating(tmp_path, field, value):
         ("Circuit: test\n.step R=1 C=bad\n", "steps"),
         (_LOG_WITH_BLOCK.replace("4.80e-04", "bad"), "device_op"),
         (_LOG_WITH_BLOCK.replace("Name:           M1", "Name:           M1 M2"), "device_op"),
-        ("Circuit: test\ngain: V(out)=bad\n", "measurements"),
+        # A table heading with no table under it: the section cannot be read.
+        # (A value printed as text fails only its own entry; see test_decoded_log.)
+        ("Circuit: test\nMeasurement: gain\n", "measurements"),
     ],
 )
 def test_partially_malformed_numeric_sections_are_errors(tmp_path, body, section):

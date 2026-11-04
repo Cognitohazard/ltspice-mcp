@@ -24,6 +24,7 @@ from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.projection import KeepPlan, project_row
 from ltspice_mcp.lib.spice_lex import INCLUDE_HEADS, SpiceCard, TokenKind, lex, tokenize_body
+from ltspice_mcp.lib.store import is_sha256
 
 PROFILE = "sky130-e6f9c887-ngspice-v1"
 PIN_MANIFEST_SHA256 = "48f8c0953abca720520bfcc3729579d29b7f501c72dffac6ca564f0b21c2c589"
@@ -52,7 +53,6 @@ _MODES: dict[str, tuple[str, int, int]] = {
     "combined": ("mc", 1, 1),
 }
 _IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
-_DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _OWNED = frozenset(
     {"seed", "randomseed", "mc_mm_switch", "mc_pr_switch", "ngbehavior", "ng_nomodcheck", "scale"}
 )
@@ -716,7 +716,7 @@ def driver_bytes(seed: int, paths: NativePaths, token: str) -> bytes:
 
 
 def _verify_artifact(artifact: ArtifactDigest) -> None:
-    if not _DIGEST.fullmatch(artifact.sha256):
+    if not is_sha256(artifact.sha256):
         raise NativeCaseError("artifact_digest", "expected artifact digest is missing or invalid")
     try:
         actual = sha256_file(artifact.path)

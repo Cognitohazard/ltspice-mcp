@@ -79,7 +79,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, NamedTuple, TypeAlias
 
 from mcp import types
-from pydantic import BeforeValidator, Field, field_validator
+from pydantic import BeforeValidator, Field
 
 from ltspice_mcp.errors import InvalidCursorError, PathSecurityError
 from ltspice_mcp.lib import (
@@ -130,15 +130,14 @@ from ltspice_mcp.lib.sheet_findings import (
 )
 from ltspice_mcp.lib.simulator import DEFAULT_FAMILY, family_for
 from ltspice_mcp.lib.simulator_build import executable_identity, is_cp1252_ltspice_build
-from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, lex
+from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, lex_deck
 from ltspice_mcp.lib.spice_lex_ops import (
     MICRO_SIGN_READERS,
     ValueSuffixSite,
     value_suffix_sites,
 )
 from ltspice_mcp.lib.spice_validator import (
-    drop_title_card,
-    validate_directive,
+    validate_directive_card,
     validate_netlist_arity,
     validate_netlist_bias_topology,
     validate_netlist_dangling_nodes,
@@ -322,15 +321,16 @@ class FindingsCursor(NamedTuple):
 
 
 def decode_findings_cursor(text: str) -> FindingsCursor:
-    """The resume point a ``findings_cursor`` names; ``ValueError`` naming the
-    way round for anything this tool did not return."""
+    """The resume point a ``findings_cursor`` names; ``InvalidCursorError``,
+    as every tool's cursor decoder raises, for anything this tool did not
+    return."""
     try:
         body = decode_cursor(text)
         cursor = FindingsCursor(
             rule=body["rule"], check=body["check"], offset=body["offset"], revision=body["of"]
         )
     except (CursorError, KeyError) as exc:
-        raise ValueError(_NOT_A_FINDINGS_CURSOR) from exc
+        raise InvalidCursorError(_NOT_A_FINDINGS_CURSOR) from exc
     if not (
         isinstance(cursor.rule, str)
         and cursor.check in CHECK_ORDER
@@ -338,13 +338,14 @@ def decode_findings_cursor(text: str) -> FindingsCursor:
         and cursor.offset >= FINDING_RULE_CAP
         and (cursor.revision is None or isinstance(cursor.revision, str))
     ):
-        raise ValueError(_NOT_A_FINDINGS_CURSOR)
+        raise InvalidCursorError(_NOT_A_FINDINGS_CURSOR)
     return cursor
 
 
 _NOT_A_FINDINGS_CURSOR = (
-    "not a cursor this tool returned: pass a findings_omitted entry's next_cursor "
-    "unchanged, or leave findings_cursor out to list each rule from its first finding"
+    "findings_cursor is not a cursor this tool returned: pass a findings_omitted "
+    "entry's next_cursor unchanged, or leave findings_cursor out to list each rule "
+    "from its first finding."
 )
 
 
@@ -1002,13 +1003,6 @@ class VerifyCircuitInput(ToolInput):
         description="next_cursor from a findings_omitted entry: lists that rule's next findings.",
     )
 
-    @field_validator("findings_cursor")
-    @classmethod
-    def _findings_cursor_is_one(cls, value: str | None) -> str | None:
-        if value is not None:
-            decode_findings_cursor(value)
-        return value
-
 
 VERIFY_DESCRIPTION = (
     "Check a circuit file, and optionally render it. It does not change the file "
@@ -1168,10 +1162,9 @@ async def _export_reference(
 class _LexedDeck:
     """One lex of a netlist, shared by the syntax and quality checks.
 
-    ``cards`` already has the title card dropped: line 1 is free text by SPICE
-    convention and the lexer has no title concept, so a title beginning with an
-    element letter parses as an element whose words the instance-level rules
-    would otherwise count as circuit nodes.
+    ``cards`` are the cards the simulator reads (``spice_lex.lex_deck``): not
+    the title on line 1, which is free text whatever it says, nor a card after
+    ``.END``, so no rule reports a card the simulator never sees.
 
     ``notes`` are the lexer's own remarks about what it had to guess — an
     unclosed ``.SUBCKT``, an ``.ENDS`` that matches nothing, a continuation with
@@ -1187,14 +1180,14 @@ class _LexedDeck:
     error: str | None = None
 
 
-def _lex_deck(text: str) -> _LexedDeck:
+def _lexed_deck(text: str) -> _LexedDeck:
     """Lex a netlist once for every check that reads its cards."""
     try:
-        result = lex(text)
+        result = lex_deck(text)
     except SpiceLexError as exc:
         return _LexedDeck(cards=[], notes=[], error=str(exc))
     return _LexedDeck(
-        cards=drop_title_card(result.cards),
+        cards=result.cards,
         notes=[f"netlist lexer: {note}" for note in result.warnings],
     )
 
@@ -1357,19 +1350,20 @@ def _syntax_findings(
     quality check.
     """
     findings: list[dict[str, Any]] = []
-    for lineno, raw in enumerate(text.splitlines(), 1):
-        line = raw.strip()
-        if not line.startswith("."):
-            continue
-        err = validate_directive(line, simulator)
+    # The deck's cards, as the linter reads them: a directive continued on a
+    # ``+`` line is checked whole, and the title and the cards after ``.END``
+    # are not checked at all.
+    for card in deck.cards:
+        err = validate_directive_card(card, simulator)
         if err is None:
             continue
+        line = " ".join(card.body.split())
         detail = err.message + (f" {err.suggestion}" if err.suggestion else "")
         findings.append(
             _finding(
                 rule_id="directive_syntax",
                 severity="error",
-                at={"file": str(path), "line": lineno},
+                at={"file": str(path), "line": card.line_start},
                 subject=line,
                 evidence={"detail": detail, "card": line},
             )
@@ -1641,7 +1635,7 @@ def _exported_value_suffix_findings(
     except OSError:
         return []
     return _value_suffix_findings(
-        _lex_deck(text).cards,
+        _lexed_deck(text).cards,
         net_path,
         text,
         encoding,
@@ -2288,7 +2282,7 @@ def _open_in_ltspice(state: SessionState, path: Path) -> dict[str, Any]:
         report["reason"] = str(error)
         return report
     report.update(shown_in_window(shown), already_open=shown.held is not None)
-    if shown.held is not None and path.suffix.lower() == ".asc":
+    if shown.held is not None and is_asc(path):
         report.update(window_difference(path.read_bytes(), shown.held))
     return report
 
@@ -2468,14 +2462,14 @@ async def evaluate_verify_circuit(
         return _error_evaluation(data, f"'{path}' does not exist or is not a file")
 
     suffix = path.suffix.lower()
-    if suffix != ".asc" and suffix not in NETLIST_SUFFIXES:
+    if not is_asc(path) and suffix not in NETLIST_SUFFIXES:
         return _error_evaluation(
             data,
             f"'{suffix}' is not a circuit file this tool can check; pass a .asc "
             f"schematic or a {NETLIST_SUFFIX_TEXT} netlist",
         )
 
-    kind = "asc" if suffix == ".asc" else "netlist"
+    kind = "asc" if is_asc(path) else "netlist"
     kind_label = ".asc" if kind == "asc" else "netlist"
     data["kind"] = kind
     applicable = _ASC_CHECKS if kind == "asc" else _NETLIST_CHECKS
@@ -2529,7 +2523,7 @@ async def evaluate_verify_circuit(
     # whichever of the two asked for it.
     deck: _LexedDeck | None = None
     if text is not None and (wanted.get("syntax") or wanted.get("quality")):
-        deck = await asyncio.to_thread(_lex_deck, text)
+        deck = await asyncio.to_thread(_lexed_deck, text)
         observations.extend(deck.notes)
 
     # The LTspice this session drives, when it decodes decks as cp1252: the one
@@ -2797,7 +2791,7 @@ def render_verify_circuit(
     if cursor is not None and not evaluation.is_error:
         total = totals[cursor.rule]
         if total <= cursor.offset:
-            raise InvalidCursorError(_unreached_cursor_text(cursor, total, data))
+            raise InvalidCursorError(_unreached_cursor_text(cursor, total, data), show_hint=False)
         last = min(total, cursor.offset + FINDING_RULE_CAP)
         listing = f"Listing {cursor.rule} findings {cursor.offset + 1} to {last} of {total}."
 
@@ -2813,7 +2807,9 @@ def render_verify_circuit(
     data["findings_omitted"] = omitted
     if not evaluation.is_error:
         data["outcome"] = _outcome(data["findings"], data["failures"], data.get("comparison"))
-        data["hint"] = _hint(data, listing=listing)
+        # Counted over every finding: the cap shortens the list shown, not
+        # what the check found.
+        data["hint"] = _hint({**data, "findings": evaluation.data["findings"]}, listing=listing)
 
     result = format_response(data["hint"], data)
     if evaluation.is_error:
@@ -2846,7 +2842,9 @@ def _refuse_unfit_cursor(
 ) -> None:
     """Refuse, before any check runs, a cursor this call cannot continue.
 
-    A file that cannot be read is left to the evaluation, which says so.
+    A file that cannot be read is left to the evaluation, which says so. A
+    refusal that names the check to run takes no generic cursor hint, which
+    would send the caller back to the cursor instead.
     """
     if revision is not None and cursor.revision != revision:
         raise InvalidCursorError(
@@ -2858,12 +2856,14 @@ def _refuse_unfit_cursor(
     if args.render is not None and args.render.mode == "only":
         raise InvalidCursorError(
             f"{reports} reports, and render.mode='only' runs no check: leave render.mode "
-            "at 'with_checks' to list them."
+            "at 'with_checks' to list them.",
+            show_hint=False,
         )
     if args.checks is not None and cursor.check not in args.checks:
         raise InvalidCursorError(
             f"{reports} reports, and checks leaves it out: add '{cursor.check}' to "
-            "checks, or leave checks out."
+            "checks, or leave checks out.",
+            show_hint=False,
         )
 
 
@@ -2882,6 +2882,7 @@ async def handle_verify_circuit(
     args: VerifyCircuitInput, state: SessionState
 ) -> types.CallToolResult:
     """Check (and optionally render/compare) a circuit file without changing it."""
+    # Decoded before any check runs, so a malformed cursor costs no export.
     cursor = (
         decode_findings_cursor(args.findings_cursor) if args.findings_cursor is not None else None
     )

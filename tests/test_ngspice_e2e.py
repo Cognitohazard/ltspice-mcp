@@ -291,9 +291,14 @@ async def test_montecarlo_without_meas_reports_no_measurements(
         assert 950.0 <= item["assignments"]["random:component:R2"] <= 1050.0
 
     # Nothing was fabricated for the .meas a batch-mode ngspice never evaluated:
-    # no 'measured' result at all, and one explanatory failure per case — counted
+    # no 'measured' rows at all, and one explanatory failure per case — counted
     # on one row where the cases say the same thing.
-    assert "measured" not in data["results"]
+    measured = data["results"]["measured"]
+    assert (
+        not measured.get("values")
+        and not measured.get("per_run", {}).get("items")
+        and any(warning.startswith("No rows:") for warning in measured["warnings"])
+    )
     meas_failures = [f for f in data["failures"] if "No .MEAS results" in f["message"]]
     assert sum(f.get("count", 1) for f in meas_failures) == 3, data["failures"]
     assert all(f["code"] == "recipe_failed" for f in meas_failures)
@@ -709,7 +714,12 @@ async def test_tran_meas_in_batch_mode_runs_and_reports_the_skip(
         "No .measure possible in batch mode" in warning
         for warning in data["results"]["sum"]["warnings"]
     )
-    assert "measured" not in data["results"]
+    measured = data["results"]["measured"]
+    assert (
+        not measured.get("values")
+        and not measured.get("per_run", {}).get("items")
+        and any(warning.startswith("No rows:") for warning in measured["warnings"])
+    )
     assert [f["code"] for f in data["failures"] if "No .MEAS results" in f["message"]] == [
         "recipe_failed"
     ]

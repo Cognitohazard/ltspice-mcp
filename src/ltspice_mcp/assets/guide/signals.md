@@ -114,6 +114,7 @@ A `.step` directive puts several sweeps inside one `.raw`, and by default
 `analyze_results` reads the first of them. Two call-level arguments change
 this, and both apply to every recipe in the call. `step`
 (`{"axis": "temp", "value": 27}`) reads the one iteration whose axis value you
-name, and `all_steps: true` evaluates every recipe at every iteration. They are
+name, written as a number or in SPICE notation (`"2k"`), and `all_steps: true`
+evaluates every recipe at every iteration. They are
 mutually exclusive. `run_experiments`' attached `analyze` block takes the same
 two, so an attached measurement and a standalone one read the same steps.

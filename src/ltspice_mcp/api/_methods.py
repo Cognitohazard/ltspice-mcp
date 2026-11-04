@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import copy
+import functools
 import inspect
 import os
 import subprocess
@@ -32,9 +33,14 @@ from ltspice_mcp.api._primitives import (
     load_raw_result,
     measurements_of,
 )
-from ltspice_mcp.errors import PathSecurityError
+from ltspice_mcp.errors import InvalidCursorError, PathSecurityError
 from ltspice_mcp.lib import experiment_store, services
-from ltspice_mcp.lib.decoded_log import LogSectionName
+from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
+from ltspice_mcp.lib.log_types import LogSectionName
+from ltspice_mcp.lib.model_fields import (
+    field_name,
+    models_in,
+)
 from ltspice_mcp.lib.pathutil import relative_paths_from
 from ltspice_mcp.lib.raw_parser import OTHER_RAW_KINDS, OtherRawKind
 from ltspice_mcp.state import SessionState
@@ -146,33 +152,64 @@ _DOOR_REMEDIES: dict[str, str] = {
 _DROPPED_CLASSES = frozenset({"budget", "dwell"})
 
 
-def _door_class(path: tuple[str, ...]) -> str | None:
-    """Which refusal class this argument path falls in, or None if it is fine."""
+#: Field names that page a reply rather than say what to compute.
+_PAGING_NAMES = frozenset({"cursor", "continuation", "continue", "view_cursors"})
+
+
+def _control_class(path: tuple[str, ...]) -> str | None:
+    """Which refusal class a field of an operation's model falls in, if any."""
     key = path[-1]
     if key == "budget":
         return "budget"
     if path == ("execution", "wait_s"):
         return "dwell"
-    if (
-        key in {"cursor", "continuation", "continue", "view_cursors"}
-        or key.endswith("_cursor")
-        or key.endswith("_cursors")
-    ):
+    if key in _PAGING_NAMES or key.endswith(("_cursor", "_cursors")):
         return "paging"
     return None
 
 
-def _enforce_auto_door(arguments: Any) -> list[str]:
+@functools.cache
+def _control_paths(model: type[BaseModel]) -> dict[tuple[str, ...], str]:
+    """Every argument path of ``model`` that is a wire-only control, and its class.
+
+    Read off the model's own fields, so a control is something the operation
+    declares: a key the caller supplies as data, such as a parameter named
+    ``budget`` or ``bias_cursor`` in an ``assign`` variation, is never one.
+    A list item adds no segment, as in :func:`_walk_fields`. A model that
+    routes to variants (the jobs actions) contributes each variant's fields.
+    """
+    found: dict[tuple[str, ...], str] = {}
+
+    def walk(current: type[BaseModel], prefix: tuple[str, ...], seen: frozenset[type]) -> None:
+        for name, field in current.model_fields.items():
+            for spelled in dict.fromkeys((name, field_name(current, name, field))):
+                path = (*prefix, spelled)
+                kind = _control_class(path)
+                if kind is not None:
+                    found[path] = kind
+                for nested in models_in(field.annotation):
+                    if nested not in seen:
+                        walk(nested, path, seen | {nested})
+
+    # Its own variants only: an action model inherits the attribute naming all of them.
+    for variant in (model, *model.__dict__.get("VARIANTS", ())):
+        walk(variant, (), frozenset({variant}))
+    return found
+
+
+def _enforce_auto_door(arguments: Any, model: type[BaseModel]) -> list[str]:
     """Apply the automatic mode's rules to one call's arguments, in place.
 
     Presentation controls (``budget``, ``execution.wait_s``) are removed and
     the removal comes back as warnings for the result; a paging control raises.
+    Only ``model``'s own control fields count.
     """
+    controls = _control_paths(model)
     rejected: dict[str, list[str]] = {}
     dropped: list[str] = []
     # Collected before any removal: the walk yields from the dict it reads.
     for path in list(_walk_fields(arguments)):
-        kind = _door_class(path)
+        kind = controls.get(path)
         if kind is None:
             continue
         if kind in _DROPPED_CLASSES:
@@ -326,7 +363,7 @@ def _note_process_owned_job(receipt: dict[str, Any]) -> dict[str, Any]:
     later status read reports a cancellation nobody asked for. The contract
     states the rule; this is the same rule at the point of use.
     """
-    if receipt.get("status") in experiments.TERMINAL_EXPERIMENT_STATUSES:
+    if receipt.get("status") in TERMINAL_STATUSES:
         return receipt
     observations = receipt.setdefault("observations", [])
     if isinstance(observations, list):
@@ -369,7 +406,7 @@ def _note_detached_owner(
     if not isinstance(observations, list):
         observations = []
         receipt["observations"] = observations
-    if receipt.get("status") in experiments.TERMINAL_EXPERIMENT_STATUSES:
+    if receipt.get("status") in TERMINAL_STATUSES:
         detail = (
             f"This job is already terminal. Pid {owner_pid} is the process its "
             "record names as having run it; nothing is supervising it now and "
@@ -568,7 +605,7 @@ async def _collect_inspect(
             invalid_cursor = (
                 not page_item.get("ok")
                 and isinstance(error, Mapping)
-                and error.get("code") == "invalid_cursor"
+                and error.get("code") == InvalidCursorError.code
             )
             if invalid_cursor:
                 if original_index in restarted:
@@ -798,16 +835,20 @@ class ApiMethodsMixin(ABC):
         A refused path gets the same guidance a tool call's does, as a note
         on the exception: a script, or a ``run_code`` snippet, sees it in the
         traceback, and the exception's type and message stay what they were.
+        The note is written under the same anchor as the call, so the folder
+        it says relative paths are taken from is the one this door used.
         """
+        base = self._state.config.working_dir
         try:
             return self._call(
-                _anchored_on(self._state.config.working_dir, coroutine),
+                _anchored_on(base, coroutine),
                 cancelable=cancelable,
                 cancel_on_interrupt=cancel_on_interrupt,
                 preserve_interrupt=preserve_interrupt,
             )
         except PathSecurityError as exc:
-            exc.add_note(self._state.sandbox_guidance())
+            with relative_paths_from(base):
+                exc.add_note(self._state.sandbox_guidance())
             raise
 
     def _dispatch(
@@ -828,7 +869,7 @@ class ApiMethodsMixin(ABC):
         is also what admits the wire-only controls the automatic mode rejects.
         """
         self._check_process_and_thread()
-        dropped = [] if raw_page else _enforce_auto_door(arguments)
+        dropped = [] if raw_page else _enforce_auto_door(arguments, model)
         request = _validate(name, model, arguments, self._state)
         coroutine = (
             _handler_page(handler, request, self._state)
@@ -886,7 +927,7 @@ class ApiMethodsMixin(ABC):
                 _handler_page(experiments.handle_run_experiments, request, self._state)
             )
 
-        dropped = _enforce_auto_door(arguments)
+        dropped = _enforce_auto_door(arguments, experiments.RunExperimentsInput)
         submitted_arguments = _submitted_arguments(copy.deepcopy(arguments))
         request = _validate(
             "run_experiments",
@@ -934,7 +975,7 @@ class ApiMethodsMixin(ABC):
         submission both belong to the owner, which is what makes the job record
         name a live owner from its first byte.
         """
-        dropped = _enforce_auto_door(arguments)
+        dropped = _enforce_auto_door(arguments, experiments.RunExperimentsInput)
         # The owner is given the call as the caller wrote it, presentation
         # controls already dropped, and applies the same automatic-mode rules
         # to it — it is an ordinary Api caller.
@@ -1002,7 +1043,7 @@ class ApiMethodsMixin(ABC):
 
     def _resume_detached(self, arguments: Mapping[str, Any]) -> dict[str, Any]:
         """Authorize a parent here, then privately delegate its token to an owner."""
-        dropped = _enforce_auto_door(arguments)
+        dropped = _enforce_auto_door(arguments, jobs.JobsResumeInput)
         payload = _detach.request_arguments(arguments)
         request = _validate("jobs", jobs.JobsResumeInput, payload, self._state)
 
@@ -1321,13 +1362,16 @@ def _one_source(
     other_raw: str | None = None,
 ) -> None:
     """Refuse a read that names both or neither of a file and a job, an empty
-    path, or a case selector without a job."""
+    path, or a case selector without a job.
+
+    These are argument values the read cannot use, refused as the operations
+    refuse theirs, so one ``except ValueError`` catches either."""
     if (path is None) == (job_id is None):
-        raise TypeError("Pass exactly one of path or job_id")
+        raise ApiValidationError("Pass exactly one of path or job_id")
     if path is not None and not os.fspath(path).strip():
-        raise TypeError("path is empty; pass a file or job_id")
+        raise ApiValidationError("path is empty; pass a file or job_id")
     if path is not None and (run_index != 0 or case_id is not None or other_raw is not None):
-        raise TypeError("run_index, case_id and other_raw are only valid with job_id")
+        raise ApiValidationError("run_index, case_id and other_raw are only valid with job_id")
 
 
 # The six methods carry their operation's catalogue entry as their docstring —

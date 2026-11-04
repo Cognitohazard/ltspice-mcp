@@ -15,7 +15,6 @@ import asyncio
 import contextlib
 import contextvars
 import logging
-import os
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -23,8 +22,13 @@ from typing import Any
 
 from ltspice_mcp.lib import now
 from ltspice_mcp.lib.background import BackgroundTasks
-from ltspice_mcp.lib.experiment_types import TERMINAL_CASE_STATUSES, ExperimentJob
-from ltspice_mcp.lib.job_lifecycle import LiveJob, WaitFor, finished, transition
+from ltspice_mcp.lib.experiment_types import (
+    OWNER_STOPPED,
+    TERMINAL_CASE_STATUSES,
+    ExperimentJob,
+    failure_row,
+)
+from ltspice_mcp.lib.job_lifecycle import LiveJob, WaitFor, finished
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.observability import emit_job_event
 
@@ -161,6 +165,17 @@ class JobRegistry:
         self.jobs[job.job_id] = job
         return live
 
+    def owns(self, job: ExperimentJob) -> bool:
+        """Whether this process runs ``job``: it admitted the job, so its live
+        job is here (``reserve``).
+
+        The one answer to "is this job ours?". A pid never answers it: a record
+        a dead server left can carry this process's pid once the pid is reused,
+        quickly on Windows, and a record read back from the store is never one
+        this process can wait on, cancel without a token, or settle at shutdown.
+        """
+        return job.job_id in self.live
+
     def release(self, job: ExperimentJob) -> None:
         """Withdraw a reservation whose record was never written."""
         live = self.live.get(job.job_id)
@@ -226,7 +241,7 @@ class JobRegistry:
             return None
         from ltspice_mcp.lib import experiment_store
 
-        return experiment_store.load_job(job_id, self.working_dir, own_is_alive=True)
+        return experiment_store.load_job(job_id, self.working_dir)
 
     def get_or_load(self, job_id: str) -> ExperimentJob | None:
         """A job by id: in memory, else from the store. None if there is none.
@@ -264,6 +279,15 @@ class JobRegistry:
 
         return experiment_store.load_job_from_path(job.store_path, self.working_dir)
 
+    def _needs_refresh(self, job: ExperimentJob) -> bool:
+        """Whether ``job`` is a live job another process runs, whose record
+        only that process updates: never with persistence off."""
+        return (
+            self.persist_enabled
+            and not self.owns(job)
+            and job.status in NON_TERMINAL_LIVE_STATUSES
+        )
+
     def refresh_foreign_job(self, job: ExperimentJob) -> ExperimentJob:
         """Re-read a parallel session's live job from its sidecar.
 
@@ -272,14 +296,10 @@ class JobRegistry:
         in this process would ever see it finish. Re-reading the sidecar at
         resolution time picks up the owner's latest persisted state
         (including the interrupted translation once the owner has died).
-        Own jobs, terminal jobs, and persistence-off sessions return
+        Own jobs (``owns``), terminal jobs, and persistence-off sessions return
         unchanged.
         """
-        if (
-            not self.persist_enabled
-            or getattr(job, "owner_pid", 0) in (0, os.getpid())
-            or job.status not in NON_TERMINAL_LIVE_STATUSES
-        ):
+        if not self._needs_refresh(job):
             return job
         try:
             fresh = self._load_foreign_job_sync(job)
@@ -298,11 +318,7 @@ class JobRegistry:
         loop. The guard (no IO for own/terminal jobs) and the registry swap
         both stay on the loop; only the foreign non-terminal case does IO.
         """
-        if (
-            not self.persist_enabled
-            or getattr(job, "owner_pid", 0) in (0, os.getpid())
-            or job.status not in NON_TERMINAL_LIVE_STATUSES
-        ):
+        if not self._needs_refresh(job):
             return job
         try:
             fresh = await asyncio.to_thread(self._load_foreign_job_sync, job)
@@ -343,17 +359,22 @@ class JobRegistry:
         """Wait for a job to finish, or its runs to; the latest view, and whether time ran out.
 
         One answer for every caller, chosen by who can change the job: this
-        process's live job is waited on; another process's job is re-read from
-        its record; anything else has nothing that will change it here, so its
-        record answers at once.
+        process's live job is waited on; any other job is re-read from its
+        record, which the store reconciles once its owner is gone. Without
+        persistence there is no record, so nothing will change it here and it
+        answers at once. A job whose record already says it is done
+        (``finished``) answers at once, live or not, so this wait and every
+        reader of the record agree on when the runs are done.
         """
         live = self.live.get(job.job_id)
         if live is not None:
+            if finished(live.job, wait_for):
+                return live.job, False
             done = await live.wait(timeout_s, wait_for=wait_for)
             return live.job, not done
         if finished(job, wait_for):
             return job, False
-        if job.owner_pid not in (0, os.getpid()):
+        if self.persist_enabled:
             return await self._wait_for_foreign(job, timeout_s, wait_for)
         return job, True
 
@@ -659,28 +680,31 @@ class JobRegistry:
         return self._pending_persist.pending(job_id)
 
     async def cancel_running(self, runners, session_state) -> None:
-        """Cancel any jobs still in running/queued state.
+        """Stop the jobs this process runs (``owns``) that are still live.
+
+        Their stopped cases record ``OWNER_STOPPED``, the code a crash leaves
+        too: the case stopped because the process running it went away, not
+        because anyone cancelled it, so a resume retries it by default either
+        way. The jobs themselves end ``cancelled``.
 
         Runners' ``cancel`` APIs take a SessionState for historical reasons;
         the caller passes it through rather than the registry reaching back
         for a circular reference.
         """
-        own_pid = os.getpid()
         # Snapshot before iterating: the awaits below suspend this coroutine,
         # and a concurrent registration would change the dict under us —
         # "dictionary changed size during iteration".
         #
-        # Only THIS process's jobs are cancelled: a parallel server session's
-        # live job also sits in the registry as running (loaded from its
-        # record with the owner still alive) and must not be killed or
-        # relabeled by our shutdown.
-        experiments = list(self.jobs.values())
+        # Only THIS process's jobs are stopped: another server's live job also
+        # sits in the registry as running (loaded from its record with the
+        # owner still alive) and must not be killed or relabeled by our
+        # shutdown, whatever pid its record names.
+        experiments = [job for job in self.jobs.values() if self.owns(job)]
         await _issue_cancels(
             [
-                runner.cancel(experiment)
+                runner.cancel(experiment, reason=OWNER_STOPPED)
                 for experiment in experiments
-                if experiment.owner_pid == own_pid
-                and (runner := runners.get_experiment_runner_for(experiment)) is not None
+                if (runner := runners.get_experiment_runner_for(experiment)) is not None
             ]
         )
         # No record is kept of which cancels succeeded, because a cancel that
@@ -692,51 +716,36 @@ class JobRegistry:
         # write it a terminal status before the process exits. Skipping it would
         # persist a sidecar reading "running" under a pid that no longer exists.
         for experiment in experiments:
-            if experiment.status in NON_TERMINAL_LIVE_STATUSES and experiment.owner_pid == own_pid:
-                cancelled_at = now()
-                newly_cancelled = [
-                    case for case in experiment.cases if case.status not in TERMINAL_CASE_STATUSES
-                ]
-                experiment.cases = [
-                    (
-                        case
-                        if case.status in TERMINAL_CASE_STATUSES
-                        else replace(
-                            case,
-                            status="cancelled",
-                            failure_code="server_shutdown",
-                            error="Server shut down before this case completed",
-                            completed_at=cancelled_at,
-                        )
-                    )
-                    for case in experiment.cases
-                ]
-                experiment.completeness = replace(
-                    experiment.completeness,
-                    cancelled=(experiment.completeness.cancelled + len(newly_cancelled)),
+            if experiment.status not in NON_TERMINAL_LIVE_STATUSES:
+                continue
+            stopped_at = now()
+            stopped = [
+                replace(
+                    case,
+                    status="failed",
+                    failure_code=OWNER_STOPPED,
+                    error="The server shut down before this case completed",
+                    completed_at=stopped_at,
                 )
-                experiment.failures.extend(
-                    {
-                        "case_id": case.case_id,
-                        "code": "server_shutdown",
-                        "message": "Server shut down before this case completed",
-                    }
-                    for case in newly_cancelled
+                for case in experiment.cases
+                if case.status not in TERMINAL_CASE_STATUSES
+            ]
+            replaced = {case.case_id: case for case in stopped}
+            experiment.cases = [replaced.get(case.case_id, case) for case in experiment.cases]
+            experiment.completeness.recount(experiment.cases, execution_job_id=experiment.job_id)
+            experiment.failures.extend(failure_row(case) for case in stopped)
+            if experiment.analysis.status in {"pending", "running"}:
+                experiment.analysis = replace(
+                    experiment.analysis,
+                    status="cancelled",
+                    error="Server shut down before attached analysis completed",
+                    completed_at=stopped_at,
                 )
-                if experiment.analysis.status in {"pending", "running"}:
-                    experiment.analysis = replace(
-                        experiment.analysis,
-                        status="cancelled",
-                        error="Server shut down before attached analysis completed",
-                        completed_at=cancelled_at,
-                    )
-                live = self.live.get(experiment.job_id)
-                if live is not None:
-                    live.transition("cancelled")
-                else:
-                    transition(experiment, "cancelled")
-                self.persist_job(experiment)
+            # Still live, so still here: eviction takes only finished jobs.
+            self.live[experiment.job_id].transition("cancelled")
+            self.persist_job(experiment)
 
+        # A job that finished during the cancels may have been evicted since.
         await _issue_cancels(
             _cancel_tasks(
                 [self.live[job.job_id] for job in experiments if job.job_id in self.live]

@@ -87,29 +87,35 @@ def is_cp1252_ltspice_executable(program: str) -> bool:
     return _CP1252_LTSPICE_EXECUTABLE.search(program) is not None
 
 
-def predates_logopinfo(program: str) -> bool:
-    """Whether ``program`` is an LTspice that does not know ``.options logopinfo``.
-
-    LTspice XVII and IV print each semiconductor's operating point in the log
-    of every ``.op`` run, and end the run with "unrecognized option" when a
-    deck asks for it. They are the same executables that decode a deck as
-    cp1252: the builds before LTspice 24.
-    """
-    return is_cp1252_ltspice_executable(program)
-
-
-def ltspice_before_24(simulator: type | None) -> bool:
-    """Whether ``simulator`` launches an LTspice before 24, XVII or IV: the
-    builds that refuse ``.options logopinfo`` (:func:`predates_logopinfo`) and
-    write each subcircuit instance without its X. False for anything else, and
-    for a family with no executable."""
-    return predates_logopinfo(executable_path(simulator) or "")
-
-
 def is_cp1252_ltspice_build(reported: str) -> bool:
     """Whether a build a run reported (``reported_build``) is an LTspice that
     decodes decks as cp1252: XVII or earlier."""
     return _CP1252_LTSPICE_BUILD.search(reported) is not None
+
+
+def ltspice_before_24(program: str | None, reported: str | None) -> str | None:
+    """The evidence that ``program`` is an LTspice before 24, XVII or IV, or None.
+
+    The one answer to that question, for everything that turns on it. Those
+    builds decode a deck as cp1252, so a UTF-8 micro sign loses its scale; they
+    print each semiconductor's operating point in the log of every ``.op`` run
+    and end the run with "unrecognized option" when a deck asks for it with
+    ``.options logopinfo``; and they write each subcircuit instance's name
+    without its X.
+
+    Shown by the executable's own file name (``XVIIx64.exe``, ``XVIIx86.exe``,
+    ``scad3.exe``), or by ``reported``, the build an earlier run on the same
+    executable named in its output (``reported_build``), which is what shows a
+    copy under another name for what it is. Neither launches the simulator, so
+    an executable under another name that has not run yet is not shown to be
+    one. Any other simulator answers None. The answer names the evidence, for a
+    finding to cite.
+    """
+    if program and is_cp1252_ltspice_executable(program):
+        return program
+    if reported and is_cp1252_ltspice_build(reported):
+        return f"{reported} ({program})" if program else reported
+    return None
 
 
 @dataclass(frozen=True)

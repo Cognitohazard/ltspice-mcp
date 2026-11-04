@@ -17,7 +17,9 @@ from pathlib import Path
 from ltspice_mcp.lib.store import parser_file_in
 
 _CHUNK_BYTES = 1024 * 1024
-_FILENAMES = {"raw": "input.raw", "log": "input.log", "console": "input.exe.log"}
+#: The name each captured file has in the parser's directory, by its role: the
+#: one table capture and every decoder of a capture read.
+CAPTURED_NAMES = {"raw": "input.raw", "log": "input.log", "console": "input.exe.log"}
 PARSER_REVISION = "artifacts-materialize-3"
 
 
@@ -152,7 +154,7 @@ def capture_inputs(
         budget = input_bytes - used
         if role != "raw":
             budget = min(budget, log_bytes - used_logs)
-        name = _FILENAMES[role]
+        name = CAPTURED_NAMES[role]
         size, digest = _copy_file(path, parser_file_in(directory, name), info, budget)
         captured.append(CapturedFile(role, name, size, digest))
         used += size

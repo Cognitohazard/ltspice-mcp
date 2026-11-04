@@ -33,6 +33,7 @@ from ltspice_mcp.lib import atomic_write_bytes, hidden_desktop
 from ltspice_mcp.lib.ltspice_windows import run_on_desktop
 from ltspice_mcp.lib.pdk_native import ArtifactDigest
 from ltspice_mcp.lib.recovery_records import ExecutionRecord, RecoveryError
+from ltspice_mcp.lib.store import is_store_name
 
 STARTUP_VERSION = "ltspice-established-ini-v1"
 # This build's startup decision and native profile getters were inspected.
@@ -40,7 +41,6 @@ STARTUP_VERSION = "ltspice-established-ini-v1"
 AUDITED_EXECUTABLE_SHA256 = "a94eb1789084db9f46375cce05110e03578f9cdb931867a0faaca5b200793f06"
 _REMINDER_SECONDS = 1_296_001
 _MAX_PROFILE_BYTES = 1_048_576
-_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
 
 def _require_windows() -> None:
@@ -72,7 +72,7 @@ def _attempt_path(path: Path, root: Path) -> None:
     if (
         path.name != "LTspice.ini"
         or path.parent.parent != root / "startup"
-        or not _TOKEN.fullmatch(path.parent.name)
+        or not is_store_name(path.parent.name)
     ):
         raise RecoveryError("recovery_path_escape", "LTspice attempt path is incompatible")
 

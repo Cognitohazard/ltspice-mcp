@@ -3,11 +3,26 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass, fields
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from typing_extensions import TypedDict
+
+#: The sections a captured log decodes into, in the order the decoder writes
+#: them: the one list the decoder and the validated view share.
+LogSectionName = Literal[
+    "diagnostics",
+    "measurements",
+    "device_op",
+    "steps",
+    "op_iterations",
+    "temperatures",
+    "fourier",
+    "native_tables",
+    "error_context",
+]
+LOG_SECTIONS: tuple[LogSectionName, ...] = get_args(LogSectionName)
 
 
 class LogDecodeError(ValueError):
@@ -165,6 +180,14 @@ class LogDiagnostics(TypedDict):
     meas_errors: list[MeasErrorEntry]
 
 
+class UnreadableValue(TypedDict):
+    """Why a measurement's printed value was not read: the log line that
+    printed it (None where no line names it) and the reason."""
+
+    line: str | None
+    reason: str
+
+
 class _MeasurementMetadata(TypedDict, total=False):
     """Optional metadata folded into a .MEAS result.
 
@@ -177,6 +200,7 @@ class _MeasurementMetadata(TypedDict, total=False):
     range_from: float | list[float | None] | None
     range_to: float | list[float | None] | None
     at: float | list[float | None] | None
+    unreadable: UnreadableValue
 
 
 class MeasurementEntry(_MeasurementMetadata):
@@ -187,10 +211,28 @@ class MeasurementEntry(_MeasurementMetadata):
     ``at`` carries the AT/WHEN time/freq for point measurements. Missing when
     not applicable (use ``.get`` rather than ``[]`` to access). When the
     underlying value varies per .step, the field is a list aligned with
-    ``values`` rather than a single scalar.
+    ``values`` rather than a single scalar. ``unreadable`` is set when the log
+    printed something other than a number for the value, such as a WHEN's
+    threshold written as a parameter or an expression: the value is null, and
+    only this entry fails.
     """
 
     values: list[float | None]
+
+
+def measurement_named(name: str, names: Iterable[str]) -> str | None:
+    """Which of a log's measurement ``names`` a caller's ``name`` refers to,
+    or None for none of them.
+
+    The log reader holds a measurement under the name lower-cased, whatever
+    case the deck gave it, so a name is matched ignoring case; one held
+    exactly as spelled is preferred.
+    """
+    held = names if isinstance(names, Collection) else list(names)
+    if name in held:
+        return name
+    folded = name.casefold()
+    return next((key for key in held if key.casefold() == folded), None)
 
 
 class MeasurementsOutput(TypedDict):

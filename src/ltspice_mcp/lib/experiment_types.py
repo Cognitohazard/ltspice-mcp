@@ -10,7 +10,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from ltspice_mcp.lib import now
 
@@ -19,16 +19,20 @@ if TYPE_CHECKING:
     from ltspice_mcp.lib.recovery_records import CaseRecovery, JobRecovery
     from ltspice_mcp.lib.simulator_build import SimulatorExecutable
 
-ExperimentStatus = Literal[
-    "queued",
-    "running",
-    "analyzing",
+#: The statuses of a job some process is still working on.
+LiveExperimentStatus = Literal["queued", "running", "analyzing"]
+#: The statuses of a finished job. 'interrupted' is one: the process running
+#: the job went away before its runs did.
+TerminalExperimentStatus = Literal[
     "completed",
     "completed_with_failures",
     "failed",
     "cancelled",
     "interrupted",
 ]
+#: Every status a job record holds; ``lib.job_types`` derives its two status
+#: sets from the two halves, so a status is live or terminal and never both.
+ExperimentStatus = Literal[LiveExperimentStatus, TerminalExperimentStatus]
 
 ExperimentCaseStatus = Literal[
     "queued",
@@ -48,6 +52,14 @@ AnalysisStatus = Literal[
     "failed",
     "cancelled",
 ]
+
+#: The failure code of a case stopped because the process running its job went
+#: away: found dead by the next reader of the job's record, or shut down, the
+#: server's or the Python API's, while the case ran. One code for both, as
+#: distinct from an explicit cancel (``cancelled``), so a resume retries either
+#: by default.
+OwnerStopped = Literal["server_restarted"]
+OWNER_STOPPED: Final[OwnerStopped] = "server_restarted"
 
 TERMINAL_CASE_STATUSES: frozenset[str] = frozenset({"produced", "failed", "cancelled", "skipped"})
 #: Launched and not yet terminal: a simulator may be running for the case now.
@@ -309,6 +321,11 @@ class ExperimentJob:
     artifacts: list[dict[str, Any]] = field(default_factory=list)
     analysis: AnalysisStage = field(default_factory=AnalysisStage)
     owner_pid: int = field(default_factory=os.getpid)
+    #: The pid and start marker of the owning process, as the record read back
+    #: held them: what tells that process from a later one given the same pid.
+    #: None for a job this process made, whose record is written with its own
+    #: (``store.owner_start_record``), and for a record written before markers.
+    owner_start: tuple[int, str] | None = field(default=None, repr=False)
     recovery: JobRecovery | None = None
     #: Set when the store reconciled this record as it loaded it — the owning
     #: process had died mid-run, so the object in memory now differs from the

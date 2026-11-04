@@ -37,7 +37,7 @@ from spicelib.simulators.xyce_simulator import XyceSimulator
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.errors import compact_validation_error
 from ltspice_mcp.lib import raster
-from ltspice_mcp.lib.lint_rules import MEAS_ANGLE_REASON, UNNAMED_EXPORT_WRITER
+from ltspice_mcp.lib.lint_rules import MEAS_ANGLE_REASON, UNNAMED_EXPORT_WRITER, lint_deck
 from ltspice_mcp.lib.schematic_scene import Scene
 from ltspice_mcp.lib.sheet_findings import Finding
 from ltspice_mcp.lib.store import RENDER_RETENTION_S, Store
@@ -379,6 +379,8 @@ async def test_micro_sign_warnings_are_capped_like_every_repeating_rule(config, 
     assert len(shown) == vc.FINDING_RULE_CAP
     omitted = data["findings_omitted"]["value_suffix_micro_sign"]
     assert (omitted["omitted"], omitted["total"]) == (60 - vc.FINDING_RULE_CAP, 60)
+    # The hint counts what the check found, not the capped list it shows.
+    assert "60 warning(s): value_suffix_micro_sign" in data["hint"]
 
 
 async def test_syntax_flags_greek_mu_like_the_micro_sign(state_no_sim, work_dir):
@@ -469,6 +471,60 @@ async def test_syntax_checks_against_an_ltspice_default(state_no_sim, work_dir):
         "C1 in out C=1n",
         "p",
     ]
+
+
+#: An AC deck to measure, between its title and its ``.end``.
+_AC_CIRCUIT = "V1 in 0 AC 1\nR1 in out 1k\nC1 out 0 1n\n.ac dec 10 1 1meg\n"
+_REFUSED = ".meas ac g FIND vdb(out) AT 1k\n"
+
+#: Where a directive the checks refuse can sit, and the line its card starts
+#: on when the simulator reads it: one line, continued on a ``+`` line past a
+#: comment (joined, as both LTspice builds join ``deck/continuation``), as the
+#: title or after ``.end`` (neither read: ``deck/title_*``, ``deck/after_end``).
+_REFUSED_DIRECTIVE_PLACES = [
+    pytest.param("* t\n" + _AC_CIRCUIT + _REFUSED + ".end\n", [6], id="one-line"),
+    pytest.param(
+        "* t\n" + _AC_CIRCUIT + ".meas ac g\n+ FIND vdb(out) AT 1k\n.end\n",
+        [6],
+        id="continued-function",
+    ),
+    pytest.param(
+        "* t\n" + _AC_CIRCUIT + ".meas ac\n* the name\n+ k FIND mag(V(out)) AT 1k\n.end\n",
+        [6],
+        id="continued-name",
+    ),
+    pytest.param(_REFUSED + _AC_CIRCUIT + ".end\n", [], id="title"),
+    pytest.param("* t\n" + _AC_CIRCUIT + ".end\n" + _REFUSED, [], id="after-end"),
+]
+
+
+@pytest.mark.parametrize(("text", "lines"), _REFUSED_DIRECTIVE_PLACES)
+async def test_syntax_and_the_linter_refuse_the_same_directive_cards(
+    state_no_sim, work_dir, text: str, lines: list[int]
+):
+    deck = _write(work_dir, "meas.cir", text)
+    data = await _run(state_no_sim, path=str(deck), checks=["syntax"])
+    verified = [
+        f["at"]["line"] for f in data.get("findings", []) if f["rule_id"] == "directive_syntax"
+    ]
+    linted = [
+        f["at"]["line"]
+        for f in lint_deck(text, deck, "ltspice", "LTspice")
+        if f["rule_id"] in {"meas-function-ltspice", "meas-name-ltspice"}
+    ]
+    assert verified == linted == lines
+
+
+async def test_syntax_reads_a_continued_tran_as_one_card(config, work_dir):
+    """ngspice refuses a zero ``.tran`` step wherever the card puts it."""
+    from spicelib.simulators.ngspice_simulator import NGspiceSimulator
+
+    state = SessionState.create(config, available={"ngspice": NGspiceSimulator})
+    deck = _write(work_dir, "tran.cir", "* t\nV1 a 0 1\nR1 a 0 1k\n.tran\n+ 0 1m\n.end\n")
+
+    data = await _run(state, path=str(deck), checks=["syntax"])
+
+    assert [(f["rule_id"], f["at"]["line"]) for f in data["findings"]] == [("directive_syntax", 4)]
 
 
 _TRIG_MEAS = (

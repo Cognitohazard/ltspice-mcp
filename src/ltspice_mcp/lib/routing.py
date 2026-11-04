@@ -1,10 +1,12 @@
 """Whether a proposed route may be drawn on a sheet.
 
-``judge`` takes a sheet as plain data, the view and the net partition the sheet
-rules read, and a :class:`Route` someone proposes, and returns what its rules
-find: the findings that refuse the route, and the junctions the route would
-make on the way, onto wiring already on its net, which LTspice joins and no
-rule faults. Nothing here resolves an endpoint,
+``judge`` takes a sheet as plain data, the view the sheet rules read and the
+nets LTspice makes of it, and a :class:`Route` someone proposes, and returns
+what its rules find: the findings that refuse the route, and the junctions the
+route would make on the way, onto what is already on its net, which LTspice
+joins and no rule faults. Whether a point is on the route's net is one
+question, asked alike of a pin, a wire's end and a label: the nets the route's
+ends are on, as LTspice makes them. Nothing here resolves an endpoint,
 chooses a path or writes a wire. The caller decides the route; this says what
 drawing it would do.
 
@@ -22,15 +24,10 @@ Nothing here reads a file or a symbol, and nothing depends on the event loop.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Container, Mapping, Sequence
+from collections.abc import Container, Mapping, Sequence
 from dataclasses import dataclass, field
 
-from ltspice_mcp.lib.connectivity import (
-    NetPartition,
-    label_folded_nets,
-    net_members,
-    point_on_segment,
-)
+from ltspice_mcp.lib.connectivity import NamedNets, point_on_segment
 from ltspice_mcp.lib.sheet_findings import Finding, SheetView
 
 Point = tuple[int, int]
@@ -78,10 +75,9 @@ class Route:
     """A route someone proposes.
 
     ``points`` are its corners from one end to the other, repeats removed, and
-    ``segments`` the wires between them. ``ends`` are its two end points and
-    ``anchors`` a point on the net each end was on before the route, which is
-    the end itself for a pin or a label and a point of the wire for an end on
-    a wire's interior. ``end_names`` are the ends as they were asked for, for
+    ``segments`` the wires between them. ``ends`` are its two end points, each
+    on the nets of what is there before the route is drawn: a pin, a label or
+    a wire through it. ``end_names`` are the ends as they were asked for, for
     wording, and ``ends_by_coordinate`` says which were given as a coordinate
     rather than as a pin or a net.
     """
@@ -89,7 +85,6 @@ class Route:
     points: tuple[Point, ...]
     segments: tuple[Wire, ...]
     ends: tuple[Point, Point]
-    anchors: tuple[Point, Point]
     end_names: tuple[str, str]
     ends_by_coordinate: tuple[bool, bool]
 
@@ -113,7 +108,7 @@ def wires_through(coord: Point, segments: Sequence[Wire]) -> list[Wire]:
     """The segments ``coord`` lies on, ends included, in the order given.
 
     A point on a wire's interior touches that wire the way its end would: LTspice
-    joins anything placed there (see ``connectivity.partition``). More than one
+    joins anything placed there (see ``lib/connectivity.py``). More than one
     segment comes back where wires meet, overlap or cross.
     """
     return [seg for seg in segments if point_on_segment(coord, seg[:2], seg[2:])]
@@ -140,8 +135,8 @@ def collinear_overlap(a: Wire, b: Wire) -> bool:
     return False
 
 
-def judge(view: SheetView, partition: NetPartition, route: Route) -> Judgement:
-    """What the route rules find of ``route`` on the sheet ``view`` and ``partition`` show.
+def judge(view: SheetView, nets: NamedNets, route: Route) -> Judgement:
+    """What the route rules find of ``route`` on the sheet ``view`` and ``nets`` show.
 
     The rules that block are all made, so a refusal names everything wrong with
     the route at once, in the order: a diagonal segment; a pin passed over; a
@@ -155,8 +150,9 @@ def judge(view: SheetView, partition: NetPartition, route: Route) -> Judgement:
     wires = list(view.wires)
     segments = list(route.segments)
     ends = set(route.ends)
-    net_of = label_folded_nets(partition)
-    pin_coords = partition.pin_owners.keys()
+    # The nets the route joins: what is on each of its ends before it is drawn.
+    end_nets = nets.at(route.ends[0]) | nets.at(route.ends[1])
+    pin_coords = {pin.point for pin in nets.pins}
 
     for sx1, sy1, sx2, sy2 in segments:
         if sx1 != sx2 and sy1 != sy2:
@@ -168,43 +164,36 @@ def judge(view: SheetView, partition: NetPartition, route: Route) -> Judgement:
                 )
             )
 
-    # A pin is safe if it is already wired to the route's net: an existing wire
-    # reaches both that pin and one of the route's ends, as at a T-junction
-    # onto a power rail. The test is that one wire, not the whole net.
-    def pin_on_target_net(px: int, py: int) -> bool:
-        for ex1, ey1, ex2, ey2 in wires:
-            wire_pts = {(ex1, ey1), (ex2, ey2)}
-            if (px, py) in wire_pts and wire_pts & ends:
-                return True
-        return False
-
-    # The exemption is by the exact coordinate of an end, NOT by whole part:
-    # the OTHER pin of an end's part still lies on the route and must be
-    # refused, or a waypoint landing on it shorts the part unremarked.
-    for part in view.parts:
-        for name, px, py in part.pins:
-            if (px, py) in ends:
-                continue
-            # A pin at the shared corner of two consecutive segments is on
-            # both, so the route is tested once per pin.
-            if not wires_through((px, py), segments):
-                continue
-            pin_label = f"{part.ref}.{name}"
-            if pin_on_target_net(px, py):
-                said.junctions.append({"x": px, "y": py, "via": "pin", "pin": pin_label})
-                continue
-            said.refusals.append(
-                Finding(
-                    "route_through_pin",
-                    f"Wire passes through {pin_label} at ({px},{py}): "
-                    "will create unintended connection",
-                    refs=(part.ref,),
-                    points=((px, py),),
-                    facts={"pin": name},
-                )
+    # A pin the route passes is on its net already when it is on the net of
+    # either end, as at a T-junction onto a power rail: a junction, as a wire's
+    # end or a label there is. The exemption is by the exact coordinate of an
+    # end, NOT by whole part: the OTHER pin of an end's part still lies on the
+    # route and must be refused, or a waypoint landing on it shorts the part
+    # unremarked.
+    for pin in nets.pins:
+        (px, py), name = pin.point, pin.name
+        if pin.point in ends:
+            continue
+        # A pin at the shared corner of two consecutive segments is on
+        # both, so the route is tested once per pin.
+        if not wires_through(pin.point, segments):
+            continue
+        pin_label = f"{pin.reference}.{name}"
+        if nets.of_pin(pin) in end_nets:
+            said.junctions.append({"x": px, "y": py, "via": "pin", "pin": pin_label})
+            continue
+        said.refusals.append(
+            Finding(
+                "route_through_pin",
+                f"Wire passes through {pin_label} at ({px},{py}): "
+                "will create unintended connection",
+                refs=(pin.reference,),
+                points=((px, py),),
+                facts={"pin": name},
             )
+        )
 
-    _wiring_met(said, wires, segments, ends, route, partition, net_of, pin_coords)
+    _wiring_met(said, wires, segments, ends, route, nets, end_nets, pin_coords)
     return said
 
 
@@ -214,8 +203,8 @@ def _wiring_met(
     segments: list[Wire],
     ends: set[Point],
     route: Route,
-    partition: NetPartition,
-    net_of: Callable[[Point], Point],
+    nets: NamedNets,
+    end_nets: frozenset[int],
     pin_coords: Container[Point],
 ) -> None:
     """The three rules about existing wiring the route meets, in their order.
@@ -300,31 +289,35 @@ def _wiring_met(
                 )
 
     # Contact. LTspice joins a wire wherever another wire's end, a pin or a
-    # label touches it (see connectivity.partition), so a waypoint on existing
+    # label touches it (see lib/connectivity.py), so a waypoint on existing
     # wiring, or a route passing through an existing wire's end or a label,
-    # joins the route there as an end would. Onto a net the route already joins
-    # that is a redundant junction, reported; onto any other net it would merge
-    # a net nobody named, so it is refused, pointing at the coordinate end that
-    # makes the same T on purpose. Pins are the pin rule's, and a wire that has
-    # already refused the route is not reported twice.
-    end_nets = {net_of(route.anchors[0]), net_of(route.anchors[1])}
+    # joins the route there as an end would. Onto the nets the route already
+    # joins that is a redundant junction, reported; onto any other net it would
+    # merge a net nobody named, so it is refused, pointing at the coordinate end
+    # that makes the same T on purpose. Pins are the pin rule's, and a wire that
+    # has already refused the route is not reported twice.
     vertices = [v for v in route.points[1:-1] if v not in ends and v not in pin_coords]
-    # (point, net it touches) -> (kind, the wire touched, or None for a label).
-    # One entry per point and net, the first found, in the order found.
-    contacts: dict[tuple[Point, Point], tuple[str, Wire | None]] = {}
+    # (point, nets it touches) -> (kind, the wire touched, or None for a label).
+    # One entry per point and nets, the first found, in the order found.
+    contacts: dict[tuple[Point, frozenset[int]], tuple[str, Wire | None]] = {}
     for ext_index, wire in enumerate(wires):
         if ext_index in flagged:
             continue
-        touched = net_of(wire[:2])
         for v in vertices:
             if point_on_segment(v, wire[:2], wire[2:]):
-                contacts.setdefault((v, touched), ("waypoint", wire))
+                contacts.setdefault((v, nets.along(v, (wire[:2], wire[2:]))), ("waypoint", wire))
         for end in (wire[:2], wire[2:]):
             if end in ends or end in vertices or end in pin_coords:
                 continue
             if wires_through(end, segments):
+                touched = nets.along(end, (wire[:2], wire[2:]))
                 contacts.setdefault((end, touched), ("wire_end", wire))
-    for coord in sorted(partition.label_texts):
+    texts_at: dict[Point, set[str]] = {}
+    nets_at: dict[Point, set[int]] = {}
+    for label in nets.labels:
+        texts_at.setdefault(label.point, set()).add(label.text)
+        nets_at.setdefault(label.point, set()).add(nets.of_label(label))
+    for coord in sorted(texts_at):
         if coord in ends or coord in pin_coords or not wires_through(coord, segments):
             continue
         # A label joins whatever passes through its point, on a wire or off
@@ -335,16 +328,13 @@ def _wiring_met(
             if point_on_segment(coord, wire[:2], wire[2:])
         ]
         if not under or any(index not in flagged for index in under):
-            contacts.setdefault((coord, net_of(coord)), ("label", None))
+            contacts.setdefault((coord, frozenset(nets_at[coord])), ("label", None))
 
-    def describe_net(net: Point) -> str:
-        on_net = net_members(partition, net_of, net)
-        labels = sorted({t for c in on_net for t in partition.label_texts.get(c, ())})
+    def describe_net(net: int) -> str:
+        labels = sorted(nets.texts(net))
         if labels:
             return "net " + ", ".join(f"'{t}'" for t in labels)
-        pins = sorted(
-            f"{ref}.{name}" for c in on_net for ref, name in partition.pin_owners.get(c, ())
-        )
+        pins = sorted(f"{pin.reference}.{pin.name}" for pin in nets.pins_on(net))
         if pins:
             more = " and others" if len(pins) > 3 else ""
             return "the net of " + ", ".join(pins[:3]) + more
@@ -353,7 +343,7 @@ def _wiring_met(
     for ((cx, cy), touched), (via, wire) in contacts.items():
         entry: dict[str, object] = {"x": cx, "y": cy, "via": via}
         if wire is None:
-            texts = sorted(partition.label_texts[(cx, cy)])
+            texts = sorted(texts_at[(cx, cy)])
             what = "the net label " + ", ".join(f"'{t}'" for t in texts) + f" at ({cx},{cy})"
             entry["label"] = texts[0]
         else:
@@ -363,9 +353,15 @@ def _wiring_met(
                 if via == "waypoint"
                 else f"the end of the wire {segment_text(wire)} at ({cx},{cy})"
             )
-        if touched in end_nets:
+        if touched and touched <= end_nets:
             said.junctions.append(entry)
             continue
+        others = sorted(touched - end_nets)
+        elsewhere = (
+            " and ".join(describe_net(net) for net in others)
+            if others
+            else "a wire no pin or label is on"
+        )
         remedy = (
             f"To join it on purpose, end a route there with "
             f'{{"x": {cx}, "y": {cy}}} as from_pin or to_pin; otherwise move the '
@@ -376,7 +372,7 @@ def _wiring_met(
         said.refusals.append(
             Finding(
                 "route_touches_net",
-                f"Route touches {what}, on {describe_net(touched)}: LTspice joins "
+                f"Route touches {what}, on {elsewhere}: LTspice joins "
                 f"wiring wherever it touches, so this would merge that net. {remedy}",
                 points=((cx, cy),),
                 facts={"via": via},

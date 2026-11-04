@@ -42,22 +42,22 @@ RUNAWAY_WAVE = 850.0 * np.sin(np.linspace(0, 30, 500))
 
 class TestParseRequestedOutputs:
     def test_meas_with_type_keyword(self):
-        out = parse_requested_outputs(".meas TRAN vpp PP V(out)\n.MEAS AC gain MAX V(o)")
+        out = parse_requested_outputs("* t\n.meas TRAN vpp PP V(out)\n.MEAS AC gain MAX V(o)")
         assert out["meas"] == ["vpp", "gain"]
 
     def test_meas_without_type_keyword(self):
         # ``.meas <name> ...`` with no analysis-type token — name is token 1.
-        out = parse_requested_outputs(".meas myval FIND V(x) AT 1m")
+        out = parse_requested_outputs("* t\n.meas myval FIND V(x) AT 1m")
         assert out["meas"] == ["myval"]
 
     def test_four_signals(self):
-        out = parse_requested_outputs(".four 1k V(out) V(in)")
+        out = parse_requested_outputs("* t\n.four 1k V(out) V(in)")
         assert out["four"] == ["V(out)", "V(in)"]
 
     def test_four_counts_before_the_traces_are_not_signals(self):
         # .four <freq> [Nharmonics] [Nperiods] <trace> ...: the counts sit
         # between the frequency and the traces, and -1 periods is the whole run.
-        out = parse_requested_outputs(".four 1k 5 V(in)\n.four 1k 7 -1 V(a) V(b)")
+        out = parse_requested_outputs("* t\n.four 1k 5 V(in)\n.four 1k 7 -1 V(a) V(b)")
         assert out["four"] == ["V(in)", "V(a)", "V(b)"]
 
     def test_four_on_the_recorded_deck(self):
@@ -68,7 +68,7 @@ class TestParseRequestedOutputs:
         assert parse_requested_outputs(deck)["four"] == ["V(out)", "V(in)"]
 
     def test_ignores_non_directives(self):
-        out = parse_requested_outputs("R1 n1 n2 1k\nV1 in 0 1\n.tran 1m")
+        out = parse_requested_outputs("* t\nR1 n1 n2 1k\nV1 in 0 1\n.tran 1m")
         assert out["meas"] == [] and out["four"] == []
 
 
@@ -88,7 +88,7 @@ class TestTranMaxStep:
         ],
     )
     def test_the_fourth_number_of_the_first_tran(self, deck: str, step: float | None):
-        assert tran_max_step(deck) == (None if step is None else pytest.approx(step))
+        assert tran_max_step("* t\n" + deck) == (None if step is None else pytest.approx(step))
 
 
 class TestOneAcFrequency:
@@ -107,7 +107,8 @@ class TestOneAcFrequency:
         ],
     )
     def test_the_one_value_of_an_ac_list(self, deck: str, frequency: float | None):
-        assert one_ac_frequency(deck) == (None if frequency is None else pytest.approx(frequency))
+        expected = None if frequency is None else pytest.approx(frequency)
+        assert one_ac_frequency("* t\n" + deck) == expected
 
 
 class TestRelayObservations:
@@ -188,7 +189,7 @@ class TestReconciliationObservations:
         assert obs[0]["evidence"]["reason"] == "missing"
 
     def test_a_four_harmonic_count_is_not_reported_as_a_missing_trace(self):
-        requested = parse_requested_outputs(".four 1k 5 V(in)")
+        requested = parse_requested_outputs("* t\n.four 1k 5 V(in)")
         obs = reconciliation_observations({"fourier": []}, requested)
         assert [o["evidence"]["name"] for o in obs] == ["V(in)"]
 
