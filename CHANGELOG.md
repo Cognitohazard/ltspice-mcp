@@ -298,6 +298,11 @@ tool-surface changes.
   after the 0.7.0 release, because the 0.7.0 tag was cut without
   `scripts/release.sh`, which stamps them. They now say 0.7.0, and the
   publish workflow refuses a tag whose manifests name another version.
+- `SECURITY.md` named the retired file arguments `raw_path`, `log_path` and
+  `raw_file` where the tools now take `path`. It also listed the
+  `<name>.net` beside a schematic that `run_experiments` no longer writes,
+  and left out the results `jobs(action="place_beside_sheet")` copies beside
+  a sheet.
 
 ### Added
 
