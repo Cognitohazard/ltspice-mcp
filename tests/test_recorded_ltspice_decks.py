@@ -1005,16 +1005,14 @@ def pair_run(build: str, case_id: str, tmp_path: Path) -> tuple[list[str], Measu
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
-def test_a_pair_measured_from_its_two_saved_nodes_is_refused_by_the_lint(
-    build: str, tmp_path: Path
-):
+def test_a_pair_measured_from_its_two_saved_nodes_passes_the_lint(build: str, tmp_path: Path):
     """``.save V(in) V(mid)`` with ``FIND V(in,mid)``: both builds take the
     measurement from the two nodes, the only voltages the raw holds, and
-    ``save-meas-coverage`` refuses the deck for want of the pair."""
+    ``save-meas-coverage`` accepts the deck, reading the pair as its nodes."""
     traces, data = pair_run(build, "deck/save_pair_both_nodes", tmp_path)
     assert traces == ["time", "V(in)", "V(mid)"]
     assert data["measurements"]["vpair"]["values"][0] == pytest.approx(PAIR_VOLTS, abs=5e-4)
-    assert refusals("deck/save_pair_both_nodes") == {"save-meas-coverage"}
+    assert refusals("deck/save_pair_both_nodes") == set()
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)

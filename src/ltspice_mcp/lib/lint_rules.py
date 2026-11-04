@@ -30,6 +30,7 @@ from ltspice_mcp.lib.spice_lex_ops import MICRO_SIGN_READERS, ValueSuffixSite, v
 from ltspice_mcp.lib.spice_lex_views import (
     InstanceLine,
     MeasCard,
+    ProbeRef,
     probe_refs,
     read_instance,
     save_cards,
@@ -37,6 +38,7 @@ from ltspice_mcp.lib.spice_lex_views import (
 from ltspice_mcp.lib.spice_validator import (
     ARITY_CHECKS,
     EXCLUSIVE_ANALYSIS_KINDS,
+    is_ground_node,
     meas_functions_refused,
     meas_name_refused,
     validate_netlist_arity,
@@ -46,7 +48,7 @@ from ltspice_mcp.lib.spice_validator import (
 Disposition = Literal["blocking", "warning", "observation"]
 LintFinding = dict[str, Any]
 
-linter_version = "10"
+linter_version = "11"
 
 # A capital M straight after a number is milli unless the letters after it
 # make it Meg or mil. Other letters do not: LTspice reads 1MHz as a millihertz.
@@ -166,6 +168,25 @@ def _directive_head(card: SpiceCard) -> str:
     return tokens[0].text.casefold() if tokens else ""
 
 
+def _probe_signals(probe: ProbeRef) -> set[str]:
+    """The signals a probe asks for in a ``.meas``, or saves in a ``.save``.
+
+    A voltage between two nodes is its two nodes: both LTspice builds measure
+    ``V(a,b)`` from a saved ``V(a)`` and ``V(b)``, and ``.save V(a,b)`` saves
+    ``V(a)`` and ``V(b)`` (recorded deck/save_pair_both_nodes and
+    deck/save_pair_as_pair). Any other probe stands as written, a voltage
+    against ground among them: neither build measures ``V(a,0)`` with only
+    ``V(a)`` saved (deck/save_pair_to_ground).
+    """
+    if (
+        probe.kind == "V"
+        and len(probe.names) == 2
+        and not any(is_ground_node(name) for name in probe.names)
+    ):
+        return {_normalize_signal(f"V({name})") for name in probe.names}
+    return {_normalize_signal(probe.text)}
+
+
 def _save_meas_coverage(
     context: _LintContext,
     rule: LintRule,
@@ -176,12 +197,10 @@ def _save_meas_coverage(
         return []
     if any(save.saves_all for save in saves):
         return []
-    # A probe is compared whole, as written: whether LTspice measures V(a,b)
-    # from a saved V(a) and V(b) is not recorded, so the pair is asked for.
-    saved = {_normalize_signal(probe.text) for save in saves for probe in save.probes}
+    saved = {signal for save in saves for probe in save.probes for signal in _probe_signals(probe)}
     findings = []
     for card in measurements:
-        required = {_normalize_signal(probe.text) for probe in probe_refs(card)}
+        required = {signal for probe in probe_refs(card) for signal in _probe_signals(probe)}
         missing = sorted(required - saved)
         if missing:
             findings.append(

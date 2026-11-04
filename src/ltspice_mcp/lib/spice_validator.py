@@ -556,6 +556,12 @@ def validate_netlist_arity(
 # Node spellings that are always considered connected (the SPICE ground).
 _GROUND_NODES = frozenset({"0", "gnd"})
 
+
+def is_ground_node(name: str) -> bool:
+    """Whether a deck's node name is ground, as the validator reads it."""
+    return name.casefold() in _GROUND_NODES
+
+
 # Characters that cannot appear in a plain node name. Positional tokens
 # carrying them are value syntax that spilled into the node slots (PULSE
 # fragments, braced expressions), not nodes.

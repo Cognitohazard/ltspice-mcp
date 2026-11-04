@@ -260,22 +260,21 @@ def test_lib_section_ngspice_names_the_setting_that_fixes_it(tmp_path, monkeypat
 
 
 #: Probe spellings, with what each reader of a probe makes of them: the names
-#: the save rule finds unsaved beside ``.save V(a) V(b) I(R1)``, which compares
-#: a probe whole, and the names the validator reads inside it, splitting a
-#: node pair. Whether LTspice measures ``V(a,b)`` from a saved ``V(a)`` and
-#: ``V(b)`` is not recorded, so the save rule asks for the pair as written.
+#: the save rule finds unsaved beside ``.save V(a) V(b) I(R1)``, and the names
+#: the validator reads inside it. Both read a pair of two nodes as its nodes:
+#: both LTspice builds measure ``V(a,b)`` from a saved ``V(a)`` and ``V(b)``.
 _PROBE_READINGS = [
     pytest.param("V(a)", [], ["a"], id="a-node"),
     pytest.param("v( a )", [], ["a"], id="spaced"),
-    pytest.param("V(a,b)", ["v(a,b)"], ["a", "b"], id="a-pair"),
-    pytest.param("V(a, b)", ["v(a,b)"], ["a", "b"], id="a-spaced-pair"),
+    pytest.param("V(a,b)", [], ["a", "b"], id="a-pair"),
+    pytest.param("V(a, b)", [], ["a", "b"], id="a-spaced-pair"),
     pytest.param("I(R1)", [], ["R1"], id="a-current"),
     pytest.param("V(x1:out)", ["v(x1:out)"], ["x1:out"], id="a-node-in-a-subcircuit"),
 ]
 
 
 @pytest.mark.parametrize(("probe", "unsaved", "names"), _PROBE_READINGS)
-def test_each_reader_of_a_probe_reads_it_as_before(
+def test_each_reader_of_a_probe_reads_its_nodes(
     tmp_path: Path, probe: str, unsaved: list[str], names: list[str]
 ):
     deck = f"* t\nV1 in 0 1\nR1 in a 1k\nR2 in b 1k\n.meas tran m AVG {probe}\n.tran 1m\n.end\n"
@@ -300,6 +299,32 @@ def test_each_reader_of_a_probe_reads_it_as_before(
         str(issue["message"]).split("'")[1] for issue in validate_netlist_directive_refs(elsewhere)
     ]
     assert undefined == [name for name in names if ":" not in name]
+
+
+@pytest.mark.parametrize(
+    ("save", "probe", "missing"),
+    [
+        pytest.param("V(a) V(b)", "V(a,b)", [], id="pair-from-both-nodes"),
+        pytest.param("V(a)", "V(a,b)", ["v(b)"], id="pair-missing-a-node"),
+        pytest.param("V(a,b)", "V(b)", [], id="saved-pair-saves-its-nodes"),
+        pytest.param("V(a)", "V(a,0)", ["v(a,0)"], id="against-ground-as-written"),
+        pytest.param("V(a)", "V(a,GND)", ["v(a,gnd)"], id="against-gnd-as-written"),
+        pytest.param("V(a,0)", "V(a,0)", [], id="saved-as-written"),
+    ],
+)
+def test_the_save_rule_reads_a_pair_of_two_nodes_as_its_nodes(
+    tmp_path: Path, save: str, probe: str, missing: list[str]
+):
+    """Recorded on both builds: ``V(a,b)`` is measured from a saved ``V(a)``
+    and ``V(b)``, and ``.save V(a,b)`` saves both nodes. A voltage against
+    ground is not measured with only the node saved, so it stands as written."""
+    deck = f"* t\nV1 a 0 1\nR1 a b 1k\nR2 b 0 1k\n.save {save}\n.tran 1m\n.meas tran m AVG {probe}\n.end\n"
+    found = [
+        f["evidence"]["missing_signals"]
+        for f in lint_deck(deck, tmp_path / "deck.cir", "ltspice", "LTspice")
+        if f["rule_id"] == "save-meas-coverage"
+    ]
+    assert found == ([missing] if missing else [])
 
 
 def test_save_meas_coverage_distinguishes_voltage_and_current(tmp_path: Path):
