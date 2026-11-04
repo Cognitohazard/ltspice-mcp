@@ -29,7 +29,7 @@
  },
  "0888d5be0cdb82a7": {
   "message": "invalid view_cursors.preexisting: malformed page cursor: 'tampered'",
-  "raised": "NetlistError"
+  "raised": "InvalidCursorError"
  },
  "089ee0b0ad47ff52": {
   "reply": "4e122718f4ed1756",
@@ -100,6 +100,10 @@
  "12094db0fb0629e3": {
   "reply": "ec3ab6714e61a76a",
   "sheet": null
+ },
+ "143de6ee1ad62ab5": {
+  "message": "invalid view_cursors.touched: malformed page cursor: 'garbage'",
+  "raised": "InvalidCursorError"
  },
  "146f9c24132d5428": {
   "reply": "28f2ec8383a9d462",
@@ -279,7 +283,7 @@
  },
  "4076cd010cd69143": {
   "message": "invalid view_cursors.touched: malformed page cursor: 'tampered'",
-  "raised": "NetlistError"
+  "raised": "InvalidCursorError"
  },
  "415307b445a847de": {
   "reply": "105b251f822cdc4d",
@@ -384,6 +388,10 @@
  "59439c1ccedda16a": {
   "reply": "4fa6314151aef2d3",
   "sheet": "1f7cd86c8e0a12c6"
+ },
+ "59a7e6d5a0655082": {
+  "message": "invalid view_cursors.label_only_pins: malformed page cursor: 'garbage'",
+  "raised": "InvalidCursorError"
  },
  "5b3f824187621c4d": {
   "reply": "63536ade3c45ac6e",
@@ -504,6 +512,10 @@
   "reply": "b36a07de332d446d",
   "sheet": "733d1ab2e59d6d40"
  },
+ "79b72d2f1959b308": {
+  "message": "invalid view_cursors.pin_legend: malformed page cursor: 'garbage'",
+  "raised": "InvalidCursorError"
+ },
  "7ab4d9f508a267ea": {
   "reply": "5c6def81b1e4038f",
   "sheet": "9130df515986b529"
@@ -612,6 +624,10 @@
   "reply": "1eac28c24073c03f",
   "sheet": "4464b9a7038d05c9"
  },
+ "947f6262c14648a3": {
+  "message": "invalid view_cursors.preexisting: malformed page cursor: 'garbage'",
+  "raised": "InvalidCursorError"
+ },
  "94eecbd12ae27c2a": {
   "reply": "8968a652bd21e30b",
   "sheet": "d70da2388e3f4613"
@@ -622,7 +638,7 @@
  },
  "96d11dd0ab34c8bc": {
   "message": "invalid view_cursors.pin_legend: cursor is for view 'label_only_pins', not 'pin_legend'; use the page's own next_cursor",
-  "raised": "NetlistError"
+  "raised": "InvalidCursorError"
  },
  "9714d71b3f43bbb3": {
   "reply": "eaaab9489b8995c1",
