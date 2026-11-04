@@ -446,7 +446,9 @@ ops.observations               # a log reader's dict (LogResult) says the same o
 - `compare` reports how far `other`'s traces are from this result's and
   returns `{signals: {name: {max_abs, max_rel, at, value, other}}, only_here,
   only_there, span, points}`. A signal named in `signals` is looked up in each
-  result the way `trace` looks it up. By default it compares every signal both
+  result the way `trace` looks it up, a node pair `V(a,b)` included, and is
+  reported under the name `trace` resolves it to; one either result lacks is
+  refused with the reason. By default it compares every signal both
   results hold except the axis. It pairs signals by name, ignoring case; a
   node or device inside subcircuits is matched by its path, however each
   build spells it (LTspice 26's `V(xa:xin:mid)` is XVII's `V(a:in:mid)`).
