@@ -335,7 +335,7 @@ def decode_findings_cursor(text: str) -> FindingsCursor:
         isinstance(cursor.rule, str)
         and cursor.check in CHECK_ORDER
         and type(cursor.offset) is int
-        and cursor.offset >= FINDING_RULE_CAP
+        and cursor.offset > 0
         and (cursor.revision is None or isinstance(cursor.revision, str))
     ):
         raise InvalidCursorError(_NOT_A_FINDINGS_CURSOR)

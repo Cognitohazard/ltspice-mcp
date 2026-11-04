@@ -40,7 +40,7 @@ _EXPECTED: dict[type[BaseModel], dict[tuple[str, ...], str]] = {
     },
     inspect_tools.InspectInput: {("budget",): "budget", ("queries", "cursor"): "paging"},
     schematic_edit.EditSchematicInput: {("view_cursors",): "paging"},
-    verify.VerifyCircuitInput: {},
+    verify.VerifyCircuitInput: {("findings_cursor",): "paging"},
 }
 
 
