@@ -199,6 +199,29 @@ def test_retype_and_param_mismatch_are_distinct_channels() -> None:
     assert param.candidate_value == "2u"
 
 
+@pytest.mark.parametrize(
+    ("card", "ref_model", "cand_model"),
+    [
+        ("Q1 in in 0 {}", "2N3904", "2N3904A"),
+        ("Q1 in in 0 0 {}", "2N3904", "2N3904A"),
+        ("D1 in 0 {}", "1N4148", "1N4148A"),
+        ("D1 in 0 {} 2", "1N4148", "1N4148A"),
+    ],
+)
+def test_two_part_numbers_are_two_models(card: str, ref_model: str, cand_model: str) -> None:
+    """Where a value runs, LTspice reads ``2N3904`` and ``2N3904A`` both as
+    2.3904n. On a transistor or diode card they name models, so the comparison
+    reads them as the card's model: a retype, never a value within tolerance."""
+    ref = f"* t\nVin in 0 5\n{card.format(ref_model)}\n.end\n"
+    cand = f"* t\nVin in 0 5\n{card.format(cand_model)}\n.end\n"
+    result = compare_graphs(ref, cand, anchors=["in"])
+    (retyped,) = result.retyped
+    assert retyped.reference_type.lower() == f"{card[0]}:{ref_model}".lower()
+    assert retyped.candidate_type.lower() == f"{card[0]}:{cand_model}".lower()
+    assert result.value_mismatches == []
+    assert result.equivalent is False
+
+
 SCHMITT_ONCE = "* t\nV1 in 0 5\nA1 in 0 0 0 0 out 0 0 SCHMITT Vt=4.15 Vh=0.2\n.end\n"
 
 

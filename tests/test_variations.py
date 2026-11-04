@@ -1925,3 +1925,28 @@ class TestCircuitIdRejection:
         # The id it refused, and the rule it refused it by.
         assert "_chosen" in message
         assert "letter or digit" in message
+
+
+@pytest.mark.parametrize("card", ["Q1 out in 0 2N3904", "D1 out 0 1N4148"])
+def test_a_random_rule_has_no_nominal_on_a_part_number(tmp_path: Path, card: str):
+    """Where a value runs, LTspice reads ``2N3904`` as 2.3904n, but on a
+    transistor or diode card it names the model. A random rule on such a part
+    has no nominal to draw around and is refused, never perturbs the name."""
+    path = tmp_path / "dut.cir"
+    text = f"* part numbers\nV1 in 0 1\n{card}\n.op\n.end\n"
+    path.write_text(text)
+    circuit = CircuitDeck("dut", path, text)
+    ref = card.split()[0]
+    variation = RandomVariation.model_validate(
+        {
+            "kind": "random",
+            "runs": 1,
+            "seed": 3,
+            "rules": [{"rule": "component", "target": ref, "tolerance": 0.1}],
+        }
+    )
+
+    with pytest.raises(VariationError, match="no plain numeric nominal") as excinfo:
+        materialize_variants(circuit, expand_variations([circuit], [variation]), tmp_path / "out")
+
+    assert excinfo.value.code == "random_nominal_unavailable"
