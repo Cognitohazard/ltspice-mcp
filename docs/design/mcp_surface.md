@@ -186,7 +186,8 @@ left out when its value is
 - a null,
 - a false flag, or
 - a sub-answer the overall answer beside it already gives: in a comparison,
-  `structurally_equivalent` beside `equivalent: true`, and in the capabilities
+  `structurally_equivalent` and `directives_equivalent` beside
+  `equivalent: true`, and in the capabilities
   report, `selectable` beside `available: false`. Beside any other overall
   answer every sub-answer is kept, so the caller sees which part held.
 
@@ -224,7 +225,7 @@ wherever they appear in its reply, and is the whole exemption:
 | | `in_sandbox` (`open_in_ltspice`) | false says the document is outside the sandbox |
 | `edit_schematic`, `verify_circuit` | `ok` (findings, stages, `export`) | false is what the finding or stage reports |
 | | `equivalent` | false is a mismatch and null is no verdict |
-| | `structurally_equivalent` | kept beside an `equivalent` that is false or null |
+| | `structurally_equivalent`, `directives_equivalent` | kept beside an `equivalent` that is false or null |
 | | `shown` (`open_in_ltspice`, `ltspice`) | false says LTspice does not show what was asked, with the reason |
 | `plot_waveform` | `shown`, `tied` (`ltspice`) | false says the window does not show the plot, or a click on the sheet does not plot |
 | `run_code` | `status` | the snippet's outcome |
@@ -1515,9 +1516,20 @@ because the caller asked for nothing the server could not do.
 component set, values, normalized parameters, which pins share a node
 (matched by the wiring, not by node names), the number of terminals, and
 `anchors`, the named nets (ports, rails, outputs) that must also match by
-name; ground always must. `structural_diff` reports the added, removed and
-changed components and directives. The modes differ on a deck they cannot
-read.
+name; ground always must. It also compares the directives outside subcircuit
+definitions, read as `structural_diff` reads them (below), so the two modes
+agree about every directive. A subcircuit definition is compared as wiring
+wherever it is defined, inline or in an included file, so its `.subckt` line,
+its `PARAMS:` defaults and the directives in its body are not compared. An
+`.include` or `.lib` line is a directive, so moving a definition into an
+included file shows as that line added. `equivalent` is true only when the wiring, the parts and values
+and the directives all match. Beside a false one, `structurally_equivalent`
+says whether the wiring matched and `directives_equivalent` whether the
+directives did, and `directives_added` and `directives_removed` list the
+directives only this circuit has and those only the reference has.
+`structural_diff` reports the added, removed and changed components and
+directives, and does not compare nodes. The modes differ on a deck they
+cannot read.
 `equivalence` returns a compare failure with no `comparison` block, while
 `structural_diff` diffs the deck as empty, so the delta is still returned,
 `equivalent` is null, and a warning names the deck that failed. In both cases

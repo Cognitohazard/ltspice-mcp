@@ -4,7 +4,9 @@ What ``verify_circuit``'s ``structural_diff`` mode and the sidecar export's
 ``diff_vs_prior`` report: components added, removed or changed, and directives
 added or removed. Both sides are netlists — an ``.asc`` is compared as its LTspice
 export — read with the foundation lexer, so a ``+`` continuation belongs to the
-card it continues and an inline comment is not part of it.
+card it continues and an inline comment is not part of it. The equivalence mode
+compares a circuit's directives with the same reader (:func:`circuit_directives`,
+:func:`directive_delta`), so the two modes cannot disagree about a directive.
 
 Two rules keep the delta quiet when nothing changed:
 
@@ -184,27 +186,56 @@ class Deck:
     directives: list[Directive] = field(default_factory=list)
 
 
+def _cards(source: str | Path) -> list[SpiceCard]:
+    return (cards_from_path(source) if isinstance(source, Path) else lex(source)).cards
+
+
+def _directive_of(card: SpiceCard) -> Directive | None:
+    """The comparable form of a directive card or an ngspice ``.control`` line,
+    or None for any other card and for export boilerplate."""
+    if card.kind in _DIRECTIVE_KINDS:
+        return parse_directive(card)
+    if card.kind == "control":
+        # An ngspice .control script line: not a card, but part of the deck.
+        line = " ".join(card.raw_lines[0].split())
+        if line and not line.startswith("*"):
+            return Directive(comparable(line), line)
+    return None
+
+
 def read_deck(source: str | Path) -> Deck:
     """Read a netlist (a path, or its text) for a structural diff.
 
     Raises what reading the file raises; a caller decides what an unreadable
     deck means for its comparison.
     """
-    cards = (cards_from_path(source) if isinstance(source, Path) else lex(source)).cards
     deck = Deck()
-    for card in cards:
+    for card in _cards(source):
         if card.kind == "instance" and card.name:
             deck.components[canon_ref(card.name)] = (card.name, instance_signature(card))
-        elif card.kind in _DIRECTIVE_KINDS:
-            directive = parse_directive(card)
-            if directive is not None:
-                deck.directives.append(directive)
-        elif card.kind == "control":
-            # An ngspice .control script line: not a card, but part of the deck.
-            line = " ".join(card.raw_lines[0].split())
-            if line and not line.startswith("*"):
-                deck.directives.append(Directive(comparable(line), line))
+        elif (directive := _directive_of(card)) is not None:
+            deck.directives.append(directive)
     return deck
+
+
+def circuit_directives(source: str | Path) -> list[Directive]:
+    """The directives of a netlist (a path, or its text) outside any subcircuit
+    definition, read as :func:`read_deck` reads them.
+
+    What the equivalence mode compares beside the wiring. A ``.subckt`` card,
+    its body and its ``.ends`` are left out: the wiring comparison reads each
+    definition the circuit uses, wherever it is defined, inline or in an
+    included file. A card after the deck's top-level ``.end`` is left out too,
+    since LTspice ignores it. Raises what reading the file raises.
+    """
+    return [
+        directive
+        for card in _cards(source)
+        if not card.scope
+        and not card.trailing
+        and card.kind not in ("subckt", "ends")
+        and (directive := _directive_of(card)) is not None
+    ]
 
 
 def _by_key(directives: list[Directive]) -> dict[str, list[str]]:
@@ -212,6 +243,24 @@ def _by_key(directives: list[Directive]) -> dict[str, list[str]]:
     for d in directives:
         by_key.setdefault(d.key, []).append(d.text)
     return by_key
+
+
+def directive_delta(
+    baseline: list[Directive], compared: list[Directive]
+) -> tuple[list[str], list[str]]:
+    """``(added, removed)``: the directives only ``compared`` has, and those only
+    ``baseline`` has, as written.
+
+    Both comparison modes read their directive difference here. A default model
+    the netlister adds is left out of ``compared`` while ``baseline`` declares no
+    model of that name (the module docstring says why).
+    """
+    declared = {d.model for d in baseline if d.model is not None}
+    da = _by_key(baseline)
+    db = _by_key([d for d in compared if not (d.default_model and d.model not in declared)])
+    added = sorted(d for k in db.keys() - da.keys() for d in db[k])
+    removed = sorted(d for k in da.keys() - db.keys() for d in da[k])
+    return added, removed
 
 
 def structural_delta(baseline: Deck, compared: Deck) -> dict[str, list]:
@@ -222,10 +271,8 @@ def structural_delta(baseline: Deck, compared: Deck) -> dict[str, list]:
     """
     a = baseline.components
     b, renamed = rekey_across_added_x(a, compared.components)
-    declared = {d.model for d in baseline.directives if d.model is not None}
-    da = _by_key(baseline.directives)
-    db = _by_key(
-        [d for d in compared.directives if not (d.default_model and d.model not in declared)]
+    directives_added, directives_removed = directive_delta(
+        baseline.directives, compared.directives
     )
     return {
         "components_added": sorted(b[key][0] for key in b.keys() - a.keys()),
@@ -236,6 +283,6 @@ def structural_delta(baseline: Deck, compared: Deck) -> dict[str, list]:
             for key in sorted(a.keys() & b.keys())
             if comparable(a[key][1]) != comparable(b[key][1])
         ],
-        "directives_added": sorted(d for k in db.keys() - da.keys() for d in db[k]),
-        "directives_removed": sorted(d for k in da.keys() - db.keys() for d in da[k]),
+        "directives_added": directives_added,
+        "directives_removed": directives_removed,
     }
