@@ -39,7 +39,7 @@ import random
 from dataclasses import dataclass
 from typing import Literal
 
-from ltspice_mcp.lib.format import parse_plain_value
+from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.spice_lex import (
     TokenKind,
     emit,
@@ -696,9 +696,10 @@ def expand_tolerances(
 def parse_value(value: str | float) -> float | None:
     """Parse a SPICE-formatted component value to float, or None.
 
-    Wraps ``lib.format.parse_spice_value`` with two MC-specific behaviors:
-    skips parametric expressions (``{Rd}``, ``table(...)``) so they
-    don't get corrupted, and accepts numeric passthrough.
+    Wraps ``lib.format.parse_spice_value``, so a value reads as LTspice runs
+    it (``4R7`` is 4.7, ``1k5`` 1500, ``2Hz`` 2), with two MC-specific
+    behaviors: skips parametric expressions (``{Rd}``, ``table(...)``) so
+    they don't get corrupted, and accepts numeric passthrough.
     """
     if isinstance(value, int | float):
         return float(value)
@@ -706,6 +707,6 @@ def parse_value(value: str | float) -> float | None:
     if not s or "{" in s or "(" in s:
         return None
     try:
-        return parse_plain_value(s)
+        return parse_spice_value(s)
     except ValueError:
         return None

@@ -116,3 +116,33 @@ def test_the_line_walk_rule_catches_what_it_names():
         "            pass\n"
     )
     assert _line_walks_in(tree) == {"cards", "directives"}
+
+
+# --------------------------------------------------------------------------
+# A value that runs is read as LTspice reads it
+# --------------------------------------------------------------------------
+
+#: Modules that import ``format.parse_plain_value``, which refuses ``4R7``,
+#: ``1k5`` and ``2Hz``. A value a simulator runs is read with
+#: ``parse_spice_value``, held to the recordings; the plain reader is for
+#: telling a number from a name.
+_PLAIN_VALUE_READERS: dict[str, str] = {
+    "lib/variations.py": (
+        "an assignment value the caller writes into a .param or a mismatch "
+        "parameter must be a plain number or SI-suffixed value, whichever "
+        "simulator then reads the deck"
+    ),
+}
+
+
+def _importers_of(name: str) -> set[str]:
+    return {
+        module
+        for module, tree in _modules().items()
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and any(alias.name == name for alias in node.names)
+    }
+
+
+def test_only_the_listed_modules_read_a_value_with_the_plain_reader():
+    assert _importers_of("parse_plain_value") == set(_PLAIN_VALUE_READERS)

@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from ltspice_mcp.lib import montecarlo
 from ltspice_mcp.lib.encoding import (
     decode_spice_bytes_with_encoding,
     read_spice_text,
@@ -25,14 +26,20 @@ from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.hierarchy_expr import evaluate
 from ltspice_mcp.lib.lint_rules import lint_deck
 from ltspice_mcp.lib.netlist_diff import read_deck, structural_delta
-from ltspice_mcp.lib.netlist_graph import compare_graphs
+from ltspice_mcp.lib.netlist_graph import compare_graphs, values_equal
 from ltspice_mcp.lib.result_observations import parse_requested_outputs, parse_source_amplitudes
 from ltspice_mcp.lib.runner_base import deck_requirements
 from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build, is_cp1252_ltspice_executable
-from ltspice_mcp.lib.spice_lex import lex, lex_deck
+from ltspice_mcp.lib.spice_lex import emit, lex, lex_deck
 from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
 from ltspice_mcp.lib.spice_lex_views import ModelCard, read_instance
 from ltspice_mcp.lib.spice_validator import validate_directive, validate_netlist_arity
+from ltspice_mcp.lib.variations import (
+    CircuitDeck,
+    RandomVariation,
+    expand_variations,
+    materialize_variants,
+)
 from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
 from tests import _ltspice_recorded as rec
 from tests.ltspice_recorder import INPUTS
@@ -103,6 +110,60 @@ def test_a_value_the_server_parses_is_the_value_ltspice_read(
         assert parse_spice_value(spelling) == pytest.approx(voltages[f"v({node})"], rel=1e-6), (
             spelling
         )
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SUFFIX_DECKS)))
+def test_every_reader_of_a_value_that_runs_reads_the_value_ltspice_read(
+    build: str, case_id: str, tmp_path: Path
+):
+    """The equivalence comparison and the Monte Carlo nominal read a value as
+    LTspice runs it, so ``4R7`` equals 4.7 and a random rule on it draws
+    around 4.7."""
+    voltages = rec.operating_point(build, case_id, tmp_path)
+    for node, spelling in resistances(case_id).items():
+        ran_as = voltages[f"v({node})"]
+        assert montecarlo.parse_value(spelling) == pytest.approx(ran_as, rel=1e-6), spelling
+        assert values_equal(spelling, repr(ran_as), rtol=1e-6), spelling
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SUFFIX_DECKS)))
+def test_a_deck_is_the_same_circuit_with_its_values_written_as_ltspice_ran_them(
+    build: str, case_id: str, tmp_path: Path
+):
+    voltages = rec.operating_point(build, case_id, tmp_path)
+    cards = lex(deck_text(case_id)).cards
+    for line in map(read_instance, cards):
+        if line is not None and line.ref[:1] == "R":
+            line.set_value(repr(voltages[f"v({line.nodes[0].lower()})"]))
+    comparison = compare_graphs(deck_text(case_id), emit(cards))
+    assert comparison.equivalent, comparison.value_mismatches
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SUFFIX_DECKS)))
+def test_a_random_rule_draws_around_the_value_ltspice_ran(
+    build: str, case_id: str, tmp_path: Path
+):
+    voltages = rec.operating_point(build, case_id, tmp_path / "raw")
+    path = tmp_path / "deck.cir"
+    path.write_text(deck_text(case_id), encoding="utf-8")
+    circuit = CircuitDeck("dut", path, deck_text(case_id))
+    rule = {"rule": "component", "target": "R*", "tolerance": 1e-9, "distribution": "uniform"}
+    variation = RandomVariation.model_validate(
+        {"kind": "random", "runs": 1, "seed": 1, "rules": [rule]}
+    )
+    (case,) = materialize_variants(
+        circuit, expand_variations([circuit], [variation]), tmp_path / "out"
+    )
+    drawn = {
+        name.removeprefix("random:component:"): value
+        for name, value in case.assignments.items()
+        if name.startswith("random:component:")
+    }
+    assert drawn == {
+        line.ref: pytest.approx(voltages[f"v({line.nodes[0].lower()})"], rel=1e-6)
+        for line in map(read_instance, lex_deck(deck_text(case_id)).cards)
+        if line is not None and line.ref[:1] == "R"
+    }
 
 
 def test_the_spellings_once_refused_are_all_recorded():
