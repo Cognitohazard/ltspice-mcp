@@ -348,6 +348,15 @@ inputs = [
     "deck/save_omits_meas.cir",
 ]
 
+[behaviour.save-meas-node-pair]
+summary = "Whether a .meas of a node pair is taken when .save names both nodes but not the pair, whether .save accepts the pair itself and what the raw then holds, and whether a node measured against ground needs more than the node saved."
+model = ["lib/lint_rules.py", "lib/spice_validator.py"]
+inputs = [
+    "deck/save_pair_both_nodes.cir",
+    "deck/save_pair_as_pair.cir",
+    "deck/save_pair_to_ground.cir",
+]
+
 [behaviour.deck-semantics]
 summary = "What a deck means where the simulators differ: a parameter named temp, the caret operator, a subcircuit's header default against a .param in its body."
 model = ["lib/hierarchy.py", "lib/hierarchy_expr.py", "lib/lint_rules.py"]
@@ -507,6 +516,17 @@ inputs = ["log/meas_trig.cir"]
 summary = "db() in an AC .meas: of a complex voltage it is the complex logarithm, printed as a complex result; of mag() it is the gain in dB, printed as a real one; a WHEN on either finds the dB crossing."
 model = ["lib/log_parser.py", "assets/guide/fundamentals.md"]
 inputs = ["log/meas_db.cir"]
+keep = ["log"]
+
+[behaviour.log-meas-when-threshold]
+summary = "How a WHEN is printed when its threshold is not a plain number: a parameter, an expression, a braced expression and another measurement, in a transient and an AC analysis, alone and in the tables of a stepped run."
+model = ["lib/log_parser.py", "lib/log_decode.py", "lib/metrics.py"]
+inputs = [
+    "log/meas_when_threshold_tran.cir",
+    "log/meas_when_threshold_ac.cir",
+    "log/meas_when_threshold_tran_step.cir",
+    "log/meas_when_threshold_ac_step.cir",
+]
 keep = ["log"]
 
 [behaviour.log-meas-complex-format]
