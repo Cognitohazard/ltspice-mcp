@@ -30,6 +30,7 @@ from ltspice_mcp.errors import (
     JobNotFoundError,
     LTSpiceMCPError,
     PathSecurityError,
+    error_hint,
 )
 from ltspice_mcp.lib import experiment_store, recent, response_budget, services
 from ltspice_mcp.lib.deck_staging import sha256_file
@@ -1409,9 +1410,15 @@ def failed_jobs_evaluation(
             head_job_id=receipt.job.job_id,
         )
     code, stage, retryable = _jobs_error_details(exc)
+    # The message, then the recovery step every surface gives this kind of
+    # failure (``errors.error_hint``), as ``path_denied_text`` does for a
+    # refused path.
+    remedy = error_hint(exc)
     hint = (
         path_denied_text(exc, state)
         if isinstance(exc, PathSecurityError) and state is not None
+        else f"{exc}\n\n{remedy}"
+        if remedy is not None
         else str(exc)
     )
     error = _JobsError(

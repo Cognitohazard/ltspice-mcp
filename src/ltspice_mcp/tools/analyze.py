@@ -28,6 +28,7 @@ from ltspice_mcp.errors import (
     OtherRawNotWritten,
     PathSecurityError,
     ResultError,
+    error_hint,
     python_route_text,
 )
 from ltspice_mcp.lib import (
@@ -993,6 +994,30 @@ def _deserialize_runs(item: result_store.ResultSet, state: SessionState) -> list
     return runs
 
 
+def _unresolved_source(
+    label: str, run_index: int | None, exc: Exception, state: SessionState
+) -> dict[str, Any]:
+    """The coverage row of a source that names nothing this call can read.
+
+    Coded and hinted as every other surface reports the same failure: the
+    error's own code (``job_not_found``, ``result_unreadable``, ``path_denied``)
+    and its type's recovery step (``errors.error_hint``; a refused path's is
+    the sandbox guidance, since the file may be perfectly readable).
+    """
+    error = exc if isinstance(exc, LTSpiceMCPError) else ResultError(str(exc))
+    row: dict[str, Any] = {
+        "label": label,
+        "case_id": None,
+        "run_index": run_index,
+        "code": error.code,
+        "detail": str(exc),
+    }
+    hint = state.sandbox_guidance() if isinstance(error, PathSecurityError) else error_hint(error)
+    if hint is not None:
+        row["hint"] = hint
+    return row
+
+
 async def _resolve_sources(
     inputs: list[AnalyzeSourceInput], state: SessionState
 ) -> tuple[list[_ResolvedRun], list[dict[str, Any]], dict[str, str | None], list[Observation]]:
@@ -1025,18 +1050,18 @@ async def _resolve_sources(
                     dialect=source_input.dialect,
                 )
             except (LTSpiceMCPError, OSError) as exc:
-                row = {
-                    "label": source_input.label,
-                    "case_id": None,
-                    "run_index": 0,
-                    "code": "source_unavailable",
-                    "detail": str(exc),
-                }
-                if isinstance(exc, PathSecurityError):
-                    # Refused, not unavailable: the file may be perfectly
-                    # readable, and the remedy is the sandbox's setting.
-                    row.update(code=exc.code, hint=state.sandbox_guidance())
-                missing.append(row)
+                missing.append(_unresolved_source(source_input.label, 0, exc, state))
+                continue
+            named = resolved.raw if resolved.raw is not None else resolved.log
+            if named is not None and not await asyncio.to_thread(os.path.isfile, named):
+                missing.append(
+                    _unresolved_source(
+                        source_input.label,
+                        0,
+                        ResultError(f"No result file at {named}"),
+                        state,
+                    )
+                )
                 continue
             source = replace(
                 resolved,
@@ -1075,15 +1100,7 @@ async def _resolve_sources(
         try:
             job = await services.resolve_job_async(source_input.job_id, state)
         except LTSpiceMCPError as exc:
-            missing.append(
-                {
-                    "label": source_input.label,
-                    "case_id": None,
-                    "run_index": None,
-                    "code": "source_unavailable",
-                    "detail": str(exc),
-                }
-            )
+            missing.append(_unresolved_source(source_input.label, None, exc, state))
             continue
         record = job.store_path
         source_jobs[job.job_id] = str(record) if record.is_file() else None

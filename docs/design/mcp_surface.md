@@ -1055,6 +1055,10 @@ continuation replays them.
   "runs")` reports them, and a case is read when it produced results or kept
   a partial raw when it was stopped. Until then the source is a
   `coverage.missing_cases` row with code `job_not_terminal`.
+- A source that names nothing is a `coverage.missing_cases` row coded as
+  every tool reports the same failure, with that failure's `hint`: an unknown
+  `job_id` is `job_not_found`, and a `path` with no file is
+  `result_unreadable`.
 - Before any recipe runs, the server reads every source once to record its
   file hashes and the simulator errors its log reports. A timeout during this
   first read raises `analysis_deadline` and creates no result set or cursor;

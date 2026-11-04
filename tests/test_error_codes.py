@@ -361,7 +361,12 @@ def _codes_in_sources() -> dict[str, set[str]]:
             values: set[str] = set()
             if isinstance(node, ast.Dict):
                 for key, value in zip(node.keys, node.values, strict=True):
-                    if isinstance(key, ast.Constant) and key.value == "code":
+                    # A key named like a code holds one, as a ``*_code`` name
+                    # does below: a manifest's ``digest_code`` becomes a
+                    # failure row's code.
+                    if isinstance(key, ast.Constant) and (
+                        key.value == "code" or str(key.value).endswith("_code")
+                    ):
                         values |= _string_literals(value)
             elif isinstance(node, ast.keyword) and node.arg == "code":
                 values |= _string_literals(node.value)

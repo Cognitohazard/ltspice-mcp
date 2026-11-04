@@ -95,31 +95,9 @@ async def _notice_circuit(arguments: dict | None, state: SessionState) -> None:
     state.background.spawn(state.note_recent_circuit(resolved))
 
 
-# Error type → hint appended to error messages. Hints name only tools the
-# consolidated surface exposes (the only profile since 0.6.0).
-# PathSecurityError is handled separately: its hint is the session's sandbox
-# guidance, which reads the sandbox as it stands at the call.
-_ERROR_HINTS: dict[type[LTSpiceMCPError], str] = {
-    _err.SimulationError: (
-        "Use inspect with a capabilities query to verify simulator availability."
-    ),
-    _err.NetlistError: (
-        "Use verify_circuit to lint the file, or inspect its components — "
-        "or read the netlist directly."
-    ),
-    _err.JobNotFoundError: (
-        'Use jobs with action:"list" to see known jobs — the id may be '
-        "mistyped, evicted, or from a previous server session."
-    ),
-    _err.ResultError: (
-        'Verify the run reached a terminal state with jobs (action:"status"), '
-        "and read signals with analyze_results."
-    ),
-    _err.LibraryError: (
-        'Use inspect with a model query (mode:"search") to find the part in the '
-        "simulator's own libraries, or add .lib/.include directives to the netlist."
-    ),
-}
+# Error type → hint appended to error messages, shared with every surface that
+# reports a failure in its own envelope (``errors.error_hint``).
+_ERROR_HINTS: dict[type[LTSpiceMCPError], str] = _err.ERROR_HINTS
 
 
 #: The recovery for an argument error: the tool's own argument table.

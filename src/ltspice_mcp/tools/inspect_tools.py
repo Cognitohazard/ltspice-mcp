@@ -127,6 +127,7 @@ from ltspice_mcp.errors import (
     NetlistError,
     PathSecurityError,
     compact_validation_error,
+    error_hint,
 )
 from ltspice_mcp.lib import (
     NETLIST_SUFFIX_TEXT,
@@ -2826,9 +2827,12 @@ async def _run_queries(
             )
             continue
         except LTSpiceMCPError as exc:
-            # The error's own code (errors.py), as every other tool reports it.
-            code = exc.code
-            results.append(_failure_item(index, raw, {"code": code, "message": str(exc)}))
+            # The error's own code (errors.py) and its type's recovery step, as
+            # every other tool reports it.
+            error = {"code": exc.code, "message": str(exc)}
+            if (hint := error_hint(exc)) is not None:
+                error["hint"] = hint
+            results.append(_failure_item(index, raw, error))
             continue
         except Exception as exc:
             # Last-resort isolation: an unexpected fault in one query must not

@@ -236,6 +236,45 @@ class BatchJobError(LTSpiceMCPError):
     code = "batch_job_error"
 
 
+# Error type → the recovery step every surface that reports it gives. Hints name
+# only tools the consolidated surface exposes (the only profile since 0.6.0).
+# PathSecurityError is handled separately: its hint is the session's sandbox
+# guidance, which reads the sandbox as it stands at the call.
+ERROR_HINTS: dict[type[LTSpiceMCPError], str] = {
+    SimulationError: ("Use inspect with a capabilities query to verify simulator availability."),
+    NetlistError: (
+        "Use verify_circuit to lint the file, or inspect its components — "
+        "or read the netlist directly."
+    ),
+    JobNotFoundError: (
+        'Use jobs with action:"list" to see known jobs — the id may be '
+        "mistyped, evicted, or from a previous server session."
+    ),
+    ResultError: (
+        'Verify the run reached a terminal state with jobs (action:"status"), '
+        "and read signals with analyze_results."
+    ),
+    LibraryError: (
+        'Use inspect with a model query (mode:"search") to find the part in the '
+        "simulator's own libraries, or add .lib/.include directives to the netlist."
+    ),
+}
+
+
+def error_hint(exc: BaseException) -> str | None:
+    """The recovery step for ``exc``: its type's entry in ``ERROR_HINTS``.
+
+    One answer for every surface that reports a failure, whether it raises it
+    (``server._invoke``) or carries it in its own envelope (a coverage row, a
+    batch item, a jobs error), so one kind of failure gets one hint everywhere.
+    None for a type with none, matched exactly, and for an error that carries
+    precise guidance of its own (``show_hint=False``).
+    """
+    if not isinstance(exc, LTSpiceMCPError) or not exc.show_hint:
+        return None
+    return ERROR_HINTS.get(type(exc))
+
+
 def raise_site_code(exc: BaseException) -> str | None:
     """Return the code an exception named at its own raise site, if any.
 
