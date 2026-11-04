@@ -33,6 +33,7 @@ import numpy as np
 # implementation lives in raw_parser so AC and transient tools share the
 # same clamped-log10 behavior.
 from ltspice_mcp.lib.raw_parser import safe_magnitude_db as magnitude_db
+from ltspice_mcp.lib.signal_analysis import level_crossings
 
 # Phase sample step above which we warn about possible unwrap errors — if the
 # raw wrapped phase jumps by more than this between adjacent points, unwrap
@@ -250,24 +251,12 @@ def detect_crossings(
         raise ValueError(f"min_amplitude must be >= 0, got {min_amplitude}")
 
     d = np.asarray(values, dtype=float) - float(level)
-    sign_change = (d[:-1] * d[1:]) < 0
-    touch_exit = (d[:-1] == 0) & (d[1:] != 0)
-    idx = np.where(sign_change | touch_exit)[0]
+    # Interpolated in log frequency, the rule every crossing is found by.
+    idx, xc, rising_mask = level_crossings(np.log10(freqs), np.asarray(values), level)
     if len(idx) == 0:
         return []
-
-    log_f = np.log10(freqs)
-    y0 = values[idx]
-    y1 = values[idx + 1]
-    x0 = log_f[idx]
-    x1 = log_f[idx + 1]
-    denom = y1 - y0
-    with np.errstate(divide="ignore", invalid="ignore"):
-        frac = np.where(denom != 0, (level - y0) / denom, 0.0)
-    xc = x0 + frac * (x1 - x0)
     fc = np.power(10.0, xc)
 
-    rising_mask = y1 > y0
     directions: list[str]
     if direction == "rising":
         fc = fc[rising_mask]
