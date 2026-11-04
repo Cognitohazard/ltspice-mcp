@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ltspice_mcp.lib import atomic_write_bytes, capabilities, now
+from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.deck_staging import sha256_file, staged_card_reference_targets
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.experiment_types import ExperimentCase, SourceRecord
@@ -243,7 +244,7 @@ def capture_case_inputs(
         # An exported schematic's authoring snapshot is provenance, not an
         # electrical dependency. Any include edge to it still fails closure
         # admission unless it was explicitly materialized as an input file.
-        if entry.path == source.path and source.path.suffix.lower() == ".asc":
+        if entry.path == source.path and is_asc(source.path):
             continue
         # A variant replaces its standalone source deck. Keep that source only
         # when materialization explicitly includes it as an electrical input.

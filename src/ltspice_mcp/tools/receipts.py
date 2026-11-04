@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import copy
 import functools
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import asdict, dataclass
 from typing import Any, Literal, get_args
 
@@ -23,6 +23,7 @@ from mcp import types
 
 from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib import response_budget, services
+from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.experiment_runner import live_run_progress
 from ltspice_mcp.lib.experiment_types import (
     ACTIVE_CASE_STATUSES,
@@ -34,17 +35,23 @@ from ltspice_mcp.lib.experiment_types import (
     ManifestEntry,
     SourceRecord,
 )
-from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES
+from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.pagination import page_of
-from ltspice_mcp.lib.projection import keep_plan, project_row
+from ltspice_mcp.lib.projection import (
+    absent_path_warnings,
+    keep_plan,
+    project_row,
+    resolve_field_paths,
+)
 from ltspice_mcp.lib.raw_parser import other_raw_path
 from ltspice_mcp.lib.sheet_results import run_by_ltspice
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze
 from ltspice_mcp.tools._base import (
+    ENVELOPE_ERROR_SCHEMA,
     FINDING_SCHEMA,
     OUTCOME_SCHEMA,
     CallOutcome,
@@ -58,16 +65,6 @@ from ltspice_mcp.tools._base import (
 _RUN_PAGE_LIMIT = 50
 
 JOBS_PAGE_LIMIT = 50
-
-TERMINAL_EXPERIMENT_STATUSES = frozenset(
-    {
-        "completed",
-        "completed_with_failures",
-        "failed",
-        "cancelled",
-        "interrupted",
-    }
-)
 
 _MANIFEST_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -222,6 +219,18 @@ RUN_RECORD_SCHEMA: dict[str, Any] = {
 
 RUNS_PAGE_SCHEMA: dict[str, Any] = page_schema({"type": "array", "items": RUN_RECORD_SCHEMA})
 
+#: Every top-level key a run row can carry, read off its schema: the roots a
+#: ``run_fields`` path may start at.
+RUN_ROW_KEYS: tuple[str, ...] = tuple(RUN_RECORD_SCHEMA["properties"])
+
+
+def resolve_run_fields(paths: list[str]) -> list[str]:
+    """``run_fields`` as the run-row projection reads them, on
+    ``run_experiments`` and ``jobs(runs)`` alike: rooted at a run row's own
+    keys, each read once. ``ValueError`` for a path no run row can carry."""
+    return list(dict.fromkeys(resolve_field_paths(paths, RUN_ROW_KEYS, argument="run_fields")))
+
+
 #: A receipt's own ``status``, which is the job's: a separate vocabulary from
 #: its run rows' case statuses.
 JOB_STATUS_SCHEMA: dict[str, Any] = {
@@ -375,21 +384,7 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
         "warnings": {"type": "array", "items": {"type": "string"}},
         "artifacts": {"type": "array", "items": _ARTIFACT_SCHEMA},
         "hint": {"type": "string"},
-        "error": {
-            "type": "object",
-            "properties": {
-                "code": {"type": "string"},
-                "message": {"type": "string"},
-                "stage": {"type": "string"},
-                "retryable": {"type": "boolean"},
-                "commit_state": {
-                    "type": "string",
-                    "enum": ["not_started", "committed", "unknown"],
-                },
-                "item_id": {"type": "string"},
-            },
-            "required": ["code", "message", "stage", "retryable", "commit_state"],
-        },
+        "error": ENVELOPE_ERROR_SCHEMA,
     },
     "required": [
         "job_id",
@@ -661,6 +656,7 @@ def render_receipt_snapshot(
     analysis_fields: list[str] | None = None,
     analysis_answer_channel: bool = False,
     analysis_rows_cap: int | None = None,
+    analysis_served: Collection[str] | None = None,
 ) -> dict[str, Any]:
     """Render the existing receipt envelope from detached neutral facts.
 
@@ -668,10 +664,12 @@ def render_receipt_snapshot(
     never writes through them — the only row edits build or own their dicts —
     so the envelope shares them rather than copying them per render.
     """
+    run_warnings: list[str] = []
     runs = project_receipt_runs(
         snapshot,
         run_fields,
         limit=runs_cap,
+        warnings=run_warnings,
     )
     data: dict[str, Any] = {
         "job_id": snapshot.job_id,
@@ -689,18 +687,18 @@ def render_receipt_snapshot(
         "runs": runs,
         "failures": list(snapshot.rendered_failures),
         "observations": list(snapshot.observations),
-        "warnings": [],
+        "warnings": run_warnings,
         "artifacts": list(snapshot.artifacts),
         "hint": (
             f"Experiment {snapshot.job_id} is still running; use jobs(wait) with this "
             "job_id to continue waiting."
-            if snapshot.status not in TERMINAL_EXPERIMENT_STATUSES
+            if snapshot.status not in TERMINAL_STATUSES
             else _terminal_hint(snapshot, runs)
         ),
     }
     emitted_control_token = control_token if control_token is not None else snapshot.control_token
     if emitted_control_token is not None and (
-        snapshot.lineage is not None or snapshot.status not in TERMINAL_EXPERIMENT_STATUSES
+        snapshot.lineage is not None or snapshot.status not in TERMINAL_STATUSES
     ):
         data["control_token"] = emitted_control_token
     if snapshot.lineage is not None:
@@ -713,6 +711,7 @@ def render_receipt_snapshot(
                 fields=analysis_fields,
                 answer_channel=analysis_answer_channel,
                 row_limit=analysis_rows_cap,
+                served=analysis_served,
             )
         analysis_observations = list(snapshot.analysis_observations)
         data["analysis"] = {
@@ -856,11 +855,13 @@ def _project_run_rows(
     run_fields: list[str] | None,
     *,
     native_by_key: dict[tuple[str, int], NativeCaseRecord],
+    warnings: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Render native evidence and project only the rows this page carries.
 
     With no ``run_fields`` every row keeps every key, whatever its status, so a
-    key read off a row is never missing because the run produced."""
+    key read off a row is never missing because the run produced. A path no
+    row on the page reaches is said in ``warnings``, naming the keys there."""
     plan = keep_plan(run_fields) if run_fields else None
     if plan is None or "native_statistics" in plan:
         for row in rows:
@@ -871,6 +872,12 @@ def _project_run_rows(
                     projection=plan.get("native_statistics") if plan is not None else None,
                 )
     if plan is not None:
+        if warnings is not None and run_fields:
+            warnings.extend(
+                absent_path_warnings(
+                    rows, run_fields, argument="run_fields", rows_name="run row on this page"
+                )
+            )
         return [project_row(row, plan) for row in rows]
     return rows
 
@@ -906,6 +913,7 @@ def project_receipt_runs(
     *,
     offset: int = 0,
     limit: int | None = None,
+    warnings: list[str] | None = None,
 ) -> dict[str, Any]:
     """Purely apply one invocation's run projection to copied canonical rows.
 
@@ -925,6 +933,7 @@ def project_receipt_runs(
         [dict(row) for row in page["items"]],
         run_fields,
         native_by_key=snapshot.native_by_key,
+        warnings=warnings,
     )
     return page
 
@@ -932,16 +941,22 @@ def project_receipt_runs(
 def _terminal_outcome(snapshot: ReceiptSnapshot) -> CallOutcome:
     """An experiment receipt's outcome, read off its own status and counters.
 
+    The one outcome every job receipt reports, whichever action renders it:
+    ``run_experiments``, ``jobs`` status and wait through
+    ``ReceiptSnapshot.outcome``, and ``jobs`` runs.
+
     ``delivered=False``: an experiment that failed produced nothing to read, so
     a failure here IS the call's outcome rather than one item among many. A
     cancelled experiment is partial whatever the counters say — a cancel
     landing after every run but before the analysis leaves them fully
-    reconciled, and one landing before expansion leaves them all at zero.
+    reconciled, and one landing before expansion leaves them all at zero. An
+    interrupted one is read off its counters: the cases whose runs wrote their
+    results before the server stopped count as produced, and are read by job.
     """
     return outcome_of(
         snapshot.status == "failed",
         partial=snapshot.status == "cancelled" or snapshot.completeness.fell_short,
-        in_progress=snapshot.status not in TERMINAL_EXPERIMENT_STATUSES,
+        in_progress=snapshot.status not in TERMINAL_STATUSES,
         delivered=False,
     )
 
@@ -984,36 +999,6 @@ def _recovery_routes(snapshot: ReceiptSnapshot) -> list[str]:
     if snapshot.failures:
         routes.append("Inspect failures and lint findings before retrying omitted cases.")
     return routes
-
-
-#: Statuses on which a job delivered nothing at all, so the whole call failed.
-_FAILED_JOB_STATUSES = frozenset({"failed", "timeout", "interrupted"})
-
-
-def _jobs_outcome(snapshot: ReceiptSnapshot) -> CallOutcome:
-    """A jobs receipt's outcome — the same rule, read off the job's status.
-
-    What differs from ``_terminal_outcome`` is which statuses count. The
-    ``jobs`` control plane reports a wider set as outright failure (a timeout
-    and an interrupt deliver nothing either), and it takes terminality from the
-    lifecycle's live-status set rather than the experiment status list.
-
-    ``completed_with_failures`` is the one status that has to consult the
-    counters: the coordinator sets it when an attached analysis fails even
-    though every run landed, so an experiment's shortfall is read off its own
-    run counters instead. Only this status — a cancelled experiment is partial
-    no matter how the counters read, including the cancel that lands before
-    expansion and leaves them all at zero.
-    """
-    shortfall = snapshot.status == "cancelled" or (
-        snapshot.status == "completed_with_failures" and snapshot.completeness.fell_short
-    )
-    return outcome_of(
-        snapshot.status in _FAILED_JOB_STATUSES,
-        partial=shortfall,
-        in_progress=snapshot.status in NON_TERMINAL_LIVE_STATUSES,
-        delivered=False,
-    )
 
 
 def snapshot_receipt(
@@ -1074,7 +1059,7 @@ def snapshot_receipt(
         {
             case.circuit_path.name
             for case in job.cases
-            if case.status == "produced" and case.circuit_path.suffix.lower() == ".asc"
+            if case.status == "produced" and is_asc(case.circuit_path)
         }
     )
     if sheets and run_by_ltspice(job.simulator):
@@ -1157,6 +1142,7 @@ def render_jobs_receipt_snapshot(
     runs_cap: int = JOBS_PAGE_LIMIT,
     analysis_answer_channel: bool = False,
     analysis_rows_cap: int | None = None,
+    analysis_served: Collection[str] | None = None,
 ) -> dict[str, Any]:
     """Render one complete jobs receipt from detached snapshot facts."""
     data = render_receipt_snapshot(
@@ -1164,6 +1150,7 @@ def render_jobs_receipt_snapshot(
         runs_cap=runs_cap,
         analysis_answer_channel=analysis_answer_channel,
         analysis_rows_cap=analysis_rows_cap,
+        analysis_served=analysis_served,
     )
     data.update(
         {
@@ -1219,23 +1206,25 @@ def render_runs_envelope(
     truncation hint below collapse to the complete-page wording. ``offset`` is
     the caller's decoded cursor position.
     """
+    run_warnings: list[str] = []
     page = project_receipt_runs(
         snapshot,
         run_fields,
         offset=offset,
         # This page's cursor continues this page, so it never renders empty.
         limit=None if limit is None else max(1, limit),
+        warnings=run_warnings,
     )
     return {
         "action": "runs",
-        "outcome": _jobs_outcome(snapshot),
+        "outcome": snapshot.outcome,
         "job_id": snapshot.job_id,
         "request_id": snapshot.request_id,
         "status": snapshot.status,
         "dialect": snapshot.dialect,
         **page,
         "observations": [],
-        "warnings": [],
+        "warnings": run_warnings,
         "failures": [],
         "hint": (
             "Use next_cursor to continue the run page."

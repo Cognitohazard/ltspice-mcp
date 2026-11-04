@@ -14,8 +14,7 @@ and renderers live in ``tools/receipts``.
 from __future__ import annotations
 
 import asyncio
-import os
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Annotated, Any, ClassVar, Literal, Self, TypeAlias, get_args
@@ -25,15 +24,19 @@ from pydantic import (
     Field,
     TypeAdapter,
     ValidatorFunctionWrapHandler,
+    field_validator,
     model_validator,
 )
 
 from ltspice_mcp.errors import (
+    InvalidCursorError,
     JobNotFoundError,
     LTSpiceMCPError,
     PathSecurityError,
+    error_hint,
 )
 from ltspice_mcp.lib import experiment_store, recent, response_budget, services
+from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.experiment_runner import (
     ExperimentCancellationError,
@@ -58,6 +61,7 @@ from ltspice_mcp.lib.recovery_records import RecoveryError
 from ltspice_mcp.lib.sheet_results import place_beside_sheet, run_by_ltspice
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
+    ENVELOPE_ERROR_SCHEMA,
     HINT_SCHEMA,
     OUTCOME_SCHEMA,
     REPEATABLE_CHANGE_ANNOTATIONS,
@@ -94,6 +98,7 @@ from ltspice_mcp.tools.receipts import (
     negotiate_receipt,
     render_jobs_receipt_snapshot,
     render_runs_envelope,
+    resolve_run_fields,
     snapshot_receipt,
     snapshot_receipt_live,
 )
@@ -305,6 +310,11 @@ class JobsRunsInput(_AddressedJobsInput):
         ),
     )
 
+    @field_validator("run_fields")
+    @classmethod
+    def _run_fields_name_run_keys(cls, value: list[str] | None) -> list[str] | None:
+        return None if value is None else resolve_run_fields(value)
+
 
 class JobsPlaceBesideSheetInput(_AddressedJobsInput):
     """Copy a finished case's results beside its sheet, where LTspice opens a sheet's."""
@@ -453,29 +463,13 @@ def _value_shape(field: dict[str, Any]) -> tuple[list[dict[str, Any]], Any]:
     )
 
 
-_JOBS_ERROR_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "code": {"type": "string"},
-        "message": {"type": "string"},
-        "stage": {"type": "string"},
-        "retryable": {"type": "boolean"},
-        "commit_state": {
-            "type": "string",
-            "enum": ["not_started", "committed", "unknown"],
-        },
-        "item_id": {"type": "string"},
-    },
-    "required": ["code", "message", "stage", "retryable", "commit_state"],
-}
-
 _JOBS_COMMON_PROPERTIES: dict[str, Any] = {
     "outcome": OUTCOME_SCHEMA,
     "observations": {"type": "array", "items": OBSERVATION_SCHEMA},
     "warnings": {"type": "array", "items": {"type": "string"}},
     "failures": failures_schema(CASE_FAILURE_SCHEMA),
     "hint": HINT_SCHEMA,
-    "error": _JOBS_ERROR_SCHEMA,
+    "error": ENVELOPE_ERROR_SCHEMA,
 }
 
 _JOBS_COMMON_REQUIRED = [
@@ -745,10 +739,8 @@ class _JobsActionError(Exception):
 def _decode_jobs_cursor(cursor: str | None) -> int:
     offset = decode_offset(cursor)
     if offset is None:
-        raise _JobsActionError(
-            "invalid_cursor",
-            "Invalid jobs cursor; use the opaque next_cursor returned by the prior page",
-            stage="pagination",
+        raise InvalidCursorError(
+            "Invalid jobs cursor; use the opaque next_cursor returned by the prior page"
         )
     return offset
 
@@ -979,8 +971,19 @@ async def _place_case_beside_sheet(
     Refused where LTspice's window could not take them as the sheet's own: a
     case with no results, a netlist's run, a run of another simulator, and a
     sheet changed since the job read it, whose results would not match it.
+    Refused too while the job's runs are not all done, as every read of a job's
+    runs is (``services.runs_unready``).
     """
     case = _case_to_place(job, case_id)
+    unready = services.runs_unready(job)
+    if unready is not None:
+        raise _JobsActionError(
+            "job_not_terminal",
+            f"{unready}; wait for them with jobs(action='wait', job_id='{job.job_id}', "
+            "wait_for='runs').",
+            stage="resolution",
+            retryable=True,
+        )
     if case.status != "produced" or case.raw_file is None:
         raise _JobsActionError(
             "case_not_produced",
@@ -988,7 +991,7 @@ async def _place_case_beside_sheet(
             f"{case.status}).",
             stage="resolution",
         )
-    if case.circuit_path.suffix.lower() != ".asc":
+    if not is_asc(case.circuit_path):
         raise _JobsActionError(
             "not_a_sheet",
             f"Case {case.case_id} ran {case.circuit_path.name}, a netlist. LTspice keeps "
@@ -1086,7 +1089,10 @@ async def _cancel_jobs_target(
     if job.status in TERMINAL_STATUSES:
         return []
 
-    if not experiment_store.cancel_authorized(job, args.control_token):
+    # Whether this process runs the job is the registry's answer, never the
+    # record's pid: a dead server's record can carry this process's pid.
+    owned = state.job_registry.owns(job)
+    if not experiment_store.cancel_authorized(job, args.control_token, owned=owned):
         raise _JobsActionError(
             "cancel_not_authorized",
             (
@@ -1097,7 +1103,7 @@ async def _cancel_jobs_target(
         )
     runner = state.runners.get_experiment_runner_for(job)
     if runner is None:
-        if job.owner_pid == os.getpid():
+        if owned:
             raise _JobsActionError(
                 "cancel_unavailable",
                 (
@@ -1237,6 +1243,8 @@ def _jobs_error_payload(evaluation: JobsEvaluation) -> dict[str, Any]:
 def _jobs_error_details(exc: Exception) -> tuple[str, str, bool]:
     if isinstance(exc, _JobsActionError):
         return exc.code, exc.stage, exc.retryable
+    if isinstance(exc, InvalidCursorError):
+        return exc.code, "pagination", False
     if isinstance(exc, JobNotFoundError):
         return exc.code, "resolution", False
     if isinstance(exc, PathSecurityError):
@@ -1462,9 +1470,15 @@ def failed_jobs_evaluation(
             head_job_id=receipt.job.job_id,
         )
     code, stage, retryable = _jobs_error_details(exc)
+    # The message, then the recovery step every surface gives this kind of
+    # failure (``errors.error_hint``), as ``path_denied_text`` does for a
+    # refused path.
+    remedy = error_hint(exc)
     hint = (
         path_denied_text(exc, state)
         if isinstance(exc, PathSecurityError) and state is not None
+        else f"{exc}\n\n{remedy}"
+        if remedy is not None
         else str(exc)
     )
     error = _JobsError(
@@ -1493,6 +1507,7 @@ def render_jobs_data(
     *,
     limit: int | None = None,
     rung: response_budget.Rung | None = None,
+    served: Collection[str] | None = None,
 ) -> _JobsBuilt:
     """Present one evaluation as a response payload and its text line.
 
@@ -1500,7 +1515,8 @@ def render_jobs_data(
     is one MCP page of that size (the budget ladder re-renders at smaller ones),
     and ``None`` is the complete result the Python API returns. Cancel
     receipts are never paged either way — they are the acknowledgement itself,
-    not a page over a larger set.
+    not a page over a larger set. ``served`` is the MCP session's tools, which
+    an attached analysis's failures name as where their snippet runs.
     """
     args = evaluation.args
     if evaluation.error is not None:
@@ -1607,6 +1623,7 @@ def render_jobs_data(
         runs_cap=limit if limit is not None else max(1, len(snapshot.runs_by_key)),
         analysis_answer_channel=rung is not None and rung.answer_channel,
         analysis_rows_cap=limit if rung is not None and rung.shrink else None,
+        analysis_served=served,
     )
     if evaluation.warnings:
         data["warnings"] = [*evaluation.warnings, *data.get("warnings", [])]
@@ -1693,14 +1710,17 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
                 )
         try:
             budget = resolve_response_budget(args.budget, state)
+            served = frozenset(state.tool_dispatch)
             if budget.tokens is None:
-                built = render_jobs_data(evaluation, limit=page_limit)
+                built = render_jobs_data(evaluation, limit=page_limit, served=served)
             else:
                 # The presentation re-runs at a smaller page for each rung the
                 # ladder tries; the control-plane work above ran once.
                 built = await _negotiate_jobs(
                     budget,
-                    lambda limit, rung: render_jobs_data(evaluation, limit=limit, rung=rung),
+                    lambda limit, rung: render_jobs_data(
+                        evaluation, limit=limit, rung=rung, served=served
+                    ),
                     page_limit,
                 )
         except Exception as exc:

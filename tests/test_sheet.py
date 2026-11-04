@@ -10,7 +10,8 @@ from pathlib import Path
 import pytest
 
 from ltspice_mcp.errors import NetlistError
-from ltspice_mcp.lib.schematic_ops import placed_geometry, wire_segments_of
+from ltspice_mcp.lib.connectivity import NamedNets
+from ltspice_mcp.lib.schematic_ops import placed_geometry, sheet_nets
 from ltspice_mcp.lib.schematic_scene import build_scene
 from ltspice_mcp.lib.sheet import Sheet, read_sheet
 from ltspice_mcp.lib.symbol_library import SymbolResolver
@@ -74,12 +75,18 @@ def test_it_places_what_the_editor_places(sheet: Path, tmp_path: Path) -> None:
         ] == geometry["pins"]
         assert part.box.to_origin_size_dict() == geometry["bounding_box"]
     if len(once) == len(read.parts):
-        # With no reference repeated or missing, the nets are the editor's too:
-        # one builder groups the same pins, labels and wires.
-        assert sorted(read.labels) == sorted(
-            (int(label.coord.X), int(label.coord.Y), label.text) for label in editor.labels
-        )
-        assert sorted(read.wires) == sorted(wire_segments_of(editor))
+        # With no reference repeated or missing, the nets are the editor's too.
+        mine, theirs = NamedNets(read.nets), sheet_nets(editor)
+
+        def groups(nets: NamedNets) -> set[tuple[frozenset[tuple[str, str]], frozenset[str]]]:
+            on_net: dict[int, set[tuple[str, str]]] = {}
+            for pin in nets.pins:
+                on_net.setdefault(nets.of_pin(pin), set()).add((pin.reference, pin.name))
+            for label in nets.labels:
+                on_net.setdefault(nets.of_label(label), set())
+            return {(frozenset(pins), nets.texts(net)) for net, pins in on_net.items()}
+
+        assert groups(mine) == groups(theirs)
 
 
 _SHEET = """Version 4

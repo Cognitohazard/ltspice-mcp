@@ -21,7 +21,6 @@ import hashlib
 import json
 import re
 import shutil
-from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,13 +28,7 @@ from typing import Any, TypeVar
 
 from spicelib import AscEditor
 
-from ltspice_mcp.lib.connectivity import label_folded_nets
-from ltspice_mcp.lib.routing import wires_through
-from ltspice_mcp.lib.schematic_ops import (
-    named_labels,
-    net_partition,
-    wire_segments_of,
-)
+from ltspice_mcp.lib.schematic_ops import sheet_nets
 from ltspice_mcp.lib.schematic_scene import scene_of_text, sheet_view
 from ltspice_mcp.lib.sheet_findings import findings
 from ltspice_mcp.lib.symbol_library import SymbolResolver
@@ -137,35 +130,32 @@ def sheet_says(editor: AscEditor, points: set[Point], resolver: SymbolResolver) 
 
 
 def what_is_there(editor: AscEditor) -> Any:
-    """For a point and a name: whether the name is already on the sheet, and
-    the nets that meet at the point with how many of them carry a name, as a
-    sentence and as the two counts.
+    """For a point and a name: whether the name is already on the sheet, how
+    many nets meet at the point, and how many of the nets there carry a name,
+    as a sentence and as the two counts.
 
-    Worked out here from the partition, apart from the op's own reading of it:
-    it is what tells apart answers the op words alike.
+    The nets that meet are those of the wires through the point, a wire LTspice
+    drops between two pins of one part counting as one; with no wire there,
+    what sits on the point is one place, and a bare point is none. Worked out
+    here from the sheet's nets, apart from the op's own reading of them: it is
+    what tells apart answers the op words alike.
     """
-    partition = net_partition(editor)
-    node_of = label_folded_nets(partition)
-    wires = wire_segments_of(editor)
-    names_of: dict[Point, set[str]] = defaultdict(set)
-    for coord, texts in partition.label_texts.items():
-        names_of[node_of(coord)].update(named_labels(frozenset(texts)))
-    on_the_sheet = {text for texts in partition.label_texts.values() for text in texts}
+    nets = sheet_nets(editor)
+    on_the_sheet = {label.text for label in nets.labels}
 
     def there(net: str, at: Point) -> tuple[str, int, int]:
-        nodes = {node_of(wire[:2]) for wire in wires_through(at, wires)}
-        # A pin or a label there with no wire is a net too; a bare point is none.
-        if at in partition.members.get(partition.root(at), ()):
-            nodes.add(node_of(at))
-        named = [node for node in nodes if names_of[node]]
+        wires = set(nets.wired_at(at))
+        nodes = set().union(*wires) if wires else set(nets.at(at))
+        met = len(wires) if wires else min(len(nodes), 1)
+        named = [node for node in nodes if nets.names(node)]
         if net == "0":
             name = "ground"
-        elif any(net in names_of[node] for node in nodes):
+        elif any(net in nets.names(node) for node in nodes):
             name = "a name already here"
         elif net in on_the_sheet:
             name = "a name already elsewhere"
         else:
             name = "a new name"
-        return f"{name}; {len(nodes)} at the point, {len(named)} named", len(nodes), len(named)
+        return f"{name}; {met} at the point, {len(named)} named", met, len(named)
 
     return there

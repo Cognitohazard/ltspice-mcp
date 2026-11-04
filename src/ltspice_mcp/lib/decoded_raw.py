@@ -14,7 +14,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import pairwise
-from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar, overload
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 import numpy as np
 from numpy.typing import NDArray
@@ -25,6 +25,7 @@ from ltspice_mcp.lib.result_kinds import (
     Analysis,
     header_analysis,
     kind_named,
+    plot_analysis,
     sampled_axis,
     stepped_kind,
 )
@@ -33,43 +34,6 @@ if TYPE_CHECKING:
     from ltspice_mcp.lib.decoded_log import DecodedLog
 
 StepValue = str | int | float
-_T = TypeVar("_T")
-
-
-class StepValues(dict[str, StepValue]):
-    """One step's parameter values, by name, found whatever the case of the name.
-
-    SPICE names are case-blind, and LTspice writes a ``.step`` parameter in its
-    log in lower case whatever the deck's spelling: both builds write
-    ``.step rv=1000`` for ``.step param Rv`` (recorded:
-    ``log/meas_when_threshold_tran_step``). So a lookup by the deck's spelling
-    must find it. Every reader that takes a step parameter's name from a caller
-    looks it up through this type; the keys stay as the run wrote them.
-    """
-
-    def _key(self, name: str) -> str:
-        """The key ``name`` stands for: itself, or the key equal to it but for case."""
-        if dict.__contains__(self, name):
-            return name
-        folded = name.casefold()
-        return next((key for key in self if key.casefold() == folded), name)
-
-    def __contains__(self, name: object) -> bool:
-        return isinstance(name, str) and dict.__contains__(self, self._key(name))
-
-    def __getitem__(self, name: str) -> StepValue:
-        return dict.__getitem__(self, self._key(name))
-
-    @overload
-    def get(self, name: str, default: None = None, /) -> StepValue | None: ...
-    @overload
-    def get(self, name: str, default: StepValue, /) -> StepValue: ...
-    @overload
-    def get(self, name: str, default: _T, /) -> StepValue | _T: ...
-    def get(self, name: str, default: object = None, /) -> object:
-        return dict.get(self, self._key(name), default)
-
-
 Representation = Literal["real", "complex"]
 StepStatus = Literal["unstepped", "matched", "unresolved", "mismatch"]
 Monotonicity = Literal["nondecreasing", "nonincreasing", "constant", "nonmonotonic", "unknown"]
@@ -145,11 +109,6 @@ class StepDescriptor:
     index: int
     parameters: tuple[tuple[str, StepValue], ...]
 
-    @property
-    def values(self) -> StepValues:
-        """The parameters by name, found whatever the case of the name."""
-        return StepValues(self.parameters)
-
 
 @dataclass(frozen=True)
 class PlotDescriptor:
@@ -177,6 +136,9 @@ class PlotDescriptor:
         return tuple(trace for trace in self.traces if trace.name not in self.step_variables)
 
 
+# The SI unit of each type a simulator declares a trace with. An unknown type
+# has none rather than a guess; an analysis can still override a declared type
+# that does not hold for what it writes (_trace_descriptor).
 _UNITS = {
     "voltage": "V",
     "current": "A",
@@ -190,6 +152,16 @@ _UNITS = {
     "voltage-density": "V/√Hz",
     "current-density": "A/√Hz",
 }
+
+
+def declared_unit(declared_type: str | None) -> str | None:
+    """The SI unit of a trace's declared type (the raw header's own word for
+    what it holds), or None for a type with no known unit."""
+    if not declared_type:
+        return None
+    return _UNITS.get(declared_type.strip().lower())
+
+
 _ROOT_LABEL = re.compile(r"(?:v\()?((?:pole|zero)\([0-9]+\))\)?\Z", re.I)
 
 
@@ -199,7 +171,7 @@ def _trace_descriptor(
     variable = header.variables[index]
     declared = variable.declared_type.lower()
     name = variable.name.lower()
-    unit = _UNITS.get(declared)
+    unit = declared_unit(declared)
     evidence = "declared_type" if unit else None
     normalization = None
     # ngspice's native analyses emit generic voltage types for derived facts.
@@ -278,18 +250,43 @@ def _step_descriptors(
     return tuple(descriptors), (*starts, points)
 
 
-def transient_time_offset(header: RawPlotHeader) -> float:
-    """Validate the time offset using header facts before numeric allocation."""
-    analysis = header_analysis(header)
-    if (
-        analysis != "transient"
-        or sampled_axis(analysis, header.variables[0].declared_type) is None
-    ):
-        return 0.0
-    offset = float(next((value for key, value in header.fields if key.lower() == "offset"), "0"))
-    if not math.isfinite(offset):
+def time_offset(plot_name: str, first_type: str, offset: str | None) -> float | None:
+    """Where a transient's stored time axis starts in deck time: the header's
+    ``Offset`` field, which LTspice sets for ``.tran 0 <tstop> <tstart>`` and
+    writes as 0 otherwise. None for a plot whose axis is not a transient's
+    time, which is read as stored. The one reading of the field, for the
+    decoder and for the progress reader of a running job.
+
+    Raises:
+        ValueError: The field is not a finite number.
+    """
+    analysis = plot_analysis(plot_name, first_type)
+    if analysis != "transient" or sampled_axis(analysis, first_type) is None:
+        return None
+    value = float(offset if offset is not None else "0")
+    if not math.isfinite(value):
         raise ValueError("Transient time offset must be finite")
-    return offset
+    return value
+
+
+def deck_time(stored: NDArray, offset: float) -> NDArray:
+    """A transient's stored times in deck time. LTspice may store a time
+    negated (spicelib's reader takes the absolute value of a time axis too),
+    and stores a windowed run's times from 0, with its start in ``offset``."""
+    corrected = np.abs(stored, dtype=np.result_type(stored.dtype, offset))
+    corrected += offset
+    return corrected
+
+
+def transient_time_offset(header: RawPlotHeader) -> float:
+    """Validate the time offset using header facts before numeric allocation;
+    0 for a plot with no time axis."""
+    offset = time_offset(
+        header.plot_name,
+        header.first_type,
+        next((value for key, value in header.fields if key.lower() == "offset"), None),
+    )
+    return 0.0 if offset is None else offset
 
 
 def _coordinate_facts(wave: NDArray, boundaries: tuple[int, ...]) -> tuple[bool, Monotonicity]:
@@ -425,9 +422,7 @@ class DecodedPlot:
             if np.iscomplexobj(arrays[0]):
                 raise ValueError("Transient time must be real and its offset finite")
             if offset or np.any(arrays[0] < 0):
-                corrected = np.abs(arrays[0], dtype=np.result_type(arrays[0].dtype, offset))
-                corrected += offset
-                arrays[0] = corrected
+                arrays[0] = deck_time(arrays[0], offset)
         traces = tuple(
             _trace_descriptor(header, i, wave, analysis) for i, wave in enumerate(arrays)
         )
@@ -503,7 +498,11 @@ class DecodedPlot:
 
     @property
     def steps(self) -> list[dict[str, StepValue]] | None:
-        return [s.values for s in self.descriptor.steps] if self._has_step_metadata else None
+        return (
+            [dict(s.parameters) for s in self.descriptor.steps]
+            if self._has_step_metadata
+            else None
+        )
 
     def get_raw_property(
         self, property_name: str | None = None
@@ -545,7 +544,7 @@ class DecodedPlot:
             raise ResultError(unresolved_steps_reason(self.descriptor.stepped_kind))
         indices = []
         for step in self.descriptor.steps:
-            parameters = step.values
+            parameters = dict(step.parameters)
             if all(
                 key in parameters and parameters[key] == value for key, value in kwargs.items()
             ):

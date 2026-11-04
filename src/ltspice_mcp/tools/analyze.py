@@ -24,10 +24,12 @@ from pydantic import BeforeValidator, Field, PrivateAttr, SkipValidation, model_
 
 from ltspice_mcp.errors import (
     AnalysisDeadlineExceeded,
+    InvalidCursorError,
     LTSpiceMCPError,
     OtherRawNotWritten,
     PathSecurityError,
     ResultError,
+    error_hint,
     python_route_text,
 )
 from ltspice_mcp.lib import (
@@ -43,19 +45,17 @@ from ltspice_mcp.lib import (
     services,
 )
 from ltspice_mcp.lib.decoded_log import DecodedLog
-from ltspice_mcp.lib.decoded_raw import DecodedRaw, PlotDescriptor, StepValues
-from ltspice_mcp.lib.experiment_types import failure_summary, has_readable_raw
-from ltspice_mcp.lib.format import format_spice_value, unique_name
-from ltspice_mcp.lib.job_lifecycle import runs_terminal
+from ltspice_mcp.lib.decoded_raw import DecodedRaw, PlotDescriptor
+from ltspice_mcp.lib.format import cap_note, format_spice_value, unique_name
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
+from ltspice_mcp.lib.log_types import measurement_named
 from ltspice_mcp.lib.pagination import retotal_page
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.projection import (
-    ABSENT,
-    escape_field_segment,
+    absent_path_warnings,
     keep_plan,
     project_row,
-    split_field_path,
+    resolve_field_paths,
 )
 from ltspice_mcp.lib.raw_parser import (
     get_step_count,
@@ -63,6 +63,7 @@ from ltspice_mcp.lib.raw_parser import (
     safe_magnitude_db,
 )
 from ltspice_mcp.lib.recipes import (
+    WAVEFORM_MAX_POINTS_CAP,
     KeyedRecipe,
     MeasurementsRecipe,
     MultiRecipe,
@@ -73,6 +74,7 @@ from ltspice_mcp.lib.recipes import (
     StepSelectionFields,
     StepSelector,
     WaveformRecipe,
+    step_axis_key,
     validate_recipe,
 )
 from ltspice_mcp.lib.result_kinds import AC_SHAPED
@@ -107,6 +109,20 @@ _MIN_ITEM_DEADLINE_S = 0.05
 MAX_PAGE_SIZE = 100
 _FAIL_CASE_PAGE_CAP = 100
 _FAILURE_CAP = 100
+
+_NO_ROWS_WARNING = "No rows: this recipe failed wherever it was read; see failures at {places}."
+"""Said on the entry of a recipe that produced no rows because it failed, so
+the entry points at the failures that explain it."""
+
+
+def _no_rows_warning(failures: Sequence[Failure]) -> str:
+    places = list(dict.fromkeys(failure.where for failure in failures))
+    shown = ", ".join(places[:_FAILURE_WHERE_CAP])
+    more = (
+        f" and {len(places) - _FAILURE_WHERE_CAP} more" if len(places) > _FAILURE_WHERE_CAP else ""
+    )
+    return _NO_ROWS_WARNING.format(places=shown + more)
+
 
 _GROUPS_OMITTED_WARNING = (
     "{omitted} of {total} group(s) omitted to fit the response budget; "
@@ -301,6 +317,15 @@ class Failure:
 _FAILURE_WHERE_CAP = 10
 """How many places a collapsed failure row names before deferring to ``count``."""
 
+_DEFERRED_ROUTE: frozenset[str] = frozenset({"<shown later>"})
+"""``served`` for failure rows that are stored now and shown later (the attached
+analysis): which session will show them, and so where their ``api`` snippet
+runs, is not known yet. A row then keeps its plain message and marks itself
+under ``_ROUTE_KEY``, and the render that shows it adds the route."""
+
+_ROUTE_KEY = "python_route"
+"""Marks a stored failure row whose message ends in an ``api`` snippet."""
+
 _DIGIT_RUN = re.compile(r"(\d+)")
 
 
@@ -335,9 +360,12 @@ def _collapse_failures(
     for failure in failures:
         grouped.setdefault(failure.reason, []).append(failure)
     rows: list[dict[str, Any]] = []
+    deferred = served is _DEFERRED_ROUTE
     for members in grouped.values():
         ordered = sorted(members, key=lambda failure: _place_order(failure.where))
-        row = ordered[0].wire(served)
+        row = ordered[0].wire(None if deferred else served)
+        if deferred and ordered[0].python_route:
+            row[_ROUTE_KEY] = True
         if len(ordered) > 1:
             places = list(dict.fromkeys(failure.where for failure in ordered))
             row["wheres"] = places[:_FAILURE_WHERE_CAP]
@@ -414,6 +442,13 @@ _ATTRIBUTION_KEYS: tuple[str, ...] = (*_IDENTITY_KEYS[:5], "plot_index", "dialec
 # paths are rooted here, so this one list is both the projector's alphabet and
 # the answer a caller gets when a path names something that does not exist.
 _ROW_KEYS: tuple[str, ...] = ("source", *_IDENTITY_KEYS, "value")
+
+
+def resolve_row_fields(paths: list[str]) -> list[str]:
+    """``include.fields`` as a projection reads them, on every surface that
+    takes the argument: rooted at a row's own keys, a bare name read under
+    ``value``. ``ValueError`` for a path no row can carry."""
+    return resolve_field_paths(paths, _ROW_KEYS, argument="include.fields", bare_root="value")
 
 
 def coerce_per_run_default(value: Any) -> Any:
@@ -525,21 +560,7 @@ class AnalyzeInclude(NotedModel):
         # rather than returning empty rows the caller has to explain.
         if self.fields is None:
             return self
-        resolved: list[str] = []
-        for path in self.fields:
-            segments = split_field_path(path)
-            if any(not segment for segment in segments):
-                raise ValueError(f"include.fields path {path!r} has an empty segment")
-            root = segments[0]
-            if root not in _ROW_KEYS:
-                if len(segments) != 1:
-                    raise ValueError(
-                        f"include.fields path {path!r} starts at unknown row key {root!r}; "
-                        f"choose one of: {', '.join(_ROW_KEYS)}"
-                    )
-                # A bare name is the number's own name, which lives under 'value'.
-                path = f"value.{path}"
-            resolved.append(path)
+        resolved = resolve_row_fields(self.fields)
         if resolved != self.fields:
             object.__setattr__(self, "fields", resolved)  # not re-validated
         # A path named twice, or once bare and once under 'value', keeps one copy.
@@ -777,16 +798,6 @@ def _pick(source: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
     return {key: source[key] for key in keys}
 
 
-def _at_segments(row: dict[str, Any], segments: list[str]) -> Any:
-    """The value at ``segments``, or ``ABSENT`` when one of them is missing."""
-    node: Any = row
-    for segment in segments:
-        if not isinstance(node, dict) or segment not in node:
-            return ABSENT
-        node = node[segment]
-    return node
-
-
 #: Nested value blocks the lean row keeps anyway. The rule is narrow on
 #: purpose: a block belongs here only when the caller cannot get it back from
 #: anything else in the response. An artifact handle names a file already
@@ -863,44 +874,12 @@ def _row_renderer(
 def _projection_warnings(records: list[dict[str, Any]], fields: list[str]) -> list[str]:
     """One warning per requested path that no row of this recipe carries.
 
-    Root keys are validated at input, so only a path reaching INTO a value dict
-    can miss — and it can miss legitimately, because ``include.fields`` is
-    call-global while each metric has its own value shape. Naming the keys that
-    are actually there turns a row missing the requested key from a silence into
-    the next call's argument.
+    It can miss legitimately, because ``include.fields`` is call-global while
+    each metric has its own value shape.
     """
-    warnings: list[str] = []
-    for path in fields:
-        segments = split_field_path(path)
-        if len(segments) == 1:
-            continue
-        if any(_at_segments(record, segments) is not ABSENT for record in records):
-            continue
-        parent_segments = segments[:-1]
-        parent = ".".join(escape_field_segment(segment) for segment in parent_segments)
-        present = sorted(
-            {
-                key
-                for record in records
-                for node in (_at_segments(record, parent_segments),)
-                if isinstance(node, dict)
-                for key in node
-            }
-        )
-        # Naming a dotted key as it must be SPELLED, not just as it reads, is
-        # the difference between a warning and a fix: the caller is one escape
-        # away from the value, and no amount of staring at the key says so.
-        addressable = ", ".join(escape_field_segment(key) for key in present)
-        warnings.append(
-            f"include.fields path {path!r} is absent from every row of this recipe; "
-            + (
-                f"keys present at {parent!r}: {addressable}"
-                if present
-                else f"no row reaches {parent!r} — a key whose own name contains a "
-                r"'.' is one segment, so address it with '\.' (e.g. 'value.v(x1\.out)')"
-            )
-        )
-    return warnings
+    return absent_path_warnings(
+        records, fields, argument="include.fields", rows_name="row of this recipe"
+    )
 
 
 def _projection_presence(records: list[dict[str, Any]]) -> dict[str, Any]:
@@ -987,6 +966,30 @@ def _deserialize_runs(item: result_store.ResultSet, state: SessionState) -> list
     return runs
 
 
+def _unresolved_source(
+    label: str, run_index: int | None, exc: Exception, state: SessionState
+) -> dict[str, Any]:
+    """The coverage row of a source that names nothing this call can read.
+
+    Coded and hinted as every other surface reports the same failure: the
+    error's own code (``job_not_found``, ``result_unreadable``, ``path_denied``)
+    and its type's recovery step (``errors.error_hint``; a refused path's is
+    the sandbox guidance, since the file may be perfectly readable).
+    """
+    error = exc if isinstance(exc, LTSpiceMCPError) else ResultError(str(exc))
+    row: dict[str, Any] = {
+        "label": label,
+        "case_id": None,
+        "run_index": run_index,
+        "code": error.code,
+        "detail": str(exc),
+    }
+    hint = state.sandbox_guidance() if isinstance(error, PathSecurityError) else error_hint(error)
+    if hint is not None:
+        row["hint"] = hint
+    return row
+
+
 async def _resolve_sources(
     inputs: list[AnalyzeSourceInput], state: SessionState
 ) -> tuple[list[_ResolvedRun], list[dict[str, Any]], dict[str, str | None], list[Observation]]:
@@ -1019,18 +1022,18 @@ async def _resolve_sources(
                     dialect=source_input.dialect,
                 )
             except (LTSpiceMCPError, OSError) as exc:
-                row = {
-                    "label": source_input.label,
-                    "case_id": None,
-                    "run_index": 0,
-                    "code": "source_unavailable",
-                    "detail": str(exc),
-                }
-                if isinstance(exc, PathSecurityError):
-                    # Refused, not unavailable: the file may be perfectly
-                    # readable, and the remedy is the sandbox's setting.
-                    row.update(code=exc.code, hint=state.sandbox_guidance())
-                missing.append(row)
+                missing.append(_unresolved_source(source_input.label, 0, exc, state))
+                continue
+            named = resolved.raw if resolved.raw is not None else resolved.log
+            if named is not None and not await asyncio.to_thread(os.path.isfile, named):
+                missing.append(
+                    _unresolved_source(
+                        source_input.label,
+                        0,
+                        ResultError(f"No result file at {named}"),
+                        state,
+                    )
+                )
                 continue
             source = replace(
                 resolved,
@@ -1069,31 +1072,21 @@ async def _resolve_sources(
         try:
             job = await services.resolve_job_async(source_input.job_id, state)
         except LTSpiceMCPError as exc:
-            missing.append(
-                {
-                    "label": source_input.label,
-                    "case_id": None,
-                    "run_index": None,
-                    "code": "source_unavailable",
-                    "detail": str(exc),
-                }
-            )
+            missing.append(_unresolved_source(source_input.label, None, exc, state))
             continue
         record = job.store_path
         source_jobs[job.job_id] = str(record) if record.is_file() else None
 
         # Per-case readiness is gated below, not here.
-        if not runs_terminal(job.status):
+        unready = services.runs_unready(job)
+        if unready is not None:
             missing.append(
                 {
                     "label": source_input.label,
                     "case_id": None,
                     "run_index": None,
                     "code": "job_not_terminal",
-                    "detail": (
-                        f"Experiment job {job.job_id!r} has no readable runs yet "
-                        f"(status={job.status!r})"
-                    ),
+                    "detail": unready,
                 }
             )
             continue
@@ -1126,14 +1119,15 @@ async def _resolve_sources(
         else:
             selected = list(job.cases)
         for case in selected:
-            if not has_readable_raw(case):
+            unreadable = services.case_unreadable(case)
+            if unreadable is not None:
                 missing.append(
                     {
                         "label": source_input.label,
                         "case_id": case.case_id,
                         "run_index": case.run_index,
                         "code": "raw_not_produced",
-                        "detail": failure_summary(case),
+                        "detail": unreadable,
                     }
                 )
                 continue
@@ -1621,7 +1615,7 @@ async def _build_step_plan(
     state: SessionState,
 ) -> _RawStepPlan:
     raw = await services.load_raw(source, state)
-    step_values = [step.values for step in raw.descriptor.steps]
+    step_values = [dict(step.parameters) for step in raw.descriptor.steps]
     return _RawStepPlan(steps.plan(get_step_count(raw), step_values), raw.descriptor)
 
 
@@ -1831,20 +1825,21 @@ async def _waveform(
                 "This plot has no sampled axis; use inspect results table or CSV export."
             )
         signals = [services.resolve_signal(raw, requested) for requested in recipe.signals]
+        max_points, held = held_to_cap(
+            "max_points",
+            recipe.max_points,
+            min(WAVEFORM_MAX_POINTS_CAP, state.config.max_points_returned),
+        )
         # Decimating and writing every sample is CPU work proportional to the
         # points kept, so it runs off the event loop as the csv export does.
         inline = await asyncio.to_thread(
-            _inline_waveform,
-            raw,
-            signals,
-            step,
-            start,
-            end,
-            min(recipe.max_points, state.config.max_points_returned),
+            _inline_waveform, raw, signals, step, start, end, max_points
         )
         return (
             {
                 **inline,
+                # A record's warnings become its recipe's, with how many runs said it.
+                **({"warnings": [held]} if held is not None else {}),
                 **_identity(run.source, step, step_values, plot_index=run.source.plot_index).wire(
                     _IDENTITY_KEYS
                 ),
@@ -1883,7 +1878,7 @@ async def _waveform(
         pending,
         lambda: time.monotonic() >= item_deadline,
         export_steps,
-        [step.values for step in raw.descriptor.steps],
+        [dict(step.parameters) for step in raw.descriptor.steps],
     )
     return (
         {
@@ -1945,7 +1940,7 @@ async def _plot(
         split_by_unit=True,
         netlist=run.source.netlist,
         steps=[step for step, _ in steps],
-        step_dicts=[step.values for step in raw.descriptor.steps],
+        step_dicts=[dict(step.parameters) for step in raw.descriptor.steps],
         analysis_type=analysis_type,
         x_is_log=x_is_log if recipe.log_x is None else recipe.log_x,
         ts=metrics.parse_time(_spice(span.start) if span else None, "span.start"),
@@ -1956,7 +1951,7 @@ async def _plot(
         raw,
         run.source.raw,
         plan,
-        min(100_000, an.PLOT_MAX_POINTS_CEILING),
+        min(100_000, WAVEFORM_MAX_POINTS_CAP),
         pending,
         recipe.title or f"{run.source.raw.stem} — {analysis_type}",
     )
@@ -2066,6 +2061,8 @@ def _measurements_compact(value: dict[str, Any]) -> dict[str, Any]:
     failed = [name for name, number in measured.items() if number is None]
     if failed:
         compact["failed_measurements"] = failed
+    if value.get("unreadable"):
+        compact["unreadable"] = value["unreadable"]
     return compact
 
 
@@ -2116,6 +2113,14 @@ _KEYED_EXTRACTORS: dict[str, Callable[[dict[str, Any]], dict[str, Any]]] = {
     "measurements": _measurements_flat,
     "operating_point": metrics.operating_point_flat,
 }
+
+
+def _keyed_name(recipe: KeyedRecipe, name: str, flat: Mapping[str, Any]) -> str:
+    """The key of a row's flat map that a caller's ``name`` reads: a
+    measurement in any case, as the log's reader holds it lower-cased."""
+    if isinstance(recipe, MeasurementsRecipe):
+        return measurement_named(name, flat) or name
+    return name
 
 
 def _whole(value: dict[str, Any]) -> dict[str, Any]:
@@ -2221,7 +2226,7 @@ def _tallies(recipe: Recipe, records: list[Record]) -> dict[str, _FieldTally]:
                 for name, candidate in flat.items():
                     tally(name, candidate, record)
             else:
-                tally(recipe.field, flat.get(recipe.field), record)
+                tally(recipe.field, flat.get(_keyed_name(recipe, recipe.field, flat)), record)
         # A key appears at most once in a row, so the rows with no number for
         # it, null or absent, are every row its samples do not account for.
         for entry in out.values():
@@ -2335,17 +2340,6 @@ def _spec(
     return result
 
 
-def _dimension_value(identity: RowIdentity, dimension: str) -> Any:
-    """A row's value along a ``group_by`` dimension that names a parameter: the
-    value a variation gave it, else the run's step value, by name whatever its
-    case (:class:`StepValues`). None when the row has neither."""
-    for values in (identity.assignments, identity.step_values):
-        named = StepValues(values)
-        if dimension in named:
-            return named[dimension]
-    return None
-
-
 def _group_values(
     recipe: Recipe, records: list[Record], dimensions: list[str], limit: int | None = None
 ) -> tuple[list[dict[str, Any]], int]:
@@ -2364,7 +2358,10 @@ def _group_values(
             if dimension == "circuit":
                 value = identity.circuit
             else:
-                value = _dimension_value(identity, dimension)
+                stepped = identity.step_values
+                value = identity.assignments.get(
+                    dimension, stepped.get(step_axis_key(dimension, stepped))
+                )
             values.append((dimension, value))
         grouped.setdefault(tuple(values), []).append(record)
     kept = list(grouped.items())[:limit]
@@ -2783,7 +2780,9 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
                 "The recipe's value. A measurements row whose run holds one value "
                 "per .meas carries 'measured' {name: value}, 'at' {name: reported "
                 "crossing/AT point} and 'failed_measurements', the names whose "
-                "'measured' is null because the log holds no number for them; its "
+                "'measured' is null because the log holds no number for them, and "
+                "'unreadable' {name: {line, reason}} for one whose printed value is "
+                "not a number; its "
                 "'stats' block is left off the default row and returned by "
                 "include.fields=['value']. A stepped run's row is 'stats' alone."
             ),
@@ -2797,6 +2796,17 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
                     "additionalProperties": {"type": ["number", "null"]},
                 },
                 "failed_measurements": {"type": "array", "items": {"type": "string"}},
+                "unreadable": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                            "line": {"type": ["string", "null"]},
+                            "reason": {"type": "string"},
+                        },
+                        "required": ["reason"],
+                    },
+                },
             },
         },
     },
@@ -3183,7 +3193,36 @@ def _assemble(
         if observation not in observations:
             observations.append(observation)
     results: dict[str, Any] = {}
+    # Where each entry's recipe sits in the work list, so the entries keep the
+    # order the recipes were asked in, failed ones included.
+    entry_at: dict[str, int] = {}
+    # The entries that answered: rows, or no failure to explain their absence.
+    delivered: list[str] = []
     analyzed_identities: set[tuple[Any, Any, Any]] = set()
+
+    for at, failure in a.skipped:
+        if at >= position:
+            continue
+        # A recipe refused before it ran keeps an entry under the key it
+        # asked for, so reading results[key] says what happened instead of
+        # raising: one entry per recipe, whatever the reason it has no rows.
+        work_item = item.work[at]
+        raw_recipe = work_item["recipe"]
+        key = str(raw_recipe.get("key") or f"recipe_{work_item['index']}")
+        if key in results:
+            continue
+        empty_rows: dict[str, Any] = (
+            {"per_run": pagination.page_of([], offset=0, total=0)}
+            if limits.per_run is not None
+            else {"values": []}
+        )
+        results[key] = {
+            "metric": str(raw_recipe.get("metric") or ""),
+            "reduced": [],
+            "warnings": [_no_rows_warning([failure])],
+            **empty_rows,
+        }
+        entry_at[key] = at
 
     for index, unit in enumerate(units):
         failures.extend(unit.failures)
@@ -3207,7 +3246,11 @@ def _assemble(
             groups_limit=limits.groups,
         )
         if unit.records or not unit.failures:
-            results[unit.key] = entry
+            delivered.append(unit.key)
+        else:
+            entry["warnings"].append(_no_rows_warning(unit.failures))
+        results[unit.key] = entry
+        entry_at[unit.key] = unit.position
         for record in unit.records:
             analyzed_identities.add(
                 (record.source, record.identity.case_id, record.identity.run_index)
@@ -3226,6 +3269,7 @@ def _assemble(
                 view_fields=a.include.fields,
             )
 
+    results = {key: results[key] for key in sorted(results, key=entry_at.__getitem__)}
     next_value: dict[str, str] | None = None
     if position < len(item.work):
         next_value = {
@@ -3245,14 +3289,19 @@ def _assemble(
             if len(failures) != len(failure_rows)
             else ""
         )
+        rest = "api.analyze_results returns every record."
+        if a.served is not None and a.served is not _DEFERRED_ROUTE:
+            rest = f"{rest} {python_route_text(a.served)}"
         observations.append(
             Observation(
                 code="failures_truncated",
                 kind="coverage",
                 detail=(
-                    f"Returned {_FAILURE_CAP} of {len(failure_rows)} failure records"
-                    f"{standing_for}; coverage and recipe result presence still "
-                    "reflect the full call."
+                    "failures: "
+                    + cap_note(
+                        _FAILURE_CAP, len(failure_rows), f"failure records{standing_for}", rest
+                    )
+                    + " Coverage and recipe result presence still reflect the full call."
                 ),
             )
         )
@@ -3264,7 +3313,7 @@ def _assemble(
     outcome = outcome_of(
         failures,
         partial=bool(a.missing) or next_value is not None,
-        delivered=bool(results) or next_value is not None,
+        delivered=bool(delivered) or next_value is not None,
     )
     if missing_page["truncated"]:
         # Carries the live work position, not the end of the work list: this
@@ -3318,7 +3367,7 @@ def _assemble(
         data["hint"] = " ".join(hints)
     # The summary line follows the reply's rule: a count of nothing is not said.
     text = (
-        f"analyze_results: {outcome}; {len(results)} recipe result(s), "
+        f"analyze_results: {outcome}; {len(delivered)} recipe result(s), "
         + (f"{len(failures)} failure(s), " if failures else "")
         + f"{coverage['runs_analyzed']}/{runs_requested} run(s) analyzed"
     )
@@ -3328,7 +3377,9 @@ def _assemble(
 def _snapshot_from_assembly(a: AnalysisEvaluation) -> dict[str, Any]:
     """Persist facts and bounded unprojected rows, never a rendered response."""
     wide_include = a.include.model_copy(update={"fields": list(_ROW_KEYS)})
-    wide = replace(a, include=wide_include)
+    # Shown later, by a session not known yet: each failure row keeps whether
+    # its message ends in an api snippet, for the render to say where it runs.
+    wide = replace(a, include=wide_include, served=_DEFERRED_ROUTE)
     requested, _ = _assemble(wide, None, _Limits.of(wide_include))
     top = requested
     requested_results = top.pop("results")
@@ -3361,27 +3412,29 @@ def _snapshot_from_assembly(a: AnalysisEvaluation) -> dict[str, Any]:
     )
     results: dict[str, Any] = {}
     for key, requested_entry in requested_results.items():
-        unit = units[key]
+        # A recipe refused before it ran has an entry and no unit: no rows.
+        unit = units.get(key)
         entry = requested_entry
         per_run = entry.pop("per_run", None)
         had_values = "values" in entry
         entry.pop("values", None)
-        rows = [record.wire() for record in unit.records]
-        answer_rows = rows[:MAX_PAGE_SIZE] if not getattr(unit.recipe, "reduce", []) else []
+        rows = [record.wire() for record in unit.records] if unit is not None else []
+        reduces = unit is not None and getattr(unit.recipe, "reduce", [])
+        answer_rows = rows[:MAX_PAGE_SIZE] if not reduces else []
         block: dict[str, Any] = {
             "facts": entry,
             "answer_rows": answer_rows,
-            "answer_total": len(unit.records),
+            "answer_total": len(rows),
             "surface": ("per_run" if per_run is not None else "values" if had_values else "none"),
             "projection_presence": _projection_presence(rows),
         }
         if per_run is not None:
             block["per_run"] = per_run
-            block["per_run_offset"] = unit.per_run_offset
+            block["per_run_offset"] = unit.per_run_offset if unit is not None else 0
             block["per_run_cursor_base"] = result_store.encode_cursor(
                 a.item,
-                unit.position,
-                intra_item=unit.per_run_offset,
+                unit.position if unit is not None else a.natural_position,
+                intra_item=unit.per_run_offset if unit is not None else 0,
                 missing_offset=missing_next,
                 view_fields=wide_include.fields,
             )
@@ -3453,8 +3506,14 @@ def render_attached_analysis(
     fields: list[str] | None,
     answer_channel: bool = False,
     row_limit: int | None = None,
+    served: Collection[str] | None = None,
 ) -> dict[str, Any]:
-    """Render one public attached result from its stored neutral snapshot."""
+    """Render one public attached result from its stored neutral snapshot.
+
+    ``served`` is the tools of the MCP session showing it, so a failure whose
+    message ends in an ``api`` snippet says where that runs, as on an
+    ``analyze_results`` page; None, for the Python API, leaves the message as is.
+    """
     snapshot_kind = analysis_snapshot.classify(stored)
     if snapshot_kind != "snapshot":
         raise ResultError(
@@ -3463,6 +3522,9 @@ def render_attached_analysis(
         )
 
     data = copy.deepcopy(stored["top"])
+    for row in data.get("failures") or []:
+        if row.pop(_ROUTE_KEY, False) and served is not None:
+            row["message"] = f"{row['message']} {python_route_text(served)}"
     _rebind_snapshot_cursors(data, fields)
     natural_cursor_base = stored.get("natural_cursor_base")
     if answer_channel:
@@ -4206,6 +4268,19 @@ def _continuation_echo_mismatch(args: AnalyzeResultsInput, item: result_store.Re
         )
 
 
+def _cursor_fields(cursor: str) -> list[str] | None:
+    """The row view a cursor was paged under, read as a request's
+    ``include.fields`` is, so a page continued from it projects what the page
+    that minted it did."""
+    fields = result_store.cursor_view(cursor)
+    if fields is None:
+        return None
+    try:
+        return list(dict.fromkeys(resolve_row_fields(fields)))
+    except ValueError as exc:
+        raise InvalidCursorError(f"Invalid analyze_results cursor: {exc}") from None
+
+
 async def _resolve_drive_start(
     args: AnalyzeResultsInput,
     state: SessionState,
@@ -4265,7 +4340,7 @@ async def _resolve_drive_start(
         )
         inherited_view = True
         resumed = True
-        cursor_fields = result_store.cursor_view(args.continuation.cursor)
+        cursor_fields = _cursor_fields(args.continuation.cursor)
     else:
         assert page_cursor is not None
         item = await asyncio.to_thread(
@@ -4275,15 +4350,15 @@ async def _resolve_drive_start(
         )
         inherited_view = True
         resumed = True
-        cursor_fields = result_store.cursor_view(page_cursor)
+        cursor_fields = _cursor_fields(page_cursor)
         if "fields" in args.include.model_fields_set and args.include.fields != cursor_fields:
-            raise ResultError(
+            raise InvalidCursorError(
                 "The per_run cursor carries a different include.fields view; replay "
                 "page 1 with the new fields projection instead of changing fields on "
                 "a cursor call."
             )
         if item.inputs.get("request_hash") != _request_hash(args):
-            raise ResultError(
+            raise InvalidCursorError(
                 "The per_run cursor does not match these sources, recipes, grouping, "
                 "and include options."
             )

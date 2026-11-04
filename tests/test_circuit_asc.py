@@ -6,9 +6,11 @@ through the shared op runner (``tests/_asc_ops.py``) and then read the sheet bac
 off disk, so a claim about geometry is checked against what was actually written.
 """
 
+import json
 from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 from mcp.types import TextContent
@@ -385,10 +387,12 @@ class TestAPinPlacedOnACrossing:
         (found,) = _found(asc_state, sheet, "joined_at_crossing")
         assert (found.refs, found.points) == (("R1",), ((200, 100),))
         # And it is so: the two wires are one net now.
-        nets = load_editor(asc_state, sheet)
-        from ltspice_mcp.lib.schematic_ops import trace_nets
+        from ltspice_mcp.lib.schematic_ops import sheet_nets
 
-        assert trace_nets(nets)[(200, 0)] == trace_nets(nets)[(400, 100)] == frozenset({"VDD"})
+        nets = sheet_nets(load_editor(asc_state, sheet))
+        (net,) = nets.at((200, 0))
+        assert nets.at((400, 100)) == {net}
+        assert nets.texts(net) == frozenset({"VDD"})
 
     async def test_a_pin_on_one_wire_is_an_ordinary_connection(self, asc_state: SessionState):
         sheet = self._crossing(asc_state, "cross-none", "VDD", "VSS")
@@ -453,10 +457,12 @@ class TestALabelPlacedOnACrossing:
         assert found.points == ((200, 100),)
         assert found.detail.startswith(f"label '{net}' at (200,100) sits where 2 wires cross")
         # And it is so: the two wires are one net now.
-        from ltspice_mcp.lib.schematic_ops import trace_nets
+        from ltspice_mcp.lib.schematic_ops import sheet_nets
 
-        nets = trace_nets(load_editor(asc_state, sheet))
-        assert nets[(200, 0)] == nets[(400, 100)] == frozenset({net})
+        nets = sheet_nets(load_editor(asc_state, sheet))
+        (joined,) = nets.at((200, 0))
+        assert nets.at((400, 100)) == {joined}
+        assert nets.texts(joined) == frozenset({net})
 
     async def test_a_second_name_and_the_join_are_both_said(self, asc_state: SessionState):
         sheet = self._crossing(asc_state, "label-cross-second", "VDD")
@@ -1522,6 +1528,56 @@ class TestSetComponentValueMultiTokenValues:
             self._set(asc_state, asc, "Vload", "AC 1")
 
 
+class TestSetComponentValueSplitsAsTheLexerDoes:
+    """A value's ``KEY=VALUE`` parameters are told from its head by the lexer,
+    for the check of the value and for the write alike. The check split the
+    value on whitespace, so a braced parameter with a space in it was refused,
+    with advice to put it in braces, although the write reads it as one
+    parameter."""
+
+    @pytest.mark.parametrize(
+        ("symbol", "ref", "value"),
+        [
+            ("cap", "C1", "1u Rser={0.1 * k}"),
+            ("res", "R1", "1k tc={a * b}"),
+            ("res", "R1", "{R0} tc = 0.001"),
+            ("ind", "L1", "10u Rser = 0.1"),
+            ("res", "R1", "1k tc=0.001"),
+            ("nmos4", "M1", "NMOS1 W={2 * w} L=1u"),
+        ],
+    )
+    def test_the_head_is_the_value_and_each_parameter_goes_to_spiceline(
+        self, asc_state: SessionState, work_dir: Path, symbol: str, ref: str, value: str
+    ):
+        from ltspice_mcp.lib.spice_lex import TokenKind, tokenize_body
+
+        tokens = tokenize_body(value)
+        head = " ".join(tok.text for tok in tokens if tok.kind != TokenKind.KEY_VALUE)
+        params = " ".join(f"{t.key}={t.value}" for t in tokens if t.kind == TokenKind.KEY_VALUE)
+        asc = _write_sheet(
+            work_dir / "split.asc",
+            f"SYMBOL {symbol} 100 100 R0",
+            f"SYMATTR InstName {ref}",
+            "SYMATTR Value 1",
+        )
+
+        apply_one(asc_state, asc, {"op": "set_component_value", "reference": ref, "value": value})
+
+        assert _attributes(asc, ref) == {"Value": head, "SpiceLine": params}
+
+    @pytest.mark.parametrize("value", ["1 k tc=0.001", "tc=0.001 1k", "1k tc={a * b} 2"])
+    def test_more_than_one_token_besides_the_parameters_is_still_refused(
+        self, asc_state: SessionState, work_dir: Path, value: str
+    ):
+        asc = _write_sheet(work_dir / "split.asc", "SYMBOL res 100 100 R0", "SYMATTR InstName R1")
+        before = asc.read_bytes()
+        with pytest.raises(NetlistError, match="whitespace"):
+            apply_one(
+                asc_state, asc, {"op": "set_component_value", "reference": "R1", "value": value}
+            )
+        assert asc.read_bytes() == before
+
+
 @pytest.mark.asyncio
 class TestSetComponentValueCreatesMissingValue:
     """Regression: set_component_value on a component added without a Value slot
@@ -2154,7 +2210,7 @@ class TestRemoveWireAndNetLabelOps:
     ):
         """The cut that hurts can leave every pin still touching a wire: two
         stubs, each attached to its pin, joined only by a duplicated bridge.
-        A floating-pin scan blesses that removal; the net partition must not."""
+        A floating-pin scan blesses that removal; the sheet's nets must not."""
         wire = await self._wired_pair(asc_state, "dup_bridge")
         x = int(wire["x1"])
         lo, hi = sorted((int(wire["y1"]), int(wire["y2"])))
@@ -2355,11 +2411,11 @@ class TestRemoveWireAndNetLabelOps:
         read = _sheet_facts(asc_state, "rm_substr.asc")
         assert any(".tran 10m" in d for d in read["directives"])
 
-    async def test_remove_directive_removes_one_of_duplicates(
+    async def test_remove_directive_removes_every_copy_and_names_each(
         self, asc_state: SessionState, work_dir: Path
     ):
-        # Inverse of a single add removes a single record: with two identical
-        # directives, one remove_directive leaves exactly one.
+        # A text names every record it matches, as move selects them, and the
+        # reply lists each record it took.
 
         blank_sheet_file(asc_state, "rm_dup")
         batch_view(
@@ -2378,8 +2434,63 @@ class TestRemoveWireAndNetLabelOps:
             stop_on_error=True,
         )
         assert res["saved"] is True
+        assert res["results"][0]["removed_texts"] == [
+            {"kind": "directive", "text": ".tran 1m", "x": 16, "y": 16},
+            {"kind": "directive", "text": ".tran 1m", "x": 16, "y": 32},
+        ]
         read = _sheet_facts(asc_state, "rm_dup.asc")
-        assert sum(1 for d in read["directives"] if d == ".tran 1m") == 1
+        assert ".tran 1m" not in read["directives"]
+
+
+#: A sheet's texts, each at a height of its own: two copies of one directive,
+#: the directive in capitals, and two comments.
+_TEXTS = (
+    "TEXT 16 16 Left 2 !.tran 1m",
+    "TEXT 16 48 Left 2 !.TRAN 1m",
+    "TEXT 16 80 Left 2 ;see TRAN note",
+    "TEXT 16 112 Left 2 !.tran 1m",
+    "TEXT 16 144 Left 2 ;note",
+)
+
+
+@pytest.mark.parametrize(
+    ("instruction", "heights"),
+    [
+        # A pattern is searched for anywhere in the text, in the case it is given.
+        ("regex:tran", [16, 112]),
+        ("regex:TRAN", [48, 80]),
+        (r"regex:\.TRAN", [48]),
+        (r"regex:(?i)\.tran", [16, 48, 112]),
+        ("regex:^note", [144]),
+        # A literal is the whole text, space around either ignored.
+        (".tran 1m", [16, 112]),
+        (" .tran 1m ", [16, 112]),
+        ("note", [144]),
+        (".TRAN 1M", []),
+    ],
+)
+def test_remove_directive_removes_the_texts_move_selects(
+    work_dir: Path, instruction: str, heights: list[int]
+):
+    """One rule says which directives and comments a text names, for both ops
+    and for both kinds of text. Each op is applied to a sheet of its own."""
+    from ltspice_mcp.lib.schematic_ops import OpMove, OpRemoveDirective, apply_op_inplace
+
+    sheet = _write_sheet(work_dir / "texts.asc", *_TEXTS)
+    remove = OpRemoveDirective(op="remove_directive", instruction=instruction)
+    move = OpMove(op="move", dx=1000, dy=0, texts=[instruction])
+    if not heights:
+        for op in (remove, move):
+            with pytest.raises(NetlistError, match="No directive or comment matched"):
+                apply_op_inplace(open_editor(sheet), op, sheet)
+        return
+
+    removed = apply_op_inplace(open_editor(sheet), remove, sheet)["removed_texts"]
+    assert isinstance(removed, list)
+    moving = open_editor(sheet)
+    apply_op_inplace(moving, move, sheet)
+    moved = [int(text.coord.Y) for text in moving.directives if int(text.coord.X) == 1016]
+    assert [text["y"] for text in removed] == moved == heights
 
 
 @pytest.mark.asyncio
@@ -3790,3 +3901,217 @@ class TestMoveOp:
         apply_one(asc_state, asc, {"op": "move", "dx": -48, "dy": 32, **moved})
         # The editor writes wires before parts; every record is where it was.
         assert sorted(_records(asc)) == sorted(before)
+
+
+#: R1 and R2 side by side, R1's pin 1 labelled ``a``, and a wire between their
+#: pins 2.
+_TWO_PARTS = (
+    _res("R1", 96, 96),
+    _res("R2", 288, 96),
+    "WIRE 96 144 288 144",
+    "FLAG 96 48 a",
+)
+
+#: Every op that names a part, with ``REF`` where the part's reference goes.
+_NAMING_OPS: tuple[dict[str, Any], ...] = (
+    {"op": "set_component_value", "reference": "REF", "value": "2k"},
+    {
+        "op": "set_component_attribute",
+        "reference": "REF",
+        "attribute": "SpiceLine",
+        "value": "x=1",
+    },
+    {"op": "set_component_attribute", "reference": "REF", "attribute": "InstName", "value": "R5"},
+    {"op": "remove_component", "reference": "REF"},
+    {"op": "move_component", "reference": "REF", "x": 96, "y": 400},
+    {"op": "move", "references": ["REF"], "dx": 0, "dy": 400},
+    {"op": "add_net_label", "net": "b", "pin": "REF.2"},
+    {"op": "remove_net_label", "pin": "REF.1"},
+    {"op": "wire_pins", "from_pin": "REF.1", "to_pin": "R2.1"},
+    {"op": "remove_wire", "pin": "REF.2"},
+)
+
+
+def _naming(op: dict[str, Any], reference: str) -> dict[str, Any]:
+    """``op`` with ``REF`` replaced by ``reference``."""
+    return json.loads(json.dumps(op).replace('"REF', f'"{reference}'))
+
+
+class TestAReferenceNamesThePartLTspiceDoes:
+    """LTspice compares references without case (recorded as
+    ``connectivity/shared_reference_case``), so ``r1`` names R1 for every op,
+    as it already did for ``add_component``'s check that a name is free. A
+    reference that names no part is refused with the parts there are."""
+
+    @pytest.mark.parametrize("op", _NAMING_OPS, ids=lambda op: op["op"])
+    def test_every_op_reads_a_reference_in_any_case(
+        self, asc_state: SessionState, work_dir: Path, op: dict[str, Any]
+    ):
+        written: dict[str, bytes] = {}
+        for spelling in ("R1", "r1"):
+            asc = _write_sheet(work_dir / f"spelled_{spelling}.asc", *_TWO_PARTS)
+            apply_one(asc_state, asc, _naming(op, spelling))
+            written[spelling] = asc.read_bytes()
+        assert written["r1"] == written["R1"]
+
+    @pytest.mark.parametrize("op", _NAMING_OPS, ids=lambda op: op["op"])
+    def test_a_reference_no_part_has_is_refused_with_the_parts_there_are(
+        self, asc_state: SessionState, work_dir: Path, op: dict[str, Any]
+    ):
+        asc = _write_sheet(work_dir / "missing.asc", *_TWO_PARTS)
+        before = asc.read_bytes()
+        with pytest.raises(NetlistError, match=r"^Component 'R9' not found\. Available: R1, R2$"):
+            apply_one(asc_state, asc, _naming(op, "R9"))
+        assert asc.read_bytes() == before
+
+    def test_adding_a_part_under_another_case_of_a_reference_is_refused(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        asc = _write_sheet(work_dir / "taken.asc", *_TWO_PARTS)
+        add = {"op": "add_component", "symbol": "res", "x": 600, "y": 96}
+        with pytest.raises(NetlistError, match="'r1' names it too"):
+            apply_one(asc_state, asc, {**add, "reference": "r1"})
+
+    @pytest.mark.parametrize("spelling", ["R1", "r1", "R9"])
+    async def test_inspect_traces_the_net_of_a_pin_in_any_case(
+        self, asc_state: SessionState, work_dir: Path, spelling: str
+    ):
+        from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
+
+        asc = _write_sheet(work_dir / "traced.asc", *_TWO_PARTS)
+        query = {"kind": "net", "path": str(asc), "at": f"{spelling}.1"}
+        result = await handle_inspect(InspectInput.model_validate({"queries": [query]}), asc_state)
+        assert result.structured_content is not None
+        (item,) = result.structured_content["results"]
+        if spelling == "R9":
+            assert item["error"]["message"] == "Component 'R9' not found. Available: R1, R2"
+        else:
+            assert item["ok"], item
+            assert item["data"]["labels"] == ["a"]
+            assert [(p["reference"], p["pin"]) for p in item["data"]["pins"]] == [("R1", "1")]
+
+
+#: R1 and R2 side by side: R1.1 at (200,52) and R2.1 at (400,52) in line.
+_SIDE_BY_SIDE = (_res("R1", 200, 100), _res("R2", 400, 100))
+
+
+@pytest.mark.parametrize(
+    ("labels", "short"),
+    [
+        pytest.param({}, False, id="no_names"),
+        pytest.param({"R1": "A", "R2": "B"}, True, id="two_names"),
+        pytest.param(
+            {"R1": "A", "R2": "B", "joined": "A B"}, False, id="two_names_joined_by_a_third_net"
+        ),
+        pytest.param({"R1": "out", "R2": "OUT"}, False, id="one_name_in_two_cases"),
+        pytest.param({"R1": "A", "R2": "A"}, False, id="one_name"),
+        pytest.param({"R1": "0", "R2": "B"}, False, id="ground_and_a_name"),
+    ],
+)
+def test_wire_pins_add_net_label_and_move_agree_on_a_short(
+    asc_state: SessionState, work_dir: Path, labels: dict[str, str], short: bool
+):
+    """Each op joins R1.1's net to R2.1's: a wire between them, a label of
+    R2.1's name on R1.1, and R2 moved with its labels until R2.1 is on R1.1.
+    Names compare as LTspice compares them: nets that share a name, in any
+    case, are one node already, and ground is no name."""
+    lines = list(_SIDE_BY_SIDE)
+    for ref, x in (("R1", 200), ("R2", 400)):
+        if ref in labels:
+            lines.append(f"FLAG {x} 52 {labels[ref]}")
+    if "joined" in labels:
+        first, second = labels["joined"].split()
+        lines += ["WIRE 0 400 64 400", f"FLAG 0 400 {first}", f"FLAG 64 400 {second}"]
+    ops = {
+        "wire_pins": {"op": "wire_pins", "from_pin": "R1.1", "to_pin": "R2.1"},
+        "add_net_label": {"op": "add_net_label", "net": labels.get("R2", "N"), "pin": "R1.1"},
+        "move": {"op": "move", "references": ["R2"], "dx": -200, "dy": 0, "drag": True},
+    }
+    refusals: dict[str, str] = {}
+    for name, op in ops.items():
+        asc = _write_sheet(work_dir / f"short_{name}.asc", *lines)
+        try:
+            apply_one(asc_state, asc, op)
+        except NetlistError as refusal:
+            refusals[name] = str(refusal)
+    assert sorted(refusals) == (sorted(ops) if short else []), refusals
+    assert all("short" in refusal for refusal in refusals.values()), refusals
+
+
+#: R1.1 at (100,52) and R3.1 at (500,52): a route between them in line passes
+#: (300,52).
+_ROUTE_ENDS = (_res("R1", 100, 100), _res("R3", 500, 100))
+
+#: What is at (300,52): a pin, a wire's end or a label, and the wiring that puts
+#: it on the route's own net, on another net, or on none.
+_AT_THE_POINT = {
+    "pin": _res("R2", 300, 100),
+    "wire_end": "WIRE 300 52 300 16",
+    "label": "FLAG 300 52 A",
+}
+_ITS_NET = {
+    "own": ("WIRE 100 52 100 0", "WIRE 100 0 300 0", "WIRE 300 0 300 52", "FLAG 100 52 A"),
+    "other": ("WIRE 300 52 300 0", "WIRE 300 0 700 0", "FLAG 700 0 B", "FLAG 300 0 B"),
+    "none": (),
+}
+
+
+@pytest.mark.parametrize("kind", list(_AT_THE_POINT))
+@pytest.mark.parametrize("net", list(_ITS_NET))
+def test_a_route_joins_what_is_already_on_its_net_and_nothing_else(
+    asc_state: SessionState, work_dir: Path, kind: str, net: str
+):
+    """A pin, a wire's end and a label the route passes are judged alike: on
+    the net the route already joins, a junction; on any other net, or on none,
+    a refusal, since the route would connect it."""
+    lines = [*_ROUTE_ENDS, _AT_THE_POINT[kind], *_ITS_NET[net]]
+    if kind == "label" and net == "other":
+        lines.remove("FLAG 300 52 A")
+        lines.append("FLAG 300 52 B")
+    asc = _write_sheet(work_dir / "route.asc", *lines)
+    route = {"op": "wire_pins", "from_pin": "R1.1", "to_pin": "R3.1"}
+    if net == "own":
+        result = apply_one(asc_state, asc, route)
+        junctions = result.get("junctions")
+        assert isinstance(junctions, list)
+        assert {(j["x"], j["y"]) for j in junctions} == {(300, 52)}, junctions
+    else:
+        with pytest.raises(NetlistError, match=r"Refused to connect R1\.1 to R3\.1"):
+            apply_one(asc_state, asc, route)
+
+
+#: R1 with a wire straight between its pins, which LTspice drops, and a label
+#: of its own name on each pin (recorded as ``connectivity/same_instance_wire``).
+_TIED = (_res("R1", 96, 144), "WIRE 96 96 96 192", "FLAG 96 96 a", "FLAG 96 192 b")
+
+
+@pytest.mark.parametrize(
+    "op",
+    [
+        {"op": "add_component", "reference": "R2", "symbol": "res", "x": 96, "y": 192},
+        {"op": "move_component", "reference": "R2", "x": 96, "y": 192},
+        {"op": "add_net_label", "net": "c", "x": 96, "y": 144},
+        {"op": "add_net_label", "net": "0", "x": 96, "y": 144},
+        {"op": "wire_pins", "from_pin": "R2.1", "to_pin": {"x": 96, "y": 144}},
+    ],
+    ids=lambda op: f"{op['op']}_{op.get('net', '')}",
+)
+def test_what_lands_on_a_wire_ltspice_drops_keeps_it_and_a_short_is_refused(
+    asc_state: SessionState, work_dir: Path, op: dict[str, Any]
+):
+    """A pin, a label or a wire's end between the ends of the dropped wire
+    keeps it (the ``same_instance_pin_inside``, ``same_instance_label_inside``
+    and ``same_instance_t_junction`` recordings), joining R1's two pins, whose
+    nets each carry a name. R2 waits at (400,144), its pin 1 at (400,96)."""
+    asc = _write_sheet(work_dir / "tied.asc", *_TIED, _res("R2", 400, 144))
+    if op["op"] == "add_component":
+        asc = _write_sheet(work_dir / "tied.asc", *_TIED)
+    if op["op"] == "wire_pins":
+        asc = _write_sheet(
+            work_dir / "tied.asc", *_TIED, _res("R2", 400, 144), "WIRE 400 96 400 144"
+        )
+        op = {**op, "from_pin": {"x": 400, "y": 144}}
+    before = asc.read_bytes()
+    with pytest.raises(NetlistError, match=r"\['a'\]; \['b'\]|\['a'\] and .* \['a', 'b'\]"):
+        apply_one(asc_state, asc, op)
+    assert asc.read_bytes() == before

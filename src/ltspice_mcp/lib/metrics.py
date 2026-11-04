@@ -27,7 +27,7 @@ import asyncio
 import contextlib
 import math
 import re
-from collections.abc import Callable, Coroutine, Sequence
+from collections.abc import Callable, Collection, Coroutine, Sequence
 from pathlib import Path
 from typing import Any, Literal, NoReturn, TypeAlias
 
@@ -36,6 +36,7 @@ import numpy as np
 from ltspice_mcp.errors import NoAxisError, ResultError
 from ltspice_mcp.lib import services
 from ltspice_mcp.lib.ac_analysis import (
+    HALF_POWER_DB,
     Quantity,
     SearchDirection,
     compute_filter_metrics,
@@ -50,7 +51,7 @@ from ltspice_mcp.lib.ac_analysis import (
 )
 from ltspice_mcp.lib.ac_structure import analyze_ac_structure
 from ltspice_mcp.lib.decoded_log import DecodedLog
-from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw
+from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, declared_unit
 from ltspice_mcp.lib.device_names import (
     current_device,
     device_names,
@@ -62,7 +63,7 @@ from ltspice_mcp.lib.device_names import (
 )
 from ltspice_mcp.lib.format import format_spice_value, parse_spice_value
 from ltspice_mcp.lib.log_parser import DEVICE_OP_TABLE_DIGITS, device_key
-from ltspice_mcp.lib.log_types import MeasurementsOutput
+from ltspice_mcp.lib.log_types import MeasurementsOutput, measurement_named
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
     compute_ac_bandwidth_metrics,
@@ -81,7 +82,6 @@ from ltspice_mcp.lib.raw_parser import (
     safe_magnitude_db,
     sample_to_dict,
     trace_unit,
-    whattype_unit,
 )
 from ltspice_mcp.lib.recipes import (
     RECIPE_MODELS,
@@ -631,7 +631,7 @@ def operating_point_units(raw, op_data: dict) -> dict[str, str]:
             else:
                 # Derived results can use voltage/current columns for gain,
                 # impedance or poles. Only a specific type establishes a unit.
-                unit = whattype_unit(declared_type(raw, name))
+                unit = declared_unit(declared_type(raw, name))
                 if unit in ("V", "A"):
                     continue
             if unit:
@@ -797,6 +797,20 @@ def aggregate_log_measurements(
     axis_map = apply_when_axis_swap(flat_values, at_map, kinds)
     steps_label = f"{meas_data.get('step_count', 1)} step(s)"
     return flat_values, axis_map, steps_label, at_map
+
+
+def require_measurement(name: str, names: Collection[str]) -> str:
+    """The one of a log's measurement ``names`` that a caller's ``name``
+    refers to, in any case (:func:`measurement_named`); a name the log does
+    not hold is refused with the ones it does."""
+    named = measurement_named(name, names)
+    if named is None:
+        held = ", ".join(sorted(names)) or "none"
+        raise ResultError(
+            f"No measurement named {name!r} in the log. It holds: {held}. A name "
+            "is matched in any case."
+        )
+    return named
 
 
 def measurements_at_step(meas_data: MeasurementsOutput, step: int) -> MeasurementsOutput:
@@ -1107,9 +1121,20 @@ async def measurement_rows(
                 crossings = [a for a in at_map.get(name, []) if a is not None]
                 if crossings:
                     entry["at"] = crossings[0]
+        if recipe.field is not None:
+            require_measurement(recipe.field, stats)
         if recipe.names is not None:
-            stats = {name: entry for name, entry in stats.items() if name in recipe.names}
-        values.append({"stats": stats})
+            chosen = {require_measurement(name, stats) for name in recipe.names}
+            stats = {name: entry for name, entry in stats.items() if name in chosen}
+        row: dict[str, Any] = {"stats": stats}
+        unreadable = {
+            name: entry["unreadable"]
+            for name, entry in whole["measurements"].items()
+            if "unreadable" in entry and name in stats
+        }
+        if unreadable:
+            row["unreadable"] = unreadable
+        values.append(row)
     zeros = await _zeros_a_failed_step_prints(source, whole, set(values[0]["stats"]))
     if zeros is not None:
         build, zero_steps = zeros
@@ -1825,7 +1850,7 @@ async def filter_metrics(
     step: int,
     state: SessionState,
     *,
-    ref_db: float = -3.0,
+    ref_db: float = HALF_POWER_DB,
     flatness_db: float = 1.0,
     passband_range: list[str] | None = None,
     stopband_range: list[str] | None = None,

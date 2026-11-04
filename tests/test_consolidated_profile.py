@@ -5,7 +5,7 @@ error hints that never name a tool a caller cannot call.
 from __future__ import annotations
 
 from ltspice_mcp.config import ServerConfig
-from ltspice_mcp.server import _ERROR_HINTS, _get_error_hint
+from ltspice_mcp.errors import ERROR_HINTS, hint_for_type
 from ltspice_mcp.tools import get_tools
 from tests._text import names
 from tests.conftest import (
@@ -79,12 +79,12 @@ class TestErrorHints:
     """Hints are recovery instructions, so they must name callable tools."""
 
     def test_every_hint_resolves(self):
-        for err_type in _ERROR_HINTS:
-            hint = _get_error_hint(err_type)
+        for err_type in ERROR_HINTS:
+            hint = hint_for_type(err_type)
             assert isinstance(hint, str) and hint
 
     def test_no_hint_names_a_removed_tool(self):
-        for err_type, hint in _ERROR_HINTS.items():
+        for err_type, hint in ERROR_HINTS.items():
             named = removed_tools_named_in(hint)
             assert not named, f"{err_type.__name__} hint names removed tools {named}: {hint!r}"
 
@@ -93,6 +93,6 @@ class TestErrorHints:
         the recovery step has to be something it can invoke — on every session,
         so a tool the operator can switch off does not count."""
         served = {d.name for d in get_tools(config=ServerConfig(run_code=False))[0]}
-        for err_type, hint in _ERROR_HINTS.items():
+        for err_type, hint in ERROR_HINTS.items():
             named = {tool for tool in served if names(hint, tool)}
             assert named, f"{err_type.__name__} hint names no callable tool: {hint!r}"

@@ -91,17 +91,34 @@ def runs_terminal(status: str) -> bool:
 WaitFor = Literal["all", "runs"]
 
 
+def runs_done(job: ExperimentJob) -> bool:
+    """Whether every run of ``job`` has finished, as its record reads now.
+
+    True at a status that guarantees it (``runs_terminal``), and also once every
+    case has a terminal status: the coordinator records the last case before it
+    changes the job's status, and another process reads that record in between.
+    A terminal case is never changed again, so nothing a reader takes from it
+    can move under it.
+
+    The one answer to "can this job's runs be read now?": ``jobs(wait,
+    wait_for="runs")`` returns on it, and every reader of a job's runs
+    (``services.runs_unready``) refuses until it holds, so a wait that returns
+    is never followed by a refusal.
+    """
+    return runs_terminal(job.status) or all(
+        case.status in TERMINAL_CASE_STATUSES for case in job.cases
+    )
+
+
 def finished(job: ExperimentJob, wait_for: WaitFor = "all") -> bool:
     """Whether a job's record says it is done, or with ``"runs"``, its runs are.
 
     What a record can answer with nothing live behind it: a job another process
-    runs, or one no process runs any more. Runs are done at a status that
-    guarantees it (``runs_terminal``), or once every case has a terminal status.
+    runs, or one no process runs any more. Runs are done when ``runs_done``
+    says so.
     """
     if wait_for == "runs":
-        return runs_terminal(job.status) or all(
-            case.status in TERMINAL_CASE_STATUSES for case in job.cases
-        )
+        return runs_done(job)
     return job.status in TERMINAL_STATUSES
 
 

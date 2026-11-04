@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import threading
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -483,6 +484,9 @@ class TestOptionalRawSources:
         job.status = job_status
         job.cases[0].status = case_status
         job.cases[0].raw_file = work_dir / "existing.raw"
+        if job_status == "running":
+            # A sibling still runs, so the job's runs are not done yet.
+            job.cases.append(replace(job.cases[0], case_id="case_0001", status="running"))
         with pytest.raises(ResultError):
             services.experiment_run_context(job, state_no_sim, require_raw=False)
         assert job.status == job_status

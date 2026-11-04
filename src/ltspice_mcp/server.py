@@ -95,43 +95,11 @@ async def _notice_circuit(arguments: dict | None, state: SessionState) -> None:
     state.background.spawn(state.note_recent_circuit(resolved))
 
 
-# Error type → hint appended to error messages. Hints name only tools the
-# consolidated surface exposes (the only profile since 0.6.0).
-# PathSecurityError is handled separately: its hint is the session's sandbox
-# guidance, which reads the sandbox as it stands at the call.
-_ERROR_HINTS: dict[type[LTSpiceMCPError], str] = {
-    _err.SimulationError: (
-        "Use inspect with a capabilities query to verify simulator availability."
-    ),
-    _err.NetlistError: (
-        "Use verify_circuit to lint the file, or inspect its components — "
-        "or read the netlist directly."
-    ),
-    _err.JobNotFoundError: (
-        'Use jobs with action:"list" to see known jobs — the id may be '
-        "mistyped, evicted, or from a previous server session."
-    ),
-    _err.ResultError: (
-        'Verify the run reached a terminal state with jobs (action:"status"), '
-        "and read signals with analyze_results."
-    ),
-    _err.LibraryError: (
-        'Use inspect with a model query (mode:"search") to find the part in the '
-        "simulator's own libraries, or add .lib/.include directives to the netlist."
-    ),
-}
-
-
 #: The recovery for an argument error: the tool's own argument table.
 _ARGUMENT_HINT = (
     'Correct the call and send it again; inspect(queries=[{{"kind": "reference", '
     '"query": "{tool}"}}]) lists every argument {tool} takes.'
 )
-
-
-def _get_error_hint(err_type: type[LTSpiceMCPError]) -> str | None:
-    """Get the error hint appended to a failed call's message, if any."""
-    return _ERROR_HINTS.get(err_type)
 
 
 def _configure_server_logging(config: ServerConfig) -> None:
@@ -552,9 +520,9 @@ async def _invoke(
             hint=state.sandbox_guidance(),
         )
     except LTSpiceMCPError as e:
-        # Errors that already carry precise guidance opt out of the generic
-        # per-type hint (show_hint=False) so it doesn't misdirect.
-        hint = _get_error_hint(type(e)) if e.show_hint else None
+        # The lookup every envelope surface uses; an error that carries
+        # precise guidance of its own (show_hint=False) takes none.
+        hint = _err.error_hint(e)
         message = _err.caller_message(e, state.tool_dispatch)
         text = f"{message}\n\n{hint}" if hint else message
         # The hint is mirrored into structuredContent (self-sufficiency
