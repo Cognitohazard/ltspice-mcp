@@ -76,7 +76,14 @@ URI gets the same error.
 **Failures outside the envelope.** Arguments that fail validation are a tool
 result with `isError`, so the caller can correct the call, and its
 `structuredContent` is `{error, code: "invalid_arguments", hint}`, the hint
-naming the `inspect(kind="reference")` lookup for the tool's arguments. A
+naming the `inspect(kind="reference")` lookup for the tool's arguments. The
+error names each field it refuses and the way round: an unknown field with
+where the tool takes it, the tool that takes it, its new name, or else the
+names its place takes, the closest first; a field sent to a branch (a `jobs`
+action, an `edit_schematic` op) that does not take it with that branch's
+fields; and a missing field that chooses a branch with the values it takes,
+beside the item's fields that no branch takes.
+`tests/test_refusals_name_the_fix.py` holds every tool to this. A
 failure a tool raises instead of reporting in its envelope is `{error, code,
 hint?, suggestions?}` with the failure's own code, or `internal_error` for an
 unclassified one; a `path_denied` refusal is `{error, code, hint}`.

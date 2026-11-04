@@ -1800,11 +1800,16 @@ def _denied_include_findings(graph: NetlistGraph, source: Path, hint: str) -> li
     for missing in graph.missing_includes:
         if "denied" not in missing.reason.lower():
             continue
+        # At the directive that names it: in the deck, or in the included file
+        # that holds it.
+        at: dict[str, Any] = {"file": missing.source or str(source)}
+        if missing.line is not None:
+            at["line"] = missing.line
         findings.append(
             _finding(
                 rule_id="path_denied",
                 severity="error",
-                at={"file": str(source)},
+                at=at,
                 subject=missing.target,
                 evidence={
                     "target": missing.target,
@@ -2335,16 +2340,22 @@ async def evaluate_verify_circuit(
     compare = args.compare
     render = args.render
 
+    # The finding is filed under the file that was refused: the circuit, or the
+    # comparison's reference.
+    refused = args.path
+    reference = None
     try:
         path = safe_path(args.path, state)
-        reference = resolve_reference(compare.reference, state) if compare else None
+        if compare:
+            refused = compare.reference
+            reference = resolve_reference(compare.reference, state)
     except PathSecurityError as exc:
         data["findings"] = [
             _finding(
                 rule_id="path_denied",
                 severity="error",
-                at={"file": args.path},
-                subject=args.path,
+                at={"file": refused},
+                subject=refused,
                 evidence={"detail": str(exc), "hint": state.sandbox_guidance()},
             )
         ]

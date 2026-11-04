@@ -210,11 +210,16 @@ class MissingInclude:
 
     ``target`` is the file token exactly as the deck wrote it; ``reason`` says
     why it yielded nothing (not found, unreadable, past the depth bound, or no
-    base directory because the netlist was parsed from bare text).
+    base directory because the netlist was parsed from bare text). ``line`` is
+    the line of the directive that names it, or of the malformed ``.SUBCKT`` an
+    included file holds, and ``source`` the included file that holds that line,
+    None when the deck itself does.
     """
 
     target: str
     reason: str
+    line: int | None = None
+    source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -776,7 +781,12 @@ def _collect_subckts(
                         card="".join(card.raw_lines).strip(),
                     ) from exc
                 registry.missing.append(
-                    MissingInclude(target=source, reason=f"malformed .SUBCKT: {exc}")
+                    MissingInclude(
+                        target=source,
+                        reason=f"malformed .SUBCKT: {exc}",
+                        line=card.line_start,
+                        source=source,
+                    )
                 )
             continue
         if card.kind != "directive":
@@ -794,6 +804,9 @@ def _collect_subckts(
             registry=registry,
             seen=seen,
             include_resolver=include_resolver,
+            line=card.line_start,
+            # The deck's own directives are at depth 0; an included file names itself.
+            source=None if depth == 0 else source,
         )
 
 
@@ -805,17 +818,24 @@ def _follow_include(
     registry: _SubcktRegistry,
     seen: set[Path],
     include_resolver: IncludeResolver | None = None,
+    line: int,
+    source: str | None,
 ) -> None:
-    """Load one include target's definitions, or record why it contributed none."""
+    """Load one include target's definitions, or record why it contributed none.
+
+    ``line`` is the line of the directive that names it, and ``source`` the
+    included file holding that directive (None for the deck itself), which a
+    record of why it contributed nothing carries.
+    """
+
+    def missing(reason: str) -> None:
+        registry.missing.append(MissingInclude(target, reason, line=line, source=source))
+
     if base_dir is None:
-        registry.missing.append(
-            MissingInclude(target, "no base directory (netlist parsed from text)")
-        )
+        missing("no base directory (netlist parsed from text)")
         return
     if depth >= _MAX_INCLUDE_DEPTH:
-        registry.missing.append(
-            MissingInclude(target, f"include depth limit ({_MAX_INCLUDE_DEPTH}) reached")
-        )
+        missing(f"include depth limit ({_MAX_INCLUDE_DEPTH}) reached")
         return
     # One resolver for the whole product: staging's answer to "which file does
     # this reference name?" is the answer here too. A local join would read
@@ -829,13 +849,13 @@ def _follow_include(
         # relies on. The resolver may also redirect to a canonical safe path.
         approved = include_resolver(path)
         if approved is None:
-            registry.missing.append(MissingInclude(target, "path denied by include resolver"))
+            missing("path denied by include resolver")
             return
         path = approved
     try:
         key = path.resolve()
     except OSError:
-        registry.missing.append(MissingInclude(target, "unresolvable path"))
+        missing("unresolvable path")
         return
     if key in seen:
         return  # already contributed; revisiting is how an include cycle stops
@@ -843,7 +863,7 @@ def _follow_include(
     try:
         included = cards_from_path(path)
     except (OSError, UnicodeDecodeError, ValueError) as exc:
-        registry.missing.append(MissingInclude(target, f"unreadable: {exc}"))
+        missing(f"unreadable: {exc}")
         return
     _collect_subckts(
         included.cards,

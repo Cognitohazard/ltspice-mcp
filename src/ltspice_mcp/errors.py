@@ -1,5 +1,6 @@
 """Error hierarchy for ltspice-mcp server."""
 
+import difflib
 from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
@@ -14,6 +15,8 @@ def compact_validation_error(
     field_owners: Mapping[str, Sequence[str]] | None = None,
     nested: Mapping[str, Sequence[str]] | None = None,
     renamed: Mapping[str, str] | None = None,
+    accepted: Mapping[str, Sequence[str]] | None = None,
+    branches: Mapping[str, Mapping[str, Sequence[str]]] | None = None,
 ) -> str:
     """Render validation failures without input echoes or documentation URLs.
 
@@ -22,13 +25,23 @@ def compact_validation_error(
     ``circuits[].path``), named first, and ``field_owners`` to the tools
     that take it at their top level. An unknown field at any depth that is
     a name this tool retired is referred to the one that replaced it, by
-    ``renamed``.
+    ``renamed``. An unknown field with no such referral is answered with the
+    names its place takes, from ``accepted`` (the place spelled as the
+    reference table spells it: ``""`` for the tool's own arguments,
+    ``circuits[]`` inside each circuit), the closest one first.
+
+    ``branches`` maps each field that chooses a branch (``action``, ``op``) to
+    each branch's fields. A missing one is answered with the values it takes,
+    and the item's fields that no branch takes, which validation never
+    reaches without a branch, are refused beside it.
     """
     if not isinstance(exc, ValidationError):
         return str(exc)
     renamed = renamed or {}
     nested = nested or {}
     field_owners = field_owners or {}
+    accepted = accepted or {}
+    branches = branches or {}
 
     def referral(field: str) -> str:
         if field in renamed:
@@ -47,36 +60,112 @@ def compact_validation_error(
             text += f" Field {field!r} is accepted by {', '.join(owners)}."
         return text
 
-    entries: list[tuple[tuple[object, ...], str, str]] = []
-    seen: set[tuple[tuple[object, ...], str, str]] = set()
-    referrals: list[str] = []
-    for error in exc.errors(include_url=False, include_input=False):
+    # The item's input is read for its field names only, never echoed.
+    errors: list[tuple[tuple[object, ...], str, str]] = []
+    #: The names an untagged item's place takes, by the location of each field
+    #: it carries that no branch does.
+    taken_at: dict[tuple[object, ...], tuple[str, ...]] = {}
+    for error in exc.errors(include_url=False):
         loc = tuple(error["loc"])
         error_type = error["type"]
         message = error["msg"]
+        ctx = error.get("ctx") or {}
         if error_type == "union_tag_invalid":
-            loc, message = _tag_mismatch(loc, error.get("ctx") or {}, message)
-        key = (loc, error_type, message)
-        if key in seen:
+            loc, message = _tag_mismatch(loc, ctx, message)
+        elif error_type == "union_tag_not_found" and _discriminator(ctx):
+            discriminator = _discriminator(ctx)
+            fields = branches.get(discriminator, {})
+            errors.append((*_tag_missing(loc, discriminator, fields), error_type))
+            if fields and isinstance(error.get("input"), Mapping):
+                taken = (discriminator, *dict.fromkeys(n for f in fields.values() for n in f))
+                for name in error["input"]:
+                    if isinstance(name, str) and name not in taken:
+                        taken_at[(*loc, name)] = taken
+                        errors.append(
+                            ((*loc, name), "Extra inputs are not permitted", "extra_forbidden")
+                        )
             continue
-        seen.add(key)
-        entries.append(key)
+        errors.append((loc, message, error_type))
+
+    entries: list[tuple[tuple[object, ...], str]] = []
+    seen: set[tuple[tuple[object, ...], str, str]] = set()
+    referrals: list[str] = []
+    for loc, message, error_type in errors:
+        if (loc, message, error_type) in seen:
+            continue
+        seen.add((loc, message, error_type))
+        entries.append((loc, message))
         field = loc[-1] if loc else None
         if error_type != "extra_forbidden" or not isinstance(field, str):
             continue
         if field in renamed or (len(loc) == 1 and (field in nested or field in field_owners)):
             sentence = referral(field)
-            if sentence not in referrals:
-                referrals.append(sentence)
+        else:
+            sentence = _accepted_here(field, loc[:-1], accepted, taken_at.get(loc, ()))
+        if sentence and sentence not in referrals:
+            referrals.append(sentence)
 
     rendered = [
         f"{'.'.join(str(part) for part in loc) or '<root>'}: {message}"
-        for loc, _, message in entries[:_MAX_VALIDATION_ERRORS]
+        for loc, message in entries[:_MAX_VALIDATION_ERRORS]
     ]
     remaining = len(entries) - _MAX_VALIDATION_ERRORS
     if remaining > 0:
         rendered.append(f"… and {remaining} more")
-    return ("; ".join(rendered) or "Validation failed") + "".join(referrals)
+    text = "; ".join(rendered) or "Validation failed"
+    return text + ("." if referrals else "") + "".join(referrals)
+
+
+def _place(loc: Sequence[object]) -> str:
+    """A location as the reference table spells a field's place: ``("circuits",
+    0)`` is ``circuits[]``, the tool's own arguments are ``""``."""
+    place = ""
+    for part in loc:
+        if isinstance(part, int):
+            place += "[]"
+        else:
+            place += f".{part}" if place else str(part)
+    return place
+
+
+def _accepted_here(
+    field: str,
+    loc: Sequence[object],
+    accepted: Mapping[str, Sequence[str]],
+    taken: Sequence[str] = (),
+) -> str:
+    """The names the place of an unknown ``field`` takes, the closest first.
+
+    ``taken`` stands in where the reference table lists no place: the names
+    the branches of an untagged item take, offered as the closest only.
+    """
+    place = _place(loc)
+    names = list(accepted.get(place, ()))
+    close = difflib.get_close_matches(field, names or list(taken), n=1)
+    guess = f" Did you mean {close[0]!r} for {field!r}?" if close else ""
+    if not names:
+        return guess
+    where = "This tool takes" if not place else f"{place} takes"
+    return f"{guess} {where} {', '.join(names)}."
+
+
+def _discriminator(ctx: Mapping[str, Any]) -> str:
+    """The field that chooses a branch, as a union error's context names it."""
+    return str(ctx.get("discriminator", "")).strip("'")
+
+
+def _tag_missing(
+    loc: tuple[object, ...], discriminator: str, fields: Mapping[str, Sequence[str]]
+) -> tuple[tuple[object, ...], str]:
+    """A missing field that chooses a branch, said at that field with the
+    values it takes.
+
+    pydantic says it as "Unable to extract tag using discriminator '…'",
+    located at the union rather than at the missing field.
+    """
+    if not fields:
+        return (*loc, discriminator), "Field required"
+    return (*loc, discriminator), "Field required, one of " + ", ".join(map(repr, fields))
 
 
 #: How much of a rejected branch name the rewritten message quotes.
@@ -92,7 +181,7 @@ def _tag_mismatch(
     of the expected tags: …", located at the union rather than at the field,
     and quoting whatever the field held, an object included.
     """
-    discriminator = str(ctx.get("discriminator", "")).strip("'")
+    discriminator = _discriminator(ctx)
     expected = ctx.get("expected_tags")
     if not discriminator or not expected:
         return loc, message

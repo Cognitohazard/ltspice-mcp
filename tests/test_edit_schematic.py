@@ -48,7 +48,14 @@ from ltspice_mcp.tools.schematic_edit import (
     handle_edit_schematic,
 )
 from tests import _fake_netlister as fake_netlister
-from tests._asc_ops import apply_ops, file_at, sheet_findings
+from tests._asc_ops import (
+    DIVIDER_DECK,
+    DIVIDER_DECK_REWIRED,
+    DIVIDER_OPS,
+    apply_ops,
+    file_at,
+    sheet_findings,
+)
 from tests._schematic_fixtures import BOX2_ASY, write_file
 from tests.ltspice_recorder import INPUTS
 from tests.test_api_reference import _op_kinds
@@ -85,18 +92,7 @@ def _fingerprint(root: Path) -> dict[str, tuple[int, int]]:
     }
 
 
-# Two resistors side by side; R1.1<->R2.1 wired over the top, R1.2 labeled.
-_DIVIDER_OPS: list[dict] = [
-    {"op": "add_component", "reference": "R1", "symbol": "res", "x": 400, "y": 300},
-    {"op": "add_component", "reference": "R2", "symbol": "res", "x": 700, "y": 300},
-    {
-        "op": "wire_pins",
-        "from_pin": "R1.1",
-        "to_pin": "R2.1",
-        "waypoints": [{"x": 400, "y": 200}, {"x": 700, "y": 200}],
-    },
-    {"op": "add_net_label", "net": "vout", "pin": "R1.2"},
-]
+_DIVIDER_OPS = DIVIDER_OPS
 
 
 async def _build_blank(state: SessionState, name: str, ops: list[dict], **kw) -> dict:
@@ -1765,8 +1761,8 @@ def test_the_arguments_this_tool_no_longer_takes(payload: dict):
 # Post-commit reference stage
 # ---------------------------------------------------------------------------
 
-_REF_DECK = "Vin in 0 5\nR1 in out 1k\nR2 out 0 2k\n.end\n"
-_REF_DECK_DIFFERENT = "Vin in 0 5\nR1 in out 1k\nR2 out mid 2k\nR3 mid 0 3k\n.end\n"
+_REF_DECK = DIVIDER_DECK
+_REF_DECK_DIFFERENT = DIVIDER_DECK_REWIRED
 
 
 @pytest.mark.parametrize("as_text", [False, True], ids=["file", "text"])

@@ -15,32 +15,11 @@ from typing import Any
 import jsonschema
 import pytest
 
-from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.jobs import JOBS_OUTPUT_SCHEMA, JobsInput, handle_jobs
-from tests.conftest import FIXTURES_DIR, make_experiment_job, stage_recorded_fixture
+from tests.conftest import copied_sheet, job_that_ran
 
 pytestmark = pytest.mark.asyncio
-
-
-def a_sheet(directory: Path, name: str = "amp") -> Path:
-    sheet = directory / f"{name}.asc"
-    shutil.copyfile(FIXTURES_DIR / "Draft1.asc", sheet)
-    return sheet
-
-
-def a_job_of(state: SessionState, sheet: Path, work_dir: Path, **job: Any) -> Path:
-    """A finished job that ran ``sheet`` as it is now, its results in a folder
-    of the job's own under another name. Returns the results file."""
-    kept = work_dir / "runs" / "placed"
-    kept.mkdir(parents=True)
-    raw = stage_recorded_fixture(kept, "ltspice_tran_rc")
-    made = make_experiment_job(state, job_id="placed", raw=raw, **job)
-    for case in made.cases:
-        case.circuit_path = sheet
-    made.sources[0].path = sheet
-    made.sources[0].sha256 = sha256_file(sheet)
-    return raw
 
 
 async def place(state: SessionState, **arguments: Any) -> dict[str, Any]:
@@ -59,8 +38,8 @@ async def place(state: SessionState, **arguments: Any) -> dict[str, Any]:
 async def test_a_cases_results_are_copied_beside_its_sheet(
     state_no_sim: SessionState, work_dir: Path
 ):
-    sheet = a_sheet(work_dir)
-    raw = a_job_of(state_no_sim, sheet, work_dir)
+    sheet = copied_sheet(work_dir)
+    raw = job_that_ran(state_no_sim, sheet, work_dir)
     first = await place(state_no_sim)
     assert first["outcome"] == "complete"
     assert first["sheet"] == str(sheet) and first["case_id"] == "case-0000"
@@ -79,8 +58,8 @@ async def test_a_cases_results_are_copied_beside_its_sheet(
 async def test_the_other_raws_a_run_wrote_go_beside_it_too(
     state_no_sim: SessionState, work_dir: Path
 ):
-    sheet = a_sheet(work_dir)
-    raw = a_job_of(state_no_sim, sheet, work_dir)
+    sheet = copied_sheet(work_dir)
+    raw = job_that_ran(state_no_sim, sheet, work_dir)
     shutil.copyfile(raw, raw.with_name(f"{raw.stem}.op.raw"))
     state_no_sim.all_jobs["placed"].cases[0].other_raws = ["op"]
     placed = await place(state_no_sim)
@@ -93,8 +72,8 @@ async def test_a_case_with_variations_says_what_the_sheet_does_not_show(
 ):
     """A job of several cases names the case, and each case's assignments
     differ from the drawn values."""
-    sheet = a_sheet(work_dir)
-    a_job_of(state_no_sim, sheet, work_dir, count=3)
+    sheet = copied_sheet(work_dir)
+    job_that_ran(state_no_sim, sheet, work_dir, count=3)
     refused = await place(state_no_sim)
     assert refused["error"]["code"] == "case_id_required"
     assert "case-0000, case-0001, case-0002" in refused["error"]["message"]
@@ -118,8 +97,8 @@ async def test_a_case_with_variations_says_what_the_sheet_does_not_show(
 async def test_what_the_sheet_could_not_take_as_its_own_is_refused(
     state_no_sim: SessionState, work_dir: Path, change: str, code: str
 ):
-    sheet = a_sheet(work_dir)
-    raw = a_job_of(state_no_sim, sheet, work_dir)
+    sheet = copied_sheet(work_dir)
+    raw = job_that_ran(state_no_sim, sheet, work_dir)
     job = state_no_sim.all_jobs["placed"]
     arguments: dict[str, Any] = {}
     if change == "sheet":
@@ -147,8 +126,8 @@ async def test_a_sheets_receipt_says_where_its_results_are(
     """The receipt of a sheet's run says the results are not beside the sheet,
     and names the action that puts them there. A netlist's run says nothing,
     nor does a sheet's run on another simulator, which LTspice only exported."""
-    sheet = a_sheet(work_dir)
-    a_job_of(state_no_sim, sheet, work_dir)
+    sheet = copied_sheet(work_dir)
+    job_that_ran(state_no_sim, sheet, work_dir)
     job = state_no_sim.all_jobs["placed"]
     receipt = await place(state_no_sim, action="status")
     (note,) = [o for o in receipt["observations"] if o["code"] == "results_not_beside_sheet"]

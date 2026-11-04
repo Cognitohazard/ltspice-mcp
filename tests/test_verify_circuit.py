@@ -821,6 +821,35 @@ async def test_reference_outside_sandbox_names_the_text_alternative(state_no_sim
     assert "netlist text itself" in finding["evidence"]["detail"]
 
 
+async def test_a_refused_reference_is_filed_under_the_reference(state_no_sim, work_dir):
+    # It was filed under the circuit, which was allowed and read.
+    deck = _write(work_dir, "cand.cir", _BASE)
+    data = await _run(state_no_sim, path=str(deck), reference="/outside/ref.cir")
+    (finding,) = [f for f in data["findings"] if f["rule_id"] == "path_denied"]
+    assert finding["at"] == {"file": "/outside/ref.cir"}
+    assert finding["subject"] == "/outside/ref.cir"
+
+
+async def test_a_refused_include_is_placed_at_its_directive(
+    state_no_sim, work_dir, tmp_path_factory
+):
+    """A refused include is placed at the line that names it, in the deck or in
+    the included file that holds it, where it was placed at the deck alone."""
+    outside = tmp_path_factory.mktemp("outside")
+    lib = _write(outside, "part.lib", ".subckt PART 1 2\nR9 1 2 1\n.ends\n")
+    nested = _write(work_dir, "nested.lib", f"* models\n\n.include {lib}\n")
+    deck = _write(
+        work_dir,
+        "cand.cir",
+        f"* c\nX1 in out PART\nR1 in out 1k\n.include {lib}\n.include {nested}\n.end\n",
+    )
+
+    data = await _run(state_no_sim, path=str(deck), checks=["compare"], reference=_BASE)
+
+    denied = [f["at"] for f in data["findings"] if f["rule_id"] == "path_denied"]
+    assert denied == [{"file": str(deck), "line": 4}, {"file": str(nested), "line": 3}]
+
+
 async def test_equivalence_reordered(state_no_sim, work_dir):
     deck = _write(work_dir, "cand.cir", _BASE)
     ref = _write(work_dir, "ref.cir", _REORDERED)
