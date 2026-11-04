@@ -1303,13 +1303,16 @@ def _one_source(
     other_raw: str | None = None,
 ) -> None:
     """Refuse a read that names both or neither of a file and a job, an empty
-    path, or a case selector without a job."""
+    path, or a case selector without a job.
+
+    These are argument values the read cannot use, refused as the operations
+    refuse theirs, so one ``except ValueError`` catches either."""
     if (path is None) == (job_id is None):
-        raise TypeError("Pass exactly one of path or job_id")
+        raise ApiValidationError("Pass exactly one of path or job_id")
     if path is not None and not os.fspath(path).strip():
-        raise TypeError("path is empty; pass a file or job_id")
+        raise ApiValidationError("path is empty; pass a file or job_id")
     if path is not None and (run_index != 0 or case_id is not None or other_raw is not None):
-        raise TypeError("run_index, case_id and other_raw are only valid with job_id")
+        raise ApiValidationError("run_index, case_id and other_raw are only valid with job_id")
 
 
 # The six methods carry their operation's catalogue entry as their docstring —

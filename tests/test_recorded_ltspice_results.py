@@ -20,6 +20,7 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
+from ltspice_mcp.api import ApiValidationError
 from ltspice_mcp.errors import NoAxisError, OtherRawNotWritten, ResultError
 from ltspice_mcp.lib import metrics, services
 from ltspice_mcp.lib.device_names import (
@@ -2050,7 +2051,9 @@ def test_the_api_reads_a_jobs_fra_results_by_job_and_case(
 async def test_other_raw_reads_only_a_job(state_no_sim: SessionState, work_dir: Path):
     """An other raw is a case's: a path names its file instead."""
     raw = work_dir / "fra.fra_1.raw"
-    with pytest.raises(TypeError, match="case_id and other_raw are only valid with job_id"):
+    with pytest.raises(
+        ApiValidationError, match="case_id and other_raw are only valid with job_id"
+    ):
         SyncApi(state_no_sim).load_raw(raw, other_raw="fra_1")
     with pytest.raises(ResultError, match="case_id and other_raw select a run_experiments case"):
         await analysis.handle_plot_waveform(

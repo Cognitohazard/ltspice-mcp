@@ -433,6 +433,9 @@ ops.observations               # a log reader's dict (LogResult) says the same o
 ```
 
 - `RawResult` is this project's type; the API returns no spicelib types.
+- Each of these reads takes exactly one of `path` and `job_id`. Neither or
+  both, an empty `path`, or `run_index`, `case_id` or `other_raw` with a
+  `path` raises `ApiValidationError`, as the operations do.
 - `observations` describes the result as it was read. It contains
   `partial_raw` for a stopped case's raw kept with
   `execution.keep_partial_raw`, whose values end where the run was stopped,
