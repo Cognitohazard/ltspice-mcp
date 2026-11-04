@@ -46,11 +46,16 @@ The server needs Python 3.11 or newer. In Claude Code,
 JSON.
 
 **You also need LTspice or ngspice** on the same machine. The server finds an
-installed simulator automatically on Windows, Linux and macOS. On WSL, you
+installed simulator automatically on Windows and Linux. On WSL, you
 have to set the LTspice path yourself ([WSL](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#wsl)). Editing `.asc`
 schematics needs LTspice, because the server uses LTspice's symbol libraries.
 Reading and checking netlists works without a simulator. The plugin and the
 extension need [`uv`](https://docs.astral.sh/uv/).
+
+**macOS is not supported yet: the server cannot read simulation results
+there.** It reads each `.raw` and `.log` file in a separate process with a
+hard memory limit and cleans up that process and any it started, and neither
+has been validated on macOS, so it refuses every result read there.
 
 **Make sure the assistant uses the server.** Some assistants run the
 simulator from the shell instead. Name the server `spice`, as the plugin
@@ -251,7 +256,7 @@ specification.
 
 Published studies by other groups informed three design choices:
 
-- **Measurements are returned as named numbers.** SPICEAssistant ([arXiv:2507.10639](https://arxiv.org/abs/2507.10639)) gave a model scalar LTspice results instead of raw output, which raised o3's solve rate on a benchmark of 269 power-supply tasks from 25.4% to 84.9%.
+- **Measurements are returned as named numbers.** A study of LLM workflows for switched-mode power supply design ([arXiv:2507.10639](https://arxiv.org/abs/2507.10639), first published as SPICEAssistant) found that GPT-4o could not reliably read a ripple value from a waveform given as numbers or as an image, so its tools extract such values from each LTspice run and return them as text. With that simulation feedback, o3 solved 84.9% of 269 power-supply design tasks, against 25.4% with no simulation. The study compared simulation feedback with none, not named numbers with raw output.
 - **Schematic edits are typed and checked.** NetlistBench ([arXiv:2608.12197](https://arxiv.org/html/2608.12197)) found that the strongest model's accuracy on netlist edits with dependent steps fell from 80% at 3 steps to 26% at 15. The study measured unassisted edits to text netlists. `edit_schematic` validates each typed operation before it writes the file and was designed in response to that finding, but its effect has not been measured.
 - **The tool interface is typed.** A benchmark of agents that take chip designs from RTL to GDS ([arXiv:2607.17528](https://arxiv.org/html/2607.17528v3)) traced 31.7% of physical-design errors to failures at the tool interface. That work is in a different domain, so it does not show the same effect in circuit simulation. The server follows its recommendations of registered APIs, persistent sessions and structured results.
 
@@ -267,7 +272,9 @@ uv run ltspice-mcp             # run the server (stdio)
 
 To release, add a dated section for the version to `CHANGELOG.md`, run
 `scripts/release.sh <version>`, and push the tag it creates. Pushing the tag
-publishes the release to PyPI.
+publishes the release to PyPI. The script also stamps the version into the
+plugin and Desktop-extension manifests, and the publish workflow refuses a
+tag whose manifests name another version.
 
 ## Contributing
 

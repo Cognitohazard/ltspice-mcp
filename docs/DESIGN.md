@@ -36,10 +36,16 @@ detects WSL.
 
 |simulator|platform|
 |-|-|
-|LTspice|Windows native; Linux and macOS through Wine; WSL through Windows interop|
-|ngspice|Linux, macOS and Windows native|
+|LTspice|Windows native; Linux through Wine; WSL through Windows interop|
+|ngspice|Linux and Windows native|
 |QSPICE|Windows native only (runs are refused under WSL or Wine)|
-|Xyce|Linux, macOS and Windows native|
+|Xyce|Linux and Windows native|
+
+macOS is not supported yet. The server reads every `.raw` and `.log` file in
+a parser process with a hard memory limit and cleans up that process and any
+it started (`lib/parser_process.py`). Neither has been validated on macOS, so
+the server refuses every result read there with `unsupported_platform`.
+[docs/TESTING.md](TESTING.md) lists the tests that supporting it needs.
 
 A schematic (`.asc`) runs through the netlist LTspice exports from it, which
 is in LTspice's own dialect. The server prepares that netlist for ngspice
@@ -85,6 +91,12 @@ prove invalid. A refusal names the segments, pins or labels that blocked it,
 so the agent can choose again instead of guessing. Agents recover poorly from
 mistakes, and a refusal saves the turns that recovery would take.
 
+The same holds for every refusal, finding and error, whether or not a write
+was involved: it names the field, the place and the way round, such as the
+fields an argument accepts, the coordinates of a collision, or the run that
+gives a result this one cannot. Tests pin what a refusal names
+(`tests/test_validation_errors.py` for argument refusals).
+
 ### No auto-routing
 
 The server does not lay out or route a circuit; the caller decides the
@@ -104,6 +116,11 @@ that with a reference netlist or schematic, to report any unintended change.
 Even when every op succeeds, the reply includes sheet-level warnings such as
 floating pins, duplicate wire segments and dangling net labels, so the caller
 does not need a separate call to inspect the sheet.
+
+A check must say what it did not look at: a comparison that leaves part of a
+circuit out says which part, a list cut short says how to read the rest, and
+a check that did not run is reported as not run. A verdict that reads as
+complete while it covered only part of the circuit is worse than no verdict.
 
 ### Structured outputs
 
@@ -178,6 +195,51 @@ it keeps the minimum and maximum of each interval and reports that it
 downsampled. The PNG is off by default (`[analysis] attach_plot`), costs
 about 1,000 tokens for two panels, and needs the optional `raster` extra. The
 core install adds no plotting dependency; the chart library is bundled.
+
+### One call per intent
+
+The caller states what it wants, and the server does the steps in between:
+staging a copy, taking locks, exporting, comparing, running. One
+`edit_schematic` batch edits a sheet and checks it against a reference;
+repeating a `request_id` returns the earlier job, so comparing two settings
+takes one call; `jobs(action="place_beside_sheet")` puts a run's results where
+LTspice opens them. When a task takes a sequence of calls, the fix is an op or
+an option, not a documented sequence.
+
+### A short reply, the data behind an id
+
+A reply carries a summary that is true on its own. The bulk stays on disk,
+recorded per job and case and addressed by id and path, for a later call or
+the Python API to read and reduce, so an old run reloads without simulating
+again. A reply should name the call that reads more, and a result too large
+to read whole should be readable in part.
+
+### Repeatable requests
+
+The same `request_id` returns the same job ("Backend: spicelib" below), so a
+retry is safe. A client keeps its own copy of the tool definitions, so a
+renamed argument breaks it until it reloads them. Renames are therefore made
+together, in one release, and the refusal of an old name says so.
+
+### LTspice's own tools as peers
+
+The server writes the files LTspice reads (a sheet's netlist, its `.plt` plot
+settings, a run's results beside its sheet) and shows a sheet or a run in
+LTspice's own window, rather than imitating them ("The file on disk is
+authoritative" below).
+
+### Evidence before assumption
+
+The server models only LTspice behaviour recorded from both supported builds
+([TESTING.md](TESTING.md), "Recorded LTspice behaviour"). Unrecorded
+behaviour is where the server goes wrong, so a recording comes before the
+code that relies on it.
+
+### Fast enough to try
+
+Small runs stay fast enough that an agent runs an experiment instead of
+reasoning one out, and work added to the run path is weighed against that.
+Tests do not time anything (`CLAUDE.md`, "Working practice").
 
 ### The file on disk is authoritative
 
