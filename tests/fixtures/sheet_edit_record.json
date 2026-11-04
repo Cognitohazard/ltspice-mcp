@@ -19,6 +19,10 @@
   "reply": "3497faa46bc7b7eb",
   "sheet": null
  },
+ "077b5c5f7060af65": {
+  "reply": "937f950c849139cc",
+  "sheet": null
+ },
  "078106cf666e8bb8": {
   "reply": "612df44a58058c79",
   "sheet": "af20c6214833a1e7"
@@ -81,6 +85,10 @@
   "reply": "777fe840d272960e",
   "sheet": null
  },
+ "0e544f46980c806a": {
+  "reply": "e4d40ed542c4d8eb",
+  "sheet": null
+ },
  "0f4a17ab7d145cfa": {
   "reply": "7ced12b58b4df529",
   "sheet": "b53e523c278c7a15"
@@ -129,6 +137,10 @@
   "reply": "15f72a1e5d5246a1",
   "sheet": "b3a2468022b86f34"
  },
+ "18964040503eb2ca": {
+  "message": "Cannot open spaced.asc for editing: line 3 ('TEXT 16 16 Left  2 !.tran 3m') is a TEXT record the schematic editor skips, and saving any edit would delete it. Write it as LTspice saves one, with one space between its fields, then edit the sheet here.",
+  "raised": "NetlistError"
+ },
  "18b5bf38b62dcdf6": {
   "reply": "fd89019199e3f34f",
   "sheet": "14058ceaeffcba38"
@@ -173,6 +185,10 @@
   "reply": "a28df13f00aa4f94",
   "sheet": "b3a2468022b86f34"
  },
+ "2079beb0b7f671c0": {
+  "reply": "3a1dc7dc6ee52b70",
+  "sheet": null
+ },
  "2095d541509aa060": {
   "reply": "6184fcfd3352e649",
   "sheet": "e74de70382e0ec77"
@@ -182,7 +198,7 @@
   "sheet": "31b13aab2a2a8ebe"
  },
  "22dd865549df1a43": {
-  "reply": "9d03cdf1622885e5",
+  "reply": "8cb7d5b4e038dfd8",
   "sheet": null
  },
  "23cf884427af189b": {
@@ -192,6 +208,10 @@
  "245ff9885e641069": {
   "reply": "15f72a1e5d5246a1",
   "sheet": "b3a2468022b86f34"
+ },
+ "2513258926e30aa0": {
+  "reply": "fe0fc6dfc16a77a1",
+  "sheet": null
  },
  "25402e1170adb265": {
   "reply": "7fc50772c8d91c7d",
@@ -225,6 +245,10 @@
   "message": "Path /outside/ref.cir is outside allowed directories [WORK] A reference may also be the netlist text itself: pass the deck's lines (with newlines) as compare.reference instead of a path.",
   "raised": "PathSecurityError"
  },
+ "2c083c7b9004a728": {
+  "reply": "e214ec861138adc8",
+  "sheet": null
+ },
  "2c260517d0f9b13d": {
   "reply": "086c77dcbdb5059f",
   "sheet": "37b3406b8a47981e"
@@ -232,6 +256,10 @@
  "2e12dc23761bbb70": {
   "reply": "8cce0bb65daf2fd5",
   "sheet": "2f66633286ed1ad2"
+ },
+ "2fe5cca8a4f3d50d": {
+  "reply": "4ec8d953c2c71b30",
+  "sheet": null
  },
  "2ff7a3bd32d877dd": {
   "reply": "a7ef19951e09e8d9",
@@ -249,12 +277,24 @@
   "reply": "82f4644dd3caabda",
   "sheet": "d54e46e32c2352ac"
  },
+ "34871e6a992639a5": {
+  "reply": "5699ac28bfa4c4b0",
+  "sheet": null
+ },
+ "35644fcf7a933b34": {
+  "message": "Cannot open spaced.asc for editing: line 3 ('TEXT\\t16 16 Left 2 !.tran 2m') is a TEXT record the schematic editor skips, and saving any edit would delete it. Write it as LTspice saves one, with one space between its fields, then edit the sheet here.",
+  "raised": "NetlistError"
+ },
  "370e2d12ec439e44": {
   "reply": "15f72a1e5d5246a1",
   "sheet": "b3a2468022b86f34"
  },
  "3a04e41576c8bac0": {
   "reply": "ce01b95855f32e4c",
+  "sheet": null
+ },
+ "3b6d3ec72c985bf5": {
+  "reply": "1434650825318fa1",
   "sheet": null
  },
  "3c607bf385bc73ce": {
@@ -284,6 +324,10 @@
  "4076cd010cd69143": {
   "message": "invalid view_cursors.touched: malformed page cursor: 'tampered'",
   "raised": "InvalidCursorError"
+ },
+ "40e67d273dbaefd1": {
+  "reply": "a097baec5a782f32",
+  "sheet": null
  },
  "415307b445a847de": {
   "reply": "105b251f822cdc4d",
@@ -361,6 +405,10 @@
   "reply": "e157ed6164d2ab20",
   "sheet": "b3a2468022b86f34"
  },
+ "540c6d9ba7f8af52": {
+  "reply": "695e794e218ae29b",
+  "sheet": null
+ },
  "5454ff3013c8c973": {
   "reply": "90621a0f04ddf74f",
   "sheet": "5fc5da36b17f4a93"
@@ -381,8 +429,16 @@
   "reply": "d46769e84ce1054c",
   "sheet": "6c6f80b9f8fca180"
  },
+ "5676fa4c33fad80e": {
+  "reply": "66004ccb23c58681",
+  "sheet": null
+ },
  "56e25a7b2255df8a": {
   "reply": "d51435052fea6f8d",
+  "sheet": null
+ },
+ "58f0604af48fa739": {
+  "reply": "fc5a0034e32ef0ea",
   "sheet": null
  },
  "59439c1ccedda16a": {
@@ -433,8 +489,16 @@
   "reply": "2f2e41316a5dcab0",
   "sheet": "2f66633286ed1ad2"
  },
+ "65ac77f03f94ea2f": {
+  "reply": "06af9a66ea628472",
+  "sheet": null
+ },
  "6b809ba58db043fa": {
   "reply": "ae15cbce2410c748",
+  "sheet": null
+ },
+ "6bbdfc6b13d6f944": {
+  "reply": "ad8e5a5cec33e733",
   "sheet": null
  },
  "6c2446aecf16fb70": {
@@ -481,6 +545,10 @@
   "reply": "64a24e3f7bbef407",
   "sheet": null
  },
+ "76a16e047783cc84": {
+  "reply": "8cbc23a8e1f0ca95",
+  "sheet": null
+ },
  "7730613626972320": {
   "varies": [
    "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[None-True]",
@@ -524,6 +592,14 @@
   "message": "Cannot open WORK/bus.asc: line 5 is a BUSTAP record ('BUSTAP 80 0 80 16'), which the schematic editor does not read, so the sheet cannot be opened for reading or editing here.",
   "raised": "NetlistError"
  },
+ "7bb0c886f6ac03c7": {
+  "reply": "129b975af6d953eb",
+  "sheet": null
+ },
+ "7bd59c2af9d62f85": {
+  "reply": "b8633424fcfc0d56",
+  "sheet": null
+ },
  "7c50d0599ac7f005": {
   "reply": "c392460cfd6e3c7d",
   "sheet": "2f66633286ed1ad2"
@@ -532,9 +608,17 @@
   "reply": "80d1858699907d9d",
   "sheet": "d083b44e671b9297"
  },
+ "7d8078c4e41703fb": {
+  "reply": "35e1bc31f5ac62d0",
+  "sheet": null
+ },
  "7f34f288f2dea42e": {
   "reply": "7f3c3db21b8ad85d",
   "sheet": "2fd4f6977eb9f79a"
+ },
+ "80688642def0823b": {
+  "reply": "17355bb9297bc7c4",
+  "sheet": null
  },
  "8106e1d5d4e1a8a4": {
   "message": "Cannot open shared_reference.asc for editing: parts share a reference ('R1' at (96,96), (400,96)). The schematic editor keeps one part per reference and would delete the others on saving, and neither LTspice build netlists such a sheet. Rename the repeated parts in LTspice, then edit the sheet here.",
@@ -560,6 +644,10 @@
   "reply": "600b3dd9cc6098e6",
   "sheet": null
  },
+ "87c761c1ecfeef90": {
+  "reply": "d97f32e803f134d5",
+  "sheet": null
+ },
  "8a3a981f86b74b0c": {
   "reply": "6218bc40fc837db0",
   "sheet": "f18b41994230550d"
@@ -567,6 +655,10 @@
  "8a6a673d92e5140f": {
   "reply": "a4ef57b61f0bd35d",
   "sheet": "4a8d150aa88702d6"
+ },
+ "8b292fc12db4a0c5": {
+  "reply": "1dbfa075d08f3ce5",
+  "sheet": null
  },
  "8b6af8dbe6061b05": {
   "reply": "46f9ac884017282c",
@@ -604,6 +696,10 @@
   "reply": "181c08e54161b125",
   "sheet": "2f66633286ed1ad2"
  },
+ "927d14421f94e55b": {
+  "reply": "04069717e74df8c8",
+  "sheet": null
+ },
  "92a78848ffccc50e": {
   "reply": "9aac9f242909f8ec",
   "sheet": "2f66633286ed1ad2"
@@ -615,6 +711,10 @@
  "92ee3fbcdbc6d26d": {
   "reply": "15f72a1e5d5246a1",
   "sheet": "b3a2468022b86f34"
+ },
+ "930c16795e8e3733": {
+  "reply": "c0fdab9a057ab10f",
+  "sheet": null
  },
  "939e5fb70235073e": {
   "reply": "999d956655da3b23",
@@ -648,6 +748,10 @@
   "reply": "bb1aad04c3087080",
   "sheet": "cd333cd95ee819e3"
  },
+ "9812c4162864ac72": {
+  "reply": "354b47a317fa12ac",
+  "sheet": null
+ },
  "988c0a891f8eefd3": {
   "reply": "b005a808d6443e3f",
   "sheet": "2f66633286ed1ad2"
@@ -675,6 +779,14 @@
   "reply": "86333e817b8cf195",
   "sheet": "c116e78a4d734899"
  },
+ "9c97e703c87ac472": {
+  "reply": "a7400ab88effff35",
+  "sheet": null
+ },
+ "9d0420a2d7aff829": {
+  "reply": "5c49ac863f033fae",
+  "sheet": null
+ },
  "9ed80fbae296e3c5": {
   "reply": "f6ea8f5deabb4b88",
   "sheet": "2f66633286ed1ad2"
@@ -686,6 +798,10 @@
  "a0b0bd9a879d3ef8": {
   "reply": "38063486f092cf33",
   "sheet": "21b15924f8cb8e38"
+ },
+ "a2a11974172c5f1a": {
+  "reply": "de880518c83fc3a5",
+  "sheet": null
  },
  "a315b7b2d2524319": {
   "reply": "f4293e1edfd08145",
@@ -743,6 +859,10 @@
   "reply": "5e5675c926d3ed7a",
   "sheet": "0fe4a46d4fb4e6e1"
  },
+ "ae112efc3359b334": {
+  "reply": "2ffef3e32b70b89c",
+  "sheet": null
+ },
  "ae66c59dfbaf1dec": {
   "reply": "3ab138721785c65b",
   "sheet": "f4955e6af62cdb33"
@@ -750,6 +870,10 @@
  "aecb65464f98a52c": {
   "reply": "b85ae5b0edfaa5ee",
   "sheet": "b3a2468022b86f34"
+ },
+ "aef14344c6cb6b2d": {
+  "reply": "167137171d27a10d",
+  "sheet": null
  },
  "af24c1e7e640e28d": {
   "reply": "42a8d8b9e6a4ee05",
@@ -801,6 +925,14 @@
   "reply": "494fd67321e34458",
   "sheet": null
  },
+ "b8731e40e2d221a4": {
+  "reply": "b328000b27e81c57",
+  "sheet": null
+ },
+ "ba8e7b48381a598c": {
+  "reply": "e1a868a8a1996919",
+  "sheet": null
+ },
  "bafd6ae12b77dce7": {
   "reply": "b4913bf3ca984150",
   "sheet": null
@@ -816,6 +948,10 @@
  "bc1053da29cc84e2": {
   "reply": "e157ed6164d2ab20",
   "sheet": "b3a2468022b86f34"
+ },
+ "bc207414c07ee215": {
+  "reply": "c05d8c48aa134816",
+  "sheet": null
  },
  "be355dd416c022ee": {
   "reply": "d48a2e1fb40ed919",
@@ -858,9 +994,21 @@
   "reply": "3f07fd693975a8d1",
   "sheet": "a4f8c1030672b090"
  },
+ "ca0c2c43ed653bc3": {
+  "reply": "f73ede3cf9a9ebaa",
+  "sheet": null
+ },
+ "ca0c825d8659372d": {
+  "reply": "5778455abf878e37",
+  "sheet": null
+ },
  "ca87c7c6b3c9eb4e": {
   "reply": "6136755e62fd9740",
   "sheet": "087779c62714d69a"
+ },
+ "cb36e21123c5cfc5": {
+  "reply": "d5b8be7c277d273f",
+  "sheet": null
  },
  "cc48c73ad9ba2d29": {
   "reply": "f7443f63825f05c2",
@@ -896,6 +1044,10 @@
   "reply": "5a4dae6f1f6390d1",
   "sheet": "53960f64fa788151"
  },
+ "d7d002cca1b3d94d": {
+  "reply": "b645e8370de8e94c",
+  "sheet": null
+ },
  "d8c4f7a1b41152fb": {
   "reply": "63536ade3c45ac6e",
   "sheet": null
@@ -915,6 +1067,10 @@
  "de25805084b48eb8": {
   "reply": "99d02b0d6fcd34b7",
   "sheet": "2f66633286ed1ad2"
+ },
+ "dea18324097847f7": {
+  "reply": "0bffb4635932509e",
+  "sheet": null
  },
  "deb9b54d1e0c4433": {
   "reply": "7c8a5cb903efe45e",
@@ -963,11 +1119,8 @@
   "sheet": "1cd64b7050cdd9bd"
  },
  "e287b9960a486623": {
-  "varies": [
-   "tests/test_asc_document.py::TestTheEditorHoldsWhatTheSheetHolds::test_a_text_line_the_editor_does_not_read_is_refused_not_dropped[TEXT  16 16 Left 2 !.tran 1m]",
-   "tests/test_asc_document.py::TestTheEditorHoldsWhatTheSheetHolds::test_a_text_line_the_editor_does_not_read_is_refused_not_dropped[TEXT 16 16 Left  2 !.tran 1m]",
-   "tests/test_asc_document.py::TestTheEditorHoldsWhatTheSheetHolds::test_a_text_line_the_editor_does_not_read_is_refused_not_dropped[TEXT\\t16 16 Left 2 !.tran 1m]"
-  ]
+  "message": "Cannot open spaced.asc for editing: line 3 ('TEXT  16 16 Left 2 !.tran 1m') is a TEXT record the schematic editor skips, and saving any edit would delete it. Write it as LTspice saves one, with one space between its fields, then edit the sheet here.",
+  "raised": "NetlistError"
  },
  "e585d938b1c68137": {
   "reply": "e8299003ffc2c16a",
@@ -1069,6 +1222,14 @@
   "reply": "719920edae7a7341",
   "sheet": "a0e138e3ce059bf4"
  },
+ "f48a4f6b4cf06f4d": {
+  "reply": "71f5dab22253cac5",
+  "sheet": null
+ },
+ "f4ceb9fc711f196b": {
+  "reply": "d217d836e83aaef1",
+  "sheet": null
+ },
  "f52668feb9fbcdaf": {
   "reply": "6d1cf8671ea28d8b",
   "sheet": "562a9043164cff64"
@@ -1092,6 +1253,10 @@
  "fcb0afe4013df6d3": {
   "reply": "955dc2c150e176b3",
   "sheet": "935c282522aab58f"
+ },
+ "fe1ccd5e5a5f02f1": {
+  "reply": "80957ead81bdaf49",
+  "sheet": null
  },
  "fe46b1e83160d080": {
   "reply": "4559e6d7ee190bf2",
