@@ -553,13 +553,16 @@ def fake_simulator(
 
 def recorded_fixture_simulator(
     monkeypatch: pytest.MonkeyPatch, fixture: str = "ltspice_tran_rc"
-) -> None:
+) -> list[str]:
     """Instant engine behind ``ExperimentRunner.submit_netlist`` that hands back
     a recorded real-LTspice raw+log pair, so analysis stages parse genuine
     simulator artifacts rather than a mock byte string. Name a different
-    *fixture* to run a job over stepped artifacts."""
+    *fixture* to run a job over stepped artifacts. Returns the list each
+    launch's run filename is appended to."""
+    launched: list[str] = []
 
     def submit(self, _netlist: Path, run_filename: str, callback, **_kwargs):
+        launched.append(run_filename)
         raw, log = fake_artifact_paths(self.output_folder, run_filename)
         shutil.copy(FIXTURES_DIR / f"{fixture}.raw", raw)
         shutil.copy(FIXTURES_DIR / f"{fixture}.log", log)
@@ -568,6 +571,7 @@ def recorded_fixture_simulator(
         return object()
 
     monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
+    return launched
 
 
 def resolve_local_ref(schema: dict, node: dict) -> dict:
