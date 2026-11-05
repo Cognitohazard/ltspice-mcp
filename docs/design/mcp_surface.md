@@ -1632,15 +1632,18 @@ every copy has one value. Otherwise a `param_mismatches` row names a
 reference copy and a candidate copy that differ.
 
 Both modes compare netlists. An `.asc` under test is compared as its LTspice
-export, and an `.asc` reference is exported the same way, on a staged copy,
-never beside the caller's file; without LTspice the compare fails rather than
-diffing a schematic's attributes against a netlist's cards. Both modes read
-the cards the simulator reads: line 1 of a deck is its title and is not read,
-nor is a card after `.end`. `equivalence` follows includes as staging reads
-them, so `.lib <file> <section>` brings in that section's definitions only,
-and of two definitions of one subcircuit name the first is the body
-compared, the others listed in `duplicate_subckts`. `structural_diff`
-lexes both decks, so a `+` continuation belongs to the card it continues, and
+export, so asking to compare one asks for `export` too, with
+`checks: ["compare"]` as with the default list: the export runs and reports as
+a check that ran, with its `export` block and findings, and is written where
+`export_to` says. An `.asc` reference is exported the same way, on a staged
+copy, never beside the caller's file; without LTspice the compare fails rather
+than diffing a schematic's attributes against a netlist's cards. Both modes
+read the cards the simulator reads: line 1 of a deck is its title and is not
+read, nor is a card after `.end`. `equivalence` follows includes as staging
+reads them, so `.lib <file> <section>` brings in that section's definitions
+only, and of two definitions of one subcircuit name the first is the body
+compared, the others listed in `duplicate_subckts`. `structural_diff` lexes
+both decks, so a `+` continuation belongs to the card it continues, and
 compares directives as parsed rather than as text, so spacing, case, comma
 separators and assignment order in `.model`/`.param` are ignored. It ignores
 the lines the netlister adds to every export, which are `.backanno`, the
@@ -1660,6 +1663,23 @@ not, a `checks_skipped` row says why (no reference supplied, not requested,
 not applicable, or no exported netlist to compare, which names whether the
 export ran) or a `failures` row at stage `compare` gives the error, so a
 reply without a comparison always says which.
+
+**Outcome.** `complete` means every check the caller asked for ran, with no
+failure, no finding at error or warning severity, and no comparison short of
+`equivalent: true`. A check asked for that did not run is a shortfall: one
+listed in `checks`, the comparison asked for by supplying `compare` with the
+default list, and the export that comparing an `.asc` reads. Its
+`checks_skipped` row or `failures` row says why, and `hint` names it. The
+outcome is then `partial` when some check ran or the drawing was returned, and
+`failed` when no check ran and no drawing was returned, whether the checks
+were skipped or failed. `isError` stays unset in both cases, because the call
+was valid and the reply says why each check did not run. Skipping a check the
+caller did not ask for is not a shortfall: one left out of `checks`, one the
+default list leaves out because it does not apply to the file kind, and every
+check under `render.mode: "only"`. Neither is a check on the default list that
+this session cannot run, such as `export` without LTspice when nothing is
+compared: its `checks_skipped` row says so, and naming it in `checks` makes
+its absence a shortfall.
 
 In the render block, `sha256` is the image's digest and `source_sha256` the
 digest of the sheet file this call drew. Rendering reads the file on disk, and

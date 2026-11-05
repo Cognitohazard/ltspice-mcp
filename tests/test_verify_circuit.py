@@ -52,7 +52,7 @@ from ltspice_mcp.tools.verify import (
     handle_verify_circuit,
 )
 from tests import _fake_netlister as fake_netlister
-from tests.conftest import needs_raster
+from tests.conftest import SyncApi, dispatch, needs_raster
 
 
 class FakeSim:
@@ -176,6 +176,135 @@ async def test_asc_rejects_syntax_check(state_no_sim, work_dir, asc_symbols):
     reasons = {s["check"]: s["reason"] for s in data["checks_skipped"]}
     assert "not applicable to a .asc file" in reasons["syntax"]
     assert "checks_run" not in data
+
+
+#: A reference the comparison would read, so a skipped compare is skipped for
+#: want of LTspice and not for want of a reference.
+_REFERENCE = {"reference": "* ref\nR1 a 0 1k\n.end\n"}
+
+#: (file kind, arguments besides the path, the outcome, the checks asked for
+#: that did not run). The first group asks for a check this session cannot
+#: run: the outcome is ``failed`` when nothing the caller asked for came back,
+#: and ``partial`` when something did, and the hint names each such check with
+#: its reason. Comparing a sheet asks for the export it reads, so both are
+#: named. The second group leaves out only checks the caller did not ask for,
+#: so the outcome stays ``complete``.
+_REQUESTED_CHECK_CASES = [
+    pytest.param("asc", {"checks": ["export"]}, "failed", ["export"], id="asc-export-alone"),
+    pytest.param(
+        "asc",
+        {"checks": ["layout", "export"]},
+        "partial",
+        ["export"],
+        id="asc-export-beside-layout",
+    ),
+    pytest.param(
+        "asc",
+        {"checks": ["export"], "render": {"format": "svg"}},
+        "partial",
+        ["export"],
+        id="asc-export-beside-a-render",
+    ),
+    pytest.param(
+        "asc",
+        {"compare": _REFERENCE},
+        "partial",
+        ["export", "compare"],
+        id="asc-compare-by-reference",
+    ),
+    pytest.param(
+        "asc",
+        {"checks": ["compare"], "compare": _REFERENCE},
+        "failed",
+        ["export", "compare"],
+        id="asc-compare-alone",
+    ),
+    pytest.param(
+        "netlist", {"checks": ["symbols"]}, "failed", ["symbols"], id="netlist-sheet-check-alone"
+    ),
+    pytest.param(
+        "netlist",
+        {"checks": ["syntax", "export"]},
+        "partial",
+        ["export"],
+        id="netlist-sheet-check-beside",
+    ),
+    pytest.param(
+        "netlist",
+        {"checks": ["compare"]},
+        "failed",
+        ["compare"],
+        id="netlist-compare-no-reference",
+    ),
+    pytest.param("asc", {}, "complete", [], id="asc-default-list"),
+    pytest.param("netlist", {}, "complete", [], id="netlist-default-list"),
+    pytest.param(
+        "asc",
+        {"checks": ["layout"], "compare": _REFERENCE},
+        "complete",
+        [],
+        id="asc-compare-left-out-of-checks",
+    ),
+    pytest.param(
+        "asc",
+        {"render": {"mode": "only", "format": "svg"}, "compare": _REFERENCE},
+        "complete",
+        [],
+        id="asc-render-only",
+    ),
+]
+
+
+def _requested_check_path(work_dir: Path, kind: str) -> Path:
+    """A file every check that runs on finds clean, so only a check that did
+    not run can move the outcome off ``complete``."""
+    if kind == "asc":
+        return _write(work_dir, "clean.asc", _CLEAN_ASC)
+    return _write(work_dir, "clean.cir", _BASE)
+
+
+def _assert_requested_check_outcome(data: dict, expected: str, not_run: list[str]) -> None:
+    assert "findings" not in data, data
+    assert "failures" not in data, data
+    assert data["outcome"] == expected, data
+    reasons = {row["check"]: row["reason"] for row in data.get("checks_skipped", ())}
+    for check in not_run:
+        assert f"{check} ({reasons[check]})" in data["hint"], data["hint"]
+    if not not_run:
+        assert data["hint"].startswith("No problems found in the checks that ran."), data["hint"]
+
+
+class TestARequestedCheckThatDidNotRunIsAShortfall:
+    """Design principle "Safe edits" (``docs/DESIGN.md``): a verdict that reads
+    as complete while it covered only part of the circuit is worse than no
+    verdict. A check asked for by name in ``checks``, or the comparison asked
+    for by supplying ``compare``, that could not run keeps the outcome off
+    ``complete``; a check left out because it was not asked for, does not apply
+    under the default list, or gave way to ``render.mode='only'`` does not.
+
+    Through both doors that answer it: the server's dispatch, and the Python
+    API, which returns the evaluation's own payload. The session has no LTspice,
+    so ``export`` cannot run, and neither can a compare of a sheet."""
+
+    @pytest.mark.parametrize(("kind", "arguments", "expected", "not_run"), _REQUESTED_CHECK_CASES)
+    async def test_through_the_server(
+        self, state_no_sim, work_dir, asc_symbols, kind, arguments, expected, not_run
+    ):
+        path = _requested_check_path(work_dir, kind)
+        result = await dispatch(state_no_sim, "verify_circuit", {"path": str(path), **arguments})
+        data = _assert_schema(result)
+        # Nothing the caller sent was refused: each check says why it did not
+        # run, so the call itself is not an error.
+        assert not result.is_error
+        _assert_requested_check_outcome(data, expected, not_run)
+
+    @pytest.mark.parametrize(("kind", "arguments", "expected", "not_run"), _REQUESTED_CHECK_CASES)
+    def test_through_the_python_api(
+        self, state_no_sim, work_dir, asc_symbols, kind, arguments, expected, not_run
+    ):
+        path = _requested_check_path(work_dir, kind)
+        data = SyncApi(state_no_sim).verify_circuit(path=str(path), **arguments)
+        _assert_requested_check_outcome(data, expected, not_run)
 
 
 @pytest.mark.parametrize("suffix", [".sp", ".spice"])
@@ -1173,7 +1302,8 @@ def test_two_unparseable_decks_are_not_equivalent(work_dir):
     assert len(warnings) == 3, "the caveat plus one message per unread deck"
     # The null verdict has to survive into the outcome, or the fix stops at the
     # payload and the call still reports success.
-    assert vc._outcome([], [], comparison) == "partial"
+    ran = {"checks_run": ["compare"], "findings": [], "failures": [], "comparison": comparison}
+    assert vc._outcome(ran, {"compare"}) == "partial"
 
 
 async def test_unreadable_reference_contract_differs_by_mode_as_documented(state_no_sim, work_dir):
@@ -1318,6 +1448,87 @@ async def test_equivalence_exports_an_asc_reference(exporting_state, work_dir):
     assert not (work_dir / "amp.net").exists()
 
 
+#: A source and a resistor, with no MOSFET, so the fake export adds no
+#: install-path library line.
+_DIVIDER_ASC = (
+    "Version 4.1\nSHEET 1 880 680\n"
+    "SYMBOL voltage 64 128 R0\nSYMATTR InstName V1\nSYMATTR Value 5\n"
+    "SYMBOL res 256 96 R0\nSYMATTR InstName R1\nSYMATTR Value 10k\n"
+)
+
+
+class TestComparingASheetRunsTheExportItReads:
+    """A sheet is compared as its LTspice export, so ``checks=["compare"]`` on
+    an ``.asc`` asks for that export too. It used to skip the export as not
+    requested and then the comparison for want of its netlist, so the call
+    compared nothing whatever the session could run. Through both doors that
+    answer which checks a call asks for: the server's dispatch, and the Python
+    API, which returns the evaluation's own payload.
+
+    The sheet has no MOSFET, so its export names no LTspice library file. The
+    fake LTspice owns no library folder, so on Windows, where the export's
+    install path is absolute, the compare would refuse that include and the
+    outcome would hang on the platform rather than on the checks."""
+
+    @staticmethod
+    def _sheet(work_dir: Path) -> Path:
+        return _write(work_dir, "divider.asc", _DIVIDER_ASC)
+
+    @staticmethod
+    def _arguments(sheet: Path) -> dict[str, Any]:
+        return {"path": str(sheet), "checks": ["compare"], "compare": {"reference": str(sheet)}}
+
+    @staticmethod
+    def _assert_compared(data: dict) -> None:
+        assert data["checks_run"] == ["export", "compare"], data
+        assert data["export"]["ok"] is True
+        assert data["comparison"]["equivalent"] is True
+        skipped = {row["check"] for row in data.get("checks_skipped", ())}
+        assert not skipped & {"export", "compare"}, data
+        assert data["outcome"] == "complete", (data.get("findings"), data.get("failures"))
+
+    @staticmethod
+    def _assert_named_what_it_lacked(data: dict) -> None:
+        reasons = {row["check"]: row["reason"] for row in data["checks_skipped"]}
+        assert reasons["export"] == "LTspice not detected"
+        assert "compare" in reasons
+        assert data["outcome"] == "failed"
+        # The root cause, not only the comparison it stopped.
+        assert "export (LTspice not detected)" in data["hint"], data["hint"]
+
+    async def test_through_the_server(self, exporting_state, work_dir):
+        sheet = self._sheet(work_dir)
+        result = await dispatch(exporting_state, "verify_circuit", self._arguments(sheet))
+        self._assert_compared(_assert_schema(result))
+
+    def test_through_the_python_api(self, exporting_state, work_dir):
+        sheet = self._sheet(work_dir)
+        self._assert_compared(SyncApi(exporting_state).verify_circuit(**self._arguments(sheet)))
+
+    async def test_without_ltspice_through_the_server(self, state_no_sim, work_dir, asc_symbols):
+        sheet = self._sheet(work_dir)
+        result = await dispatch(state_no_sim, "verify_circuit", self._arguments(sheet))
+        self._assert_named_what_it_lacked(_assert_schema(result))
+
+    def test_without_ltspice_through_the_python_api(self, state_no_sim, work_dir, asc_symbols):
+        sheet = self._sheet(work_dir)
+        data = SyncApi(state_no_sim).verify_circuit(**self._arguments(sheet))
+        self._assert_named_what_it_lacked(data)
+
+    async def test_a_netlist_compares_without_an_export(self, exporting_state, work_dir):
+        """A netlist is compared as it stands, so asking for the comparison
+        asks for no export, which does not apply to it."""
+        deck = _write(work_dir, "d.cir", _BASE)
+        result = await dispatch(
+            exporting_state,
+            "verify_circuit",
+            {"path": str(deck), "checks": ["compare"], "compare": {"reference": _BASE}},
+        )
+        data = _assert_schema(result)
+        assert data["checks_run"] == ["compare"]
+        assert data["outcome"] == "complete"
+
+
 async def test_hand_written_reference_matches_the_export(exporting_state, work_dir):
     """Continuation lines, spacing, case, parameter order and the exporter's
     boilerplate are spelling, not circuit: none of them is a difference."""
@@ -1423,6 +1634,29 @@ async def test_asc_reference_without_ltspice_fails_the_compare(
     assert [f["stage"] for f in data["failures"]] == ["compare"]
     assert "LTspice" in data["failures"][0]["error"]
     assert data["outcome"] == "partial"
+
+
+async def test_a_failure_does_not_hide_a_check_asked_for_that_did_not_run(
+    state_no_sim, work_dir, asc_symbols
+):
+    """The hint leads with the failure, and still names the check asked for
+    that was skipped, which is the other reason the outcome is partial."""
+    deck = _write(work_dir, "cand.cir", _AMP_BY_HAND)
+    ref = _write(work_dir, "amp.asc", fake_netlister.amp_asc())
+    result = await dispatch(
+        state_no_sim,
+        "verify_circuit",
+        {
+            "path": str(deck),
+            "checks": ["syntax", "export", "compare"],
+            "compare": {"reference": str(ref)},
+        },
+    )
+    data = _assert_schema(result)
+    assert [f["stage"] for f in data["failures"]] == ["compare"]
+    assert data["outcome"] == "partial"
+    assert data["hint"].startswith("compare failed:"), data["hint"]
+    assert "export (not applicable to a netlist file)" in data["hint"], data["hint"]
 
 
 async def test_asc_text_reference_is_refused(exporting_state, work_dir):
