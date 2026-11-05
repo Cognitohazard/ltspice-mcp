@@ -491,6 +491,86 @@ class TestRandomExpansion:
         draws = [case.assignments["random:component:R1"] for case in first]
         assert len(set(draws)) == 3
 
+    def test_a_sample_keeps_its_draws_when_other_cases_are_added(self, tmp_path: Path):
+        """A sample's draws follow from what the sample is (the seed, the
+        circuit, the sample index and its assign values), not from where it
+        falls in the case list. Adding a corner must not redraw the corners a
+        caller already ran."""
+        circuit = _deck(tmp_path / "dut.cir")
+
+        def draws(gains: list[int]) -> dict[tuple[int, int], float]:
+            variations: list[Variation] = [
+                AssignVariation.model_validate({"kind": "assign", "assign": {"gain": gains}}),
+                _random(seed=11, runs=3),
+            ]
+            expanded = expand_variations([circuit], variations)
+            cases = materialize_variants(circuit, expanded, tmp_path / f"gains{len(gains)}")
+            return {
+                (case.assignments["gain"], case.assignments["_random_run"]): case.assignments[
+                    "random:component:R1"
+                ]
+                for case in cases
+            }
+
+        alone = draws([2])
+        widened = draws([1, 2])
+
+        assert {key: widened[key] for key in alone} == alone
+
+    def test_a_sample_draws_the_same_values_at_every_assign_value(self, tmp_path: Path):
+        """Every case of one sample draws the same values, so a swept corner
+        compares the same die at each value instead of a new one per value."""
+        circuit = _deck(tmp_path / "dut.cir")
+        variations: list[Variation] = [
+            AssignVariation.model_validate({"kind": "assign", "assign": {"gain": [1, 2, 3]}}),
+            _random(seed=11, runs=2),
+        ]
+
+        cases = materialize_variants(
+            circuit, expand_variations([circuit], variations), tmp_path / "out"
+        )
+
+        by_sample: dict[int, set[float]] = {}
+        for case in cases:
+            by_sample.setdefault(case.assignments["_random_run"], set()).add(
+                case.assignments["random:component:R1"]
+            )
+        assert {sample: len(values) for sample, values in by_sample.items()} == {0: 1, 1: 1}
+        assert by_sample[0] != by_sample[1]
+
+    def test_one_sample_replays_alone_from_sample_start(self, tmp_path: Path):
+        """sample_start runs sample k by itself, and with the same seed it draws
+        what sample k drew in the full run."""
+        circuit = _deck(tmp_path / "dut.cir")
+        full = materialize_variants(
+            circuit, expand_variations([circuit], [_random(seed=5, runs=4)]), tmp_path / "full"
+        )
+        replay = RandomVariation.model_validate(
+            {**_random(seed=5, runs=1).model_dump(), "sample_start": 2}
+        )
+
+        (case,) = materialize_variants(
+            circuit, expand_variations([circuit], [replay]), tmp_path / "replay"
+        )
+
+        assert case.assignments["_random_run"] == 2
+        assert (
+            case.assignments["random:component:R1"]
+            == full[2].assignments["random:component:R1"]
+        )
+
+    def test_every_case_records_the_seed_it_was_drawn_from(self, tmp_path: Path):
+        """The job record keeps each case's assignments and not the request, so
+        the seed goes on every case beside its sample index: without it a
+        reader of the record cannot replay a sample."""
+        circuit = _deck(tmp_path / "dut.cir")
+
+        cases = materialize_variants(
+            circuit, expand_variations([circuit], [_random(seed=9, runs=2)]), tmp_path / "out"
+        )
+
+        assert [case.assignments["_random_seed"] for case in cases] == [9, 9]
+
     def test_case_cap_applies_after_cross_circuit_expansion(self, tmp_path: Path):
         first = _deck(tmp_path / "a.cir", "a")
         second = _deck(tmp_path / "b.cir", "b")

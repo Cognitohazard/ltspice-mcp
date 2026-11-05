@@ -2090,8 +2090,9 @@ each tool's `inputSchema`.
   whatever order the cases run in. See the native PDK contract below for the
   supported profile and the deck it needs.
 
-{kind: "random", id?, runs: int >= 1, seed?: int, applies_to?: [circuit id],
- rules: [RandomRule]}          at most ONE random entry per circuit
+{kind: "random", id?, runs: int >= 1, seed?: int, sample_start?: int >= 0,
+ applies_to?: [circuit id], rules: [RandomRule]}
+                               at most ONE random entry per circuit
 
 RandomRule:
   {rule: "component", target: ref | glob, tolerance, scale:
@@ -2132,6 +2133,18 @@ there m is the device's own. An inner `m={mult}` resolves in the scope its X
 line sets. An `m` that does not resolve to a positive number refuses the
 request with `mismatch_geometry_unresolved`. Draws across circuits are
 independent; correlated Monte Carlo across decks is not supported.
+
+A random case's draws follow from the seed, its circuit id and its sample
+index, never from the case's position among the request's cases. Every case
+of one sample draws the same values whatever its `assign` values, so a sweep
+compares the same die at each corner, and adding a corner leaves the other
+draws as they were. Sample indices start at `sample_start` (default 0), and
+with the same seed `runs: 1` and `sample_start: k` replay sample k alone. An
+entry without `seed` gets one the server chooses after it has looked the
+request up for a replay, so a retry under the same `request_id` returns the
+job it made. Every case records its sample index as `_random_run`, its seed
+as `_random_seed` and, when the entry has one, its `id` as `_random_id`, in
+its assignments.
 
 ### A.2 Recipe
 

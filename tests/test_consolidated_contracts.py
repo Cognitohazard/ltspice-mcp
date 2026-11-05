@@ -663,7 +663,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # analyze_results can afterwards. Measured 16,882.
     # Raised by about 15 characters for minLength on circuits[].path: an
     # empty path names no file. Measured 16,910.
-    "run_experiments": 16920,
+    # Raised by about 210 characters for random's sample_start and a seed
+    # description: a seedless Monte Carlo gets a recorded seed, and one sample
+    # can be repeated alone. Measured 17,131.
+    "run_experiments": 17140,
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.
