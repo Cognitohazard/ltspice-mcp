@@ -725,7 +725,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 220 characters for a job source's other_raw, which reads
     # a case's frequency response analysis results or a transient's operating
     # point by job and case instead of by path. Measured 21,185.
-    "analyze_results": 21200,
+    # Raised by about 95 characters for bode_crossing's ref_hz, which measures
+    # a crossing from the gain at a chosen frequency in one call instead of a
+    # bode_point read and a second crossing. Measured 21,281.
+    "analyze_results": 21290,
     # Ten query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.

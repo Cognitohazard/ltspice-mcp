@@ -62,6 +62,11 @@ tool-surface changes.
 
 ### Added
 
+- The `bode_crossing` recipe takes `ref_hz`, which measures `level_db` from
+  the gain at that frequency: `level_db: -3.0103, ref_hz: "1k"` finds where
+  the gain falls 1/sqrt(2) below its value at 1 kHz, in one call instead of a
+  `bode_point` read and a second crossing. The value's `level` is the
+  absolute level crossed, and `reference` says what it was measured from.
 - `run_experiments` takes `execution.results_beside_sheet`. With it set, each
   sheet's results are copied beside it, under its name, once the runs
   finish, so LTspice opens them with the sheet, without a separate
@@ -152,6 +157,14 @@ tool-surface changes.
 
 ### Changed
 
+- A signal named `V(<instance>:<pin>)` for a subcircuit's pin is refused with
+  the reason: a result holds no voltage under a pin's name, because the pin's
+  voltage is the net it connects to in the circuit above. The refusal lists
+  the instance's pins in the order its instance line lists their nets, where
+  LTspice wrote them, and names the current into the pin. Every reader of a
+  signal says so, `analyze_results` on an operating point included.
+- The Python guide lists `RawResult.source`, the `.raw` file a result was
+  read from.
 - `remove_directive`'s `removed_texts` gives a text as it reads, as the
   drawing and the sheet findings read it: a line break where the TEXT record
   holds a `\n` escape, and one backslash where it holds `\\`. It gave the

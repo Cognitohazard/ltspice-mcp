@@ -47,6 +47,7 @@
       "recipes[].nth",
       "recipes[].quantiles",
       "recipes[].reduce",
+      "recipes[].ref_hz",
       "recipes[].signal",
       "recipes[].signals",
       "recipes[].sources",

@@ -9,6 +9,7 @@ of the same corner.
 from __future__ import annotations
 
 import ast
+import json
 import math
 from pathlib import Path
 
@@ -94,6 +95,68 @@ def test_every_reader_of_the_rc_corner_agrees_with_ltspices_meas(
         below_passband["first_crossing_hz"], rel=1e-9
     )
     assert filtered["cutoff_high_hz"] == pytest.approx(corner, rel=3e-4)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+@pytest.mark.parametrize("ref_hz", ["10", 100.0, "2.5k"])
+def test_a_crossing_below_the_gain_at_a_frequency_takes_one_call(
+    build: str, ref_hz: str | float, state_no_sim: SessionState, work_dir: Path
+):
+    """``ref_hz`` measures ``level_db`` from the gain at that frequency: the
+    half-power point below the gain at 10 Hz (the sweep's first point), at
+    100 Hz (between points) or at 2.5 kHz (past the corner) is the crossing at
+    the absolute level bode_point reads there, plus ``HALF_POWER_DB``. Two
+    calls before; one now."""
+    raw = rec.stage_run(build, "raw/ac", work_dir)
+    reference = _rc_reply(
+        state_no_sim,
+        raw,
+        [{"key": "ref", "metric": "bode_point", "signal": "V(out)", "at_hz": ref_hz}],
+    )["ref"]
+    absolute, relative = (
+        _rc_reply(state_no_sim, raw, [{"key": key, **recipe}])[key]
+        for key, recipe in (
+            (
+                "absolute",
+                {
+                    "metric": "bode_crossing",
+                    "signal": "V(out)",
+                    "level_db": reference["magnitude_db"] + HALF_POWER_DB,
+                },
+            ),
+            (
+                "relative",
+                {
+                    "metric": "bode_crossing",
+                    "signal": "V(out)",
+                    "level_db": HALF_POWER_DB,
+                    "ref_hz": ref_hz,
+                },
+            ),
+        )
+    )
+    assert relative["first_crossing_hz"] == pytest.approx(absolute["first_crossing_hz"], rel=1e-12)
+    assert relative["level"] == pytest.approx(absolute["level"], rel=1e-12)
+    assert relative["reference"]["magnitude_db"] == reference["magnitude_db"]
+    assert relative["reference"]["level_db"] == HALF_POWER_DB
+
+
+@pytest.mark.parametrize(
+    ("recipe", "refused"),
+    [
+        ({"ref_hz": "1meg", "level_db": -3.0}, "outside the sweep"),
+        ({"ref_hz": "1k", "level_deg": -45.0}, "a phase level is not relative"),
+    ],
+)
+def test_a_reference_the_crossing_cannot_be_measured_from_is_refused(
+    recipe: dict, refused: str, state_no_sim: SessionState, work_dir: Path
+):
+    raw = rec.stage_run(rec.BUILDS[0], "raw/ac", work_dir)
+    reply = SyncApi(state_no_sim).analyze_results(
+        sources=[{"path": str(raw), "label": "rc"}],
+        recipes=[{"key": "c", "metric": "bode_crossing", "signal": "V(out)", **recipe}],
+    )
+    assert refused in json.dumps(reply)
 
 
 def test_a_resonance_flank_is_read_at_the_half_power_level():

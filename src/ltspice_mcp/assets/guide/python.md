@@ -111,6 +111,7 @@ job id.
 ```python
 # job_id from the receipt, case_id from one of its run rows
 r = api.load_raw(job_id=job_id, case_id=case_id)  # or api.load_raw("run.raw")
+r.source  # the .raw file read
 r.signals  # trace names
 r.steps  # one entry per .step iteration
 t = r.axis(step=0)  # time or frequency
