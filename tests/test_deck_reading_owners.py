@@ -12,21 +12,26 @@ from __future__ import annotations
 import ast
 import functools
 import re
-from collections.abc import Iterator
 
 from tests._source_scan import modules
 
 
 @functools.cache
-def _functions(tree: ast.AST, prefix: str = "") -> Iterator[tuple[str, ast.AST]]:
-    """Every function in ``tree`` with its qualified name."""
+def _functions(tree: ast.AST, prefix: str = "") -> tuple[tuple[str, ast.AST], ...]:
+    """Every function in ``tree`` with its qualified name.
+
+    A tuple, because the cache hands every caller the same object and a
+    generator is spent once its first caller has read it.
+    """
+    found: list[tuple[str, ast.AST]] = []
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
             name = f"{prefix}{node.name}"
-            yield name, node
-            yield from _functions(node, f"{name}.")
+            found.append((name, node))
+            found.extend(_functions(node, f"{name}."))
         elif isinstance(node, ast.ClassDef):
-            yield from _functions(node, f"{prefix}{node.name}.")
+            found.extend(_functions(node, f"{prefix}{node.name}."))
+    return tuple(found)
 
 
 def _calls_method(node: ast.AST, method: str) -> bool:
@@ -86,6 +91,15 @@ def test_no_deck_is_read_line_by_line_outside_the_lexer():
         for name in _line_walks_in(tree)
     }
     assert walks == set(_LINE_WALKS)
+
+
+def test_every_rule_sees_every_function_of_a_module():
+    """The walk is cached per tree, and each rule here reads the same trees,
+    so the second rule to ask must be given the functions the first was."""
+    tree = modules()["lib/spice_lex.py"]
+    first = [name for name, _ in _functions(tree)]
+    assert "lex" in first
+    assert [name for name, _ in _functions(tree)] == first
 
 
 def test_the_line_walk_rule_catches_what_it_names():
