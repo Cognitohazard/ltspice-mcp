@@ -747,6 +747,8 @@ tool-surface changes.
 
 ### Changed
 
+- The `mcp` dependency's floor is 2.3, the release the server is tested with,
+  which speaks the current protocol revision (2026-07-28). The floor was 2.1.
 - `analyze_results`: a `spec.fail_cases` list cut short says how to read the
   rest in a `hint` beside its `truncated` flag, where the recipe's `warnings`
   said it. The list has no cursor of its own, and its schema no longer
