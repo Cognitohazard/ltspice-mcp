@@ -16,7 +16,9 @@ tool-surface changes.
   text carries its `code` and recovery `hint`, which a client that shows the
   model only an error's text (Claude Code among them) used to leave out.
   `plot_waveform`'s `format` argument is removed, since every reply's text is
-  the same JSON; a call that still sends it is told so.
+  the same JSON; a call that still sends it is told so. An image block now
+  comes ahead of the text, so `plot_waveform`'s attached PNG is the first
+  block, as `verify_circuit`'s picture already was.
 - Every reply leaves out the fields that say nothing: an empty list or
   object, a null, a false flag, and a sub-answer that the overall answer
   beside it already gives (`structurally_equivalent` beside

@@ -536,19 +536,6 @@ def _hint(reply: dict[str, Any]) -> str | None:
     return " ".join(parts) or None
 
 
-def _render(reply: dict[str, Any]) -> str:
-    lines = [f"run_code #{reply['exec_seq']}: {reply['status']}"]
-    if reply["stdout"]:
-        lines.append(reply["stdout"].rstrip("\n"))
-    if reply["result"] is not None:
-        lines.append(f"=> {reply['result']}")
-    if reply["error"] is not None:
-        lines.append(f"{reply['error']['type']}: {reply['error']['message']}")
-    if reply["hint"]:
-        lines.append(reply["hint"])
-    return "\n".join(lines)
-
-
 def worker_for(state: SessionState) -> CodeWorker:
     if state.code_worker is None:
         state.code_worker = CodeWorker(state.working_dir, state.config.config_path)
@@ -592,7 +579,7 @@ async def handle_run_code(args: RunCodeInput, state: SessionState) -> types.Call
     reply = await worker_for(state).run(args.code, args.timeout_s, args.reset)
     held = args.argument_notes()
     if held:
-        # Said in both channels, ahead of the reply's own recovery step.
+        # Said as warnings and in the hint, ahead of the reply's own recovery step.
         reply["warnings"] = [*reply.get("warnings", []), *held]
         reply["hint"] = " ".join([*held, *([reply["hint"]] if reply["hint"] else [])])
-    return format_response(_render(reply), reply)
+    return format_response(reply)

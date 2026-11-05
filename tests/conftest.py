@@ -1947,8 +1947,8 @@ def _enforce_output_schema_conformance():
 
     original_format = base_mod.format_response
 
-    def checked_format_response(text, data):
-        result = original_format(text, data)
+    def checked_format_response(data):
+        result = original_format(data)
         _validate(result, data)
         return result
 

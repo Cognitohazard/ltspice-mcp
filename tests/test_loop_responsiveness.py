@@ -59,7 +59,7 @@ async def assert_light_request_served(heavy: asyncio.Task, state: SessionState) 
         "heavy operation finished before the light request was even served — "
         "it ran inline on the event loop and stalled all other requests"
     )
-    assert light.content
+    assert light.structured_content
 
 
 async def test_light_tool_served_while_heavy_parse_in_flight(

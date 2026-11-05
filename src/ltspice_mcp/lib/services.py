@@ -1089,11 +1089,10 @@ _CONVERGENCE_FLAG_SUBSTRINGS: tuple[str, ...] = (
 )
 
 
-# Structured-channel cap for convergence_warnings. The full list stays cached
-# on the BatchJob and the text channel already caps its display at 10, but
-# structuredContent is re-sent on EVERY terminal check_job/batch_results read
-# — a 400-run Monte Carlo where most runs trip a gmin/source-stepping marker
-# would re-ship ~400 near-identical objects per poll.
+# Reply cap for convergence_warnings. The full list stays cached on the
+# BatchJob, but a reply re-sends it on EVERY terminal read of the job — a
+# 400-run Monte Carlo where most runs trip a gmin/source-stepping marker would
+# re-ship ~400 near-identical objects per poll.
 _CONVERGENCE_STRUCTURED_CAP = 25
 
 

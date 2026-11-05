@@ -167,9 +167,9 @@ async def test_malformed_final_analyze_results_payload_still_trips_the_hook(
     original_assemble = analyze_mod._assemble
 
     def corrupting_assemble(*args: Any, **kwargs: Any):
-        data, text = original_assemble(*args, **kwargs)
+        data = original_assemble(*args, **kwargs)
         data["results"] = "not-an-object"
-        return data, text
+        return data
 
     monkeypatch.setattr(analyze_mod, "_assemble", corrupting_assemble)
     with pytest.raises(AssertionError, match="output_schema"):

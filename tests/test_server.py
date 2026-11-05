@@ -544,14 +544,15 @@ def _capabilities_call() -> mcp_types.CallToolRequestParams:
     return call_tool_params("inspect", {"queries": [{"kind": "capabilities"}]})
 
 
-def test_the_serialized_text_takes_the_first_text_blocks_place():
-    """A handler's block order holds: verify_circuit puts its picture first,
-    for a client that shows only the first block."""
+def test_the_serialized_text_follows_the_other_blocks():
+    """A reply's picture comes ahead of its one text block, as Anthropic's
+    vision guidance places images ahead of the text about them, and any text
+    block a reply was built with gives way to the serialized data."""
     image = mcp_types.ImageContent(type="image", data="aGk=", mime_type="image/png")
     result = mcp_types.CallToolResult(
         content=[
-            image,
             mcp_types.TextContent(type="text", text="a summary"),
+            image,
             mcp_types.TextContent(type="text", text="more text"),
         ],
         structured_content={"value": 1.5},

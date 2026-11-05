@@ -177,7 +177,7 @@ from ltspice_mcp.lib.model_fields import literal_values, model_union
 from ltspice_mcp.lib.montecarlo import matches_prefix
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
 from ltspice_mcp.lib.raster import RasterSupport, raster_support
-from ltspice_mcp.lib.routing import segment_json, segment_text, wires_through
+from ltspice_mcp.lib.routing import segment_json, wires_through
 from ltspice_mcp.lib.schematic_ops import (
     crossing_refused,
     netlist_card_value,
@@ -422,23 +422,7 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
     if warnings:
         data["warnings"] = warnings
 
-    net_name = ", ".join(sorted(labels)) if labels else "<unnamed>"
-    lines = [f"Net at ({x},{y}): {net_name}"]
-    if snapped is not None:
-        lines.append(
-            f"  ({x},{y}) lies on the wire {segment_text(snapped)}; traced that wire's net."
-        )
-    if pins:
-        lines.append("  Pins:")
-        for p in pins:
-            lines.append(f"    {p['reference']}.{p['pin']} at ({p['x']},{p['y']})")
-    else:
-        lines.append("  (no component pins on this net)")
-    if is_shorted:
-        lines.append(f"  WARNING: net carries multiple labels {named} — likely a short.")
-    for w in warnings:
-        lines.append(f"  WARNING: {w}")
-    return format_response("\n".join(lines), data)
+    return format_response(data)
 
 
 def _net_at(sheet: Sheet, point: tuple[int, int]) -> int:
@@ -2969,7 +2953,7 @@ async def handle_inspect(args: InspectInput, state: SessionState) -> types.CallT
         budget = resolve_response_budget(args.budget, state)
         if budget.tokens is None:
             results = await _run_queries(args, state, _View())
-            return format_response(_summary_text(results), inspect_envelope(results))
+            return format_response(inspect_envelope(results))
         return await _negotiate_inspect(args, state, budget)
     finally:
         _SHEETS_READ.reset(reading)
@@ -3163,7 +3147,7 @@ async def _negotiate_inspect(
     result = await response_budget.negotiate(budget.tokens, render, max_rung=budget.max_rung)
     response_budget.attach_notes(result, _BUDGET_NOTES)
     data = result.data
-    return format_response(_summary_text(data["results"]), data)
+    return format_response(data)
 
 
 def _failure_item(index: int, raw: Any, error: dict[str, Any]) -> dict[str, Any]:
@@ -3173,17 +3157,3 @@ def _failure_item(index: int, raw: Any, error: dict[str, Any]) -> dict[str, Any]
 def _kind_of(raw: Any) -> str | None:
     kind = raw.get("kind") if isinstance(raw, dict) else getattr(raw, "kind", None)
     return kind if isinstance(kind, str) else None
-
-
-def _summary_text(results: list[dict[str, Any]]) -> str:
-    lines = []
-    for r in results:
-        if r["ok"]:
-            lines.append(f"[{r['index']}] {r['kind']}: ok")
-        else:
-            lines.append(
-                f"[{r['index']}] {r.get('kind')}: {r['error']['code']} — {r['error']['message']}"
-            )
-            if r["error"].get("hint"):
-                lines.append(r["error"]["hint"])
-    return "\n".join(lines) if lines else "(no queries)"

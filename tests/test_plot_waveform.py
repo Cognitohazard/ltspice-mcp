@@ -931,18 +931,6 @@ class TestTraceSummary:
         assert trace["mean"] == pytest.approx(want["mean"])
         assert trace["max"] == pytest.approx(want["max"])
 
-    async def test_text_channel_carries_the_summary(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-        result = await handle_plot_waveform(
-            PlotWaveformInput(path=str(raw), signals=["V(out)"], open=False), state_no_sim
-        )
-        text = result.content[0].text
-        final = result.structured_content["traces"][0]["final"]
-        assert "V(out)" in text
-        assert f"final {final:.4g}" in text
-
     async def test_each_step_is_its_own_trace(self, state_no_sim: SessionState, work_dir: Path):
         raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
         data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"])

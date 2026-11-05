@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from mcp.types import TextContent
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.connectivity import build_on_wire_predicate, point_on_segment
@@ -41,13 +40,6 @@ from tests._asc_ops import (
 from tests._schematic_fixtures import open_editor, write_file
 from tests.conftest import FIXTURES_DIR
 from tests.test_verify_circuit import _run as run_verify_circuit
-
-
-def _result_text(result) -> str:
-    """Extract text from a tool result's first content block, asserting it is text."""
-    item = result.content[0]
-    assert isinstance(item, TextContent)
-    return item.text
 
 
 def _sheet(name: str) -> Path:
@@ -3418,8 +3410,6 @@ class TestTraceNet:
         assert len(warnings) == 1, sc
         assert "R1.1" in warnings[0] and "R1.2" in warnings[0]
         assert "LTspice drops" in warnings[0]
-        # The text channel mirrors the structured warning (self-sufficiency).
-        assert "LTspice drops" in _result_text(res)
 
     async def test_collinear_multi_segment_tie_surfaced_as_warning(
         self, asc_state: SessionState, work_dir: Path
