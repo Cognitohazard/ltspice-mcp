@@ -104,6 +104,21 @@ tool-surface changes.
   sheet now asks for its export too, which runs and reports as a check that
   ran, with its `export` block and findings. Without LTspice the `hint` names
   the export as the check that could not run, with the comparison it stopped.
+- `verify_circuit`'s comparison called two sources equivalent when their
+  value fields differed after the first token, such as `V1 a 0 5V AC 1` and
+  `V1 a 0 5V AC 2`, because the shared value reader read the whole field by
+  its leading number. A value field is now compared token by token, each
+  numerically within the tolerance, so `5V AC 1` still matches `5.0V AC 1`.
+  `parse_spice_value`, in the server and in the Python API, refuses a string
+  of several tokens; a suffix is written against its number (`1ms`).
+- A random component rule on a source written as `V1 a 0 5V AC 1` drew
+  around 5 and wrote the draw over the AC magnitude (`5V AC 5.1`). It is
+  refused again as having no plain numeric nominal, and the refusal names
+  the field and says to vary a `.param` the value reads.
+- The recovery check of a run's frozen inputs refused a seeded ngspice run
+  whose second line is its one analysis, as having two, and a recoverable run
+  whose second line opens a subcircuit. It read the deck's first card twice,
+  once in place of the title line. It now reads line 1 as the title.
 - A call that sends a retired argument name is told the name that replaced
   it only where the old name was taken. `analyze_results`' `raw_path` and
   `log_path` were retired inside each source; a `raw_path` at the top level

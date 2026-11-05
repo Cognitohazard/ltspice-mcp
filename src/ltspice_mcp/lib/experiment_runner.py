@@ -885,7 +885,7 @@ class ExperimentRunner(RunnerBase):
         )
         indexed_job_id = str(index.get("job_id", ""))
         try:
-            existing = experiment_store.load_job(indexed_job_id, working_dir)
+            existing = experiment_store.load_job(indexed_job_id, working_dir)  # noqa: TID251 - the request gate reads the job its index names
         except ValueError:
             existing = None
         if existing is None:

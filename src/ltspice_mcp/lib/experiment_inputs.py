@@ -18,7 +18,6 @@ from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.deck_staging import sha256_file, staged_card_reference_targets
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.experiment_types import ExperimentCase, SourceRecord
-from ltspice_mcp.lib.hierarchy import parse_hierarchy_cards
 from ltspice_mcp.lib.pdk_native import ArtifactDigest, NativePaths, driver_bytes
 from ltspice_mcp.lib.recovery_records import (
     ExecutionRecord,
@@ -32,7 +31,6 @@ from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     Token,
     TokenKind,
-    emit,
     lex,
     tokenize_body,
 )
@@ -437,13 +435,9 @@ def _verify_inputs(inputs: FrozenInputs, *, native: bool, seeded: bool) -> None:
         if key in cards_by_content:
             continue
         content = contents[artifact.sha256]
-        text = decode_spice_bytes(content)
-        if path in roots:
-            # Reuse hierarchy's root title, retaining the complete body for
-            # lexer warnings even after the electrical end marker.
-            title = parse_hierarchy_cards(content, root=True)[:1]
-            text = emit(title) + "".join(text.splitlines(keepends=True)[1:])
-        parsed = lex(text)
+        # A root deck's line 1 is its title, as lex_deck reads it. Lex keeps
+        # the cards after the end marker, so their warnings still refuse.
+        parsed = lex(decode_spice_bytes(content), title=path in roots)
         if parsed.warnings:
             raise RecoveryError(
                 "recovery_syntax_unsupported",
