@@ -177,20 +177,28 @@ def _prefix_text(reference: str, value: str) -> str:
 
 
 def _attribute_texts(
-    editor: AscEditor, part: SchematicComponent, given: Mapping[str, str]
+    editor: AscEditor,
+    part: SchematicComponent,
+    given: Mapping[str, str],
+    *,
+    cleared: Container[str] = (),
 ) -> dict[str, str]:
     """The text each attribute in ``given`` is written with on ``part``, a part
     on ``editor``'s sheet or one about to be placed on it, in ``given``'s order.
+    ``cleared`` names the attributes the same op removes from the part.
 
-    Every op that writes a part's attributes takes their text from here
-    (``add_component``, ``set_component_value``, ``set_component_attribute``),
-    so a text one op refuses no other op writes:
+    Every op that writes or clears a part's attributes takes their text from
+    here (``add_component``, ``set_component_value``,
+    ``set_component_attribute``), so a text one op refuses no other op writes:
 
     - a ``Prefix`` is written as ``_prefix_text`` gives it;
-    - a ``Value`` must be one LTspice reads whole as the value of the element
-      class the part netlists as (``_validate_component_value``), the class
-      given by the ``Prefix`` in ``given``, else by the part's own, else by
-      its symbol's.
+    - the part's ``Value`` once the op is done, the one in ``given`` or else
+      its own, must be one LTspice reads whole as the value of the element
+      class the part then netlists as (``_validate_component_value``): the
+      class given by the ``Prefix`` in ``given``, else by the part's own
+      unless ``cleared`` removes it, else by its symbol's. A ``Prefix``
+      written or cleared changes that class, so it holds the part's own Value
+      to the new class.
 
     Raises NetlistError for a text the part cannot be given.
     """
@@ -198,9 +206,35 @@ def _attribute_texts(
         name: _prefix_text(part.reference, text) if name == INSTANCE_PREFIX else text
         for name, text in given.items()
     }
-    if "Value" in texts:
-        element = _element_of(editor, part, part.reference, texts.get(INSTANCE_PREFIX))
-        _validate_component_value(part.reference, texts["Value"], element)
+    touched = {*texts, *(name for name in ("Value", INSTANCE_PREFIX) if name in cleared)}
+    if not touched & {"Value", INSTANCE_PREFIX}:
+        return texts
+    own = getattr(part, "attributes", None) or {}
+    after = {
+        name: str(own[name])
+        for name in ("Value", INSTANCE_PREFIX)
+        if name in own and name not in cleared
+    }
+    after.update(texts)
+    if "Value" not in after:
+        return texts
+    element = _element_of(editor, part, part.reference, after.get(INSTANCE_PREFIX))
+    try:
+        _validate_component_value(part.reference, after["Value"], element)
+    except NetlistError as exc:
+        if "Value" in texts:
+            raise
+        change = (
+            f"set Prefix {texts[INSTANCE_PREFIX]!r} on"
+            if INSTANCE_PREFIX in texts
+            else "clear the Prefix of"
+        )
+        raise NetlistError(
+            f"Refused to {change} {part.reference!r}: it would netlist as a "
+            f"{element}-class part, and its Value does not read as one. {exc} "
+            "Give it a Value that class reads (set_component_value) in an op "
+            "ahead of this one."
+        ) from exc
     return texts
 
 
@@ -770,23 +804,20 @@ def placed_geometry(editor: AscEditor, reference: str) -> dict | None:
 def element_class(editor: AscEditor, reference: str) -> str:
     """The element letter a placed part netlists as (``sheet.element_letter``),
     read from the editor's part and its symbol."""
-    return _element_of(editor, editor.components.get(reference), reference)
+    part = editor.components.get(reference)
+    return _element_of(
+        editor, part, reference, (getattr(part, "attributes", None) or {}).get(INSTANCE_PREFIX)
+    )
 
 
-def _element_of(
-    editor: AscEditor, part: object, reference: str, own_prefix: str | None = None
-) -> str:
+def _element_of(editor: AscEditor, part: object, reference: str, own_prefix: str | None) -> str:
     """The element letter ``part`` netlists as (``sheet.element_letter``), on
-    ``editor``'s sheet or about to be placed on it: from ``own_prefix``, a
-    ``Prefix`` about to be written on it, else from its own, else from its
-    symbol's, else from ``reference``."""
+    ``editor``'s sheet or about to be placed on it, with ``own_prefix`` as its
+    own ``Prefix``, the one it has or is about to have: from that, else from
+    its symbol's, else from ``reference``."""
     symbol = getattr(part, "symbol", None)
     info = symbol_info_for(editor, symbol) if symbol else None
-    return element_letter(
-        own_prefix or (getattr(part, "attributes", None) or {}).get(INSTANCE_PREFIX),
-        info.prefix if info is not None else None,
-        reference,
-    )
+    return element_letter(own_prefix, info.prefix if info is not None else None, reference)
 
 
 def export_parts(editor: AscEditor, geometry: Iterable[dict]) -> list[tuple[str, str, list[str]]]:
@@ -2556,7 +2587,9 @@ def apply_op_inplace(
             # representation (a 2-token SYMATTR line is unreadable), so the
             # line is removed instead.
             _require_clearable_attr(reference, op.attribute)
-            editor.get_component(reference).attributes.pop(op.attribute, None)
+            part = editor.get_component(reference)
+            _attribute_texts(editor, part, {}, cleared={op.attribute})
+            part.attributes.pop(op.attribute, None)
         elif op.attribute == "InstName":
             return _rename_component(editor, reference, op.value.strip())
         else:

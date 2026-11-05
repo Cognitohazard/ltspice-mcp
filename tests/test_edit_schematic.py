@@ -2443,6 +2443,108 @@ async def test_a_value_is_checked_for_the_class_the_parts_own_prefix_gives(
         assert data["commit_state"] == "committed", data
 
 
+@pytest.mark.parametrize(
+    ("writer", "symbol", "prefix", "refused"),
+    [
+        ("set", "voltage", "R", True),
+        ("set", "voltage", "I", False),
+        ("clear", "res", "V", True),
+        ("clear", "voltage", "I", False),
+    ],
+    ids=[
+        "set-source-symbol-as-resistor",
+        "set-source-symbol-as-current-source",
+        "clear-resistor-symbol-made-a-source",
+        "clear-source-symbol-made-a-current-source",
+    ],
+)
+async def test_a_prefix_written_or_cleared_holds_the_parts_value_to_its_new_class(
+    asc_state, writer: str, symbol: str, prefix: str, refused: bool
+):
+    """Setting or clearing a part's Prefix changes the element class it
+    netlists as, so the Value it already has is checked for the new class, as
+    add_component checks the same Value and Prefix placed in one op. A Prefix
+    set to ``R`` on a source holding ``AC 1`` was written unchecked, leaving
+    a resistor whose netlist reads ``1`` as another node."""
+    value = "AC 1"
+    if writer == "set":
+        await build_sheet(
+            asc_state,
+            "value_text",
+            [
+                {
+                    "op": "add_component",
+                    "reference": "P1",
+                    "symbol": symbol,
+                    "x": 400,
+                    "y": 300,
+                    "value": value,
+                }
+            ],
+        )
+        op = {
+            "op": "set_component_attribute",
+            "reference": "P1",
+            "attribute": "Prefix",
+            "value": prefix,
+        }
+        final = {"Value": value, "Prefix": prefix}
+    else:
+        await build_sheet(
+            asc_state,
+            "value_text",
+            [
+                {
+                    "op": "add_component",
+                    "reference": "P1",
+                    "symbol": symbol,
+                    "x": 400,
+                    "y": 300,
+                    "attributes": {"Prefix": prefix, "Value": value},
+                }
+            ],
+        )
+        op = {
+            "op": "set_component_attribute",
+            "reference": "P1",
+            "attribute": "Prefix",
+            "value": "",
+        }
+        final = {"Value": value}
+    path = Path(asc_state.working_dir) / "value_text.asc"
+    before = path.read_bytes()
+
+    data = await apply_ops(asc_state, path.name, [op])
+    # The part the op would leave, placed in one op.
+    placed = await build_sheet(
+        asc_state,
+        "value_placed",
+        [
+            {
+                "op": "add_component",
+                "reference": "P1",
+                "symbol": symbol,
+                "x": 400,
+                "y": 300,
+                "attributes": final,
+            }
+        ],
+    )
+
+    if refused:
+        assert data["commit_state"] == "not_committed", data
+        error = data["failures"][0]["error"]
+        assert "R-class value" in error
+        assert "set_component_value" in error
+        assert path.read_bytes() == before
+        assert placed["commit_state"] == "not_committed", placed
+    else:
+        assert data["commit_state"] == "committed", data
+        assert placed["commit_state"] == "committed", placed
+        editor = AscEditor(str(path))
+        assert str(editor.get_component_value("P1")) == value
+
+
 # ---------------------------------------------------------------------------
 # Archetype-scale blank build (ops-at-scale through base:"blank")
 # ---------------------------------------------------------------------------

@@ -2284,7 +2284,10 @@ of a transistor or diode, a model name followed by `KEY=VALUE` parameters,
 and anything inside braces, quotes or parentheses. Anything else, such as a resistor's `1 k`, puts a
 token where LTspice reads another node and is refused before the sheet
 changes. The class is the one the part's own `Prefix` gives, in the same op
-or before it, else its symbol's.
+or before it, else its symbol's. Setting or clearing a `Prefix` with
+`set_component_attribute` changes the class, so the part's own `Value` is
+held to the new class, and an op that would leave a `Value` the new class
+splits is refused the same way.
 
 ### A.4 Inspect queries
 
