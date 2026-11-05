@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import secrets
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -115,6 +116,7 @@ from ltspice_mcp.lib.variations import (
     materialize_variants,
     normalize_circuit_decks,
     projected_case_count,
+    random_identity,
     validate_variation_circuit_ids,
 )
 from ltspice_mcp.state import SessionState
@@ -694,6 +696,10 @@ async def handle_run_experiments(
                     replay, exc, None, budget=budget, state=state
                 )
 
+        # Chosen only now, after the fingerprint and the replay check have read
+        # the caller's own request: a retry of the same seedless request replays
+        # the job this one makes, with its seed, instead of a new draw.
+        args = _seed_random_variations(args)
         simulator = resolve_run_simulator(args.execution.simulator, state)
         if args.execution.simulator_seed is not None and (
             simulator_dialect(simulator) != "ngspice"
@@ -1249,6 +1255,20 @@ async def _prepare_circuit(
     )
 
 
+def _seed_random_variations(args: RunExperimentsInput) -> RunExperimentsInput:
+    """Give each random entry that has no seed one chosen now, so that every
+    Monte Carlo the server runs can be replayed from what its cases record."""
+    if not any(isinstance(item, RandomVariation) and item.seed is None for item in args.variations):
+        return args
+    variations = [
+        item.model_copy(update={"seed": secrets.randbelow(2**31)})
+        if isinstance(item, RandomVariation) and item.seed is None
+        else item
+        for item in args.variations
+    ]
+    return args.model_copy(update={"variations": variations})
+
+
 def _native_family(circuit_id: str, variations: list[Variation]) -> PdkNativeVariation | None:
     applicable = [
         item
@@ -1530,10 +1550,12 @@ def _append_terminal_cases(
         )
     for local_index, expanded in enumerate(descriptors):
         assignments = dict(expanded.assignments) if expanded is not None else {}
-        if expanded is not None and expanded.random_index is not None:
-            assignments["_random_run"] = expanded.random_index
-            if expanded.random is not None and expanded.random.id is not None:
-                assignments["_random_id"] = expanded.random.id
+        if (
+            expanded is not None
+            and expanded.random is not None
+            and expanded.random_index is not None
+        ):
+            assignments.update(random_identity(expanded.random, expanded.random_index))
         cases.append(
             ExperimentCase(
                 case_id=(

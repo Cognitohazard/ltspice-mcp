@@ -7,6 +7,7 @@ import pytest
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
+from ltspice_mcp.lib.variations import random_sample_key
 
 
 def inspect_text(tmp_path: Path, text: str, simulator: Literal["ngspice", "ltspice"] = "ngspice"):
@@ -332,7 +333,7 @@ def test_final_geometry_precedes_exact_nested_mismatch(tmp_path):
         sample_instance_mismatch,
     )
 
-    sampler = MCSampler(17).derive("bench:case0:run1")
+    sampler = MCSampler(17).derive(random_sample_key("bench", 0))
     width = dict(left.geometry)["w"].value
     assert width is not None
     expected = sample_instance_mismatch(
@@ -957,7 +958,7 @@ def _drawn_mismatch(avt=0.0, ak=0.0):
     )
 
     return sample_instance_mismatch(
-        MCSampler(_FLAT_MISMATCH_SEED).derive("bench:case0:run1"),
+        MCSampler(_FLAT_MISMATCH_SEED).derive(random_sample_key("bench", 0)),
         InstanceGeometry(canonical_target(("M1",), "mismatch"), "n", 2e-6, 1e-6),
         MismatchRule(prefix="M1", avt=avt, ak=ak),
     )

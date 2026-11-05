@@ -90,7 +90,6 @@ from ltspice_mcp.lib.signal_analysis import (
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
-    FORMAT_DESCRIPTION,
     LTSPICE_SHOWN_PROPERTIES,
     NEW_WORK_ANNOTATIONS,
     OBSERVATIONS_SCHEMA,
@@ -1083,10 +1082,6 @@ class PlotWaveformInput(OptionalRawSelectionFields, OtherRawFields, ToolInput, N
             "directory unless LTSPICE_MCP_STORE_DIR moves it."
         ),
     )
-    format: Literal["json", "text"] | None = Field(
-        default=None,
-        description=FORMAT_DESCRIPTION,
-    )
 
     @model_validator(mode="after")
     def _hold_max_points(self) -> "PlotWaveformInput":
@@ -1390,7 +1385,7 @@ async def _show_without_chart(
         "observations": observations,
     }
     lines = [_ltspice_line(shown), *format_observations(observations)]
-    return format_response("\n".join(lines), data, args.format)
+    return format_response("\n".join(lines), data)
 
 
 def _ltspice_line(report: Mapping[str, Any]) -> str:
@@ -1552,7 +1547,6 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
         run_index = args.run_index
         netlist = source.netlist
     raw_path = source.raw
-    fmt = args.format
     if isinstance(args.signals, list) and not args.signals:
         raise ResultError("Pass at least one signal, or 'all'.")
 
@@ -1923,7 +1917,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     lines.extend(_summary_lines(traces, plan.x_unit))
     lines.extend(format_observations(observations))
     lines.extend(data.get("warnings", []))
-    result = format_response("\n".join(lines), data, fmt)
+    result = format_response("\n".join(lines), data)
 
     if image is not None:
         result.content.append(image_content(image))
