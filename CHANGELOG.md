@@ -287,6 +287,8 @@ tool-surface changes.
   that shows the model only an error's text (Claude Code among them) used to
   leave out. `plot_waveform`'s `format` argument is removed: every reply's
   text is the same JSON.
+- The `mcp` dependency's floor is 2.3, the release the server is tested with,
+  which speaks the current protocol revision (2026-07-28). The floor was 2.1.
 - `group_by`'s description in `analyze_results` and in `run_experiments`'
   `analyze` block names a parameter varied by a variation or within a run,
   where it named a `.step` axis, a deck command not every simulator has.
