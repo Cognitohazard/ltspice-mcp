@@ -26,13 +26,22 @@ from ltspice_mcp.lib.variations import (
 #: A source, its value field, and the same field with a different AC magnitude.
 FIELDS = [("V1", "5V AC 1", "5V AC 2"), ("I1", "1m AC 2", "1m AC 3")]
 
+#: A source and two spellings of one field: each token holds the same value.
+SAME_FIELDS = [
+    ("V1", "5V AC 1", "5.0V AC 1"),
+    ("V1", "5V AC 1", "5V AC 1.0"),
+    ("V1", "5V AC 1", "5v ac 1"),
+    ("I1", "1m AC 2", "1mA AC 2"),
+    ("I1", "1m AC 2", "1000u AC 2"),
+]
+
 
 def _deck(ref: str, field: str) -> str:
     return f"* sources\n{ref} a 0 {field}\nR1 a 0 1k\n.op\n.end\n"
 
 
-@pytest.mark.parametrize(("ref", "field", "other"), FIELDS)
-def test_a_field_of_several_tokens_is_not_one_value(ref: str, field: str, other: str):
+@pytest.mark.parametrize("field", [field for _, field, _ in FIELDS])
+def test_a_field_of_several_tokens_is_not_one_value(field: str):
     with pytest.raises(ValueError, match="one token"):
         parse_spice_value(field)
 
@@ -45,9 +54,18 @@ def test_sources_that_differ_after_the_first_token_are_not_equivalent(
     assert not compare_graphs(_deck(ref, field), _deck(ref, other)).equivalent
 
 
-@pytest.mark.parametrize(("ref", "field", "other"), FIELDS)
+@pytest.mark.parametrize(("ref", "field", "other"), SAME_FIELDS)
+def test_sources_whose_tokens_hold_the_same_values_are_equivalent(
+    ref: str, field: str, other: str
+):
+    """Each token is compared as a value, so a field is not told apart from
+    the same field written another way."""
+    assert compare_graphs(_deck(ref, field), _deck(ref, other)).equivalent
+
+
+@pytest.mark.parametrize(("ref", "field"), [(ref, field) for ref, field, _ in FIELDS])
 def test_a_random_rule_has_no_nominal_on_a_field_of_several_tokens(
-    tmp_path: Path, ref: str, field: str, other: str
+    tmp_path: Path, ref: str, field: str
 ):
     """Drawing around the leading number would write the draw over a later
     token of the field (``5V AC 5.1``), so the rule is refused instead."""

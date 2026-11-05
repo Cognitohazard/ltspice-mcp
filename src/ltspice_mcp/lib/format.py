@@ -143,7 +143,10 @@ def parse_spice_value(s: str) -> float:
         pass
 
     if len(s.split()) > 1:
-        raise ValueError(f"Cannot parse '{s}' as one SPICE value: a value is one token")
+        raise ValueError(
+            f"Cannot parse '{s}' as one SPICE value: a value is one token, with its "
+            "suffix written against the number (1ms, 15.9kHz)"
+        )
     m = _NUM_TAIL_RE.match(s)
     if m is None:
         raise ValueError(

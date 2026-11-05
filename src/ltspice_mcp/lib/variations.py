@@ -1992,7 +1992,8 @@ def _apply_component_rule(
         if nominal is None:
             raise VariationError(
                 "random_nominal_unavailable",
-                f"Random component target {view.ref!r} has no plain numeric nominal value",
+                f"Random component target {view.ref!r} has no plain numeric nominal value "
+                f"(its value is {view.value!r}); vary a .param the value reads instead",
             )
         sampled = _sample_nominal(
             sampler,
