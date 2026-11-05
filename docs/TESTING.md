@@ -141,9 +141,9 @@ Everything else runs on macOS and must pass: schematic editing and rendering,
 netlist and deck checks, the job and run machinery, the decoders called in the
 test's own process, the `run_code` worker, the refusal checks above, and the
 ngspice end-to-end tests that do not read a result. The job runs with `-ra`,
-so its summary lists every skip with its reason. About 680 tests skip for the
-parser refusal, most of them in the tests of `analyze_results`,
-`plot_waveform`, the recorded LTspice results and the parser itself.
+so its summary lists every skip with its reason. Most of the tests that skip
+for the parser refusal are tests of `analyze_results`, `plot_waveform`, the
+recorded LTspice results and the parser itself.
 
 The optional Sky130 integration tests find a `sky130A` root containing
 `libs.ref` and `libs.tech` through `LTSPICE_MCP_TEST_PDK_ROOT`, and need
