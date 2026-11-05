@@ -25,9 +25,10 @@ import json
 import os
 import signal
 import time
+from collections.abc import Awaitable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 import psutil
 from mcp import types
@@ -54,6 +55,8 @@ INTERRUPT_GRACE_S = 5.0
 CLOSE_GRACE_S = 5.0
 #: How often the supervisor reads the worker's memory while a snippet runs.
 MEMORY_POLL_S = 0.1
+
+_T = TypeVar("_T")
 #: The longest reply line the pipe reader accepts. A reply is bounded by the
 #: output caps (about 28k characters, UTF-8 encoded), so this is far above
 #: any real line; the default 64 KiB was not.
@@ -218,6 +221,14 @@ def _mib(size: int) -> int:
     return size // (1024 * 1024)
 
 
+class _BelowBoot(Exception):
+    """A fresh worker already holds more than the memory limit."""
+
+    def __init__(self, held: int) -> None:
+        super().__init__(f"a fresh worker holds {held} bytes")
+        self.held = held
+
+
 @dataclass
 class _Running:
     seq: int
@@ -245,7 +256,7 @@ class CodeWorker:
         #: What the worker held when it was stopped over the limit, until the
         #: reply says so.
         self._over_memory: int | None = None
-        self._watched: psutil.Process | None = None
+        self._measured: psutil.Process | None = None
         self.process: asyncio.subprocess.Process | None = None
         self.exec_seq = 0
         self.running: _Running | None = None
@@ -281,9 +292,9 @@ class CodeWorker:
             limit=_PIPE_LINE_LIMIT,
         )
         try:
-            self._watched = psutil.Process(self.process.pid)
+            self._measured = psutil.Process(self.process.pid)
         except psutil.Error:
-            self._watched = None
+            self._measured = None
         if os.name == "nt":
             try:
                 self._windows_job = WindowsJob(self.process.pid)
@@ -297,9 +308,37 @@ class CodeWorker:
             raise RuntimeError(f"run_code worker failed to start: {error}")
 
     async def _ensure(self) -> None:
+        """A live worker under its memory limit for the next snippet.
+
+        A worker that exited is replaced, and so is one that holds more than
+        its limit before the snippet starts, which memory a snippet freed but
+        the worker kept, or a job it runs between calls, can leave it doing:
+        the snippet is not stopped for memory it did not take. A fresh worker
+        that already holds more than the limit is refused (``_BelowBoot``).
+        """
         if self._live() is None:
-            await self._kill("the worker exited")
+            await self._kill(self._exit_reason())
             await self._spawn()
+        else:
+            held = self._held_bytes()
+            if held is not None and held > self.memory_limit_bytes:
+                await self._kill(
+                    f"held {_mib(held)} MiB before this snippet, over its "
+                    f"{_mib(self.memory_limit_bytes)} MiB memory limit"
+                )
+                await self._spawn()
+            else:
+                return
+        held = self._held_bytes()
+        if held is not None and held > self.memory_limit_bytes:
+            await self._kill()
+            raise _BelowBoot(held)
+
+    def _exit_reason(self) -> str:
+        """Why the worker found gone went: stopped over its memory limit, as
+        the watch records it, or exited on its own."""
+        over, self._over_memory = self._over_memory, None
+        return _OVER_MEMORY if over is not None else "the worker exited"
 
     async def _kill(self, reason: str | None = None) -> None:
         """Kill the worker and reap its session; ``reason`` is what the next
@@ -322,7 +361,7 @@ class CodeWorker:
         # owned by a dead pid, reads as interrupted.
         kill_process_group(process.pid)
         self.process = None
-        self._watched = None
+        self._measured = None
 
     def _interrupt(self) -> None:
         """Ask the worker to stop the running snippet (POSIX: SIGINT to it alone)."""
@@ -420,31 +459,36 @@ class CodeWorker:
         """After an MCP cancellation: hold ``running`` until the interrupted
         reply arrives, so a call in that window is answered busy, not queued."""
         try:
-            reply = await self._await_reply(seq, INTERRUPT_GRACE_S)
+            reply = await self._watched(self._await_reply(seq, INTERRUPT_GRACE_S))
             if reply is None or reply is _EOF:
                 await self._kill(
-                    "the worker exited" if reply is _EOF else "killed after a cancellation"
+                    self._exit_reason() if reply is _EOF else "killed after a cancellation"
                 )
         finally:
             self.running = None
             self._drain = None
 
     def _held_bytes(self) -> int | None:
-        """The memory the worker holds now: resident memory, and on Windows the
+        """The memory the worker holds now: resident memory, or on Windows the
         memory it has committed (psutil's ``vms`` there), which is what runs a
         Windows machine out. None once the worker is gone."""
-        if self._watched is None:
+        if self._measured is None:
             return None
         try:
-            info = self._watched.memory_info()
+            info = self._measured.memory_info()
         except psutil.Error:
             return None
         return info.vms if os.name == "nt" else info.rss
 
     async def _watch_memory(self) -> None:
         """Stop the worker once it holds more than its limit, for the reply to
-        say so (``_lost``). Runs while a snippet does: a snippet's own code is
-        what grows the worker, and a simulator it starts is not counted."""
+        say so (``_lost``, or ``_exit_reason`` for a reply that came first).
+        Runs while a snippet does: a snippet's own code is what grows the
+        worker. A simulator it starts is not counted, which is why this reads
+        the worker rather than setting a kernel limit as the parser's process
+        has: a Job Object's limit binds each process in the job, simulators
+        included, and an rlimit is inherited by them on POSIX, where an
+        address-space limit also stops Wine from starting."""
         while True:
             held = self._held_bytes()
             if held is not None and held > self.memory_limit_bytes:
@@ -466,19 +510,28 @@ class CodeWorker:
             if not await self._send(request):
                 raise RuntimeError("run_code worker is not accepting requests")
         self._over_memory = None
+        return await self._watched(self._answer(seq, timeout_s))
+
+    async def _answer(self, seq: int, timeout_s: float) -> dict[str, Any] | None:
+        """The reply to snippet ``seq``, interrupted at ``timeout_s``."""
+        reply = await self._await_reply(seq, timeout_s)
+        if reply is None:
+            self._interrupt()
+            reply = await self._await_reply(seq, INTERRUPT_GRACE_S)
+            if reply is _EOF:
+                # The deadline caused the exit; Windows terminates the worker
+                # instead of delivering the POSIX graceful interrupt.
+                return None
+            if reply is not None:
+                reply["status"] = "timeout"
+        return reply
+
+    async def _watched(self, work: Awaitable[_T]) -> _T:
+        """``work``, with the worker stopped meanwhile if it holds more than its
+        limit (``_watch_memory``)."""
         watch = asyncio.ensure_future(self._watch_memory())
         try:
-            reply = await self._await_reply(seq, timeout_s)
-            if reply is None:
-                self._interrupt()
-                reply = await self._await_reply(seq, INTERRUPT_GRACE_S)
-                if reply is _EOF:
-                    # The deadline caused the exit; Windows terminates the worker
-                    # instead of delivering the POSIX graceful interrupt.
-                    return None
-                if reply is not None:
-                    reply["status"] = "timeout"
-            return reply
+            return await work
         finally:
             watch.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -574,6 +627,26 @@ class CodeWorker:
         self.running = _Running(seq, code, started)
         try:
             await self._ensure()
+        except _BelowBoot as exc:
+            self.running = None
+            self.exec_seq -= 1
+            return self._reply(
+                "error",
+                error={
+                    "type": "MemoryLimit",
+                    "message": (
+                        f"a fresh worker holds {_mib(exc.held)} MiB before running "
+                        f"anything, over the {_mib(self.memory_limit_bytes)} MiB limit "
+                        "on its memory ([tools] run_code_memory_mb), so the snippet "
+                        "did not run"
+                    ),
+                    "traceback_tail": "",
+                },
+                hint=(
+                    f"Set [tools] run_code_memory_mb above {_mib(exc.held)} and "
+                    "restart the server."
+                ),
+            )
         except BaseException as exc:
             self.running = None
             self.exec_seq -= 1

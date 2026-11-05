@@ -810,9 +810,10 @@ class ServerConfig:
     run_code_memory_mb: int | None = None
     """The most memory, in MiB, the ``run_code`` worker may hold while a
     snippet runs; past it the worker is stopped, the call answers an error of
-    type ``MemoryLimit``, and the next call starts a fresh worker. It counts
-    the worker process alone, not a simulator it starts: resident memory, and
-    on Windows the memory it has committed. None (the default) is half the
+    type ``MemoryLimit``, and the next call starts a fresh worker; a worker
+    already over it when a snippet arrives is replaced first. It counts the
+    worker process alone, not a simulator it starts: resident memory, or on
+    Windows the memory it has committed. None (the default) is half the
     machine's physical memory. ``[tools] run_code_memory_mb``."""
 
     persist_jobs: bool = True

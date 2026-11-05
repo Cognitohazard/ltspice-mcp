@@ -108,6 +108,13 @@ class TestSurface:
         # Its arguments do not claim ownership of any wire field either.
         assert "code" not in silent.field_owners
 
+    def test_the_memory_limit_is_the_setting_or_half_the_machine(self, code_dir: Path):
+        assert run_code_memory_limit(512) == 512 * 1024 * 1024
+        assert run_code_memory_limit(None) == psutil.virtual_memory().total // 2
+        config = ServerConfig(working_dir=code_dir, run_code=True, run_code_memory_mb=300)
+        configured = SessionState.create(config, available={})
+        assert worker_for(configured).memory_limit_bytes == 300 * 1024 * 1024
+
     def test_on_puts_it_last_on_the_surface(self, state: SessionState):
         names = [d.name for d in state.tool_defs]
         assert names[-1] == "run_code"
@@ -549,12 +556,42 @@ class TestLifetime:
         assert after["status"] == "ok", after
         assert after["worker_restarted"]["reason"] == "stopped over its memory limit"
 
-    def test_the_memory_limit_is_the_setting_or_half_the_machine(self, code_dir: Path):
-        assert run_code_memory_limit(512) == 512 * 1024 * 1024
-        assert run_code_memory_limit(None) == psutil.virtual_memory().total // 2
-        config = ServerConfig(working_dir=code_dir, run_code=True, run_code_memory_mb=300)
-        configured = SessionState.create(config, available={})
-        assert worker_for(configured).memory_limit_bytes == 300 * 1024 * 1024
+    async def test_a_worker_over_its_limit_between_snippets_is_replaced_before_one_runs(
+        self, state: SessionState, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Memory the worker kept after a snippet, or that a job it runs between
+        calls took, is not charged to the next snippet: a worker over its limit
+        when a snippet arrives is replaced, and the snippet runs on the fresh
+        one. Before, the snippet was stopped for memory it never took."""
+        before = worker_of(await run(state, "1"))
+        worker = worker_for(state)
+        held = worker._held_bytes()
+        assert held is not None
+        kept = await run(state, "import builtins\nbuiltins._kept = b'x' * (256 * 1024 * 1024)")
+        assert kept["status"] == "ok", kept
+        monkeypatch.setattr(worker, "memory_limit_bytes", held + 128 * 1024 * 1024)
+        reply = await run(state, "print('ran')")
+        assert reply["status"] == "ok", reply
+        assert reply["stdout"] == "ran\n"
+        assert "before this snippet" in reply["worker_restarted"]["reason"]
+        assert not process_running(before)
+
+    async def test_a_limit_below_a_fresh_workers_size_is_refused_without_running(
+        self, state: SessionState, monkeypatch: pytest.MonkeyPatch
+    ):
+        """No worker fits under such a limit, so no snippet is blamed for it:
+        the call says the limit is too low for the worker to start, and by how
+        much, instead of answering that the snippet held too much."""
+        await run(state, "1")
+        worker = worker_for(state)
+        monkeypatch.setattr(worker, "memory_limit_bytes", 1024 * 1024)
+        reply = await run(state, "print('ran')")
+        assert reply["status"] == "error", reply
+        assert reply["error"]["type"] == "MemoryLimit"
+        assert "did not run" in reply["error"]["message"]
+        assert reply["stdout"] == ""
+        assert "run_code_memory_mb" in reply["hint"]
+        assert worker.process is None
 
     async def test_a_worker_that_cannot_start_is_a_structured_error(self, tmp_path: Path):
         worker = CodeWorker(tmp_path / "missing", None)

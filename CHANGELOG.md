@@ -67,9 +67,13 @@ tool-surface changes.
   server reads the worker's memory ten times a second and stops the worker
   once it holds more than the limit. The call then answers an error of type
   `MemoryLimit` that names the setting, and the next call starts a fresh
-  worker. The limit counts the worker alone, not a simulator it starts:
-  resident memory, and on Windows the memory it has committed. Before,
-  nothing but the machine's own memory bounded a snippet.
+  worker. A worker already over the limit when a snippet arrives, from
+  memory an earlier snippet left it holding or a job it runs between calls,
+  is replaced before the snippet runs, and a limit below what a fresh worker
+  needs is refused with the size to set. The limit counts the worker alone,
+  not a simulator it starts: resident memory, or on Windows the memory it
+  has committed. Before, nothing but the machine's own memory bounded a
+  snippet.
 - A `random` variation's samples can be replayed. Each case records its sample
   index (`_random_run`) and its seed (`_random_seed`) in its assignments, and
   an entry without a `seed` gets one the server chooses, so a Monte Carlo run

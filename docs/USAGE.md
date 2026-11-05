@@ -171,7 +171,8 @@ through a proxy. The change takes effect at the next start;
 snippet runs, the server stops the worker if it holds more memory than
 `run_code_memory_mb` MiB (default half the machine's physical memory); the
 call answers a `MemoryLimit` error and the next call starts a fresh worker.
-The limit counts the worker alone, not a simulator it starts.
+A worker already over the limit when a snippet arrives is replaced before the
+snippet runs. The limit counts the worker alone, not a simulator it starts.
 
 **Plots.** `plot_waveform` opens its chart in a browser when the client can't
 show it in the chat; `[analysis] open_plot = false` returns only the file
