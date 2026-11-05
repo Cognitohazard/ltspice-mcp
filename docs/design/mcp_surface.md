@@ -134,11 +134,13 @@ Codes named after the stage, used where the stage is the more useful fact:
 that can be large is a page, `{items, total, returned, truncated,
 next_cursor}`, and every tool that returns a page accepts its cursor as input.
 
-When one page contains several collections (an `inspect` net view pages pins
-and wire coordinates together), `total` and `returned` are sums over all of
-them, a `collections {<data key>: {total, returned, truncated}}` block gives
-each collection's counts, and `primary_truncated` reports whether the primary
-collection continues. On every page, `truncated` implies `returned < total`.
+An `inspect` item's `page` names the data key its cursor pages in a
+`collections {<data key>: {total, returned, truncated}}` block, which is how
+a client that pages any kind (the Python API's `inspect` among them) knows
+which list to join. When one page contains several collections (an `inspect`
+net view pages pins and wire coordinates together), `total` and `returned`
+are sums over all of them, `collections` gives each collection's counts, and
+`primary_truncated` reports whether the primary collection continues. On every page, `truncated` implies `returned < total`.
 Stop paging when `next_cursor` is absent, not by the counters. A page leaves
 out `items` when it is empty and `truncated` when it is false, as every reply
 leaves out a field that says nothing; `total` and `returned` are always
@@ -1352,7 +1354,10 @@ a window's copy and does not check. For one that replaces the sheet:
   window that differs either has unsaved changes or was opened before the file
   last changed, and committing would leave two sheets, each missing the
   other's changes. The call then fails with `open_window_differs` at stage
-  `window_check`, naming a few of the differing entries, and writes nothing.
+  `window_check`, naming a few of the differing entries, and writes nothing;
+  its `hint` names `inspect(kind="open_in_ltspice")` with this path and the
+  window's process as `pid` as the call that reads every entry. A dry run
+  reports the same difference in a note, with the same call.
   A call with no ops and `open_window` set to the user's choice settles it.
   With `"save"`, LTspice saves the sheet from that window, as Ctrl+S does,
   and the reply gives the file's new `sha256`. Where more than one window
@@ -1401,7 +1406,10 @@ reports that the window could not be checked.
 sheet, keyed by `index` and `op` as a `failures` entry is. A `wire_pins` entry
 lists the segments it found `already_present` and the `junctions` it made,
 and a removal's entry reports how much it removed; `remove_directive`'s
-entry names each text it removed, with its kind and place (`removed_texts`).
+entry names each text it removed, with its kind and place (`removed_texts`),
+and `replace_directive`'s gives the text it changed, with its kind and place
+and what it `was` and is `now`. A text is given as it reads, a line break as
+a line break.
 Everything else an op reports is in the views. `applied` counts the ops the
 batch applied, every op of a committed batch, so an op with nothing to report
 is counted though it has no `results` entry. `results` is not a page because,
@@ -1555,7 +1563,9 @@ bridge LTspice ships. The reply's `ltspice` block reports the result:
 reason?}`. A sheet the window already had open is brought to the front as the
 window has it, because LTspice does not read a file again; its copy is
 compared with the file, and `differs_from_file` is set when the user is
-looking at something other than what was checked. With no window open,
+looking at something other than what was checked; `difference` then names a
+few entries, and the `hint` names `inspect(kind="open_in_ltspice")` with this
+path and the block's `pid` as the call that reads every entry. With no window open,
 LTspice is started in view (`started: true`); with `[schematic]
 start_ltspice` off, the block reports that no window is open and the check
 results are still returned. `in_ltspice` never fails the call.
@@ -1627,15 +1637,18 @@ every copy has one value. Otherwise a `param_mismatches` row names a
 reference copy and a candidate copy that differ.
 
 Both modes compare netlists. An `.asc` under test is compared as its LTspice
-export, and an `.asc` reference is exported the same way, on a staged copy,
-never beside the caller's file; without LTspice the compare fails rather than
-diffing a schematic's attributes against a netlist's cards. Both modes read
-the cards the simulator reads: line 1 of a deck is its title and is not read,
-nor is a card after `.end`. `equivalence` follows includes as staging reads
-them, so `.lib <file> <section>` brings in that section's definitions only,
-and of two definitions of one subcircuit name the first is the body
-compared, the others listed in `duplicate_subckts`. `structural_diff`
-lexes both decks, so a `+` continuation belongs to the card it continues, and
+export, so asking to compare one asks for `export` too, with
+`checks: ["compare"]` as with the default list: the export runs and reports as
+a check that ran, with its `export` block and findings, and is written where
+`export_to` says. An `.asc` reference is exported the same way, on a staged
+copy, never beside the caller's file; without LTspice the compare fails rather
+than diffing a schematic's attributes against a netlist's cards. Both modes
+read the cards the simulator reads: line 1 of a deck is its title and is not
+read, nor is a card after `.end`. `equivalence` follows includes as staging
+reads them, so `.lib <file> <section>` brings in that section's definitions
+only, and of two definitions of one subcircuit name the first is the body
+compared, the others listed in `duplicate_subckts`. `structural_diff` lexes
+both decks, so a `+` continuation belongs to the card it continues, and
 compares directives as parsed rather than as text, so spacing, case, comma
 separators and assignment order in `.model`/`.param` are ignored. It ignores
 the lines the netlister adds to every export, which are `.backanno`, the
@@ -1655,6 +1668,23 @@ not, a `checks_skipped` row says why (no reference supplied, not requested,
 not applicable, or no exported netlist to compare, which names whether the
 export ran) or a `failures` row at stage `compare` gives the error, so a
 reply without a comparison always says which.
+
+**Outcome.** `complete` means every check the caller asked for ran, with no
+failure, no finding at error or warning severity, and no comparison short of
+`equivalent: true`. A check asked for that did not run is a shortfall: one
+listed in `checks`, the comparison asked for by supplying `compare` with the
+default list, and the export that comparing an `.asc` reads. Its
+`checks_skipped` row or `failures` row says why, and `hint` names it. The
+outcome is then `partial` when some check ran or the drawing was returned, and
+`failed` when no check ran and no drawing was returned, whether the checks
+were skipped or failed. `isError` stays unset in both cases, because the call
+was valid and the reply says why each check did not run. Skipping a check the
+caller did not ask for is not a shortfall: one left out of `checks`, one the
+default list leaves out because it does not apply to the file kind, and every
+check under `render.mode: "only"`. Neither is a check on the default list that
+this session cannot run, such as `export` without LTspice when nothing is
+compared: its `checks_skipped` row says so, and naming it in `checks` makes
+its absence a shortfall.
 
 In the render block, `sha256` is the image's digest and `source_sha256` the
 digest of the sheet file this call drew. Rendering reads the file on disk, and
@@ -1824,16 +1854,30 @@ cursors where listed:
     headings and paged by section. An unknown name fails as `unknown_document`,
     listing the names; an install with none fails as
     `simulator_docs_unavailable`
-{kind: "open_in_ltspice"}
+{kind: "open_in_ltspice", path?, pid?, cursor?}
     the documents open in the LTspice windows on this machine: `windows`
     (how many are running), `total`, and `designs`, each {path, kind:
     "schematic"|"netlist"|"other", active (the one in front in its window),
-    pid, version, in_sandbox}. A sheet the server may read adds its `sha256`
+    pid, version, in_sandbox}, paged by `cursor`. The cursor is bound to the
+    documents open, by window and path, so a page asked after one was opened
+    or closed fails as `invalid_cursor`. A sheet the server may read adds its `sha256`
     and `differs_from_file`. When the window's copy differs from the file,
     `difference` names a few entries in a sentence, and `only_in_window` and
     `only_in_file` list the differing entries (a symbol with its
     attributes, or one other line), up to 25 a side, with
-    `difference_omitted` counting the rest. Fails as
+    `difference_omitted` counting the rest and a `hint` naming the call
+    that reads them. That call names the sheet: with a `path` (a `.asc`) the
+    query answers for the window that has it open, `pid` choosing one
+    where more than one has, as {path, pid, version, sha256,
+    differs_from_file}, and when they differ `difference`, `only_in_window`
+    and `only_in_file` with every entry, both lists paged under one cursor
+    (`page.collections` says which continues). The cursor is bound to the
+    difference itself, and the window and the file are read again for every
+    page, so a page asked after either copy changed fails as
+    `invalid_cursor`. A path no window has open fails as `sheet_not_open`,
+    and more than one window without a `pid` as `window_not_chosen`, naming
+    the processes; `pid` without a `path`, or a path that is not a `.asc`,
+    fails as `invalid_query`. Fails as
     `open_windows_unavailable` where there is no bridge to ask (not
     Windows, LTspice before 26.1, the setting off) and as
     `open_windows_unreachable` when the bridge does not answer
@@ -2154,10 +2198,11 @@ library otherwise.
 
 ### A.3 Edit ops
 
-The thirteen op kinds, discriminated on `op`, are `add_component`,
+The fourteen op kinds, discriminated on `op`, are `add_component`,
 `move_component`, `move`, `remove_component`, `set_component_value`,
 `set_component_attribute`, `add_net_label`, `remove_net_label`, `wire_pins`,
-`remove_wire`, `add_directive`, `remove_directive`, `set_plot_panes`. The batch
+`remove_wire`, `add_directive`, `remove_directive`, `replace_directive`,
+`set_plot_panes`. The batch
 is atomic, so the first op that fails aborts the transaction and nothing is
 written.
 
@@ -2194,7 +2239,13 @@ ignored, and a line break may be given as a newline or as the `\n` escape the
 file holds. A `regex:` prefix names every text the pattern is found in
 (`re.search`), case-sensitive: `(?i)` ignores case and `^` anchors the pattern
 at the start of the text. `remove_directive` removes every text it names and
-lists each in `removed_texts`.
+lists each in `removed_texts`. `replace_directive` gives one text new words
+(`text`) and keeps its record: its place, size, justification and kind. Its
+`instruction` names the text by the same rule and must name exactly one; one
+that names several is refused with each, so a caller narrows it rather than
+writing one text over many. A directive's new text is checked as
+`add_directive`'s is. Applied again with `now` as `instruction` and `was` as
+`text`, it puts the text back.
 
 `set_component_value` splits a trailing `KEY=VALUE` off the value it is given
 and sets it wherever the part already gives that key (`Value`, `Value2`,

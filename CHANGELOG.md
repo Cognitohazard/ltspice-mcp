@@ -56,6 +56,15 @@ tool-surface changes.
 
 ### Added
 
+- `edit_schematic`'s `replace_directive` op changes one directive's or
+  comment's text in one call. Its `instruction` names the text as
+  `remove_directive` does, the whole text or `regex:`, and must name one; one
+  that names several is refused with each. The text keeps its place, size,
+  justification and kind, which a `remove_directive` and an `add_directive`
+  lost unless given again, and a directive's new text is checked as
+  `add_directive`'s is. Its result gives the text's kind and place and what
+  it `was` and is `now`. `remove_directive`'s `removed_texts` now gives a
+  text with its line breaks, where it gave the `\n` escapes the file holds.
 - At `INFO`, the server logs one structured record per tool call on the
   `ltspice_mcp.events` logger: the tool, its duration, how it ended (a
   result, an error and its code, a cancellation by the client, or a protocol
@@ -74,6 +83,26 @@ tool-surface changes.
   resource (and `spice://capabilities/{family}`) serves the whole table with
   its evidence. The refusals of a QSPICE run off Windows and of a schematic
   run on QSPICE or Xyce now read the table.
+- `inspect(kind="open_in_ltspice")` reads every entry where a window's copy
+  of a sheet differs from the file. The listing still names 25 entries a
+  side and counts the rest in `difference_omitted`, and a `hint` beside the
+  count now names the call that reads them: the same query with the sheet's
+  `path` (and `pid`, where more than one window has it open), which returns
+  that window's difference with both lists paged under one cursor. The
+  cursor is bound to the difference, so a page asked after either copy
+  changed is refused as `invalid_cursor`; a sheet no window has open fails as
+  `sheet_not_open`. Every reply that names a window's difference in part
+  now names the same call: `edit_schematic`'s `open_window_differs` refusal
+  and a dry run's note about a differing window, `verify_circuit`'s hint
+  when its `in_ltspice` window shows another sheet than the one checked, and
+  the `note` of `plot_waveform`'s `ltspice` block. One function writes that
+  call for all of them. The Python API's `inspect` follows the cursor and
+  returns the whole difference.
+- `inspect(kind="open_in_ltspice")` pages the documents open by `cursor`.
+  It listed the first 100 and counted the rest in `total`, with no way to
+  read them. The cursor is bound to the documents open, by window and path,
+  so a page asked after one was opened or closed is refused as
+  `invalid_cursor`.
 - A `mismatch` rule reaches a MOSFET inside a subcircuit on LTspice. LTspice
   takes neither `mulu0` nor `delvto` on a BSIM3 device, so the device gets its
   own copy of its `.model` card inside a private copy of its subcircuit, with
@@ -95,6 +124,33 @@ tool-surface changes.
   `unreadable-card` lint rule, a warning in both), and the names and nodes on
   it count as defined and connected, so no other rule reports on a guess
   about it.
+- The Python API's `inspect` returns every row of a paged query. It follows
+  each query's cursor, and joined the pages only where an item paged two
+  lists, so for every kind that pages one (`components`, `symbols`, `model`,
+  `simulator_docs`, a netlist `net`, the `open_in_ltspice` listing) it
+  returned the last page alone, under a `total` that counted every row: 50
+  of a netlist's 150 components. Every paged `inspect` item now names the
+  list its cursor pages in `page.collections`, one collection or two, which
+  is what the API joins by; `hierarchy` and `results`, which had added that
+  block themselves, now get it the same way.
+- `verify_circuit` reported `outcome: "complete"` when a check the caller
+  asked for could not run, so `checks=["export"]` in a session without
+  LTspice read as a clean result although no check ran. A check named in
+  `checks`, or the comparison asked for by supplying `compare`, that does not
+  run now makes the outcome `partial`, and `failed` when nothing the caller
+  asked for came back: no check ran and no drawing was returned, whether the
+  checks were skipped or failed. The `hint` names each such check with the
+  reason it did not run. A check the caller did not ask for still leaves the
+  outcome alone: one left out of `checks`, one that does not apply to the file
+  kind under the default list, every check under `render.mode: "only"`, and a
+  default-list check this session cannot run, such as `export` without
+  LTspice when nothing is compared, which `checks_skipped` still reports.
+- `verify_circuit` with `checks=["compare"]` on an `.asc` compared nothing,
+  even with LTspice: it skipped the export as not requested, then skipped the
+  comparison for want of the exported netlist it reads. Asking to compare a
+  sheet now asks for its export too, which runs and reports as a check that
+  ran, with its `export` block and findings. Without LTspice the `hint` names
+  the export as the check that could not run, with the comparison it stopped.
 - `verify_circuit`'s comparison called two sources equivalent when their
   value fields differed after the first token, such as `V1 a 0 5V AC 1` and
   `V1 a 0 5V AC 2`, because the shared value reader read the whole field by

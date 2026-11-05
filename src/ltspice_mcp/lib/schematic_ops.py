@@ -1298,19 +1298,34 @@ def _remove_directive_or_comment(editor: AscEditor, instruction: str) -> None:
     if len(kept) < len(editor.directives):
         editor.directives[:] = kept
         return
+    raise _no_text_matched(instruction)
+
+
+def _no_text_matched(instruction: str) -> NetlistError:
+    """The refusal of a text op whose ``instruction`` names no directive or comment."""
     if instruction.startswith("regex:"):
-        raise NetlistError(
+        return NetlistError(
             f"No directive or comment matched regex {instruction[6:]!r}. It is searched "
             "for in each TEXT line's text, in the case it is given, where a line break "
             "is a \\n escape."
         )
-    raise NetlistError(
+    return NetlistError(
         f"No directive or comment matched {instruction!r} exactly. "
         "Match is literal by default — pass 'regex:<pattern>' for regex "
         "matching, or copy the text of the sheet's TEXT line, after its '!' "
         "(directive) or ';' (comment); a line break may be given as a newline "
         "or as the \\n escape the file holds."
     )
+
+
+def _shown_text(body: str) -> str:
+    """A TEXT record's text as a reader writes it: each ``\\n`` escape the
+    record holds (``_text_record_body``) as a line break."""
+    return body.replace("\\n", "\n")
+
+
+def _text_kind(text: Text) -> str:
+    return "comment" if text.type == TextTypeEnum.COMMENT else "directive"
 
 
 # ---------------------------------------------------------------------------
@@ -1577,7 +1592,11 @@ def _pins_on_crossings(
         # Each net it lands on is known by the names that net carries itself
         # (NamedNets.own_names), as for a label.
         joined = sorted(
-            {net for name in after.own_names_of(landed) if (net := nets.net_named(name)) is not None}
+            {
+                net
+                for name in after.own_names_of(landed)
+                if (net := nets.net_named(name)) is not None
+            }
         )
         if len(joined) < 2:
             continue
@@ -2248,6 +2267,14 @@ class OpRemoveDirective(StrictModel):
     )
 
 
+class OpReplaceDirective(StrictModel):
+    """Change one text; its place, size, justification and kind stay."""
+
+    op: Literal["replace_directive"]
+    instruction: str = Field(description="Names one text, as remove_directive names them.")
+    text: str = Field(description="The new text.")
+
+
 class PlotPaneSpec(StrictModel):
     """One waveform pane."""
 
@@ -2286,6 +2313,7 @@ SchematicOp = (
     | OpWirePins
     | OpAddDirective
     | OpRemoveDirective
+    | OpReplaceDirective
     | OpSetPlotPanes
 )
 
@@ -2383,6 +2411,7 @@ OP_RESULT_FACTS: dict[str, tuple[str, ...]] = {
     "remove_wire": ("removed",),
     "remove_net_label": ("removed",),
     "remove_directive": ("removed_texts",),
+    "replace_directive": ("text",),
     "remove_component": ("deleted_wires",),
     "move": ("moved",),
     "set_plot_panes": ("plot_settings", "replaced_panes"),
@@ -2671,8 +2700,8 @@ def apply_op_inplace(
         kept = {id(text) for text in editor.directives}
         removed_texts = [
             {
-                "kind": "comment" if text.type == TextTypeEnum.COMMENT else "directive",
-                "text": text.text,
+                "kind": _text_kind(text),
+                "text": _shown_text(text.text),
                 "x": int(text.coord.X),
                 "y": int(text.coord.Y),
             }
@@ -2683,6 +2712,40 @@ def apply_op_inplace(
             "op": "remove_directive",
             "instruction": op.instruction,
             "removed_texts": removed_texts,
+        }
+
+    if isinstance(op, OpReplaceDirective):
+        # One text, named as remove_directive names it, keeps its record (place,
+        # size, justification, kind) and takes the new text.
+        named = _text_matcher(op.instruction)
+        matched = [text for text in editor.directives if named(text)]
+        if not matched:
+            raise _no_text_matched(op.instruction)
+        if len(matched) > 1:
+            listed = "; ".join(repr(_shown_text(text.text)) for text in matched[:10])
+            raise NetlistError(
+                f"replace_directive names one text, and {op.instruction!r} names "
+                f"{len(matched)}: {listed}. Give one of them whole, or a narrower regex."
+            )
+        (text,) = matched
+        kind = _text_kind(text)
+        if kind == "directive":
+            err = validate_directive(op.text, simulator="LTspice")
+            if err is not None:
+                raise NetlistError(
+                    f"Refusing directive {op.text!r}: {err.message} ({err.suggestion})"
+                )
+        was = _shown_text(text.text)
+        text.text = _text_record_body(op.text)
+        return {
+            "op": "replace_directive",
+            "text": {
+                "kind": kind,
+                "x": int(text.coord.X),
+                "y": int(text.coord.Y),
+                "was": was,
+                "now": _shown_text(text.text),
+            },
         }
 
     raise NetlistError(f"Unknown op type: {type(op).__name__}")
