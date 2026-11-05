@@ -708,16 +708,25 @@ LTSPICE_MCP_RECORD_SHEET_FINDINGS=1 uv run pytest tests/test_sheet_findings_snap
 |`LTSPICE_MCP_RECORD_TOOL_ARGUMENTS`|`tests/test_argument_names_are_kept.py`|`tests/fixtures/tool_arguments.json`: every place a caller writes an argument name in each tool (`circuits[].path`, `ops[].dx`), and each place a tool retired a name with the one that replaced it. A place that stops taking its name, even one the tool still takes elsewhere, must be in the tool's `RENAMED_ARGUMENTS` entry, which refers a call sending the old name there, and named in the changelog; recording refuses one that is not|
 
 `tests/fixtures/sheet_edit_record.json` holds, for every `edit_schematic` call
-the suite makes, the committed sheet (read as records) and the reply.
-`tests/sheet_edit_record.py`, a plugin loaded by `tests/conftest.py`, compares
-each call with it and fails the test whose call gets a different answer; its
-docstring describes how a call is keyed. To re-record it, run the whole suite
-with `LTSPICE_MCP_RECORD_SHEET_EDITS=1` with no LTspice library installed or
-visible. A run that finds a symbol in an LTspice library writes nothing,
-because CI has no library and would make different keys. Mark a test whose
-`edit_schematic` replies differ on Windows and Linux with
-`@pytest.mark.edit_reply_per_platform(reason)`. Its calls are then compared
-only with a recording made on the same platform.
+the suite makes, the committed sheet (read as records), the reply, and the
+tests that made the call. `tests/sheet_edit_record.py`, a plugin loaded by
+`tests/conftest.py`, compares each call with it and fails the test whose call
+gets a different answer; its docstring describes how a call is keyed. A call
+is keyed on the arguments it gives, so an input field added with a default
+changes no key. A run of the whole suite fails, naming the entry and its
+tests, when no call matches an entry although a test that made it passed, or
+although none of its tests exists any more. A run of part of the suite (`-k`,
+a file, a stop after a failure) only reports such entries. To re-record it,
+run the whole suite with
+`LTSPICE_MCP_RECORD_SHEET_EDITS=1` with no LTspice library installed or
+visible. A recording of part of the suite writes nothing, and so does a run
+that finds a symbol in an LTspice library, because CI has no library and
+would make different keys. Mark a test whose `edit_schematic` replies differ
+on Windows and Linux with `@pytest.mark.edit_reply_per_platform(reason)`. Its
+calls are then compared only with a recording made on the same platform. A
+recording keeps only its own platform's entries for them, so one made on
+Windows replaces the Linux entries, and the Linux CI jobs then compare none
+of those calls.
 
 ### The schematic build benchmark
 
