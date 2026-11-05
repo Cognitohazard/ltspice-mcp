@@ -1413,7 +1413,7 @@ class TestSeedStability:
         position in a match list or among the rules, so widening a pattern or
         adding a rule can only add draws: the ones already drawn stay put."""
         text = (
-            "R1 in out 1k\nR2 out 0 2k\nV1 in 0 1\n.param gain=2\n"
+            "* seed stability\nR1 in out 1k\nR2 out 0 2k\nV1 in 0 1\n.param gain=2\n"
             ".model NM NMOS(VTO=0.7 KP=100u)\n"
             "M1 out in 0 0 NM W=10u L=1u\nM2 out in 0 0 NM W=10u L=1u\n.op\n.end\n"
         )
