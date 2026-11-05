@@ -22,6 +22,7 @@ from ltspice_mcp.lib.deck_staging import (
 from ltspice_mcp.lib.hierarchy import (
     CapturedFile,
     Hierarchy,
+    ResolvedInstance,
     SemanticProfile,
     Source,
     parse_hierarchy_cards,
@@ -256,6 +257,12 @@ class TargetEditor:
             for path, cards in self.cards.items()
             for card in cards
         }
+        # Every card added later is a copy of one of these or is named by _name.
+        self.names |= {
+            card.name.casefold()
+            for card in self.root_map.values()
+            if card.kind == "model" and card.name
+        }
         input_origins = origins if origins is not None else source_origins(files, files, profile)
         self.origins = {
             id(card): input_origins[key]
@@ -367,7 +374,8 @@ class TargetEditor:
         caller = parent_map[(row.source.path, row.source.line)]
         InstanceLine.from_card(caller).set_model(name)
         closer = self.root_map[(definition.closer.path, definition.closer.line)]
-        at = self.cards[source].index(closer) + 1
+        _, at = self._position(closer, source)
+        at += 1
         if not closer.raw_lines[-1].endswith("\n"):
             closer.raw_lines[-1] += "\n"
         if not block[-1].raw_lines[-1].endswith("\n"):
@@ -390,29 +398,47 @@ class TargetEditor:
             for file in self.files
         ]
 
-    def clone_flat_model(
-        self, source: Source, instance: tuple[str, ...], overrides: dict[str, float]
-    ) -> str:
-        """Retain the flat model-variant engine using the resolved model occurrence."""
-        card = self.root_map[(source.path, source.line)]
-        names = {
-            c.name.casefold()
-            for cards in self.cards.values()
-            for c in cards
-            if c.kind == "model" and c.name
-        }
-        self.names.update(names)
-        name = self._name(("model", *[part.casefold() for part in instance]))
+    def clone_model(self, row: ResolvedInstance, overrides: dict[str, float]) -> InstanceEdit:
+        """Copy the one model ``row`` resolves to, with ``overrides``; return the edit to it.
+
+        The copy goes beside the card it copies. A model at a file's top level
+        is visible to every device there. A model defined inside a subcircuit,
+        in its body or in a file its body includes, is copied into this
+        instance's private copy of that subcircuit, which the returned edit is
+        written to and the only place its device can name it.
+        """
+        assert row.model_source is not None
+        key = (row.model_source.path, row.model_source.line)
+        card = self.root_map[key]
+        for depth in range(len(row.instance) - 1, 0, -1):
+            mapping = self._ancestry(row.instance[:depth])
+            if key in mapping:
+                card = mapping[key]
+                break
+        name = self._name(("model", *[part.casefold() for part in row.instance]))
         clone = lex(render_variant_model_card(emit([card]), name, overrides)).cards[0]
         if id(card) in self.origins:
             self.origins[id(clone)] = self.origins[id(card)]
-        cards = self.cards[Path(source.path)]
+        cards, at = self._position(card, Path(row.model_source.path))
         if not card.raw_lines[-1].endswith("\n"):
             card.raw_lines[-1] += "\n"
         if not clone.raw_lines[-1].endswith("\n"):
             clone.raw_lines[-1] += "\n"
-        cards.insert(cards.index(card) + 1, clone)
-        return name
+        cards.insert(at + 1, clone)
+        return InstanceEdit(row.instance, "model", name)
+
+    def _position(self, card: SpiceCard, path: Path) -> tuple[list[SpiceCard], int]:
+        """The card list holding ``card``, and its index there, found by identity.
+
+        A subcircuit copy's cards compare equal to the original's, and a file
+        included from inside a copied body is held under its copy's own path,
+        so ``path`` is searched first and every other file after it.
+        """
+        for cards in (self.cards[path], *self.cards.values()):
+            for index, held in enumerate(cards):
+                if held is card:
+                    return cards, index
+        raise NetlistError("a card being edited is no longer in the case's files")
 
     def output_origins(self) -> dict[tuple[str, int], Source]:
         result = {}

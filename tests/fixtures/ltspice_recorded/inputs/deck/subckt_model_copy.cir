@@ -1,0 +1,30 @@
+* A subcircuit copy that carries a copy of its local model, and one that names a copy of a top-level model
+Vdd vdd 0 1.8
+Vg g 0 1.0
+VA vdd da 0
+XA da g 0 cell
+VB vdd db 0
+XB db g 0 cell_copy
+VC vdd dc 0
+XC dc g 0 gcell
+VD vdd dd 0
+XD dd g 0 gcell_copy
+.subckt cell d g s
+M0 d g s s nloc W=1u L=1u
+.model nloc NMOS level=54 vth0=0.5
+.ends cell
+.subckt cell_copy d g s
+M0 d g s s nloc_copy W=1u L=1u
+.model nloc NMOS level=54 vth0=0.5
+.model nloc_copy NMOS level=54 vth0=0.6
+.ends cell_copy
+.subckt gcell d g s
+M0 d g s s nglob W=1u L=1u
+.ends gcell
+.subckt gcell_copy d g s
+M0 d g s s nglob_copy W=1u L=1u
+.ends gcell_copy
+.model nglob NMOS level=54 vth0=0.5
+.model nglob_copy NMOS level=54 vth0=0.6
+.op
+.end

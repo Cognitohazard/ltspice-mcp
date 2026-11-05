@@ -144,11 +144,15 @@ def test_structured_payload_refuses_slot_escape(attribute, parameter, value, rea
         )
 
 
-def target_circuit(tmp_path, *, fragment=False):
+_LEAF_DEVICE = "M0 p g 0 0 n w={w} l={l}"
+_LEAF_MODEL = ".model n NMOS(level=54)"
+
+
+def target_circuit(tmp_path, *, fragment=False, device=_LEAF_DEVICE, model=_LEAF_MODEL):
     from ltspice_mcp.lib.deck_staging import sha256_file
     from ltspice_mcp.lib.variations import CircuitDeck, DeckFile
 
-    body = "R1 p 0 1k\nM0 p g 0 0 n w={w} l={l}\n.model n NMOS(level=54)\n"
+    body = f"R1 p 0 1k\n{device}\n{model}\n"
     includes = ()
     if fragment:
         path = tmp_path / "body.inc"
@@ -959,45 +963,134 @@ def _drawn_mismatch(avt=0.0, ak=0.0):
     )
 
 
-def _nested_threshold_shift(tmp_path, xa_line):
-    """The threshold shift drawn for XA.Xleaf.M0 with ``xa_line`` as XA's card."""
+_DRAWN = ("XA", "Xleaf", "M0")
+
+
+def _nested_draw(
+    tmp_path,
+    simulator,
+    *,
+    replacements=(),
+    device=_LEAF_DEVICE,
+    model=".model n NMOS(level=54 vth0=0.5)",
+    fragment=False,
+):
+    """The case and the threshold shift drawn for XA.Xleaf.M0 of the target circuit.
+
+    On ngspice the shift is the device's ``delvto``; on LTspice it is the VTH0
+    of the device's own model copy less the model's 0.5. Both draw from one
+    stream, so one copy's shift is the same on both.
+    """
     from dataclasses import replace
 
+    from ltspice_mcp.lib.instance_targeting import canonical_target
+
     tmp_path.mkdir()
-    circuit = target_circuit(tmp_path)
-    circuit = replace(circuit, text=circuit.text.replace("XA a g block\n", xa_line + "\n"))
+    circuit = target_circuit(tmp_path, fragment=fragment, device=device, model=model)
+    text = circuit.text
+    for old, new in replacements:
+        text = text.replace(old, new)
+    profile = SemanticProfile(simulator, "hsa" if simulator == "ngspice" else None)
+    circuit = replace(circuit, text=text, semantic_profile=profile)
+    rule = {"rule": "mismatch", "instance": list(_DRAWN), "AVT": 0.003, "vth_param": "VTH0"}
     (case,) = materialize(
-        circuit,
-        tmp_path,
-        [
-            {
-                "kind": "random",
-                "runs": 1,
-                "seed": 17,
-                "rules": [{"rule": "mismatch", "instance": ["XA", "Xleaf", "M0"], "AVT": 0.003}],
-            }
-        ],
+        circuit, tmp_path, [{"kind": "random", "runs": 1, "seed": 17, "rules": [rule]}]
     )
-    (shift,) = [value for key, value in case.assignments.items() if "delvto" in key]
-    return shift
+    if simulator == "ngspice":
+        return case, case.assignments[canonical_target(_DRAWN, "parameter", "delvto")]
+    return case, case.assignments[canonical_target(_DRAWN, "model_parameter", "VTH0")] - 0.5
 
 
-def test_nested_mismatch_counts_the_multiplier_of_an_instance_above(tmp_path):
-    # ngspice builds m copies of every device below an X line that carries m,
-    # all from one card, so the four leaf copies share the one draw.
-    one = _nested_threshold_shift(tmp_path / "one", "XA a g block")
-    four = _nested_threshold_shift(tmp_path / "four", "XA a g block m=4")
-    assert one != 0.0
-    assert four == pytest.approx(one / 2, rel=1e-9)
+def _resolved(case, tmp_path):
+    """Each instance of a case's deck as hierarchy discovery resolves it for LTspice."""
+    hierarchy = load_hierarchy(str(case.path), [tmp_path], SemanticProfile("ltspice", None))
+    return {row.instance: row for row in hierarchy.instances}
+
+
+_ON_XA = [("XA a g block\n", "XA a g block m=4\n")]
 
 
 def test_nested_mismatch_refuses_a_multiplier_it_cannot_resolve(tmp_path):
     from ltspice_mcp.lib.variations import VariationError
 
     with pytest.raises(VariationError) as exc:
-        _nested_threshold_shift(tmp_path / "unknown", "XA a g block m={nowhere}")
+        _nested_draw(
+            tmp_path / "unknown",
+            "ngspice",
+            replacements=[("XA a g block\n", "XA a g block m={nowhere}\n")],
+        )
     assert exc.value.code == "mismatch_geometry_unresolved"
     assert "XA" in str(exc.value)
+
+
+def test_an_x_line_multiplier_counts_on_ngspice_and_not_on_ltspice(tmp_path):
+    """ngspice builds m copies of every device below an X line that carries m,
+    all from one card, so the four leaf copies share the one draw. LTspice
+    builds one (recorded: raw/subckt_multiplier, deck/subckt_multiplier_nested).
+    So m=4 on XA halves the ngspice draw and leaves the LTspice draw at one
+    copy's, while m=4 on the device itself halves it on LTspice too."""
+    _, ngspice_one = _nested_draw(tmp_path / "ng_one", "ngspice")
+    _, ngspice_four = _nested_draw(tmp_path / "ng_four", "ngspice", replacements=_ON_XA)
+    _, ltspice_one = _nested_draw(tmp_path / "lt_one", "ltspice")
+    _, ltspice_x_line = _nested_draw(tmp_path / "lt_x_line", "ltspice", replacements=_ON_XA)
+    _, ltspice_own = _nested_draw(tmp_path / "lt_own", "ltspice", device=_LEAF_DEVICE + " m=4")
+    assert ngspice_one != 0.0
+    assert ngspice_four == pytest.approx(ngspice_one / 2, rel=1e-9)
+    assert ltspice_one == pytest.approx(ngspice_one, rel=1e-9)
+    assert ltspice_x_line == pytest.approx(ltspice_one, rel=1e-9)
+    assert ltspice_own == pytest.approx(ltspice_one / 2, rel=1e-9)
+
+
+@pytest.mark.parametrize("fragment", [False, True], ids=["in-the-body", "in-an-include"])
+def test_an_ltspice_draw_copies_a_local_model_into_the_devices_own_subcircuit_copy(
+    tmp_path, fragment
+):
+    """The model leaf defines, in its body or in a file its body includes, is
+    copied with the drawn VTH0 into the private copy of leaf that XA's chain
+    gets, and XA's device resolves to that copy. XB keeps leaf and its model as
+    written."""
+    from ltspice_mcp.lib.montecarlo import parse_model_params
+
+    case, shift = _nested_draw(tmp_path / "local", "ltspice", fragment=fragment)
+    rows = _resolved(case, tmp_path / "local")
+    (drawn,) = rows[_DRAWN].model_family
+    (kept,) = rows[("XB", "Xleaf", "M0")].model_family
+    assert kept.name == "n"
+    assert parse_model_params(kept.raw)["VTH0"] == 0.5
+    assert drawn.name != "n"
+    # The card holds the value to ten significant digits.
+    assert parse_model_params(drawn.raw)["VTH0"] == pytest.approx(0.5 + shift, rel=1e-9)
+    assert rows[("XA",)].model_name != "block"
+    assert rows[("XB",)].model_name == "block"
+
+
+def test_an_ltspice_draw_copies_a_top_level_model_at_top_level(tmp_path):
+    case, shift = _nested_draw(
+        tmp_path / "global",
+        "ltspice",
+        model="",
+        replacements=[(".end\n", ".model n NMOS(level=54 vth0=0.5)\n.end\n")],
+    )
+    from ltspice_mcp.lib.montecarlo import parse_model_params
+
+    (drawn,) = _resolved(case, tmp_path / "global")[_DRAWN].model_family
+    assert drawn.source.definition is None
+    assert drawn.name != "n"
+    assert parse_model_params(drawn.raw)["VTH0"] == pytest.approx(0.5 + shift, rel=1e-9)
+
+
+def test_an_ltspice_draw_refuses_a_binned_model(tmp_path):
+    """Copying the model needs one definition; a binned model has one per size."""
+    from ltspice_mcp.lib.variations import VariationError
+
+    binned = (
+        ".model n.0 NMOS(level=54 vth0=0.5 lmin=0 lmax=1u)\n"
+        ".model n.1 NMOS(level=54 vth0=0.5 lmin=1u lmax=1)"
+    )
+    with pytest.raises(VariationError) as exc:
+        _nested_draw(tmp_path / "binned", "ltspice", model=binned)
+    assert exc.value.code == "model_missing"
+    assert "binned" in str(exc.value)
 
 
 def test_flat_mismatch_counts_the_device_multiplier(tmp_path):

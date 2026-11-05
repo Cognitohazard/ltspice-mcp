@@ -892,11 +892,16 @@ def table_of_contents(tools: frozenset[str] | None = None) -> list[dict[str, Any
 
 _REFERENCE_DESCRIPTION_CHARS = 160
 
-#: Arguments a tool renamed, by tool and old name: a call that still sends
-#: one is told the name that replaced it.
+#: Arguments a tool renamed, by tool and by the old name's place as a client
+#: writes it (a union's branch name left out): a call that still sends one
+#: there is told the name that replaced it. ``tests/test_argument_names_are_kept.py``
+#: requires an entry for every place that stops taking a name.
 RENAMED_ARGUMENTS: dict[str, dict[str, str]] = {
     "plot_waveform": {"raw_file": "path"},
-    "analyze_results": {"raw_path": "path", "log_path": "path"},
+    "analyze_results": {
+        "sources[].raw_path": "sources[].path",
+        "sources[].log_path": "sources[].path",
+    },
     "edit_schematic": {"target": "path", "save_open_window": "open_window"},
 }
 

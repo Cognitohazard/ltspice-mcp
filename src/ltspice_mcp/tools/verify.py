@@ -1083,20 +1083,20 @@ class _LexedDeck:
     the lexer assigns them no severity, so they are relayed as observations
     rather than promoted to findings — but relayed they must be, since the deck
     they describe parsed into cards that mean something other than what the file
-    says. ``error`` is set when the deck did not lex at all.
+    says.
     """
 
     cards: list[SpiceCard]
     notes: list[str]
-    error: str | None = None
 
 
 def _lexed_deck(text: str) -> _LexedDeck:
-    """Lex a netlist once for every check that reads its cards."""
-    try:
-        result = lex_deck(text)
-    except SpiceLexError as exc:
-        return _LexedDeck(cards=[], notes=[], error=str(exc))
+    """Lex a netlist once for every check that reads its cards.
+
+    ``lex`` reads any text into cards, a malformed card included, and says what
+    it had to guess in its warnings, so there is no deck it refuses.
+    """
+    result = lex_deck(text)
     return _LexedDeck(
         cards=result.cards,
         notes=[f"netlist lexer: {note}" for note in result.warnings],
@@ -1280,16 +1280,6 @@ def _syntax_findings(
             )
         )
 
-    if deck.error is not None:
-        findings.append(
-            _finding(
-                rule_id="lex_error",
-                severity="error",
-                at={"file": str(path)},
-                subject=str(path.name),
-                evidence={"detail": deck.error},
-            )
-        )
     findings.extend(
         _rule_finding(issue, path, rule_id="element_arity", severity=str(issue["severity"]))
         for issue in validate_netlist_arity(deck.cards, simulator=simulator)

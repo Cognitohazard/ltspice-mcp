@@ -140,7 +140,9 @@ such as an `.op` or `.tf` result. It returns every value of every quantity,
 the first included, with complex values as real and imaginary components.
 `r.axis()` raises on such a plot, and `r.table()` on a plot that has an axis.
 Step parameters (`r.steps`) are read at the same time as the traces, from the
-RAW itself or the `.log` beside it.
+RAW itself or the `.log` beside it. LTspice writes a step parameter's name in
+lower case, so a name is found whatever its case: `r.steps[0]["RD"]` reads
+`rd`, as `step={axis:'RD', ...}` and `group_by` do.
 
 For a log without a RAW file:
 

@@ -29,6 +29,7 @@ from spicelib import AscEditor
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.errors import InvalidCursorError, NetlistError, PathSecurityError
 from ltspice_mcp.lib.connectivity import build_on_wire_predicate
+from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.schematic_ops import (
     KEEPS_WIRING,
     OP_RESULT_FACTS,
@@ -1795,6 +1796,68 @@ async def test_an_equivalent_comparison_commits_and_leaves_the_netlist_out(
     assert "netlist" not in data
     # Every stage completed, so none is listed.
     assert "stages" not in data
+
+
+async def test_a_dry_run_compares_the_sheet_it_would_write(asc_state, work_dir, monkeypatch):
+    """A dry run with a reference returns the verdict on the sheet the batch
+    would write, exported from a staged copy of it, and writes nothing."""
+    staged: list[bytes] = []
+
+    async def fake_export(copy, _state):
+        staged.append(copy.read_bytes())
+        return _REF_DECK
+
+    monkeypatch.setattr(se, "_export_asc_to_netlist", fake_export)
+    data = await _build_blank(
+        asc_state, "drycmp", _DIVIDER_OPS, dry_run=True, compare={"reference": _REF_DECK}
+    )
+    assert data["commit_state"] == "not_committed"
+    assert data["verification"]["equivalent"] is True
+    assert data["outcome"] == "complete"
+    assert "Reference netlist verified: equivalent." in data["hint"]
+    assert not (work_dir / "drycmp.asc").exists()
+    (sheet,) = staged
+    assert decode_spice_bytes(sheet).count("SYMATTR InstName R") == 2
+
+
+async def test_a_dry_run_reports_a_mismatch_with_the_netlist(asc_state, work_dir, monkeypatch):
+    async def fake_export(_copy, _state):
+        return _REF_DECK_DIFFERENT
+
+    monkeypatch.setattr(se, "_export_asc_to_netlist", fake_export)
+    data = await _build_blank(
+        asc_state, "drydiff", _DIVIDER_OPS, dry_run=True, compare={"reference": _REF_DECK}
+    )
+    assert data["commit_state"] == "not_committed"
+    assert data["verification"]["equivalent"] is False
+    assert data["netlist"] == _REF_DECK_DIFFERENT
+    assert data["outcome"] == "partial"
+    assert {"stage": "reference", "ok": False} in data["stages"]
+    assert not (work_dir / "drydiff.asc").exists()
+
+
+async def test_a_dry_run_with_a_failed_op_says_it_compared_nothing(asc_state, monkeypatch):
+    """With an op failed the batch would write nothing, so there is no sheet
+    to compare, and the verification block says so."""
+
+    async def fake_export(_copy, _state):
+        raise AssertionError("nothing is exported when an op failed")
+
+    monkeypatch.setattr(se, "_export_asc_to_netlist", fake_export)
+    ops = [*_DIVIDER_OPS, {"op": "remove_component", "reference": "R9"}]
+    data = await _build_blank(
+        asc_state, "dryfail", ops, dry_run=True, compare={"reference": _REF_DECK}
+    )
+    assert data["failures"]
+    verification = data["verification"]
+    assert verification["equivalent"] is None
+    assert verification["compare_error"] == (
+        "an op failed, so this batch would write nothing to compare"
+    )
+    assert (
+        "Reference check could not compare: an op failed, so this batch would write "
+        "nothing to compare." in data["hint"]
+    )
 
 
 async def test_a_directive_difference_says_the_wiring_matched(asc_state, monkeypatch):

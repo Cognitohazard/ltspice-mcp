@@ -105,12 +105,12 @@ async def test_hook_rejects_a_finding_that_says_nowhere_where_it_is(
 async def test_hook_rejects_a_list_cut_short_with_no_way_to_read_the_rest(
     state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """A list a reply cuts short gives a cursor, or says how to read the rest.
-    spec.fail_cases has no cursor of its own, and its recipe's warning names
-    the route; with that warning made to name nothing, a real analysis of a
-    real raw emits a cut list with no way on, and the hook must refuse it."""
+    """A list a reply cuts short gives a cursor, or says beside its flag how to
+    read the rest. spec.fail_cases has no cursor of its own; with its hint left
+    off, a real analysis of a real raw emits a cut list with no way on, and the
+    hook must refuse it."""
     monkeypatch.setattr(analyze_mod, "_FAIL_CASE_PAGE_CAP", 1)
-    monkeypatch.setattr(analyze_mod, "_FAIL_CASES_OMITTED_WARNING", "{omitted} more failed.")
+    monkeypatch.setattr(analyze_mod, "_say_how_to_read_fail_cases", lambda spec: None)
     raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
     recipe = {
         "key": "vout",

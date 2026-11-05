@@ -8,7 +8,7 @@ or ``field`` is rejected by schema validation instead of being ignored.
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from typing import Annotated, Any, Literal, TypeAlias, get_args
 
 from pydantic import (
@@ -211,8 +211,9 @@ class Window(StrictModel):
     end: float | str | None = None
 
 
-def step_axis_key(axis: str, values: Mapping[str, Any]) -> str:
-    """The key of one step's ``values`` that a caller's step-axis name reads.
+def step_axis_key(axis: str, values: Collection[str]) -> str:
+    """The key of one step's ``values`` (its mapping, or its names) that a
+    caller's step-axis name reads.
 
     The name itself where a step holds it, else the one that differs from it
     only in case: SPICE compares names without case, and both LTspice builds
@@ -228,6 +229,23 @@ def step_axis_key(axis: str, values: Mapping[str, Any]) -> str:
     if folded == "temperature" and STEPPED_TEMPERATURE in values:
         return STEPPED_TEMPERATURE
     return next((key for key in values if key.casefold() == folded), axis)
+
+
+class StepValues(dict[str, Any]):
+    """One step's parameters as the Python API gives them: a ``dict`` keyed as
+    the run wrote them, in which a name is found as :func:`step_axis_key`
+    reads it, so ``steps[0]["Rv"]`` reads the log's ``rv``."""
+
+    # The rule reads the dict's own keys view, whose lookups are the dict's,
+    # not the ones below.
+    def __contains__(self, name: object) -> bool:
+        return isinstance(name, str) and step_axis_key(name, dict.keys(self)) in dict.keys(self)
+
+    def __getitem__(self, name: str) -> Any:
+        return dict.__getitem__(self, step_axis_key(name, dict.keys(self)))
+
+    def get(self, name: str, default: Any = None, /) -> Any:
+        return dict.get(self, step_axis_key(name, dict.keys(self)), default)
 
 
 def _step_number(value: Any) -> float | None:

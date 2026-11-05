@@ -1047,6 +1047,78 @@ def test_a_node_against_ground_is_not_measured_with_only_the_node_saved(
 
 
 # --------------------------------------------------------------------------
+# A mismatch draw on a MOSFET inside a subcircuit
+# --------------------------------------------------------------------------
+
+
+def source_currents(build: str, case_id: str, tmp_path: Path) -> dict[str, float]:
+    """The current through each 0 V source of a recorded operating point, by name."""
+    values = rec.operating_point(build, case_id, tmp_path / case_id.replace("/", "-"))
+    return {name[2:-1]: value for name, value in values.items() if name.startswith("i(v")}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_delvto_on_a_bsim4_device_is_its_signed_vth0_shifted(build: str, tmp_path: Path):
+    """``delvto=0.1`` on a BSIM4 device draws the current of a model with
+    ``vth0`` 0.1 V higher. On a p-channel device that is ``vth0`` -0.4 for -0.5,
+    the signed shift ngspice also makes, not -0.6."""
+    i = source_currents(build, "deck/mos_delvto_bsim4", tmp_path)
+    assert i["vn1"] == pytest.approx(i["vn2"], rel=1e-9)
+    assert i["vn1"] < i["vn0"]
+    assert i["vp1"] == pytest.approx(i["vp2"], rel=1e-9)
+    assert i["vp1"] != pytest.approx(i["vp3"], rel=1e-3)
+
+
+#: Decks giving a device an instance parameter LTspice does not take, each
+#: device with it paired with its twin without it.
+UNKNOWN_INSTANCE_PARAMETER = {
+    "deck/mos_mulu0_bsim4": [("v1", "v0")],
+    "deck/mos_delvto_bsim3": [("vn1", "vn0"), ("vp1", "vp0")],
+    "deck/mos_mulu0_bsim3": [("v1", "v0")],
+}
+
+
+@pytest.mark.parametrize(
+    ("build", "case_id"), [(b, c) for b in rec.BUILDS for c in UNKNOWN_INSTANCE_PARAMETER]
+)
+def test_an_instance_parameter_ltspice_lacks_stops_26_and_xvii_runs_without_it(
+    build: str, case_id: str, tmp_path: Path
+):
+    """``mulu0`` on BSIM4 and BSIM3, and ``delvto`` on BSIM3, are unknown to
+    both builds. LTspice 26 stops on "Unknown parameter"; XVII prints the same
+    error and runs on with the parameter dropped, so the device draws its twin's
+    current."""
+    assert "Unknown parameter" in read_spice_text(rec.recorded(build, f"{case_id}.log"))
+    if rec.generation(build) == "xvii":
+        i = source_currents(build, case_id, tmp_path)
+        for given, twin in UNKNOWN_INSTANCE_PARAMETER[case_id]:
+            assert i[given] == i[twin]
+    else:
+        assert rec.entry(build, case_id)["exit_code"] == 1
+        assert not rec.has(build, f"{case_id}.raw")
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_model_copied_with_vth0_or_u0_changed_takes_effect(build: str, tmp_path: Path):
+    """On BSIM4 and BSIM3 alike, a model with ``u0`` scaled by 1.2 draws more
+    current than its original, and one with ``vth0`` 0.1 V higher draws less."""
+    i = source_currents(build, "deck/mos_model_variants", tmp_path)
+    assert i["vb"] > i["va"]
+    assert i["vd"] < i["vc"] < i["ve"]
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_subcircuit_copy_uses_the_model_copy_it_names(build: str, tmp_path: Path):
+    """A copy of a subcircuit that carries a copy of its local model, and one
+    that names a copy of a top-level model, each draw the shifted model's
+    current, while the originals draw the unshifted one."""
+    i = source_currents(build, "deck/subckt_model_copy", tmp_path)
+    reference = source_currents(build, "deck/mos_delvto_bsim4", tmp_path)
+    assert i["va"] == i["vc"] == pytest.approx(reference["vn0"], rel=1e-9)
+    assert i["vb"] == i["vd"] == pytest.approx(reference["vn2"], rel=1e-9)
+
+
+# --------------------------------------------------------------------------
 # What a deck means
 # --------------------------------------------------------------------------
 
