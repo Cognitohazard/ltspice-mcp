@@ -195,7 +195,7 @@ def _entry_for(journal: RecoveryJournal, job_id: str) -> JournalEntry:
 def _load_attempt(journal: RecoveryJournal, entry: JournalEntry, store: Store) -> ExperimentJob:
     if entry.job_id is None:
         raise RecoveryError("recovery_record_invalid", "No-op entry has no job record")
-    job = experiment_store.load_job(entry.job_id, store.working_dir)  # noqa: TID251 - resume authorizes from a fresh record
+    job = experiment_store.load_job(entry.job_id, store.working_dir)  # noqa: TID251 - an attempt is read fresh under its lineage
     if job is None:
         # An unreadable record is evidence too. Never replace it with an older
         # candidate that would erase a launch or a completion.

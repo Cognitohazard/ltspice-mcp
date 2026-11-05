@@ -4,9 +4,10 @@ The reads by job (``services.experiment_run_context``, behind ``inspect``,
 ``plot_waveform`` and the Python API, and ``analyze_results``' source
 resolution), ``jobs(place_beside_sheet)`` and ``jobs(wait, wait_for="runs")``
 each answer it. A wait that returns while a read refuses, or a copy beside the
-sheet of a case a read refuses, is three answers to one question. The two
-predicates the answer is made of are banned outside their owners in
-``pyproject.toml``.
+sheet of a case a read refuses, is three answers to one question. Whether a
+status means the runs are done (``job_lifecycle.runs_terminal``) is banned
+outside its owner in ``pyproject.toml``, and whether a case kept a raw is
+decided only in ``services.case_unreadable``.
 """
 
 from __future__ import annotations

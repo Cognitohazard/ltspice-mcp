@@ -41,7 +41,6 @@ from ltspice_mcp.lib.experiment_types import (
     ExperimentCase,
     ExperimentJob,
     failure_summary,
-    has_readable_raw,  # noqa: TID251 - services decides readiness
     partial_raw,
 )
 from ltspice_mcp.lib.job_lifecycle import runs_done
@@ -353,7 +352,8 @@ def case_unreadable(case: ExperimentCase) -> str | None:
     """Why a read of ``case``, of a job whose runs are done, takes no raw, or
     None when it does: the case produced one, or was stopped and kept what its
     run wrote (``partial_raw``). The answer is the case's failure summary."""
-    return None if has_readable_raw(case) else failure_summary(case)
+    readable = case.status == "produced" or partial_raw(case) is not None
+    return None if readable else failure_summary(case)
 
 
 def experiment_run_context(
