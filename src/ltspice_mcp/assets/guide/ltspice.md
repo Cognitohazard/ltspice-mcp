@@ -236,6 +236,10 @@ C1 out 0 {C}
   (`meas-name-ltspice`), as do `verify_circuit`'s `syntax` check and
   `edit_schematic`'s directives (`meas_reserved_name`). `time`, `temp` and
   `boltz` are accepted.
+- **`.meas` syntax**: a parenthesis left open in a `.meas` makes LTspice 26
+  refuse the whole deck and XVII skip that measurement. `run_experiments`
+  refuses it before the run (`meas-unclosed-paren-ltspice`), and
+  `verify_circuit`'s `syntax` check reports it (`meas_unclosed_paren`).
 - **Values**: digits after a scale letter or `R` are the fraction (`1k5` is
   1500, `4R7` is 4.7, `2M2` is 2.2m), and any other letters after the number
   are ignored (`2Hz` is 2, `9V1` is 9). `M` is milli wherever it stands, so

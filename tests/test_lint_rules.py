@@ -16,6 +16,7 @@ from ltspice_mcp.lib.spice_validator import (
     validate_netlist_dangling_nodes,
     validate_netlist_directive_refs,
 )
+from tests.conftest import FIXTURES_DIR
 
 
 def _ids(
@@ -99,6 +100,12 @@ _SEED_CASES = [
     (
         "meas-name-ltspice",
         "V1 in 0 1\nR1 in 0 1k\n.tran 1m\n.meas tran k MAX V(in)\n.end\n",
+        None,
+        "LTspice",
+    ),
+    (
+        "meas-unclosed-paren-ltspice",
+        "V1 in 0 1\nR1 in 0 1k\n.tran 1m\n.meas tran x FIND V(in AT 0.5m\n.end\n",
         None,
         "LTspice",
     ),
@@ -917,5 +924,62 @@ def test_a_card_no_rule_can_read_is_reported_where_it_is(tmp_path):
 
     unread = [f for f in findings if f["rule_id"] == "unreadable-card"]
     assert [f["at"]["line"] for f in unread] == [3, 5]
-    assert "the checks could not split this card" in unread[0]["evidence"]["detail"]
+    detail = unread[0]["evidence"]["detail"]
+    assert "the checks could not split this card" in detail
+    assert "Check for a missing } matching the {." in detail
     assert RULES_BY_ID["unreadable-card"].disposition == "warning"
+
+
+def test_a_measurement_with_a_parenthesis_left_open_blocks_an_ltspice_run(tmp_path):
+    """LTspice 26 refuses the recorded deck at that .meas and runs nothing;
+    XVII runs it without the measurement (log/meas_bad_syntax). What ngspice
+    does with it is not recorded, so there it is the warning any card no rule
+    can read is."""
+    source = FIXTURES_DIR / "ltspice_recorded" / "inputs" / "log" / "meas_bad_syntax.cir"
+    deck = source.read_text(encoding="utf-8")
+
+    def found(family: str) -> list[tuple[str, int]]:
+        findings = lint_deck(deck, tmp_path / "deck.cir", family, None)
+        return [
+            (f["rule_id"], f["at"]["line"])
+            for f in findings
+            if f["rule_id"] in ("meas-unclosed-paren-ltspice", "unreadable-card")
+        ]
+
+    assert found("ltspice") == [("meas-unclosed-paren-ltspice", 7)]
+    assert found("ngspice") == [("unreadable-card", 7)]
+    assert RULES_BY_ID["meas-unclosed-paren-ltspice"].disposition == "blocking"
+
+
+# A directive with a bracket or quote left open: each was read for its name or
+# parts by some rule, which raised the lexer's error out of lint_deck.
+_OPEN_DIRECTIVES = [
+    ".tran 0 1m )",
+    ".save V(in",
+    ".param r={1k",
+    ".step param r list (1k 2k",
+    ".options plotwinsize=(0",
+]
+
+
+@pytest.mark.parametrize("family", ["ltspice", "ngspice"])
+@pytest.mark.parametrize("directive", _OPEN_DIRECTIVES)
+def test_a_directive_no_rule_can_read_is_reported_not_raised(tmp_path, family, directive):
+    deck = f"* t\nV1 in 0 1\nR1 in 0 {{r}}\n.param r=1k\n{directive}\n.op\n.end\n"
+
+    findings = lint_deck(deck, tmp_path / "deck.cir", family, None)
+
+    unread = [f for f in findings if f["rule_id"] == "unreadable-card"]
+    assert [(f["at"]["line"], f["subject"]) for f in unread] == [(5, directive)]
+
+
+def test_a_save_no_rule_can_read_may_save_what_a_measurement_asks_for(tmp_path):
+    # '.save V(in' may save V(in); the other .save does not, so reading only it
+    # would refuse the measurement on a guess.
+    deck = (
+        "* t\nV1 in 0 1\nR1 in out 1k\nC1 out 0 1n\n.save V(out)\n.save V(in\n"
+        ".meas tran vin MAX V(in)\n.tran 1m\n.end\n"
+    )
+
+    assert "save-meas-coverage" not in _ids(deck, tmp_path)
+    assert "save-meas-coverage" in _ids(deck.replace(".save V(in\n", ""), tmp_path)

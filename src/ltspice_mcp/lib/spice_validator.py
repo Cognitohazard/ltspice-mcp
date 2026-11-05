@@ -29,6 +29,7 @@ from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
     TokenKind,
+    directive_head,
     lex,
     tokenize_body,
     unreadable_cards,
@@ -569,12 +570,29 @@ class _NodeUse:
     count: int = 1
 
 
-def _words_of_unread(card: SpiceCard) -> set[str]:
-    """Every word of a card no rule could split into parts
-    (``spice_lex.unreadable_cards``), lowercased: each may be a name or a node
-    the card defines or connects. The passes that may only ever hide a
-    warning, never make one on a guess, count them so."""
-    return {word.lower() for word in card.body.split()}
+# What separates the words of a card no rule could split into parts, and the
+# operators inside an expression word: a node a card names inside an
+# expression (``B1 out 0 V={V(in)*2``) is one of its words too.
+_UNREAD_SEPARATORS = re.compile(r"[\s(){}\[\]'\",=]+")
+_UNREAD_OPERATORS = re.compile(r"[*/+\-<>^&|!?:;%]+")
+
+
+def _unread_connectors(cards: list[SpiceCard]) -> list[tuple[SpiceCard, set[str]]]:
+    """Each card that may connect nodes but that no rule could split into
+    parts (``spice_lex.unreadable_cards``): an instance, a ``.SUBCKT`` header
+    or a ``.GLOBAL``. With it, every word on it, lowercased, split at spaces,
+    brackets and separators and again at operators, since any of them may be a
+    node or a name the card connects or defines. The passes here may only hide
+    a warning, never make one on a guess, so they count each as connected.
+    A directive that only names a node (``.save``, ``.meas``) connects none."""
+    found: list[tuple[SpiceCard, set[str]]] = []
+    for card, _error in unreadable_cards(cards):
+        if card.kind not in ("instance", "subckt") and directive_head(card) != ".global":
+            continue
+        words = {word for word in _UNREAD_SEPARATORS.split(card.body.lower()) if word}
+        words |= {part for word in words for part in _UNREAD_OPERATORS.split(word) if part}
+        found.append((card, words))
+    return found
 
 
 def _scan_global_nodes(cards: list[SpiceCard]) -> set[str]:
@@ -628,7 +646,8 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
 
     # scope → lowercased node → first reference + total reference count.
     occurrences: dict[tuple[str, ...], dict[str, _NodeUse]] = {}
-    suppressed: set[str] = set()
+    # A card no rule could read may connect any word on it.
+    suppressed: set[str] = {word for _card, words in _unread_connectors(cards) for word in words}
 
     def record(
         scope: tuple[str, ...], node: str, referrer: str, card: SpiceCard, is_port: bool = False
@@ -654,7 +673,6 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
             try:
                 sub = SubcktCard.from_card(card)
             except SpiceLexError:
-                suppressed.update(_words_of_unread(card))
                 continue
             body_scope = (*card.scope, sub.name)
             for port in sub.ports:
@@ -663,7 +681,6 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
             try:
                 inst = InstanceLine.from_card(card)
             except SpiceLexError:
-                suppressed.update(_words_of_unread(card))
                 continue
             terminals, rest = _instance_terminals(inst)
             for node in terminals:
@@ -753,12 +770,13 @@ def _known_names(cards: list[SpiceCard]) -> set[str]:
     """
     known: set[str] = set(_GROUND_NODES) | set(_RESERVED_TRACES)
     known |= _scan_global_nodes(cards)
+    # A card no rule could read may define any word on it.
+    known |= {word for _card, words in _unread_connectors(cards) for word in words}
     for card in cards:
         if card.kind == "subckt":
             try:
                 sub = SubcktCard.from_card(card)
             except SpiceLexError:
-                known.update(_words_of_unread(card))
                 continue
             known.add(sub.name.lower())
             known.update(p.lower() for p in sub.ports)
@@ -766,7 +784,6 @@ def _known_names(cards: list[SpiceCard]) -> set[str]:
             try:
                 inst = InstanceLine.from_card(card)
             except SpiceLexError:
-                known.update(_words_of_unread(card))
                 continue
             known.add(inst.ref.lower())
             terminals, rest = _instance_terminals(inst)
@@ -1117,13 +1134,17 @@ def validate_netlist_bias_topology(cards: list[SpiceCard]) -> list[dict[str, obj
 
     # A card no rule could read may connect any word on it, to ground among
     # them, so in keeping with the over-connection each of its words is a
-    # sink: a net it touches is never flagged on a guess.
-    for card, _error in unreadable_cards(cards):
-        scopes = [card.scope]
-        if card.kind == "subckt" and card.name:
-            scopes.append((*card.scope, card.name))
-        for scope in scopes:
-            graphs.setdefault(scope, _BiasGraph()).sinks.update(_words_of_unread(card))
+    # sink: a net it touches is never flagged on a guess. A .SUBCKT header's
+    # words are its body's ports, and a .GLOBAL's are sinks in every scope.
+    unread_globals: set[str] = set()
+    for card, words in _unread_connectors(cards):
+        if card.kind == "instance":
+            graphs.setdefault(card.scope, _BiasGraph()).sinks.update(words)
+        elif card.kind == "subckt":
+            if card.name:
+                graphs.setdefault((*card.scope, card.name), _BiasGraph()).sinks.update(words)
+        else:
+            unread_globals |= words
 
     for card, inst, terminals in _iter_instances(cards):
         graph = graphs.setdefault(card.scope, _BiasGraph())
@@ -1145,7 +1166,7 @@ def validate_netlist_bias_topology(cards: list[SpiceCard]) -> list[dict[str, obj
 
     issues: list[dict[str, object]] = []
     for scope, graph in graphs.items():
-        for sink in graph.sinks | grounded_globals | _GROUND_NODES:
+        for sink in graph.sinks | grounded_globals | unread_globals | _GROUND_NODES:
             graph.dsu.union(_GROUND_SINK, sink)
         ground_root = graph.dsu.find(_GROUND_SINK)
 

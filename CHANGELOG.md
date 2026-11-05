@@ -127,15 +127,25 @@ tool-surface changes.
 
 ### Fixed
 
-- A card no rule could split into its parts, such as `R1 in out {1k` with
-  its brace left open or a `.meas` with an unclosed parenthesis, was left out
-  of every check without a word, so `verify_circuit` and the linter read the
-  deck as one without it: a node wired through it reported as wired to one
-  element, and a measurement of it as naming nothing. Such a card is now
-  reported at its line (`unreadable_card` in `verify_circuit`, the
-  `unreadable-card` lint rule, a warning in both), and the names and nodes on
-  it count as defined and connected, so no other rule reports on a guess
-  about it.
+- A card with a quote, brace or parenthesis left open, or a closer with
+  nothing open, such as `R1 in out {1k`, cannot be split into its parts, and
+  every check left it out without a word, so `verify_circuit` and the linter
+  read the deck as one without it: a node wired through it reported as wired
+  to one element, and a measurement of it as naming nothing. Such a card is
+  now reported at its line (`unreadable_card` in `verify_circuit`, the
+  `unreadable-card` lint rule, a warning in both), and the nodes and names
+  on a part or `.subckt` line like it, inside an expression too, count as
+  connected and defined, so no other rule reports on a guess about it. A
+  `.meas` with a parenthesis left open, which LTspice 26 refuses before the
+  run and XVII runs without that measurement (recorded on both), is an error
+  for LTspice instead (`meas_unclosed_paren`, and the blocking
+  `meas-unclosed-paren-ltspice` lint rule; `linter_version` 12).
+- A directive in that state, such as `.tran 0 1m )`, `.save V(in` or
+  `.param r={1k`, stopped `run_experiments` with the lexer's error as a
+  retryable submission failure, raised by staging, the linter or the
+  variation reader. The deck now runs with the card reported, and an
+  `.include` or `.lib` whose path cannot be read for the same reason fails
+  its circuit with `include_unstaged`, naming the line and the fix.
 - The Python API's `inspect` returns every row of a paged query. It follows
   each query's cursor, and joined the pages only where an item paged two
   lists, so for every kind that pages one (`components`, `symbols`, `model`,

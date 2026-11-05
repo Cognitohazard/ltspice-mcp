@@ -62,7 +62,15 @@ from ltspice_mcp.lib.montecarlo import (
     variant_model_name,
 )
 from ltspice_mcp.lib.montecarlo import MismatchRule as EngineMismatchRule
-from ltspice_mcp.lib.spice_lex import SpiceCard, Token, TokenKind, emit, lex, tokenize_body
+from ltspice_mcp.lib.spice_lex import (
+    SpiceCard,
+    SpiceLexError,
+    Token,
+    TokenKind,
+    emit,
+    lex,
+    tokenize_body,
+)
 from ltspice_mcp.lib.spice_lex_ops import fold_micro_suffix_cards, section_sign_names
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, ModelCard
 from ltspice_mcp.lib.subckt_mismatch import (
@@ -981,6 +989,22 @@ def _applies(
     }
 
 
+def _param_assignments(card: SpiceCard) -> list[tuple[str, Token]]:
+    """The ``name=value`` parts of a ``.param`` card with their names, or none
+    for a card that cannot be split into parts (``spice_lex.unreadable_cards``):
+    the names it sets are not known, so no variation targets or edits it, and
+    the linter reports it."""
+    try:
+        tokens = tokenize_body(card.body)
+    except SpiceLexError:
+        return []
+    return [
+        (token.key, token)
+        for token in tokens[1:]
+        if token.kind == TokenKind.KEY_VALUE and token.key
+    ]
+
+
 def _deck_targets(text: str, source: Path, depth: int) -> _DeckTargets:
     params: dict[str, list[_Site]] = {}
     components: dict[str, list[_Site]] = {}
@@ -990,11 +1014,8 @@ def _deck_targets(text: str, source: Path, depth: int) -> _DeckTargets:
     cards = lex(text).cards
     for card, section in zip(cards, card_sections(cards, source, depth), strict=True):
         if card.kind == "param":
-            for token in tokenize_body(card.body)[1:]:
-                if token.kind == TokenKind.KEY_VALUE and token.key:
-                    params.setdefault(token.key.casefold(), []).append(
-                        _Site(token.key, card.scope, section)
-                    )
+            for key, _token in _param_assignments(card):
+                params.setdefault(key.casefold(), []).append(_Site(key, card.scope, section))
         elif card.kind == "model" and card.name:
             model_names.setdefault(card.name.casefold(), []).append(
                 _Site(card.name, card.scope, section)
@@ -1624,8 +1645,8 @@ def _param_tokens(cards: list[SpiceCard], name: str) -> list[tuple[int, Token]]:
     for index, card in enumerate(cards):
         if card.kind != "param":
             continue
-        for token in tokenize_body(card.body)[1:]:
-            if token.kind == TokenKind.KEY_VALUE and token.key and token.key.casefold() == target:
+        for key, token in _param_assignments(card):
+            if key.casefold() == target:
                 tokens.append((index, token))
     return tokens
 
@@ -2746,8 +2767,8 @@ def _claim_card(
                 parameter
                 and card.kind == "param"
                 and any(
-                    t.key and t.key.casefold() == site.name.casefold()
-                    for t in tokenize_body(card.body)
+                    key.casefold() == site.name.casefold()
+                    for key, _token in _param_assignments(card)
                 )
             )
         )

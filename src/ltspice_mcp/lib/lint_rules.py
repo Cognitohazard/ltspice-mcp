@@ -21,7 +21,9 @@ from ltspice_mcp.lib.simulator import DEFAULT_FAMILY, current_ngbehavior, family
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
+    SpiceLexErrorCategory,
     TokenKind,
+    directive_head,
     lex,
     lex_deck,
     tokenize_body,
@@ -49,7 +51,7 @@ from ltspice_mcp.lib.spice_validator import (
 Disposition = Literal["blocking", "warning", "observation"]
 LintFinding = dict[str, Any]
 
-linter_version = "11"
+linter_version = "12"
 
 # A capital M straight after a number is milli unless the letters after it
 # make it Meg or mil. Other letters do not: LTspice reads 1MHz as a millihertz.
@@ -164,11 +166,6 @@ def _finding(
     }
 
 
-def _directive_head(card: SpiceCard) -> str:
-    tokens = tokenize_body(card.body)
-    return tokens[0].text.casefold() if tokens else ""
-
-
 def _probe_signals(probe: ProbeRef) -> set[str]:
     """The signals a probe asks for in a ``.meas``, or saves in a ``.save``.
 
@@ -196,7 +193,9 @@ def _save_meas_coverage(
     measurements = [card for card in context.cards if card.kind == "meas"]
     if not saves or not measurements:
         return []
-    if any(save.saves_all for save in saves):
+    # A .save no rule could split into parts (``unreadable_cards``) may save
+    # any signal, so none is reported missing on a guess about it.
+    if any(save.saves_all for save in saves) or unreadable_cards(save.card for save in saves):
         return []
     saved = {signal for save in saves for probe in save.probes for signal in _probe_signals(probe)}
     findings = []
@@ -312,7 +311,7 @@ def _step_ngspice(
 ) -> list[LintFinding]:
     findings = []
     for card in context.cards:
-        if card.kind != "directive" or _directive_head(card) != ".step":
+        if card.kind != "directive" or directive_head(card) != ".step":
             continue
         findings.append(
             _finding(
@@ -389,7 +388,7 @@ def _analysis_count_ltspice(
         (file.path, card)
         for file in context.files
         for card in file.cards
-        if card.kind == "directive" and _directive_head(card)[1:] in EXCLUSIVE_ANALYSIS_KINDS
+        if card.kind == "directive" and directive_head(card)[1:] in EXCLUSIVE_ANALYSIS_KINDS
     ]
     if len(analyses) < 2:
         return []
@@ -400,7 +399,7 @@ def _analysis_count_ltspice(
             rule,
             line=second.line_start,
             file=path,
-            subject=_directive_head(second),
+            subject=directive_head(second),
             evidence={
                 "directives": [card.body for _, card in analyses],
                 "reason": (
@@ -669,10 +668,13 @@ def _temp_as_param(
     for card in context.cards:
         if card.kind != "param":
             continue
+        try:
+            tokens = tokenize_body(card.body)
+        except SpiceLexError:
+            # The unreadable-card rule reports it; the names it sets are not known.
+            continue
         names = [
-            token.key
-            for token in tokenize_body(card.body)[1:]
-            if token.kind == TokenKind.KEY_VALUE and token.key
+            token.key for token in tokens[1:] if token.kind == TokenKind.KEY_VALUE and token.key
         ]
         if not any(name.casefold() == "temp" for name in names):
             continue
@@ -698,29 +700,63 @@ def _temp_as_param(
     return findings
 
 
-def unreadable_card_detail(error: SpiceLexError) -> str:
-    """What a check says of a card it could not split into its parts
-    (``spice_lex.unreadable_cards``): the reason, and that no rule read the
-    card. ``verify_circuit`` says the same of the same cards."""
-    where = f" at position {error.position}" if error.position >= 0 else ""
-    return (
-        f"{error.message}{where}: the checks could not split this card into its "
-        "parts, so no rule read it, and the names and nodes on it count as "
-        "defined and connected"
-    )
+class UnreadableSite(NamedTuple):
+    """A card no rule could split into its parts, the lint rule that reports
+    it, and what the finding says."""
+
+    card: SpiceCard
+    rule_id: str
+    detail: str
+
+
+def unreadable_card_sites(cards: Iterable[SpiceCard], family: str) -> list[UnreadableSite]:
+    """Each card no rule could split into its parts (``spice_lex.unreadable_cards``),
+    with the rule that reports it for ``family`` and the reason.
+
+    For LTspice, a ``.meas`` with a parenthesis left open is
+    ``meas-unclosed-paren-ltspice``: LTspice 26 refuses the deck at its line
+    ('Expected ")" here.') and runs nothing, and XVII runs it without that
+    measurement (recorded on both, log/meas_bad_syntax). Any other is
+    ``unreadable-card``: what a simulator does with it is not recorded. One
+    answer for the linter and ``verify_circuit``, which reports the same cards.
+    """
+    sites = []
+    for card, error in unreadable_cards(cards):
+        fix = f" {error.suggestion[:1].upper()}{error.suggestion[1:]}." if error.suggestion else ""
+        if (
+            family == "ltspice"
+            and card.kind == "meas"
+            and error.category is SpiceLexErrorCategory.UNBALANCED_PAREN
+        ):
+            rule_id = "meas-unclosed-paren-ltspice"
+            detail = (
+                f"{error.message}: LTspice 26 refuses the deck at this line and runs "
+                f"nothing, and LTspice XVII runs it without this measurement.{fix}"
+            )
+        else:
+            rule_id = "unreadable-card"
+            detail = (
+                f"{error.message}: the checks could not split this card into its "
+                "parts, so no rule read them, and the names and nodes on it count "
+                f"as defined and connected.{fix}"
+            )
+        sites.append(UnreadableSite(card, rule_id, detail))
+    return sites
 
 
 def _unreadable_card(context: _LintContext, rule: LintRule) -> list[LintFinding]:
-    """A card no rule could read: the other rules leave it out, so this says so."""
+    """A card no rule could read, under the rule ``unreadable_card_sites``
+    files it under: the other rules leave it out, so this says so."""
     return [
         _finding(
             context,
             rule,
-            line=card.line_start,
-            subject=" ".join(card.body.split()),
-            evidence={"detail": unreadable_card_detail(error)},
+            line=site.card.line_start,
+            subject=" ".join(site.card.body.split()),
+            evidence={"detail": site.detail},
         )
-        for card, error in unreadable_cards(context.cards)
+        for site in unreadable_card_sites(context.cards, context.family)
+        if site.rule_id == rule.rule_id
     ]
 
 
@@ -982,6 +1018,7 @@ RULES: tuple[LintRule, ...] = (
     LintRule("analysis-count-ltspice", "blocking", _analysis_count_ltspice, family="ltspice"),
     LintRule("meas-function-ltspice", "blocking", _meas_function_ltspice, family="ltspice"),
     LintRule("meas-name-ltspice", "blocking", _meas_name_ltspice, family="ltspice"),
+    LintRule("meas-unclosed-paren-ltspice", "blocking", _unreadable_card, family="ltspice"),
     LintRule("lib-section-ltspice", "blocking", _lib_section_ltspice, family="ltspice"),
     # A warning, not blocking: LTspice 24 and later run another circuit than
     # the one the server reads, XVII the same one, and which build will run
@@ -1011,8 +1048,9 @@ RULES: tuple[LintRule, ...] = (
     # A warning: the deck runs, but a parameter given twice is read one way or
     # the other, and which is not recorded here.
     LintRule("duplicate-param", "warning", _duplicate_param),
-    # A warning: a card no rule could read is checked by none, which a caller
-    # must know. How the simulator reads it is not recorded, so the deck runs.
+    # A warning: a card no rule could split into its parts is checked by
+    # none, which a caller must know. What a simulator does with it is not
+    # recorded, except for the .meas above, so the deck runs.
     LintRule("unreadable-card", "warning", _unreadable_card),
     # Blocking: a suffix that shows a file decoded in an encoding it was not
     # written in. 'Âµ' — a UTF-8 micro sign decoded as cp1252 — is never a
