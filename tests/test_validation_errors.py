@@ -220,3 +220,25 @@ async def test_a_missing_op_is_answered_with_the_ops_and_its_misspelling(config)
     assert "ops.0.opp: Extra inputs are not permitted" in message
     assert "Did you mean 'op' for 'opp'?" in message
     assert "ops.0.references" not in message
+
+
+@pytest.mark.asyncio
+async def test_a_retired_name_is_referred_only_where_it_was_taken(config):
+    # analyze_results retired raw_path inside each source. Matched by name
+    # alone, a raw_path at the top level was told "'raw_path' is now 'path'",
+    # an argument the top level does not take.
+    state = _consolidated_state(config)
+    arguments = {
+        "raw_path": "run.raw",
+        "sources": [{"path": "run.raw"}],
+        "recipes": [{"metric": "summary", "key": "s"}],
+    }
+
+    result = await call_tool(
+        fake_request_context(state), call_tool_params("analyze_results", arguments)
+    )
+
+    assert result.is_error
+    message = tool_text(result)
+    assert "is now" not in message
+    assert "This tool takes" in message and "sources" in message
