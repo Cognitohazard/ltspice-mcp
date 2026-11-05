@@ -58,13 +58,14 @@ tool-surface changes.
 
 - `edit_schematic`'s `replace_directive` op changes one directive's or
   comment's text in one call. Its `instruction` names the text as
-  `remove_directive` does, the whole text or `regex:`, and must name one; one
-  that names several is refused with each. The text keeps its place, size,
+  `remove_directive` does, the whole text or `regex:`, and must name one, or
+  `x` and `y` pick the named text anchored there; one that names several is
+  refused with the place of each. The text keeps its place, size,
   justification and kind, which a `remove_directive` and an `add_directive`
   lost unless given again, and a directive's new text is checked as
   `add_directive`'s is. Its result gives the text's kind and place and what
-  it `was` and is `now`. `remove_directive`'s `removed_texts` now gives a
-  text with its line breaks, where it gave the `\n` escapes the file holds.
+  it `was` and is `now`; applied again with that place, `now` and `was`, it
+  puts the text back.
 - At `INFO`, the server logs one structured record per tool call on the
   `ltspice_mcp.events` logger: the tool, its duration, how it ended (a
   result, an error and its code, a cancellation by the client, or a protocol
@@ -124,6 +125,15 @@ tool-surface changes.
   `m` on an X line, so the draw's area counts only the device's own `m`.
   Such a rule used to be refused with `unsupported_backend`, a code the server
   no longer returns.
+
+
+### Changed
+
+- `remove_directive`'s `removed_texts` gives a text as it reads, as the
+  drawing and the sheet findings read it: a line break where the TEXT record
+  holds a `\n` escape, and one backslash where it holds `\\`. It gave the
+  record's spelling, so a client that compared it with the `.asc` line now
+  sees a different string.
 
 ### Fixed
 
