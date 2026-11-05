@@ -483,6 +483,11 @@ class RunExperimentsInput(ToolInput):
             payload["execution"].pop("keep_partial_raw", None)
         if self.analyze is not None and self.analyze.other_raw is None:
             payload["analyze"].pop("other_raw", None)
+        # A random entry's sample_start came after random requests were
+        # recorded; at its default it starts the samples where they always did.
+        for variation, rendered in zip(self.variations, payload["variations"], strict=True):
+            if isinstance(variation, RandomVariation) and variation.sample_start == 0:
+                rendered.pop("sample_start", None)
 
         def collapse_optional_models(
             model: StrictModel,
@@ -1220,7 +1225,9 @@ async def _prepare_circuit(
 def _seed_random_variations(args: RunExperimentsInput) -> RunExperimentsInput:
     """Give each random entry that has no seed one chosen now, so that every
     Monte Carlo the server runs can be replayed from what its cases record."""
-    if not any(isinstance(item, RandomVariation) and item.seed is None for item in args.variations):
+    if not any(
+        isinstance(item, RandomVariation) and item.seed is None for item in args.variations
+    ):
         return args
     variations = [
         item.model_copy(update={"seed": secrets.randbelow(2**31)})

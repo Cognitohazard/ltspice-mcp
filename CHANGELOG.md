@@ -59,6 +59,15 @@ tool-surface changes.
   and moving a definition into an included file shows as the `.include` line
   added. The `mode` and tool descriptions now say what each mode compares,
   and that `structural_diff` does not compare nodes.
+- A `random` variation's seed draws different values than it did in earlier
+  versions, so a seeded Monte Carlo run from 0.7.0 does not reproduce. Its
+  draws were keyed on the case's position in the expanded list, so with
+  several `assign` values each value drew its own numbers, and adding a value
+  changed the draws of every case after it under the same seed. A sample's
+  draws now depend only on the seed, its circuit id and its sample index:
+  every case of one sample draws the same deviation at each `assign` value, so
+  a sweep compares the same die at each corner, and adding a value leaves the
+  other draws as they were.
 
 ### Added
 
@@ -66,9 +75,10 @@ tool-surface changes.
   index (`_random_run`) and its seed (`_random_seed`) in its assignments, and
   an entry without a `seed` gets one the server chooses, so a Monte Carlo run
   without one is no longer impossible to repeat. A new `sample_start` sets the
-  first sample index: with the same seed, `runs: 1, sample_start: 7` draws
-  what sample 7 drew in the full run. A retry of a seedless request under the
-  same `request_id` returns the job it made, with that job's seed.
+  first sample index: with the same seed and circuit id, `runs: 1,
+  sample_start: 7` draws what sample 7 drew in the full run. A retry of a
+  seedless request under the same `request_id` returns the job it made, with
+  that job's seed.
 - `edit_schematic`'s `replace_directive` op changes one directive's or
   comment's text in one call. Its `instruction` names the text as
   `remove_directive` does, the whole text or `regex:`, and must name one, or
@@ -159,14 +169,6 @@ tool-surface changes.
   `unreadable-card` lint rule, a warning in both), and the names and nodes on
   it count as defined and connected, so no other rule reports on a guess
   about it.
-- A `random` variation no longer redraws a sample when other cases change. Its
-  draws were keyed on the case's position in the expanded list, so with
-  several `assign` values each value drew its own numbers, and adding a value
-  changed the draws of every case after it under the same seed. A sample's
-  draws now depend only on the seed, its circuit and its sample index: every
-  case of one sample draws the same values at each `assign` value, so a sweep
-  compares the same die at each corner. A given seed therefore draws different
-  values than it did in earlier versions.
 - The Python API's `inspect` returns every row of a paged query. It follows
   each query's cursor, and joined the pages only where an item paged two
   lists, so for every kind that pages one (`components`, `symbols`, `model`,

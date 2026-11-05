@@ -312,7 +312,7 @@ class RandomVariation(VariationModel):
         default=None,
         description="Omitted, the server picks one and records it as '_random_seed'.",
     )
-    sample_start: int = Field(
+    sample_start: StrictInt = Field(
         default=0,
         ge=0,
         description="First sample index; sample k draws the same values in any run.",

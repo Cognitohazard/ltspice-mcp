@@ -1375,6 +1375,39 @@ class TestOptionalRequestId:
             == "8d5e2d07daeddf5f92339e9f999d441390c3bb830cbc16a88ed39d9478618861"
         )
 
+    def test_a_random_request_keeps_the_fingerprint_it_was_recorded_under(self):
+        """A retry of a stored Monte Carlo request must hash as it did.
+
+        `sample_start` was added to random entries after such requests were
+        recorded. Dumped at its default it entered every random request's
+        canonical bytes, so a retry under the stored request_id came back a
+        conflict. The pin is the hash these arguments had before the field
+        existed; a sample_start other than 0 is a different experiment.
+        """
+        from ltspice_mcp.lib.experiment_runner import canonical_fingerprint
+
+        payload: dict[str, Any] = {
+            "request_id": "mc-1",
+            "circuits": [{"path": "dut.cir"}],
+            "variations": [
+                {
+                    "kind": "random",
+                    "runs": 3,
+                    "seed": 7,
+                    "rules": [{"rule": "component", "target": "R1", "tolerance": 0.1}],
+                }
+            ],
+        }
+        args = RunExperimentsInput.model_validate(payload)
+        assert (
+            canonical_fingerprint(args)
+            == "117cfc08db971afe7feb4a936561e8da1f04699dd19987e0bb155f7f3de4734c"
+        )
+
+        payload["variations"][0]["sample_start"] = 3
+        later = RunExperimentsInput.model_validate(payload)
+        assert canonical_fingerprint(later) != canonical_fingerprint(args)
+
     def test_serializing_an_attached_block_raises_no_pydantic_warning(self):
         """Every submission dumps this block twice — for the fingerprint and
         for the persisted request. The declared union would make pydantic warn
@@ -3300,7 +3333,9 @@ class TestMonteCarloSampleIdentity:
                 _args(
                     deck,
                     "mc-reseeded",
-                    variations=[{"kind": "random", "runs": 3, "seed": seed, "rules": [self._RULE]}],
+                    variations=[
+                        {"kind": "random", "runs": 3, "seed": seed, "rules": [self._RULE]}
+                    ],
                 ),
                 state_with_sim,
             )
@@ -3335,6 +3370,46 @@ class TestMonteCarloSampleIdentity:
 
         assert retry["job_id"] == first["job_id"]
         assert self._draws(retry) == self._draws(first)
+
+    async def test_a_sample_that_never_ran_still_records_how_to_replay_it(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A case skipped before it was drawn (here by a blocking lint finding)
+        keeps its sample index and the seed the server chose, so a caller can
+        send that sample again once the deck is fixed."""
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "blocked.cir", "V1 in 0 1\nR1 out 1k\n.op\n.end\n")
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "mc-blocked",
+                    variations=[
+                        {
+                            "kind": "random",
+                            "id": "die",
+                            "runs": 2,
+                            "sample_start": 4,
+                            "rules": [self._RULE],
+                        }
+                    ],
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert submissions == []
+        assert data["failures"][0]["code"] == "lint_blocked"
+        rows = [item["assignments"] for item in data["runs"]["items"]]
+        assert [row["_random_run"] for row in rows] == [4, 5]
+        assert [row["_random_id"] for row in rows] == ["die", "die"]
+        (seed,) = {row["_random_seed"] for row in rows}
+        assert isinstance(seed, int)
 
 
 @pytest.mark.asyncio

@@ -2159,10 +2159,13 @@ independent; correlated Monte Carlo across decks is not supported.
 
 A random case's draws follow from the seed, its circuit id and its sample
 index, never from the case's position among the request's cases. Every case
-of one sample draws the same values whatever its `assign` values, so a sweep
-compares the same die at each corner, and adding a corner leaves the other
-draws as they were. Sample indices start at `sample_start` (default 0), and
-with the same seed `runs: 1` and `sample_start: k` replay sample k alone. An
+of one sample draws the same deviation whatever its `assign` values, so a
+sweep compares the same die at each corner, and adding a corner leaves the
+other draws as they were. The value a deviation gives still follows what the
+case assigns: a relative tolerance scales with the assigned nominal, and a
+mismatch draw with the assigned W and L. Sample indices start at
+`sample_start` (default 0), and with the same seed and circuit id `runs: 1`
+and `sample_start: k` replay sample k alone. An
 entry without `seed` gets one the server chooses after it has looked the
 request up for a replay, so a retry under the same `request_id` returns the
 job it made. Every case records its sample index as `_random_run`, its seed
