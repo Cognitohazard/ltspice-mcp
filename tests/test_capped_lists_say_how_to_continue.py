@@ -5,15 +5,12 @@ to read the rest. And "A short reply, the data behind an id": a result too
 large to read whole should be readable in part.
 
 Every output schema a tool or a delegated handler declares is walked. An object
-that declares a ``truncated`` flag is a list that can be cut short, and it must
-declare the way on: a cursor (``next_cursor``, ``cursor``, ``continue`` or
-``next``) in that object or in an object around it within the same reply item,
-or a ``hint`` beside the flag that says what to do instead (``run_code``, whose
-dropped output cannot be paged).
-
-Counts of omitted items (``*_omitted``, ``*_truncated``) are not held to this
-here: ``inspect``'s open-window ``difference_omitted`` has no way to read the
-rest yet.
+that declares a ``truncated`` flag, or a count of the items a list left out
+(an integer ``*_omitted`` or ``*_truncated``), holds a list that can be cut
+short, and it must declare the way on: a cursor (``next_cursor``, ``cursor``,
+``continue`` or ``next``) in that object or in an object around it within the
+same reply item, or a ``hint`` beside the flag or the count that says what to
+do instead (``run_code``, whose dropped output cannot be paged).
 """
 
 from __future__ import annotations
@@ -34,10 +31,20 @@ def _declared_schemas() -> dict[str, dict[str, Any]]:
     }
 
 
+def _counts_what_it_left_out(name: str, schema: Any) -> bool:
+    """Whether a property is a count of the items a list left out."""
+    return (
+        name.endswith(("_omitted", "_truncated"))
+        and isinstance(schema, dict)
+        and schema.get("type") == "integer"
+    )
+
+
 def _cut_lists(schema: dict[str, Any]) -> Iterator[tuple[str, bool]]:
-    """Each object in an output schema with a ``truncated`` flag: its path, and
-    whether it declares a way to read the rest (a cursor in it or around it
-    within its reply item, or a hint beside the flag)."""
+    """Each object in an output schema with a ``truncated`` flag or a count of
+    what a list left out: its path (with the count's name), and whether it
+    declares a way to read the rest (a cursor in it or around it within its
+    reply item, or a hint beside the flag or the count)."""
 
     def walk(node: Any, path: str, cursor_around: bool) -> Iterator[tuple[str, bool]]:
         if not isinstance(node, dict):
@@ -51,6 +58,9 @@ def _cut_lists(schema: dict[str, Any]) -> Iterator[tuple[str, bool]]:
             inside = cursor_around or bool(CONTINUATIONS & properties.keys())
             if "truncated" in properties:
                 yield path or "<root>", inside or "hint" in properties
+            for name, child in properties.items():
+                if _counts_what_it_left_out(name, child):
+                    yield f"{path or '<root>'}:{name}", inside or "hint" in properties
             for name, child in properties.items():
                 yield from walk(child, f"{path}.{name}" if path else name, inside)
         if isinstance(node.get("items"), dict):
@@ -80,6 +90,8 @@ def test_the_walk_finds_the_cut_lists():
         ("inspect_tools.handle_inspect", "results[].page.collections.*"),
         ("schematic_edit.handle_edit_schematic", "views.preexisting"),
         ("analyze.handle_analyze_results", "results.*.per_run"),
+        ("inspect_tools.handle_inspect", "results[].data.designs[]:difference_omitted"),
+        ("analysis.handle_plot_waveform", "<root>:traces_truncated"),
     ):
         assert expected in found, sorted(found)
 
@@ -102,3 +114,17 @@ def test_a_page_without_its_cursor_is_caught():
     page = page_schema()
     del page["properties"]["next_cursor"]
     assert list(_cut_lists({"type": "object", "properties": {"rows": page}})) == [("rows", False)]
+
+
+def test_a_count_of_what_was_left_out_without_a_way_on_is_caught():
+    # A list and the count of what it left out, with nothing that reads the rest.
+    rows = {
+        "type": "object",
+        "properties": {
+            "rows": {"type": "array", "items": {"type": "string"}},
+            "rows_omitted": {"type": "integer"},
+        },
+    }
+    assert list(_cut_lists(rows)) == [("<root>:rows_omitted", False)]
+    rows["properties"]["hint"] = {"type": "string"}
+    assert list(_cut_lists(rows)) == [("<root>:rows_omitted", True)]
