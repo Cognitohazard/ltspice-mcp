@@ -125,7 +125,7 @@ def authorize_resume(job: ExperimentJob, control_token: str | None) -> str:
 
 async def resume_control_token(state: SessionState, job_id: str, control_token: str | None) -> str:
     """Authorize a private detached handoff from a fresh parent record."""
-    job = await asyncio.to_thread(experiment_store.load_job, job_id, state.working_dir)
+    job = await asyncio.to_thread(experiment_store.load_job, job_id, state.working_dir)  # noqa: TID251 - resume authorizes from a fresh record
     if job is None:
         raise JobNotFoundError(f"Experiment job {job_id} was not found")
     return authorize_resume(job, control_token)
@@ -195,7 +195,7 @@ def _entry_for(journal: RecoveryJournal, job_id: str) -> JournalEntry:
 def _load_attempt(journal: RecoveryJournal, entry: JournalEntry, store: Store) -> ExperimentJob:
     if entry.job_id is None:
         raise RecoveryError("recovery_record_invalid", "No-op entry has no job record")
-    job = experiment_store.load_job(entry.job_id, store.working_dir)
+    job = experiment_store.load_job(entry.job_id, store.working_dir)  # noqa: TID251 - an attempt is read fresh under its lineage
     if job is None:
         # An unreadable record is evidence too. Never replace it with an older
         # candidate that would erase a launch or a completion.
@@ -657,7 +657,7 @@ async def resume_experiment(
         raise RecoveryError(
             "recovery_persistence_required", "Resume requires durable job persistence"
         )
-    parent = await asyncio.to_thread(experiment_store.load_job, job_id, state.working_dir)
+    parent = await asyncio.to_thread(experiment_store.load_job, job_id, state.working_dir)  # noqa: TID251 - resume authorizes from a fresh record
     if parent is None:
         raise JobNotFoundError(f"Experiment job {job_id} was not found")
     recovery = _required_recovery(parent)

@@ -115,12 +115,6 @@ def partial_raw(case: ExperimentCase) -> dict[str, Any] | None:
     return held if isinstance(held, dict) else None
 
 
-def has_readable_raw(case: ExperimentCase) -> bool:
-    """Whether reads of ``case`` take a raw: it produced one, or it was
-    stopped and kept what its run wrote (``partial_raw``)."""
-    return case.status == "produced" or partial_raw(case) is not None
-
-
 def failure_row(case: ExperimentCase) -> dict[str, Any]:
     """Project one non-produced case into the receipt's failure-channel row.
 

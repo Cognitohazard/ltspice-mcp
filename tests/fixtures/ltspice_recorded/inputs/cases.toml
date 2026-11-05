@@ -302,7 +302,7 @@ inputs = [
 
 [behaviour.value-suffixes]
 summary = "The number LTspice reads from a value: scale suffixes in either case, M against Meg, unit tails, letters that are no suffix, 3k4-style shorthand, and words that begin with a suffix."
-model = ["lib/format.py", "lib/lint_rules.py", "lib/hierarchy_expr.py", "lib/montecarlo.py"]
+model = ["lib/format.py", "lib/lint_rules.py", "lib/hierarchy_expr.py", "lib/montecarlo.py", "lib/netlist_graph.py", "lib/variations.py"]
 # Each resistor carries 1 A, so the node voltage in the raw is the resistance read.
 inputs = [
     "deck/suffixes.cir",
@@ -314,7 +314,7 @@ inputs = [
 
 [behaviour.deck-structure]
 summary = "How a deck's lines are read: the title line, ; and $ comments, a $ inside a node name and at its start, + continuations, a ; comment on a line the card is continued past, inside a .model card's parentheses and outside them, cards after .end, a missing .end, CRLF line endings, case, and whether gnd is ground."
-model = ["lib/spice_lex.py", "lib/spice_validator.py", "lib/lint_rules.py", "lib/hierarchy.py", "lib/netlist_graph.py", "tools/inspect_tools.py"]
+model = ["lib/spice_lex.py", "lib/spice_validator.py", "lib/lint_rules.py", "lib/hierarchy.py", "lib/netlist_graph.py", "tools/inspect_tools.py", "lib/experiment_inputs.py"]
 inputs = [
     "deck/comment_semicolon.cir",
     "deck/comment_dollar.cir",

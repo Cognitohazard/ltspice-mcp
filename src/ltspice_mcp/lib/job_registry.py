@@ -241,7 +241,7 @@ class JobRegistry:
             return None
         from ltspice_mcp.lib import experiment_store
 
-        return experiment_store.load_job(job_id, self.working_dir)
+        return experiment_store.load_job(job_id, self.working_dir)  # noqa: TID251 - the registry reads job records
 
     def get_or_load(self, job_id: str) -> ExperimentJob | None:
         """A job by id: in memory, else from the store. None if there is none.
@@ -277,7 +277,7 @@ class JobRegistry:
         """Blocking store read for refreshing one foreign-owned job."""
         from ltspice_mcp.lib import experiment_store
 
-        return experiment_store.load_job_from_path(job.store_path, self.working_dir)
+        return experiment_store.load_job_from_path(job.store_path, self.working_dir)  # noqa: TID251 - the registry reads job records
 
     def _needs_refresh(self, job: ExperimentJob) -> bool:
         """Whether ``job`` is a live job another process runs, whose record

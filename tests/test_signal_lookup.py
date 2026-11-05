@@ -2,12 +2,13 @@
 
 ``resolve_signal`` reads one trace, or a node pair ``V(a,b)`` as
 ``V(a) - V(b)``. ``RawResult.trace`` and ``RawResult.compare`` both go
-through it, so a name one of them reads the other reads too.
+through it, so a name one of them reads the other reads too. Looking a trace
+up by name alone (``services.find_trace``) is banned elsewhere in
+``pyproject.toml``.
 """
 
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 
 import numpy as np
@@ -16,7 +17,6 @@ import pytest
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
-from tests._source_scan import PACKAGE, parsed
 from tests.conftest import SyncApi
 
 #: Spellings of signals of the recorded ``raw/tran`` (V1 drives ``in``, R1
@@ -80,23 +80,3 @@ def test_a_name_neither_result_has_is_refused_with_why(state_no_sim: SessionStat
         match=r"Not a signal of both results: V\(in,nowhere\)\. .*'V\(nowhere\)' is not in",
     ):
         raw.compare(raw, signals=["V(in,nowhere)"])
-
-
-def _callers(name: str) -> set[str]:
-    found = set()
-    for path in PACKAGE.rglob("*.py"):
-        tree = parsed(path)
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call):
-                called = node.func
-                if (isinstance(called, ast.Attribute) and called.attr == name) or (
-                    isinstance(called, ast.Name) and called.id == name
-                ):
-                    found.add(path.relative_to(PACKAGE).as_posix())
-    return found
-
-
-def test_only_the_signal_resolver_and_the_bias_point_map_look_a_trace_up_by_name():
-    """Every other reader of a caller's signal goes through resolve_signal,
-    which also reads a node pair."""
-    assert _callers("find_trace") <= {"lib/services.py", "lib/metrics.py"}

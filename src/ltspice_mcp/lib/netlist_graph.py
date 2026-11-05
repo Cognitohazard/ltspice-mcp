@@ -554,21 +554,30 @@ def _normalize_value_text(text: str) -> str:
 
 
 def values_equal(a: str | None, b: str | None, rtol: float) -> bool:
-    """Compare two value/param strings, numeric within ``rtol`` else textually.
+    """Compare two value/param strings token by token, each numeric within
+    ``rtol`` else textually.
 
-    A number is read as LTspice runs it (``format.parse_spice_value``, held to
-    the recordings): ``1k`` == ``1000`` == ``1.0k``, ``4.7µ`` == ``4.7u`` ==
-    ``4.7e-6``, ``4R7`` == ``4.7`` and ``1k5`` == ``1.5k``. When either side
-    does not start with a number (a model name, a ``PULSE(...)`` spec), fall
-    back to a case-insensitive, whitespace-collapsed string compare.
+    A field can hold several tokens, as a source's ``5V AC 1`` does, so the two
+    must have as many tokens, and each pair must match. A number is read as
+    LTspice runs it (``format.parse_spice_value``, held to the recordings):
+    ``1k`` == ``1000`` == ``1.0k``, ``4.7µ`` == ``4.7u`` == ``4.7e-6``, ``4R7``
+    == ``4.7`` and ``1k5`` == ``1.5k``. A pair that is not two numbers (a model
+    name, a part of a ``PULSE(...)`` spec) is compared without regard to case.
     """
     if a is None or b is None:
         return a == b
-    na, nb = _normalize_value_text(a), _normalize_value_text(b)
+    tokens_a = _normalize_value_text(a).split()
+    tokens_b = _normalize_value_text(b).split()
+    return len(tokens_a) == len(tokens_b) and all(
+        _tokens_equal(ta, tb, rtol) for ta, tb in zip(tokens_a, tokens_b, strict=True)
+    )
+
+
+def _tokens_equal(a: str, b: str, rtol: float) -> bool:
     try:
-        va, vb = parse_spice_value(na), parse_spice_value(nb)
+        va, vb = parse_spice_value(a), parse_spice_value(b)
     except ValueError:
-        return " ".join(na.lower().split()) == " ".join(nb.lower().split())
+        return a.lower() == b.lower()
     if va == vb:
         return True
     scale = max(abs(va), abs(vb))
