@@ -369,7 +369,26 @@ LTSPICE_DIFFERENCE_ENTRIES: dict[str, Any] = {
         "type": "integer",
         "description": "How many more entries differ than the two lists hold.",
     },
+    "hint": {
+        "type": "string",
+        "description": "With difference_omitted: the call that reads every entry.",
+    },
 }
+
+
+def difference_in_full(sheet: str = "this path", window: str = "the window's process") -> str:
+    """The call that reads every entry where an LTspice window's copy of a sheet
+    differs from its file, as a reply names it: ``inspect``'s ``open_in_ltspice``
+    query given the sheet as ``path`` and the window as ``pid``, which pages them.
+
+    A reply that names a difference only in part (``Difference.summary``, or the
+    first entries of each side) points here; ``sheet`` and ``window`` say where
+    that reply gives the two.
+    """
+    return (
+        f"inspect(kind='open_in_ltspice') with path set to {sheet} and pid to {window} "
+        "reads every entry where the window's copy differs from the file, paged."
+    )
 
 
 def window_difference(on_disk: bytes, window_text: str, *, entries: int = 0) -> dict[str, Any]:
@@ -377,7 +396,8 @@ def window_difference(on_disk: bytes, window_text: str, *, entries: int = 0) -> 
     ``differs_from_file``, and ``difference`` when it does.
 
     With ``entries``, where they differ is listed too, up to that many entries
-    from each side, and the rest are counted (``LTSPICE_DIFFERENCE_ENTRIES``).
+    from each side, and the rest are counted, with a ``hint`` naming the call
+    that reads them (``LTSPICE_DIFFERENCE_ENTRIES``).
     """
     difference = file_difference(on_disk, window_text)
     if difference is None:
@@ -389,6 +409,7 @@ def window_difference(on_disk: bytes, window_text: str, *, entries: int = 0) -> 
         omitted = sum(max(0, len(side) - entries) for side in sides)
         if omitted:
             said["difference_omitted"] = omitted
+            said["hint"] = difference_in_full(window="this pid")
     return said
 
 

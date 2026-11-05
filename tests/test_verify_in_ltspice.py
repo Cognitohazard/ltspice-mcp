@@ -20,6 +20,8 @@ from ltspice_mcp.lib import ltspice_window
 from ltspice_mcp.lib.ltspice_window import OpenWindows
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import verify
+from ltspice_mcp.tools._base import difference_in_full
+from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
 from tests._ltspice_window import (
     PID,
@@ -115,6 +117,15 @@ async def test_a_window_showing_another_sheet_than_the_file_is_said_to(
     assert "only in the window: SYMBOL res 128 112 R90" in shown["difference"]
     assert "shows a different one from the file that was checked" in data["hint"]
     assert window_of(world)["designs"][str(asc_file)] == held
+    # The difference is named in part; the hint names the call that reads all of it.
+    assert difference_in_full() in data["hint"]
+    queries: Any = [{"kind": "open_in_ltspice", "path": shown["path"], "pid": shown["pid"]}]
+    read = await handle_inspect(InspectInput(queries=queries), asc_state)
+    assert read.structured_content is not None
+    (whole,) = read.structured_content["results"]
+    (in_window,) = whole["data"]["only_in_window"]
+    (in_file,) = whole["data"]["only_in_file"]
+    assert "SYMATTR Value 5k" in in_window and "SYMATTR Value 1k" in in_file
 
 
 async def test_a_netlist_is_opened_too(asc_state: SessionState, work_dir: Path, tmp_path: Path):

@@ -133,7 +133,7 @@ def test_every_file_argument_is_a_path_that_is_never_empty():
     """A file argument is named path, and an empty one names no file."""
     assert not {"raw_file", "raw_path", "log_path"} & set(_shared_arguments())
     paths = [use for tool, schema in _published().items() for use in _every(schema, "path", tool)]
-    assert len(paths) == 11
+    assert len(paths) == 12
     assert [where for where, schema in paths if schema.get("minLength") != 1] == []
 
 
