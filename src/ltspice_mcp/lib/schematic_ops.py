@@ -120,6 +120,7 @@ from ltspice_mcp.lib.routing import (
     segment_text,
     wires_through,
 )
+from ltspice_mcp.lib.schematic_scene import decode_text_lines
 from ltspice_mcp.lib.sheet import (
     INSTANCE_PREFIX,
     PARAMETER_ATTRIBUTES,
@@ -1319,13 +1320,32 @@ def _no_text_matched(instruction: str) -> NetlistError:
 
 
 def _shown_text(body: str) -> str:
-    """A TEXT record's text as a reader writes it: each ``\\n`` escape the
-    record holds (``_text_record_body``) as a line break."""
-    return body.replace("\\n", "\n")
+    """A TEXT record's text as it reads, a line break as a line break: decoded
+    as the drawing and the sheet findings decode it (``decode_text_lines``)."""
+    return "\n".join(decode_text_lines(body))
 
 
 def _text_kind(text: Text) -> str:
     return "comment" if text.type == TextTypeEnum.COMMENT else "directive"
+
+
+def _refuse_unrunnable_directive(text: str) -> None:
+    """Refuse a directive the pre-flight rules refuse, as every op that writes
+    one does; a comment is not checked."""
+    err = validate_directive(text, simulator="LTspice")
+    if err is not None:
+        raise NetlistError(f"Refusing directive {text!r}: {err.message} ({err.suggestion})")
+
+
+def _listed_texts(texts: Sequence[Text], shown: int = 10) -> str:
+    """The texts, each with its anchor, for a refusal; past ``shown`` it says how
+    many more there are."""
+    listed = "; ".join(
+        f"{_shown_text(text.text)!r} at ({int(text.coord.X)}, {int(text.coord.Y)})"
+        for text in texts[:shown]
+    )
+    more = len(texts) - shown
+    return f"{listed}; and {more} more" if more > 0 else listed
 
 
 # ---------------------------------------------------------------------------
@@ -2273,6 +2293,8 @@ class OpReplaceDirective(StrictModel):
     op: Literal["replace_directive"]
     instruction: str = Field(description="Names one text, as remove_directive names them.")
     text: str = Field(description="The new text.")
+    x: int | None = Field(default=None, description="With y, picks the named text anchored there.")
+    y: int | None = None
 
 
 class PlotPaneSpec(StrictModel):
@@ -2391,6 +2413,7 @@ KEEPS_WIRING = frozenset(
         "set_component_attribute",
         "add_directive",
         "remove_directive",
+        "replace_directive",
         "set_plot_panes",
     }
 )
@@ -2679,13 +2702,8 @@ def apply_op_inplace(
         return result
 
     if isinstance(op, OpAddDirective):
-        # Comments allow any text; SPICE directives go through validate_directive.
         if op.kind == "directive":
-            err = validate_directive(op.instruction, simulator="LTspice")
-            if err is not None:
-                raise NetlistError(
-                    f"Refusing directive {op.instruction!r}: {err.message} ({err.suggestion})"
-                )
+            _refuse_unrunnable_directive(op.instruction)
         text_type = TextTypeEnum.DIRECTIVE if op.kind == "directive" else TextTypeEnum.COMMENT
         _append_asc_text(
             editor, op.instruction, text_type, op.x, op.y, op.size, default_x=16, default_y=16
@@ -2717,24 +2735,39 @@ def apply_op_inplace(
     if isinstance(op, OpReplaceDirective):
         # One text, named as remove_directive names it, keeps its record (place,
         # size, justification, kind) and takes the new text.
+        # Everything is checked before the text changes, so a refused op leaves
+        # the sheet as it was, and a dry run's later ops see it so.
+        if (op.x is None) != (op.y is None):
+            raise NetlistError("replace_directive takes x and y together, or neither.")
         named = _text_matcher(op.instruction)
         matched = [text for text in editor.directives if named(text)]
         if not matched:
             raise _no_text_matched(op.instruction)
+        if op.x is not None:
+            there = [
+                text for text in matched if (int(text.coord.X), int(text.coord.Y)) == (op.x, op.y)
+            ]
+            if not there:
+                raise NetlistError(
+                    f"None of the texts {op.instruction!r} names is anchored at "
+                    f"({op.x}, {op.y}); they are {_listed_texts(matched)}."
+                )
+            matched = there
         if len(matched) > 1:
-            listed = "; ".join(repr(_shown_text(text.text)) for text in matched[:10])
+            place = " at that anchor" if op.x is not None else ""
+            fix = (
+                "Move one of them first: texts on one anchor cannot be told apart."
+                if op.x is not None
+                else "Give the x and y of the one to change."
+            )
             raise NetlistError(
-                f"replace_directive names one text, and {op.instruction!r} names "
-                f"{len(matched)}: {listed}. Give one of them whole, or a narrower regex."
+                f"replace_directive changes one text, and {op.instruction!r} names "
+                f"{len(matched)}{place}: {_listed_texts(matched)}. {fix}"
             )
         (text,) = matched
         kind = _text_kind(text)
         if kind == "directive":
-            err = validate_directive(op.text, simulator="LTspice")
-            if err is not None:
-                raise NetlistError(
-                    f"Refusing directive {op.text!r}: {err.message} ({err.suggestion})"
-                )
+            _refuse_unrunnable_directive(op.text)
         was = _shown_text(text.text)
         text.text = _text_record_body(op.text)
         return {

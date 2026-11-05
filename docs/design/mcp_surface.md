@@ -107,7 +107,7 @@ Codes by kind of failure:
 | `analysis_deadline` | a result read ran past its wall-clock bound and was abandoned |
 | `no_axis` | the selected plot is a table (an operating point, `.tf` or `.pz` result), so it has no sweep axis to query at |
 | `job_not_found` | no job with that `job_id` or `request_id` |
-| `invalid_cursor` | a page cursor did not decode, or was minted for another listing, view or request; the `hint` says to send back the cursor the same tool returned |
+| `invalid_cursor` | a page cursor did not decode, or was minted for another listing, view or request, or for a file that has changed since; the `hint` says to send back the cursor the same tool returned, or the message names the argument to change |
 | `idempotency_conflict` | a `request_id` was reused for a different payload |
 | `request_gate_busy` | another submission holds that `request_id`; retry with the same id |
 | `cancel_not_authorized` | the call reached a server process other than the one running the job (the job's owning process) and presented no matching `control_token` |
@@ -133,6 +133,8 @@ Codes named after the stage, used where the stage is the more useful fact:
 **Page object.** No tool returns an unbounded collection. Every collection
 that can be large is a page, `{items, total, returned, truncated,
 next_cursor}`, and every tool that returns a page accepts its cursor as input.
+`verify_circuit`'s `findings` is one list with a cap per rule instead: a rule
+cut at the cap has a `findings_omitted` entry with its own cursor (§3.5).
 
 An `inspect` item's `page` names the data key its cursor pages in a
 `collections {<data key>: {total, returned, truncated}}` block, which is how
@@ -1551,6 +1553,9 @@ render        {format: "png"|"svg", scale?, max_pixels?,
 in_ltspice    also open the file in the LTspice window the user has running,
               in front; default false
 export_to     "managed" (default) | "sidecar"
+findings_cursor
+              a findings_omitted entry's next_cursor: lists that rule's next
+              25 findings in place of its first
 ```
 
 `compare` (`{reference, anchors, rtol, mode}`) means the same here as in
@@ -1658,10 +1663,10 @@ component's signature is its model or value plus its instance parameters,
 without nodes (`equivalence` is the mode that compares wiring); a parameter
 given twice contributes both copies, so a second copy counts as a change.
 
-Output: findings in the shared shape, a comparison block per mode, a render
-block `{path, sha256, source_sha256, width, height, downscaled,
-returned_inline, svg?, note, …}`, a scene summary, `outcome` and
-`hint`.
+Output: findings in the shared shape, `findings_omitted` for the rules cut
+at the cap (below), a comparison block per mode, a render block `{path,
+sha256, source_sha256, width, height, downscaled, returned_inline, svg?,
+note, …}`, a scene summary, `outcome` and `hint`.
 
 `comparison` is present exactly when `compare` is in `checks_run`. When it is
 not, a `checks_skipped` row says why (no reference supplied, not requested,
@@ -1708,19 +1713,39 @@ move the part or the item its text crosses. `wire_through_symbol` and `text_in_s
 what a part draws, not its box, so a wire or a text anchor in the empty corner
 beside an amplifier's triangle is not in the part.
 
-A cap of 25 findings per rule applies to the layout and quality rules, to the
-value-suffix rules (`value_suffix_micro_sign`, `value_suffix_mojibake`,
-`value_suffix_nonascii`) and to `dropped_wire`. A capped rule other than
-`dropped_wire` adds an observation `<rule>: showing 25 of <n> findings;
-api.verify_circuit returns every one.`, followed by where that runs;
-`dropped_wire` adds none, and `rules_run` gives its full count. The `hint`
-counts every finding, not only those shown.
+A reply lists at most 25 findings of each layout and quality rule, of each
+value-suffix rule (`value_suffix_micro_sign`, `value_suffix_mojibake`,
+`value_suffix_nonascii`) and of `dropped_wire`. A rule with more has an entry
+in `findings_omitted`, keyed by its `rule_id`: `{omitted, total,
+next_cursor}`, where `omitted` counts its findings after the ones listed and
+`total` counts them all. Passing `next_cursor` back as `findings_cursor` lists
+that rule's next 25 findings in place of its first; the entry in that reply
+carries the cursor for the page after, and the last page has none. The rest
+of the reply, `rules_run` included, is the same as without the cursor. The
+`hint` counts every finding, not only those listed, names each rule cut short
+with the check that reports it, so a caller can narrow `checks` to that check
+to skip the others, and on a cursor's page says which findings it lists.
+
+A cursor is bound to every finding of its rule as the call that returned it
+found them, which depends on more than the checked file: the symbols a sheet
+uses, its export, the build that reads a deck. A call that does not run the
+check that reports the rule is refused with `invalid_cursor` before any check
+runs, and the refusal names what to change (add the check to `checks`, or
+leave `render.mode` at `with_checks`). A call whose findings of the rule are
+not the ones the cursor was counted against is refused with `invalid_cursor`
+once they are found, and the refusal says why: the check did not run, with
+its reason; it failed, with its error; or what the findings are read from
+changed. Either refusal says to call again without `findings_cursor`, and
+neither carries the generic cursor hint. A malformed cursor is refused with
+`invalid_cursor` too.
+`api.verify_circuit` returns every finding and takes no `findings_cursor`
+unless called with `raw_page=True`.
 
 **No `baseline` filter.** `verify_circuit` reports on the whole file. To find
 what changed relative to a copy the caller kept, diff the two finding lists,
-which include `rule_id`, `at` and `subject`. Diff the findings
-`api.verify_circuit` returns (through `run_code` or the Python API), which are
-complete and never capped; capped lists do not diff reliably.
+which include `rule_id`, `at` and `subject`. Diff complete lists: follow each
+`findings_omitted` cursor to the end, or diff the findings
+`api.verify_circuit` returns, which are never capped.
 
 ### 3.6 `inspect` — pure read
 
@@ -2026,6 +2051,7 @@ Suppression is per call, and `linter_version` is reported in provenance.
 | `step-ngspice` | warning | ngspice: a `.step`, which ngspice ignores in batch mode, so the deck runs once at the base value |
 | `temp-as-param` | blocking | a deck that sweeps temperature as a parameter (§3.1) |
 | `duplicate-param` | warning | an instance, `.model` or `.subckt` card giving one parameter more than once, in any case; which copy the simulator reads is not known, and `verify_circuit` reports the same as `duplicate_parameter` |
+| `unreadable-card` | warning | a card no rule can split into its parts: an unclosed quote, brace or parenthesis, or a closer with nothing open. The other rules leave it out, and the names and nodes on it count as defined and connected, so no rule reports something on a guess about it; `verify_circuit` reports the same as `unreadable_card` |
 | `value-suffix-mojibake` | blocking | a suffix showing the file was decoded in an encoding it was not written in, such as the `Âµ` a UTF-8 `µ` becomes under cp1252; the simulator reads the bare number, off by a factor of 1e6 |
 | `value-suffix-nonascii` | warning | any other symbol after a number, such as `10Ω` or `25°C`, read as the bare number, which is usually the intended value. Staging spells a `µ`/`μ` as `u` before the deck is linted; for a deck run elsewhere `verify_circuit` reports it as one observation per file, or as a warning per value when a reader the server knows of (LTspice XVII) would decode the file differently |
 
@@ -2253,11 +2279,23 @@ file holds. A `regex:` prefix names every text the pattern is found in
 at the start of the text. `remove_directive` removes every text it names and
 lists each in `removed_texts`. `replace_directive` gives one text new words
 (`text`) and keeps its record: its place, size, justification and kind. Its
-`instruction` names the text by the same rule and must name exactly one; one
-that names several is refused with each, so a caller narrows it rather than
-writing one text over many. A directive's new text is checked as
-`add_directive`'s is. Applied again with `now` as `instruction` and `was` as
-`text`, it puts the text back.
+`instruction` names the text by the same rule and must name exactly one, or
+`x` and `y` pick the named text anchored there. An instruction that names
+several texts is refused with the place of each, up to ten and the count of
+the rest, so a caller picks one rather than writing one text over many; texts
+on one anchor cannot be told apart, so one of them is moved first. A
+directive's new text is checked as `add_directive`'s is, and a refused op
+changes nothing. Applied again with its result's `x` and `y`, `now` as
+`instruction` and `was` as `text`, it puts the text back, unless `now` begins
+with `regex:`, which names a pattern, or a text holds a backslash (below).
+
+A text is read, in a reply, as the drawing and the sheet findings read it: a
+`\n` in the TEXT record is a line break and `\\` a backslash, so a Windows
+path keeps its `\new_models`. Writing a text escapes only line breaks, and
+naming one compares it with the text as the record holds it, so a text with
+a backslash is named by the record's spelling, and the text a reply gives is
+not written back as the record held it. How LTspice writes and reads a
+backslash in a TEXT record is not recorded, so neither side is changed yet.
 
 `set_component_value` splits a trailing `KEY=VALUE` off the value it is given
 and sets it wherever the part already gives that key (`Value`, `Value2`,

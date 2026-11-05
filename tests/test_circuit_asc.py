@@ -2547,14 +2547,28 @@ class TestReplaceDirective:
     """replace_directive changes one text and keeps its record: place, size,
     justification and kind."""
 
-    def _apply(self, sheet: Path, instruction: str, text: str) -> tuple[dict, Path]:
+    def _apply(self, sheet: Path, instruction: str, text: str, **at: int) -> dict:
+        """Apply the op to the sheet and save it; a refusal raises before the save."""
         from ltspice_mcp.lib.schematic_ops import OpReplaceDirective, apply_op_inplace
 
         editor = open_editor(sheet)
-        op = OpReplaceDirective(op="replace_directive", instruction=instruction, text=text)
+        op = OpReplaceDirective(op="replace_directive", instruction=instruction, text=text, **at)
         result = apply_op_inplace(editor, op, sheet)
         editor.save_netlist(sheet)
-        return result, sheet
+        return result
+
+    def _refused(self, sheet: Path, instruction: str, text: str, **at: int) -> str:
+        """The refusal's message, after checking the editor holds the texts it
+        held: a refused op changes nothing, so a dry run's later ops see none."""
+        from ltspice_mcp.lib.schematic_ops import OpReplaceDirective, apply_op_inplace
+
+        editor = open_editor(sheet)
+        before = [(text.text, text.coord.X, text.coord.Y) for text in editor.directives]
+        op = OpReplaceDirective(op="replace_directive", instruction=instruction, text=text, **at)
+        with pytest.raises(NetlistError) as refused:
+            apply_op_inplace(editor, op, sheet)
+        assert [(text.text, text.coord.X, text.coord.Y) for text in editor.directives] == before
+        return str(refused.value)
 
     def test_the_text_changes_and_its_record_stays(self, work_dir: Path):
         sheet = _write_sheet(
@@ -2562,7 +2576,7 @@ class TestReplaceDirective:
             "TEXT 32 48 VRight 3 !.tran 1m",
             "TEXT 32 96 Left 2 ;keep me",
         )
-        result, _ = self._apply(sheet, r"regex:^\.tran", ".tran 2m")
+        result = self._apply(sheet, r"regex:^\.tran", ".tran 2m")
         assert result["text"] == {
             "kind": "directive",
             "x": 32,
@@ -2576,30 +2590,72 @@ class TestReplaceDirective:
 
     def test_a_comment_stays_a_comment_and_line_breaks_read_as_breaks(self, work_dir: Path):
         sheet = _write_sheet(work_dir / "note.asc", "TEXT 16 16 Left 2 ;old\\nnote")
-        result, _ = self._apply(sheet, "old\nnote", "new\nnote")
+        result = self._apply(sheet, "old\nnote", "new\nnote")
         assert result["text"]["kind"] == "comment"
         assert (result["text"]["was"], result["text"]["now"]) == ("old\nnote", "new\nnote")
         assert "TEXT 16 16 Left 2 ;new\\nnote" in sheet.read_text(encoding="utf-8")
 
-    def test_a_name_for_more_than_one_text_is_refused_with_each(self, work_dir: Path):
+    def test_a_name_for_two_texts_is_refused_with_the_place_of_each(self, work_dir: Path):
         sheet = _write_sheet(work_dir / "two.asc", *_TEXTS)
-        before = sheet.read_text(encoding="utf-8")
-        with pytest.raises(NetlistError, match=r"names 2: '\.tran 1m'; '\.tran 1m'\. Give one"):
-            self._apply(sheet, ".tran 1m", ".tran 2m")
-        assert sheet.read_text(encoding="utf-8") == before
+        message = self._refused(sheet, ".tran 1m", ".tran 2m")
+        assert message.endswith(
+            "names 2: '.tran 1m' at (16, 16); '.tran 1m' at (16, 112). "
+            "Give the x and y of the one to change."
+        )
+
+    def test_x_and_y_pick_one_of_two_identical_texts(self, work_dir: Path):
+        sheet = _write_sheet(work_dir / "pick.asc", *_TEXTS)
+        result = self._apply(sheet, ".tran 1m", ".tran 2m", x=16, y=112)
+        assert (result["text"]["x"], result["text"]["y"]) == (16, 112)
+        lines = sheet.read_text(encoding="utf-8").splitlines()
+        assert "TEXT 16 16 Left 2 !.tran 1m" in lines
+        assert "TEXT 16 112 Left 2 !.tran 2m" in lines
+
+    def test_the_result_undoes_it_where_the_new_text_is_not_unique(self, work_dir: Path):
+        """Applied again with its result's x and y, now as instruction and was
+        as text, the op puts the sheet back, even when the new text is the same
+        as another one."""
+        sheet = _write_sheet(
+            work_dir / "undo.asc", "TEXT 16 16 Left 2 !.tran 1m", "TEXT 16 48 Left 2 !.tran 2m"
+        )
+        # Lines, not bytes: the editor's save writes the platform's line ending.
+        before = sheet.read_text(encoding="utf-8").splitlines()
+        done = self._apply(sheet, ".tran 1m", ".tran 2m")["text"]
+        assert sheet.read_text(encoding="utf-8").splitlines() != before
+        self._apply(sheet, done["now"], done["was"], x=done["x"], y=done["y"])
+        assert sheet.read_text(encoding="utf-8").splitlines() == before
+
+    def test_x_and_y_where_no_named_text_is_are_refused_with_where_they_are(self, work_dir: Path):
+        sheet = _write_sheet(work_dir / "where.asc", *_TEXTS)
+        message = self._refused(sheet, ".tran 1m", ".tran 2m", x=16, y=48)
+        assert message == (
+            "None of the texts '.tran 1m' names is anchored at (16, 48); they are "
+            "'.tran 1m' at (16, 16); '.tran 1m' at (16, 112)."
+        )
+
+    def test_x_without_y_is_refused(self, work_dir: Path):
+        sheet = _write_sheet(work_dir / "half.asc", *_TEXTS)
+        assert "x and y together" in self._refused(sheet, ".tran 1m", ".tran 2m", x=16)
+
+    def test_a_long_list_of_matches_says_how_many_it_leaves_out(self, work_dir: Path):
+        lines = [f"TEXT 16 {16 + 32 * i} Left 2 ;note" for i in range(12)]
+        sheet = _write_sheet(work_dir / "many.asc", *lines)
+        message = self._refused(sheet, "note", "memo")
+        assert "names 12: " in message
+        assert "'note' at (16, 304); and 2 more. Give the x and y" in message
 
     def test_a_name_for_no_text_is_refused_as_remove_directive_refuses_it(self, work_dir: Path):
         sheet = _write_sheet(work_dir / "none.asc", *_TEXTS)
-        with pytest.raises(NetlistError, match=r"No directive or comment matched '\.ac'"):
-            self._apply(sheet, ".ac", ".ac dec 10 1 1meg")
+        message = self._refused(sheet, ".ac", ".ac dec 10 1 1meg")
+        assert message.startswith("No directive or comment matched '.ac'")
 
     def test_a_directive_the_check_refuses_is_not_written(self, work_dir: Path):
         sheet = _write_sheet(
             work_dir / "meas.asc", "TEXT 16 16 Left 2 !.meas tran vmax MAX V(out)"
         )
-        with pytest.raises(NetlistError, match=r"Refusing directive.*constants"):
-            self._apply(sheet, "regex:vmax", ".meas tran k MAX V(out)")
-        assert "!.meas tran vmax MAX V(out)" in sheet.read_text(encoding="utf-8")
+        message = self._refused(sheet, "regex:vmax", ".meas tran k MAX V(out)")
+        assert message.startswith("Refusing directive '.meas tran k MAX V(out)'")
+        assert "constants" in message
 
 
 def test_removed_texts_read_line_breaks_as_breaks(work_dir: Path):
@@ -2611,6 +2667,30 @@ def test_removed_texts_read_line_breaks_as_breaks(work_dir: Path):
     op = OpRemoveDirective(op="remove_directive", instruction=r"regex:a=1")
     (removed,) = apply_op_inplace(open_editor(sheet), op, sheet)["removed_texts"]  # type: ignore[misc]
     assert removed["text"] == ".param a=1\n.param b=2"
+
+
+def test_a_text_reads_alike_in_the_ops_and_the_drawing(work_dir: Path):
+    """A Windows path in a TEXT record holds each backslash escaped, ``\\\\``, so
+    the ``\\n`` inside ``\\\\new_models`` is no line break. remove_directive's
+    removed_texts and replace_directive's was read it as the drawing and the
+    sheet findings do (``decode_text_lines``), one line."""
+    from ltspice_mcp.lib.schematic_ops import (
+        OpRemoveDirective,
+        OpReplaceDirective,
+        apply_op_inplace,
+    )
+    from ltspice_mcp.lib.schematic_scene import decode_text_lines
+
+    record = ".include C:\\\\new_models\\\\x.lib"
+    (drawn,) = decode_text_lines(record)
+    sheet = _write_sheet(work_dir / "path.asc", f"TEXT 16 16 Left 2 !{record}")
+    replace = OpReplaceDirective(
+        op="replace_directive", instruction="regex:include", text=".include y.lib"
+    )
+    was = apply_op_inplace(open_editor(sheet), replace, sheet)["text"]["was"]  # type: ignore[index]
+    remove = OpRemoveDirective(op="remove_directive", instruction="regex:include")
+    (removed,) = apply_op_inplace(open_editor(sheet), remove, sheet)["removed_texts"]  # type: ignore[misc]
+    assert was == removed["text"] == drawn == ".include C:\\new_models\\x.lib"
 
 
 @pytest.mark.asyncio

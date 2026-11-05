@@ -306,6 +306,7 @@
       "compare.reference",
       "compare.rtol",
       "export_to",
+      "findings_cursor",
       "in_ltspice",
       "path",
       "render",

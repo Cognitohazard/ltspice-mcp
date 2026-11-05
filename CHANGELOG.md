@@ -65,13 +65,14 @@ tool-surface changes.
   same `request_id` returns the job it made, with that job's seed.
 - `edit_schematic`'s `replace_directive` op changes one directive's or
   comment's text in one call. Its `instruction` names the text as
-  `remove_directive` does, the whole text or `regex:`, and must name one; one
-  that names several is refused with each. The text keeps its place, size,
+  `remove_directive` does, the whole text or `regex:`, and must name one, or
+  `x` and `y` pick the named text anchored there; one that names several is
+  refused with the place of each. The text keeps its place, size,
   justification and kind, which a `remove_directive` and an `add_directive`
   lost unless given again, and a directive's new text is checked as
   `add_directive`'s is. Its result gives the text's kind and place and what
-  it `was` and is `now`. `remove_directive`'s `removed_texts` now gives a
-  text with its line breaks, where it gave the `\n` escapes the file holds.
+  it `was` and is `now`; applied again with that place, `now` and `was`, it
+  puts the text back.
 - At `INFO`, the server logs one structured record per tool call on the
   `ltspice_mcp.events` logger: the tool, its duration, how it ended (a
   result, an error and its code, a cancellation by the client, or a protocol
@@ -90,6 +91,18 @@ tool-surface changes.
   resource (and `spice://capabilities/{family}`) serves the whole table with
   its evidence. The refusals of a QSPICE run off Windows and of a schematic
   run on QSPICE or Xyce now read the table.
+- `verify_circuit` lists the findings past its cap of 25 a rule through the
+  tool itself. A rule with more has a `findings_omitted` entry, `{omitted,
+  total, next_cursor}`, and the new `findings_cursor` argument takes the
+  cursor back to list that rule's next 25 findings, so every finding can be
+  read without `run_code` or the Python API. The cursor is bound to the
+  rule's findings as they were found, and is refused with `invalid_cursor`
+  once they change (the file, a symbol it uses or its export), or when the
+  call does not run the check that reports the rule, naming what to change.
+  The entry replaces the `<rule>: showing 25 of <n> findings` observation,
+  which sent the caller to `api.verify_circuit` for the rest, and
+  `dropped_wire`, which was cut at the cap with no word, now has one too.
+  The hint names each rule cut short and the check that reports it.
 - `inspect(kind="open_in_ltspice")` reads every entry where a window's copy
   of a sheet differs from the file. The listing still names 25 entries a
   side and counts the rest in `difference_omitted`, and a `hint` beside the
@@ -120,8 +133,26 @@ tool-surface changes.
   Such a rule used to be refused with `unsupported_backend`, a code the server
   no longer returns.
 
+
+### Changed
+
+- `remove_directive`'s `removed_texts` gives a text as it reads, as the
+  drawing and the sheet findings read it: a line break where the TEXT record
+  holds a `\n` escape, and one backslash where it holds `\\`. It gave the
+  record's spelling, so a client that compared it with the `.asc` line now
+  sees a different string.
+
 ### Fixed
 
+- A card no rule could split into its parts, such as `R1 in out {1k` with
+  its brace left open or a `.meas` with an unclosed parenthesis, was left out
+  of every check without a word, so `verify_circuit` and the linter read the
+  deck as one without it: a node wired through it reported as wired to one
+  element, and a measurement of it as naming nothing. Such a card is now
+  reported at its line (`unreadable_card` in `verify_circuit`, the
+  `unreadable-card` lint rule, a warning in both), and the names and nodes on
+  it count as defined and connected, so no other rule reports on a guess
+  about it.
 - A `random` variation no longer redraws a sample when other cases change. Its
   draws were keyed on the case's position in the expanded list, so with
   several `assign` values each value drew its own numbers, and adding a value
