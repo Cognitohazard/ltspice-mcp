@@ -685,10 +685,23 @@ class BodeCrossingRecipe(VariableRecipe):
         ),
     )
 
+    ref_hz: float | str | None = Field(
+        default=None,
+        description=(
+            "Measure level_db from the gain at this frequency: -3.0103 with ref_hz=1k "
+            "is 1/sqrt(2) below the gain at 1 kHz."
+        ),
+    )
+
     @model_validator(mode="after")
     def _one_crossing_level(self) -> BodeCrossingRecipe:
         if (self.level_db is None) == (self.level_deg is None):
             raise ValueError("provide exactly one of 'level_db' or 'level_deg'")
+        if self.ref_hz is not None and self.level_db is None:
+            raise ValueError(
+                "'ref_hz' measures 'level_db' from the gain at that frequency; a phase "
+                "level is not relative to it"
+            )
         return self
 
 

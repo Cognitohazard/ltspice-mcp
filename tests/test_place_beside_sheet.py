@@ -1,23 +1,41 @@
-"""jobs(action="place_beside_sheet"): a case's results beside the sheet it ran.
+"""A case's results beside the sheet it ran: jobs(action="place_beside_sheet"),
+and run_experiments' execution.results_beside_sheet.
 
 LTspice keeps a sheet's own results beside it under its name and opens them
 from there; a job keeps its runs' in the job folder. The action copies one
-case's there on request and refuses what the sheet's window could not take as
-its own.
+case's there on request, the run option copies each sheet's as the job's runs
+finish, and both refuse what the sheet's window could not take as its own.
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import shutil
 from pathlib import Path
 from typing import Any
 
 import jsonschema
 import pytest
+from pydantic import ValidationError
+from spicelib.simulators.ltspice_simulator import LTspice
+from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
+from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.lib import filelock as filelock_mod
+from ltspice_mcp.lib import wsl as wsl_mod
+from ltspice_mcp.lib.experiment_runner import ExperimentRunner
+from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
 from ltspice_mcp.tools.jobs import JOBS_OUTPUT_SCHEMA, JobsInput, handle_jobs
-from tests.conftest import copied_sheet, job_that_ran
+from tests.conftest import (
+    FIXTURES_DIR,
+    copied_sheet,
+    job_that_ran,
+    recorded_fixture_simulator,
+    terminal_experiment,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -140,3 +158,175 @@ async def test_a_sheets_receipt_says_where_its_results_are(
     job.cases[0].circuit_path = work_dir / "amp.cir"
     receipt = await place(state_no_sim, action="status")
     assert all(o["code"] != "results_not_beside_sheet" for o in receipt.get("observations", []))
+
+
+# ---------------------------------------------------------------------------
+# run_experiments(execution={"results_beside_sheet": true})
+# ---------------------------------------------------------------------------
+
+_RC_DECK = "* rc\nV1 in 0 PULSE(0 1 0 1n 1n 1m 2m)\nR1 in out 1k\nC1 out 0 100n\n.tran 1m\n.end\n"
+
+
+class _ExportingLTspice(LTspice):
+    """An LTspice whose export of any sheet is the RC deck the recorded run
+    (``recorded_fixture_simulator``) stands for. Only the program is stood in
+    for: the export, the run and the copy go through the server's own code."""
+
+    @classmethod
+    def create_netlist(cls, circuit_file: Any, *_args: Any, **_kwargs: Any) -> Path:
+        net = Path(circuit_file).with_suffix(".net")
+        net.write_text(_RC_DECK, encoding="utf-8")
+        return net
+
+
+@pytest.fixture
+def ltspice_state(config: ServerConfig, monkeypatch: pytest.MonkeyPatch) -> SessionState:
+    recorded_fixture_simulator(monkeypatch)
+    # An LTspice under WSL would have its runs moved to the Windows side.
+    monkeypatch.setattr(wsl_mod, "is_wsl", lambda: False)
+    return SessionState.create(config, {"ltspice": _ExportingLTspice, "ngspice": NGspiceSimulator})
+
+
+def _run(*paths: Path, **execution: Any) -> dict[str, Any]:
+    return {
+        "request_id": "beside",
+        "circuits": [{"path": str(path), "id": f"c{n}"} for n, path in enumerate(paths)],
+        "execution": {"wait_s": 30, "results_beside_sheet": True, **execution},
+        "lint": "off",
+    }
+
+
+def _observed(receipt: dict[str, Any], code: str) -> list[dict[str, Any]]:
+    return [o for o in receipt.get("observations", []) if o["code"] == code]
+
+
+async def test_a_sheets_run_leaves_its_results_beside_it(
+    ltspice_state: SessionState, work_dir: Path
+):
+    sheet = copied_sheet(work_dir)
+    receipt = await terminal_experiment(ltspice_state, _run(sheet))
+    assert receipt["status"] == "completed", receipt
+    recorded = FIXTURES_DIR / "ltspice_tran_rc"
+    assert sheet.with_suffix(".raw").read_bytes() == recorded.with_suffix(".raw").read_bytes()
+    assert sheet.with_suffix(".log").read_bytes() == recorded.with_suffix(".log").read_bytes()
+    (placed,) = _observed(receipt, "results_placed_beside_sheet")
+    assert placed["evidence"]["sheet"] == str(sheet)
+    assert [Path(f["to"]).name for f in placed["evidence"]["files"]] == ["amp.raw", "amp.log"]
+    # The receipt no longer says nothing was written beside the sheet.
+    assert _observed(receipt, "results_not_beside_sheet") == []
+    # The job keeps its own copy, which every read of the job takes.
+    (row,) = receipt["runs"]["items"]
+    kept = Path(row["raw"])
+    assert kept != sheet.with_suffix(".raw") and await asyncio.to_thread(kept.is_file)
+
+
+async def test_a_sheet_changed_during_the_run_is_left_alone(
+    ltspice_state: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    sheet = copied_sheet(work_dir)
+    run = ExperimentRunner.submit_netlist
+
+    def edit_then_run(self: ExperimentRunner, *args: Any, **kwargs: Any) -> Any:
+        sheet.write_bytes(sheet.read_bytes() + b"TEXT 0 0 Left 2 ;edited\n")
+        return run(self, *args, **kwargs)
+
+    monkeypatch.setattr(ExperimentRunner, "submit_netlist", edit_then_run)
+    receipt = await terminal_experiment(ltspice_state, _run(sheet))
+    assert receipt["status"] == "completed", receipt
+    assert not sheet.with_suffix(".raw").exists()
+    (note,) = _observed(receipt, "results_not_placed")
+    assert note["evidence"]["reason_code"] == "sheet_changed"
+    assert "Run the sheet again" in note["detail"]
+    assert _observed(receipt, "results_not_beside_sheet") == []
+
+
+async def test_a_copy_that_fails_costs_only_the_copy(ltspice_state: SessionState, work_dir: Path):
+    """The runs stand, the receipt says what failed, and names the action
+    that copies the results once it is fixed."""
+    sheet = copied_sheet(work_dir)
+    sheet.with_suffix(".raw").mkdir()  # nothing can replace a folder with a file
+    receipt = await terminal_experiment(ltspice_state, _run(sheet))
+    assert receipt["status"] == "completed", receipt
+    (note,) = _observed(receipt, "results_not_placed")
+    assert note["evidence"]["reason_code"] == "copy_failed"
+    assert "jobs(action='place_beside_sheet'" in note["detail"]
+
+
+async def test_a_sheet_another_process_holds_is_left_alone(
+    ltspice_state: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A sheet whose lock another server process holds past the lock's wait
+    (an edit in progress) is not copied to, and the job's runs still stand."""
+    sheet = copied_sheet(work_dir)
+    # timing: the wait running out is the case under test; the holder never lets go
+    monkeypatch.setattr(filelock_mod, "DEFAULT_TIMEOUT", 0.2)
+    held = contextlib.ExitStack()
+    run = ExperimentRunner.submit_netlist
+
+    def run_then_hold(self: ExperimentRunner, *args: Any, **kwargs: Any) -> Any:
+        # Taken once the sheet is exported, as another process's edit would be.
+        held.enter_context(filelock_mod.file_lock(Store.circuit_lock(sheet)))
+        return run(self, *args, **kwargs)
+
+    monkeypatch.setattr(ExperimentRunner, "submit_netlist", run_then_hold)
+    with held:
+        receipt = await terminal_experiment(ltspice_state, _run(sheet))
+    assert receipt["status"] == "completed", receipt
+    assert not sheet.with_suffix(".raw").exists()
+    (note,) = _observed(receipt, "results_not_placed")
+    assert note["evidence"]["reason_code"] == "sheet_locked"
+    assert "jobs(action='place_beside_sheet'" in note["detail"]
+
+
+@pytest.mark.parametrize(
+    ("circuits", "execution", "code"),
+    [
+        ("netlist", {}, "not_a_sheet"),
+        ("sweep", {}, "several_cases_per_sheet"),
+        ("twice", {}, "several_cases_per_sheet"),
+        ("sheet", {"simulator": "ngspice"}, "not_ltspice"),
+    ],
+)
+async def test_a_request_no_sheet_could_hold_is_refused_before_it_runs(
+    ltspice_state: SessionState,
+    work_dir: Path,
+    circuits: str,
+    execution: dict[str, Any],
+    code: str,
+):
+    sheet = copied_sheet(work_dir)
+    netlist = work_dir / "rc.cir"
+    netlist.write_text(_RC_DECK, encoding="utf-8")
+    paths = {"netlist": (netlist,), "twice": (sheet, sheet)}.get(circuits, (sheet,))
+    payload = _run(*paths, **execution)
+    if circuits == "sweep":
+        payload["variations"] = [{"kind": "assign", "assign": {"R1": ["1k", "2k"]}}]
+    result = await handle_run_experiments(
+        RunExperimentsInput.model_validate(payload), ltspice_state
+    )
+    data = result.structured_content
+    assert data is not None and result.is_error
+    assert data["error"]["code"] == code
+    assert data["error"]["commit_state"] == "not_started"
+    if code == "several_cases_per_sheet":
+        assert "jobs(action='place_beside_sheet'" in data["error"]["message"]
+    assert not sheet.with_suffix(".raw").exists()
+    assert ltspice_state.all_jobs == {}
+
+
+async def test_a_recoverable_job_cannot_ask_for_it(work_dir: Path):
+    """A resumed job's runs would finish without it, so the request says so."""
+    payload = _run(work_dir / "amp.asc", recoverable=True)
+    with pytest.raises(ValidationError, match="cannot be combined with recoverable"):
+        RunExperimentsInput.model_validate(payload)
+
+
+async def test_leaving_it_off_keeps_a_requests_identity():
+    """A request made before the option existed replays as the same request."""
+    plain = {"request_id": "same", "circuits": [{"path": "amp.asc"}]}
+    off = {**plain, "execution": {"results_beside_sheet": False}}
+    on = {**plain, "execution": {"results_beside_sheet": True}}
+    stripped = [
+        RunExperimentsInput.model_validate(p).strip_presentation() for p in (plain, off, on)
+    ]
+    assert stripped[0] == stripped[1] != stripped[2]
