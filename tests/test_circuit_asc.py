@@ -487,6 +487,56 @@ class TestALabelPlacedOnACrossing:
 
 
 @pytest.mark.asyncio
+class TestAWireGroundedOnItsOwn:
+    """VDD is grounded, and the wire down is grounded on its own, with no
+    name. Joining that wire to VSS grounds VSS, as a ground flag on VSS would:
+    a net may be grounded whatever else is, so no edit that does it is a short,
+    as a move that does it never was."""
+
+    _crossing = TestAPinPlacedOnACrossing._crossing  # pyright: ignore[reportPrivateUsage]
+
+    def _sheet(self, state: SessionState, name: str) -> Path:
+        sheet = self._crossing(state, name, "VSS")
+        add_net_label(state, sheet, "0", x=200, y=200)
+        add_net_label(state, sheet, "VDD", x=600, y=600)
+        add_net_label(state, sheet, "0", x=600, y=600)
+        return sheet
+
+    async def test_a_name_put_on_it_is_placed(self, asc_state: SessionState):
+        sheet = self._sheet(asc_state, "grounded-name")
+        add_net_label(asc_state, sheet, "VSS", x=200, y=50)
+
+    async def test_a_label_where_it_crosses_vss_is_placed(self, asc_state: SessionState):
+        sheet = self._sheet(asc_state, "grounded-cross")
+        add_net_label(asc_state, sheet, "fresh", x=200, y=100)
+
+    async def test_a_pin_where_it_crosses_vss_is_placed(self, asc_state: SessionState):
+        sheet = self._sheet(asc_state, "grounded-pin")
+        add_component(asc_state, sheet, "R1", "res", 200, 148)
+
+    async def test_a_route_from_it_to_vss_is_drawn(self, asc_state: SessionState):
+        sheet = self._sheet(asc_state, "grounded-route")
+        wire_pins(
+            asc_state, sheet, {"x": 200, "y": 200}, {"x": 400, "y": 100}, [{"x": 400, "y": 200}]
+        )
+
+
+async def test_a_part_moved_onto_one_wire_by_both_pins_is_judged_as_ltspice_netlists_it(
+    asc_state: SessionState, work_dir: Path
+):
+    """R1 moved with R1.1 on the end of the wire labelled b and R1.2 where it
+    crosses the wire labelled a. The piece of b's wire between R1's pins runs
+    straight between two pins of one part, so LTspice drops it: R1 sits between
+    b and a, and nothing is shorted."""
+    sheet = work_dir / "every_kind.asc"
+    _copy_file(FIXTURES_DIR / "crossings" / "every_kind.asc", sheet)
+    apply_one(asc_state, sheet, {"op": "move_component", "reference": "R1", "x": 96, "y": 48})
+    one = await inspect_one(asc_state, {"kind": "net", "path": str(sheet), "at": "R1.1"})
+    two = await inspect_one(asc_state, {"kind": "net", "path": str(sheet), "at": "R1.2"})
+    assert (one["labels"], two["labels"]) == (["b"], ["a"])
+
+
+@pytest.mark.asyncio
 class TestWirePins:
     async def test_diagonal_rejected(self, asc_state: SessionState, asc_file: Path):
         # First add a unique net label, then try a diagonal route to it from a

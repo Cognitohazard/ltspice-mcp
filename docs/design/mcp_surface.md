@@ -1470,7 +1470,10 @@ is refused, as a named label or a pin there is. Where at most one of the two
 wires has a name, the label is placed and the sheet reports the join
 (`joined_at_crossing`), as it does for a pin. Grounding a named net is not
 such a join, because it is what the flag requests, and a second named net may
-be grounded after the first. Names already joined, by a wire between two
+be grounded after the first. A net whose only label is a ground flag carries
+no name either, so a name, a pin or a route that joins it to a named net only
+grounds that net. A net is known in these checks by the names its own labels
+carry, as the `move` check has always known it. Names already joined, by a wire between two
 labels or by a shared name, are one net, so joining them again is no short.
 `wire_pins` passes over a pin, a wire's end or a label already on the net of
 either of its ends as a junction, and refuses one on any other net.

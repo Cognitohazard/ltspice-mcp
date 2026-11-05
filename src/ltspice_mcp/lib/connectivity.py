@@ -240,10 +240,14 @@ class NamedNets:
         self._texts: dict[int, set[str]] = defaultdict(set)
         #: The one net each name is on, by its key: labels of one key are one net.
         self._net_named: dict[str, int] = {}
+        #: The names each net carries on its own wiring, before folding.
+        self._own: dict[int, set[str]] = defaultdict(set)
         for label in nets.labels:
             net = self.of_label(label)
             self._texts[net].add(label.text)
             self._net_named[nets.name_key(label.text)] = net
+            if not is_ground(label.text):
+                self._own[nets.of_label(label)].add(label.text)
 
     @property
     def pins(self) -> tuple[PinAt, ...]:
@@ -301,6 +305,34 @@ class NamedNets:
         """The net a label of ``name`` is on, in any case; None if no label carries it."""
         return self._net_named.get(self.nets.name_key(name))
 
+    def own_names(self, point: Point, *, landing: bool = True) -> frozenset[str]:
+        """The names something put on ``point`` would carry from what it
+        touches (``Nets.touched_at``, or with ``landing`` false only the runs
+        of wire through it): each net's own labels, ground left out.
+
+        A net is known across a join by those names. One whose only label is a
+        ground flag carries none, so joining it to a named net grounds that
+        net, which a net may be whatever else is grounded; it joins no name.
+        """
+        touched = (
+            self.nets.touched_at(point)
+            if landing
+            else [net for _run, nets in self.nets.runs_through(point) for net in nets]
+        )
+        return frozenset(name for net in touched for name in self._own.get(net, ()))
+
+    def own_names_of(self, pin: PinAt) -> frozenset[str]:
+        """The names ``pin``'s net carries on its own wiring (:meth:`own_names`)."""
+        return frozenset(self._own.get(self.nets.of_pin(pin), ()))
+
+    def named_at(self, point: Point, *, landing: bool = True) -> frozenset[int]:
+        """The named nets something put on ``point`` would join: the net each
+        of its :meth:`own_names` is on."""
+        return frozenset(
+            self._net_named[self.nets.name_key(name)]
+            for name in self.own_names(point, landing=landing)
+        )
+
     def pins_on(self, net: int) -> list[PinAt]:
         """The pins on ``net``, in the sheet's order."""
         return [pin for pin in self.pins if self.of_pin(pin) == net]
@@ -324,17 +356,15 @@ class NamedNets:
 
         ``name`` is a net name the thing carries, which makes it one node with
         every net already of that name, in any case. Ground is not given as
-        one. Nets that each carry a ground flag are one net already, and a net
-        with a name may be grounded whatever else is: that is what a ground
-        flag is for, and no join of the flag's own making.
+        one. A net with a name may be grounded whatever else is: that is what a
+        ground flag is for, and no join of the flag's own making. So a net
+        whose only label is a ground flag joins no name either (``own_names``).
         """
         wired: set[int] = set().union(*self.wired_at(point))
-        nets = set(wired)
-        if landing:
-            nets |= self.at(point)
+        nets = set(self.named_at(point, landing=landing))
         if name is not None and (named_net := self.net_named(name)) is not None:
             nets.add(named_net)
-        named = tuple(self.names(net) for net in sorted(nets) if self.names(net))
+        named = tuple(self.names(net) for net in sorted(nets))
         return Joined(named, len(wired))
 
 
