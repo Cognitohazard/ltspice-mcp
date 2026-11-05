@@ -124,12 +124,16 @@ def parse_spice_value(s: str) -> float:
     - digits right after a suffix are the fraction it stands in for, and an
       'R' does the same with no scale: '1k5' is 1500, '4R7' is 4.7, '2M2' is
       2.2e-3;
-    - any other letters end the number, and the rest is skipped: '1uF' is
-      1e-6, '10MegHz' 1e7, '1MHz' a millihertz, '2Hz' 2, '9V1' 9.
+    - any other letters end the number, and the rest of the token is skipped:
+      '1uF' is 1e-6, '10MegHz' 1e7, '1MHz' a millihertz, '2Hz' 2, '9V1' 9.
+
+    A value is one token. A field of several, such as a source's ``5V AC 1``
+    (its DC value and its AC magnitude), is not read by its leading number.
 
     Raises:
-        ValueError: If ``s`` does not start with a number, or the number is
-            followed by something other than a letter (``8%``).
+        ValueError: If ``s`` does not start with a number, the number is
+            followed by something other than a letter (``8%``), or ``s`` holds
+            more than one token.
     """
     s = s.strip()
 
@@ -138,6 +142,8 @@ def parse_spice_value(s: str) -> float:
     except ValueError:
         pass
 
+    if len(s.split()) > 1:
+        raise ValueError(f"Cannot parse '{s}' as one SPICE value: a value is one token")
     m = _NUM_TAIL_RE.match(s)
     if m is None:
         raise ValueError(
