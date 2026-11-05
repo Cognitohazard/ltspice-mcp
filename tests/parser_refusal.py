@@ -15,7 +15,8 @@ meets the refusal and passes stays passed, and every failure without one stays
 a failure, so a fault of the host's own still shows.
 
 A refusal in a process the test started itself (a supervisor in a program the
-test runs, or the parser's entry module started directly) is not seen here.
+test runs, the ``run_code`` worker, or the parser's entry module started
+directly) is not seen here.
 Such a test carries ``needs_parsing``, which skips it on such a host with the
 same reason.
 

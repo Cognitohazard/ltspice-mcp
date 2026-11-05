@@ -24,7 +24,12 @@ from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.lib.store import OwnerLiveness
 from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
-from tests.conftest import LIVENESS_S, coordinator_returned, recorded_fixture_simulator
+from tests.conftest import (
+    LIVENESS_S,
+    coordinator_returned,
+    needs_controlled_startup,
+    recorded_fixture_simulator,
+)
 from tests.test_recovery_records import recovery_job
 
 #: The public code of a case whose owning process went away
@@ -83,6 +88,7 @@ async def test_a_shutdown_with_no_coordinator_leaves_a_case_a_default_resume_ret
 _DECK = "* divider\nV1 in 0 1\nR1 in out 1k\nR2 out 0 1k\n.op\n.end\n"
 
 
+@needs_controlled_startup
 @pytest.mark.asyncio
 @pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH")
 @pytest.mark.parametrize(

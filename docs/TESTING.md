@@ -122,8 +122,8 @@ the supervisor's check raises while a test runs, and reports a test that fails
 after one as skipped; the check itself still runs and raises. A test that meets
 the refusal and passes is reported as passed, and any other failure stays a
 failure. The plugin cannot see a refusal in a process the test started itself
-(a program that runs the supervisor, or the parser's entry module started
-directly), so such a test carries the plugin's `needs_parsing` mark, which
+(a program that runs the supervisor, the `run_code` worker, or the parser's
+entry module started directly), so such a test carries the plugin's `needs_parsing` mark, which
 skips it with the same reason; the tests of a warm parser, which is called past
 the supervisor's check, skip in their shared fixture. On Linux and Windows the
 plugin changes no report, and `test_parser_refusal.py` checks both behaviours

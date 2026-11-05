@@ -28,7 +28,12 @@ from ltspice_mcp.tools.analyze import AnalyzeSourceInput
 from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
 from ltspice_mcp.tools.jobs import handle_jobs
 from tests._source_scan import PACKAGE, parsed
-from tests.conftest import LIVENESS_S, await_until, recorded_fixture_simulator
+from tests.conftest import (
+    LIVENESS_S,
+    await_until,
+    needs_controlled_startup,
+    recorded_fixture_simulator,
+)
 from tests.test_jobs_tool import _args, _assert_jobs_schema, _circuit, _experiment
 
 _STATUSES: tuple[str, ...] = get_args(ExperimentStatus)
@@ -132,6 +137,7 @@ async def test_this_process_s_job_reads_one_way_on_every_route(
 _DECK = "* divider\nV1 in 0 1\nR1 in out 1k\nR2 out 0 1k\n.op\n.end\n"
 
 
+@needs_controlled_startup
 @pytest.mark.asyncio
 @pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH")
 async def test_a_recoverable_job_s_runs_read_as_soon_as_the_wait_returns(

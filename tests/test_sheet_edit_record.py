@@ -10,6 +10,8 @@ differently from the record must be found.
 from __future__ import annotations
 
 import hashlib
+import os
+import sys
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Any
 
@@ -20,6 +22,7 @@ from ltspice_mcp.tools.schematic_edit import EditSchematicInput
 from tests import sheet_edit_record
 from tests._asc_ops import build_sheet
 from tests._schematic_fixtures import suite_resolver
+from tests.conftest import symlink_or_skip
 from tests.sheet_edit_record import key_of, scrubbed, sheet_form
 
 _SHEET = [
@@ -96,6 +99,17 @@ class TestTextReadsTheSameOnEveryPlatform:
             scrubbed(text, (), {}, ("/outside/ref.cir",))
             == "Path /outside/ref.cir is outside allowed directories"
         )
+
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="the arguments the record maps are POSIX paths"
+    )
+    def test_an_absolute_posix_argument_reads_as_given_through_a_symlink(self, tmp_path: Path):
+        """macOS resolves /etc to /private/etc; any host resolves a linked folder."""
+        (tmp_path / "real").mkdir()
+        symlink_or_skip(tmp_path / "link", tmp_path / "real", target_is_directory=True)
+        given = str(tmp_path / "link" / "ref.cir")
+        text = f"Path {os.path.realpath(given)} is outside allowed directories"
+        assert scrubbed(text, (), {}, (given,)) == f"Path {given} is outside allowed directories"
 
     def test_the_posix_spelling_is_left_alone(self):
         text = "Path /outside/ref.cir is outside allowed directories"

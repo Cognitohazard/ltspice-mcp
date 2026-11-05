@@ -133,9 +133,10 @@ def scrubbed(
 ) -> Any:
     """``value`` with each string's folders as ``WORK`` (a path under one written
     with ``/``), each absolute POSIX path in ``given`` as given where Windows put
-    a drive before it, each token's text replaced by its name, and any other
+    a drive before it or the host resolved a link in it (macOS's ``/etc`` is
+    ``/private/etc``), each token's text replaced by its name, and any other
     SHA-256 digest as ``SHA256``. So a string naming a path or a file's digest
-    reads the same on Linux and on Windows."""
+    reads the same on Linux, Windows and macOS."""
     if isinstance(value, dict):
         return {k: scrubbed(v, folders, tokens, given) for k, v in value.items()}
     if isinstance(value, list):
@@ -150,6 +151,9 @@ def scrubbed(
     for path in given:
         on_a_drive = re.compile(r"[A-Za-z]:[\\/]+" + path_pattern(path).pattern, re.IGNORECASE)
         value = on_a_drive.sub(lambda _, path=path: path, value)
+        resolved = os.path.realpath(path)
+        if resolved != path:
+            value = value.replace(resolved, path)
     for text, name in tokens.items():
         value = value.replace(text, name)
     return _SHA256.sub("SHA256", value)
