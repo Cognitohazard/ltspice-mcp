@@ -148,10 +148,10 @@ def sanitize_payload(data: dict[str, Any]) -> dict[str, Any]:
 
     NaN/Inf are not JSON: pydantic silently serializes them as null on the
     wire, so a degenerate result would read as a number that is simply
-    missing. Per the emit-a-null-over-a-
-    meaningless-number rule (lib/result_observations.py), substitute null
-    OURSELVES and say so, naming the affected keys, so the substitution is a
-    surfaced fact instead of a serializer accident.
+    missing. Per the emit-a-null-over-a-meaningless-number rule
+    (lib/result_observations.py), substitute null OURSELVES and say so,
+    naming the affected keys, so the substitution is a surfaced fact instead
+    of a serializer accident.
     """
     stats: dict[str, Any] = {"total": 0, "named": []}
     scrubbed = _scrub_non_finite(data, "", stats)
@@ -220,7 +220,8 @@ def image_content(image: RenderedImage) -> types.ImageContent:
 # ---------------------------------------------------------------------------
 
 # Output-schema fragment for the optional ``hint`` key: caller guidance a
-# reply carries in its data (see format_response). Sites needing a custom description inline their own dict.
+# reply carries in its data (see format_response). Sites needing a custom
+# description inline their own dict.
 HINT_SCHEMA: dict[str, str] = {"type": "string"}
 
 # Free-text measurement caveats (see the observations-vs-warnings rule in

@@ -1,7 +1,6 @@
 """Tests for server.py — error hints, asc editor configuration, and dispatch."""
 
 import io
-import json
 import re
 from dataclasses import replace
 from pathlib import Path
@@ -25,6 +24,7 @@ from ltspice_mcp.server import (
     CONSOLIDATED_INSTRUCTIONS,
     GUIDE_REMINDER,
     _invoke,
+    _with_serialized_text,
     build_instructions,
     call_tool,
     list_resources,
@@ -40,6 +40,7 @@ from tests.conftest import (
     call_tool_params,
     fake_request_context,
     removed_tools_named_in,
+    text_json,
     tool_text,
 )
 
@@ -437,14 +438,15 @@ class TestServerDispatch:
         data = result.structured_content
         assert data is not None
         assert data["code"] == "invalid_arguments"
-        assert data["error"] == tool_text(result)
         assert "action: must be one of 'status', 'wait'" in data["error"]
         assert "Input tag" not in data["error"]
         assert '"kind": "reference"' in data["hint"] and '"query": "jobs"' in data["hint"]
 
     async def test_a_tool_error_carries_its_code(self, state_no_sim: SessionState):
         """A typed failure kept its code off the wire unless it also had
-        suggestions to send."""
+        suggestions to send; and its text, all a client that shows the model
+        only an error's text (as Claude Code does) passes on, held the
+        message without the code or the recovery hint."""
         result = await call_tool(
             fake_request_context(state_no_sim),
             call_tool_params("plot_waveform", {"path": "missing.raw"}),
@@ -453,8 +455,8 @@ class TestServerDispatch:
         data = result.structured_content
         assert data is not None
         assert data["code"] == "result_unreadable"
-        assert data["error"] == tool_text(result)
         assert data["hint"]
+        assert text_json(result) == data
 
     async def test_an_unclassified_failure_carries_the_internal_error_code(
         self, state_no_sim: SessionState
@@ -542,6 +544,24 @@ def _capabilities_call() -> mcp_types.CallToolRequestParams:
     return call_tool_params("inspect", {"queries": [{"kind": "capabilities"}]})
 
 
+def test_the_serialized_text_takes_the_first_text_blocks_place():
+    """A handler's block order holds: verify_circuit puts its picture first,
+    for a client that shows only the first block."""
+    image = mcp_types.ImageContent(type="image", data="aGk=", mime_type="image/png")
+    result = mcp_types.CallToolResult(
+        content=[
+            image,
+            mcp_types.TextContent(type="text", text="a summary"),
+            mcp_types.TextContent(type="text", text="more text"),
+        ],
+        structured_content={"value": 1.5},
+    )
+    image_block, text_block = _with_serialized_text(result).content
+    assert image_block == image
+    assert isinstance(text_block, mcp_types.TextContent)
+    assert text_block.text == '{"value":1.5}'
+
+
 @pytest.mark.asyncio
 async def test_the_text_block_is_the_serialized_structured_content(state_no_sim: SessionState):
     """As the MCP specification recommends: a client that passes a reply's
@@ -551,28 +571,9 @@ async def test_the_text_block_is_the_serialized_structured_content(state_no_sim:
     assert not result.is_error
     data = result.structured_content
     assert data is not None
-    (block,) = result.content
-    assert isinstance(block, mcp_types.TextContent)
-    assert json.loads(block.text) == data
+    assert len(result.content) == 1
+    assert text_json(result) == data
     assert GUIDE_REMINDER in data["hint"]
-
-
-@pytest.mark.asyncio
-async def test_a_failed_calls_text_carries_its_code_and_hint(state_no_sim: SessionState):
-    """A client that shows the model only the text of a failed call, as Claude
-    Code does, read the message alone: the code and the recovery hint were
-    only in structuredContent."""
-    result = await call_tool(
-        fake_request_context(state_no_sim),
-        call_tool_params("plot_waveform", {"path": "missing.raw"}),
-    )
-    assert result.is_error
-    (block,) = result.content
-    assert isinstance(block, mcp_types.TextContent)
-    carried = json.loads(block.text)
-    assert carried == result.structured_content
-    assert carried["code"] == "result_unreadable"
-    assert carried["hint"]
 
 
 @pytest.mark.asyncio

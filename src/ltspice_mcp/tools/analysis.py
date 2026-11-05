@@ -1082,13 +1082,6 @@ class PlotWaveformInput(OptionalRawSelectionFields, OtherRawFields, ToolInput, N
             "directory unless LTSPICE_MCP_STORE_DIR moves it."
         ),
     )
-    format: Literal["json", "text"] | None = Field(
-        default=None,
-        description=(
-            "Ignored: a reply's text block is always its JSON. Accepted so a client "
-            "with an older copy of this tool is not refused."
-        ),
-    )
 
     @model_validator(mode="after")
     def _hold_max_points(self) -> "PlotWaveformInput":

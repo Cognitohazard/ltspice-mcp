@@ -212,9 +212,9 @@ is left out in turn.
 
 One function applies the rule to every reply, on its way out of the server:
 `structuredContent`, the text block that serializes it, and the Python API's
-complete results, which therefore have the same shape. A
-number that is not finite is the exception: the reply writes it as null at its
-place and names it in `warnings`. Output schemas mark every field a reply may
+complete results, which therefore have the same shape. A number that is not
+finite is the exception: the reply writes it as null at its place and names it
+in `warnings`. Output schemas mark every field a reply may
 leave out as optional. A field is kept anyway only when its empty, null or
 false value is itself the answer. The table lists those fields for each tool,
 wherever they appear in its reply, and is the whole exemption:

@@ -900,7 +900,8 @@ _REFERENCE_DESCRIPTION_CHARS = 160
 #: Arguments a tool renamed, by tool and by the old name's place as a client
 #: writes it (a union's branch name left out): a call that still sends one
 #: there is told the name that replaced it. ``tests/test_argument_names_are_kept.py``
-#: requires an entry for every place that stops taking a name.
+#: requires an entry here or in ``REMOVED_ARGUMENTS`` for every place that stops
+#: taking a name.
 RENAMED_ARGUMENTS: dict[str, dict[str, str]] = {
     "plot_waveform": {"raw_file": "path"},
     "analyze_results": {
@@ -908,6 +909,12 @@ RENAMED_ARGUMENTS: dict[str, dict[str, str]] = {
         "sources[].log_path": "sources[].path",
     },
     "edit_schematic": {"target": "path", "save_open_window": "open_window"},
+}
+
+#: Arguments a tool removed with nothing in their place, keyed as
+#: ``RENAMED_ARGUMENTS``, with the reason a call that still sends one is told.
+REMOVED_ARGUMENTS: dict[str, dict[str, str]] = {
+    "plot_waveform": {"format": "a reply's text block is always its JSON"},
 }
 
 
@@ -930,6 +937,7 @@ def validation_error_detail(
         field_owners=field_owners,
         nested=None if field_owners is None else _nested_fields(tool),
         renamed=RENAMED_ARGUMENTS.get(tool),
+        removed=REMOVED_ARGUMENTS.get(tool),
         accepted=None if field_owners is None else _accepted_fields(tool),
         branches=_branches(tool),
     )

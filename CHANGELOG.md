@@ -15,8 +15,8 @@ tool-surface changes.
   passes the model only the text now gives it the data, and a failed call's
   text carries its `code` and recovery `hint`, which a client that shows the
   model only an error's text (Claude Code among them) used to leave out.
-  `plot_waveform`'s `format` argument no longer changes anything; it is still
-  accepted, so a client with an older copy of the tool is not refused.
+  `plot_waveform`'s `format` argument is removed, since every reply's text is
+  the same JSON; a call that still sends it is told so.
 - Every reply leaves out the fields that say nothing: an empty list or
   object, a null, a false flag, and a sub-answer that the overall answer
   beside it already gives (`structurally_equivalent` beside

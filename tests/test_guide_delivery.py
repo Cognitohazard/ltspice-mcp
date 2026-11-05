@@ -8,7 +8,6 @@ the same text), the instructions that send a model there, and the one reminder
 a session gets when it skipped them.
 """
 
-import json
 import os
 import re
 import subprocess
@@ -34,7 +33,7 @@ from ltspice_mcp.server import (
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import get_tools
 from tests._text import names, says, section
-from tests.conftest import call_tool_params, fake_request_context
+from tests.conftest import call_tool_params, fake_request_context, text_json
 
 ROOT = Path(__file__).resolve().parents[1]
 GUIDE_DIR = ROOT / "src" / "ltspice_mcp" / "assets" / "guide"
@@ -432,9 +431,7 @@ class TestTheReadTheGuideReminder:
         # In the data, and so in the text block that carries it serialized.
         assert first.structured_content is not None
         assert GUIDE_REMINDER in first.structured_content["hint"]
-        (block,) = first.content
-        assert isinstance(block, types.TextContent)
-        assert GUIDE_REMINDER in json.loads(block.text)["hint"]
+        assert GUIDE_REMINDER in text_json(first)["hint"]
         # Once a session: the second reply is the tool's own.
         assert second.structured_content is not None
         assert GUIDE_REMINDER not in second.structured_content.get("hint", "")
@@ -469,6 +466,4 @@ class TestTheReadTheGuideReminder:
             fake_request_context(state), call_tool_params("run_experiments", {"missing": 1})
         )
         assert result.is_error
-        (block,) = result.content
-        assert isinstance(block, types.TextContent)
-        assert GUIDE_REMINDER in json.loads(block.text)["hint"]
+        assert GUIDE_REMINDER in text_json(result)["hint"]
