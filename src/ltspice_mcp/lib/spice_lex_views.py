@@ -29,6 +29,7 @@ from ltspice_mcp.lib.spice_lex import (
     Token,
     TokenKind,
     copies_by_name,
+    directive_head,
     strip_matching_quotes,
     tokenize_body,
 )
@@ -1100,8 +1101,7 @@ class SaveCard:
 
 
 def _is_save(card: SpiceCard) -> bool:
-    tokens = tokenize_body(card.body)
-    return bool(tokens) and tokens[0].text.casefold() == ".save"
+    return directive_head(card) == ".save"
 
 
 def save_cards(cards: Sequence[SpiceCard]) -> list[SaveCard]:

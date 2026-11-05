@@ -20,6 +20,7 @@ from ltspice_mcp.lib.spice_lex import (
     SpiceLexErrorCategory,
     Token,
     TokenKind,
+    directive_head,
     emit,
     extract_meas_name,
     iter_body,
@@ -1855,3 +1856,27 @@ def test_continuation_trivia_does_not_cross_control_or_new_card() -> None:
     assert emit(parsed.cards) == text
     assert len(parsed.cards[0].raw_lines) == 1
     assert any("no preceding card" in warning for warning in parsed.warnings)
+
+
+@pytest.mark.parametrize(
+    ("readable", "unreadable"),
+    [
+        ('.include"models.lib"', '.include"models.lib'),
+        (".tran 0 1m", ".tran 0 1m )"),
+        (".save V(in)", ".save V(in"),
+        (".param r={1k}", ".param r={1k"),
+        (".lib(tt)", ".lib(tt"),
+    ],
+)
+def test_a_directive_is_named_the_same_whether_or_not_it_can_be_split(
+    readable: str, unreadable: str
+):
+    """Staging refuses an include it cannot read by its name; read up to the
+    first space only, ``.include"models.lib`` was named ``.include"models.lib``
+    and neither refused nor staged."""
+    (read,) = [card for card in lex(readable + "\n", title=False).cards if card.body]
+    (unread,) = [card for card in lex(unreadable + "\n", title=False).cards if card.body]
+    with pytest.raises(SpiceLexError):
+        tokenize_body(unread.body)
+
+    assert directive_head(unread) == directive_head(read)

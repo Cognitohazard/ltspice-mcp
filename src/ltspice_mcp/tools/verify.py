@@ -100,7 +100,7 @@ from ltspice_mcp.lib.lint_rules import (
     export_writer,
     meas_angle_sites,
     rule_severity,
-    unreadable_card_detail,
+    unreadable_card_sites,
     value_suffix_evidence,
 )
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
@@ -132,7 +132,7 @@ from ltspice_mcp.lib.sheet_findings import (
 )
 from ltspice_mcp.lib.simulator import DEFAULT_FAMILY, family_for
 from ltspice_mcp.lib.simulator_build import executable_identity, is_cp1252_ltspice_build
-from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, lex_deck, unreadable_cards
+from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, lex_deck
 from ltspice_mcp.lib.spice_lex_ops import (
     MICRO_SIGN_READERS,
     ValueSuffixSite,
@@ -1343,7 +1343,7 @@ def _syntax_findings(
     encoding: str,
     *,
     cp1252_reader: str | None,
-    simulator: str,
+    family: str,
 ) -> list[dict[str, Any]]:
     """Directive, unreadable-card, element-arity, value-suffix and .meas angle
     findings in a netlist.
@@ -1354,11 +1354,12 @@ def _syntax_findings(
     element-arity issue carries the severity its validator check declares, and
     a suffix finding is an error only for a mis-decoded file (see
     ``_value_suffix_findings``).
-    ``simulator`` is the one the session runs decks on, ``"LTspice"`` or
-    ``"ngspice"``: some directive and element forms are a fault for one and
+    ``family`` is the simulator family the session runs decks on, ``ltspice``
+    or ``ngspice``: some directive and element forms are a fault for one and
     valid for the other. The facts that are legal-but-notable live in the
     quality check.
     """
+    simulator = DISPLAY[family]
     findings: list[dict[str, Any]] = []
     # The deck's cards, as the linter reads them: a directive continued on a
     # ``+`` line is checked whole, and the title and the cards after ``.END``
@@ -1379,18 +1380,20 @@ def _syntax_findings(
             )
         )
 
-    # A card no rule could read is left out by every rule below and by the
-    # quality check, so the reply says which, as the linter's
-    # ``unreadable-card`` rule does.
+    # A card no rule could split into its parts is left out by every rule
+    # below and by the quality check, so the reply says which, as the
+    # linter's unreadable-card rule does. A .meas LTspice refuses for a
+    # parenthesis left open is the directive_syntax error above instead.
     findings.extend(
         _finding(
             rule_id="unreadable_card",
-            severity="warning",
-            at={"file": str(path), "line": card.line_start},
-            subject=" ".join(card.body.split()),
-            evidence={"detail": unreadable_card_detail(error)},
+            severity=rule_severity("unreadable-card"),
+            at={"file": str(path), "line": site.card.line_start},
+            subject=" ".join(site.card.body.split()),
+            evidence={"detail": site.detail},
         )
-        for card, error in unreadable_cards(deck.cards)
+        for site in unreadable_card_sites(deck.cards, family)
+        if site.rule_id == "unreadable-card"
     )
     findings.extend(
         _rule_finding(issue, path, rule_id="element_arity", severity=str(issue["severity"]))
@@ -2620,7 +2623,6 @@ async def evaluate_verify_circuit(
                 "syntax: no simulator is detected; the deck was checked as "
                 f"{DISPLAY[family]} reads it."
             )
-        simulator = DISPLAY[family]
         gap = capabilities.gap_reason(family, "validator_rules")
         if gap is not None:
             observations.append(f"syntax: {gap}")
@@ -2632,7 +2634,7 @@ async def evaluate_verify_circuit(
                 deck,
                 encoding,
                 cp1252_reader=cp1252_reader,
-                simulator=simulator,
+                family=family,
             )
         )
         checks_run.append("syntax")

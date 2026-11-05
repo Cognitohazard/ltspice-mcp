@@ -2033,3 +2033,104 @@ def test_a_random_rule_has_no_nominal_on_a_part_number(tmp_path: Path, card: str
         materialize_variants(circuit, expand_variations([circuit], [variation]), tmp_path / "out")
 
     assert excinfo.value.code == "random_nominal_unavailable"
+
+
+# A card with a brace left open cannot be split into its parts, so what it
+# declares is not known. A variation of a name it may declare was made on
+# another copy, or a set left it out, and reported a whole edit.
+_PARAM = AssignVariation(kind="assign", assign={"r": ["5k"]})
+_PART = AssignVariation(kind="assign", assign={"R1": ["5k"]})
+_SUBCKT_R1 = "X1 in S\n.subckt S a\nR1 a 0 1k\n.ends S\n"
+_UNREAD_TARGETS = {
+    # (deck, variation, what the refusal names, the card's text)
+    "param beside a copy that can be read": (
+        "* t\nV1 in 0 1\nR1 in 0 {r}\n.param r=1k\n.param r={2k\n.op\n.end\n",
+        _PARAM,
+        ".param",
+        ".param r={2k",
+    ),
+    "param alone": (
+        "* t\nV1 in 0 1\nR1 in 0 {r}\n.param r={2k\n.op\n.end\n",
+        _PARAM,
+        ".param",
+        ".param r={2k",
+    ),
+    "random param": (
+        "* t\nV1 in 0 1\nR1 in 0 {r}\n.param r={2k\n.op\n.end\n",
+        _random_rule({"rule": "param", "target": "r", "tolerance": 0.1}),
+        ".param",
+        ".param r={2k",
+    ),
+    # The top-level R1 cannot be read; the readable R1 inside S was edited.
+    "part beside a copy in a subcircuit": (
+        f"* t\nV1 in 0 1\nR1 in 0 {{1k\n{_SUBCKT_R1}.op\n.end\n",
+        _PART,
+        "part",
+        "R1 in 0 {1k",
+    ),
+    "part alone": ("* t\nV1 in 0 1\nR1 in 0 {1k\n.op\n.end\n", _PART, "part", "R1 in 0 {1k"),
+    # A glob left out the R1 it could not read.
+    "part in a random glob": (
+        "* t\nV1 in 0 1\nR1 in 0 {1k\nR2 in 0 1k\n.op\n.end\n",
+        _random_rule({"rule": "component", "target": "R*", "tolerance": 0.1}),
+        "part",
+        "R1 in 0 {1k",
+    ),
+    # The lexer's error escaped the edit of the .model.
+    "random model": (
+        "* t\nV1 in 0 1\nD1 in 0 DX\n.model DX D(Is=1e-14\n.op\n.end\n",
+        _random_rule({"rule": "model", "target": "DX", "param": "Is", "tolerance": 0.1}),
+        ".model",
+        ".model DX D(Is=1e-14",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(_UNREAD_TARGETS))
+def test_a_target_a_card_that_cannot_be_read_may_declare_is_refused_by_its_line(
+    tmp_path: Path, case: str
+):
+    deck_text, variation, what, card = _UNREAD_TARGETS[case]
+    path = tmp_path / "d.cir"
+    path.write_text(deck_text)
+    deck = CircuitDeck("dut", path, deck_text)
+
+    with pytest.raises(VariationError) as excinfo:
+        materialize_variants(deck, expand_variations([deck], [variation]), tmp_path / "out")
+
+    assert excinfo.value.code == "ambiguous_target"
+    line = deck_text.splitlines().index(card) + 1
+    message = str(excinfo.value)
+    assert f"may name the {what} " in message, message
+    assert f"on line {line} of d.cir, which could not be read" in message, message
+    assert "Check for a missing" in message, message
+
+
+def test_a_param_that_cannot_be_read_leaves_the_other_targets_alone(tmp_path: Path):
+    text = "* t\nV1 in 0 1\nR1 in 0 {r}\n.param r=1k\n.param q={2k\n.op\n.end\n"
+    path = tmp_path / "d.cir"
+    path.write_text(text)
+    deck = CircuitDeck("dut", path, text)
+    variation = AssignVariation(kind="assign", assign={"r": ["5k"]})
+
+    (variant,) = materialize_variants(deck, expand_variations([deck], [variation]), tmp_path / "o")
+
+    assert ".param r=5k" in variant.text
+    assert ".param q={2k" in variant.text
+
+
+def test_source_lineage_reads_past_a_directive_that_cannot_be_read(tmp_path: Path):
+    # A recoverable run records each case's source lineage through the
+    # hierarchy walk, which split every card and raised on this one.
+    text = "* t\nV1 in 0 1\nR1 in 0 1k\n.tran 0 1m )\n.end\n"
+    path = tmp_path / "d.cir"
+    path.write_text(text)
+    deck = CircuitDeck(
+        "dut", path, text, semantic_profile=SemanticProfile("ltspice"), record_source_lineage=True
+    )
+
+    (variant,) = materialize_variants(
+        deck, expand_variations([deck], [], validate_applies_to=False), tmp_path / "out"
+    )
+
+    assert ".tran 0 1m )" in variant.text

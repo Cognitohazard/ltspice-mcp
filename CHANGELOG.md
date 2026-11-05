@@ -150,15 +150,36 @@ tool-surface changes.
 
 ### Fixed
 
-- A card no rule could split into its parts, such as `R1 in out {1k` with
-  its brace left open or a `.meas` with an unclosed parenthesis, was left out
-  of every check without a word, so `verify_circuit` and the linter read the
-  deck as one without it: a node wired through it reported as wired to one
-  element, and a measurement of it as naming nothing. Such a card is now
-  reported at its line (`unreadable_card` in `verify_circuit`, the
-  `unreadable-card` lint rule, a warning in both), and the names and nodes on
-  it count as defined and connected, so no other rule reports on a guess
-  about it.
+- A card with a quote, brace or parenthesis left open, or a closer with
+  nothing open, such as `R1 in out {1k`, cannot be split into its parts, and
+  every check left it out without a word, so `verify_circuit` and the linter
+  read the deck as one without it: a node wired through it reported as wired
+  to one element, and a measurement of it as naming nothing. Such a card is
+  now reported at its line (`unreadable_card` in `verify_circuit`, the
+  `unreadable-card` lint rule, a warning in both). On a part, `.subckt`
+  header or `.global` like it, the nodes and names, inside an expression
+  too, count as connected and defined, and an `X` of a subcircuit holding one
+  as tied to ground at every port, so no other rule reports on a guess about
+  it; a `.save` or `.meas` like it connects nothing.
+- A `.meas` with a parenthesis left open is refused for LTspice: LTspice 26
+  refused the recorded one before the run and XVII ran that deck without the
+  measurement. `edit_schematic` refuses to write it, `verify_circuit`'s
+  `syntax` check reports it as a `directive_syntax` error, `run_experiments`
+  refuses it (`meas-unclosed-paren-ltspice`, blocking; `linter_version` 12),
+  and the LTspice 26 log's failure carries the fix.
+- A directive in that state, such as `.tran 0 1m )`, `.save V(in` or
+  `.param r={1k`, stopped `run_experiments` with the lexer's error as a
+  retryable submission failure, raised by staging, the linter, the variation
+  reader or the hierarchy walk behind recoverable runs and nested targets.
+  The deck now runs with the card reported. An `.include` or `.lib` in that
+  state fails its circuit with `include_unstaged`, naming the line and the
+  fix, since which file it names is not known; a variation or random rule on
+  a part, `.model` or `.param` name a card in that state may declare is
+  refused (`ambiguous_target`), naming its line, rather than made on another
+  copy or left out of a glob; and `inspect(kind="hierarchy")` and a nested
+  target refuse a card they need in that state by its file and line. The
+  `unreadable-card` lint rule covers staged includes too, and a live include
+  holding such an include card, for which `model-missing` says nothing.
 - A `random` variation no longer redraws a sample when other cases change. Its
   draws were keyed on the case's position in the expanded list, so with
   several `assign` values each value drew its own numbers, and adding a value

@@ -1392,7 +1392,15 @@ class TestMeasurements:
 
     def test_a_directive_that_does_not_parse(self, build: str):
         """LTspice 26 stops before the run and says where; XVII runs, reports
-        the directive and takes the measurements around it."""
+        the directive and takes the measurements around it. The directive
+        check and the lint refuse the parenthesis left open before either."""
+        card = next(c for c in rec.deck_cards("log/meas_bad_syntax.cir") if c.name == "broken")
+        error = validate_directive(card.body, "LTspice")
+        assert error is not None
+        assert error.rule_name == "meas_unclosed_paren"
+        assert _lint_refusals("log/meas_bad_syntax") == [
+            ("meas-unclosed-paren-ltspice", ".meas tran broken FIND V(out AT 0.5m")
+        ]
         log = rec.recorded(build, "log/meas_bad_syntax.log")
         diagnostics = extract_log_diagnostics(log)
         if rec.generation(build) == "xvii":
@@ -1404,6 +1412,8 @@ class TestMeasurements:
             assert block.splitlines()[0].endswith('(7): Expected ")" here.')
             (failed,) = diagnostics["meas_errors"]
             assert failed["directive"] == ".meas tran broken FIND V(out AT 0.5m"
+            # The relayed failure carries the directive check's fix.
+            assert failed["suggestion"] == error.suggestion
 
 
 #: How long log/meas_trig runs: two whole periods of its 1 kHz sine of amplitude 1.
