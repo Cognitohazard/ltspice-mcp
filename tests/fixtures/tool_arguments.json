@@ -258,6 +258,7 @@
       "execution.keep_partial_raw",
       "execution.max_parallel",
       "execution.recoverable",
+      "execution.results_beside_sheet",
       "execution.run_timeout_s",
       "execution.simulator",
       "execution.simulator_seed",

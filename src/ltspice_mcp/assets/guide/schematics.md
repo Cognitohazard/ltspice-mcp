@@ -84,6 +84,12 @@ its name, replacing any there, without opening anything. It refuses a case
 whose sheet has changed since the run, since the results would not match it,
 and, like every read of a job's runs, a case of a job whose runs have not all
 finished (`job_not_terminal`; `jobs(action="wait", wait_for="runs")` first).
+When the user wants that before the run starts, pass
+`execution={"results_beside_sheet": true}` to `run_experiments` instead: each
+sheet's results are copied beside it as the runs finish, and the receipt's
+`results_placed_beside_sheet` or `results_not_placed` says what happened. It
+takes LTspice runs of sheets with one case each, so for a sweep, copy the
+chosen case afterwards with the action.
 A case with variations shows values the sheet does not; the reply's
 `assignments` lists them, so tell the user. A plot with no sampled axis (a
 stepped `.op`, say) has no chart, and `plot_waveform(..., in_ltspice=true)`

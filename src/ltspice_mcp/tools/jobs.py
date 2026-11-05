@@ -36,8 +36,6 @@ from ltspice_mcp.errors import (
     error_hint,
 )
 from ltspice_mcp.lib import experiment_store, recent, response_budget, services
-from ltspice_mcp.lib.asc_document import is_asc
-from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.experiment_runner import (
     ExperimentCancellationError,
     IdempotencyConflictError,
@@ -56,9 +54,8 @@ from ltspice_mcp.lib.job_lifecycle import WaitFor
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.pagination import decode_offset, unpaged
 from ltspice_mcp.lib.pagination import page as _page
-from ltspice_mcp.lib.raw_parser import other_raw_path
 from ltspice_mcp.lib.recovery_records import RecoveryError
-from ltspice_mcp.lib.sheet_results import place_beside_sheet, run_by_ltspice
+from ltspice_mcp.lib.sheet_results import NotPlaced, check_case, place_case
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     ENVELOPE_ERROR_SCHEMA,
@@ -966,13 +963,12 @@ async def _place_case_beside_sheet(
     job: ExperimentJob, case_id: str | None, state: SessionState
 ) -> dict[str, Any]:
     """Copy one finished case's results beside the sheet it ran
-    (``sheet_results.place_beside_sheet``), under the sheet's lock.
+    (``sheet_results.place_case``), under the sheet's lock.
 
-    Refused where LTspice's window could not take them as the sheet's own: a
-    case with no results, a netlist's run, a run of another simulator, and a
-    sheet changed since the job read it, whose results would not match it.
-    Refused too while the job's runs are not all done, as every read of a job's
-    runs is (``services.runs_unready``).
+    Refused where LTspice's window could not take them as the sheet's own
+    (``sheet_results.check_case`` and ``place_case`` say which), and while the
+    job's runs are not all done, as every read of a job's runs is
+    (``services.runs_unready``).
     """
     case = _case_to_place(job, case_id)
     unready = services.runs_unready(job)
@@ -984,51 +980,17 @@ async def _place_case_beside_sheet(
             stage="resolution",
             retryable=True,
         )
-    if case.status != "produced" or case.raw_file is None:
-        raise _JobsActionError(
-            "case_not_produced",
-            f"Case {case.case_id} of job {job.job_id} has no results to place (status "
-            f"{case.status}).",
-            stage="resolution",
-        )
-    if not is_asc(case.circuit_path):
-        raise _JobsActionError(
-            "not_a_sheet",
-            f"Case {case.case_id} ran {case.circuit_path.name}, a netlist. LTspice keeps "
-            "results beside a sheet; read a netlist's from the job.",
-            stage="resolution",
-        )
-    if not run_by_ltspice(job.simulator):
-        raise _JobsActionError(
-            "not_ltspice",
-            f"Job {job.job_id} ran on {job.simulator}; LTspice's window opens a sheet's "
-            "results only as LTspice writes them.",
-            stage="resolution",
-        )
+    try:
+        check_case(job, case)
+    except NotPlaced as exc:
+        raise _JobsActionError(exc.code, str(exc), stage="resolution") from None
     sheet = await asyncio.to_thread(safe_path, str(case.circuit_path), state)
-    ran = next((source.sha256 for source in job.sources if source.circuit == case.circuit), None)
-    raw = case.raw_file
-    others = {kind: other_raw_path(raw, kind) for kind in case.other_raws}
 
     def place() -> list[dict[str, Any]]:
-        if not raw.is_file():
-            raise _JobsActionError(
-                "results_missing",
-                f"Case {case.case_id}'s results are not there any more ({raw}).",
-                stage="resolution",
-            )
-        if not sheet.is_file():
-            raise _JobsActionError(
-                "sheet_missing", f"{sheet} is not there any more.", stage="resolution"
-            )
-        if ran is not None and sha256_file(sheet) != ran:
-            raise _JobsActionError(
-                "sheet_changed",
-                f"{sheet.name} has changed since job {job.job_id} ran it, so these results "
-                "would not match it. Run the sheet again and place that run's.",
-                stage="resolution",
-            )
-        return place_beside_sheet(sheet, raw, case.log_file, others)
+        try:
+            return place_case(job, case, sheet)
+        except NotPlaced as exc:
+            raise _JobsActionError(exc.code, str(exc), stage="resolution") from None
 
     async with circuit_file_lock(sheet):
         # The check and the copy are one unit off the loop, shielded so a

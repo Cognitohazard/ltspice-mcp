@@ -663,7 +663,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # analyze_results can afterwards. Measured 16,882.
     # Raised by about 15 characters for minLength on circuits[].path: an
     # empty path names no file. Measured 16,910.
-    "run_experiments": 16920,
+    # Raised by about 230 characters for execution.results_beside_sheet, which
+    # leaves a sheet's results where LTspice opens them as the run finishes,
+    # in the call that runs it. Measured 17,140.
+    "run_experiments": 17150,
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.
