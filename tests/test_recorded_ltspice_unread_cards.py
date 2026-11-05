@@ -130,6 +130,11 @@ TITLES = {
     "option": ".options logopinfo",
     "measurement": ".meas op late WHEN V(a)=1",
     "noise": ".noise V(a) V9 dec 10 1 1k",
+    # Would end the deck before its first card, and put every card after it.
+    "end": ".end",
+    # Would open a subcircuit around the deck's cards, none of them then at
+    # top level, and close at the definition's own .ends.
+    "subcircuit": ".subckt minifet d g s b",
 }
 
 DECKS = [
