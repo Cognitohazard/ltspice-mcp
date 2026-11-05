@@ -2657,6 +2657,15 @@ class TestReplaceDirective:
         assert message.startswith("Refusing directive '.meas tran k MAX V(out)'")
         assert "constants" in message
 
+    def test_a_measurement_with_a_parenthesis_left_open_is_not_written(self, work_dir: Path):
+        # LTspice 26 refused the recorded one and ran nothing (log/meas_bad_syntax).
+        sheet = _write_sheet(
+            work_dir / "open.asc", "TEXT 16 16 Left 2 !.meas tran vmax MAX V(out)"
+        )
+        with pytest.raises(NetlistError, match=r"Refusing directive.*Add the \) that closes"):
+            self._apply(sheet, "regex:vmax", ".meas tran vmax MAX V(out")
+        assert "!.meas tran vmax MAX V(out)" in sheet.read_text(encoding="utf-8")
+
 
 def test_removed_texts_read_line_breaks_as_breaks(work_dir: Path):
     """A TEXT record holds a line break as a ``\\n`` escape; removed_texts gives

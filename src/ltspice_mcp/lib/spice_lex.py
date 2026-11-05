@@ -1213,6 +1213,24 @@ def unreadable_cards(cards: Iterable[SpiceCard]) -> list[tuple[SpiceCard, SpiceL
     return found
 
 
+def directive_head(card: SpiceCard) -> str:
+    """The name a directive card starts with, casefolded (``.tran``,
+    ``.save``), or ``""`` for an empty body.
+
+    Read from the card's first part, or, when the card cannot be split into
+    parts (``unreadable_cards``), from its text up to where that part would
+    end: a directive's name is one word, readable even when a quote or
+    bracket after it is left open (``.include"models.lib`` is ``.include``).
+    """
+    try:
+        tokens = tokenize_body(card.body)
+    except SpiceLexError:
+        body = card.body.lstrip()
+        end = next((i for i, c in enumerate(body) if c in _BARE_TERMINATORS), len(body))
+        return body[:end].casefold()
+    return tokens[0].text.casefold() if tokens else ""
+
+
 # ---------------------------------------------------------------------------
 # Emit
 # ---------------------------------------------------------------------------

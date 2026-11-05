@@ -62,6 +62,21 @@ tool-surface changes.
 
 ### Added
 
+- The `bode_crossing` recipe takes `ref_hz`, which measures `level_db` from
+  the gain at that frequency: `level_db: -3.0103, ref_hz: "1k"` finds where
+  the gain falls 1/sqrt(2) below its value at 1 kHz, in one call instead of a
+  `bode_point` read and a second crossing. The value's `level` is the
+  absolute level crossed, and `reference` says what it was measured from.
+- `run_experiments` takes `execution.results_beside_sheet`. With it set, each
+  sheet's results are copied beside it, under its name, once the runs
+  finish, so LTspice opens them with the sheet, without a separate
+  `jobs(action="place_beside_sheet")` call. The receipt says, per sheet, what
+  was copied (`results_placed_beside_sheet`) or why not
+  (`results_not_placed`, for example a sheet edited during the run). A request
+  is refused before it runs when a circuit is a netlist, the job does not run
+  on LTspice, or a sheet would run more than one case; it cannot be combined
+  with `recoverable`. The jobs action and the run option decide whether a case
+  can be copied by the same rules.
 - A `random` variation's samples can be replayed. Each case records its sample
   index (`_random_run`) and its seed (`_random_seed`) in its assignments, and
   an entry without a `seed` gets one the server chooses, so a Monte Carlo run
@@ -142,6 +157,14 @@ tool-surface changes.
 
 ### Changed
 
+- A signal named `V(<instance>:<pin>)` for a subcircuit's pin is refused with
+  the reason: a result holds no voltage under a pin's name, because the pin's
+  voltage is the net it connects to in the circuit above. The refusal lists
+  the instance's pins in the order its instance line lists their nets, where
+  LTspice wrote them, and names the current into the pin. Every reader of a
+  signal says so, `analyze_results` on an operating point included.
+- The Python guide lists `RawResult.source`, the `.raw` file a result was
+  read from.
 - `remove_directive`'s `removed_texts` gives a text as it reads, as the
   drawing and the sheet findings read it: a line break where the TEXT record
   holds a `\n` escape, and one backslash where it holds `\\`. It gave the
@@ -159,12 +182,12 @@ tool-surface changes.
   `traces_truncated` naming the `analyze_results` call that reads the traces
   left out over what was plotted: the source with `runs` set to the job's run
   or case, the plot's `t_start`/`t_end` as each recipe's `window`, and its
-  step selector, or `all_steps=true` with the rows that are the plotted step. The recipe is
-  `signal_stats` where it reads the plot, else the `waveform` recipe, which
-  returns the samples: on a distortion or sensitivity sweep, and on an AC or
-  noise plot drawn over a window. The `trace_summary_truncated` observation
-  said nothing the count and the hint do not, and is no longer emitted; read
-  `hint` instead.
+  step selector, or `all_steps=true` with the rows that are the plotted step.
+  The recipe is `signal_stats` where it reads the plot, else the `waveform`
+  recipe, which returns the samples: on a distortion or sensitivity sweep, and
+  on an AC or noise plot drawn over a window. The `trace_summary_truncated`
+  observation said nothing the count and the hint do not, and is no longer
+  emitted; read `hint` instead.
 - The `summary` recipe lists the first 100 signal names and counts them all in
   `signals_truncated`, with no way to read the rest. A `hint` beside the count
   now names `inspect(kind='results', view='signals')`, which pages every name.
@@ -173,15 +196,36 @@ tool-surface changes.
   `inspect(kind='results')`, which reads no samples of such a plot. Both are
   refused before any read, and each refusal names the `waveform` recipe, which
   returns the samples, over the same window where one was given.
-- A card no rule could split into its parts, such as `R1 in out {1k` with
-  its brace left open or a `.meas` with an unclosed parenthesis, was left out
-  of every check without a word, so `verify_circuit` and the linter read the
-  deck as one without it: a node wired through it reported as wired to one
-  element, and a measurement of it as naming nothing. Such a card is now
-  reported at its line (`unreadable_card` in `verify_circuit`, the
-  `unreadable-card` lint rule, a warning in both), and the names and nodes on
-  it count as defined and connected, so no other rule reports on a guess
-  about it.
+- A card with a quote, brace or parenthesis left open, or a closer with
+  nothing open, such as `R1 in out {1k`, cannot be split into its parts, and
+  every check left it out without a word, so `verify_circuit` and the linter
+  read the deck as one without it: a node wired through it reported as wired
+  to one element, and a measurement of it as naming nothing. Such a card is
+  now reported at its line (`unreadable_card` in `verify_circuit`, the
+  `unreadable-card` lint rule, a warning in both). On a part, `.subckt`
+  header or `.global` like it, the nodes and names, inside an expression
+  too, count as connected and defined, and an `X` of a subcircuit holding one
+  as tied to ground at every port, so no other rule reports on a guess about
+  it; a `.save` or `.meas` like it connects nothing.
+- A `.meas` with a parenthesis left open is refused for LTspice: LTspice 26
+  refused the recorded one before the run and XVII ran that deck without the
+  measurement. `edit_schematic` refuses to write it, `verify_circuit`'s
+  `syntax` check reports it as a `directive_syntax` error, `run_experiments`
+  refuses it (`meas-unclosed-paren-ltspice`, blocking; `linter_version` 12),
+  and the LTspice 26 log's failure carries the fix.
+- A directive in that state, such as `.tran 0 1m )`, `.save V(in` or
+  `.param r={1k`, stopped `run_experiments` with the lexer's error as a
+  retryable submission failure, raised by staging, the linter, the variation
+  reader or the hierarchy walk behind recoverable runs and nested targets.
+  The deck now runs with the card reported. An `.include` or `.lib` in that
+  state fails its circuit with `include_unstaged`, naming the line and the
+  fix, since which file it names is not known; a variation or random rule on
+  a part, `.model` or `.param` name a card in that state may declare is
+  refused (`ambiguous_target`), naming its line, rather than made on another
+  copy or left out of a glob; and `inspect(kind="hierarchy")` and a nested
+  target refuse a card they need in that state by its file and line. The
+  `unreadable-card` lint rule covers staged includes too, and a live include
+  holding such an include card, for which `model-missing` says nothing.
 - A `random` variation no longer redraws a sample when other cases change. Its
   draws were keyed on the case's position in the expanded list, so with
   several `assign` values each value drew its own numbers, and adding a value

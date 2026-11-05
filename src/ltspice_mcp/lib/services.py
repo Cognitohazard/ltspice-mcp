@@ -897,6 +897,8 @@ def _not_found(raw: RawData, signal: str) -> ResultError:
         "v(onoise)" in trace_lo or "v(inoise)" in trace_lo
     ):
         hint = " (LTspice names noise signals 'V(onoise)'/'V(inoise)')"
+    elif pin := pin_hint(raw, signal):
+        hint = pin
     elif dev_param or "@" in sig_lo:
         save_target = device_key(*dev_param) if dev_param else signal
         hint = (
@@ -906,6 +908,55 @@ def _not_found(raw: RawData, signal: str) -> ResultError:
             f".log under '.options logopinfo' (operating_point reads that), not the raw."
         )
     return ResultError(f"Signal '{signal}' not found.{hint} Available signals: {available}")
+
+
+def pin_hint(raw: RawData, signal: str) -> str:
+    """Say, for ``V(<instance>:<pin>)``, that ``pin`` is a pin of a subcircuit
+    instance, which a result holds no voltage for; empty for any other name.
+
+    A raw names a node inside a subcircuit ``V(<instance>:<node>)``, but a pin
+    is the net it connects to in the circuit above, under that net's name. The
+    pin is known as one by the current into it (``Ix(<instance>:<pin>)``), or
+    by the ``Backannotation`` line LTspice writes for the instance, which lists
+    its pins in the order the instance line lists their nets (the
+    ``export-hierarchical-block`` recordings; XVII writes that line for a
+    sheet's block but not for a netlist's instance, ``raw/subckt_names_tran``).
+    """
+    match = _V_TRACE_RE.fullmatch(signal.strip())
+    if match is None or ":" not in match.group(1):
+        return ""
+    instance, _, pin = match.group(1).strip().rpartition(":")
+    pins = _instance_pins(raw, instance)
+    # Found as any trace is, so XVII's spelling (Ix(a:TOP) for xa's TOP) counts.
+    current = _find_trace(raw, f"Ix({instance}:{pin})")
+    if current is None and pin.lower() not in (p.lower() for p in pins):
+        return ""
+    hint = (
+        f" '{pin}' is a pin of subcircuit instance {instance}, and a result holds no "
+        "voltage under a pin's name: the pin's voltage is the net it connects to in the "
+        "circuit above, under that net's name."
+    )
+    if pins:
+        hint += (
+            f" {instance}'s pins are {', '.join(pins)}, in the order its instance line "
+            "lists their nets (inspect kind='components' with detail='full' shows them)."
+        )
+    if current is not None:
+        hint += f" {current} is the current into the pin."
+    return hint
+
+
+def _instance_pins(raw: RawData, instance: str) -> list[str]:
+    """The pins of ``instance`` as the raw's ``Backannotation`` line for it
+    lists them, or none when the raw has no such line."""
+    header = getattr(raw, "header", None)
+    for key, value in getattr(header, "fields", ()):
+        if key.casefold() != "backannotation":
+            continue
+        name, *pins = value.split()
+        if name.lower() == instance.lower():
+            return pins
+    return []
 
 
 def _node_pair(
@@ -932,8 +983,8 @@ def _node_pair(
         if trace is None and node not in grounded:
             raise ResultError(
                 f"Signal '{signal}' reads as a node-pair difference, but node voltage "
-                f"'V({node})' is not in this result. Available signals: "
-                f"{_available_signals(raw)}"
+                f"'V({node})' is not in this result.{pin_hint(raw, f'V({node})')} "
+                f"Available signals: {_available_signals(raw)}"
             )
     plus, minus = traces[plus_node], traces[minus_node]
     if minus is None:

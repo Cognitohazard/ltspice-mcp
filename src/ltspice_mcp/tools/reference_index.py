@@ -182,8 +182,9 @@ _SUMMARIES: dict[tuple[str, str], str] = {
     ),
     ("analyze_results", "bode_point"): "Gain in dB and phase in degrees at one frequency.",
     ("analyze_results", "bode_crossing"): (
-        "Every frequency where the gain crosses a dB level, or where the unwrapped "
-        "phase crosses a degree level."
+        "Every frequency where the gain crosses a dB level, absolute or measured from "
+        "the gain at a chosen frequency, or where the unwrapped phase crosses a degree "
+        "level."
     ),
     ("analyze_results", "bode_slope"): (
         "Average slope in dB per decade between two frequencies — the roll-off rate."
@@ -335,6 +336,7 @@ _SYNONYMS: dict[tuple[str, str], tuple[str, ...]] = {
         "unity gain frequency",
         "phase crossing",
         "where the gain crosses",
+        "3 db below the gain at",
     ),
     ("analyze_results", "bode_slope"): ("roll off", "db per decade", "slope"),
     ("analyze_results", "stability"): (

@@ -77,6 +77,7 @@ from ltspice_mcp.lib.runner_base import (
     inject_logopinfo,
     inject_ngspice_control_write,
 )
+from ltspice_mcp.lib.sheet_results import place_job_beside_sheets
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name, is_ngspice, raw_extension_for
 from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
@@ -468,6 +469,10 @@ class ExperimentRunRequest:
     #: Keep a stopped case's raw, cut to the points a full read reaches, for
     #: reads of the case to take. Never set on a recoverable request.
     keep_partial_raw: bool = False
+    #: Copy each sheet's results beside it once the runs are done
+    #: (``sheet_results.place_job_beside_sheets``). Never set on a recoverable
+    #: request, whose resumed runs would finish without it.
+    results_beside_sheet: bool = False
 
 
 def effective_run_timeout(
@@ -1021,6 +1026,14 @@ class ExperimentRunner(RunnerBase):
                 await asyncio.gather(*execution.case_tasks.values(), return_exceptions=True)
             self._reconcile_unfinished_cases(execution)
             job.completeness.validate_terminal()
+            if request.results_beside_sheet and execution.stop_reason not in (
+                "cancelled",
+                OWNER_STOPPED,
+            ):
+                # Before this process counts the runs done and before the job's
+                # final status, so a wait on either reads a receipt that says
+                # where the results are.
+                job.observations.extend(await place_job_beside_sheets(job))
             await self._persist_job(execution)
             execution.live.mark_runs_done()
 

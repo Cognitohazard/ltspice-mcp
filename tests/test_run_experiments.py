@@ -2116,6 +2116,63 @@ class TestLintModes:
         assert data["outcome"] == "complete"
         assert "failures" not in data
 
+    async def test_a_directive_with_a_bracket_left_open_runs_and_is_reported(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Staging and the linter split each directive into parts, and one they
+        could not split stopped the run with the lexer's error, as a retryable
+        submission failure. The deck runs, and each such card is reported."""
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(
+            work_dir / "open.cir",
+            "* t\nV1 in 0 1\nR1 in 0 1k\n.save V(in\n.param r={1k\n.tran 0 1m )\n.end\n",
+        )
+
+        data = _assert_schema(
+            await handle_run_experiments(_args(deck, "open-directive"), state_with_sim)
+        )
+
+        assert len(submissions) == 1, json.dumps(data)[:3000]
+        assert [
+            finding["at"]["line"]
+            for finding in data["lint"][0]["findings"]
+            if finding["rule_id"] == "unreadable-card"
+        ] == [4, 5, 6]
+
+    # With no space after its name the card was not taken for an include, and
+    # was neither refused nor staged.
+    @pytest.mark.parametrize("card", ['.include "models.lib', '.include"models.lib'])
+    async def test_an_include_whose_path_cannot_be_read_is_refused_at_its_line(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        card: str,
+    ):
+        """Staging cannot tell which file an include with its quote left open
+        names, so it cannot stage or check it: the circuit fails with the line
+        and the fix, not with the lexer's error as a retryable failure."""
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(
+            work_dir / "open_include.cir",
+            f"* t\nV1 in 0 1\nR1 in 0 1k\n{card}\n.op\n.end\n",
+        )
+
+        data = _assert_schema(
+            await handle_run_experiments(_args(deck, "open-include"), state_with_sim)
+        )
+
+        assert submissions == []
+        row = data["failures"][0]
+        assert row["code"] == "include_unstaged", row
+        assert "line 4" in row["message"], row
+        assert 'Add a closing "' in row["message"], row
+
     async def test_off_skips_linter(
         self,
         state_with_sim: SessionState,
@@ -3300,7 +3357,9 @@ class TestMonteCarloSampleIdentity:
                 _args(
                     deck,
                     "mc-reseeded",
-                    variations=[{"kind": "random", "runs": 3, "seed": seed, "rules": [self._RULE]}],
+                    variations=[
+                        {"kind": "random", "runs": 3, "seed": seed, "rules": [self._RULE]}
+                    ],
                 ),
                 state_with_sim,
             )
