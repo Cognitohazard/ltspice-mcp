@@ -11,7 +11,9 @@ for on its own, and all of them by default, on a sheet and on a netlist, in a
 session with no LTspice and with no comparison reference, which is where an
 export and a comparison cannot run. Each call goes through the server's own
 dispatch. Every check the tool offers must come back as run, as skipped with
-a reason, or as a failure that names it; none may be silently absent.
+a reason, or as a failure that names it; none may be silently absent. A check
+asked for on its own that did not run leaves nothing the caller asked for, so
+the call's outcome is ``failed``, never ``complete``.
 """
 
 from __future__ import annotations
@@ -86,3 +88,8 @@ async def test_every_check_is_run_or_said_not_to_have_run(
         if check in skipped:
             assert skipped[check].strip(), f"{check!r} was skipped with no reason: {data}"
     assert not ran & set(skipped), f"a check is both run and skipped: {data}"
+    if checks is not None and not ran & set(checks):
+        assert data["outcome"] == "failed", (
+            f"{tool} on a {kind} file with checks={checks}: nothing asked for ran, "
+            f"yet the outcome is {data['outcome']!r}: {data}"
+        )
