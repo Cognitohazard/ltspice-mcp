@@ -86,6 +86,11 @@ tool-surface changes.
 
 ### Fixed
 
+- A call that sends a retired argument name is told the name that replaced
+  it only where the old name was taken. `analyze_results`' `raw_path` and
+  `log_path` were retired inside each source; a `raw_path` at the top level
+  was told it "is now 'path'", which the top level does not take, and is now
+  answered with the names the top level takes.
 - An `edit_schematic` dry run with `compare` returned no `verification`, so a
   batch could be checked against its reference only by committing it. The
   reference check exports a staged copy of the sheet the batch would write,
@@ -660,6 +665,11 @@ tool-surface changes.
   does, that its results end where the run was stopped (`partial_raw`).
 
 ### Changed
+
+- `analyze_results`: a `spec.fail_cases` list cut short says how to read the
+  rest in a `hint` beside its `truncated` flag, where the recipe's `warnings`
+  said it. The list has no cursor of its own, and its schema no longer
+  declares one.
 
 - **Breaking:** a `wire_pins` route whose end lands mid-way along an existing
   wire, a T, is listed under `junctions` with `via: "tee"`. It was
