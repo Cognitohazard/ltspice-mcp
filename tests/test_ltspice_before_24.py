@@ -5,12 +5,13 @@ LTspice XVII and IV read a deck as cp1252, refuse ``.options logopinfo`` with
 subcircuit's instances without their X. An XVII is recognised by its stock file
 name, or, under any other name, by the build an earlier run on it reported. The
 run's deck, the hierarchy's spelling and the encoding warning all take that one
-answer, so an XVII under another name is not handed a deck it refuses.
+answer, so an XVII under another name is not handed a deck it refuses. Reading
+the name alone (``is_cp1252_ltspice_executable``) is banned outside its module
+in ``pyproject.toml``.
 """
 
 from __future__ import annotations
 
-import ast
 import asyncio
 import shutil
 from pathlib import Path
@@ -24,7 +25,6 @@ from ltspice_mcp.lib import services
 from ltspice_mcp.lib.simulator_build import executable_identity
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
-from tests._source_scan import PACKAGE, parsed
 from tests.conftest import stand_in_program, terminal_experiment
 from tests.test_inspect_tools import _run
 
@@ -123,30 +123,3 @@ async def test_an_xvii_is_known_by_its_name_or_by_what_its_runs_report(
     # Its run named the build, so from then on every route knows it.
     assert after == dict.fromkeys(after, True)
     assert injected[1] is False
-
-
-# ---------------------------------------------------------------------------
-# Ownership of the question
-# ---------------------------------------------------------------------------
-
-
-def _calls(name: str) -> list[tuple[str, ast.Call]]:
-    found: list[tuple[str, ast.Call]] = []
-    for path in PACKAGE.rglob("*.py"):
-        module = path.relative_to(PACKAGE).as_posix()
-        for node in ast.walk(parsed(path)):
-            if isinstance(node, ast.Call) and (
-                (isinstance(node.func, ast.Name) and node.func.id == name)
-                or (isinstance(node.func, ast.Attribute) and node.func.attr == name)
-            ):
-                found.append((module, node))
-    return found
-
-
-def test_only_the_owner_reads_an_executable_s_name_for_its_age() -> None:
-    stray = sorted(
-        f"{module}:{call.lineno}"
-        for module, call in _calls("is_cp1252_ltspice_executable")
-        if module != "lib/simulator_build.py"
-    )
-    assert not stray, f"the executable's name read for its age around the owner: {stray}"

@@ -1714,7 +1714,6 @@ FILE_LEVEL_RULES: dict[str, str] = {
         "The file named by an argument was refused, so it was never read. A refused "
         "include is placed at its directive's line instead."
     ),
-    "lex_error": "The lexer's error names no line, though the card it stopped in has one.",
 }
 
 
@@ -1788,19 +1787,12 @@ def declared_output_schemas() -> Iterator[tuple[ModuleType, Callable, dict]]:
 CONTINUATIONS = frozenset({"next_cursor", "cursor", "continue", "next"})
 
 
-def _names_the_list(outer: dict, name: str) -> bool:
-    """Whether an object's ``hint`` or ``warnings`` says something of the list
-    ``name``: the prose way on for a list that has no cursor of its own."""
-    said = [outer.get("hint"), *(outer.get("warnings") or ())]
-    return any(isinstance(line, str) and name in line for line in said)
-
-
 def cut_without_continuation(
     value: typing.Any, path: tuple = (), around: tuple[dict, ...] = ()
 ) -> Iterator[tuple]:
     """Every list a reply says it cut short (``truncated: true``) that gives no
-    way on: no cursor in it or around it within its reply item, no hint beside
-    the flag, and no hint or warning around it that names the list.
+    way on: no cursor in it or around it within its reply item, and no hint
+    beside the flag.
 
     Design principle "Safe edits" (``docs/DESIGN.md``): a list cut short says
     how to read the rest. ``tests/test_capped_lists_say_how_to_continue.py``
@@ -1809,11 +1801,8 @@ def cut_without_continuation(
     if isinstance(value, dict):
         if value.get("truncated") is True:
             scope = (*around, value)
-            name = str(path[-1]) if path else ""
             if not (
-                "hint" in value
-                or any(outer.get(key) for outer in scope for key in CONTINUATIONS)
-                or (name and any(_names_the_list(outer, name) for outer in around))
+                "hint" in value or any(outer.get(key) for outer in scope for key in CONTINUATIONS)
             ):
                 yield path
         for key, item in value.items():
@@ -1938,8 +1927,8 @@ def _enforce_output_schema_conformance():
         if stranded is not None:
             raise AssertionError(
                 f"{_replying_tool(frame) or 'a reply'}: the list at {_dotted(stranded)} was cut short "
-                "and the reply gives no way to read the rest: a next_cursor, a hint "
-                "beside the flag, or a hint or warning around it that names the list."
+                "and the reply gives no way to read the rest: a next_cursor, or a hint "
+                "beside the flag."
             )
 
     def _validate(result, data=None) -> None:

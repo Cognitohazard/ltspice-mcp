@@ -92,6 +92,26 @@ tool-surface changes.
 
 ### Fixed
 
+- `verify_circuit`'s comparison called two sources equivalent when their
+  value fields differed after the first token, such as `V1 a 0 5V AC 1` and
+  `V1 a 0 5V AC 2`, because the shared value reader read the whole field by
+  its leading number. A value field is now compared token by token, each
+  numerically within the tolerance, so `5V AC 1` still matches `5.0V AC 1`.
+  `parse_spice_value`, in the server and in the Python API, refuses a string
+  of several tokens; a suffix is written against its number (`1ms`).
+- A random component rule on a source written as `V1 a 0 5V AC 1` drew
+  around 5 and wrote the draw over the AC magnitude (`5V AC 5.1`). It is
+  refused again as having no plain numeric nominal, and the refusal names
+  the field and says to vary a `.param` the value reads.
+- The recovery check of a run's frozen inputs refused a seeded ngspice run
+  whose second line is its one analysis, as having two, and a recoverable run
+  whose second line opens a subcircuit. It read the deck's first card twice,
+  once in place of the title line. It now reads line 1 as the title.
+- A call that sends a retired argument name is told the name that replaced
+  it only where the old name was taken. `analyze_results`' `raw_path` and
+  `log_path` were retired inside each source; a `raw_path` at the top level
+  was told it "is now 'path'", which the top level does not take, and is now
+  answered with the names the top level takes.
 - An `edit_schematic` dry run with `compare` returned no `verification`, so a
   batch could be checked against its reference only by committing it. The
   reference check exports a staged copy of the sheet the batch would write,
@@ -103,6 +123,21 @@ tool-surface changes.
   the deck steps as `Rv`, since LTspice logs it as `rv`. Each entry of
   `RawResult.steps` now finds a name as a step selector does, whatever its
   case, and keeps the keys as the run wrote them.
+- `add_net_label`, a placed or moved part's pins and `wire_pins` counted a
+  net's names through ground. A wire whose only label is a ground flag took
+  the names of every other grounded net, so joining it to `VSS` while `VDD`
+  was grounded elsewhere was refused as a short of the two, though moving a
+  `VSS` label there was allowed. A net in these checks is now known by the
+  names its own labels carry, as in `move`: joining a ground-only wire to a
+  named net grounds that net, which a net may be whatever else is. The
+  route check's refusal for a label picked up mid-route now lists only the
+  names the route's wiring joins. A route that also runs straight across
+  two pins of one part is refused for that.
+- A part placed or moved with two pins on one straight wire was judged on
+  the sheet without it. LTspice drops the piece of wire between those two
+  pins, so a pin on a crossing there joins only the piece on its side, and
+  the move was refused as a short LTspice does not make. Each pin's joins
+  are now read off the sheet with the part in its new place.
 - An argument refusal names the fix for a field it does not know: an unknown
   field is answered with the names its place takes, the closest first ("Did
   you mean 'dry_run' for 'dry_runn'? This tool takes path, base, ..."), where
@@ -651,6 +686,11 @@ tool-surface changes.
   does, that its results end where the run was stopped (`partial_raw`).
 
 ### Changed
+
+- `analyze_results`: a `spec.fail_cases` list cut short says how to read the
+  rest in a `hint` beside its `truncated` flag, where the recipe's `warnings`
+  said it. The list has no cursor of its own, and its schema no longer
+  declares one.
 
 - **Breaking:** a `wire_pins` route whose end lands mid-way along an existing
   wire, a T, is listed under `junctions` with `via: "tee"`. It was

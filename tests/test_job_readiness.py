@@ -4,12 +4,14 @@ The reads by job (``services.experiment_run_context``, behind ``inspect``,
 ``plot_waveform`` and the Python API, and ``analyze_results``' source
 resolution), ``jobs(place_beside_sheet)`` and ``jobs(wait, wait_for="runs")``
 each answer it. A wait that returns while a read refuses, or a copy beside the
-sheet of a case a read refuses, is three answers to one question.
+sheet of a case a read refuses, is three answers to one question. Whether a
+status means the runs are done (``job_lifecycle.runs_terminal``) is banned
+outside its owner in ``pyproject.toml``, and whether a case kept a raw is
+decided only in ``services.case_unreadable``.
 """
 
 from __future__ import annotations
 
-import ast
 import asyncio
 import os
 import shutil
@@ -27,7 +29,6 @@ from ltspice_mcp.tools import analyze
 from ltspice_mcp.tools.analyze import AnalyzeSourceInput
 from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
 from ltspice_mcp.tools.jobs import handle_jobs
-from tests._source_scan import PACKAGE, parsed
 from tests.conftest import (
     LIVENESS_S,
     await_until,
@@ -193,29 +194,3 @@ async def test_a_recoverable_job_s_runs_read_as_soon_as_the_wait_returns(
         if task is not None:
             await asyncio.wait_for(asyncio.shield(task), LIVENESS_S)
         await state.job_registry.drain_pending()
-
-
-# ---------------------------------------------------------------------------
-# Ownership of the rule
-# ---------------------------------------------------------------------------
-
-#: The predicates readiness is made of, and the modules that own the rule.
-_PREDICATES = frozenset({"runs_terminal", "has_readable_raw"})
-_OWNERS = frozenset({"lib/services.py", "lib/job_lifecycle.py"})
-
-
-def test_readiness_is_decided_only_by_its_owners() -> None:
-    """Every other module asks ``services.runs_unready``/``case_unreadable`` or
-    ``job_lifecycle.runs_done``, so a second copy of the rule cannot drift."""
-    found = sorted(
-        f"{path.relative_to(PACKAGE).as_posix()}:{node.lineno}"
-        for path in PACKAGE.rglob("*.py")
-        if path.relative_to(PACKAGE).as_posix() not in _OWNERS
-        for node in ast.walk(parsed(path))
-        if isinstance(node, ast.Call)
-        and (
-            (isinstance(node.func, ast.Name) and node.func.id in _PREDICATES)
-            or (isinstance(node.func, ast.Attribute) and node.func.attr in _PREDICATES)
-        )
-    )
-    assert not found, f"readiness decided outside {sorted(_OWNERS)}: {found}"
