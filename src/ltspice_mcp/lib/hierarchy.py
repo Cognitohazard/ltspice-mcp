@@ -24,6 +24,7 @@ from ltspice_mcp.lib.deck_staging import (
     resolve_reference,
     scan_include_references,
     unquote,
+    unreadable_references,
 )
 from ltspice_mcp.lib.device_names import raw_name
 from ltspice_mcp.lib.encoding import decode_spice_bytes
@@ -36,8 +37,10 @@ from ltspice_mcp.lib.hierarchy_expr import (
 from ltspice_mcp.lib.pathutil import resolve_safe_path, with_roots
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
+    SpiceLexError,
     Token,
     TokenKind,
+    directive_head,
     find_matching_ends,
     lex_deck,
     tokenize_body,
@@ -232,8 +235,28 @@ class _Definition:
     closer: Source
 
 
+def _unreadable(card: SpiceCard, error: SpiceLexError, where: object = None) -> NetlistError:
+    """The refusal of a card the hierarchy needs but cannot split into its
+    parts (``spice_lex.unreadable_cards``), with its line and the fix."""
+    at = f"{where}:{card.line_start}" if where is not None else f"line {card.line_start}"
+    fix = f" {error.suggestion[:1].upper()}{error.suggestion[1:]}." if error.suggestion else ""
+    return NetlistError(f"cannot split the card at {at} into its parts: {error.message}.{fix}")
+
+
+def _refuse_unreadable_references(cards: list[SpiceCard], path: Path) -> None:
+    """Refuse an include or library card that cannot be split into parts,
+    before the include and section readers raise on it: which file or
+    section it opens is not known."""
+    for card, error in unreadable_references(cards):
+        raise _unreadable(card, error, path)
+
+
 def _tokens(card: SpiceCard) -> list[Token]:
-    return [t for t in tokenize_body(card.body) if t.kind != TokenKind.COMMENT_TRAIL]
+    try:
+        tokens = tokenize_body(card.body)
+    except SpiceLexError as exc:
+        raise _unreadable(card, exc) from exc
+    return [t for t in tokens if t.kind != TokenKind.COMMENT_TRAIL]
 
 
 def _assignments(card: SpiceCard, *, only: bool = False) -> dict[str, str]:
@@ -303,6 +326,7 @@ def walk_active(
         if count > MAX_CARDS:
             raise NetlistError(f"hierarchy exceeds {MAX_CARDS} cards")
         existence = dict(captured.existence)
+        _refuse_unreadable_references(cards, path)
         sections = card_sections(cards, path, len(stack), exists=existence.__getitem__)
         refs = {
             id(ref.card): ref
@@ -314,9 +338,11 @@ def walk_active(
         opened: str | None = None
         declared: set[str] = set()
         for card, owner in zip(cards, sections, strict=True):
-            tokens = _tokens(card)
-            head = tokens[0].text.casefold() if tokens else ""
+            # Only a section's own cards are split here, so a directive the
+            # walk does not need (``.tran 0 1m )``) cannot stop it.
+            head = directive_head(card)
             if head == ".lib" and id(card) not in refs:
+                tokens = _tokens(card)
                 if len(tokens) != 2 or opened is not None:
                     raise NetlistError(f"malformed library section at {path}:{card.line_start}")
                 opened = unquote(tokens[1].text).casefold()
@@ -325,6 +351,7 @@ def walk_active(
                 declared.add(opened)
                 continue
             if head == ".endl":
+                tokens = _tokens(card)
                 if (
                     opened is None
                     or len(tokens) > 2
@@ -435,6 +462,7 @@ def load_hierarchy(
                 existence[candidate] = candidate.exists()
             return existence[candidate]
 
+        _refuse_unreadable_references(cards, source)
         refs = scan_include_references(cards, source, depth=depth, exists=exists)
         card_sections(cards, source, depth, exists=exists)
         targets = tuple(
@@ -479,8 +507,8 @@ def _models(body: Sequence[_Occurrence], enclosing: str | None) -> dict[str, Mod
 
 
 def _shape(card: SpiceCard) -> tuple[InstanceLine, bool]:
+    _assignments(card)  # first, so a card it cannot split is refused by its line
     view = InstanceLine.from_card(card)
-    _assignments(card)
     tokens = _tokens(card)[1:]
     first = next((i for i, t in enumerate(tokens) if t.kind == TokenKind.KEY_VALUE), len(tokens))
     if any(t.kind != TokenKind.KEY_VALUE for t in tokens[first:]):
@@ -605,8 +633,7 @@ def resolve_hierarchy(
     scale_expression = "1"
     dynamic_reason = None
     for item in occurrences:
-        tokens = _tokens(item.card)
-        head = tokens[0].text.casefold() if tokens else ""
+        head = directive_head(item.card)
         if item.card.kind == "control":
             raise NetlistError(
                 "opaque control programs may alter hierarchy; discovery is unsupported"
@@ -618,7 +645,7 @@ def resolve_hierarchy(
         if head == ".step":
             dynamic_reason = "context-dependent .step: no single effective numeric value"
         if head == ".global":
-            for token in tokens[1:]:
+            for token in _tokens(item.card)[1:]:
                 globals_.setdefault(token.text.casefold(), token.text)
         if head in {".option", ".options"}:
             values = _assignments(item.card)

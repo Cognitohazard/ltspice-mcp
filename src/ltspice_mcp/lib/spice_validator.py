@@ -28,6 +28,7 @@ from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
+    SpiceLexErrorCategory,
     TokenKind,
     directive_head,
     lex,
@@ -151,6 +152,38 @@ def meas_name_refused(card: SpiceCard, simulator: str = "LTspice") -> Validation
     )
 
 
+def meas_unclosed_paren_refused(
+    card: SpiceCard, simulator: str = "LTspice"
+) -> ValidationError | None:
+    """The error for a lexed ``.meas`` card with a parenthesis left open,
+    which LTspice refuses.
+
+    Recorded for one card (log/meas_bad_syntax, ``FIND V(out AT 0.5m``):
+    LTspice 26 stopped at it before the run ('Expected ")" here.') and ran
+    nothing, and XVII ran the deck without that measurement. Any ``.meas``
+    with a parenthesis left open is taken the same way, since LTspice 26's
+    error names the missing parenthesis, not the form around it; what XVII
+    makes of another form is not recorded.
+    """
+    if simulator != "LTspice" or card.kind != "meas":
+        return None
+    try:
+        tokenize_body(card.body)
+    except SpiceLexError as exc:
+        if exc.category is not SpiceLexErrorCategory.UNBALANCED_PAREN:
+            return None
+        return ValidationError(
+            rule_name="meas_unclosed_paren",
+            message=(
+                "A parenthesis is left open in this .meas. LTspice 26 stopped at "
+                "the recorded .meas like it ('Expected \")\" here.') and ran "
+                "nothing, and LTspice XVII ran that deck without the measurement."
+            ),
+            suggestion="Add the ) that closes the ( it opens.",
+        )
+    return None
+
+
 def leading_numeric_tokens(tokens: list[str]) -> list[float]:
     """Parse leading tokens as SPICE values, stopping at the first non-numeric.
 
@@ -234,7 +267,7 @@ def validate_directive(directive: str, simulator: str = "LTspice") -> Validation
 
     Returns the first matched rule's error, or None if no rule fires.
     Empty / whitespace-only input is a no-op. Covers ``.MEAS`` function
-    blocklists and reserved names, the ``.tran`` zero-step ngspice
+    blocklists, reserved names and a parenthesis left open, the ``.tran`` zero-step ngspice
     incompatibility, and the ``.backanno`` ngspice incompatibility; other
     directives pass through unchecked.
     """
@@ -274,6 +307,8 @@ def validate_directive_card(card: SpiceCard, simulator: str = "LTspice") -> Vali
     continuation line is checked whole. A card that is no directive passes.
     """
     if card.kind == "meas":
+        if (error := meas_unclosed_paren_refused(card, simulator)) is not None:
+            return error
         if (error := meas_name_refused(card, simulator)) is not None:
             return error
         refused = meas_functions_refused(card, simulator)
@@ -577,19 +612,28 @@ _UNREAD_SEPARATORS = re.compile(r"[\s(){}\[\]'\",=]+")
 _UNREAD_OPERATORS = re.compile(r"[*/+\-<>^&|!?:;%]+")
 
 
+def may_connect_nodes(card: SpiceCard) -> bool:
+    """Whether ``card`` may connect nodes or define names an element uses: an
+    instance, a ``.SUBCKT`` header or a ``.GLOBAL``. A directive that only
+    names a node (``.save``, ``.meas``) connects none."""
+    return card.kind in ("instance", "subckt") or directive_head(card) == ".global"
+
+
 def _unread_connectors(cards: list[SpiceCard]) -> list[tuple[SpiceCard, set[str]]]:
-    """Each card that may connect nodes but that no rule could split into
-    parts (``spice_lex.unreadable_cards``): an instance, a ``.SUBCKT`` header
-    or a ``.GLOBAL``. With it, every word on it, lowercased, split at spaces,
-    brackets and separators and again at operators, since any of them may be a
-    node or a name the card connects or defines. The passes here may only hide
-    a warning, never make one on a guess, so they count each as connected.
-    A directive that only names a node (``.save``, ``.meas``) connects none."""
+    """Each card that may connect nodes (``may_connect_nodes``) but that no
+    rule could split into parts (``spice_lex.unreadable_cards``), with every
+    word on it, lowercased: as written between spaces (``d[0]``), split again
+    at brackets and separators, and again at operators, since any of them may
+    be a node or a name the card connects or defines. The passes here may
+    only hide a warning, never make one on a guess, so they count each as
+    connected."""
     found: list[tuple[SpiceCard, set[str]]] = []
     for card, _error in unreadable_cards(cards):
-        if card.kind not in ("instance", "subckt") and directive_head(card) != ".global":
+        if not may_connect_nodes(card):
             continue
-        words = {word for word in _UNREAD_SEPARATORS.split(card.body.lower()) if word}
+        body = card.body.lower()
+        words = set(body.split())
+        words |= {word for word in _UNREAD_SEPARATORS.split(body) if word}
         words |= {part for word in words for part in _UNREAD_OPERATORS.split(word) if part}
         found.append((card, words))
     return found
@@ -930,6 +974,12 @@ def _dc_edges(
     return _star(terminals)
 
 
+#: The grounded ports of a subckt that cannot be read whole
+#: (``_subckt_internal_grounds``): any port may reach ground inside it, so an
+#: ``X`` of it counts every node it is wired to as grounded.
+_EVERY_PORT: frozenset[int] = frozenset({-1})
+
+
 def _apply_instance_edges(
     dsu: _DSU,
     inst: InstanceLine,
@@ -952,6 +1002,8 @@ def _apply_instance_edges(
             dsu.union(a.lower(), b.lower())
     if prefix == "X" and inst.model:
         nested = subckt_grounds.get(inst.model.lower(), frozenset())
+        if nested is _EVERY_PORT:
+            return [terminal.lower() for terminal in terminals]
         return [terminals[i].lower() for i in nested if i < len(terminals)]
     return []
 
@@ -1017,19 +1069,30 @@ def _subckt_internal_grounds(
     # Parse each body once up front; the fixpoint below only re-runs the
     # cheap union step, never re-lexes.
     defs: dict[str, tuple[list[str], list[tuple[InstanceLine, list[str]]]]] = {}
+    # A subckt whose header, or a card in whose body that may connect nodes,
+    # cannot be split into parts may tie any port to ground.
+    unread: set[str] = set()
     for card in cards:
         if card.kind != "subckt":
             continue
         try:
             sub = SubcktCard.from_card(card)
         except SpiceLexError:
+            if card.name:
+                unread.add(card.name.lower())
             continue
         body_cards = [c for c in cards if c.scope == (*card.scope, sub.name)]
+        if _unread_connectors(body_cards):
+            unread.add(sub.name.lower())
+            continue
         body = [(inst, terminals) for _c, inst, terminals in _iter_instances(body_cards)]
         defs[sub.name.lower()] = ([p.lower() for p in sub.ports], body)
+    for name in unread:
+        defs.pop(name, None)
 
     sinks = _GROUND_NODES | global_nodes
     grounds: dict[str, frozenset[int]] = {name: frozenset() for name in defs}
+    grounds.update(dict.fromkeys(unread, _EVERY_PORT))
     for _ in range(len(defs) + 1):  # bounded fixpoint over nested grounding
         changed = False
         for name, (ports, body) in defs.items():

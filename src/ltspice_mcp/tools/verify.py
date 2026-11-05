@@ -1381,17 +1381,19 @@ def _syntax_findings(
         )
 
     # A card no rule could split into its parts is left out by every rule
-    # below and by the quality check, so the reply says which, under the
-    # linter's rule for it, at that rule's severity.
+    # below and by the quality check, so the reply says which, as the
+    # linter's unreadable-card rule does. A .meas LTspice refuses for a
+    # parenthesis left open is the directive_syntax error above instead.
     findings.extend(
         _finding(
-            rule_id=_UNREADABLE_RULE_IDS[site.rule_id],
-            severity=rule_severity(site.rule_id),
+            rule_id="unreadable_card",
+            severity=rule_severity("unreadable-card"),
             at={"file": str(path), "line": site.card.line_start},
             subject=" ".join(site.card.body.split()),
             evidence={"detail": site.detail},
         )
         for site in unreadable_card_sites(deck.cards, family)
+        if site.rule_id == "unreadable-card"
     )
     findings.extend(
         _rule_finding(issue, path, rule_id="element_arity", severity=str(issue["severity"]))
@@ -1403,14 +1405,6 @@ def _syntax_findings(
     if simulator == "LTspice":
         findings.extend(_meas_angle_findings(deck.cards, path))
     return findings
-
-
-# The linter's rules for a card no rule could split into its parts
-# (``unreadable_card_sites``), as this tool names them.
-_UNREADABLE_RULE_IDS = {
-    "unreadable-card": "unreadable_card",
-    "meas-unclosed-paren-ltspice": "meas_unclosed_paren",
-}
 
 
 def _meas_angle_findings(cards: list[SpiceCard], path: Path) -> list[dict[str, Any]]:

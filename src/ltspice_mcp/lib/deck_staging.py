@@ -369,8 +369,8 @@ def stage_deck(
                 raise DeckStagingError(
                     "include_unstaged",
                     f"Cannot stage the reference on line {card.line_start} of "
-                    f"{resolved}: {error.message}, so the file it names cannot be "
-                    f"read. {error.suggestion.capitalize()}.",
+                    f"{resolved}: {error.message}, so which file it names is not "
+                    f"known. {error.suggestion[:1].upper()}{error.suggestion[1:]}.",
                     reference=" ".join(card.body.split()),
                 )
             for reference in scan_include_references(parsed.cards, anchor, depth=depth):
@@ -761,9 +761,10 @@ def scan_include_references(
 def unreadable_references(cards: list[SpiceCard]) -> list[tuple[SpiceCard, SpiceLexError]]:
     """The include and library cards whose path cannot be read, because the
     card cannot be split into parts (``spice_lex.unreadable_cards``): an
-    unclosed quote, brace or parenthesis. ``scan_include_references`` and
-    ``card_sections`` raise the lexer's error on one, so staging refuses them
-    by line first, instead of running a deck whose files it could not check."""
+    unclosed quote, brace or parenthesis, or a closer with nothing open.
+    ``scan_include_references`` raises the lexer's error on any of them and
+    ``card_sections`` on a ``.lib``, so staging refuses them by line first,
+    instead of running a deck whose files it could not check."""
     return [
         (card, error)
         for card, error in unreadable_cards(cards)

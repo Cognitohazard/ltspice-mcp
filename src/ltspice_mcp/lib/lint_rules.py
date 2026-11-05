@@ -21,7 +21,6 @@ from ltspice_mcp.lib.simulator import DEFAULT_FAMILY, current_ngbehavior, family
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
-    SpiceLexErrorCategory,
     TokenKind,
     directive_head,
     lex,
@@ -42,8 +41,10 @@ from ltspice_mcp.lib.spice_validator import (
     ARITY_CHECKS,
     EXCLUSIVE_ANALYSIS_KINDS,
     is_ground_node,
+    may_connect_nodes,
     meas_functions_refused,
     meas_name_refused,
+    meas_unclosed_paren_refused,
     validate_netlist_arity,
     validate_netlist_duplicate_params,
 )
@@ -493,8 +494,10 @@ def _model_missing(
     context: _LintContext,
     rule: LintRule,
 ) -> list[LintFinding]:
-    declared = _declared_models(context.cards)
-    declared.update(_models_from_staged_dependencies(context))
+    reached = _models_from_staged_dependencies(context)
+    if reached is None:
+        return []
+    declared = _declared_models(context.cards) | reached
     findings = []
     for card in context.cards:
         if card.kind != "instance" or not card.name:
@@ -529,7 +532,7 @@ def _declared_models(cards: list[SpiceCard]) -> set[str]:
     }
 
 
-def _models_from_staged_dependencies(context: _LintContext) -> set[str]:
+def _models_from_staged_dependencies(context: _LintContext) -> set[str] | None:
     """Collect declarations the deck reaches through its include references.
 
     The staged snapshots in ``context.includes`` are authoritative for the
@@ -543,8 +546,13 @@ def _models_from_staged_dependencies(context: _LintContext) -> set[str]:
     must not lint as missing. Disk resolution goes through deck staging's
     ``resolve_reference`` so the linter cannot read a different file than the
     one staging staged.
+
+    None when a live file holds an include or library card that cannot be
+    split into parts: which file it names is not known, so neither are the
+    models it declares. Staging refuses such a card in every file it stages.
     """
     declared: set[str] = set()
+    unread = False
     snapshot: dict[Path, list[SpiceCard]] = {}
     for file in context.files[1:]:
         declared.update(_declared_models(file.cards))
@@ -552,12 +560,18 @@ def _models_from_staged_dependencies(context: _LintContext) -> set[str]:
     visited: set[Path] = set(snapshot)
 
     def walk(cards: list[SpiceCard], source: Path, depth: int) -> None:
+        nonlocal unread
         if depth >= DEFAULT_INCLUDE_DEPTH:
             return
         # ``depth`` here is the recursion budget; the scanner's parameter is
         # the library-context bit (0 = the deck itself, nonzero = a file
         # reached by following a reference). Keep the two separate.
-        for reference in scan_include_references(cards, source, depth=min(depth, 1)):
+        try:
+            references = scan_include_references(cards, source, depth=min(depth, 1))
+        except SpiceLexError:
+            unread = True
+            return
+        for reference in references:
             dependency = resolve_reference(source.parent, reference.raw_path)
             try:
                 resolved = dependency.resolve(strict=False)
@@ -581,7 +595,7 @@ def _models_from_staged_dependencies(context: _LintContext) -> set[str]:
         # find that the snapshot itself does not carry is a live reference
         # nested inside a staged file.
         walk(cards, staged_path, 1)
-    return declared
+    return None if unread else declared
 
 
 def _arity_check(
@@ -711,36 +725,40 @@ class UnreadableSite(NamedTuple):
 
 def unreadable_card_sites(cards: Iterable[SpiceCard], family: str) -> list[UnreadableSite]:
     """Each card no rule could split into its parts (``spice_lex.unreadable_cards``),
-    with the rule that reports it for ``family`` and the reason.
+    with the rule that reports it for ``family`` and what the finding says.
 
-    For LTspice, a ``.meas`` with a parenthesis left open is
-    ``meas-unclosed-paren-ltspice``: LTspice 26 refuses the deck at its line
-    ('Expected ")" here.') and runs nothing, and XVII runs it without that
-    measurement (recorded on both, log/meas_bad_syntax). Any other is
-    ``unreadable-card``: what a simulator does with it is not recorded. One
-    answer for the linter and ``verify_circuit``, which reports the same cards.
+    For LTspice, a ``.meas`` that ``meas_unclosed_paren_refused`` refuses is
+    ``meas-unclosed-paren-ltspice``; ``verify_circuit`` and ``edit_schematic``
+    refuse it through the same validator. Any other is ``unreadable-card``:
+    what a simulator does with it is not recorded. One answer for the linter
+    and ``verify_circuit``, which reports the same cards.
     """
+    simulator = DISPLAY.get(family, family)
     sites = []
     for card, error in unreadable_cards(cards):
+        refused = meas_unclosed_paren_refused(card, simulator)
+        if family == "ltspice" and refused is not None:
+            sites.append(
+                UnreadableSite(
+                    card,
+                    "meas-unclosed-paren-ltspice",
+                    f"{refused.message} {refused.suggestion}",
+                )
+            )
+            continue
         fix = f" {error.suggestion[:1].upper()}{error.suggestion[1:]}." if error.suggestion else ""
-        if (
-            family == "ltspice"
-            and card.kind == "meas"
-            and error.category is SpiceLexErrorCategory.UNBALANCED_PAREN
-        ):
-            rule_id = "meas-unclosed-paren-ltspice"
-            detail = (
-                f"{error.message}: LTspice 26 refuses the deck at this line and runs "
-                f"nothing, and LTspice XVII runs it without this measurement.{fix}"
-            )
-        else:
-            rule_id = "unreadable-card"
-            detail = (
-                f"{error.message}: the checks could not split this card into its "
-                "parts, so no rule read them, and the names and nodes on it count "
-                f"as defined and connected.{fix}"
-            )
-        sites.append(UnreadableSite(card, rule_id, detail))
+        # Only a card that may connect nodes has its words counted as
+        # connected and defined; a .save or .param that cannot be read is not.
+        counted = (
+            ", and the nodes and names on it count as connected and defined"
+            if may_connect_nodes(card)
+            else ""
+        )
+        detail = (
+            f"{error.message}: the checks could not split this card into its parts, "
+            f"so no rule read them{counted}.{fix}"
+        )
+        sites.append(UnreadableSite(card, "unreadable-card", detail))
     return sites
 
 

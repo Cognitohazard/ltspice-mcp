@@ -1954,3 +1954,70 @@ def test_a_random_rule_has_no_nominal_on_a_part_number(tmp_path: Path, card: str
         materialize_variants(circuit, expand_variations([circuit], [variation]), tmp_path / "out")
 
     assert excinfo.value.code == "random_nominal_unavailable"
+
+
+# A .param card with a brace left open cannot be split into its parts, so the
+# names it sets are not known. A sweep of a name it may set was made on the
+# copy that could be read, and reported a value the circuit may not run at.
+_UNREAD_PARAM_DECKS = {
+    "beside a copy that can be read": "* t\nV1 in 0 1\nR1 in 0 {r}\n.param r=1k\n"
+    ".param r={2k\n.op\n.end\n",
+    "alone": "* t\nV1 in 0 1\nR1 in 0 {r}\n.param r={2k\n.op\n.end\n",
+}
+
+
+@pytest.mark.parametrize(
+    "variation",
+    [
+        AssignVariation(kind="assign", assign={"r": ["5k"]}),
+        _random_rule({"rule": "param", "target": "r", "tolerance": 0.1}),
+    ],
+    ids=["assign", "random"],
+)
+@pytest.mark.parametrize(
+    "deck_text", list(_UNREAD_PARAM_DECKS.values()), ids=list(_UNREAD_PARAM_DECKS)
+)
+def test_a_param_a_card_that_cannot_be_read_may_set_is_refused_by_its_line(
+    tmp_path: Path, deck_text: str, variation: Variation
+):
+    path = tmp_path / "d.cir"
+    path.write_text(deck_text)
+    deck = CircuitDeck("dut", path, deck_text)
+
+    with pytest.raises(VariationError) as excinfo:
+        materialize_variants(deck, expand_variations([deck], [variation]), tmp_path / "out")
+
+    assert excinfo.value.code == "ambiguous_target"
+    line = deck_text.splitlines().index(".param r={2k") + 1
+    assert f"may be set by the .param on line {line} of d.cir" in str(excinfo.value)
+    assert "Check for a missing } matching the {." in str(excinfo.value)
+
+
+def test_a_param_that_cannot_be_read_leaves_the_other_targets_alone(tmp_path: Path):
+    text = "* t\nV1 in 0 1\nR1 in 0 {r}\n.param r=1k\n.param q={2k\n.op\n.end\n"
+    path = tmp_path / "d.cir"
+    path.write_text(text)
+    deck = CircuitDeck("dut", path, text)
+    variation = AssignVariation(kind="assign", assign={"r": ["5k"]})
+
+    (variant,) = materialize_variants(deck, expand_variations([deck], [variation]), tmp_path / "o")
+
+    assert ".param r=5k" in variant.text
+    assert ".param q={2k" in variant.text
+
+
+def test_source_lineage_reads_past_a_directive_that_cannot_be_read(tmp_path: Path):
+    # A recoverable run records each case's source lineage through the
+    # hierarchy walk, which split every card and raised on this one.
+    text = "* t\nV1 in 0 1\nR1 in 0 1k\n.tran 0 1m )\n.end\n"
+    path = tmp_path / "d.cir"
+    path.write_text(text)
+    deck = CircuitDeck(
+        "dut", path, text, semantic_profile=SemanticProfile("ltspice"), record_source_lineage=True
+    )
+
+    (variant,) = materialize_variants(
+        deck, expand_variations([deck], [], validate_applies_to=False), tmp_path / "out"
+    )
+
+    assert ".tran 0 1m )" in variant.text

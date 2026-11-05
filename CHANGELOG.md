@@ -133,19 +133,27 @@ tool-surface changes.
   read the deck as one without it: a node wired through it reported as wired
   to one element, and a measurement of it as naming nothing. Such a card is
   now reported at its line (`unreadable_card` in `verify_circuit`, the
-  `unreadable-card` lint rule, a warning in both), and the nodes and names
-  on a part or `.subckt` line like it, inside an expression too, count as
-  connected and defined, so no other rule reports on a guess about it. A
-  `.meas` with a parenthesis left open, which LTspice 26 refuses before the
-  run and XVII runs without that measurement (recorded on both), is an error
-  for LTspice instead (`meas_unclosed_paren`, and the blocking
-  `meas-unclosed-paren-ltspice` lint rule; `linter_version` 12).
+  `unreadable-card` lint rule, a warning in both). On a part, `.subckt`
+  header or `.global` like it, the nodes and names, inside an expression
+  too, count as connected and defined, and an `X` of a subcircuit holding one
+  as tied to ground at every port, so no other rule reports on a guess about
+  it; a `.save` or `.meas` like it connects nothing.
+- A `.meas` with a parenthesis left open is refused for LTspice: LTspice 26
+  refused the recorded one before the run and XVII ran that deck without the
+  measurement. `edit_schematic` refuses to write it, `verify_circuit`'s
+  `syntax` check reports it as an error, `run_experiments` refuses it
+  (`meas-unclosed-paren-ltspice`, blocking; `linter_version` 12), and the
+  LTspice 26 log's failure carries the fix (`meas_unclosed_paren`).
 - A directive in that state, such as `.tran 0 1m )`, `.save V(in` or
   `.param r={1k`, stopped `run_experiments` with the lexer's error as a
-  retryable submission failure, raised by staging, the linter or the
-  variation reader. The deck now runs with the card reported, and an
-  `.include` or `.lib` whose path cannot be read for the same reason fails
-  its circuit with `include_unstaged`, naming the line and the fix.
+  retryable submission failure, raised by staging, the linter, the variation
+  reader or the hierarchy walk behind recoverable runs and nested targets.
+  The deck now runs with the card reported. An `.include` or `.lib` in that
+  state fails its circuit with `include_unstaged`, naming the line and the
+  fix, since which file it names is not known; a variation of a name a
+  `.param` in that state may set is refused (`ambiguous_target`), naming its
+  line, rather than made on another copy; and `inspect(kind="hierarchy")`
+  and a nested target refuse a card they need in that state by its line.
 - The Python API's `inspect` returns every row of a paged query. It follows
   each query's cursor, and joined the pages only where an item paged two
   lists, so for every kind that pages one (`components`, `symbols`, `model`,

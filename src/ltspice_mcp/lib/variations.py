@@ -484,6 +484,10 @@ class _DeckTargets:
     #: The other names of each component LTspice exported with its section
     #: sign (``spice_lex_ops.section_sign_names``), by case-folded name.
     aliases: dict[str, list[_Site]] = field(default_factory=dict)
+    #: Each name a ``.param`` card that cannot be split into parts may set
+    #: (a word before ``=``), by case-folded name, with the card's line and
+    #: the reason it cannot be read. Such a card may declare the name again.
+    unread_params: dict[str, list[tuple[int, str]]] = field(default_factory=dict)
 
     def component_sites(self, folded: str) -> list[_Site]:
         """The components an exact target names: a reference as written, or
@@ -989,6 +993,42 @@ def _applies(
     }
 
 
+#: A name a ``.param`` card sets: a word, then ``=``.
+_PARAM_NAME_RE = re.compile(r"([A-Za-z_][\w.$]*)\s*=")
+
+
+def _unread_param_names(card: SpiceCard) -> tuple[set[str], str] | None:
+    """The names a ``.param`` card that cannot be split into parts may set,
+    case-folded, with the reason and the fix; None for a card that can be
+    read. A word before ``=`` anywhere on it counts, so a name is never
+    missed, and a variation of it is refused rather than made on the one
+    copy that can be read."""
+    try:
+        tokenize_body(card.body)
+    except SpiceLexError as exc:
+        fix = f" {exc.suggestion[:1].upper()}{exc.suggestion[1:]}." if exc.suggestion else ""
+        names = {name.casefold() for name in _PARAM_NAME_RE.findall(card.body)}
+        return (
+            names,
+            f"({exc.message}), so the variation cannot tell which declaration it edits.{fix}",
+        )
+    return None
+
+
+def _refuse_unread_param(closure: _DeckClosure, folded: str, *, what: str, target: str) -> None:
+    """Refuse a target that a ``.param`` card that cannot be read may also set
+    (``_DeckTargets.unread_params``): editing the copy that can be read would
+    report a value the circuit may not run at."""
+    for file in closure.files:
+        for line, reason in file.targets.unread_params.get(folded, ()):
+            raise VariationError(
+                "ambiguous_target",
+                f"Circuit {closure.circuit_id!r}: {what} {target!r} may be set by the "
+                f".param on line {line} of {file.path.name}, which cannot be split into "
+                f"its parts {reason}",
+            )
+
+
 def _param_assignments(card: SpiceCard) -> list[tuple[str, Token]]:
     """The ``name=value`` parts of a ``.param`` card with their names, or none
     for a card that cannot be split into parts (``spice_lex.unreadable_cards``):
@@ -1011,9 +1051,15 @@ def _deck_targets(text: str, source: Path, depth: int) -> _DeckTargets:
     models_by_ref: dict[str, str] = {}
     model_names: dict[str, list[_Site]] = {}
     aliases: dict[str, list[_Site]] = {}
+    unread_params: dict[str, list[tuple[int, str]]] = {}
     cards = lex(text).cards
     for card, section in zip(cards, card_sections(cards, source, depth), strict=True):
         if card.kind == "param":
+            if (unread := _unread_param_names(card)) is not None:
+                names, reason = unread
+                for name in names:
+                    unread_params.setdefault(name, []).append((card.line_start, reason))
+                continue
             for key, _token in _param_assignments(card):
                 params.setdefault(key.casefold(), []).append(_Site(key, card.scope, section))
         elif card.kind == "model" and card.name:
@@ -1037,6 +1083,7 @@ def _deck_targets(text: str, source: Path, depth: int) -> _DeckTargets:
         models_by_ref=models_by_ref,
         model_names=model_names,
         aliases=aliases,
+        unread_params=unread_params,
     )
 
 
@@ -1231,6 +1278,7 @@ def _resolve_assignment(
         return tuple(edits)
 
     folded = target.casefold()
+    _refuse_unread_param(closure, folded, what="target", target=target)
     # File precedence is the outer test and kind precedence the inner one: a
     # .param still beats a same-named component, but only within the one file
     # that owns the target, so an include can never shadow the root deck.
@@ -1317,6 +1365,7 @@ def _resolve_instance_param(
             "(a mobility multiplier) can be set per instance",
         )
     folded = target.casefold()
+    _refuse_unread_param(closure, folded, what="target", target=target)
     clashes = sorted(
         {
             file.path.name
@@ -1529,6 +1578,8 @@ def _resolve_random_rule_targets(
         what, miss = "random model target", "has no .model card"
         sites_by_file = {file.index: file.targets.model_names for file in closure.files}
     folded = rule.target.casefold()
+    if isinstance(rule, ParamRule):
+        _refuse_unread_param(closure, folded, what=what, target=rule.target)
     matches = [index for index, sites in sites_by_file.items() if folded in sites]
     if not matches:
         raise VariationError(
