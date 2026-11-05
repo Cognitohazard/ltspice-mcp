@@ -162,15 +162,10 @@ def _reject_empty_attr_value(reference: str, attribute: str, value: str) -> None
         )
 
 
-def _attribute_value(reference: str, attribute: str, value: str) -> str:
-    """The value an attribute is written with.
-
-    A ``Prefix`` must start with the element letter it gives the part, and is
-    written in upper case, the way spicelib reads it back; LTspice reads either
-    case the same.
-    """
-    if attribute != INSTANCE_PREFIX:
-        return value
+def _prefix_text(reference: str, value: str) -> str:
+    """The text a ``Prefix`` is written with: it must start with the element
+    letter it gives the part, and is written in upper case, the way spicelib
+    reads it back; LTspice reads either case the same."""
     letter = value.strip()[:1]
     if not (letter.isascii() and letter.isalpha()):
         raise NetlistError(
@@ -179,6 +174,34 @@ def _attribute_value(reference: str, attribute: str, value: str) -> str:
             "subcircuit."
         )
     return value.strip().upper()
+
+
+def _attribute_texts(
+    editor: AscEditor, part: SchematicComponent, given: Mapping[str, str]
+) -> dict[str, str]:
+    """The text each attribute in ``given`` is written with on ``part``, a part
+    on ``editor``'s sheet or one about to be placed on it, in ``given``'s order.
+
+    Every op that writes a part's attributes takes their text from here
+    (``add_component``, ``set_component_value``, ``set_component_attribute``),
+    so a text one op refuses no other op writes:
+
+    - a ``Prefix`` is written as ``_prefix_text`` gives it;
+    - a ``Value`` must be one LTspice reads whole as the value of the element
+      class the part netlists as (``_validate_component_value``), the class
+      given by the ``Prefix`` in ``given``, else by the part's own, else by
+      its symbol's.
+
+    Raises NetlistError for a text the part cannot be given.
+    """
+    texts = {
+        name: _prefix_text(part.reference, text) if name == INSTANCE_PREFIX else text
+        for name, text in given.items()
+    }
+    if "Value" in texts:
+        element = _element_of(editor, part, part.reference, texts.get(INSTANCE_PREFIX))
+        _validate_component_value(part.reference, texts["Value"], element)
+    return texts
 
 
 def _require_clearable_attr(reference: str, attribute: str) -> None:
@@ -242,16 +265,19 @@ def create_component(
     comp.symbol = symbol  # pyright: ignore[reportAttributeAccessIssue]
     comp.position = Point(x, y)
     comp.rotation = rotation
+    # ``value`` is the Value attribute; a Value in ``attributes`` as well
+    # replaces it, in its place. An empty value writes the 2-token SYMATTR
+    # line that corrupts the .asc on the next read.
+    given: dict[str, str] = {}
     if value is not None:
-        # An empty Value writes the same 2-token SYMATTR line that corrupts the
-        # .asc on the next read, so guard this path too (not just attributes).
         _reject_empty_attr_value(reference, "Value", value)
-        comp.attributes["Value"] = value
-    if attributes:
-        for attr_name, attr_val in attributes.items():
-            _reject_unknown_attr(attr_name)
-            _reject_empty_attr_value(reference, attr_name, attr_val)
-            comp.attributes[attr_name] = _attribute_value(reference, attr_name, attr_val)
+        given["Value"] = value
+    for attr_name, attr_val in (attributes or {}).items():
+        _reject_unknown_attr(attr_name)
+        _reject_empty_attr_value(reference, attr_name, attr_val)
+        given[attr_name] = attr_val
+    # Every text is checked before the part reaches the sheet.
+    comp.attributes.update(_attribute_texts(editor, comp, given))
     editor.add_component(comp)
 
 
@@ -596,7 +622,7 @@ def _set_or_create_value(editor, reference: str, value: str) -> None:
         editor.set_component_value(reference, value)
 
 
-def _apply_component_value(editor, reference: str, value: str, element: str) -> None:
+def _apply_component_value(editor, reference: str, value: str) -> None:
     """Set a component's value, splitting trailing ``KEY=VALUE`` tokens off.
 
     spicelib's ``set_component_value`` writes only the model/value field of
@@ -615,7 +641,8 @@ def _apply_component_value(editor, reference: str, value: str, element: str) -> 
     cases like ``M1 d g s b "NMOS_lvt" W=10u`` and
     ``R1 n1 n2 {1/(2*pi*RC)}`` route correctly.
     """
-    _validate_component_value(reference, value, element)
+    _attribute_texts(editor, editor.get_component(reference), {"Value": value})
+    element = element_class(editor, reference)
     # Behavioral sources: the whole value IS an equation whose first token is
     # V=/I=/R=... — not a model name with trailing parameters. The KEY=VALUE
     # split below would route it to set_component_parameters, which the .asc
@@ -743,11 +770,20 @@ def placed_geometry(editor: AscEditor, reference: str) -> dict | None:
 def element_class(editor: AscEditor, reference: str) -> str:
     """The element letter a placed part netlists as (``sheet.element_letter``),
     read from the editor's part and its symbol."""
-    comp = editor.components.get(reference)
-    symbol = getattr(comp, "symbol", None)
+    return _element_of(editor, editor.components.get(reference), reference)
+
+
+def _element_of(
+    editor: AscEditor, part: object, reference: str, own_prefix: str | None = None
+) -> str:
+    """The element letter ``part`` netlists as (``sheet.element_letter``), on
+    ``editor``'s sheet or about to be placed on it: from ``own_prefix``, a
+    ``Prefix`` about to be written on it, else from its own, else from its
+    symbol's, else from ``reference``."""
+    symbol = getattr(part, "symbol", None)
     info = symbol_info_for(editor, symbol) if symbol else None
     return element_letter(
-        (getattr(comp, "attributes", None) or {}).get(INSTANCE_PREFIX),
+        own_prefix or (getattr(part, "attributes", None) or {}).get(INSTANCE_PREFIX),
         info.prefix if info is not None else None,
         reference,
     )
@@ -2501,7 +2537,7 @@ def apply_op_inplace(
     if isinstance(op, OpSetComponentValue):
         reference = part_reference(editor, op.reference)
         before = _attributes_of(editor, reference)
-        _apply_component_value(editor, reference, op.value, element_class(editor, reference))
+        _apply_component_value(editor, reference, op.value)
         result: dict[str, object] = {
             "op": "set_component_value",
             "reference": reference,
@@ -2524,11 +2560,10 @@ def apply_op_inplace(
         elif op.attribute == "InstName":
             return _rename_component(editor, reference, op.value.strip())
         else:
-            editor.set_component_attribute(
-                reference,
-                op.attribute,
-                _attribute_value(reference, op.attribute, op.value),
-            )
+            text = _attribute_texts(
+                editor, editor.get_component(reference), {op.attribute: op.value}
+            )[op.attribute]
+            editor.set_component_attribute(reference, op.attribute, text)
         attr_result: dict[str, object] = {
             "op": "set_component_attribute",
             "reference": reference,

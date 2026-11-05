@@ -2254,6 +2254,17 @@ more than once gets the sheet's `duplicate_parameter` finding, which the reply
 lists because the op names the part. A behavioural source's value is one
 expression and replaces `Value` entirely.
 
+Every op that writes a part's `Value` holds it to one rule: `add_component`,
+by `value` or among its `attributes`, `set_component_value` and
+`set_component_attribute`. LTspice writes the `Value` after the part's nodes,
+so a space in it may only separate what the part's element class reads as one
+value: a source's spec, the area factor of a BJT, JFET or diode, the `off`
+of a transistor or diode, a model name followed by `KEY=VALUE` parameters,
+and anything inside braces, quotes or parentheses. Anything else, such as a resistor's `1 k`, puts a
+token where LTspice reads another node and is refused before the sheet
+changes. The class is the one the part's own `Prefix` gives, in the same op
+or before it, else its symbol's.
+
 ### A.4 Inspect queries
 
 §3.6 lists every query kind.

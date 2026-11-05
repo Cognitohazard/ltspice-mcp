@@ -116,3 +116,34 @@ def test_no_text_is_matched_by_spicelibs_instruction_removers():
     hit, the other anchored at the start and in any case."""
     assert _called("remove_Xinstruction") == []
     assert _called("remove_instruction") == []
+
+
+def test_which_text_a_part_attribute_is_written_with_is_answered_in_one_place():
+    """``schematic_ops._attribute_texts`` holds the text of a part's attribute
+    to its rule, whichever op writes it: a Value to what the part's element
+    class reads whole, a Prefix to a letter. Each op that wrote a Value
+    answered this itself, and only ``set_component_value`` checked it, so a
+    value it refused was written by ``add_component`` and by
+    ``set_component_attribute``."""
+    rules = {"_validate_component_value", "_prefix_text"}
+    callers = {
+        f"{module}:{function.name}"
+        for module, tree in modules().items()
+        for function in ast.walk(tree)
+        if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef))
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in rules
+    }
+    assert callers == {"lib/schematic_ops.py:_attribute_texts"}
+    # An attribute stored straight into a part's attributes passes no rule.
+    stored = [
+        f"{module}:{node.lineno}"
+        for module, tree in modules().items()
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Assign, ast.AugAssign))
+        for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+        if isinstance(target, ast.Subscript)
+        and isinstance(target.value, ast.Attribute)
+        and target.value.attr == "attributes"
+    ]
+    assert stored == []
