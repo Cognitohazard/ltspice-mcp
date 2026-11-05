@@ -172,6 +172,7 @@
       "queries[].ngbehavior",
       "queries[].other_raw",
       "queries[].path",
+      "queries[].pid",
       "queries[].plot_index",
       "queries[].prefix",
       "queries[].query",

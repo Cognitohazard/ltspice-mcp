@@ -84,6 +84,26 @@ tool-surface changes.
   resource (and `spice://capabilities/{family}`) serves the whole table with
   its evidence. The refusals of a QSPICE run off Windows and of a schematic
   run on QSPICE or Xyce now read the table.
+- `inspect(kind="open_in_ltspice")` reads every entry where a window's copy
+  of a sheet differs from the file. The listing still names 25 entries a
+  side and counts the rest in `difference_omitted`, and a `hint` beside the
+  count now names the call that reads them: the same query with the sheet's
+  `path` (and `pid`, where more than one window has it open), which returns
+  that window's difference with both lists paged under one cursor. The
+  cursor is bound to the difference, so a page asked after either copy
+  changed is refused as `invalid_cursor`; a sheet no window has open fails as
+  `sheet_not_open`. Every reply that names a window's difference in part
+  now names the same call: `edit_schematic`'s `open_window_differs` refusal
+  and a dry run's note about a differing window, `verify_circuit`'s hint
+  when its `in_ltspice` window shows another sheet than the one checked, and
+  the `note` of `plot_waveform`'s `ltspice` block. One function writes that
+  call for all of them. The Python API's `inspect` follows the cursor and
+  returns the whole difference.
+- `inspect(kind="open_in_ltspice")` pages the documents open by `cursor`.
+  It listed the first 100 and counted the rest in `total`, with no way to
+  read them. The cursor is bound to the documents open, by window and path,
+  so a page asked after one was opened or closed is refused as
+  `invalid_cursor`.
 - A `mismatch` rule reaches a MOSFET inside a subcircuit on LTspice. LTspice
   takes neither `mulu0` nor `delvto` on a BSIM3 device, so the device gets its
   own copy of its `.model` card inside a private copy of its subcircuit, with
@@ -105,6 +125,15 @@ tool-surface changes.
 
 ### Fixed
 
+- The Python API's `inspect` returns every row of a paged query. It follows
+  each query's cursor, and joined the pages only where an item paged two
+  lists, so for every kind that pages one (`components`, `symbols`, `model`,
+  `simulator_docs`, a netlist `net`, the `open_in_ltspice` listing) it
+  returned the last page alone, under a `total` that counted every row: 50
+  of a netlist's 150 components. Every paged `inspect` item now names the
+  list its cursor pages in `page.collections`, one collection or two, which
+  is what the API joins by; `hierarchy` and `results`, which had added that
+  block themselves, now get it the same way.
 - `verify_circuit` reported `outcome: "complete"` when a check the caller
   asked for could not run, so `checks=["export"]` in a session without
   LTspice read as a clean result although no check ran. A check named in

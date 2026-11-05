@@ -38,7 +38,9 @@ from ltspice_mcp.lib.plot_settings import (
 )
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools._base import difference_in_full
 from ltspice_mcp.tools.analysis import PlotWaveformInput, handle_plot_waveform
+from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from tests import _ltspice_recorded as rec
 from tests._ltspice_window import (
     PID,
@@ -813,8 +815,16 @@ async def test_a_sheet_with_changes_nobody_saved_is_left_open_and_the_plot_stand
     assert shown["shown"] is True
     assert shown["tied"] is False
     assert shown["sheet"] == str(sheet) and shown["results"] == str(beside)
-    assert shown["note"] == ALONE
+    # The difference is named in part; the note names the call that reads all of it.
+    assert shown["note"] == f"{ALONE} {difference_in_full('this sheet', 'this pid')}"
     assert shown["differs_from_file"] is True
+    queries: Any = [{"kind": "open_in_ltspice", "path": shown["sheet"], "pid": shown["pid"]}]
+    read_whole = await handle_inspect(InspectInput(queries=queries), state_no_sim)
+    assert read_whole.structured_content is not None
+    (whole,) = read_whole.structured_content["results"]
+    (in_window,) = whole["data"]["only_in_window"]
+    (in_file,) = whole["data"]["only_in_file"]
+    assert "SYMATTR Value 5k" in in_window and "SYMATTR Value 1k" in in_file
     assert "sheet_reopened" not in shown
     assert read(beside) == read(raw)
     window = read_world(world)["windows"][0]
