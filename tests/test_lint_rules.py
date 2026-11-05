@@ -165,6 +165,12 @@ _SEED_CASES = [
         "LTspice",
     ),
     (
+        "unreadable-card",
+        "V1 in 0 1\nR1 in 0 {1k\n.op\n.end\n",
+        None,
+        "LTspice",
+    ),
+    (
         "value-suffix-mojibake",
         "V1 in 0 1\nC1 in 0 23Âµ\n.op\n.end\n",
         None,
@@ -896,3 +902,20 @@ def test_byte_85_in_an_include_is_found_in_the_include(tmp_path: Path):
 def test_a_node_name_in_a_utf8_deck_holds_no_control_byte(tmp_path: Path):
     """In UTF-8 a euro sign is three bytes LTspice reads as one character."""
     assert "node-control-byte-ltspice" not in _ids(_EURO_NODE_DECK, tmp_path, codec="utf-8")
+
+
+# A resistor with an unclosed brace and a .model with an unclosed quote: no
+# rule can split either card into its parts.
+_UNREADABLE = (
+    "* t\nV1 in 0 5\nR1 in out {1k\nC1 out 0 1n\n"
+    '.model D1 D(IS="1e-14\n.meas op vr FIND I(R1)\n.op\n.end\n'
+)
+
+
+def test_a_card_no_rule_can_read_is_reported_where_it_is(tmp_path):
+    findings = lint_deck(_UNREADABLE, tmp_path / "deck.cir", "ltspice", "LTspice")
+
+    unread = [f for f in findings if f["rule_id"] == "unreadable-card"]
+    assert [f["at"]["line"] for f in unread] == [3, 5]
+    assert "the checks could not split this card" in unread[0]["evidence"]["detail"]
+    assert RULES_BY_ID["unreadable-card"].disposition == "warning"

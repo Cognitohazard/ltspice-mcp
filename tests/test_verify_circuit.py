@@ -52,7 +52,7 @@ from ltspice_mcp.tools.verify import (
     handle_verify_circuit,
 )
 from tests import _fake_netlister as fake_netlister
-from tests.conftest import SyncApi, dispatch, needs_raster
+from tests.conftest import FIXTURES_DIR, SyncApi, dispatch, needs_raster
 
 
 class FakeSim:
@@ -1019,6 +1019,40 @@ async def test_a_deck_the_lexer_has_to_guess_at_is_still_checked(state_no_sim, w
     data = await _run(state_no_sim, path=str(deck), checks=["syntax", "quality"])
     assert data["checks_run"] == ["syntax", "quality"]
     assert data["outcome"] != "failed", data
+
+
+async def test_a_card_no_rule_can_read_is_reported_and_misleads_no_other_rule(
+    state_no_sim, work_dir
+):
+    """An unclosed brace or quote leaves a card no rule can split into parts.
+    Every rule left it out without a word, so the deck read as one without it:
+    'in' wired to V1 alone, I(R1) naming nothing, 'out' on C1 alone. The card is
+    reported at its line, and the names and nodes on it count as connected."""
+    deck = _write(
+        work_dir,
+        "unread.cir",
+        "* t\nV1 in 0 5\nR1 in out {1k\nC1 out 0 1n\n"
+        '.model D1 D(IS="1e-14\n.meas op vr FIND I(R1)\n.op\n.end\n',
+    )
+
+    data = await _run(state_no_sim, path=str(deck), checks=["syntax", "quality"])
+
+    found = [(f["rule_id"], f["at"].get("line")) for f in data["findings"]]
+    assert found == [("unreadable_card", 3), ("unreadable_card", 5)], found
+
+
+async def test_a_recorded_measurement_with_an_unclosed_parenthesis_is_reported(
+    state_no_sim, work_dir
+):
+    # A deck both LTspice builds were recorded running (log/meas_bad_syntax).
+    source = FIXTURES_DIR / "ltspice_recorded" / "inputs" / "log" / "meas_bad_syntax.cir"
+    deck = _write(work_dir, "meas_bad_syntax.cir", source.read_text(encoding="utf-8"))
+
+    data = await _run(state_no_sim, path=str(deck), checks=["syntax"])
+
+    (finding,) = [f for f in data["findings"] if f["rule_id"] == "unreadable_card"]
+    assert finding["at"]["line"] == 7
+    assert finding["subject"].startswith(".meas tran broken")
 
 
 async def test_a_refused_reference_is_filed_under_the_reference(state_no_sim, work_dir):

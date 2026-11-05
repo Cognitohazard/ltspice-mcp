@@ -25,6 +25,7 @@ from ltspice_mcp.lib.spice_lex import (
     lex,
     lex_deck,
     tokenize_body,
+    unreadable_cards,
 )
 from ltspice_mcp.lib.spice_lex_ops import MICRO_SIGN_READERS, ValueSuffixSite, value_suffix_sites
 from ltspice_mcp.lib.spice_lex_views import (
@@ -697,6 +698,32 @@ def _temp_as_param(
     return findings
 
 
+def unreadable_card_detail(error: SpiceLexError) -> str:
+    """What a check says of a card it could not split into its parts
+    (``spice_lex.unreadable_cards``): the reason, and that no rule read the
+    card. ``verify_circuit`` says the same of the same cards."""
+    where = f" at position {error.position}" if error.position >= 0 else ""
+    return (
+        f"{error.message}{where}: the checks could not split this card into its "
+        "parts, so no rule read it, and the names and nodes on it count as "
+        "defined and connected"
+    )
+
+
+def _unreadable_card(context: _LintContext, rule: LintRule) -> list[LintFinding]:
+    """A card no rule could read: the other rules leave it out, so this says so."""
+    return [
+        _finding(
+            context,
+            rule,
+            line=card.line_start,
+            subject=" ".join(card.body.split()),
+            evidence={"detail": unreadable_card_detail(error)},
+        )
+        for card, error in unreadable_cards(context.cards)
+    ]
+
+
 def _duplicate_param(context: _LintContext, rule: LintRule) -> list[LintFinding]:
     """An instance, ``.model`` or ``.subckt`` card giving one parameter more
     than once: which copy the simulator reads is not known here, so a value a
@@ -984,6 +1011,9 @@ RULES: tuple[LintRule, ...] = (
     # A warning: the deck runs, but a parameter given twice is read one way or
     # the other, and which is not recorded here.
     LintRule("duplicate-param", "warning", _duplicate_param),
+    # A warning: a card no rule could read is checked by none, which a caller
+    # must know. How the simulator reads it is not recorded, so the deck runs.
+    LintRule("unreadable-card", "warning", _unreadable_card),
     # Blocking: a suffix that shows a file decoded in an encoding it was not
     # written in. 'Âµ' — a UTF-8 micro sign decoded as cp1252 — is never a
     # scale, so the deck runs at the bare number, a factor of 1e6 off. A micro

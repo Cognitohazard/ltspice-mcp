@@ -2026,6 +2026,7 @@ Suppression is per call, and `linter_version` is reported in provenance.
 | `step-ngspice` | warning | ngspice: a `.step`, which ngspice ignores in batch mode, so the deck runs once at the base value |
 | `temp-as-param` | blocking | a deck that sweeps temperature as a parameter (§3.1) |
 | `duplicate-param` | warning | an instance, `.model` or `.subckt` card giving one parameter more than once, in any case; which copy the simulator reads is not known, and `verify_circuit` reports the same as `duplicate_parameter` |
+| `unreadable-card` | warning | a card no rule can split into its parts: an unclosed quote, brace or parenthesis, or a closer with nothing open. The other rules leave it out, and the names and nodes on it count as defined and connected, so no rule reports something on a guess about it; `verify_circuit` reports the same as `unreadable_card` |
 | `value-suffix-mojibake` | blocking | a suffix showing the file was decoded in an encoding it was not written in, such as the `Âµ` a UTF-8 `µ` becomes under cp1252; the simulator reads the bare number, off by a factor of 1e6 |
 | `value-suffix-nonascii` | warning | any other symbol after a number, such as `10Ω` or `25°C`, read as the bare number, which is usually the intended value. Staging spells a `µ`/`μ` as `u` before the deck is linted; for a deck run elsewhere `verify_circuit` reports it as one observation per file, or as a warning per value when a reader the server knows of (LTspice XVII) would decode the file differently |
 
