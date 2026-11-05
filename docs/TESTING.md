@@ -176,9 +176,10 @@ Before a release, review the source for the cases that slipped through:
 Confirm a finding by running both paths on its input before acting on it,
 preferably by someone given the code locations and the input but not the
 conclusion. A difference documented as intended is not a finding. Fix each
-finding where the question is decided. When a replaced function keeps
-callers for a while, ban its name as `CLAUDE.md` describes;
-`tests/test_banned_api.py` keeps the list of files still using it current.
+finding where the question is decided. When only the owner may call a
+function, or a replaced function keeps callers for a while, ban its name as
+`CLAUDE.md` describes; Ruff then flags each allowed use whose marker is no
+longer needed.
 
 ## Recorded LTspice behaviour
 
