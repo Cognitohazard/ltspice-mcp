@@ -2,10 +2,7 @@
 
 <!-- mcp-name: io.github.cognitohazard/ltspice-mcp -->
 
-> **Work in progress.** Version 0.6.0 was a breaking release. It merged the
-> old tools, each of which ran one operation, into the tools described below,
-> and made the engine importable as a Python API. Pin `ltspice-mcp==0.5.*` if
-> you need the old tools.
+> **Work in progress.** Expect breaking changes across versions.
 
 ltspice-mcp lets AI assistants run LTspice and ngspice simulations and edit
 LTspice `.asc` schematics. The server reads the simulator's output files and

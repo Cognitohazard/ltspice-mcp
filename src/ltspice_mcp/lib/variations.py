@@ -32,7 +32,7 @@ from ltspice_mcp.lib.deck_staging import (
     staged_reference_targets,
 )
 from ltspice_mcp.lib.encoding import encode_spice_text
-from ltspice_mcp.lib.format import parse_plain_value, parse_spice_value, unique_name
+from ltspice_mcp.lib.format import parse_plain_value, parse_spice_value, unique_name  # noqa: TID251 - a written assignment must be a plain or SI value
 from ltspice_mcp.lib.hierarchy import Hierarchy, ResolvedInstance, SemanticProfile, Source
 from ltspice_mcp.lib.hierarchy_expr import multiplier_product
 from ltspice_mcp.lib.instance_targeting import (
@@ -1992,7 +1992,8 @@ def _apply_component_rule(
         if nominal is None:
             raise VariationError(
                 "random_nominal_unavailable",
-                f"Random component target {view.ref!r} has no plain numeric nominal value",
+                f"Random component target {view.ref!r} has no plain numeric nominal value "
+                f"(its value is {view.value!r}); vary a .param the value reads instead",
             )
         sampled = _sample_nominal(
             sampler,
@@ -2548,18 +2549,29 @@ def _validate_write_sets(
 
 
 def _path_multiplier(
-    row: ResolvedInstance, by_path: Mapping[tuple[str, ...], ResolvedInstance]
+    row: ResolvedInstance,
+    by_path: Mapping[tuple[str, ...], ResolvedInstance],
+    x_line_m: bool,
 ) -> float:
     """How many parallel copies of ``row`` the simulator builds from its one card.
 
-    The product of the device's own ``m`` and the ``m`` of every subcircuit
-    instance above it, each read as hierarchy discovery resolved it in its own
-    scope (so an inner ``m={mult}`` takes the value its X line gives). All
-    the copies share one mismatch draw, so the area the draw stands for is this
+    The device's own ``m``, times, when ``x_line_m``, the ``m`` of every
+    subcircuit instance above it. ngspice multiplies those in; LTspice ignores
+    ``m`` on an X line at any depth (recorded: ``raw/subckt_multiplier``,
+    ``deck/subckt_multiplier_nested``). Each ``m`` is read as hierarchy
+    discovery resolved it in its own scope, so an inner ``m={mult}`` takes the
+    value its X line gives, which both simulators honour. A deck with no
+    semantic profile is drawn by ``subckt_mismatch``, whose
+    ``_device_multiplier`` counts the X line's ``m`` as ngspice does. All the
+    copies share one mismatch draw, so the area the draw stands for is this
     many times W·L. An ``m`` written but not resolvable to a positive number
     refuses the rule: drawn as one copy, the sigma would be too large.
     """
-    holders = (by_path.get(row.instance[:depth]) for depth in range(1, len(row.instance) + 1))
+    holders = (
+        [by_path.get(row.instance[:depth]) for depth in range(1, len(row.instance) + 1)]
+        if x_line_m
+        else [row]
+    )
     multiplier = multiplier_product(
         (".".join(holder.instance), dict(holder.parameters).get("m"))
         for holder in holders
@@ -2574,16 +2586,42 @@ def _path_multiplier(
     return multiplier.value
 
 
+def _takes_model_copy(row: ResolvedInstance, simulator: str) -> bool:
+    """Whether ``row`` takes its draw as its own copy of its model; refuse one it cannot take.
+
+    A top-level device gets its own copy of its model with the draw applied,
+    and so does a device inside a subcircuit on LTspice, which takes neither
+    ``mulu0`` nor ``delvto`` on BSIM3 (recorded: ``deck/mos_delvto_*``,
+    ``deck/mos_mulu0_*``). A copy needs one model definition. Inside a
+    subcircuit, ngspice takes the draw as ``delvto`` and ``mulu0`` on the
+    device's card, which needs a BSIM3 or BSIM4 model.
+    """
+    from ltspice_mcp.lib.subckt_mismatch import require_scoped_bsim
+
+    if len(row.instance) > 1 and simulator == "ngspice":
+        require_scoped_bsim(row)
+        return False
+    if row.model_source is None or len(row.model_family) != 1:
+        raise VariationError(
+            "model_missing",
+            f"mismatch on {'.'.join(row.instance)} gives it its own copy of its .model "
+            "card, which needs one exact model definition; a binned model has one per "
+            "size bin",
+        )
+    return True
+
+
 def _nested_mismatch_edits(
     hierarchy: Hierarchy, rules: Sequence[MismatchRule], sampler: MCSampler, editor: TargetEditor
 ) -> tuple[list[InstanceEdit], dict[str, float]]:
     from ltspice_mcp.lib.montecarlo import InstanceGeometry
-    from ltspice_mcp.lib.subckt_mismatch import require_scoped_bsim
 
     edits: list[InstanceEdit] = []
     draws: dict[str, float] = {}
     claimed: set[tuple[str, ...]] = set()
     by_path = {row.instance: row for row in hierarchy.instances}
+    simulator = hierarchy.profile.simulator
+    nominals_by_model: dict[tuple[str, int], dict[str, float]] = {}
     for rule in rules:
         if rule.instance is not None:
             selected = select(hierarchy, rule.instance)
@@ -2617,8 +2655,7 @@ def _nested_mismatch_edits(
                     "overlapping_mismatch_rules", f"multiple mismatch rules claim {row.instance}"
                 )
             claimed.add(row.instance)
-            if len(row.instance) > 1:
-                require_scoped_bsim(row, hierarchy.profile)
+            model_copy = _takes_model_copy(row, simulator)
             geometry = dict(row.geometry)
             width, length = geometry["w"].value, geometry["l"].value
             if width is None or length is None:
@@ -2637,16 +2674,16 @@ def _nested_mismatch_edits(
                     row.model_name or "",
                     width,
                     length,
-                    _path_multiplier(row, by_path),
+                    _path_multiplier(row, by_path, x_line_m=simulator == "ngspice"),
                 ),
                 _engine_rule(rule),
             )
-            if len(row.instance) == 1:
-                if row.model_source is None or len(row.model_family) != 1:
-                    raise VariationError(
-                        "model_missing", "flat mismatch needs one exact model definition"
-                    )
-                nominals = parse_model_params(row.model_family[0].raw)
+            if model_copy:
+                assert row.model_source is not None
+                source = (row.model_source.path, row.model_source.line)
+                if source not in nominals_by_model:
+                    nominals_by_model[source] = parse_model_params(row.model_family[0].raw)
+                nominals = nominals_by_model[source]
                 overrides = {}
                 for parameter, enabled, additive in (
                     (rule.vth_param, rule.AVT > 0, True),
@@ -2666,17 +2703,16 @@ def _nested_mismatch_edits(
                     overrides[parameter] = value
                     draws[canonical_target(row.instance, "model_parameter", parameter)] = value
                 if overrides:
-                    name = editor.clone_flat_model(row.model_source, row.instance, overrides)
-                    edits.append(InstanceEdit(row.instance, "model", name))
-                continue
-            for parameter, value, enabled in (
-                (VTH_PARAM, delta["dvth"], rule.AVT > 0),
-                (MOBILITY_PARAM, 1 + delta["dk_over_k"], rule.AK > 0),
-            ):
-                if enabled:
-                    edit = InstanceEdit(row.instance, "parameter", value, parameter)
-                    edits.append(edit)
-                    draws[edit.target] = value
+                    edits.append(editor.clone_model(row, overrides))
+            else:
+                for parameter, value, enabled in (
+                    (VTH_PARAM, delta["dvth"], rule.AVT > 0),
+                    (MOBILITY_PARAM, 1 + delta["dk_over_k"], rule.AK > 0),
+                ):
+                    if enabled:
+                        edit = InstanceEdit(row.instance, "parameter", value, parameter)
+                        edits.append(edit)
+                        draws[edit.target] = value
     return edits, draws
 
 

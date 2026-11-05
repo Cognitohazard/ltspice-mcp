@@ -1,0 +1,13 @@
+* mulu0 on a BSIM4 device against a model with u0 scaled by the same 1.2
+Vdd vdd 0 1.8
+Vg g 0 1.0
+V0 vdd d0 0
+M0 d0 g 0 0 N W=1u L=1u
+V1 vdd d1 0
+M1 d1 g 0 0 N W=1u L=1u mulu0=1.2
+V2 vdd d2 0
+M2 d2 g 0 0 NU W=1u L=1u
+.model N NMOS level=54 vth0=0.5 u0=0.04
+.model NU NMOS level=54 vth0=0.5 u0=0.048
+.op
+.end

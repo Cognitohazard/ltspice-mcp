@@ -88,6 +88,33 @@ def test_unsupported_constructs_refuse_in_nested_include(tmp_path, body, code):
     assert error.value.code == code
 
 
+@pytest.mark.parametrize(
+    ("deck", "seeded"),
+    [
+        # Line 2 is the deck's only analysis.
+        (b"* frozen\n.op\nV1 n 0 1\nR1 n 0 1k\n.end\n", True),
+        # The title reads as a second analysis, but a title is only text.
+        (b".tran 1n 10n\nV1 n 0 1\nR1 n 0 1k\n.op\n.end\n", True),
+        # Line 2 opens a subcircuit.
+        (b"* frozen\n.subckt s a\nR1 a 0 1\n.ends\nV1 n 0 1\nX1 n s\n.op\n.end\n", False),
+    ],
+)
+def test_a_root_decks_title_is_its_first_line_and_nothing_more(tmp_path, deck, seeded):
+    """Both readers of a frozen root deck's cards, the seeded analysis count
+    and the refusal of a deck the lexer warns about, skip line 1 as the title
+    and read line 2 once, as the deck's first card."""
+    job = recovery_job(tmp_path)
+    assert job.output_folder is not None
+    case = job.cases[0]
+    case.recovery = None
+    case.staged_deck.write_bytes(deck)
+    case.deck_sha256 = sha256_file(case.staged_deck)
+    captured = capture_case_inputs(
+        case, job.sources[0], lineage_root=job.output_folder, seeded=seeded
+    )
+    verify_case_inputs(captured, seeded=seeded)
+
+
 def test_refuses_unrecorded_include_and_live_manifest(tmp_path):
     job = recovery_job(tmp_path)
     assert job.output_folder is not None

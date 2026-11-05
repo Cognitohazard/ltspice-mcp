@@ -25,6 +25,7 @@ from ltspice_mcp.lib.device_names import (
 )
 from ltspice_mcp.lib.log_types import LogSectionName
 from ltspice_mcp.lib.raw_parser import OtherRawKind
+from ltspice_mcp.lib.recipes import StepValues
 from ltspice_mcp.state import SessionState
 
 
@@ -120,7 +121,12 @@ class RawResult:
 
     @property
     def steps(self) -> list[dict[str, Any]]:
-        """Parameter metadata aligned one-for-one with the result steps."""
+        """Parameter metadata aligned one-for-one with the result steps.
+
+        Each entry finds a parameter as a step selector does, whatever the
+        case of its name: LTspice writes ``rd`` for a deck's ``RD``, and
+        ``steps[0]["RD"]`` reads it (:class:`~ltspice_mcp.lib.recipes.StepValues`).
+        """
         return copy.deepcopy(list(self._steps))
 
     @property
@@ -383,7 +389,7 @@ async def load_raw_result(
     observations = await asyncio.to_thread(services.read_observations, source, raw)
     assert resolved is not None
     step_count = len(raw.descriptor.steps)
-    steps = [dict(step.parameters) for step in raw.descriptor.steps]
+    steps: list[dict[str, Any]] = [StepValues(step.parameters) for step in raw.descriptor.steps]
     return RawResult(
         raw,
         source=resolved,

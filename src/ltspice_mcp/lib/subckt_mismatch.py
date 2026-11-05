@@ -47,7 +47,7 @@ from ltspice_mcp.lib.deck_staging import (
     scan_include_references,
 )
 from ltspice_mcp.lib.encoding import read_spice_text
-from ltspice_mcp.lib.hierarchy import ResolvedInstance, SemanticProfile, param_assignments
+from ltspice_mcp.lib.hierarchy import ResolvedInstance, param_assignments
 from ltspice_mcp.lib.hierarchy_expr import Environment, NumericFact, multiplier_product
 from ltspice_mcp.lib.montecarlo import (
     InstanceGeometry,
@@ -95,12 +95,8 @@ _REFUSING_LEVELS: frozenset[int] = frozenset({1, 2, 3})
 NGSPICE_UNKNOWN_PARAMETER = "unknown parameter (delvto)"
 
 
-def require_scoped_bsim(instance: ResolvedInstance, profile: SemanticProfile) -> None:
-    """Gate caller injection on the exact resolved family, never a name-only lookup."""
-    if profile.simulator != "ngspice":
-        raise MismatchPlanError(
-            "unsupported_backend", "caller nested BSIM mismatch requires ngspice"
-        )
+def require_scoped_bsim(instance: ResolvedInstance) -> None:
+    """Gate ngspice's delvto/mulu0 route on the exact resolved family, never a name-only lookup."""
     if not instance.model_family or any(
         model.level not in BSIM_LEVELS for model in instance.model_family
     ):
@@ -510,8 +506,12 @@ def _device_multiplier(
 
     ngspice multiplies an X line's ``m`` into every device of the body, and an
     inner device's own ``m`` (often ``m={mult}``, a parameter the X line sets)
-    on top of it, so the copies are the product. ``body`` builds the scope the
-    inner ``m`` is read in, so a device that writes none never builds it.
+    on top of it, so the copies are the product. This plan serves a deck with
+    no semantic profile, so it applies ngspice's rule to QSPICE and Xyce too,
+    as it does ``delvto`` and ``mulu0``; LTspice ignores an X line's ``m``,
+    which ``variations._path_multiplier`` applies to a profiled deck. ``body``
+    builds the scope the inner ``m`` is read in, so a device that writes none
+    never builds it.
     """
     x_m, inner_m = x_view.get_param("M"), inner.get_param("M")
     return multiplier_product(

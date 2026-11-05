@@ -3,7 +3,8 @@
 ``run_experiments(request_id=...)`` replaying a recorded submission resolves
 the job through the registry: a record whose owner exited is reconciled and
 written back, exactly as ``jobs`` or ``analyze_results`` would leave it, and a
-replay is not logged as a new submission.
+replay is not logged as a new submission. Reading a record straight from the
+store is banned outside the registry and its peers in ``pyproject.toml``.
 """
 
 from __future__ import annotations
@@ -78,25 +79,14 @@ async def test_a_replay_of_an_exited_owner_s_job_writes_back_its_reconciliation(
 # One route from a job id to a job
 # ---------------------------------------------------------------------------
 
-#: Who may read a job record straight from the store: the registry, the store,
-#: the request gate in the runner, and resume, which authorizes from a fresh
-#: record on purpose.
-_RECORD_READERS = frozenset(
-    {
-        "lib/job_registry.py",
-        "lib/experiment_store.py",
-        "lib/experiment_runner.py",
-        "lib/experiment_resume.py",
-    }
-)
 #: Who may register a job: the runner that admits it, the registry, and the
 #: session's delegate to the registry.
 _REGISTRARS = frozenset({"lib/experiment_runner.py", "lib/job_registry.py", "state.py"})
 
 
 def _named_uses(names: frozenset[str]) -> list[tuple[str, int]]:
-    """Every call of, or reference to, one of ``names`` (``to_thread(load_job,
-    ...)`` reads a record as surely as ``load_job(...)`` does)."""
+    """Every call of, or reference to, one of ``names``: a method passed on as a
+    callback is used as surely as one called in place."""
     found: list[tuple[str, int]] = []
     for path in PACKAGE.rglob("*.py"):
         module = path.relative_to(PACKAGE).as_posix()
@@ -106,15 +96,6 @@ def _named_uses(names: frozenset[str]) -> list[tuple[str, int]]:
             ):
                 found.append((module, node.lineno))
     return found
-
-
-def test_only_the_registry_and_its_peers_read_a_job_record() -> None:
-    stray = sorted(
-        f"{module}:{line}"
-        for module, line in _named_uses(frozenset({"load_job", "load_job_from_path"}))
-        if module not in _RECORD_READERS
-    )
-    assert not stray, f"job records read around the registry: {stray}"
 
 
 def test_only_the_runner_and_the_registry_register_a_job() -> None:

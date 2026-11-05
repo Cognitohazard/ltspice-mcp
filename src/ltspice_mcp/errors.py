@@ -23,9 +23,12 @@ def compact_validation_error(
     An unknown top-level field is referred to where it is taken: ``nested``
     maps a field to its place inside this tool's own arguments (``path`` to
     ``circuits[].path``), named first, and ``field_owners`` to the tools
-    that take it at their top level. An unknown field at any depth that is
-    a name this tool retired is referred to the one that replaced it, by
-    ``renamed``. An unknown field with no such referral is answered with the
+    that take it at their top level. An unknown field at a place where this
+    tool retired its name is referred to the one that replaced it, by
+    ``renamed``, keyed by that place as a client writes it (``raw_file``,
+    ``sources[].raw_path``; a union's branch name is no part of it, since a
+    client never writes one). An unknown field with no such referral is
+    answered with the
     names its place takes, from ``accepted`` (the place spelled as the
     reference table spells it: ``""`` for the tool's own arguments,
     ``circuits[]`` inside each circuit), the closest one first.
@@ -43,12 +46,16 @@ def compact_validation_error(
     accepted = accepted or {}
     branches = branches or {}
 
-    def referral(field: str) -> str:
-        if field in renamed:
+    #: The names of every union branch, which a location carries and a place does not.
+    tags = frozenset(name for fields in branches.values() for name in fields)
+
+    def referral(field: str, replaced_by: str | None = None) -> str:
+        if replaced_by is not None:
             # A client that checks a call against its own copy of the tool's
             # arguments refuses the new name while that copy lists the old one.
+            new = replaced_by.rpartition(".")[2]
             return (
-                f" {field!r} is now {renamed[field]!r}. If your copy of this tool's "
+                f" {field!r} is now {new!r}. If your copy of this tool's "
                 f"arguments still lists {field!r}, it is out of date: reload the "
                 "tool's definition or reconnect this server."
             )
@@ -98,7 +105,10 @@ def compact_validation_error(
         field = loc[-1] if loc else None
         if error_type != "extra_forbidden" or not isinstance(field, str):
             continue
-        if field in renamed or (len(loc) == 1 and (field in nested or field in field_owners)):
+        written = _place(loc, tags)
+        if written in renamed:
+            sentence = referral(field, renamed[written])
+        elif len(loc) == 1 and (field in nested or field in field_owners):
             sentence = referral(field)
         else:
             sentence = _accepted_here(field, loc[:-1], accepted, taken_at.get(loc, ()))
@@ -116,13 +126,20 @@ def compact_validation_error(
     return text + ("." if referrals else "") + "".join(referrals)
 
 
-def _place(loc: Sequence[object]) -> str:
+def _place(loc: Sequence[object], tags: Collection[str] = ()) -> str:
     """A location as the reference table spells a field's place: ``("circuits",
-    0)`` is ``circuits[]``, the tool's own arguments are ``""``."""
+    0)`` is ``circuits[]``, the tool's own arguments are ``""``.
+
+    A part in ``tags`` that starts the location or follows a list index is the
+    branch a union chose (``("ops", 0, "move", "dx")``), which a client does
+    not write, so it is left out: ``ops[].dx``.
+    """
     place = ""
-    for part in loc:
+    for index, part in enumerate(loc):
         if isinstance(part, int):
             place += "[]"
+        elif part in tags and (index == 0 or isinstance(loc[index - 1], int)):
+            continue
         else:
             place += f".{part}" if place else str(part)
     return place

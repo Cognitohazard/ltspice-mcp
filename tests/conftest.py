@@ -1689,7 +1689,6 @@ FILE_LEVEL_RULES: dict[str, str] = {
         "The file named by an argument was refused, so it was never read. A refused "
         "include is placed at its directive's line instead."
     ),
-    "lex_error": "The lexer's error names no line, though the card it stopped in has one.",
 }
 
 
@@ -1763,68 +1762,27 @@ def declared_output_schemas() -> Iterator[tuple[ModuleType, Callable, dict]]:
 CONTINUATIONS = frozenset({"next_cursor", "cursor", "continue", "next"})
 
 
-def counts_omitted(name: str) -> bool:
-    """Whether a reply field named ``name`` counts items left out of a list
-    (``omitted``, ``*_omitted``, ``*_truncated``): beside a ``truncated`` flag,
-    what says a list was cut short."""
-    return name == "omitted" or name.endswith(("_omitted", "_truncated"))
-
-
-def _names_the_list(outer: dict, name: str) -> bool:
-    """Whether an object's ``hint``, ``warnings`` or ``observations`` says
-    something of the list ``name``: the prose way on for a list that has no
-    cursor of its own."""
-    said = [
-        outer.get("hint"),
-        *(outer.get("warnings") or ()),
-        *(
-            note.get("detail") if isinstance(note, dict) else note
-            for note in outer.get("observations") or ()
-        ),
-    ]
-    return any(isinstance(line, str) and name in line for line in said)
-
-
 def cut_without_continuation(
     value: typing.Any, path: tuple = (), around: tuple[dict, ...] = ()
 ) -> Iterator[tuple]:
-    """Every list a reply says it cut short that gives no way on.
-
-    A ``truncated: true`` flag marks the object holding it as the cut list's
-    page; it is continued by a cursor in it or around it within its reply item,
-    a hint beside the flag, or a hint, warning or observation around it that
-    names the list. A count of omitted items above zero (``counts_omitted``)
-    is continued by a cursor or hint beside it or around it, or prose in its
-    own object or around it that names its list (``traces`` for
-    ``traces_truncated``).
+    """Every list a reply says it cut short (``truncated: true``) that gives no
+    way on: no cursor in it or around it within its reply item, and no hint
+    beside the flag.
 
     Design principle "Safe edits" (``docs/DESIGN.md``): a list cut short says
     how to read the rest. ``tests/test_capped_lists_say_how_to_continue.py``
     holds the declared schemas to the same rule.
     """
     if isinstance(value, dict):
-        scope = (*around, value)
-        cursor_in_scope = any(outer.get(key) for outer in scope for key in CONTINUATIONS)
         if value.get("truncated") is True:
-            name = str(path[-1]) if path else ""
+            scope = (*around, value)
             if not (
-                "hint" in value
-                or cursor_in_scope
-                or (name and any(_names_the_list(outer, name) for outer in around))
+                "hint" in value or any(outer.get(key) for outer in scope for key in CONTINUATIONS)
             ):
                 yield path
         for key, item in value.items():
-            if counts_omitted(key) and type(item) is int and item > 0:
-                listed = key.rpartition("_")[0]
-                if not (
-                    "hint" in value
-                    or cursor_in_scope
-                    or (listed and any(_names_the_list(outer, listed) for outer in scope))
-                ):
-                    yield (*path, key)
-        for key, item in value.items():
             if isinstance(item, (dict, list)):
-                yield from cut_without_continuation(item, (*path, key), scope)
+                yield from cut_without_continuation(item, (*path, key), (*around, value))
     elif isinstance(value, list):
         for index, item in enumerate(value):
             if isinstance(item, (dict, list)):
@@ -1944,8 +1902,8 @@ def _enforce_output_schema_conformance():
         if stranded is not None:
             raise AssertionError(
                 f"{_replying_tool(frame) or 'a reply'}: the list at {_dotted(stranded)} was cut short "
-                "and the reply gives no way to read the rest: a next_cursor, a hint "
-                "beside the flag, or a hint or warning around it that names the list."
+                "and the reply gives no way to read the rest: a next_cursor, or a hint "
+                "beside the flag."
             )
 
     def _validate(result, data=None) -> None:

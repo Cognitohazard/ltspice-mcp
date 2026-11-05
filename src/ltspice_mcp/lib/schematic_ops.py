@@ -1551,27 +1551,37 @@ def _pins_on_crossings(
 
     The sheet is read without the part itself, and ``already`` is where its
     pins are now: what a pin joins from where it already is, is not this
-    op's doing. Called before the part is placed or moved, so a refusal
-    leaves the sheet as it was.
+    op's doing. What each pin joins is read off the sheet with the part in
+    its new place, since the part's own pins can leave a wire straight
+    between two of them, which LTspice drops: a pin on a crossing then joins
+    only the piece of wire on its side. Called before the part is placed or
+    moved, so a refusal leaves the sheet as it was.
     """
     wires = wire_segments_of(editor)
     # Nearly every pin is on one wire's end or on none, and the sheet's nets
     # need not be worked out for those.
     on_wires = [
-        (pin, through)
-        for pin in pins
+        (order, pin, through)
+        for order, pin in enumerate(pins)
         if (point := (pin["x"], pin["y"])) not in already
         and (through := wires_through(point, wires))
         and (len(through) > 1 or point not in (through[0][:2], through[0][2:]))
     ]
     if not on_wires:
         return
-    nets = sheet_nets(editor, without=reference)
-    for pin, through in on_wires:
-        joined = nets.joined_at((pin["x"], pin["y"]))
-        if len(joined.named) < 2:
+    others = [entry for entry in collect_component_geometry(editor) if entry["ref"] != reference]
+    nets = sheet_nets(editor, geometry=others)
+    after = sheet_nets(editor, geometry=[*others, {"ref": reference, "pins": list(pins)}])
+    for order, pin, through in on_wires:
+        landed = PinAt((pin["x"], pin["y"]), len(others), order, reference, pin["name"])
+        # Each net it lands on is known by the names that net carries itself
+        # (NamedNets.own_names), as for a label.
+        joined = sorted(
+            {net for name in after.own_names_of(landed) if (net := nets.net_named(name)) is not None}
+        )
+        if len(joined) < 2:
             continue
-        listed = "; ".join(str(sorted(names)) for names in joined.named)
+        listed = "; ".join(str(sorted(nets.names(net))) for net in joined)
         if len(through) == 1:
             raise NetlistError(
                 f"Refused to {doing}: {reference}.{pin['name']} would land at "
@@ -1874,11 +1884,13 @@ def _plan_connect_route(
     #      the union, merging an additional named net.
     # Nets are the ones LTspice makes, names compared as LTspice compares them
     # (name_key): a net named VOUT and one named Vout, or two names a wire
-    # already joins, are one node already.
-    from_nets, to_nets = before.at((x1, y1)), before.at((x2, y2))
+    # already joins, are one node already. An end's nets are known by the
+    # names they carry themselves (NamedNets.named_at), so a wire grounded on
+    # its own joins no name: it grounds what it is routed to.
+    from_nets, to_nets = before.named_at((x1, y1)), before.named_at((x2, y2))
     from_labels_before = set().union(*(before.names(net) for net in from_nets))
     to_labels_before = set().union(*(before.names(net) for net in to_nets))
-    named = [net for net in sorted(from_nets | to_nets) if before.names(net)]
+    named = sorted(from_nets | to_nets)
     if len(named) > 1:
         if from_labels_before and to_labels_before:
             joined = (
@@ -1900,7 +1912,7 @@ def _plan_connect_route(
         )
     from_keys, to_keys = name_keys(from_labels_before), name_keys(to_labels_before)
     after = sheet_nets(editor, extra_segments=segments, geometry=component_geo)
-    unioned = set().union(*(after.names(net) for net in after.at((x1, y1)) | after.at((x2, y2))))
+    unioned = after.own_names((x1, y1)) | after.own_names((x2, y2))
     if len(name_keys(unioned)) >= 2:
         # Some labels seen post-route weren't there pre-route on
         # either endpoint — that's the mid-segment case.

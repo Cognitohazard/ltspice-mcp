@@ -93,9 +93,64 @@ tool-surface changes.
   as `invalid_cursor` once either changes or the sheet is closed. The Python
   API's `inspect` lists every entry, where it stopped at 25 a side as the
   tool did.
+- A `mismatch` rule reaches a MOSFET inside a subcircuit on LTspice. LTspice
+  takes neither `mulu0` nor `delvto` on a BSIM3 device, so the device gets its
+  own copy of its `.model` card inside a private copy of its subcircuit, with
+  the drawn shift and scale applied to the rule's `vth_param` and `k_param`,
+  as a top-level device does. Any model level works if the model has one
+  definition; a binned model is refused with `model_missing`. LTspice ignores
+  `m` on an X line, so the draw's area counts only the device's own `m`.
+  Such a rule used to be refused with `unsupported_backend`, a code the server
+  no longer returns.
 
 ### Fixed
 
+- `verify_circuit`'s comparison called two sources equivalent when their
+  value fields differed after the first token, such as `V1 a 0 5V AC 1` and
+  `V1 a 0 5V AC 2`, because the shared value reader read the whole field by
+  its leading number. A value field is now compared token by token, each
+  numerically within the tolerance, so `5V AC 1` still matches `5.0V AC 1`.
+  `parse_spice_value`, in the server and in the Python API, refuses a string
+  of several tokens; a suffix is written against its number (`1ms`).
+- A random component rule on a source written as `V1 a 0 5V AC 1` drew
+  around 5 and wrote the draw over the AC magnitude (`5V AC 5.1`). It is
+  refused again as having no plain numeric nominal, and the refusal names
+  the field and says to vary a `.param` the value reads.
+- The recovery check of a run's frozen inputs refused a seeded ngspice run
+  whose second line is its one analysis, as having two, and a recoverable run
+  whose second line opens a subcircuit. It read the deck's first card twice,
+  once in place of the title line. It now reads line 1 as the title.
+- A call that sends a retired argument name is told the name that replaced
+  it only where the old name was taken. `analyze_results`' `raw_path` and
+  `log_path` were retired inside each source; a `raw_path` at the top level
+  was told it "is now 'path'", which the top level does not take, and is now
+  answered with the names the top level takes.
+- An `edit_schematic` dry run with `compare` returned no `verification`, so a
+  batch could be checked against its reference only by committing it. The
+  reference check exports a staged copy of the sheet the batch would write,
+  so it now runs on a dry run too, an op-less read included, and reports the
+  same block, the exported netlist on a mismatch and a `partial` outcome, with
+  nothing saved. When an op failed the batch would write nothing, so
+  `verification.compare_error` says the sheet was not compared.
+- In the Python API, `r.steps[0]["Rv"]` raised `KeyError` for a parameter
+  the deck steps as `Rv`, since LTspice logs it as `rv`. Each entry of
+  `RawResult.steps` now finds a name as a step selector does, whatever its
+  case, and keeps the keys as the run wrote them.
+- `add_net_label`, a placed or moved part's pins and `wire_pins` counted a
+  net's names through ground. A wire whose only label is a ground flag took
+  the names of every other grounded net, so joining it to `VSS` while `VDD`
+  was grounded elsewhere was refused as a short of the two, though moving a
+  `VSS` label there was allowed. A net in these checks is now known by the
+  names its own labels carry, as in `move`: joining a ground-only wire to a
+  named net grounds that net, which a net may be whatever else is. The
+  route check's refusal for a label picked up mid-route now lists only the
+  names the route's wiring joins. A route that also runs straight across
+  two pins of one part is refused for that.
+- A part placed or moved with two pins on one straight wire was judged on
+  the sheet without it. LTspice drops the piece of wire between those two
+  pins, so a pin on a crossing there joins only the piece on its side, and
+  the move was refused as a short LTspice does not make. Each pin's joins
+  are now read off the sheet with the part in its new place.
 - An argument refusal names the fix for a field it does not know: an unknown
   field is answered with the names its place takes, the closest first ("Did
   you mean 'dry_run' for 'dry_runn'? This tool takes path, base, ..."), where
@@ -113,18 +168,17 @@ tool-surface changes.
   builds m parallel copies from one card and they share its one draw, so
   their area is `m·W·L`, but the draw took the area of a single copy: a device
   written as `W=1u m=12` got a threshold spread √12 (about 3.5×) too large,
-  with no warning. The area now counts the device's own `m` and the `m` of
-  every subcircuit instance above it, including an inner `m={mult}` set from
-  the X line, on a top-level `M` card, a device one subcircuit level down and
-  a nested `instance` target alike. An `m` that does not resolve to a positive
-  number refuses the request with `mismatch_geometry_unresolved` instead of
-  being drawn as one copy. A refusal while drawing for a device one subcircuit
-  level down now reaches the caller as a coded error rather than an uncoded
-  one.
+  with no warning. The area now counts the device's own `m`, including an
+  inner `m={mult}` set from the X line, and under ngspice the `m` of every
+  subcircuit instance above it, on a top-level `M` card, a device one
+  subcircuit level down and a nested `instance` target alike. An `m` that does
+  not resolve to a positive number refuses the request with
+  `mismatch_geometry_unresolved` instead of being drawn as one copy. A refusal
+  while drawing for a device one subcircuit level down now reaches the caller
+  as a coded error rather than an uncoded one.
 - `run_experiments` reported a mismatch rule it refuses for a device inside a
-  subcircuit as `submission_failed`. An LTspice run now reports
-  `unsupported_backend`, and an ngspice run whose device is not a BSIM3 or
-  BSIM4 model reports `unsupported_model`.
+  subcircuit as `submission_failed`. An ngspice run whose device is not a
+  BSIM3 or BSIM4 model now reports `unsupported_model`.
 - The `jobs` tool was missing from Claude Code sessions, though the server
   listed it: its input schema put one branch per action under a top-level
   `allOf`, which Claude's API refuses, so the client dropped the tool. Its
@@ -645,6 +699,11 @@ tool-surface changes.
   does, that its results end where the run was stopped (`partial_raw`).
 
 ### Changed
+
+- `analyze_results`: a `spec.fail_cases` list cut short says how to read the
+  rest in a `hint` beside its `truncated` flag, where the recipe's `warnings`
+  said it. The list has no cursor of its own, and its schema no longer
+  declares one.
 
 - **Breaking:** a `wire_pins` route whose end lands mid-way along an existing
   wire, a T, is listed under `junctions` with `via: "tee"`. It was
