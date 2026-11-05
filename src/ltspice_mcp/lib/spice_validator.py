@@ -25,7 +25,14 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from ltspice_mcp.lib.format import parse_spice_value
-from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, TokenKind, lex, tokenize_body
+from ltspice_mcp.lib.spice_lex import (
+    SpiceCard,
+    SpiceLexError,
+    TokenKind,
+    lex,
+    tokenize_body,
+    unreadable_cards,
+)
 from ltspice_mcp.lib.spice_lex_views import (
     ELEMENT_SPECS,
     InstanceLine,
@@ -562,6 +569,14 @@ class _NodeUse:
     count: int = 1
 
 
+def _words_of_unread(card: SpiceCard) -> set[str]:
+    """Every word of a card no rule could split into parts
+    (``spice_lex.unreadable_cards``), lowercased: each may be a name or a node
+    the card defines or connects. The passes that may only ever hide a
+    warning, never make one on a guess, count them so."""
+    return {word.lower() for word in card.body.split()}
+
+
 def _scan_global_nodes(cards: list[SpiceCard]) -> set[str]:
     """Collect lowercased node names declared via ``.GLOBAL`` directives.
 
@@ -639,6 +654,7 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
             try:
                 sub = SubcktCard.from_card(card)
             except SpiceLexError:
+                suppressed.update(_words_of_unread(card))
                 continue
             body_scope = (*card.scope, sub.name)
             for port in sub.ports:
@@ -647,6 +663,7 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
             try:
                 inst = InstanceLine.from_card(card)
             except SpiceLexError:
+                suppressed.update(_words_of_unread(card))
                 continue
             terminals, rest = _instance_terminals(inst)
             for node in terminals:
@@ -741,6 +758,7 @@ def _known_names(cards: list[SpiceCard]) -> set[str]:
             try:
                 sub = SubcktCard.from_card(card)
             except SpiceLexError:
+                known.update(_words_of_unread(card))
                 continue
             known.add(sub.name.lower())
             known.update(p.lower() for p in sub.ports)
@@ -748,6 +766,7 @@ def _known_names(cards: list[SpiceCard]) -> set[str]:
             try:
                 inst = InstanceLine.from_card(card)
             except SpiceLexError:
+                known.update(_words_of_unread(card))
                 continue
             known.add(inst.ref.lower())
             terminals, rest = _instance_terminals(inst)
@@ -1095,6 +1114,16 @@ def validate_netlist_bias_topology(cards: list[SpiceCard]) -> list[dict[str, obj
             continue
         body_graph = graphs.setdefault((*card.scope, sub.name), _BiasGraph())
         body_graph.sinks.update(port.lower() for port in sub.ports)
+
+    # A card no rule could read may connect any word on it, to ground among
+    # them, so in keeping with the over-connection each of its words is a
+    # sink: a net it touches is never flagged on a guess.
+    for card, _error in unreadable_cards(cards):
+        scopes = [card.scope]
+        if card.kind == "subckt" and card.name:
+            scopes.append((*card.scope, card.name))
+        for scope in scopes:
+            graphs.setdefault(scope, _BiasGraph()).sinks.update(_words_of_unread(card))
 
     for card, inst, terminals in _iter_instances(cards):
         graph = graphs.setdefault(card.scope, _BiasGraph())

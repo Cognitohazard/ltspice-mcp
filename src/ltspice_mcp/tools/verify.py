@@ -98,6 +98,7 @@ from ltspice_mcp.lib.lint_rules import (
     export_writer,
     meas_angle_sites,
     rule_severity,
+    unreadable_card_detail,
     value_suffix_evidence,
 )
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
@@ -129,7 +130,7 @@ from ltspice_mcp.lib.sheet_findings import (
 )
 from ltspice_mcp.lib.simulator import DEFAULT_FAMILY, family_for
 from ltspice_mcp.lib.simulator_build import executable_identity, is_cp1252_ltspice_build
-from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, lex_deck
+from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, lex_deck, unreadable_cards
 from ltspice_mcp.lib.spice_lex_ops import (
     MICRO_SIGN_READERS,
     ValueSuffixSite,
@@ -1246,7 +1247,8 @@ def _syntax_findings(
     cp1252_reader: str | None,
     simulator: str,
 ) -> list[dict[str, Any]]:
-    """Directive, lex, element-arity, value-suffix and .meas angle findings in a netlist.
+    """Directive, unreadable-card, element-arity, value-suffix and .meas angle
+    findings in a netlist.
 
     Everything here changes what the simulator reads, or what it computes from
     it: LTspice takes a trig function's angle in a .meas in degrees. A finding
@@ -1279,6 +1281,19 @@ def _syntax_findings(
             )
         )
 
+    # A card no rule could read is left out by every rule below and by the
+    # quality check, so the reply says which, as the linter's
+    # ``unreadable-card`` rule does.
+    findings.extend(
+        _finding(
+            rule_id="unreadable_card",
+            severity="warning",
+            at={"file": str(path), "line": card.line_start},
+            subject=" ".join(card.body.split()),
+            evidence={"detail": unreadable_card_detail(error)},
+        )
+        for card, error in unreadable_cards(deck.cards)
+    )
     findings.extend(
         _rule_finding(issue, path, rule_id="element_arity", severity=str(issue["severity"]))
         for issue in validate_netlist_arity(deck.cards, simulator=simulator)

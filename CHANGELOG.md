@@ -86,6 +86,15 @@ tool-surface changes.
 
 ### Fixed
 
+- A card no rule could split into its parts, such as `R1 in out {1k` with
+  its brace left open or a `.meas` with an unclosed parenthesis, was left out
+  of every check without a word, so `verify_circuit` and the linter read the
+  deck as one without it: a node wired through it reported as wired to one
+  element, and a measurement of it as naming nothing. Such a card is now
+  reported at its line (`unreadable_card` in `verify_circuit`, the
+  `unreadable-card` lint rule, a warning in both), and the names and nodes on
+  it count as defined and connected, so no other rule reports on a guess
+  about it.
 - `verify_circuit`'s comparison called two sources equivalent when their
   value fields differed after the first token, such as `V1 a 0 5V AC 1` and
   `V1 a 0 5V AC 2`, because the shared value reader read the whole field by
