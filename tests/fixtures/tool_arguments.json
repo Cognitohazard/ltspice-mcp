@@ -106,6 +106,7 @@
       "rtol",
       "size",
       "symbol",
+      "text",
       "texts",
       "to_pin",
       "touched",

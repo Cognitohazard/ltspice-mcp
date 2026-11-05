@@ -23,6 +23,8 @@ export gives it (`N001`). `inspect(kind="symbol")` previews the same geometry
 before you place anything, and lists every attribute the symbol has
 (`Prefix`, `SpiceModel`, `Value`, `SpiceLine`, `ModelFile`). These attributes
 hold the model name and parameters that an instance is netlisted with.
+Change a directive or comment with `replace_directive`, which keeps its place
+on the sheet; a `regex:` instruction saves typing the old text.
 
 When the user says "this circuit" and names no file, find out what they have
 open with `inspect(kind="open_in_ltspice")`. It lists the sheets and netlists
