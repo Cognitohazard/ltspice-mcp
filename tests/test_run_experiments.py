@@ -3357,7 +3357,9 @@ class TestMonteCarloSampleIdentity:
                 _args(
                     deck,
                     "mc-reseeded",
-                    variations=[{"kind": "random", "runs": 3, "seed": seed, "rules": [self._RULE]}],
+                    variations=[
+                        {"kind": "random", "runs": 3, "seed": seed, "rules": [self._RULE]}
+                    ],
                 ),
                 state_with_sim,
             )

@@ -453,7 +453,8 @@ variations           list[Variation]    Appendix A.1. assign entries combine by
 execution            {wait_s?, run_timeout_s?, job_deadline_s?, max_parallel?,
                       simulator?: "ltspice"|"ngspice"|"qspice"|"xyce"|
                                   "<family>:<name>", recoverable?: bool,
-                      simulator_seed?: int, keep_partial_raw?: bool}
+                      simulator_seed?: int, keep_partial_raw?: bool,
+                      results_beside_sheet?: bool}
 analyze              {recipes: list[Recipe], group_by?, step?, all_steps?,
                       plot_index?, dialect?, include?}
                                         attached analysis stage; `recipes` is
@@ -785,6 +786,29 @@ beside the sheet it ran, where LTspice's window opens a sheet's results. A
 receipt of a job that ran an `.asc` in LTspice contains one
 `results_not_beside_sheet` observation naming the sheets of its produced cases and
 `jobs(action="place_beside_sheet")`, which copies a case's results there.
+
+`execution.results_beside_sheet: true` does that copy as part of the run.
+Once every run has finished, each produced case's results are copied beside
+its sheet under the sheet's name, replacing any there, as the jobs action
+copies them, before the job reaches its final status, so `jobs(wait)` returns
+after the copy; the job folder keeps its own, which every read of the job
+takes. The receipt then has one
+observation per sheet instead of `results_not_beside_sheet`:
+`results_placed_beside_sheet`, whose `evidence` gives the `sheet`, the
+`case_id`, the `files` copied and any `assignments` the sheet does not show,
+or `results_not_placed`, whose `evidence.reason_code` is the code the jobs
+action would refuse with (`sheet_changed` when the sheet was edited during
+the run), `sheet_locked` when another server process held the sheet, or
+`copy_failed`; the last two name the action that copies the results once that
+is fixed. Neither observation costs the job its status. A cancelled job
+copies nothing, and a case that produced nothing leaves its sheet alone.
+The request is refused before it runs (`commit_state: "not_started"`) when a
+circuit is a netlist (`not_a_sheet`), when the job does not run on LTspice
+(`not_ltspice`), and when a sheet would run more than one case, by a
+variation or by being named twice (`several_cases_per_sheet`): a sheet holds
+one run's results, so the caller copies the case it wants afterwards. It
+cannot be combined with `recoverable`, since a resumed job's runs would
+finish without it. Left false, it is not part of the request's identity.
 
 **RunRecord** is a schema fragment shared by `run_experiments` and `jobs`:
 `{case_id?, run_index?, circuit?, assignments?, status?, raw?, log?,
@@ -2212,7 +2236,7 @@ it, and reported when the caller names it.
 | `tone` | tran | `signal`, `frequency_hz` | `window?`; cut to the whole periods of `frequency_hz` that fit from the window's first sample and resampled by linear interpolation onto evenly spaced times, as `thd` does by default, so samples weigh by time. `amplitude` (peak, signal unit), `phase_deg` in (-180, 180] for `dc + amplitude*sin(2*pi*f*t + phase_deg)` with `t` the run's own time from zero, `sin_component`, `cos_component`, `dc`, plus `t_start`, `t_end`, `n_cycles`. Reducible leaves: `amplitude`, `phase_deg`, `dc`, `sin_component`, `cos_component`; a spread of `phase_deg` that straddles 180 degrees reduces the wrapped value, the components do not wrap |
 | `bode_filter` | ac | `signal` | filter characteristics: fc, bw, Q, type; a cutoff is read at the half-power level (-3.0103 dB) below the passband |
 | `bode_point` | ac | `signal`, `at_hz` | gain and phase at a frequency |
-| `bode_crossing` | ac | `signal`, exactly one of `level_db` / `level_deg` | `level_deg` scans the unwrapped phase, so a crossing past 180 degrees is found once rather than at every wrap; `phase_deg` remains accepted as an alias |
+| `bode_crossing` | ac | `signal`, exactly one of `level_db` / `level_deg`; `ref_hz` with `level_db` | `level_deg` scans the unwrapped phase, so a crossing past 180 degrees is found once rather than at every wrap; `phase_deg` remains accepted as an alias. `ref_hz` measures `level_db` from the gain at that frequency, read as `bode_point` reads it, so the half-power point below a reference is one call; the value's `level` is then the absolute level crossed, and its `reference` gives `frequency_hz`, `magnitude_db` and the relative `level_db`. A `ref_hz` outside the sweep is refused |
 | `bode_slope` | ac | `signal`, `from_hz`, `to_hz` | dB per decade |
 | `stability` | ac | `signal` | phase margin = 180 degrees + phase at unity gain, positive being stable. Reducible leaves: `phase_margin_deg`, `gain_margin_db`, `unity_gain_hz`, `dc_gain_db` |
 | `ac_structure` | ac | `signal` | structural poles and zeros |

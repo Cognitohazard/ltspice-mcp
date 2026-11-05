@@ -666,7 +666,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 210 characters for random's sample_start and a seed
     # description: a seedless Monte Carlo gets a recorded seed, and one sample
     # can be repeated alone. Measured 17,131.
-    "run_experiments": 17140,
+    # Raised by about 230 characters for execution.results_beside_sheet, which
+    # leaves a sheet's results where LTspice opens them as the run finishes,
+    # in the call that runs it. Measured 17,357.
+    "run_experiments": 17370,
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.
@@ -722,7 +725,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 220 characters for a job source's other_raw, which reads
     # a case's frequency response analysis results or a transient's operating
     # point by job and case instead of by path. Measured 21,185.
-    "analyze_results": 21200,
+    # Raised by about 95 characters for bode_crossing's ref_hz, which measures
+    # a crossing from the gain at a chosen frequency in one call instead of a
+    # bode_point read and a second crossing. Measured 21,281.
+    "analyze_results": 21290,
     # Ten query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.

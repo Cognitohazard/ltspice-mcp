@@ -81,6 +81,12 @@ starting the engine.
   interrupts the jobs it owned. `api.run_experiments(wait=False, detach=True)`
   hands the job to an owner process of its own, so it outlives yours;
   `api.wait(job_id)` or `jobs(action="wait")` reads it from anywhere.
+- To open a sheet's run in LTspice, pass
+  `execution={"results_beside_sheet": True}`: the results are copied beside
+  the `.asc` under its name as the runs finish, instead of copying them with
+  the shell. For a case of a sweep, `api.jobs(action="place_beside_sheet",
+  job_id=..., case_id=...)` copies that one. Guide section 'schematics' has
+  the details.
 
 For recovery, submit with `execution={"simulator": "ngspice", "recoverable": True}`
 and keep the original receipt's `control_token`. Once the job is terminal, use
@@ -105,6 +111,7 @@ job id.
 ```python
 # job_id from the receipt, case_id from one of its run rows
 r = api.load_raw(job_id=job_id, case_id=case_id)  # or api.load_raw("run.raw")
+r.source  # the .raw file read
 r.signals  # trace names
 r.steps  # one entry per .step iteration
 t = r.axis(step=0)  # time or frequency

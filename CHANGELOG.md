@@ -62,6 +62,21 @@ tool-surface changes.
 
 ### Added
 
+- The `bode_crossing` recipe takes `ref_hz`, which measures `level_db` from
+  the gain at that frequency: `level_db: -3.0103, ref_hz: "1k"` finds where
+  the gain falls 1/sqrt(2) below its value at 1 kHz, in one call instead of a
+  `bode_point` read and a second crossing. The value's `level` is the
+  absolute level crossed, and `reference` says what it was measured from.
+- `run_experiments` takes `execution.results_beside_sheet`. With it set, each
+  sheet's results are copied beside it, under its name, once the runs
+  finish, so LTspice opens them with the sheet, without a separate
+  `jobs(action="place_beside_sheet")` call. The receipt says, per sheet, what
+  was copied (`results_placed_beside_sheet`) or why not
+  (`results_not_placed`, for example a sheet edited during the run). A request
+  is refused before it runs when a circuit is a netlist, the job does not run
+  on LTspice, or a sheet would run more than one case; it cannot be combined
+  with `recoverable`. The jobs action and the run option decide whether a case
+  can be copied by the same rules.
 - A `random` variation's samples can be replayed. Each case records its sample
   index (`_random_run`) and its seed (`_random_seed`) in its assignments, and
   an entry without a `seed` gets one the server chooses, so a Monte Carlo run
@@ -142,6 +157,14 @@ tool-surface changes.
 
 ### Changed
 
+- A signal named `V(<instance>:<pin>)` for a subcircuit's pin is refused with
+  the reason: a result holds no voltage under a pin's name, because the pin's
+  voltage is the net it connects to in the circuit above. The refusal lists
+  the instance's pins in the order its instance line lists their nets, where
+  LTspice wrote them, and names the current into the pin. Every reader of a
+  signal says so, `analyze_results` on an operating point included.
+- The Python guide lists `RawResult.source`, the `.raw` file a result was
+  read from.
 - `remove_directive`'s `removed_texts` gives a text as it reads, as the
   drawing and the sheet findings read it: a line break where the TEXT record
   holds a `\n` escape, and one backslash where it holds `\\`. It gave the

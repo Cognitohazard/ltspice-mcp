@@ -1290,7 +1290,8 @@ async def _value_from_operating_point(
             present += f", ... ({len(flat)} total)"
         raise ResultError(
             f"{recipe.expr!r} is not present in this operating-point "
-            "result. Address a value by the name it carries (e.g. "
+            f"result.{services.pin_hint(raw, recipe.expr)} Address a value by the name it "
+            "carries (e.g. "
             "'@m1[gm]', 'V(out)') or a device parameter by the device's path "
             "and the parameter ('m1.gm', 'x1.m1.gm' for M1 inside X1). "
             f"Present here: {present}"
@@ -1995,15 +1996,40 @@ async def bode_crossing(
     step: int,
     state: SessionState,
 ) -> MetricValue:
-    """Every frequency where an AC response crosses a magnitude or phase level."""
+    """Every frequency where an AC response crosses a magnitude or phase level.
+
+    With ``ref_hz``, ``level_db`` is measured from the gain at that frequency,
+    read as ``bode_point`` reads one (``gain_at_frequencies``); the reply's
+    ``level`` is then the absolute level crossed, and ``reference`` says what
+    it was measured from.
+    """
     quantity: Quantity = "phase_deg" if recipe.level_deg is not None else "magnitude_db"
     level = recipe.level_deg if recipe.level_deg is not None else recipe.level_db
     assert level is not None
-    return await _bode(
-        source,
-        state,
-        find_crossing(source, recipe.signal, quantity, level, step, state),
-    )
+
+    async def crossing() -> MetricValue:
+        if recipe.ref_hz is None:
+            return await find_crossing(source, recipe.signal, quantity, level, step, state)
+        ref_hz = parse_freq(format_spice_value(recipe.ref_hz), "ref_hz")
+        freqs, h = await load_ac_signal(source, recipe.signal, step, state)
+        if not freqs[0] <= ref_hz <= freqs[-1]:
+            raise ResultError(
+                f"ref_hz {ref_hz:g} Hz is outside the sweep [{freqs[0]:g}, {freqs[-1]:g}] "
+                "Hz, so there is no gain there to measure level_db from. Give a frequency "
+                "the .ac sweep covers."
+            )
+        (point,), _ = gain_at_frequencies(freqs, h, [ref_hz])
+        found = await find_crossing(
+            source, recipe.signal, quantity, point["magnitude_db"] + level, step, state
+        )
+        reference = {
+            "frequency_hz": ref_hz,
+            "magnitude_db": point["magnitude_db"],
+            "level_db": level,
+        }
+        return {**found, "reference": reference}
+
+    return await _bode(source, state, crossing())
 
 
 async def bode_slope(
