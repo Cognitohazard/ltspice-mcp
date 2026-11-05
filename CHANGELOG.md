@@ -97,6 +97,21 @@ tool-surface changes.
   the deck steps as `Rv`, since LTspice logs it as `rv`. Each entry of
   `RawResult.steps` now finds a name as a step selector does, whatever its
   case, and keeps the keys as the run wrote them.
+- `add_net_label`, a placed or moved part's pins and `wire_pins` counted a
+  net's names through ground. A wire whose only label is a ground flag took
+  the names of every other grounded net, so joining it to `VSS` while `VDD`
+  was grounded elsewhere was refused as a short of the two, though moving a
+  `VSS` label there was allowed. A net in these checks is now known by the
+  names its own labels carry, as in `move`: joining a ground-only wire to a
+  named net grounds that net, which a net may be whatever else is. The
+  route check's refusal for a label picked up mid-route now lists only the
+  names the route's wiring joins. A route that also runs straight across
+  two pins of one part is refused for that.
+- A part placed or moved with two pins on one straight wire was judged on
+  the sheet without it. LTspice drops the piece of wire between those two
+  pins, so a pin on a crossing there joins only the piece on its side, and
+  the move was refused as a short LTspice does not make. Each pin's joins
+  are now read off the sheet with the part in its new place.
 - An argument refusal names the fix for a field it does not know: an unknown
   field is answered with the names its place takes, the closest first ("Did
   you mean 'dry_run' for 'dry_runn'? This tool takes path, base, ..."), where
