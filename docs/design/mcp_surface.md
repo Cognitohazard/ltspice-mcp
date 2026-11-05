@@ -134,11 +134,13 @@ Codes named after the stage, used where the stage is the more useful fact:
 that can be large is a page, `{items, total, returned, truncated,
 next_cursor}`, and every tool that returns a page accepts its cursor as input.
 
-When one page contains several collections (an `inspect` net view pages pins
-and wire coordinates together), `total` and `returned` are sums over all of
-them, a `collections {<data key>: {total, returned, truncated}}` block gives
-each collection's counts, and `primary_truncated` reports whether the primary
-collection continues. On every page, `truncated` implies `returned < total`.
+An `inspect` item's `page` names the data key its cursor pages in a
+`collections {<data key>: {total, returned, truncated}}` block, which is how
+a client that pages any kind (the Python API's `inspect` among them) knows
+which list to join. When one page contains several collections (an `inspect`
+net view pages pins and wire coordinates together), `total` and `returned`
+are sums over all of them, `collections` gives each collection's counts, and
+`primary_truncated` reports whether the primary collection continues. On every page, `truncated` implies `returned < total`.
 Stop paging when `next_cursor` is absent, not by the counters. A page leaves
 out `items` when it is empty and `truncated` when it is false, as every reply
 leaves out a field that says nothing; `total` and `returned` are always

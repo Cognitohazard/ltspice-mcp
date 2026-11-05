@@ -1110,9 +1110,13 @@ def _page_meta(page: dict[str, Any], primary: str, secondary: str | None = None)
     wire-vertex coordinates under one cursor, and pins-only counters read
     ``returned == total`` while hundreds of coordinates are still unfetched.
     Summed instead, ``truncated`` implies ``returned < total`` on every page, and
-    ``collections`` says which collection is the one that continues. It is
-    omitted for an item that pages exactly one collection: with nothing to
-    disambiguate it restates the three counters directly above it.
+    ``collections`` says which collection is the one that continues.
+
+    ``collections`` is there for an item that pages one collection too: it is
+    what names the data key the cursor pages, which the kind alone does not
+    (a ``results`` page holds ``plots``, ``signals`` or ``table`` by view, a
+    ``simulator_docs`` page ``docs`` or ``sections``), and what the Python
+    API's collector joins pages by.
     """
     collections: dict[str, dict[str, Any]] = {
         primary: {
@@ -1132,8 +1136,7 @@ def _page_meta(page: dict[str, Any], primary: str, secondary: str | None = None)
         "returned": sum(c["returned"] for c in collections.values()),
         "truncated": page["truncated"],
     }
-    if secondary is not None:
-        meta["collections"] = collections
+    meta["collections"] = collections
     return meta
 
 
@@ -2337,8 +2340,6 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
     }
     page = _paginate(rows, "hierarchy", identity, q.cursor, (), view)
     metadata = _page_meta(page, "instances")
-    # The complete Python collector identifies rows through named collections.
-    metadata["collections"] = {"instances": dict(metadata)}
     return {
         "data": {
             "instances": [row.row() for row in page["items"]],
@@ -2499,9 +2500,7 @@ async def _log_results_page(
     }
     if query.view == "measurements" and facts is not None:
         data.update({key: value for key, value in facts.items() if key != "measurements"})
-    metadata = _page_meta(page, "results")
-    metadata["collections"] = {query.view: dict(metadata)}
-    return {"data": data, "next_cursor": page["next_cursor"], "page": metadata}
+    return {"data": data, "next_cursor": page["next_cursor"], "page": _page_meta(page, query.view)}
 
 
 def _with_observations(
@@ -2587,10 +2586,9 @@ async def _results_page(query: ResultsQuery, state: SessionState, view: _View) -
         "axis": asdict(descriptor.axis) if descriptor.axis else None,
         query.view: page["items"],
     }
-    metadata = _page_meta(page, "results")
-    metadata["collections"] = {query.view: dict(metadata)}
     return _with_observations(
-        {"data": data, "next_cursor": page["next_cursor"], "page": metadata}, observations
+        {"data": data, "next_cursor": page["next_cursor"], "page": _page_meta(page, query.view)},
+        observations,
     )
 
 
@@ -2905,10 +2903,9 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                             "collections": {
                                 "type": "object",
                                 "description": (
-                                    "Per-collection counters, keyed by the data key they page "
-                                    "— which collection still has rows. Present only for an "
-                                    "item paging more than one (a .asc net's pins and "
-                                    "coordinates); otherwise the counters above describe it."
+                                    "Per-collection counters, keyed by the data key they page: "
+                                    "which list the cursor pages, and where an item pages two "
+                                    "(a .asc net's pins and coordinates), which still has rows."
                                 ),
                                 "additionalProperties": {
                                     "type": "object",
