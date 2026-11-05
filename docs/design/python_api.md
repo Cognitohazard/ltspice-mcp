@@ -127,7 +127,10 @@ Every other argument a method takes but cannot use raises `ApiValidationError`
 too: both spellings of one argument (`wait`'s `timeout_s` and `timeout`, a
 result read's `path` and its older keyword), a value `wait` cannot use, a
 `wait` or `detach` control that is not a bool, and a value a detached call
-cannot hand to its owner. A keyword a method's signature does not name raises
+cannot hand to its owner as given: one that is neither JSON, a path nor a
+model, a dictionary key that is not a string (JSON would write a number's as
+a string, a key the call never had), and a value that holds itself. A
+keyword a method's signature does not name raises
 Python's own `TypeError`, as for the constructor; the six operations take any
 keyword and refuse one they do not accept with `ApiValidationError`. The
 catalogue lookups `reference()` and `guide()` run no call and raise Python's

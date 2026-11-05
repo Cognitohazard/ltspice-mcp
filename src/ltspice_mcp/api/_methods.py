@@ -117,16 +117,24 @@ def _validate(
         raise _validation_error(operation, exc, state) from None
 
 
-def _walk_fields(value: Any, path: tuple[str, ...] = ()) -> Iterator[tuple[str, ...]]:
+def _walk_fields(
+    value: Any, path: tuple[str, ...] = (), holders: frozenset[int] = frozenset()
+) -> Iterator[tuple[str, ...]]:
+    """Every field path in ``value``. A value that holds itself is walked
+    once: the operation's model refuses it, as the detached hand-off does,
+    and the walk must end so that either can. ``holders`` are the containers
+    that hold ``value``."""
+    if id(value) in holders:
+        return
     if isinstance(value, Mapping):
         for raw_key, child in value.items():
             key = str(raw_key)
             child_path = (*path, key)
             yield child_path
-            yield from _walk_fields(child, child_path)
+            yield from _walk_fields(child, child_path, holders | {id(value)})
     elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         for child in value:
-            yield from _walk_fields(child, path)
+            yield from _walk_fields(child, path, holders | {id(value)})
 
 
 #: What the automatic mode says about each class of wire-only control. The two

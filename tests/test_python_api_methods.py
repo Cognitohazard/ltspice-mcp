@@ -458,6 +458,49 @@ def test_every_argument_an_api_call_cannot_use_raises_api_validation_error(
         _MISUSED_ARGUMENTS[misuse](SyncApi(state_no_sim))
 
 
+def _holding_itself() -> dict[str, Any]:
+    circuit: dict[str, Any] = {"path": "d.cir"}
+    circuit["again"] = circuit
+    return {"circuits": [circuit]}
+
+
+#: Arguments the JSON hand-off to a detached owner cannot carry as they are: a
+#: key JSON cannot write, a key JSON writes as a string, and a value that holds
+#: itself.
+_UNSENDABLE_ARGUMENTS: dict[str, typing.Callable[[], dict[str, Any]]] = {
+    "tuple-key": lambda: {"circuits": [{("p",): 1}]},
+    "int-key": lambda: {
+        "circuits": _CIRCUITS,
+        "variations": [{"kind": "assign", "assign": {1: ["2k"]}}],
+    },
+    "holds-itself": _holding_itself,
+}
+
+
+@pytest.mark.parametrize("detach", [False, True], ids=["in-process", "detached"])
+@pytest.mark.parametrize("arguments", list(_UNSENDABLE_ARGUMENTS))
+def test_a_detached_call_refuses_what_the_same_call_refuses_in_process(
+    state_no_sim: SessionState, monkeypatch: pytest.MonkeyPatch, arguments: str, detach: bool
+) -> None:
+    """A detached call hands its arguments to the owner as JSON, and refuses
+    an argument the call made in this process refuses, as the same
+    ``ApiValidationError`` and before any owner is spawned. ``json.dumps``
+    raised ``TypeError`` for a tuple key before the hand-off's own check was
+    asked, and wrote an int key as a string, so the detached call accepted an
+    ``assign`` key the model refuses; a value that holds itself ran the field
+    walk both calls make into a ``RecursionError``."""
+
+    def spawned(*args: object, **kwargs: object) -> typing.NoReturn:
+        raise AssertionError("an owner was spawned for a call that should be refused")
+
+    monkeypatch.setattr(methods_module._detach, "submit", spawned)
+    api = SyncApi(state_no_sim)
+    with pytest.raises(ApiValidationError):
+        api.run_experiments(
+            wait=False, detach=detach, request_id="r1", **_UNSENDABLE_ARGUMENTS[arguments]()
+        )
+
+
 def test_a_catalogue_lookup_refuses_with_pythons_errors_not_api_validation_error() -> None:
     """``reference()`` and ``guide()`` look a name up and run no call, as
     ``python -m ltspice_mcp.api`` does with the same lookups; the guide's is
