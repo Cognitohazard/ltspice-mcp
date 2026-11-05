@@ -159,9 +159,8 @@ tool-surface changes.
   changed the draws of every case after it under the same seed. A sample's
   draws now depend only on the seed, its circuit and its sample index: every
   case of one sample draws the same values at each `assign` value, so a sweep
-  compares the same die at each corner. A request with no `assign` values, or
-  one value each, draws exactly what it drew before; with several values, each
-  sample now has one set of draws across them.
+  compares the same die at each corner. A given seed therefore draws different
+  values than it did in earlier versions.
 - The Python API's `inspect` returns every row of a paged query. It follows
   each query's cursor, and joined the pages only where an item paged two
   lists, so for every kind that pages one (`components`, `symbols`, `model`,

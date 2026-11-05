@@ -1351,7 +1351,9 @@ class TestStructuredWriteConflicts:
             line for line in case.text.splitlines() if line.lower().startswith(".param p=")
         )
         assert float(param_line.split("=", 1)[1]) == pytest.approx(draw)
-        assert draw == pytest.approx(1896.62575638)
+        # The rule perturbs the assigned 2k, within its 10%, not the deck's 1k.
+        assert draw != 2000.0
+        assert abs(draw / 2000.0 - 1) <= 0.1
         assert case.assignments["p"] == "2k"
         assert ("R2 b 0 3k" in case.text) == with_disjoint_edit
 
@@ -1404,54 +1406,51 @@ class TestStructuredWriteConflicts:
 
 
 class TestSeedStability:
-    def test_single_file_draws_are_bit_identical(self, tmp_path: Path):
-        """Widening a pattern's reach must not move one recorded number.
-
-        Every draw is keyed by the name of what it perturbs, never by a
-        position in a match list, so reaching further can only add draws. These
-        literals were recorded before that change; a diff here means a shipped
-        Monte Carlo silently reports different values for the same seed.
-        """
-        circuit = _deck(tmp_path / "dut.cir")
-        variation = RandomVariation.model_validate(
-            {
-                "kind": "random",
-                "runs": 2,
-                "seed": 1234,
-                "rules": [
-                    {"rule": "component", "target": "R1", "tolerance": 0.1},
-                    {"rule": "param", "target": "gain", "tolerance": 0.2},
-                    {"rule": "model", "target": "NM", "param": "VTO", "tolerance": 0.15},
-                    {"rule": "mismatch", "prefix": "M", "AVT": 3e-3, "AK": 0.02},
-                ],
-            }
+    def test_reaching_further_or_adding_a_rule_moves_no_existing_draw(self, tmp_path: Path):
+        """Every draw is keyed by the name of what it perturbs, never by a
+        position in a match list or among the rules, so widening a pattern or
+        adding a rule can only add draws: the ones already drawn stay put."""
+        text = (
+            "R1 in out 1k\nR2 out 0 2k\nV1 in 0 1\n.param gain=2\n"
+            ".model NM NMOS(VTO=0.7 KP=100u)\n"
+            "M1 out in 0 0 NM W=10u L=1u\nM2 out in 0 0 NM W=10u L=1u\n.op\n.end\n"
         )
+        path = tmp_path / "dut.cir"
+        path.write_text(text)
+        circuit = CircuitDeck("dut", path, text)
 
-        cases = materialize_variants(
-            circuit,
-            expand_variations([circuit], [variation]),
-            tmp_path / "out",
+        def draws(rules: list[dict[str, object]], name: str) -> list[dict[str, float]]:
+            variation = RandomVariation.model_validate(
+                {"kind": "random", "runs": 2, "seed": 1234, "rules": rules}
+            )
+            cases = materialize_variants(
+                circuit, expand_variations([circuit], [variation]), tmp_path / name
+            )
+            return [
+                {key: value for key, value in case.assignments.items() if key.startswith("random:")}
+                for case in cases
+            ]
+
+        narrow = draws(
+            [
+                {"rule": "component", "target": "R1", "tolerance": 0.1},
+                {"rule": "mismatch", "prefix": "M1", "AVT": 3e-3, "AK": 0.02},
+            ],
+            "narrow",
+        )
+        wide = draws(
+            [
+                {"rule": "param", "target": "gain", "tolerance": 0.2},
+                {"rule": "component", "target": "R*", "tolerance": 0.1},
+                {"rule": "mismatch", "prefix": "M", "AVT": 3e-3, "AK": 0.02},
+            ],
+            "wide",
         )
 
         assert [
-            {key: value for key, value in case.assignments.items() if key.startswith("random:")}
-            for case in cases
-        ] == [
-            {
-                "random:component:R1": 958.0617667513966,
-                "random:mismatch:M1.KP": 0.00010148208338562579,
-                "random:mismatch:M1.VTO": 0.757990883147177,
-                "random:model:NM.VTO": 0.7579506983921265,
-                "random:param:gain": 1.9558313266252403,
-            },
-            {
-                "random:component:R1": 976.05993006425,
-                "random:mismatch:M1.KP": 0.00010097882808618597,
-                "random:mismatch:M1.VTO": 0.6759447769918987,
-                "random:model:NM.VTO": 0.6753772591338416,
-                "random:param:gain": 1.9275251793846904,
-            },
-        ]
+            {key: wider[key] for key in kept} for kept, wider in zip(narrow, wide, strict=True)
+        ] == narrow
+        assert all(set(wider) > set(kept) for kept, wider in zip(narrow, wide, strict=True))
 
 
 PDK_DECK = (

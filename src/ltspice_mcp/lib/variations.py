@@ -843,16 +843,14 @@ def random_identity(variation: RandomVariation, sample_index: int) -> dict[str, 
     return identity
 
 
-def _random_sample_key(circuit_id: str, sample_index: int) -> str:
+def random_sample_key(circuit_id: str, sample_index: int) -> str:
     """The stream a random sample draws from: its circuit and sample index.
 
     Not the case's position in the expanded list, which moves when a corner is
-    added, nor its assign values: every case of one sample draws
-    the same values, so a sample is the same die at each corner of a sweep.
-    The spelling is the one earlier versions gave a sample whose circuit had no
-    assign values, so the draws they recorded for a seed stay as they were.
+    added, nor its assign values: every case of one sample draws the same
+    values, so a sample is the same die at each corner of a sweep.
     """
-    return f"{circuit_id}:case{sample_index}:run{sample_index + 1}"
+    return f"{circuit_id}:sample{sample_index}"
 
 
 def materialize_variants(
@@ -885,7 +883,7 @@ def materialize_variants(
         rules = case.random.rules if case.random is not None else []
         sampler = (
             MCSampler(case.random.seed).derive(
-                _random_sample_key(case.circuit_id, case.random_index or 0)
+                random_sample_key(case.circuit_id, case.random_index or 0)
             )
             if case.random is not None
             else None
