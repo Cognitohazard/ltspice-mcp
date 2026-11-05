@@ -140,8 +140,8 @@ _DECLARED_INVERSES: dict[str, str] = {
     "remove_wire": "wire_pins",
     "add_directive": "remove_directive",
     "remove_directive": "add_directive",
-    # Re-applied with its result's now as instruction and was as text, it puts
-    # the text back.
+    # Re-applied with its result's x and y, now as instruction and was as text,
+    # it puts the text back.
     "replace_directive": _SELF_INVERSE,
     "set_component_value": _SELF_INVERSE,
     "set_component_attribute": _SELF_INVERSE,

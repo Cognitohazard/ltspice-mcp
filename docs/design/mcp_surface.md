@@ -2219,11 +2219,23 @@ file holds. A `regex:` prefix names every text the pattern is found in
 at the start of the text. `remove_directive` removes every text it names and
 lists each in `removed_texts`. `replace_directive` gives one text new words
 (`text`) and keeps its record: its place, size, justification and kind. Its
-`instruction` names the text by the same rule and must name exactly one; one
-that names several is refused with each, so a caller narrows it rather than
-writing one text over many. A directive's new text is checked as
-`add_directive`'s is. Applied again with `now` as `instruction` and `was` as
-`text`, it puts the text back.
+`instruction` names the text by the same rule and must name exactly one, or
+`x` and `y` pick the named text anchored there. An instruction that names
+several texts is refused with the place of each, up to ten and the count of
+the rest, so a caller picks one rather than writing one text over many; texts
+on one anchor cannot be told apart, so one of them is moved first. A
+directive's new text is checked as `add_directive`'s is, and a refused op
+changes nothing. Applied again with its result's `x` and `y`, `now` as
+`instruction` and `was` as `text`, it puts the text back, unless `now` begins
+with `regex:`, which names a pattern, or a text holds a backslash (below).
+
+A text is read, in a reply, as the drawing and the sheet findings read it: a
+`\n` in the TEXT record is a line break and `\\` a backslash, so a Windows
+path keeps its `\new_models`. Writing a text escapes only line breaks, and
+naming one compares it with the text as the record holds it, so a text with
+a backslash is named by the record's spelling, and the text a reply gives is
+not written back as the record held it. How LTspice writes and reads a
+backslash in a TEXT record is not recorded, so neither side is changed yet.
 
 `set_component_value` splits a trailing `KEY=VALUE` off the value it is given
 and sets it wherever the part already gives that key (`Value`, `Value2`,
