@@ -28,7 +28,7 @@ from tests._ltspice_window import (
     put_windows,
     write_world,
 )
-from tests.conftest import dispatched
+from tests.conftest import SyncApi, dispatched
 
 
 def a_second_sheet(asc_file: Path) -> Path:
@@ -334,16 +334,23 @@ def row_for(item: dict[str, Any], sheet: Path) -> dict[str, Any]:
     return row
 
 
+async def listed(state: SessionState, cursor: str | None = None) -> dict[str, Any]:
+    """The open_in_ltspice item, asked through the server's dispatch."""
+    query: dict[str, Any] = {"kind": "open_in_ltspice"}
+    if cursor is not None:
+        query["cursor"] = cursor
+    (item,) = (await dispatched(state, "inspect", queries=[query]))["results"]
+    return item
+
+
 async def every_entry(state: SessionState, sheet: Path) -> tuple[list[str], list[str], int]:
     """Both sides of ``sheet``'s difference, read by following its cursor, and
     the queries asked."""
-    query: dict[str, Any] = {"kind": "open_in_ltspice"}
-    row = row_for((await dispatched(state, "inspect", queries=[query]))["results"][0], sheet)
+    row = row_for(await listed(state), sheet)
     in_window, in_file = list(row.get("only_in_window", [])), list(row.get("only_in_file", []))
     asked = 1
     while "next_cursor" in row:
-        query = {"kind": "open_in_ltspice", "cursor": row["next_cursor"]}
-        row = row_for((await dispatched(state, "inspect", queries=[query]))["results"][0], sheet)
+        row = row_for(await listed(state, row["next_cursor"]), sheet)
         page_window, page_file = row.get("only_in_window", []), row.get("only_in_file", [])
         assert len(page_window) + len(page_file) > 0
         in_window.extend(page_window)
@@ -371,24 +378,10 @@ async def test_each_page_counts_what_is_still_left_out(
     asc_state: SessionState, asc_file: Path, tmp_path: Path
 ):
     a_long_difference(asc_state, asc_file, tmp_path / "world.json", in_window=60, in_file=30)
-    first = row_for(
-        (await dispatched(asc_state, "inspect", queries=[{"kind": "open_in_ltspice"}]))["results"][
-            0
-        ],
-        asc_file,
-    )
+    first = row_for(await listed(asc_state), asc_file)
     assert first["difference_omitted"] == (60 - 25) + (30 - 25)
 
-    second = row_for(
-        (
-            await dispatched(
-                asc_state,
-                "inspect",
-                queries=[{"kind": "open_in_ltspice", "cursor": first["next_cursor"]}],
-            )
-        )["results"][0],
-        asc_file,
-    )
+    second = row_for(await listed(asc_state, first["next_cursor"]), asc_file)
 
     assert second["difference_omitted"] == 60 - 50
     assert len(second["only_in_file"]) == 30 - 25
@@ -404,19 +397,9 @@ async def test_a_cursor_pages_its_own_sheet_and_leaves_the_others_as_they_were(
         str(sheet): as_ltspice_reads(sheet) + lines(wires(30, 2000)) for sheet in (asc_file, other)
     }
     put_windows(asc_state, tmp_path / "world.json", [a_window(held)])
-    first = (await dispatched(asc_state, "inspect", queries=[{"kind": "open_in_ltspice"}]))[
-        "results"
-    ][0]
+    first = await listed(asc_state)
 
-    second = (
-        await dispatched(
-            asc_state,
-            "inspect",
-            queries=[
-                {"kind": "open_in_ltspice", "cursor": row_for(first, asc_file)["next_cursor"]}
-            ],
-        )
-    )["results"][0]
+    second = await listed(asc_state, row_for(first, asc_file)["next_cursor"])
 
     assert row_for(second, other) == row_for(first, other)
     assert row_for(second, asc_file)["only_in_window"] == wires(30, 2000)[25:]
@@ -429,12 +412,7 @@ async def test_a_cursor_from_before_the_sheet_changed_is_refused(
 ):
     world = tmp_path / "world.json"
     window_only, _ = a_long_difference(asc_state, asc_file, world, in_window=30, in_file=0)
-    first = row_for(
-        (await dispatched(asc_state, "inspect", queries=[{"kind": "open_in_ltspice"}]))["results"][
-            0
-        ],
-        asc_file,
-    )
+    first = row_for(await listed(asc_state), asc_file)
     if change == "window":
         held = as_ltspice_reads(asc_file) + lines(window_only[1:])
         write_world(world, [a_window({str(asc_file): held})])
@@ -443,21 +421,14 @@ async def test_a_cursor_from_before_the_sheet_changed_is_refused(
     else:
         write_world(world, [a_window({})])
 
-    data = await dispatched(
-        asc_state,
-        "inspect",
-        queries=[{"kind": "open_in_ltspice", "cursor": first["next_cursor"]}],
-    )
+    item = await listed(asc_state, first["next_cursor"])
 
-    (item,) = data["results"]
     assert item["ok"] is False
     assert item["error"]["code"] == "invalid_cursor"
     assert "without cursor" in item["error"]["message"]
 
 
 def test_the_python_api_lists_every_entry(asc_state: SessionState, asc_file: Path, tmp_path: Path):
-    from tests.conftest import SyncApi
-
     window_only, file_only = a_long_difference(
         asc_state, asc_file, tmp_path / "world.json", in_window=60, in_file=30
     )

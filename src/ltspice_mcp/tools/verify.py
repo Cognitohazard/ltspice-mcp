@@ -74,7 +74,7 @@ import shutil
 import uuid
 from collections import Counter
 from collections.abc import AsyncIterator, Collection, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Literal, NamedTuple, TypeAlias
 
@@ -305,19 +305,16 @@ FINDINGS_OMITTED_SCHEMA: dict[str, Any] = {
 
 
 class FindingsCursor(NamedTuple):
-    """Where a ``findings_cursor`` resumes: the rule it lists, the check that
-    reports that rule, the finding it resumes at, and the revision of the file
-    it was returned for (:func:`file_revision`)."""
+    """Where a ``findings_cursor`` resumes: the rule it lists, the finding it
+    resumes at, and the revision of the file it was returned for
+    (:func:`file_revision`)."""
 
     rule: str
-    check: str
     offset: int
     revision: str | None
 
     def encode(self) -> str:
-        return encode_cursor(
-            {"rule": self.rule, "check": self.check, "offset": self.offset, "of": self.revision}
-        )
+        return encode_cursor({"rule": self.rule, "offset": self.offset, "of": self.revision})
 
 
 def decode_findings_cursor(text: str) -> FindingsCursor:
@@ -326,14 +323,11 @@ def decode_findings_cursor(text: str) -> FindingsCursor:
     return."""
     try:
         body = decode_cursor(text)
-        cursor = FindingsCursor(
-            rule=body["rule"], check=body["check"], offset=body["offset"], revision=body["of"]
-        )
+        cursor = FindingsCursor(rule=body["rule"], offset=body["offset"], revision=body["of"])
     except (CursorError, KeyError) as exc:
         raise InvalidCursorError(_NOT_A_FINDINGS_CURSOR) from exc
     if not (
-        isinstance(cursor.rule, str)
-        and cursor.check in CHECK_ORDER
+        (cursor.rule in RULES or cursor.rule in _VALUE_SUFFIX_RULES)
         and type(cursor.offset) is int
         and cursor.offset > 0
         and (cursor.revision is None or isinstance(cursor.revision, str))
@@ -353,11 +347,8 @@ def file_revision(path: Path) -> str | None:
     """The revision a ``findings_cursor`` is bound to: the file's path and its
     bytes, so a cursor resumes only the list it was returned with. ``None``
     when the file cannot be read. Blocking."""
-    try:
-        content = hashlib.sha256(path.read_bytes()).hexdigest()
-    except OSError:
-        return None
-    return canonical_hash([str(path), content])[:16]
+    content = _file_digest(path)
+    return None if content is None else canonical_hash([str(path), content])[:16]
 
 
 # The sheet rules each check reports, as the registry assigns them.
@@ -1221,6 +1212,15 @@ def _rule_finding(
 #: The value-suffix rules, all under ``FINDING_RULE_CAP``: one deck can spell
 #: every value of a sheet with the same character.
 _VALUE_SUFFIX_RULES = ("value_suffix_micro_sign", "value_suffix_mojibake", "value_suffix_nonascii")
+
+
+def check_reporting(rule: str, kind: str) -> str:
+    """The check that reports ``rule``'s findings on a file of ``kind``: the
+    registry's for a sheet rule; a value-suffix rule is the syntax check's on a
+    netlist, and read off the export of a sheet."""
+    if rule in _VALUE_SUFFIX_RULES:
+        return "syntax" if kind == "netlist" else "export"
+    return RULES[rule].check
 
 
 def _micro_sign_observation(
@@ -2363,10 +2363,14 @@ def _hint(data: dict[str, Any], *, listing: str | None = None) -> str:
         headline = f"{listing} {headline}"
     omitted = data.get("findings_omitted")
     if omitted:
-        more = ", ".join(f"{entry['omitted']} more {rule}" for rule, entry in omitted.items())
+        more = ", ".join(
+            f"{entry['omitted']} more {rule} ({check_reporting(rule, data['kind'])} check)"
+            for rule, entry in omitted.items()
+        )
         headline = (
             f"{headline.rstrip('.')}. Not listed: {more}; pass a rule's findings_omitted "
-            "next_cursor as findings_cursor to list them."
+            "next_cursor as findings_cursor to list them, with checks set to its check "
+            "alone to skip the others."
         )
     if delivery_note:
         headline = f"{headline.rstrip('.')}. {delivery_note}"
@@ -2389,14 +2393,40 @@ class VerifyCircuitEvaluation:
     fields are the same evaluator facts used by the wire renderer; the inline
     image is held separately because it is MCP content rather than structured
     data. ``capped_rules`` names the rules the reply lists at most
-    ``FINDING_RULE_CAP`` findings of, each with the check that reports it,
-    which a ``findings_cursor`` for the rule needs to run.
+    ``FINDING_RULE_CAP`` findings of.
     """
 
     data: dict[str, Any]
     inline_image: RenderedImage | None = None
     is_error: bool = False
-    capped_rules: Mapping[str, str] = field(default_factory=dict)
+    capped_rules: frozenset[str] = frozenset()
+
+
+def _planned_checks(
+    args: VerifyCircuitInput, kind: str, *, has_reference: bool
+) -> tuple[dict[str, bool], list[dict[str, str]]]:
+    """Which checks a call runs on a file of ``kind``, and a ``checks_skipped``
+    row with the reason for each it does not. A check that is chosen and then
+    cannot run, such as an export with no LTspice, adds its own row later."""
+    applicable = _ASC_CHECKS if kind == "asc" else _NETLIST_CHECKS
+    requested = set(args.checks) if args.checks is not None else None
+    wanted: dict[str, bool] = {}
+    skipped: list[dict[str, str]] = []
+    for check in CHECK_ORDER:
+        if args.render is not None and args.render.mode == "only":
+            reason = "render.mode='only'"
+        elif check == "compare" and not has_reference:
+            reason = "no reference supplied"
+        elif check not in applicable:
+            reason = f"not applicable to a {'.asc' if kind == 'asc' else 'netlist'} file"
+        elif requested is not None and check not in requested:
+            reason = "not requested"
+        else:
+            wanted[check] = True
+            continue
+        wanted[check] = False
+        skipped.append({"check": check, "reason": reason})
+    return wanted, skipped
 
 
 def _base_data(path: str) -> dict[str, Any]:
@@ -2470,42 +2500,18 @@ async def evaluate_verify_circuit(
         )
 
     kind = "asc" if is_asc(path) else "netlist"
-    kind_label = ".asc" if kind == "asc" else "netlist"
     data["kind"] = kind
-    applicable = _ASC_CHECKS if kind == "asc" else _NETLIST_CHECKS
-    requested = set(args.checks) if args.checks is not None else None
-    render_only = render is not None and render.mode == "only"
+    wanted, skipped = _planned_checks(args, kind, has_reference=reference is not None)
 
     findings: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
     warnings: list[str] = []
     checks_run: list[str] = []
-    skipped: list[dict[str, str]] = []
-    capped_rules: dict[str, str] = {}
+    capped_rules: set[str] = set()
     observations: list[str] = []
 
     def skip(check: str, reason: str) -> None:
         skipped.append({"check": check, "reason": reason})
-
-    wanted: dict[str, bool] = {}
-    for check in CHECK_ORDER:
-        if render_only:
-            skip(check, "render.mode='only'")
-            wanted[check] = False
-            continue
-        if check == "compare" and reference is None:
-            skip(check, "no reference supplied")
-            wanted[check] = False
-            continue
-        if check not in applicable:
-            skip(check, f"not applicable to a {kind_label} file")
-            wanted[check] = False
-            continue
-        if requested is not None and check not in requested:
-            skip(check, "not requested")
-            wanted[check] = False
-            continue
-        wanted[check] = True
 
     # --- netlist text (syntax, quality) -------------------------------------
     # The text and the codec it decoded as, which the syntax check reports.
@@ -2611,7 +2617,7 @@ async def evaluate_verify_circuit(
             layout_findings, totals = _check_findings(sheet_found, path, "layout")
             findings.extend(layout_findings)
             rules_run |= dict.fromkeys(_RULES_OF_CHECK["layout"], 0) | totals
-            capped_rules.update(dict.fromkeys(totals, "layout"))
+            capped_rules.update(totals)
             observations.append(LAYOUT_COVERAGE)
             checks_run.append("layout")
         if wanted.get("quality"):
@@ -2619,7 +2625,7 @@ async def evaluate_verify_circuit(
             quality_findings.extend(_byte_order_mark_findings(scene, path))
             findings.extend(quality_findings)
             rules_run |= dict.fromkeys(_RULES_OF_CHECK["quality"], 0) | totals
-            capped_rules.update(dict.fromkeys(totals, "quality"))
+            capped_rules.update(totals)
             checks_run.append("quality")
 
     # --- render (started here, collected below) -----------------------------
@@ -2650,7 +2656,7 @@ async def evaluate_verify_circuit(
                     findings.extend(dropped)
                     rules_run["dropped_wire"] = len(dropped)
                     if dropped:
-                        capped_rules["dropped_wire"] = "export"
+                        capped_rules.add("dropped_wire")
                 data["export"] = export.payload
                 checks_run.append("export")
                 if export.failure is not None:
@@ -2720,8 +2726,7 @@ async def evaluate_verify_circuit(
     suffix_totals = Counter(
         str(f["rule_id"]) for f in findings if f["rule_id"] in _VALUE_SUFFIX_RULES
     )
-    # A netlist's are its syntax check's; a sheet's are read off its export.
-    capped_rules.update(dict.fromkeys(suffix_totals, "syntax" if kind == "netlist" else "export"))
+    capped_rules.update(suffix_totals)
 
     # --- render -------------------------------------------------------------
     inline_image: RenderedImage | None = None
@@ -2749,7 +2754,9 @@ async def evaluate_verify_circuit(
     )
     data["outcome"] = _outcome(findings, failures, data.get("comparison"))
     data["hint"] = _hint(data)
-    return VerifyCircuitEvaluation(data=data, inline_image=inline_image, capped_rules=capped_rules)
+    return VerifyCircuitEvaluation(
+        data=data, inline_image=inline_image, capped_rules=frozenset(capped_rules)
+    )
 
 
 def render_verify_circuit(
@@ -2802,7 +2809,7 @@ def render_verify_circuit(
             omitted[rule] = {
                 "omitted": total - end,
                 "total": total,
-                "next_cursor": FindingsCursor(rule, capped[rule], end, revision).encode(),
+                "next_cursor": FindingsCursor(rule, end, revision).encode(),
             }
     data["findings_omitted"] = omitted
     if not evaluation.is_error:
@@ -2822,11 +2829,12 @@ def render_verify_circuit(
 def _unreached_cursor_text(cursor: FindingsCursor, found: int, data: Mapping[str, Any]) -> str:
     """Why a cursor whose file is unchanged reached no finding: the check that
     reports its rule did not run, or found fewer than before."""
+    check = check_reporting(cursor.rule, data["kind"])
     why = next(
         (
-            f": the {cursor.check} check did not run ({row['reason']})"
+            f": the {check} check did not run ({row['reason']})"
             for row in data.get("checks_skipped") or ()
-            if row["check"] == cursor.check
+            if row["check"] == check
         ),
         "",
     )
@@ -2846,23 +2854,24 @@ def _refuse_unfit_cursor(
     refusal that names the check to run takes no generic cursor hint, which
     would send the caller back to the cursor instead.
     """
-    if revision is not None and cursor.revision != revision:
+    if path is None or revision is None:
+        return
+    if cursor.revision != revision:
         raise InvalidCursorError(
             f"findings_cursor was returned for another file, or for {path} before it "
             f"changed. Call verify_circuit again without findings_cursor to list the "
             f"{cursor.rule} findings from the first."
         )
-    reports = f"findings_cursor resumes the {cursor.rule} findings, which the {cursor.check} check"
-    if args.render is not None and args.render.mode == "only":
+    # The revision matched, so this is the file the cursor was returned for.
+    kind = "asc" if is_asc(path) else "netlist"
+    check = check_reporting(cursor.rule, kind)
+    wanted, skipped = _planned_checks(args, kind, has_reference=args.compare is not None)
+    if not wanted[check]:
+        reason = next(row["reason"] for row in skipped if row["check"] == check)
         raise InvalidCursorError(
-            f"{reports} reports, and render.mode='only' runs no check: leave render.mode "
-            "at 'with_checks' to list them.",
-            show_hint=False,
-        )
-    if args.checks is not None and cursor.check not in args.checks:
-        raise InvalidCursorError(
-            f"{reports} reports, and checks leaves it out: add '{cursor.check}' to "
-            "checks, or leave checks out.",
+            f"findings_cursor resumes the {cursor.rule} findings, which the '{check}' "
+            f"check reports, and this call does not run it ({reason}). Ask as the call "
+            f"that returned the cursor did, with '{check}' among the checks.",
             show_hint=False,
         )
 

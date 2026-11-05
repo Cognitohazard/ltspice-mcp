@@ -7,25 +7,19 @@ to list the rule's next findings. Every call here goes through the server's own
 dispatch (``server.call_tool``), as a client's does, and no ``run_code``.
 
 The finding lists are checked against what the files hold, and against the
-uncapped evaluation the Python API returns (``evaluate_verify_circuit``): the
-pages together are that list, in its order, each finding once.
+uncapped list ``api.verify_circuit`` returns: the pages together are that list,
+in its order, each finding once.
 """
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._base import as_sent
-from ltspice_mcp.tools.verify import (
-    FINDING_RULE_CAP,
-    FindingsCursor,
-    VerifyCircuitInput,
-    evaluate_verify_circuit,
-    file_revision,
-)
-from tests.conftest import dispatch, dispatched
+from ltspice_mcp.tools.verify import FINDING_RULE_CAP, FindingsCursor, file_revision
+from tests.conftest import SyncApi, dispatch, dispatched
 
 #: More findings of one rule than one reply lists, and not a multiple of the
 #: cap, so the last page is a short one.
@@ -42,12 +36,17 @@ def _netlist(work_dir: Path, values: int = MANY) -> Path:
     return deck
 
 
-def _sheet(work_dir: Path, labels: int = MANY) -> Path:
-    """A sheet of net labels on nothing: one ``dangling_label`` finding each."""
+def _sheet(work_dir: Path, labels: int = MANY, more: str = "") -> Path:
+    """A sheet of net labels on nothing, one ``dangling_label`` finding each,
+    then the lines ``more``."""
     flags = "".join(f"FLAG {64 * index} 0 n{index}\n" for index in range(labels))
     sheet = work_dir / "labels.asc"
-    sheet.write_text(f"Version 4\nSHEET 1 880 680\n{flags}", encoding="utf-8")
+    sheet.write_text(f"Version 4\nSHEET 1 880 680\n{flags}{more}", encoding="utf-8")
     return sheet
+
+
+def _of(findings: list[dict[str, Any]], rule: str) -> list[dict[str, Any]]:
+    return [finding for finding in findings if finding["rule_id"] == rule]
 
 
 async def _every_finding(
@@ -55,7 +54,7 @@ async def _every_finding(
 ) -> tuple[list[dict[str, Any]], int]:
     """Every ``rule`` finding, read by following its cursor; and the replies read."""
     data = await dispatched(state, "verify_circuit", path=str(path), **arguments)
-    read = [finding for finding in data["findings"] if finding["rule_id"] == rule]
+    read = _of(data["findings"], rule)
     replies = 1
     while rule in data.get("findings_omitted", {}):
         entry = data["findings_omitted"][rule]
@@ -68,7 +67,7 @@ async def _every_finding(
             findings_cursor=entry["next_cursor"],
             **arguments,
         )
-        page = [finding for finding in data["findings"] if finding["rule_id"] == rule]
+        page = _of(data["findings"], rule)
         assert 0 < len(page) <= FINDING_RULE_CAP
         read.extend(page)
         replies += 1
@@ -76,12 +75,11 @@ async def _every_finding(
 
 
 async def _uncapped(state: SessionState, path: Path, rule: str, **arguments: Any) -> list:
-    """Every ``rule`` finding as the Python API returns it: the evaluation, as sent."""
-    evaluation = await evaluate_verify_circuit(
-        VerifyCircuitInput(path=str(path), **arguments), state
+    """Every ``rule`` finding as ``api.verify_circuit`` returns it."""
+    result = await asyncio.to_thread(
+        lambda: SyncApi(state).verify_circuit(path=str(path), **arguments)
     )
-    findings = as_sent(evaluation.data["findings"], "verify_circuit")
-    return [finding for finding in findings if finding["rule_id"] == rule]
+    return _of(result["findings"], rule)
 
 
 async def test_every_finding_of_a_netlist_rule_is_read_through_the_cursor(state_no_sim, work_dir):
@@ -132,10 +130,8 @@ async def test_a_cursor_pages_its_own_rule_and_leaves_the_others_as_they_were(
 ):
     # Two capped rules on one sheet: each label on nothing, and each wire drawn
     # twice. Paging one leaves the other listed, and counted, from its start.
-    flags = "".join(f"FLAG {64 * index} 0 n{index}\n" for index in range(MANY))
     wires = "".join(f"WIRE {64 * index} 200 {64 * index + 32} 200\n" * 2 for index in range(MANY))
-    sheet = work_dir / "busy.asc"
-    sheet.write_text(f"Version 4\nSHEET 1 880 680\n{flags}{wires}", encoding="utf-8")
+    sheet = _sheet(work_dir, more=wires)
     first = await dispatched(state_no_sim, "verify_circuit", path=str(sheet), checks=["layout"])
     assert set(first["findings_omitted"]) >= {"dangling_label", "duplicate_wire"}
 
@@ -147,14 +143,11 @@ async def test_a_cursor_pages_its_own_rule_and_leaves_the_others_as_they_were(
         findings_cursor=first["findings_omitted"]["dangling_label"]["next_cursor"],
     )
 
-    def of(data: dict, rule: str) -> list:
-        return [finding for finding in data["findings"] if finding["rule_id"] == rule]
-
-    assert of(second, "duplicate_wire") == of(first, "duplicate_wire")
+    assert _of(second["findings"], "duplicate_wire") == _of(first["findings"], "duplicate_wire")
     assert (
         second["findings_omitted"]["duplicate_wire"] == first["findings_omitted"]["duplicate_wire"]
     )
-    assert of(second, "dangling_label") != of(first, "dangling_label")
+    assert _of(second["findings"], "dangling_label") != _of(first["findings"], "dangling_label")
     assert second["findings_omitted"]["dangling_label"]["omitted"] == MANY - 2 * FINDING_RULE_CAP
     assert f"dangling_label findings {FINDING_RULE_CAP + 1}" in second["hint"]
 
@@ -232,7 +225,7 @@ async def test_a_cursor_whose_check_could_not_run_says_why(state_no_sim, work_di
     # its reason rather than reading as "no more findings".
     sheet = _sheet(work_dir, labels=1)
     revision = file_revision(state_no_sim.resolve_path(str(sheet)))
-    cursor = FindingsCursor("value_suffix_micro_sign", "export", FINDING_RULE_CAP, revision)
+    cursor = FindingsCursor("value_suffix_micro_sign", FINDING_RULE_CAP, revision)
 
     result = await dispatch(
         state_no_sim, "verify_circuit", {"path": str(sheet), "findings_cursor": cursor.encode()}

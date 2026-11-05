@@ -11,10 +11,7 @@ that says items were left out of a list marks a list that can be cut short: a
 ``cursor``, ``continue`` or ``next``) in the object that declares it or in an
 object around it within the same reply item, or a ``hint`` beside it that says
 what to do instead (``run_code``, whose dropped output cannot be paged).
-
-``NO_WAY_ON_YET`` names the fields that declare no way on yet, each with the
-reason. It is empty today. A test fails once one of them gains a way on, so the
-list only shrinks.
+``tests/conftest.py`` holds every reply in the suite to the same rule.
 """
 
 from __future__ import annotations
@@ -23,12 +20,12 @@ from collections.abc import Iterator
 from typing import Any
 
 from ltspice_mcp.tools._base import page_schema
-from tests.conftest import CONTINUATIONS, declared_output_schemas
-
-#: Cut lists with no way to read the rest yet, by ``(handler, path)``, each
-#: with the reason. Empty today: a new entry needs its reason, and is removed
-#: when its list gains a way on.
-NO_WAY_ON_YET: dict[tuple[str, str], str] = {}
+from tests.conftest import (
+    CONTINUATIONS,
+    counts_omitted,
+    cut_without_continuation,
+    declared_output_schemas,
+)
 
 
 def _declared_schemas() -> dict[str, dict[str, Any]]:
@@ -38,11 +35,6 @@ def _declared_schemas() -> dict[str, dict[str, Any]]:
         f"{module.__name__.rsplit('.', 1)[-1]}.{handler.__name__}": schema
         for module, handler, schema in declared_output_schemas()
     }
-
-
-def _counts_omitted(name: str) -> bool:
-    """Whether a field named ``name`` counts items left out of a list."""
-    return name == "omitted" or name.endswith(("_omitted", "_truncated"))
 
 
 def _cut_lists(schema: dict[str, Any]) -> Iterator[tuple[str, bool]]:
@@ -68,7 +60,7 @@ def _cut_lists(schema: dict[str, Any]) -> Iterator[tuple[str, bool]]:
             if "truncated" in properties:
                 yield path or "<root>", continued
             for name in properties:
-                if _counts_omitted(name):
+                if counts_omitted(name):
                     yield f"{path}.{name}" if path else name, continued
             for name, child in properties.items():
                 yield from walk(child, f"{path}.{name}" if path else name, inside)
@@ -107,29 +99,17 @@ def test_the_walk_finds_the_cut_lists():
         ("verify.handle_verify_circuit", "findings_omitted.*.omitted"),
         ("analysis.handle_plot_waveform", "traces_truncated"),
         ("inspect_tools.handle_inspect", "results[].data.designs[].difference_omitted"),
-        *NO_WAY_ON_YET,
     ):
         assert expected in found, sorted(found)
 
 
 def test_every_list_cut_short_says_how_to_read_the_rest():
     stranded = [
-        f"{name}: {path}"
-        for (name, path), continued in _every_cut_list().items()
-        if not continued and (name, path) not in NO_WAY_ON_YET
+        f"{name}: {path}" for (name, path), continued in _every_cut_list().items() if not continued
     ]
     assert not stranded, (
         "These lists can be cut short and declare no way to read the rest: a "
         f"next_cursor beside the flag or count, or a hint that says what to do: {stranded}"
-    )
-
-
-def test_the_lists_with_no_way_on_yet_still_have_none():
-    # The exemptions only shrink: one that has gained a way on is removed.
-    found = _every_cut_list()
-    continued = [place for place in NO_WAY_ON_YET if found.get(place)]
-    assert not continued, (
-        f"These lists now say how to continue; remove them from NO_WAY_ON_YET: {continued}"
     )
 
 
@@ -151,3 +131,14 @@ def test_a_count_of_omitted_items_without_a_way_on_is_caught():
     assert list(_cut_lists(rows)) == [("rows_omitted", False)]
     rows["properties"]["next_cursor"] = {"type": "string"}
     assert list(_cut_lists(rows)) == [("rows_omitted", True)]
+
+
+def test_a_reply_that_counts_omitted_items_with_no_way_on_is_caught():
+    # The hook every reply in the suite passes through holds a count to the
+    # same rule: a cursor beside it, or prose around it naming its list.
+    reply: dict = {"rows": [{}], "rows_omitted": 3}
+    assert list(cut_without_continuation(reply)) == [("rows_omitted",)]
+    assert list(cut_without_continuation({**reply, "next_cursor": "c"})) == []
+    noted = {**reply, "observations": [{"detail": "Listed 1 of 4 rows; ask for the rest."}]}
+    assert list(cut_without_continuation(noted)) == []
+    assert list(cut_without_continuation({**reply, "rows_omitted": 0})) == []

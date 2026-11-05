@@ -84,7 +84,7 @@ tool-surface changes.
   check. The entry replaces the `<rule>: showing 25 of <n> findings`
   observation, which sent the caller to `api.verify_circuit` for the rest,
   and `dropped_wire`, which was cut at the cap with no word, now has one too.
-  The hint names each rule cut short.
+  The hint names each rule cut short and the check that reports it.
 - `inspect(kind="open_in_ltspice")` lists all of where a sheet's window
   differs from its file. A row cut at 25 entries a side has a `next_cursor`
   beside `difference_omitted`, and the query's new `cursor` takes it back to

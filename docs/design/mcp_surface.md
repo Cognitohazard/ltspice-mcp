@@ -1682,23 +1682,21 @@ value-suffix rule (`value_suffix_micro_sign`, `value_suffix_mojibake`,
 in `findings_omitted`, keyed by its `rule_id`: `{omitted, total,
 next_cursor}`, where `omitted` counts its findings after the ones listed and
 `total` counts them all. Passing `next_cursor` back as `findings_cursor` lists
-that rule's next 25 findings in place of its first, with the other rules
-listed and counted as before; the entry in that reply carries the cursor for
-the page after, and the last page has none. The `hint` counts every finding,
-not only those listed, names each rule cut short, and on a cursor's page
-says which findings it lists. The rest of the reply
-is the same as without the cursor, so narrow `checks` to the one that reports
-the rule to skip the others.
+that rule's next 25 findings in place of its first; the entry in that reply
+carries the cursor for the page after, and the last page has none. The rest
+of the reply, `rules_run` included, is the same as without the cursor. The
+`hint` counts every finding, not only those listed, names each rule cut short
+with the check that reports it, so a caller can narrow `checks` to that check
+to skip the others, and on a cursor's page says which findings it lists.
 
 A cursor is bound to the file's path and content, read before the checks run.
 It is refused with `invalid_cursor` when the file has changed since, or is
-another file; when `checks` leaves out the check that reports its rule, or
-`render.mode` is `"only"`, which the refusal names; and when the call finds
-fewer findings of the rule than the cursor resumes at, as when the export it
-needs did not run. A malformed cursor is refused with `invalid_cursor` too.
-`rules_run` gives each sheet rule's full count
-whichever page is listed. `api.verify_circuit` returns every finding and
-takes no `findings_cursor` unless called with `raw_page=True`.
+another file; when the call does not run the check that reports its rule,
+which the refusal names with the reason; and when the call finds fewer
+findings of the rule than the cursor resumes at, as when the export it needs
+did not run. A malformed cursor is refused with `invalid_cursor` too.
+`api.verify_circuit` returns every finding and takes no `findings_cursor`
+unless called with `raw_page=True`.
 
 **No `baseline` filter.** `verify_circuit` reports on the whole file. To find
 what changed relative to a copy the caller kept, diff the two finding lists,
