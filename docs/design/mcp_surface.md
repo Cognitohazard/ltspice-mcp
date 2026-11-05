@@ -461,8 +461,13 @@ analyze              {recipes: list[Recipe], group_by?, step?, all_steps?,
                                         takes, and `step`/`all_steps` mean what
                                         they mean there, so an attached
                                         measurement and a standalone one read
-                                        the same `.step` iterations. Every
-                                        recipe is validated at SUBMISSION,
+                                        the same `.step` iterations. The
+                                        block's one source, the experiment,
+                                        is labelled `experiment`, the only
+                                        label a recipe's `sources` may name.
+                                        Every recipe is validated at
+                                        SUBMISSION, as `analyze_results`
+                                        validates it against its sources,
                                         before a deck is staged; an invalid
                                         one fails the call with
                                         `recipe_invalid`, stage `validate`,

@@ -84,7 +84,6 @@ from ltspice_mcp.lib.recipes import (
     DORMANT_POINTER,
     Recipe,
     StepSelectionFields,
-    validate_recipe,
 )
 from ltspice_mcp.lib.recovery_records import CaseAttempt, CaseRecovery, RecoveryError
 from ltspice_mcp.lib.services import cp1252_ltspice, resolve_job_async
@@ -1272,21 +1271,28 @@ def _validate_attached_analysis(analyze_block: AttachedAnalysis) -> None:
     registry.
     """
     request = analyze_block.model_dump(mode="json", exclude_unset=False)
+    refused = "The attached analyze block is not a valid analyze_results request: "
     try:
-        analyze.AnalyzeResultsInput.model_validate(
+        expanded = analyze.AnalyzeResultsInput.model_validate(
             _attached_analysis_payload("preflight", request)
         )
-        # The input model deliberately skips per-recipe validation
-        # (SkipValidation[Recipe] — items are validated lazily at execution so
-        # one bad recipe fails one item). At SUBMISSION that laziness is the
-        # bug: every recipe must parse before a simulator is asked to run.
-        for raw_recipe in request.get("recipes") or []:
-            validate_recipe(raw_recipe)
-    except (ValidationError, ValueError) as exc:
+    except ValidationError as exc:
         raise RecipeInvalidError(
-            "The attached analyze block is not a valid analyze_results request: "
-            f"{validation_error_detail('analyze_results', exc)}"
+            refused + validation_error_detail("analyze_results", exc)
         ) from exc
+    # The input model deliberately skips per-recipe validation
+    # (SkipValidation[Recipe] — items are validated lazily at execution so one
+    # bad recipe fails one item). At SUBMISSION that laziness is the bug: every
+    # recipe must be one the analysis after the runs can run, against the
+    # sources it will read, before a simulator is asked to run.
+    labels = [source.label for source in expanded.sources or []]
+    for index, raw_recipe in enumerate(request.get("recipes") or []):
+        try:
+            analyze.recipe_of_request(raw_recipe, labels)
+        except (ValueError, TypeError) as exc:
+            raise RecipeInvalidError(
+                f"{refused}recipes[{index}]: {validation_error_detail('analyze_results', exc)}"
+            ) from exc
 
 
 def attached_analysis_callback(state: SessionState) -> AnalysisCallback:

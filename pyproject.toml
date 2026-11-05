@@ -166,6 +166,8 @@ known-first-party = ["ltspice_mcp"]
 "ltspice_mcp.lib.job_lifecycle.runs_terminal".msg = "Ask services.runs_unready, services.case_unreadable or job_lifecycle.runs_done whether runs can be read."
 "ltspice_mcp.lib.experiment_store.load_job".msg = "Resolve a job through the registry (JobRegistry.get_or_load), which reconciles a record another process owns."
 "ltspice_mcp.lib.experiment_store.load_job_from_path".msg = "Resolve a job through the registry (JobRegistry.get_or_load), which reconciles a record another process owns."
+"ltspice_mcp.lib.recipes.validate_recipe".msg = "Validate a request's recipe with analyze.recipe_of_request, which also checks the source labels it names."
+"ltspice_mcp.tools.analyze.validate_recipe".msg = "Validate a request's recipe with analyze.recipe_of_request, which also checks the source labels it names."
 
 [tool.ruff.lint.per-file-ignores]
 # Tests exercise a banned name directly.
