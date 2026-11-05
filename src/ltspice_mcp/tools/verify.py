@@ -33,9 +33,10 @@ exporter the compare fails rather than diff a schematic's attributes against a
 netlist's cards.
 
 The three channels stay separate. ``observations`` are facts about what the checks
-could see — an unresolved symbol drawn as a placeholder, a finding list truncated
-at the cap, the layout scan's stated blind spot — each weighed by the caller, none
-with a single required action. ``warnings`` are the assumptions a check had to make
+could see — an unresolved symbol drawn as a placeholder, the layout scan's stated
+blind spot — each weighed by the caller, none with a single required action. A
+rule with more findings than a reply lists (``FINDING_RULE_CAP``) is counted in
+``findings_omitted``, whose cursor lists the rest. ``warnings`` are the assumptions a check had to make
 for its result to exist: today, a deck in a comparison that could not be parsed and
 was therefore diffed as an empty circuit, which makes the other side's whole content
 read as added or removed. Those warnings have one home, the top-level channel:
@@ -67,6 +68,7 @@ import asyncio
 import contextlib
 import functools
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -80,18 +82,18 @@ from typing import Annotated, Any, Literal, NamedTuple, TypeAlias
 from mcp import types
 from pydantic import BeforeValidator, Field
 
-from ltspice_mcp.errors import PathSecurityError, python_route_text
+from ltspice_mcp.errors import InvalidCursorError, PathSecurityError
 from ltspice_mcp.lib import (
     NETLIST_SUFFIX_TEXT,
     NETLIST_SUFFIXES,
     atomic_write_bytes,
     capabilities,
 )
+from ltspice_mcp.lib.cursor_codec import CursorError, decode_cursor, encode_cursor
 from ltspice_mcp.lib.deck_prep import asc_export_lock, stage_sheet_copy
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding, refused_sheet_mark_note
 from ltspice_mcp.lib.families import DISPLAY
 from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
-from ltspice_mcp.lib.format import cap_note
 from ltspice_mcp.lib.lint_rules import (
     MEAS_ANGLE_REASON,
     deck_generator,
@@ -170,6 +172,7 @@ from ltspice_mcp.tools._base import (
     render_scene_artifact,
     resolve_reference,
     safe_path,
+    sandboxed,
     shown_in_window,
     window_difference,
 )
@@ -275,9 +278,87 @@ CHECK_ORDER = ("syntax", "symbols", "export", "layout", "quality", "compare")
 _ASC_CHECKS = frozenset({"symbols", "export", "layout", "quality", "compare"})
 _NETLIST_CHECKS = frozenset({"syntax", "quality", "compare"})
 
-# Bounded arrays: retained sample per finding rule, and the true count travels
-# in the accompanying observation when a rule is truncated.
+# The most findings of one rule a reply lists. A rule with more has a
+# ``findings_omitted`` entry counting the rest, with the cursor that lists them.
 FINDING_RULE_CAP = 25
+
+FINDINGS_OMITTED_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "description": (
+        f"The rules with more findings than this reply lists ({FINDING_RULE_CAP} a "
+        "rule), by rule_id. Pass an entry's next_cursor as findings_cursor to list "
+        "that rule's next findings."
+    ),
+    "additionalProperties": {
+        "type": "object",
+        "properties": {
+            "omitted": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Findings of this rule after the ones this reply lists.",
+            },
+            "total": {"type": "integer", "description": "Every finding of this rule."},
+            "next_cursor": {
+                "type": "string",
+                "description": "Pass as findings_cursor to list the next findings of this rule.",
+            },
+        },
+        "required": ["omitted", "total", "next_cursor"],
+    },
+}
+
+
+class FindingsCursor(NamedTuple):
+    """Where a ``findings_cursor`` resumes: the rule it lists, the finding it
+    resumes at, and the digest of that rule's findings as the call that
+    returned it found them (:func:`findings_digest`)."""
+
+    rule: str
+    offset: int
+    digest: str
+
+    def encode(self) -> str:
+        return encode_cursor({"rule": self.rule, "offset": self.offset, "of": self.digest})
+
+
+def decode_findings_cursor(text: str) -> FindingsCursor:
+    """The resume point a ``findings_cursor`` names; ``InvalidCursorError``,
+    as every tool's cursor decoder raises, for anything this tool did not
+    return."""
+    try:
+        body = decode_cursor(text)
+        cursor = FindingsCursor(rule=body["rule"], offset=body["offset"], digest=body["of"])
+    except (CursorError, KeyError) as exc:
+        raise InvalidCursorError(_NOT_A_FINDINGS_CURSOR) from exc
+    # The codec's checksum is no secret, so any body decodes: each field is
+    # checked for its type before it is used.
+    if not (
+        isinstance(cursor.rule, str)
+        and (cursor.rule in RULES or cursor.rule in _VALUE_SUFFIX_RULES)
+        and type(cursor.offset) is int
+        and cursor.offset > 0
+        and isinstance(cursor.digest, str)
+    ):
+        raise InvalidCursorError(_NOT_A_FINDINGS_CURSOR)
+    return cursor
+
+
+_NOT_A_FINDINGS_CURSOR = (
+    "findings_cursor is not a cursor this tool returned: pass a findings_omitted "
+    "entry's next_cursor unchanged, or leave findings_cursor out to list each rule "
+    "from its first finding."
+)
+
+
+def findings_digest(findings: Sequence[Mapping[str, Any]]) -> str:
+    """What a ``findings_cursor`` is bound to: every finding of its rule, as
+    the call that returned it found them. The findings depend on more than the
+    checked file (the symbols a sheet uses, the export LTspice writes, the
+    build that reads a deck), so a cursor resumes only the list it was counted
+    against, whichever of those changed."""
+    text = json.dumps(list(findings), sort_keys=True, default=str)
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
+
 
 # The sheet rules each check reports, as the registry assigns them.
 _RULES_OF_CHECK: dict[str, tuple[str, ...]] = {
@@ -724,6 +805,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         "rules_run": RULES_RUN_SCHEMA,
         "checks_skipped": {"type": "array", "items": _CHECK_SKIPPED_SCHEMA},
         "findings": {"type": "array", "items": FINDING_SCHEMA},
+        "findings_omitted": FINDINGS_OMITTED_SCHEMA,
         "comparison": COMPARISON_SCHEMA,
         "export": _EXPORT_SCHEMA,
         "render": _RENDER_SCHEMA,
@@ -754,9 +836,9 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
             **WARNINGS_SCHEMA,
             "description": (
                 "What the checks could and could not see: a symbol that resolved "
-                "only to a placeholder, a finding list truncated at the cap, the "
-                "layout scan's stated blind spot, a render that was skipped. Facts "
-                "to weigh — none carries a single required action."
+                "only to a placeholder, the layout scan's stated blind spot, a "
+                "render that was skipped. Facts to weigh — none carries a single "
+                "required action."
             ),
         },
         "warnings": {
@@ -914,6 +996,11 @@ class VerifyCircuitInput(ToolInput):
             "overwrites <name>.net next to the schematic, as LTspice does. "
             "Both report what changed since the last export."
         ),
+    )
+
+    findings_cursor: str | None = Field(
+        default=None,
+        description="next_cursor from a findings_omitted entry: lists that rule's next findings.",
     )
 
 
@@ -1134,6 +1221,15 @@ def _rule_finding(
 #: The value-suffix rules, all under ``FINDING_RULE_CAP``: one deck can spell
 #: every value of a sheet with the same character.
 _VALUE_SUFFIX_RULES = ("value_suffix_micro_sign", "value_suffix_mojibake", "value_suffix_nonascii")
+
+
+def check_reporting(rule: str, kind: str) -> str:
+    """The check that reports ``rule``'s findings on a file of ``kind``: the
+    registry's for a sheet rule; a value-suffix rule is the syntax check's on a
+    netlist, and read off the export of a sheet."""
+    if rule in _VALUE_SUFFIX_RULES:
+        return "syntax" if kind == "netlist" else "export"
+    return RULES[rule].check
 
 
 def _micro_sign_observation(
@@ -2249,8 +2345,30 @@ def _ltspice_hint(shown: Mapping[str, Any] | None) -> str | None:
     return "In front in LTspice."
 
 
-def _hint(data: dict[str, Any], asked: Collection[str]) -> str:
-    """One concrete thing the caller most needs to know."""
+def _with_the_cut(headline: str, data: Mapping[str, Any], listing: str | None) -> str:
+    """``headline`` with which of a rule's findings a cursor's page lists
+    (``listing``) before it, and each rule cut short after it."""
+    if listing:
+        headline = f"{listing} {headline}"
+    omitted = data.get("findings_omitted")
+    if not omitted:
+        return headline
+    more = ", ".join(
+        f"{entry['omitted']} more {rule} ({check_reporting(rule, data['kind'])} check)"
+        for rule, entry in omitted.items()
+    )
+    return (
+        f"{headline.rstrip('.')}. Not listed: {more}; pass a rule's findings_omitted "
+        "next_cursor as findings_cursor to list them, with checks set to its check "
+        "alone to skip the others."
+    )
+
+
+def _hint(data: dict[str, Any], asked: Collection[str], *, listing: str | None = None) -> str:
+    """One concrete thing the caller most needs to know.
+
+    ``listing`` says which of a rule's findings a ``findings_cursor`` listed.
+    """
     # A check the caller asked for that did not run is why the outcome is not
     # complete, so the headline names it beside a failure or the findings.
     not_run = set(_asked_for_not_run(data, asked))
@@ -2263,7 +2381,9 @@ def _hint(data: dict[str, Any], asked: Collection[str]) -> str:
         headline = f"{first['stage']} failed: {first['error']}" + (
             f" — {remedy}" if remedy else ""
         )
-        return f"{headline}. Asked for but not run: {unmet_text}." if unmet else headline
+        if unmet:
+            headline = f"{headline}. Asked for but not run: {unmet_text}."
+        return _with_the_cut(headline, data, listing)
     parts: list[str] = []
     # A warning says a result exists only because something was assumed, so it
     # leads: without it "no problems found" reads as a clean bill of health over a
@@ -2311,6 +2431,7 @@ def _hint(data: dict[str, Any], asked: Collection[str]) -> str:
         headline = "No problems found in the checks that ran."
         if skipped:
             headline += " Not run: " + ", ".join(f"{s['check']} ({s['reason']})" for s in skipped)
+    headline = _with_the_cut(headline, data, listing)
     if delivery_note:
         headline = f"{headline.rstrip('.')}. {delivery_note}"
     in_ltspice = _ltspice_hint(data.get("ltspice"))
@@ -2325,30 +2446,50 @@ def _hint(data: dict[str, Any], asked: Collection[str]) -> str:
 
 
 @dataclass(frozen=True)
-class _FindingCapSummary:
-    """A presentation note inserted where one capped rule family was evaluated."""
-
-    totals: dict[str, int]
-
-
-@dataclass(frozen=True)
 class VerifyCircuitEvaluation:
     """Neutral verify result before the MCP finding cap is applied.
 
     ``data["findings"]`` contains every evaluated finding.  The remaining
     fields are the same evaluator facts used by the wire renderer; the inline
     image is held separately because it is MCP content rather than structured
-    data.
+    data. ``capped_rules`` names the rules the reply lists at most
+    ``FINDING_RULE_CAP`` findings of.
     """
 
     data: dict[str, Any]
     inline_image: RenderedImage | None = None
     is_error: bool = False
     capped_rules: frozenset[str] = frozenset()
-    observation_events: tuple[str | _FindingCapSummary, ...] = ()
     #: The checks the caller asked for (``_checks_asked_for``), which the
     #: outcome holds the evaluation to.
     checks_asked_for: frozenset[str] = frozenset()
+
+
+def _planned_checks(
+    args: VerifyCircuitInput, kind: str, *, has_reference: bool
+) -> tuple[dict[str, bool], list[dict[str, str]]]:
+    """Which checks a call runs on a file of ``kind``, and a ``checks_skipped``
+    row with the reason for each it does not. A check that is chosen and then
+    cannot run, such as an export with no LTspice, adds its own row later."""
+    applicable = _ASC_CHECKS if kind == "asc" else _NETLIST_CHECKS
+    asked = _checks_asked_for(args, kind)
+    wanted: dict[str, bool] = {}
+    skipped: list[dict[str, str]] = []
+    for check in CHECK_ORDER:
+        if args.render is not None and args.render.mode == "only":
+            reason = "render.mode='only'"
+        elif check == "compare" and not has_reference:
+            reason = "no reference supplied"
+        elif check not in applicable:
+            reason = f"not applicable to a {'.asc' if kind == 'asc' else 'netlist'} file"
+        elif args.checks is not None and check not in asked:
+            reason = "not requested"
+        else:
+            wanted[check] = True
+            continue
+        wanted[check] = False
+        skipped.append({"check": check, "reason": reason})
+    return wanted, skipped
 
 
 def _base_data(path: str) -> dict[str, Any]:
@@ -2422,42 +2563,19 @@ async def evaluate_verify_circuit(
         )
 
     kind = "asc" if is_asc(path) else "netlist"
-    kind_label = ".asc" if kind == "asc" else "netlist"
     data["kind"] = kind
-    applicable = _ASC_CHECKS if kind == "asc" else _NETLIST_CHECKS
     asked = _checks_asked_for(args, kind)
-    render_only = render is not None and render.mode == "only"
+    wanted, skipped = _planned_checks(args, kind, has_reference=reference is not None)
 
     findings: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
     warnings: list[str] = []
     checks_run: list[str] = []
-    skipped: list[dict[str, str]] = []
     capped_rules: set[str] = set()
-    observation_events: list[str | _FindingCapSummary] = []
+    observations: list[str] = []
 
     def skip(check: str, reason: str) -> None:
         skipped.append({"check": check, "reason": reason})
-
-    wanted: dict[str, bool] = {}
-    for check in CHECK_ORDER:
-        if render_only:
-            skip(check, "render.mode='only'")
-            wanted[check] = False
-            continue
-        if check == "compare" and reference is None:
-            skip(check, "no reference supplied")
-            wanted[check] = False
-            continue
-        if check not in applicable:
-            skip(check, f"not applicable to a {kind_label} file")
-            wanted[check] = False
-            continue
-        if args.checks is not None and check not in asked:
-            skip(check, "not requested")
-            wanted[check] = False
-            continue
-        wanted[check] = True
 
     # --- netlist text (syntax, quality) -------------------------------------
     # The text and the codec it decoded as, which the syntax check reports.
@@ -2476,7 +2594,7 @@ async def evaluate_verify_circuit(
     deck: _LexedDeck | None = None
     if text is not None and (wanted.get("syntax") or wanted.get("quality")):
         deck = await asyncio.to_thread(_lexed_deck, text)
-        observation_events.extend(deck.notes)
+        observations.extend(deck.notes)
 
     # The LTspice this session drives, when it decodes decks as cp1252: the one
     # reader known to misread a UTF-8 micro sign. Identified off the loop (the
@@ -2498,14 +2616,14 @@ async def evaluate_verify_circuit(
         family = family_for(None, state.default_simulator)
         if family is None:
             family = DEFAULT_FAMILY
-            observation_events.append(
+            observations.append(
                 "syntax: no simulator is detected; the deck was checked as "
                 f"{DISPLAY[family]} reads it."
             )
         simulator = DISPLAY[family]
         gap = capabilities.gap_reason(family, "validator_rules")
         if gap is not None:
-            observation_events.append(f"syntax: {gap}")
+            observations.append(f"syntax: {gap}")
         findings.extend(
             await asyncio.to_thread(
                 _syntax_findings,
@@ -2545,7 +2663,7 @@ async def evaluate_verify_circuit(
             failures.append(_failure("scene", str(exc), where=str(path)))
 
     if scene is not None:
-        observation_events.extend(scene.diagnostics)
+        observations.extend(scene.diagnostics)
         bbox = scene.content_bbox()
         data["scene"] = {
             "symbols": len(scene.symbols),
@@ -2564,8 +2682,7 @@ async def evaluate_verify_circuit(
             findings.extend(layout_findings)
             rules_run |= dict.fromkeys(_RULES_OF_CHECK["layout"], 0) | totals
             capped_rules.update(totals)
-            observation_events.append(_FindingCapSummary(totals))
-            observation_events.append(LAYOUT_COVERAGE)
+            observations.append(LAYOUT_COVERAGE)
             checks_run.append("layout")
         if wanted.get("quality"):
             quality_findings, totals = _check_findings(sheet_found, path, "quality")
@@ -2573,7 +2690,6 @@ async def evaluate_verify_circuit(
             findings.extend(quality_findings)
             rules_run |= dict.fromkeys(_RULES_OF_CHECK["quality"], 0) | totals
             capped_rules.update(totals)
-            observation_events.append(_FindingCapSummary(totals))
             checks_run.append("quality")
 
     # --- render (started here, collected below) -----------------------------
@@ -2596,7 +2712,7 @@ async def evaluate_verify_circuit(
                 export = await _run_export(
                     path, state, args.export_to, simulator_cls, cp1252_reader=cp1252_reader
                 )
-                observation_events.extend(export.observations)
+                observations.extend(export.observations)
                 warnings.extend(export.warnings)
                 findings.extend(export.findings)
                 if scene is not None:
@@ -2633,7 +2749,7 @@ async def evaluate_verify_circuit(
                 )
                 compared: CompareResult
                 async with reference_netlist(reference, state) as ref_netlist:
-                    observation_events.extend(ref_netlist.observations)
+                    observations.extend(ref_netlist.observations)
                     if ref_netlist.source is None:
                         failure = _failure(
                             "compare",
@@ -2674,9 +2790,7 @@ async def evaluate_verify_circuit(
     suffix_totals = Counter(
         str(f["rule_id"]) for f in findings if f["rule_id"] in _VALUE_SUFFIX_RULES
     )
-    if suffix_totals:
-        capped_rules.update(suffix_totals)
-        observation_events.append(_FindingCapSummary(dict(suffix_totals)))
+    capped_rules.update(suffix_totals)
 
     # --- render -------------------------------------------------------------
     inline_image: RenderedImage | None = None
@@ -2685,7 +2799,7 @@ async def evaluate_verify_circuit(
         if render_payload is not None:
             data["render"] = render_payload
         failures.extend(render_failures)
-        observation_events.extend(render_obs)
+        observations.extend(render_obs)
 
     # --- shown in LTspice ---------------------------------------------------
     if args.in_ltspice:
@@ -2697,7 +2811,7 @@ async def evaluate_verify_circuit(
             "rules_run": rules_run,
             "checks_skipped": skipped,
             "findings": findings,
-            "observations": [event for event in observation_events if isinstance(event, str)],
+            "observations": observations,
             "warnings": warnings,
             "failures": failures,
         }
@@ -2708,58 +2822,70 @@ async def evaluate_verify_circuit(
         data=data,
         inline_image=inline_image,
         capped_rules=frozenset(capped_rules),
-        observation_events=tuple(observation_events),
         checks_asked_for=asked,
     )
 
 
-def _finding_cap_rest(served: Collection[str] | None) -> str:
-    """Where the findings a capped rule leaves out are read."""
-    rest = "api.verify_circuit returns every one."
-    return rest if served is None else f"{rest} {python_route_text(served)}"
-
-
 def render_verify_circuit(
-    evaluation: VerifyCircuitEvaluation, served: Collection[str] | None = None
+    evaluation: VerifyCircuitEvaluation,
+    *,
+    cursor: FindingsCursor | None = None,
 ) -> types.CallToolResult:
-    """Apply the existing MCP cap and observation presentation to an evaluation.
+    """Apply the MCP finding cap to an evaluation.
+
+    A capped rule lists at most ``FINDING_RULE_CAP`` findings: its first, or
+    from the one ``cursor`` resumes at when the cursor is for that rule. A rule
+    with findings after the ones listed gets a ``findings_omitted`` entry,
+    whose cursor is bound to the rule's findings (:func:`findings_digest`).
+    Raises ``InvalidCursorError`` when ``cursor``'s rule found other findings
+    than those it was returned with.
 
     Selects findings by reference before building the envelope, so the uncapped
     evaluation is never copied wholesale; presentation replaces keys rather than
-    writing through any value it shares with the evaluation. ``served`` is the
-    session's tools, which decide where a capped rule's note sends the caller
-    for the rest.
+    writing through any value it shares with the evaluation.
     """
-    shown: dict[str, int] = {}
+    capped = evaluation.capped_rules
+    start = {cursor.rule: cursor.offset} if cursor is not None else {}
+    of_rule: dict[str, list[dict[str, Any]]] = {}
     presented: list[dict[str, Any]] = []
     for finding in evaluation.data["findings"]:
         rule = str(finding["rule_id"])
-        if rule in evaluation.capped_rules:
-            count = shown.get(rule, 0)
-            if count >= FINDING_RULE_CAP:
+        if rule in capped:
+            index = len(of_rule.setdefault(rule, []))
+            of_rule[rule].append(finding)
+            first = start.get(rule, 0)
+            if not first <= index < first + FINDING_RULE_CAP:
                 continue
-            shown[rule] = count + 1
         presented.append(finding)
     data = dict(evaluation.data)
     data["findings"] = presented
 
-    observations: list[str] = []
-    for event in evaluation.observation_events:
-        if isinstance(event, str):
-            observations.append(event)
-            continue
-        observations.extend(
-            f"{kind}: " + cap_note(FINDING_RULE_CAP, count, "findings", _finding_cap_rest(served))
-            for kind, count in sorted(event.totals.items())
-            if count > FINDING_RULE_CAP
-        )
-    data["observations"] = observations
+    listing: str | None = None
+    if cursor is not None and not evaluation.is_error:
+        found = of_rule.get(cursor.rule, [])
+        if findings_digest(found) != cursor.digest:
+            raise InvalidCursorError(_stale_cursor_text(cursor, data), show_hint=False)
+        last = min(len(found), cursor.offset + FINDING_RULE_CAP)
+        listing = f"Listing {cursor.rule} findings {cursor.offset + 1} to {last} of {len(found)}."
+
+    omitted: dict[str, dict[str, Any]] = {}
+    for rule, found in sorted(of_rule.items()):
+        end = start.get(rule, 0) + FINDING_RULE_CAP
+        if len(found) > end:
+            omitted[rule] = {
+                "omitted": len(found) - end,
+                "total": len(found),
+                "next_cursor": FindingsCursor(rule, end, findings_digest(found)).encode(),
+            }
+    data["findings_omitted"] = omitted
     if not evaluation.is_error:
         data["outcome"] = _outcome(data, evaluation.checks_asked_for)
-        # Counted over every finding, as the observations count them: the cap
-        # shortens the list shown, not what the check found.
+        # Counted over every finding: the cap shortens the list shown, not
+        # what the check found.
         data["hint"] = _hint(
-            {**data, "findings": evaluation.data["findings"]}, evaluation.checks_asked_for
+            {**data, "findings": evaluation.data["findings"]},
+            evaluation.checks_asked_for,
+            listing=listing,
         )
 
     result = format_response(data["hint"], data)
@@ -2768,6 +2894,59 @@ def render_verify_circuit(
     if evaluation.inline_image is not None:
         result.content.insert(0, image_content(evaluation.inline_image))
     return result
+
+
+def _stale_cursor_text(cursor: FindingsCursor, data: Mapping[str, Any]) -> str:
+    """Why this call's findings of a cursor's rule are not the ones it was
+    returned with: the check that reports them did not run, or failed, or
+    what they are read from changed."""
+    check = check_reporting(cursor.rule, data["kind"])
+    skipped = [row for row in data.get("checks_skipped") or () if row["check"] == check]
+    failed = [row for row in data.get("failures") or () if row["stage"] == check]
+    if skipped:
+        why = f"the {check} check that reports them did not run ({skipped[0]['reason']})"
+    elif failed:
+        why = f"the {check} check that reports them failed: {failed[0]['error']}"
+    else:
+        why = (
+            "they have changed since it was returned: the file, a symbol or "
+            "library it reads, or its export, says something else now"
+        )
+    return (
+        f"findings_cursor resumes the {cursor.rule} findings at finding "
+        f"{cursor.offset + 1}, and {why}. Call verify_circuit again without "
+        "findings_cursor to list them from the first."
+    )
+
+
+#: What to change when a call does not run the check a cursor's rule needs,
+#: by the reason ``_planned_checks`` gives.
+_RUN_THE_CHECK: dict[str, str] = {
+    "render.mode='only'": "leave render.mode at 'with_checks'",
+    "not requested": "add '{check}' to checks, or leave checks out",
+}
+
+
+def _refuse_unfit_cursor(cursor: FindingsCursor, args: VerifyCircuitInput, path: Path) -> None:
+    """Refuse, before any check runs, a cursor this call cannot continue
+    because it does not run the check that reports the cursor's rule. A refusal
+    that names what to change takes no generic cursor hint, which would send
+    the caller back to the cursor instead."""
+    if not is_asc(path) and path.suffix.lower() not in NETLIST_SUFFIXES:
+        return  # the evaluation refuses the file and says why
+    kind = "asc" if is_asc(path) else "netlist"
+    check = check_reporting(cursor.rule, kind)
+    wanted, skipped = _planned_checks(args, kind, has_reference=args.compare is not None)
+    if wanted[check]:
+        return
+    reason = next(row["reason"] for row in skipped if row["check"] == check)
+    fix = _RUN_THE_CHECK.get(reason, "run it as the call that returned the cursor did")
+    raise InvalidCursorError(
+        f"findings_cursor resumes the {cursor.rule} findings, which the '{check}' "
+        f"check reports, and this call does not run it ({reason}): "
+        f"{fix.format(check=check)}.",
+        show_hint=False,
+    )
 
 
 @registry.tool(
@@ -2785,6 +2964,14 @@ async def handle_verify_circuit(
     args: VerifyCircuitInput, state: SessionState
 ) -> types.CallToolResult:
     """Check (and optionally render/compare) a circuit file without changing it."""
-    return render_verify_circuit(
-        await evaluate_verify_circuit(args, state), served=frozenset(state.tool_dispatch)
+    # Decoded, and held to the checks this call runs, before any check runs,
+    # so a cursor this call cannot continue costs no export. Whether its rule's
+    # findings are still the ones it was counted against is known only once
+    # they are found again (render_verify_circuit).
+    cursor = (
+        decode_findings_cursor(args.findings_cursor) if args.findings_cursor is not None else None
     )
+    path = sandboxed(args.path, state)
+    if cursor is not None and path is not None:
+        _refuse_unfit_cursor(cursor, args, path)
+    return render_verify_circuit(await evaluate_verify_circuit(args, state), cursor=cursor)

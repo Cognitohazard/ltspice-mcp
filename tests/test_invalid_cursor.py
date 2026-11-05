@@ -133,6 +133,18 @@ class TestCallLevelCursors:
         assert "next_cursor" in data["hint"]
         assert "verify_circuit" not in data["hint"]
 
+    async def test_verify_circuit_findings_cursor(
+        self, state_no_sim: SessionState, work_dir: Path
+    ) -> None:
+        deck = work_dir / "rc.cir"
+        deck.write_text("* rc\nR1 in 0 1k\n.end\n", encoding="utf-8")
+        data = _assert_invalid_cursor(
+            await _call(
+                state_no_sim, "verify_circuit", {"path": str(deck), "findings_cursor": GARBAGE}
+            )
+        )
+        assert "next_cursor" in data["hint"]
+
 
 class TestItemLevelCursors:
     async def test_inspect_results_cursor(

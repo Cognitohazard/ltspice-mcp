@@ -375,7 +375,8 @@ class RecipeInvalidError(LTSpiceMCPError):
 
 class InvalidCursorError(LTSpiceMCPError):
     """A page cursor did not decode, failed its integrity check, or was minted
-    for another listing, view, request or result set.
+    for another listing, view, request or result set, or for a file that has
+    changed since.
 
     One type for every tool's cursors, so the same mistake carries the same
     code on every tool, and its recovery is the one that applies: send back

@@ -39,6 +39,10 @@ _ALLOWED: dict[str, str] = {
     "tools/inspect_tools.py:_do_reference": "names the cap in the hint's lever; slices nothing",
     "tools/jobs.py:_collect_circuit_groups": "a sample of recent jobs; recent_jobs_total is the total",
     "tools/receipts.py:_render_failures": "a row's sample of cases; its count is the total",
+    "tools/verify.py:render_verify_circuit": (
+        "each capped rule's findings_omitted entry states its total and carries the "
+        "cursor that lists the rest, and the hint names both"
+    ),
 }
 
 

@@ -6,11 +6,11 @@ large to read whole should be readable in part.
 
 Every output schema a tool or a delegated handler declares is walked. An object
 that declares a ``truncated`` flag, or a count of the items a list left out
-(an integer ``*_omitted`` or ``*_truncated``), holds a list that can be cut
-short, and it must declare the way on: a cursor (``next_cursor``, ``cursor``,
-``continue`` or ``next``) in that object or in an object around it within the
-same reply item, or a ``hint`` beside the flag or the count that says what to
-do instead (``run_code``, whose dropped output cannot be paged).
+(an integer ``omitted``, ``*_omitted`` or ``*_truncated``), holds a list that
+can be cut short, and it must declare the way on: a cursor (``next_cursor``,
+``cursor``, ``continue`` or ``next``) in that object or in an object around it
+within the same reply item, or a ``hint`` beside the flag or the count that
+says what to do instead (``run_code``, whose dropped output cannot be paged).
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ def _declared_schemas() -> dict[str, dict[str, Any]]:
 def _counts_what_it_left_out(name: str, schema: Any) -> bool:
     """Whether a property is a count of the items a list left out."""
     return (
-        name.endswith(("_omitted", "_truncated"))
+        (name == "omitted" or name.endswith(("_omitted", "_truncated")))
         and isinstance(schema, dict)
         and schema.get("type") == "integer"
     )
@@ -92,6 +92,7 @@ def test_the_walk_finds_the_cut_lists():
         ("analyze.handle_analyze_results", "results.*.per_run"),
         ("inspect_tools.handle_inspect", "results[].data.designs[]:difference_omitted"),
         ("analysis.handle_plot_waveform", "<root>:traces_truncated"),
+        ("verify.handle_verify_circuit", "findings_omitted.*:omitted"),
     ):
         assert expected in found, sorted(found)
 
