@@ -1441,13 +1441,31 @@ async def test_equivalence_exports_an_asc_reference(exporting_state, work_dir):
     assert not (work_dir / "amp.net").exists()
 
 
+#: A source and a resistor, with no MOSFET, so the fake export adds no
+#: install-path library line.
+_DIVIDER_ASC = (
+    "Version 4.1\nSHEET 1 880 680\n"
+    "SYMBOL voltage 64 128 R0\nSYMATTR InstName V1\nSYMATTR Value 5\n"
+    "SYMBOL res 256 96 R0\nSYMATTR InstName R1\nSYMATTR Value 10k\n"
+)
+
+
 class TestComparingASheetRunsTheExportItReads:
     """A sheet is compared as its LTspice export, so ``checks=["compare"]`` on
     an ``.asc`` asks for that export too. It used to skip the export as not
     requested and then the comparison for want of its netlist, so the call
     compared nothing whatever the session could run. Through both doors that
     answer which checks a call asks for: the server's dispatch, and the Python
-    API, which returns the evaluation's own payload."""
+    API, which returns the evaluation's own payload.
+
+    The sheet has no MOSFET, so its export names no LTspice library file. The
+    fake LTspice owns no library folder, so on Windows, where the export's
+    install path is absolute, the compare would refuse that include and the
+    outcome would hang on the platform rather than on the checks."""
+
+    @staticmethod
+    def _sheet(work_dir: Path) -> Path:
+        return _write(work_dir, "divider.asc", _DIVIDER_ASC)
 
     @staticmethod
     def _arguments(sheet: Path) -> dict[str, Any]:
@@ -1460,7 +1478,7 @@ class TestComparingASheetRunsTheExportItReads:
         assert data["comparison"]["equivalent"] is True
         skipped = {row["check"] for row in data.get("checks_skipped", ())}
         assert not skipped & {"export", "compare"}, data
-        assert data["outcome"] == "complete", data
+        assert data["outcome"] == "complete", (data.get("findings"), data.get("failures"))
 
     @staticmethod
     def _assert_named_what_it_lacked(data: dict) -> None:
@@ -1472,21 +1490,21 @@ class TestComparingASheetRunsTheExportItReads:
         assert "export (LTspice not detected)" in data["hint"], data["hint"]
 
     async def test_through_the_server(self, exporting_state, work_dir):
-        sheet = _write(work_dir, "amp.asc", fake_netlister.amp_asc())
+        sheet = self._sheet(work_dir)
         result = await dispatch(exporting_state, "verify_circuit", self._arguments(sheet))
         self._assert_compared(_assert_schema(result))
 
     def test_through_the_python_api(self, exporting_state, work_dir):
-        sheet = _write(work_dir, "amp.asc", fake_netlister.amp_asc())
+        sheet = self._sheet(work_dir)
         self._assert_compared(SyncApi(exporting_state).verify_circuit(**self._arguments(sheet)))
 
     async def test_without_ltspice_through_the_server(self, state_no_sim, work_dir, asc_symbols):
-        sheet = _write(work_dir, "amp.asc", fake_netlister.amp_asc())
+        sheet = self._sheet(work_dir)
         result = await dispatch(state_no_sim, "verify_circuit", self._arguments(sheet))
         self._assert_named_what_it_lacked(_assert_schema(result))
 
     def test_without_ltspice_through_the_python_api(self, state_no_sim, work_dir, asc_symbols):
-        sheet = _write(work_dir, "amp.asc", fake_netlister.amp_asc())
+        sheet = self._sheet(work_dir)
         data = SyncApi(state_no_sim).verify_circuit(**self._arguments(sheet))
         self._assert_named_what_it_lacked(data)
 
