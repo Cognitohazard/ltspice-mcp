@@ -316,7 +316,15 @@ class RandomVariation(VariationModel):
         ),
     )
     runs: int = Field(ge=1)
-    seed: int | None = None
+    seed: int | None = Field(
+        default=None,
+        description="Omitted, the server picks one and records it as '_random_seed'.",
+    )
+    sample_start: int = Field(
+        default=0,
+        ge=0,
+        description="First sample index; sample k draws the same values in any run.",
+    )
     applies_to: list[str] | None = Field(default=None, description=_APPLIES_TO_DESCRIPTION)
     rules: list[RandomRule] = Field(
         description=(
@@ -817,7 +825,11 @@ def expand_variations(
                         assignments=dict(assignments),
                         edits=edits,
                         random=random_variation,
-                        random_index=sample_index if random_variation is not None else None,
+                        random_index=(
+                            random_variation.sample_start + sample_index
+                            if random_variation is not None and sample_index is not None
+                            else None
+                        ),
                         native=native_variation,
                         native_index=(
                             native_variation.sample_start + sample_index
@@ -829,6 +841,29 @@ def expand_variations(
                 circuit_index += 1
                 check_case_cap(len(expanded), max_cases)
     return expanded
+
+
+def random_identity(variation: RandomVariation, sample_index: int) -> dict[str, Any]:
+    """The assignments that name a random case's sample: its index, its seed
+    and its entry's id. The job record keeps a case's assignments, not the
+    request, so these are what a later reader replays a sample from.
+    """
+    identity: dict[str, Any] = {"_random_run": sample_index}
+    if variation.seed is not None:
+        identity["_random_seed"] = variation.seed
+    if variation.id is not None:
+        identity["_random_id"] = variation.id
+    return identity
+
+
+def random_sample_key(circuit_id: str, sample_index: int) -> str:
+    """The stream a random sample draws from: its circuit and sample index.
+
+    Not the case's position in the expanded list, which moves when a corner is
+    added, nor its assign values: every case of one sample draws the same
+    values, so a sample is the same die at each corner of a sweep.
+    """
+    return f"{circuit_id}:sample{sample_index}"
 
 
 def materialize_variants(
@@ -861,7 +896,7 @@ def materialize_variants(
         rules = case.random.rules if case.random is not None else []
         sampler = (
             MCSampler(case.random.seed).derive(
-                f"{case.circuit_id}:case{case.case_index}:run{(case.random_index or 0) + 1}"
+                random_sample_key(case.circuit_id, case.random_index or 0)
             )
             if case.random is not None
             else None
@@ -943,9 +978,7 @@ def materialize_variants(
                     if unchanged_case:
                         zero_edit_lineage = lineage
         if case.random is not None and case.random_index is not None:
-            assignments["_random_run"] = case.random_index
-            if case.random.id is not None:
-                assignments["_random_id"] = case.random.id
+            assignments.update(random_identity(case.random, case.random_index))
         text, written = _write_case_includes(case_closure, texts, case.case_index)
         path = output_dir / f"case-{case.case_index:04d}{suffix}"
         data = encode_spice_text(text, case_closure.files[0].codec)

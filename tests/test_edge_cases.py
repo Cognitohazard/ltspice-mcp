@@ -676,7 +676,7 @@ class TestPageLimitFloor:
 
 # ---------------------------------------------------------------------------
 # Non-finite floats must be scrubbed to null WITH a warning, not silently
-# nulled by the JSON serializer while the text channel says "nan"
+# nulled by the JSON serializer
 # ---------------------------------------------------------------------------
 
 

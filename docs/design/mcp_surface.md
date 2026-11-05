@@ -161,7 +161,7 @@ facts and the caller judges them.
 and `subject` are required on every finding a caller is expected to fix.
 
 **Self-sufficiency.** `structuredContent` contains everything the caller needs,
-including any `hint`; the text channel is presentation only. When a sandbox
+including any `hint`, and the text block carries it serialized. When a sandbox
 (`allowed_paths`) is set, every path a caller passes is checked against it.
 Work on a `.asc` takes a cross-process lock on that circuit, so calls from
 different sessions on one file run one at a time, and a call that waits more
@@ -213,11 +213,10 @@ a series keeps its place. An object left empty once its silent fields are gone
 is left out in turn.
 
 One function applies the rule to every reply, on its way out of the server:
-`structuredContent`, the text block when `[tools] text_channel = "json"`, and
-the Python API's complete results, which therefore have the same shape. The
-summary text follows the rule too and does not state an empty result. A
-number that is not finite is the exception: the reply writes it as null at its
-place and names it in `warnings`. Output schemas mark every field a reply may
+`structuredContent`, the text block that serializes it, and the Python API's
+complete results, which therefore have the same shape. A number that is not
+finite is the exception: the reply writes it as null at its place and names it
+in `warnings`. Output schemas mark every field a reply may
 leave out as optional. A field is kept anyway only when its empty, null or
 false value is itself the answer. The table lists those fields for each tool,
 wherever they appear in its reply, and is the whole exemption:
@@ -267,16 +266,15 @@ valid call. `inspect(kind: "capabilities")` reports the session's mode as
 connection and no call changes them. The server accepts the same calls in both
 modes, and dispatch, validation and responses are identical.
 
-**Text channel.** `[tools] text_channel` (or `LTSPICE_MCP_TEXT_CHANNEL`) sets
-what a reply's text block holds beside its `structuredContent`. `summary`, the
-default, is a one-line summary, because a client that reads
-`structuredContent` shows the model that and drops the text, so the data is
-not sent twice. `json` replaces the text blocks with the serialized
-`structuredContent`, as the MCP specification recommends for a client that
-passes only the text to the model; such a client's model otherwise reads the
-summary alone. Image blocks stay, and a reply with no `structuredContent`
-keeps its text. `inspect(kind: "capabilities")` reports the mode as
-`text_channel`.
+**Text block.** A reply's one text block is its `structuredContent`
+serialized as compact JSON, as the MCP specification recommends ("a tool that
+returns structured content SHOULD also return the serialized JSON in a
+TextContent block"). A failed call's text is its `{error, code, hint?,
+suggestions?}` that way, so a client that shows the model only the text of
+an error, as Claude Code does, still gives it the code and the recovery hint.
+Image blocks stay beside it, and a reply with no `structuredContent` keeps its
+text. A client that shows the model both channels sends the data twice; the
+specification accepts that cost.
 
 Three recipes, `periodic`, `return_loss` and `noise_integral`, are published
 in both modes as only their `metric` value and a one-sentence description that
@@ -1779,8 +1777,7 @@ cursors where listed:
     `spice://capabilities/{family}`); job persistence
     (`persist_jobs`); the sandbox (allowed_paths, null when none is set);
     `tool_profile`; the tool listing this session was served
-    (`tool_listing`) and what its replies' text blocks hold
-    (`text_channel`); limits; linter_version; the startup diagnostics
+    (`tool_listing`); limits; linter_version; the startup diagnostics
     (`diagnostics`), which show whether the server started degraded; and
     `render: {png, missing, reason, remedy}` (whether verify_circuit can
     make the PNG it inlines and, if not, whether the `raster` extra is
@@ -2119,8 +2116,9 @@ each tool's `inputSchema`.
   whatever order the cases run in. See the native PDK contract below for the
   supported profile and the deck it needs.
 
-{kind: "random", id?, runs: int >= 1, seed?: int, applies_to?: [circuit id],
- rules: [RandomRule]}          at most ONE random entry per circuit
+{kind: "random", id?, runs: int >= 1, seed?: int, sample_start?: int >= 0,
+ applies_to?: [circuit id], rules: [RandomRule]}
+                               at most ONE random entry per circuit
 
 RandomRule:
   {rule: "component", target: ref | glob, tolerance, scale:
@@ -2161,6 +2159,18 @@ there m is the device's own. An inner `m={mult}` resolves in the scope its X
 line sets. An `m` that does not resolve to a positive number refuses the
 request with `mismatch_geometry_unresolved`. Draws across circuits are
 independent; correlated Monte Carlo across decks is not supported.
+
+A random case's draws follow from the seed, its circuit id and its sample
+index, never from the case's position among the request's cases. Every case
+of one sample draws the same values whatever its `assign` values, so a sweep
+compares the same die at each corner, and adding a corner leaves the other
+draws as they were. Sample indices start at `sample_start` (default 0), and
+with the same seed `runs: 1` and `sample_start: k` replay sample k alone. An
+entry without `seed` gets one the server chooses after it has looked the
+request up for a replay, so a retry under the same `request_id` returns the
+job it made. Every case records its sample index as `_random_run`, its seed
+as `_random_seed` and, when the entry has one, its `id` as `_random_id`, in
+its assignments.
 
 ### A.2 Recipe
 
@@ -2269,11 +2279,23 @@ file holds. A `regex:` prefix names every text the pattern is found in
 at the start of the text. `remove_directive` removes every text it names and
 lists each in `removed_texts`. `replace_directive` gives one text new words
 (`text`) and keeps its record: its place, size, justification and kind. Its
-`instruction` names the text by the same rule and must name exactly one; one
-that names several is refused with each, so a caller narrows it rather than
-writing one text over many. A directive's new text is checked as
-`add_directive`'s is. Applied again with `now` as `instruction` and `was` as
-`text`, it puts the text back.
+`instruction` names the text by the same rule and must name exactly one, or
+`x` and `y` pick the named text anchored there. An instruction that names
+several texts is refused with the place of each, up to ten and the count of
+the rest, so a caller picks one rather than writing one text over many; texts
+on one anchor cannot be told apart, so one of them is moved first. A
+directive's new text is checked as `add_directive`'s is, and a refused op
+changes nothing. Applied again with its result's `x` and `y`, `now` as
+`instruction` and `was` as `text`, it puts the text back, unless `now` begins
+with `regex:`, which names a pattern, or a text holds a backslash (below).
+
+A text is read, in a reply, as the drawing and the sheet findings read it: a
+`\n` in the TEXT record is a line break and `\\` a backslash, so a Windows
+path keeps its `\new_models`. Writing a text escapes only line breaks, and
+naming one compares it with the text as the record holds it, so a text with
+a backslash is named by the record's spelling, and the text a reply gives is
+not written back as the record held it. How LTspice writes and reads a
+backslash in a TEXT record is not recorded, so neither side is changed yet.
 
 `set_component_value` splits a trailing `KEY=VALUE` off the value it is given
 and sets it wherever the part already gives that key (`Value`, `Value2`,

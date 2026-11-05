@@ -10,6 +10,13 @@ tool-surface changes.
 
 ### Breaking
 
+- A reply's text block is its `structuredContent` serialized as JSON, as the
+  MCP specification recommends, in place of a one-line summary. A client that
+  passes the model only the text now gives it the data, and a failed call's
+  text carries its `code` and recovery `hint`, which a client that shows the
+  model only an error's text (Claude Code among them) used to leave out.
+  `plot_waveform`'s `format` argument is removed, since every reply's text is
+  the same JSON; a call that still sends it is told so.
 - Every reply leaves out the fields that say nothing: an empty list or
   object, a null, a false flag, and a sub-answer that the overall answer
   beside it already gives (`structurally_equivalent` beside
@@ -19,10 +26,9 @@ tool-surface changes.
   field means "checked, and nothing to report", never "not checked": what did
   not run, was skipped or could not be read is still stated, by a
   `checks_skipped` row, a failure, a `status` or a `reason`. One function
-  applies the rule to every tool's `structuredContent`, to the text block
-  under `[tools] text_channel = "json"`, and to the Python API's results, so
-  the API keeps the tools' shape; the summary text no longer states an empty
-  result either. Each tool keeps a short list of fields whose empty, null or
+  applies the rule to every tool's `structuredContent`, to the text block that
+  serializes it, and to the Python API's results, so the API keeps the tools'
+  shape. Each tool keeps a short list of fields whose empty, null or
   false value is the answer itself, such as a finding's `ok`, a comparison's
   `equivalent` and a recipe's measured `value`
   (`docs/design/mcp_surface.md`, "Fields left out"), and output schemas mark
@@ -56,15 +62,23 @@ tool-surface changes.
 
 ### Added
 
+- A `random` variation's samples can be replayed. Each case records its sample
+  index (`_random_run`) and its seed (`_random_seed`) in its assignments, and
+  an entry without a `seed` gets one the server chooses, so a Monte Carlo run
+  without one is no longer impossible to repeat. A new `sample_start` sets the
+  first sample index: with the same seed, `runs: 1, sample_start: 7` draws
+  what sample 7 drew in the full run. A retry of a seedless request under the
+  same `request_id` returns the job it made, with that job's seed.
 - `edit_schematic`'s `replace_directive` op changes one directive's or
   comment's text in one call. Its `instruction` names the text as
-  `remove_directive` does, the whole text or `regex:`, and must name one; one
-  that names several is refused with each. The text keeps its place, size,
+  `remove_directive` does, the whole text or `regex:`, and must name one, or
+  `x` and `y` pick the named text anchored there; one that names several is
+  refused with the place of each. The text keeps its place, size,
   justification and kind, which a `remove_directive` and an `add_directive`
   lost unless given again, and a directive's new text is checked as
   `add_directive`'s is. Its result gives the text's kind and place and what
-  it `was` and is `now`. `remove_directive`'s `removed_texts` now gives a
-  text with its line breaks, where it gave the `\n` escapes the file holds.
+  it `was` and is `now`; applied again with that place, `now` and `was`, it
+  puts the text back.
 - At `INFO`, the server logs one structured record per tool call on the
   `ltspice_mcp.events` logger: the tool, its duration, how it ended (a
   result, an error and its code, a cancellation by the client, or a protocol
@@ -125,6 +139,15 @@ tool-surface changes.
   Such a rule used to be refused with `unsupported_backend`, a code the server
   no longer returns.
 
+
+### Changed
+
+- `remove_directive`'s `removed_texts` gives a text as it reads, as the
+  drawing and the sheet findings read it: a line break where the TEXT record
+  holds a `\n` escape, and one backslash where it holds `\\`. It gave the
+  record's spelling, so a client that compared it with the `.asc` line now
+  sees a different string.
+
 ### Fixed
 
 - A card with a quote, brace or parenthesis left open, or a closer with
@@ -157,6 +180,14 @@ tool-surface changes.
   target refuse a card they need in that state by its file and line. The
   `unreadable-card` lint rule covers staged includes too, and a live include
   holding such an include card, for which `model-missing` says nothing.
+- A `random` variation no longer redraws a sample when other cases change. Its
+  draws were keyed on the case's position in the expanded list, so with
+  several `assign` values each value drew its own numbers, and adding a value
+  changed the draws of every case after it under the same seed. A sample's
+  draws now depend only on the seed, its circuit and its sample index: every
+  case of one sample draws the same values at each `assign` value, so a sweep
+  compares the same die at each corner. A given seed therefore draws different
+  values than it did in earlier versions.
 - The Python API's `inspect` returns every row of a paged query. It follows
   each query's cursor, and joined the pages only where an item paged two
   lists, so for every kind that pages one (`components`, `symbols`, `model`,
@@ -700,11 +731,6 @@ tool-surface changes.
   that `attribute_text_overlap` uses. `verify_circuit` reports it under the
   `layout` check, and `edit_schematic` with its other findings. Texts at one
   anchor are left to `stacked_directive`.
-- `[tools] text_channel` (`LTSPICE_MCP_TEXT_CHANNEL`): `"json"` puts each
-  reply's serialized `structuredContent` in its text block, as the MCP
-  specification recommends for a client that passes only the text to the
-  model; under the default, `"summary"`, such a model reads one summary line.
-  `inspect(kind="capabilities")` reports the mode as `text_channel`.
 - `edit_schematic(open_window="save"|"discard", ops=[])` settles a sheet the
   user changed in LTspice and did not save, once they choose, instead of
   asking them to do it by hand. `"save"` has LTspice save the sheet from the
@@ -779,6 +805,8 @@ tool-surface changes.
 
 ### Changed
 
+- The `mcp` dependency's floor is 2.3, the release the server is tested with,
+  which speaks the current protocol revision (2026-07-28). The floor was 2.1.
 - `analyze_results`: a `spec.fail_cases` list cut short says how to read the
   rest in a `hint` beside its `truncated` flag, where the recipe's `warnings`
   said it. The list has no cursor of its own, and its schema no longer
