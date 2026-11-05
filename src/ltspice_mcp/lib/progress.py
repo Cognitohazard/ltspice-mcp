@@ -29,17 +29,35 @@ POLL_S = 1.0
 
 _T = TypeVar("_T")
 
-_reporter: ContextVar[Reporter | None] = ContextVar("mcp_progress_reporter", default=None)
+#: The reporter bound for a call, with the task the call runs in.
+_reporter: ContextVar[tuple[asyncio.Task[object] | None, Reporter] | None] = ContextVar(
+    "mcp_progress_reporter", default=None
+)
 
 
 @contextlib.contextmanager
 def reporting_to(reporter: Reporter) -> Iterator[None]:
-    """Report the progress of the work run inside this block to ``reporter``."""
-    bound = _reporter.set(reporter)
+    """Report the progress of the work this task runs inside this block to
+    ``reporter``.
+
+    A task started inside the block inherits the binding but does not report:
+    it can outlive the call, such as a job's coordinator, and a report sent
+    after the call is answered is not one the caller can use.
+    """
+    bound = _reporter.set((asyncio.current_task(), reporter))
     try:
         yield
     finally:
         _reporter.reset(bound)
+
+
+def _bound() -> Reporter | None:
+    """The reporter bound for the call this task runs, if this is its task."""
+    binding = _reporter.get()
+    if binding is None:
+        return None
+    owner, reporter = binding
+    return reporter if asyncio.current_task() is owner else None
 
 
 async def watch(work: Awaitable[_T], read: Callable[[], tuple[int, int, str]]) -> _T:
@@ -52,7 +70,7 @@ async def watch(work: Awaitable[_T], read: Callable[[], tuple[int, int, str]]) -
     known and is left out. A report that fails, as when the client has gone,
     is logged and the wait goes on: progress is never what a call answers.
     """
-    reporter = _reporter.get()
+    reporter = _bound()
     if reporter is None:
         return await work
     task = asyncio.ensure_future(work)

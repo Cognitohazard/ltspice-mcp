@@ -1987,12 +1987,16 @@ neither a policy nor a boolean is refused, and the error lists the accepted
 forms and the `mode` values.
 
 **Progress.** A call that asks for progress (a `_meta.progressToken`) and
-waits on a job, `jobs` wait or resume or `run_experiments` holding the call open, gets
-a `notifications/progress` when the wait begins and each time another of the
-job's cases finishes: `progress` is the number of cases finished, `total` the
-cases the job expanded to (left out until it is known), and `message` says
-both with the job id. A client may restart its timeout on each one. No other
-call reports progress, and a call that did not ask is sent none.
+waits on a job, `jobs` wait or resume or `run_experiments` holding the call
+open, gets a `notifications/progress` when the wait begins, then at most once
+a second while more of the job's cases have finished, and as the wait ends if
+more have: `progress` is the number of cases finished, `total` the cases the
+job expanded to (left out until it is known), and `message` says both with
+the job id. A client may restart its timeout on each one; none is sent while
+no case finishes, as during one long case or the job's attached analysis.
+Only the call's own task reports, so a task it starts, such as the job's
+coordinator, sends nothing after the call is answered. No other call reports
+progress, and a call that did not ask is sent none.
 
 **Server logging.** The server logs only to stderr, at `WARNING` by default;
 `[logging] level = "INFO"` or `LTSPICE_MCP_LOG_LEVEL` sets another level. It
