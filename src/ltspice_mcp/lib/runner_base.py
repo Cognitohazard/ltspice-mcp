@@ -525,8 +525,9 @@ def inject_logopinfo(
     The deck is read as LTspice reads it (``spice_lex.lex_for_edit``): an
     ``.op`` or an option in its title or after its ``.END`` is not one LTspice
     sees, and the option goes in before the ``.END`` that ends the deck. The
-    deck is rewritten in its own encoding, so every byte the option does not
-    add is the caller's.
+    deck is rewritten in its own encoding, and the option's line ends with
+    the deck's own line break, so every byte the option does not add is the
+    caller's.
     """
     from spicelib.simulators.ltspice_simulator import LTspice
 

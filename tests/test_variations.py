@@ -1957,3 +1957,42 @@ def test_a_random_rule_has_no_nominal_on_a_part_number(tmp_path: Path, card: str
         materialize_variants(circuit, expand_variations([circuit], [variation]), tmp_path / "out")
 
     assert excinfo.value.code == "random_nominal_unavailable"
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        {"rule": "mismatch", "prefix": "M", "AVT": 3e-3, "AK": 0.02},
+        {"rule": "mismatch", "prefix": "XN", "AVT": 3e-3},
+    ],
+    ids=["variant-model-card", "patched-subcircuit-copy"],
+)
+def test_a_card_added_before_end_takes_the_decks_line_breaks(tmp_path: Path, rule: dict):
+    """A mismatch rule adds cards before the deck's ``.end`` through the same
+    splice as the ``.options logopinfo`` an operating-point run is given: a
+    variant ``.model`` for a top-level transistor, a patched copy of a
+    subcircuit for a device inside one. Each line added ends with the deck's
+    own line break, so a CRLF deck has no bare LF line afterwards."""
+    text = (
+        "* crlf deck\n"
+        ".model nch nmos(vto=0.7 kp=100u)\n"
+        "M1 a g 0 0 nch W=1u L=1u\n"
+        f"{MINI_FET}"
+        "XN0 a g 0 0 minifet W=1 L=0.15\n"
+        "Vg g 0 1\n"
+        ".op\n"
+        ".end\n"
+    ).replace("\n", "\r\n")
+    path = tmp_path / "crlf.cir"
+    path.write_bytes(text.encode("ascii"))
+    circuit = CircuitDeck("dut", path, text)
+    variation = RandomVariation.model_validate(
+        {"kind": "random", "runs": 1, "seed": 1, "rules": [rule]}
+    )
+
+    (case,) = materialize_variants(
+        circuit, expand_variations([circuit], [variation]), tmp_path / "out"
+    )
+
+    assert case.text.count("\r\n") > text.count("\r\n")
+    assert "\n" not in case.text.replace("\r\n", "")

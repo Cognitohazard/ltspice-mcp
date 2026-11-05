@@ -375,6 +375,16 @@ class TestOps:
         assert "1k.MODEL" not in out
         assert "1k\n.MODEL" in out
 
+    def test_injected_lines_take_the_files_line_break(self) -> None:
+        """A block lexed from text with LF line breaks lands in a CRLF file with
+        CRLF ones, each of its lines and a predecessor missing one alike."""
+        from ltspice_mcp.lib.spice_lex_ops import inject_cards_before_end
+
+        cards = lex("* t\r\nR1 a b 1k\r\n.END\r\n").cards
+        cards[1].raw_lines = ["R1 a b 1k"]  # strip trailing newline
+        inject_cards_before_end(cards, lex(".SUBCKT S a\nR2 a 0 1\n.ENDS S").cards)
+        assert emit(cards) == "* t\r\nR1 a b 1k\r\n.SUBCKT S a\r\nR2 a 0 1\r\n.ENDS S\r\n.END\r\n"
+
     def test_rename_subckt_atomic(self) -> None:
         from ltspice_mcp.lib.spice_lex_ops import rename_subckt
 

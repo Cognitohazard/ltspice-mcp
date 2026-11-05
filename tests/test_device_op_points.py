@@ -150,6 +150,28 @@ class TestInjectLogopinfo:
         assert run != src
         assert ".options logopinfo" in run.read_text()
 
+    def test_an_op_in_an_included_file_gets_the_option_in_the_deck(self, tmp_path: Path):
+        """The deck's analyses are the ones the run reads, its includes among
+        them, so an ``.op`` written in an included file asks for the
+        operating point too, and the option goes before the deck's own
+        ``.end``."""
+        (tmp_path / "analysis.inc").write_text(".op\n")
+        deck = self._DECK.replace(".op\n", ".include analysis.inc\n")
+        src = self._write(tmp_path, deck)
+        run = inject_logopinfo(src, LTSPICE_26, "job1")
+        assert run.read_text() == deck.replace(".end\n", ".options logopinfo\n.end\n")
+
+    def test_a_crlf_deck_keeps_its_line_breaks(self, tmp_path: Path):
+        """The option is written with the deck's own line break, so a CRLF
+        deck differs only by the added line, which ends with ``\\r\\n``."""
+        deck = self._DECK.replace("\n", "\r\n")
+        src = tmp_path / "crlf.cir"
+        src.write_bytes(deck.encode("ascii"))
+        run = inject_logopinfo(src, LTSPICE_26, "job1")
+        assert run.read_bytes() == deck.replace(
+            ".end\r\n", ".options logopinfo\r\n.end\r\n"
+        ).encode("ascii")
+
 
 class TestFilterByDevice:
     """``operating_point(device=...)`` narrows the table's values to one device."""
