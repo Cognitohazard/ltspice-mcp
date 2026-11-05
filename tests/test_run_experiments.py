@@ -2143,11 +2143,15 @@ class TestLintModes:
             if finding["rule_id"] == "unreadable-card"
         ] == [4, 5, 6]
 
+    # With no space after its name the card was not taken for an include, and
+    # was neither refused nor staged.
+    @pytest.mark.parametrize("card", ['.include "models.lib', '.include"models.lib'])
     async def test_an_include_whose_path_cannot_be_read_is_refused_at_its_line(
         self,
         state_with_sim: SessionState,
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
+        card: str,
     ):
         """Staging cannot tell which file an include with its quote left open
         names, so it cannot stage or check it: the circuit fails with the line
@@ -2156,7 +2160,7 @@ class TestLintModes:
         fake_simulator(monkeypatch, submissions)
         deck = _deck(
             work_dir / "open_include.cir",
-            '* t\nV1 in 0 1\nR1 in 0 1k\n.include "models.lib\n.op\n.end\n',
+            f"* t\nV1 in 0 1\nR1 in 0 1k\n{card}\n.op\n.end\n",
         )
 
         data = _assert_schema(

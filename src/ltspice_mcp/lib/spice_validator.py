@@ -175,9 +175,9 @@ def meas_unclosed_paren_refused(
         return ValidationError(
             rule_name="meas_unclosed_paren",
             message=(
-                "A parenthesis is left open in this .meas. LTspice 26 stopped at "
-                "the recorded .meas like it ('Expected \")\" here.') and ran "
-                "nothing, and LTspice XVII ran that deck without the measurement."
+                "A parenthesis is left open in this .meas. LTspice 26 refuses such "
+                "a deck before the run ('Expected \")\" here.') and runs nothing, "
+                "and LTspice XVII has run one without the measurement."
             ),
             suggestion="Add the ) that closes the ( it opens.",
         )
@@ -608,14 +608,19 @@ class _NodeUse:
 # What separates the words of a card no rule could split into parts, and the
 # operators inside an expression word: a node a card names inside an
 # expression (``B1 out 0 V={V(in)*2``) is one of its words too.
-_UNREAD_SEPARATORS = re.compile(r"[\s(){}\[\]'\",=]+")
+# A bus name keeps its brackets (``V(d[0])*2`` holds ``d[0]``), and an index
+# may be a node too, so the words are taken both with and without them.
+_UNREAD_SEPARATORS = (
+    re.compile(r"[\s(){}'\",=]+"),
+    re.compile(r"[\s(){}\[\]'\",=]+"),
+)
 _UNREAD_OPERATORS = re.compile(r"[*/+\-<>^&|!?:;%]+")
 
 
 def may_connect_nodes(card: SpiceCard) -> bool:
-    """Whether ``card`` may connect nodes or define names an element uses: an
-    instance, a ``.SUBCKT`` header or a ``.GLOBAL``. A directive that only
-    names a node (``.save``, ``.meas``) connects none."""
+    """Whether ``card`` may connect nodes: an instance, a ``.SUBCKT`` header or
+    a ``.GLOBAL``. A directive that only names a node (``.save``, ``.meas``)
+    connects none."""
     return card.kind in ("instance", "subckt") or directive_head(card) == ".global"
 
 
@@ -623,7 +628,8 @@ def _unread_connectors(cards: list[SpiceCard]) -> list[tuple[SpiceCard, set[str]
     """Each card that may connect nodes (``may_connect_nodes``) but that no
     rule could split into parts (``spice_lex.unreadable_cards``), with every
     word on it, lowercased: as written between spaces (``d[0]``), split again
-    at brackets and separators, and again at operators, since any of them may
+    at parentheses, braces and separators, with and without square brackets,
+    and again at operators, since any of them may
     be a node or a name the card connects or defines. The passes here may
     only hide a warning, never make one on a guess, so they count each as
     connected."""
@@ -633,7 +639,7 @@ def _unread_connectors(cards: list[SpiceCard]) -> list[tuple[SpiceCard, set[str]
             continue
         body = card.body.lower()
         words = set(body.split())
-        words |= {word for word in _UNREAD_SEPARATORS.split(body) if word}
+        words |= {word for split in _UNREAD_SEPARATORS for word in split.split(body) if word}
         words |= {part for word in words for part in _UNREAD_OPERATORS.split(word) if part}
         found.append((card, words))
     return found

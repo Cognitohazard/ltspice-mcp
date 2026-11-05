@@ -141,19 +141,22 @@ tool-surface changes.
 - A `.meas` with a parenthesis left open is refused for LTspice: LTspice 26
   refused the recorded one before the run and XVII ran that deck without the
   measurement. `edit_schematic` refuses to write it, `verify_circuit`'s
-  `syntax` check reports it as an error, `run_experiments` refuses it
-  (`meas-unclosed-paren-ltspice`, blocking; `linter_version` 12), and the
-  LTspice 26 log's failure carries the fix (`meas_unclosed_paren`).
+  `syntax` check reports it as a `directive_syntax` error, `run_experiments`
+  refuses it (`meas-unclosed-paren-ltspice`, blocking; `linter_version` 12),
+  and the LTspice 26 log's failure carries the fix.
 - A directive in that state, such as `.tran 0 1m )`, `.save V(in` or
   `.param r={1k`, stopped `run_experiments` with the lexer's error as a
   retryable submission failure, raised by staging, the linter, the variation
   reader or the hierarchy walk behind recoverable runs and nested targets.
   The deck now runs with the card reported. An `.include` or `.lib` in that
   state fails its circuit with `include_unstaged`, naming the line and the
-  fix, since which file it names is not known; a variation of a name a
-  `.param` in that state may set is refused (`ambiguous_target`), naming its
-  line, rather than made on another copy; and `inspect(kind="hierarchy")`
-  and a nested target refuse a card they need in that state by its line.
+  fix, since which file it names is not known; a variation or random rule on
+  a part, `.model` or `.param` name a card in that state may declare is
+  refused (`ambiguous_target`), naming its line, rather than made on another
+  copy or left out of a glob; and `inspect(kind="hierarchy")` and a nested
+  target refuse a card they need in that state by its file and line. The
+  `unreadable-card` lint rule covers staged includes too, and a live include
+  holding such an include card, for which `model-missing` says nothing.
 - The Python API's `inspect` returns every row of a paged query. It follows
   each query's cursor, and joined the pages only where an item paged two
   lists, so for every kind that pages one (`components`, `symbols`, `model`,

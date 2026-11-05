@@ -251,25 +251,31 @@ def _refuse_unreadable_references(cards: list[SpiceCard], path: Path) -> None:
         raise _unreadable(card, error, path)
 
 
-def _tokens(card: SpiceCard) -> list[Token]:
+def _tokens(card: SpiceCard, where: str | None = None) -> list[Token]:
+    """A card's parts, or its refusal by ``where`` (its file) and line."""
     try:
         tokens = tokenize_body(card.body)
     except SpiceLexError as exc:
-        raise _unreadable(card, exc) from exc
+        raise _unreadable(card, exc, where) from exc
     return [t for t in tokens if t.kind != TokenKind.COMMENT_TRAIL]
 
 
-def _assignments(card: SpiceCard, *, only: bool = False) -> dict[str, str]:
+def _assignments(
+    card: SpiceCard, *, only: bool = False, where: str | None = None
+) -> dict[str, str]:
     result: dict[str, str] = {}
-    tokens = _tokens(card)[1:]
+    tokens = _tokens(card, where)[1:]
     if card.kind == "model":
-        tokens = [
-            inner
-            for token in tokens
-            for inner in (
-                tokenize_body(token.text[1:-1]) if token.kind == TokenKind.PARENED else [token]
-            )
-        ]
+        try:
+            tokens = [
+                inner
+                for token in tokens
+                for inner in (
+                    tokenize_body(token.text[1:-1]) if token.kind == TokenKind.PARENED else [token]
+                )
+            ]
+        except SpiceLexError as exc:  # inside its parameter list: D(is={1e-14)
+            raise _unreadable(card, exc, where) from exc
     for token in tokens:
         if token.kind == TokenKind.KEY_VALUE:
             assert token.key is not None and token.value is not None
@@ -342,7 +348,7 @@ def walk_active(
             # walk does not need (``.tran 0 1m )``) cannot stop it.
             head = directive_head(card)
             if head == ".lib" and id(card) not in refs:
-                tokens = _tokens(card)
+                tokens = _tokens(card, str(path))
                 if len(tokens) != 2 or opened is not None:
                     raise NetlistError(f"malformed library section at {path}:{card.line_start}")
                 opened = unquote(tokens[1].text).casefold()
@@ -351,7 +357,7 @@ def walk_active(
                 declared.add(opened)
                 continue
             if head == ".endl":
-                tokens = _tokens(card)
+                tokens = _tokens(card, str(path))
                 if (
                     opened is None
                     or len(tokens) > 2
@@ -481,7 +487,7 @@ def _parameters(body: Sequence[_Occurrence], profile: SemanticProfile) -> dict[s
     params: dict[str, str] = {}
     for item in body:
         if item.card.kind == "param":
-            values = _assignments(item.card, only=True)
+            values = _assignments(item.card, only=True, where=item.source.path)
             if params.keys() & values.keys() and not (
                 profile.simulator == "ngspice" and profile.ngbehavior == "hsa"
             ):
@@ -495,7 +501,7 @@ def _models(body: Sequence[_Occurrence], enclosing: str | None) -> dict[str, Mod
     for item in body:
         if item.card.kind != "model":
             continue
-        _assignments(item.card)  # refuses a parameter the card gives twice
+        _assignments(item.card, where=item.source.path)  # refuses a parameter given twice
         model = ModelCard.from_card(item.card)
         key = model.name.casefold()
         if key in models:
@@ -506,8 +512,8 @@ def _models(body: Sequence[_Occurrence], enclosing: str | None) -> dict[str, Mod
     return models
 
 
-def _shape(card: SpiceCard) -> tuple[InstanceLine, bool]:
-    _assignments(card)  # first, so a card it cannot split is refused by its line
+def _shape(card: SpiceCard, where: str | None = None) -> tuple[InstanceLine, bool]:
+    _assignments(card, where=where)  # first, so a card it cannot split is refused by its line
     view = InstanceLine.from_card(card)
     tokens = _tokens(card)[1:]
     first = next((i for i, t in enumerate(tokens) if t.kind == TokenKind.KEY_VALUE), len(tokens))
@@ -585,7 +591,7 @@ def resolve_hierarchy(
         item = occurrences[i]
         card = item.card
         if card.kind == "subckt":
-            _assignments(card)
+            _assignments(card, where=item.source.path)
             view = SubcktCard.from_card(card)
             parameters_started = False
             for token in _tokens(card)[2:]:
@@ -597,7 +603,7 @@ def resolve_hierarchy(
             if end is None:
                 raise NetlistError(f"unclosed subcircuit {view.name}")
             closer = cards[end]
-            if len(_tokens(closer)) > 2:
+            if len(_tokens(closer, occurrences[end].source.path)) > 2:
                 raise NetlistError(f"malformed .ends for {view.name}")
             if closer.name and closer.name.casefold() != view.name.casefold():
                 raise NetlistError(f"mismatched .ends for {view.name}")
@@ -645,10 +651,10 @@ def resolve_hierarchy(
         if head == ".step":
             dynamic_reason = "context-dependent .step: no single effective numeric value"
         if head == ".global":
-            for token in _tokens(item.card)[1:]:
+            for token in _tokens(item.card, item.source.path)[1:]:
                 globals_.setdefault(token.text.casefold(), token.text)
         if head in {".option", ".options"}:
-            values = _assignments(item.card)
+            values = _assignments(item.card, where=item.source.path)
             if "scale" in values:
                 if profile.simulator == "ltspice":
                     raise NetlistError("explicit scale is unsupported by LTspice")
@@ -707,7 +713,7 @@ def resolve_hierarchy(
         for item in body:
             if item.card.kind != "instance":
                 continue
-            view, supported = _shape(item.card)
+            view, supported = _shape(item.card, item.source.path)
             folded = view.ref.casefold()
             if folded in refs:
                 raise NetlistError(f"duplicate active reference {view.ref} in {scope}")
@@ -715,7 +721,7 @@ def resolve_hierarchy(
             path = (*scope, view.ref)
             kind = view.ref[0].upper()
             nodes = tuple(node(n, scope, ports) for n in view.nodes) if supported else ()
-            params = _assignments(item.card)
+            params = _assignments(item.card, where=item.source.path)
             param_facts = tuple(
                 (
                     k,

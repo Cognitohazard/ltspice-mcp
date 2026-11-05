@@ -936,14 +936,36 @@ def test_a_card_no_rule_can_read_is_reported_where_it_is(tmp_path):
 def test_an_include_that_cannot_be_read_in_a_live_file_leaves_models_unknown(tmp_path):
     """A live include holding an include card it cannot read: which file that
     card names, and so which models it declares, is not known. The scanner's
-    error escaped lint_deck; now no model is reported missing on the guess."""
+    error escaped lint_deck; now no model is reported missing on the guess,
+    and the reply says so at that card."""
     (tmp_path / "live.inc").write_text('.include "models.lib\n')
     deck = '* t\n.include "live.inc"\nV1 a 0 1\nD1 a 0 mydiode\n.op\n.end\n'
 
-    assert "model-missing" not in _ids(deck, tmp_path)
+    findings = lint_deck(deck, tmp_path / "deck.cir", "ltspice", "LTspice")
+
+    assert "model-missing" not in {f["rule_id"] for f in findings}
+    (unread,) = [f for f in findings if f["rule_id"] == "unreadable-card"]
+    assert unread["at"] == {"file": str(tmp_path / "live.inc"), "line": 1}
+    assert "model-missing reported nothing" in unread["evidence"]["detail"]
     readable = deck.replace("live.inc", "other.inc")
     (tmp_path / "other.inc").write_text("* nothing here\n")
     assert "model-missing" in _ids(readable, tmp_path)
+
+
+def test_a_card_that_cannot_be_read_in_a_staged_include_is_reported_there(tmp_path):
+    staged = tmp_path / "staged" / "parts.inc"
+    deck = '* t\n.include "parts.inc"\nV1 a 0 1\n.op\n.end\n'
+
+    findings = lint_deck(
+        deck,
+        tmp_path / "deck.cir",
+        "ltspice",
+        "LTspice",
+        includes=[(staged, "R9 a 0 1k\nR1 a 0 {1k\n", "utf-8")],
+    )
+
+    (unread,) = [f for f in findings if f["rule_id"] == "unreadable-card"]
+    assert unread["at"] == {"file": str(staged), "line": 2}
 
 
 def test_a_measurement_with_a_parenthesis_left_open_blocks_an_ltspice_run(tmp_path):

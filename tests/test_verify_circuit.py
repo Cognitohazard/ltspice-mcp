@@ -1043,6 +1043,11 @@ _UNREAD_PART_DECKS = {
     "dangling_node": ("* t\nV1 in 0 5\nB1 out 0 V={V(in)*2\nR1 out 0 1k\n.op\n.end\n", 3),
     # 'd[0]' is a node name with brackets in it, wired to R1 too.
     "dangling_node, a bracketed name": ("* t\nV1 d[0] 0 1\nR1 d[0] 0 {1k\n.op\n.end\n", 3),
+    # ...and read by B1 inside its expression.
+    "dangling_node, a bracketed name in an expression": (
+        "* t\nV1 d[0] 0 1\nB1 out 0 V={V(d[0])*2\nR1 out 0 1k\n.op\n.end\n",
+        3,
+    ),
     # 'sense' is named only inside B1's expression.
     "undefined_reference": (
         "* t\nV1 in 0 5\nB1 out 0 V={V(in)*V(sense)\nR1 out 0 1k\n"
@@ -1112,7 +1117,7 @@ async def test_a_recorded_measurement_with_an_unclosed_parenthesis_is_an_error(
     assert finding["at"]["line"] == 7
     assert finding["subject"].startswith(".meas tran broken")
     detail = finding["evidence"]["detail"]
-    assert "LTspice 26 stopped at the recorded .meas like it" in detail
+    assert "LTspice 26 refuses such a deck before the run" in detail
     assert "Add the ) that closes the ( it opens." in detail
 
 

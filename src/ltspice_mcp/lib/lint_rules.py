@@ -14,6 +14,7 @@ from ltspice_mcp.lib.deck_staging import (
     is_absolute_reference,
     resolve_reference,
     scan_include_references,
+    unreadable_references,
 )
 from ltspice_mcp.lib.encoding import latin1_reading, read_spice_text
 from ltspice_mcp.lib.families import DISPLAY
@@ -122,6 +123,12 @@ class _LintContext:
         only an LTspice deck is held to it.
         """
         return validate_netlist_arity(self.cards, simulator=DISPLAY[self.family])
+
+    @functools.cached_property
+    def reached_models(self) -> _ReachedModels:
+        """The models the deck reaches through its includes, read once for
+        model-missing and the unreadable-card rule."""
+        return _models_from_staged_dependencies(self)
 
     @functools.cached_property
     def files(self) -> tuple[_LintFile, ...]:
@@ -494,10 +501,12 @@ def _model_missing(
     context: _LintContext,
     rule: LintRule,
 ) -> list[LintFinding]:
-    reached = _models_from_staged_dependencies(context)
-    if reached is None:
+    reached = context.reached_models
+    if not reached.complete:
+        # Which models an include it cannot read declares is not known; the
+        # unreadable-card rule reports that card and that this rule was quiet.
         return []
-    declared = _declared_models(context.cards) | reached
+    declared = _declared_models(context.cards) | reached.declared
     findings = []
     for card in context.cards:
         if card.kind != "instance" or not card.name:
@@ -532,7 +541,17 @@ def _declared_models(cards: list[SpiceCard]) -> set[str]:
     }
 
 
-def _models_from_staged_dependencies(context: _LintContext) -> set[str] | None:
+class _ReachedModels(NamedTuple):
+    """The models a deck reaches through its include references; whether
+    every include card on the way could be read, so that they are all of
+    them; and those in a live file that could not."""
+
+    declared: set[str]
+    complete: bool
+    unread: list[tuple[Path, SpiceCard, SpiceLexError]]
+
+
+def _models_from_staged_dependencies(context: _LintContext) -> _ReachedModels:
     """Collect declarations the deck reaches through its include references.
 
     The staged snapshots in ``context.includes`` are authoritative for the
@@ -547,31 +566,33 @@ def _models_from_staged_dependencies(context: _LintContext) -> set[str] | None:
     ``resolve_reference`` so the linter cannot read a different file than the
     one staging staged.
 
-    None when a live file holds an include or library card that cannot be
-    split into parts: which file it names is not known, so neither are the
-    models it declares. Staging refuses such a card in every file it stages.
+    ``unread`` lists each include or library card in a live file that cannot
+    be split into parts: which file it names is not known, so neither are the
+    models it declares. Staging refuses such a card in every file it stages,
+    and the unreadable-card rule reports one in the deck or a staged file.
     """
     declared: set[str] = set()
-    unread = False
+    complete = True
+    unread: list[tuple[Path, SpiceCard, SpiceLexError]] = []
     snapshot: dict[Path, list[SpiceCard]] = {}
     for file in context.files[1:]:
         declared.update(_declared_models(file.cards))
         snapshot[file.path.resolve(strict=False)] = file.cards
     visited: set[Path] = set(snapshot)
 
-    def walk(cards: list[SpiceCard], source: Path, depth: int) -> None:
-        nonlocal unread
+    def walk(cards: list[SpiceCard], source: Path, depth: int, *, live: bool) -> None:
+        nonlocal complete
         if depth >= DEFAULT_INCLUDE_DEPTH:
+            return
+        if blocked := unreadable_references(cards):
+            complete = False
+            if live:
+                unread.extend((source, card, error) for card, error in blocked)
             return
         # ``depth`` here is the recursion budget; the scanner's parameter is
         # the library-context bit (0 = the deck itself, nonzero = a file
         # reached by following a reference). Keep the two separate.
-        try:
-            references = scan_include_references(cards, source, depth=min(depth, 1))
-        except SpiceLexError:
-            unread = True
-            return
-        for reference in references:
+        for reference in scan_include_references(cards, source, depth=min(depth, 1)):
             dependency = resolve_reference(source.parent, reference.raw_path)
             try:
                 resolved = dependency.resolve(strict=False)
@@ -587,15 +608,15 @@ def _models_from_staged_dependencies(context: _LintContext) -> set[str] | None:
             except (OSError, UnicodeError, ValueError):
                 continue
             declared.update(_declared_models(nested))
-            walk(nested, resolved, depth + 1)
+            walk(nested, resolved, depth + 1, live=True)
 
-    walk(context.cards, context.path, 0)
+    walk(context.cards, context.path, 0, live=False)
     for staged_path, cards in snapshot.items():
         # Scanned from the snapshot, never from disk; the only thing this can
         # find that the snapshot itself does not carry is a live reference
         # nested inside a staged file.
-        walk(cards, staged_path, 1)
-    return None if unread else declared
+        walk(cards, staged_path, 1, live=False)
+    return _ReachedModels(declared, complete, unread)
 
 
 def _arity_check(
@@ -763,17 +784,30 @@ def unreadable_card_sites(cards: Iterable[SpiceCard], family: str) -> list[Unrea
 
 
 def _unreadable_card(context: _LintContext, rule: LintRule) -> list[LintFinding]:
-    """A card no rule could read, under the rule ``unreadable_card_sites``
-    files it under: the other rules leave it out, so this says so."""
+    """A card no rule could read, in the deck or a staged include, under the
+    rule ``unreadable_card_sites`` files it under: the other rules leave it
+    out, so this says so. An include card in a live file that cannot be read
+    is reported too, since model-missing says nothing for it."""
+    located = [
+        (file.path, site)
+        for file in context.files
+        for site in unreadable_card_sites(file.cards, context.family)
+    ]
+    if rule.rule_id == "unreadable-card":
+        quiet = " Which file it names is not known, so model-missing reported nothing."
+        for path, card, _error in context.reached_models.unread:
+            (site,) = unreadable_card_sites([card], context.family)
+            located.append((path, site._replace(detail=site.detail + quiet)))
     return [
         _finding(
             context,
             rule,
             line=site.card.line_start,
+            file=path,
             subject=" ".join(site.card.body.split()),
             evidence={"detail": site.detail},
         )
-        for site in unreadable_card_sites(context.cards, context.family)
+        for path, site in located
         if site.rule_id == rule.rule_id
     ]
 
