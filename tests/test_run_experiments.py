@@ -2949,6 +2949,62 @@ class TestAttachedAnalysis:
         assert job.analysis.request is not None
         assert job.analysis.request["include"] is None
 
+    async def test_a_field_named_with_an_underscore_is_found_by_both_doors(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Every random case carries '_random_seed' and '_random_run' in its
+        assignments. The attached analysis checks a projection against a key
+        outline saved with the result, which left out every key starting with
+        '_' at any depth, so it warned that these paths were absent from every
+        row while each row it returned carried them. analyze_results checks
+        the rows themselves and never warned; both must give the same answer."""
+        recorded_fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "attached-underscore.cir")
+        recipes = [{"key": "summary", "metric": "summary"}]
+        fields = ["assignments._random_seed", "assignments._random_run"]
+        variations = [
+            {
+                "kind": "random",
+                "runs": 2,
+                "seed": 11,
+                "rules": [{"rule": "component", "target": "R1", "tolerance": 0.1}],
+            }
+        ]
+
+        attached = _assert_schema(
+            await _completed_analysis_receipt(
+                _args(
+                    deck,
+                    "attached-underscore",
+                    variations=variations,
+                    analyze={"recipes": recipes, "include": {"fields": fields}},
+                ),
+                state_with_sim,
+            )
+        )
+        standalone = await handle_analyze_results(
+            AnalyzeResultsInput.model_validate(
+                {
+                    "sources": [{"job_id": attached["job_id"], "runs": "all"}],
+                    "recipes": recipes,
+                    "include": {"fields": fields},
+                }
+            ),
+            state_with_sim,
+        )
+        assert standalone.structured_content is not None
+
+        for result in (attached["analysis"]["result"], standalone.structured_content):
+            block = result["results"]["summary"]
+            assert [row["assignments"] for row in block["values"]] == [
+                {"_random_seed": 11, "_random_run": 0},
+                {"_random_seed": 11, "_random_run": 1},
+            ]
+            assert not any("absent" in warning for warning in block.get("warnings", []))
+
     async def test_projection_survives_the_attached_continuation_and_replay_view_change(
         self,
         state_with_sim: SessionState,
