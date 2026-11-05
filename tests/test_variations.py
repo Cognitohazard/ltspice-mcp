@@ -31,6 +31,7 @@ from tests._mismatch_fixtures import MINI_FET, instance_params
 
 def _deck(path: Path, circuit_id: str = "dut") -> CircuitDeck:
     text = (
+        "* dut\n"
         "R1 in out 1k\n"
         "C1 out 0 1n\n"
         "V1 in 0 1\n"
@@ -162,7 +163,7 @@ class TestAssignExpansion:
 
     def test_b_source_assignment_preserves_source_kind_and_nodes(self, tmp_path: Path):
         path = tmp_path / "behavioral.cir"
-        text = "V1 in 0 1\nB1 out 0 V=V(in)\nR1 out 0 1k\n.op\n.end\n"
+        text = "* behavioral\nV1 in 0 1\nB1 out 0 V=V(in)\nR1 out 0 1k\n.op\n.end\n"
         circuit = CircuitDeck("behavioral", path, text)
         variation = AssignVariation(
             kind="assign",
@@ -179,7 +180,7 @@ class TestAssignExpansion:
 
     def test_pulse_source_assignment_preserves_complete_source_card(self, tmp_path: Path):
         path = tmp_path / "pulse.cir"
-        text = "V1 in 0 PULSE(0 1 1n 1n 1n 5n 10n)\nR1 in 0 1k\n.tran 1n 20n\n.end\n"
+        text = "* pulse\nV1 in 0 PULSE(0 1 1n 1n 1n 5n 10n)\nR1 in 0 1k\n.tran 1n 20n\n.end\n"
         circuit = CircuitDeck("pulse", path, text)
         pulse = "PULSE(0 5 2n 1n 1n 4n 10n)"
         variation = AssignVariation(kind="assign", assign={"V1": [pulse]})
@@ -194,7 +195,7 @@ class TestAssignExpansion:
 
     def test_param_wins_over_same_named_component(self, tmp_path: Path):
         path = tmp_path / "collision.cir"
-        text = "R1 in out 1k\n.param R1=7\n.op\n.end\n"
+        text = "* collision\nR1 in out 1k\n.param R1=7\n.op\n.end\n"
         circuit = CircuitDeck("collision", path, text)
         variation = AssignVariation(kind="assign", assign={"R1": [9]})
 
@@ -209,7 +210,7 @@ class TestAssignExpansion:
 
     def test_nonfirst_param_on_shared_card_is_resolved_and_rewritten(self, tmp_path: Path):
         path = tmp_path / "multi-param.cir"
-        text = "R1 in out 1k\n.param first=1 target=2 last=3\n.op\n.end\n"
+        text = "* multi\nR1 in out 1k\n.param first=1 target=2 last=3\n.op\n.end\n"
         circuit = CircuitDeck("multi", path, text)
         variation = AssignVariation(kind="assign", assign={"target": ["4.7k"]})
 
@@ -223,7 +224,7 @@ class TestAssignExpansion:
 
     def test_a_component_value_given_twice_is_set_in_both_copies(self, tmp_path: Path):
         path = tmp_path / "twice.cir"
-        text = "V1 in 0 1\nR1 in out R=1k R=1k\n.op\n.end\n"
+        text = "* twice\nV1 in 0 1\nR1 in out R=1k R=1k\n.op\n.end\n"
         circuit = CircuitDeck("twice", path, text)
         variation = AssignVariation(kind="assign", assign={"R1": ["2k"]})
 
@@ -241,7 +242,7 @@ class TestAssignExpansion:
 
         path = tmp_path / "model_twice.cir"
         text = (
-            "V1 d 0 1\nM1 d d 0 0 NM W=10u L=1u\n"
+            "* model twice\nV1 d 0 1\nM1 d d 0 0 NM W=10u L=1u\n"
             ".model NM NMOS(VTO=0.7 KP=100u VTO=0.7)\n.op\n.end\n"
         )
         circuit = CircuitDeck("model-twice", path, text)
@@ -586,7 +587,7 @@ def _closure(
         path.write_text(text)
         files.append(DeckFile(path, text))
         references += f'{reference} "{path}"\n'
-    root_text = f"{references}{root_body}.op\n.end\n"
+    root_text = f"* dut\n{references}{root_body}.op\n.end\n"
     root = staged / "dut.cir"
     root.write_text(root_text)
     return CircuitDeck("dut", root, root_text, tuple(files))
@@ -1066,7 +1067,9 @@ class TestOneFileDeclaringOneNameTwice:
         models = staged / "models"
         model_text = ".model NM NMOS(VTO=0.7)\n"
         models.write_text(model_text)
-        root_text = ".lib models\n.subckt buf in out\nR1 in out 9k\n.ends\nR1 a b 1k\n.op\n.end\n"
+        root_text = (
+            "* dut\n.lib models\n.subckt buf in out\nR1 in out 9k\n.ends\nR1 a b 1k\n.op\n.end\n"
+        )
         root = staged / "dut.cir"
         root.write_text(root_text)
         circuit = CircuitDeck("dut", root, root_text, (DeckFile(models, model_text),))

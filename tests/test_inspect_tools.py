@@ -617,7 +617,7 @@ async def test_components_full_netlist_lists_a_repeated_parameter(
     """``params`` holds one value per key, so a card naming a parameter twice
     read as naming it once; the copies are listed beside it."""
     deck = work_dir / "twice.cir"
-    deck.write_text("M1 d g 0 0 NMOS w=1u l=1u W=2u\n.end\n")
+    deck.write_text("* twice\nM1 d g 0 0 NMOS w=1u l=1u W=2u\n.end\n")
 
     (res,) = await _run(
         state_no_sim, [{"kind": "components", "path": str(deck), "detail": "full"}]

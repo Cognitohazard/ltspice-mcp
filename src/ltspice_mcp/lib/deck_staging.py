@@ -23,7 +23,7 @@ from ltspice_mcp.lib.spice_lex import (
     Token,
     TokenKind,
     emit,
-    lex,
+    lex_for_edit,
     tokenize_body,
 )
 from ltspice_mcp.lib.spice_lex_ops import (
@@ -359,10 +359,13 @@ def stage_deck(
         processing.add(resolved)
         try:
             text, encoding = decode_spice_bytes_with_encoding(data)
-            parsed = lex(text)
+            # The deck's references and values are the cards LTspice reads: an
+            # include named in its title or after its .END is not staged, and
+            # those cards are copied as they are.
+            parsed = lex_for_edit(text, deck=depth == 0)
             changed = False
             anchor = stands_at if resolved == source else resolved
-            for reference in scan_include_references(parsed.cards, anchor, depth=depth):
+            for reference in scan_include_references(parsed.read, anchor, depth=depth):
                 target = resolve_reference(anchor.parent, reference.raw_path)
                 target_resolved = resolve_existing(target)
                 target_root = None
@@ -477,7 +480,7 @@ def stage_deck(
             # is spelled 'u', which every simulator in every encoding reads as
             # micro: a UTF-8 µ reaches LTspice XVII as the two cp1252
             # characters 'Âµ' and silently loses its scale.
-            folded = fold_micro_suffix_cards(parsed.cards)
+            folded = fold_micro_suffix_cards(parsed.read)
             if folded:
                 changed = True
                 if cp1252_reader is not None:
@@ -550,8 +553,14 @@ def stage_deck(
 
 
 def staged_reference_targets(text: str, source: Path, *, depth: int) -> list[Path]:
-    """Return the resolved paths one staged file's include references name."""
-    return staged_card_reference_targets(lex(text).cards, source, depth=depth)
+    """Return the resolved paths one staged file's include references name.
+
+    At ``depth`` 0 the file is the deck, and its references are the ones
+    staging followed: none in its title or after its ``.END``.
+    """
+    return staged_card_reference_targets(
+        lex_for_edit(text, deck=depth == 0).read, source, depth=depth
+    )
 
 
 def staged_card_reference_targets(
@@ -578,12 +587,13 @@ def rewrite_staged_references(
     files, a Windows absolute path handed to LTspice across the WSL boundary —
     survives untouched. That is why ``renames`` is keyed by resolved path and
     valued by bare filename: a copy that is not a sibling of its original
-    cannot be addressed this way.
+    cannot be addressed this way. At ``depth`` 0 the file is the deck, and a
+    reference in its title or after its ``.END`` is left as it is.
     """
-    cards = lex(text).cards
+    lexed = lex_for_edit(text, deck=depth == 0)
     return (
-        emit(cards)
-        if rewrite_staged_reference_cards(cards, source, renames, depth=depth)
+        emit(lexed.cards)
+        if rewrite_staged_reference_cards(lexed.read, source, renames, depth=depth)
         else text
     )
 

@@ -27,7 +27,12 @@ from ltspice_mcp.lib.deck_staging import (
     scan_include_references,
 )
 from ltspice_mcp.lib.decoded_log import DecodedLog
-from ltspice_mcp.lib.encoding import read_spice_text
+from ltspice_mcp.lib.encoding import (
+    bom_of,
+    decode_spice_bytes_with_encoding,
+    encode_spice_text_strictly,
+    read_spice_text,
+)
 from ltspice_mcp.lib.log_parser import (
     classify_failure_code,
     is_op_stepping_failure,
@@ -38,7 +43,8 @@ from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executa
 from ltspice_mcp.lib.raw_parser import other_raws
 from ltspice_mcp.lib.simulator import current_ngbehavior, is_ngspice
 from ltspice_mcp.lib.simulator_build import executable_path, ltspice_before_24, reported_build
-from ltspice_mcp.lib.spice_lex import SpiceLexError, cards_from_path, lex_deck, tokenize_body
+from ltspice_mcp.lib.spice_lex import SpiceLexError, emit, lex_deck, lex_for_edit, tokenize_body
+from ltspice_mcp.lib.spice_lex_ops import inject_card_before_end
 from ltspice_mcp.lib.spice_validator import ANALYSIS_KINDS
 from ltspice_mcp.lib.wsl import kill_windows_ltspice_by_token
 
@@ -263,10 +269,12 @@ def _deck_has_sectioned_lib(netlist: Path) -> bool:
     The section-selecting form — the standard PDK corner idiom — as opposed to
     LTspice's section-less ``.lib <file>``. Lexed rather than string-matched so
     an inline comment or a quoted path with spaces cannot inflate the token
-    count into a section that is not there.
+    count into a section that is not there, and read as the simulator reads
+    the deck (``spice_lex.lex_deck``), as the ``lib-section-ngspice`` lint
+    rule reads it: neither its title nor a card after ``.END`` selects one.
     """
     try:
-        cards = cards_from_path(netlist).cards
+        cards = lex_deck(read_spice_text(netlist)).cards
     except (OSError, ValueError, SpiceLexError):
         return False
     for card in cards:
@@ -504,6 +512,12 @@ def inject_logopinfo(
     original path unchanged when injection doesn't apply (non-LTspice, non-text
     netlist, no ``.op``, or ``logopinfo`` already present) or the sibling can't
     be written.
+
+    The deck is read as LTspice reads it (``spice_lex.lex_for_edit``): an
+    ``.op`` or an option in its title or after its ``.END`` is not one LTspice
+    sees, and the option goes in before the ``.END`` that ends the deck. The
+    deck is rewritten in its own encoding, so every byte the option does not
+    add is the caller's.
     """
     from spicelib.simulators.ltspice_simulator import LTspice
 
@@ -520,24 +534,27 @@ def inject_logopinfo(
     except OSError:
         return netlist_path
 
-    # Detect on the raw bytes (the directives are ASCII) — same plane the .end
-    # splice below works on, so no decode round-trip is needed.
-    if b"logopinfo" in data.lower():
+    text, codec = decode_spice_bytes_with_encoding(data)
+    bom = bom_of(data)
+    try:
+        deck = lex_for_edit(text, deck=True)
+        # A deck whose bytes did not decode exactly cannot be written back
+        # with only the option added.
+        if bom + encode_spice_text_strictly(text, codec) != data:
+            return netlist_path
+    except (SpiceLexError, UnicodeError):
         return netlist_path
-    # ``.op\b`` excludes ``.options`` (the 't' blocks the word boundary); only a
-    # real .op analysis emits the operating-point block. ``.dc`` does not.
-    if not re.search(rb"(?im)^[ \t]*\.op\b", data):
+    if any("logopinfo" in card.body.casefold() for card in deck.read):
+        return netlist_path
+    # Only a real .op analysis emits the operating-point block; .dc does not.
+    if ".op" not in deck_requirements(netlist_path).analyses:
         return netlist_path
 
-    # Byte-level insertion before the final ``.end`` keeps the original encoding
-    # intact (the added line is pure ASCII). ``.end\b`` skips ``.ends``.
-    line = b".options logopinfo\n"
-    ends = list(re.finditer(rb"(?im)^[ \t]*\.end\b.*$", data))
-    if ends:
-        at = ends[-1].start()
-        augmented = data[:at] + line + data[at:]
-    else:
-        augmented = data + (b"" if not data or data.endswith(b"\n") else b"\n") + line
+    inject_card_before_end(deck.cards, ".options logopinfo\n")
+    try:
+        augmented = bom + encode_spice_text_strictly(emit(deck.cards), codec)
+    except UnicodeError:
+        return netlist_path
 
     run_path = netlist_path.with_name(
         f".{netlist_path.stem}.{job_id}{LOGOPINFO_MARKER}{netlist_path.suffix}"

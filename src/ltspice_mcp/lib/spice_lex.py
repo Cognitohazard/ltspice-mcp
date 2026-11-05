@@ -1139,9 +1139,6 @@ def lex(netlist_text: str, *, title: bool = False) -> LexResult:
         else:
             card_scope = tuple(scope)
 
-        if kind == "end" and not scope:
-            seen_top_end = True
-
         card = SpiceCard(
             kind=kind,
             raw_lines=raw_group,
@@ -1149,10 +1146,15 @@ def lex(netlist_text: str, *, title: bool = False) -> LexResult:
             line_start=line_start,
             name=name,
             scope=card_scope,
-            trailing=seen_top_end and kind != "end",
+            # The .END that ends the deck is read; every card after it is
+            # trailing, a second .END among them.
+            trailing=seen_top_end,
             body_layout=segments,
         )
         cards.append(card)
+
+        if kind == "end" and not scope:
+            seen_top_end = True
 
         if kind == "subckt":
             if name:
@@ -1173,6 +1175,13 @@ def lex(netlist_text: str, *, title: bool = False) -> LexResult:
     return LexResult(cards=cards, warnings=warnings)
 
 
+def _read_cards(cards: list[SpiceCard], *, title: bool) -> list[SpiceCard]:
+    """The cards a simulator reads of ``lex``'s cards: not the title, which
+    ``cards`` opens with when ``title``, nor a card after a top-level ``.END``.
+    The one place ``lex_deck`` and ``lex_for_edit`` say so."""
+    return [card for card in (cards[1:] if title else cards) if not card.trailing]
+
+
 def lex_deck(netlist_text: str, *, title: bool = True) -> LexResult:
     """The cards a simulator reads from a deck, and ``lex``'s warnings.
 
@@ -1182,15 +1191,52 @@ def lex_deck(netlist_text: str, *, title: bool = True) -> LexResult:
     ``.param`` its resistor needs. Nor is a card after a top-level ``.END``
     (``deck/after_end``). ``title=False`` reads an included file, which
     begins with a card. Every reader of what a deck holds goes through here,
-    so none of them can count a card the simulator never sees; an edit keeps
-    using ``lex``, which holds every line for a byte-faithful ``emit``.
+    so none of them can count a card the simulator never sees; an edit uses
+    ``lex_for_edit``, which also holds every line for a byte-faithful
+    ``emit``.
     """
     result = lex(netlist_text, title=title)
-    cards = result.cards[1:] if title else result.cards
-    return LexResult(
-        cards=[card for card in cards if not card.trailing],
-        warnings=result.warnings,
-    )
+    return LexResult(cards=_read_cards(result.cards, title=title), warnings=result.warnings)
+
+
+@dataclass
+class EditCards:
+    """A file lexed for an edit: every card, and the cards among them it may change.
+
+    ``cards`` holds every line of the file, so ``emit(cards)`` writes it back
+    byte for byte. ``read`` holds the cards among them that are read, the same
+    objects, so a change made through one is in what ``emit`` writes. An edit
+    chooses what to read or change from ``read`` alone: a change to a card
+    outside it changes nothing the simulator runs, while its receipt says it
+    did.
+    """
+
+    cards: list[SpiceCard]
+    read: list[SpiceCard]
+    warnings: list[str] = field(default_factory=list)
+    _read_ids: frozenset[int] = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        self._read_ids = frozenset(map(id, self.read))
+
+    def reads(self, card: SpiceCard) -> bool:
+        """Is ``card``, one of ``cards``, a card that is read?"""
+        return id(card) in self._read_ids
+
+
+def lex_for_edit(netlist_text: str, *, deck: bool) -> EditCards:
+    """``netlist_text`` lexed for an edit that writes every card back.
+
+    For a deck (``deck``) the cards read are the ones ``lex_deck`` reads: the
+    title is a comment card of its own, and a card after a top-level ``.END``
+    is kept but not read. An included file (``deck=False``) begins with a
+    card, and every card of it is read, as the edits have always read one:
+    whether LTspice reads a card after an included file's ``.END`` is not
+    recorded.
+    """
+    result = lex(netlist_text, title=deck)
+    read = _read_cards(result.cards, title=True) if deck else list(result.cards)
+    return EditCards(cards=result.cards, read=read, warnings=result.warnings)
 
 
 # ---------------------------------------------------------------------------

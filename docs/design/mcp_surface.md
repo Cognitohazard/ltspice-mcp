@@ -1797,7 +1797,9 @@ cursors where listed:
     `prefix` keeps references that start with it, case-insensitively, on
     both a .asc and a netlist: `"M"` for every MOSFET, `"LX"` for LX1, LX2
     but not L1. It is plain text; a wildcard is refused with the plain
-    spelling to use. On a netlist, `detail: "full"` adds each card's
+    spelling to use. A netlist's components are the cards the simulator
+    reads, as the net query's members are: neither the deck's first line,
+    its title, nor a card after `.end`. On a netlist, `detail: "full"` adds each card's
     `nodes`, `model` and `params`, keyed as written (a key given twice in
     one spelling reads as its last copy), and `repeated_params` for a
     parameter the card gives more than once, compared without case: every
@@ -2086,6 +2088,10 @@ each tool's `inputSchema`.
   an ngspice copy, and in verify_circuit) and by `Load` (its name on the
   sheet and in LTspice's results); a name two parts answer to is refused as
   ambiguous_target. The same holds for a random `component` rule's target.
+  Every target, and every rule's match, is resolved among the cards the
+  simulator reads: a part, `.param` or `.model` named only by the deck's
+  title line or after its `.end` is not one, so a target naming it is refused
+  as one that names nothing.
 
   At least one assign or instances target is required. `parameter` is required
   only for attribute "parameter". An `instances` target selects one instance

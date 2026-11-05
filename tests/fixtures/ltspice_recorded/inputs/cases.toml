@@ -314,7 +314,25 @@ inputs = [
 
 [behaviour.deck-structure]
 summary = "How a deck's lines are read: the title line, ; and $ comments, a $ inside a node name and at its start, + continuations, a ; comment on a line the card is continued past, inside a .model card's parentheses and outside them, cards after .end, a missing .end, CRLF line endings, case, and whether gnd is ground."
-model = ["lib/spice_lex.py", "lib/spice_validator.py", "lib/lint_rules.py", "lib/hierarchy.py", "lib/netlist_graph.py", "tools/inspect_tools.py", "lib/experiment_inputs.py"]
+model = [
+    "lib/spice_lex.py",
+    "lib/spice_validator.py",
+    "lib/lint_rules.py",
+    "lib/hierarchy.py",
+    "lib/netlist_graph.py",
+    "lib/netlist_diff.py",
+    "lib/result_observations.py",
+    "tools/inspect_tools.py",
+    "lib/experiment_inputs.py",
+    "lib/variations.py",
+    "lib/subckt_mismatch.py",
+    "lib/montecarlo.py",
+    "lib/deck_staging.py",
+    "lib/runner_base.py",
+    "lib/metrics.py",
+    "lib/export_nets.py",
+    "lib/services.py",
+]
 inputs = [
     "deck/comment_semicolon.cir",
     "deck/comment_dollar.cir",

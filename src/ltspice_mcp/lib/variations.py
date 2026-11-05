@@ -62,7 +62,16 @@ from ltspice_mcp.lib.montecarlo import (
     variant_model_name,
 )
 from ltspice_mcp.lib.montecarlo import MismatchRule as EngineMismatchRule
-from ltspice_mcp.lib.spice_lex import SpiceCard, Token, TokenKind, emit, lex, tokenize_body
+from ltspice_mcp.lib.spice_lex import (
+    EditCards,
+    SpiceCard,
+    Token,
+    TokenKind,
+    emit,
+    lex,
+    lex_for_edit,
+    tokenize_body,
+)
 from ltspice_mcp.lib.spice_lex_ops import fold_micro_suffix_cards, section_sign_names
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, ModelCard
 from ltspice_mcp.lib.subckt_mismatch import (
@@ -500,6 +509,28 @@ class _ClosureFile:
     @property
     def depth(self) -> int:
         return closure_depth(self.index)
+
+    @property
+    def is_deck(self) -> bool:
+        """Is this the deck itself, whose first line is its title, rather than
+        a file it pulls in?"""
+        return self.depth == 0
+
+    def lexed(self, text: str) -> EditCards:
+        """``text``, this file's text in a case, lexed for an edit
+        (``_lexed_file``)."""
+        return _lexed_file(text, self.depth)
+
+
+def _lexed_file(text: str, depth: int) -> EditCards:
+    """One closure file's text lexed for an edit: every card to write back, and
+    the cards a target may name among them. Those of the deck itself
+    (``depth`` 0) are the cards LTspice reads, so a target named only by its
+    title or after its ``.END`` is refused rather than written where the
+    simulator never reads it; an included file's are all its cards
+    (``spice_lex.lex_for_edit``). Target resolution and every writer read the
+    same cards, so a site resolution chose is the site written."""
+    return lex_for_edit(text, deck=depth == 0)
 
 
 @dataclass(frozen=True)
@@ -987,7 +1018,7 @@ def _deck_targets(text: str, source: Path, depth: int) -> _DeckTargets:
     models_by_ref: dict[str, str] = {}
     model_names: dict[str, list[_Site]] = {}
     aliases: dict[str, list[_Site]] = {}
-    cards = lex(text).cards
+    cards = _lexed_file(text, depth).read
     for card, section in zip(cards, card_sections(cards, source, depth), strict=True):
         if card.kind == "param":
             for token in tokenize_body(card.body)[1:]:
@@ -1571,7 +1602,8 @@ def _apply_assignments(
     _apply_instance_params(closure, texts, instance_params)
     for index, file_edits in by_file.items():
         file = closure.files[index]
-        cards = lex(texts[index]).cards
+        lexed = file.lexed(texts[index])
+        cards = lexed.read
         for edit in file_edits:
             if edit.kind == "model":
                 for ref in edit.refs:
@@ -1582,7 +1614,7 @@ def _apply_assignments(
                 _set_param_value_on_cards(cards, edit.site, edit.value, file=file)
             else:
                 _set_component_value(cards, edit.site, edit.value, file=file)
-        texts[index] = emit(cards)
+        texts[index] = emit(lexed.cards)
 
 
 def _card_at_site(
@@ -1786,7 +1818,9 @@ def _apply_random_rules(
             text = texts[index]
             site = target.site
             if isinstance(rule, ComponentRule):
-                text, sampled = _apply_component_rule(text, rule, sampler, target.refs)
+                text, sampled = _apply_component_rule(
+                    text, rule, sampler, target.refs, file=target.file
+                )
             elif isinstance(rule, ParamRule):
                 assert site is not None
                 text, sampled = _apply_param_rule(text, rule, sampler, site=site, file=target.file)
@@ -1846,7 +1880,7 @@ def _closure_model_card(closure: _DeckClosure, texts: dict[int, str], name: str)
     target = name.casefold()
     found: list[tuple[_ClosureFile, list[SpiceCard], int]] = []
     for file in closure.files:
-        cards = lex(texts[file.index]).cards
+        cards = file.lexed(texts[file.index]).read
         found.extend(
             (file, cards, index)
             for index, card in enumerate(cards)
@@ -1935,10 +1969,14 @@ def _write_case_includes(
     written: dict[Path, tuple[Path, str]] = {}
     for index in sorted(copies):
         file = closure.files[index]
-        cards = lex(texts[index]).cards
-        rewritten = rewrite_staged_reference_cards(cards, file.path, renames, depth=file.depth)
-        if fold_micro_suffix_cards(cards) or rewritten:
-            texts[index] = emit(cards)
+        lexed = file.lexed(texts[index])
+        # A card the simulator never reads is neither repointed nor folded, as
+        # staging left it.
+        rewritten = rewrite_staged_reference_cards(
+            lexed.read, file.path, renames, depth=file.depth
+        )
+        if fold_micro_suffix_cards(lexed.read) or rewritten:
+            texts[index] = emit(lexed.cards)
         if index == 0:
             continue
         source = file.path.resolve()
@@ -1975,16 +2013,20 @@ def _apply_component_rule(
     rule: ComponentRule,
     sampler: MCSampler,
     refs: frozenset[str],
+    *,
+    file: _ClosureFile,
 ) -> tuple[str, dict[str, float]]:
     """Perturb the references resolution matched in this file, one draw each.
 
     ``refs`` rather than the pattern: resolution already evaluated the glob,
     and evaluating it a second time here is what would let the set that gets
-    perturbed differ from the set that gets reported.
+    perturbed differ from the set that gets reported. They are looked up
+    among the cards resolution read (``_lexed_file``), so a part of the same
+    name the simulator never reads is neither drawn for nor reported.
     """
-    result = lex(text)
+    lexed = file.lexed(text)
     matched: list[tuple[str, float]] = []
-    for card in result.cards:
+    for card in lexed.read:
         if card.kind != "instance" or not card.name or card.name.casefold() not in refs:
             continue
         view = _instance_view(card, card.name, "Random component target")
@@ -2008,7 +2050,7 @@ def _apply_component_rule(
             "ambiguous_target",
             f"Random component target {rule.target!r} matches no component",
         )
-    return emit(result.cards), {f"random:component:{ref}": value for ref, value in matched}
+    return emit(lexed.cards), {f"random:component:{ref}": value for ref, value in matched}
 
 
 def _apply_param_rule(
@@ -2019,7 +2061,8 @@ def _apply_param_rule(
     site: _Site,
     file: _ClosureFile,
 ) -> tuple[str, dict[str, float]]:
-    cards = lex(text).cards
+    lexed = file.lexed(text)
+    cards = lexed.read
     chosen = _chosen_param_token(cards, site, file=file)
     nominal = None if chosen is None else parse_value(chosen[1].value or "")
     if nominal is None:
@@ -2034,7 +2077,7 @@ def _apply_param_rule(
         stream=f"param:{rule.target}",
     )
     _set_param_value_on_cards(cards, site, sampled, file=file)
-    return emit(cards), {f"random:param:{rule.target}": sampled}
+    return emit(lexed.cards), {f"random:param:{rule.target}": sampled}
 
 
 def _render_scalar(value: ScalarValue) -> str:
@@ -2051,7 +2094,8 @@ def _apply_model_rule(
     site: _Site,
     file: _ClosureFile,
 ) -> tuple[str, dict[str, float]]:
-    cards = lex(text).cards
+    lexed = file.lexed(text)
+    cards = lexed.read
     matches = [
         index
         for index, card in enumerate(cards)
@@ -2085,7 +2129,7 @@ def _apply_model_rule(
     view = ModelCard.from_card(cards[chosen])
     for param, new_value in perturbations.items():
         view.set_param(param, new_value)
-    return emit(cards), {f"random:model:{rule.target}.{rule.param}": sampled}
+    return emit(lexed.cards), {f"random:model:{rule.target}.{rule.param}": sampled}
 
 
 def _engine_rule(rule: MismatchRule) -> EngineMismatchRule:
@@ -2120,7 +2164,10 @@ def _flat_mismatch_files(
     for file in closure.files:
         if not any(ref.startswith(prefixes) for ref in file.targets.components):
             continue
-        refs = [instance.ref for instance in extract_mosfet_instances(texts[file.index])]
+        refs = [
+            instance.ref
+            for instance in extract_mosfet_instances(texts[file.index], deck=file.is_deck)
+        ]
         for position, rule in enumerate(rules):
             if any(matches_prefix(ref, rule.prefix) for ref in refs):
                 hits[position].append(file.index)
@@ -2218,7 +2265,11 @@ def _apply_mismatch_rules(
     for rule, indexes in zip(mismatch_rules, flat, strict=True):
         for index in indexes:
             text, sampled = _apply_mismatch_rule(
-                texts[index], rule, sampler, model_card=model_card
+                texts[index],
+                rule,
+                sampler,
+                model_card=model_card,
+                deck=closure.files[index].is_deck,
             )
             texts[index] = text
             draws.update(sampled)
@@ -2317,11 +2368,17 @@ def _apply_mismatch_rule(
     sampler: MCSampler,
     *,
     model_card: Callable[[str], str | None],
+    deck: bool,
 ) -> tuple[str, dict[str, float]]:
+    """Draw for each top-level device the rule's prefix claims in one file.
+
+    ``deck`` says the file is the deck itself, whose title and cards after
+    ``.END`` hold no device the simulator reads (``_ClosureFile.is_deck``).
+    """
     engine_rule = _engine_rule(rule)
     instances = [
         instance
-        for instance in extract_mosfet_instances(text)
+        for instance in extract_mosfet_instances(text, deck=deck)
         if matches_prefix(instance.ref, rule.prefix)
     ]
     if not instances:
@@ -2366,8 +2423,9 @@ def _apply_mismatch_rule(
         text = inject_card_before_end(
             text,
             render_variant_model_card(base_card, variant, overrides),
+            deck=deck,
         )
-        text = rewrite_instance_model(text, instance.ref, variant)
+        text = rewrite_instance_model(text, instance.ref, variant, deck=deck)
     return text, draws
 
 
@@ -2430,7 +2488,7 @@ def _validate_write_sets(
     origins: dict[tuple[str, int], Source] | None = None,
 ) -> None:
     claims: list[_WriteClaim] = []
-    cards = {file.index: lex(file.text).cards for file in closure.files}
+    cards = {file.index: file.lexed(file.text).read for file in closure.files}
     for edit in edits:
         if edit.kind in {"structured", "instance_param"}:
             continue

@@ -196,7 +196,7 @@ from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
     executable_identity,
 )
-from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex, lex_deck
+from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex_deck
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, symbol_info_of
 from ltspice_mcp.lib.symbol_library import SymbolResolver, symbol_files
@@ -1738,11 +1738,13 @@ def _components_netlist_payload(
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """The component rows, plus the lexer's notes about how the deck read.
 
-    ``prefix`` is the upper-cased prefix :func:`_check_prefix` returns.
+    ``prefix`` is the upper-cased prefix :func:`_check_prefix` returns. The
+    rows are the cards the simulator reads (``spice_lex.lex_deck``), as the
+    net query's members are: neither the title line nor a card after ``.END``.
     """
     from ltspice_mcp.lib.spice_lex_views import body_has_stray_kv_remnant
 
-    lexed = lex(text)
+    lexed = lex_deck(text)
     cards = lexed.cards
     by_ref = instances_by_ref(cards)
     rows: list[dict[str, Any]] = []

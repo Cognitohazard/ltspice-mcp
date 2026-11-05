@@ -821,6 +821,17 @@ class TestLexAndEmit:
         assert last.kind == "instance"
         assert last.trailing is True
 
+    def test_only_the_first_top_level_end_ends_the_deck(self) -> None:
+        """A second ``.END`` is a card after the first, and trailing like any
+        other; the first is not."""
+        result = lex("R1 a b 1k\n.END\nR2 c d 2k\n.END\n")
+        assert [(card.kind, card.trailing) for card in result.cards] == [
+            ("instance", False),
+            ("end", False),
+            ("instance", True),
+            ("end", True),
+        ]
+
     def test_meas_classified_separately(self) -> None:
         text = ".MEAS AC fc WHEN mag(V(out))=0.7\n"
         result = lex(text)

@@ -28,10 +28,11 @@ from ltspice_mcp.lib.recovery_records import (
 )
 from ltspice_mcp.lib.spice_lex import (
     INCLUDE_HEADS,
+    EditCards,
     SpiceCard,
     Token,
     TokenKind,
-    lex,
+    lex_for_edit,
     tokenize_body,
 )
 from ltspice_mcp.lib.spice_lex_views import read_instance
@@ -425,7 +426,7 @@ def _verify_inputs(inputs: FrozenInputs, *, native: bool, seeded: bool) -> None:
     # Share syntax only within this verification. Every physical file above
     # still proves its bytes, and every include below resolves from its own path.
     file_keys: dict[Path, tuple[str, bool]] = {}
-    cards_by_content: dict[tuple[str, bool], list[SpiceCard]] = {}
+    cards_by_content: dict[tuple[str, bool], EditCards] = {}
     for artifact in inputs.files:
         path = artifact.path
         if path in native_setups:
@@ -435,29 +436,32 @@ def _verify_inputs(inputs: FrozenInputs, *, native: bool, seeded: bool) -> None:
         if key in cards_by_content:
             continue
         content = contents[artifact.sha256]
-        # A root deck's line 1 is its title, as lex_deck reads it. Lex keeps
-        # the cards after the end marker, so their warnings still refuse.
-        parsed = lex(decode_spice_bytes(content), title=path in roots)
+        # A root deck's line 1 is its title, and a card after its end marker
+        # is not read (lex_for_edit). Every card is still classified, so the
+        # warnings and the constructs of an unread card refuse as well.
+        parsed = lex_for_edit(decode_spice_bytes(content), deck=path in roots)
         if parsed.warnings:
             raise RecoveryError(
                 "recovery_syntax_unsupported",
                 "Frozen input cannot be classified without lexer warnings",
             )
-        cards_by_content[key] = parsed.cards
+        cards_by_content[key] = parsed
     functions = {
         match.group(1).casefold()
-        for cards in cards_by_content.values()
-        for card in cards
+        for parsed in cards_by_content.values()
+        for card in parsed.cards
         if card.body.lstrip().casefold().startswith(".func ")
         if (match := _FUNCTION.search(card.body)) is not None
     }
     if seeded:
         # The audited driver writes the current plot. Multiple analyses and
         # noise can create additional plots that an ordinary batch run retains.
+        # An analysis is one the simulator reads, as the run's requirements
+        # count them (runner_base.deck_requirements).
         analyses = [
             head
             for key in file_keys.values()
-            for card in cards_by_content[key]
+            for card in cards_by_content[key].read
             if card.kind == "directive"
             if (head := card.body.split(maxsplit=1)[0].casefold())
             in {".op", ".ac", ".dc", ".tran", ".noise", ".step"}
@@ -469,13 +473,15 @@ def _verify_inputs(inputs: FrozenInputs, *, native: bool, seeded: bool) -> None:
             )
     validated: set[tuple[str, bool]] = set()
     for path, key in file_keys.items():
-        cards = cards_by_content[key]
+        parsed = cards_by_content[key]
         if key not in validated:
-            _validate_cards(cards, functions, native=native, seeded=seeded)
+            _validate_cards(parsed.cards, functions, native=native, seeded=seeded)
             validated.add(key)
         try:
+            # The includes staging followed (deck_staging.stage_deck): none in
+            # a root deck's title or after its end marker.
             targets = staged_card_reference_targets(
-                cards, path, depth=0 if path == inputs.electrical.path else 1
+                parsed.read, path, depth=0 if path == inputs.electrical.path else 1
             )
         except (ValueError, OSError) as exc:
             raise RecoveryError(

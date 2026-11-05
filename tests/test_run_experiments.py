@@ -198,7 +198,7 @@ def test_the_random_rules_field_names_all_four_kinds_in_plain_words():
 
 
 def _deck(path: Path, body: str | None = None) -> Path:
-    path.write_text(body or "V1 in 0 1\nR1 in 0 1k\n.op\n.end\n")
+    path.write_text(body or "* deck\nV1 in 0 1\nR1 in 0 1k\n.op\n.end\n")
     return path
 
 
@@ -1675,7 +1675,7 @@ class TestReplayRejectsChangedSources:
         outside.write_text(".param supply=5\n")
         deck = _deck(
             work_dir / "live.cir",
-            f'.include "{outside}"\nV1 in 0 {{supply}}\nR1 in 0 1k\n.op\n.end\n',
+            f'* live\n.include "{outside}"\nV1 in 0 {{supply}}\nR1 in 0 1k\n.op\n.end\n',
         )
         args = _args(deck, "live-include", lint="off", allow_live_includes=True)
         first = _assert_schema(await handle_run_experiments(args, state_with_sim))
@@ -1728,7 +1728,7 @@ class TestReplayRejectsChangedSources:
 
 
 # An export whose relative include names a file beside the schematic.
-_INCLUDING_EXPORT = ".include models.inc\nV1 in 0 1\nR1 in 0 {rval}\n.op\n.end\n"
+_INCLUDING_EXPORT = "* amp\n.include models.inc\nV1 in 0 1\nR1 in 0 {rval}\n.op\n.end\n"
 
 
 def _schematic_with_include(state: SessionState, project_dir: Path) -> tuple[Path, Path]:
@@ -2160,7 +2160,7 @@ class TestLintModes:
         (work_dir / "amp.inc").write_text(".subckt AMP a b\nRA a b 1k\n.ends AMP\n")
         deck = _deck(
             work_dir / "with_include.cir",
-            '.include "amp.inc"\nX1 in 0 AMP\nV1 in 0 1\n.op\n.end\n',
+            '* with include\n.include "amp.inc"\nX1 in 0 AMP\nV1 in 0 1\n.op\n.end\n',
         )
         route = resolve_experiment_paths
 
@@ -2421,7 +2421,7 @@ class TestPerCircuitFailuresAndAccounting:
         (work_dir / "support.inc").write_text(".param supply=1\n")
         deck = _deck(
             work_dir / "relative.cir",
-            '.include "support.inc"\nV1 in 0 {supply}\nR1 in 0 1k\n.op\n.end\n',
+            '* relative\n.include "support.inc"\nV1 in 0 {supply}\nR1 in 0 1k\n.op\n.end\n',
         )
 
         data = _assert_schema(
@@ -3299,7 +3299,7 @@ class TestAttachedAnalysis:
 
 
 _CORE_INC = ".subckt core in out\nR1 in mid 1k\nC1 mid out 1n\n.ends\n"
-_FACTORED_ROOT = '.include "core.inc"\nV1 in 0 1\nX1 in out core\n.op\n.end\n'
+_FACTORED_ROOT = '* factored\n.include "core.inc"\nV1 in 0 1\nX1 in out core\n.op\n.end\n'
 
 
 def _recording_simulator(monkeypatch: pytest.MonkeyPatch, submitted: list[Path]) -> None:
@@ -3437,7 +3437,10 @@ class TestVariationsReachIntoIncludes:
         _recording_simulator(monkeypatch, submitted)
         deck = _factored_deck(
             work_dir,
-            root='.include "core.inc"\nV1 in 0 1\nR1 in out 1k\nX1 out 0 core\n.op\n.end\n',
+            root=(
+                '* factored\n.include "core.inc"\nV1 in 0 1\nR1 in out 1k\nX1 out 0 core\n'
+                ".op\n.end\n"
+            ),
         )
 
         _assert_schema(
@@ -3468,7 +3471,7 @@ class TestVariationsReachIntoIncludes:
         (work_dir / "right.inc").write_text(".subckt right in out\nR1 in out 2k\n.ends\n")
         deck = _deck(
             work_dir / "two-cores.cir",
-            '.include "left.inc"\n.include "right.inc"\nV1 in 0 1\n'
+            '* two cores\n.include "left.inc"\n.include "right.inc"\nV1 in 0 1\n'
             "X1 in mid left\nX2 mid 0 right\n.op\n.end\n",
         )
 
@@ -3593,7 +3596,7 @@ class TestVariationsReachIntoIncludes:
         (work_dir / "mid.inc").write_text('.include "core.inc"\n')
         deck = _deck(
             work_dir / "nested.cir",
-            '.include "mid.inc"\nV1 in 0 1\nX1 in out core\n.op\n.end\n',
+            '* nested\n.include "mid.inc"\nV1 in 0 1\nX1 in out core\n.op\n.end\n',
         )
 
         data = _assert_schema(
@@ -3750,7 +3753,7 @@ class TestReceiptWeight:
         inside.write_text("R8 in 0 2k\n")
         deck = _deck(
             work_dir / "live.cir",
-            f".include {inside}\n.include {outside}\nV1 in 0 1\n.op\n.end\n",
+            f"* live\n.include {inside}\n.include {outside}\nV1 in 0 1\n.op\n.end\n",
         )
 
         data = _assert_schema(
@@ -3808,7 +3811,7 @@ class TestReceiptWeight:
         outside.write_text("R9 in 0 1k\n")
         deck = _deck(
             work_dir / "live-budget.cir",
-            f".include {outside}\nV1 in 0 1\n.op\n.end\n",
+            f"* live budget\n.include {outside}\nV1 in 0 1\n.op\n.end\n",
         )
 
         data = _assert_schema(

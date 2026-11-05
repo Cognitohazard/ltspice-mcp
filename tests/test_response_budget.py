@@ -1048,7 +1048,7 @@ class TestJobsBudget:
 # The experiment receipt's floor
 # ---------------------------------------------------------------------------
 
-_GRID_DECK = "V1 in 0 1\nR1 in out 1k\nC1 out 0 1u\n.tran 1m\n.end\n"
+_GRID_DECK = "* grid\nV1 in 0 1\nR1 in out 1k\nC1 out 0 1u\n.tran 1m\n.end\n"
 
 # Three recipes with no reduction, so the attached analysis carries one row per
 # run for each of them: a run page plus three row surfaces under one limit.

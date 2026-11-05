@@ -33,7 +33,7 @@ from ltspice_mcp.lib.netlist_graph import compare_graphs, parse_netlist_graph, v
 from ltspice_mcp.lib.result_observations import parse_requested_outputs, parse_source_amplitudes
 from ltspice_mcp.lib.runner_base import deck_requirements
 from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build, is_cp1252_ltspice_executable
-from ltspice_mcp.lib.spice_lex import emit, lex, lex_deck
+from ltspice_mcp.lib.spice_lex import emit, lex, lex_deck, lex_for_edit
 from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
 from ltspice_mcp.lib.spice_lex_views import ModelCard, read_instance
 from ltspice_mcp.lib.spice_validator import (
@@ -724,6 +724,20 @@ def as_ltspice_reads(text: str) -> str:
 
 def no_structural_change(delta: dict[str, list]) -> bool:
     return not any(changes for key, changes in delta.items() if key != "components_renamed")
+
+
+@pytest.mark.parametrize("case_id", UNREAD_CARD_DECKS)
+def test_an_edit_may_change_only_the_cards_the_deck_reading_reads(case_id: str):
+    """``lex_for_edit`` keeps every line of the deck for ``emit``, and offers
+    an edit the cards ``lex_deck`` reads, as the same objects, so a change made
+    through them is written. ``test_recorded_ltspice_unread_cards.py`` holds
+    each edit to it."""
+    text = deck_text(case_id)
+    lexed = lex_for_edit(text, deck=True)
+    assert emit(lexed.cards) == text
+    assert [card.body for card in lexed.read] == [card.body for card in lex_deck(text).cards]
+    assert all(lexed.reads(card) for card in lexed.read)
+    assert {id(card) for card in lexed.read} <= {id(card) for card in lexed.cards}
 
 
 @pytest.mark.parametrize("case_id", UNREAD_CARD_DECKS)
