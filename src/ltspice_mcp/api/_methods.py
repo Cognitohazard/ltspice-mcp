@@ -274,14 +274,13 @@ async def _through_auto_door(coroutine: Coroutine[Any, Any, _T], tool: str) -> _
 
 def _error_message(payload: Mapping[str, Any]) -> str:
     """What a failed call's payload says went wrong: the envelope's
-    ``error.message``, a raised failure's ``error``, or else the ``hint`` a
-    reply with no error block (``verify_circuit``'s) carries its refusal in."""
+    ``error.message``, or else the ``hint`` a reply with no error block
+    (``verify_circuit``'s) carries its refusal in."""
     error = payload.get("error")
-    if isinstance(error, Mapping):
-        error = error.get("message")
-    for message in (error, payload.get("hint")):
-        if isinstance(message, str) and message:
-            return message
+    message = error.get("message") if isinstance(error, Mapping) else None
+    for said in (message, payload.get("hint")):
+        if isinstance(said, str) and said:
+            return said
     return "The engine returned a call-level error"
 
 

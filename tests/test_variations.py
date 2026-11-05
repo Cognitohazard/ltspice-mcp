@@ -555,7 +555,8 @@ class TestRandomExpansion:
 
         assert case.assignments["_random_run"] == 2
         assert (
-            case.assignments["random:component:R1"] == full[2].assignments["random:component:R1"]
+            case.assignments["random:component:R1"]
+            == full[2].assignments["random:component:R1"]
         )
 
     def test_every_case_records_the_seed_it_was_drawn_from(self, tmp_path: Path):
@@ -1426,11 +1427,7 @@ class TestSeedStability:
                 circuit, expand_variations([circuit], [variation]), tmp_path / name
             )
             return [
-                {
-                    key: value
-                    for key, value in case.assignments.items()
-                    if key.startswith("random:")
-                }
+                {key: value for key, value in case.assignments.items() if key.startswith("random:")}
                 for case in cases
             ]
 

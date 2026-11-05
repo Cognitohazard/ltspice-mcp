@@ -1216,9 +1216,7 @@ async def _prepare_circuit(
 def _seed_random_variations(args: RunExperimentsInput) -> RunExperimentsInput:
     """Give each random entry that has no seed one chosen now, so that every
     Monte Carlo the server runs can be replayed from what its cases record."""
-    if not any(
-        isinstance(item, RandomVariation) and item.seed is None for item in args.variations
-    ):
+    if not any(isinstance(item, RandomVariation) and item.seed is None for item in args.variations):
         return args
     variations = [
         item.model_copy(update={"seed": secrets.randbelow(2**31)})

@@ -332,7 +332,7 @@ async def terminal_experiment(state, payload: dict, *, wait_timeout_s: int = 120
 
     result = await handle_run_experiments(RunExperimentsInput.model_validate(payload), state)
     data = result.structured_content
-    assert data is not None, result.content[0].text
+    assert data is not None, result.content
     if data["outcome"] == "in_progress":
         waited = await handle_jobs(
             JobsInput.model_validate(
@@ -365,7 +365,7 @@ async def submit_experiment(
 
     result = await handle_run_experiments(RunExperimentsInput.model_validate(payload), state)
     data = result.structured_content
-    assert data is not None, result.content[0].text
+    assert data is not None, result.content
     jsonschema.Draft202012Validator(RUN_EXPERIMENTS_OUTPUT_SCHEMA).validate(data)
     return bool(result.is_error), data
 
@@ -1161,17 +1161,14 @@ def property_names(schema: typing.Any) -> set[str]:
 
 def tool_text(result) -> str:
     """The message a tool result carries: a failed call's ``error``, or any
-    other reply's text block as it is."""
+    other reply's one text block, which follows any image."""
     from mcp import types
 
     structured = result.structured_content or {}
     if result.is_error and isinstance(structured.get("error"), str):
         return structured["error"]
-    first = result.content[0]
-    assert isinstance(first, types.TextContent), (
-        f"expected a text content block, got {type(first).__name__}"
-    )
-    return first.text
+    (block,) = [block for block in result.content if isinstance(block, types.TextContent)]
+    return block.text
 
 
 def text_json(result) -> dict:

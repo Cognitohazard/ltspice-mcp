@@ -699,25 +699,19 @@ class TestDeliveryAndSecurity:
 def _widget_spec(result) -> dict | None:
     """Parse the widget chart spec from the result's _meta (the hidden channel).
 
-    Also asserts the spec is NOT leaked into model-visible content (no content
-    block parses to a chart spec)."""
+    Also asserts the spec is NOT leaked into what the model reads: the
+    structured content, which the reply's text block serializes."""
     from ltspice_mcp.lib.plot_html import WIDGET_SPEC_META_KEY
 
-    for c in result.content:
-        text = getattr(c, "text", None)
-        if not text:
-            continue
-        try:
-            obj = json.loads(text)
-        except (ValueError, TypeError):
-            continue
-        assert not (isinstance(obj, dict) and isinstance(obj.get("panels"), list)), (
-            "chart spec must not appear in model-visible content"
-        )
     meta = result.meta
     if not meta or WIDGET_SPEC_META_KEY not in meta:
         return None
-    return json.loads(meta[WIDGET_SPEC_META_KEY])
+    spec = json.loads(meta[WIDGET_SPEC_META_KEY])
+    visible = json.dumps(result.structured_content)
+    assert json.dumps(spec["panels"]) not in visible, (
+        "chart spec must not appear in model-visible content"
+    )
+    return spec
 
 
 @pytest.mark.asyncio
