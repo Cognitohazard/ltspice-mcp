@@ -111,7 +111,7 @@ async def handle_foo(args: FooInput, state: SessionState) -> types.CallToolResul
 
 ## Rules the code depends on
 
-- **Blocking work**: every request runs on one shared event loop, so offload slow filesystem and parse work with `asyncio.to_thread`. Build responses (`format_response`, `json_response`) in the handler coroutine, and use the cached editors (`state.editors`, the parsed circuit files the session keeps between calls) only on the loop.
+- **Blocking work**: every request runs on one shared event loop, so offload slow filesystem and parse work with `asyncio.to_thread`. Build responses (`format_response`) in the handler coroutine, and use the cached editors (`state.editors`, the parsed circuit files the session keeps between calls) only on the loop.
 - **Background work**: start a task you do not await with `spawn` on the `BackgroundTasks` (`lib/background.py`) of the object that starts it, never with a bare `create_task`, so that object's `settled()` can wait for the work. A direct spawn elsewhere must be listed in `tests/test_test_hygiene.py`.
 - **Paths**: every user-provided path is resolved through `state.resolve_path()` (`safe_path()` on the tool side), which resolves a relative path and refuses a path outside `[security] allowed_paths` when that is set.
 - **Runners**: get a runner from `state.runners` (`RunnerManager`); never create one directly. The manager keeps one runner per simulator and output folder, so runs share its limit on parallel simulations and its per-job cancel events.
