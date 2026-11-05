@@ -302,7 +302,8 @@ with file access does that directly.
 Schematic editing is one tool with many ops (`add_component`,
 `move_component`, `move`, `remove_component`, `set_component_value`,
 `set_component_attribute`, `wire_pins`, `add_net_label`, `remove_net_label`,
-`remove_wire`, `add_directive`, `remove_directive` and `set_plot_panes`).
+`remove_wire`, `add_directive`, `remove_directive`, `replace_directive` and
+`set_plot_panes`).
 `move` shifts parts, wires, labels and text by one offset, and
 `set_plot_panes` writes the waveform panes LTspice opens for the sheet. Every
 tool's schema uses model context whether or not the tool is called, so one

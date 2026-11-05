@@ -151,6 +151,7 @@ from ltspice_mcp.tools._base import (
     REPEATABLE_CHANGE_ANNOTATIONS,
     RULES_RUN_SCHEMA,
     WARNINGS_SCHEMA,
+    CallOutcome,
     CompareSpec,
     RenderPolicy,
     ToolInput,
@@ -2148,23 +2149,49 @@ def _comparison_unverified(comparison: dict[str, Any] | None) -> bool:
     return comparison is not None and comparison.get("equivalent") is None
 
 
-def _outcome(
-    findings: list[dict[str, Any]],
-    failures: list[dict[str, Any]],
-    comparison: dict[str, Any] | None,
-) -> str:
+def _checks_asked_for(args: VerifyCircuitInput, kind: str) -> frozenset[str]:
+    """The checks the caller asked for: one that does not run is a shortfall.
+
+    The ``checks`` list when one is given, which with the export below are
+    then the only checks that run; otherwise the comparison, when a reference
+    is supplied. A sheet is
+    compared as its LTspice export, so asking to compare an ``.asc`` asks for
+    the export it reads too, either way. The default list means "every check
+    that applies", so a check it holds that cannot run here (``export``
+    without LTspice, with no comparison) is reported as skipped without being
+    a shortfall. ``render.mode='only'`` asks for no check at all.
+    """
+    if args.render is not None and args.render.mode == "only":
+        return frozenset()
+    asked = set(args.checks) if args.checks is not None else set()
+    if args.checks is None and args.compare is not None:
+        asked.add("compare")
+    if kind == "asc" and "compare" in asked and args.compare is not None:
+        asked.add("export")
+    return frozenset(asked)
+
+
+def _asked_for_not_run(data: Mapping[str, Any], asked: Collection[str]) -> list[str]:
+    """The checks the caller asked for that did not run, in check order."""
+    ran = set(data["checks_run"])
+    return [check for check in CHECK_ORDER if check in asked and check not in ran]
+
+
+def _outcome(data: Mapping[str, Any], asked: Collection[str]) -> CallOutcome:
     """This tool's shortfalls, handed to the shared outcome rule.
 
-    A check that failed to run, a finding at error or warning severity, and a
-    comparison that came back non-equivalent are each a reason the caller did
-    not get the clean answer they asked for. None of them fails the whole call
-    — the checks that did run still reported — so this surface never returns
-    ``failed`` from here.
+    A check that failed to run, a check the caller asked for that did not run, a
+    finding at error or warning severity, and a comparison that came back
+    non-equivalent are each a reason the caller did not get the clean answer
+    they asked for. The call fails only when nothing it asked for came back:
+    no check ran and no drawing was returned. Otherwise what did run still
+    reported, and the outcome is ``partial``.
     """
     return outcome_of(
-        failures,
-        partial=any(f["severity"] in ("error", "warning") for f in findings)
-        or comparison_mismatch(comparison),
+        data["failures"] or _asked_for_not_run(data, asked),
+        partial=any(f["severity"] in ("error", "warning") for f in data["findings"])
+        or comparison_mismatch(data.get("comparison")),
+        delivered=bool(data["checks_run"]) or data.get("render") is not None,
     )
 
 
@@ -2207,13 +2234,21 @@ def _ltspice_hint(shown: Mapping[str, Any] | None) -> str | None:
     return "In front in LTspice."
 
 
-def _hint(data: dict[str, Any]) -> str:
+def _hint(data: dict[str, Any], asked: Collection[str]) -> str:
     """One concrete thing the caller most needs to know."""
+    # A check the caller asked for that did not run is why the outcome is not
+    # complete, so the headline names it beside a failure or the findings.
+    not_run = set(_asked_for_not_run(data, asked))
+    unmet = [row for row in data["checks_skipped"] if row["check"] in not_run]
+    unmet_text = ", ".join(f"{row['check']} ({row['reason']})" for row in unmet)
     failures = data["failures"]
     if failures:
         first = failures[0]
         remedy = first.get("remedy")
-        return f"{first['stage']} failed: {first['error']}" + (f" — {remedy}" if remedy else "")
+        headline = f"{first['stage']} failed: {first['error']}" + (
+            f" — {remedy}" if remedy else ""
+        )
+        return f"{headline}. Asked for but not run: {unmet_text}." if unmet else headline
     parts: list[str] = []
     # A warning says a result exists only because something was assumed, so it
     # leads: without it "no problems found" reads as a clean bill of health over a
@@ -2221,6 +2256,9 @@ def _hint(data: dict[str, Any]) -> str:
     warnings_channel = data.get("warnings") or []
     if warnings_channel:
         parts.append(warnings_channel[0].rstrip("."))
+    if unmet:
+        lead = "no check asked for ran" if data["outcome"] == "failed" else "asked for but not run"
+        parts.append(f"{lead}: {unmet_text}")
     errors = [f for f in data["findings"] if f["severity"] == "error"]
     # Findings of warning severity — a different thing from the top-level
     # warnings channel read above, which is why neither is just "warnings".
@@ -2293,6 +2331,9 @@ class VerifyCircuitEvaluation:
     is_error: bool = False
     capped_rules: frozenset[str] = frozenset()
     observation_events: tuple[str | _FindingCapSummary, ...] = ()
+    #: The checks the caller asked for (``_checks_asked_for``), which the
+    #: outcome holds the evaluation to.
+    checks_asked_for: frozenset[str] = frozenset()
 
 
 def _base_data(path: str) -> dict[str, Any]:
@@ -2369,7 +2410,7 @@ async def evaluate_verify_circuit(
     kind_label = ".asc" if kind == "asc" else "netlist"
     data["kind"] = kind
     applicable = _ASC_CHECKS if kind == "asc" else _NETLIST_CHECKS
-    requested = set(args.checks) if args.checks is not None else None
+    asked = _checks_asked_for(args, kind)
     render_only = render is not None and render.mode == "only"
 
     findings: list[dict[str, Any]] = []
@@ -2397,7 +2438,7 @@ async def evaluate_verify_circuit(
             skip(check, f"not applicable to a {kind_label} file")
             wanted[check] = False
             continue
-        if requested is not None and check not in requested:
+        if args.checks is not None and check not in asked:
             skip(check, "not requested")
             wanted[check] = False
             continue
@@ -2646,13 +2687,14 @@ async def evaluate_verify_circuit(
             "failures": failures,
         }
     )
-    data["outcome"] = _outcome(findings, failures, data.get("comparison"))
-    data["hint"] = _hint(data)
+    data["outcome"] = _outcome(data, asked)
+    data["hint"] = _hint(data, asked)
     return VerifyCircuitEvaluation(
         data=data,
         inline_image=inline_image,
         capped_rules=frozenset(capped_rules),
         observation_events=tuple(observation_events),
+        checks_asked_for=asked,
     )
 
 
@@ -2698,10 +2740,12 @@ def render_verify_circuit(
         )
     data["observations"] = observations
     if not evaluation.is_error:
-        data["outcome"] = _outcome(data["findings"], data["failures"], data.get("comparison"))
+        data["outcome"] = _outcome(data, evaluation.checks_asked_for)
         # Counted over every finding, as the observations count them: the cap
         # shortens the list shown, not what the check found.
-        data["hint"] = _hint({**data, "findings": evaluation.data["findings"]})
+        data["hint"] = _hint(
+            {**data, "findings": evaluation.data["findings"]}, evaluation.checks_asked_for
+        )
 
     result = format_response(data["hint"], data)
     if evaluation.is_error:

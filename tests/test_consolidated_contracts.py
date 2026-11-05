@@ -799,7 +799,12 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # are a line each. Measured 14,768.
     # Raised by about 15 characters for minLength on path: an empty path names
     # no file. Measured 14,781.
-    "edit_schematic": 15194,
+    # Raised by about 410 characters for replace_directive, the fourteenth op:
+    # one directive or comment's text changed in place, where a remove and an
+    # add lost its place, size and justification and needed the old text
+    # typed whole. Its descriptions are a line each; the rest is the op's
+    # three fields. Measured 15,605.
+    "edit_schematic": 15605,
     # Checks, the render policy and the compare spec (each with the
     # verify-only fields on a subclass), each in one spelling. The checks are
     # named in the tool's own description because a caller cannot ask for what

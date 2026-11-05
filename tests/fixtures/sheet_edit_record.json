@@ -127,6 +127,15 @@
    "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[rc_lowpass_labelled]"
   ]
  },
+ "0edb38b595e04a7d": {
+  "answer": {
+   "reply": "7e1f59ee426a10e0",
+   "sheet": "0a1618c86eec59d6"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_replace_directive_reports_what_it_changed"
+  ]
+ },
  "0f1d3cacefa0c31e": {
   "answer": {
    "reply": "56eb3bf5a508a7ad",
@@ -1679,6 +1688,15 @@
   "tests": [
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/two_labels_corner]",
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/two_labels_corner]"
+  ]
+ },
+ "8b61bfe9e8d1d089": {
+  "answer": {
+   "reply": "0713061279a179d5",
+   "sheet": "2961a71434a9027a"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_replace_directive_reports_what_it_changed"
   ]
  },
  "8bf304039fe263f6": {
