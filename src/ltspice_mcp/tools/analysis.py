@@ -979,24 +979,6 @@ def _summary_lines(traces: list[TraceSummary], x_unit: str | None) -> list[str]:
     return lines
 
 
-def _rest_of_summary(analysis: str, *, stepped: bool) -> str:
-    """The call that reads the traces a summary cut at ``_TRACE_SUMMARY_MAX``
-    leaves out, as the reply's ``hint`` names it: analyze_results' signal_stats
-    recipe on a plot it defines statistics for, else its waveform recipe, which
-    returns the samples of any plot with a sampled axis, as every plot this
-    tool draws has. An analyze_results source names its results the way this
-    tool does, so the source is the same."""
-    steps = ", with all_steps=true for one row per step" if stepped else ""
-    if signal_stats_defined(analysis):
-        recipe = "a signal_stats recipe for each signal"
-    else:
-        recipe = "a waveform recipe naming their signals, which returns their samples"
-    return (
-        f"analyze_results reads the traces this summary leaves out: on the same source, "
-        f"{recipe}{steps}."
-    )
-
-
 class PlotWaveformInput(OptionalRawSelectionFields, OtherRawFields, ToolInput, NotedModel):
     path: str | None = Field(
         default=None,
@@ -1418,6 +1400,54 @@ def _ltspice_line(report: Mapping[str, Any]) -> str:
         where = f"{how} in LTspice {report['version']} (process {report['pid']})."
         return f"{where} {report['note']}" if "note" in report else where
     return f"Not shown in LTspice: {report['reason']}. " + str(report.get("note", ""))
+
+
+def _rest_of_summary(
+    args: PlotWaveformInput, analysis: str, *, n_steps: int, run_index: int
+) -> str:
+    """The call that reads the traces a summary cut at ``_TRACE_SUMMARY_MAX``
+    leaves out, as the reply's ``hint`` names it, reading what this call
+    plotted: the same run, window and steps.
+
+    analyze_results' signal_stats recipe reads them where it defines
+    statistics for the plot over its window (``signal_stats_defined``), else
+    its waveform recipe returns their samples, as it does for any plot with a
+    sampled axis. An analyze_results source takes this tool's path, job_id,
+    plot_index, other_raw and dialect, but picks a job's run with ``runs``.
+    """
+    windowed = args.t_start is not None or args.t_end is not None
+    if signal_stats_defined(analysis, windowed=windowed):
+        recipes = "a signal_stats recipe for each signal, at most 256 a call"
+    else:
+        recipes = "waveform recipes naming their signals, at most 32 a recipe; they return samples"
+    if windowed:
+        window = {
+            edge: value
+            for edge, value in (("start", args.t_start), ("end", args.t_end))
+            if value is not None
+        }
+        recipes += f"; each with window={json.dumps(window)}"
+    source = (
+        "the path or job_id this call named, with its plot_index, other_raw and dialect if any"
+    )
+    if args.job_id is not None:
+        runs = {"case_ids": [args.case_id]} if args.case_id is not None else [run_index]
+        source += f", and runs={json.dumps(runs)}"
+    said = [
+        "analyze_results reads the traces this summary leaves out.",
+        f"Source: {source}.",
+        f"Recipes: {recipes}.",
+    ]
+    if n_steps > 1:
+        if isinstance(args.step, StepSelector):
+            said.append(f"Steps: step={json.dumps(args.step.model_dump(mode='json'))}.")
+        elif args.step is not None:
+            said.append(
+                f"Steps: all_steps=true; this plot's step is the rows with step_index {args.step}."
+            )
+        else:
+            said.append("Steps: all_steps=true, one row per step.")
+    return " ".join(said)
 
 
 @registry.tool(
@@ -1915,7 +1945,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     # sliced from a list. The hint beside it names the call that reads the rest.
     rest: str | None = None
     if traces_total > len(traces):
-        rest = _rest_of_summary(analysis_type, stepped=n_steps > 1)
+        rest = _rest_of_summary(args, analysis_type, n_steps=n_steps, run_index=run_index)
         data["traces_truncated"] = traces_total
         data["hint"] = rest
     held = args.argument_notes()

@@ -172,3 +172,17 @@ def test_a_cursor_in_another_reply_item_does_not_continue_a_count():
 
 def test_a_count_of_nothing_left_out_is_no_cut():
     assert list(cut_without_continuation({"rows": ["a"], "rows_omitted": 0})) == []
+
+
+def test_an_empty_hint_is_no_way_on():
+    reply = {"rows": ["a"], "rows_omitted": 2, "hint": ""}
+    assert list(cut_without_continuation(reply)) == [("rows_omitted",)]
+    assert list(cut_without_continuation({"rows": ["a"], "truncated": True, "hint": ""})) == [()]
+
+
+def test_a_flag_named_like_a_count_is_not_read_as_one():
+    # The schema walk reads an integer only; a boolean *_truncated is a flag,
+    # whose list the reply pages or not by its own fields.
+    assert (
+        list(cut_without_continuation({"coordinates": [1], "coordinates_truncated": True})) == []
+    )

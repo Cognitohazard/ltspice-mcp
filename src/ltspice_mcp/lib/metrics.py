@@ -591,13 +591,20 @@ def has_active_device(currents: dict[str, float]) -> bool:
 
 #: The analyses whose plots signal_stats defines statistics for.
 _STATS_ANALYSES = frozenset({"transient", "dc", "noise"}) | AC_SHAPED
+#: Of those, the ones it reads over a window: their axis is time or a swept
+#: value. A plot over frequency (AC-shaped, noise) is read whole.
+_WINDOWED_STATS_ANALYSES = frozenset({"transient", "dc"})
 
 
-def signal_stats_defined(analysis: str) -> bool:
+def signal_stats_defined(analysis: str, *, windowed: bool = False) -> bool:
     """Whether the signal_stats recipe defines statistics for a plot of this
-    analysis. signal_stats refuses any other plot, and a reply that names a
-    call to read a plot's statistics asks here which call that is."""
-    return analysis in _STATS_ANALYSES
+    analysis, over a window when ``windowed``. signal_stats refuses any other
+    request, and a reply that names a call to read a plot's statistics asks
+    here which call that is; the waveform recipe reads the samples of the
+    rest."""
+    if analysis not in _STATS_ANALYSES:
+        return False
+    return not windowed or analysis in _WINDOWED_STATS_ANALYSES
 
 
 #: Every bucket that filtering, unit reporting and scalar reads must visit.
@@ -1417,9 +1424,17 @@ async def signal_stats(
         raise _no_axis_error(raw)
     if not signal_stats_defined(analysis):
         raise ResultError(
-            f"signal_stats does not define statistics for {analysis!r}. "
-            "Read this plot's quantities through inspect(kind='results') or "
-            "api.load_raw(...).trace(signal) and choose the appropriate calculation.",
+            f"signal_stats does not define statistics for {analysis!r}. The waveform "
+            "recipe returns this plot's samples, as api.load_raw(...).trace(signal) "
+            "does; choose the calculation from those.",
+            show_hint=False,
+        )
+    if not signal_stats_defined(analysis, windowed=t_start is not None or t_end is not None):
+        lookup = "the bode_point recipe" if analysis in AC_SHAPED else "the value recipe"
+        raise ResultError(
+            f"signal_stats reads a {analysis!r} plot whole: its axis is frequency, so it "
+            f"takes no window. Drop 'window', look up one frequency with {lookup}, or "
+            "read the window's samples with the waveform recipe and the same window.",
             show_hint=False,
         )
     if recipe.quantiles and not is_transient_analysis(raw):
@@ -1447,10 +1462,14 @@ async def signal_stats(
         )
 
     if np.iscomplexobj(wave):
+        # Complex samples are read whole, as an AC sweep's are. The analyses
+        # signal_stats_defined reads over a window write real samples, so this
+        # stops only a raw whose samples its analysis does not account for.
         if t_start is not None or t_end is not None:
             raise ResultError(
-                "t_start/t_end windowing is not supported for AC analysis. "
-                "Use the bode_point recipe to look up a specific frequency.",
+                f"Signal {signal!r} holds complex samples, which signal_stats reads "
+                "whole; drop 'window', or read the window's samples with the waveform "
+                "recipe and the same window.",
                 show_hint=False,
             )
         magnitude_db = safe_magnitude_db(wave)
@@ -1479,14 +1498,6 @@ async def signal_stats(
     # too since the units aren't seconds.
     is_dc_sweep = is_dc_analysis(raw)
     is_noise = is_noise_analysis(raw)
-
-    if is_noise and (t_start is not None or t_end is not None):
-        raise ResultError(
-            "t_start/t_end windowing is not supported for Noise analysis (axis is "
-            "frequency, not time). Use the value recipe to look up a specific "
-            "frequency.",
-            show_hint=False,
-        )
 
     ts = parse_time(t_start, "t_start")
     te = parse_time(t_end, "t_end")

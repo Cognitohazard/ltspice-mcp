@@ -139,15 +139,28 @@ tool-surface changes.
 
 - `plot_waveform` summarizes at most 32 traces and counts every plotted trace
   in `traces_truncated`, but named the call that reads the rest only in the
-  prose of a `trace_summary_truncated` observation, and named `signal_stats`
-  there even for an ngspice distortion or AC sensitivity sweep, which that
-  recipe refuses. The reply now carries a `hint` beside `traces_truncated`,
-  and the same line in its text, naming the `analyze_results` call that reads
-  the traces left out: a `signal_stats` recipe for each signal, with
-  `all_steps=true` on a stepped run, or, on a plot `signal_stats` defines no
-  statistics for, the `waveform` recipe, which returns their samples. The
-  `trace_summary_truncated` observation said nothing the count and the hint
-  do not, and is no longer emitted; read `hint` instead.
+  prose of a `trace_summary_truncated` observation, and that call read the
+  whole run whatever the plot had drawn: a `signal_stats` recipe even for an
+  ngspice distortion or AC sensitivity sweep, which that recipe refuses, with
+  no window, steps or run. The reply now carries a `hint` beside
+  `traces_truncated`, and the same line in its text, naming the
+  `analyze_results` call that reads the traces left out over what was
+  plotted: the source with `runs` set to the job's run or case, the plot's
+  `t_start`/`t_end` as each recipe's `window`, and its step selector, or
+  `all_steps=true` with the rows that are the plotted step. The recipe is
+  `signal_stats` where it reads the plot, else the `waveform` recipe, which
+  returns the samples: on a distortion or sensitivity sweep, and on an AC or
+  noise plot drawn over a window. The `trace_summary_truncated` observation
+  said nothing the count and the hint do not, and is no longer emitted; read
+  `hint` instead.
+- The `summary` recipe lists the first 100 signal names and counts them all in
+  `signals_truncated`, with no way to read the rest. A `hint` beside the count
+  now names `inspect(kind='results', view='signals')`, which pages every name.
+- `signal_stats` refused a window on an AC or noise plot only after reading
+  the trace, and its refusal of a distortion or sensitivity sweep pointed at
+  `inspect(kind='results')`, which reads no samples of such a plot. Both are
+  refused before any read, and each refusal names the `waveform` recipe, which
+  returns the samples, over the same window where one was given.
 - A card no rule could split into its parts, such as `R1 in out {1k` with
   its brace left open or a `.meas` with an unclosed parenthesis, was left out
   of every check without a word, so `verify_circuit` and the linter read the

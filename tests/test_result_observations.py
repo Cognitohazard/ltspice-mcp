@@ -569,6 +569,7 @@ class TestBuildSummaryWiring:
         assert len(summary["signals"]) == 100
         assert summary["signals"] == names[:100]
         assert summary["signals_truncated"] == 150
+        assert "inspect(kind='results', view='signals')" in summary["hint"]
 
     def test_small_signals_list_not_truncated(self):
         raw = make_raw_mock(
@@ -577,6 +578,7 @@ class TestBuildSummaryWiring:
         summary = build_simulation_summary(raw, None)
         assert summary["signals"] == ["time", "V(out)"]
         assert "signals_truncated" not in summary
+        assert "hint" not in summary
 
     def test_source_amplitudes_kwarg_arms_the_trigger(self):
         # Pins the build_simulation_summary -> surface_observations hand-off:

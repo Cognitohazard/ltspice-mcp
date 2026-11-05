@@ -889,6 +889,19 @@ async def _raw_series(state: SessionState, raw_path: Path, name: str, step: int 
     return guarded_axis(raw, step), np.asarray(raw.get_wave(name, step=step))
 
 
+async def _analyze(state: SessionState, source: dict, recipe: dict, **extra) -> dict:
+    """One analyze_results call with one recipe, keyed ``r``: the call a capped
+    summary's hint names."""
+    result = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate(
+            {"sources": [source], "recipes": [{"key": "r", **recipe}], **extra}
+        ),
+        state,
+    )
+    assert result.structured_content is not None
+    return result.structured_content
+
+
 def _series_labels(blob: dict) -> list[list[str]]:
     return [[s["label"] for s in p["series"]] for p in blob["panels"]]
 
@@ -998,23 +1011,156 @@ class TestTraceSummary:
         # The hint and traces_truncated say it; an observation does not say it again.
         assert "trace_summary_truncated" not in {o["code"] for o in data.get("observations", [])}
 
-        stats = await handle_analyze_results(
-            AnalyzeResultsInput.model_validate(
-                {
-                    "sources": [{"path": str(raw)}],
-                    "recipes": [{"key": "s", "metric": "signal_stats", "signal": "V(out)"}],
-                    "all_steps": True,
-                }
-            ),
+        stats = await _analyze(
             state_no_sim,
+            {"path": str(raw)},
+            {"metric": "signal_stats", "signal": "V(out)"},
+            all_steps=True,
         )
-        assert stats.structured_content is not None
-        rows = {
-            row["step_index"]: row for row in stats.structured_content["results"]["s"]["values"]
-        }
+        rows = {row["step_index"]: row for row in stats["results"]["r"]["values"]}
         _, left_out = await _raw_series(state_no_sim, raw, "V(out)", step=2)
         assert rows[2]["value"]["max"] == pytest.approx(float(np.max(left_out)))
         assert rows[2]["value"]["min"] == pytest.approx(float(np.min(left_out)))
+
+    async def test_the_call_for_the_rest_reads_the_plotted_window(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The summaries are read over [t_start, t_end]; the call the hint
+        names carries the same window, so it reads the traces left out over
+        the range the summarized ones were read over, not the whole run."""
+        import ltspice_mcp.tools.analysis as mod
+
+        raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+        t, _ = await _raw_series(state_no_sim, raw, "V(out)", step=2)
+        t_start, t_end = (f"{float(t[len(t) * k // 4]):.12g}" for k in (1, 2))
+        window = {"path": str(raw), "signals": ["V(out)"], "t_start": t_start, "t_end": t_end}
+        whole = await _plot(state_no_sim, **window)
+        monkeypatch.setattr(mod, "_TRACE_SUMMARY_MAX", 2)
+        capped = await _plot(state_no_sim, **window)
+
+        assert capped["traces_truncated"] == 3
+        hint = capped["hint"]
+        assert "signal_stats" in hint
+        assert f'window={{"start": "{t_start}", "end": "{t_end}"}}' in hint
+        stats = await _analyze(
+            state_no_sim,
+            {"path": str(raw)},
+            {
+                "metric": "signal_stats",
+                "signal": "V(out)",
+                "window": {"start": t_start, "end": t_end},
+            },
+            all_steps=True,
+        )
+        rows = {row["step_index"]: row["value"] for row in stats["results"]["r"]["values"]}
+        left_out = whole["traces"][2]
+        assert rows[2]["max"] == pytest.approx(left_out["max"])
+        assert rows[2]["min"] == pytest.approx(left_out["min"])
+
+    async def test_the_call_for_the_rest_of_a_windowed_ac_plot_reads_its_samples(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """signal_stats reads an AC sweep whole and refuses a window, so for a
+        windowed AC plot the hint names the waveform recipe with the window,
+        whose samples are the ones the summary was read from."""
+        import ltspice_mcp.tools.analysis as mod
+
+        raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
+        window = {"path": str(raw), "signals": ["V(out)"], "t_start": "1k", "t_end": "100k"}
+        whole = await _plot(state_no_sim, **window)
+        monkeypatch.setattr(mod, "_TRACE_SUMMARY_MAX", 1)
+        capped = await _plot(state_no_sim, **window)
+
+        assert capped["n_steps"] > 1
+        hint = capped["hint"]
+        assert "waveform recipes" in hint
+        assert "signal_stats" not in hint
+        assert 'window={"start": "1k", "end": "100k"}' in hint
+        assert "all_steps=true" in hint
+
+        refused = await _analyze(
+            state_no_sim,
+            {"path": str(raw)},
+            {"metric": "signal_stats", "signal": "V(out)", "window": {"start": "1k"}},
+        )
+        (failure,) = refused["failures"]
+        assert "takes no window" in failure["message"]
+        assert "waveform recipe" in failure["message"]
+
+        read = await _analyze(
+            state_no_sim,
+            {"path": str(raw)},
+            {
+                "metric": "waveform",
+                "signals": ["V(out)"],
+                "window": {"start": "1k", "end": "100k"},
+            },
+            all_steps=True,
+        )
+        rows = {row["step_index"]: row["value"] for row in read["results"]["r"]["values"]}
+        (series,) = rows[1]["series"]
+        assert min(rows[1]["x"]) >= 1e3 and max(rows[1]["x"]) <= 1e5
+        assert max(series["magnitude_db"]) == pytest.approx(whole["traces"][1]["max"])
+        assert min(series["magnitude_db"]) == pytest.approx(whole["traces"][1]["min"])
+
+    async def test_the_call_for_the_rest_reads_the_plotted_step(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A plot of one step of a stepped run: the hint passes on the step
+        selector it was given, which analyze_results reads the same way, and
+        for a step given by index names the rows that are that step's, since
+        analyze_results selects a step by its value only."""
+        import ltspice_mcp.tools.analysis as mod
+
+        monkeypatch.setattr(mod, "_TRACE_SUMMARY_MAX", 1)
+        raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+        signals = ["V(out)", "V(in)"]
+        by_value = await _plot(
+            state_no_sim, path=str(raw), signals=signals, step={"axis": "r", "value": "25"}
+        )
+        assert by_value["traces_truncated"] == 2
+        assert 'step={"axis": "r", "value": "25"}' in by_value["hint"]
+        assert "all_steps" not in by_value["hint"]
+        stats = await _analyze(
+            state_no_sim,
+            {"path": str(raw)},
+            {"metric": "signal_stats", "signal": "V(in)"},
+            step={"axis": "r", "value": "25"},
+        )
+        (row,) = stats["results"]["r"]["values"]
+        _, left_out = await _raw_series(state_no_sim, raw, "V(in)", step=1)
+        assert row["step_index"] == 1
+        assert row["value"]["max"] == pytest.approx(float(np.max(left_out)))
+
+        by_index = await _plot(state_no_sim, path=str(raw), signals=signals, step=2)
+        assert "all_steps=true" in by_index["hint"]
+        assert "step_index 2" in by_index["hint"]
+
+    async def test_the_call_for_the_rest_reads_the_plotted_run_of_a_job(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """plot_waveform picks a job's run with run_index or case_id, which an
+        analyze_results source does not take: the hint names the runs that
+        select the same run, and that call reads that run alone."""
+        import ltspice_mcp.tools.analysis as mod
+
+        monkeypatch.setattr(mod, "_TRACE_SUMMARY_MAX", 1)
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        make_experiment_job(state_no_sim, job_id="ex1", count=2, raw=raw)
+        signals = ["V(out)", "V(in)"]
+        by_index = await _plot(state_no_sim, job_id="ex1", run_index=1, signals=signals)
+        by_case = await _plot(state_no_sim, job_id="ex1", case_id="case-0001", signals=signals)
+        assert "runs=[1]" in by_index["hint"]
+        assert 'runs={"case_ids": ["case-0001"]}' in by_case["hint"]
+
+        for runs in ([1], {"case_ids": ["case-0001"]}):
+            stats = await _analyze(
+                state_no_sim,
+                {"job_id": "ex1", "runs": runs},
+                {"metric": "signal_stats", "signal": "V(in)"},
+            )
+            (row,) = stats["results"]["r"]["values"]
+            assert row["run_index"] == 1
 
     async def test_a_capped_summary_of_a_plot_signal_stats_refuses_names_its_samples(
         self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
@@ -1045,26 +1191,20 @@ class TestTraceSummary:
         assert data["analysis_type"] == "disto"
         assert [t["signal"] for t in data["traces"]] == ["v(out)"]
         assert data["traces_truncated"] == 2
-        assert "waveform recipe" in data["hint"]
+        assert "waveform recipes" in data["hint"]
         assert "signal_stats" not in data["hint"]
         assert "all_steps" not in data["hint"]  # one run, no steps
 
-        async def analyze(recipe: dict) -> dict:
-            result = await handle_analyze_results(
-                AnalyzeResultsInput.model_validate(
-                    {"sources": [{"path": str(raw)}], "recipes": [{"key": "r", **recipe}]}
-                ),
-                state_no_sim,
-            )
-            assert result.structured_content is not None
-            return result.structured_content
-
-        refused = await analyze({"metric": "signal_stats", "signal": "v(in)"})
-        assert any(
-            "signal_stats does not define statistics" in failure["message"]
-            for failure in refused["failures"]
+        refused = await _analyze(
+            state_no_sim, {"path": str(raw)}, {"metric": "signal_stats", "signal": "v(in)"}
         )
-        read = await analyze({"metric": "waveform", "signals": ["v(in)"]})
+        # signal_stats' own refusal names the same route as the hint.
+        (failure,) = refused["failures"]
+        assert "signal_stats does not define statistics" in failure["message"]
+        assert "waveform recipe" in failure["message"]
+        read = await _analyze(
+            state_no_sim, {"path": str(raw)}, {"metric": "waveform", "signals": ["v(in)"]}
+        )
         assert "failures" not in read, read["failures"]
         (row,) = read["results"]["r"]["values"]
         (series,) = row["value"]["series"]

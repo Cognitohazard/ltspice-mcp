@@ -1774,8 +1774,8 @@ def cut_without_continuation(
     value: typing.Any, path: tuple = (), around: tuple[dict, ...] = ()
 ) -> Iterator[tuple]:
     """Every list a reply says it cut short that gives no way on: no cursor in
-    it or around it within its reply item, and no hint beside what says it was
-    cut.
+    it or around it within its reply item, and no hint, empty or absent,
+    beside what says it was cut.
 
     A list says it was cut by a ``truncated: true`` flag, reported at the
     object that holds the flag, or by a count of what it left out above zero
@@ -1798,7 +1798,7 @@ def cut_without_continuation(
         if value.get("truncated") is True:
             cut.insert(0, path)
         if cut and not (
-            "hint" in value
+            value.get("hint")
             or any(outer.get(key) for outer in (*around, value) for key in CONTINUATIONS)
         ):
             yield from cut
