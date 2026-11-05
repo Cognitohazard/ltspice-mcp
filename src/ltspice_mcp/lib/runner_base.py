@@ -43,7 +43,16 @@ from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executa
 from ltspice_mcp.lib.raw_parser import other_raws
 from ltspice_mcp.lib.simulator import current_ngbehavior, is_ngspice
 from ltspice_mcp.lib.simulator_build import executable_path, ltspice_before_24, reported_build
-from ltspice_mcp.lib.spice_lex import SpiceLexError, emit, lex_deck, lex_for_edit, tokenize_body
+from ltspice_mcp.lib.spice_lex import (
+    SpiceCard,
+    SpiceLexError,
+    control_blocks,
+    emit,
+    lex_deck,
+    lex_for_edit,
+    line_break,
+    tokenize_body,
+)
 from ltspice_mcp.lib.spice_lex_ops import inject_card_before_end
 from ltspice_mcp.lib.spice_validator import ANALYSIS_KINDS
 from ltspice_mcp.lib.wsl import kill_windows_ltspice_by_token
@@ -566,24 +575,22 @@ def inject_logopinfo(
     return run_path
 
 
-# A ``.control``...``.endc`` block, case-insensitive. Group 1 is the body —
-# everything between the ``.control`` line and the ``.endc`` line — so
-# ``match.end(1)`` is exactly where the ``.endc`` line begins (the fallback
-# insertion point when the block has no ``quit``/``exit``).
-_RE_CONTROL_BLOCK = re.compile(rb"(?ims)^[ \t]*\.control\b[^\n]*\n(.*?)^[ \t]*\.endc\b[^\n]*$")
-# A ``write``/``wrdata`` command starting a line, anywhere in the deck — not
-# just inside the block, since a script could call either from a subckt or a
-# second block this pass doesn't otherwise recognize.
-_RE_EXISTING_WRITE = re.compile(rb"(?im)^[ \t]*(?:write|wrdata)\b")
+# A ``write``/``wrdata`` command starting a line ngspice reads, anywhere in the
+# deck — not just inside the block, since a script could call either from a
+# subckt or a second block this pass doesn't otherwise recognize.
+_RE_EXISTING_WRITE = re.compile(r"[ \t]*(?:write|wrdata)\b", re.IGNORECASE)
 # ``quit``/``exit`` end control-script execution; a command placed after one
 # would never run, so the injected ``write`` must land before the LAST one.
-_RE_QUIT_EXIT = re.compile(rb"(?im)^[ \t]*(?:quit|exit)\b.*$")
-# A tail (from just after a quit/exit line to the block's .endc) that is only
-# blank lines and ``*`` comments — i.e. the quit/exit was the block's LAST
-# statement. Used to tell a script-ending trailing quit from one nested in an
-# if/while (which must NOT anchor the injected write, or it lands inside that
-# conditional and never runs on the success path).
-_RE_TRIVIAL_TAIL = re.compile(rb"(?m)\A(?:[ \t]*(?:\*.*)?(?:\n|\Z))*\Z")
+_RE_QUIT_EXIT = re.compile(r"[ \t]*(?:quit|exit)\b", re.IGNORECASE)
+
+
+def _blank_or_comment(card: SpiceCard) -> bool:
+    """Whether a ``.control`` line is blank or a ``*`` comment. A block whose
+    lines after a quit/exit are all such ends with it: that quit/exit is the
+    script's last statement, not one nested in an if/while (which must NOT
+    anchor the injected write, or it lands inside that conditional and never
+    runs on the success path)."""
+    return all(not raw.strip() or raw.lstrip().startswith("*") for raw in card.raw_lines)
 
 
 def inject_ngspice_control_write(
@@ -615,6 +622,10 @@ def inject_ngspice_control_write(
     output folder path contains a space can't get an auto-injected write
     either (guard (d)) — that run just stays log-only, same as today.
 
+    The deck is read as the simulator reads it (``spice_lex.lex_for_edit``):
+    its title and a line after its ``.END`` are neither a block nor a
+    ``write``, so a deck titled "Write-up of an RC filter" still gets one.
+
     Guards (all required, or the original path is returned unchanged):
     (a) ngspice only (LTspice has no ``.control``; ``inject_logopinfo``
         covers its own op-point injection separately).
@@ -623,6 +634,9 @@ def inject_ngspice_control_write(
     (c) no existing ``write``/``wrdata`` anywhere in the deck — never
         override a user who already captures their own output.
     (d) the write target has no whitespace (see the limitation above).
+    (e) the deck's bytes decode exactly, so it can be written back in its
+        own encoding with only the ``write`` added, which ends with the
+        deck's own line break.
 
     The ``write`` target is the ABSOLUTE path ``{output_folder}/{job_id}.raw``
     — the same path spicelib's own (suppressed) ``-r`` would use, since it
@@ -658,13 +672,22 @@ def inject_ngspice_control_write(
     except OSError:
         return netlist_path
 
-    if _RE_EXISTING_WRITE.search(data):
+    text, codec = decode_spice_bytes_with_encoding(data)
+    bom = bom_of(data)
+    try:
+        deck = lex_for_edit(text, deck=True)
+        # A deck whose bytes did not decode exactly cannot be written back
+        # with only the write added.
+        if bom + encode_spice_text_strictly(text, codec) != data:
+            return netlist_path
+    except (SpiceLexError, UnicodeError):
         return netlist_path
-    blocks = list(_RE_CONTROL_BLOCK.finditer(data))
+    if any(_RE_EXISTING_WRITE.match(raw) for card in deck.read for raw in card.raw_lines):
+        return netlist_path
+    blocks = control_blocks(deck.read)
     if len(blocks) != 1:
         return netlist_path
-    block = blocks[0]
-    body_start, body_end = block.start(1), block.end(1)
+    body = blocks[0][1:-1]
 
     raw_path = (output_folder / f"{job_id}.raw").as_posix()
     # ngspice's `write` parser cannot handle a spaced target at all — not
@@ -672,18 +695,31 @@ def inject_ngspice_control_write(
     # can't get an auto-injected write; that run just stays log-only.
     if any(c.isspace() for c in raw_path):
         return netlist_path
-    write_line = f"write {raw_path}\n".encode()
 
     # Insert before .endc, UNLESS the block's last statement is an
     # unconditional trailing quit/exit — a write after that would never run. A
     # quit/exit nested in an if/while is not the last statement (an ``end`` and
     # possibly more follow it), so anchoring on it is skipped: the write goes
     # before .endc and runs on the normal path.
-    insert_at = body_end
-    quit_matches = list(_RE_QUIT_EXIT.finditer(data, body_start, body_end))
-    if quit_matches and _RE_TRIVIAL_TAIL.match(data[quit_matches[-1].end() : body_end]):
-        insert_at = quit_matches[-1].start()
-    augmented = data[:insert_at] + write_line + data[insert_at:]
+    anchor = blocks[0][-1]
+    quits = [i for i, card in enumerate(body) if _RE_QUIT_EXIT.match(card.raw_lines[0])]
+    if quits and all(_blank_or_comment(card) for card in body[quits[-1] + 1 :]):
+        anchor = body[quits[-1]]
+    at = next(i for i, card in enumerate(deck.cards) if card is anchor)
+    deck.cards.insert(
+        at,
+        SpiceCard(
+            kind="control",
+            raw_lines=[f"write {raw_path}{line_break(deck.cards)}"],
+            body="",
+            line_start=anchor.line_start,
+            scope=anchor.scope,
+        ),
+    )
+    try:
+        augmented = bom + encode_spice_text_strictly(emit(deck.cards), codec)
+    except UnicodeError:
+        return netlist_path
 
     run_path = netlist_path.with_name(
         f".{netlist_path.stem}.{job_id}{NGSPICE_CONTROL_WRITE_MARKER}{netlist_path.suffix}"

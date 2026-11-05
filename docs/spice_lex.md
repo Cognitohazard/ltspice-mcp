@@ -458,7 +458,9 @@ would lex as the element sharing its first letter (`let` → L, `dc` → D,
 `meas` → M, `foreach` → F, `alter` → A, `set` → S) and a valid ngspice
 deck would produce many spurious arity errors. Both delimiters are part
 of the region; a stray `.endc` with no opener stays an ordinary
-directive.
+directive. `control_blocks` lists each closed region among the cards it is
+given, as the lexer found it; given the cards that are read, it finds none
+in a deck's title or after its `.END`.
 
 Each view caches its tokens' offsets into the card's body, and one view
 does not see another's edits. Holding two typed views over the same card
@@ -477,6 +479,8 @@ def lex(netlist_text: str, *, title: bool = False) -> LexResult: ...
 def lex_deck(netlist_text: str, *, title: bool = True) -> LexResult: ...  # the cards a simulator reads
 def lex_for_edit(netlist_text: str, *, deck: bool) -> EditCards: ...  # every card, and those read
 def emit(cards: Sequence[SpiceCard]) -> str: ...
+def line_break(cards: Sequence[SpiceCard]) -> str: ...  # the line break an added line ends with
+def control_blocks(cards) -> list[list[SpiceCard]]: ...  # each .control ... .endc region
 def tokenize_body(body: str) -> list[Token]: ...
 def find_matching_ends(cards: Sequence[SpiceCard], opener_idx: int) -> int | None: ...
 def subckt_children(cards, opener_idx) -> Iterator[tuple[int, SpiceCard]]: ...  # one body, by span

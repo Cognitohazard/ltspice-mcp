@@ -121,7 +121,9 @@ class TestInjectNgspiceControlWrite:
 
     def test_noop_with_two_control_blocks(self, tmp_path: Path):
         # Ambiguous which block's result is "the" answer — skip rather than guess.
-        deck = self._DECK + ".control\nrun\n.endc\n"
+        # Both are before .end: a block after it is not read
+        # (test_lines_after_end_are_not_read).
+        deck = self._DECK.replace(".end\n", ".control\nrun\n.endc\n.end\n")
         src = self._write(tmp_path, deck)
         out_dir = self._out_dir(tmp_path)
         assert inject_ngspice_control_write(src, NGspiceSimulator, "job1", out_dir) == src
@@ -157,6 +159,50 @@ class TestInjectNgspiceControlWrite:
         run = inject_ngspice_control_write(src, NGspiceSimulator, "job1", out_dir)
         assert run != src
         assert "write " in run.read_text()
+
+    @pytest.mark.parametrize(
+        "title", ["* rc step", "Write-up of an RC filter", "wrdata of the rc step"]
+    )
+    def test_the_title_is_not_a_line_ngspice_reads(self, tmp_path: Path, title: str):
+        """A deck's first line is its title, whatever it says: a title that
+        starts like a ``write`` command matched the guard for one, so the deck
+        got no write and the run ended with a log and no raw."""
+        deck = self._DECK.replace("* rc step\n", f"{title}\n")
+        src = self._write(tmp_path, deck)
+        out_dir = self._out_dir(tmp_path)
+        run = inject_ngspice_control_write(src, NGspiceSimulator, "job1", out_dir)
+        expected = (out_dir / "job1.raw").as_posix()
+        assert run.read_text() == deck.replace(".endc\n", f"write {expected}\n.endc\n")
+
+    def test_lines_after_end_are_not_read(self, tmp_path: Path):
+        """Nothing after ``.end`` is read: a second block or a ``write`` there
+        neither makes the deck's one block ambiguous nor counts as its own
+        write."""
+        out_dir = self._out_dir(tmp_path)
+        for after in (".control\nrun\n.endc\n", "write mine.raw\n"):
+            src = self._write(tmp_path, self._DECK + after, name="after.cir")
+            run = inject_ngspice_control_write(src, NGspiceSimulator, "job1", out_dir)
+            expected = (out_dir / "job1.raw").as_posix()
+            assert run.read_text() == (self._DECK + after).replace(
+                ".endc\n", f"write {expected}\n.endc\n", 1
+            )
+        # A block only after .end is none.
+        deck = self._DECK.replace(".control\nrun\n.endc\n", "") + ".control\nrun\n.endc\n"
+        src = self._write(tmp_path, deck, name="late.cir")
+        assert inject_ngspice_control_write(src, NGspiceSimulator, "job1", out_dir) == src
+
+    def test_a_crlf_deck_in_its_own_codec_keeps_every_byte_but_the_write(self, tmp_path: Path):
+        """The deck is written back in its own encoding with its own line
+        breaks: only the added line differs, and it ends with ``\\r\\n``."""
+        deck = self._DECK.replace("* rc step", "* rc step at 25 °C").replace("\n", "\r\n")
+        src = tmp_path / "crlf.cir"
+        src.write_bytes(deck.encode("cp1252"))
+        out_dir = self._out_dir(tmp_path)
+        run = inject_ngspice_control_write(src, NGspiceSimulator, "job1", out_dir)
+        expected = (out_dir / "job1.raw").as_posix()
+        assert run.read_bytes() == deck.replace(
+            ".endc\r\n", f"write {expected}\r\n.endc\r\n"
+        ).encode("cp1252")
 
     def test_per_job_unique_names_avoid_clobber(self, tmp_path: Path):
         # Two queued/concurrent runs of the SAME netlist must not share an
@@ -218,12 +264,12 @@ class TestControlWriteThroughRunExperiments:
         )
         return args, decks
 
+    @pytest.mark.parametrize("title", ["* rc step", "Write-up of an RC filter"])
     async def test_scripted_deck_gets_a_write_and_the_case_says_so(
-        self, state_with_sim, work_dir: Path, monkeypatch
+        self, state_with_sim, work_dir: Path, monkeypatch, title: str
     ):
-        args, decks = self._submission(
-            state_with_sim, work_dir, monkeypatch, self._DECK, "ctrl-write"
-        )
+        body = self._DECK.replace("* rc step\n", f"{title}\n")
+        args, decks = self._submission(state_with_sim, work_dir, monkeypatch, body, "ctrl-write")
         result = await handle_run_experiments(args, state_with_sim)
 
         data = result.structured_content

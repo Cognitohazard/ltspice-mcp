@@ -1263,6 +1263,41 @@ def emit(cards: Sequence[SpiceCard]) -> str:
     return "".join(out)
 
 
+def line_break(cards: Sequence[SpiceCard]) -> str:
+    """The line break of the text ``cards`` were lexed from: the one its
+    first line that has one ends with, else ``\\n``. A line an edit adds ends
+    with it, so a file keeps its own line breaks."""
+    for card in cards:
+        for raw in card.raw_lines:
+            if raw.endswith("\n"):
+                return "\r\n" if raw.endswith("\r\n") else "\n"
+    return "\n"
+
+
+def control_blocks(cards: Sequence[SpiceCard]) -> list[list[SpiceCard]]:
+    """Each ngspice ``.control`` ... ``.endc`` region among ``cards``, in order:
+    its cards from the ``.control`` line to the ``.endc`` line, as ``lex``
+    found the region. A region with no ``.endc`` is not one. Pass the cards
+    that are read (``lex_deck``, ``EditCards.read``), so a region in a deck's
+    title or after its ``.END`` is none."""
+    blocks: list[list[SpiceCard]] = []
+    current: list[SpiceCard] | None = None
+    for card in cards:
+        if card.kind != "control" or not card.raw_lines:
+            current = None
+            continue
+        head = _line_directive_head(card.raw_lines[0].lstrip())
+        if current is None:
+            if head in _OPAQUE_REGIONS:
+                current = [card]
+            continue
+        current.append(card)
+        if head == _OPAQUE_REGIONS[".control"]:
+            blocks.append(current)
+            current = None
+    return blocks
+
+
 # ---------------------------------------------------------------------------
 # Interop helpers for spicelib and file-based workflows
 # ---------------------------------------------------------------------------
