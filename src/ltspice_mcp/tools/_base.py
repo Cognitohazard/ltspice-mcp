@@ -4,7 +4,6 @@ import base64
 import contextlib
 import contextvars
 import hashlib
-import json
 import logging
 import math
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -98,10 +97,9 @@ class OptionalRawSelectionFields(RawDialectFields):
 # Response helpers — standardize tool output format
 #
 # All helpers return types.CallToolResult, the MCP protocol's canonical
-# response type. format_response() returns both human-readable text content AND
-# structured data via structuredContent, which is what every tool here does:
-# a structured-aware client renders only structuredContent, so the text channel
-# is presentation and the data dict has to carry everything a caller acts on.
+# response type, with the reply's data as structuredContent. The server then
+# makes the text block that data serialized (server._with_serialized_text), so
+# the data dict has to carry everything a caller acts on.
 # ---------------------------------------------------------------------------
 
 
@@ -149,11 +147,11 @@ def sanitize_payload(data: dict[str, Any]) -> dict[str, Any]:
     """Null out non-finite floats and surface the substitution as a warning.
 
     NaN/Inf are not JSON: pydantic silently serializes them as null on the
-    wire while the text channel prints "nan" — the two channels contradict
-    each other exactly on degenerate results. Per the emit-a-null-over-a-
-    meaningless-number rule (lib/result_observations.py), substitute null
-    OURSELVES and say so, naming the affected keys, so the substitution is a
-    surfaced fact instead of a serializer accident.
+    wire, so a degenerate result would read as a number that is simply
+    missing. Per the emit-a-null-over-a-meaningless-number rule
+    (lib/result_observations.py), substitute null OURSELVES and say so,
+    naming the affected keys, so the substitution is a surfaced fact instead
+    of a serializer accident.
     """
     stats: dict[str, Any] = {"total": 0, "named": []}
     scrubbed = _scrub_non_finite(data, "", stats)
@@ -183,47 +181,24 @@ def reply_payload(data: dict[str, Any]) -> dict[str, Any]:
     return sanitize_payload(omit_silent(data, active_kept()))
 
 
-def json_response(data: Any) -> types.CallToolResult:
-    """Return data as JSON text + structuredContent."""
-    if isinstance(data, dict):
-        data = reply_payload(data)
-    return types.CallToolResult(
-        content=[types.TextContent(type="text", text=json.dumps(data, indent=2, allow_nan=False))],
-        structured_content=data,
-    )
+def format_response(text: str, data: Mapping[str, Any]) -> types.CallToolResult:
+    """Return a CallToolResult with ``data`` as its structuredContent.
 
-
-def format_response(
-    text: str,
-    data: Mapping[str, Any],
-    fmt: str | None = None,
-) -> types.CallToolResult:
-    """Return a CallToolResult with text content and structuredContent.
-
-    Always populates structuredContent for programmatic access. Accepts any
-    mapping so TypedDict return values from lib functions pass through
-    without cast/copy. The format param controls the text representation:
-    - "json": text is JSON-formatted (for clients that parse text)
-    - "text" or None: text is human-readable (default)
-
-    Self-sufficiency contract: structured-aware clients (Claude Code included)
-    render ONLY structuredContent when it is present and drop the text channel
-    entirely, so ``data`` must carry everything the caller needs to act on.
-    Any caller-guidance composed into ``text`` (hints, referrals, recovery
-    steps, caveats) must be mirrored into ``data`` — conventionally an
-    optional ``hint`` key declared in the tool's output_schema. The text
-    channel is presentation only.
+    Accepts any mapping so TypedDict return values from lib functions pass
+    through without cast/copy. ``text`` is the reply's text block as the
+    handler leaves it; the server replaces it with ``data`` serialized, as the
+    MCP specification recommends, so ``data`` must carry everything the caller
+    needs to act on: any caller guidance (hints, referrals, recovery steps,
+    caveats) belongs in it, conventionally as an optional ``hint`` key
+    declared in the tool's output_schema.
 
     The fields that say nothing are left out of ``data`` here
-    (:func:`reply_payload`), so ``text`` is written as a summary that never
-    states an empty result either.
+    (:func:`reply_payload`).
     """
     # MCP SDK's CallToolResult wants a plain dict for structuredContent;
     # TypedDicts ARE plain dicts at runtime, but wrap defensively so
     # non-dict mappings (rare, but cheap to support) also work.
     payload: dict[str, Any] = dict(data) if not isinstance(data, dict) else data
-    if fmt == "json":
-        return json_response(payload)  # leans and sanitizes internally — don't walk twice
     payload = reply_payload(payload)
     return types.CallToolResult(
         content=[types.TextContent(type="text", text=text)],
@@ -240,57 +215,13 @@ def image_content(image: RenderedImage) -> types.ImageContent:
     )
 
 
-def image_response(
-    image: RenderedImage,
-    text: str,
-    data: Mapping[str, Any] | None = None,
-) -> types.CallToolResult:
-    """Return a rendered image plus the metadata describing it.
-
-    A raster is carried as an MCP image block, which is what a model actually
-    looks at. Vector output is carried as text instead: SVG is markup, and
-    ``image/svg+xml`` is not reliably rendered by clients, so sending it as an
-    image block would produce a blank space where a picture should be.
-
-    Self-sufficiency contract (as for :func:`format_response`): a client that
-    renders only ``structuredContent`` must still be able to act, so the image's
-    own description — format, scale actually applied, byte size, and any note
-    explaining a degraded result — is always mirrored there. That is what tells
-    a caller it asked for a PNG and received SVG, without decoding anything.
-    """
-    payload: dict[str, Any] = dict(data or {})
-    if "image" in payload:
-        raise ValueError(
-            "image_response owns the 'image' key in structuredContent; the "
-            "caller's data must not set it (rename the caller's key)"
-        )
-    payload["image"] = image.to_dict()
-    payload = reply_payload(payload)
-
-    content: list[Any] = []
-    if image.is_raster:
-        content.append(image_content(image))
-    else:
-        content.append(types.TextContent(type="text", text=image.data.decode("utf-8")))
-    content.append(types.TextContent(type="text", text=text))
-
-    return types.CallToolResult(content=content, structured_content=payload)
-
-
 # ---------------------------------------------------------------------------
 # Shared tool schema fragments and annotations
 # ---------------------------------------------------------------------------
 
-# Client-visible description of the shared ``format`` input param — one string,
-# reused by every tool input model that exposes the param.
-FORMAT_DESCRIPTION = (
-    "Response format: 'json' for structured data, 'text' for human-readable "
-    "(default; both carry the same structured content)"
-)
-
-# Output-schema fragment for the optional ``hint`` key: caller guidance
-# mirrored from the text channel (see format_response's self-sufficiency
-# contract). Sites needing a custom description inline their own dict.
+# Output-schema fragment for the optional ``hint`` key: caller guidance a
+# reply carries in its data (see format_response). Sites needing a custom
+# description inline their own dict.
 HINT_SCHEMA: dict[str, str] = {"type": "string"}
 
 # Free-text measurement caveats (see the observations-vs-warnings rule in
@@ -619,8 +550,8 @@ class Envelope(TypedDict, total=False):
     ``warnings`` — did this measurement assume something: a clamped window, an
     unparseable deck diffed as empty. Free text, always actionable.
 
-    ``hint`` — the one next step, mirrored from the text channel because a
-    structured-aware client renders only ``structuredContent``.
+    ``hint`` — the one next step, carried in the data like everything else a
+    caller acts on.
 
     ``observations`` and ``warnings`` are never merged; see the
     surface-don't-judge rules in ``lib/result_observations.py``.
@@ -1587,7 +1518,7 @@ def resolve_reference(reference: str, state: SessionState) -> str | Path:
 #
 #   * Event loop (handler coroutines): argument validation, JobRegistry /
 #     SessionState mutation, and ALL response building. format_response /
-#     json_response / CallToolResult construction must stay in the handler
+#     CallToolResult construction must stay in the handler
 #     frame — the test suite's output-schema conformance hook attributes
 #     emissions by walking the current thread's stack, so an emission from a
 #     worker thread would silently skip schema validation. Offload

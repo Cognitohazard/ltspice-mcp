@@ -2144,9 +2144,8 @@ async def test_an_inline_svg_request_returns_the_markup(state_no_sim, work_dir, 
     assert markup.startswith("<svg")
     assert render["returned_inline"] is True
     assert render["svg"] == markup
-    # Once: the text channel carries the headline, not a second copy.
+    # Once: no image block carries a second copy of the drawing.
     assert [c.type for c in result.content] == ["text"]
-    assert markup not in result.content[0].text
     # SVG was what the caller asked for: nothing to explain.
     assert "note" not in render
     assert "failures" not in data

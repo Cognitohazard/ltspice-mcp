@@ -3264,6 +3264,80 @@ def _factored_deck(work_dir: Path, *, core: str = _CORE_INC, root: str = _FACTOR
 
 
 @pytest.mark.asyncio
+class TestMonteCarloSampleIdentity:
+    _RULE: ClassVar[dict[str, Any]] = {"rule": "component", "target": "R1", "tolerance": 0.1}
+
+    @staticmethod
+    def _draws(data: dict) -> list[float]:
+        return [item["assignments"]["random:component:R1"] for item in data["runs"]["items"]]
+
+    async def test_a_seedless_monte_carlo_records_the_seed_that_reproduces_it(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """With no seed the server chooses one and records it on every case as
+        '_random_seed'; a later request with that seed draws the same values.
+        Before, an omitted seed meant fresh entropy and a run nobody could
+        repeat."""
+        fake_simulator(monkeypatch)
+        deck = _deck(work_dir / "mc.cir")
+
+        first = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "mc-seedless",
+                    variations=[{"kind": "random", "runs": 3, "rules": [self._RULE]}],
+                ),
+                state_with_sim,
+            )
+        )
+        (seed,) = {item["assignments"]["_random_seed"] for item in first["runs"]["items"]}
+        again = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "mc-reseeded",
+                    variations=[{"kind": "random", "runs": 3, "seed": seed, "rules": [self._RULE]}],
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert self._draws(again) == self._draws(first)
+        assert len(set(self._draws(first))) == 3
+
+    async def test_a_retried_seedless_request_returns_its_job_not_a_conflict(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The seed the server chooses is not part of the caller's request, so a
+        retry of the same seedless request under the same request_id replays
+        the job it made, with the same seed, instead of refusing a mismatch."""
+        fake_simulator(monkeypatch)
+        deck = _deck(work_dir / "mc.cir")
+        variations = [{"kind": "random", "runs": 2, "rules": [self._RULE]}]
+
+        first = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "mc-retry", variations=variations), state_with_sim
+            )
+        )
+        retry = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "mc-retry", variations=variations), state_with_sim
+            )
+        )
+
+        assert retry["job_id"] == first["job_id"]
+        assert self._draws(retry) == self._draws(first)
+
+
+@pytest.mark.asyncio
 class TestVariationsReachIntoIncludes:
     """A component only reachable through .include is still a sweep target.
 

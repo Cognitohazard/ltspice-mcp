@@ -61,6 +61,12 @@ distribution: "normal"|"uniform"}`; `model` adds `param`.
 These coefficients are your own assumptions; for a PDK's own statistical
 models, see guide section 'sky130'.
 
+Each case records its sample index (`_random_run`) and seed (`_random_seed`);
+without a `seed` the server picks one. To repeat sample 7 alone, send the same
+entry with that seed, `runs: 1` and `sample_start: 7`. A sample draws the same
+values at every `assign` value, so a sweep compares the same die at each
+corner, and adding a corner leaves the other draws as they were.
+
 The variation's `seed` controls these draws from your assumed coefficients. It
 does not affect random functions written in the deck (`agauss`, `gauss`,
 `aunif`, `unif`, `limit`); in a recoverable ngspice run,
