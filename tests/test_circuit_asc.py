@@ -2618,10 +2618,12 @@ class TestReplaceDirective:
         sheet = _write_sheet(
             work_dir / "undo.asc", "TEXT 16 16 Left 2 !.tran 1m", "TEXT 16 48 Left 2 !.tran 2m"
         )
-        before = sheet.read_bytes()
+        # Lines, not bytes: the editor's save writes the platform's line ending.
+        before = sheet.read_text(encoding="utf-8").splitlines()
         done = self._apply(sheet, ".tran 1m", ".tran 2m")["text"]
+        assert sheet.read_text(encoding="utf-8").splitlines() != before
         self._apply(sheet, done["now"], done["was"], x=done["x"], y=done["y"])
-        assert sheet.read_bytes() == before
+        assert sheet.read_text(encoding="utf-8").splitlines() == before
 
     def test_x_and_y_where_no_named_text_is_are_refused_with_where_they_are(self, work_dir: Path):
         sheet = _write_sheet(work_dir / "where.asc", *_TEXTS)
