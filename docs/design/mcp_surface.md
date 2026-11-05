@@ -1716,12 +1716,18 @@ of the reply, `rules_run` included, is the same as without the cursor. The
 with the check that reports it, so a caller can narrow `checks` to that check
 to skip the others, and on a cursor's page says which findings it lists.
 
-A cursor is bound to the file's path and content, read before the checks run.
-It is refused with `invalid_cursor` when the file has changed since, or is
-another file; when the call does not run the check that reports its rule,
-which the refusal names with the reason; and when the call finds fewer
-findings of the rule than the cursor resumes at, as when the export it needs
-did not run. A malformed cursor is refused with `invalid_cursor` too.
+A cursor is bound to every finding of its rule as the call that returned it
+found them, which depends on more than the checked file: the symbols a sheet
+uses, its export, the build that reads a deck. A call that does not run the
+check that reports the rule is refused with `invalid_cursor` before any check
+runs, and the refusal names what to change (add the check to `checks`, or
+leave `render.mode` at `with_checks`). A call whose findings of the rule are
+not the ones the cursor was counted against is refused with `invalid_cursor`
+once they are found, and the refusal says why: the check did not run, with
+its reason; it failed, with its error; or what the findings are read from
+changed. Either refusal says to call again without `findings_cursor`, and
+neither carries the generic cursor hint. A malformed cursor is refused with
+`invalid_cursor` too.
 `api.verify_circuit` returns every finding and takes no `findings_cursor`
 unless called with `raw_page=True`.
 

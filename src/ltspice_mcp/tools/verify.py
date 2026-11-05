@@ -68,6 +68,7 @@ import asyncio
 import contextlib
 import functools
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -88,7 +89,7 @@ from ltspice_mcp.lib import (
     atomic_write_bytes,
     capabilities,
 )
-from ltspice_mcp.lib.cursor_codec import CursorError, canonical_hash, decode_cursor, encode_cursor
+from ltspice_mcp.lib.cursor_codec import CursorError, decode_cursor, encode_cursor
 from ltspice_mcp.lib.deck_prep import asc_export_lock, stage_sheet_copy
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding, refused_sheet_mark_note
 from ltspice_mcp.lib.families import DISPLAY
@@ -307,15 +308,15 @@ FINDINGS_OMITTED_SCHEMA: dict[str, Any] = {
 
 class FindingsCursor(NamedTuple):
     """Where a ``findings_cursor`` resumes: the rule it lists, the finding it
-    resumes at, and the revision of the file it was returned for
-    (:func:`file_revision`)."""
+    resumes at, and the digest of that rule's findings as the call that
+    returned it found them (:func:`findings_digest`)."""
 
     rule: str
     offset: int
-    revision: str | None
+    digest: str
 
     def encode(self) -> str:
-        return encode_cursor({"rule": self.rule, "offset": self.offset, "of": self.revision})
+        return encode_cursor({"rule": self.rule, "offset": self.offset, "of": self.digest})
 
 
 def decode_findings_cursor(text: str) -> FindingsCursor:
@@ -324,14 +325,17 @@ def decode_findings_cursor(text: str) -> FindingsCursor:
     return."""
     try:
         body = decode_cursor(text)
-        cursor = FindingsCursor(rule=body["rule"], offset=body["offset"], revision=body["of"])
+        cursor = FindingsCursor(rule=body["rule"], offset=body["offset"], digest=body["of"])
     except (CursorError, KeyError) as exc:
         raise InvalidCursorError(_NOT_A_FINDINGS_CURSOR) from exc
+    # The codec's checksum is no secret, so any body decodes: each field is
+    # checked for its type before it is used.
     if not (
-        (cursor.rule in RULES or cursor.rule in _VALUE_SUFFIX_RULES)
+        isinstance(cursor.rule, str)
+        and (cursor.rule in RULES or cursor.rule in _VALUE_SUFFIX_RULES)
         and type(cursor.offset) is int
         and cursor.offset > 0
-        and (cursor.revision is None or isinstance(cursor.revision, str))
+        and isinstance(cursor.digest, str)
     ):
         raise InvalidCursorError(_NOT_A_FINDINGS_CURSOR)
     return cursor
@@ -344,12 +348,14 @@ _NOT_A_FINDINGS_CURSOR = (
 )
 
 
-def file_revision(path: Path) -> str | None:
-    """The revision a ``findings_cursor`` is bound to: the file's path and its
-    bytes, so a cursor resumes only the list it was returned with. ``None``
-    when the file cannot be read. Blocking."""
-    content = _file_digest(path)
-    return None if content is None else canonical_hash([str(path), content])[:16]
+def findings_digest(findings: Sequence[Mapping[str, Any]]) -> str:
+    """What a ``findings_cursor`` is bound to: every finding of its rule, as
+    the call that returned it found them. The findings depend on more than the
+    checked file (the symbols a sheet uses, the export LTspice writes, the
+    build that reads a deck), so a cursor resumes only the list it was counted
+    against, whichever of those changed."""
+    text = json.dumps(list(findings), sort_keys=True, default=str)
+    return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
 # The sheet rules each check reports, as the registry assigns them.
@@ -2322,6 +2328,25 @@ def _ltspice_hint(shown: Mapping[str, Any] | None) -> str | None:
     return "In front in LTspice."
 
 
+def _with_the_cut(headline: str, data: Mapping[str, Any], listing: str | None) -> str:
+    """``headline`` with which of a rule's findings a cursor's page lists
+    (``listing``) before it, and each rule cut short after it."""
+    if listing:
+        headline = f"{listing} {headline}"
+    omitted = data.get("findings_omitted")
+    if not omitted:
+        return headline
+    more = ", ".join(
+        f"{entry['omitted']} more {rule} ({check_reporting(rule, data['kind'])} check)"
+        for rule, entry in omitted.items()
+    )
+    return (
+        f"{headline.rstrip('.')}. Not listed: {more}; pass a rule's findings_omitted "
+        "next_cursor as findings_cursor to list them, with checks set to its check "
+        "alone to skip the others."
+    )
+
+
 def _hint(data: dict[str, Any], asked: Collection[str], *, listing: str | None = None) -> str:
     """One concrete thing the caller most needs to know.
 
@@ -2339,7 +2364,9 @@ def _hint(data: dict[str, Any], asked: Collection[str], *, listing: str | None =
         headline = f"{first['stage']} failed: {first['error']}" + (
             f" — {remedy}" if remedy else ""
         )
-        return f"{headline}. Asked for but not run: {unmet_text}." if unmet else headline
+        if unmet:
+            headline = f"{headline}. Asked for but not run: {unmet_text}."
+        return _with_the_cut(headline, data, listing)
     parts: list[str] = []
     # A warning says a result exists only because something was assumed, so it
     # leads: without it "no problems found" reads as a clean bill of health over a
@@ -2387,19 +2414,7 @@ def _hint(data: dict[str, Any], asked: Collection[str], *, listing: str | None =
         headline = "No problems found in the checks that ran."
         if skipped:
             headline += " Not run: " + ", ".join(f"{s['check']} ({s['reason']})" for s in skipped)
-    if listing:
-        headline = f"{listing} {headline}"
-    omitted = data.get("findings_omitted")
-    if omitted:
-        more = ", ".join(
-            f"{entry['omitted']} more {rule} ({check_reporting(rule, data['kind'])} check)"
-            for rule, entry in omitted.items()
-        )
-        headline = (
-            f"{headline.rstrip('.')}. Not listed: {more}; pass a rule's findings_omitted "
-            "next_cursor as findings_cursor to list them, with checks set to its check "
-            "alone to skip the others."
-        )
+    headline = _with_the_cut(headline, data, listing)
     if delivery_note:
         headline = f"{headline.rstrip('.')}. {delivery_note}"
     in_ltspice = _ltspice_hint(data.get("ltspice"))
@@ -2797,7 +2812,6 @@ async def evaluate_verify_circuit(
 def render_verify_circuit(
     evaluation: VerifyCircuitEvaluation,
     *,
-    revision: str | None = None,
     cursor: FindingsCursor | None = None,
 ) -> types.CallToolResult:
     """Apply the MCP finding cap to an evaluation.
@@ -2805,9 +2819,9 @@ def render_verify_circuit(
     A capped rule lists at most ``FINDING_RULE_CAP`` findings: its first, or
     from the one ``cursor`` resumes at when the cursor is for that rule. A rule
     with findings after the ones listed gets a ``findings_omitted`` entry,
-    whose cursor is bound to ``revision`` (:func:`file_revision`, read before
-    the evaluation). Raises ``InvalidCursorError`` when the evaluation does not
-    reach the finding ``cursor`` resumes at.
+    whose cursor is bound to the rule's findings (:func:`findings_digest`).
+    Raises ``InvalidCursorError`` when ``cursor``'s rule found other findings
+    than those it was returned with.
 
     Selects findings by reference before building the envelope, so the uncapped
     evaluation is never copied wholesale; presentation replaces keys rather than
@@ -2815,13 +2829,13 @@ def render_verify_circuit(
     """
     capped = evaluation.capped_rules
     start = {cursor.rule: cursor.offset} if cursor is not None else {}
-    totals: Counter[str] = Counter()
+    of_rule: dict[str, list[dict[str, Any]]] = {}
     presented: list[dict[str, Any]] = []
     for finding in evaluation.data["findings"]:
         rule = str(finding["rule_id"])
         if rule in capped:
-            index = totals[rule]
-            totals[rule] += 1
+            index = len(of_rule.setdefault(rule, []))
+            of_rule[rule].append(finding)
             first = start.get(rule, 0)
             if not first <= index < first + FINDING_RULE_CAP:
                 continue
@@ -2831,20 +2845,20 @@ def render_verify_circuit(
 
     listing: str | None = None
     if cursor is not None and not evaluation.is_error:
-        total = totals[cursor.rule]
-        if total <= cursor.offset:
-            raise InvalidCursorError(_unreached_cursor_text(cursor, total, data), show_hint=False)
-        last = min(total, cursor.offset + FINDING_RULE_CAP)
-        listing = f"Listing {cursor.rule} findings {cursor.offset + 1} to {last} of {total}."
+        found = of_rule.get(cursor.rule, [])
+        if findings_digest(found) != cursor.digest:
+            raise InvalidCursorError(_stale_cursor_text(cursor, data), show_hint=False)
+        last = min(len(found), cursor.offset + FINDING_RULE_CAP)
+        listing = f"Listing {cursor.rule} findings {cursor.offset + 1} to {last} of {len(found)}."
 
     omitted: dict[str, dict[str, Any]] = {}
-    for rule, total in sorted(totals.items()):
+    for rule, found in sorted(of_rule.items()):
         end = start.get(rule, 0) + FINDING_RULE_CAP
-        if total > end:
+        if len(found) > end:
             omitted[rule] = {
-                "omitted": total - end,
-                "total": total,
-                "next_cursor": FindingsCursor(rule, end, revision).encode(),
+                "omitted": len(found) - end,
+                "total": len(found),
+                "next_cursor": FindingsCursor(rule, end, findings_digest(found)).encode(),
             }
     data["findings_omitted"] = omitted
     if not evaluation.is_error:
@@ -2865,54 +2879,57 @@ def render_verify_circuit(
     return result
 
 
-def _unreached_cursor_text(cursor: FindingsCursor, found: int, data: Mapping[str, Any]) -> str:
-    """Why a cursor whose file is unchanged reached no finding: the check that
-    reports its rule did not run, or found fewer than before."""
+def _stale_cursor_text(cursor: FindingsCursor, data: Mapping[str, Any]) -> str:
+    """Why this call's findings of a cursor's rule are not the ones it was
+    returned with: the check that reports them did not run, or failed, or
+    what they are read from changed."""
     check = check_reporting(cursor.rule, data["kind"])
-    why = next(
-        (
-            f": the {check} check did not run ({row['reason']})"
-            for row in data.get("checks_skipped") or ()
-            if row["check"] == check
-        ),
-        "",
-    )
+    skipped = [row for row in data.get("checks_skipped") or () if row["check"] == check]
+    failed = [row for row in data.get("failures") or () if row["stage"] == check]
+    if skipped:
+        why = f"the {check} check that reports them did not run ({skipped[0]['reason']})"
+    elif failed:
+        why = f"the {check} check that reports them failed: {failed[0]['error']}"
+    else:
+        why = (
+            "they have changed since it was returned: the file, a symbol or "
+            "library it reads, or its export, says something else now"
+        )
     return (
         f"findings_cursor resumes the {cursor.rule} findings at finding "
-        f"{cursor.offset + 1}, and this call found {found}{why}. Call verify_circuit "
-        "again without findings_cursor to list them from the first."
+        f"{cursor.offset + 1}, and {why}. Call verify_circuit again without "
+        "findings_cursor to list them from the first."
     )
 
 
-def _refuse_unfit_cursor(
-    cursor: FindingsCursor, args: VerifyCircuitInput, path: Path | None, revision: str | None
-) -> None:
-    """Refuse, before any check runs, a cursor this call cannot continue.
+#: What to change when a call does not run the check a cursor's rule needs,
+#: by the reason ``_planned_checks`` gives.
+_RUN_THE_CHECK: dict[str, str] = {
+    "render.mode='only'": "leave render.mode at 'with_checks'",
+    "not requested": "add '{check}' to checks, or leave checks out",
+}
 
-    A file that cannot be read is left to the evaluation, which says so. A
-    refusal that names the check to run takes no generic cursor hint, which
-    would send the caller back to the cursor instead.
-    """
-    if path is None or revision is None:
-        return
-    if cursor.revision != revision:
-        raise InvalidCursorError(
-            f"findings_cursor was returned for another file, or for {path} before it "
-            f"changed. Call verify_circuit again without findings_cursor to list the "
-            f"{cursor.rule} findings from the first."
-        )
-    # The revision matched, so this is the file the cursor was returned for.
+
+def _refuse_unfit_cursor(cursor: FindingsCursor, args: VerifyCircuitInput, path: Path) -> None:
+    """Refuse, before any check runs, a cursor this call cannot continue
+    because it does not run the check that reports the cursor's rule. A refusal
+    that names what to change takes no generic cursor hint, which would send
+    the caller back to the cursor instead."""
+    if not is_asc(path) and path.suffix.lower() not in NETLIST_SUFFIXES:
+        return  # the evaluation refuses the file and says why
     kind = "asc" if is_asc(path) else "netlist"
     check = check_reporting(cursor.rule, kind)
     wanted, skipped = _planned_checks(args, kind, has_reference=args.compare is not None)
-    if not wanted[check]:
-        reason = next(row["reason"] for row in skipped if row["check"] == check)
-        raise InvalidCursorError(
-            f"findings_cursor resumes the {cursor.rule} findings, which the '{check}' "
-            f"check reports, and this call does not run it ({reason}). Ask as the call "
-            f"that returned the cursor did, with '{check}' among the checks.",
-            show_hint=False,
-        )
+    if wanted[check]:
+        return
+    reason = next(row["reason"] for row in skipped if row["check"] == check)
+    fix = _RUN_THE_CHECK.get(reason, "run it as the call that returned the cursor did")
+    raise InvalidCursorError(
+        f"findings_cursor resumes the {cursor.rule} findings, which the '{check}' "
+        f"check reports, and this call does not run it ({reason}): "
+        f"{fix.format(check=check)}.",
+        show_hint=False,
+    )
 
 
 @registry.tool(
@@ -2930,16 +2947,14 @@ async def handle_verify_circuit(
     args: VerifyCircuitInput, state: SessionState
 ) -> types.CallToolResult:
     """Check (and optionally render/compare) a circuit file without changing it."""
-    # Decoded before any check runs, so a malformed cursor costs no export.
+    # Decoded, and held to the checks this call runs, before any check runs,
+    # so a cursor this call cannot continue costs no export. Whether its rule's
+    # findings are still the ones it was counted against is known only once
+    # they are found again (render_verify_circuit).
     cursor = (
         decode_findings_cursor(args.findings_cursor) if args.findings_cursor is not None else None
     )
-    # Read before the checks, so a file that changes while they run leaves the
-    # cursors of this reply bound to the old content, and the next call refuses
-    # them rather than resume a list they were not counted against.
     path = sandboxed(args.path, state)
-    revision = await asyncio.to_thread(file_revision, path) if path is not None else None
-    if cursor is not None:
-        _refuse_unfit_cursor(cursor, args, path, revision)
-    evaluation = await evaluate_verify_circuit(args, state)
-    return render_verify_circuit(evaluation, revision=revision, cursor=cursor)
+    if cursor is not None and path is not None:
+        _refuse_unfit_cursor(cursor, args, path)
+    return render_verify_circuit(await evaluate_verify_circuit(args, state), cursor=cursor)

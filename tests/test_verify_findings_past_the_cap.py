@@ -15,10 +15,15 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
+import pytest
+
+from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.lib.cursor_codec import encode_cursor
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools.verify import FINDING_RULE_CAP, FindingsCursor, file_revision
+from ltspice_mcp.tools import verify
+from ltspice_mcp.tools.verify import FINDING_RULE_CAP
 from tests.conftest import SyncApi, dispatch, dispatched
 
 #: More findings of one rule than one reply lists, and not a multiple of the
@@ -168,6 +173,8 @@ async def test_a_cursor_from_before_the_file_changed_is_refused(state_no_sim, wo
     assert refusal["code"] == "invalid_cursor"
     assert "changed" in refusal["error"]
     assert "without findings_cursor" in refusal["error"]
+    # The generic cursor hint would send the caller back to this dead cursor.
+    assert "hint" not in refusal
 
 
 async def test_a_cursor_for_another_file_is_refused(state_no_sim, work_dir):
@@ -218,22 +225,155 @@ async def test_a_cursor_that_is_not_one_is_refused_as_every_tool_refuses_one(
     assert "next_cursor" in refusal["error"]
 
 
-async def test_a_cursor_whose_check_could_not_run_says_why(state_no_sim, work_dir):
-    # A sheet's value-suffix findings are read off its export. A cursor for one,
-    # on an unchanged sheet, in a session where the export cannot run (no
-    # LTspice) reaches no finding, and the refusal names the skipped check and
-    # its reason rather than reading as "no more findings".
-    sheet = _sheet(work_dir, labels=1)
-    revision = file_revision(state_no_sim.resolve_path(str(sheet)))
-    cursor = FindingsCursor("value_suffix_micro_sign", FINDING_RULE_CAP, revision)
+class _LTspice:
+    """LTspice as the session detects it; its export is ``verify._create_netlist``,
+    which each test below replaces with the netlist it exports."""
 
+    spice_exe: ClassVar[list[str]] = ["/fake/LTspice.exe"]
+
+
+def _exporting(netlist: str):
+    """An export that writes ``netlist`` beside the sheet, as LTspice's does."""
+
+    def export(_simulator: Any, asc_path: Path, timeout: float = 0) -> Path:
+        net = Path(asc_path).with_suffix(".net")
+        net.write_bytes(netlist.encode())
+        return net
+
+    return export
+
+
+def _writing_nothing(_simulator: Any, asc_path: Path, timeout: float = 0) -> Path:
+    """An export that exits without writing the netlist."""
+    return Path(asc_path).with_suffix(".net")
+
+
+async def _export_cursor(
+    config: ServerConfig, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[SessionState, Path, str]:
+    """A session with LTspice, a sheet whose export spells every value with an
+    ohm sign, and the cursor a real call returned for those findings, which
+    the export check reports."""
+    cards = "".join(f"R{index} a 0 {index + 1}Ω\n" for index in range(MANY))
+    monkeypatch.setattr(verify, "_create_netlist", _exporting(f"* ohms\n{cards}.end\n"))
+    state = SessionState.create(config, available={"ltspice": _LTspice})
+    sheet = _sheet(work_dir, labels=1)
+    first = await dispatched(state, "verify_circuit", path=str(sheet), checks=["export"])
+    return state, sheet, first["findings_omitted"]["value_suffix_nonascii"]["next_cursor"]
+
+
+async def _refusal(state: SessionState, sheet: Path, cursor: str, **arguments: Any) -> dict:
     result = await dispatch(
-        state_no_sim, "verify_circuit", {"path": str(sheet), "findings_cursor": cursor.encode()}
+        state, "verify_circuit", {"path": str(sheet), "findings_cursor": cursor, **arguments}
+    )
+    assert result.is_error, result.structured_content
+    assert result.structured_content["code"] == "invalid_cursor"
+    return result.structured_content
+
+
+async def test_a_cursor_whose_check_could_not_run_says_why(config, work_dir, monkeypatch):
+    # The export the cursor's findings came from cannot run in this call, so
+    # the refusal names the skipped check and its reason rather than reading
+    # as "no more findings".
+    state, sheet, cursor = await _export_cursor(config, work_dir, monkeypatch)
+    del state.available_simulators["ltspice"]
+
+    refusal = await _refusal(state, sheet, cursor)
+
+    assert (
+        "the export check that reports them did not run (LTspice not detected)"
+        in (refusal["error"])
+    )
+    assert "without findings_cursor" in refusal["error"]
+
+
+async def test_a_cursor_whose_check_failed_names_the_failure(config, work_dir, monkeypatch):
+    state, sheet, cursor = await _export_cursor(config, work_dir, monkeypatch)
+    monkeypatch.setattr(verify, "_create_netlist", _writing_nothing)
+
+    refusal = await _refusal(state, sheet, cursor)
+
+    assert "produced no .net file" in refusal["error"]
+
+
+async def test_a_cursor_whose_export_lists_other_findings_is_refused(
+    config, work_dir, monkeypatch
+):
+    # The sheet is unchanged; what its export says is not. The cursor's place
+    # in the old list would serve a page of the new one.
+    state, sheet, cursor = await _export_cursor(config, work_dir, monkeypatch)
+    cards = "".join(f"R{index} a 0 {index + 1001}Ω\n" for index in range(MANY))
+    monkeypatch.setattr(verify, "_create_netlist", _exporting(f"* ohms\n{cards}.end\n"))
+
+    refusal = await _refusal(state, sheet, cursor)
+
+    assert "changed" in refusal["error"]
+
+
+#: A two-pin part, kept beside the sheet that uses it.
+_TWO_PINS = (
+    "Version 4\nSymbolType BLOCK\nRECTANGLE Normal -16 -16 16 16\n"
+    "PIN -16 0 LEFT 8\nPINATTR PinName A\nPINATTR SpiceOrder 1\n"
+    "PIN 16 0 RIGHT 8\nPINATTR PinName B\nPINATTR SpiceOrder 2\n"
+)
+
+
+async def test_a_cursor_whose_symbol_changed_is_refused(state_no_sim, work_dir):
+    # The sheet is unchanged; the symbol its parts use loses a pin, so each
+    # part has one floating pin where it had two.
+    symbol = work_dir / "twopin.asy"
+    symbol.write_text(_TWO_PINS, encoding="utf-8")
+    parts = "".join(
+        f"SYMBOL twopin {128 * index} 0 R0\nSYMATTR InstName X{index}\n" for index in range(30)
+    )
+    sheet = work_dir / "parts.asc"
+    sheet.write_text(f"Version 4\nSHEET 1 880 680\n{parts}", encoding="utf-8")
+    first = await dispatched(state_no_sim, "verify_circuit", path=str(sheet), checks=["layout"])
+    assert first["findings_omitted"]["floating_pin"]["total"] == 60
+    cursor = first["findings_omitted"]["floating_pin"]["next_cursor"]
+    symbol.write_text(_TWO_PINS.split("PIN 16 0")[0], encoding="utf-8")
+
+    refusal = await _refusal(state_no_sim, sheet, cursor, checks=["layout"])
+
+    assert "changed" in refusal["error"]
+
+
+async def test_a_render_only_call_names_the_render_mode_to_leave(state_no_sim, work_dir):
+    sheet = _sheet(work_dir)
+    first = await dispatched(state_no_sim, "verify_circuit", path=str(sheet), checks=["layout"])
+    cursor = first["findings_omitted"]["dangling_label"]["next_cursor"]
+
+    refusal = await _refusal(
+        state_no_sim, sheet, cursor, checks=["layout"], render={"format": "svg", "mode": "only"}
     )
 
-    assert result.is_error
-    refusal = result.structured_content
-    assert refusal["code"] == "invalid_cursor"
-    assert "this call found 0" in refusal["error"]
-    assert "the export check did not run (LTspice not detected)" in refusal["error"]
-    assert "without findings_cursor" in refusal["error"]
+    assert "render.mode" in refusal["error"]
+    assert "among the checks" not in refusal["error"]
+
+
+async def test_the_hint_names_the_cut_beside_a_failure(state_no_sim, work_dir):
+    # A compare against a sheet needs LTspice to export it, so the compare
+    # fails; the findings that were listed are still cut, and the hint says so.
+    deck = _netlist(work_dir)
+    reference = _sheet(work_dir, labels=1)
+    arguments = {"compare": {"reference": str(reference)}}
+    first = await dispatched(state_no_sim, "verify_circuit", path=str(deck), **arguments)
+    assert first["failures"]
+    assert f"{MANY - FINDING_RULE_CAP} more value_suffix_nonascii" in first["hint"]
+
+    second = await dispatched(
+        state_no_sim,
+        "verify_circuit",
+        path=str(deck),
+        findings_cursor=first["findings_omitted"]["value_suffix_nonascii"]["next_cursor"],
+        **arguments,
+    )
+
+    assert f"value_suffix_nonascii findings {FINDING_RULE_CAP + 1}" in second["hint"]
+
+
+async def test_a_cursor_naming_no_rule_is_refused_as_a_cursor(state_no_sim, work_dir):
+    # The codec's checksum is not a secret, so any body can be encoded.
+    crafted = encode_cursor({"rule": ["floating_pin"], "offset": FINDING_RULE_CAP, "of": None})
+
+    await _refusal(state_no_sim, _netlist(work_dir), crafted)
