@@ -197,8 +197,9 @@ def source_for_raw_path(
     """The source an already-validated caller-supplied ``.raw`` path resolves to.
 
     The path must already have passed ``safe_path``. Companion candidates are
-    authorized independently on load; only the contained capture worker checks
-    presence and writer evidence. Session simulator defaults are not provenance.
+    authorized independently on load, where a file the capture needs and does
+    not find is refused (``parser_service``); only the contained capture worker
+    reads writer evidence. Session simulator defaults are not provenance.
     """
     sibling = raw.with_suffix(".log")
     return AnalysisSource(

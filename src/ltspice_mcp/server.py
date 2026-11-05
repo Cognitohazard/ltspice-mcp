@@ -34,7 +34,7 @@ from ltspice_mcp.resources import (
     handle_read_resource,
 )
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._base import RegisteredTool, path_denied_text
+from ltspice_mcp.tools._base import RegisteredTool, failure_text, recovery_hint
 from ltspice_mcp.tools.reference_index import validation_error_detail
 
 # Tool argument keys that carry a circuit file path.
@@ -508,27 +508,25 @@ async def _invoke(
         return _tool_error(
             message, code="invalid_arguments", hint=_ARGUMENT_HINT.format(tool=name)
         )
-    except PathSecurityError as e:
-        # The caller reads the refusal in the result; the operator reads it on
-        # the server's stderr, which is the only channel left for it.
-        logger.warning("Path security violation in %s: %s", name, e)
-        # The guidance is the whole recovery, so it rides structuredContent too.
-        return _tool_error(
-            path_denied_text(e, state),
-            code=e.code,
-            error=str(e),
-            hint=state.sandbox_guidance(),
-        )
     except LTSpiceMCPError as e:
-        # The lookup every envelope surface uses; an error that carries
-        # precise guidance of its own (show_hint=False) takes none.
-        hint = _err.error_hint(e)
+        if isinstance(e, PathSecurityError):
+            # The caller reads the refusal in the result; the operator reads it
+            # on the server's stderr, which is the only channel left for it.
+            logger.warning("Path security violation in %s: %s", name, e)
+        # The step every surface gives this kind of failure (recovery_hint): a
+        # refused path's sandbox guidance, else its type's in the hint table;
+        # an error that carries precise guidance of its own takes none.
         message = _err.caller_message(e, state.tool_dispatch)
-        text = f"{message}\n\n{hint}" if hint else message
         # The hint is mirrored into structuredContent (self-sufficiency
         # contract): structured-aware clients drop the text channel, so a
         # text-only hint would be invisible exactly where it's needed.
-        return _tool_error(text, code=e.code, error=message, hint=hint, suggestions=e.suggestions)
+        return _tool_error(
+            failure_text(e, state, message),
+            code=e.code,
+            error=message,
+            hint=recovery_hint(e, state),
+            suggestions=e.suggestions,
+        )
     except Exception as e:
         # Surface the actual exception type + message in the response. A bare
         # "check server logs" is a dead end for an MCP client: the traceback
@@ -554,7 +552,7 @@ async def list_resource_templates(
     return types.ListResourceTemplatesResult(resource_templates=get_resource_templates())
 
 
-def _resource_error(message: str) -> MCPError:
+def _resource_error(message: str, *, code: str | None = None, hint: str | None = None) -> MCPError:
     """The JSON-RPC error a failed resource read answers with.
 
     A read has no result to carry a message, so a failure has to be a protocol
@@ -566,8 +564,17 @@ def _resource_error(message: str) -> MCPError:
     resource that refused the request. A server-side fault gets the
     internal-error code instead, so a client is not told to retry with
     different arguments when nothing it sends would help.
+
+    A failure of a typed kind carries, in the error's ``data``, the ``code`` and
+    recovery ``hint`` a tool that fails the same way returns, so a client can
+    branch on the one and act on the other without reading the message.
     """
-    return MCPError(types.INVALID_PARAMS, message)
+    data: dict[str, str] = {}
+    if code is not None:
+        data["code"] = code
+    if hint is not None:
+        data["hint"] = hint
+    return MCPError(types.INVALID_PARAMS, message, data or None)
 
 
 async def read_resource(
@@ -593,11 +600,17 @@ async def read_resource(
         # whole router runs off the loop. It never touches loop-owned
         # mutable state (the editor cache and library sessions stay untouched).
         return await asyncio.to_thread(handle_read_resource, uri, state)
-    except PathSecurityError as e:
-        # Same sandbox wall as the tool path (e.g. spice://netlists/{outside});
-        # enrich it here so every resource route gets the recovery guidance.
-        raise _resource_error(path_denied_text(e, state)) from None
-    except (LTSpiceMCPError, ValueError) as e:
+    except LTSpiceMCPError as e:
+        # Reported as a tool reports the same failure: the same sandbox wall
+        # (spice://netlists/{outside}) with its guidance, an unknown job
+        # (spice://results/{job_id}/...) with the table's step for it.
+        message = _err.caller_message(e, state.tool_dispatch)
+        raise _resource_error(
+            failure_text(e, state, message), code=e.code, hint=recovery_hint(e, state)
+        ) from None
+    except ValueError as e:
+        # An unknown URI, or a file this resource does not serve: the message
+        # names what it takes, and there is no failure kind to name.
         raise _resource_error(str(e)) from None
     except Exception as e:
         # Nothing above classified this, so it is a fault in the server, not in

@@ -312,6 +312,18 @@ class JobNotFoundError(ResultError):
     code = "job_not_found"
 
 
+class ResultFileNotFoundError(ResultError):
+    """No file is at a path a caller named for its results: the ``.raw`` or
+    ``.log`` to read, or every file read with it.
+
+    Its own type because its recovery is the path the caller wrote, where the
+    result family's is the run that made the file: a file named by path need
+    not have come from any job of this server's.
+    """
+
+    code = "result_file_not_found"
+
+
 class OtherRawNotWritten(ResultError):
     """A read asked for an experiment case's other raw (an FRA's results, a
     transient's operating point) of a kind its run did not write."""
@@ -403,6 +415,11 @@ ERROR_HINTS: dict[type[LTSpiceMCPError], str] = {
     ResultError: (
         'Verify the run reached a terminal state with jobs (action:"status"), '
         "and read signals with analyze_results."
+    ),
+    ResultFileNotFoundError: (
+        "Check the file's name and folder against the path the message gives, "
+        "or read a run this server made by its job_id instead (jobs with "
+        'action:"list" lists them).'
     ),
     LibraryError: (
         'Use inspect with a model query (mode:"search") to find the part in the '

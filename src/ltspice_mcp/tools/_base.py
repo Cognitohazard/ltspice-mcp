@@ -18,7 +18,7 @@ from pydantic import Field, PrivateAttr
 
 from ltspice_mcp.config import SIM_EXECUTABLES_KEY as _SIM_EXECUTABLES_KEY
 from ltspice_mcp.config import SIM_SECTION as _SIM_SECTION
-from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError, SimulationError
+from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError, SimulationError, error_hint
 from ltspice_mcp.lib import atomic_write_bytes, response_budget
 
 # Re-exported façade names: the strict Pydantic base lives in ``lib`` (models
@@ -1556,7 +1556,35 @@ def path_denied_text(exc: PathSecurityError, state: SessionState) -> str:
     what to do about it; a surface that carries the message in a field of its
     own puts ``state.sandbox_guidance()`` alone in its ``hint``.
     """
-    return f"{exc}\n\n{state.sandbox_guidance()}"
+    return failure_text(exc, state)
+
+
+def recovery_hint(exc: BaseException, state: SessionState | None) -> str | None:
+    """The recovery step every surface gives a failure of ``exc``'s kind.
+
+    A refused path's is the session's sandbox guidance, which reads the
+    sandbox as it stands (none without a session to read); any other's is its
+    type's entry in ``errors.ERROR_HINTS`` (``errors.error_hint``). None for a
+    failure with no step, or one whose message says its own.
+    """
+    if isinstance(exc, PathSecurityError):
+        return state.sandbox_guidance() if state is not None else None
+    return error_hint(exc)
+
+
+def failure_text(
+    exc: BaseException, state: SessionState | None, message: str | None = None
+) -> str:
+    """A failure as one text: its message (``message``, else the exception's),
+    then its recovery step (:func:`recovery_hint`) when it has one.
+
+    For a surface with one text to carry both: a tool's text channel, a failed
+    resource read, and the ``hint`` of a receipt-shaped refusal (run_experiments,
+    jobs), which says the message again ahead of the step.
+    """
+    said = str(exc) if message is None else message
+    hint = recovery_hint(exc, state)
+    return f"{said}\n\n{hint}" if hint else said
 
 
 def resolve_reference(reference: str, state: SessionState) -> str | Path:

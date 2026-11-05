@@ -455,7 +455,7 @@ class TestServerDispatch:
         assert result.is_error
         data = result.structured_content
         assert data is not None
-        assert data["code"] == "result_unreadable"
+        assert data["code"] == "result_file_not_found"
         message, hint = tool_text(result).split("\n\n", 1)
         assert data["error"] == message
         # The first reply's guide reminder follows the hint.

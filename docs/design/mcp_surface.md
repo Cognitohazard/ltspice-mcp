@@ -86,7 +86,13 @@ beside the item's fields that no branch takes.
 `tests/test_refusals_name_the_fix.py` holds every tool to this. A
 failure a tool raises instead of reporting in its envelope is `{error, code,
 hint?, suggestions?}` with the failure's own code, or `internal_error` for an
-unclassified one; a `path_denied` refusal is `{error, code, hint}`.
+unclassified one; a `path_denied` refusal is `{error, code, hint}`. A
+`run_experiments` or `jobs` refusal is the envelope's `error`, and its `hint`
+is the message followed by the same recovery step. A resource read that fails
+this way is a JSON-RPC invalid-params error whose message is the failure
+followed by that step, and whose `data` is `{code, hint?}`; an unknown URI's
+error has no `data`. Every surface takes the step for a kind of failure from
+one table (`errors.ERROR_HINTS`), a refused path's from the session's sandbox.
 
 **Error codes.** `code` is a stable public name for a failure. It depends on
 the kind of failure and never on the message, except that a failure inside a
@@ -104,6 +110,7 @@ Codes by kind of failure:
 | `symbol_unresolved` | the schematic opened, but a symbol or library it refers to was not found |
 | `simulation_failed` | the simulator could not be started, or the run failed |
 | `result_unreadable` | a `.raw` or `.log` could not be read |
+| `result_file_not_found` | no file is at a `.raw` or `.log` path the caller named; the `hint` says to check the path, or to read a run of this server's by its `job_id` |
 | `analysis_deadline` | a result read ran past its wall-clock bound and was abandoned |
 | `no_axis` | the selected plot is a table (an operating point, `.tf` or `.pz` result), so it has no sweep axis to query at |
 | `job_not_found` | no job with that `job_id` or `request_id` |
@@ -1163,7 +1170,7 @@ continuation replays them.
 - A source that names nothing is a `coverage.missing_cases` row coded as
   every tool reports the same failure, with that failure's `hint`: an unknown
   `job_id` is `job_not_found`, and a `path` with no file is
-  `result_unreadable`.
+  `result_file_not_found`.
 - Before any recipe runs, the server reads every source once to record its
   file hashes and the simulator errors its log reports. A timeout during this
   first read raises `analysis_deadline` and creates no result set or cursor;

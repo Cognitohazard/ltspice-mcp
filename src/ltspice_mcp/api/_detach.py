@@ -194,6 +194,9 @@ def _failure(
         # submitting, and it died without saying. Claiming not_started here
         # would tell the caller a job that may exist does not.
         commit_state="unknown",
+        # The owner's failure is no kind the hint table names; the message says
+        # where its log is, and for a timeout how to replay the request.
+        hint=detail,
     )
     return ApiCallError(detail, payload=payload)
 

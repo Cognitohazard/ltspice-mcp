@@ -2,18 +2,22 @@
 
 import os
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
-from mcp.types import TextResourceContents
+from mcp.shared.exceptions import MCPError
+from mcp.types import INVALID_PARAMS, ReadResourceRequestParams, TextResourceContents
 
+from ltspice_mcp.errors import ERROR_HINTS, JobNotFoundError
 from ltspice_mcp.lib import experiment_store, recent
 from ltspice_mcp.resources import (
     get_static_resources,
     handle_read_resource,
 )
+from ltspice_mcp.server import read_resource
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.jobs import JobsInput, handle_jobs
-from tests.conftest import persist_experiment_record
+from tests.conftest import dispatch, fake_request_context, persist_experiment_record
 
 
 def _text(contents) -> str:
@@ -328,3 +332,56 @@ class TestNetlistResourceHardening:
         monkeypatch.setattr(resources_mod, "_NETLIST_RESOURCE_CAP_BYTES", 64)
         with pytest.raises(ValueError, match="too large"):
             handle_read_resource("spice://netlists/huge.cir", state_no_sim)
+
+
+async def _read_failure(state: SessionState, uri: str) -> MCPError:
+    """The error a ``resources/read`` of ``uri`` answers with, through the
+    server's own handler."""
+    with pytest.raises(MCPError) as failed:
+        await read_resource(
+            fake_request_context(state, "resources/read"), ReadResourceRequestParams(uri=uri)
+        )
+    return failed.value
+
+
+class TestReadFailureCarriesCodeAndHint:
+    """A failed read carries its failure's code and recovery step, as a tool
+    call that fails the same way does: the step in the message after the
+    failure, and both in the error's data for a client that branches on them."""
+
+    async def test_an_unknown_job_is_job_not_found_with_its_step(self, state_no_sim: SessionState):
+        failed = await _read_failure(state_no_sim, "spice://results/exp_nope_123/signals")
+        step = ERROR_HINTS[JobNotFoundError]
+        assert failed.code == INVALID_PARAMS
+        assert failed.data == {"code": "job_not_found", "hint": step}
+        assert failed.message.endswith(f"\n\n{step}")
+
+        # The tool that reads the same job answers the same way.
+        tool = await dispatch(
+            state_no_sim, "inspect", {"queries": [{"kind": "results", "job_id": "exp_nope_123"}]}
+        )
+        assert tool.structured_content is not None
+        (item,) = tool.structured_content["results"]
+        assert (item["error"]["code"], item["error"]["hint"]) == ("job_not_found", step)
+
+    async def test_a_refused_path_is_path_denied_with_the_sandbox_guidance(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        outside = work_dir.parent / "outside.cir"
+        failed = await _read_failure(
+            state_no_sim, f"spice://netlists/{quote(str(outside), safe='')}"
+        )
+        guidance = state_no_sim.sandbox_guidance()
+        assert failed.code == INVALID_PARAMS
+        assert failed.data == {"code": "path_denied", "hint": guidance}
+        assert failed.message.endswith(f"\n\n{guidance}")
+
+    async def test_a_failure_of_no_kind_carries_its_message_alone(
+        self, state_no_sim: SessionState
+    ):
+        """A URI that names no resource has no code of its own: nothing is
+        added to what the message says."""
+        failed = await _read_failure(state_no_sim, "spice://nonexistent")
+        assert failed.code == INVALID_PARAMS
+        assert failed.data is None
+        assert failed.message == "Unknown resource URI: spice://nonexistent"

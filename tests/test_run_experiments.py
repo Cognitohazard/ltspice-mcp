@@ -21,7 +21,9 @@ import pytest
 from pydantic import ValidationError
 from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
+from ltspice_mcp.api import ApiCallError
 from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.errors import ERROR_HINTS, RecipeInvalidError, SimulationError
 from ltspice_mcp.lib import experiment_runner as experiment_runner_mod
 from ltspice_mcp.lib import experiment_store, response_budget, result_store, store, wsl
 from ltspice_mcp.lib.deck_staging import resolve_experiment_paths, sha256_file
@@ -55,8 +57,10 @@ from tests._mismatch_fixtures import MINI_FET
 from tests.conftest import (
     LIVENESS_S,
     FakeSim,
+    SyncApi,
     await_until,
     coordinator_returned,
+    dispatch,
     fake_artifact_paths,
     fake_simulator,
     job_done,
@@ -1216,6 +1220,72 @@ class TestLeanReceipt:
 
         assert data["analysis"]["status"] == "completed"
         _assert_attached_artifact(data, "p")
+
+
+def _refused_submissions(state: SessionState, arguments: dict[str, Any]) -> dict[str, Any]:
+    """The receipt each way into run_experiments answers a refused submission
+    with: its handler, the server's dispatch, and the Python API."""
+    # Read, so no reply carries the first-reply guide reminder after its hint.
+    state.guide_read = True
+    replies = {
+        "handler": asyncio.run(
+            handle_run_experiments(
+                RunExperimentsInput.model_validate({**arguments, "request_id": "refused-1"}),
+                state,
+            )
+        ),
+        "mcp": asyncio.run(dispatch(state, "run_experiments", {**arguments, "request_id": "r-2"})),
+    }
+    receipts: dict[str, Any] = {}
+    for door, result in replies.items():
+        assert result.is_error and result.structured_content is not None, door
+        receipts[door] = result.structured_content
+    with pytest.raises(ApiCallError) as refused:
+        SyncApi(state).run_experiments(**arguments, request_id="refused-3", wait=False)
+    receipts["api"] = refused.value.payload
+    return receipts
+
+
+class TestSubmissionRefusalHints:
+    """A submission refused before a job exists carries its failure kind's
+    recovery step from the one table every surface reads (``errors.ERROR_HINTS``),
+    after its message, as a jobs refusal does; a kind with none, or one that
+    says its own recovery, carries the message alone."""
+
+    def test_an_invalid_attached_recipe_carries_the_recipe_step(
+        self, state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        arguments = {
+            "circuits": [{"path": str(_deck(work_dir / "bad_recipe.cir"))}],
+            "analyze": {"recipes": [{"key": "x", "metric": "no_such_metric"}]},
+        }
+        for door, receipt in _refused_submissions(state_with_sim, arguments).items():
+            error = receipt["error"]
+            assert error["code"] == RecipeInvalidError.code, door
+            assert receipt["hint"] == f"{error['message']}\n\n{ERROR_HINTS[RecipeInvalidError]}"
+        assert submissions == []
+
+    def test_no_simulator_carries_the_simulator_step(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        arguments = {"circuits": [{"path": str(_deck(work_dir / "no_sim.cir"))}]}
+        for door, receipt in _refused_submissions(state_no_sim, arguments).items():
+            error = receipt["error"]
+            assert error["code"] == "submission_failed", door
+            assert receipt["hint"] == f"{error['message']}\n\n{ERROR_HINTS[SimulationError]}"
+
+    def test_a_refusal_that_names_its_own_recovery_carries_the_message_alone(
+        self, state_with_sim: SessionState, work_dir: Path
+    ):
+        arguments = {
+            "circuits": [{"path": str(_deck(work_dir / "unknown_sim.cir"))}],
+            # A family this session did not detect: the refusal lists what it has.
+            "execution": {"simulator": "xyce"},
+        }
+        for door, receipt in _refused_submissions(state_with_sim, arguments).items():
+            assert receipt["hint"] == receipt["error"]["message"], door
 
 
 @pytest.mark.asyncio

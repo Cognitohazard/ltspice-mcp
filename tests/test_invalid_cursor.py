@@ -1,9 +1,10 @@
 """A malformed cursor is the same failure on every tool that takes one.
 
 Each argument that resumes a page is sent a cursor no tool minted, through the
-server's own dispatch. Every one answers ``invalid_cursor``, and a call-level
-refusal's hint sends the caller back to that tool's own cursor rather than to
-a job check or a netlist lint.
+server's own dispatch. Every one answers ``invalid_cursor`` with that kind's
+one recovery step (``errors.ERROR_HINTS``), a call-level refusal and a failed
+``inspect`` item alike, which sends the caller back to that tool's own cursor
+rather than to a job check or a netlist lint.
 """
 
 from __future__ import annotations
@@ -14,18 +15,21 @@ from typing import Any
 
 import pytest
 
-from ltspice_mcp.errors import InvalidCursorError
+from ltspice_mcp.errors import ERROR_HINTS, InvalidCursorError
 from ltspice_mcp.lib import result_store
 from ltspice_mcp.server import call_tool
 from ltspice_mcp.state import SessionState
 from tests.conftest import (
     FIXTURES_DIR,
+    SyncApi,
     call_tool_params,
     fake_request_context,
     make_experiment_job,
 )
 
 GARBAGE = "garbage"
+#: The recovery step every surface gives a cursor no tool minted.
+_STEP = ERROR_HINTS[InvalidCursorError]
 
 
 async def _call(state: SessionState, tool: str, arguments: dict[str, Any]) -> Any:
@@ -40,6 +44,9 @@ def _assert_invalid_cursor(result: Any) -> dict[str, Any]:
     # jobs and edit_schematic report inside their envelope; the others raise.
     code = error["code"] if isinstance(error, dict) else data["code"]
     assert code == "invalid_cursor", data
+    # jobs' hint is its message, then the step; the first reply of a session
+    # carries the guide reminder after it.
+    assert _STEP in data["hint"], data
     return data
 
 
@@ -153,6 +160,29 @@ class TestItemLevelCursors:
         (item,) = data["results"]
         assert item["ok"] is False
         assert item["error"]["code"] == "invalid_cursor"
+        assert item["error"]["hint"] == _STEP
+
+    @pytest.mark.parametrize("kind", ["results", "components"])
+    def test_inspect_cursor_through_the_python_api(
+        self, state_no_sim: SessionState, work_dir: Path, kind: str
+    ) -> None:
+        raw = _raw(work_dir)
+        deck = work_dir / "rc.cir"
+        deck.write_text("V1 in 0 1\nR1 in out 1k\nC1 out 0 1u\n.tran 1m\n.end\n", encoding="utf-8")
+        query = (
+            {"kind": "results", "view": "signals", "path": str(raw)}
+            if kind == "results"
+            else {"kind": "components", "path": str(deck)}
+        )
+        # Only a single page takes a caller's cursor; automatic mode pages itself.
+        data = SyncApi(state_no_sim).inspect(raw_page=True, queries=[{**query, "cursor": GARBAGE}])
+        (item,) = data["results"]
+        assert item["ok"] is False
+        assert item["error"] == {
+            "code": "invalid_cursor",
+            "message": item["error"]["message"],
+            "hint": _STEP,
+        }
 
 
 class TestDecoders:

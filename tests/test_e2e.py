@@ -751,7 +751,7 @@ class TestAnalysisDegraded:
         assert data["coverage"]["runs_analyzed"] == 0
         assert data.get("failures", []) == []
         missing = data["coverage"]["missing_cases"]["items"][0]
-        assert missing["code"] == "result_unreadable"
+        assert missing["code"] == "result_file_not_found"
         assert "missing.raw" in missing["detail"]
         assert missing["hint"]
 
