@@ -1592,7 +1592,11 @@ def _pins_on_crossings(
         # Each net it lands on is known by the names that net carries itself
         # (NamedNets.own_names), as for a label.
         joined = sorted(
-            {net for name in after.own_names_of(landed) if (net := nets.net_named(name)) is not None}
+            {
+                net
+                for name in after.own_names_of(landed)
+                if (net := nets.net_named(name)) is not None
+            }
         )
         if len(joined) < 2:
             continue
