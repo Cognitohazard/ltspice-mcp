@@ -56,6 +56,15 @@ tool-surface changes.
 
 ### Added
 
+- `edit_schematic`'s `replace_directive` op changes one directive's or
+  comment's text in one call. Its `instruction` names the text as
+  `remove_directive` does, the whole text or `regex:`, and must name one; one
+  that names several is refused with each. The text keeps its place, size,
+  justification and kind, which a `remove_directive` and an `add_directive`
+  lost unless given again, and a directive's new text is checked as
+  `add_directive`'s is. Its result gives the text's kind and place and what
+  it `was` and is `now`. `remove_directive`'s `removed_texts` now gives a
+  text with its line breaks, where it gave the `\n` escapes the file holds.
 - At `INFO`, the server logs one structured record per tool call on the
   `ltspice_mcp.events` logger: the tool, its duration, how it ended (a
   result, an error and its code, a cancellation by the client, or a protocol
@@ -81,18 +90,31 @@ tool-surface changes.
   read without `run_code` or the Python API. The cursor is bound to the
   rule's findings as they were found, and is refused with `invalid_cursor`
   once they change (the file, a symbol it uses or its export), or when the
-  call does not run the check that reports the rule, naming what to change. The entry replaces the `<rule>: showing 25 of <n> findings`
-  observation, which sent the caller to `api.verify_circuit` for the rest,
-  and `dropped_wire`, which was cut at the cap with no word, now has one too.
+  call does not run the check that reports the rule, naming what to change.
+  The entry replaces the `<rule>: showing 25 of <n> findings` observation,
+  which sent the caller to `api.verify_circuit` for the rest, and
+  `dropped_wire`, which was cut at the cap with no word, now has one too.
   The hint names each rule cut short and the check that reports it.
-- `inspect(kind="open_in_ltspice")` lists all of where a sheet's window
-  differs from its file. A row cut at 25 entries a side has a `next_cursor`
-  beside `difference_omitted`, and the query's new `cursor` takes it back to
-  list that sheet's next entries, with the other rows listed as before. The
-  cursor is bound to the document, its window and both contents, and fails
-  as `invalid_cursor` once either changes or the sheet is closed. The Python
-  API's `inspect` lists every entry, where it stopped at 25 a side as the
-  tool did.
+- `inspect(kind="open_in_ltspice")` reads every entry where a window's copy
+  of a sheet differs from the file. The listing still names 25 entries a
+  side and counts the rest in `difference_omitted`, and a `hint` beside the
+  count now names the call that reads them: the same query with the sheet's
+  `path` (and `pid`, where more than one window has it open), which returns
+  that window's difference with both lists paged under one cursor. The
+  cursor is bound to the difference, so a page asked after either copy
+  changed is refused as `invalid_cursor`; a sheet no window has open fails as
+  `sheet_not_open`. Every reply that names a window's difference in part
+  now names the same call: `edit_schematic`'s `open_window_differs` refusal
+  and a dry run's note about a differing window, `verify_circuit`'s hint
+  when its `in_ltspice` window shows another sheet than the one checked, and
+  the `note` of `plot_waveform`'s `ltspice` block. One function writes that
+  call for all of them. The Python API's `inspect` follows the cursor and
+  returns the whole difference.
+- `inspect(kind="open_in_ltspice")` pages the documents open by `cursor`.
+  It listed the first 100 and counted the rest in `total`, with no way to
+  read them. The cursor is bound to the documents open, by window and path,
+  so a page asked after one was opened or closed is refused as
+  `invalid_cursor`.
 - A `mismatch` rule reaches a MOSFET inside a subcircuit on LTspice. LTspice
   takes neither `mulu0` nor `delvto` on a BSIM3 device, so the device gets its
   own copy of its `.model` card inside a private copy of its subcircuit, with
@@ -105,6 +127,15 @@ tool-surface changes.
 
 ### Fixed
 
+- The Python API's `inspect` returns every row of a paged query. It follows
+  each query's cursor, and joined the pages only where an item paged two
+  lists, so for every kind that pages one (`components`, `symbols`, `model`,
+  `simulator_docs`, a netlist `net`, the `open_in_ltspice` listing) it
+  returned the last page alone, under a `total` that counted every row: 50
+  of a netlist's 150 components. Every paged `inspect` item now names the
+  list its cursor pages in `page.collections`, one collection or two, which
+  is what the API joins by; `hierarchy` and `results`, which had added that
+  block themselves, now get it the same way.
 - `verify_circuit` reported `outcome: "complete"` when a check the caller
   asked for could not run, so `checks=["export"]` in a session without
   LTspice read as a clean result although no check ran. A check named in

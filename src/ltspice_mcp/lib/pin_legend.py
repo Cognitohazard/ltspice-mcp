@@ -162,29 +162,21 @@ def encode_pair_cursor(kind: str, offsets: tuple[int, int]) -> str:
     return encode_cursor({"kind": kind, "offsets": [offsets[0], offsets[1]]})
 
 
-def read_pair_cursor(cursor: str) -> tuple[str, tuple[int, int]]:
-    """The view a two-offset cursor was minted for, and its offsets, without
-    matching it to a view: for a caller that holds several views and finds the
-    cursor's own among them. ``PageCursorError`` for anything else."""
+def decode_pair_cursor(cursor: str, kind: str) -> tuple[int, int]:
+    """Recover both resume offsets from ``cursor``; validate it belongs to ``kind``."""
     try:
         body = decode_cursor(cursor)
         c_kind = body["kind"]
         first, second = (int(value) for value in body["offsets"])
     except (CursorError, KeyError, TypeError, ValueError) as exc:
         raise PageCursorError(f"malformed page cursor: {cursor!r}") from exc
-    if not isinstance(c_kind, str) or first < 0 or second < 0:
-        raise PageCursorError(f"invalid page cursor: {cursor!r}")
-    return c_kind, (first, second)
-
-
-def decode_pair_cursor(cursor: str, kind: str) -> tuple[int, int]:
-    """Recover both resume offsets from ``cursor``; validate it belongs to ``kind``."""
-    c_kind, offsets = read_pair_cursor(cursor)
     if c_kind != kind:
         raise PageCursorError(
             f"cursor is for view {c_kind!r}, not {kind!r}; use the page's own next_cursor"
         )
-    return offsets
+    if first < 0 or second < 0:
+        raise PageCursorError(f"invalid page cursor: {cursor!r}")
+    return first, second
 
 
 def _window(items: Sequence[Any], offset: int, limit: int) -> dict[str, Any]:

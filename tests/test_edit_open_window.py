@@ -30,6 +30,7 @@ from ltspice_mcp.lib.ltspice_bridge import BridgeError, BridgeSession
 from ltspice_mcp.lib.ltspice_window import OpenSheet, OpenWindows
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import schematic_edit as se
+from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from ltspice_mcp.tools.schematic_edit import EditSchematicInput, handle_edit_schematic
 from tests._ltspice_window import (
     PID,
@@ -190,6 +191,28 @@ async def test_an_edit_is_refused_while_the_window_holds_a_different_sheet(
     assert file_bytes(asc_file) == before
     assert window.text(asc_file) == held
     assert data["sha256"] == hashlib.sha256(before).hexdigest()
+
+
+async def test_a_refusal_names_part_of_a_long_difference_and_the_call_that_reads_it_all(
+    asc_state: SessionState, asc_file: Path, window: Window
+):
+    """The refusal names a few entries a side by their first line; the call
+    its hint names reads every entry, in full."""
+    added = [f"WIRE {x} 2000 {x} 2016" for x in range(0, 16 * 30, 16)]
+    window.shows(asc_file, as_ltspice_reads(asc_file) + "".join(f"{w}\n" for w in added))
+
+    data = await edit(asc_state, asc_file)
+
+    assert data["error"]["code"] == "open_window_differs"
+    assert "; and 27 more" in data["error"]["message"]
+    assert se._DIFFERENCE_IN_ONE in data["hint"]
+    queries: Any = [{"kind": "open_in_ltspice", "path": str(asc_file)}]
+    read = await handle_inspect(InspectInput(queries=queries), asc_state)
+    assert read.structured_content is not None
+    (item,) = read.structured_content["results"]
+    assert item["data"]["only_in_window"] == sorted(added)
+    assert "only_in_file" not in item["data"]
+    assert "next_cursor" not in item
 
 
 def a_change(sheet: Path) -> str:

@@ -17,6 +17,7 @@ import pytest
 from ltspice_mcp.lib.ltspice_window import OpenWindows
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import inspect_tools
+from ltspice_mcp.tools._base import difference_in_full
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from tests._ltspice_window import (
     PID,
@@ -28,7 +29,7 @@ from tests._ltspice_window import (
     put_windows,
     write_world,
 )
-from tests.conftest import SyncApi, dispatched
+from tests.conftest import SyncApi
 
 
 def a_second_sheet(asc_file: Path) -> Path:
@@ -59,8 +60,9 @@ R1 = (
 )
 
 
-async def ask(state: SessionState) -> dict[str, Any]:
-    result = await handle_inspect(InspectInput(queries=[{"kind": "open_in_ltspice"}]), state)  # type: ignore[list-item]
+async def ask(state: SessionState, **query: Any) -> dict[str, Any]:
+    queries = [{"kind": "open_in_ltspice", **query}]
+    result = await handle_inspect(InspectInput(queries=queries), state)  # type: ignore[arg-type]
     data = result.structured_content
     assert data is not None
     jsonschema.Draft202012Validator(inspect_tools._OUTPUT_SCHEMA).validate(data)
@@ -165,6 +167,190 @@ async def test_a_long_difference_is_listed_up_to_a_limit_and_the_rest_counted(
     assert row["only_in_window"] == sorted(wires)[:25]
     assert "only_in_file" not in row
     assert row["difference_omitted"] == 5
+    assert row["hint"] == difference_in_full(window="this pid")
+
+
+def wires(y: int, count: int) -> list[str]:
+    """``count`` short wires along ``y``, as .asc lines."""
+    return [f"WIRE {x} {y} {x} {y + 16}" for x in range(0, 16 * count, 16)]
+
+
+def lines(entries: list[str]) -> str:
+    return "".join(f"{entry}\n" for entry in entries)
+
+
+def a_sheet_and_a_window_far_apart(
+    state: SessionState, asc_file: Path, world: Path, in_window: list[str], in_file: list[str]
+) -> None:
+    """The window holds the sheet with ``in_window`` added; the file, with ``in_file``."""
+    sheet = as_ltspice_reads(asc_file)
+    put_windows(state, world, [a_window({str(asc_file): sheet + lines(in_window)})])
+    with asc_file.open("ab") as file:
+        file.write(lines(in_file).encode("ascii"))
+
+
+async def read_in_full(state: SessionState, **query: Any) -> list[dict[str, Any]]:
+    """Every page of an open_in_ltspice query naming a sheet, following next_cursor."""
+    pages = [await ask(state, **query)]
+    while "next_cursor" in pages[-1]:
+        assert len(pages) < 100, "the cursor never ran out"
+        pages.append(await ask(state, **query, cursor=pages[-1]["next_cursor"]))
+    return pages
+
+
+async def test_every_entry_of_a_long_difference_is_read_through_the_call_its_hint_names(
+    asc_state: SessionState, asc_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The list names 25 entries a side and counts the rest. The call its hint
+    names, given the row's path and pid, pages through every one of them."""
+    in_window, in_file = wires(2000, 30), wires(3000, 40)
+    a_sheet_and_a_window_far_apart(
+        asc_state, asc_file, tmp_path / "world.json", in_window, in_file
+    )
+
+    (row,) = (await ask(asc_state))["data"]["designs"]
+    assert row["difference_omitted"] == (30 - 25) + (40 - 25)
+    assert row["hint"] == difference_in_full(window="this pid")
+    # A page smaller than either side, so both sides take several pages.
+    monkeypatch.setattr(inspect_tools, "_PAGE_SIZE", 7)
+    pages = await read_in_full(asc_state, path=row["path"], pid=row["pid"])
+
+    assert all(page["ok"] for page in pages), pages
+    assert len(pages) == 6
+    for page in pages:
+        data = page["data"]
+        assert (data["path"], data["pid"], data["version"]) == (str(asc_file), PID, "26.1.1")
+        assert data["sha256"] == row["sha256"] == digest(asc_file)
+        assert data["differs_from_file"] is True
+        assert data["difference"] == row["difference"]
+    read = {
+        side: [entry for page in pages for entry in page["data"].get(side, [])]
+        for side in ("only_in_window", "only_in_file")
+    }
+    assert read == {"only_in_window": sorted(in_window), "only_in_file": sorted(in_file)}
+    assert pages[0]["page"] == {
+        "total": 70,
+        "returned": 14,
+        "truncated": True,
+        "collections": {
+            "only_in_window": {"total": 30, "returned": 7, "truncated": True},
+            "only_in_file": {"total": 40, "returned": 7, "truncated": True},
+        },
+    }
+
+
+def test_the_python_api_reads_a_long_difference_whole_in_one_call(
+    asc_state: SessionState, asc_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """``Api.inspect`` follows the cursor itself, as for every other paged kind."""
+    in_window, in_file = wires(2000, 30), wires(3000, 40)
+    a_sheet_and_a_window_far_apart(
+        asc_state, asc_file, tmp_path / "world.json", in_window, in_file
+    )
+    monkeypatch.setattr(inspect_tools, "_PAGE_SIZE", 7)
+
+    collected = SyncApi(asc_state).inspect(
+        queries=[{"kind": "open_in_ltspice", "path": str(asc_file)}]
+    )
+
+    (item,) = collected["results"]
+    assert item["data"]["only_in_window"] == sorted(in_window)
+    assert item["data"]["only_in_file"] == sorted(in_file)
+
+
+async def test_a_sheet_open_in_two_windows_is_read_in_the_one_pid_names(
+    asc_state: SessionState, asc_file: Path, tmp_path: Path
+):
+    sheet = as_ltspice_reads(asc_file)
+    first, second = wires(2000, 3), wires(4000, 2)
+    put_windows(
+        asc_state,
+        tmp_path / "world.json",
+        [
+            a_window({str(asc_file): sheet + lines(first)}),
+            a_window({str(asc_file): sheet + lines(second)}, pid=PID + 1),
+        ],
+    )
+
+    unchosen = await ask(asc_state, path=str(asc_file))
+    chosen = await ask(asc_state, path=str(asc_file), pid=PID + 1)
+    neither = await ask(asc_state, path=str(asc_file), pid=PID + 2)
+
+    assert unchosen["ok"] is False
+    assert unchosen["error"]["code"] == "window_not_chosen"
+    assert f"(processes {PID}, {PID + 1}): pass one as pid" in unchosen["error"]["message"]
+    assert chosen["ok"] is True
+    assert chosen["data"]["pid"] == PID + 1
+    assert chosen["data"]["only_in_window"] == sorted(second)
+    assert "next_cursor" not in chosen
+    assert neither["error"]["code"] == "sheet_not_open"
+    assert f"open in process {PID}, {PID + 1}: pass one as pid" in neither["error"]["message"]
+
+
+async def test_a_page_asked_after_the_window_changed_is_refused(
+    asc_state: SessionState, asc_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The cursor carries offsets into the difference it was minted for; a page
+    of a different one would skip or repeat entries, so it is refused."""
+    world = tmp_path / "world.json"
+    sheet = as_ltspice_reads(asc_file)
+    put_windows(asc_state, world, [a_window({str(asc_file): sheet + lines(wires(2000, 10))})])
+    monkeypatch.setattr(inspect_tools, "_PAGE_SIZE", 4)
+    first = await ask(asc_state, path=str(asc_file))
+    write_world(world, [a_window({str(asc_file): sheet + lines(wires(2000, 11))})])
+
+    later = await ask(asc_state, path=str(asc_file), cursor=first["next_cursor"])
+
+    assert later["ok"] is False
+    assert later["error"]["code"] == "invalid_cursor"
+
+
+async def test_a_sheet_whose_window_holds_the_file_says_so_and_lists_nothing(
+    asc_state: SessionState, asc_file: Path, tmp_path: Path
+):
+    put_windows(
+        asc_state, tmp_path / "world.json", [a_window({str(asc_file): as_ltspice_reads(asc_file)})]
+    )
+
+    item = await ask(asc_state, path=str(asc_file))
+
+    assert item["ok"] is True
+    assert item["data"] == {
+        "path": str(asc_file),
+        "pid": PID,
+        "version": "26.1.1",
+        "sha256": digest(asc_file),
+    }
+    assert "next_cursor" not in item
+
+
+async def test_a_sheet_no_window_has_open_fails_and_says_where_to_look(
+    asc_state: SessionState, asc_file: Path, tmp_path: Path
+):
+    put_windows(asc_state, tmp_path / "world.json", [a_window()])
+
+    item = await ask(asc_state, path=str(asc_file))
+
+    assert item["error"]["code"] == "sheet_not_open"
+    assert "inspect(kind='open_in_ltspice') without a path" in item["error"]["message"]
+
+
+@pytest.mark.parametrize(
+    ("query", "said"),
+    [
+        ({"path": "amp.net"}, "path must be a .asc sheet"),
+        ({"pid": PID}, "pid needs path"),
+    ],
+)
+async def test_a_query_that_names_no_sheet_to_compare_is_refused(
+    asc_state: SessionState, tmp_path: Path, query: dict[str, Any], said: str
+):
+    put_windows(asc_state, tmp_path / "world.json", [a_window()])
+
+    item = await ask(asc_state, **query)
+
+    assert item["error"]["code"] == "invalid_query"
+    assert said in item["error"]["message"]
 
 
 async def test_the_digest_it_reports_is_the_one_an_edit_takes(
@@ -253,21 +439,48 @@ async def test_a_bridge_that_does_not_answer_fails_the_query(
 
 
 @pytest.mark.parametrize("extra", [41, 0])
-async def test_a_long_list_is_cut_and_counted(
+async def test_every_open_document_is_read_by_following_the_cursor(
     asc_state: SessionState,
     asc_file: Path,
     tmp_path: Path,
     extra: int,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(inspect_tools, "_OPEN_DESIGNS_LIMIT", 3)
+    monkeypatch.setattr(inspect_tools, "_PAGE_SIZE", 3)
     designs = {str(asc_file.with_name(f"deck{n}.net")): "* deck\n" for n in range(3 + extra)}
     put_windows(asc_state, tmp_path / "world.json", [a_window(designs)])
 
-    data = (await ask(asc_state))["data"]
+    pages = [await ask(asc_state)]
+    while "next_cursor" in pages[-1]:
+        assert len(pages) < 100, "the cursor never ran out"
+        pages.append(await ask(asc_state, cursor=pages[-1]["next_cursor"]))
 
-    assert len(data["designs"]) == 3
-    assert data["total"] == 3 + extra
+    assert all(page["ok"] for page in pages), pages
+    assert len(pages[0]["data"]["designs"]) == 3
+    assert {page["data"]["total"] for page in pages} == {3 + extra}
+    read = [row["path"] for page in pages for row in page["data"]["designs"]]
+    assert read == list(designs)
+
+
+async def test_a_page_of_the_list_asked_after_a_document_opened_is_refused(
+    asc_state: SessionState, asc_file: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The cursor carries an offset into the documents it was minted for: one
+    opened or closed in between would shift the rest, so the page is refused."""
+    monkeypatch.setattr(inspect_tools, "_PAGE_SIZE", 3)
+    world = tmp_path / "world.json"
+    designs = {str(asc_file.with_name(f"deck{n}.net")): "* deck\n" for n in range(5)}
+    put_windows(asc_state, world, [a_window(designs)])
+    first = await ask(asc_state)
+    designs[str(asc_file.with_name("late.net"))] = "* late\n"
+    write_world(world, [a_window(designs)])
+
+    later = await ask(asc_state, cursor=first["next_cursor"])
+    forged = await ask(asc_state, cursor="x")
+
+    assert later["ok"] is False
+    assert later["error"]["code"] == "invalid_cursor"
+    assert forged["error"]["code"] == "invalid_cursor"
 
 
 async def test_capabilities_say_whether_ltspice_is_started_on_request(
@@ -289,154 +502,3 @@ async def test_capabilities_say_whether_ltspice_is_started_on_request(
     assert await reported() == {"available": True}
     put_windows(asc_state, world, [], start=FakeStart(world))
     assert await reported() == {"available": True, "starts_ltspice": True}
-
-
-# ---------------------------------------------------------------------------
-# A long difference, read to the end
-#
-# Design principle "Safe edits" (docs/DESIGN.md): a list cut short says how to
-# read the rest. A row whose difference is cut has a next_cursor beside
-# difference_omitted, which the query's cursor takes back. Through the server's
-# own dispatch, as a client calls it, and without run_code.
-# ---------------------------------------------------------------------------
-
-
-def wires(count: int, y: int) -> list[str]:
-    """``count`` short wires on the row ``y``, as a difference lists them."""
-    return sorted(f"WIRE {x} {y} {x} {y + 16}" for x in range(0, 16 * count, 16))
-
-
-def lines(entries: list[str]) -> str:
-    return "".join(f"{entry}\n" for entry in entries)
-
-
-def a_long_difference(
-    state: SessionState, sheet: Path, world: Path, *, in_window: int, in_file: int
-) -> tuple[list[str], list[str]]:
-    """Open ``sheet`` in a window whose copy has ``in_window`` wires the file
-    lacks, and give the file ``in_file`` wires the copy lacks; both lists."""
-    window_only, file_only = wires(in_window, 2000), wires(in_file, 3000)
-    held = as_ltspice_reads(sheet) + lines(window_only)
-    with sheet.open("a", encoding="cp1252", newline="\n") as file:
-        file.write(lines(file_only))
-    put_windows(state, world, [a_window({str(sheet): held})])
-    return window_only, file_only
-
-
-def add_a_wire(sheet: Path) -> None:
-    """Change the file under a window that has it open."""
-    sheet.write_bytes(sheet.read_bytes() + b"WIRE 0 4000 0 4016\n")
-
-
-def row_for(item: dict[str, Any], sheet: Path) -> dict[str, Any]:
-    assert item["ok"] is True, item
-    (row,) = [row for row in item["data"]["designs"] if row["path"] == str(sheet)]
-    return row
-
-
-async def listed(state: SessionState, cursor: str | None = None) -> dict[str, Any]:
-    """The open_in_ltspice item, asked through the server's dispatch."""
-    query: dict[str, Any] = {"kind": "open_in_ltspice"}
-    if cursor is not None:
-        query["cursor"] = cursor
-    (item,) = (await dispatched(state, "inspect", queries=[query]))["results"]
-    return item
-
-
-async def every_entry(state: SessionState, sheet: Path) -> tuple[list[str], list[str], int]:
-    """Both sides of ``sheet``'s difference, read by following its cursor, and
-    the queries asked."""
-    row = row_for(await listed(state), sheet)
-    in_window, in_file = list(row.get("only_in_window", [])), list(row.get("only_in_file", []))
-    asked = 1
-    while "next_cursor" in row:
-        row = row_for(await listed(state, row["next_cursor"]), sheet)
-        page_window, page_file = row.get("only_in_window", []), row.get("only_in_file", [])
-        assert len(page_window) + len(page_file) > 0
-        in_window.extend(page_window)
-        in_file.extend(page_file)
-        asked += 1
-    return in_window, in_file, asked
-
-
-async def test_every_entry_of_a_long_difference_is_read_through_the_cursor(
-    asc_state: SessionState, asc_file: Path, tmp_path: Path
-):
-    window_only, file_only = a_long_difference(
-        asc_state, asc_file, tmp_path / "world.json", in_window=60, in_file=30
-    )
-
-    in_window, in_file, asked = await every_entry(asc_state, asc_file)
-
-    # 25 a side a reply: the window's 60 take three.
-    assert asked == 3
-    assert in_window == window_only
-    assert in_file == file_only
-
-
-async def test_each_page_counts_what_is_still_left_out(
-    asc_state: SessionState, asc_file: Path, tmp_path: Path
-):
-    a_long_difference(asc_state, asc_file, tmp_path / "world.json", in_window=60, in_file=30)
-    first = row_for(await listed(asc_state), asc_file)
-    assert first["difference_omitted"] == (60 - 25) + (30 - 25)
-
-    second = row_for(await listed(asc_state, first["next_cursor"]), asc_file)
-
-    assert second["difference_omitted"] == 60 - 50
-    assert len(second["only_in_file"]) == 30 - 25
-    # The sentence is about the whole difference, whichever page is listed.
-    assert second["difference"] == first["difference"]
-
-
-async def test_a_cursor_pages_its_own_sheet_and_leaves_the_others_as_they_were(
-    asc_state: SessionState, asc_file: Path, tmp_path: Path
-):
-    other = a_second_sheet(asc_file)
-    held = {
-        str(sheet): as_ltspice_reads(sheet) + lines(wires(30, 2000)) for sheet in (asc_file, other)
-    }
-    put_windows(asc_state, tmp_path / "world.json", [a_window(held)])
-    first = await listed(asc_state)
-
-    second = await listed(asc_state, row_for(first, asc_file)["next_cursor"])
-
-    assert row_for(second, other) == row_for(first, other)
-    assert row_for(second, asc_file)["only_in_window"] == wires(30, 2000)[25:]
-    assert "next_cursor" not in row_for(second, asc_file)
-
-
-@pytest.mark.parametrize("change", ["window", "file", "closed"])
-async def test_a_cursor_from_before_the_sheet_changed_is_refused(
-    asc_state: SessionState, asc_file: Path, tmp_path: Path, change: str
-):
-    world = tmp_path / "world.json"
-    window_only, _ = a_long_difference(asc_state, asc_file, world, in_window=30, in_file=0)
-    first = row_for(await listed(asc_state), asc_file)
-    if change == "window":
-        held = as_ltspice_reads(asc_file) + lines(window_only[1:])
-        write_world(world, [a_window({str(asc_file): held})])
-    elif change == "file":
-        add_a_wire(asc_file)
-    else:
-        write_world(world, [a_window({})])
-
-    item = await listed(asc_state, first["next_cursor"])
-
-    assert item["ok"] is False
-    assert item["error"]["code"] == "invalid_cursor"
-    assert "without cursor" in item["error"]["message"]
-
-
-def test_the_python_api_lists_every_entry(asc_state: SessionState, asc_file: Path, tmp_path: Path):
-    window_only, file_only = a_long_difference(
-        asc_state, asc_file, tmp_path / "world.json", in_window=60, in_file=30
-    )
-
-    result = SyncApi(asc_state).inspect(queries=[{"kind": "open_in_ltspice"}])
-
-    (row,) = result["results"][0]["data"]["designs"]
-    assert row["only_in_window"] == window_only
-    assert row["only_in_file"] == file_only
-    assert "difference_omitted" not in row
-    assert "next_cursor" not in row

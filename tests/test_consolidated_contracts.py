@@ -766,10 +766,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 40 characters for the capabilities report's
     # simulator_capabilities key (the capability table's view for the detected
     # families) and the sentence in its description. Measured 11,694.
-    # Raised by about 120 characters for the open_in_ltspice query's cursor,
-    # which lists the rest of where a sheet's window differs from its file: a
-    # list cut short says how to read the rest. Measured 11,818.
-    "inspect": 11820,
+    # Raised by about 440 characters for open_in_ltspice's path, pid and
+    # cursor: where a window's copy of a sheet differs from the file in more
+    # than 25 entries a side, the listing counted the rest and no call read
+    # them. Most of it is the three fields' structure. Measured 12,134.
+    "inspect": 12140,
     # The typed op union — twelve ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
     # policy is the more capable one, so no render argument is advertised here.
@@ -798,7 +799,12 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # are a line each. Measured 14,768.
     # Raised by about 15 characters for minLength on path: an empty path names
     # no file. Measured 14,781.
-    "edit_schematic": 15194,
+    # Raised by about 410 characters for replace_directive, the fourteenth op:
+    # one directive or comment's text changed in place, where a remove and an
+    # add lost its place, size and justification and needed the old text
+    # typed whole. Its descriptions are a line each; the rest is the op's
+    # three fields. Measured 15,605.
+    "edit_schematic": 15605,
     # Checks, the render policy and the compare spec (each with the
     # verify-only fields on a subclass), each in one spelling. The checks are
     # named in the tool's own description because a caller cannot ask for what

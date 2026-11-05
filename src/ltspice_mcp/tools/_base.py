@@ -23,7 +23,7 @@ from ltspice_mcp.lib import atomic_write_bytes, response_budget
 
 # Re-exported façade names: the strict Pydantic base lives in ``lib`` (models
 # below the tool layer declare models too), and the tool modules reach it here.
-from ltspice_mcp.lib.ltspice_window import Difference, Shown, file_difference
+from ltspice_mcp.lib.ltspice_window import Shown, file_difference
 from ltspice_mcp.lib.models import StrictModel as StrictModel
 from ltspice_mcp.lib.netlist_graph import IncludeResolver
 from ltspice_mcp.lib.raster import DEFAULT_SCALE, RenderedImage, render_image
@@ -367,22 +367,50 @@ LTSPICE_DIFFERENCE_ENTRIES: dict[str, Any] = {
     },
     "difference_omitted": {
         "type": "integer",
-        "description": "How many entries differ after the ones the two lists hold.",
+        "description": "How many more entries differ than the two lists hold.",
+    },
+    "hint": {
+        "type": "string",
+        "description": "With difference_omitted: the call that reads every entry.",
     },
 }
 
 
-def difference_fields(difference: Difference | None) -> dict[str, Any]:
-    """``differs_from_file``, and ``difference`` when it does, as a reply says
-    how an LTspice window's copy of a sheet compares with its file."""
+def difference_in_full(sheet: str = "this path", window: str = "the window's process") -> str:
+    """The call that reads every entry where an LTspice window's copy of a sheet
+    differs from its file, as a reply names it: ``inspect``'s ``open_in_ltspice``
+    query given the sheet as ``path`` and the window as ``pid``, which pages them.
+
+    A reply that names a difference only in part (``Difference.summary``, or the
+    first entries of each side) points here; ``sheet`` and ``window`` say where
+    that reply gives the two.
+    """
+    return (
+        f"inspect(kind='open_in_ltspice') with path set to {sheet} and pid to {window} "
+        "reads every entry where the window's copy differs from the file, paged."
+    )
+
+
+def window_difference(on_disk: bytes, window_text: str, *, entries: int = 0) -> dict[str, Any]:
+    """Whether an LTspice window's copy of a sheet is the file's, as a reply says it:
+    ``differs_from_file``, and ``difference`` when it does.
+
+    With ``entries``, where they differ is listed too, up to that many entries
+    from each side, and the rest are counted, with a ``hint`` naming the call
+    that reads them (``LTSPICE_DIFFERENCE_ENTRIES``).
+    """
+    difference = file_difference(on_disk, window_text)
     if difference is None:
         return {"differs_from_file": False}
-    return {"differs_from_file": True, "difference": difference.summary()}
-
-
-def window_difference(on_disk: bytes, window_text: str) -> dict[str, Any]:
-    """Whether an LTspice window's copy of a sheet is the file's, as a reply says it."""
-    return difference_fields(file_difference(on_disk, window_text))
+    said: dict[str, Any] = {"differs_from_file": True, "difference": difference.summary()}
+    if entries:
+        sides = (difference.only_in_window, difference.only_in_file)
+        said["only_in_window"], said["only_in_file"] = (list(side[:entries]) for side in sides)
+        omitted = sum(max(0, len(side) - entries) for side in sides)
+        if omitted:
+            said["difference_omitted"] = omitted
+            said["hint"] = difference_in_full(window="this pid")
+    return said
 
 
 # A sheet finding as edit_schematic's preexisting view publishes it
@@ -1398,13 +1426,6 @@ _AUTOMATIC_DOOR: contextvars.ContextVar[bool] = contextvars.ContextVar(
 )
 
 
-def collecting_whole() -> bool:
-    """Whether this handler call is collected whole, by the Python API's
-    automatic mode, which returns all of a result: a cap that bounds what one
-    reply costs is not applied to it, and nothing is left to page."""
-    return _AUTOMATIC_DOOR.get()
-
-
 @contextlib.contextmanager
 def automatic_door() -> Iterator[None]:
     """Mark the handler calls inside as arriving through the API's automatic mode.
@@ -1442,7 +1463,7 @@ def resolve_response_budget(explicit: int | None, state: SessionState) -> Respon
     """
     if explicit is not None:
         return ResponseBudget(explicit)
-    if collecting_whole():
+    if _AUTOMATIC_DOOR.get():
         return ResponseBudget(None)
     default = state.config.default_budget
     if default <= 0:

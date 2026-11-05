@@ -161,8 +161,7 @@ returns all of it:
   `dry_run` returns full views the same way and writes nothing.
 - `inspect` follows each query's cursor to the end. A query whose source
   changes during collection starts again once; a second change raises
-  `ApiCallError`. `open_in_ltspice` lists every entry where a sheet's window
-  differs from its file, which the MCP tool lists 25 a side with a cursor.
+  `ApiCallError`.
 - `run_experiments`, `jobs(status|wait)` and `jobs(runs)` return one
   consistent snapshot of the job. The snapshot contains the rows keyed by
   `(case_id, run_index)`, status, completeness, `outcome`, `failures`,

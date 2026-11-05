@@ -4,15 +4,13 @@ Design principle "Safe edits" (``docs/DESIGN.md``): a list cut short says how
 to read the rest. And "A short reply, the data behind an id": a result too
 large to read whole should be readable in part.
 
-Every output schema a tool or a delegated handler declares is walked. A field
-that says items were left out of a list marks a list that can be cut short: a
-``truncated`` flag, or a count of omitted items (``omitted``, ``*_omitted``,
-``*_truncated``). It must declare the way on: a cursor (``next_cursor``,
-``cursor``, ``continue`` or ``next``) in the object that declares it or in an
-object around it within the same reply item, or a ``hint`` beside it that says
-what to do instead (``run_code``, whose dropped output cannot be paged).
-``tests/conftest.py`` holds every reply in the suite to the rule for a
-``truncated`` flag.
+Every output schema a tool or a delegated handler declares is walked. An object
+that declares a ``truncated`` flag, or a count of the items a list left out
+(an integer ``omitted``, ``*_omitted`` or ``*_truncated``), holds a list that
+can be cut short, and it must declare the way on: a cursor (``next_cursor``,
+``cursor``, ``continue`` or ``next``) in that object or in an object around it
+within the same reply item, or a ``hint`` beside the flag or the count that
+says what to do instead (``run_code``, whose dropped output cannot be paged).
 """
 
 from __future__ import annotations
@@ -33,19 +31,20 @@ def _declared_schemas() -> dict[str, dict[str, Any]]:
     }
 
 
-def _counts_omitted(name: str) -> bool:
-    """Whether a field named ``name`` counts items left out of a list."""
-    return name == "omitted" or name.endswith(("_omitted", "_truncated"))
+def _counts_what_it_left_out(name: str, schema: Any) -> bool:
+    """Whether a property is a count of the items a list left out."""
+    return (
+        (name == "omitted" or name.endswith(("_omitted", "_truncated")))
+        and isinstance(schema, dict)
+        and schema.get("type") == "integer"
+    )
 
 
 def _cut_lists(schema: dict[str, Any]) -> Iterator[tuple[str, bool]]:
-    """Each place in an output schema that says a list was cut short, and
-    whether it declares a way to read the rest (a cursor in its object or
-    around it within its reply item, or a hint beside it).
-
-    A ``truncated`` flag is reported at the object that declares it, which is
-    the list's page; a count of omitted items at the count itself.
-    """
+    """Each object in an output schema with a ``truncated`` flag or a count of
+    what a list left out: its path (with the count's name), and whether it
+    declares a way to read the rest (a cursor in it or around it within its
+    reply item, or a hint beside the flag or the count)."""
 
     def walk(node: Any, path: str, cursor_around: bool) -> Iterator[tuple[str, bool]]:
         if not isinstance(node, dict):
@@ -57,12 +56,11 @@ def _cut_lists(schema: dict[str, Any]) -> Iterator[tuple[str, bool]]:
         inside = cursor_around
         if isinstance(properties, dict):
             inside = cursor_around or bool(CONTINUATIONS & properties.keys())
-            continued = inside or "hint" in properties
             if "truncated" in properties:
-                yield path or "<root>", continued
-            for name in properties:
-                if _counts_omitted(name):
-                    yield f"{path}.{name}" if path else name, continued
+                yield path or "<root>", inside or "hint" in properties
+            for name, child in properties.items():
+                if _counts_what_it_left_out(name, child):
+                    yield f"{path or '<root>'}:{name}", inside or "hint" in properties
             for name, child in properties.items():
                 yield from walk(child, f"{path}.{name}" if path else name, inside)
         if isinstance(node.get("items"), dict):
@@ -78,17 +76,13 @@ def _cut_lists(schema: dict[str, Any]) -> Iterator[tuple[str, bool]]:
     yield from walk(schema, "", False)
 
 
-def _every_cut_list() -> dict[tuple[str, str], bool]:
-    return {
-        (name, path): continued
-        for name, schema in _declared_schemas().items()
-        for path, continued in _cut_lists(schema)
-    }
-
-
 def test_the_walk_finds_the_cut_lists():
     # A walk that found nothing would pass the check below.
-    found = set(_every_cut_list())
+    found = {
+        (name, path)
+        for name, schema in _declared_schemas().items()
+        for path, _ in _cut_lists(schema)
+    }
     for expected in (
         ("jobs.handle_jobs", "<oneOf0>.runs"),
         ("experiments.handle_run_experiments", "runs"),
@@ -96,21 +90,23 @@ def test_the_walk_finds_the_cut_lists():
         ("inspect_tools.handle_inspect", "results[].page.collections.*"),
         ("schematic_edit.handle_edit_schematic", "views.preexisting"),
         ("analyze.handle_analyze_results", "results.*.per_run"),
-        # Counts of omitted items.
-        ("verify.handle_verify_circuit", "findings_omitted.*.omitted"),
-        ("analysis.handle_plot_waveform", "traces_truncated"),
-        ("inspect_tools.handle_inspect", "results[].data.designs[].difference_omitted"),
+        ("inspect_tools.handle_inspect", "results[].data.designs[]:difference_omitted"),
+        ("analysis.handle_plot_waveform", "<root>:traces_truncated"),
+        ("verify.handle_verify_circuit", "findings_omitted.*:omitted"),
     ):
         assert expected in found, sorted(found)
 
 
 def test_every_list_cut_short_says_how_to_read_the_rest():
     stranded = [
-        f"{name}: {path}" for (name, path), continued in _every_cut_list().items() if not continued
+        f"{name}: {path}"
+        for name, schema in _declared_schemas().items()
+        for path, continued in _cut_lists(schema)
+        if not continued
     ]
     assert not stranded, (
         "These lists can be cut short and declare no way to read the rest: a "
-        f"next_cursor beside the flag or count, or a hint that says what to do: {stranded}"
+        f"next_cursor beside the flag, or a hint that says what to do: {stranded}"
     )
 
 
@@ -121,14 +117,15 @@ def test_a_page_without_its_cursor_is_caught():
     assert list(_cut_lists({"type": "object", "properties": {"rows": page}})) == [("rows", False)]
 
 
-def test_a_count_of_omitted_items_without_a_way_on_is_caught():
+def test_a_count_of_what_was_left_out_without_a_way_on_is_caught():
+    # A list and the count of what it left out, with nothing that reads the rest.
     rows = {
         "type": "object",
         "properties": {
-            "rows": {"type": "array", "items": {"type": "object"}},
+            "rows": {"type": "array", "items": {"type": "string"}},
             "rows_omitted": {"type": "integer"},
         },
     }
-    assert list(_cut_lists(rows)) == [("rows_omitted", False)]
-    rows["properties"]["next_cursor"] = {"type": "string"}
-    assert list(_cut_lists(rows)) == [("rows_omitted", True)]
+    assert list(_cut_lists(rows)) == [("<root>:rows_omitted", False)]
+    rows["properties"]["hint"] = {"type": "string"}
+    assert list(_cut_lists(rows)) == [("<root>:rows_omitted", True)]

@@ -1798,6 +1798,41 @@ async def test_an_equivalent_comparison_commits_and_leaves_the_netlist_out(
     assert "stages" not in data
 
 
+async def test_replace_directive_reports_what_it_changed(asc_state, work_dir):
+    """One call changes a directive's text, and the reply says where it was,
+    what it was and what it is now."""
+    await _build_blank(
+        asc_state, "repl", [{"op": "add_directive", "instruction": ".tran 1m", "x": 64, "y": 96}]
+    )
+    target = work_dir / "repl.asc"
+    data = _assert_schema(
+        await handle_edit_schematic(
+            _edit_input(
+                path="repl.asc",
+                expected_sha256=_sha(target),
+                ops=[
+                    {
+                        "op": "replace_directive",
+                        "instruction": r"regex:^\.tran",
+                        "text": ".tran 0 5m",
+                    }
+                ],
+            ),
+            asc_state,
+        )
+    )
+    assert data["commit_state"] == "committed"
+    (result,) = data["results"]
+    assert result["text"] == {
+        "kind": "directive",
+        "x": 64,
+        "y": 96,
+        "was": ".tran 1m",
+        "now": ".tran 0 5m",
+    }
+    assert "TEXT 64 96 Left 2 !.tran 0 5m" in target.read_text(encoding="utf-8")
+
+
 async def test_a_dry_run_compares_the_sheet_it_would_write(asc_state, work_dir, monkeypatch):
     """A dry run with a reference returns the verdict on the sheet the batch
     would write, exported from a staged copy of it, and writes nothing."""

@@ -2543,6 +2543,76 @@ def test_remove_directive_removes_the_texts_move_selects(
     assert [text["y"] for text in removed] == moved == heights
 
 
+class TestReplaceDirective:
+    """replace_directive changes one text and keeps its record: place, size,
+    justification and kind."""
+
+    def _apply(self, sheet: Path, instruction: str, text: str) -> tuple[dict, Path]:
+        from ltspice_mcp.lib.schematic_ops import OpReplaceDirective, apply_op_inplace
+
+        editor = open_editor(sheet)
+        op = OpReplaceDirective(op="replace_directive", instruction=instruction, text=text)
+        result = apply_op_inplace(editor, op, sheet)
+        editor.save_netlist(sheet)
+        return result, sheet
+
+    def test_the_text_changes_and_its_record_stays(self, work_dir: Path):
+        sheet = _write_sheet(
+            work_dir / "replace.asc",
+            "TEXT 32 48 VRight 3 !.tran 1m",
+            "TEXT 32 96 Left 2 ;keep me",
+        )
+        result, _ = self._apply(sheet, r"regex:^\.tran", ".tran 2m")
+        assert result["text"] == {
+            "kind": "directive",
+            "x": 32,
+            "y": 48,
+            "was": ".tran 1m",
+            "now": ".tran 2m",
+        }
+        lines = sheet.read_text(encoding="utf-8").splitlines()
+        assert "TEXT 32 48 VRight 3 !.tran 2m" in lines
+        assert "TEXT 32 96 Left 2 ;keep me" in lines
+
+    def test_a_comment_stays_a_comment_and_line_breaks_read_as_breaks(self, work_dir: Path):
+        sheet = _write_sheet(work_dir / "note.asc", "TEXT 16 16 Left 2 ;old\\nnote")
+        result, _ = self._apply(sheet, "old\nnote", "new\nnote")
+        assert result["text"]["kind"] == "comment"
+        assert (result["text"]["was"], result["text"]["now"]) == ("old\nnote", "new\nnote")
+        assert "TEXT 16 16 Left 2 ;new\\nnote" in sheet.read_text(encoding="utf-8")
+
+    def test_a_name_for_more_than_one_text_is_refused_with_each(self, work_dir: Path):
+        sheet = _write_sheet(work_dir / "two.asc", *_TEXTS)
+        before = sheet.read_text(encoding="utf-8")
+        with pytest.raises(NetlistError, match=r"names 2: '\.tran 1m'; '\.tran 1m'\. Give one"):
+            self._apply(sheet, ".tran 1m", ".tran 2m")
+        assert sheet.read_text(encoding="utf-8") == before
+
+    def test_a_name_for_no_text_is_refused_as_remove_directive_refuses_it(self, work_dir: Path):
+        sheet = _write_sheet(work_dir / "none.asc", *_TEXTS)
+        with pytest.raises(NetlistError, match=r"No directive or comment matched '\.ac'"):
+            self._apply(sheet, ".ac", ".ac dec 10 1 1meg")
+
+    def test_a_directive_the_check_refuses_is_not_written(self, work_dir: Path):
+        sheet = _write_sheet(
+            work_dir / "meas.asc", "TEXT 16 16 Left 2 !.meas tran vmax MAX V(out)"
+        )
+        with pytest.raises(NetlistError, match=r"Refusing directive.*constants"):
+            self._apply(sheet, "regex:vmax", ".meas tran k MAX V(out)")
+        assert "!.meas tran vmax MAX V(out)" in sheet.read_text(encoding="utf-8")
+
+
+def test_removed_texts_read_line_breaks_as_breaks(work_dir: Path):
+    """A TEXT record holds a line break as a ``\\n`` escape; removed_texts gives
+    the text as it reads, with the break."""
+    from ltspice_mcp.lib.schematic_ops import OpRemoveDirective, apply_op_inplace
+
+    sheet = _write_sheet(work_dir / "multi.asc", "TEXT 16 16 Left 2 !.param a=1\\n.param b=2")
+    op = OpRemoveDirective(op="remove_directive", instruction=r"regex:a=1")
+    (removed,) = apply_op_inplace(open_editor(sheet), op, sheet)["removed_texts"]  # type: ignore[misc]
+    assert removed["text"] == ".param a=1\n.param b=2"
+
+
 @pytest.mark.asyncio
 class TestAddNetLabelOpValidation:
     """The add_net_label op is the public path now that the standalone tool is
