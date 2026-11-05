@@ -5,18 +5,24 @@ through the parser the server runs on a live result. A value printed in a
 form the decoder did not read would fail the whole measurements section, and
 every measurement of that run with it. A line the decoder skipped would lose
 that measurement alone, so the decoded entries are checked against the
-measurements the log printed.
+measurements the log printed. A line read as a measurement that is none would
+add an entry, and would be among the printed ones too, so the entries are also
+held to the names the deck behind the log measures, read from the deck alone.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
+from ltspice_mcp.lib import NETLIST_SUFFIXES
+from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.log_parser import printed_measurements, read_log_text
+from ltspice_mcp.lib.spice_lex import SpiceLexError, lex_deck
+from ltspice_mcp.lib.spice_lex_views import MeasCard
 from tests import _ltspice_recorded as rec
-from tests.ltspice_recorder import FIXTURES
+from tests.ltspice_recorder import FIXTURES, INPUTS
 
 
 def recorded_logs() -> list[str]:
@@ -31,6 +37,55 @@ def recorded_logs() -> list[str]:
 
 
 LOGS = recorded_logs()
+
+#: Measurements a recorded log prints that no ``.meas`` card of its deck asks
+#: for: LTspice 26 prints each loop margin of a stepped ``.fra`` run as a
+#: measurement table of its own (``raw/fra_step``).
+UNASKED: dict[str, frozenset[str]] = {
+    "raw/fra_step": frozenset({"phasemargin_1", "gainmargin_1"}),
+}
+
+
+def measured(build: str, case_id: str) -> set[str]:
+    """The names, in lower case, of the measurements the deck behind a
+    recorded log asks for: each ``.meas`` card of its input deck, or of the
+    netlist the build wrote from its input sheet, and of the files copied
+    beside it, and the names ``UNASKED`` lists. A card's name is the one the
+    lexer gives it, which ``MeasCard`` reads too, and which it gives a card
+    ``MeasCard`` refuses as malformed (``log/meas_bad_syntax``)."""
+    case = rec.CASES.case(case_id)
+    decks = [
+        rec.export_text(build, case_id)
+        if case.source.endswith(".asc")
+        else read_spice_text(INPUTS / case.source)
+    ]
+    included = [
+        read_spice_text(INPUTS / extra)
+        for extra in case.extra
+        if PurePosixPath(extra).suffix.lower() in NETLIST_SUFFIXES | {".inc", ".lib"}
+    ]
+    cards = [
+        *(card for text in decks for card in lex_deck(text).cards),
+        *(card for text in included for card in lex_deck(text, title=False).cards),
+    ]
+    names = {card.name.lower() for card in cards if card.kind == "meas" and card.name}
+    return names | UNASKED.get(case_id, frozenset())
+
+
+def test_a_measurement_is_named_as_meas_card_reads_it():
+    """``measured`` takes each ``.meas`` card's name from the lexer, which is
+    the name ``MeasCard`` reads off every card it can read."""
+    for case in rec.CASES.cases:
+        if PurePosixPath(case.source).suffix.lower() not in NETLIST_SUFFIXES:
+            continue
+        for card in lex_deck(read_spice_text(INPUTS / case.source)).cards:
+            if card.kind != "meas":
+                continue
+            try:
+                view = MeasCard.from_card(card)
+            except SpiceLexError:
+                continue
+            assert card.name == view.name, card.body
 
 
 def test_both_builds_recorded_logs():
@@ -47,13 +102,19 @@ def test_every_recorded_logs_measurements_decode(name: str, tmp_path: Path):
     stepped table and a FAIL'ed line each have one, LTspice 26's braced WHEN
     threshold (``log/meas_when_threshold_tran``) included, and nothing else
     has one, such as XVII's title ``Circuit: .param r=2k`` or a warning
-    ``Warning: Pd = 0 is less than W.``."""
+    ``Warning: Pd = 0 is less than W.``. Each is a name the deck measures,
+    read from the deck rather than the log: ``printed_measurements`` decides
+    both sides of the first comparison, so a line it took for a measurement
+    would be on both."""
     build, _, log = name.partition("/")
-    section = rec.decode_log(build, log.removesuffix(".log"), tmp_path).section("measurements")
+    case_id = log.removesuffix(".log")
+    section = rec.decode_log(build, case_id, tmp_path).section("measurements")
     assert section["status"] in ("parsed", "absent"), section["error"]
-    entries = (section["value"] or {}).get("measurements", {})
+    entries = {entry.lower() for entry in (section["value"] or {}).get("measurements", {})}
     printed = printed_measurements(read_log_text(FIXTURES / name))
-    assert {entry.lower() for entry in entries} == set(printed)
+    assert entries == set(printed)
+    assert entries <= measured(build, case_id)
+    assert UNASKED.get(case_id, frozenset()) <= entries
 
 
 def test_a_stepped_fra_runs_margins_read_as_the_numbers_printed(tmp_path: Path):
