@@ -1541,17 +1541,27 @@ def parse_measurements(
             override = at_overrides.get(name.lower())
             if override:
                 entry["at"] = override[0] if all(v == override[0] for v in override) else override
-        printed = unreadable.get(name) or next(
-            (
-                unreadable[meta]
-                for suffix, _key in _MEAS_METADATA_SUFFIXES
-                if (meta := name + suffix) in unreadable
-            ),
-            None,
+        shown = logged.get(name.lower())
+        # The text quoted is the log's own: spicelib cuts a value short at a
+        # character its pattern lacks (docs/spicelib_bugs.md, Bug 38), reading
+        # ``vth^2`` as ``vth``, so a result line's value is taken from what it
+        # printed. A stepped table's cell or a metadata value has no such text,
+        # and is quoted as the reader holds it.
+        printed = (
+            (shown.value if shown is not None and shown.value is not None else unreadable[name])
+            if name in unreadable
+            else next(
+                (
+                    unreadable[meta]
+                    for suffix, _key in _MEAS_METADATA_SUFFIXES
+                    if (meta := name + suffix) in unreadable
+                ),
+                None,
+            )
         )
         if printed is not None:
             entry["unreadable"] = {
-                "line": shown.line if (shown := logged.get(name.lower())) else None,
+                "line": shown.line if shown is not None else None,
                 "reason": f"the log gives {printed!r} where a number belongs",
             }
         measurements[name] = entry

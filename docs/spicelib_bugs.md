@@ -3885,7 +3885,9 @@ cache empty and warmed by another folder's files.
 from the text. `parse_measurements` reads a result line the reader skipped
 like any value it kept: a value that is not a number fails only that entry,
 with the line and the reason, and the `AT` crossing comes from
-`_RE_MEAS_AT_LINE`. The measurements check of `lib/log_decode.py` refuses a
+`_RE_MEAS_AT_LINE`. The reason quotes the value as the log printed it
+(`printed_measurements`), not as the reader holds it, since the reader cuts
+`vth^2` to `vth`. The measurements check of `lib/log_decode.py` refuses a
 table that lacks a measurement the log printed.
 
 ### Summary
@@ -3993,7 +3995,9 @@ and `::test_a_when_against_a_non_number_fails_only_its_own_entry` pin the
 workaround against both builds' recordings; `tests/test_unreadable_measurement.py`
 reads the same entries through the Python API, `inspect`, the `measurements`
 recipe and the run summary; `tests/test_decoded_log.py::test_a_line_the_reader_does_not_match_fails_only_its_measurement`
-covers a log whose only measurement is such a line; and
+covers a log whose only measurement is such a line, and
+`::test_a_value_the_reader_cuts_short_is_quoted_as_the_log_printed_it` one
+whose value the reader cuts short; and
 `tests/test_log_decode.py::test_a_measurement_the_log_printed_and_the_table_lacks_fails_the_section`
 pins the check. `tests/test_recorded_log_measurements.py::test_every_recorded_logs_measurements_decode`
 holds every recorded log of both builds to an entry for each measurement it
