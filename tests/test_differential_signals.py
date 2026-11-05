@@ -349,7 +349,8 @@ class TestExpressionPointer:
         assert "run_code" in text
         assert "r.trace(" in text
         # The generic "check the job" hint would misdirect here.
-        assert 'jobs (action:"status")' not in text
+        assert result.structured_content is not None
+        assert 'jobs (action:"status")' not in result.structured_content.get("hint", "")
 
     async def test_the_route_survives_a_solve_failure_rewrap(
         self, state_no_sim: SessionState, work_dir: Path

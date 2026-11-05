@@ -205,7 +205,6 @@
       "attach_plot",
       "case_id",
       "dialect",
-      "format",
       "in_ltspice",
       "job_id",
       "max_points",
@@ -327,6 +326,7 @@
       "target": "path"
     },
     "plot_waveform": {
+      "format": null,
       "raw_file": "path"
     }
   }

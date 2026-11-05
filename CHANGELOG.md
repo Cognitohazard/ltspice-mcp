@@ -10,6 +10,13 @@ tool-surface changes.
 
 ### Breaking
 
+- A reply's text block is its `structuredContent` serialized as JSON, as the
+  MCP specification recommends, in place of a one-line summary. A client that
+  passes the model only the text now gives it the data, and a failed call's
+  text carries its `code` and recovery `hint`, which a client that shows the
+  model only an error's text (Claude Code among them) used to leave out.
+  `plot_waveform`'s `format` argument is removed, since every reply's text is
+  the same JSON; a call that still sends it is told so.
 - Every reply leaves out the fields that say nothing: an empty list or
   object, a null, a false flag, and a sub-answer that the overall answer
   beside it already gives (`structurally_equivalent` beside
@@ -19,10 +26,9 @@ tool-surface changes.
   field means "checked, and nothing to report", never "not checked": what did
   not run, was skipped or could not be read is still stated, by a
   `checks_skipped` row, a failure, a `status` or a `reason`. One function
-  applies the rule to every tool's `structuredContent`, to the text block
-  under `[tools] text_channel = "json"`, and to the Python API's results, so
-  the API keeps the tools' shape; the summary text no longer states an empty
-  result either. Each tool keeps a short list of fields whose empty, null or
+  applies the rule to every tool's `structuredContent`, to the text block that
+  serializes it, and to the Python API's results, so the API keeps the tools'
+  shape. Each tool keeps a short list of fields whose empty, null or
   false value is the answer itself, such as a finding's `ok`, a comparison's
   `equivalent` and a recipe's measured `value`
   (`docs/design/mcp_surface.md`, "Fields left out"), and output schemas mark
@@ -704,11 +710,6 @@ tool-surface changes.
   that `attribute_text_overlap` uses. `verify_circuit` reports it under the
   `layout` check, and `edit_schematic` with its other findings. Texts at one
   anchor are left to `stacked_directive`.
-- `[tools] text_channel` (`LTSPICE_MCP_TEXT_CHANNEL`): `"json"` puts each
-  reply's serialized `structuredContent` in its text block, as the MCP
-  specification recommends for a client that passes only the text to the
-  model; under the default, `"summary"`, such a model reads one summary line.
-  `inspect(kind="capabilities")` reports the mode as `text_channel`.
 - `edit_schematic(open_window="save"|"discard", ops=[])` settles a sheet the
   user changed in LTspice and did not save, once they choose, instead of
   asking them to do it by hand. `"save"` has LTspice save the sheet from the
@@ -783,6 +784,8 @@ tool-surface changes.
 
 ### Changed
 
+- The `mcp` dependency's floor is 2.3, the release the server is tested with,
+  which speaks the current protocol revision (2026-07-28). The floor was 2.1.
 - `analyze_results`: a `spec.fail_cases` list cut short says how to read the
   rest in a `hint` beside its `truncated` flag, where the recipe's `warnings`
   said it. The list has no cursor of its own, and its schema no longer

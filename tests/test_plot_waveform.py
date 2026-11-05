@@ -622,12 +622,6 @@ class TestRender:
         assert all(n <= 22 for n in data["points_per_series"])
         assert any(o["code"] == "downsampled" for o in data["observations"])
 
-    async def test_json_format_passes_schema(self, state_no_sim: SessionState, work_dir: Path):
-        # The autouse conformance hook validates structuredContent vs output_schema.
-        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-        data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"], format="json")
-        assert {"path", "analysis_type", "delivery", "traces"} <= data.keys()
-
 
 # --- delivery / opener / security ------------------------------------------
 
