@@ -47,6 +47,11 @@ _SOURCE_SPAWNS: dict[str, tuple[int, str]] = {
         1,
         "awaited under the shutdown bound; stragglers are cancelled",
     ),
+    "ltspice_mcp/lib/progress.py:watch": (
+        1,
+        "the watched wait is awaited in the same function, and cancelled and awaited there "
+        "when the call ends first",
+    ),
     "ltspice_mcp/lib/services.py:bounded_parse": (
         1,
         "awaited under its deadline; a worker thread past it cannot be stopped",

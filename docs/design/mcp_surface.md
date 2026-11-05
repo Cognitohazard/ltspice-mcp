@@ -1986,6 +1986,14 @@ An unrecognized flag name fails with the list of valid flags, noting that
 neither a policy nor a boolean is refused, and the error lists the accepted
 forms and the `mode` values.
 
+**Progress.** A call that asks for progress (a `_meta.progressToken`) and
+waits on a job, `jobs` wait or resume or `run_experiments` holding the call open, gets
+a `notifications/progress` when the wait begins and each time another of the
+job's cases finishes: `progress` is the number of cases finished, `total` the
+cases the job expanded to (left out until it is known), and `message` says
+both with the job id. A client may restart its timeout on each one. No other
+call reports progress, and a call that did not ask is sent none.
+
 **Server logging.** The server logs only to stderr, at `WARNING` by default;
 `[logging] level = "INFO"` or `LTSPICE_MCP_LOG_LEVEL` sets another level. It
 neither advertises nor serves the MCP logging capability

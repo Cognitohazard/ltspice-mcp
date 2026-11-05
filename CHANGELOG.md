@@ -62,6 +62,12 @@ tool-surface changes.
 
 ### Added
 
+- Progress notifications. A call that asks for progress and waits on a job,
+  `jobs` wait or resume or `run_experiments` holding the call open, is told when the
+  wait begins and each time another of the job's cases finishes, with the
+  number finished and the total, so a client can show how far the job has
+  got and may restart its timeout. Before, such a wait was silent however
+  long it ran.
 - A `random` variation's samples can be replayed. Each case records its sample
   index (`_random_run`) and its seed (`_random_seed`) in its assignments, and
   an entry without a `seed` gets one the server chooses, so a Monte Carlo run
