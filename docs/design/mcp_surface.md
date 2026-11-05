@@ -23,8 +23,10 @@ document needs fixing.
 A seventh tool, `plot_waveform`, is the interactive MCP Apps waveform widget
 and does not use the envelope. Its reply summarizes each plotted trace:
 minimum and maximum with their positions, first and final value, and on a
-transient the time-weighted mean. `attach_plot` adds a PNG of the chart for a
-vision model. Traces are split into panels by declared
+transient the time-weighted mean. Past 32 traces it summarizes the first 32,
+counts every plotted trace in `traces_truncated`, and names in `hint` the
+`analyze_results` call that reads the rest. `attach_plot` adds a PNG of the
+chart for a vision model. Traces are split into panels by declared
 unit, or by the caller's `panels`. A plot with no sampled axis (an operating
 point, a `.tf`, or a stepped `.op` or one-frequency `.ac`, which hold one point
 a step) has no chart: it is refused with `no_axis`, which says what the plot

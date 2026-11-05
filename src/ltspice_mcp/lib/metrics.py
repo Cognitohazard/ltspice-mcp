@@ -592,6 +592,14 @@ def has_active_device(currents: dict[str, float]) -> bool:
 #: The analyses whose plots signal_stats defines statistics for.
 _STATS_ANALYSES = frozenset({"transient", "dc", "noise"}) | AC_SHAPED
 
+
+def signal_stats_defined(analysis: str) -> bool:
+    """Whether the signal_stats recipe defines statistics for a plot of this
+    analysis. signal_stats refuses any other plot, and a reply that names a
+    call to read a plot's statistics asks here which call that is."""
+    return analysis in _STATS_ANALYSES
+
+
 #: Every bucket that filtering, unit reporting and scalar reads must visit.
 OP_BUCKETS = ("voltages", "currents", "device_op_points", "other")
 
@@ -1407,7 +1415,7 @@ async def signal_stats(
         # Nothing to take statistics along; the refusal names what reads it,
         # the value recipe for a point a step.
         raise _no_axis_error(raw)
-    if analysis not in _STATS_ANALYSES:
+    if not signal_stats_defined(analysis):
         raise ResultError(
             f"signal_stats does not define statistics for {analysis!r}. "
             "Read this plot's quantities through inspect(kind='results') or "

@@ -127,6 +127,17 @@ tool-surface changes.
 
 ### Fixed
 
+- `plot_waveform` summarizes at most 32 traces and counts every plotted trace
+  in `traces_truncated`, but named the call that reads the rest only in the
+  prose of a `trace_summary_truncated` observation, and named `signal_stats`
+  there even for an ngspice distortion or AC sensitivity sweep, which that
+  recipe refuses. The reply now carries a `hint` beside `traces_truncated`,
+  and the same line in its text, naming the `analyze_results` call that reads
+  the traces left out: a `signal_stats` recipe for each signal, with
+  `all_steps=true` on a stepped run, or, on a plot `signal_stats` defines no
+  statistics for, the `waveform` recipe, which returns their samples. The
+  `trace_summary_truncated` observation said nothing the count and the hint
+  do not, and is no longer emitted; read `hint` instead.
 - A card no rule could split into its parts, such as `R1 in out {1k` with
   its brace left open or a `.meas` with an unclosed parenthesis, was left out
   of every check without a word, so `verify_circuit` and the linter read the

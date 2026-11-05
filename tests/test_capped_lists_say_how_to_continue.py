@@ -19,7 +19,12 @@ from collections.abc import Iterator
 from typing import Any
 
 from ltspice_mcp.tools._base import page_schema
-from tests.conftest import CONTINUATIONS, declared_output_schemas
+from tests.conftest import (
+    CONTINUATIONS,
+    counts_what_was_left_out,
+    cut_without_continuation,
+    declared_output_schemas,
+)
 
 
 def _declared_schemas() -> dict[str, dict[str, Any]]:
@@ -32,9 +37,10 @@ def _declared_schemas() -> dict[str, dict[str, Any]]:
 
 
 def _counts_what_it_left_out(name: str, schema: Any) -> bool:
-    """Whether a property is a count of the items a list left out."""
+    """Whether a property is a count of the items a list left out: an integer
+    by a name the reply checker reads too."""
     return (
-        (name == "omitted" or name.endswith(("_omitted", "_truncated")))
+        counts_what_was_left_out(name)
         and isinstance(schema, dict)
         and schema.get("type") == "integer"
     )
@@ -129,3 +135,40 @@ def test_a_count_of_what_was_left_out_without_a_way_on_is_caught():
     assert list(_cut_lists(rows)) == [("<root>:rows_omitted", False)]
     rows["properties"]["hint"] = {"type": "string"}
     assert list(_cut_lists(rows)) == [("<root>:rows_omitted", True)]
+
+
+# The reply checker the conformance hook runs on every reply in the suite
+# (``tests/conftest.py``) holds a reply's counts to the rule the schemas above
+# are held to: a count of what a list left out, above zero, needs a cursor in
+# its reply item or a hint beside it.
+
+
+def test_the_reply_checker_catches_a_count_with_no_way_on():
+    reply = {"rows": ["a", "b"], "rows_truncated": 5, "page": {"items": [1], "omitted": 3}}
+    assert list(cut_without_continuation(reply)) == [("rows_truncated",), ("page", "omitted")]
+
+
+def test_the_reply_checker_passes_a_count_with_a_hint_beside_it():
+    reply = {"rows": ["a", "b"], "rows_truncated": 5, "hint": "rows(offset=2) reads the rest."}
+    assert list(cut_without_continuation(reply)) == []
+
+
+def test_the_reply_checker_passes_a_count_with_a_cursor_in_its_reply_item():
+    beside = {"items": [1], "omitted": 3, "next_cursor": "c2"}
+    around = {"next_cursor": "c2", "page": {"items": [1], "omitted": 3}}
+    assert list(cut_without_continuation(beside)) == []
+    assert list(cut_without_continuation(around)) == []
+
+
+def test_a_cursor_in_another_reply_item_does_not_continue_a_count():
+    # Each item of a list is a reply item of its own: one item's cursor does
+    # not page what another left out, nor does a cursor around the list.
+    reply = {
+        "next_cursor": "c2",
+        "designs": [{"next_cursor": "d2"}, {"difference": ["x"], "difference_omitted": 4}],
+    }
+    assert list(cut_without_continuation(reply)) == [("designs", 1, "difference_omitted")]
+
+
+def test_a_count_of_nothing_left_out_is_no_cut():
+    assert list(cut_without_continuation({"rows": ["a"], "rows_omitted": 0})) == []

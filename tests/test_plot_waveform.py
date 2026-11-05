@@ -30,6 +30,7 @@ from ltspice_mcp.tools.analysis import (
     _panel,
     handle_plot_waveform,
 )
+from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
 from tests import _ltspice_recorded as rec
 from tests.conftest import (
     make_experiment_job,
@@ -971,19 +972,105 @@ class TestTraceSummary:
         _, y1 = await _raw_series(state_no_sim, raw, "V(out)", step=1)
         assert trace["final"] == pytest.approx(float(y1[-1]))
 
-    async def test_summary_is_capped_and_says_so(
+    async def test_a_capped_summary_names_the_call_that_reads_the_rest(
         self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
     ):
+        """The count of traces the summary left out came with no way to read
+        them in structuredContent: the route was only in an observation's
+        prose. The hint beside the count names the call, and that call reads
+        a trace the summary left out."""
         import ltspice_mcp.tools.analysis as mod
 
         monkeypatch.setattr(mod, "_TRACE_SUMMARY_MAX", 2)
         raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
-        data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"])
-        assert data["n_steps"] > 2
-        assert len(data["traces"]) == 2
-        assert data["traces_truncated"] == data["n_steps"]
-        (obs,) = [o for o in data["observations"] if o["code"] == "trace_summary_truncated"]
-        assert f"2 of {data['n_steps']}" in obs["detail"]
+        result = await handle_plot_waveform(
+            PlotWaveformInput(path=str(raw), signals=["V(out)"], open=False), state_no_sim
+        )
+        data = result.structured_content
+        assert data is not None
+        assert data["n_steps"] == 3
+        assert [t["step"] for t in data["traces"]] == [0, 1]
+        assert data["traces_truncated"] == 3
+        assert "analyze_results" in data["hint"]
+        assert "signal_stats" in data["hint"]
+        assert "all_steps=true" in data["hint"]
+        assert data["hint"] in result.content[0].text
+        # The hint and traces_truncated say it; an observation does not say it again.
+        assert "trace_summary_truncated" not in {o["code"] for o in data.get("observations", [])}
+
+        stats = await handle_analyze_results(
+            AnalyzeResultsInput.model_validate(
+                {
+                    "sources": [{"path": str(raw)}],
+                    "recipes": [{"key": "s", "metric": "signal_stats", "signal": "V(out)"}],
+                    "all_steps": True,
+                }
+            ),
+            state_no_sim,
+        )
+        assert stats.structured_content is not None
+        rows = {
+            row["step_index"]: row for row in stats.structured_content["results"]["s"]["values"]
+        }
+        _, left_out = await _raw_series(state_no_sim, raw, "V(out)", step=2)
+        assert rows[2]["value"]["max"] == pytest.approx(float(np.max(left_out)))
+        assert rows[2]["value"]["min"] == pytest.approx(float(np.min(left_out)))
+
+    async def test_a_capped_summary_of_a_plot_signal_stats_refuses_names_its_samples(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """signal_stats defines no statistics for an ngspice distortion sweep,
+        so the call the hint names for its left-out traces is the waveform
+        recipe, which returns their samples."""
+        import ltspice_mcp.tools.analysis as mod
+
+        monkeypatch.setattr(mod, "_TRACE_SUMMARY_MAX", 1)
+        freqs = [1e3, 1e4, 1e5]
+        rows = "".join(
+            f"{i}\t{f:.15e},0.0\n\t{0.1 * (i + 1):.15e},0.0\n\t{0.5 + i:.15e},0.0\n"
+            for i, f in enumerate(freqs)
+        )
+        raw = work_dir / "disto.raw"
+        # Bytes, so the file holds exactly these newlines on every platform.
+        raw.write_bytes(
+            (
+                "Title: * distortion\nDate: x\nPlotname: DISTORTION - 2nd harmonic\n"
+                f"Flags: complex\nNo. Variables: 3\nNo. Points: {len(freqs)}\n"
+                "Command: ngspice-44\nVariables:\n\t0\tfrequency\tfrequency\n"
+                "\t1\tv(out)\tvoltage\n\t2\tv(in)\tvoltage\nValues:\n" + rows
+            ).encode("ascii")
+        )
+
+        data = await _plot(state_no_sim, path=str(raw), signals=["v(out)", "v(in)"])
+        assert data["analysis_type"] == "disto"
+        assert [t["signal"] for t in data["traces"]] == ["v(out)"]
+        assert data["traces_truncated"] == 2
+        assert "waveform recipe" in data["hint"]
+        assert "signal_stats" not in data["hint"]
+        assert "all_steps" not in data["hint"]  # one run, no steps
+
+        async def analyze(recipe: dict) -> dict:
+            result = await handle_analyze_results(
+                AnalyzeResultsInput.model_validate(
+                    {"sources": [{"path": str(raw)}], "recipes": [{"key": "r", **recipe}]}
+                ),
+                state_no_sim,
+            )
+            assert result.structured_content is not None
+            return result.structured_content
+
+        refused = await analyze({"metric": "signal_stats", "signal": "v(in)"})
+        assert any(
+            "signal_stats does not define statistics" in failure["message"]
+            for failure in refused["failures"]
+        )
+        read = await analyze({"metric": "waveform", "signals": ["v(in)"]})
+        assert "failures" not in read, read["failures"]
+        (row,) = read["results"]["r"]["values"]
+        (series,) = row["value"]["series"]
+        assert series["signal"] == "v(in)"
+        assert row["value"]["x"] == pytest.approx(freqs)
+        assert series["real"] == pytest.approx([0.5, 1.5, 2.5])
 
     async def test_ac_summary_reads_magnitude_in_db_and_phase_ends(
         self, state_no_sim: SessionState, work_dir: Path
