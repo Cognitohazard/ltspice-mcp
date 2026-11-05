@@ -122,6 +122,7 @@
       "ops[].rotation",
       "ops[].size",
       "ops[].symbol",
+      "ops[].text",
       "ops[].texts",
       "ops[].to_pin",
       "ops[].to_pin.x",

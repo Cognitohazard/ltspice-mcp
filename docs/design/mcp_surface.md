@@ -1401,7 +1401,10 @@ reports that the window could not be checked.
 sheet, keyed by `index` and `op` as a `failures` entry is. A `wire_pins` entry
 lists the segments it found `already_present` and the `junctions` it made,
 and a removal's entry reports how much it removed; `remove_directive`'s
-entry names each text it removed, with its kind and place (`removed_texts`).
+entry names each text it removed, with its kind and place (`removed_texts`),
+and `replace_directive`'s gives the text it changed, with its kind and place
+and what it `was` and is `now`. A text is given as it reads, a line break as
+a line break.
 Everything else an op reports is in the views. `applied` counts the ops the
 batch applied, every op of a committed batch, so an op with nothing to report
 is counted though it has no `results` entry. `results` is not a page because,
@@ -2173,10 +2176,11 @@ library otherwise.
 
 ### A.3 Edit ops
 
-The thirteen op kinds, discriminated on `op`, are `add_component`,
+The fourteen op kinds, discriminated on `op`, are `add_component`,
 `move_component`, `move`, `remove_component`, `set_component_value`,
 `set_component_attribute`, `add_net_label`, `remove_net_label`, `wire_pins`,
-`remove_wire`, `add_directive`, `remove_directive`, `set_plot_panes`. The batch
+`remove_wire`, `add_directive`, `remove_directive`, `replace_directive`,
+`set_plot_panes`. The batch
 is atomic, so the first op that fails aborts the transaction and nothing is
 written.
 
@@ -2213,7 +2217,13 @@ ignored, and a line break may be given as a newline or as the `\n` escape the
 file holds. A `regex:` prefix names every text the pattern is found in
 (`re.search`), case-sensitive: `(?i)` ignores case and `^` anchors the pattern
 at the start of the text. `remove_directive` removes every text it names and
-lists each in `removed_texts`.
+lists each in `removed_texts`. `replace_directive` gives one text new words
+(`text`) and keeps its record: its place, size, justification and kind. Its
+`instruction` names the text by the same rule and must name exactly one; one
+that names several is refused with each, so a caller narrows it rather than
+writing one text over many. A directive's new text is checked as
+`add_directive`'s is. Applied again with `now` as `instruction` and `was` as
+`text`, it puts the text back.
 
 `set_component_value` splits a trailing `KEY=VALUE` off the value it is given
 and sets it wherever the part already gives that key (`Value`, `Value2`,

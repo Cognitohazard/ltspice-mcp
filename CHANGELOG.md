@@ -56,6 +56,15 @@ tool-surface changes.
 
 ### Added
 
+- `edit_schematic`'s `replace_directive` op changes one directive's or
+  comment's text in one call. Its `instruction` names the text as
+  `remove_directive` does, the whole text or `regex:`, and must name one; one
+  that names several is refused with each. The text keeps its place, size,
+  justification and kind, which a `remove_directive` and an `add_directive`
+  lost unless given again, and a directive's new text is checked as
+  `add_directive`'s is. Its result gives the text's kind and place and what
+  it `was` and is `now`. `remove_directive`'s `removed_texts` now gives a
+  text with its line breaks, where it gave the `\n` escapes the file holds.
 - At `INFO`, the server logs one structured record per tool call on the
   `ltspice_mcp.events` logger: the tool, its duration, how it ended (a
   result, an error and its code, a cancellation by the client, or a protocol
