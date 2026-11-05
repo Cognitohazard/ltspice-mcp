@@ -32,7 +32,7 @@ from ltspice_mcp.lib.deck_staging import (
     staged_reference_targets,
 )
 from ltspice_mcp.lib.encoding import encode_spice_text
-from ltspice_mcp.lib.format import parse_plain_value, parse_spice_value, unique_name
+from ltspice_mcp.lib.format import parse_plain_value, parse_spice_value, unique_name  # noqa: TID251 - a written assignment must be a plain or SI value
 from ltspice_mcp.lib.hierarchy import Hierarchy, ResolvedInstance, SemanticProfile, Source
 from ltspice_mcp.lib.hierarchy_expr import multiplier_product
 from ltspice_mcp.lib.instance_targeting import (

@@ -153,14 +153,24 @@ allowed-confusables = ["σ", "×", "·", "−", "∝", "µ", "√", "°"]
 [tool.ruff.lint.isort]
 known-first-party = ["ltspice_mcp"]
 
-# Names a replacement now answers for, kept only until their callers move. Ruff
-# refuses a new use; the source files below still use one, and
-# tests/test_banned_api.py fails once a listed file no longer does, so the list
-# only shrinks. A move is finished when no source file is listed for it.
+# Names that answer a question only their owner may ask, and names a
+# replacement now answers for. Ruff refuses a use anywhere else. A use that is
+# allowed carries `# noqa: TID251 - <reason>` on its line, and Ruff flags a
+# marker whose line no longer uses a banned name (RUF100), so the allowed uses
+# only shrink. A name imported into another module is banned there too.
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
+"ltspice_mcp.lib.services.find_trace".msg = "Resolve a caller's signal with services.resolve_signal, which also reads a node pair."
+"ltspice_mcp.lib.format.parse_plain_value".msg = "Read a value a simulator runs with format.parse_spice_value; the plain reader only tells a number from a name."
+"ltspice_mcp.lib.variations.parse_plain_value".msg = "Read a value a simulator runs with format.parse_spice_value; the plain reader only tells a number from a name."
+"ltspice_mcp.lib.simulator_build.is_cp1252_ltspice_executable".msg = "Ask simulator_build.ltspice_before_24, which also reads the build a run reported."
+"ltspice_mcp.lib.job_lifecycle.runs_terminal".msg = "Ask services.runs_unready, services.case_unreadable or job_lifecycle.runs_done whether runs can be read."
+"ltspice_mcp.lib.experiment_types.has_readable_raw".msg = "Ask services.runs_unready, services.case_unreadable or job_lifecycle.runs_done whether runs can be read."
+"ltspice_mcp.lib.services.has_readable_raw".msg = "Ask services.runs_unready, services.case_unreadable or job_lifecycle.runs_done whether runs can be read."
+"ltspice_mcp.lib.experiment_store.load_job".msg = "Resolve a job through the registry (JobRegistry.get_or_load), which reconciles a record another process owns."
+"ltspice_mcp.lib.experiment_store.load_job_from_path".msg = "Resolve a job through the registry (JobRegistry.get_or_load), which reconciles a record another process owns."
 
 [tool.ruff.lint.per-file-ignores]
-# Tests may cover a banned name until it is removed.
+# Tests exercise a banned name directly.
 "tests/**" = ["TID251"]
 
 [tool.pytest.ini_options]

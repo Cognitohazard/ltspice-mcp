@@ -41,7 +41,7 @@ from ltspice_mcp.lib.experiment_types import (
     ExperimentCase,
     ExperimentJob,
     failure_summary,
-    has_readable_raw,
+    has_readable_raw,  # noqa: TID251 - services decides readiness
     partial_raw,
 )
 from ltspice_mcp.lib.job_lifecycle import runs_done

@@ -1,10 +1,11 @@
 """Which module answers each question about a deck's text, checked rather than documented.
 
-A deck read line by line, a probe pattern written again, a value read with
-the plain reader, an include target cut out of a directive by hand: each was a
-second answer to a question one module owns, and each came to disagree with
-it. These checks keep the answers with their owners. An allow-list entry is a
-decision written down with its reason, and the lists may only shrink.
+A deck read line by line, a probe pattern written again, an include target
+cut out of a directive by hand: each was a second answer to a question one
+module owns, and each came to disagree with it. These checks keep the answers
+with their owners. An allow-list entry is a decision written down with its
+reason, and the lists may only shrink. A name only its owner may call, such as
+the plain value reader, is banned in ``pyproject.toml`` instead.
 """
 
 from __future__ import annotations
@@ -118,36 +119,6 @@ def test_the_line_walk_rule_catches_what_it_names():
         "            pass\n"
     )
     assert _line_walks_in(tree) == {"cards", "directives"}
-
-
-# --------------------------------------------------------------------------
-# A value that runs is read as LTspice reads it
-# --------------------------------------------------------------------------
-
-#: Modules that import ``format.parse_plain_value``, which refuses ``4R7``,
-#: ``1k5`` and ``2Hz``. A value a simulator runs is read with
-#: ``parse_spice_value``, held to the recordings; the plain reader is for
-#: telling a number from a name.
-_PLAIN_VALUE_READERS: dict[str, str] = {
-    "lib/variations.py": (
-        "an assignment value the caller writes into a .param or a mismatch "
-        "parameter must be a plain number or SI-suffixed value, whichever "
-        "simulator then reads the deck"
-    ),
-}
-
-
-def _importers_of(name: str) -> set[str]:
-    return {
-        module
-        for module, tree in modules().items()
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and any(alias.name == name for alias in node.names)
-    }
-
-
-def test_only_the_listed_modules_read_a_value_with_the_plain_reader():
-    assert _importers_of("parse_plain_value") == set(_PLAIN_VALUE_READERS)
 
 
 # --------------------------------------------------------------------------
