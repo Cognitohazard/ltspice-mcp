@@ -43,11 +43,11 @@ def test_identical_copies_parse_once_but_each_file_is_verified(tmp_path, monkeyp
     real_lex = experiment_inputs.lex
     library_parses = 0
 
-    def count_parse(text):
+    def count_parse(text, **options):
         nonlocal library_parses
         if text == body.decode():
             library_parses += 1
-        return real_lex(text)
+        return real_lex(text, **options)
 
     monkeypatch.setattr(experiment_inputs, "lex", count_parse)
     monkeypatch.setattr(deck_staging, "lex", count_parse)

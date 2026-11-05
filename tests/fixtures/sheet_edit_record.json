@@ -1,144 +1,1071 @@
 {
- "00fdfdc50d0869be": {
-  "varies": [
-   "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[None-True]",
-   "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[child-True]",
-   "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[grandchild-True]"
+ "00e5548c7250acb3": {
+  "answer": {
+   "reply": "b2f60afddb9cadc4",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/floating_label]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/floating_label]"
   ]
  },
- "034881f1487bb02f": {
-  "reply": "b4b83cf5e9432d91",
-  "sheet": "168171de437364ed"
+ "018423ef2a9e522c": {
+  "answer": {
+   "reply": "c2398dc8d30236ef",
+   "sheet": "189e647fb79514c1"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_an_edit_reports_what_it_introduced_and_counts_the_rest"
+  ]
  },
- "0357ab15e820ef8f": {
-  "reply": "630ba84aafd584cf",
-  "sheet": null
+ "03826ee7b8917926": {
+  "answer": {
+   "reply": "61a4e5e7cf3dd205",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edge_cases.py::TestWirePinsZeroLength::test_self_loop_rejected"
+  ]
  },
- "0371480bd6150243": {
-  "reply": "f0bd5e3d24840349",
-  "sheet": null
+ "03d8b426a88c348f": {
+  "answer": {
+   "reply": "df8dbb97fb8c95a2",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/wire_end_on_wire_interior]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/wire_end_on_wire_interior]"
+  ]
  },
- "041068d3617335b9": {
-  "reply": "74842d93c439307d",
-  "sheet": "b3a2468022b86f34"
+ "04fe530b589e1cc9": {
+  "answer": {
+   "reply": "73050a1fa17c6db9",
+   "sheet": "02799fe4a330ce21"
+  },
+  "tests": [
+   "tests/test_circuit_asc.py::TestSetComponentValueParameterSlots::test_an_edit_of_a_part_giving_a_key_twice_sets_both_and_says_so"
+  ]
  },
- "05f80e0f03816bb6": {
-  "reply": "80de6882358070bf",
-  "sheet": null
+ "0616f338bd80acfa": {
+  "answer": {
+   "reply": "2441d519a70deda0",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_dry_run_reports_a_mismatch_with_the_netlist"
+  ]
  },
- "060041fcf6bb0748": {
-  "reply": "0b2fe5040c88b539",
-  "sheet": "6706b0fcfb66049c"
+ "078875ffcb92330e": {
+  "answer": {
+   "reply": "2244be4733f811f8",
+   "sheet": "d70da2388e3f4613"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_an_edit_reports_what_it_introduced_and_counts_the_rest"
+  ]
  },
- "061d2d632aea269e": {
-  "reply": "fcbf8793a35117ad",
-  "sheet": "32351080a0d7479e"
+ "092435e76931010d": {
+  "answer": {
+   "reply": "3c0ceeaa84a0764b",
+   "sheet": "15598c6f7ef7c69d"
+  },
+  "tests": [
+   "tests/test_edit_open_window.py::test_a_call_that_leaves_the_sheet_as_it_is_asks_no_window[plot panes only]"
+  ]
  },
- "07094125073590fd": {
-  "varies": [
+ "0bc116483cbc224d": {
+  "answer": {
+   "reply": "3c20a5b6dcbcd85b",
+   "sheet": "59345d9e34feffe2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_an_edit_reports_what_it_drew_badly"
+  ]
+ },
+ "0c2a480a8bedc83b": {
+  "answer": {
+   "reply": "f04cf063d3539da9",
+   "sheet": "cd333cd95ee819e3"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_batch_that_changes_no_wiring_lists_no_pins[value]"
+  ]
+ },
+ "0c4d2f6ba6cc2ff3": {
+  "answer": {
+   "reply": "3e66c7f7dc1a2526",
+   "sheet": "9130df515986b529"
+  },
+  "tests": [
+   "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[vccs_stage_drawn]"
+  ]
+ },
+ "0cc4c501bd638db6": {
+  "answer": {
+   "reply": "80de6882358070bf",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_the_preexisting_cursor_pages_every_withheld_row"
+  ]
+ },
+ "0d0fcf89fb7b0c16": {
+  "answer": {
+   "reply": "7b32ed5bd53afff4",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_reference_mismatch_stays_committed"
+  ]
+ },
+ "0e14b6b4189e86da": {
+  "answer": {
+   "reply": "dae56db224b190fd",
+   "sheet": "f13722c501757260"
+  },
+  "tests": [
+   "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[rc_lowpass_labelled]"
+  ]
+ },
+ "0edb38b595e04a7d": {
+  "answer": {
+   "reply": "7e1f59ee426a10e0",
+   "sheet": "0a1618c86eec59d6"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_replace_directive_reports_what_it_changed"
+  ]
+ },
+ "0f1d3cacefa0c31e": {
+  "answer": {
+   "reply": "56eb3bf5a508a7ad",
+   "sheet": "ccc0ccf65a13b089"
+  },
+  "tests": [
+   "tests/test_python_api_methods.py::test_edit_returns_each_ops_facts_exactly_as_the_mcp_reply_does"
+  ]
+ },
+ "0f75ff37e4e4a5d8": {
+  "answer": {
+   "reply": "20ddddf279dfd774",
+   "sheet": "6de60ebbdd4c2559"
+  },
+  "tests": [
+   "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[r2r_ladder_labelled]"
+  ]
+ },
+ "0f8a079a64e612a5": {
+  "answer": {
+   "reply": "f0bd5e3d24840349",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/label_and_ground]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/label_and_ground]"
+  ]
+ },
+ "0fcf2251bbe49520": {
+  "answer": {
+   "reply": "16b1ecf17d414100",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_open_window.py::test_a_dry_run_reports_a_window_that_differs_and_is_not_refused"
+  ]
+ },
+ "1011beab1d41ed5e": {
+  "answer": {
+   "reply": "19283a1e912a2561",
+   "sheet": "31b13aab2a2a8ebe"
+  },
+  "tests": [
+   "tests/test_post_op_warnings.py::TestWirePinsRefusals::test_wire_pins_through_endpoint_pin_refused"
+  ]
+ },
+ "101a2fdf17cefced": {
+  "answer": {
+   "reply": "6121d2d7256b5661",
+   "sheet": "d70da2388e3f4613"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_blank_build_withholds_nothing"
+  ]
+ },
+ "1038e190284a00f2": {
+  "answer": {
+   "reply": "64a7983e09e7b68c",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_op_less_read_needs_no_expected_sha"
+  ]
+ },
+ "10773c27fff0b39b": {
+  "answer": {
+   "reply": "06c7d9202e57585e",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_dry_run_needs_no_expected_sha_and_hands_back_the_digest"
+  ]
+ },
+ "117f44aede9319b5": {
+  "answer": {
+   "message": "Cannot open WORK/bus.asc: line 5 is empty, which the schematic editor does not read, so the sheet cannot be opened for reading or editing here.",
+   "raised": "NetlistError"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::TestRecordTheEditorCannotRead::test_an_edit_names_the_record_and_its_line[-empty]"
+  ]
+ },
+ "13e37f29f7e017a4": {
+  "answer": {
+   "reply": "50e1e2816c583d83",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/unconnected_pins]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/unconnected_pins]"
+  ]
+ },
+ "13fbaee55d8895ac": {
+  "answer": {
+   "reply": "6f834af4600f423d",
+   "sheet": "133c1190f24ed080"
+  },
+  "tests": [
+   "tests/test_edit_open_window.py::test_a_new_sheet_asks_no_window"
+  ]
+ },
+ "145baa30b9d55584": {
+  "answer": {
+   "reply": "bc14fd2895235293",
+   "sheet": "43a2822eb408c09d"
+  },
+  "tests": [
+   "tests/test_circuit_asc.py::TestSetComponentValueCreatesMissingValue::test_set_value_after_a_valueless_add_in_one_edit"
+  ]
+ },
+ "148c081f518efb2c": {
+  "answer": {
+   "reply": "4cb93aa34c74604b",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_crash_before_rename_leaves_the_target_and_writes_nothing_else"
+  ]
+ },
+ "14ca579372a1b055": {
+  "answer": {
+   "reply": "80de6882358070bf",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_the_preexisting_cursor_pages_every_withheld_row"
+  ]
+ },
+ "15398b623ff880ab": {
+  "answer": {
+   "reply": "5de33a81aaa3d1e6",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/same_instance_inline_vertex]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_inline_vertex]"
+  ]
+ },
+ "15d872c40b87e12e": {
+  "answer": {
+   "reply": "ebe2b35d41c1527d",
+   "sheet": "159ab54529afe730"
+  },
+  "tests": [
+   "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[vcvs_stage_labelled]"
+  ]
+ },
+ "186adc1447eb192a": {
+  "answer": {
+   "reply": "c58b6b61d9a955a2",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/same_name_labels]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_name_labels]"
+  ]
+ },
+ "1918524347fe7c25": {
+  "answer": {
+   "message": "Path /outside/ref.cir is outside allowed directories [WORK] A reference may also be the netlist text itself: pass the deck's lines (with newlines) as compare.reference instead of a path.",
+   "raised": "PathSecurityError"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_reference_outside_sandbox_names_the_text_alternative"
+  ]
+ },
+ "19aca848f42578fd": {
+  "answer": {
+   "reply": "e721351f65e08d14",
+   "sheet": "d54e46e32c2352ac"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_finding_the_batch_leaves_as_it_was_is_not_the_batchs"
+  ]
+ },
+ "1a43b1fa27213b67": {
+  "answer": {
+   "reply": "3a1b4ea704295a87",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::TestPathsThatLeaveTheSheetAsItIs::test_the_sheet_keeps_its_bytes[read]"
+  ]
+ },
+ "1a4efb86961e26c8": {
+  "answer": {
+   "reply": "021f74118e2ff102",
+   "sheet": "d70da2388e3f4613"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_the_python_seam_scopes_the_same_way_and_completes_the_view"
+  ]
+ },
+ "1aa890dbd3ef0f30": {
+  "tests": [
    "tests/test_concurrent_same_target.py::test_simultaneous_edits_on_one_sha_commit_exactly_one",
    "tests/test_parallel_sessions.py::TestCircuitFileLock::test_a_plot_panes_edit_locks_the_plot_settings_file",
    "tests/test_parallel_sessions.py::TestCircuitFileLock::test_contended_lock_times_out_with_clear_error",
    "tests/test_parallel_sessions.py::TestCircuitLockLocation::test_a_session_in_another_working_directory_holds_the_same_lock",
    "tests/test_parallel_sessions.py::TestCircuitLockLocation::test_an_edit_leaves_nothing_beside_the_circuit"
+  ],
+  "varies": true
+ },
+ "1aedcb95cd217998": {
+  "answer": {
+   "reply": "7f0f8dbe612e3795",
+   "sheet": "2385a94d791ae910"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_an_edit_reports_what_it_drew_badly"
   ]
  },
- "0792fa49f3c7c76a": {
-  "reply": "50e1e2816c583d83",
-  "sheet": null
+ "1bcb899994204b8c": {
+  "answer": {
+   "reply": "86c7030a46059a07",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_blank_build_parity_with_the_shared_op_runner"
+  ]
  },
- "081b86fe22b80c98": {
-  "reply": "27f4d7a28e871cf1",
-  "sheet": "1128ba216dbad4a1"
+ "1c1a17e02e87f498": {
+  "answer": {
+   "reply": "c3218044650ffa40",
+   "sheet": "88c9ff221b645b1b"
+  },
+  "tests": [
+   "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[two_stage_opamp_moved]"
+  ]
  },
- "090e046ee3b3a344": {
-  "reply": "6a4377491c70e0e6",
-  "sheet": "eac2755b33662a82"
+ "1c32878d0aeb2603": {
+  "answer": {
+   "reply": "354fc00bb8ac25d0",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_an_equivalent_comparison_commits_and_leaves_the_netlist_out[file]"
+  ]
  },
- "09a67c9de58c8fa4": {
-  "reply": "c3218044650ffa40",
-  "sheet": "88c9ff221b645b1b"
+ "1cabc2ada90c7b1a": {
+  "answer": {
+   "reply": "f04e321d233a1f38",
+   "sheet": "733d1ab2e59d6d40"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_finding_at_a_routes_coordinate_endpoint_is_still_the_sheets"
+  ]
  },
- "09c909175ec14d07": {
-  "reply": "25f0b16e86050179",
-  "sheet": "ffba5e1e9d340bbf"
+ "1db12dcb615cc926": {
+  "answer": {
+   "reply": "9d332a55dd5bafb1",
+   "sheet": "dfa35865c0e752f9"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::TestDataFlagPreservation::test_an_edit_keeps_the_data_flags_on_disk"
+  ]
  },
- "0a37c6fa0e5077b7": {
-  "reply": "74842d93c439307d",
-  "sheet": "b3a2468022b86f34"
+ "1dfb74428729788d": {
+  "answer": {
+   "reply": "51ff8337f1cb4ba6",
+   "sheet": "6e9880d2e1a04bf2"
+  },
+  "tests": [
+   "tests/test_parallel_sessions.py::TestCircuitFileLock::test_pin_geometry_resolved_under_the_lock"
+  ]
  },
- "0b2c06b5b900dbb6": {
-  "reply": "3e00f451f800deb1",
-  "sheet": "d70da2388e3f4613"
+ "1ed83908ede6b721": {
+  "answer": {
+   "reply": "407e96db6577a92b",
+   "sheet": "49b1144b74853f95"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_that_makes_an_overlap_is_the_batchs"
+  ]
  },
- "0b587cf5d33593ac": {
-  "reply": "34b2e8c2f25a7196",
-  "sheet": "4f700298c191ce88"
+ "1f1f31fd6c898e67": {
+  "answer": {
+   "reply": "1f01da5273f08b36",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_view_pagination_cursor_resumption"
+  ]
  },
- "0b59ac217c0300a6": {
-  "reply": "fe06fdba64e6b34e",
-  "sheet": "21b15924f8cb8e38"
+ "1f68fda6161200d4": {
+  "answer": {
+   "reply": "49c179684dc1dda4",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/same_instance_wire]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_wire]"
+  ]
  },
- "0cb914a48cb5f076": {
-  "reply": "251eefe1ec0613b6",
-  "sheet": "c064b176635b7503"
+ "1fb25aa95760a14a": {
+  "answer": {
+   "reply": "e5cbb24af78a4dc3",
+   "sheet": "4919ae4e9092bfa8"
+  },
+  "tests": [
+   "tests/test_circuit_asc.py::TestJudgedOnTheFinishedSheet::test_a_part_moved_onto_a_crossing_is_said_whichever_op_moved_it"
+  ]
  },
- "0cd59b9ce8464edf": {
-  "reply": "ad5b765bd561d878",
-  "sheet": "2f66633286ed1ad2"
+ "1ffaa49992edc09f": {
+  "answer": {
+   "reply": "9c3101911c762156",
+   "sheet": "9a63168c465b5051"
+  },
+  "tests": [
+   "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[rlc_line_labelled]"
+  ]
  },
- "0de46396544567b7": {
-  "varies": [
+ "212ca8c6790598e3": {
+  "answer": {
+   "message": "invalid view_cursors.touched: malformed page cursor: 'tampered'",
+   "raised": "InvalidCursorError"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_malformed_touched_cursor_is_rejected_before_the_sheet_is_written"
+  ]
+ },
+ "21c43b9788ea50c6": {
+  "answer": {
+   "reply": "c967c2d0cf5ffc9d",
+   "sheet": "dd784a9aa9452591"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::TestExportedNames::test_a_sheet_with_a_block_symbol_of_no_sheet_can_be_edited[ltspice17]",
+   "tests/test_recorded_ltspice_schematics.py::TestExportedNames::test_a_sheet_with_a_block_symbol_of_no_sheet_can_be_edited[ltspice26]"
+  ]
+ },
+ "21e20f243189b350": {
+  "answer": {
+   "reply": "e664f9f579ca07e2",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_dry_run_compares_the_sheet_it_would_write"
+  ]
+ },
+ "220b7d211540fb1d": {
+  "answer": {
+   "reply": "82efd8e45a4de33a",
+   "sheet": "31b13aab2a2a8ebe"
+  },
+  "tests": [
+   "tests/test_inspect_tools.py::TestASheetReadOncePerCall::test_every_query_of_a_call_on_one_sheet_reads_it_once"
+  ]
+ },
+ "2343c1e51b000b2b": {
+  "answer": {
+   "reply": "291d8cbb9e272775",
+   "sheet": "b3a2468022b86f34"
+  },
+  "tests": [
+   "tests/test_set_plot_panes.py::test_a_file_ltspice_26_wrote_keeps_its_other_sections"
+  ]
+ },
+ "23c3e64eb56feb83": {
+  "answer": {
+   "reply": "339568fdc7453048",
+   "sheet": "0fe4a46d4fb4e6e1"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_view_pagination_cursor_resumption"
+  ]
+ },
+ "241958f300465e0a": {
+  "answer": {
+   "reply": "c45d803891be45ff",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_missing_expected_sha_refusal_hands_back_the_current_digest"
+  ]
+ },
+ "25300c274ae95854": {
+  "answer": {
+   "reply": "d28239d4a14164b7",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_the_parts_a_move_lists_are_the_ones_it_touched"
+  ]
+ },
+ "2565802724470ac1": {
+  "answer": {
+   "reply": "5bf86e4ad62a5f90",
+   "sheet": "d70da2388e3f4613"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_asking_for_the_preexisting_view_returns_the_rest_in_the_same_call"
+  ]
+ },
+ "25724fcec9b33f14": {
+  "answer": {
+   "message": "invalid view_cursors.touched: malformed page cursor: 'garbage'",
+   "raised": "InvalidCursorError"
+  },
+  "tests": [
+   "tests/test_invalid_cursor.py::TestCallLevelCursors::test_edit_schematic_view_cursor[touched]"
+  ]
+ },
+ "2665484787e41961": {
+  "answer": {
+   "reply": "5c2d49a8c4ee7357",
+   "sheet": "0c9cf7c74f9326ad"
+  },
+  "tests": [
+   "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[rc_lowpass_drawn]"
+  ]
+ },
+ "282bedee7f0b2ce4": {
+  "answer": {
+   "reply": "07f93cb713ebe8aa",
+   "sheet": "4464b9a7038d05c9"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_reply_lists_every_rule_that_ran_with_what_it_found"
+  ]
+ },
+ "286b4708f5607859": {
+  "answer": {
+   "reply": "57c3d348966fd38c",
+   "sheet": "cce88fb6b2b0cacb"
+  },
+  "tests": [
+   "tests/test_circuit_asc.py::TestJudgedOnTheFinishedSheet::test_a_route_across_a_wire_is_said_by_the_sheet"
+  ]
+ },
+ "28b33b769b5a64b3": {
+  "answer": {
+   "reply": "fb6bc5cdddbe09bf",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_reference_mismatch_is_a_partial_outcome"
+  ]
+ },
+ "2aefc3ef74390adf": {
+  "answer": {
+   "reply": "ddf3e4197c80cb76",
+   "sheet": "ffb9eba3962b6fc3"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::TestSheetRecords::test_an_edit_keeps_the_data_labels_where_the_sheet_has_them[ltspice17]",
+   "tests/test_recorded_ltspice_schematics.py::TestSheetRecords::test_an_edit_keeps_the_data_labels_where_the_sheet_has_them[ltspice26]"
+  ]
+ },
+ "2e5570504b8617b7": {
+  "answer": {
+   "reply": "2b6c00d370324c3a",
+   "sheet": "89c7502b2db3c9e2"
+  },
+  "tests": [
+   "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[diff_pair_drawn]"
+  ]
+ },
+ "2e916f23286339ec": {
+  "answer": {
+   "reply": "25f27843a7b0e4fd",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_circuit_asc.py::TestEmptyAttributeHandling::test_edit_schematic_refuses_an_empty_value_without_writing"
+  ]
+ },
+ "2f2f05aa84eb3e6c": {
+  "answer": {
+   "reply": "38e25c1f08952b31",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_dry_run_with_a_failed_op_says_it_compared_nothing"
+  ]
+ },
+ "2f737bebbdc02d99": {
+  "answer": {
+   "reply": "468172e03c6195a5",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_set_plot_panes.py::test_a_plot_settings_write_that_fails_leaves_both_files"
+  ]
+ },
+ "309ca094e35e27bb": {
+  "answer": {
+   "reply": "59acc678cd53aa28",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_one_call_per_task.py::test_an_edit_is_compared_with_its_reference_in_the_same_call"
+  ]
+ },
+ "30faec53625ff6b6": {
+  "answer": {
+   "message": "open_window takes only path and expected_sha256, with ops=[]: settle the window, read the sheet again, then edit it in another call.",
+   "raised": "NetlistError"
+  },
+  "tests": [
+   "tests/test_edit_open_window.py::test_a_save_is_a_call_of_its_own[other0]"
+  ]
+ },
+ "3248fff8be3f58cb": {
+  "answer": {
+   "reply": "6c53201b42d9e9a9",
+   "sheet": "1ae5073d11532c6c"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_an_ordinary_edit_keeps_ordered_ports"
+  ]
+ },
+ "3383695a088653f5": {
+  "answer": {
+   "reply": "5475f0dc34081b3e",
+   "sheet": "b274158233309af4"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_compared_with_its_export_names_its_unlabelled_nets[ltspice17]"
+  ]
+ },
+ "347d138af5a9684d": {
+  "answer": {
+   "reply": "0478f5c59d88d5b5",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/same_instance_waypoint_on_wire]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_waypoint_on_wire]"
+  ]
+ },
+ "34b23c5d3ed4a3ed": {
+  "answer": {
+   "message": "disk full",
+   "raised": "OSError"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_render_failure_leaves_the_target_and_evicts_the_edited_editor"
+  ]
+ },
+ "36cd9720f52e6a2c": {
+  "answer": {
+   "reply": "f8ae29750e78f2c5",
+   "sheet": "a4f8c1030672b090"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_reply_counts_every_op_and_says_what_a_removal_matched"
+  ]
+ },
+ "380a2735f7c78ae6": {
+  "answer": {
+   "reply": "3c0d4427fa6a6c79",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_set_plot_panes.py::test_a_file_in_two_encodings_is_refused_and_left_alone"
+  ]
+ },
+ "383396ab54a2cad1": {
+  "answer": {
+   "reply": "302f9905f0f8f0b1",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_post_op_warnings.py::TestWirePinsRefusals::test_wire_pins_through_endpoint_pin_refused"
+  ]
+ },
+ "39ad6d347984c0fd": {
+  "answer": {
+   "reply": "ad7fc8ee2ea3119d",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/same_instance_ground_inside]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_ground_inside]"
+  ]
+ },
+ "3b41f2c13f80fac4": {
+  "answer": {
+   "message": "window_pid goes with open_window='save': it names the window whose copy the user keeps.",
+   "raised": "NetlistError"
+  },
+  "tests": [
+   "tests/test_edit_open_window.py::test_window_pid_goes_with_a_save[discard]"
+  ]
+ },
+ "3c96f67f8a9ba691": {
+  "answer": {
+   "reply": "04644776a735c21c",
+   "sheet": "e25eabc5d902e620"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_finding_at_a_routes_coordinate_endpoint_is_still_the_sheets"
+  ]
+ },
+ "3ca022ff08e998ed": {
+  "answer": {
+   "reply": "dfd391ae6b84b852",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_parallel_sessions.py::TestCircuitFileLock::test_asc_edit_sees_a_peer_write_instead_of_overwriting_it"
+  ]
+ },
+ "3d58c8eb96223245": {
+  "answer": {
+   "reply": "4237a41dbecda0c2",
+   "sheet": "935c282522aab58f"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_batch_that_changes_no_wiring_lists_no_pins[value-unchanged]"
+  ]
+ },
+ "3da225cbf3a103ef": {
+  "answer": {
+   "reply": "0a5850f9f270c33d",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/same_instance_label_inside]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_label_inside]"
+  ]
+ },
+ "3dafc92bfc65df52": {
+  "answer": {
+   "message": "ops list is empty \u2014 pass at least one op, or name return_views to read the sheet's pin table without changing it.",
+   "raised": "NetlistError"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_empty_ops_without_views_is_rejected"
+  ]
+ },
+ "3ebd2bdf3546a9a8": {
+  "answer": {
+   "reply": "5475f0dc34081b3e",
+   "sheet": "b274158233309af4"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_compared_with_its_export_names_its_unlabelled_nets[ltspice26]"
+  ]
+ },
+ "3f3e2d203aa11a5f": {
+  "answer": {
+   "reply": "9f22cfaea3f5e6e4",
+   "sheet": "168171de437364ed"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_stale_sha_returns_revision_conflict[other_session]",
+   "tests/test_edit_schematic.py::test_stale_sha_returns_revision_conflict[same_session]"
+  ]
+ },
+ "404cfe05ef42758e": {
+  "answer": {
+   "reply": "a0b7cddb28916f46",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_stale_sha_returns_revision_conflict[other_session]",
+   "tests/test_edit_schematic.py::test_stale_sha_returns_revision_conflict[same_session]"
+  ]
+ },
+ "40f5adea4af0dcdd": {
+  "answer": {
+   "reply": "f0cda61c31d32f09",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/same_instance_pin_inside]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_pin_inside]"
+  ]
+ },
+ "410e734cf2199cec": {
+  "answer": {
+   "reply": "74842d93c439307d",
+   "sheet": "b3a2468022b86f34"
+  },
+  "tests": [
+   "tests/test_set_plot_panes.py::test_the_replaced_panes_put_back_undo_the_op[ltspice26-plot/math_grid.plt]"
+  ]
+ },
+ "41a1a71c5d29609d": {
+  "answer": {
+   "reply": "ac689a3bc06d1958",
+   "sheet": "4a8d150aa88702d6"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_batch_that_changes_no_wiring_lists_no_pins[attribute]"
+  ]
+ },
+ "4273c285db7f3c56": {
+  "answer": {
+   "reply": "714ec85e678352b7",
+   "sheet": "6fc11c0de7f0f741"
+  },
+  "tests": [
+   "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[two_stage_opamp_moved]"
+  ]
+ },
+ "42983bbf5a5bf99f": {
+  "answer": {
+   "reply": "9b30e2e6e28c38d2",
+   "sheet": "d083b44e671b9297"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_what_a_moved_part_had_moves_with_it_and_is_not_the_batchs"
+  ]
+ },
+ "43ab6d8662235de8": {
+  "answer": {
+   "reply": "a22802dcdde05e03",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/label_case_one_wire]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/label_case_one_wire]"
+  ]
+ },
+ "450b41289b03c9e4": {
+  "answer": {
+   "reply": "5d45c885e2c06e35",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_dry_run_seam_keeps_full_views_while_mcp_pages_them"
+  ]
+ },
+ "45d74664fb2529fa": {
+  "answer": {
+   "reply": "1a18dde2e9efec16",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/gnd_label_lower_case]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/gnd_label_lower_case]"
+  ]
+ },
+ "464deaa02ce2ccfc": {
+  "answer": {
+   "reply": "27f4d7a28e871cf1",
+   "sheet": "1128ba216dbad4a1"
+  },
+  "tests": [
+   "tests/test_inspect_tools.py::TestAReadDuringAnEdit::test_a_net_trace_shows_the_file"
+  ]
+ },
+ "47520cd2f71bcf5f": {
+  "answer": {
+   "reply": "548241e4d9829d6f",
+   "sheet": "a0e138e3ce059bf4"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_move_reply_says_what_moved"
+  ]
+ },
+ "4898be3a9e58c853": {
+  "answer": {
+   "reply": "3bcd8275b9cf3b4e",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/pins_of_one_part_on_one_point]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/pins_of_one_part_on_one_point]"
+  ]
+ },
+ "49c235f3612337bc": {
+  "answer": {
+   "reply": "af7e668dfdeed3e6",
+   "sheet": "b3a2468022b86f34"
+  },
+  "tests": [
+   "tests/test_set_plot_panes.py::test_no_panes_removes_the_analysis_and_then_the_file"
+  ]
+ },
+ "4ae931fac1e49df3": {
+  "answer": {
+   "reply": "fbdbe1b7c3ccf175",
+   "sheet": "0fe4a46d4fb4e6e1"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_cross_view_cursor_rejected"
+  ]
+ },
+ "4b55f87c79c972b5": {
+  "answer": {
+   "reply": "5635fc35414f0729",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_existing_edit_requires_and_honors_sha"
+  ]
+ },
+ "4b7da7b7a0b59be8": {
+  "answer": {
+   "reply": "48abe9a254fc0609",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/two_labels_zeta_first]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/two_labels_zeta_first]"
+  ]
+ },
+ "4d36fd38babe0985": {
+  "answer": {
+   "reply": "291d8cbb9e272775",
+   "sheet": "b3a2468022b86f34"
+  },
+  "tests": [
+   "tests/test_set_plot_panes.py::test_a_batch_of_plot_panes_alone_leaves_the_sheet_as_it_is",
+   "tests/test_set_plot_panes.py::test_panes_the_file_already_holds_are_not_written_again",
+   "tests/test_set_plot_panes.py::test_the_panes_are_written_beside_the_sheet_bottom_first"
+  ]
+ },
+ "4eebaeb29acb0b04": {
+  "answer": {
+   "reply": "2b22d3eefd5a23c7",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_label_only_pin_is_named_by_the_labels_at_its_coordinate"
+  ]
+ },
+ "4fe16a60027d1550": {
+  "answer": {
+   "message": "Each hierarchical port must belong to exactly one unique label.",
+   "raised": "NetlistError"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_removing_a_port_label_refuses_before_write"
+  ]
+ },
+ "504475ef521f1def": {
+  "answer": {
+   "reply": "1506f38d0ed1a6f9",
+   "sheet": "52ecf6f819eba445"
+  },
+  "tests": [
+   "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[rectifier_labelled]"
+  ]
+ },
+ "513ae433478091b9": {
+  "tests": [
    "tests/test_edit_open_window.py::test_a_window_that_does_not_save_is_reported",
    "tests/test_edit_open_window.py::test_nothing_is_done_where_no_window_holds_a_different_sheet[save-saved-commands]",
    "tests/test_edit_open_window.py::test_other_windows_with_the_sheet_open_are_handed_the_saved_one",
    "tests/test_edit_open_window.py::test_the_box_ltspice_shows_instead_of_saving_is_quoted_and_cancelled",
    "tests/test_edit_open_window.py::test_two_windows_with_different_copies_save_nothing_until_one_is_chosen",
    "tests/test_edit_open_window.py::test_with_the_users_agreement_ltspice_saves_the_window_and_the_edit_goes_on"
+  ],
+  "varies": true
+ },
+ "523fa0e60ad78bc2": {
+  "answer": {
+   "reply": "d64db581800aeb66",
+   "sheet": "aaa53083dca6c6e2"
+  },
+  "tests": [
+   "tests/test_circuit_asc.py::TestSheetLocalSymbols::test_a_blank_build_finds_symbols_beside_its_target"
   ]
  },
- "0e16916abb027b68": {
-  "reply": "6f834af4600f423d",
-  "sheet": "133c1190f24ed080"
+ "539e8d540060bbd6": {
+  "answer": {
+   "reply": "6133d7b61e9ebb18",
+   "sheet": "1cd64b7050cdd9bd"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_wire_a_later_op_removes_is_not_said_to_hang[move_component]"
+  ]
  },
- "0ea1778c254499ad": {
-  "message": "open_window takes only path and expected_sha256, with ops=[]: settle the window, read the sheet again, then edit it in another call.",
-  "raised": "NetlistError"
+ "557660cf5e631e78": {
+  "answer": {
+   "reply": "d10702c23c5abcf9",
+   "sheet": "b3a2468022b86f34"
+  },
+  "tests": [
+   "tests/test_set_plot_panes.py::test_no_panes_removes_the_analysis_and_then_the_file"
+  ]
  },
- "0f1c0c5dff7006dc": {
-  "reply": "63492304e33c75d9",
-  "sheet": "832fb497a634385d"
+ "57273bac973e2790": {
+  "answer": {
+   "reply": "a7d4a4c79e2f8a40",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/label_at_crossing]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/label_at_crossing]"
+  ]
  },
- "0f5dd2be26921c12": {
-  "reply": "4cd7e01ab4df85d9",
-  "sheet": "99098b43e1a2502f"
+ "577d695c3ed3eecf": {
+  "answer": {
+   "reply": "4a77d1e13c010d61",
+   "sheet": "b3a2468022b86f34"
+  },
+  "tests": [
+   "tests/test_set_plot_panes.py::test_the_replaced_panes_put_back_undo_the_op[ltspice17-plot/math_grid.plt]",
+   "tests/test_set_plot_panes.py::test_the_replaced_panes_put_back_undo_the_op[ltspice26-plot/math_grid.plt]"
+  ]
  },
- "10bd873e527e7279": {
-  "reply": "fde28fa5d0f01df7",
-  "sheet": "d70da2388e3f4613"
+ "584820d522b4ca65": {
+  "answer": {
+   "reply": "3ac27ac6f988da8b",
+   "sheet": "d70da2388e3f4613"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_finding_the_batch_names_but_leaves_as_it_was_is_still_the_sheets[a_directive_on_the_dangling_labels_point]",
+   "tests/test_edit_schematic.py::test_a_finding_the_batch_names_but_leaves_as_it_was_is_still_the_sheets[a_new_value_on_the_part_with_floating_pins]",
+   "tests/test_edit_schematic.py::test_a_finding_the_batch_names_but_leaves_as_it_was_is_still_the_sheets[the_dangling_label_moved_away_and_back]"
+  ]
  },
- "110c07e0b19a501a": {
-  "reply": "6c53201b42d9e9a9",
-  "sheet": "1ae5073d11532c6c"
+ "5b21f1fa29c4c835": {
+  "answer": {
+   "reply": "fde28fa5d0f01df7",
+   "sheet": "d70da2388e3f4613"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_batch_that_changes_no_wiring_lists_no_pins[attribute]",
+   "tests/test_edit_schematic.py::test_a_batch_that_changes_no_wiring_lists_no_pins[value-unchanged]",
+   "tests/test_edit_schematic.py::test_a_batch_that_changes_no_wiring_lists_no_pins[value]"
+  ]
  },
- "1128620d3284e61d": {
-  "reply": "bd32dbf4836a1f78",
-  "sheet": null
+ "5bed15923246a255": {
+  "answer": {
+   "reply": "9b30155b61be7073",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_empty_ops_with_views_reads_the_sheet"
+  ]
  },
- "116f04f039bba51d": {
-  "reply": "a0b7cddb28916f46",
-  "sheet": null
- },
- "12623d816af95b05": {
-  "reply": "6121d2d7256b5661",
-  "sheet": "d70da2388e3f4613"
- },
- "12f0054dc66bfa30": {
-  "reply": "7015c0830e0b0647",
-  "sheet": "1986dcae4e2adb90"
- },
- "139bcc0e7b16b56b": {
-  "varies": [
+ "5ecab07c8c2117c5": {
+  "tests": [
    "tests/test_edit_open_window.py::test_a_bridge_that_cannot_say_does_not_stop_the_edit",
    "tests/test_edit_open_window.py::test_a_committed_edit_is_shown_in_the_window_that_has_the_sheet_open",
    "tests/test_edit_open_window.py::test_a_request_carried_out_after_all_is_not_taken_for_a_change",
@@ -153,1184 +1080,1917 @@
    "tests/test_edit_open_window.py::test_with_the_users_agreement_ltspice_saves_the_window_and_the_edit_goes_on",
    "tests/test_edit_open_window.py::test_with_the_users_agreement_the_window_is_closed_and_opened_from_the_file",
    "tests/test_inspect_open_in_ltspice.py::test_the_digest_it_reports_is_the_one_an_edit_takes"
+  ],
+  "varies": true
+ },
+ "5f6fb2a9f3c08420": {
+  "answer": {
+   "reply": "49644dbdf7d79ecf",
+   "sheet": "4f700298c191ce88"
+  },
+  "platform": "posix",
+  "tests": [
+   "tests/test_edit_schematic.py::test_asc_reference_is_exported_like_the_committed_sheet[structural_diff]"
   ]
  },
- "1440753e230fe002": {
-  "reply": "3c20a5b6dcbcd85b",
-  "sheet": "59345d9e34feffe2"
- },
- "1489627a8d3d182a": {
-  "reply": "ebe2b35d41c1527d",
-  "sheet": "159ab54529afe730"
- },
- "160c4beeb8c77f0b": {
-  "reply": "b2f60afddb9cadc4",
-  "sheet": null
- },
- "16341cefe54ee6e8": {
-  "reply": "ff7f914f1d9f833d",
-  "sheet": "2f66633286ed1ad2"
- },
- "166406d081d2b823": {
-  "reply": "548241e4d9829d6f",
-  "sheet": "a0e138e3ce059bf4"
- },
- "176326403b5cb890": {
-  "reply": "2126b04815c7d54c",
-  "sheet": "30e2f036e5f18bc4"
- },
- "17d822716539757f": {
-  "reply": "3d250f1d8ceeb20d",
-  "sheet": "4464b9a7038d05c9"
- },
- "187e659bf701c2fb": {
-  "reply": "1f01da5273f08b36",
-  "sheet": null
- },
- "1ace7d88a7d6b20e": {
-  "reply": "291d8cbb9e272775",
-  "sheet": "b3a2468022b86f34"
- },
- "1cad21ce77d1b47b": {
-  "reply": "98ea889562f8f47b",
-  "sheet": "189e647fb79514c1"
- },
- "1eb4998aca74d1b7": {
-  "message": "Path /outside/ref.cir is outside allowed directories [WORK] A reference may also be the netlist text itself: pass the deck's lines (with newlines) as compare.reference instead of a path.",
-  "raised": "PathSecurityError"
- },
- "1ff9e184b3d81ad1": {
-  "reply": "df8dbb97fb8c95a2",
-  "sheet": null
- },
- "2268422da856d769": {
-  "reply": "c940976e622001c4",
-  "sheet": "4464b9a7038d05c9"
- },
- "2286928bd6707408": {
-  "reply": "5dbfbd1cdb138e47",
-  "sheet": "2f66633286ed1ad2"
- },
- "23d99882886bfb10": {
-  "reply": "ad7fc8ee2ea3119d",
-  "sheet": null
- },
- "2636b7b6487484f7": {
-  "message": "Draft1.plt is locked by another ltspice-mcp process (waited 0s). Retry once its edit finishes.",
-  "raised": "NetlistError"
- },
- "26c9848e50f99037": {
-  "reply": "0a0615ea78da1416",
-  "sheet": "e74de70382e0ec77"
- },
- "2735506accba230b": {
-  "reply": "29b1bbb3f617ca50",
-  "sheet": "29c596fe49dd2953"
- },
- "27610ca50e451d7c": {
-  "reply": "b784a21374bcfdf1",
-  "sheet": "bc9c9f192388fafc"
- },
- "286a44c2f9b13345": {
-  "reply": "0d6f63caa045df74",
-  "sheet": null
- },
- "293580a19686e648": {
-  "reply": "1962194299a71fae",
-  "sheet": "ca4f09dc17968e9c"
- },
- "2c74b78b64eec3f6": {
-  "reply": "48abe9a254fc0609",
-  "sheet": null
- },
- "2cdb1e482fec7faa": {
-  "reply": "021f74118e2ff102",
-  "sheet": "d70da2388e3f4613"
- },
- "2df51bb938300043": {
-  "reply": "90806e8425713577",
-  "sheet": null
- },
- "2fc807dafa38e4fc": {
-  "reply": "bdb5b14ad174a37f",
-  "sheet": "31b13aab2a2a8ebe"
- },
- "30e9d1b26037dead": {
-  "reply": "3bcd8275b9cf3b4e",
-  "sheet": null
- },
- "317d09aa76576a1d": {
-  "reply": "8370eef36cb18be5",
-  "sheet": null
- },
- "326a7a2e0640cf3d": {
-  "reply": "3ac27ac6f988da8b",
-  "sheet": "d70da2388e3f4613"
- },
- "34ab359c6f59c793": {
-  "reply": "8c1c59d1e503ee44",
-  "sheet": null
- },
- "366962d2f325170f": {
-  "message": "invalid view_cursors.pin_legend: malformed page cursor: 'garbage'",
-  "raised": "InvalidCursorError"
- },
- "382909c46e3d12b0": {
-  "reply": "3a235a018ea79cb6",
-  "sheet": null
- },
- "394beb82eeadf5e7": {
-  "reply": "0713061279a179d5",
-  "sheet": "2961a71434a9027a"
- },
- "39c06ec752eeba01": {
-  "reply": "1dab39ddf46db897",
-  "sheet": null
- },
- "3e103525888f761a": {
-  "reply": "9379a14eb42e9781",
-  "sheet": "37b3406b8a47981e"
- },
- "3f8af47d68cc901e": {
-  "reply": "7cc64cb9df5bd58d",
-  "sheet": "2f66633286ed1ad2"
- },
- "3f8b148349f9baae": {
-  "reply": "6133d7b61e9ebb18",
-  "sheet": "1cd64b7050cdd9bd"
- },
- "411f044d777a142e": {
-  "reply": "e5cbb24af78a4dc3",
-  "sheet": "4919ae4e9092bfa8"
- },
- "4140ae16107e3b62": {
-  "reply": "04644776a735c21c",
-  "sheet": "e25eabc5d902e620"
- },
- "4186c7ad7f48e2cb": {
-  "reply": "dfd391ae6b84b852",
-  "sheet": null
- },
- "4252ed27c3cdda91": {
-  "reply": "3a1b4ea704295a87",
-  "sheet": null
- },
- "42ce5a3342dce5ee": {
-  "reply": "730df546e0c878f9",
-  "sheet": "2f66633286ed1ad2"
- },
- "439f5821d667e80d": {
-  "reply": "ea72a720ca7a61ec",
-  "sheet": "168171de437364ed"
- },
- "43b447db23caac25": {
-  "message": "open_window takes only path and expected_sha256, with ops=[]: settle the window, read the sheet again, then edit it in another call.",
-  "raised": "NetlistError"
- },
- "4536bfd8d0673254": {
-  "reply": "fb838ba53c93acdd",
-  "sheet": "2f66633286ed1ad2"
- },
- "4740532d1b009356": {
-  "reply": "07f93cb713ebe8aa",
-  "sheet": "4464b9a7038d05c9"
- },
- "4864c3593bd64830": {
-  "reply": "49e540b8d1185e94",
-  "sheet": "2f66633286ed1ad2"
- },
- "48a8c1665ba47183": {
-  "reply": "f0f35a26b5610e86",
-  "sheet": "4f700298c191ce88"
- },
- "48f3ed52819b4d0e": {
-  "reply": "59acc678cd53aa28",
-  "sheet": "2f66633286ed1ad2"
- },
- "492f18a117bed201": {
-  "varies": [
-   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[equivalent]",
-   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[mismatch]"
+ "5f7747cb71640096": {
+  "answer": {
+   "reply": "e110932617f104ff",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/gnd_label]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/gnd_label]"
   ]
  },
- "4a3dcc451f918366": {
-  "message": "invalid view_cursors.touched: malformed page cursor: 'garbage'",
-  "raised": "InvalidCursorError"
- },
- "4a8afd1b715e33b9": {
-  "reply": "5475f0dc34081b3e",
-  "sheet": "b274158233309af4"
- },
- "4c6e6f00a0506559": {
-  "reply": "3c4eabebac8bcd42",
-  "sheet": "7537888aa9b73a27"
- },
- "4da77b67904d1869": {
-  "reply": "5d903ea1a0d777dc",
-  "sheet": "2f66633286ed1ad2"
- },
- "4e9e1eadfa34c37d": {
-  "message": "invalid view_cursors.touched: malformed page cursor: 'tampered'",
-  "raised": "InvalidCursorError"
- },
- "5024a95f3aca3db9": {
-  "reply": "714ec85e678352b7",
-  "sheet": "6fc11c0de7f0f741"
- },
- "519edef110e81203": {
-  "reply": "1bbde98b60eb2d6e",
-  "sheet": null
- },
- "5298ff51152a44aa": {
-  "reply": "57c3d348966fd38c",
-  "sheet": "cce88fb6b2b0cacb"
- },
- "52c3f056469ad41a": {
-  "reply": "8d4f48218ddff18f",
-  "sheet": "672bc0a563ba2f34"
- },
- "52e60f3fa3787ac0": {
-  "reply": "9b30155b61be7073",
-  "sheet": null
- },
- "536e20a256dc216f": {
-  "reply": "639320d3fcd2a624",
-  "sheet": "2f66633286ed1ad2"
- },
- "537d3c57742e7066": {
-  "reply": "61a4e5e7cf3dd205",
-  "sheet": null
- },
- "546dfb2d453cc257": {
-  "reply": "4aae7ee35826deb0",
-  "sheet": "2f66633286ed1ad2"
- },
- "54bd8053ab89de84": {
-  "reply": "3e66c7f7dc1a2526",
-  "sheet": "9130df515986b529"
- },
- "551a291faed34ce1": {
-  "reply": "e7542f4f0e4c24e7",
-  "sheet": "f4955e6af62cdb33"
- },
- "5579fe640206f6db": {
-  "reply": "5d45c885e2c06e35",
-  "sheet": null
- },
- "55da351422c96c65": {
-  "reply": "210e7648de8f0fab",
-  "sheet": "1f7cd86c8e0a12c6"
- },
- "55f93b1321e1e3f8": {
-  "reply": "86053d7c7dfa7ae5",
-  "sheet": "2f66633286ed1ad2"
- },
- "56dbec15b1954e05": {
-  "reply": "d10702c23c5abcf9",
-  "sheet": "b3a2468022b86f34"
- },
- "570bdc7e2143f4d7": {
-  "reply": "4a77d1e13c010d61",
-  "sheet": "b3a2468022b86f34"
- },
- "5782aab96df56585": {
-  "reply": "9d332a55dd5bafb1",
-  "sheet": "dfa35865c0e752f9"
- },
- "578e960424c31dba": {
-  "reply": "64a7983e09e7b68c",
-  "sheet": null
- },
- "57e73a2dcb8bd079": {
-  "reply": "88ee824307c1910d",
-  "sheet": null
- },
- "583bb5093004ea69": {
-  "reply": "0a5850f9f270c33d",
-  "sheet": null
- },
- "5908e7fdb2cf7bf8": {
-  "message": "invalid view_cursors.pin_legend: cursor is for view 'label_only_pins', not 'pin_legend'; use the page's own next_cursor",
-  "raised": "InvalidCursorError"
- },
- "5930afc3d0bddc9e": {
-  "reply": "8ee47bb8b51dc13d",
-  "sheet": null
- },
- "59d9a01c292c433b": {
-  "message": "Cannot open WORK/top.asc: WORK/bus.asc, a sheet it loads: line 5 is a BUSTAP record ('BUSTAP 80 0 80 16'), which the schematic editor does not read, so the sheet cannot be opened for reading or editing here.",
-  "raised": "NetlistError"
- },
- "59e106123001c4f2": {
-  "reply": "c6959b2f48801107",
-  "sheet": "ebabd77bdc824e39"
- },
- "5a6671a9040ef6e8": {
-  "reply": "86c7030a46059a07",
-  "sheet": "2f66633286ed1ad2"
- },
- "5b4416edab1bb5ff": {
-  "reply": "344cd135dc8fe7e4",
-  "sheet": null
- },
- "5cba3bbc066e60f2": {
-  "reply": "0bc18e864308e180",
-  "sheet": "2fd4f6977eb9f79a"
- },
- "5dc921a9e1d12e3d": {
-  "message": "injected mid-batch failure",
-  "raised": "RuntimeError"
- },
- "6084eea7fe3fcb2a": {
-  "reply": "b372773112aab9a6",
-  "sheet": "047439922969956b"
- },
- "61180a027869ee0e": {
-  "reply": "8f654ab83ad7d4e5",
-  "sheet": "5309d926a1d3da61"
- },
- "627081fd0d07513f": {
-  "reply": "80de6882358070bf",
-  "sheet": null
- },
- "637dd33b10007517": {
-  "reply": "4646b3d8ad088789",
-  "sheet": "4464b9a7038d05c9"
- },
- "663c0065bb512949": {
-  "reply": "89a000af7d087a6f",
-  "sheet": null
- },
- "689c23cac20f6f91": {
-  "reply": "1506f38d0ed1a6f9",
-  "sheet": "52ecf6f819eba445"
- },
- "6a3177a760b99139": {
-  "reply": "fbdbe1b7c3ccf175",
-  "sheet": "0fe4a46d4fb4e6e1"
- },
- "6aba3f9c1627f621": {
-  "message": "Each hierarchical port must belong to exactly one unique label.",
-  "raised": "NetlistError"
- },
- "6af4d377a3f3d4c3": {
-  "reply": "f2ff9571f1d0236d",
-  "sheet": null
- },
- "6b2447a2a321398e": {
-  "reply": "54b8cc8f5e0a8a34",
-  "sheet": "4919ae4e9092bfa8"
- },
- "6bbef99eb1621a2b": {
-  "reply": "af75451582818525",
-  "sheet": null
- },
- "6c19bd35117bcc4e": {
-  "reply": "bb286ae35035402a",
-  "sheet": "4f614343a2c6e7aa"
- },
- "6cb820476008c6aa": {
-  "reply": "49644dbdf7d79ecf",
-  "sheet": "4f700298c191ce88"
- },
- "6d3510dee8edb82f": {
-  "reply": "08105bd5e78e120c",
-  "sheet": "189e647fb79514c1"
- },
- "6e01e602749180a5": {
-  "reply": "0eac4fe90e6387dd",
-  "sheet": "f18b41994230550d"
- },
- "6e734264060a7db0": {
-  "reply": "c45d803891be45ff",
-  "sheet": null
- },
- "6f0600c4ae709cc1": {
-  "message": "window_pid goes with open_window='save': it names the window whose copy the user keeps.",
-  "raised": "NetlistError"
- },
- "70f11f692056dee7": {
-  "reply": "cd4fe542a7714631",
-  "sheet": null
- },
- "7120aba3663b57f7": {
-  "reply": "82efd8e45a4de33a",
-  "sheet": "31b13aab2a2a8ebe"
- },
- "715de86ed6ab7552": {
-  "reply": "061081a5b1e4ace3",
-  "sheet": "2f66633286ed1ad2"
- },
- "7171944cb34587d0": {
-  "reply": "edad5faa7c07502d",
-  "sheet": "5fcd33e31cbd8c08"
- },
- "7191ee5a5fad387d": {
-  "reply": "468172e03c6195a5",
-  "sheet": null
- },
- "720b81d979817099": {
-  "reply": "5475f0dc34081b3e",
-  "sheet": "b274158233309af4"
- },
- "728d54792138bea2": {
-  "reply": "52205c892feb1c1a",
-  "sheet": "5270a760fe5167ba"
- },
- "7420ac63d0e8ca99": {
-  "reply": "0b72618f638e4600",
-  "sheet": "eb9a6ac0e8188eef"
- },
- "7441e9d08c5ac630": {
-  "reply": "19283a1e912a2561",
-  "sheet": "31b13aab2a2a8ebe"
- },
- "746bf3801f903133": {
-  "reply": "80de6882358070bf",
-  "sheet": null
- },
- "7497ba51d2cd5462": {
-  "reply": "470a5b329672e300",
-  "sheet": "842d0f37c2e53812"
- },
- "75a9991b44e53f0c": {
-  "reply": "f805e0fc4d825a00",
-  "sheet": null
- },
- "76c2a959f7674705": {
-  "reply": "291d8cbb9e272775",
-  "sheet": "b3a2468022b86f34"
- },
- "77ba075c20675d3d": {
-  "reply": "f0cda61c31d32f09",
-  "sheet": null
- },
- "792e94aa9a61a96b": {
-  "reply": "d8796706234ab2e7",
-  "sheet": null
- },
- "796225092f29bd56": {
-  "reply": "016bb7fbf6f26e0e",
-  "sheet": null
- },
- "79d008d703bf8616": {
-  "reply": "b379fe56404daf68",
-  "sheet": "2f66633286ed1ad2"
- },
- "7aaab0480e81cb38": {
-  "reply": "d011597671d3badd",
-  "sheet": "2f66633286ed1ad2"
- },
- "7b69c70f1c088c9a": {
-  "reply": "dae56db224b190fd",
-  "sheet": "f13722c501757260"
- },
- "7e305399ea50932a": {
-  "message": "Path /etc/ltspice-mcp-not-allowed.cir is outside allowed directories [WORK] A reference may also be the netlist text itself: pass the deck's lines (with newlines) as compare.reference instead of a path.",
-  "raised": "PathSecurityError"
- },
- "7e3e7879522bbafc": {
-  "reply": "4b03952f441a1e89",
-  "sheet": "2f66633286ed1ad2"
- },
- "7e4ebadbf7531feb": {
-  "message": "open_window takes only path and expected_sha256, with ops=[]: settle the window, read the sheet again, then edit it in another call.",
-  "raised": "NetlistError"
- },
- "7e6f2cb1bc4a5512": {
-  "reply": "d4fa0e3daf32f514",
-  "sheet": "c071ac08a8bd3d19"
- },
- "7ea2d03dd3bbf023": {
-  "reply": "f8ae29750e78f2c5",
-  "sheet": "a4f8c1030672b090"
- },
- "7f670f7a08530ef6": {
-  "reply": "eaa4b8e3d296bfc6",
-  "sheet": null
- },
- "7fd27b5a59cffca0": {
-  "reply": "5c47600043d64b71",
-  "sheet": "2f66633286ed1ad2"
- },
- "8254e3e89013c1cb": {
-  "reply": "5de33a81aaa3d1e6",
-  "sheet": null
- },
- "826cc8f36d760539": {
-  "reply": "44a06fb2b6c5f2f7",
-  "sheet": "e51a879c905062d9"
- },
- "82ddf01f9e9074a4": {
-  "reply": "c7b6d288c7bd00ed",
-  "sheet": null
- },
- "83a5d6e2b65c7bf6": {
-  "reply": "1f01da5273f08b36",
-  "sheet": null
- },
- "843ad1fcd2a6c7b4": {
-  "reply": "6c730117c77816f8",
-  "sheet": null
- },
- "848789703c343213": {
-  "reply": "8df8edcbe1ee5b95",
-  "sheet": null
- },
- "84c416814ed48d01": {
-  "reply": "a98c0d82b994d71f",
-  "sheet": "7e46f18271775e61"
- },
- "8553c8b7f8a72c09": {
-  "reply": "eedbf62e73c9cfe6",
-  "sheet": null
- },
- "8574a19c2c5a93e2": {
-  "reply": "73050a1fa17c6db9",
-  "sheet": "02799fe4a330ce21"
- },
- "86f44f293daee10d": {
-  "reply": "16b1ecf17d414100",
-  "sheet": null
- },
- "8806959f545a83af": {
-  "reply": "06c7d9202e57585e",
-  "sheet": null
- },
- "8847ac6497a9d8f7": {
-  "varies": [
+ "60607b0d59849e20": {
+  "answer": {
+   "reply": "4842e46da2498fe6",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_an_edit_says_of_a_sheet_what_a_check_of_it_says"
+  ]
+ },
+ "612a5873becde290": {
+  "answer": {
+   "reply": "c1a060f6ae9555b0",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/unlabelled_nets]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/unlabelled_nets]"
+  ]
+ },
+ "61ed6a671d7946e6": {
+  "answer": {
+   "reply": "afddf992370eb669",
+   "sheet": "bab9cd389e43e638"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_library_symbol_redrawn_between_edits_is_read_again"
+  ]
+ },
+ "62fdc94bc2f78ab8": {
+  "answer": {
+   "reply": "3ef784adad94cb04",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_circuit_asc.py::TestEmptyAttributeHandling::test_instname_cannot_be_cleared"
+  ]
+ },
+ "6324c6837dc4c430": {
+  "answer": {
+   "reply": "f805e0fc4d825a00",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_bad_op_aborts_transaction_nothing_written"
+  ]
+ },
+ "63b5ebfa27f92415": {
+  "answer": {
+   "reply": "be0a940a87dd33ca",
+   "sheet": "e51a879c905062d9"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_wire_a_later_op_removes_is_not_said_to_hang[move_component]",
+   "tests/test_edit_schematic.py::test_a_wire_a_later_op_removes_is_not_said_to_hang[remove_component]"
+  ]
+ },
+ "648ac1dee9da05f4": {
+  "answer": {
+   "reply": "4cd7e01ab4df85d9",
+   "sheet": "99098b43e1a2502f"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_reply_counts_every_op_and_says_what_a_removal_matched"
+  ]
+ },
+ "64a5e83816d6c55c": {
+  "answer": {
+   "reply": "fb70b7fc003e60ac",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_crash_after_rename_stays_committed"
+  ]
+ },
+ "65b88a7751c1f73d": {
+  "answer": {
+   "message": "Cannot open spaced.asc for editing: line 3 ('TEXT  16 16 Left 2 !.tran 1m') is a TEXT record the schematic editor skips, and saving any edit would delete it. Write it as LTspice saves one, with one space between its fields, then edit the sheet here.",
+   "raised": "NetlistError"
+  },
+  "tests": [
+   "tests/test_asc_document.py::TestTheEditorHoldsWhatTheSheetHolds::test_a_text_line_the_editor_does_not_read_is_refused_not_dropped[TEXT  16 16 Left 2 !.tran 1m]"
+  ]
+ },
+ "65fed0467439c401": {
+  "answer": {
+   "reply": "f809ee58593c1c87",
+   "sheet": "0fe4a46d4fb4e6e1"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_an_echoed_cursor_returns_its_view_without_a_return_views_entry"
+  ]
+ },
+ "6634448da911e715": {
+  "answer": {
+   "reply": "ad5b765bd561d878",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_one_call_per_task.py::test_a_mismatch_is_reported_in_the_same_call_without_undoing_the_edit"
+  ]
+ },
+ "67969f88832e2c9e": {
+  "answer": {
+   "reply": "edad5faa7c07502d",
+   "sheet": "5fcd33e31cbd8c08"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_route_already_drawn_through_a_part_is_not_the_batchs"
+  ]
+ },
+ "67c9b15a46f292c8": {
+  "answer": {
+   "reply": "9179fbd11fd6fade",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_dry_run_surfaces_all_op_failures"
+  ]
+ },
+ "67c9c366dde9c7d1": {
+  "answer": {
+   "message": "Cannot open shared_reference.asc for editing: parts share a reference ('R1' at (96,96), (400,96)). The schematic editor keeps one part per reference and would delete the others on saving, and neither LTspice build netlists such a sheet. Rename the repeated parts in LTspice, then edit the sheet here.",
+   "raised": "NetlistError"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_refuses_a_sheet_whose_parts_share_a_name_and_keeps_both[ltspice17]",
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_refuses_a_sheet_whose_parts_share_a_name_and_keeps_both[ltspice26]"
+  ]
+ },
+ "67fae8dd5d9a76dc": {
+  "answer": {
+   "reply": "0eac4fe90e6387dd",
+   "sheet": "f18b41994230550d"
+  },
+  "tests": [
+   "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[rectifier_drawn]"
+  ]
+ },
+ "68da161be83202ea": {
+  "answer": {
+   "reply": "cd4fe542a7714631",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/diagonal_wire_interior]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/diagonal_wire_interior]"
+  ]
+ },
+ "6baebd583c0ffda3": {
+  "answer": {
+   "reply": "88ee824307c1910d",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_crash_before_rename_leaves_the_target_and_writes_nothing_else"
+  ]
+ },
+ "6bf0d9328300bdcc": {
+  "answer": {
+   "reply": "52205c892feb1c1a",
+   "sheet": "5270a760fe5167ba"
+  },
+  "tests": [
+   "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[common_source_drawn]"
+  ]
+ },
+ "6c544a9bca78d10e": {
+  "answer": {
+   "reply": "c6959b2f48801107",
+   "sheet": "ebabd77bdc824e39"
+  },
+  "tests": [
+   "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[common_source_labelled]"
+  ]
+ },
+ "6c6988d7293aad73": {
+  "answer": {
+   "reply": "b188610dd156f29a",
+   "sheet": "53960f64fa788151"
+  },
+  "tests": [
+   "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[rlc_line_drawn]"
+  ]
+ },
+ "6c9fe6ea2184a5b3": {
+  "answer": {
+   "reply": "344cd135dc8fe7e4",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/same_instance_detour]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_detour]"
+  ]
+ },
+ "6d78df2f4a93c062": {
+  "answer": {
+   "reply": "8f654ab83ad7d4e5",
+   "sheet": "5309d926a1d3da61"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_wire_a_later_op_removes_is_not_said_to_hang[remove_component]"
+  ]
+ },
+ "6dfb76b1d4fc6046": {
+  "answer": {
+   "reply": "6fcee7e7f62ebea1",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_first_edit_commits_with_the_digest_inspect_reported"
+  ]
+ },
+ "6f6837b07099aa30": {
+  "answer": {
+   "reply": "74842d93c439307d",
+   "sheet": "b3a2468022b86f34"
+  },
+  "tests": [
+   "tests/test_set_plot_panes.py::test_the_replaced_panes_put_back_undo_the_op[ltspice26-plot/math.plt]"
+  ]
+ },
+ "6facab3ee3da3b6e": {
+  "answer": {
+   "reply": "f0f35a26b5610e86",
+   "sheet": "4f700298c191ce88"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_unexportable_asc_reference_is_a_compare_error"
+  ]
+ },
+ "6fd567dd59cfa3f7": {
+  "answer": {
+   "reply": "5c47600043d64b71",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_dry_run_reports_a_stale_expected_sha_as_a_fact"
+  ]
+ },
+ "7130dda6f5e8e113": {
+  "answer": {
+   "reply": "27797bf14a73778e",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_missing_expected_sha_refusal_hands_back_the_current_digest"
+  ]
+ },
+ "721e38944487c29c": {
+  "answer": {
+   "reply": "a98c0d82b994d71f",
+   "sheet": "7e46f18271775e61"
+  },
+  "tests": [
+   "tests/test_circuit_asc.py::TestRemoveComponentNoFalseOrphans::test_other_component_pin_not_flagged"
+  ]
+ },
+ "724786c108ae7086": {
+  "answer": {
+   "reply": "4aae7ee35826deb0",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_dry_run_needs_no_expected_sha_and_hands_back_the_digest"
+  ]
+ },
+ "72835a99ee0328ce": {
+  "answer": {
+   "reply": "56298b67026ad2b0",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/pin_at_crossing]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/pin_at_crossing]"
+  ]
+ },
+ "72c0a0e93ba9ae62": {
+  "answer": {
+   "reply": "639320d3fcd2a624",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_reference_structural_diff_reports_the_delta"
+  ]
+ },
+ "735a50064b630a31": {
+  "answer": {
+   "reply": "fc73f137ccd0a96a",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/collinear_overlap]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/collinear_overlap]"
+  ]
+ },
+ "73e5782b31b157b8": {
+  "answer": {
+   "reply": "7615987a30a9981d",
+   "sheet": "be2910d5a44c2ad2"
+  },
+  "tests": [
+   "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[nmos_mirror_drawn]"
+  ]
+ },
+ "74e44eb4aafdf8c6": {
+  "answer": {
+   "reply": "0d6f63caa045df74",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/same_instance_label_at_vertex]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_label_at_vertex]"
+  ]
+ },
+ "7558200c58f8329a": {
+  "answer": {
+   "reply": "29b1bbb3f617ca50",
+   "sheet": "29c596fe49dd2953"
+  },
+  "tests": [
+   "tests/test_inspect_tools.py::TestAReadDuringAnEdit::test_a_component_listing_shows_the_file"
+  ]
+ },
+ "75736c9e6e06daf9": {
+  "answer": {
+   "reply": "fe06fdba64e6b34e",
+   "sheet": "21b15924f8cb8e38"
+  },
+  "tests": [
+   "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[diff_pair_labelled]"
+  ]
+ },
+ "79089fe7b2c96ab9": {
+  "answer": {
+   "reply": "7015c0830e0b0647",
+   "sheet": "1986dcae4e2adb90"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_fact_of_the_finished_sheet_is_said_once"
+  ]
+ },
+ "7981ed46eaca025f": {
+  "answer": {
+   "reply": "12e724f5f88aa823",
+   "sheet": "acac928179f1ea70"
+  },
+  "tests": [
+   "tests/test_circuit_asc.py::TestWirePins::test_edit_schematic_refuses_a_same_instance_wire"
+  ]
+ },
+ "79cbda8edbf7c217": {
+  "answer": {
+   "reply": "291d8cbb9e272775",
+   "sheet": "b3a2468022b86f34"
+  },
+  "tests": [
+   "tests/test_set_plot_panes.py::test_an_ac_pane_gets_ltspices_own_scales_unless_it_names_them"
+  ]
+ },
+ "79f356081af66140": {
+  "answer": {
+   "reply": "6dc4b6159287e765",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_empty_ops_without_views_is_rejected"
+  ]
+ },
+ "79fc3581ced4dfce": {
+  "answer": {
+   "reply": "af75451582818525",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_circuit_asc.py::TestWirePins::test_edit_schematic_refuses_a_same_instance_wire"
+  ]
+ },
+ "7ad408fe2cdf85ff": {
+  "answer": {
+   "reply": "929f528e132111ef",
+   "sheet": "65f07c55b9c1a9d6"
+  },
+  "tests": [
+   "tests/test_edit_open_window.py::test_a_sheet_ltspice_rewrote_on_opening_is_not_taken_for_an_unsaved_one[older_version]"
+  ]
+ },
+ "7af07120771e3da3": {
+  "answer": {
+   "reply": "5ac1f63988296d70",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_open_window.py::test_a_stale_revision_saves_nothing"
+  ]
+ },
+ "7bab8197553c8b81": {
+  "answer": {
+   "reply": "8370eef36cb18be5",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_set_plot_panes.py::test_a_dry_run_reports_and_writes_nothing"
+  ]
+ },
+ "7c0088d2748054a5": {
+  "answer": {
+   "reply": "1105c3df44576f08",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_dry_run_writes_nothing"
+  ]
+ },
+ "7c4d7f7d227126a1": {
+  "answer": {
+   "reply": "63492304e33c75d9",
+   "sheet": "832fb497a634385d"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_label_only_pin_is_named_by_the_labels_at_its_coordinate"
+  ]
+ },
+ "7c98c5fabca1ad91": {
+  "answer": {
+   "reply": "ea72a720ca7a61ec",
+   "sheet": "168171de437364ed"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_post_commit_reference_error_returns_committed_envelope"
+  ]
+ },
+ "7cb2e6386d3f236f": {
+  "answer": {
+   "reply": "b6d5c194111a1ac1",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/two_labels_alpha_first]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/two_labels_alpha_first]"
+  ]
+ },
+ "7d49742a7c4e3912": {
+  "answer": {
+   "reply": "291d8cbb9e272775",
+   "sheet": "b3a2468022b86f34"
+  },
+  "tests": [
+   "tests/test_set_plot_panes.py::test_a_dc_sweep_and_a_noise_run_have_panes_of_their_own[noise-Noise Spectral Density - (V/Hz\\xbd or A/Hz\\xbd)-scales1]"
+  ]
+ },
+ "7db9e7bd8eff0e21": {
+  "tests": [
    "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[None-False]",
    "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[child-False]",
    "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[grandchild-False]"
+  ],
+  "varies": true
+ },
+ "817a0848ec20b7af": {
+  "answer": {
+   "reply": "630ba84aafd584cf",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/label_on_wire_interior]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/label_on_wire_interior]"
   ]
  },
- "88eee14ab2a8115a": {
-  "reply": "d64db581800aeb66",
-  "sheet": "aaa53083dca6c6e2"
+ "81db4a289f0bbb38": {
+  "answer": {
+   "reply": "0cb8d12f804933a1",
+   "sheet": "4464b9a7038d05c9"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_an_edit_says_of_a_sheet_what_a_check_of_it_says"
+  ]
  },
- "89de98fcd4f0a4af": {
-  "reply": "9e6ddd44a41f10b1",
-  "sheet": null
+ "8250b12a4fb3dc22": {
+  "answer": {
+   "reply": "28f2c95e7f07766a",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_dry_run_reports_a_stale_expected_sha_as_a_fact"
+  ]
  },
- "8b002a09cf02a965": {
-  "reply": "5ac1f63988296d70",
-  "sheet": null
+ "8257603b6a7b4f8f": {
+  "answer": {
+   "reply": "977763d92f225b11",
+   "sheet": "b53e523c278c7a15"
+  },
+  "tests": [
+   "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[sallen_key_drawn]"
+  ]
  },
- "8b0172ed16106447": {
-  "reply": "006045f415d4598d",
-  "sheet": "087779c62714d69a"
+ "82fea3b415c0f4a6": {
+  "answer": {
+   "reply": "d10702c23c5abcf9",
+   "sheet": "b3a2468022b86f34"
+  },
+  "tests": [
+   "tests/test_set_plot_panes.py::test_panes_the_file_already_holds_are_not_written_again"
+  ]
  },
- "8b5933f2f4183c01": {
-  "reply": "be0a940a87dd33ca",
-  "sheet": "e51a879c905062d9"
+ "830e9f0ff13442c3": {
+  "answer": {
+   "message": "invalid view_cursors.label_only_pins: malformed page cursor: 'garbage'",
+   "raised": "InvalidCursorError"
+  },
+  "tests": [
+   "tests/test_invalid_cursor.py::TestCallLevelCursors::test_edit_schematic_view_cursor[label_only_pins]"
+  ]
  },
- "8be2de70ad1c064a": {
-  "reply": "20ddddf279dfd774",
-  "sheet": "6de60ebbdd4c2559"
+ "83b9ba79ef30c78a": {
+  "answer": {
+   "reply": "838782eb13cd9ce0",
+   "sheet": "ccc0ccf65a13b089"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_the_response_carries_each_ops_own_facts[commit]"
+  ]
  },
- "8beb0ee0cc59f685": {
-  "varies": [
+ "853337e630a76ce0": {
+  "answer": {
+   "reply": "fb1b4c4280891e67",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_directive_difference_says_the_wiring_matched"
+  ]
+ },
+ "87318208619df721": {
+  "answer": {
+   "reply": "b1f0fa1ecfd1941d",
+   "sheet": "a5bda05d7e572abc"
+  },
+  "tests": [
+   "tests/test_post_op_warnings.py::TestReadabilityWarnings::test_wiring_profile_counts_wired_pins"
+  ]
+ },
+ "880866ff6f0f7bba": {
+  "answer": {
+   "reply": "b9671e6bee73f8b8",
+   "sheet": "858573307ac29a7b"
+  },
+  "tests": [
+   "tests/test_post_op_warnings.py::TestReadabilityWarnings::test_wiring_profile_flags_net_label_soup"
+  ]
+ },
+ "8825e6c3e76f1dd9": {
+  "tests": [
+   "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[None-True]",
+   "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[child-True]",
+   "tests/test_edit_schematic.py::TestHierarchicalPortPreservation::test_pending_child_changes_never_write_through_parent[grandchild-True]"
+  ],
+  "varies": true
+ },
+ "88806e23996c2e78": {
+  "answer": {
+   "reply": "e98d833a962c76a0",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/same_instance_t_junction]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_t_junction]"
+  ]
+ },
+ "898e765d10ff9823": {
+  "answer": {
+   "reply": "e7542f4f0e4c24e7",
+   "sheet": "f4955e6af62cdb33"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_label_wired_later_in_the_batch_is_never_called_loose"
+  ]
+ },
+ "8b4b1bd53e96aa50": {
+  "answer": {
+   "reply": "eaa4b8e3d296bfc6",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/two_labels_corner]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/two_labels_corner]"
+  ]
+ },
+ "8b61bfe9e8d1d089": {
+  "answer": {
+   "reply": "0713061279a179d5",
+   "sheet": "2961a71434a9027a"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_replace_directive_reports_what_it_changed"
+  ]
+ },
+ "8bf304039fe263f6": {
+  "answer": {
+   "message": "invalid view_cursors.pin_legend: malformed page cursor: 'garbage'",
+   "raised": "InvalidCursorError"
+  },
+  "tests": [
+   "tests/test_invalid_cursor.py::TestCallLevelCursors::test_edit_schematic_view_cursor[pin_legend]"
+  ]
+ },
+ "8c005d353ff57ba3": {
+  "answer": {
+   "reply": "bb286ae35035402a",
+   "sheet": "4f614343a2c6e7aa"
+  },
+  "tests": [
+   "tests/test_python_api_primitives.py::test_archetype_build_verify_and_recorded_analysis_through_api"
+  ]
+ },
+ "8d2fb64858b60499": {
+  "answer": {
+   "reply": "c957ae5ab6c9d801",
+   "sheet": "1f1cd547b8f9866c"
+  },
+  "tests": [
+   "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[vccs_stage_labelled]"
+  ]
+ },
+ "8d6a2038790cdb1c": {
+  "answer": {
+   "reply": "70a8f75e976ce660",
+   "sheet": "88c9ff221b645b1b"
+  },
+  "tests": [
+   "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[two_stage_opamp_drawn]"
+  ]
+ },
+ "8dace3d48cec3322": {
+  "answer": {
+   "reply": "876363644042fe04",
+   "sheet": "afc8aa383e2e8640"
+  },
+  "tests": [
+   "tests/test_edit_open_window.py::test_with_the_users_agreement_ltspice_saves_the_window_and_the_edit_goes_on"
+  ]
+ },
+ "8e7c8122ead4c544": {
+  "answer": {
+   "reply": "314faa0d12ad0227",
+   "sheet": "d70da2388e3f4613"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_the_preexisting_cursor_pages_every_withheld_row"
+  ]
+ },
+ "8f1a81aef836e336": {
+  "answer": {
+   "message": "open_window takes only path and expected_sha256, with ops=[]: settle the window, read the sheet again, then edit it in another call.",
+   "raised": "NetlistError"
+  },
+  "tests": [
+   "tests/test_edit_open_window.py::test_a_save_is_a_call_of_its_own[other2]"
+  ]
+ },
+ "9397fc8deaa43c75": {
+  "answer": {
+   "reply": "78e7326917ba3022",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_default_view_covers_only_the_refs_the_batch_touched"
+  ]
+ },
+ "94ade902cdb7e4eb": {
+  "answer": {
+   "reply": "80de6882358070bf",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_the_preexisting_cursor_pages_every_withheld_row"
+  ]
+ },
+ "95022b6a00dfcccb": {
+  "answer": {
+   "reply": "7a243a8c8c277cea",
+   "sheet": "b3a2468022b86f34"
+  },
+  "tests": [
+   "tests/test_set_plot_panes.py::test_a_batch_of_plot_panes_alone_leaves_the_sheet_as_it_is",
+   "tests/test_set_plot_panes.py::test_a_dc_sweep_and_a_noise_run_have_panes_of_their_own[dc-DC transfer characteristic-scales0]",
+   "tests/test_set_plot_panes.py::test_a_dc_sweep_and_a_noise_run_have_panes_of_their_own[noise-Noise Spectral Density - (V/Hz\\xbd or A/Hz\\xbd)-scales1]",
+   "tests/test_set_plot_panes.py::test_a_dry_run_reports_and_writes_nothing",
+   "tests/test_set_plot_panes.py::test_a_file_in_two_encodings_is_refused_and_left_alone",
+   "tests/test_set_plot_panes.py::test_a_file_ltspice_26_wrote_keeps_its_other_sections",
+   "tests/test_set_plot_panes.py::test_a_pane_with_no_trace_is_refused_by_the_model",
+   "tests/test_set_plot_panes.py::test_a_plot_settings_write_that_fails_leaves_both_files",
+   "tests/test_set_plot_panes.py::test_a_sheet_rename_that_fails_puts_the_old_panes_back[None]",
+   "tests/test_set_plot_panes.py::test_a_sheet_rename_that_fails_puts_the_old_panes_back[plot/math.plt]",
+   "tests/test_set_plot_panes.py::test_a_trace_the_file_cannot_carry_aborts_the_batch[ ]",
+   "tests/test_set_plot_panes.py::test_a_trace_the_file_cannot_carry_aborts_the_batch[V(\"out\")]",
+   "tests/test_set_plot_panes.py::test_a_trace_the_file_cannot_carry_aborts_the_batch[V(out)\\nV(in)]",
+   "tests/test_set_plot_panes.py::test_an_ac_pane_gets_ltspices_own_scales_unless_it_names_them",
+   "tests/test_set_plot_panes.py::test_no_panes_removes_the_analysis_and_then_the_file",
+   "tests/test_set_plot_panes.py::test_one_batch_edits_the_sheet_and_its_panes",
+   "tests/test_set_plot_panes.py::test_panes_the_file_already_holds_are_not_written_again",
+   "tests/test_set_plot_panes.py::test_the_panes_are_written_beside_the_sheet_bottom_first",
+   "tests/test_set_plot_panes.py::test_the_replaced_panes_put_back_undo_the_op[ltspice17-plot/math_grid.plt]",
+   "tests/test_set_plot_panes.py::test_the_replaced_panes_put_back_undo_the_op[ltspice26-plot/math.plt]",
+   "tests/test_set_plot_panes.py::test_the_replaced_panes_put_back_undo_the_op[ltspice26-plot/math_grid.plt]"
+  ]
+ },
+ "961f527a13bf3751": {
+  "answer": {
+   "reply": "21154f45f7068bab",
+   "sheet": "d70da2388e3f4613"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_finding_the_batch_names_but_leaves_as_it_was_is_still_the_sheets[the_dangling_label_moved_away_and_back]"
+  ]
+ },
+ "96fd2f78f6cb7973": {
+  "answer": {
+   "reply": "b4b83cf5e9432d91",
+   "sheet": "168171de437364ed"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_existing_edit_requires_and_honors_sha"
+  ]
+ },
+ "980678f0e65c60bb": {
+  "answer": {
+   "message": "Cannot open spaced.asc for editing: line 3 ('TEXT 16 16 Left  2 !.tran 3m') is a TEXT record the schematic editor skips, and saving any edit would delete it. Write it as LTspice saves one, with one space between its fields, then edit the sheet here.",
+   "raised": "NetlistError"
+  },
+  "tests": [
+   "tests/test_asc_document.py::TestTheEditorHoldsWhatTheSheetHolds::test_a_text_line_the_editor_does_not_read_is_refused_not_dropped[TEXT 16 16 Left  2 !.tran 3m]"
+  ]
+ },
+ "98105af95d58e1ae": {
+  "answer": {
+   "reply": "291d8cbb9e272775",
+   "sheet": "b3a2468022b86f34"
+  },
+  "tests": [
+   "tests/test_set_plot_panes.py::test_a_dc_sweep_and_a_noise_run_have_panes_of_their_own[dc-DC transfer characteristic-scales0]"
+  ]
+ },
+ "98dbc0c6c5be7ce1": {
+  "answer": {
+   "message": "Cannot open WORK/top.asc: WORK/bus.asc, a sheet it loads, starts with a UTF-8 byte order mark; neither LTspice 26 nor LTspice XVII reads a sheet that does (26 exports nothing from it, XVII stops on \"Unknown schematic syntax\"). Save it without the mark.",
+   "raised": "NetlistError"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::TestRecordTheEditorCannotRead::test_a_byte_order_mark_on_a_sheet_the_target_loads_names_that_sheet"
+  ]
+ },
+ "9a5ababd62273080": {
+  "answer": {
+   "reply": "251eefe1ec0613b6",
+   "sheet": "44202d5c22063149"
+  },
+  "platform": "posix",
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_symbol_saved_beside_the_sheet_is_found_by_the_compare_export[in-the-folder-its-name-says]"
+  ]
+ },
+ "9ae1f963be6acdc2": {
+  "answer": {
+   "reply": "cfe616e4238337de",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_wiring_metric_and_label_only"
+  ]
+ },
+ "9af827f92b71ce6b": {
+  "answer": {
+   "reply": "08105bd5e78e120c",
+   "sheet": "189e647fb79514c1"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_asking_for_the_preexisting_view_returns_the_rest_in_the_same_call"
+  ]
+ },
+ "9b31692fbbb5df2c": {
+  "answer": {
+   "reply": "f98ee3238e2ae318",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/two_instance_wire]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/two_instance_wire]"
+  ]
+ },
+ "9b44f1996f8714fe": {
+  "answer": {
+   "reply": "5f1bff5dfb20ca8c",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_what_the_editor_drops_on_reading_a_sheet_is_not_the_batchs"
+  ]
+ },
+ "9b472d6b77c11e98": {
+  "answer": {
+   "reply": "3c4eabebac8bcd42",
+   "sheet": "7537888aa9b73a27"
+  },
+  "tests": [
+   "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[sallen_key_labelled]"
+  ]
+ },
+ "9c5dd49cd8c19ae3": {
+  "answer": {
+   "reply": "0a0615ea78da1416",
+   "sheet": "e74de70382e0ec77"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_finding_the_batch_names_but_leaves_as_it_was_is_still_the_sheets[a_new_value_on_the_part_with_floating_pins]"
+  ]
+ },
+ "9e2161b1929171b5": {
+  "answer": {
+   "reply": "730df546e0c878f9",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_post_commit_view_error_returns_committed_envelope"
+  ]
+ },
+ "9e6ed88f1b38b506": {
+  "answer": {
+   "reply": "7cc64cb9df5bd58d",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_an_equivalent_comparison_commits_and_leaves_the_netlist_out[text]"
+  ]
+ },
+ "9f2446a011da4235": {
+  "answer": {
+   "reply": "94252cb3a45a4ece",
+   "sheet": "62ecac96c2c111e7"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_reply_lists_every_rule_that_ran_with_what_it_found"
+  ]
+ },
+ "9f54541b119dadfc": {
+  "answer": {
+   "reply": "25f0b16e86050179",
+   "sheet": "ffba5e1e9d340bbf"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_library_symbol_redrawn_between_edits_is_read_again"
+  ]
+ },
+ "9f64c626d9159a73": {
+  "answer": {
+   "reply": "f24ef55c8868904f",
+   "sheet": "018d0b7888b32527"
+  },
+  "tests": [
+   "tests/test_parallel_sessions.py::TestCircuitFileLock::test_asc_edit_on_the_peers_revision_keeps_both_edits"
+  ]
+ },
+ "9fcfbfdbcc1afe2d": {
+  "answer": {
+   "reply": "1bbde98b60eb2d6e",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_open_window.py::test_a_call_that_leaves_the_sheet_as_it_is_asks_no_window[no ops]"
+  ]
+ },
+ "a20ca17edad5aaa2": {
+  "answer": {
+   "message": "open_window takes only path and expected_sha256, with ops=[]: settle the window, read the sheet again, then edit it in another call.",
+   "raised": "NetlistError"
+  },
+  "tests": [
+   "tests/test_edit_open_window.py::test_a_save_is_a_call_of_its_own[other3]"
+  ]
+ },
+ "a2acb18c29567833": {
+  "answer": {
+   "message": "Draft1.plt is locked by another ltspice-mcp process (waited 0s). Retry once its edit finishes.",
+   "raised": "NetlistError"
+  },
+  "tests": [
+   "tests/test_parallel_sessions.py::TestCircuitFileLock::test_a_plot_panes_edit_locks_the_plot_settings_file"
+  ]
+ },
+ "a2c55b3727cdcbd1": {
+  "answer": {
+   "reply": "9379a14eb42e9781",
+   "sheet": "37b3406b8a47981e"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_new_value_on_a_text_that_overlapped_before_is_not_the_batchs"
+  ]
+ },
+ "a33742ef33aad2cd": {
+  "answer": {
+   "reply": "0b72618f638e4600",
+   "sheet": "eb9a6ac0e8188eef"
+  },
+  "tests": [
+   "tests/test_asc_document.py::TestTheFormatThePresentEngineWrites::test_a_sheet_built_through_the_tool_is_rebuilt_byte_for_byte"
+  ]
+ },
+ "a3711f8d9b364ed9": {
+  "answer": {
+   "message": "Cannot open spaced.asc for editing: line 3 ('TEXT\\t16 16 Left 2 !.tran 2m') is a TEXT record the schematic editor skips, and saving any edit would delete it. Write it as LTspice saves one, with one space between its fields, then edit the sheet here.",
+   "raised": "NetlistError"
+  },
+  "tests": [
+   "tests/test_asc_document.py::TestTheEditorHoldsWhatTheSheetHolds::test_a_text_line_the_editor_does_not_read_is_refused_not_dropped[TEXT\\t16 16 Left 2 !.tran 2m]"
+  ]
+ },
+ "a3cde978d2b9230d": {
+  "answer": {
+   "reply": "6117555ba9d202d5",
+   "sheet": "0f7d0950a33ecae5"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_a_rename_ends_a_reference_two_parts_share_in_another_case[ltspice17]",
+   "tests/test_recorded_ltspice_schematics.py::test_a_rename_ends_a_reference_two_parts_share_in_another_case[ltspice26]"
+  ]
+ },
+ "a497cd44b7aa3d36": {
+  "answer": {
+   "reply": "44a06fb2b6c5f2f7",
+   "sheet": "e51a879c905062d9"
+  },
+  "tests": [
+   "tests/test_circuit_asc.py::TestRemoveComponentNoFalseOrphans::test_other_component_pin_not_flagged"
+  ]
+ },
+ "a4a7ebed2f439ec7": {
+  "answer": {
+   "message": "injected mid-batch failure",
+   "raised": "RuntimeError"
+  },
+  "tests": [
+   "tests/test_post_op_warnings.py::TestAbortedTransaction::test_uncaught_exception_invalidates_the_cache_and_preserves_the_file"
+  ]
+ },
+ "a4b46d14152a12f6": {
+  "answer": {
+   "reply": "29718b5b37003982",
+   "sheet": "d70da2388e3f4613"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_malformed_preexisting_cursor_is_rejected_before_the_sheet_is_written"
+  ]
+ },
+ "a4c9744ed53f8472": {
+  "answer": {
+   "reply": "e90fae2ce2284cf2",
+   "sheet": "5dbf7601bad3bc6f"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::TestDataFlagPreservation::test_a_blank_base_starts_without_the_targets_data_flags"
+  ]
+ },
+ "a715ba8289da03cd": {
+  "answer": {
+   "reply": "275be6f7003de360",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/crossing_wires]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/crossing_wires]"
+  ]
+ },
+ "a788911dd8fab732": {
+  "answer": {
+   "reply": "3a235a018ea79cb6",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_dry_run_writes_nothing"
+  ]
+ },
+ "a8858bc369732461": {
+  "answer": {
+   "reply": "8ee47bb8b51dc13d",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_dry_run_reports_a_stale_expected_sha_as_a_fact"
+  ]
+ },
+ "a88cdabec078c35e": {
+  "answer": {
+   "reply": "f64a1f31837b7c72",
+   "sheet": "003b5c758daab3c8"
+  },
+  "tests": [
+   "tests/test_circuit_asc.py::TestJudgedOnTheFinishedSheet::test_a_wire_dragged_diagonal_is_said_by_the_sheet"
+  ]
+ },
+ "a8dfba030831ed9a": {
+  "answer": {
+   "reply": "17ca42675da225d2",
+   "sheet": "879e5d6f510a331b"
+  },
+  "tests": [
+   "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[two_stage_opamp_labelled]"
+  ]
+ },
+ "a9bd3c737f392b88": {
+  "answer": {
+   "reply": "251eefe1ec0613b6",
+   "sheet": "c064b176635b7503"
+  },
+  "platform": "posix",
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_symbol_saved_beside_the_sheet_is_found_by_the_compare_export[beside]"
+  ]
+ },
+ "aa5d7ab0b02d9f4c": {
+  "tests": [
    "tests/test_edit_open_window.py::test_a_window_pid_without_a_different_copy_saves_nothing[4243-holds the file's copy]",
    "tests/test_edit_open_window.py::test_a_window_that_does_not_take_the_chosen_copy_is_opened_again_from_the_file",
    "tests/test_edit_open_window.py::test_the_copy_the_user_chose_is_saved_and_the_other_window_is_handed_it"
+  ],
+  "varies": true
+ },
+ "ac2daaf8e59f8bb6": {
+  "answer": {
+   "reply": "bff86fa1f94a6f6a",
+   "sheet": "31b13aab2a2a8ebe"
+  },
+  "tests": [
+   "tests/test_inspect_tools.py::TestAReadDuringAnEdit::test_a_net_trace_shows_the_file"
   ]
  },
- "8d65ae4f9da99133": {
-  "reply": "4cb93aa34c74604b",
-  "sheet": "2f66633286ed1ad2"
+ "acf14994712eb346": {
+  "answer": {
+   "reply": "fb838ba53c93acdd",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_reference_export_failure_is_a_partial_outcome"
+  ]
  },
- "8d7eec35ae8dd6a7": {
-  "reply": "8520e9afdc56457e",
-  "sheet": "5fcd33e31cbd8c08"
+ "ad7106870a07d3bc": {
+  "answer": {
+   "reply": "7c2f61725e4532ed",
+   "sheet": "168171de437364ed"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_first_edit_commits_with_the_digest_inspect_reported"
+  ]
  },
- "8e353f68572285ee": {
-  "message": "Cannot open spaced.asc for editing: line 3 ('TEXT  16 16 Left 2 !.tran 1m') is a TEXT record the schematic editor skips, and saving any edit would delete it. Write it as LTspice saves one, with one space between its fields, then edit the sheet here.",
-  "raised": "NetlistError"
+ "ade6f222eb6bdc68": {
+  "answer": {
+   "message": "Path /etc/ltspice-mcp-not-allowed.cir is outside allowed directories [WORK] A reference may also be the netlist text itself: pass the deck's lines (with newlines) as compare.reference instead of a path.",
+   "raised": "PathSecurityError"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_rejected_reference_path_refuses_before_committing"
+  ]
  },
- "8ec8270d51061d0b": {
-  "reply": "40d5db00dd101acb",
-  "sheet": "509ddb679e8bfe03"
+ "aee4077f664d7bfa": {
+  "answer": {
+   "reply": "acf5384c67db6cfe",
+   "sheet": "ccc0ccf65a13b089"
+  },
+  "tests": [
+   "tests/test_python_api_methods.py::test_edit_returns_each_ops_facts_exactly_as_the_mcp_reply_does"
+  ]
  },
- "8f261d6e969c6a56": {
-  "reply": "80de6882358070bf",
-  "sheet": null
+ "af8da4ab3f22fc6c": {
+  "answer": {
+   "message": "invalid view_cursors.pin_legend: cursor is for view 'label_only_pins', not 'pin_legend'; use the page's own next_cursor",
+   "raised": "InvalidCursorError"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_cross_view_cursor_rejected"
+  ]
  },
- "908295264a547cfb": {
-  "reply": "e664f9f579ca07e2",
-  "sheet": null
+ "b296e05d59240008": {
+  "answer": {
+   "reply": "ff2bb32d8e460939",
+   "sheet": "5950d261f0733a5f"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_finding_the_batch_leaves_as_it_was_is_not_the_batchs"
+  ]
  },
- "934f9db5354450d6": {
-  "reply": "e90fae2ce2284cf2",
-  "sheet": "5dbf7601bad3bc6f"
+ "b2abbdeab616a2f8": {
+  "answer": {
+   "reply": "b784a21374bcfdf1",
+   "sheet": "bc9c9f192388fafc"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_t_junction_endpoint_commits_through_the_whole_transaction"
+  ]
  },
- "935411bf2b2ed530": {
-  "reply": "291d8cbb9e272775",
-  "sheet": "b3a2468022b86f34"
+ "b48c5d3ec93c4daf": {
+  "answer": {
+   "reply": "d4fa0e3daf32f514",
+   "sheet": "c071ac08a8bd3d19"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_set_on_several_ops_is_said_once_of_the_sheet"
+  ]
  },
- "93d9fd4c44972640": {
-  "reply": "ddf3e4197c80cb76",
-  "sheet": "ffb9eba3962b6fc3"
+ "b56a57e011555dda": {
+  "answer": {
+   "reply": "2ed4bd8e66a33e7a",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_malformed_touched_cursor_is_rejected_before_the_sheet_is_written"
+  ]
  },
- "941f37f8af041b74": {
-  "reply": "977763d92f225b11",
-  "sheet": "b53e523c278c7a15"
+ "b5b801afd9431e30": {
+  "answer": {
+   "reply": "e2cdf3145c02a986",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_the_python_seam_scopes_the_same_way_and_completes_the_view"
+  ]
  },
- "94b4552367bc8bcf": {
-  "reply": "f98ee3238e2ae318",
-  "sheet": null
+ "b7d3281bdd711d97": {
+  "answer": {
+   "reply": "29850ee7554fe2e6",
+   "sheet": "fd0b62d3879aefde"
+  },
+  "tests": [
+   "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[r2r_ladder_drawn]"
+  ]
  },
- "98da35edd03d3370": {
-  "reply": "f64a1f31837b7c72",
-  "sheet": "003b5c758daab3c8"
+ "b80d58eb963818db": {
+  "answer": {
+   "reply": "74842d93c439307d",
+   "sheet": "b3a2468022b86f34"
+  },
+  "tests": [
+   "tests/test_set_plot_panes.py::test_the_replaced_panes_put_back_undo_the_op[ltspice17-plot/math_grid.plt]"
+  ]
  },
- "9928d663ef4297c7": {
-  "reply": "6dc4b6159287e765",
-  "sheet": "2f66633286ed1ad2"
+ "bd04fbc3bbabf3c1": {
+  "answer": {
+   "reply": "8a8eaffc40417e7d",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/label_case_second_name]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/label_case_second_name]"
+  ]
  },
- "9bde7cad603492ca": {
-  "reply": "7fbdcfce6d30531f",
-  "sheet": "e51a879c905062d9"
+ "bde7daa060e2a966": {
+  "answer": {
+   "reply": "86053d7c7dfa7ae5",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_default_view_covers_only_the_refs_the_batch_touched"
+  ]
  },
- "9d1c815ddc221517": {
-  "reply": "ff2bb32d8e460939",
-  "sheet": "5950d261f0733a5f"
+ "bec0e67ca59f4455": {
+  "answer": {
+   "reply": "98ea889562f8f47b",
+   "sheet": "189e647fb79514c1"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_the_preexisting_cursor_pages_every_withheld_row"
+  ]
  },
- "9d7fe8c75b9b5189": {
-  "reply": "a22802dcdde05e03",
-  "sheet": null
+ "bf656c3e0b84c5d3": {
+  "tests": [
+   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[equivalent]",
+   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[mismatch]"
+  ],
+  "varies": true
  },
- "9de19837c12498f3": {
-  "reply": "fdfb1aef2d4d8199",
-  "sheet": "14058ceaeffcba38"
+ "bfe76d8f582a2d31": {
+  "answer": {
+   "reply": "4a77d1e13c010d61",
+   "sheet": "b3a2468022b86f34"
+  },
+  "tests": [
+   "tests/test_set_plot_panes.py::test_the_replaced_panes_put_back_undo_the_op[ltspice26-plot/math.plt]"
+  ]
  },
- "9e160d3eb433a9c1": {
-  "reply": "fb02b1f344cc4f71",
-  "sheet": "562a9043164cff64"
+ "bfe93c691e417f2f": {
+  "answer": {
+   "reply": "90806e8425713577",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/same_instance_bare]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_bare]"
+  ]
  },
- "9e446be4be364e2d": {
-  "reply": "5bf86e4ad62a5f90",
-  "sheet": "d70da2388e3f4613"
+ "c010c4914ab30191": {
+  "answer": {
+   "reply": "fb02b1f344cc4f71",
+   "sheet": "562a9043164cff64"
+  },
+  "tests": [
+   "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[vcvs_stage_drawn]"
+  ]
  },
- "9ee4a153a3eb5727": {
-  "reply": "fc73f137ccd0a96a",
-  "sheet": null
+ "c10a8dc7810b13a9": {
+  "answer": {
+   "reply": "d011597671d3badd",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_post_commit_reference_error_returns_committed_envelope"
+  ]
  },
- "9ff8a92f38d74678": {
-  "message": "Cannot open WORK/bus.asc: line 5 is a BUSTAP record ('BUSTAP 80 0 80 16'), which the schematic editor does not read, so the sheet cannot be opened for reading or editing here.",
-  "raised": "NetlistError"
+ "c1981f3e0e08514d": {
+  "answer": {
+   "reply": "80de6882358070bf",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_the_preexisting_cursor_pages_every_withheld_row"
+  ]
  },
- "a01b0d8c5fe70952": {
-  "reply": "9179fbd11fd6fade",
-  "sheet": "2f66633286ed1ad2"
+ "c2197a575528a06f": {
+  "answer": {
+   "reply": "bdb5b14ad174a37f",
+   "sheet": "31b13aab2a2a8ebe"
+  },
+  "tests": [
+   "tests/test_inspect_tools.py::TestAReadDuringAnEdit::test_a_component_listing_shows_the_file"
+  ]
  },
- "a181e00a3ddc1bd5": {
-  "reply": "251eefe1ec0613b6",
-  "sheet": "44202d5c22063149"
+ "c2ef9dc91b06b977": {
+  "answer": {
+   "reply": "2126b04815c7d54c",
+   "sheet": "30e2f036e5f18bc4"
+  },
+  "tests": [
+   "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[nmos_mirror_labelled]"
+  ]
  },
- "a2354cfe752b84b6": {
-  "reply": "9b30e2e6e28c38d2",
-  "sheet": "d083b44e671b9297"
+ "c3321a5595aa3fa5": {
+  "answer": {
+   "reply": "0b2fe5040c88b539",
+   "sheet": "6706b0fcfb66049c"
+  },
+  "tests": [
+   "tests/test_circuit_asc.py::TestRemoveComponentNoFalseOrphans::test_other_component_pin_not_flagged"
+  ]
  },
- "a2459303c3925076": {
-  "reply": "1105c3df44576f08",
-  "sheet": "2f66633286ed1ad2"
+ "c4cad6c8ed355cd4": {
+  "answer": {
+   "reply": "fdfb1aef2d4d8199",
+   "sheet": "14058ceaeffcba38"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_label_only_pins_are_scoped_and_reconcile_with_the_sheet_totals"
+  ]
  },
- "a2a6112977171e74": {
-  "reply": "2441d519a70deda0",
-  "sheet": null
+ "c51ef86c06b8decc": {
+  "answer": {
+   "reply": "3e16d147120eea9b",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_set_plot_panes.py::test_a_trace_the_file_cannot_carry_aborts_the_batch[ ]"
+  ]
  },
- "a42119384497b99a": {
-  "reply": "acf5384c67db6cfe",
-  "sheet": "ccc0ccf65a13b089"
+ "c5292c57912c7ce8": {
+  "answer": {
+   "reply": "846afcd949dec5e9",
+   "sheet": "c116e78a4d734899"
+  },
+  "tests": [
+   "tests/test_circuit_asc.py::TestJudgedOnTheFinishedSheet::test_a_net_relabelled_in_remove_and_add_pairs_says_nothing"
+  ]
  },
- "a47b36a65af571ad": {
-  "reply": "9c3101911c762156",
-  "sheet": "9a63168c465b5051"
+ "c593d9513e2fbb0f": {
+  "tests": [
+   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[equivalent]",
+   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[mismatch]"
+  ],
+  "varies": true
  },
- "a5040e28a9fbcb04": {
-  "reply": "275be6f7003de360",
-  "sheet": null
+ "c69d23cab458a8f1": {
+  "answer": {
+   "reply": "5d903ea1a0d777dc",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_op_less_read_needs_no_expected_sha"
+  ]
  },
- "a6b46695c389945f": {
-  "reply": "c1a060f6ae9555b0",
-  "sheet": null
+ "c6b5c76ce3d0f2bb": {
+  "answer": {
+   "reply": "5cf330c497df377b",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_render_failure_leaves_the_target_and_evicts_the_edited_editor"
+  ]
  },
- "a78926eaae91c6b7": {
-  "reply": "d10702c23c5abcf9",
-  "sheet": "b3a2468022b86f34"
+ "c7cb57328fad5346": {
+  "answer": {
+   "reply": "5c74b88f3f2188ff",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/label_on_vertical_wire_interior]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/label_on_vertical_wire_interior]"
+  ]
  },
- "a846c5a73e8900d9": {
-  "reply": "f24ef55c8868904f",
-  "sheet": "018d0b7888b32527"
+ "c870b4c3c13c9964": {
+  "answer": {
+   "reply": "dfd391ae6b84b852",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_concurrent_same_target.py::test_simultaneous_edits_on_one_sha_commit_exactly_one"
+  ]
  },
- "a8886ac6ad6d1cf4": {
-  "message": "invalid view_cursors.label_only_pins: malformed page cursor: 'garbage'",
-  "raised": "InvalidCursorError"
+ "c8c542c0a57d013c": {
+  "answer": {
+   "reply": "eedbf62e73c9cfe6",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_set_plot_panes.py::test_a_sheet_rename_that_fails_puts_the_old_panes_back[plot/math.plt]"
+  ]
  },
- "a93731fe44276741": {
-  "reply": "e611b6aaf36a4ce6",
-  "sheet": null
+ "cc67fe2e6fb86894": {
+  "answer": {
+   "reply": "b372773112aab9a6",
+   "sheet": "047439922969956b"
+  },
+  "tests": [
+   "tests/test_circuit_asc.py::TestEmptyAttributeHandling::test_set_component_attribute_empty_value_clears"
+  ]
  },
- "a9fa53192b5d6ced": {
-  "reply": "8a8eaffc40417e7d",
-  "sheet": null
+ "cdde7ed1ecfb56c8": {
+  "answer": {
+   "reply": "4c5f4c3d7af81eef",
+   "sheet": "c13e97e9196a2fd7"
+  },
+  "tests": [
+   "tests/test_circuit_asc.py::TestWirePinsTJunction::test_a_label_then_a_wire_to_it_in_one_batch_leaves_nothing_loose"
+  ]
  },
- "aa1cf51fac07afea": {
-  "reply": "3d2926552f0862df",
-  "sheet": null
+ "cf90017ff085bd97": {
+  "answer": {
+   "reply": "016bb7fbf6f26e0e",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_parallel_sessions.py::TestCircuitLockLocation::test_a_dry_run_leaves_nothing_beside_the_circuit"
+  ]
  },
- "aa27fe2c0c7adf2e": {
-  "reply": "b9671e6bee73f8b8",
-  "sheet": "858573307ac29a7b"
+ "cffef2f81758f135": {
+  "answer": {
+   "reply": "d8796706234ab2e7",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_row_carries_every_part_and_point_of_its_finding"
+  ]
  },
- "ab145d045816d49e": {
-  "reply": "27797bf14a73778e",
-  "sheet": "2f66633286ed1ad2"
+ "d109c7f914e40246": {
+  "answer": {
+   "reply": "5f6288ea1e0f0e03",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_post_op_warnings.py::TestAbortedTransaction::test_aborted_transaction_writes_nothing_and_emits_no_warnings"
+  ]
  },
- "abb27bd04d91f529": {
-  "reply": "291d8cbb9e272775",
-  "sheet": "b3a2468022b86f34"
+ "d4281b0387bf13f0": {
+  "answer": {
+   "reply": "ae474fbe23413690",
+   "sheet": "b3a2468022b86f34"
+  },
+  "tests": [
+   "tests/test_set_plot_panes.py::test_no_panes_removes_the_analysis_and_then_the_file"
+  ]
  },
- "aca4dfb7be0cad13": {
-  "reply": "7e1f59ee426a10e0",
-  "sheet": "0a1618c86eec59d6"
+ "d42a76f059449458": {
+  "answer": {
+   "message": "open_window takes only path and expected_sha256, with ops=[]: settle the window, read the sheet again, then edit it in another call.",
+   "raised": "NetlistError"
+  },
+  "tests": [
+   "tests/test_edit_open_window.py::test_a_save_is_a_call_of_its_own[other1]"
+  ]
  },
- "ad838360c6390f09": {
-  "reply": "b1f0fa1ecfd1941d",
-  "sheet": "a5bda05d7e572abc"
+ "d430a6a33c148b97": {
+  "answer": {
+   "reply": "1962194299a71fae",
+   "sheet": "ca4f09dc17968e9c"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_finding_the_batch_names_but_leaves_as_it_was_is_still_the_sheets[a_directive_on_the_dangling_labels_point]"
+  ]
  },
- "ae36cc9277f4f158": {
-  "message": "invalid view_cursors.preexisting: malformed page cursor: 'tampered'",
-  "raised": "InvalidCursorError"
+ "d56edc0475b093ef": {
+  "answer": {
+   "reply": "0bc18e864308e180",
+   "sheet": "2fd4f6977eb9f79a"
+  },
+  "tests": [
+   "tests/test_circuit_asc.py::TestJudgedOnTheFinishedSheet::test_a_label_put_on_a_crossing_is_said_by_the_sheet"
+  ]
  },
- "aed89e0f2f566e95": {
-  "reply": "bc14fd2895235293",
-  "sheet": "43a2822eb408c09d"
+ "d5e7cd3ea8b422ba": {
+  "answer": {
+   "reply": "b379fe56404daf68",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_reference_anchors_are_honoured"
+  ]
  },
- "afb198b586fbb207": {
-  "reply": "4c5f4c3d7af81eef",
-  "sheet": "c13e97e9196a2fd7"
+ "d5fa51e016c0f0ad": {
+  "answer": {
+   "reply": "40d5db00dd101acb",
+   "sheet": "509ddb679e8bfe03"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::TestExportEncoding::test_an_edit_writes_a_utf16_sheet_without_the_mark_neither_build_reads[ltspice17]",
+   "tests/test_recorded_ltspice_schematics.py::TestExportEncoding::test_an_edit_writes_a_utf16_sheet_without_the_mark_neither_build_reads[ltspice26]"
+  ]
  },
- "b263e5bf106e1da3": {
-  "reply": "5f1bff5dfb20ca8c",
-  "sheet": null
+ "d75e5e417c10496b": {
+  "answer": {
+   "reply": "599571c0d1d7cb3c",
+   "sheet": "6c6f80b9f8fca180"
+  },
+  "tests": [
+   "tests/test_circuit_asc.py::TestWirePinsTJunction::test_a_crossing_a_route_makes_reaches_the_edit_response"
+  ]
  },
- "b312ec3ed6d641e4": {
-  "reply": "a7d4a4c79e2f8a40",
-  "sheet": null
+ "d770171135e9102b": {
+  "answer": {
+   "reply": "9e6ddd44a41f10b1",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/pin_on_pin]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/pin_on_pin]"
+  ]
  },
- "b42687d28bd3edb4": {
-  "reply": "4a77d1e13c010d61",
-  "sheet": "b3a2468022b86f34"
+ "d7a8bf2d7c8683a9": {
+  "answer": {
+   "reply": "74506fd5057e8fb2",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/wire_ends_meeting_on_wire_interior]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/wire_ends_meeting_on_wire_interior]"
+  ]
  },
- "b5510bbfbb8281b5": {
-  "reply": "7f0f8dbe612e3795",
-  "sheet": "2385a94d791ae910"
+ "daf6cfa941c166e1": {
+  "answer": {
+   "message": "invalid view_cursors.preexisting: malformed page cursor: 'tampered'",
+   "raised": "InvalidCursorError"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_malformed_preexisting_cursor_is_rejected_before_the_sheet_is_written"
+  ]
  },
- "b7f0351b9a4b9161": {
-  "reply": "1a18dde2e9efec16",
-  "sheet": null
+ "db15a6fb201b766b": {
+  "answer": {
+   "reply": "c940976e622001c4",
+   "sheet": "4464b9a7038d05c9"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_finding_the_batch_leaves_as_it_was_is_not_the_batchs"
+  ]
  },
- "b7f5e842c9821485": {
-  "reply": "d28239d4a14164b7",
-  "sheet": "2f66633286ed1ad2"
+ "dba8c02c0d9b52bb": {
+  "answer": {
+   "message": "window_pid goes with open_window='save': it names the window whose copy the user keeps.",
+   "raised": "NetlistError"
+  },
+  "tests": [
+   "tests/test_edit_open_window.py::test_window_pid_goes_with_a_save[None]"
+  ]
  },
- "b90034560deefd99": {
-  "reply": "876363644042fe04",
-  "sheet": "afc8aa383e2e8640"
+ "dbd9e55d5578ef09": {
+  "answer": {
+   "reply": "1dab39ddf46db897",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/label_case_separate_wires]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/label_case_separate_wires]"
+  ]
  },
- "b97751dfa72aa3c1": {
-  "reply": "5f6288ea1e0f0e03",
-  "sheet": null
+ "e0d6d2fa5889688f": {
+  "answer": {
+   "reply": "89a000af7d087a6f",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/wire_end_on_wire_interior_reversed]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/wire_end_on_wire_interior_reversed]"
+  ]
  },
- "bba8398ac5416ab3": {
-  "reply": "74842d93c439307d",
-  "sheet": "b3a2468022b86f34"
+ "e100e950e4ac4dae": {
+  "answer": {
+   "message": "Cannot open WORK/top.asc: WORK/bus.asc, a sheet it loads: line 5 is a BUSTAP record ('BUSTAP 80 0 80 16'), which the schematic editor does not read, so the sheet cannot be opened for reading or editing here.",
+   "raised": "NetlistError"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::TestRecordTheEditorCannotRead::test_a_record_in_a_sheet_the_target_loads_names_that_sheet"
+  ]
  },
- "bc19ef43053b471b": {
-  "reply": "afddf992370eb669",
-  "sheet": "bab9cd389e43e638"
+ "e300422d689d4883": {
+  "answer": {
+   "reply": "c7b6d288c7bd00ed",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/two_labels_later_on_left]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/two_labels_later_on_left]"
+  ]
  },
- "bca9feb3106672cc": {
-  "reply": "7a243a8c8c277cea",
-  "sheet": "b3a2468022b86f34"
+ "e31d63432b1787fa": {
+  "answer": {
+   "reply": "8df8edcbe1ee5b95",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_set_plot_panes.py::test_a_trace_the_file_cannot_carry_aborts_the_batch[V(\"out\")]"
+  ]
  },
- "bce1cf9732163e00": {
-  "reply": "28f2c95e7f07766a",
-  "sheet": null
+ "e3339c82043826b2": {
+  "answer": {
+   "reply": "6be6f93517abd27e",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_committed_sha_matches_file"
+  ]
  },
- "bce331a87c22947a": {
-  "reply": "2b22d3eefd5a23c7",
-  "sheet": null
+ "e3c9dce5866b4171": {
+  "answer": {
+   "reply": "f340d4329a2aba0c",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/pin_on_wire_interior]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/pin_on_wire_interior]"
+  ]
  },
- "be0872f87edcd913": {
-  "varies": [
+ "e43a9ebd6a92a95b": {
+  "answer": {
+   "reply": "bd32dbf4836a1f78",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::TestPathsThatLeaveTheSheetAsItIs::test_the_sheet_keeps_its_bytes[dry_run]"
+  ]
+ },
+ "e523464bdf8e14d3": {
+  "answer": {
+   "reply": "5dbfbd1cdb138e47",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_failure_after_a_completed_stage_is_not_reported_against_it"
+  ]
+ },
+ "e5b4c89d80e912b1": {
+  "answer": {
+   "reply": "8d4f48218ddff18f",
+   "sheet": "672bc0a563ba2f34"
+  },
+  "tests": [
+   "tests/test_circuit_asc.py::TestRepeatedLabels::test_labels_of_a_name_already_on_the_sheet_are_said_nothing_of"
+  ]
+ },
+ "e5bc1492e607a8f0": {
+  "answer": {
+   "reply": "4b03952f441a1e89",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_stale_sha_returns_revision_conflict[other_session]",
+   "tests/test_edit_schematic.py::test_stale_sha_returns_revision_conflict[same_session]"
+  ]
+ },
+ "e7854c7b2f7551f4": {
+  "answer": {
+   "reply": "02c30648410b5bb9",
+   "sheet": "5fc5da36b17f4a93"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::TestDataFlagPreservation::test_a_data_flag_is_written_back_in_the_sheets_codec"
+  ]
+ },
+ "e9f96d301c87cc8c": {
+  "answer": {
+   "reply": "8c1c59d1e503ee44",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_the_response_carries_each_ops_own_facts[dry_run]"
+  ]
+ },
+ "ea114c665d1b8300": {
+  "answer": {
+   "reply": "1f01da5273f08b36",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_view_pagination_cursor_resumption"
+  ]
+ },
+ "eaceff9ef1f9fdfe": {
+  "answer": {
+   "reply": "061081a5b1e4ace3",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_the_edit_response_carries_no_render_block"
+  ]
+ },
+ "eb24ba6b131e8f2d": {
+  "answer": {
+   "reply": "b27f9e00aca9bc1a",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/wire_end_on_vertical_wire_interior]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/wire_end_on_vertical_wire_interior]"
+  ]
+ },
+ "ebbed1d26e34bfea": {
+  "answer": {
+   "reply": "49e540b8d1185e94",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_reference_anchors_are_honoured"
+  ]
+ },
+ "ec4c6a7a09e4f09c": {
+  "answer": {
+   "message": "Cannot open WORK/bus.asc: line 5 is a BUSTAP record ('BUSTAP 80 0 80 16'), which the schematic editor does not read, so the sheet cannot be opened for reading or editing here.",
+   "raised": "NetlistError"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::TestRecordTheEditorCannotRead::test_an_edit_names_the_record_and_its_line[BUSTAP 80 0 80 16-BUSTAP 80 0 80 16]"
+  ]
+ },
+ "eccec81d1b00e575": {
+  "answer": {
+   "reply": "ff7f914f1d9f833d",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_empty_ops_with_views_reads_the_sheet"
+  ]
+ },
+ "ed471c18df6c8adb": {
+  "answer": {
+   "reply": "6c730117c77816f8",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/diagonal_wire_end]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/diagonal_wire_end]"
+  ]
+ },
+ "eef381a0cb881c1f": {
+  "tests": [
+   "tests/test_set_plot_panes.py::test_a_sheet_rename_that_fails_puts_the_old_panes_back[None]",
+   "tests/test_set_plot_panes.py::test_one_batch_edits_the_sheet_and_its_panes"
+  ],
+  "varies": true
+ },
+ "ef3fbce4486032f8": {
+  "answer": {
+   "reply": "f2ff9571f1d0236d",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_an_echoed_cursor_returns_its_view_without_a_return_views_entry"
+  ]
+ },
+ "ef6a28782447d34c": {
+  "answer": {
+   "reply": "34b2e8c2f25a7196",
+   "sheet": "4f700298c191ce88"
+  },
+  "platform": "posix",
+  "tests": [
+   "tests/test_edit_schematic.py::test_asc_reference_is_exported_like_the_committed_sheet[equivalence]"
+  ]
+ },
+ "ef9f7d9a29e38f3b": {
+  "answer": {
+   "reply": "54b8cc8f5e0a8a34",
+   "sheet": "4919ae4e9092bfa8"
+  },
+  "tests": [
+   "tests/test_circuit_asc.py::TestJudgedOnTheFinishedSheet::test_a_part_moved_onto_a_crossing_is_said_whichever_op_moved_it"
+  ]
+ },
+ "f1bea3b6d0f2ab59": {
+  "answer": {
+   "reply": "148ec6116e4dc5b5",
+   "sheet": "bbd6b0cfdd8cd329"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_the_parts_a_move_lists_are_the_ones_it_touched"
+  ]
+ },
+ "f4c947b20e471998": {
+  "answer": {
+   "reply": "bbefa71f37315cbd",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_set_plot_panes.py::test_a_trace_the_file_cannot_carry_aborts_the_batch[V(out)\\nV(in)]"
+  ]
+ },
+ "f4eac36ed22c9fce": {
+  "answer": {
+   "reply": "3e00f451f800deb1",
+   "sheet": "d70da2388e3f4613"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_label_only_pins_are_scoped_and_reconcile_with_the_sheet_totals"
+  ]
+ },
+ "f57a8761b06d088e": {
+  "answer": {
+   "reply": "2699bf2b1e53a5d4",
+   "sheet": "af20c6214833a1e7"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::TestPathsThatLeaveTheSheetAsItIs::test_the_sheet_keeps_its_bytes[plot_panes_only]"
+  ]
+ },
+ "f62acfbef8b1f3c5": {
+  "answer": {
+   "reply": "4646b3d8ad088789",
+   "sheet": "4464b9a7038d05c9"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_row_carries_every_part_and_point_of_its_finding"
+  ]
+ },
+ "f7023a10bd22a8a0": {
+  "answer": {
+   "reply": "8520e9afdc56457e",
+   "sheet": "5fcd33e31cbd8c08"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_route_already_drawn_through_a_part_is_not_the_batchs"
+  ]
+ },
+ "f7e0ee4d22eead91": {
+  "answer": {
+   "reply": "210e7648de8f0fab",
+   "sheet": "1f7cd86c8e0a12c6"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_default_view_covers_only_the_refs_the_batch_touched"
+  ]
+ },
+ "f863e58c7583c288": {
+  "answer": {
+   "reply": "fcbf8793a35117ad",
+   "sheet": "32351080a0d7479e"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_what_the_editor_drops_on_reading_a_sheet_is_not_the_batchs"
+  ]
+ },
+ "f8d6971118817fa3": {
+  "answer": {
+   "reply": "fb2f8b2ae9d1ce7b",
+   "sheet": "392e3cdd6b5d23fc"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::TestExportEncoding::test_an_edit_writes_a_micro_sign_the_way_both_builds_read_a_sheet[ltspice17]",
+   "tests/test_recorded_ltspice_schematics.py::TestExportEncoding::test_an_edit_writes_a_micro_sign_the_way_both_builds_read_a_sheet[ltspice26]"
+  ]
+ },
+ "faa292ecf1204e13": {
+  "answer": {
+   "reply": "7fbdcfce6d30531f",
+   "sheet": "e51a879c905062d9"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_move_reply_says_what_moved"
+  ]
+ },
+ "fb87493e75e12e8d": {
+  "answer": {
+   "reply": "e611b6aaf36a4ce6",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_open_window.py::test_a_window_pid_without_a_different_copy_saves_nothing[4249-does not have the sheet open]"
+  ]
+ },
+ "fca2672cec880bd2": {
+  "tests": [
    "tests/test_edit_open_window.py::test_a_window_changed_while_ltspice_asks_is_left_open",
    "tests/test_edit_open_window.py::test_a_window_without_the_sheet_by_the_time_it_is_closed_has_nothing_to_drop[closes the sheet]",
    "tests/test_edit_open_window.py::test_a_window_without_the_sheet_by_the_time_it_is_closed_has_nothing_to_drop[quits LTspice]",
    "tests/test_edit_open_window.py::test_every_window_with_a_different_copy_is_closed_and_opened_from_the_file",
    "tests/test_edit_open_window.py::test_nothing_is_done_where_no_window_holds_a_different_sheet[discard-dropped-closed]",
    "tests/test_edit_open_window.py::test_with_the_users_agreement_the_window_is_closed_and_opened_from_the_file"
+  ],
+  "varies": true
+ },
+ "fcefbe6da16b72d9": {
+  "answer": {
+   "reply": "006045f415d4598d",
+   "sheet": "087779c62714d69a"
+  },
+  "tests": [
+   "tests/test_inspect_tools.py::test_components_prefix_is_a_case_insensitive_reference_prefix[L-expected3-asc]",
+   "tests/test_inspect_tools.py::test_components_prefix_is_a_case_insensitive_reference_prefix[L-expected3-netlist]",
+   "tests/test_inspect_tools.py::test_components_prefix_is_a_case_insensitive_reference_prefix[LX-expected0-asc]",
+   "tests/test_inspect_tools.py::test_components_prefix_is_a_case_insensitive_reference_prefix[LX-expected0-netlist]",
+   "tests/test_inspect_tools.py::test_components_prefix_is_a_case_insensitive_reference_prefix[MXO-expected2-asc]",
+   "tests/test_inspect_tools.py::test_components_prefix_is_a_case_insensitive_reference_prefix[MXO-expected2-netlist]",
+   "tests/test_inspect_tools.py::test_components_prefix_is_a_case_insensitive_reference_prefix[lx-expected1-asc]",
+   "tests/test_inspect_tools.py::test_components_prefix_is_a_case_insensitive_reference_prefix[lx-expected1-netlist]",
+   "tests/test_inspect_tools.py::test_components_prefix_is_a_case_insensitive_reference_prefix[m-expected4-asc]",
+   "tests/test_inspect_tools.py::test_components_prefix_is_a_case_insensitive_reference_prefix[m-expected4-netlist]"
   ]
  },
- "c0a05398a291b833": {
-  "reply": "51ff8337f1cb4ba6",
-  "sheet": "6e9880d2e1a04bf2"
- },
- "c1355c0f349b4d1f": {
-  "message": "invalid view_cursors.preexisting: malformed page cursor: 'garbage'",
-  "raised": "InvalidCursorError"
- },
- "c1aff7a6d6eab7d1": {
-  "reply": "4842e46da2498fe6",
-  "sheet": null
- },
- "c3b57f52e69a9f7c": {
-  "reply": "70a8f75e976ce660",
-  "sheet": "88c9ff221b645b1b"
- },
- "c4135200c1492dcc": {
-  "reply": "148ec6116e4dc5b5",
-  "sheet": "bbd6b0cfdd8cd329"
- },
- "c48650eaa5fbd43a": {
-  "reply": "c58b6b61d9a955a2",
-  "sheet": null
- },
- "c510a13ee79f464d": {
-  "reply": "3c0ceeaa84a0764b",
-  "sheet": "15598c6f7ef7c69d"
- },
- "c5775eda26237383": {
-  "reply": "b6d5c194111a1ac1",
-  "sheet": null
- },
- "c63903f94ed9c311": {
-  "reply": "ae474fbe23413690",
-  "sheet": "b3a2468022b86f34"
- },
- "c65b8a3b14c9405b": {
-  "reply": "cfe616e4238337de",
-  "sheet": "2f66633286ed1ad2"
- },
- "c6c63560ac0bc8a8": {
-  "message": "window_pid goes with open_window='save': it names the window whose copy the user keeps.",
-  "raised": "NetlistError"
- },
- "c6c8d61ee64e61b4": {
-  "reply": "56298b67026ad2b0",
-  "sheet": null
- },
- "c6edc425387e4c96": {
-  "reply": "c967c2d0cf5ffc9d",
-  "sheet": "dd784a9aa9452591"
- },
- "c7f3e3980ce0fd30": {
-  "reply": "49c179684dc1dda4",
-  "sheet": null
- },
- "caa9b6f86a48cd62": {
-  "reply": "929f528e132111ef",
-  "sheet": "65f07c55b9c1a9d6"
- },
- "cb9aa964fc173221": {
-  "reply": "94252cb3a45a4ece",
-  "sheet": "62ecac96c2c111e7"
- },
- "ccb1be304466999f": {
-  "reply": "78e7326917ba3022",
-  "sheet": "2f66633286ed1ad2"
- },
- "cd390abe452dcc65": {
-  "message": "Cannot open spaced.asc for editing: line 3 ('TEXT\\t16 16 Left 2 !.tran 2m') is a TEXT record the schematic editor skips, and saving any edit would delete it. Write it as LTspice saves one, with one space between its fields, then edit the sheet here.",
-  "raised": "NetlistError"
- },
- "cdf7c8e05d6cacca": {
-  "reply": "0478f5c59d88d5b5",
-  "sheet": null
- },
- "ce04c709bbd2080b": {
-  "reply": "314faa0d12ad0227",
-  "sheet": "d70da2388e3f4613"
- },
- "ce1a5c0b094bab7b": {
-  "reply": "7615987a30a9981d",
-  "sheet": "be2910d5a44c2ad2"
- },
- "ce3825c7525ef515": {
-  "reply": "2244be4733f811f8",
-  "sheet": "d70da2388e3f4613"
- },
- "cf4313af64832a21": {
-  "reply": "df4debe26e2970c4",
-  "sheet": "7e8b75862034a676"
- },
- "cf62c175ffbac29d": {
-  "message": "Cannot open WORK/bus.asc: line 5 is empty, which the schematic editor does not read, so the sheet cannot be opened for reading or editing here.",
-  "raised": "NetlistError"
- },
- "d060d4dba50d0c68": {
-  "reply": "354fc00bb8ac25d0",
-  "sheet": "2f66633286ed1ad2"
- },
- "d1455dd9397469a9": {
-  "reply": "6117555ba9d202d5",
-  "sheet": "0f7d0950a33ecae5"
- },
- "d18f225ef5af2f45": {
-  "reply": "25f27843a7b0e4fd",
-  "sheet": null
- },
- "d2db7bfd583a560a": {
-  "varies": [
-   "tests/test_set_plot_panes.py::test_a_sheet_rename_that_fails_puts_the_old_panes_back[None]",
-   "tests/test_set_plot_panes.py::test_one_batch_edits_the_sheet_and_its_panes"
+ "fdad5a20269909fe": {
+  "answer": {
+   "reply": "3d250f1d8ceeb20d",
+   "sheet": "4464b9a7038d05c9"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_the_sheets_findings_are_read_off_the_event_loop"
   ]
  },
- "d52f69d924ba3a4c": {
-  "reply": "12e724f5f88aa823",
-  "sheet": "acac928179f1ea70"
- },
- "d5b9dda10d36ed6a": {
-  "reply": "3c0d4427fa6a6c79",
-  "sheet": null
- },
- "d5d56796e99b356e": {
-  "varies": [
-   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[equivalent]",
-   "tests/test_python_api_methods.py::test_edit_returns_the_compare_netlist_exactly_when_the_mcp_reply_does[mismatch]"
+ "fe09900879e1375b": {
+  "answer": {
+   "reply": "470a5b329672e300",
+   "sheet": "842d0f37c2e53812"
+  },
+  "tests": [
+   "tests/test_edit_open_window.py::test_a_sheet_stored_as_utf8_matches_the_window_that_read_it_as_cp1252"
   ]
  },
- "d5fef64da8a1e42a": {
-  "reply": "0cb8d12f804933a1",
-  "sheet": "4464b9a7038d05c9"
+ "fe61e461fece752c": {
+  "answer": {
+   "message": "invalid view_cursors.preexisting: malformed page cursor: 'garbage'",
+   "raised": "InvalidCursorError"
+  },
+  "tests": [
+   "tests/test_invalid_cursor.py::TestCallLevelCursors::test_edit_schematic_view_cursor[preexisting]"
+  ]
  },
- "d898bd0b0fb5afff": {
-  "reply": "56eb3bf5a508a7ad",
-  "sheet": "ccc0ccf65a13b089"
+ "fe83f956f416495b": {
+  "answer": {
+   "reply": "df4debe26e2970c4",
+   "sheet": "7e8b75862034a676"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_archetype_scale_blank_build"
+  ]
  },
- "d99f306b4b7e3e17": {
-  "reply": "291d8cbb9e272775",
-  "sheet": "b3a2468022b86f34"
+ "fed874465ed49a88": {
+  "answer": {
+   "reply": "6a4377491c70e0e6",
+   "sheet": "eac2755b33662a82"
+  },
+  "tests": [
+   "tests/test_edit_open_window.py::test_a_sheet_ltspice_rewrote_on_opening_is_not_taken_for_an_unsaved_one[symbol_attributes]"
+  ]
  },
- "d9b580853bc67663": {
-  "reply": "3e16d147120eea9b",
-  "sheet": null
- },
- "da102e5b993eb32d": {
-  "reply": "c957ae5ab6c9d801",
-  "sheet": "1f1cd547b8f9866c"
- },
- "da3ae9947d522204": {
-  "reply": "fb1b4c4280891e67",
-  "sheet": "2f66633286ed1ad2"
- },
- "da3ed41b1dc2f873": {
-  "reply": "ac689a3bc06d1958",
-  "sheet": "4a8d150aa88702d6"
- },
- "db26d45639151902": {
-  "reply": "02c30648410b5bb9",
-  "sheet": "5fc5da36b17f4a93"
- },
- "db558c17d9ca68e5": {
-  "reply": "f04e321d233a1f38",
-  "sheet": "733d1ab2e59d6d40"
- },
- "dcaf8ada41beba37": {
-  "reply": "bbefa71f37315cbd",
-  "sheet": null
- },
- "de6fd8119948878f": {
-  "reply": "2b6c00d370324c3a",
-  "sheet": "89c7502b2db3c9e2"
- },
- "df5d4d23813eecb8": {
-  "reply": "f809ee58593c1c87",
-  "sheet": "0fe4a46d4fb4e6e1"
- },
- "df9ee58fc9ad7e71": {
-  "message": "Cannot open spaced.asc for editing: line 3 ('TEXT 16 16 Left  2 !.tran 3m') is a TEXT record the schematic editor skips, and saving any edit would delete it. Write it as LTspice saves one, with one space between its fields, then edit the sheet here.",
-  "raised": "NetlistError"
- },
- "dfe9292a1da9471a": {
-  "reply": "599571c0d1d7cb3c",
-  "sheet": "6c6f80b9f8fca180"
- },
- "e02aa01b870c3fe3": {
-  "reply": "dfd391ae6b84b852",
-  "sheet": null
- },
- "e0a410b9672dd758": {
-  "reply": "2ed4bd8e66a33e7a",
-  "sheet": "2f66633286ed1ad2"
- },
- "e0b593209a0e101b": {
-  "reply": "7c2f61725e4532ed",
-  "sheet": "168171de437364ed"
- },
- "e0da8ad38f08709a": {
-  "message": "disk full",
-  "raised": "OSError"
- },
- "e1c0564b12ebf31b": {
-  "reply": "f04cf063d3539da9",
-  "sheet": "cd333cd95ee819e3"
- },
- "e23c53802a9e96b7": {
-  "reply": "fb6bc5cdddbe09bf",
-  "sheet": "2f66633286ed1ad2"
- },
- "e314e97d4b37e192": {
-  "reply": "4237a41dbecda0c2",
-  "sheet": "935c282522aab58f"
- },
- "e4cc811c68d4a63b": {
-  "reply": "5c2d49a8c4ee7357",
-  "sheet": "0c9cf7c74f9326ad"
- },
- "e4e446f7b6451ed3": {
-  "message": "ops list is empty \u2014 pass at least one op, or name return_views to read the sheet's pin table without changing it.",
-  "raised": "NetlistError"
- },
- "e56ceca789f0276a": {
-  "reply": "29718b5b37003982",
-  "sheet": "d70da2388e3f4613"
- },
- "e5a447839ef93b01": {
-  "reply": "21154f45f7068bab",
-  "sheet": "d70da2388e3f4613"
- },
- "e6212c9468fafdea": {
-  "reply": "b188610dd156f29a",
-  "sheet": "53960f64fa788151"
- },
- "e63f0e5f273af220": {
-  "reply": "af7e668dfdeed3e6",
-  "sheet": "b3a2468022b86f34"
- },
- "e662b6d81605ebc6": {
-  "reply": "7b32ed5bd53afff4",
-  "sheet": "2f66633286ed1ad2"
- },
- "e7149e4e8d37179d": {
-  "reply": "74506fd5057e8fb2",
-  "sheet": null
- },
- "eaf7c73fc75b056d": {
-  "reply": "b27f9e00aca9bc1a",
-  "sheet": null
- },
- "ebc923f8c79bf3be": {
-  "reply": "5c74b88f3f2188ff",
-  "sheet": null
- },
- "ec4bb6148e62be47": {
-  "reply": "5cf330c497df377b",
-  "sheet": "2f66633286ed1ad2"
- },
- "ecd85af3af313b8a": {
-  "reply": "9f22cfaea3f5e6e4",
-  "sheet": "168171de437364ed"
- },
- "ed78d3feca616554": {
-  "message": "Cannot open shared_reference.asc for editing: parts share a reference ('R1' at (96,96), (400,96)). The schematic editor keeps one part per reference and would delete the others on saving, and neither LTspice build netlists such a sheet. Rename the repeated parts in LTspice, then edit the sheet here.",
-  "raised": "NetlistError"
- },
- "ed7c53eaf8c3896b": {
-  "reply": "c2398dc8d30236ef",
-  "sheet": "189e647fb79514c1"
- },
- "eff3c0a0775667ea": {
-  "reply": "838782eb13cd9ce0",
-  "sheet": "ccc0ccf65a13b089"
- },
- "f01c3214dc49a432": {
-  "reply": "e2cdf3145c02a986",
-  "sheet": null
- },
- "f086f9ac40730a3a": {
-  "reply": "6be6f93517abd27e",
-  "sheet": "2f66633286ed1ad2"
- },
- "f2fb798e4fd21b8e": {
-  "reply": "3ef784adad94cb04",
-  "sheet": null
- },
- "f40a96f031a9ee9a": {
-  "reply": "17ca42675da225d2",
-  "sheet": "879e5d6f510a331b"
- },
- "f5c40f4fc9f75fa0": {
-  "reply": "38e25c1f08952b31",
-  "sheet": null
- },
- "f60be6bdf232dd61": {
-  "reply": "fb70b7fc003e60ac",
-  "sheet": "2f66633286ed1ad2"
- },
- "f84f2fc062268bde": {
-  "reply": "2699bf2b1e53a5d4",
-  "sheet": "af20c6214833a1e7"
- },
- "f94bb2072f02b1a8": {
-  "reply": "407e96db6577a92b",
-  "sheet": "49b1144b74853f95"
- },
- "f960ad3caed0cf67": {
-  "message": "open_window takes only path and expected_sha256, with ops=[]: settle the window, read the sheet again, then edit it in another call.",
-  "raised": "NetlistError"
- },
- "f99daa7bf287e275": {
-  "reply": "846afcd949dec5e9",
-  "sheet": "c116e78a4d734899"
- },
- "f9d36f5e08b7dfc1": {
-  "reply": "302f9905f0f8f0b1",
-  "sheet": null
- },
- "fa4d39b850df29b1": {
-  "reply": "e98d833a962c76a0",
-  "sheet": null
- },
- "fbef2d50c16adcad": {
-  "reply": "bff86fa1f94a6f6a",
-  "sheet": "31b13aab2a2a8ebe"
- },
- "fc7e038d98c6ecbf": {
-  "reply": "6fcee7e7f62ebea1",
-  "sheet": "2f66633286ed1ad2"
- },
- "fd0f0aef61382da3": {
-  "reply": "f340d4329a2aba0c",
-  "sheet": null
- },
- "fd4f5dfbc5e034fb": {
-  "reply": "339568fdc7453048",
-  "sheet": "0fe4a46d4fb4e6e1"
- },
- "fdfdc655e709e9d8": {
-  "message": "Cannot open WORK/top.asc: WORK/bus.asc, a sheet it loads, starts with a UTF-8 byte order mark; neither LTspice 26 nor LTspice XVII reads a sheet that does (26 exports nothing from it, XVII stops on \"Unknown schematic syntax\"). Save it without the mark.",
-  "raised": "NetlistError"
- },
- "fe03669ea11cd6dd": {
-  "reply": "e110932617f104ff",
-  "sheet": null
- },
- "fe494e3c61d4dfed": {
-  "reply": "29850ee7554fe2e6",
-  "sheet": "fd0b62d3879aefde"
- },
- "ff0e9375337c45ec": {
-  "reply": "e721351f65e08d14",
-  "sheet": "d54e46e32c2352ac"
- },
- "ffe947b724adfaec": {
-  "reply": "5635fc35414f0729",
-  "sheet": "2f66633286ed1ad2"
- },
- "fff84b8dac68310b": {
-  "reply": "fb2f8b2ae9d1ce7b",
-  "sheet": "392e3cdd6b5d23fc"
+ "ff08b46063a1164f": {
+  "answer": {
+   "reply": "3d2926552f0862df",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_dry_run_surfaces_all_op_failures"
+  ]
  }
 }
