@@ -24,7 +24,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
-from ltspice_mcp.api._exceptions import ApiCallError, ApiInternalError
+from ltspice_mcp.api._exceptions import ApiCallError, ApiInternalError, ApiValidationError
 from ltspice_mcp.lib import atomic_write_json
 from ltspice_mcp.lib.experiment_runner import REQUEST_GATE_TIMEOUT_S
 from ltspice_mcp.lib.proc_kill import kill_process_group
@@ -118,7 +118,9 @@ def _owner_default(value: Any) -> Any:
     refused in the other is a difference nothing explains. Deliberately narrow:
     paths become strings and models their JSON form, and anything else is
     refused by name. A silently dropped or stringified value would give the
-    owner a different call, or a different engine, than the caller has.
+    owner a different call, or a different engine, than the caller has. The
+    refusal is an ``ApiValidationError``, as any argument an ``Api`` call
+    cannot use is; ``json.dumps`` passes it on as raised.
     """
     from pydantic import BaseModel
 
@@ -126,7 +128,7 @@ def _owner_default(value: Any) -> Any:
         return value.model_dump(mode="json")
     if isinstance(value, os.PathLike):
         return os.fspath(value)
-    raise TypeError(f"A detached owner cannot be given a {type(value).__name__}")
+    raise ApiValidationError(f"A detached owner cannot be given a {type(value).__name__}")
 
 
 def _jsonable(value: Any) -> Any:

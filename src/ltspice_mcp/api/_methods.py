@@ -895,9 +895,9 @@ class ApiMethodsMixin(ABC):
         """Submit an experiment and optionally wait for its complete receipt."""
         self._check_process_and_thread()
         if not isinstance(wait, bool):
-            raise TypeError("wait must be a bool")
+            raise ApiValidationError("wait must be a bool")
         if not isinstance(detach, bool):
-            raise TypeError("detach must be a bool")
+            raise ApiValidationError("detach must be a bool")
         if detach:
             if wait:
                 raise ApiValidationError(
@@ -1013,7 +1013,7 @@ class ApiMethodsMixin(ABC):
         """Control jobs, collecting list and receipt pages in automatic mode."""
         self._check_process_and_thread()
         if not isinstance(detach, bool):
-            raise TypeError("detach must be a bool")
+            raise ApiValidationError("detach must be a bool")
         if detach:
             if arguments.get("action") != "resume":
                 raise ApiValidationError("Only jobs(action='resume') accepts detach=True.")
@@ -1113,15 +1113,15 @@ class ApiMethodsMixin(ABC):
         """
         self._check_process_and_thread()
         if not isinstance(job_id, str) or not job_id:
-            raise ValueError("job_id must be a non-empty string")
+            raise ApiValidationError("job_id must be a non-empty string")
         if timeout is not None and timeout_s is not None:
-            raise ValueError("give timeout_s or timeout, not both")
+            raise ApiValidationError("give timeout_s or timeout, not both")
         timeout = timeout_s if timeout is None else timeout
         if timeout is not None:
             if not isinstance(timeout, (int, float)) or isinstance(timeout, bool):
-                raise ValueError("timeout_s must be a non-negative number or None")
+                raise ApiValidationError("timeout_s must be a non-negative number or None")
             if timeout < 0:
-                raise ValueError("timeout_s must be a non-negative number or None")
+                raise ApiValidationError("timeout_s must be a non-negative number or None")
 
         # Read before the clock: the first read imports the tool modules, over a
         # second that must not land on top of a dwell measured against a deadline.
@@ -1349,7 +1349,7 @@ def _older_spelling(path: _PathArg, name: str, older: _PathArg) -> _PathArg:
     if older is None:
         return path
     if path is not None:
-        raise TypeError(f"Give path or {name}, not both")
+        raise ApiValidationError(f"Give path or {name}, not both")
     return older
 
 

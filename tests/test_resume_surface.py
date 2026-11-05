@@ -60,7 +60,7 @@ def test_only_resume_can_detach(state_no_sim: SessionState):
     api = SyncApi(state_no_sim)
     with pytest.raises(ApiValidationError, match="resume"):
         api.jobs(action="list", detach=True)
-    with pytest.raises(TypeError, match="detach must be a bool"):
+    with pytest.raises(ApiValidationError, match="detach must be a bool"):
         api.jobs(action="list", detach=cast(bool, "true"))
 
 

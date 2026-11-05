@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import copy
 import json
 import re
@@ -31,6 +32,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze, experiments, inspect_tools, schematic_edit, verify
 from ltspice_mcp.tools import jobs as jobs_mod
 from ltspice_mcp.tools.reference_index import validation_error_detail
+from tests._source_scan import modules
 from tests.conftest import SyncApi, make_experiment_job, stage_recorded_fixture
 from tests.test_edit_schematic import (
     _DIVIDER_OPS,
@@ -401,8 +403,98 @@ def test_wait_takes_the_timeout_the_jobs_tool_takes(state_no_sim: SessionState) 
     job = make_experiment_job(state_no_sim, job_id="exp-waiting", count=1, status="queued")
 
     assert api.wait(job.job_id, timeout_s=0)["timed_out"] is True
-    with pytest.raises(ValueError, match="not both"):
+    with pytest.raises(ApiValidationError, match="not both"):
         api.wait(job.job_id, timeout_s=0, timeout=0)
+
+
+_CIRCUITS = [{"path": "d.cir"}]
+
+#: Each kind of argument an ``Api`` call takes but cannot use, by the call
+#: that refuses it, besides a misused result source
+#: (``tests/test_api_source_misuse.py``): a field an operation's model
+#: refuses, a value ``wait`` or a control cannot use, and a value the detached
+#: hand-off cannot carry, which the same call refuses through the model when
+#: it is not detached.
+_MISUSED_ARGUMENTS: dict[str, typing.Callable[[SyncApi], object]] = {
+    "jobs-unknown-action": lambda api: api.jobs(action="nope"),
+    "wait-empty-job_id": lambda api: api.wait(""),
+    "wait-timeout_s-and-timeout": lambda api: api.wait("exp", timeout_s=0, timeout=0),
+    "wait-negative-timeout_s": lambda api: api.wait("exp", timeout_s=-1),
+    "wait-timeout_s-not-a-number": lambda api: api.wait("exp", timeout_s=cast(float, "1")),
+    "run_experiments-wait-not-a-bool": (
+        lambda api: api.run_experiments(
+            wait=cast(bool, "yes"), request_id="never", circuits=_CIRCUITS
+        )
+    ),
+    "run_experiments-detach-not-a-bool": (
+        lambda api: api.run_experiments(
+            wait=False, detach=cast(bool, "yes"), request_id="never", circuits=_CIRCUITS
+        )
+    ),
+    "jobs-detach-not-a-bool": lambda api: api.jobs(action="list", detach=cast(bool, "true")),
+    "run_experiments-value-the-model-refuses": (
+        lambda api: api.run_experiments(
+            wait=False, request_id=cast(str, object()), circuits=_CIRCUITS
+        )
+    ),
+    "run_experiments-detached-value-the-owner-cannot-be-given": (
+        lambda api: api.run_experiments(
+            wait=False, detach=True, request_id=cast(str, object()), circuits=_CIRCUITS
+        )
+    ),
+}
+
+
+@pytest.mark.parametrize("misuse", list(_MISUSED_ARGUMENTS))
+def test_every_argument_an_api_call_cannot_use_raises_api_validation_error(
+    state_no_sim: SessionState, misuse: str
+) -> None:
+    """An operation refuses an argument it cannot use with ``ApiValidationError``
+    (docs/design/python_api.md §5), and so does every other call. ``api.wait``
+    raised a plain ``ValueError``, and the ``wait`` and ``detach`` controls and
+    the detached hand-off a ``TypeError``: none reached an
+    ``except ApiValidationError``, and the ``TypeError``s no ``except ValueError``."""
+    with pytest.raises(ApiValidationError):
+        _MISUSED_ARGUMENTS[misuse](SyncApi(state_no_sim))
+
+
+def test_a_catalogue_lookup_refuses_with_pythons_errors_not_api_validation_error() -> None:
+    """``reference()`` and ``guide()`` look a name up and run no call, as
+    ``python -m ltspice_mcp.api`` does with the same lookups; the guide's is
+    also the MCP server's ``inspect(kind="guide")``, which knows nothing of the
+    Python API. So a name they do not have is a plain ``ValueError`` and a
+    ``reference()`` op that is not a string a ``TypeError``, where an argument
+    a call cannot use is an ``ApiValidationError``."""
+    for lookup in (lambda: SyncApi.reference("bogus"), lambda: SyncApi.guide("bogus")):
+        with pytest.raises(ValueError, match="unknown") as caught:
+            lookup()
+        assert not isinstance(caught.value, ApiValidationError)
+    with pytest.raises(TypeError):
+        SyncApi.reference(cast(str, 3))
+
+
+def test_no_api_call_refuses_an_argument_with_a_builtin_error() -> None:
+    """Every refusal the API package raises itself is an ``ApiValidationError``,
+    so a refusal written with ``TypeError`` or ``ValueError`` is a second
+    answer. The catalogue lookups are the exception, for the reason
+    ``test_a_catalogue_lookup_refuses_with_pythons_errors_not_api_validation_error``
+    gives."""
+    raised = {
+        f"{module}:{function.name}:{node.exc.func.id}"
+        for module, tree in modules().items()
+        if module.startswith("api/")
+        for function in ast.walk(tree)
+        if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef))
+        for node in ast.walk(function)
+        if isinstance(node, ast.Raise)
+        and isinstance(node.exc, ast.Call)
+        and isinstance(node.exc.func, ast.Name)
+        and node.exc.func.id in ("TypeError", "ValueError")
+    }
+    assert raised == {
+        "api/_reference.py:reference:TypeError",
+        "api/_reference.py:_find:ValueError",
+    }
 
 
 def test_a_wait_ends_at_the_deadline_it_was_given(state_no_sim: SessionState) -> None:
