@@ -169,6 +169,39 @@ def test_parse_failure_is_not_valid_empty_measurements(tmp_path):
     assert facts["scan"]["complete"]
 
 
+@pytest.mark.parametrize(
+    ("body", "dropped"),
+    [
+        ("Circuit: test\nvo: MAX(V(out))=1.5 FROM 0 TO 0.001\nt: V(out)=0.5 AT 1e-05\n", "vo"),
+        ("Circuit: test\nvo: MAX(V(out))=1.5 FROM 0 TO 0.001\nt: V(out)={vth} AT 1e-05\n", "t"),
+        ('Circuit: test\nvo: MAX(V(out))=1.5 FROM 0 TO 0.001\nMeasurement "t" FAIL\'ed\n', "t"),
+        (
+            "Circuit: test\n.step r=1\n\nMeasurement: vo\n  step\tMAX(V(out))\n     1\t1.5\n",
+            "vo",
+        ),
+    ],
+    ids=["value", "unreadable_value", "failed", "stepped_table"],
+)
+def test_a_measurement_the_log_printed_and_the_table_lacks_fails_the_section(
+    tmp_path, monkeypatch, body, dropped
+):
+    """The decoder checks the parser's table against every measurement the log
+    printed, a single value as well as a stepped table, so a measurement the
+    parser leaves out fails the section, naming it, instead of going missing."""
+    parse = log_parser.parse_measurements
+
+    def leaving_one_out(log_path, reader=None):
+        value = parse(log_path, reader=reader)
+        value["measurements"].pop(dropped, None)
+        return value
+
+    monkeypatch.setattr(log_parser, "parse_measurements", leaving_one_out)
+    captured, directory = capture(tmp_path, text=body)
+    facts = decode_logs(captured, directory, limits=LIMITS)
+    assert facts["measurements"]["status"] == "error"
+    assert repr(dropped) in facts["measurements"]["error"]["message"]
+
+
 def test_malformed_measurement_block_is_section_error(tmp_path):
     captured, directory = capture(tmp_path, text="Circuit: test\nMeasurement: gain\nnot a table\n")
     facts = decode_logs(captured, directory, limits=LIMITS)

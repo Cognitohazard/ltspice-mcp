@@ -329,6 +329,31 @@ def test_a_value_printed_as_text_fails_only_its_measurement(tmp_path):
 
 
 @pytest.mark.parametrize(
+    "others", ["", "vo: MAX(V(out))=1.5 FROM 0 TO 0.001\n"], ids=["alone", "with_another"]
+)
+def test_a_line_the_reader_does_not_match_fails_only_its_measurement(tmp_path, others):
+    """A WHEN whose threshold LTspice 26 prints in braces is a line spicelib's
+    reader does not match (the recorded ``log/meas_when_threshold_tran``). It
+    still gets an entry, with its line, the reason and its crossing, whether
+    or not the log printed another measurement."""
+    captured, directory = capture(
+        tmp_path, text=f"Circuit: test\nt: V(out)={{vth}} AT 6.98e-05\n{others}"
+    )
+    log = resident(decode_logs(captured, directory, limits=LIMITS))
+    assert log.section("measurements")["status"] == "parsed"
+    entries = log.value("measurements")["measurements"]
+    assert entries["t"] == {
+        "values": [None],
+        "at": 6.98e-05,
+        "unreadable": {
+            "line": "t: V(out)={vth} AT 6.98e-05",
+            "reason": "the log gives '{vth}' where a number belongs",
+        },
+    }
+    assert set(entries) == ({"t", "vo"} if others else {"t"})
+
+
+@pytest.mark.parametrize(
     ("body", "name"),
     [
         ("Circuit: test\nMeasurement: gain\n", "measurements"),

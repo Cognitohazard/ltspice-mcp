@@ -545,7 +545,7 @@ keep = ["log"]
 
 [behaviour.log-meas-when-threshold]
 summary = "How a WHEN is printed when its threshold is not a plain number: a parameter, an expression, a braced expression and another measurement, in a transient and an AC analysis, alone and in the tables of a stepped run. The stepped decks step a parameter written Rv, whose name both builds write in lower case in the log (.step rv=1000)."
-model = ["lib/log_parser.py", "lib/log_decode.py", "lib/metrics.py", "lib/recipes.py", "tools/analyze.py", "api/_primitives.py"]
+model = ["lib/log_parser.py", "lib/log_decode.py", "lib/metrics.py", "lib/recipes.py", "tools/analyze.py", "tools/inspect_tools.py", "api/_primitives.py"]
 inputs = [
     "log/meas_when_threshold_tran.cir",
     "log/meas_when_threshold_ac.cir",

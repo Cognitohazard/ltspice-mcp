@@ -1040,9 +1040,12 @@ each name the log has no number for (LTspice printed it as FAIL'ed, or
 printed a non-finite value, or printed something other than a number). A
 failed name's `measured` entry is null, not absent, and a null there is always
 listed in `failed_measurements`. A value printed as something other than a
-number, such as a WHEN threshold written as a parameter or an expression,
-fails only its own entry: `unreadable: {name: {line, reason}}` gives the log
-line and what it printed, and every other measurement of the log reads. The
+number, such as a WHEN threshold written as a parameter, an expression or (on
+LTspice 26) a braced expression, fails only its own entry:
+`unreadable: {name: {line, reason}}` gives the log line and what it printed,
+and every other measurement of the log reads. Every measurement the log
+printed has an entry; a log whose measurements cannot all be given one fails
+the measurements read, naming the ones it lacks. The
 same `unreadable {line, reason}` is on the entry in the summary's
 `measurements`, in `inspect(kind="results", view="measurements")` rows and in
 the Python API's `measurements`. The
