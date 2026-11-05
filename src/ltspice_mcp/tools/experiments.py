@@ -467,7 +467,11 @@ class RunExperimentsInput(ToolInput):
     }
 
     def strip_presentation(self) -> dict[str, Any]:
-        """Return the execution-shaped request with render controls removed."""
+        """Return the execution-shaped request with render controls removed.
+
+        These are the bytes a request's fingerprint hashes, so a field added
+        after requests were recorded is left out at its default here.
+        """
         payload = self.model_dump(
             mode="json",
             exclude_unset=False,
@@ -485,6 +489,8 @@ class RunExperimentsInput(ToolInput):
             payload["analyze"].pop("other_raw", None)
         # A random entry's sample_start came after random requests were
         # recorded; at its default it starts the samples where they always did.
+        # A pdk_native entry keeps its sample_start: it had the field from its
+        # first release, so its recorded bytes carry it.
         for variation, rendered in zip(self.variations, payload["variations"], strict=True):
             if isinstance(variation, RandomVariation) and variation.sample_start == 0:
                 rendered.pop("sample_start", None)

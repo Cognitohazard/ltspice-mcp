@@ -67,7 +67,7 @@ entry with that seed, `runs: 1` and `sample_start: 7`, on the circuit under the
 same id. A sample draws the same deviation at every `assign` value, so a sweep
 compares the same die at each corner, and adding a corner leaves the other
 draws as they were. A relative tolerance still scales with an assigned
-nominal, and a mismatch draw with an assigned W and L.
+nominal, and a mismatch draw as 1/sqrt(m·W·L) of an assigned geometry.
 
 The variation's `seed` controls these draws from your assumed coefficients. It
 does not affect random functions written in the deck (`agauss`, `gauss`,
