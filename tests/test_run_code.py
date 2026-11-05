@@ -24,7 +24,13 @@ import pytest
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import run_code as run_code_module
-from ltspice_mcp.tools.run_code import CodeWorker, RunCodeInput, handle_run_code, worker_for
+from ltspice_mcp.tools.run_code import (
+    CodeWorker,
+    RunCodeInput,
+    handle_run_code,
+    run_code_memory_limit,
+    worker_for,
+)
 from tests.conftest import (
     LIVENESS_S,
     await_until,
@@ -514,6 +520,41 @@ class TestLifetime:
         assert worker.process is None
         # The process itself is gone, not just forgotten.
         assert not process_running(reply["worker_pid"])
+
+    async def test_a_snippet_over_the_memory_limit_stops_the_worker(
+        self, state: SessionState, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A snippet that holds more than its limit is stopped with its worker,
+        and the reply says so and names the setting; the next call runs on a
+        fresh worker that says why. Before, nothing but the machine's own
+        memory bounded what a snippet could take."""
+        before = worker_of(await run(state, "1"))
+        worker = worker_for(state)
+        held = worker._held_bytes()
+        assert held is not None
+        # Room for the snippet's own interpreter work, far less than it takes.
+        monkeypatch.setattr(worker, "memory_limit_bytes", held + 64 * 1024 * 1024)
+        reply = await run(
+            state,
+            # timing: held until the watch stops the worker; timeout_s caps a miss
+            "import time\nblock = b'x' * (512 * 1024 * 1024)\ntime.sleep(60)",
+            timeout_s=LIVENESS_S,
+        )
+        assert reply["status"] == "error", reply
+        assert reply["error"]["type"] == "MemoryLimit"
+        assert "[tools] run_code_memory_mb" in reply["error"]["message"]
+        assert "run_code_memory_mb" in reply["hint"]
+        assert not process_running(before)
+        after = await run(state, "1")
+        assert after["status"] == "ok", after
+        assert after["worker_restarted"]["reason"] == "stopped over its memory limit"
+
+    def test_the_memory_limit_is_the_setting_or_half_the_machine(self, code_dir: Path):
+        assert run_code_memory_limit(512) == 512 * 1024 * 1024
+        assert run_code_memory_limit(None) == psutil.virtual_memory().total // 2
+        config = ServerConfig(working_dir=code_dir, run_code=True, run_code_memory_mb=300)
+        configured = SessionState.create(config, available={})
+        assert worker_for(configured).memory_limit_bytes == 300 * 1024 * 1024
 
     async def test_a_worker_that_cannot_start_is_a_structured_error(self, tmp_path: Path):
         worker = CodeWorker(tmp_path / "missing", None)

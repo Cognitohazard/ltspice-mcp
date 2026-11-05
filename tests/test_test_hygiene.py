@@ -51,6 +51,10 @@ _SOURCE_SPAWNS: dict[str, tuple[int, str]] = {
         1,
         "awaited under its deadline; a worker thread past it cannot be stopped",
     ),
+    "ltspice_mcp/tools/run_code.py:CodeWorker._exchange": (
+        1,
+        "the memory watch is cancelled and awaited in the same function",
+    ),
     "ltspice_mcp/tools/run_code.py:CodeWorker._read_message": (
         1,
         "the line read is awaited in the same function",

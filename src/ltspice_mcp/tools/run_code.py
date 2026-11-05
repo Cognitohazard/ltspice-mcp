@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import psutil
 from mcp import types
 from pydantic import Field, model_validator
 
@@ -51,6 +52,8 @@ BOOT_TIMEOUT_S = 60.0
 INTERRUPT_GRACE_S = 5.0
 #: After a close, how long the worker gets to exit before it is killed.
 CLOSE_GRACE_S = 5.0
+#: How often the supervisor reads the worker's memory while a snippet runs.
+MEMORY_POLL_S = 0.1
 #: The longest reply line the pipe reader accepts. A reply is bounded by the
 #: output caps (about 28k characters, UTF-8 encoded), so this is far above
 #: any real line; the default 64 KiB was not.
@@ -195,6 +198,24 @@ _TIMEOUT_HINT = (
 _RESTART_HINT = (
     "The worker was restarted; jobs the previous one owned read as interrupted in jobs(list)."
 )
+_MEMORY_HINT = (
+    "Hold less at once (one step's traces, a window of the samples, a file read in "
+    "pieces), or raise [tools] run_code_memory_mb."
+)
+#: The ``worker_restarted`` reason for a worker stopped over its memory limit.
+_OVER_MEMORY = "stopped over its memory limit"
+
+
+def run_code_memory_limit(memory_mb: int | None) -> int:
+    """The bytes the worker may hold: ``[tools] run_code_memory_mb`` MiB, or
+    half the machine's physical memory when that is unset."""
+    if memory_mb is not None:
+        return memory_mb * 1024 * 1024
+    return psutil.virtual_memory().total // 2
+
+
+def _mib(size: int) -> int:
+    return size // (1024 * 1024)
 
 
 @dataclass
@@ -208,9 +229,23 @@ class _Running:
 class CodeWorker:
     """One session's warm worker: spawn, run, interrupt, kill, respawn."""
 
-    def __init__(self, working_dir: Path, config_path: Path | None) -> None:
+    def __init__(
+        self,
+        working_dir: Path,
+        config_path: Path | None,
+        *,
+        memory_limit_bytes: int | None = None,
+    ) -> None:
         self.working_dir = working_dir
         self.config_path = config_path
+        #: Past this, the worker is stopped while a snippet runs.
+        self.memory_limit_bytes = (
+            memory_limit_bytes if memory_limit_bytes is not None else run_code_memory_limit(None)
+        )
+        #: What the worker held when it was stopped over the limit, until the
+        #: reply says so.
+        self._over_memory: int | None = None
+        self._watched: psutil.Process | None = None
         self.process: asyncio.subprocess.Process | None = None
         self.exec_seq = 0
         self.running: _Running | None = None
@@ -245,6 +280,10 @@ class CodeWorker:
             start_new_session=os.name != "nt",
             limit=_PIPE_LINE_LIMIT,
         )
+        try:
+            self._watched = psutil.Process(self.process.pid)
+        except psutil.Error:
+            self._watched = None
         if os.name == "nt":
             try:
                 self._windows_job = WindowsJob(self.process.pid)
@@ -283,6 +322,7 @@ class CodeWorker:
         # owned by a dead pid, reads as interrupted.
         kill_process_group(process.pid)
         self.process = None
+        self._watched = None
 
     def _interrupt(self) -> None:
         """Ask the worker to stop the running snippet (POSIX: SIGINT to it alone)."""
@@ -389,26 +429,60 @@ class CodeWorker:
             self.running = None
             self._drain = None
 
+    def _held_bytes(self) -> int | None:
+        """The memory the worker holds now: resident memory, and on Windows the
+        memory it has committed (psutil's ``vms`` there), which is what runs a
+        Windows machine out. None once the worker is gone."""
+        if self._watched is None:
+            return None
+        try:
+            info = self._watched.memory_info()
+        except psutil.Error:
+            return None
+        return info.vms if os.name == "nt" else info.rss
+
+    async def _watch_memory(self) -> None:
+        """Stop the worker once it holds more than its limit, for the reply to
+        say so (``_lost``). Runs while a snippet does: a snippet's own code is
+        what grows the worker, and a simulator it starts is not counted."""
+        while True:
+            held = self._held_bytes()
+            if held is not None and held > self.memory_limit_bytes:
+                self._over_memory = held
+                process = self._live()
+                if process is not None:
+                    with contextlib.suppress(ProcessLookupError):
+                        process.kill()
+                return
+            await asyncio.sleep(MEMORY_POLL_S)
+
     async def _exchange(self, seq: int, code: str, timeout_s: float) -> dict[str, Any] | None:
         """Send one snippet and await its reply: one respawn if the worker died
-        between calls, an interrupt at the timeout. None or ``_EOF`` when the
-        worker never answered."""
+        between calls, an interrupt at the timeout, the worker stopped over its
+        memory limit. None or ``_EOF`` when the worker never answered."""
         request = {"op": "run", "seq": seq, "code": code, "timeout_s": timeout_s}
         if not await self._send(request):
             await self._ensure()
             if not await self._send(request):
                 raise RuntimeError("run_code worker is not accepting requests")
-        reply = await self._await_reply(seq, timeout_s)
-        if reply is None:
-            self._interrupt()
-            reply = await self._await_reply(seq, INTERRUPT_GRACE_S)
-            if reply is _EOF:
-                # The deadline caused the exit; Windows terminates the worker
-                # instead of delivering the POSIX graceful interrupt.
-                return None
-            if reply is not None:
-                reply["status"] = "timeout"
-        return reply
+        self._over_memory = None
+        watch = asyncio.ensure_future(self._watch_memory())
+        try:
+            reply = await self._await_reply(seq, timeout_s)
+            if reply is None:
+                self._interrupt()
+                reply = await self._await_reply(seq, INTERRUPT_GRACE_S)
+                if reply is _EOF:
+                    # The deadline caused the exit; Windows terminates the worker
+                    # instead of delivering the POSIX graceful interrupt.
+                    return None
+                if reply is not None:
+                    reply["status"] = "timeout"
+            return reply
+        finally:
+            watch.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await watch
 
     # -- the call ------------------------------------------------------------
 
@@ -445,9 +519,26 @@ class CodeWorker:
         )
 
     async def _lost(self, died: bool, elapsed_s: float) -> dict[str, Any]:
-        """No answer: the worker exited, or it ignored the interrupt. The
-        reply is built first, so the restart it causes is reported where the
-        contract puts it: on the next call."""
+        """No answer: the worker was stopped over its memory limit, it exited,
+        or it ignored the interrupt. The reply is built first, so the restart
+        it causes is reported where the contract puts it: on the next call."""
+        over, self._over_memory = self._over_memory, None
+        if over is not None:
+            reply = self._reply(
+                "error",
+                error={
+                    "type": "MemoryLimit",
+                    "message": (
+                        f"the worker held {_mib(over)} MiB, over the "
+                        f"{_mib(self.memory_limit_bytes)} MiB limit on its memory "
+                        "([tools] run_code_memory_mb), and was stopped"
+                    ),
+                    "traceback_tail": "",
+                },
+                hint=f"{_MEMORY_HINT} {_RESTART_HINT}",
+            )
+            await self._kill(_OVER_MEMORY)
+            return reply
         if died:
             reply = self._reply(
                 "error",
@@ -551,7 +642,11 @@ def _render(reply: dict[str, Any]) -> str:
 
 def worker_for(state: SessionState) -> CodeWorker:
     if state.code_worker is None:
-        state.code_worker = CodeWorker(state.working_dir, state.config.config_path)
+        state.code_worker = CodeWorker(
+            state.working_dir,
+            state.config.config_path,
+            memory_limit_bytes=run_code_memory_limit(state.config.run_code_memory_mb),
+        )
     return state.code_worker
 
 
@@ -575,7 +670,9 @@ def worker_for(state: SessionState) -> CodeWorker:
         f"{STDOUT_TAIL_CHARS} characters of print() output, stderr its last "
         f"{STDERR_TAIL_CHARS}, result the repr of a trailing expression "
         f"({RESULT_CHARS}). Bound: timeout_s, default 60 (max 600); a timeout "
-        "interrupts the snippet and cancels a run it waits on. One snippet at a "
+        "interrupts the snippet and cancels a run it waits on. The worker is stopped "
+        "if it holds more memory than [tools] run_code_memory_mb (default half the "
+        "machine's). One snippet at a "
         "time: a call during another is answered busy, not queued."
     ),
     input_model=RunCodeInput,
