@@ -1612,9 +1612,9 @@ def fail_imports(monkeypatch: pytest.MonkeyPatch, errors: dict[str, Exception]) 
 
 
 @pytest.fixture
-def raster_extra_missing(monkeypatch: pytest.MonkeyPatch) -> FailingImports:
-    """The 'raster' extra is not installed, nor cairosvg: neither rasterizer
-    imports."""
+def raster_dependency_missing(monkeypatch: pytest.MonkeyPatch) -> FailingImports:
+    """resvg-py, a dependency, cannot be imported, nor is cairosvg installed:
+    neither rasterizer imports."""
     return fail_imports(
         monkeypatch,
         {"resvg_py": not_installed("resvg_py"), "cairosvg": not_installed("cairosvg")},
@@ -1623,7 +1623,7 @@ def raster_extra_missing(monkeypatch: pytest.MonkeyPatch) -> FailingImports:
 
 @pytest.fixture
 def raster_native_missing(monkeypatch: pytest.MonkeyPatch) -> FailingImports:
-    """The extra is not installed, and cairosvg is but libcairo is not.
+    """resvg-py cannot be imported, and cairosvg is installed but libcairo is not.
 
     cairocffi opens the native library while it is imported, and reports a
     library it cannot find as an OSError, not an ImportError. The message is

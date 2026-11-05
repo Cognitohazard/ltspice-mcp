@@ -1624,10 +1624,10 @@ turn reads bottom to top. A multi-line comment's lines are one line apart, and
 a `Bottom` one ends at its point. The file is written to the per-user folder's
 `renders/`, never to the working directory or beside the sheet, and is deleted
 a week later; a render regenerates it. `inline` and `both` return a PNG as an
-image block, and an SVG as its markup in `render.svg`. A PNG needs the
-`raster` extra (`resvg-py`), or `cairosvg` with the native Cairo library it
-loads; without either the render falls back to SVG, and `render.note` names
-what is missing and its remedy. The fallback is also a `render` failure when
+image block, and an SVG as its markup in `render.svg`. A PNG is made with
+`resvg-py`, a dependency, or, where that cannot be imported, with `cairosvg`
+and the native Cairo library it loads; without either the render falls back
+to SVG, and `render.note` names what is missing and its remedy. The fallback is also a `render` failure when
 the caller named `format: "png"`. A default that falls back is not a failure,
 because the caller asked for nothing the server could not do.
 `inspect(kind:"capabilities")` reports the same facts as

@@ -1126,7 +1126,7 @@ def _images(result) -> list[types.ImageContent]:
 @pytest.mark.asyncio
 class TestAttachedImage:
     """``attach_plot`` adds a static PNG a vision model can read, rendered from
-    the same panels; without the raster extra it is skipped and reported."""
+    the same panels; without a rasterizer it is skipped and reported."""
 
     @needs_raster
     async def test_attach_plot_returns_a_png(self, state_no_sim: SessionState, work_dir: Path):
@@ -1192,25 +1192,26 @@ class TestAttachedImage:
         (obs,) = [o for o in sc["observations"] if o["code"] == "image_unavailable"]
         return obs["detail"]
 
-    async def test_a_missing_extra_is_named_with_its_install_step(
-        self, state_no_sim: SessionState, work_dir: Path, raster_extra_missing
+    async def test_a_missing_dependency_is_named_with_its_install_step(
+        self, state_no_sim: SessionState, work_dir: Path, raster_dependency_missing
     ):
         detail = self._skipped_image_detail(
             await self._plot_asking_for_an_image(state_no_sim, work_dir)
         )
-        assert "'raster' extra" in detail
-        assert "pip install 'ltspice-mcp[raster]'" in detail
+        assert "resvg-py, which ltspice-mcp depends on" in detail
+        assert "pip install --force-reinstall ltspice-mcp" in detail
 
     async def test_a_missing_native_library_is_named_as_itself(
         self, state_no_sim: SessionState, work_dir: Path, raster_native_missing
     ):
         # cairosvg is installed but libcairo is not: the library is named, and
-        # the extra, whose rasterizer needs no native library, is offered.
+        # reinstalling, which brings back resvg-py and needs no native library,
+        # is offered.
         detail = self._skipped_image_detail(
             await self._plot_asking_for_an_image(state_no_sim, work_dir)
         )
         assert "native Cairo library" in detail
-        assert "pip install 'ltspice-mcp[raster]'" in detail
+        assert "pip install --force-reinstall ltspice-mcp" in detail
 
     @needs_raster
     async def test_ui_host_gets_the_widget_and_the_image(

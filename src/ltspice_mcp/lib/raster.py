@@ -4,15 +4,15 @@ The schematic and result renderers are SVG-only by design. A model consuming a
 render over MCP generally wants a bitmap, so this module is the one place that
 converts SVG markup to PNG and describes what the caller actually got.
 
-Rasterization needs ``resvg-py``, an **optional** dependency (extra:
-``raster``) with prebuilt wheels and no native library; ``cairosvg`` is used
-when it is absent and is installed with the native Cairo library it loads.
+Rasterization uses ``resvg-py``, a dependency with prebuilt wheels and no
+native library; ``cairosvg`` is used when ``resvg-py`` cannot be imported (an
+install that lost it) and is installed with the native Cairo library it loads.
 Without either this module still returns the SVG unchanged rather than failing
 — a render that arrives as markup is degraded, not broken, and the caller is
 told so through :attr:`RenderedImage.note` rather than through an exception.
-What is missing is reported as the extra or, when only cairosvg is installed,
-its native library (:class:`RasterSupport`), and :func:`raster_support`
-answers the same question before anything is drawn.
+What is missing is reported as the dependency or, when only cairosvg is
+installed, its native library (:class:`RasterSupport`), and
+:func:`raster_support` answers the same question before anything is drawn.
 
 Interface note: ``image_format`` is a named choice rather than a boolean so a
 third format can be added without changing the shape of every call site, and
@@ -32,9 +32,9 @@ from ltspice_mcp.errors import LTSpiceMCPError
 
 ImageFormat = Literal["png", "svg"]
 
-#: What keeps PNG from being made: the 'raster' extra is not installed, or only
-#: cairosvg is, without the native Cairo library it loads.
-RasterMissing = Literal["extra", "native_library"]
+#: What keeps PNG from being made: resvg-py, a dependency, cannot be imported,
+#: or only cairosvg can, without the native Cairo library it loads.
+RasterMissing = Literal["dependency", "native_library"]
 
 # Scale is the only real cost lever. Image cost tracks pixel area (roughly
 # width*height/750), so it grows with the SQUARE of scale, while format does not
@@ -151,7 +151,7 @@ class RenderedImage:
 
 
 class RasterUnavailableError(LTSpiceMCPError):
-    """Rasterization was requested but the optional dependency is not usable.
+    """Rasterization was requested but no rasterizer can be loaded.
 
     Part of the project error hierarchy so a consumer calling
     :func:`rasterize_svg` directly raises something the server already handles,
@@ -171,13 +171,21 @@ class RasterUnavailableError(LTSpiceMCPError):
         return (type(self), (self.support,))
 
 
-_EXTRA_MISSING = "the optional 'raster' extra (resvg-py) is not installed"
-_EXTRA_REMEDY = (
-    "install it where the server runs (pip install 'ltspice-mcp[raster]', "
-    "uv tool install 'ltspice-mcp[raster]', or launch with uvx --from "
-    "'ltspice-mcp[raster]' ltspice-mcp; for a server run from a source "
-    "checkout, uv sync --extra raster in the checkout), then restart the server"
+_DEPENDENCY_REMEDY = (
+    "reinstall the server where it runs (uv tool install --reinstall ltspice-mcp, "
+    "pip install --force-reinstall ltspice-mcp, or launch with uvx --refresh "
+    "ltspice-mcp; for a server run from a source checkout, uv sync in the "
+    "checkout), then restart the server"
 )
+
+
+def _dependency_missing(exc: ImportError) -> str:
+    """Why PNG cannot be made: resvg-py, which the package depends on, did not
+    import, and the first line of what the import said."""
+    detail = str(exc).strip().splitlines()
+    return "resvg-py, which ltspice-mcp depends on, could not be imported" + (
+        f" ({detail[0]})" if detail else ""
+    )
 
 
 def native_library_remedy(platform: str) -> str:
@@ -253,23 +261,24 @@ def _load_rasterizer() -> Rasterizer:
 
 
 def _find_rasterizer() -> Rasterizer | RasterSupport:
-    """``resvg-py`` first, the 'raster' extra's, which needs no native library;
-    then ``cairosvg``. Imported lazily rather than at module load: the
-    dependency is optional, and a server never rendering an image should not
-    pay for loading it. cairosvg is absent in two ways: the package is not
-    installed (ImportError), or it is but the native cairo library it binds is
-    not, which cairocffi reports as an OSError from the import.
+    """``resvg-py`` first, a dependency, which needs no native library; then
+    ``cairosvg``. Imported lazily rather than at module load: a server never
+    rendering an image should not pay for loading it. ``resvg-py`` fails to
+    import only where an install lost it. cairosvg is absent in two ways: the
+    package is not installed (ImportError), or it is but the native cairo
+    library it binds is not, which cairocffi reports as an OSError from the
+    import.
     """
     try:
         import resvg_py
-    except ImportError:
-        pass
+    except ImportError as exc:
+        missing = _dependency_missing(exc)
     else:
         return _resvg(resvg_py)
     try:
         import cairosvg
     except ImportError:
-        return RasterSupport(False, "extra", _EXTRA_MISSING, _EXTRA_REMEDY)
+        return RasterSupport(False, "dependency", missing, _DEPENDENCY_REMEDY)
     except OSError as exc:
         # cairocffi lists every name it tried, one per line; the first says
         # enough and keeps the reason to one line.
@@ -277,9 +286,10 @@ def _find_rasterizer() -> Rasterizer | RasterSupport:
         return RasterSupport(
             False,
             "native_library",
-            "cairosvg is installed but the native Cairo library it loads could "
-            "not be loaded" + (f" ({detail[0]})" if detail else ""),
-            f"{_EXTRA_REMEDY}; its rasterizer needs no native library. Or "
+            f"{missing}, and cairosvg, tried in its place, is installed but the "
+            "native Cairo library it loads could not be loaded"
+            + (f" ({detail[0]})" if detail else ""),
+            f"{_DEPENDENCY_REMEDY}; resvg-py needs no native library. Or "
             f"{native_library_remedy(sys.platform)}",
         )
     return _cairosvg(cairosvg)

@@ -22,9 +22,7 @@ published as `circuit-mcp`, `ngspice-mcp` and `osic-mcp`, in case one of
 those names is easier to remember.
 
 The Claude Code plugin and the Claude Desktop extension fetch the server with
-`uv` and include the `raster` extra for [PNG rendering](#png-rendering). If
-you start the server with `uvx` yourself, use
-`uvx --from 'ltspice-mcp[raster]' ltspice-mcp` to get it too.
+`uv`. Every install includes what [PNG rendering](#png-rendering) needs.
 
 ## Making sure the assistant uses the server
 
@@ -224,37 +222,31 @@ schematic is always found first, as in LTspice.
 ## PNG rendering
 
 `verify_circuit` draws schematics as SVG, but an assistant can only see a
-drawing returned as a PNG, since clients don't reliably display SVG. PNG
-needs the `raster` extra, which the plain install leaves out. Install the
-server with it:
+drawing returned as a PNG, since clients don't reliably display SVG. The
+server makes the PNG with `resvg-py`, a dependency that every install
+includes. It ships as a prebuilt wheel and needs no other library. The image
+`plot_waveform` attaches with `attach_plot` is made the same way.
 
-```bash
-uv tool install 'ltspice-mcp[raster]'    # or: pipx install 'ltspice-mcp[raster]'
-```
+Releases up to 0.7.0 left `resvg-py` out unless the server was installed with
+the `raster` extra. The extra still exists, empty, so a launch line that names
+it, such as `uvx --from 'ltspice-mcp[raster]' ltspice-mcp`, keeps working.
 
-With `uvx`, use `uvx --from 'ltspice-mcp[raster]' ltspice-mcp`. For a server
-run from a source checkout, run `uv sync --extra raster` in the checkout; a
-plain `uv sync` already installs it with the development tools. The Claude
-Code plugin and the Claude Desktop extension already include it. The extra's
-rasterizer, `resvg-py`, ships as a prebuilt wheel and needs no other library.
-Restart the server afterwards. The image `plot_waveform` attaches with
-`attach_plot` needs the same extra.
-
-Without the extra, the server uses `cairosvg` if it is installed, together
-with the Cairo library it loads. If there is no rasterizer, a PNG request
-returns an SVG file instead, and the reply names what is missing and how to
-install it. A `verify_circuit` render with `delivery` set to `"inline"` or
-`"both"` then returns the SVG markup in `render.svg`, and a plot still
-returns its chart and trace summaries.
+If `resvg-py` cannot be imported, for instance in an install that lost it,
+the server uses `cairosvg` if it is installed, together with the Cairo library
+it loads. If there is no rasterizer, a PNG request returns an SVG file
+instead, and the reply names what is missing and how to fix it. A
+`verify_circuit` render with `delivery` set to `"inline"` or `"both"` then
+returns the SVG markup in `render.svg`, and a plot still returns its chart and
+trace summaries.
 `inspect(kind="capabilities")` reports the same before anything is drawn:
 
 ```json
-"render": {"png": false, "missing": "extra", "reason": "...", "remedy": "..."}
+"render": {"png": false, "missing": "dependency", "reason": "...", "remedy": "..."}
 ```
 
-`missing` is `"extra"`, or `"native_library"` when only `cairosvg` is
-installed and the Cairo library is not. `missing`, `reason` and `remedy` are
-null when `png` is true.
+`missing` is `"dependency"` when `resvg-py` cannot be imported, or
+`"native_library"` when only `cairosvg` is installed and the Cairo library is
+not. `missing`, `reason` and `remedy` are null when `png` is true.
 
 ## Where the server can run
 
