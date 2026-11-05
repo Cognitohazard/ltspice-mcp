@@ -470,11 +470,11 @@ def inject_card_before_end(netlist_text: str, card: str, *, deck: bool) -> str:
 
 def _top_level_instances(cards: list[SpiceCard]) -> dict[str, SpiceCard]:
     """The instance cards by lowercased reference among ``cards``, the ones a
-    file's ``lex_for_edit`` reads: not one inside a ``.subckt`` body, which is
-    another device that only shares the name. A card after an included file's
-    ``.END`` is left out too, as it always was here. The extraction and the
-    rewrite below both read this, so the card rewritten is the card measured."""
-    return instances_by_ref((card for card in cards if not card.trailing), scope=())
+    file's ``lex_for_edit`` reads (none after its ``.END``): not one inside a
+    ``.subckt`` body, which is another device that only shares the name. The
+    extraction and the rewrite below both read this, so the card rewritten is
+    the card measured."""
+    return instances_by_ref(cards, scope=())
 
 
 def rewrite_instance_model(

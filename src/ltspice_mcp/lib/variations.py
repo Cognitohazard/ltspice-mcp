@@ -524,12 +524,12 @@ class _ClosureFile:
 
 def _lexed_file(text: str, depth: int) -> EditCards:
     """One closure file's text lexed for an edit: every card to write back, and
-    the cards a target may name among them. Those of the deck itself
-    (``depth`` 0) are the cards LTspice reads, so a target named only by its
-    title or after its ``.END`` is refused rather than written where the
-    simulator never reads it; an included file's are all its cards
-    (``spice_lex.lex_for_edit``). Target resolution and every writer read the
-    same cards, so a site resolution chose is the site written."""
+    the cards a target may name among them: the cards LTspice reads
+    (``spice_lex.lex_for_edit``), so a target named only by the deck's
+    (``depth`` 0) title or after a file's ``.END`` is refused rather than
+    written where the simulator never reads it. Target resolution and every
+    writer read the same cards, so a site resolution chose is the site
+    written."""
     return lex_for_edit(text, deck=depth == 0)
 
 

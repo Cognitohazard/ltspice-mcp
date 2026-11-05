@@ -1227,15 +1227,16 @@ class EditCards:
 def lex_for_edit(netlist_text: str, *, deck: bool) -> EditCards:
     """``netlist_text`` lexed for an edit that writes every card back.
 
-    For a deck (``deck``) the cards read are the ones ``lex_deck`` reads: the
-    title is a comment card of its own, and a card after a top-level ``.END``
-    is kept but not read. An included file (``deck=False``) begins with a
-    card, and every card of it is read, as the edits have always read one:
-    whether LTspice reads a card after an included file's ``.END`` is not
-    recorded.
+    The cards read are the ones ``lex_deck`` reads, with ``title=deck``, both
+    taken by ``_read_cards``: for a deck (``deck``) the title is a comment card
+    of its own and is not read; an included file (``deck=False``) begins with
+    a card. In either a card after a top-level ``.END`` is kept but not read.
+    For an included file that follows the reading every other reader of one
+    already takes (``lex_deck(title=False)``); what LTspice does past an
+    included file's ``.END`` is not recorded.
     """
     result = lex(netlist_text, title=deck)
-    read = _read_cards(result.cards, title=True) if deck else list(result.cards)
+    read = _read_cards(result.cards, title=deck)
     return EditCards(cards=result.cards, read=read, warnings=result.warnings)
 
 

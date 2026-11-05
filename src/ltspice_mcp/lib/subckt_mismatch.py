@@ -136,11 +136,10 @@ class ClosureFile:
 
     def lexed(self) -> EditCards:
         """This file lexed for an edit: every card to write back, and the
-        cards a plan may select among them. The deck's (index 0) are the cards
-        LTspice reads, not its title nor a card after its ``.END``; an
-        included file's are all its cards (``spice_lex.lex_for_edit``).
-        Planning and rendering both read this, so a card the plan chose is
-        the card a run writes."""
+        cards a plan may select among them: the cards LTspice reads, not a
+        card after the file's ``.END`` nor the deck's (index 0) title
+        (``spice_lex.lex_for_edit``). Planning and rendering both read this,
+        so a card the plan chose is the card a run writes."""
         return lex_for_edit(self.text, deck=self.depth == 0)
 
 

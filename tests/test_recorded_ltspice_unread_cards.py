@@ -15,6 +15,9 @@ instance, a subcircuit call, a ``.model``, a ``.param``, an include, an
 analysis, an option, a measurement, and as many cards after ``.end``. Its
 answer for each must be its answer for the deck LTspice reads from it, the
 title a comment and nothing after ``.end`` (``as_ltspice_reads``).
+
+The last test is not a recording: it holds every reader to the one reading
+the server takes of an included file's ``.end``, which no recording shows.
 """
 
 from __future__ import annotations
@@ -44,6 +47,7 @@ from ltspice_mcp.lib.subckt_mismatch import MismatchPlanError, build_plan, closu
 from ltspice_mcp.lib.variations import (
     AssignVariation,
     CircuitDeck,
+    DeckFile,
     RandomVariation,
     VariationError,
     expand_variations,
@@ -203,16 +207,34 @@ ASSIGNMENTS = {
 
 def materialized(text: str, where: Path, variation: AssignVariation | RandomVariation) -> Any:
     """The case one variation writes, as LTspice reads it, with its receipt;
-    or the code it is refused with."""
+    or the code it is refused with. The deck is staged, and the variation
+    reaches the files it includes, as ``run_experiments`` hands them over."""
     deck = write_deck(where, text)
-    circuit = CircuitDeck("dut", deck, text)
+    try:
+        staged = stage_deck(deck, where / "stage", [where], origin=deck)
+    except DeckStagingError as exc:
+        return exc.code
+    circuit = CircuitDeck(
+        "dut",
+        staged.staged_deck,
+        staged.text,
+        includes=tuple(
+            DeckFile(file.staged_path, file.text, file.sha256, file.codec)
+            for file in staged.includes
+        ),
+        codec=staged.codec,
+    )
     try:
         (case,) = materialize_variants(
             circuit, expand_variations([circuit], [variation]), where / "case"
         )
     except VariationError as exc:
         return exc.code
-    return case.assignments, read_bodies(case.text)
+    # A case names the files it includes by their staged paths, under ``where``.
+    return case.assignments, [
+        body.replace(str(where), "WHERE").replace(where.as_posix(), "WHERE")
+        for body in read_bodies(case.text)
+    ]
 
 
 @reader
@@ -372,3 +394,37 @@ async def test_each_reader_reads_the_deck_ltspice_reads(
     assert read != text
     expected = await READERS[name](read, tmp_path / "read", state_no_sim)
     assert await READERS[name](text, tmp_path / "deck", state_no_sim) == expected
+
+
+# --------------------------------------------------------------------------
+# An included file's .end
+# --------------------------------------------------------------------------
+
+#: A deck that includes ``part.inc`` ahead of the cards above.
+INCLUDING = f"* a deck with an include\n.include part.inc\n{BODY}"
+
+#: The included file up to its ``.end``.
+INCLUDED = "R5 a 0 1k\n.end\n"
+
+
+@pytest.mark.parametrize("name", sorted(READERS))
+async def test_each_reader_reads_an_included_file_up_to_its_end(
+    name: str, tmp_path: Path, state_no_sim: SessionState, monkeypatch: pytest.MonkeyPatch
+):
+    """Not a recording: no recorded input shows what LTspice does with a card
+    after an included file's ``.end``. The hierarchy, the run's requirements
+    and the netlist graph leave such a card out (``lex_deck(title=False)``),
+    and every reader takes that same reading, so none acts on a card another
+    does not see. An assignment or a random rule named ``R2``, ``r`` or
+    ``nch`` after the included ``.end`` and reached it, and staging and the
+    mismatch plan followed its include, while ``lex_deck`` read only ``R5``.
+    Each reader's answer is its answer for the same file with nothing after
+    its ``.end``."""
+    included = INCLUDED + AFTER_END
+    assert [card.body for card in lex_deck(included, title=False).cards] == [
+        card.body for card in lex_deck(INCLUDED, title=False).cards
+    ]
+    monkeypatch.setitem(SUPPORT, "part.inc", INCLUDED)
+    expected = await READERS[name](INCLUDING, tmp_path / "read", state_no_sim)
+    monkeypatch.setitem(SUPPORT, "part.inc", included)
+    assert await READERS[name](INCLUDING, tmp_path / "file", state_no_sim) == expected

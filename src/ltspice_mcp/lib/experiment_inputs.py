@@ -436,9 +436,9 @@ def _verify_inputs(inputs: FrozenInputs, *, native: bool, seeded: bool) -> None:
         if key in cards_by_content:
             continue
         content = contents[artifact.sha256]
-        # A root deck's line 1 is its title, and a card after its end marker
-        # is not read (lex_for_edit). Every card is still classified, so the
-        # warnings and the constructs of an unread card refuse as well.
+        # A card after a file's end marker is not read, nor a root deck's
+        # line 1, its title (lex_for_edit). Every card is still classified, so
+        # the warnings and the constructs of an unread card refuse as well.
         parsed = lex_for_edit(decode_spice_bytes(content), deck=path in roots)
         if parsed.warnings:
             raise RecoveryError(
@@ -479,7 +479,7 @@ def _verify_inputs(inputs: FrozenInputs, *, native: bool, seeded: bool) -> None:
             validated.add(key)
         try:
             # The includes staging followed (deck_staging.stage_deck): none in
-            # a root deck's title or after its end marker.
+            # a root deck's title or after a file's end marker.
             targets = staged_card_reference_targets(
                 parsed.read, path, depth=0 if path == inputs.electrical.path else 1
             )

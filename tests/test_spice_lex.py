@@ -25,6 +25,8 @@ from ltspice_mcp.lib.spice_lex import (
     iter_body,
     iter_by_kind,
     lex,
+    lex_deck,
+    lex_for_edit,
     tokenize_body,
 )
 from ltspice_mcp.lib.spice_lex_views import (
@@ -831,6 +833,23 @@ class TestLexAndEmit:
             ("instance", True),
             ("end", True),
         ]
+
+    @pytest.mark.parametrize("deck", [True, False], ids=["deck", "included-file"])
+    def test_an_edit_reads_the_cards_the_deck_reading_reads(self, deck: bool) -> None:
+        """``lex_for_edit`` offers an edit the cards ``lex_deck`` reads, with
+        ``title=deck``: no title of a deck, and no card after a file's
+        ``.END``. An included file's edit read ``R6`` after its ``.END``,
+        which ``lex_deck(title=False)`` leaves out."""
+        text = "R4 a 0 1k\nR5 a 0 1k\n.end\nR6 a 0 1k\n.include more.inc\n"
+        edit = lex_for_edit(text, deck=deck)
+        read = lex_deck(text, title=deck).cards
+        assert [(card.body, card.line_start) for card in edit.read] == [
+            (card.body, card.line_start) for card in read
+        ]
+        assert [card.name for card in edit.read if card.kind == "instance"] == (
+            ["R5"] if deck else ["R4", "R5"]
+        )
+        assert emit(edit.cards) == text
 
     def test_meas_classified_separately(self) -> None:
         text = ".MEAS AC fc WHEN mag(V(out))=0.7\n"

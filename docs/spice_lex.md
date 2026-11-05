@@ -102,7 +102,10 @@ whatever it says, so it cannot open a scope, end the deck or take a `+` line.
 ran `deck/title_card`, whose title is an `I1` card, with one `I1`, and
 failed `deck/title_directive`, whose title is the `.param` it needs), and so
 is every card after a top-level `.END` (`deck/after_end`), a second `.END`
-among them. `title=False` reads an included file, which begins with a card.
+among them. `title=False` reads an included file, which begins with a card,
+and leaves out a card after its top-level `.END` the same way; no recorded
+input shows what LTspice does past an included file's `.END`, so that rule
+follows the reading the server already took and is not recorded.
 Every reader of what a deck holds (the linter, `verify_circuit`'s checks and
 both compare modes, the `inspect` net and components queries, the hierarchy,
 the run's requirements, the result observations, the measurement kinds and
@@ -113,13 +116,14 @@ noise unit read off the run's deck, the export's pin nodes) goes through it.
 cards among them that are read, the same objects, so a change made through
 `read` is in what `emit` writes. An edit chooses what to read or change from
 `read` alone, so it cannot write a change the simulator never reads and
-report it. For a deck (`deck=True`) `read` is what `lex_deck` reads; an
-included file (`deck=False`) is read whole, as the edits have always read
-one, because whether LTspice reads a card after an included file's `.END` is
-not recorded. Variation targets and their writers, the per-instance mismatch
-plan, Monte Carlo's transistor extraction, staging's include walk and value
-fold, the recovery check of a staged closure and the `.options logopinfo`
-injection use it. Each `SpiceCard` has these fields:
+report it. `read` is what `lex_deck` reads with `title=deck`, both taken by
+one function (`_read_cards`), so the two readings cannot differ: for a deck
+(`deck=True`) the title is not read, an included file (`deck=False`) begins
+with a card, and in either a card after a top-level `.END` is not read.
+Variation targets and their writers, the per-instance mismatch plan, Monte
+Carlo's transistor extraction, staging's include walk and value fold, the
+recovery check of a staged closure and the `.options logopinfo` injection
+use it. Each `SpiceCard` has these fields:
 
 ```python
 class SpiceCard:
