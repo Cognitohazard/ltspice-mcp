@@ -2186,6 +2186,63 @@ class TestLintModes:
         assert data["outcome"] == "complete"
         assert "failures" not in data
 
+    async def test_a_directive_with_a_bracket_left_open_runs_and_is_reported(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Staging and the linter split each directive into parts, and one they
+        could not split stopped the run with the lexer's error, as a retryable
+        submission failure. The deck runs, and each such card is reported."""
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(
+            work_dir / "open.cir",
+            "* t\nV1 in 0 1\nR1 in 0 1k\n.save V(in\n.param r={1k\n.tran 0 1m )\n.end\n",
+        )
+
+        data = _assert_schema(
+            await handle_run_experiments(_args(deck, "open-directive"), state_with_sim)
+        )
+
+        assert len(submissions) == 1, json.dumps(data)[:3000]
+        assert [
+            finding["at"]["line"]
+            for finding in data["lint"][0]["findings"]
+            if finding["rule_id"] == "unreadable-card"
+        ] == [4, 5, 6]
+
+    # With no space after its name the card was not taken for an include, and
+    # was neither refused nor staged.
+    @pytest.mark.parametrize("card", ['.include "models.lib', '.include"models.lib'])
+    async def test_an_include_whose_path_cannot_be_read_is_refused_at_its_line(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        card: str,
+    ):
+        """Staging cannot tell which file an include with its quote left open
+        names, so it cannot stage or check it: the circuit fails with the line
+        and the fix, not with the lexer's error as a retryable failure."""
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(
+            work_dir / "open_include.cir",
+            f"* t\nV1 in 0 1\nR1 in 0 1k\n{card}\n.op\n.end\n",
+        )
+
+        data = _assert_schema(
+            await handle_run_experiments(_args(deck, "open-include"), state_with_sim)
+        )
+
+        assert submissions == []
+        row = data["failures"][0]
+        assert row["code"] == "include_unstaged", row
+        assert "line 4" in row["message"], row
+        assert 'Add a closing "' in row["message"], row
+
     async def test_off_skips_linter(
         self,
         state_with_sim: SessionState,
@@ -3331,6 +3388,82 @@ def _include_targets(netlist: Path) -> list[Path]:
 def _factored_deck(work_dir: Path, *, core: str = _CORE_INC, root: str = _FACTORED_ROOT) -> Path:
     (work_dir / "core.inc").write_text(core)
     return _deck(work_dir / "factored.cir", root)
+
+
+@pytest.mark.asyncio
+class TestMonteCarloSampleIdentity:
+    _RULE: ClassVar[dict[str, Any]] = {"rule": "component", "target": "R1", "tolerance": 0.1}
+
+    @staticmethod
+    def _draws(data: dict) -> list[float]:
+        return [item["assignments"]["random:component:R1"] for item in data["runs"]["items"]]
+
+    async def test_a_seedless_monte_carlo_records_the_seed_that_reproduces_it(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """With no seed the server chooses one and records it on every case as
+        '_random_seed'; a later request with that seed draws the same values.
+        Before, an omitted seed meant fresh entropy and a run nobody could
+        repeat."""
+        fake_simulator(monkeypatch)
+        deck = _deck(work_dir / "mc.cir")
+
+        first = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "mc-seedless",
+                    variations=[{"kind": "random", "runs": 3, "rules": [self._RULE]}],
+                ),
+                state_with_sim,
+            )
+        )
+        (seed,) = {item["assignments"]["_random_seed"] for item in first["runs"]["items"]}
+        again = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "mc-reseeded",
+                    variations=[
+                        {"kind": "random", "runs": 3, "seed": seed, "rules": [self._RULE]}
+                    ],
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert self._draws(again) == self._draws(first)
+        assert len(set(self._draws(first))) == 3
+
+    async def test_a_retried_seedless_request_returns_its_job_not_a_conflict(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The seed the server chooses is not part of the caller's request, so a
+        retry of the same seedless request under the same request_id replays
+        the job it made, with the same seed, instead of refusing a mismatch."""
+        fake_simulator(monkeypatch)
+        deck = _deck(work_dir / "mc.cir")
+        variations = [{"kind": "random", "runs": 2, "rules": [self._RULE]}]
+
+        first = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "mc-retry", variations=variations), state_with_sim
+            )
+        )
+        retry = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "mc-retry", variations=variations), state_with_sim
+            )
+        )
+
+        assert retry["job_id"] == first["job_id"]
+        assert self._draws(retry) == self._draws(first)
 
 
 @pytest.mark.asyncio

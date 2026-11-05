@@ -47,6 +47,7 @@
       "recipes[].nth",
       "recipes[].quantiles",
       "recipes[].reduce",
+      "recipes[].ref_hz",
       "recipes[].signal",
       "recipes[].signals",
       "recipes[].sources",
@@ -205,7 +206,6 @@
       "attach_plot",
       "case_id",
       "dialect",
-      "format",
       "in_ltspice",
       "job_id",
       "max_points",
@@ -258,6 +258,7 @@
       "execution.keep_partial_raw",
       "execution.max_parallel",
       "execution.recoverable",
+      "execution.results_beside_sheet",
       "execution.run_timeout_s",
       "execution.simulator",
       "execution.simulator_seed",
@@ -306,6 +307,7 @@
       "compare.reference",
       "compare.rtol",
       "export_to",
+      "findings_cursor",
       "in_ltspice",
       "path",
       "render",
@@ -326,6 +328,7 @@
       "target": "path"
     },
     "plot_waveform": {
+      "format": null,
       "raw_file": "path"
     }
   }

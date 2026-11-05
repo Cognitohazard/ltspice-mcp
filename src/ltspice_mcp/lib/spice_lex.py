@@ -1240,6 +1240,44 @@ def lex_for_edit(netlist_text: str, *, deck: bool) -> EditCards:
     return EditCards(cards=result.cards, read=read, warnings=result.warnings)
 
 
+def unreadable_cards(cards: Iterable[SpiceCard]) -> list[tuple[SpiceCard, SpiceLexError]]:
+    """The cards whose body cannot be split into parts, with the reason: an
+    unclosed quote, brace or parenthesis, or a closer with nothing open.
+
+    ``lex`` keeps such a card whole, and every rule that reads a card's parts
+    leaves it out, so a check reports these cards to say what it did not look
+    at. Comments, blank lines and the lines of a control block are text, not
+    cards with parts.
+    """
+    found: list[tuple[SpiceCard, SpiceLexError]] = []
+    for card in cards:
+        if card.kind in ("comment", "blank", "control"):
+            continue
+        try:
+            tokenize_body(card.body)
+        except SpiceLexError as exc:
+            found.append((card, exc))
+    return found
+
+
+def directive_head(card: SpiceCard) -> str:
+    """The name a directive card starts with, casefolded (``.tran``,
+    ``.save``), or ``""`` for an empty body.
+
+    Read from the card's first part, or, when the card cannot be split into
+    parts (``unreadable_cards``), from its text up to where that part would
+    end: a directive's name is one word, readable even when a quote or
+    bracket after it is left open (``.include"models.lib`` is ``.include``).
+    """
+    try:
+        tokens = tokenize_body(card.body)
+    except SpiceLexError:
+        body = card.body.lstrip()
+        end = next((i for i, c in enumerate(body) if c in _BARE_TERMINATORS), len(body))
+        return body[:end].casefold()
+    return tokens[0].text.casefold() if tokens else ""
+
+
 # ---------------------------------------------------------------------------
 # Emit
 # ---------------------------------------------------------------------------

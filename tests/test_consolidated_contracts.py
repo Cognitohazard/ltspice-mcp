@@ -663,7 +663,13 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # analyze_results can afterwards. Measured 16,882.
     # Raised by about 15 characters for minLength on circuits[].path: an
     # empty path names no file. Measured 16,910.
-    "run_experiments": 16920,
+    # Raised by about 210 characters for random's sample_start and a seed
+    # description: a seedless Monte Carlo gets a recorded seed, and one sample
+    # can be repeated alone. Measured 17,131.
+    # Raised by about 230 characters for execution.results_beside_sheet, which
+    # leaves a sheet's results where LTspice opens them as the run finishes,
+    # in the call that runs it. Measured 17,357.
+    "run_experiments": 17370,
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.
@@ -719,7 +725,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 220 characters for a job source's other_raw, which reads
     # a case's frequency response analysis results or a transient's operating
     # point by job and case instead of by path. Measured 21,185.
-    "analyze_results": 21200,
+    # Raised by about 95 characters for bode_crossing's ref_hz, which measures
+    # a crossing from the gain at a chosen frequency in one call instead of a
+    # bode_point read and a second crossing. Measured 21,281.
+    "analyze_results": 21290,
     # Ten query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.
@@ -761,8 +770,6 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # 11,557.
     # Raised by about 95 characters for minLength on each query's path (six
     # queries take one): an empty path names no file. Measured 11,631.
-    # Raised by 6 characters for the capabilities key 'text_channel', so a
-    # caller can read which text block its replies carry. Measured 11,646.
     # Raised by about 40 characters for the capabilities report's
     # simulator_capabilities key (the capability table's view for the detected
     # families) and the sentence in its description. Measured 11,694.
@@ -804,7 +811,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # add lost its place, size and justification and needed the old text
     # typed whole. Its descriptions are a line each; the rest is the op's
     # three fields. Measured 15,605.
-    "edit_schematic": 15605,
+    # Raised by 125 characters for replace_directive's optional x and y, which
+    # pick one of several texts its instruction names: two identical texts
+    # could not be told apart, so the op's own undo failed on them. Measured
+    # 15,730.
+    "edit_schematic": 15730,
     # Checks, the render policy and the compare spec (each with the
     # verify-only fields on a subclass), each in one spelling. The checks are
     # named in the tool's own description because a caller cannot ask for what
@@ -833,7 +844,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # showed it. Named for the reason the others are. Measured 5,223.
     # Raised by about 15 characters for minLength on path: an empty path names
     # no file. Measured 5,238.
-    "verify_circuit": 5245,
+    # Raised by about 110 characters for findings_cursor, which lists a rule's
+    # findings past the cap of 25 a reply lists: a list cut short says how to
+    # read the rest, through the tool and without run_code. Measured 5,357.
+    "verify_circuit": 5360,
     # Job/case addressing, windowing, and delivery flags.
     # Raised by about 500 characters for what the model gets back: the
     # description says the reply summarizes each trace and that attach_plot

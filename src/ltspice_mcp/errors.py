@@ -15,6 +15,7 @@ def compact_validation_error(
     field_owners: Mapping[str, Sequence[str]] | None = None,
     nested: Mapping[str, Sequence[str]] | None = None,
     renamed: Mapping[str, str] | None = None,
+    removed: Mapping[str, str] | None = None,
     accepted: Mapping[str, Sequence[str]] | None = None,
     branches: Mapping[str, Mapping[str, Sequence[str]]] | None = None,
 ) -> str:
@@ -27,7 +28,8 @@ def compact_validation_error(
     tool retired its name is referred to the one that replaced it, by
     ``renamed``, keyed by that place as a client writes it (``raw_file``,
     ``sources[].raw_path``; a union's branch name is no part of it, since a
-    client never writes one). An unknown field with no such referral is
+    client never writes one), or told why it was removed, by ``removed``,
+    keyed the same way. An unknown field with no such referral is
     answered with the
     names its place takes, from ``accepted`` (the place spelled as the
     reference table spells it: ``""`` for the tool's own arguments,
@@ -41,6 +43,7 @@ def compact_validation_error(
     if not isinstance(exc, ValidationError):
         return str(exc)
     renamed = renamed or {}
+    removed = removed or {}
     nested = nested or {}
     field_owners = field_owners or {}
     accepted = accepted or {}
@@ -49,16 +52,17 @@ def compact_validation_error(
     #: The names of every union branch, which a location carries and a place does not.
     tags = frozenset(name for fields in branches.values() for name in fields)
 
-    def referral(field: str, replaced_by: str | None = None) -> str:
+    def referral(field: str, replaced_by: str | None = None, why: str | None = None) -> str:
+        # A client that checks a call against its own copy of the tool's
+        # arguments keeps sending a retired name while that copy lists it.
+        stale = (
+            f" If your copy of this tool's arguments still lists {field!r}, it is "
+            "out of date: reload the tool's definition or reconnect this server."
+        )
         if replaced_by is not None:
-            # A client that checks a call against its own copy of the tool's
-            # arguments refuses the new name while that copy lists the old one.
-            new = replaced_by.rpartition(".")[2]
-            return (
-                f" {field!r} is now {new!r}. If your copy of this tool's "
-                f"arguments still lists {field!r}, it is out of date: reload the "
-                "tool's definition or reconnect this server."
-            )
+            return f" {field!r} is now {replaced_by.rpartition('.')[2]!r}.{stale}"
+        if why is not None:
+            return f" {field!r} was removed: {why}.{stale}"
         text = ""
         if nested.get(field):
             text += f" This tool takes {field!r} as {' or '.join(nested[field])}."
@@ -108,6 +112,8 @@ def compact_validation_error(
         written = _place(loc, tags)
         if written in renamed:
             sentence = referral(field, renamed[written])
+        elif written in removed:
+            sentence = referral(field, why=removed[written])
         elif len(loc) == 1 and (field in nested or field in field_owners):
             sentence = referral(field)
         else:
@@ -387,7 +393,8 @@ class RecipeInvalidError(LTSpiceMCPError):
 
 class InvalidCursorError(LTSpiceMCPError):
     """A page cursor did not decode, failed its integrity check, or was minted
-    for another listing, view, request or result set.
+    for another listing, view, request or result set, or for a file that has
+    changed since.
 
     One type for every tool's cursors, so the same mistake carries the same
     code on every tool, and its recovery is the one that applies: send back

@@ -479,6 +479,18 @@ def test_unbalanced_brace_is_a_parse_failure_naming_the_line() -> None:
     assert exc.value.line == 3
 
 
+@pytest.mark.parametrize("directive", [".tran 0 1m )", '.include "models.lib', ".lib (tt"])
+def test_a_directive_with_a_bracket_left_open_is_a_parse_failure_naming_the_line(
+    directive: str,
+) -> None:
+    # The graph is never partial: the include and section readers raise on an
+    # unreadable reference only, so the walk refuses every unreadable directive.
+    bad = f"* t\nVin in 0 5\nR1 in 0 1k\n{directive}\n.end\n"
+    with pytest.raises(NetlistGraphError, match="malformed directive") as exc:
+        parse_netlist_graph(bad)
+    assert exc.value.line == 4
+
+
 def test_unclosed_subckt_is_a_parse_failure() -> None:
     bad = "* t\nVin in 0 5\n.subckt LEAK a b\nR1 a b 1k\n.end\n"
     with pytest.raises(NetlistGraphError):

@@ -16,6 +16,7 @@ from ltspice_mcp.lib.spice_validator import (
     validate_netlist_dangling_nodes,
     validate_netlist_directive_refs,
 )
+from tests.conftest import FIXTURES_DIR
 
 
 def _ids(
@@ -102,6 +103,12 @@ _SEED_CASES = [
         None,
         "LTspice",
     ),
+    (
+        "meas-unclosed-paren-ltspice",
+        "V1 in 0 1\nR1 in 0 1k\n.tran 1m\n.meas tran x FIND V(in AT 0.5m\n.end\n",
+        None,
+        "LTspice",
+    ),
     ("byte-85-ltspice", _BYTE_85_DECK, None, "LTspice"),
     ("node-control-byte-ltspice", _EURO_NODE_DECK, None, "LTspice"),
     (
@@ -161,6 +168,12 @@ _SEED_CASES = [
     (
         "duplicate-param",
         "V1 d 0 1\nM1 d d 0 0 NMOS w=1u W=2u\n.model NMOS NMOS\n.op\n.end\n",
+        None,
+        "LTspice",
+    ),
+    (
+        "unreadable-card",
+        "V1 in 0 1\nR1 in 0 {1k\n.op\n.end\n",
         None,
         "LTspice",
     ),
@@ -896,3 +909,115 @@ def test_byte_85_in_an_include_is_found_in_the_include(tmp_path: Path):
 def test_a_node_name_in_a_utf8_deck_holds_no_control_byte(tmp_path: Path):
     """In UTF-8 a euro sign is three bytes LTspice reads as one character."""
     assert "node-control-byte-ltspice" not in _ids(_EURO_NODE_DECK, tmp_path, codec="utf-8")
+
+
+# A resistor with an unclosed brace and a .model with an unclosed quote: no
+# rule can split either card into its parts.
+_UNREADABLE = (
+    "* t\nV1 in 0 5\nR1 in out {1k\nC1 out 0 1n\n"
+    '.model D1 D(IS="1e-14\n.meas op vr FIND I(R1)\n.op\n.end\n'
+)
+
+
+def test_a_card_no_rule_can_read_is_reported_where_it_is(tmp_path):
+    findings = lint_deck(_UNREADABLE, tmp_path / "deck.cir", "ltspice", "LTspice")
+
+    unread = [f for f in findings if f["rule_id"] == "unreadable-card"]
+    assert [f["at"]["line"] for f in unread] == [3, 5]
+    part, model = (f["evidence"]["detail"] for f in unread)
+    assert "the checks could not split this card" in part
+    assert "Check for a missing } matching the {." in part
+    # Only a card that may connect nodes has its words counted as connected.
+    assert "count as connected and defined" in part
+    assert "count as connected" not in model
+    assert RULES_BY_ID["unreadable-card"].disposition == "warning"
+
+
+def test_an_include_that_cannot_be_read_in_a_live_file_leaves_models_unknown(tmp_path):
+    """A live include holding an include card it cannot read: which file that
+    card names, and so which models it declares, is not known. The scanner's
+    error escaped lint_deck; now no model is reported missing on the guess,
+    and the reply says so at that card."""
+    (tmp_path / "live.inc").write_text('.include "models.lib\n')
+    deck = '* t\n.include "live.inc"\nV1 a 0 1\nD1 a 0 mydiode\n.op\n.end\n'
+
+    findings = lint_deck(deck, tmp_path / "deck.cir", "ltspice", "LTspice")
+
+    assert "model-missing" not in {f["rule_id"] for f in findings}
+    (unread,) = [f for f in findings if f["rule_id"] == "unreadable-card"]
+    assert unread["at"] == {"file": str(tmp_path / "live.inc"), "line": 1}
+    assert "model-missing reported nothing" in unread["evidence"]["detail"]
+    readable = deck.replace("live.inc", "other.inc")
+    (tmp_path / "other.inc").write_text("* nothing here\n")
+    assert "model-missing" in _ids(readable, tmp_path)
+
+
+def test_a_card_that_cannot_be_read_in_a_staged_include_is_reported_there(tmp_path):
+    staged = tmp_path / "staged" / "parts.inc"
+    deck = '* t\n.include "parts.inc"\nV1 a 0 1\n.op\n.end\n'
+
+    findings = lint_deck(
+        deck,
+        tmp_path / "deck.cir",
+        "ltspice",
+        "LTspice",
+        includes=[(staged, "R9 a 0 1k\nR1 a 0 {1k\n", "utf-8")],
+    )
+
+    (unread,) = [f for f in findings if f["rule_id"] == "unreadable-card"]
+    assert unread["at"] == {"file": str(staged), "line": 2}
+
+
+def test_a_measurement_with_a_parenthesis_left_open_blocks_an_ltspice_run(tmp_path):
+    """LTspice 26 refuses the recorded deck at that .meas and runs nothing;
+    XVII runs it without the measurement (log/meas_bad_syntax). What ngspice
+    does with it is not recorded, so there it is the warning any card no rule
+    can read is."""
+    source = FIXTURES_DIR / "ltspice_recorded" / "inputs" / "log" / "meas_bad_syntax.cir"
+    deck = source.read_text(encoding="utf-8")
+
+    def found(family: str) -> list[tuple[str, int]]:
+        findings = lint_deck(deck, tmp_path / "deck.cir", family, None)
+        return [
+            (f["rule_id"], f["at"]["line"])
+            for f in findings
+            if f["rule_id"] in ("meas-unclosed-paren-ltspice", "unreadable-card")
+        ]
+
+    assert found("ltspice") == [("meas-unclosed-paren-ltspice", 7)]
+    assert found("ngspice") == [("unreadable-card", 7)]
+    assert RULES_BY_ID["meas-unclosed-paren-ltspice"].disposition == "blocking"
+
+
+# A directive with a bracket or quote left open: each was read for its name or
+# parts by some rule, which raised the lexer's error out of lint_deck.
+_OPEN_DIRECTIVES = [
+    ".tran 0 1m )",
+    ".save V(in",
+    ".param r={1k",
+    ".step param r list (1k 2k",
+    ".options plotwinsize=(0",
+]
+
+
+@pytest.mark.parametrize("family", ["ltspice", "ngspice"])
+@pytest.mark.parametrize("directive", _OPEN_DIRECTIVES)
+def test_a_directive_no_rule_can_read_is_reported_not_raised(tmp_path, family, directive):
+    deck = f"* t\nV1 in 0 1\nR1 in 0 {{r}}\n.param r=1k\n{directive}\n.op\n.end\n"
+
+    findings = lint_deck(deck, tmp_path / "deck.cir", family, None)
+
+    unread = [f for f in findings if f["rule_id"] == "unreadable-card"]
+    assert [(f["at"]["line"], f["subject"]) for f in unread] == [(5, directive)]
+
+
+def test_a_save_no_rule_can_read_may_save_what_a_measurement_asks_for(tmp_path):
+    # '.save V(in' may save V(in); the other .save does not, so reading only it
+    # would refuse the measurement on a guess.
+    deck = (
+        "* t\nV1 in 0 1\nR1 in out 1k\nC1 out 0 1n\n.save V(out)\n.save V(in\n"
+        ".meas tran vin MAX V(in)\n.tran 1m\n.end\n"
+    )
+
+    assert "save-meas-coverage" not in _ids(deck, tmp_path)
+    assert "save-meas-coverage" in _ids(deck.replace(".save V(in\n", ""), tmp_path)

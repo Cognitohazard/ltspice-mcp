@@ -634,8 +634,10 @@ class TestSecurity:
         result = await shared_session.call_tool("verify_circuit", {"path": "/etc/passwd"})
         _assert_tool_error(result, "outside allowed directories")
         # The guidance must name the roots that ARE allowed, or the caller
-        # cannot tell where to put the file instead.
-        assert str(shared_work_dir) in tool_text(result)
+        # cannot tell where to put the file instead. Read the structured
+        # hint: the text block is JSON, which escapes a Windows path's
+        # backslashes.
+        assert str(shared_work_dir) in _data(result)["hint"]
 
     async def test_analyze_results_source_outside_sandbox_blocked(
         self, shared_session: ClientSession, shared_work_dir: Path

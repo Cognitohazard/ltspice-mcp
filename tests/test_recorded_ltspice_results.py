@@ -817,6 +817,63 @@ def test_every_reader_finds_a_step_parameter_whatever_its_case(
     assert [group["by"] for group in groups] == [{"R": 1000.0}, {"R": 2000.0}, {"R": 4000.0}]
 
 
+def says_subcircuit_pin(text: str) -> None:
+    """``text`` says IN is a pin of x1, lists x1's pins, and names the current."""
+    assert "is a pin of subcircuit instance x1" in text.lower(), text
+    assert "pins are in, out" in text.lower(), text
+    assert "ix(x1:in) is the current into the pin" in text.lower(), text
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_every_reader_says_a_subcircuit_pin_is_its_parents_net(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """``export/hier_plain_top_run`` holds ``V(n001)`` and ``V(out)``, the
+    parent's nets on block ``x1``'s pins IN and OUT, and ``Ix(x1:in)``, the
+    current into IN, but no ``V(x1:in)``. Every reader of a signal says that
+    IN is a pin, lists the pins in the order the instance line lists their
+    nets (the raw's ``Backannotation`` line), and names the current: the
+    Python API's trace, a node pair, and analyze_results on this operating
+    point. plot_waveform's is the next test."""
+    raw = rec.stage_run(build, "export/hier_plain_top_run", work_dir)
+    loaded = SyncApi(state_no_sim).load_raw(path=raw)
+    for asked in ("V(x1:in)", "V(X1:IN)", "V(x1:in,out)"):
+        with pytest.raises(ResultError) as refused:
+            loaded.trace(asked)
+        says_subcircuit_pin(str(refused.value))
+    analyzed = SyncApi(state_no_sim).analyze_results(
+        sources=[{"path": str(raw), "label": "run"}],
+        recipes=[{"metric": "value", "key": "v", "expr": "V(x1:in)"}],
+    )
+    (failure,) = analyzed["failures"]
+    says_subcircuit_pin(failure["message"])
+    # A name inside the block that is no pin of it gets no such hint.
+    with pytest.raises(ResultError) as refused:
+        loaded.trace("V(x1:mid)")
+    assert "is a pin" not in str(refused.value)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_plot_waveform_says_a_subcircuit_pin_is_its_parents_net(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """plot_waveform charts no operating point, so its case is the transient
+    ``raw/subckt_names_tran``: TOP is a pin of ``xa``, whose current XVII
+    writes as ``Ix(a:TOP)`` and with no ``Backannotation`` line, so only
+    LTspice 26's reply lists the pins."""
+    raw = rec.stage_run(build, "raw/subckt_names_tran", work_dir)
+    with pytest.raises(ResultError) as refused:
+        await analysis.handle_plot_waveform(
+            analysis.PlotWaveformInput(path=str(raw), signals=["V(xa:top)"], open=False),
+            state_no_sim,
+        )
+    text = str(refused.value).lower()
+    assert "'top' is a pin of subcircuit instance xa" in text, text
+    current = "ix(a:top)" if build == "ltspice17" else "ix(xa:top)"
+    assert f"{current} is the current into the pin" in text, text
+    assert ("pins are top, out" in text) == (build != "ltspice17"), text
+
+
 @pytest.mark.parametrize("build", rec.BUILDS)
 async def test_plot_waveform_finds_a_step_parameter_whatever_its_case(
     build: str, state_no_sim: SessionState, work_dir: Path
@@ -1409,7 +1466,15 @@ class TestMeasurements:
 
     def test_a_directive_that_does_not_parse(self, build: str):
         """LTspice 26 stops before the run and says where; XVII runs, reports
-        the directive and takes the measurements around it."""
+        the directive and takes the measurements around it. The directive
+        check and the lint refuse the parenthesis left open before either."""
+        card = next(c for c in rec.deck_cards("log/meas_bad_syntax.cir") if c.name == "broken")
+        error = validate_directive(card.body, "LTspice")
+        assert error is not None
+        assert error.rule_name == "meas_unclosed_paren"
+        assert _lint_refusals("log/meas_bad_syntax") == [
+            ("meas-unclosed-paren-ltspice", ".meas tran broken FIND V(out AT 0.5m")
+        ]
         log = rec.recorded(build, "log/meas_bad_syntax.log")
         diagnostics = extract_log_diagnostics(log)
         if rec.generation(build) == "xvii":
@@ -1421,6 +1486,8 @@ class TestMeasurements:
             assert block.splitlines()[0].endswith('(7): Expected ")" here.')
             (failed,) = diagnostics["meas_errors"]
             assert failed["directive"] == ".meas tran broken FIND V(out AT 0.5m"
+            # The relayed failure carries the directive check's fix.
+            assert failed["suggestion"] == error.suggestion
 
 
 #: How long log/meas_trig runs: two whole periods of its 1 kHz sine of amplitude 1.

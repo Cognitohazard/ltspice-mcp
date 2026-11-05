@@ -46,7 +46,7 @@ from ltspice_mcp.lib.projection import (
     resolve_field_paths,
 )
 from ltspice_mcp.lib.raw_parser import other_raw_path
-from ltspice_mcp.lib.sheet_results import run_by_ltspice
+from ltspice_mcp.lib.sheet_results import run_by_ltspice, sheets_reported
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze
@@ -1055,11 +1055,15 @@ def snapshot_receipt(
             live = live_progress.get(case.case_id)
             if live is not None:
                 observations.append(copy.deepcopy(live))
+    # A sheet the job's own placement reported on has its own observation.
+    reported = sheets_reported(job.observations)
     sheets = sorted(
         {
             case.circuit_path.name
             for case in job.cases
-            if case.status == "produced" and is_asc(case.circuit_path)
+            if case.status == "produced"
+            and is_asc(case.circuit_path)
+            and str(case.circuit_path) not in reported
         }
     )
     if sheets and run_by_ltspice(job.simulator):

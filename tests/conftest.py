@@ -1160,14 +1160,29 @@ def property_names(schema: typing.Any) -> set[str]:
 
 
 def tool_text(result) -> str:
-    """The text channel of a tool result — the message a failing call carries."""
+    """The message a tool result carries: a failed call's ``error``, or any
+    other reply's text block as it is."""
     from mcp import types
 
+    structured = result.structured_content or {}
+    if result.is_error and isinstance(structured.get("error"), str):
+        return structured["error"]
     first = result.content[0]
     assert isinstance(first, types.TextContent), (
         f"expected a text content block, got {type(first).__name__}"
     )
     return first.text
+
+
+def text_json(result) -> dict:
+    """A reply's one text block, parsed: the server writes it as the reply's
+    ``structuredContent`` serialized."""
+    import json
+
+    from mcp import types
+
+    (block,) = [block for block in result.content if isinstance(block, types.TextContent)]
+    return json.loads(block.text)
 
 
 @pytest.fixture
@@ -1931,19 +1946,9 @@ def _enforce_output_schema_conformance():
             frame = frame.f_back
 
     original_format = base_mod.format_response
-    original_json = base_mod.json_response
 
-    def checked_format_response(text, data, fmt=None):
-        result = original_format(text, data, fmt)
-        # fmt="json" delegates to the (also patched) json_response, which
-        # already validated this result — don't pay the stack walk and
-        # schema validation twice per emission.
-        if fmt != "json":
-            _validate(result, data)
-        return result
-
-    def checked_json_response(data):
-        result = original_json(data)
+    def checked_format_response(text, data):
+        result = original_format(text, data)
         _validate(result, data)
         return result
 
@@ -1955,21 +1960,20 @@ def _enforce_output_schema_conformance():
     # @declare_output_schema but register no tool, or that only builds
     # responses for a handler elsewhere, leaving its emissions unvalidated.
     #
-    # Known limitation: only bindings literally named format_response /
-    # json_response are patched — an aliased import (``from _base import
-    # format_response as fr``) or a module-local wrapper would escape the
-    # check. tests/test_conformance_hook_armed.py proves the patch chain is
-    # live for the canonical binding; it cannot prove no alias exists. Keep
-    # the canonical names when adding tool modules.
-    saved = []
-    for mod in tool_modules() | {base_mod, tools_pkg}:
-        for attr, checked, orig in (
-            ("format_response", checked_format_response, original_format),
-            ("json_response", checked_json_response, original_json),
-        ):
-            if getattr(mod, attr, None) is orig:
-                saved.append((mod, attr, orig))
-                setattr(mod, attr, checked)
+    # Known limitation: only a binding literally named format_response is
+    # patched — an aliased import (``from _base import format_response as
+    # fr``) or a module-local wrapper would escape the check.
+    # tests/test_conformance_hook_armed.py proves the patch chain is live for
+    # the canonical binding; it cannot prove no alias exists. Keep the
+    # canonical name when adding tool modules.
+    name = "format_response"
+    patched = [
+        mod
+        for mod in tool_modules() | {base_mod, tools_pkg}
+        if getattr(mod, name, None) is original_format
+    ]
+    for mod in patched:
+        setattr(mod, name, checked_format_response)
     yield
-    for mod, attr, orig in saved:
-        setattr(mod, attr, orig)
+    for mod in patched:
+        setattr(mod, name, original_format)

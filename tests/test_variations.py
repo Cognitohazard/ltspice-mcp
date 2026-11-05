@@ -492,6 +492,85 @@ class TestRandomExpansion:
         draws = [case.assignments["random:component:R1"] for case in first]
         assert len(set(draws)) == 3
 
+    def test_a_sample_keeps_its_draws_when_other_cases_are_added(self, tmp_path: Path):
+        """A sample's draws follow from what the sample is (the seed, the
+        circuit, the sample index and its assign values), not from where it
+        falls in the case list. Adding a corner must not redraw the corners a
+        caller already ran."""
+        circuit = _deck(tmp_path / "dut.cir")
+
+        def draws(gains: list[int]) -> dict[tuple[int, int], float]:
+            variations: list[Variation] = [
+                AssignVariation.model_validate({"kind": "assign", "assign": {"gain": gains}}),
+                _random(seed=11, runs=3),
+            ]
+            expanded = expand_variations([circuit], variations)
+            cases = materialize_variants(circuit, expanded, tmp_path / f"gains{len(gains)}")
+            return {
+                (case.assignments["gain"], case.assignments["_random_run"]): case.assignments[
+                    "random:component:R1"
+                ]
+                for case in cases
+            }
+
+        alone = draws([2])
+        widened = draws([1, 2])
+
+        assert {key: widened[key] for key in alone} == alone
+
+    def test_a_sample_draws_the_same_values_at_every_assign_value(self, tmp_path: Path):
+        """Every case of one sample draws the same values, so a swept corner
+        compares the same die at each value instead of a new one per value."""
+        circuit = _deck(tmp_path / "dut.cir")
+        variations: list[Variation] = [
+            AssignVariation.model_validate({"kind": "assign", "assign": {"gain": [1, 2, 3]}}),
+            _random(seed=11, runs=2),
+        ]
+
+        cases = materialize_variants(
+            circuit, expand_variations([circuit], variations), tmp_path / "out"
+        )
+
+        by_sample: dict[int, set[float]] = {}
+        for case in cases:
+            by_sample.setdefault(case.assignments["_random_run"], set()).add(
+                case.assignments["random:component:R1"]
+            )
+        assert {sample: len(values) for sample, values in by_sample.items()} == {0: 1, 1: 1}
+        assert by_sample[0] != by_sample[1]
+
+    def test_one_sample_replays_alone_from_sample_start(self, tmp_path: Path):
+        """sample_start runs sample k by itself, and with the same seed it draws
+        what sample k drew in the full run."""
+        circuit = _deck(tmp_path / "dut.cir")
+        full = materialize_variants(
+            circuit, expand_variations([circuit], [_random(seed=5, runs=4)]), tmp_path / "full"
+        )
+        replay = RandomVariation.model_validate(
+            {**_random(seed=5, runs=1).model_dump(), "sample_start": 2}
+        )
+
+        (case,) = materialize_variants(
+            circuit, expand_variations([circuit], [replay]), tmp_path / "replay"
+        )
+
+        assert case.assignments["_random_run"] == 2
+        assert (
+            case.assignments["random:component:R1"] == full[2].assignments["random:component:R1"]
+        )
+
+    def test_every_case_records_the_seed_it_was_drawn_from(self, tmp_path: Path):
+        """The job record keeps each case's assignments and not the request, so
+        the seed goes on every case beside its sample index: without it a
+        reader of the record cannot replay a sample."""
+        circuit = _deck(tmp_path / "dut.cir")
+
+        cases = materialize_variants(
+            circuit, expand_variations([circuit], [_random(seed=9, runs=2)]), tmp_path / "out"
+        )
+
+        assert [case.assignments["_random_seed"] for case in cases] == [9, 9]
+
     def test_case_cap_applies_after_cross_circuit_expansion(self, tmp_path: Path):
         first = _deck(tmp_path / "a.cir", "a")
         second = _deck(tmp_path / "b.cir", "b")
@@ -1274,7 +1353,9 @@ class TestStructuredWriteConflicts:
             line for line in case.text.splitlines() if line.lower().startswith(".param p=")
         )
         assert float(param_line.split("=", 1)[1]) == pytest.approx(draw)
-        assert draw == pytest.approx(1896.62575638)
+        # The rule perturbs the assigned 2k, within its 10%, not the deck's 1k.
+        assert draw != 2000.0
+        assert abs(draw / 2000.0 - 1) <= 0.1
         assert case.assignments["p"] == "2k"
         assert ("R2 b 0 3k" in case.text) == with_disjoint_edit
 
@@ -1327,54 +1408,55 @@ class TestStructuredWriteConflicts:
 
 
 class TestSeedStability:
-    def test_single_file_draws_are_bit_identical(self, tmp_path: Path):
-        """Widening a pattern's reach must not move one recorded number.
-
-        Every draw is keyed by the name of what it perturbs, never by a
-        position in a match list, so reaching further can only add draws. These
-        literals were recorded before that change; a diff here means a shipped
-        Monte Carlo silently reports different values for the same seed.
-        """
-        circuit = _deck(tmp_path / "dut.cir")
-        variation = RandomVariation.model_validate(
-            {
-                "kind": "random",
-                "runs": 2,
-                "seed": 1234,
-                "rules": [
-                    {"rule": "component", "target": "R1", "tolerance": 0.1},
-                    {"rule": "param", "target": "gain", "tolerance": 0.2},
-                    {"rule": "model", "target": "NM", "param": "VTO", "tolerance": 0.15},
-                    {"rule": "mismatch", "prefix": "M", "AVT": 3e-3, "AK": 0.02},
-                ],
-            }
+    def test_reaching_further_or_adding_a_rule_moves_no_existing_draw(self, tmp_path: Path):
+        """Every draw is keyed by the name of what it perturbs, never by a
+        position in a match list or among the rules, so widening a pattern or
+        adding a rule can only add draws: the ones already drawn stay put."""
+        text = (
+            "R1 in out 1k\nR2 out 0 2k\nV1 in 0 1\n.param gain=2\n"
+            ".model NM NMOS(VTO=0.7 KP=100u)\n"
+            "M1 out in 0 0 NM W=10u L=1u\nM2 out in 0 0 NM W=10u L=1u\n.op\n.end\n"
         )
+        path = tmp_path / "dut.cir"
+        path.write_text(text)
+        circuit = CircuitDeck("dut", path, text)
 
-        cases = materialize_variants(
-            circuit,
-            expand_variations([circuit], [variation]),
-            tmp_path / "out",
+        def draws(rules: list[dict[str, object]], name: str) -> list[dict[str, float]]:
+            variation = RandomVariation.model_validate(
+                {"kind": "random", "runs": 2, "seed": 1234, "rules": rules}
+            )
+            cases = materialize_variants(
+                circuit, expand_variations([circuit], [variation]), tmp_path / name
+            )
+            return [
+                {
+                    key: value
+                    for key, value in case.assignments.items()
+                    if key.startswith("random:")
+                }
+                for case in cases
+            ]
+
+        narrow = draws(
+            [
+                {"rule": "component", "target": "R1", "tolerance": 0.1},
+                {"rule": "mismatch", "prefix": "M1", "AVT": 3e-3, "AK": 0.02},
+            ],
+            "narrow",
+        )
+        wide = draws(
+            [
+                {"rule": "param", "target": "gain", "tolerance": 0.2},
+                {"rule": "component", "target": "R*", "tolerance": 0.1},
+                {"rule": "mismatch", "prefix": "M", "AVT": 3e-3, "AK": 0.02},
+            ],
+            "wide",
         )
 
         assert [
-            {key: value for key, value in case.assignments.items() if key.startswith("random:")}
-            for case in cases
-        ] == [
-            {
-                "random:component:R1": 958.0617667513966,
-                "random:mismatch:M1.KP": 0.00010148208338562579,
-                "random:mismatch:M1.VTO": 0.757990883147177,
-                "random:model:NM.VTO": 0.7579506983921265,
-                "random:param:gain": 1.9558313266252403,
-            },
-            {
-                "random:component:R1": 976.05993006425,
-                "random:mismatch:M1.KP": 0.00010097882808618597,
-                "random:mismatch:M1.VTO": 0.6759447769918987,
-                "random:model:NM.VTO": 0.6753772591338416,
-                "random:param:gain": 1.9275251793846904,
-            },
-        ]
+            {key: wider[key] for key in kept} for kept, wider in zip(narrow, wide, strict=True)
+        ] == narrow
+        assert all(set(wider) > set(kept) for kept, wider in zip(narrow, wide, strict=True))
 
 
 PDK_DECK = (
@@ -1996,3 +2078,104 @@ def test_a_card_added_before_end_takes_the_decks_line_breaks(tmp_path: Path, rul
 
     assert case.text.count("\r\n") > text.count("\r\n")
     assert "\n" not in case.text.replace("\r\n", "")
+
+
+# A card with a brace left open cannot be split into its parts, so what it
+# declares is not known. A variation of a name it may declare was made on
+# another copy, or a set left it out, and reported a whole edit.
+_PARAM = AssignVariation(kind="assign", assign={"r": ["5k"]})
+_PART = AssignVariation(kind="assign", assign={"R1": ["5k"]})
+_SUBCKT_R1 = "X1 in S\n.subckt S a\nR1 a 0 1k\n.ends S\n"
+_UNREAD_TARGETS = {
+    # (deck, variation, what the refusal names, the card's text)
+    "param beside a copy that can be read": (
+        "* t\nV1 in 0 1\nR1 in 0 {r}\n.param r=1k\n.param r={2k\n.op\n.end\n",
+        _PARAM,
+        ".param",
+        ".param r={2k",
+    ),
+    "param alone": (
+        "* t\nV1 in 0 1\nR1 in 0 {r}\n.param r={2k\n.op\n.end\n",
+        _PARAM,
+        ".param",
+        ".param r={2k",
+    ),
+    "random param": (
+        "* t\nV1 in 0 1\nR1 in 0 {r}\n.param r={2k\n.op\n.end\n",
+        _random_rule({"rule": "param", "target": "r", "tolerance": 0.1}),
+        ".param",
+        ".param r={2k",
+    ),
+    # The top-level R1 cannot be read; the readable R1 inside S was edited.
+    "part beside a copy in a subcircuit": (
+        f"* t\nV1 in 0 1\nR1 in 0 {{1k\n{_SUBCKT_R1}.op\n.end\n",
+        _PART,
+        "part",
+        "R1 in 0 {1k",
+    ),
+    "part alone": ("* t\nV1 in 0 1\nR1 in 0 {1k\n.op\n.end\n", _PART, "part", "R1 in 0 {1k"),
+    # A glob left out the R1 it could not read.
+    "part in a random glob": (
+        "* t\nV1 in 0 1\nR1 in 0 {1k\nR2 in 0 1k\n.op\n.end\n",
+        _random_rule({"rule": "component", "target": "R*", "tolerance": 0.1}),
+        "part",
+        "R1 in 0 {1k",
+    ),
+    # The lexer's error escaped the edit of the .model.
+    "random model": (
+        "* t\nV1 in 0 1\nD1 in 0 DX\n.model DX D(Is=1e-14\n.op\n.end\n",
+        _random_rule({"rule": "model", "target": "DX", "param": "Is", "tolerance": 0.1}),
+        ".model",
+        ".model DX D(Is=1e-14",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(_UNREAD_TARGETS))
+def test_a_target_a_card_that_cannot_be_read_may_declare_is_refused_by_its_line(
+    tmp_path: Path, case: str
+):
+    deck_text, variation, what, card = _UNREAD_TARGETS[case]
+    path = tmp_path / "d.cir"
+    path.write_text(deck_text)
+    deck = CircuitDeck("dut", path, deck_text)
+
+    with pytest.raises(VariationError) as excinfo:
+        materialize_variants(deck, expand_variations([deck], [variation]), tmp_path / "out")
+
+    assert excinfo.value.code == "ambiguous_target"
+    line = deck_text.splitlines().index(card) + 1
+    message = str(excinfo.value)
+    assert f"may name the {what} " in message, message
+    assert f"on line {line} of d.cir, which could not be read" in message, message
+    assert "Check for a missing" in message, message
+
+
+def test_a_param_that_cannot_be_read_leaves_the_other_targets_alone(tmp_path: Path):
+    text = "* t\nV1 in 0 1\nR1 in 0 {r}\n.param r=1k\n.param q={2k\n.op\n.end\n"
+    path = tmp_path / "d.cir"
+    path.write_text(text)
+    deck = CircuitDeck("dut", path, text)
+    variation = AssignVariation(kind="assign", assign={"r": ["5k"]})
+
+    (variant,) = materialize_variants(deck, expand_variations([deck], [variation]), tmp_path / "o")
+
+    assert ".param r=5k" in variant.text
+    assert ".param q={2k" in variant.text
+
+
+def test_source_lineage_reads_past_a_directive_that_cannot_be_read(tmp_path: Path):
+    # A recoverable run records each case's source lineage through the
+    # hierarchy walk, which split every card and raised on this one.
+    text = "* t\nV1 in 0 1\nR1 in 0 1k\n.tran 0 1m )\n.end\n"
+    path = tmp_path / "d.cir"
+    path.write_text(text)
+    deck = CircuitDeck(
+        "dut", path, text, semantic_profile=SemanticProfile("ltspice"), record_source_lineage=True
+    )
+
+    (variant,) = materialize_variants(
+        deck, expand_variations([deck], [], validate_applies_to=False), tmp_path / "out"
+    )
+
+    assert ".tran 0 1m )" in variant.text

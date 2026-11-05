@@ -114,7 +114,7 @@ Codes by kind of failure:
 | `analysis_deadline` | a result read ran past its wall-clock bound and was abandoned |
 | `no_axis` | the selected plot is a table (an operating point, `.tf` or `.pz` result), so it has no sweep axis to query at |
 | `job_not_found` | no job with that `job_id` or `request_id` |
-| `invalid_cursor` | a page cursor did not decode, or was minted for another listing, view or request; the `hint` says to send back the cursor the same tool returned |
+| `invalid_cursor` | a page cursor did not decode, or was minted for another listing, view or request, or for a file that has changed since; the `hint` says to send back the cursor the same tool returned, or the message names the argument to change |
 | `idempotency_conflict` | a `request_id` was reused for a different payload |
 | `request_gate_busy` | another submission holds that `request_id`; retry with the same id |
 | `cancel_not_authorized` | the call reached a server process other than the one running the job (the job's owning process) and presented no matching `control_token` |
@@ -140,6 +140,8 @@ Codes named after the stage, used where the stage is the more useful fact:
 **Page object.** No tool returns an unbounded collection. Every collection
 that can be large is a page, `{items, total, returned, truncated,
 next_cursor}`, and every tool that returns a page accepts its cursor as input.
+`verify_circuit`'s `findings` is one list with a cap per rule instead: a rule
+cut at the cap has a `findings_omitted` entry with its own cursor (§3.5).
 
 An `inspect` item's `page` names the data key its cursor pages in a
 `collections {<data key>: {total, returned, truncated}}` block, which is how
@@ -166,7 +168,7 @@ facts and the caller judges them.
 and `subject` are required on every finding a caller is expected to fix.
 
 **Self-sufficiency.** `structuredContent` contains everything the caller needs,
-including any `hint`; the text channel is presentation only. When a sandbox
+including any `hint`, and the text block carries it serialized. When a sandbox
 (`allowed_paths`) is set, every path a caller passes is checked against it.
 Work on a `.asc` takes a cross-process lock on that circuit, so calls from
 different sessions on one file run one at a time, and a call that waits more
@@ -218,11 +220,10 @@ a series keeps its place. An object left empty once its silent fields are gone
 is left out in turn.
 
 One function applies the rule to every reply, on its way out of the server:
-`structuredContent`, the text block when `[tools] text_channel = "json"`, and
-the Python API's complete results, which therefore have the same shape. The
-summary text follows the rule too and does not state an empty result. A
-number that is not finite is the exception: the reply writes it as null at its
-place and names it in `warnings`. Output schemas mark every field a reply may
+`structuredContent`, the text block that serializes it, and the Python API's
+complete results, which therefore have the same shape. A number that is not
+finite is the exception: the reply writes it as null at its place and names it
+in `warnings`. Output schemas mark every field a reply may
 leave out as optional. A field is kept anyway only when its empty, null or
 false value is itself the answer. The table lists those fields for each tool,
 wherever they appear in its reply, and is the whole exemption:
@@ -272,16 +273,15 @@ valid call. `inspect(kind: "capabilities")` reports the session's mode as
 connection and no call changes them. The server accepts the same calls in both
 modes, and dispatch, validation and responses are identical.
 
-**Text channel.** `[tools] text_channel` (or `LTSPICE_MCP_TEXT_CHANNEL`) sets
-what a reply's text block holds beside its `structuredContent`. `summary`, the
-default, is a one-line summary, because a client that reads
-`structuredContent` shows the model that and drops the text, so the data is
-not sent twice. `json` replaces the text blocks with the serialized
-`structuredContent`, as the MCP specification recommends for a client that
-passes only the text to the model; such a client's model otherwise reads the
-summary alone. Image blocks stay, and a reply with no `structuredContent`
-keeps its text. `inspect(kind: "capabilities")` reports the mode as
-`text_channel`.
+**Text block.** A reply's one text block is its `structuredContent`
+serialized as compact JSON, as the MCP specification recommends ("a tool that
+returns structured content SHOULD also return the serialized JSON in a
+TextContent block"). A failed call's text is its `{error, code, hint?,
+suggestions?}` that way, so a client that shows the model only the text of
+an error, as Claude Code does, still gives it the code and the recovery hint.
+Image blocks stay beside it, and a reply with no `structuredContent` keeps its
+text. A client that shows the model both channels sends the data twice; the
+specification accepts that cost.
 
 Three recipes, `periodic`, `return_loss` and `noise_integral`, are published
 in both modes as only their `metric` value and a one-sentence description that
@@ -460,7 +460,8 @@ variations           list[Variation]    Appendix A.1. assign entries combine by
 execution            {wait_s?, run_timeout_s?, job_deadline_s?, max_parallel?,
                       simulator?: "ltspice"|"ngspice"|"qspice"|"xyce"|
                                   "<family>:<name>", recoverable?: bool,
-                      simulator_seed?: int, keep_partial_raw?: bool}
+                      simulator_seed?: int, keep_partial_raw?: bool,
+                      results_beside_sheet?: bool}
 analyze              {recipes: list[Recipe], group_by?, step?, all_steps?,
                       plot_index?, dialect?, include?}
                                         attached analysis stage; `recipes` is
@@ -688,7 +689,9 @@ copies, so editing an original afterwards does not change the job, and every
 reported number cites the hash of the deck that produced it.
 
 By default, a reference that cannot be staged fails that circuit's submission
-with an `include_unstaged` error naming the reference. With
+with an `include_unstaged` error naming the reference. An include or library
+card with a quote or bracket left open, or a closer with nothing open,
+always does, at its line, since which file it names is not known. With
 `allow_live_includes: true`, runs read those files in place, the manifest
 marks them `live: true`, and an observation reports the weaker provenance.
 Every live reference is listed.
@@ -795,6 +798,29 @@ beside the sheet it ran, where LTspice's window opens a sheet's results. A
 receipt of a job that ran an `.asc` in LTspice contains one
 `results_not_beside_sheet` observation naming the sheets of its produced cases and
 `jobs(action="place_beside_sheet")`, which copies a case's results there.
+
+`execution.results_beside_sheet: true` does that copy as part of the run.
+Once every run has finished, each produced case's results are copied beside
+its sheet under the sheet's name, replacing any there, as the jobs action
+copies them, before the job reaches its final status, so `jobs(wait)` returns
+after the copy; the job folder keeps its own, which every read of the job
+takes. The receipt then has one
+observation per sheet instead of `results_not_beside_sheet`:
+`results_placed_beside_sheet`, whose `evidence` gives the `sheet`, the
+`case_id`, the `files` copied and any `assignments` the sheet does not show,
+or `results_not_placed`, whose `evidence.reason_code` is the code the jobs
+action would refuse with (`sheet_changed` when the sheet was edited during
+the run), `sheet_locked` when another server process held the sheet, or
+`copy_failed`; the last two name the action that copies the results once that
+is fixed. Neither observation costs the job its status. A cancelled job
+copies nothing, and a case that produced nothing leaves its sheet alone.
+The request is refused before it runs (`commit_state: "not_started"`) when a
+circuit is a netlist (`not_a_sheet`), when the job does not run on LTspice
+(`not_ltspice`), and when a sheet would run more than one case, by a
+variation or by being named twice (`several_cases_per_sheet`): a sheet holds
+one run's results, so the caller copies the case it wants afterwards. It
+cannot be combined with `recoverable`, since a resumed job's runs would
+finish without it. Left false, it is not part of the request's identity.
 
 **RunRecord** is a schema fragment shared by `run_experiments` and `jobs`:
 `{case_id?, run_index?, circuit?, assignments?, status?, raw?, log?,
@@ -1566,6 +1592,9 @@ render        {format: "png"|"svg", scale?, max_pixels?,
 in_ltspice    also open the file in the LTspice window the user has running,
               in front; default false
 export_to     "managed" (default) | "sidecar"
+findings_cursor
+              a findings_omitted entry's next_cursor: lists that rule's next
+              25 findings in place of its first
 ```
 
 `compare` (`{reference, anchors, rtol, mode}`) means the same here as in
@@ -1673,10 +1702,10 @@ component's signature is its model or value plus its instance parameters,
 without nodes (`equivalence` is the mode that compares wiring); a parameter
 given twice contributes both copies, so a second copy counts as a change.
 
-Output: findings in the shared shape, a comparison block per mode, a render
-block `{path, sha256, source_sha256, width, height, downscaled,
-returned_inline, svg?, note, …}`, a scene summary, `outcome` and
-`hint`.
+Output: findings in the shared shape, `findings_omitted` for the rules cut
+at the cap (below), a comparison block per mode, a render block `{path,
+sha256, source_sha256, width, height, downscaled, returned_inline, svg?,
+note, …}`, a scene summary, `outcome` and `hint`.
 
 `comparison` is present exactly when `compare` is in `checks_run`. When it is
 not, a `checks_skipped` row says why (no reference supplied, not requested,
@@ -1723,19 +1752,39 @@ move the part or the item its text crosses. `wire_through_symbol` and `text_in_s
 what a part draws, not its box, so a wire or a text anchor in the empty corner
 beside an amplifier's triangle is not in the part.
 
-A cap of 25 findings per rule applies to the layout and quality rules, to the
-value-suffix rules (`value_suffix_micro_sign`, `value_suffix_mojibake`,
-`value_suffix_nonascii`) and to `dropped_wire`. A capped rule other than
-`dropped_wire` adds an observation `<rule>: showing 25 of <n> findings;
-api.verify_circuit returns every one.`, followed by where that runs;
-`dropped_wire` adds none, and `rules_run` gives its full count. The `hint`
-counts every finding, not only those shown.
+A reply lists at most 25 findings of each layout and quality rule, of each
+value-suffix rule (`value_suffix_micro_sign`, `value_suffix_mojibake`,
+`value_suffix_nonascii`) and of `dropped_wire`. A rule with more has an entry
+in `findings_omitted`, keyed by its `rule_id`: `{omitted, total,
+next_cursor}`, where `omitted` counts its findings after the ones listed and
+`total` counts them all. Passing `next_cursor` back as `findings_cursor` lists
+that rule's next 25 findings in place of its first; the entry in that reply
+carries the cursor for the page after, and the last page has none. The rest
+of the reply, `rules_run` included, is the same as without the cursor. The
+`hint` counts every finding, not only those listed, names each rule cut short
+with the check that reports it, so a caller can narrow `checks` to that check
+to skip the others, and on a cursor's page says which findings it lists.
+
+A cursor is bound to every finding of its rule as the call that returned it
+found them, which depends on more than the checked file: the symbols a sheet
+uses, its export, the build that reads a deck. A call that does not run the
+check that reports the rule is refused with `invalid_cursor` before any check
+runs, and the refusal names what to change (add the check to `checks`, or
+leave `render.mode` at `with_checks`). A call whose findings of the rule are
+not the ones the cursor was counted against is refused with `invalid_cursor`
+once they are found, and the refusal says why: the check did not run, with
+its reason; it failed, with its error; or what the findings are read from
+changed. Either refusal says to call again without `findings_cursor`, and
+neither carries the generic cursor hint. A malformed cursor is refused with
+`invalid_cursor` too.
+`api.verify_circuit` returns every finding and takes no `findings_cursor`
+unless called with `raw_page=True`.
 
 **No `baseline` filter.** `verify_circuit` reports on the whole file. To find
 what changed relative to a copy the caller kept, diff the two finding lists,
-which include `rule_id`, `at` and `subject`. Diff the findings
-`api.verify_circuit` returns (through `run_code` or the Python API), which are
-complete and never capped; capped lists do not diff reliably.
+which include `rule_id`, `at` and `subject`. Diff complete lists: follow each
+`findings_omitted` cursor to the end, or diff the findings
+`api.verify_circuit` returns, which are never capped.
 
 ### 3.6 `inspect` — pure read
 
@@ -1767,8 +1816,7 @@ cursors where listed:
     `spice://capabilities/{family}`); job persistence
     (`persist_jobs`); the sandbox (allowed_paths, null when none is set);
     `tool_profile`; the tool listing this session was served
-    (`tool_listing`) and what its replies' text blocks hold
-    (`text_channel`); limits; linter_version; the startup diagnostics
+    (`tool_listing`); limits; linter_version; the startup diagnostics
     (`diagnostics`), which show whether the server started degraded; and
     `render: {png, missing, reason, remedy}` (whether verify_circuit can
     make the PNG it inlines and, if not, whether the `raster` extra is
@@ -2030,6 +2078,7 @@ Suppression is per call, and `linter_version` is reported in provenance.
 | `analysis-count-ltspice` | blocking | refused by LTspice 26 and XVII: two of `.tran`/`.ac`/`.dc`/`.noise` (`.op` may appear with one) |
 | `meas-function-ltspice` | blocking | refused by LTspice 26 and XVII: `vdb()`, `phase()` or `group_delay()` in a `.meas` |
 | `meas-name-ltspice` | blocking | refused by LTspice 26 and XVII: a `.meas` named `e`, `k`, `pi` or `q`, constants of the expression engine |
+| `meas-unclosed-paren-ltspice` | blocking | a `.meas` with a parenthesis left open. LTspice 26 refused the recorded one before the run and ran nothing, and XVII ran that deck without the measurement; any such `.meas` is refused, since LTspice 26's error names the parenthesis, not the form. `verify_circuit`'s `syntax` check reports the same as a `directive_syntax` error, and `edit_schematic` refuses to write it |
 | `lib-section-ltspice` | blocking | refused by LTspice 26 and XVII: `.lib file section`, which LTspice reads as one file name |
 | `byte-85-ltspice` | warning | LTspice: a byte 0x85 in an 8-bit deck or include with a card after it on the line, which LTspice 24 and later read as a line break and XVII does not; not reported when the session's LTspice is known to be XVII |
 | `node-control-byte-ltspice` | warning | LTspice: a node name in an 8-bit file containing a byte from 0x80 to 0x9F, a control character to LTspice, which LTspice 26 refuses and XVII saves under a name the server spells differently |
@@ -2043,6 +2092,7 @@ Suppression is per call, and `linter_version` is reported in provenance.
 | `step-ngspice` | warning | ngspice: a `.step`, which ngspice ignores in batch mode, so the deck runs once at the base value |
 | `temp-as-param` | blocking | a deck that sweeps temperature as a parameter (§3.1) |
 | `duplicate-param` | warning | an instance, `.model` or `.subckt` card giving one parameter more than once, in any case; which copy the simulator reads is not known, and `verify_circuit` reports the same as `duplicate_parameter` |
+| `unreadable-card` | warning | a card no rule can split into its parts: an unclosed quote, brace or parenthesis, or a closer with nothing open. The other rules leave it out. On a part, `.subckt` header or `.global` its words count as connected and defined nodes and names, so no rule reports something on a guess about it; a variation or random rule on a part, `.model` or `.param` name a card like it may declare is refused (`ambiguous_target`). It covers the deck and its staged includes, and an include card in a live include, for which `model-missing` then says nothing. What a simulator does with such a card is recorded only for the `.meas` of `meas-unclosed-paren-ltspice`; `verify_circuit` reports the same as `unreadable_card` |
 | `value-suffix-mojibake` | blocking | a suffix showing the file was decoded in an encoding it was not written in, such as the `Âµ` a UTF-8 `µ` becomes under cp1252; the simulator reads the bare number, off by a factor of 1e6 |
 | `value-suffix-nonascii` | warning | any other symbol after a number, such as `10Ω` or `25°C`, read as the bare number, which is usually the intended value. Staging spells a `µ`/`μ` as `u` before the deck is linted; for a deck run elsewhere `verify_circuit` reports it as one observation per file, or as a warning per value when a reader the server knows of (LTspice XVII) would decode the file differently |
 
@@ -2111,8 +2161,9 @@ each tool's `inputSchema`.
   whatever order the cases run in. See the native PDK contract below for the
   supported profile and the deck it needs.
 
-{kind: "random", id?, runs: int >= 1, seed?: int, applies_to?: [circuit id],
- rules: [RandomRule]}          at most ONE random entry per circuit
+{kind: "random", id?, runs: int >= 1, seed?: int, sample_start?: int >= 0,
+ applies_to?: [circuit id], rules: [RandomRule]}
+                               at most ONE random entry per circuit
 
 RandomRule:
   {rule: "component", target: ref | glob, tolerance, scale:
@@ -2154,6 +2205,18 @@ line sets. An `m` that does not resolve to a positive number refuses the
 request with `mismatch_geometry_unresolved`. Draws across circuits are
 independent; correlated Monte Carlo across decks is not supported.
 
+A random case's draws follow from the seed, its circuit id and its sample
+index, never from the case's position among the request's cases. Every case
+of one sample draws the same values whatever its `assign` values, so a sweep
+compares the same die at each corner, and adding a corner leaves the other
+draws as they were. Sample indices start at `sample_start` (default 0), and
+with the same seed `runs: 1` and `sample_start: k` replay sample k alone. An
+entry without `seed` gets one the server chooses after it has looked the
+request up for a replay, so a retry under the same `request_id` returns the
+job it made. Every case records its sample index as `_random_run`, its seed
+as `_random_seed` and, when the entry has one, its `id` as `_random_id`, in
+its assignments.
+
 ### A.2 Recipe
 
 There are 22 recipes (discriminant values). The shared fields `key` (required
@@ -2194,7 +2257,7 @@ it, and reported when the caller names it.
 | `tone` | tran | `signal`, `frequency_hz` | `window?`; cut to the whole periods of `frequency_hz` that fit from the window's first sample and resampled by linear interpolation onto evenly spaced times, as `thd` does by default, so samples weigh by time. `amplitude` (peak, signal unit), `phase_deg` in (-180, 180] for `dc + amplitude*sin(2*pi*f*t + phase_deg)` with `t` the run's own time from zero, `sin_component`, `cos_component`, `dc`, plus `t_start`, `t_end`, `n_cycles`. Reducible leaves: `amplitude`, `phase_deg`, `dc`, `sin_component`, `cos_component`; a spread of `phase_deg` that straddles 180 degrees reduces the wrapped value, the components do not wrap |
 | `bode_filter` | ac | `signal` | filter characteristics: fc, bw, Q, type; a cutoff is read at the half-power level (-3.0103 dB) below the passband |
 | `bode_point` | ac | `signal`, `at_hz` | gain and phase at a frequency |
-| `bode_crossing` | ac | `signal`, exactly one of `level_db` / `level_deg` | `level_deg` scans the unwrapped phase, so a crossing past 180 degrees is found once rather than at every wrap; `phase_deg` remains accepted as an alias |
+| `bode_crossing` | ac | `signal`, exactly one of `level_db` / `level_deg`; `ref_hz` with `level_db` | `level_deg` scans the unwrapped phase, so a crossing past 180 degrees is found once rather than at every wrap; `phase_deg` remains accepted as an alias. `ref_hz` measures `level_db` from the gain at that frequency, read as `bode_point` reads it, so the half-power point below a reference is one call; the value's `level` is then the absolute level crossed, and its `reference` gives `frequency_hz`, `magnitude_db` and the relative `level_db`. A `ref_hz` outside the sweep is refused |
 | `bode_slope` | ac | `signal`, `from_hz`, `to_hz` | dB per decade |
 | `stability` | ac | `signal` | phase margin = 180 degrees + phase at unity gain, positive being stable. Reducible leaves: `phase_margin_deg`, `gain_margin_db`, `unity_gain_hz`, `dc_gain_db` |
 | `ac_structure` | ac | `signal` | structural poles and zeros |
@@ -2261,11 +2324,23 @@ file holds. A `regex:` prefix names every text the pattern is found in
 at the start of the text. `remove_directive` removes every text it names and
 lists each in `removed_texts`. `replace_directive` gives one text new words
 (`text`) and keeps its record: its place, size, justification and kind. Its
-`instruction` names the text by the same rule and must name exactly one; one
-that names several is refused with each, so a caller narrows it rather than
-writing one text over many. A directive's new text is checked as
-`add_directive`'s is. Applied again with `now` as `instruction` and `was` as
-`text`, it puts the text back.
+`instruction` names the text by the same rule and must name exactly one, or
+`x` and `y` pick the named text anchored there. An instruction that names
+several texts is refused with the place of each, up to ten and the count of
+the rest, so a caller picks one rather than writing one text over many; texts
+on one anchor cannot be told apart, so one of them is moved first. A
+directive's new text is checked as `add_directive`'s is, and a refused op
+changes nothing. Applied again with its result's `x` and `y`, `now` as
+`instruction` and `was` as `text`, it puts the text back, unless `now` begins
+with `regex:`, which names a pattern, or a text holds a backslash (below).
+
+A text is read, in a reply, as the drawing and the sheet findings read it: a
+`\n` in the TEXT record is a line break and `\\` a backslash, so a Windows
+path keeps its `\new_models`. Writing a text escapes only line breaks, and
+naming one compares it with the text as the record holds it, so a text with
+a backslash is named by the record's spelling, and the text a reply gives is
+not written back as the record held it. How LTspice writes and reads a
+backslash in a TEXT record is not recorded, so neither side is changed yet.
 
 `set_component_value` splits a trailing `KEY=VALUE` off the value it is given
 and sets it wherever the part already gives that key (`Value`, `Value2`,

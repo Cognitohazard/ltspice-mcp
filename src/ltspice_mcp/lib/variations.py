@@ -65,6 +65,7 @@ from ltspice_mcp.lib.montecarlo import MismatchRule as EngineMismatchRule
 from ltspice_mcp.lib.spice_lex import (
     EditCards,
     SpiceCard,
+    SpiceLexError,
     Token,
     TokenKind,
     emit,
@@ -317,7 +318,15 @@ class RandomVariation(VariationModel):
         ),
     )
     runs: int = Field(ge=1)
-    seed: int | None = None
+    seed: int | None = Field(
+        default=None,
+        description="Omitted, the server picks one and records it as '_random_seed'.",
+    )
+    sample_start: int = Field(
+        default=0,
+        ge=0,
+        description="First sample index; sample k draws the same values in any run.",
+    )
     applies_to: list[str] | None = Field(default=None, description=_APPLIES_TO_DESCRIPTION)
     rules: list[RandomRule] = Field(
         description=(
@@ -485,6 +494,11 @@ class _DeckTargets:
     #: The other names of each component LTspice exported with its section
     #: sign (``spice_lex_ops.section_sign_names``), by case-folded name.
     aliases: dict[str, list[_Site]] = field(default_factory=dict)
+    #: Each name a card that cannot be split into parts may declare, by
+    #: case-folded name: a part's reference, a ``.model``'s name, or a name a
+    #: ``.param`` may set (a word before ``=``). With each, the card's line,
+    #: what it is and the reason it cannot be read.
+    unread: dict[str, list[_UnreadDeclaration]] = field(default_factory=dict)
 
     def component_sites(self, folded: str) -> list[_Site]:
         """The components an exact target names: a reference as written, or
@@ -835,7 +849,11 @@ def expand_variations(
                         assignments=dict(assignments),
                         edits=edits,
                         random=random_variation,
-                        random_index=sample_index if random_variation is not None else None,
+                        random_index=(
+                            random_variation.sample_start + sample_index
+                            if random_variation is not None and sample_index is not None
+                            else None
+                        ),
                         native=native_variation,
                         native_index=(
                             native_variation.sample_start + sample_index
@@ -847,6 +865,29 @@ def expand_variations(
                 circuit_index += 1
                 check_case_cap(len(expanded), max_cases)
     return expanded
+
+
+def random_identity(variation: RandomVariation, sample_index: int) -> dict[str, Any]:
+    """The assignments that name a random case's sample: its index, its seed
+    and its entry's id. The job record keeps a case's assignments, not the
+    request, so these are what a later reader replays a sample from.
+    """
+    identity: dict[str, Any] = {"_random_run": sample_index}
+    if variation.seed is not None:
+        identity["_random_seed"] = variation.seed
+    if variation.id is not None:
+        identity["_random_id"] = variation.id
+    return identity
+
+
+def random_sample_key(circuit_id: str, sample_index: int) -> str:
+    """The stream a random sample draws from: its circuit and sample index.
+
+    Not the case's position in the expanded list, which moves when a corner is
+    added, nor its assign values: every case of one sample draws the same
+    values, so a sample is the same die at each corner of a sweep.
+    """
+    return f"{circuit_id}:sample{sample_index}"
 
 
 def materialize_variants(
@@ -879,7 +920,7 @@ def materialize_variants(
         rules = case.random.rules if case.random is not None else []
         sampler = (
             MCSampler(case.random.seed).derive(
-                f"{case.circuit_id}:case{case.case_index}:run{(case.random_index or 0) + 1}"
+                random_sample_key(case.circuit_id, case.random_index or 0)
             )
             if case.random is not None
             else None
@@ -961,9 +1002,7 @@ def materialize_variants(
                     if unchanged_case:
                         zero_edit_lineage = lineage
         if case.random is not None and case.random_index is not None:
-            assignments["_random_run"] = case.random_index
-            if case.random.id is not None:
-                assignments["_random_id"] = case.random.id
+            assignments.update(random_identity(case.random, case.random_index))
         text, written = _write_case_includes(case_closure, texts, case.case_index)
         path = output_dir / f"case-{case.case_index:04d}{suffix}"
         data = encode_spice_text(text, case_closure.files[0].codec)
@@ -1012,20 +1051,103 @@ def _applies(
     }
 
 
+#: A name a ``.param`` card sets: a word, then ``=``.
+_PARAM_NAME_RE = re.compile(r"([A-Za-z_][\w.$]*)\s*=")
+#: What ends a word of a card that cannot be split into parts.
+_UNREAD_WORD_END = re.compile(r"[\s(){}=,\"';]+")
+
+
+@dataclass(frozen=True)
+class _UnreadDeclaration:
+    """A card that cannot be split into parts and may declare a target."""
+
+    line: int
+    what: str  # "part", ".model" or ".param"
+    reason: str
+    name: str = ""  # as the card writes it
+
+
+def _unread_declarations(card: SpiceCard) -> tuple[set[str], _UnreadDeclaration] | None:
+    """The names a card that cannot be split into parts may declare, as it
+    writes them, and what the card is; None for a card that can be read or
+    declares no target. Every candidate counts, so a name is never missed,
+    and a variation of it is refused rather than made on another copy."""
+    if card.kind not in ("param", "instance", "model"):
+        return None
+    try:
+        tokenize_body(card.body)
+    except SpiceLexError as exc:
+        words = [word for word in _UNREAD_WORD_END.split(card.body) if word]
+        if card.kind == "param":
+            names, what = set(_PARAM_NAME_RE.findall(card.body)), ".param"
+        elif card.kind == "instance":
+            names, what = ({card.name or words[0]} if words else set()), "part"
+        else:
+            names, what = ({card.name or words[1]} if len(words) > 1 else set()), ".model"
+        fix = f" {exc.suggestion[:1].upper()}{exc.suggestion[1:]}." if exc.suggestion else ""
+        reason = f"({exc.message}), so the variation cannot tell which declaration it edits.{fix}"
+        return names, _UnreadDeclaration(card.line_start, what, reason)
+    return None
+
+
+def _refuse_unread(
+    closure: _DeckClosure, pattern: str, *, kinds: tuple[str, ...], what: str, target: str
+) -> None:
+    """Refuse a target that a card that cannot be split into parts may name
+    (``_DeckTargets.unread``): the copy that can be read is not known to be
+    the one the circuit runs with, and a glob would leave the card out of a
+    set it reports whole. ``pattern`` is case-folded; ``kinds`` are the
+    cards that can answer to it."""
+    for file in closure.files:
+        for name, declarations in file.targets.unread.items():
+            names = (name, *section_sign_names(name))
+            if pattern not in names and not (
+                _is_glob(pattern) and any(fnmatch.fnmatchcase(n, pattern) for n in names)
+            ):
+                continue
+            for declared in declarations:
+                if declared.what in kinds:
+                    raise VariationError(
+                        "ambiguous_target",
+                        f"Circuit {closure.circuit_id!r}: {what} {target!r} may name the "
+                        f"{declared.what} {declared.name!r} on line {declared.line} of "
+                        f"{file.path.name}, which could not be read {declared.reason}",
+                    )
+
+
+def _param_assignments(card: SpiceCard) -> list[tuple[str, Token]]:
+    """The ``name=value`` parts of a ``.param`` card with their names, or none
+    for a card that cannot be split into parts (``spice_lex.unreadable_cards``):
+    the names it sets are not known, so no variation targets or edits it, and
+    the linter reports it."""
+    try:
+        tokens = tokenize_body(card.body)
+    except SpiceLexError:
+        return []
+    return [
+        (token.key, token)
+        for token in tokens[1:]
+        if token.kind == TokenKind.KEY_VALUE and token.key
+    ]
+
+
 def _deck_targets(text: str, source: Path, depth: int) -> _DeckTargets:
     params: dict[str, list[_Site]] = {}
     components: dict[str, list[_Site]] = {}
     models_by_ref: dict[str, str] = {}
     model_names: dict[str, list[_Site]] = {}
     aliases: dict[str, list[_Site]] = {}
+    unread: dict[str, list[_UnreadDeclaration]] = {}
     cards = _lexed_file(text, depth).read
     for card, section in zip(cards, card_sections(cards, source, depth), strict=True):
+        if (unread_card := _unread_declarations(card)) is not None:
+            names, declared = unread_card
+            for name in names:
+                unread.setdefault(name.casefold(), []).append(replace(declared, name=name))
+            continue
         if card.kind == "param":
-            for token in tokenize_body(card.body)[1:]:
-                if token.kind == TokenKind.KEY_VALUE and token.key:
-                    params.setdefault(token.key.casefold(), []).append(
-                        _Site(token.key, card.scope, section)
-                    )
+            for key, _token in _param_assignments(card):
+                params.setdefault(key.casefold(), []).append(_Site(key, card.scope, section))
         elif card.kind == "model" and card.name:
             model_names.setdefault(card.name.casefold(), []).append(
                 _Site(card.name, card.scope, section)
@@ -1047,6 +1169,7 @@ def _deck_targets(text: str, source: Path, depth: int) -> _DeckTargets:
         models_by_ref=models_by_ref,
         model_names=model_names,
         aliases=aliases,
+        unread=unread,
     )
 
 
@@ -1215,6 +1338,7 @@ def _resolve_assignment(
         return _resolve_instance_param(closure, target, value)
     if target.casefold().endswith("@model"):
         pattern = target[:-6].casefold()
+        _refuse_unread(closure, pattern, kinds=("part",), what="model-swap target", target=target)
         edits: list[ResolvedAssignment] = []
         for file in closure.files:
             refs = tuple(
@@ -1241,6 +1365,7 @@ def _resolve_assignment(
         return tuple(edits)
 
     folded = target.casefold()
+    _refuse_unread(closure, folded, kinds=(".param", "part"), what="target", target=target)
     # File precedence is the outer test and kind precedence the inner one: a
     # .param still beats a same-named component, but only within the one file
     # that owns the target, so an include can never shadow the root deck.
@@ -1327,6 +1452,7 @@ def _resolve_instance_param(
             "(a mobility multiplier) can be set per instance",
         )
     folded = target.casefold()
+    _refuse_unread(closure, folded, kinds=(".param", "part"), what="target", target=target)
     clashes = sorted(
         {
             file.path.name
@@ -1499,6 +1625,9 @@ def _resolve_random_rule_targets(
     """
     if isinstance(rule, ComponentRule):
         pattern = rule.target.casefold()
+        _refuse_unread(
+            closure, pattern, kinds=("part",), what="random component target", target=rule.target
+        )
         by_ref: dict[str, list[tuple[_ClosureFile, _Site]]] = {}
         for file in closure.files:
             for folded, sites in file.targets.components.items():
@@ -1539,6 +1668,8 @@ def _resolve_random_rule_targets(
         what, miss = "random model target", "has no .model card"
         sites_by_file = {file.index: file.targets.model_names for file in closure.files}
     folded = rule.target.casefold()
+    kinds = (".param",) if isinstance(rule, ParamRule) else (".model",)
+    _refuse_unread(closure, folded, kinds=kinds, what=what, target=rule.target)
     matches = [index for index, sites in sites_by_file.items() if folded in sites]
     if not matches:
         raise VariationError(
@@ -1656,8 +1787,8 @@ def _param_tokens(cards: list[SpiceCard], name: str) -> list[tuple[int, Token]]:
     for index, card in enumerate(cards):
         if card.kind != "param":
             continue
-        for token in tokenize_body(card.body)[1:]:
-            if token.kind == TokenKind.KEY_VALUE and token.key and token.key.casefold() == target:
+        for key, token in _param_assignments(card):
+            if key.casefold() == target:
                 tokens.append((index, token))
     return tokens
 
@@ -2804,8 +2935,8 @@ def _claim_card(
                 parameter
                 and card.kind == "param"
                 and any(
-                    t.key and t.key.casefold() == site.name.casefold()
-                    for t in tokenize_body(card.body)
+                    key.casefold() == site.name.casefold()
+                    for key, _token in _param_assignments(card)
                 )
             )
         )

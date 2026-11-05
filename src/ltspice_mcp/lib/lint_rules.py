@@ -14,6 +14,7 @@ from ltspice_mcp.lib.deck_staging import (
     is_absolute_reference,
     resolve_reference,
     scan_include_references,
+    unreadable_references,
 )
 from ltspice_mcp.lib.encoding import latin1_reading, read_spice_text
 from ltspice_mcp.lib.families import DISPLAY
@@ -22,9 +23,11 @@ from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
     TokenKind,
+    directive_head,
     lex,
     lex_deck,
     tokenize_body,
+    unreadable_cards,
 )
 from ltspice_mcp.lib.spice_lex_ops import MICRO_SIGN_READERS, ValueSuffixSite, value_suffix_sites
 from ltspice_mcp.lib.spice_lex_views import (
@@ -39,8 +42,10 @@ from ltspice_mcp.lib.spice_validator import (
     ARITY_CHECKS,
     EXCLUSIVE_ANALYSIS_KINDS,
     is_ground_node,
+    may_connect_nodes,
     meas_functions_refused,
     meas_name_refused,
+    meas_unclosed_paren_refused,
     validate_netlist_arity,
     validate_netlist_duplicate_params,
 )
@@ -48,7 +53,7 @@ from ltspice_mcp.lib.spice_validator import (
 Disposition = Literal["blocking", "warning", "observation"]
 LintFinding = dict[str, Any]
 
-linter_version = "11"
+linter_version = "12"
 
 # A capital M straight after a number is milli unless the letters after it
 # make it Meg or mil. Other letters do not: LTspice reads 1MHz as a millihertz.
@@ -120,6 +125,12 @@ class _LintContext:
         return validate_netlist_arity(self.cards, simulator=DISPLAY[self.family])
 
     @functools.cached_property
+    def reached_models(self) -> _ReachedModels:
+        """The models the deck reaches through its includes, read once for
+        model-missing and the unreadable-card rule."""
+        return _models_from_staged_dependencies(self)
+
+    @functools.cached_property
     def files(self) -> tuple[_LintFile, ...]:
         """The deck, then each staged include snapshot, lexed once for every rule."""
         return (
@@ -163,11 +174,6 @@ def _finding(
     }
 
 
-def _directive_head(card: SpiceCard) -> str:
-    tokens = tokenize_body(card.body)
-    return tokens[0].text.casefold() if tokens else ""
-
-
 def _probe_signals(probe: ProbeRef) -> set[str]:
     """The signals a probe asks for in a ``.meas``, or saves in a ``.save``.
 
@@ -195,7 +201,9 @@ def _save_meas_coverage(
     measurements = [card for card in context.cards if card.kind == "meas"]
     if not saves or not measurements:
         return []
-    if any(save.saves_all for save in saves):
+    # A .save no rule could split into parts (``unreadable_cards``) may save
+    # any signal, so none is reported missing on a guess about it.
+    if any(save.saves_all for save in saves) or unreadable_cards(save.card for save in saves):
         return []
     saved = {signal for save in saves for probe in save.probes for signal in _probe_signals(probe)}
     findings = []
@@ -311,7 +319,7 @@ def _step_ngspice(
 ) -> list[LintFinding]:
     findings = []
     for card in context.cards:
-        if card.kind != "directive" or _directive_head(card) != ".step":
+        if card.kind != "directive" or directive_head(card) != ".step":
             continue
         findings.append(
             _finding(
@@ -388,7 +396,7 @@ def _analysis_count_ltspice(
         (file.path, card)
         for file in context.files
         for card in file.cards
-        if card.kind == "directive" and _directive_head(card)[1:] in EXCLUSIVE_ANALYSIS_KINDS
+        if card.kind == "directive" and directive_head(card)[1:] in EXCLUSIVE_ANALYSIS_KINDS
     ]
     if len(analyses) < 2:
         return []
@@ -399,7 +407,7 @@ def _analysis_count_ltspice(
             rule,
             line=second.line_start,
             file=path,
-            subject=_directive_head(second),
+            subject=directive_head(second),
             evidence={
                 "directives": [card.body for _, card in analyses],
                 "reason": (
@@ -493,8 +501,12 @@ def _model_missing(
     context: _LintContext,
     rule: LintRule,
 ) -> list[LintFinding]:
-    declared = _declared_models(context.cards)
-    declared.update(_models_from_staged_dependencies(context))
+    reached = context.reached_models
+    if not reached.complete:
+        # Which models an include it cannot read declares is not known; the
+        # unreadable-card rule reports that card and that this rule was quiet.
+        return []
+    declared = _declared_models(context.cards) | reached.declared
     findings = []
     for card in context.cards:
         if card.kind != "instance" or not card.name:
@@ -529,7 +541,17 @@ def _declared_models(cards: list[SpiceCard]) -> set[str]:
     }
 
 
-def _models_from_staged_dependencies(context: _LintContext) -> set[str]:
+class _ReachedModels(NamedTuple):
+    """The models a deck reaches through its include references; whether
+    every include card on the way could be read, so that they are all of
+    them; and those in a live file that could not."""
+
+    declared: set[str]
+    complete: bool
+    unread: list[tuple[Path, SpiceCard, SpiceLexError]]
+
+
+def _models_from_staged_dependencies(context: _LintContext) -> _ReachedModels:
     """Collect declarations the deck reaches through its include references.
 
     The staged snapshots in ``context.includes`` are authoritative for the
@@ -543,16 +565,29 @@ def _models_from_staged_dependencies(context: _LintContext) -> set[str]:
     must not lint as missing. Disk resolution goes through deck staging's
     ``resolve_reference`` so the linter cannot read a different file than the
     one staging staged.
+
+    ``unread`` lists each include or library card in a live file that cannot
+    be split into parts: which file it names is not known, so neither are the
+    models it declares. Staging refuses such a card in every file it stages,
+    and the unreadable-card rule reports one in the deck or a staged file.
     """
     declared: set[str] = set()
+    complete = True
+    unread: list[tuple[Path, SpiceCard, SpiceLexError]] = []
     snapshot: dict[Path, list[SpiceCard]] = {}
     for file in context.files[1:]:
         declared.update(_declared_models(file.cards))
         snapshot[file.path.resolve(strict=False)] = file.cards
     visited: set[Path] = set(snapshot)
 
-    def walk(cards: list[SpiceCard], source: Path, depth: int) -> None:
+    def walk(cards: list[SpiceCard], source: Path, depth: int, *, live: bool) -> None:
+        nonlocal complete
         if depth >= DEFAULT_INCLUDE_DEPTH:
+            return
+        if blocked := unreadable_references(cards):
+            complete = False
+            if live:
+                unread.extend((source, card, error) for card, error in blocked)
             return
         # ``depth`` here is the recursion budget; the scanner's parameter is
         # the library-context bit (0 = the deck itself, nonzero = a file
@@ -573,15 +608,15 @@ def _models_from_staged_dependencies(context: _LintContext) -> set[str]:
             except (OSError, UnicodeError, ValueError):
                 continue
             declared.update(_declared_models(nested))
-            walk(nested, resolved, depth + 1)
+            walk(nested, resolved, depth + 1, live=True)
 
-    walk(context.cards, context.path, 0)
+    walk(context.cards, context.path, 0, live=False)
     for staged_path, cards in snapshot.items():
         # Scanned from the snapshot, never from disk; the only thing this can
         # find that the snapshot itself does not carry is a live reference
         # nested inside a staged file.
-        walk(cards, staged_path, 1)
-    return declared
+        walk(cards, staged_path, 1, live=False)
+    return _ReachedModels(declared, complete, unread)
 
 
 def _arity_check(
@@ -668,10 +703,13 @@ def _temp_as_param(
     for card in context.cards:
         if card.kind != "param":
             continue
+        try:
+            tokens = tokenize_body(card.body)
+        except SpiceLexError:
+            # The unreadable-card rule reports it; the names it sets are not known.
+            continue
         names = [
-            token.key
-            for token in tokenize_body(card.body)[1:]
-            if token.kind == TokenKind.KEY_VALUE and token.key
+            token.key for token in tokens[1:] if token.kind == TokenKind.KEY_VALUE and token.key
         ]
         if not any(name.casefold() == "temp" for name in names):
             continue
@@ -695,6 +733,83 @@ def _temp_as_param(
             )
         )
     return findings
+
+
+class UnreadableSite(NamedTuple):
+    """A card no rule could split into its parts, the lint rule that reports
+    it, and what the finding says."""
+
+    card: SpiceCard
+    rule_id: str
+    detail: str
+
+
+def unreadable_card_sites(cards: Iterable[SpiceCard], family: str) -> list[UnreadableSite]:
+    """Each card no rule could split into its parts (``spice_lex.unreadable_cards``),
+    with the rule that reports it for ``family`` and what the finding says.
+
+    For LTspice, a ``.meas`` that ``meas_unclosed_paren_refused`` refuses is
+    ``meas-unclosed-paren-ltspice``; ``verify_circuit`` and ``edit_schematic``
+    refuse it through the same validator. Any other is ``unreadable-card``:
+    what a simulator does with it is not recorded. One answer for the linter
+    and ``verify_circuit``, which reports the same cards.
+    """
+    simulator = DISPLAY.get(family, family)
+    sites = []
+    for card, error in unreadable_cards(cards):
+        refused = meas_unclosed_paren_refused(card, simulator)
+        if family == "ltspice" and refused is not None:
+            sites.append(
+                UnreadableSite(
+                    card,
+                    "meas-unclosed-paren-ltspice",
+                    f"{refused.message} {refused.suggestion}",
+                )
+            )
+            continue
+        fix = f" {error.suggestion[:1].upper()}{error.suggestion[1:]}." if error.suggestion else ""
+        # Only a card that may connect nodes has its words counted as
+        # connected and defined; a .save or .param that cannot be read is not.
+        counted = (
+            ", and the nodes and names on it count as connected and defined"
+            if may_connect_nodes(card)
+            else ""
+        )
+        detail = (
+            f"{error.message}: the checks could not split this card into its parts, "
+            f"so no rule read them{counted}.{fix}"
+        )
+        sites.append(UnreadableSite(card, "unreadable-card", detail))
+    return sites
+
+
+def _unreadable_card(context: _LintContext, rule: LintRule) -> list[LintFinding]:
+    """A card no rule could read, in the deck or a staged include, under the
+    rule ``unreadable_card_sites`` files it under: the other rules leave it
+    out, so this says so. An include card in a live file that cannot be read
+    is reported too, since model-missing says nothing for it."""
+    located = [
+        (file.path, site)
+        for file in context.files
+        for site in unreadable_card_sites(file.cards, context.family)
+    ]
+    if rule.rule_id == "unreadable-card":
+        quiet = " Which file it names is not known, so model-missing reported nothing."
+        for path, card, _error in context.reached_models.unread:
+            (site,) = unreadable_card_sites([card], context.family)
+            located.append((path, site._replace(detail=site.detail + quiet)))
+    return [
+        _finding(
+            context,
+            rule,
+            line=site.card.line_start,
+            file=path,
+            subject=" ".join(site.card.body.split()),
+            evidence={"detail": site.detail},
+        )
+        for path, site in located
+        if site.rule_id == rule.rule_id
+    ]
 
 
 def _duplicate_param(context: _LintContext, rule: LintRule) -> list[LintFinding]:
@@ -955,6 +1070,7 @@ RULES: tuple[LintRule, ...] = (
     LintRule("analysis-count-ltspice", "blocking", _analysis_count_ltspice, family="ltspice"),
     LintRule("meas-function-ltspice", "blocking", _meas_function_ltspice, family="ltspice"),
     LintRule("meas-name-ltspice", "blocking", _meas_name_ltspice, family="ltspice"),
+    LintRule("meas-unclosed-paren-ltspice", "blocking", _unreadable_card, family="ltspice"),
     LintRule("lib-section-ltspice", "blocking", _lib_section_ltspice, family="ltspice"),
     # A warning, not blocking: LTspice 24 and later run another circuit than
     # the one the server reads, XVII the same one, and which build will run
@@ -984,6 +1100,10 @@ RULES: tuple[LintRule, ...] = (
     # A warning: the deck runs, but a parameter given twice is read one way or
     # the other, and which is not recorded here.
     LintRule("duplicate-param", "warning", _duplicate_param),
+    # A warning: a card no rule could split into its parts is checked by
+    # none, which a caller must know. What a simulator does with it is not
+    # recorded, except for the .meas above, so the deck runs.
+    LintRule("unreadable-card", "warning", _unreadable_card),
     # Blocking: a suffix that shows a file decoded in an encoding it was not
     # written in. 'Âµ' — a UTF-8 micro sign decoded as cp1252 — is never a
     # scale, so the deck runs at the bare number, a factor of 1e6 off. A micro

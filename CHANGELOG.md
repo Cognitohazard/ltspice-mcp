@@ -10,6 +10,13 @@ tool-surface changes.
 
 ### Breaking
 
+- A reply's text block is its `structuredContent` serialized as JSON, as the
+  MCP specification recommends, in place of a one-line summary. A client that
+  passes the model only the text now gives it the data, and a failed call's
+  text carries its `code` and recovery `hint`, which a client that shows the
+  model only an error's text (Claude Code among them) used to leave out.
+  `plot_waveform`'s `format` argument is removed, since every reply's text is
+  the same JSON; a call that still sends it is told so.
 - Every reply leaves out the fields that say nothing: an empty list or
   object, a null, a false flag, and a sub-answer that the overall answer
   beside it already gives (`structurally_equivalent` beside
@@ -19,10 +26,9 @@ tool-surface changes.
   field means "checked, and nothing to report", never "not checked": what did
   not run, was skipped or could not be read is still stated, by a
   `checks_skipped` row, a failure, a `status` or a `reason`. One function
-  applies the rule to every tool's `structuredContent`, to the text block
-  under `[tools] text_channel = "json"`, and to the Python API's results, so
-  the API keeps the tools' shape; the summary text no longer states an empty
-  result either. Each tool keeps a short list of fields whose empty, null or
+  applies the rule to every tool's `structuredContent`, to the text block that
+  serializes it, and to the Python API's results, so the API keeps the tools'
+  shape. Each tool keeps a short list of fields whose empty, null or
   false value is the answer itself, such as a finding's `ok`, a comparison's
   `equivalent` and a recipe's measured `value`
   (`docs/design/mcp_surface.md`, "Fields left out"), and output schemas mark
@@ -76,15 +82,38 @@ tool-surface changes.
 
 ### Added
 
+- The `bode_crossing` recipe takes `ref_hz`, which measures `level_db` from
+  the gain at that frequency: `level_db: -3.0103, ref_hz: "1k"` finds where
+  the gain falls 1/sqrt(2) below its value at 1 kHz, in one call instead of a
+  `bode_point` read and a second crossing. The value's `level` is the
+  absolute level crossed, and `reference` says what it was measured from.
+- `run_experiments` takes `execution.results_beside_sheet`. With it set, each
+  sheet's results are copied beside it, under its name, once the runs
+  finish, so LTspice opens them with the sheet, without a separate
+  `jobs(action="place_beside_sheet")` call. The receipt says, per sheet, what
+  was copied (`results_placed_beside_sheet`) or why not
+  (`results_not_placed`, for example a sheet edited during the run). A request
+  is refused before it runs when a circuit is a netlist, the job does not run
+  on LTspice, or a sheet would run more than one case; it cannot be combined
+  with `recoverable`. The jobs action and the run option decide whether a case
+  can be copied by the same rules.
+- A `random` variation's samples can be replayed. Each case records its sample
+  index (`_random_run`) and its seed (`_random_seed`) in its assignments, and
+  an entry without a `seed` gets one the server chooses, so a Monte Carlo run
+  without one is no longer impossible to repeat. A new `sample_start` sets the
+  first sample index: with the same seed, `runs: 1, sample_start: 7` draws
+  what sample 7 drew in the full run. A retry of a seedless request under the
+  same `request_id` returns the job it made, with that job's seed.
 - `edit_schematic`'s `replace_directive` op changes one directive's or
   comment's text in one call. Its `instruction` names the text as
-  `remove_directive` does, the whole text or `regex:`, and must name one; one
-  that names several is refused with each. The text keeps its place, size,
+  `remove_directive` does, the whole text or `regex:`, and must name one, or
+  `x` and `y` pick the named text anchored there; one that names several is
+  refused with the place of each. The text keeps its place, size,
   justification and kind, which a `remove_directive` and an `add_directive`
   lost unless given again, and a directive's new text is checked as
   `add_directive`'s is. Its result gives the text's kind and place and what
-  it `was` and is `now`. `remove_directive`'s `removed_texts` now gives a
-  text with its line breaks, where it gave the `\n` escapes the file holds.
+  it `was` and is `now`; applied again with that place, `now` and `was`, it
+  puts the text back.
 - At `INFO`, the server logs one structured record per tool call on the
   `ltspice_mcp.events` logger: the tool, its duration, how it ended (a
   result, an error and its code, a cancellation by the client, or a protocol
@@ -103,6 +132,18 @@ tool-surface changes.
   resource (and `spice://capabilities/{family}`) serves the whole table with
   its evidence. The refusals of a QSPICE run off Windows and of a schematic
   run on QSPICE or Xyce now read the table.
+- `verify_circuit` lists the findings past its cap of 25 a rule through the
+  tool itself. A rule with more has a `findings_omitted` entry, `{omitted,
+  total, next_cursor}`, and the new `findings_cursor` argument takes the
+  cursor back to list that rule's next 25 findings, so every finding can be
+  read without `run_code` or the Python API. The cursor is bound to the
+  rule's findings as they were found, and is refused with `invalid_cursor`
+  once they change (the file, a symbol it uses or its export), or when the
+  call does not run the check that reports the rule, naming what to change.
+  The entry replaces the `<rule>: showing 25 of <n> findings` observation,
+  which sent the caller to `api.verify_circuit` for the rest, and
+  `dropped_wire`, which was cut at the cap with no word, now has one too.
+  The hint names each rule cut short and the check that reports it.
 - `inspect(kind="open_in_ltspice")` reads every entry where a window's copy
   of a sheet differs from the file. The listing still names 25 entries a
   side and counts the rest in `difference_omitted`, and a `hint` beside the
@@ -132,6 +173,23 @@ tool-surface changes.
   `m` on an X line, so the draw's area counts only the device's own `m`.
   Such a rule used to be refused with `unsupported_backend`, a code the server
   no longer returns.
+
+
+### Changed
+
+- A signal named `V(<instance>:<pin>)` for a subcircuit's pin is refused with
+  the reason: a result holds no voltage under a pin's name, because the pin's
+  voltage is the net it connects to in the circuit above. The refusal lists
+  the instance's pins in the order its instance line lists their nets, where
+  LTspice wrote them, and names the current into the pin. Every reader of a
+  signal says so, `analyze_results` on an operating point included.
+- The Python guide lists `RawResult.source`, the `.raw` file a result was
+  read from.
+- `remove_directive`'s `removed_texts` gives a text as it reads, as the
+  drawing and the sheet findings read it: a line break where the TEXT record
+  holds a `\n` escape, and one backslash where it holds `\\`. It gave the
+  record's spelling, so a client that compared it with the `.asc` line now
+  sees a different string.
 
 ### Fixed
 
@@ -185,6 +243,44 @@ tool-surface changes.
   measurement that cannot be given an entry now fails the measurements read
   and names it, where it was left out. An unreadable value is quoted as the
   log printed it (`vth^2`), not as spicelib cut it short (`vth`).
+- A card with a quote, brace or parenthesis left open, or a closer with
+  nothing open, such as `R1 in out {1k`, cannot be split into its parts, and
+  every check left it out without a word, so `verify_circuit` and the linter
+  read the deck as one without it: a node wired through it reported as wired
+  to one element, and a measurement of it as naming nothing. Such a card is
+  now reported at its line (`unreadable_card` in `verify_circuit`, the
+  `unreadable-card` lint rule, a warning in both). On a part, `.subckt`
+  header or `.global` like it, the nodes and names, inside an expression
+  too, count as connected and defined, and an `X` of a subcircuit holding one
+  as tied to ground at every port, so no other rule reports on a guess about
+  it; a `.save` or `.meas` like it connects nothing.
+- A `.meas` with a parenthesis left open is refused for LTspice: LTspice 26
+  refused the recorded one before the run and XVII ran that deck without the
+  measurement. `edit_schematic` refuses to write it, `verify_circuit`'s
+  `syntax` check reports it as a `directive_syntax` error, `run_experiments`
+  refuses it (`meas-unclosed-paren-ltspice`, blocking; `linter_version` 12),
+  and the LTspice 26 log's failure carries the fix.
+- A directive in that state, such as `.tran 0 1m )`, `.save V(in` or
+  `.param r={1k`, stopped `run_experiments` with the lexer's error as a
+  retryable submission failure, raised by staging, the linter, the variation
+  reader or the hierarchy walk behind recoverable runs and nested targets.
+  The deck now runs with the card reported. An `.include` or `.lib` in that
+  state fails its circuit with `include_unstaged`, naming the line and the
+  fix, since which file it names is not known; a variation or random rule on
+  a part, `.model` or `.param` name a card in that state may declare is
+  refused (`ambiguous_target`), naming its line, rather than made on another
+  copy or left out of a glob; and `inspect(kind="hierarchy")` and a nested
+  target refuse a card they need in that state by its file and line. The
+  `unreadable-card` lint rule covers staged includes too, and a live include
+  holding such an include card, for which `model-missing` says nothing.
+- A `random` variation no longer redraws a sample when other cases change. Its
+  draws were keyed on the case's position in the expanded list, so with
+  several `assign` values each value drew its own numbers, and adding a value
+  changed the draws of every case after it under the same seed. A sample's
+  draws now depend only on the seed, its circuit and its sample index: every
+  case of one sample draws the same values at each `assign` value, so a sweep
+  compares the same die at each corner. A given seed therefore draws different
+  values than it did in earlier versions.
 - The Python API's `inspect` returns every row of a paged query. It follows
   each query's cursor, and joined the pages only where an item paged two
   lists, so for every kind that pages one (`components`, `symbols`, `model`,
@@ -728,11 +824,6 @@ tool-surface changes.
   that `attribute_text_overlap` uses. `verify_circuit` reports it under the
   `layout` check, and `edit_schematic` with its other findings. Texts at one
   anchor are left to `stacked_directive`.
-- `[tools] text_channel` (`LTSPICE_MCP_TEXT_CHANNEL`): `"json"` puts each
-  reply's serialized `structuredContent` in its text block, as the MCP
-  specification recommends for a client that passes only the text to the
-  model; under the default, `"summary"`, such a model reads one summary line.
-  `inspect(kind="capabilities")` reports the mode as `text_channel`.
 - `edit_schematic(open_window="save"|"discard", ops=[])` settles a sheet the
   user changed in LTspice and did not save, once they choose, instead of
   asking them to do it by hand. `"save"` has LTspice save the sheet from the
@@ -807,6 +898,8 @@ tool-surface changes.
 
 ### Changed
 
+- The `mcp` dependency's floor is 2.3, the release the server is tested with,
+  which speaks the current protocol revision (2026-07-28). The floor was 2.1.
 - `analyze_results`: a `spec.fail_cases` list cut short says how to read the
   rest in a `hint` beside its `truncated` flag, where the recipe's `warnings`
   said it. The list has no cursor of its own, and its schema no longer

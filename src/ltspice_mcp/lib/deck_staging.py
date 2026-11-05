@@ -20,11 +20,14 @@ from ltspice_mcp.lib.experiment_types import ManifestEntry
 from ltspice_mcp.lib.spice_lex import (
     INCLUDE_HEADS,
     SpiceCard,
+    SpiceLexError,
     Token,
     TokenKind,
+    directive_head,
     emit,
     lex_for_edit,
     tokenize_body,
+    unreadable_cards,
 )
 from ltspice_mcp.lib.spice_lex_ops import (
     MICRO_SIGN_READERS,
@@ -365,6 +368,14 @@ def stage_deck(
             parsed = lex_for_edit(text, deck=depth == 0)
             changed = False
             anchor = stands_at if resolved == source else resolved
+            for card, error in unreadable_references(parsed.read):
+                raise DeckStagingError(
+                    "include_unstaged",
+                    f"Cannot stage the reference on line {card.line_start} of "
+                    f"{resolved}: {error.message}, so which file it names is not "
+                    f"known. {error.suggestion[:1].upper()}{error.suggestion[1:]}.",
+                    reference=" ".join(card.body.split()),
+                )
             for reference in scan_include_references(parsed.read, anchor, depth=depth):
                 target = resolve_reference(anchor.parent, reference.raw_path)
                 target_resolved = resolve_existing(target)
@@ -723,7 +734,15 @@ def scan_include_references(
     for card in cards:
         if card.kind != "directive":
             continue
-        tokens = tokenize_body(card.body)
+        try:
+            tokens = tokenize_body(card.body)
+        except SpiceLexError:
+            if directive_head(card) in INCLUDE_HEADS:
+                # Which file it names is not known, so the references read
+                # are not all of them. Staging refuses the card by its line
+                # (``unreadable_references``) before reading any.
+                raise
+            continue  # a directive that names no file
         if len(tokens) < 2 or tokens[0].text.casefold() not in INCLUDE_HEADS:
             continue
         path_token = tokens[1]
@@ -747,6 +766,20 @@ def scan_include_references(
             )
         )
     return references
+
+
+def unreadable_references(cards: list[SpiceCard]) -> list[tuple[SpiceCard, SpiceLexError]]:
+    """The include and library cards whose path cannot be read, because the
+    card cannot be split into parts (``spice_lex.unreadable_cards``): an
+    unclosed quote, brace or parenthesis, or a closer with nothing open.
+    ``scan_include_references`` raises the lexer's error on any of them and
+    ``card_sections`` on a ``.lib``, so staging refuses them by line first,
+    instead of running a deck whose files it could not check."""
+    return [
+        (card, error)
+        for card, error in unreadable_cards(cards)
+        if card.kind == "directive" and directive_head(card) in INCLUDE_HEADS
+    ]
 
 
 def closure_depth(index: int) -> int:
@@ -788,9 +821,18 @@ def card_sections(
         sections.append(stack[-1] if stack else None)
         if card.kind != "directive":
             continue
-        tokens = [
-            token for token in tokenize_body(card.body) if token.kind != TokenKind.COMMENT_TRAIL
-        ]
+        try:
+            body_tokens = tokenize_body(card.body)
+        except SpiceLexError:
+            head = directive_head(card)
+            if head == ".lib":
+                # Whether it opens a section is not known; staging refuses it
+                # by its line (``unreadable_references``).
+                raise
+            if head == ".endl" and stack:
+                stack.pop()
+            continue
+        tokens = [token for token in body_tokens if token.kind != TokenKind.COMMENT_TRAIL]
         if not tokens:
             continue
         head = tokens[0].text.casefold()

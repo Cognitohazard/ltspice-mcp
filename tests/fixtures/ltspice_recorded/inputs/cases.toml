@@ -543,7 +543,7 @@ keep = ["log"]
 
 [behaviour.log-meas-failed]
 summary = "What the log says of a measurement that cannot be taken or does not parse, and what happens to the measurements around it."
-model = ["lib/log_parser.py", "lib/result_observations.py"]
+model = ["lib/log_parser.py", "lib/result_observations.py", "lib/lint_rules.py", "lib/spice_validator.py"]
 inputs = ["log/meas_failed.cir", "log/meas_bad_syntax.cir"]
 keep = ["log"]
 

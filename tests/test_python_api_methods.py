@@ -123,6 +123,7 @@ def test_raw_page_returns_each_handler_payload_verbatim(
             "queries.cursor",
         ),
         ("edit_schematic", {"view_cursors": {}}, "view_cursors"),
+        ("verify_circuit", {"path": "deck.cir", "findings_cursor": "token"}, "findings_cursor"),
     ],
 )
 def test_automatic_door_rejects_every_wire_control_before_dispatch(

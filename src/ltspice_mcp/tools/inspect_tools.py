@@ -202,7 +202,6 @@ from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, symbol_info
 from ltspice_mcp.lib.symbol_library import SymbolResolver, symbol_files
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
-    FORMAT_DESCRIPTION,
     HINT_SCHEMA,
     LTSPICE_DIFFERENCE_ENTRIES,
     LTSPICE_WINDOW_PROPERTIES,
@@ -241,10 +240,6 @@ class TraceNetInput(ToolInput):
     )
     x: int | None = Field(default=None, description="X coordinate (with y) to trace from")
     y: int | None = Field(default=None, description="Y coordinate (with x) to trace from")
-    format: Literal["json", "text"] | None = Field(
-        default=None,
-        description=FORMAT_DESCRIPTION,
-    )
 
 
 #: The sheets one ``inspect`` call has read, by path and file stamp, each with
@@ -442,7 +437,7 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
         lines.append(f"  WARNING: net carries multiple labels {named} — likely a short.")
     for w in warnings:
         lines.append(f"  WARNING: {w}")
-    return format_response("\n".join(lines), data, args.format)
+    return format_response("\n".join(lines), data)
 
 
 def _net_at(sheet: Sheet, point: tuple[int, int]) -> int:
@@ -584,7 +579,6 @@ CapabilityField: TypeAlias = Literal[
     "tool_profile",
     "python_api",
     "tool_listing",
-    "text_channel",
     "limits",
     "linter_version",
 ]
@@ -1328,8 +1322,6 @@ def _do_capabilities(
         # listing is compact, because the per-argument descriptions are then
         # not on the wire — and this is the only place that fact is readable.
         "tool_listing": state.config.tool_listing,
-        # What each reply's text block holds beside structuredContent.
-        "text_channel": state.config.text_channel,
         "limits": {
             "max_experiment_cases": state.config.max_experiment_cases,
             "analysis_budget_s": state.config.analysis_budget_s,

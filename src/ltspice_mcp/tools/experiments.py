@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import secrets
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -87,6 +88,7 @@ from ltspice_mcp.lib.recipes import (
 )
 from ltspice_mcp.lib.recovery_records import CaseAttempt, CaseRecovery, RecoveryError
 from ltspice_mcp.lib.services import cp1252_ltspice, resolve_job_async
+from ltspice_mcp.lib.sheet_results import NotPlaced, check_request
 from ltspice_mcp.lib.simulator import (
     SIMULATOR_SELECTOR_PATTERN,
     current_ngbehavior,
@@ -113,6 +115,7 @@ from ltspice_mcp.lib.variations import (
     materialize_variants,
     normalize_circuit_decks,
     projected_case_count,
+    random_identity,
     validate_variation_circuit_ids,
 )
 from ltspice_mcp.state import SessionState
@@ -221,6 +224,15 @@ class ExperimentExecution(StrictModel):
         ),
     )
 
+    results_beside_sheet: bool = Field(
+        default=False,
+        strict=True,
+        description=(
+            "When the runs finish, copy each sheet's results beside it, under its name, "
+            "for LTspice to open. One case per sheet; LTspice only; not with recoverable."
+        ),
+    )
+
     @model_validator(mode="after")
     def _seed_requires_recovery(self) -> ExperimentExecution:
         if self.simulator_seed is not None and (
@@ -231,6 +243,12 @@ class ExperimentExecution(StrictModel):
             raise ValueError(
                 "execution.keep_partial_raw cannot be combined with recoverable: a "
                 "resumed job runs its stopped cases again"
+            )
+        if self.results_beside_sheet and self.recoverable:
+            raise ValueError(
+                "execution.results_beside_sheet cannot be combined with recoverable: a "
+                "resumed job's runs would finish without it. Copy a case's results "
+                "afterwards with jobs(action='place_beside_sheet')"
             )
         return self
 
@@ -478,6 +496,8 @@ class RunExperimentsInput(ToolInput):
             payload["execution"].pop("simulator_seed", None)
         if not self.execution.keep_partial_raw:
             payload["execution"].pop("keep_partial_raw", None)
+        if not self.execution.results_beside_sheet:
+            payload["execution"].pop("results_beside_sheet", None)
         if self.analyze is not None and self.analyze.other_raw is None:
             payload["analyze"].pop("other_raw", None)
 
@@ -675,6 +695,10 @@ async def handle_run_experiments(
                     replay, exc, None, budget=budget, state=state
                 )
 
+        # Chosen only now, after the fingerprint and the replay check have read
+        # the caller's own request: a retry of the same seedless request replays
+        # the job this one makes, with its seed, instead of a new draw.
+        args = _seed_random_variations(args)
         simulator = resolve_run_simulator(args.execution.simulator, state)
         if args.execution.simulator_seed is not None and (
             simulator_dialect(simulator) != "ngspice"
@@ -706,6 +730,14 @@ async def handle_run_experiments(
             projected_case_count(circuit.circuit_id, args.variations) for circuit in circuit_inputs
         )
         check_case_cap(projected, state.config.max_experiment_cases)
+        if args.execution.results_beside_sheet:
+            check_request(
+                [
+                    (circuit.path, projected_case_count(circuit.circuit_id, args.variations))
+                    for circuit in circuit_inputs
+                ],
+                simulator.__name__,
+            )
         if args.analyze is not None:
             _validate_attached_analysis(args.analyze)
 
@@ -795,6 +827,7 @@ async def handle_run_experiments(
             recoverable=args.execution.recoverable,
             simulator_seed=args.execution.simulator_seed,
             keep_partial_raw=args.execution.keep_partial_raw,
+            results_beside_sheet=args.execution.results_beside_sheet,
             analysis_request=analysis_request,
             analysis_callback=(
                 attached_analysis_callback(state) if analysis_request is not None else None
@@ -917,6 +950,18 @@ async def handle_run_experiments(
             code=exc.code,
             failure=exc,
             stage="recovery",
+            retryable=False,
+            commit_state="not_started",
+            budget=budget,
+            state=state,
+        )
+    except NotPlaced as exc:
+        # The request asks for what its own circuits or simulator rule out.
+        return await _error_response(
+            args.request_id,
+            code=exc.code,
+            failure=exc,
+            stage="validate",
             retryable=False,
             commit_state="not_started",
             budget=budget,
@@ -1219,6 +1264,22 @@ async def _prepare_circuit(
     )
 
 
+def _seed_random_variations(args: RunExperimentsInput) -> RunExperimentsInput:
+    """Give each random entry that has no seed one chosen now, so that every
+    Monte Carlo the server runs can be replayed from what its cases record."""
+    if not any(
+        isinstance(item, RandomVariation) and item.seed is None for item in args.variations
+    ):
+        return args
+    variations = [
+        item.model_copy(update={"seed": secrets.randbelow(2**31)})
+        if isinstance(item, RandomVariation) and item.seed is None
+        else item
+        for item in args.variations
+    ]
+    return args.model_copy(update={"variations": variations})
+
+
 def _native_family(circuit_id: str, variations: list[Variation]) -> PdkNativeVariation | None:
     applicable = [
         item
@@ -1507,10 +1568,12 @@ def _append_terminal_cases(
         )
     for local_index, expanded in enumerate(descriptors):
         assignments = dict(expanded.assignments) if expanded is not None else {}
-        if expanded is not None and expanded.random_index is not None:
-            assignments["_random_run"] = expanded.random_index
-            if expanded.random is not None and expanded.random.id is not None:
-                assignments["_random_id"] = expanded.random.id
+        if (
+            expanded is not None
+            and expanded.random is not None
+            and expanded.random_index is not None
+        ):
+            assignments.update(random_identity(expanded.random, expanded.random_index))
         cases.append(
             ExperimentCase(
                 case_id=(

@@ -1799,6 +1799,21 @@ async def test_an_equivalent_comparison_commits_and_leaves_the_netlist_out(
     assert "stages" not in data
 
 
+async def test_a_measurement_with_a_parenthesis_left_open_is_not_added(asc_state, work_dir):
+    """LTspice 26 refused the recorded .meas like it and ran nothing
+    (log/meas_bad_syntax), so the sheet is not written with it."""
+    data = await _build_blank(
+        asc_state,
+        "open_meas",
+        [{"op": "add_directive", "instruction": ".meas tran m MAX V(out", "x": 64, "y": 96}],
+    )
+
+    assert data["outcome"] == "failed", data
+    assert data["commit_state"] == "not_committed"
+    assert "Add the ) that closes the ( it opens." in data["error"]["message"]
+    assert not (work_dir / "open_meas.asc").exists()
+
+
 async def test_replace_directive_reports_what_it_changed(asc_state, work_dir):
     """One call changes a directive's text, and the reply says where it was,
     what it was and what it is now."""
