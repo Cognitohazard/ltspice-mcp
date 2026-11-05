@@ -1193,6 +1193,26 @@ def lex_deck(netlist_text: str, *, title: bool = True) -> LexResult:
     )
 
 
+def unreadable_cards(cards: Iterable[SpiceCard]) -> list[tuple[SpiceCard, SpiceLexError]]:
+    """The cards whose body cannot be split into parts, with the reason: an
+    unclosed quote, brace or parenthesis, or a closer with nothing open.
+
+    ``lex`` keeps such a card whole, and every rule that reads a card's parts
+    leaves it out, so a check reports these cards to say what it did not look
+    at. Comments, blank lines and the lines of a control block are text, not
+    cards with parts.
+    """
+    found: list[tuple[SpiceCard, SpiceLexError]] = []
+    for card in cards:
+        if card.kind in ("comment", "blank", "control"):
+            continue
+        try:
+            tokenize_body(card.body)
+        except SpiceLexError as exc:
+            found.append((card, exc))
+    return found
+
+
 # ---------------------------------------------------------------------------
 # Emit
 # ---------------------------------------------------------------------------
