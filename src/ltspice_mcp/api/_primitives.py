@@ -139,6 +139,9 @@ class RawResult:
 
     @property
     def source(self) -> Path:
+        """The ``.raw`` file this result was read from: the one the case's run
+        wrote (its other raw, with ``other_raw``) when loaded by ``job_id``,
+        else the path given, resolved."""
         return self._source
 
     @property

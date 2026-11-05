@@ -453,7 +453,8 @@ variations           list[Variation]    Appendix A.1. assign entries combine by
 execution            {wait_s?, run_timeout_s?, job_deadline_s?, max_parallel?,
                       simulator?: "ltspice"|"ngspice"|"qspice"|"xyce"|
                                   "<family>:<name>", recoverable?: bool,
-                      simulator_seed?: int, keep_partial_raw?: bool}
+                      simulator_seed?: int, keep_partial_raw?: bool,
+                      results_beside_sheet?: bool}
 analyze              {recipes: list[Recipe], group_by?, step?, all_steps?,
                       plot_index?, dialect?, include?}
                                         attached analysis stage; `recipes` is
@@ -676,7 +677,9 @@ copies, so editing an original afterwards does not change the job, and every
 reported number cites the hash of the deck that produced it.
 
 By default, a reference that cannot be staged fails that circuit's submission
-with an `include_unstaged` error naming the reference. With
+with an `include_unstaged` error naming the reference. An include or library
+card with a quote or bracket left open, or a closer with nothing open,
+always does, at its line, since which file it names is not known. With
 `allow_live_includes: true`, runs read those files in place, the manifest
 marks them `live: true`, and an observation reports the weaker provenance.
 Every live reference is listed.
@@ -783,6 +786,29 @@ beside the sheet it ran, where LTspice's window opens a sheet's results. A
 receipt of a job that ran an `.asc` in LTspice contains one
 `results_not_beside_sheet` observation naming the sheets of its produced cases and
 `jobs(action="place_beside_sheet")`, which copies a case's results there.
+
+`execution.results_beside_sheet: true` does that copy as part of the run.
+Once every run has finished, each produced case's results are copied beside
+its sheet under the sheet's name, replacing any there, as the jobs action
+copies them, before the job reaches its final status, so `jobs(wait)` returns
+after the copy; the job folder keeps its own, which every read of the job
+takes. The receipt then has one
+observation per sheet instead of `results_not_beside_sheet`:
+`results_placed_beside_sheet`, whose `evidence` gives the `sheet`, the
+`case_id`, the `files` copied and any `assignments` the sheet does not show,
+or `results_not_placed`, whose `evidence.reason_code` is the code the jobs
+action would refuse with (`sheet_changed` when the sheet was edited during
+the run), `sheet_locked` when another server process held the sheet, or
+`copy_failed`; the last two name the action that copies the results once that
+is fixed. Neither observation costs the job its status. A cancelled job
+copies nothing, and a case that produced nothing leaves its sheet alone.
+The request is refused before it runs (`commit_state: "not_started"`) when a
+circuit is a netlist (`not_a_sheet`), when the job does not run on LTspice
+(`not_ltspice`), and when a sheet would run more than one case, by a
+variation or by being named twice (`several_cases_per_sheet`): a sheet holds
+one run's results, so the caller copies the case it wants afterwards. It
+cannot be combined with `recoverable`, since a resumed job's runs would
+finish without it. Left false, it is not part of the request's identity.
 
 **RunRecord** is a schema fragment shared by `run_experiments` and `jobs`:
 `{case_id?, run_index?, circuit?, assignments?, status?, raw?, log?,
@@ -2035,6 +2061,7 @@ Suppression is per call, and `linter_version` is reported in provenance.
 | `analysis-count-ltspice` | blocking | refused by LTspice 26 and XVII: two of `.tran`/`.ac`/`.dc`/`.noise` (`.op` may appear with one) |
 | `meas-function-ltspice` | blocking | refused by LTspice 26 and XVII: `vdb()`, `phase()` or `group_delay()` in a `.meas` |
 | `meas-name-ltspice` | blocking | refused by LTspice 26 and XVII: a `.meas` named `e`, `k`, `pi` or `q`, constants of the expression engine |
+| `meas-unclosed-paren-ltspice` | blocking | a `.meas` with a parenthesis left open. LTspice 26 refused the recorded one before the run and ran nothing, and XVII ran that deck without the measurement; any such `.meas` is refused, since LTspice 26's error names the parenthesis, not the form. `verify_circuit`'s `syntax` check reports the same as a `directive_syntax` error, and `edit_schematic` refuses to write it |
 | `lib-section-ltspice` | blocking | refused by LTspice 26 and XVII: `.lib file section`, which LTspice reads as one file name |
 | `byte-85-ltspice` | warning | LTspice: a byte 0x85 in an 8-bit deck or include with a card after it on the line, which LTspice 24 and later read as a line break and XVII does not; not reported when the session's LTspice is known to be XVII |
 | `node-control-byte-ltspice` | warning | LTspice: a node name in an 8-bit file containing a byte from 0x80 to 0x9F, a control character to LTspice, which LTspice 26 refuses and XVII saves under a name the server spells differently |
@@ -2048,7 +2075,7 @@ Suppression is per call, and `linter_version` is reported in provenance.
 | `step-ngspice` | warning | ngspice: a `.step`, which ngspice ignores in batch mode, so the deck runs once at the base value |
 | `temp-as-param` | blocking | a deck that sweeps temperature as a parameter (§3.1) |
 | `duplicate-param` | warning | an instance, `.model` or `.subckt` card giving one parameter more than once, in any case; which copy the simulator reads is not known, and `verify_circuit` reports the same as `duplicate_parameter` |
-| `unreadable-card` | warning | a card no rule can split into its parts: an unclosed quote, brace or parenthesis, or a closer with nothing open. The other rules leave it out, and the names and nodes on it count as defined and connected, so no rule reports something on a guess about it; `verify_circuit` reports the same as `unreadable_card` |
+| `unreadable-card` | warning | a card no rule can split into its parts: an unclosed quote, brace or parenthesis, or a closer with nothing open. The other rules leave it out. On a part, `.subckt` header or `.global` its words count as connected and defined nodes and names, so no rule reports something on a guess about it; a variation or random rule on a part, `.model` or `.param` name a card like it may declare is refused (`ambiguous_target`). It covers the deck and its staged includes, and an include card in a live include, for which `model-missing` then says nothing. What a simulator does with such a card is recorded only for the `.meas` of `meas-unclosed-paren-ltspice`; `verify_circuit` reports the same as `unreadable_card` |
 | `value-suffix-mojibake` | blocking | a suffix showing the file was decoded in an encoding it was not written in, such as the `Âµ` a UTF-8 `µ` becomes under cp1252; the simulator reads the bare number, off by a factor of 1e6 |
 | `value-suffix-nonascii` | warning | any other symbol after a number, such as `10Ω` or `25°C`, read as the bare number, which is usually the intended value. Staging spells a `µ`/`μ` as `u` before the deck is linted; for a deck run elsewhere `verify_circuit` reports it as one observation per file, or as a warning per value when a reader the server knows of (LTspice XVII) would decode the file differently |
 
@@ -2209,7 +2236,7 @@ it, and reported when the caller names it.
 | `tone` | tran | `signal`, `frequency_hz` | `window?`; cut to the whole periods of `frequency_hz` that fit from the window's first sample and resampled by linear interpolation onto evenly spaced times, as `thd` does by default, so samples weigh by time. `amplitude` (peak, signal unit), `phase_deg` in (-180, 180] for `dc + amplitude*sin(2*pi*f*t + phase_deg)` with `t` the run's own time from zero, `sin_component`, `cos_component`, `dc`, plus `t_start`, `t_end`, `n_cycles`. Reducible leaves: `amplitude`, `phase_deg`, `dc`, `sin_component`, `cos_component`; a spread of `phase_deg` that straddles 180 degrees reduces the wrapped value, the components do not wrap |
 | `bode_filter` | ac | `signal` | filter characteristics: fc, bw, Q, type; a cutoff is read at the half-power level (-3.0103 dB) below the passband |
 | `bode_point` | ac | `signal`, `at_hz` | gain and phase at a frequency |
-| `bode_crossing` | ac | `signal`, exactly one of `level_db` / `level_deg` | `level_deg` scans the unwrapped phase, so a crossing past 180 degrees is found once rather than at every wrap; `phase_deg` remains accepted as an alias |
+| `bode_crossing` | ac | `signal`, exactly one of `level_db` / `level_deg`; `ref_hz` with `level_db` | `level_deg` scans the unwrapped phase, so a crossing past 180 degrees is found once rather than at every wrap; `phase_deg` remains accepted as an alias. `ref_hz` measures `level_db` from the gain at that frequency, read as `bode_point` reads it, so the half-power point below a reference is one call; the value's `level` is then the absolute level crossed, and its `reference` gives `frequency_hz`, `magnitude_db` and the relative `level_db`. A `ref_hz` outside the sweep is refused |
 | `bode_slope` | ac | `signal`, `from_hz`, `to_hz` | dB per decade |
 | `stability` | ac | `signal` | phase margin = 180 degrees + phase at unity gain, positive being stable. Reducible leaves: `phase_margin_deg`, `gain_margin_db`, `unity_gain_hz`, `dc_gain_db` |
 | `ac_structure` | ac | `signal` | structural poles and zeros |

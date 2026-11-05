@@ -103,6 +103,7 @@ from ltspice_mcp.lib.spice_lex import (
     iter_by_kind,
     lex_deck,
     subckt_children,
+    unreadable_cards,
 )
 from ltspice_mcp.lib.spice_lex_ops import SECTION_SIGN
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, SubcktCard
@@ -784,6 +785,11 @@ def _collect_subckts(
     cannot break the comparison.
     """
     try:
+        # Every directive that cannot be split into parts is a malformed card
+        # here, as an instance is, so the graph is never partial: the section
+        # and include readers raise on an unreadable reference only.
+        for _card, error in unreadable_cards(card for card in cards if card.kind == "directive"):
+            raise error
         sections = card_sections(cards, origin, closure_depth(depth))
         references = {
             id(reference.card): reference
