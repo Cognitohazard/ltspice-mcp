@@ -18,8 +18,9 @@ connect, and the server draws the wire. An edit that would connect
 something by accident, such as a wire over another part's pin or a label that
 shorts two nets, is refused with the reason before anything is written, so
 the assistant can fix it on the next call. The server also reports parts and
-text drawn on top of each other, so the finished sheet is easy to read. On
-Windows, the edits appear in an LTspice window you have open.
+text drawn on top of each other, so the finished sheet is easy to read. With
+LTspice 26.1 or later on Windows, the edits appear in an LTspice window you
+have open ([Working with LTspice open](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#working-with-ltspice-open)).
 
 The schematics and netlists are ordinary files that you can open in LTspice
 yourself. The same engine is also a Python package, `ltspice_mcp.api`, for
@@ -60,8 +61,8 @@ JSON.
 either one on Windows and Linux. On WSL, set the LTspice path yourself
 ([WSL](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#wsl)).
 Editing `.asc` schematics needs LTspice, because the server uses LTspice's
-symbol libraries. Reading and checking netlists works without a simulator. The plugin and the extension need
-[`uv`](https://docs.astral.sh/uv/).
+symbol libraries. Reading and checking netlists works without a simulator.
+The plugin and the extension need [`uv`](https://docs.astral.sh/uv/).
 
 **macOS is not supported yet: the server cannot read simulation results
 there.** It reads each `.raw` and `.log` file in a separate process with a
@@ -79,108 +80,26 @@ Then add this rule to your project's `CLAUDE.md` or your client's equivalent:
 If you prefer a less strict rule, [When the shell is fine](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#when-the-shell-is-fine)
 lists the cases in which running the simulator from the shell is acceptable.
 
-## What you can ask
-
-### Simulate and measure
-
-> *"Bias this NMOS common-source stage into saturation at 100 µA and report gm/ID."*
-
-The assistant writes a netlist, runs an operating point, and reads the
-transistor's drain current, gm, gds, VDS and VDSAT from the reply. If VDS is
-below VDSAT, it moves the bias and runs again.
-
-The server reads the simulator's binary output itself and measures:
-
-- **Transient:** rise and fall time, overshoot, settling, delay, period, duty
-  cycle, jitter, RMS, THD, and the amplitude and phase of one tone.
-- **AC and noise:** filter cutoffs, gain and phase at a frequency, stability
-  margins, resonance and Q, poles and zeros, return loss and VSWR, integrated
-  noise.
-- **Operating point:** node voltages, branch currents, and each device's gm,
-  gds, vth and other small-signal parameters, on both simulators.
-- **`.meas`:** the deck's own measurements, including those that failed.
-
-A measurement can be given a limit, and the reply says whether each run
-meets it. The reply lists simulator warnings next to the values they affect,
-such as a singular-matrix warning from an ngspice run that still wrote
-plausible values. The server can also measure a `.raw` file simulated
-elsewhere.
-
-- *"What's the overshoot and settling time of this regulator's step response?"*
-- *"Is this loop stable?"* (phase and gain margin at every crossover)
-- *"What's the resonant frequency and Q of this series RLC?"*
-- *"Characterize this NMOS: gm and gm/ID vs VGS."*
-- *"Find an N-channel power MOSFET for a low-side switch and measure the on-state drop."*
-
-### Sweeps, corners and Monte Carlo
-
-One `run_experiments` call can sweep several parameters at once, swap models
-for process corners, and run Monte Carlo with component tolerances, `.MODEL`
-parameter spread and Pelgrom device mismatch. A parameter can be set on one
-device inside nested subcircuits. With an installed Sky130 PDK, the server
-samples process and mismatch variation from the PDK's own statistical
-models. Only its 1.8 V NMOS is supported so far. The reply gives statistics across the runs,
-and any single run can be measured on its own.
-
-- *"Run a 200-run Monte Carlo with 5% resistors and tell me the output spread."*
-- *"Sweep the load from 100 Ω to 10 kΩ and find where efficiency drops."*
-- *"Does the phase margin stay above 45° at every corner?"*
-- *"What does 5 mV of threshold mismatch in the input pair do to the offset?"*
-
-Each simulation runs as a job, which can be cancelled or given a time limit.
-`run_experiments` waits up to 60 seconds, then returns the job ID and leaves
-the job running. Job records are kept in the working directory, so a
-restarted server can still read earlier jobs. A job submitted with
-`execution.recoverable` can rerun the cases a stopped server left unfinished.
-
-### Schematics and netlists
-
-The server creates and edits LTspice `.asc` files: it places, moves and
-replaces parts, wires pins, labels nets and adds directives. A batch of edits
-is written whole or not at all, so a whole build is one call, and a batch
-that fails leaves the file as it was. Besides accidental connections, the
-server refuses diagonal wires, which LTspice connects anywhere along their
-length, and any edit to a file that changed since the assistant last read it,
-so it never overwrites a change you made. It reports floating pins and
-dangling wires and labels, which are usually unfinished work.
-
-The assistant edits netlists (`.cir`, `.net`, `.sp`) with its own file tools,
-and the server checks them before they run. It can trace a net or list the
-parts in either kind of file, and compare a schematic with a netlist. For a
-netlist built from subcircuits, it lists every device inside them under the
-name the simulator gives it, such as `x1.m3`. It also searches the installed
-model libraries for a part, and draws a schematic as a PNG the assistant can
-look at.
-
-You and the assistant can work on the same circuit: the server reads your
-changes from the file on its next call, and you can open anything it writes.
-
-- *"Build this differential pair as a schematic I can open in LTspice."*
-- *"I drew this in LTspice. Why doesn't the output move?"*
-- *"Does my schematic match this netlist?"*
-- *"Replace Q1 with a 2N3906 and keep it wired."*
-
-### With the schematic open in LTspice
-
-On Windows with LTspice 26.1 or later, an edit to a schematic you have open
-appears in the LTspice window, and Ctrl+Z undoes it. If the window has
-unsaved changes, the server refuses the edit and the assistant asks you to
-save first. The assistant can also see which schematic is in front, open a
-schematic or a finished run in LTspice with the traces you named already
-plotted, and read LTspice's own help files.
-
-- *"Add a 10 pF load to the circuit I have open."*
-- *"Show me V(out) and I(L1) from that run in LTspice."*
-
-[Working with LTspice open](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#working-with-ltspice-open)
-has the details.
-
 **LTspice's own MCP server.** LTspice 26.1 and later include an MCP server,
 which registers as `ltspice` and can run beside this one. It drives the
 LTspice window and returns raw samples and logs, leaving measurements and
 Monte Carlo setup to the assistant. This server does not need it. [Alongside
 LTspice's own MCP server](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#alongside-ltspices-own-mcp-server)
-describes a setting you may want to change on LTspice's side.
+describes an LTspice setting you may want to change.
+
+## What you can ask
+
+- *"Size this NMOS common-source stage for 100 µA at a gm/ID of 15, and check
+  that it stays in saturation at the slow and fast corners."*
+- *"Here's my LDO schematic. What are the overshoot and settling time for a
+  1 mA to 100 mA load step, and how much phase margin does it have at full
+  load?"*
+- *"Run 500 Monte Carlo samples with 1% resistors and mismatch in the input
+  pair, and tell me what fraction keep the output offset under 1 mV."*
+- *"Find an N-channel MOSFET in the LTspice library for a 12 V, 5 A low-side
+  switch, and compare the conduction loss of the three best candidates."*
+- *"I have my filter open in LTspice and the output doesn't move. Find out
+  why, fix it, and show me V(out)."*
 
 ## Supported simulators
 
