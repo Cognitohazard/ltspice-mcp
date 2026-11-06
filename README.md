@@ -4,27 +4,28 @@
 
 > **Work in progress.** Expect breaking changes across versions.
 
-ltspice-mcp is an MCP server for circuit simulation. It lets an AI assistant
-run LTspice or ngspice and get the results back as named measurements, such
-as cutoff frequency, phase margin, overshoot, or a transistor's gm and vth.
-Sweeps, corners and Monte Carlo run as background jobs, with statistics
-across the runs.
+ltspice-mcp is an MCP server that lets an AI assistant simulate circuits with
+LTspice or ngspice, and build or edit LTspice schematics.
 
-The assistant can also build and edit LTspice `.asc` schematics. Without the
-server, an assistant edits the `.asc` text directly and can connect a pin by
-mistake, for example by running a wire across it. Nothing reports this until
-a simulation gives a wrong answer, often several turns later. This server
-routes each wire itself, between pins the assistant names. An edit that would
-connect something by accident, such as a wire over another part's pin or a
-label that shorts two nets, is refused with the reason before anything is
-written, so the assistant can fix it on the next call. The server also
-reports parts and text drawn on top of each other, which make a sheet hard to
-read. With LTspice 26.1 or later on Windows, the edits appear in an LTspice
-window you have open ([Working with LTspice open](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#working-with-ltspice-open)).
+An assistant editing circuit files as text makes mistakes that nothing
+reports, such as a wire that touches the wrong pin. It finds them only turns
+later, when a simulation comes out wrong. This server checks a schematic edit
+mechanically before writing it, and a netlist before running it. When it
+refuses something, it says what to fix. A check that covers only part of a
+circuit says which part. The rules behind the checks, such as which points of
+a schematic form one net, come from recordings of what LTspice 26 and XVII
+do.
 
-The schematics and netlists are ordinary files that you can open in LTspice
-yourself. The same engine is also a Python package, `ltspice_mcp.api`, for
-scripts and optimizers. The server is built on [spicelib](https://github.com/nunobrum/spicelib).
+The server is also built to keep the assistant's context small. Results come
+back as named numbers, such as a phase margin or a transistor's gm, instead
+of waveforms to read. A sweep, a Monte Carlo run or a whole schematic build
+is one call. Large results stay on disk until the assistant asks for them.
+
+You can open anything the server writes in LTspice. On Windows, with LTspice
+26.1 or later, its edits also appear in an LTspice window you have open
+([Working with LTspice open](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#working-with-ltspice-open)).
+The same engine is a Python package, `ltspice_mcp.api`, for scripts. The
+server is built on [spicelib](https://github.com/nunobrum/spicelib).
 
 ## Quick start
 
