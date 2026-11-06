@@ -18,6 +18,7 @@ import pytest
 from pydantic import ValidationError
 
 from ltspice_mcp.lib import result_store
+from ltspice_mcp.lib.projection import absent_path_warnings, key_outline
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze, experiments, jobs, receipts
 from ltspice_mcp.tools.analyze import (
@@ -188,6 +189,44 @@ async def test_include_fields_read_the_same_on_analyze_results_and_the_attached_
     if case == "absent leaf":
         (warning,) = page["results"]["k"].get("warnings", [])
         assert "'value.rmss' is absent" in warning and "rms" in warning
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "assignments._random_seed",
+        "assignments._random_run",
+        "assignments.R1",
+        "assignments.R2",
+        "value.rms",
+        "value.rms.deep",
+        r"value.v(x1\.out)",
+        "value.v(x1.out)",
+        "value._private",
+        "missing.leaf",
+    ],
+)
+def test_a_saved_key_outline_warns_as_the_rows_it_outlines(path: str) -> None:
+    """An attached analysis keeps a key outline in place of its rows and checks a
+    projection against it, so the outline must answer every path as the rows
+    do. It once left out each key starting with '_', so a projection of a
+    random case's 'assignments._random_seed' was called absent from rows that
+    all carried it."""
+    rows = [
+        {
+            "source": "a",
+            "assignments": {"R1": "1k", "_random_seed": 3, "_random_run": 0},
+            "value": {"rms": 1.0, "v(x1.out)": 2.0, "_private": {"x": 1}},
+        },
+        {"source": "b", "assignments": {"_random_seed": 3, "_random_run": 1}, "value": {}},
+    ]
+
+    assert absent_path_warnings([key_outline(rows)], [path], **_WARNING_ARGS) == (
+        absent_path_warnings(rows, [path], **_WARNING_ARGS)
+    )
+
+
+_WARNING_ARGS: dict[str, str] = {"argument": "include.fields", "rows_name": "row"}
 
 
 async def test_a_continued_page_keeps_the_resolved_view(

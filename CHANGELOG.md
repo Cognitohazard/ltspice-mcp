@@ -10,6 +10,15 @@ tool-surface changes.
 
 ### Breaking
 
+- `resvg-py`, the PNG rasterizer, is a dependency: every install draws a
+  schematic or an attached plot as a PNG, which is the only image an
+  assistant can see, without the `raster` extra. The extra stays, empty, so a
+  launch line that names it (`uvx --from 'ltspice-mcp[raster]' ltspice-mcp`)
+  still works. `resvg-py` ships prebuilt wheels for Windows, macOS and Linux
+  and loads no native library. Where it cannot be imported, the reply's
+  `missing` (in `inspect(kind="capabilities")`'s `render`, and in a render's
+  `png_unavailable`) now reads `"dependency"` instead of `"extra"`, and the
+  remedy is to reinstall the server.
 - A reply's text block is its `structuredContent` serialized as JSON, as the
   MCP specification recommends, in place of a one-line summary. A client that
   passes the model only the text now gives it the data, and a failed call's
@@ -79,6 +88,15 @@ tool-surface changes.
   `ValueError`, so code that caught `TypeError` here should catch
   `ApiValidationError`. A value that holds itself no longer raises
   `RecursionError` in any call.
+- A `random` variation's seed draws different values than it did in earlier
+  versions, so a seeded Monte Carlo run from 0.7.0 does not reproduce. Its
+  draws were keyed on the case's position in the expanded list, so with
+  several `assign` values each value drew its own numbers, and adding a value
+  changed the draws of every case after it under the same seed. A sample's
+  draws now depend only on the seed, its circuit id and its sample index:
+  every case of one sample draws the same deviation at each `assign` value, so
+  a sweep compares the same die at each corner, and adding a value leaves the
+  other draws as they were.
 
 ### Added
 
@@ -101,9 +119,10 @@ tool-surface changes.
   index (`_random_run`) and its seed (`_random_seed`) in its assignments, and
   an entry without a `seed` gets one the server chooses, so a Monte Carlo run
   without one is no longer impossible to repeat. A new `sample_start` sets the
-  first sample index: with the same seed, `runs: 1, sample_start: 7` draws
-  what sample 7 drew in the full run. A retry of a seedless request under the
-  same `request_id` returns the job it made, with that job's seed.
+  first sample index: with the same seed and circuit id, `runs: 1,
+  sample_start: 7` draws what sample 7 drew in the full run. A retry of a
+  seedless request under the same `request_id` returns the job it made, with
+  that job's seed.
 - `edit_schematic`'s `replace_directive` op changes one directive's or
   comment's text in one call. Its `instruction` names the text as
   `remove_directive` does, the whole text or `regex:`, and must name one, or
@@ -173,6 +192,12 @@ tool-surface changes.
   `m` on an X line, so the draw's area counts only the device's own `m`.
   Such a rule used to be refused with `unsupported_backend`, a code the server
   no longer returns.
+- CI: a `checks / check-macos` job runs the suite on a native macOS runner,
+  with ngspice and Cairo from Homebrew. Reading results is still refused on
+  macOS, so a test that fails only because of that refusal is reported as
+  skipped, with the refusal as its reason, and so is a test of a recoverable
+  ngspice run, which the server also refuses there. Every other test must
+  pass. The release gate runs the job too, since it calls the same checks.
 
 
 ### Changed
@@ -243,6 +268,14 @@ tool-surface changes.
   measurement that cannot be given an entry now fails the measurements read
   and names it, where it was left out. An unreadable value is quoted as the
   log printed it (`vth^2`), not as spicelib cut it short (`vth`).
+- An attached analysis on `run_experiments` no longer warns that an
+  `include.fields` path whose key starts with `_` is absent from every row.
+  It checks a projection against a key outline saved with the result, and
+  that outline left out every such key, so `assignments._random_run` or
+  `assignments._random_id` was called absent while each row it returned
+  carried it; `analyze_results` gave no such warning. The outline now keeps
+  every key, so both give the same warnings. A result saved before this
+  version keeps its old outline.
 - A card with a quote, brace or parenthesis left open, or a closer with
   nothing open, such as `R1 in out {1k`, cannot be split into its parts, and
   every check left it out without a word, so `verify_circuit` and the linter
@@ -273,14 +306,6 @@ tool-surface changes.
   target refuse a card they need in that state by its file and line. The
   `unreadable-card` lint rule covers staged includes too, and a live include
   holding such an include card, for which `model-missing` says nothing.
-- A `random` variation no longer redraws a sample when other cases change. Its
-  draws were keyed on the case's position in the expanded list, so with
-  several `assign` values each value drew its own numbers, and adding a value
-  changed the draws of every case after it under the same seed. A sample's
-  draws now depend only on the seed, its circuit and its sample index: every
-  case of one sample draws the same values at each `assign` value, so a sweep
-  compares the same die at each corner. A given seed therefore draws different
-  values than it did in earlier versions.
 - The Python API's `inspect` returns every row of a paged query. It follows
   each query's cursor, and joined the pages only where an item paged two
   lists, so for every kind that pages one (`components`, `symbols`, `model`,

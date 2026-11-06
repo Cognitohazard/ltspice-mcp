@@ -1,9 +1,9 @@
 """Behavior tests for image return: rasterization and the MCP image response.
 
-Rasterization depends on an optional package, so the tests that need a real PNG
-skip when it is absent — but the *degradation* path is tested unconditionally by
-failing the import the way a deployment without it does (the
-``raster_extra_missing`` and ``raster_native_missing`` fixtures in conftest).
+The tests that need a real PNG skip where no rasterizer loads, but the
+*degradation* path is tested unconditionally by failing the import the way a
+deployment that lost resvg-py does (the
+``raster_dependency_missing`` and ``raster_native_missing`` fixtures in conftest).
 That is the branch such a deployment actually runs, so it must not be the
 branch that only gets exercised when someone happens not to have a rasterizer
 installed.
@@ -68,7 +68,7 @@ def test_scale_is_the_cost_lever() -> None:
 
 @pytest.mark.parametrize("hidden", ["cairosvg", "resvg_py"])
 def test_each_rasterizer_draws_on_its_own(monkeypatch: pytest.MonkeyPatch, hidden: str) -> None:
-    """The extra's resvg-py, which loads no native library, is tried first and
+    """resvg-py, which loads no native library, is tried first and
     cairosvg after it; either alone draws the picture at the asked scale."""
     finder = fail_imports(monkeypatch, {hidden: not_installed(hidden)})
     support = raster_support()
@@ -97,9 +97,9 @@ def test_text_rendering_survives_caller_thread_exit() -> None:
         assert image.data.startswith(_PNG_MAGIC)
 
 
-def test_scale_is_validated_without_the_extra(raster_extra_missing: None) -> None:
-    # Whether an invalid argument is rejected must not depend on which optional
-    # packages are installed, or the same call raises on one machine and quietly
+def test_scale_is_validated_without_a_rasterizer(raster_dependency_missing: None) -> None:
+    # Whether an invalid argument is rejected must not depend on which
+    # rasterizers can be loaded, or the same call raises on one machine and quietly
     # degrades on another.
     with pytest.raises(ValueError, match="scale must be positive"):
         render_image(TINY_SVG, image_format=PNG, scale=-1)
@@ -107,13 +107,13 @@ def test_scale_is_validated_without_the_extra(raster_extra_missing: None) -> Non
         raster.rasterize_svg(TINY_SVG, scale=-1)
 
 
-def test_scale_is_validated_for_vector_requests_too(raster_extra_missing: None) -> None:
+def test_scale_is_validated_for_vector_requests_too(raster_dependency_missing: None) -> None:
     with pytest.raises(ValueError, match="scale must be positive"):
         render_image(TINY_SVG, image_format=SVG, scale=0)
 
 
-def test_svg_request_never_rasterizes(raster_extra_missing: None) -> None:
-    # Vector output must not depend on the optional package at all.
+def test_svg_request_never_rasterizes(raster_dependency_missing: None) -> None:
+    # Vector output must not depend on a rasterizer at all.
     image = render_image(TINY_SVG, image_format=SVG)
     assert image.image_format == SVG
     assert image.mime_type == "image/svg+xml"
@@ -124,29 +124,35 @@ def test_svg_request_never_rasterizes(raster_extra_missing: None) -> None:
     assert image.data.decode("utf-8") == TINY_SVG
 
 
-def test_png_request_degrades_to_svg_without_the_extra(raster_extra_missing: None) -> None:
-    # The point of the mechanism: a missing optional dependency downgrades the
-    # render, it does not fail the call.
+def test_png_request_degrades_to_svg_without_a_rasterizer(raster_dependency_missing: None) -> None:
+    # The point of the mechanism: a rasterizer that cannot be loaded downgrades
+    # the render, it does not fail the call.
     image = render_image(TINY_SVG, image_format=PNG)
     assert image.image_format == SVG
     assert image.data.decode("utf-8") == TINY_SVG
     assert image.note is not None
-    assert "'raster' extra" in image.note  # names the extra that fixes it
+    assert "resvg-py, which ltspice-mcp depends on" in image.note  # names what is missing
     # The same fact as data, for a caller that acts on it rather than reads it.
     assert image.png_unavailable is not None
-    assert image.png_unavailable.missing == "extra"
+    assert image.png_unavailable.missing == "dependency"
     assert image.png_unavailable.remedy is not None
-    assert "ltspice-mcp[raster]" in image.png_unavailable.remedy
+    assert "uv tool install --reinstall ltspice-mcp" in image.png_unavailable.remedy
 
 
-def test_missing_extra_is_reported_as_the_extra(raster_extra_missing: None) -> None:
+def test_a_missing_dependency_is_reported_as_the_dependency(
+    raster_dependency_missing: None,
+) -> None:
     support = raster_support()
     assert support.png is False
-    assert support.missing == "extra"
-    assert support.reason is not None and "'raster' extra" in support.reason
-    assert support.remedy is not None and "ltspice-mcp[raster]" in support.remedy
-    # A server run from a source checkout installs the extra into the checkout.
-    assert "uv sync --extra raster" in support.remedy
+    assert support.missing == "dependency"
+    assert (
+        support.reason is not None and "resvg-py, which ltspice-mcp depends on" in support.reason
+    )
+    assert (
+        support.remedy is not None and "uv tool install --reinstall ltspice-mcp" in support.remedy
+    )
+    # A server run from a source checkout gets it back with a sync.
+    assert "uv sync in the checkout" in support.remedy
     assert raster_available() is False
 
 
@@ -154,8 +160,8 @@ def test_missing_native_library_is_reported_as_the_library(
     raster_native_missing: None,
 ) -> None:
     """cairosvg is installed without its native library: the reason names the
-    library, and the remedy offers the extra, which needs none, before the
-    library for this platform."""
+    library, and the remedy offers reinstalling, which brings back resvg-py
+    and needs no library, before the library for this platform."""
     support = raster_support()
     assert support.png is False
     assert support.missing == "native_library"
@@ -167,7 +173,7 @@ def test_missing_native_library_is_reported_as_the_library(
     assert 'no library called "cairo-2" was found' in support.reason
     assert "\n" not in support.reason
     assert support.remedy is not None
-    assert support.remedy.startswith(raster._EXTRA_REMEDY)
+    assert support.remedy.startswith(raster._DEPENDENCY_REMEDY)
     assert support.remedy.endswith(raster.native_library_remedy(sys.platform))
 
 
@@ -199,12 +205,14 @@ def test_a_working_rasterizer_reports_png_support() -> None:
     assert asdict(support) == {"png": True, "missing": None, "reason": None, "remedy": None}
 
 
-def test_direct_rasterize_raises_when_unavailable(raster_extra_missing: None) -> None:
+def test_direct_rasterize_raises_when_unavailable(raster_dependency_missing: None) -> None:
     # render_image degrades; the lower-level call is explicit about failing, so
     # a caller that genuinely requires a bitmap can detect it.
-    with pytest.raises(RasterUnavailableError, match="'raster' extra") as caught:
+    with pytest.raises(
+        RasterUnavailableError, match="resvg-py, which ltspice-mcp depends on"
+    ) as caught:
         raster.rasterize_svg(TINY_SVG)
-    assert caught.value.support.missing == "extra"
+    assert caught.value.support.missing == "dependency"
 
 
 def test_the_unavailable_error_survives_pickling(raster_native_missing: None) -> None:
@@ -242,7 +250,7 @@ def test_raster_reports_its_pixel_size_and_cost() -> None:
     assert image.estimated_tokens == round(40 * 20 / 750)
 
 
-def test_vector_has_no_pixel_size_or_token_estimate(raster_extra_missing: None) -> None:
+def test_vector_has_no_pixel_size_or_token_estimate(raster_dependency_missing: None) -> None:
     image = render_image(TINY_SVG, image_format=SVG)
     assert image.width is None
     assert image.height is None
@@ -265,9 +273,9 @@ def test_a_missing_native_cairo_library_counts_as_no_rasterizer(
     raster_native_missing: None,
 ) -> None:
     """cairocffi raises OSError, not ImportError, when cairosvg is installed
-    but libcairo is not — the state of a CI runner or a bare host that pip
-    installed the extra on. That must read as "no rasterizer here", not escape
-    from a render call."""
+    but libcairo is not — the state of a host that has cairosvg but lost
+    resvg-py. That must read as "no rasterizer here", not escape from a
+    render call."""
     assert raster_available() is False
     image = render_image(TINY_SVG, image_format=PNG)
     assert image.image_format == SVG
@@ -276,4 +284,4 @@ def test_a_missing_native_cairo_library_counts_as_no_rasterizer(
     assert image.png_unavailable.missing == "native_library"
     # cairosvg is installed; the note blames its library, not the package.
     assert image.note is not None and "Cairo" in image.note
-    assert "cairosvg is installed" in image.note
+    assert "cairosvg, tried in its place, is installed" in image.note

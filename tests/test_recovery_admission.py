@@ -27,11 +27,13 @@ from ltspice_mcp.lib.recovery_journal import load_journal
 from ltspice_mcp.lib.recovery_records import CaseAttempt, CaseRecovery, RecoveryError
 from ltspice_mcp.lib.simulator_build import executable_identity
 from ltspice_mcp.lib.store import Store
+from tests.conftest import needs_controlled_startup
 from tests.test_resume_surface import _DECK, _state
 
 pytestmark = [
     pytest.mark.asyncio,
     pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH"),
+    needs_controlled_startup,
 ]
 
 

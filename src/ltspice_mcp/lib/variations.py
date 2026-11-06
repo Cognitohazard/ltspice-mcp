@@ -322,10 +322,10 @@ class RandomVariation(VariationModel):
         default=None,
         description="Omitted, the server picks one and records it as '_random_seed'.",
     )
-    sample_start: int = Field(
+    sample_start: StrictInt = Field(
         default=0,
         ge=0,
-        description="First sample index; sample k draws the same values in any run.",
+        description="First sample index; sample k draws the same deviations in any run.",
     )
     applies_to: list[str] | None = Field(default=None, description=_APPLIES_TO_DESCRIPTION)
     rules: list[RandomRule] = Field(
@@ -357,6 +357,8 @@ class PdkNativeVariation(VariationModel):
     )
     profile: str = Field(description="Supported profile: sky130-e6f9c887-ngspice-v1 for ngspice.")
     mode: Literal["nominal", "mismatch", "process", "combined"]
+    # Unlike a random entry's, this sample_start stays in the request
+    # fingerprint at 0: native requests were recorded with it.
     sample_start: StrictInt = Field(
         default=0, ge=0, description="Nonnegative logical index for replaying a subset."
     )

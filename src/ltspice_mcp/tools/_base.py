@@ -965,9 +965,8 @@ class RenderPolicy(StrictModel):
     format: Literal["png", "svg"] = Field(
         default="png",
         description=(
-            "PNG (lossless, what a model looks at) needs the 'raster' extra, as "
-            "inspect capabilities reports; without it the render degrades to "
-            "SVG and says why."
+            "PNG (lossless, what a model looks at); where no rasterizer loads, as "
+            "inspect capabilities reports, the render degrades to SVG and says why."
         ),
     )
     scale: float = Field(

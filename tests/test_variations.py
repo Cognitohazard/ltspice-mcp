@@ -18,6 +18,7 @@ from ltspice_mcp.lib.variations import (
     CircuitDeck,
     DeckFile,
     MismatchRule,
+    PdkNativeVariation,
     RandomVariation,
     Variation,
     VariationError,
@@ -558,6 +559,25 @@ class TestRandomExpansion:
         assert (
             case.assignments["random:component:R1"] == full[2].assignments["random:component:R1"]
         )
+
+    @pytest.mark.parametrize("value", [-1, 1.5, 2.0, True, "3"])
+    def test_a_sample_index_is_a_nonnegative_integer_not_a_coerced_one(self, value):
+        """A random entry's sample_start takes what a pdk_native entry's does:
+        a boolean or a numeric string is refused, not read as an index."""
+        with pytest.raises(ValidationError):
+            RandomVariation.model_validate({**_random().model_dump(), "sample_start": value})
+        with pytest.raises(ValidationError):
+            PdkNativeVariation.model_validate(
+                {
+                    "kind": "pdk_native",
+                    "id": "mc",
+                    "runs": 1,
+                    "seed": 1,
+                    "profile": "sky130-e6f9c887-ngspice-v1",
+                    "mode": "mismatch",
+                    "sample_start": value,
+                }
+            )
 
     def test_every_case_records_the_seed_it_was_drawn_from(self, tmp_path: Path):
         """The job record keeps each case's assignments and not the request, so

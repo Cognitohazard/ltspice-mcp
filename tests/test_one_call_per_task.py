@@ -32,6 +32,7 @@ from tests.conftest import (
     rc_transient_deck,
     recorded_fixture_simulator,
 )
+from tests.parser_refusal import needs_parsing
 
 pytestmark = pytest.mark.asyncio
 
@@ -202,6 +203,7 @@ async def test_repeating_a_request_id_answers_from_the_job_in_one_call(
 # ---------------------------------------------------------------------------
 
 
+@needs_parsing
 async def test_a_jobs_results_are_reduced_in_python_in_one_call(
     state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
