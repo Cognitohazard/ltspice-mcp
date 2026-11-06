@@ -209,8 +209,11 @@ def test_every_capped_reply_list_states_its_total_and_route() -> None:
         "(lib/format.py cap_note or cap_list), and are not listed with a reason: "
         + ", ".join(missing)
     )
-    stale = sorted(set(_ALLOWED) - set(found))
-    assert not stale, "allowed entries that no longer cap anything: " + ", ".join(stale)
+    stale = sorted(set(_ALLOWED) - _unnoted(found))
+    assert not stale, (
+        "allowed entries that no longer cap anything, or now say the total and the route: "
+        + ", ".join(stale)
+    )
     assert set(_NOT_REPLY_LISTS) <= _caps(modules()), "listed caps that are no longer caps"
 
 

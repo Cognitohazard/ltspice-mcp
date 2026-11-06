@@ -14,7 +14,7 @@ from typing import get_args
 import pytest
 
 from ltspice_mcp.lib import experiment_store
-from ltspice_mcp.lib.experiment_types import ExperimentStatus
+from ltspice_mcp.lib.experiment_types import AnalysisStatus, ExperimentCaseStatus, ExperimentStatus
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.jobs import handle_jobs
@@ -25,6 +25,13 @@ from tests.test_jobs_tool import _args, _assert_jobs_schema, _circuit, _experime
 _OWNERS = frozenset({"lib/experiment_types.py", "lib/job_types.py", "lib/job_lifecycle.py"})
 #: Every word a job record's status may be.
 _JOB_STATUS_WORDS = frozenset(get_args(ExperimentStatus))
+#: The job status words no case or analysis status shares: one of them alone
+#: says a collection holds a job's statuses.
+_JOB_ONLY_WORDS = (
+    _JOB_STATUS_WORDS
+    - frozenset(get_args(ExperimentCaseStatus))
+    - frozenset(get_args(AnalysisStatus))
+)
 
 
 def test_live_and_terminal_statuses_split_the_vocabulary() -> None:
@@ -55,13 +62,18 @@ def _collection_strings(node: ast.AST) -> set[str]:
     }
 
 
+def _holds_job_statuses(strings: set[str]) -> bool:
+    """Two or more job status words, or one that only a job's status has."""
+    return len(strings & _JOB_STATUS_WORDS) >= 2 or bool(strings & _JOB_ONLY_WORDS)
+
+
 def _status_sets_in(tree: ast.AST) -> set[str]:
-    """The scopes in ``tree`` that write a collection of two or more job status
-    words, a ``Literal[...]`` of them included."""
+    """The scopes in ``tree`` that write a collection of job status words
+    (``_holds_job_statuses``), a ``Literal[...]`` of them included."""
     return {
         name
         for name, nodes in scopes(tree)
-        if any(len(_collection_strings(node) & _JOB_STATUS_WORDS) >= 2 for node in nodes)
+        if any(_holds_job_statuses(_collection_strings(node)) for node in nodes)
     }
 
 
@@ -135,6 +147,8 @@ def test_the_status_set_rule_catches_what_it_names() -> None:
         "    return job.status in {'failed', 'skipped'}, job.status == 'completed'\n"
         "def read(job):\n"
         "    return job.status in TERMINAL_STATUSES, {'produced', 'skipped'}\n"
+        "def mixed(job):\n"
+        "    return job.status in {'interrupted', 'skipped'}\n"
     )
     assert _status_sets_in(tree) == {
         "failure",
@@ -145,6 +159,7 @@ def test_the_status_set_rule_catches_what_it_names() -> None:
         "Job.wait",
         "typed",
         "typed.inner",
+        "mixed",
     }
 
 

@@ -10,16 +10,23 @@ from __future__ import annotations
 
 import ast
 import functools
+from collections.abc import Mapping
 
 from tests._source_scan import modules, own_nodes, scopes
 
 
 @functools.cache
 def _called(name: str) -> list[str]:
-    """Where a function or method of that name is called, as ``module:line``."""
+    """Where a function or method of that name is called in the package, as
+    ``module:line``."""
+    return _calls_in(name, modules())
+
+
+def _calls_in(name: str, trees: Mapping[str, ast.AST]) -> list[str]:
+    """Where a function or method of that name is called in ``trees``."""
     return [
         f"{module}:{node.lineno}"
-        for module, tree in modules().items()
+        for module, tree in trees.items()
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and (
@@ -76,10 +83,31 @@ def _is_parts(node: ast.AST) -> bool:
     return isinstance(node, ast.Attribute) and node.attr == "components"
 
 
+#: spicelib's editor methods that find a part by the reference they are given,
+#: spelled exactly.
+_EXACT_PART_METHODS = frozenset(
+    {
+        "get_component",
+        "get_component_attribute",
+        "get_component_floatvalue",
+        "get_component_info",
+        "get_component_nodes",
+        "get_component_parameters",
+        "get_component_position",
+        "get_component_value",
+        "remove_component",
+        "set_component_attribute",
+        "set_component_parameters",
+        "set_component_position",
+        "set_component_value",
+    }
+)
+
+
 def _looks_up_a_part(node: ast.AST) -> bool:
     """Whether ``node`` finds a part by its reference spelled exactly: ``r in
-    parts``, ``r not in parts``, ``parts[r]``, ``parts.get(r)`` or
-    ``get_component(r)`` on any receiver."""
+    parts``, ``r not in parts``, ``parts[r]``, ``parts.get(r)``, or one of
+    spicelib's lookups by reference (``_EXACT_PART_METHODS``) on any receiver."""
     if isinstance(node, ast.Compare):
         return any(isinstance(op, (ast.In, ast.NotIn)) for op in node.ops) and any(
             _is_parts(side) for side in node.comparators
@@ -89,9 +117,9 @@ def _looks_up_a_part(node: ast.AST) -> bool:
     if isinstance(node, ast.Call):
         callee = node.func
         if isinstance(callee, ast.Name):
-            return callee.id == "get_component"
+            return callee.id in _EXACT_PART_METHODS
         if isinstance(callee, ast.Attribute):
-            return callee.attr == "get_component" or (
+            return callee.attr in _EXACT_PART_METHODS or (
                 callee.attr == "get" and _is_parts(callee.value)
             )
     return False
@@ -125,6 +153,18 @@ _PART_LOOKUPS: dict[str, str] = {
     "lib/schematic_ops.py:resolve_pin": "looks the part up after part_reference resolved it",
     "lib/schematic_ops.py:apply_op_inplace": (
         "each op looks its part up after part_reference resolved it"
+    ),
+    "lib/schematic_ops.py:_asc_component_value": (
+        "reads the part _set_or_create_value was given, resolved with part_reference"
+    ),
+    "lib/schematic_ops.py:_set_or_create_value": (
+        "sets the part _apply_component_value was given, resolved with part_reference"
+    ),
+    "lib/schematic_ops.py:_plan_move.inside": (
+        "reads a reference taken from the editor's own parts"
+    ),
+    "lib/schematic_ops.py:_apply_move": (
+        "moves the parts _plan_move resolved with part_reference or took from the editor"
     ),
     "lib/variations.py:_DeckTargets.component_sites": (
         "a deck's cards keyed by case-folded name, not a sheet's parts"
@@ -164,6 +204,10 @@ def test_the_part_lookup_rule_catches_what_it_names():
         "    return state.editor.get_component(ref)\n"
         "def bare(ref):\n"
         "    return get_component(ref)\n"
+        "def placed(editor, ref):\n"
+        "    return editor.get_component_position(ref)\n"
+        "def valued(editor, ref):\n"
+        "    editor.set_component_value(ref, '1k')\n"
         "class Ops:\n"
         "    found = REF in EDITOR.components\n"
         "    def outer(self, editor, ref):\n"
@@ -186,6 +230,8 @@ def test_the_part_lookup_rule_catches_what_it_names():
         "got",
         "handler",
         "bare",
+        "placed",
+        "valued",
         "Ops",
         "Ops.outer.inner",
         "<module>",
@@ -438,3 +484,23 @@ def test_a_sheets_files_are_found_by_the_sessions_library_alone():
     (``banned-api`` in ``pyproject.toml``); a method it cannot see is checked
     here."""
     assert [where for name in _SPICELIB_SEARCHES for where in _called(name)] == []
+
+
+def test_the_spicelib_search_rule_catches_what_it_names():
+    tree = ast.parse(
+        "class Editor(AscEditor):\n"
+        "    def _get_subcircuit(self, symbol):\n"
+        "        return super()._get_subcircuit(symbol)\n"  # 3
+        "    def symbol(self, name):\n"
+        "        return self._asy_file_find(name)\n"  # 5
+        "def library(name):\n"
+        "    return _lib_file_find(name)\n"  # 7
+        "def found(resolver, name):\n"
+        "    return resolver.resolve(name), _get_subcircuit\n"
+    )
+    planted = {"planted.py": tree}
+    assert sorted(where for name in _SPICELIB_SEARCHES for where in _calls_in(name, planted)) == [
+        "planted.py:3",
+        "planted.py:5",
+        "planted.py:7",
+    ]

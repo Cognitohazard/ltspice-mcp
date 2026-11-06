@@ -221,22 +221,23 @@ _OTHER_THREE_DB: dict[str, str] = {
 }
 
 
-def _three_db_levels_in(tree: ast.AST) -> list[int]:
+def _three_db_levels_in(tree: ast.AST, exempted: set[str] | None = None) -> list[int]:
     """The lines of ``tree`` that write 3 dB (``3`` or ``-3``, int or float) where
     a dB level is read: added to, subtracted from or compared with something
     that holds decibels; bound to, defaulted for or passed as a name that holds
     decibels; or given under such a key in a dict. A float ``3.0`` added or
-    subtracted is read as a dB level whatever it is added to."""
+    subtracted is read as a dB level whatever it is added to. A name listed in
+    ``_OTHER_THREE_DB`` is passed over, and added to ``exempted``."""
     found: list[int] = []
 
     def named(name: str, value: ast.expr | None) -> None:
-        if (
-            value is not None
-            and _says_db(name)
-            and name not in _OTHER_THREE_DB
-            and _gives_three(value)
-        ):
-            found.append(value.lineno)
+        if value is None or not _says_db(name) or not _gives_three(value):
+            return
+        if name in _OTHER_THREE_DB:
+            if exempted is not None:
+                exempted.add(name)
+            return
+        found.append(value.lineno)
 
     for node in ast.walk(tree):
         if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add | ast.Sub):
@@ -273,12 +274,15 @@ def _three_db_levels_in(tree: ast.AST) -> list[int]:
 
 
 def test_no_module_writes_its_own_three_db_level():
+    exempted: set[str] = set()
     found = [
         f"{path.relative_to(PACKAGE).as_posix()}:{line}"
         for path in sorted(PACKAGE.rglob("*.py"))
-        for line in _three_db_levels_in(parsed(path))
+        for line in _three_db_levels_in(parsed(path), exempted)
     ]
     assert found == []
+    stale = sorted(set(_OTHER_THREE_DB) - exempted)
+    assert not stale, "listed names no longer given 3 dB: " + ", ".join(stale)
 
 
 def test_the_three_db_rule_catches_what_it_names():
@@ -301,3 +305,7 @@ def test_the_three_db_rule_catches_what_it_names():
         "    return index - 3, times[3], 3 + index, {'count': 3}, level(db=None)\n"
     )
     assert _three_db_levels_in(tree) == [2, 4, 6, 7, 9, 10, 11, 12, 14]
+    exempted: set[str] = set()
+    listed = ast.parse("def peaks(x, min_prominence_db=3.0):\n    return x\n")
+    assert _three_db_levels_in(listed, exempted) == []
+    assert exempted == {"min_prominence_db"}
