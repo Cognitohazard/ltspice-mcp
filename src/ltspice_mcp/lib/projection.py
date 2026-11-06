@@ -152,6 +152,28 @@ def absent_path_warnings(
     return warnings
 
 
+def key_outline(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """Every key path the ``rows`` carry, merged into one row of empty dicts.
+
+    A result saved for later rendering keeps this instead of its rows, and
+    ``absent_path_warnings([key_outline(rows)], ...)`` gives the warnings
+    ``absent_path_warnings(rows, ...)`` gives. So it keeps every key a row
+    carries, those whose name starts with '_' included: a random case's
+    ``assignments._random_seed`` is a key a caller projects.
+    """
+    outline: dict[str, Any] = {}
+
+    def add(node: dict[str, Any], value: Any) -> None:
+        if not isinstance(value, dict):
+            return
+        for key, child_value in value.items():
+            add(node.setdefault(str(key), {}), child_value)
+
+    for row in rows:
+        add(outline, row)
+    return outline
+
+
 def escape_field_segment(segment: str) -> str:
     r"""Spell one row key as the path segment that addresses it.
 
