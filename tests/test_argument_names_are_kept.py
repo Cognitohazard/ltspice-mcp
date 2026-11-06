@@ -17,7 +17,7 @@ no longer takes its name, though the name may live on elsewhere in the tool:
   replaced it, or its ``removed`` map (``REMOVED_ARGUMENTS``) has it, with why
   it went; and a call that sends the old name there, through the server's own
   dispatch, is refused with the new one or the reason;
-* ``CHANGELOG.md``'s Unreleased section names the old name.
+* a changelog fragment under ``changelog.d/`` names the old name.
 
 A retired place stays held to the first rule for good, and its name to being
 named somewhere in the changelog. A map's keys (``assign``'s parts) are the
@@ -44,6 +44,7 @@ from tests.conftest import advertised_input_schemas, dispatch
 
 RECORD = Path(__file__).parent / "fixtures" / "tool_arguments.json"
 CHANGELOG = Path(__file__).parent.parent / "CHANGELOG.md"
+FRAGMENTS = Path(__file__).parent.parent / "changelog.d"
 RECORDING = os.environ.get("LTSPICE_MCP_RECORD_TOOL_ARGUMENTS") == "1"
 
 
@@ -98,10 +99,10 @@ def _recorded() -> dict[str, Any]:
 
 
 def _unreleased() -> str:
-    text = CHANGELOG.read_text(encoding="utf-8")
-    start = text.index("## [Unreleased]")
-    end = text.find("\n## [", start + 1)
-    return text[start : end if end != -1 else len(text)]
+    """The changelog entries not yet released: the fragments under changelog.d/."""
+    return "\n".join(
+        path.read_text(encoding="utf-8") for path in sorted(FRAGMENTS.glob("+*.md"))
+    )
 
 
 def _beyond(names: dict[str, list[str]], others: dict[str, list[str]]) -> dict[str, list[str]]:
@@ -150,7 +151,7 @@ if RECORDING:
 
 def _retirements() -> list[Any]:
     """Every recorded place the tool no longer takes, and every retired one,
-    with whether it is new since the record (and so still Unreleased)."""
+    with whether it is new since the record (and so not yet released)."""
     recorded = _recorded()
     cases = []
     for tool, names in _beyond(recorded["arguments"], _current()).items():
@@ -210,8 +211,10 @@ async def test_a_retired_name_is_refused_with_its_referral_and_announced(
     message = result.structured_content["error"]
     told = f"is now {_name(new)!r}" if new is not None else f"was removed: {why}"
     assert f"{_name(old)!r} {told}" in message, message
-    changelog = _unreleased() if unrecorded else CHANGELOG.read_text(encoding="utf-8")
+    changelog = _unreleased() if unrecorded else (
+        _unreleased() + CHANGELOG.read_text(encoding="utf-8")
+    )
     assert f"`{_name(old)}`" in changelog or f"`{_name(old)}=" in changelog, (
-        f"CHANGELOG.md{' (Unreleased)' if unrecorded else ''} does not name {tool}'s retired "
-        f"argument `{_name(old)}`"
+        f"no fragment under changelog.d/{'' if unrecorded else ' and no section of CHANGELOG.md'}"
+        f" names {tool}'s retired argument `{_name(old)}`"
     )

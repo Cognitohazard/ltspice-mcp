@@ -267,11 +267,12 @@ uv run ruff check src/ tests/  # lint
 uv run ltspice-mcp             # run the server (stdio)
 ```
 
-To release, add a dated section for the version to `CHANGELOG.md`, run
-`scripts/release.sh <version>`, and push the tag it creates. Pushing the tag
-publishes the release to PyPI. The script also stamps the version into the
-plugin and Desktop-extension manifests, and the publish workflow refuses a
-tag whose manifests name another version.
+To release, run `scripts/release.sh <version>` and push the tag it creates.
+The script renders the changelog fragments under `changelog.d/` into a dated
+section of `CHANGELOG.md`, stamps the version into the plugin and
+Desktop-extension manifests, commits and tags. Pushing the tag publishes the
+release to PyPI, and the publish workflow refuses a tag whose manifests name
+another version.
 
 ## Contributing
 
