@@ -17,6 +17,7 @@ from typing import Any, Literal, get_args
 
 from ltspice_mcp.errors import MultiplierRewriteStop, NetlistError
 from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES
+from ltspice_mcp.lib.deck_nodes import GROUND, global_names, node_kind
 from ltspice_mcp.lib.deck_staging import (
     DEFAULT_INCLUDE_DEPTH,
     card_sections,
@@ -721,10 +722,9 @@ def resolve_hierarchy(
         top.append(item)
         i += 1
 
-    # ``gnd`` is node 0 to both simulators, at the top level and inside a
-    # subcircuit alike. They differ where a subcircuit names a port ``gnd``:
-    # see ``node`` below.
-    globals_: dict[str, str] = {"0": "0", "gnd": "0"}
+    # The names .global cards list, by folded name, as first written. Which
+    # net a name stands for is decided in deck_nodes (``node`` below).
+    globals_: dict[str, str] = {}
     scale_expression = "1"
     dynamic_reason = None
     for item in occurrences:
@@ -740,8 +740,12 @@ def resolve_hierarchy(
         if head == ".step":
             dynamic_reason = "context-dependent .step: no single effective numeric value"
         if head == ".global":
-            for token in _tokens(item.card, item.source.path)[1:]:
-                globals_.setdefault(token.text.casefold(), token.text)
+            try:
+                listed = global_names(item.card)
+            except SpiceLexError as exc:
+                raise _unreadable(item.card, exc, item.source.path) from exc
+            for text in listed:
+                globals_.setdefault(text.casefold(), text)
         if head in {".option", ".options"}:
             values = _assignments(item.card, where=item.source.path)
             if "scale" in values:
@@ -766,14 +770,13 @@ def resolve_hierarchy(
                 "version-dependent ground alias 'gnd' in kiltpsa mode; "
                 "use explicit node 0 or inspect a supported native/hsa deck"
             )
-        if folded == "gnd" and profile.simulator == "ltspice" and folded in ports:
-            # To LTspice a port named gnd is that port; to ngspice it is still
-            # ground, which is the next branch.
+        kind = node_kind(name, ports=ports, global_names=globals_, simulator=profile.simulator)
+        if kind == "port":
             return ports[folded]
-        if folded in globals_:
+        if kind == "ground":
+            scope, name = (), GROUND
+        elif kind == "global":
             scope, name = (), globals_[folded]
-        elif folded in ports:
-            return ports[folded]
         key = (tuple(segment.casefold() for segment in scope), name.casefold())
         if key in node_cache:
             return node_cache[key]

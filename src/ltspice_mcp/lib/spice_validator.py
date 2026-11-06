@@ -24,6 +24,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Literal
 
+from ltspice_mcp.lib.deck_nodes import GROUND_NAMES, global_names, node_kind
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
@@ -494,8 +495,13 @@ def validate_netlist_arity(
     return issues
 
 
-# Node spellings that are always considered connected (the SPICE ground).
-_GROUND_NODES = frozenset({"0", "gnd"})
+# The names ``deck_nodes`` reads as ground, always considered connected.
+_GROUND_NODES = GROUND_NAMES
+# The floating- and dangling-node checks read a deck as LTspice does. The one
+# difference ngspice makes here is a port named ``gnd``, which is the port to
+# LTspice and ground to ngspice (``deck_nodes``): for an ngspice deck these
+# checks can report a node floating that such a port ties to ground.
+_READ_AS = "ltspice"
 
 
 def is_ground_node(name: str) -> bool:
@@ -654,22 +660,32 @@ def _scan_global_nodes(cards: list[SpiceCard]) -> set[str]:
     """
     nodes: set[str] = set()
     for card in cards:
-        if card.kind != "directive":
-            continue
-        if not card.body.lstrip().lower().startswith(".global"):
-            continue
         try:
-            tokens = tokenize_body(card.body)
+            nodes.update(name.lower() for name in global_names(card))
         except SpiceLexError:
             continue
-        if not tokens or tokens[0].text.lower() != ".global":
-            continue
-        for tok in tokens[1:]:
-            if tok.kind == TokenKind.COMMENT_TRAIL:
-                break
-            if tok.kind == TokenKind.BARE:
-                nodes.add(tok.text.lower())
     return nodes
+
+
+def _scope_ports(cards: list[SpiceCard]) -> dict[tuple[str, ...], tuple[str, ...]]:
+    """Each subcircuit body's scope, and the ports its header names."""
+    ports: dict[tuple[str, ...], tuple[str, ...]] = {}
+    for card in cards:
+        if card.kind != "subckt":
+            continue
+        try:
+            sub = SubcktCard.from_card(card)
+        except SpiceLexError:
+            continue
+        ports[(*card.scope, sub.name)] = tuple(sub.ports)
+    return ports
+
+
+def _shared(node: str, ports: tuple[str, ...], global_nodes: set[str]) -> bool:
+    """Whether ``node``, written in a scope with ``ports``, is ground or a
+    ``.GLOBAL`` net, which every scope shares (``deck_nodes``)."""
+    kind = node_kind(node, ports=ports, global_names=global_nodes, simulator=_READ_AS)
+    return kind in ("ground", "global")
 
 
 def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, object]]:
@@ -693,6 +709,7 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
     create a false one.
     """
     global_nodes = _scan_global_nodes(cards)
+    scope_ports = _scope_ports(cards)
 
     # scope → lowercased node → first reference + total reference count.
     occurrences: dict[tuple[str, ...], dict[str, _NodeUse]] = {}
@@ -702,9 +719,9 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
     def record(
         scope: tuple[str, ...], node: str, referrer: str, card: SpiceCard, is_port: bool = False
     ) -> None:
-        key = node.lower()
-        if key in _GROUND_NODES or key in global_nodes:
+        if _shared(node, scope_ports.get(scope, ()), global_nodes):
             return
+        key = node.lower()
         nodes = occurrences.setdefault(scope, {})
         use = nodes.get(key)
         if use is None:
@@ -1096,15 +1113,16 @@ def _subckt_internal_grounds(
     for name in unread:
         defs.pop(name, None)
 
-    sinks = _GROUND_NODES | global_nodes
     grounds: dict[str, frozenset[int]] = {name: frozenset() for name in defs}
     grounds.update(dict.fromkeys(unread, _EVERY_PORT))
     for _ in range(len(defs) + 1):  # bounded fixpoint over nested grounding
         changed = False
         for name, (ports, body) in defs.items():
             dsu = _DSU()
-            for sink in sinks:
-                dsu.union(_GROUND_SINK, sink)
+            # Ground and the globals, but not a port named like ground.
+            for sink in _GROUND_NODES | global_nodes:
+                if _shared(sink, tuple(ports), global_nodes):
+                    dsu.union(_GROUND_SINK, sink)
             for inst, terminals in body:
                 _union_instance(dsu, inst, terminals, grounds)
             groot = dsu.find(_GROUND_SINK)
@@ -1117,17 +1135,20 @@ def _subckt_internal_grounds(
     return grounds
 
 
-def _qualify(node: str, scope: tuple[str, ...], global_nodes: set[str]) -> str:
-    """Key a node for the deck-wide global-reachability graph.
+def _qualify(
+    node: str, scope: tuple[str, ...], global_nodes: set[str], ports: tuple[str, ...]
+) -> str:
+    """Key a node, written in ``scope`` whose ports are ``ports``, for the
+    deck-wide global-reachability graph.
 
-    Ground and global names stay shared (bare); every local name is
-    namespaced by its scope so identically-named locals in different
-    subckts never merge. The NUL / SOH separators cannot occur in a real
-    node name, so a namespaced local can never collide with a bare global
-    or the ground sentinel.
+    Ground and global names stay shared (bare); every local name, a port
+    included, is namespaced by its scope so identically-named locals in
+    different subckts never merge. The NUL / SOH separators cannot occur in a
+    real node name, so a namespaced local can never collide with a bare
+    global or the ground sentinel.
     """
     key = node.lower()
-    if key in _GROUND_NODES or key in global_nodes:
+    if _shared(node, ports, global_nodes):
         return key
     return "\x00".join(s.lower() for s in scope) + "\x01" + key
 
@@ -1153,8 +1174,10 @@ def _grounded_globals(
     dsu = _DSU()
     for sink in _GROUND_NODES:
         dsu.union(_GROUND_SINK, sink)
+    scope_ports = _scope_ports(cards)
     for card, inst, terminals in _iter_instances(cards):
-        qualified = [_qualify(t, card.scope, global_nodes) for t in terminals]
+        ports = scope_ports.get(card.scope, ())
+        qualified = [_qualify(t, card.scope, global_nodes, ports) for t in terminals]
         _union_instance(dsu, inst, qualified, subckt_grounds)
     ground_root = dsu.find(_GROUND_SINK)
     return {g for g in global_nodes if dsu.find(g) == ground_root}
