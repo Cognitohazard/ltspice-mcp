@@ -1,10 +1,10 @@
 """load_raw(signals=...): a read that keeps only the traces some names read.
 
 The parser worker decides which traces to keep by the rule every reader of a
-signal uses (``trace_names``), cuts the file's header to them, and decodes only
+signal uses (``trace_names``), cuts the file's header to them, and writes only
 those; the size limit then applies to what is kept, so a file too large to read
-whole can be read for a few signals. Each test reads a recorded LTspice file
-both ways, through the real parser process, and compares.
+whole can be read for a few signals. Each test reads a recorded file through
+the real parser process, most of them both ways, and compares.
 """
 
 from __future__ import annotations
@@ -18,10 +18,11 @@ import pytest
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import parser_service, services
 from ltspice_mcp.lib.raw_header import leading_parameters
-from ltspice_mcp.lib.trace_names import traces_read
+from ltspice_mcp.lib.result_kinds import step_variables
+from ltspice_mcp.lib.trace_names import signal_names, step_value_note, traces_read
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
-from tests.conftest import FIXTURES_DIR, SyncApi
+from tests.conftest import FIXTURES_DIR, SyncApi, stage_recorded_fixture
 
 
 def _same(full: np.ndarray, chosen: np.ndarray) -> None:
@@ -81,9 +82,86 @@ def test_a_stepped_operating_point_keeps_its_step_parameters(
     full = api.load_raw(path=raw)
     signal = full.signals[-1]
     chosen = api.load_raw(path=raw, signals=[signal])
+    header = full._raw.header
+    parameters = [header.variables[index].name for index in leading_parameters(header)]
+    assert parameters
+    assert [variable.name for variable in chosen._raw.header.variables] == [*parameters, signal]
     assert chosen.steps == full.steps and chosen.step_count == full.step_count > 1
     for step in range(full.step_count):
         assert chosen.value(signal, step=step) == full.value(signal, step=step)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_step_parameter_is_a_step_value_to_every_reader(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """A stepped .op's parameter is a variable of the raw, and holds each
+    step's stepped value: no signal reads it, in a chosen read or a whole one,
+    and both say where its values are."""
+    raw = rec.stage_run(build, "raw/step_op", work_dir)
+    api = SyncApi(state_no_sim)
+    full = api.load_raw(path=raw)
+    (parameter,) = full.steps[0]
+    note = step_value_note(parameter)
+    with pytest.raises(ResultError) as whole:
+        full.trace(parameter)
+    assert note in str(whole.value)
+    with pytest.raises(ResultError) as chosen:
+        api.load_raw(path=raw, signals=[parameter.upper()])
+    assert step_value_note(parameter.upper()) in str(chosen.value)
+    assert full.signals[0] in str(chosen.value).split("Its traces:")[1]
+
+
+def test_a_pair_of_two_grounds_reads_no_trace(state_no_sim: SessionState, work_dir: Path):
+    raw = _rc(work_dir)
+    api = SyncApi(state_no_sim)
+    with pytest.raises(ResultError, match="names ground twice"):
+        api.load_raw(path=raw).trace("V(0,0)")
+    with pytest.raises(ResultError, match=r"'V\(gnd,0\)' names no trace of this result"):
+        api.load_raw(path=raw, signals=["V(gnd,0)"])
+
+
+def test_a_signal_is_looked_for_in_the_plot_read(state_no_sim: SessionState, work_dir: Path):
+    """A file of two plots: a signal of the second is refused from a read of
+    the first, after a read of the second has kept it."""
+    path = stage_recorded_fixture(work_dir, "ngspice_noise_2plot")
+    api = SyncApi(state_no_sim)
+    later = api.load_raw(path, plot_index=1, dialect="ngspice", signals=["v(onoise_total)"])
+    whole = api.load_raw(path, plot_index=1, dialect="ngspice")
+    assert later.value("v(onoise_total)") == whole.value("v(onoise_total)")
+    with pytest.raises(ResultError) as refused:
+        api.load_raw(path, plot_index=0, dialect="ngspice", signals=["v(onoise_total)"])
+    listed = str(refused.value).split("Its traces:")[1]
+    assert "onoise_spectrum" in listed and "onoise_total" not in listed
+
+
+def test_a_chosen_read_and_a_whole_read_of_one_file_are_kept_apart(
+    state_no_sim: SessionState, work_dir: Path
+):
+    raw = _rc(work_dir)
+    api = SyncApi(state_no_sim)
+    chosen = api.load_raw(path=raw, signals=["V(out)"])
+    full = api.load_raw(path=raw)
+    again = api.load_raw(path=raw, signals=["V(out)"])
+    assert len(full.signals) > len(chosen.signals) == len(again.signals) == 2
+    assert not [o for o in full.observations if o["code"] == "signals_chosen"]
+
+
+def test_compare_does_not_call_a_trace_not_read_missing(
+    state_no_sim: SessionState, work_dir: Path
+):
+    raw = _rc(work_dir)
+    api = SyncApi(state_no_sim)
+    full = api.load_raw(path=raw)
+    chosen = api.load_raw(path=raw, signals=["V(out)"])
+    unread = sorted(name for name in full.signals[1:] if name != "V(out)")
+    assert unread
+    there = full.compare(chosen)
+    assert there["only_here"] == [] and there["unread_there"] == unread
+    assert there["signals"]["V(out)"]["max_abs"] == 0
+    here = chosen.compare(full)
+    assert here["only_there"] == [] and here["unread_here"] == unread
+    assert "unread_here" not in there and "unread_there" not in full.compare(full)
 
 
 def _rc(work_dir: Path) -> Path:
@@ -108,7 +186,7 @@ def test_an_unread_trace_says_the_result_was_read_for_others(
     state_no_sim: SessionState, work_dir: Path
 ):
     raw = _rc(work_dir)
-    chosen = SyncApi(state_no_sim).load_raw(path=raw, signals=["V(out)"])
+    chosen = SyncApi(state_no_sim).load_raw(path=raw, signals=[" V(out) "])
     with pytest.raises(ResultError, match=r"read with signals=\['V\(out\)'\]"):
         chosen.trace("V(in)")
 
@@ -141,12 +219,39 @@ def test_a_file_too_large_to_read_whole_is_read_for_its_signals(
         api.load_raw(path=other, signals=["V(out)", "V(in)"])
 
 
+def test_a_file_stored_a_point_at_a_time_is_held_to_what_decoding_it_holds(
+    state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """spicelib decodes a plot stored a point at a time whole, whichever traces
+    are kept (``docs/spicelib_bugs.md``), and one in LTspice's Fast Access
+    layout a trace at a time. With the decode budget between what the axis
+    and one trace hold and what the whole file holds, the same run is refused
+    in the one layout, naming the other, and read in the other."""
+    build = rec.BUILDS[0]
+    stored = rec.stage_run(build, "raw/tran", work_dir)
+    converted = rec.stage_run(build, "raw/tran_fastaccess", work_dir)
+    api = SyncApi(state_no_sim)
+    full = api.load_raw(path=stored)
+    points = len(full.axis())
+    one = (full.axis().itemsize + full.trace("V(out)").itemsize) * points
+    assert one < sum(full.trace(name).itemsize for name in full.signals) * points
+    monkeypatch.setattr(parser_service, "DECODE_BYTES", one)
+    with pytest.raises(ResultError) as refused:
+        api.load_raw(path=stored, signals=["V(out)"])
+    message = str(refused.value)
+    assert "stores its numbers a point at a time" in message
+    assert "-FastAccess" in message
+    chosen = api.load_raw(path=converted, signals=["V(out)"])
+    _same(full.trace("V(out)"), chosen.trace("V(out)"))
+
+
 def test_signals_are_checked_before_a_read(state_no_sim: SessionState, work_dir: Path):
     from ltspice_mcp.api import ApiValidationError
 
     api = SyncApi(state_no_sim)
     raw = _rc(work_dir)
-    for wrong in ("V(out)", [], [""], ["V(out)"] * 0 + [f"V(n{i})" for i in range(65)]):
+    many = [f"V(n{i})" for i in range(65)]
+    for wrong in ("V(out)", [], [""], ["  "], [["V(out)"]], [1], many, ["V(" + "a" * 300 + ")"]):
         with pytest.raises(ApiValidationError, match="signals"):
             api.load_raw(path=raw, signals=wrong)  # pyright: ignore[reportArgumentType]
 
@@ -166,7 +271,8 @@ def test_the_traces_a_name_reads_are_those_resolve_signal_reads(
 
     raw = rec.stage_run(build, case_id, work_dir)
     decoded = SyncApi(state_no_sim).load_raw(path=raw)._raw
-    names = list(decoded.get_trace_names())
+    names = signal_names(decoded.header)
+    assert names == list(decoded.get_trace_names())
     xvii = writes_xvii_names(decoded)
     voltages = [name for name in names if name.lower().startswith("v(")]
     asked = [
@@ -175,7 +281,10 @@ def test_the_traces_a_name_reads_are_those_resolve_signal_reads(
         *(name.replace(":", ".") for name in names),
         *(f"V({a[2:-1]},{b[2:-1]})" for a, b in pairwise(voltages)),
         *(f"V({a[2:-1]},0)" for a in voltages[:1]),
+        *step_variables(decoded.header),
         "V(nowhere)",
+        "V(0,0)",
+        "V(gnd,0)",
     ]
     for name in asked:
         read = traces_read(names, name, xvii=xvii)
@@ -206,16 +315,7 @@ def test_a_noise_node_pair_names_its_two_traces_and_is_refused_when_read(
     assert traces_read(names, pair, xvii=False) == tuple(voltages)
     chosen = api.load_raw(path=raw, signals=[pair])
     assert set(chosen.signals[1:]) == set(voltages)
-    with pytest.raises(ResultError, match="spectral densities"):
-        chosen.trace(pair)
-
-
-def test_leading_parameters_are_what_a_stepped_op_opens_with(work_dir: Path):
-    """The cut keeps a plot's leading parameters by ``raw_header`` itself."""
-    from ltspice_mcp.lib.raw_header import RawLimits, preflight_raw
-
-    raw = rec.stage_run(rec.BUILDS[0], "raw/step_op", work_dir)
-    limits = parser_service.raw_limits(4096)
-    assert isinstance(limits, RawLimits)
-    (plot,) = preflight_raw(raw, limits=limits).plots
-    assert leading_parameters(plot) and leading_parameters(plot)[0] >= 0
+    with pytest.raises(ResultError, match="spectral densities") as refused:
+        chosen.trace(pair.lower())
+    # The pair was read for; it is refused for its own reason, not as unread.
+    assert "load_raw again" not in str(refused.value)

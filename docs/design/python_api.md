@@ -466,15 +466,19 @@ ops.observations               # a log reader's dict (LogResult) says the same o
 
 - `RawResult` is this project's type; the API returns no spicelib types.
 - `signals` reads only the traces those names read, by the rule `trace` reads
-  a name with (`lib/trace_names.py`): one trace, or a node pair's two node
-  voltages. The axis and any step parameters are always kept. The parser
-  worker decodes only those traces, and the read's numeric limit (512 MiB at
-  the widths the file stores) applies to them, so a file too large to read
-  whole can be read for a few signals. A name the file has no trace for is
-  refused with the traces it has; the result's `observations` include
-  `signals_chosen`, and `trace` of a trace not read says it was not chosen. A
-  whole-file read over the limit is refused with the file's size, the limit
-  and these ways around it.
+  a name with: one trace, or a node pair's two node voltages. The plot's
+  first variable (its axis, where it has one) and any step parameters are
+  always kept. The read's numeric limit (512 MiB at the widths the file
+  stores) applies to the traces kept, so a file too large to read whole can
+  be read for a few signals. A file stored a point at a time, as LTspice
+  stores a run, is still decoded whole while it is read, and a read holds
+  that to 1 GiB of numbers; a file in LTspice's Fast Access layout (`LTspice
+  -FastAccess <file>.raw` converts one) is decoded only for the traces kept.
+  A name the plot has no trace for, or one that holds each step's stepped
+  value, is refused with the traces it has; the result's `observations`
+  include `signals_chosen`, and `trace` of a trace not read says it was not
+  chosen. A whole-file read over the limit is refused with the file's size,
+  the limit and these ways around it.
 - Each of these reads takes exactly one of `path` and `job_id`. Neither or
   both, an empty `path`, or `run_index`, `case_id` or `other_raw` with a
   `path` raises `ApiValidationError`, as the operations do.
@@ -508,7 +512,10 @@ ops.observations               # a log reader's dict (LogResult) says the same o
   plot with no axis is compared point by point and must have the same number
   of points. `max_rel` is `max_abs` divided by the signal's largest magnitude
   in this result, and is null when that magnitude is 0. Complex values are
-  compared as complex numbers. No tolerance is applied.
+  compared as complex numbers. No tolerance is applied. A result read with
+  `signals` holds no other trace, so when `other` was, the traces only this
+  result holds are `unread_there` and `only_here` is empty, and when this
+  result was, the other's are `unread_here` and `only_there` is empty.
 - `device_op_points` reads, by device and parameter, the semiconductor
   operating points that LTspice prints in the log of an `.op` run. LTspice 26
   prints them under `.options logopinfo`; XVII always prints them and refuses

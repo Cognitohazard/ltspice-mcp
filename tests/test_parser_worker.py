@@ -43,7 +43,7 @@ def request_for(raw):
             "step_rows": 1000,
             "metadata_bytes": 2 * 1024**2,
         },
-        "signals": None,
+        "chosen": None,
         "existing_cache_keys": [],
     }
 

@@ -1258,10 +1258,13 @@ class ApiMethodsMixin(ABC):
         ``other_raws`` lists it, instead of its raw: ``"fra_1"`` a frequency
         response analysis's results, ``"op"`` a transient's operating point.
         ``signals`` reads only the traces those names read, as ``trace`` reads
-        a name (a node pair reads both nodes), with the axis and any step
-        parameters: a file too large to read whole can be read this way, since
-        the size limit applies to what is kept. A name the file has no trace
-        for is refused.
+        a name (a node pair reads both nodes), with the plot's first variable
+        (its axis, where it has one) and any step parameters: a file too large
+        to read whole can be read this way, since the size limit applies to
+        what is kept. A file stored a point at a time, as LTspice stores a run
+        unless it is converted to its Fast Access layout, is still decoded
+        whole, which a read holds to 1 GiB of numbers. A name the plot has no
+        trace for is refused.
         ``raw_path`` is the older spelling of ``path``, still accepted."""
         self._check_process_and_thread()
         path = _older_spelling(path, "raw_path", raw_path)
@@ -1371,15 +1374,18 @@ def _older_spelling(path: _PathArg, name: str, older: _PathArg) -> _PathArg:
 
 def _chosen_signals(signals: Sequence[str] | None) -> tuple[str, ...] | None:
     """``load_raw``'s ``signals`` as the parser takes them: 1 to 64 names, each
-    a non-empty string, in the order given, a repeat dropped."""
+    a string of 1 to 256 characters without the spaces around it, in the order
+    given, a repeat dropped."""
     if signals is None:
         return None
-    if isinstance(signals, str) or not isinstance(signals, Sequence):
-        raise ApiValidationError("signals must be a list of names, e.g. ['V(out)']")
-    names = tuple(dict.fromkeys(signals))
-    if not 0 < len(names) <= 64 or any(
-        not isinstance(name, str) or not 0 < len(name.strip()) <= 256 for name in names
+    if (
+        isinstance(signals, str)
+        or not isinstance(signals, Sequence)
+        or any(not isinstance(name, str) for name in signals)
     ):
+        raise ApiValidationError("signals must be a list of names, e.g. ['V(out)']")
+    names = tuple(dict.fromkeys(name.strip() for name in signals))
+    if not 0 < len(names) <= 64 or any(not 0 < len(name) <= 256 for name in names):
         raise ApiValidationError("signals must name 1 to 64 traces, each in 1 to 256 characters")
     return names
 

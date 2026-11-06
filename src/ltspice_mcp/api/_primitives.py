@@ -80,7 +80,11 @@ class RawResult:
         try:
             signal = services.resolve_signal(self._raw, name)
         except ResultError as exc:
-            if self._chosen is None:
+            # A name this result was read for is refused for its own reason
+            # (a noise pair); another one may name a trace it was not read for.
+            if self._chosen is None or name.strip().lower() in {
+                chosen.lower() for chosen in self._chosen
+            }:
                 raise
             raise ResultError(
                 f"{exc} This result was read with signals={list(self._chosen)}, so it "
@@ -263,6 +267,12 @@ class RawResult:
         the largest difference, its share of this result's largest magnitude
         of that signal (None when that is 0), the axis value it is at, and
         the two values there. How large a difference may be is the caller's.
+        A result read for chosen signals (``load_raw(signals=...)``) holds no
+        other trace, so a trace only the other result holds was not read, and
+        is not known to be missing: when ``other`` was read so, those of this
+        result's traces are ``unread_there`` and ``only_here`` is empty, and
+        when this result was, the other's are ``unread_here`` and
+        ``only_there`` is empty.
         """
         self._validate_step(step)
         if other_step is None:
@@ -335,13 +345,20 @@ class RawResult:
                 "value": ours[worst].item(),
                 "other": theirs[worst].item(),
             }
-        return {
+        only_here = sorted(names[i] for key, i in here.items() if key not in there)
+        only_there = sorted(other_names[i] for key, i in there.items() if key not in here)
+        result: dict[str, Any] = {
             "signals": compared,
-            "only_here": sorted(names[i] for key, i in here.items() if key not in there),
-            "only_there": sorted(other_names[i] for key, i in there.items() if key not in here),
+            "only_here": only_here,
+            "only_there": only_there,
             "span": span,
             "points": points,
         }
+        if other._chosen is not None:
+            result["only_here"], result["unread_there"] = [], only_here
+        if self._chosen is not None:
+            result["only_there"], result["unread_here"] = [], only_there
+        return result
 
 
 #: One step of a signal of a result: ``read(raw, step)``.
@@ -388,8 +405,8 @@ async def load_raw_result(
     """Resolve and bounded-parse one raw result on the API event loop.
 
     With ``signals``, the parser keeps only the traces they read, with the
-    axis and any step parameters (``trace_names.chosen_traces``), and holds
-    its numeric budget to those."""
+    plot's first variable and any step parameters
+    (``trace_names.chosen_traces``), and holds its numeric budget to those."""
     if raw_path is not None:
         resolved = state.resolve_path(str(raw_path))
         source = services.source_for_raw_path(
@@ -416,7 +433,8 @@ async def load_raw_result(
                 "kind": "provenance",
                 "detail": (
                     f"Read with signals={list(signals)}: this result holds the traces "
-                    "they read, the axis and any step parameters, and no other trace."
+                    "they read, the plot's first variable (its axis, where it has one) "
+                    "and any step parameters, and no other trace."
                 ),
             },
         )

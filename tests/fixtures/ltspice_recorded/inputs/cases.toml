@@ -470,7 +470,7 @@ inputs = ["raw/dc.cir"]
 
 [behaviour.raw-noise]
 summary = "A noise raw: its plot name, the gain trace, and the onoise and inoise traces; and a noise analysis at one frequency, plain and stepped, which may store no frequency and one point a step; the same frequency named by a list, plain here and stepped under raw-stepped."
-model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/decoded_raw.py", "lib/metrics.py"]
+model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/decoded_raw.py", "lib/trace_names.py", "lib/metrics.py"]
 inputs = ["raw/noise.cir", "raw/noise_one_freq.cir", "raw/step_noise_one_freq.cir", "raw/noise_list_one_freq.cir"]
 
 [behaviour.raw-op]
@@ -491,7 +491,7 @@ inputs = ["raw/mos_multiplier.cir", "raw/subckt_multiplier.cir", "deck/subckt_mu
 
 [behaviour.raw-stepped]
 summary = "Stepped runs: the stepped flag, where one step ends and the next begins, the .step lines of the log (a temperature among them), what a stepped .op (over a parameter and over temperature) and a stepped .dc store, the .op.raw a stepped .tran and a stepped .ac leave, a stepped .noise sweep, a stepped .ac at one frequency, which stores no frequency and one point a step, and a stepped .noise at one frequency named by a list, which does the same."
-model = ["lib/raw_decode.py", "lib/raw_parser.py", "lib/log_parser.py", "lib/metrics.py"]
+model = ["lib/raw_decode.py", "lib/raw_parser.py", "lib/log_parser.py", "lib/trace_names.py", "lib/metrics.py"]
 inputs = ["raw/step_tran.cir", "raw/step_ac.cir", "raw/step_op.cir", "raw/step_dc.cir", "raw/step_temp.cir", "raw/step_temp_op.cir", "raw/step_ac_one_freq.cir", "raw/step_noise.cir", "raw/step_noise_list_one_freq.cir"]
 
 [behaviour.raw-transfer-function]
@@ -517,7 +517,7 @@ model = ["lib/raw_header.py", "lib/raw_decode.py"]
 
 [behaviour.raw-fastaccess]
 summary = "A raw converted to Fast Access layout: the fastaccess flag and samples stored trace by trace."
-model = ["lib/raw_header.py", "lib/raw_parser.py"]
+model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/raw_decode.py"]
 
 [behaviour.raw-partial]
 summary = "The raw a run leaves when it is stopped part way: a point count in the header that lags the samples after it, and, on LTspice XVII, samples past the count that go back in time."
@@ -611,7 +611,7 @@ keep = ["log"]
 
 [behaviour.subckt-device-names]
 summary = "How each build names a device, a node and a port current inside named and nested subcircuit instances: in the .op device table with and without logopinfo, in an operating-point raw, and in a transient's raw, stepped and not."
-model = ["lib/device_names.py", "lib/metrics.py", "lib/log_parser.py"]
+model = ["lib/device_names.py", "lib/trace_names.py", "lib/metrics.py", "lib/log_parser.py"]
 inputs = ["log/subckt_names.cir", "log/subckt_names_off.cir", "raw/subckt_names_tran.cir", "raw/subckt_names_step.cir"]
 
 [behaviour.save-subckt-names]

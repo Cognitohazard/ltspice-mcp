@@ -58,6 +58,26 @@ class RawTooLargeError(RawLimitError):
         self.limit = limit
 
 
+class RawTooLargeToDecodeError(RawLimitError):
+    """The traces a read keeps fit, but decoding them would hold more numbers
+    than the decoder may: a plot stored a point at a time is decoded whole,
+    whichever of its traces are kept (``raw_decode.numbers_held``).
+
+    ``parser_code`` is the code the parser worker reports it under.
+    """
+
+    parser_code = "too_large_to_decode"
+
+    def __init__(self, held: int, limit: int) -> None:
+        super().__init__(
+            "the file stores its numbers a point at a time, so reading any of its traces "
+            f"decodes all of them: {_size(held)} of numbers, over the {_size(limit)} a read "
+            "of chosen signals may decode"
+        )
+        self.held = held
+        self.limit = limit
+
+
 def _size(count: int) -> str:
     """A byte count as a reader takes it in."""
     mib = 1024 * 1024

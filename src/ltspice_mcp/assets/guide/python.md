@@ -134,9 +134,11 @@ section 'ltspice'). You choose the tolerance.
 
 A file too large to read whole (one read keeps 512 MiB of numbers) can still
 be read for the signals you need: `api.load_raw(..., signals=["V(out)",
-"I(R1)"])` decodes only those traces, the axis and any step parameters. A node
+"I(R1)"])` keeps only those traces, the axis and any step parameters. A node
 pair `V(a,b)` keeps both nodes. Its `observations` say which signals were
-chosen.
+chosen. LTspice stores a run a point at a time, which is decoded whole even
+for a few traces, up to 1 GiB of numbers; for a larger file, convert it with
+`LTspice -FastAccess <file>.raw` first.
 
 `api.load_raw(..., plot_index=1, dialect=None)` selects a plot by its
 zero-based position in the file, separately from the case (or run) and the

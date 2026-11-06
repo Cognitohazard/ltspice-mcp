@@ -44,6 +44,23 @@ class RawDecodeError(ValueError):
     """Capture identity or dependency materialization did not satisfy the contract."""
 
 
+def numbers_held(header: RawHeader, chosen: RawHeader) -> int:
+    """The most bytes of numbers ``decode_raw`` holds reading ``chosen``'s
+    traces of ``header``.
+
+    spicelib reads a plot stored a trace at a time (LTspice's Fast Access)
+    one trace after another, so it holds only the traces kept. A plot stored
+    a point at a time it reads whole whichever traces are asked for: binary
+    into one buffer, text into every trace (``docs/spicelib_bugs.md``, "A
+    read of some traces holds every trace"). Plots are decoded one after
+    another, so the sum over them bounds what is held at once.
+    """
+    return sum(
+        kept.numeric_bytes if plot.storage_order == "trace" else plot.numeric_bytes
+        for plot, kept in zip(header.plots, chosen.plots, strict=True)
+    )
+
+
 class _PlotView:
     """An absolute-position read view ending at one preflight-validated plot.
 
@@ -459,8 +476,9 @@ def decode_raw(
 
     ``chosen`` is the preflight cut to the traces a read keeps
     (``raw_header.select_traces``): the dependency is still checked against
-    the whole file, only those traces are read, and the result is the cut
-    header with their arrays.
+    the whole file, only those traces are asked of it and written, and the
+    result is the cut header with their arrays. What the dependency holds
+    while it reads them is ``numbers_held``.
     """
     _positive_limit(step_log_bytes, "step_log_bytes")
     _positive_limit(step_rows, "step_rows")
@@ -494,7 +512,8 @@ def decode_raw(
             or reader.aliases
         ):
             raise RawDecodeError("Dependency plot metadata contradicts RAW preflight")
-        # Only the kept traces are read; spicelib reads the axis with them.
+        # Only the kept traces are asked for; spicelib reads the axis with
+        # them, and a plot stored a point at a time whole (numbers_held).
         reader.read_trace_data([variable.name for variable in keep.variables])
         first = np.asarray(reader.get_trace(0).data)
         positions = {variable.name: variable.index for variable in plot.variables}

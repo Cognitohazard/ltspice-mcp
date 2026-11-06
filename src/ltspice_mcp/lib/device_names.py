@@ -27,7 +27,7 @@ builds, and the raw then holds only the instances' port currents.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -49,11 +49,17 @@ _TRACE = re.compile(r"^([a-z]+)\(([^(),]+)\)$", re.IGNORECASE)
 def writes_xvii_names(raw: RawData) -> bool:
     """Whether the build that wrote ``raw`` names devices as XVII does:
     LTspice XVII, and LTspice IV before it, by the header's ``Command``."""
+    return writes_xvii_command(raw.raw_params)
+
+
+def writes_xvii_command(fields: Mapping[str, object]) -> bool:
+    """The same, from a raw header's fields, whose names are read in any case:
+    what the parser worker reads before a raw is decoded."""
     # Here, not at the top: the raw parser reads device names through this
     # module, and simulator_build reads a raw's writer through the raw parser.
     from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build
 
-    command = raw.raw_params.get("Command")
+    command = next((value for key, value in fields.items() if key.lower() == "command"), None)
     return isinstance(command, str) and is_cp1252_ltspice_build(command)
 
 

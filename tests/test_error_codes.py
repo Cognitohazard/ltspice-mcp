@@ -651,6 +651,7 @@ FROZEN_ERROR_CODES = (
     "symbol_not_found",
     "symbol_unresolved",
     "too_large",
+    "too_large_to_decode",
     "trace_unit_unknown",
     "transport_delay",
     "unencodable_device_ref",
