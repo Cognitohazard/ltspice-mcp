@@ -1008,7 +1008,11 @@ def _resolved(case, tmp_path):
     return {row.instance: row for row in hierarchy.instances}
 
 
-_ON_XA = [("XA a g block\n", "XA a g block m=4\n")]
+#: m=4 on XA, and m=1 on Xleaf: ngspice passes XA's m to block's cards and
+#: Xleaf's call then passes it into leaf, which an X line's m makes ngspice
+#: rewrite too. Without Xleaf's own m, leaf takes no parameters and ngspice
+#: stops on the m appended to Xleaf (``test_ngspice_multiplier``).
+_ON_XA = [("XA a g block\n", "XA a g block m=4\n"), ("Xleaf p g leaf\n", "Xleaf p g leaf m=1\n")]
 
 
 def test_nested_mismatch_refuses_a_multiplier_it_cannot_resolve(tmp_path):
@@ -1018,18 +1022,22 @@ def test_nested_mismatch_refuses_a_multiplier_it_cannot_resolve(tmp_path):
         _nested_draw(
             tmp_path / "unknown",
             "ngspice",
-            replacements=[("XA a g block\n", "XA a g block m={nowhere}\n")],
+            replacements=[
+                ("XA a g block\n", "XA a g block m={nowhere}\n"),
+                ("Xleaf p g leaf\n", "Xleaf p g leaf m=1\n"),
+            ],
         )
     assert exc.value.code == "mismatch_geometry_unresolved"
     assert "XA" in str(exc.value)
 
 
 def test_an_x_line_multiplier_counts_on_ngspice_and_not_on_ltspice(tmp_path):
-    """ngspice builds m copies of every device below an X line that carries m,
-    all from one card, so the four leaf copies share the one draw. LTspice
-    builds one (recorded: raw/subckt_multiplier, deck/subckt_multiplier_nested).
-    So m=4 on XA halves the ngspice draw and leaves the LTspice draw at one
-    copy's, while m=4 on the device itself halves it on LTspice too."""
+    """ngspice passes XA's m=4 down to M0 through block and leaf, which an X
+    line's m makes it rewrite for m, so it builds four copies from the one card
+    and they share the one draw. LTspice builds one (recorded:
+    raw/subckt_multiplier, deck/subckt_multiplier_nested). So m=4 on XA halves
+    the ngspice draw and leaves the LTspice draw at one copy's, while m=4 on the
+    device itself halves it on LTspice too."""
     _, ngspice_one = _nested_draw(tmp_path / "ng_one", "ngspice")
     _, ngspice_four = _nested_draw(tmp_path / "ng_four", "ngspice", replacements=_ON_XA)
     _, ltspice_one = _nested_draw(tmp_path / "lt_one", "ltspice")

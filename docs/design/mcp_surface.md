@@ -2177,11 +2177,23 @@ top-level device does, which needs a model with one definition; a binned
 model is refused with `model_missing`. The draw uses the device's W and L
 after `assign` variations are applied. The area a draw stands for is `m·W·L`,
 because the simulator builds m parallel copies from one card and they share
-the draw. On ngspice m is the product of the device's own `m` and the `m` of
-every subcircuit instance above it; LTspice ignores `m` on an X line, so
-there m is the device's own. An inner `m={mult}` resolves in the scope its X
-line sets. An `m` that does not resolve to a positive number refuses the
-request with `mismatch_geometry_unresolved`. Draws across circuits are
+the draw. LTspice ignores `m` on an X line, so there m is the device's own.
+ngspice gives a subcircuit that declares no `m` (on its `.subckt` line or in a
+body `.param`) an `m` parameter, default 1, whenever an X line anywhere in the
+deck calls it with `m`, and appends `m={m}` to every card of its body but a
+V, E, H or B card. The appended `m` replaces the card's own outside the
+HSPICE modes (the `kiltpsa` spicelib runs by default) and multiplies it in
+them (`ngbehavior` `hsa`); an X line's `m` on a subcircuit that declares `m`
+is an ordinary parameter. So m is the device's `m` after that rewrite, read
+in the scope its X lines set, as measured on ngspice-42. A deck where the
+rewrite appends `m` to an X line calling a subcircuit that takes no
+parameters is refused, as ngspice stops on it. An inner `m={mult}` resolves
+in the scope its X line sets. An `m` that does not resolve to a positive
+number refuses the request with `mismatch_geometry_unresolved`. A device one
+subcircuit level down is drawn on a private copy of its subcircuit that only
+the drawn X lines call; outside the HSPICE modes, where that copy would change
+which callers ngspice rewrites and so the `m` a card of the subcircuit builds,
+the request is refused with `multiplier_rewrite_changed`. Draws across circuits are
 independent; correlated Monte Carlo across decks is not supported.
 
 A random case's draws follow from the seed, its circuit id and its sample

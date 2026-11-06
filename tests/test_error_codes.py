@@ -520,6 +520,7 @@ FROZEN_ERROR_CODES = (
     "model_missing",
     "multiple_random_variations",
     "multiple_stochastic_families",
+    "multiplier_rewrite_changed",
     "native_log_output",
     "nested_fet_unsupported",
     "netlist_invalid",

@@ -29,8 +29,11 @@ from ltspice_mcp.lib.deck_staging import (
 from ltspice_mcp.lib.device_names import raw_name
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.hierarchy_expr import (
+    NGSPICE_M_EXEMPT,
     Environment,
     NumericFact,
+    card_copies,
+    ngspice_multiplies_m,
     references_sibling,
     scaled_geometry,
 )
@@ -150,6 +153,9 @@ class ResolvedInstance:
     save: str | None
     address_reason: str | None
     model_family: tuple[ModelDefinition, ...] = ()
+    #: How many parallel copies the simulator builds from this card
+    #: (``hierarchy_expr.card_copies``); None for a card that takes no ``m``.
+    multiplier: NumericFact | None = None
 
     def row(self) -> dict[str, Any]:
         return {
@@ -188,6 +194,8 @@ class Hierarchy:
     library_bindings: tuple[LibraryBinding, ...] = ()
     scale: NumericFact = field(default_factory=lambda: NumericFact("1", 1.0, status="resolved"))
     include_bindings: tuple[IncludeBinding, ...] = ()
+    #: The subcircuits ngspice rewrites for ``m`` (``_rewritten_for_m``).
+    m_rewritten: frozenset[str] = frozenset()
 
     def binding(self) -> dict[str, Any]:
         return {
@@ -512,6 +520,37 @@ def _models(body: Sequence[_Occurrence], enclosing: str | None) -> dict[str, Mod
     return models
 
 
+def _rewritten_for_m(
+    occurrences: Sequence[_Occurrence],
+    definitions: Mapping[str, _Definition],
+    profile: SemanticProfile,
+) -> frozenset[str]:
+    """The subcircuits ngspice gives an ``m`` parameter and appends to each card.
+
+    Each one some ``X`` line in the deck calls with ``m`` and that declares no
+    ``m`` of its own, on its ``.subckt`` line or in a body ``.param``
+    (``hierarchy_expr.card_copies``). Every call counts, used or not, since
+    ngspice rewrites the deck's text before it expands any of it. LTspice
+    rewrites nothing.
+    """
+    if profile.simulator != "ngspice":
+        return frozenset()
+    called_with_m = {
+        (InstanceLine.from_card(item.card).model or "").casefold()
+        for item in occurrences
+        if item.card.kind == "instance"
+        and item.card.body.lstrip()[:1].upper() == "X"
+        and "m" in _assignments(item.card, where=item.source.path)
+    }
+    return frozenset(
+        name
+        for name, definition in definitions.items()
+        if name in called_with_m
+        and "m" not in {key.casefold() for key in definition.view.param_defaults}
+        and "m" not in _parameters(definition.body, profile)
+    )
+
+
 def _shape(card: SpiceCard, where: str | None = None) -> tuple[InstanceLine, bool]:
     _assignments(card, where=where)  # first, so a card it cannot split is refused by its line
     view = InstanceLine.from_card(card)
@@ -665,6 +704,8 @@ def resolve_hierarchy(
         _parameters(top, profile), simulator=profile.simulator, dynamic_reason=dynamic_reason
     )
     scale = global_env.fact(scale_expression)
+    rewritten = _rewritten_for_m(occurrences, definitions, profile)
+    multiply_m = ngspice_multiplies_m(profile.ngbehavior)
     rows: list[ResolvedInstance] = []
     node_cache: dict[tuple[tuple[str, ...], str], Node] = {}
 
@@ -706,7 +747,10 @@ def resolve_hierarchy(
         ports: Mapping[str, Node],
         stack: tuple[str, ...],
         enclosing: str | None,
+        passed: NumericFact | None,
     ) -> None:
+        """Expand ``body``; ``passed`` is the ``m`` ngspice appends to its cards
+        (``card_copies``), None where it appends none."""
         if len(scope) > MAX_INSTANCE_DEPTH:
             raise NetlistError(f"runtime hierarchy depth exceeds {MAX_INSTANCE_DEPTH}")
         refs: set[str] = set()
@@ -733,7 +777,19 @@ def resolve_hierarchy(
                 )
                 for k, v in params.items()
             )
+            multiplier = (
+                None
+                if profile.simulator == "ngspice" and kind in NGSPICE_M_EXEMPT
+                else card_copies(
+                    dict(param_facts).get("m"),
+                    passed,
+                    multiply=multiply_m,
+                    where=".".join(path),
+                    passed_from=".".join(scope),
+                )
+            )
             child = None
+            child_passed = None
             child_env = env
             mapped: tuple[tuple[str, Node], ...] = ()
             model_source = None
@@ -755,13 +811,30 @@ def resolve_hierarchy(
                     if profile.simulator == "ngspice"
                     else {**local, **defaults}
                 )
+                overrides = dict(param_facts)
+                rewrites = child.view.name.casefold() in rewritten
+                if passed is not None and multiplier is not None:
+                    # ngspice appended this body's m to the X line too, and
+                    # passes it to the callee as a parameter.
+                    overrides["m"] = multiplier
+                    if not rewrites and not defaults and not local:
+                        raise NetlistError(
+                            f"ngspice stops on this deck: {'.'.join(path)} calls "
+                            f"{child.view.name}, which takes no parameters, with the m ngspice "
+                            f"appends to every card of {enclosing} ('Mismatch: 0 formal but 1 "
+                            f"actual params'); declare m on {child.view.name} or write m on "
+                            f"{view.ref}"
+                        )
+                if rewrites:
+                    expressions["m"] = "1"
                 child_env = Environment(
                     expressions,
                     simulator=profile.simulator,
                     parent=env,
-                    overrides=dict(param_facts),
+                    overrides=overrides,
                     dynamic_reason=dynamic_reason,
                 )
+                child_passed = child_env.fact("m") if rewrites else None
                 mapped = tuple(zip(child.view.ports, nodes, strict=True))
             elif kind == "M" and supported:
                 name = (view.model or "").casefold()
@@ -822,6 +895,7 @@ def resolve_hierarchy(
                     save,
                     reason,
                     model_family,
+                    multiplier,
                 )
             )
             if len(rows) > MAX_INSTANCES:
@@ -834,9 +908,10 @@ def resolve_hierarchy(
                     {k.casefold(): v for k, v in mapped},
                     (*stack, child.view.name.casefold()),
                     child.view.name,
+                    child_passed,
                 )
 
-    expand(top, (), global_env, {}, (), None)
+    expand(top, (), global_env, {}, (), None, None)
     if profile.simulator == "ltspice":
         # Existing operating-point selectors match ancestral suffixes. A suffix
         # that also names another runtime device cannot promise exact selection.
@@ -863,4 +938,5 @@ def resolve_hierarchy(
         tuple(library_bindings),
         scale,
         tuple(include_bindings),
+        rewritten,
     )

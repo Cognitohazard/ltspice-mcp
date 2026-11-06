@@ -6,7 +6,7 @@ import ast
 import math
 import operator
 import re
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 
 from ltspice_mcp.lib.format import parse_spice_value
@@ -194,19 +194,63 @@ def scaled_geometry(fact: NumericFact, scale: NumericFact) -> NumericFact:
     return NumericFact(fact.expression, value, "m", "resolved")
 
 
-def multiplier_product(facts: Iterable[tuple[str, NumericFact | None]]) -> NumericFact:
-    """How many parallel copies a device's ``m`` values build: their product.
+#: Element letters ngspice appends a subcircuit's ``m`` to (measured on
+#: ngspice-42 with ``listing expand``: a voltage source and a VCVS are left as
+#: written, and ngspice's source skips CCVS and behavioural sources too).
+NGSPICE_M_EXEMPT = frozenset("VEHB")
 
-    Each item names where an ``m`` is written and gives its fact, or None where
-    no ``m`` is written, which counts as 1. The first ``m`` that is not a
-    positive number leaves the product unresolved, with a reason naming it.
+
+def ngspice_multiplies_m(ngbehavior: str | None) -> bool:
+    """Whether ngspice in this compatibility mode multiplies a card's own ``m``
+    by the ``m`` its subcircuit passes down, rather than replacing it.
+
+    Only the HSPICE modes multiply (``hs``, ``hsa``); every other mode, the
+    ``kiltpsa`` spicelib runs by default included, replaces it. Measured on
+    ngspice-42: ``R1 p 0 1k m=3`` in a body called with ``m=4`` builds 12
+    copies under ``hsa`` and 4 under ``kiltpsa``.
     """
-    product = 1.0
-    for where, fact in facts:
+    return "hs" in (ngbehavior or "").casefold()
+
+
+def card_copies(
+    own: NumericFact | None,
+    passed: NumericFact | None,
+    *,
+    multiply: bool,
+    where: str,
+    passed_from: str,
+) -> NumericFact:
+    """How many parallel copies the simulator builds from one card: its effective ``m``.
+
+    LTspice ignores ``m`` on an ``X`` line at any depth (recorded:
+    ``raw/subckt_multiplier``, ``deck/subckt_multiplier_nested``), so to it a
+    card's copies are its own ``m`` and ``passed`` is always None. ngspice gives a subcircuit that does not declare ``m`` (on its ``.subckt``
+    line or in a body ``.param``) an ``m`` parameter, default 1, whenever any
+    ``X`` line in the deck calls it with ``m``, and appends ``m={m}`` to every
+    card of its body but those of ``NGSPICE_M_EXEMPT``. ``passed`` is that
+    parameter's value in the body ``own`` sits in, or None where the body is
+    not rewritten. A subcircuit that declares ``m`` takes the ``X`` line's
+    ``m`` as an ordinary parameter, which only a card writing ``m={m}`` reads.
+
+    With ``passed`` the appended ``m`` replaces the card's own (``multiply``
+    False) or multiplies it (``multiply`` True, the HSPICE modes); without it
+    the card's own ``m`` stands, and no ``m`` is one copy. An ``m`` that is not
+    a positive number leaves the answer unresolved, with a reason naming where
+    it is written.
+    """
+    facts = (
+        [(where, own)]
+        if passed is None
+        else [(passed_from, passed), (where, own)]
+        if multiply
+        else [(passed_from, passed)]
+    )
+    copies = 1.0
+    for place, fact in facts:
         if fact is None:
             continue
         if fact.value is None or not fact.value > 0.0:
             why = fact.reason or "not a positive number"
-            return NumericFact(fact.expression, reason=f"m={fact.expression} on {where}: {why}")
-        product *= fact.value
-    return NumericFact(None, product, None, "resolved")
+            return NumericFact(fact.expression, reason=f"m={fact.expression} on {place}: {why}")
+        copies *= fact.value
+    return NumericFact(None, copies, None, "resolved")

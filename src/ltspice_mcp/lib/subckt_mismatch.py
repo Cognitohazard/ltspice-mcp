@@ -48,7 +48,13 @@ from ltspice_mcp.lib.deck_staging import (
 )
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.hierarchy import ResolvedInstance, param_assignments
-from ltspice_mcp.lib.hierarchy_expr import Environment, NumericFact, multiplier_product
+from ltspice_mcp.lib.hierarchy_expr import (
+    NGSPICE_M_EXEMPT,
+    Environment,
+    NumericFact,
+    card_copies,
+    ngspice_multiplies_m,
+)
 from ltspice_mcp.lib.montecarlo import (
     InstanceGeometry,
     MCSampler,
@@ -500,29 +506,109 @@ def _body_environment(
 
 
 def _device_multiplier(
-    x_view: InstanceLine, inner: InstanceLine, body: Callable[[], Environment]
+    x_view: InstanceLine,
+    inner: InstanceLine,
+    body: Callable[[], Environment],
+    passed: NumericFact | None,
+    multiply: bool,
 ) -> NumericFact:
     """How many parallel copies of ``inner`` ngspice builds under ``x_view``.
 
-    ngspice multiplies an X line's ``m`` into every device of the body, and an
-    inner device's own ``m`` (often ``m={mult}``, a parameter the X line sets)
-    on top of it, so the copies are the product. This plan serves a deck with
-    no semantic profile, so it applies ngspice's rule to QSPICE and Xyce too,
-    as it does ``delvto`` and ``mulu0``; LTspice ignores an X line's ``m``,
-    which ``variations._path_multiplier`` applies to a profiled deck. ``body``
-    builds the scope the inner ``m`` is read in, so a device that writes none
-    never builds it.
+    ``hierarchy_expr.card_copies`` with ``passed`` from ``_passed_m``: the X
+    line's ``m`` replaces the inner device's own, or multiplies it in the
+    HSPICE modes, where ngspice rewrites the subcircuit for ``m``; otherwise
+    the inner device's own ``m`` stands, often ``m={mult}`` read from what the
+    X line sets. This plan serves a deck with no semantic profile, so it
+    applies ngspice's rule to QSPICE and Xyce too, as it does ``delvto`` and
+    ``mulu0``. ``body`` builds the scope the inner ``m`` is read in, so a
+    device that writes none never builds it.
     """
-    x_m, inner_m = x_view.get_param("M"), inner.get_param("M")
-    return multiplier_product(
-        [
-            (
-                f"the X line {x_view.ref}",
-                None if x_m is None else Environment({}, simulator="ngspice").fact(x_m),
-            ),
-            (f"the inner device {inner.ref}", None if inner_m is None else body().fact(inner_m)),
-        ]
+    inner_m = inner.get_param("M")
+    return card_copies(
+        None if inner_m is None else body().fact(inner_m),
+        passed,
+        multiply=multiply,
+        where=f"the inner device {inner.ref}",
+        passed_from=f"the X line {x_view.ref}",
     )
+
+
+def _callers_by_subckt(indexes: list[_FileIndex]) -> dict[str, list[tuple[int, bool]]]:
+    """Each active ``X`` card in the closure under the subcircuit it calls:
+    the card's identity and whether it writes ``m``."""
+    callers: dict[str, list[tuple[int, bool]]] = {}
+    for index in indexes:
+        for card_index, card in enumerate(index.cards):
+            if card.kind != "instance" or not card.name or card.name[:1].upper() != "X":
+                continue
+            if not index.is_active(card_index):
+                continue
+            view = InstanceLine.from_card(card)
+            writes = "m" in {key.casefold() for key in view.params}
+            callers.setdefault((view.model or "").casefold(), []).append((id(card), writes))
+    return callers
+
+
+def _declares_m(opener: SpiceCard, children: Sequence[tuple[int, SpiceCard]]) -> bool:
+    """Whether a subcircuit declares ``m``, on its ``.subckt`` line or in a body
+    ``.param``; a body ``.param`` this reader cannot split is refused."""
+    if "m" in {key.casefold() for key in SubcktCard.from_card(opener).param_defaults}:
+        return True
+    try:
+        return any("m" in param_assignments(card) for _, card in children if card.kind == "param")
+    except NetlistError as exc:
+        raise MismatchPlanError(
+            "mismatch_geometry_unresolved",
+            f"a .param in {SubcktCard.from_card(opener).name} cannot be read ({exc}), so "
+            "whether it declares m, which sets how many copies ngspice builds, is unknown",
+        ) from exc
+
+
+def _passed_m(
+    x_view: InstanceLine,
+    opener: SpiceCard,
+    children: Sequence[tuple[int, SpiceCard]],
+    callers: Sequence[tuple[int, bool]],
+    targeted: set[int],
+    multiply: bool,
+) -> NumericFact | None:
+    """The ``m`` ngspice appends to the cards of the copy ``x_view`` is re-pointed
+    at (``hierarchy_expr.card_copies``), or None where it appends none.
+
+    The patched deck calls the copy from the targeted X lines only and the
+    original from the rest, and ngspice rewrites each for ``m`` only if one of
+    its own callers writes ``m``. Outside the HSPICE modes a rewrite replaces a
+    card's own ``m``, so a split that moves the rewrite would change what the
+    untouched cards build; the plan refuses that rather than run another
+    circuit.
+    """
+    if not any(writes for _, writes in callers) or _declares_m(opener, children):
+        return None
+    copy_rewritten = any(writes for card, writes in callers if card in targeted)
+    rest = [writes for card, writes in callers if card not in targeted]
+    name = SubcktCard.from_card(opener).name
+    if not multiply and (not copy_rewritten or (rest and not any(rest))):
+        own = [
+            card.name
+            for _, card in children
+            if card.kind == "instance"
+            and card.name
+            and card.name[:1].upper() not in NGSPICE_M_EXEMPT
+            and "m" in {key.casefold() for key in InstanceLine.from_card(card).params}
+        ]
+        if own:
+            raise MismatchPlanError(
+                "multiplier_rewrite_changed",
+                f"ngspice gives {name} an m parameter because an X line calls it with m, "
+                f"and that m replaces the m {', '.join(own)} writes; patching only some of "
+                f"its callers, {x_view.ref} among them, would leave the others without it "
+                "and change the circuit. Write m on every X line that calls "
+                f"{name}, declare m on {name}, or target every instance that calls it",
+            )
+    if not copy_rewritten:
+        return None
+    x_m = x_view.get_param("M")
+    return Environment({}, simulator="ngspice").fact("1" if x_m is None else x_m)
 
 
 def _model_level(indexes: list[_FileIndex], model_name: str) -> float | None:
@@ -595,6 +681,11 @@ def build_plan(
     # Only decks this selection actually reaches into pay for the scale lookup,
     # and only they can be refused by it.
     scale = _deck_scale(indexes) if picked else 1.0
+    from ltspice_mcp.lib.simulator import current_ngbehavior
+
+    multiply = ngspice_multiplies_m(current_ngbehavior())
+    callers = _callers_by_subckt(indexes) if picked else {}
+    targeted = {id(card) for _, _, card, _ in picked}
     targets: list[XFetTarget] = []
     skips: list[MismatchSkip] = []
     # Keyed by the definition SITE, not just the name: one library entered
@@ -662,9 +753,17 @@ def build_plan(
         width = None if raw_width is None else raw_width * scale
         length = None if raw_length is None else raw_length * scale
         body_env = cache(partial(_body_environment, view, def_index.cards[opener_index], children))
+        passed = _passed_m(
+            view,
+            def_index.cards[opener_index],
+            children,
+            callers.get(subckt.casefold(), []),
+            targeted,
+            multiply,
+        )
         for inner in chosen:
             inner_view = InstanceLine.from_card(inner)
-            multiplier = _device_multiplier(view, inner_view, body_env)
+            multiplier = _device_multiplier(view, inner_view, body_env, passed, multiply)
             _refuse_preexisting(
                 x_ref, inner_view, MISMATCH_PARAMS, f"inner device {inner_view.ref}"
             )
