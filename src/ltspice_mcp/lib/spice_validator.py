@@ -498,9 +498,10 @@ def validate_netlist_arity(
 # The names ``deck_nodes`` reads as ground, always considered connected.
 _GROUND_NODES = GROUND_NAMES
 # The floating- and dangling-node checks read a deck as LTspice does, whichever
-# simulator the deck is for: a port named ``gnd`` is the port, where ngspice
-# reads it as ground (``deck_nodes``), so for an ngspice deck they can report a
-# node floating that such a port ties to ground. Hierarchy discovery, which is
+# simulator the deck is for: a port named ``gnd`` or named like a ``.global``
+# net is the port, where ngspice reads it as ground or the global
+# (``deck_nodes``), so for an ngspice deck they can report a node floating that
+# such a port ties to ground or to the global. Hierarchy discovery, which is
 # told the simulator, reads it as that simulator does; tests/test_deck_nodes.py
 # pins the difference.
 _READ_AS = "ltspice"
@@ -1121,7 +1122,7 @@ def _subckt_internal_grounds(
         changed = False
         for name, (ports, body) in defs.items():
             dsu = _DSU()
-            # Ground and the globals, but not a port named like ground.
+            # Ground and the globals, but not a port named like either.
             for sink in _GROUND_NODES | global_nodes:
                 if _shared(sink, tuple(ports), global_nodes):
                     dsu.union(_GROUND_SINK, sink)

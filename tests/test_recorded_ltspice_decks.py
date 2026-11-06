@@ -718,6 +718,99 @@ class TestDeckStructure:
             i["message"] for i in validate_netlist_dangling_nodes(lex_deck(unused_renamed).cards)
         ]
 
+    async def test_every_reader_of_a_deck_reads_a_port_named_like_a_global_as_the_port(
+        self, build: str, tmp_path: Path, state_no_sim, work_dir: Path
+    ):
+        """With ``.global vdd``, inside ``.subckt leg top vdd`` the card
+        ``R1 top vdd`` goes to the port, not to the global 5 V rail: the
+        milliampere crosses R1 and then R3 to ground, so v(c) is 2 and v(mid)
+        1, and the rail carries none of it. ngspice 42 wires the resistor to
+        the rail instead (``tests/test_deck_nodes.py``). So the comparison
+        flattens the resistor onto the node the port is wired to, hierarchy
+        discovery for LTspice reads it so, and the floating- and dangling-node
+        checks read the port as they read the same port renamed."""
+        voltages = rec.operating_point(build, "deck/global_port", tmp_path)
+        assert (voltages["v(c)"], voltages["v(mid)"]) == (pytest.approx(2.0), pytest.approx(1.0))
+        assert voltages["i(v1)"] == pytest.approx(0.0)
+        text = deck_text("deck/global_port")
+
+        def body(header: str, card: str, deck: str = text) -> str:
+            changed = deck.replace(".subckt leg top vdd\nR1 top vdd 1k", f"{header}\n{card}")
+            assert changed != deck
+            return changed
+
+        renamed = body(".subckt leg top p", "R1 top p 1k")
+        to_rail = body(".subckt leg top p", "R1 top vdd 1k")
+
+        nodes = {
+            c.ref.lower(): c.nodes for c in flatten_graph(parse_netlist_graph(text)).components
+        }
+        assert nodes["x2.r1"] == ("c", "mid")
+        assert compare_graphs(text, renamed).equivalent
+        assert not compare_graphs(text, to_rail).equivalent
+        path = work_dir / "global_port.cir"
+        path.write_text(text, encoding="utf-8")
+        for reference, equivalent in ((renamed, True), (to_rail, False)):
+            verified = await handle_verify_circuit(
+                VerifyCircuitInput.model_validate(
+                    {"path": str(path), "checks": ["compare"], "compare": {"reference": reference}}
+                ),
+                state_no_sim,
+            )
+            assert verified.structured_content is not None
+            assert verified.structured_content["comparison"]["equivalent"] is equivalent
+
+        rows = await hierarchy_rows(state_no_sim, work_dir, "deck/global_port")
+        port = rows[("X2", "R1")]["nodes"][1]
+        assert (port.get("scope", []), port["name"]) == ([], "mid")
+
+        # With its only path to ground a capacitor, the node the port is wired
+        # to floats, whatever the port is called.
+        floating = text.replace("R3 mid 0 1k", "C3 mid 0 1n")
+        floating_renamed = body(".subckt leg top p", "R1 top p 1k", floating)
+        found = validate_netlist_bias_topology(lex_deck(floating).cards)
+        assert found
+        assert [i["message"] for i in found] == [
+            i["message"] for i in validate_netlist_bias_topology(lex_deck(floating_renamed).cards)
+        ]
+        # A port wired to nothing in its body is reported whatever it is called.
+        unused = body(".subckt leg top vdd", "R1 top 0 1k")
+        unused_renamed = body(".subckt leg top p", "R1 top 0 1k")
+        dangling = [
+            str(i["message"]).replace("'vdd'", "'p'")
+            for i in validate_netlist_dangling_nodes(lex_deck(unused).cards)
+        ]
+        assert dangling
+        assert dangling == [
+            i["message"] for i in validate_netlist_dangling_nodes(lex_deck(unused_renamed).cards)
+        ]
+
+    async def test_every_reader_of_a_deck_reads_gnd_bang_as_a_node_of_its_own(
+        self, build: str, tmp_path: Path, state_no_sim, work_dir: Path
+    ):
+        """``R1 a gnd! 1k`` and ``R2 gnd! 0 1k``: the ampere crosses both, so
+        v(a) is 2000 and ``gnd!`` sits at 1000, as ngspice 42 reads it too. So
+        the comparison keeps ``gnd!`` apart from ground, hierarchy discovery
+        names it, and with a capacitor in place of R2 the floating-node check
+        reports it."""
+        voltages = rec.operating_point(build, "deck/gnd_bang", tmp_path)
+        assert voltages["v(a)"] == pytest.approx(2000.0)
+        assert voltages["v(gnd!)"] == pytest.approx(1000.0)
+        text = deck_text("deck/gnd_bang")
+        nodes = {
+            c.ref.lower(): c.nodes for c in flatten_graph(parse_netlist_graph(text)).components
+        }
+        assert nodes["r1"] == ("a", "gnd!")
+        to_ground = text.replace("R1 a gnd! 1k\nR2 gnd! 0 1k", "R1 a 0 1k")
+        assert to_ground != text
+        assert not compare_graphs(text, to_ground).structurally_equivalent
+        rows = await hierarchy_rows(state_no_sim, work_dir, "deck/gnd_bang")
+        bang = rows[("R1",)]["nodes"][1]
+        assert (bang.get("scope", []), bang["name"]) == ([], "gnd!")
+        floating = text.replace("R2 gnd! 0 1k", "C2 gnd! 0 1n")
+        assert floating != text
+        assert validate_netlist_bias_topology(lex_deck(floating).cards)
+
     @pytest.mark.parametrize("at", ["0", "gnd", "GND"])
     async def test_the_net_query_reads_gnd_as_node_0(
         self, build: str, at: str, tmp_path: Path, state_no_sim, work_dir: Path

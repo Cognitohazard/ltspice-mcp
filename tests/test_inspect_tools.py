@@ -495,6 +495,26 @@ async def test_net_netlist_refusal_says_what_the_query_did_not_read(
     assert "Did you mean" not in far["error"]["message"]
 
 
+async def test_net_netlist_refusal_counts_no_body_whose_port_has_the_global_name(
+    work_dir: Path, state_no_sim: SessionState
+):
+    """Inside a subcircuit whose port is named like a ``.global`` net, the
+    name is that port, as both LTspice builds record (``deck/global_port``),
+    so the refusal of the global's name does not say that body uses it."""
+    deck = work_dir / "rail.cir"
+    deck.write_text(
+        "* rail\n.global vdd\n.subckt load out vdd\nR1 vdd out 1k\n.ends\n"
+        "V1 a 0 1\nX1 a b load\nR2 b 0 1k\n.end\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    (rail,) = await _run(state_no_sim, [{"kind": "net", "path": str(deck), "at": "vdd"}])
+    assert rail["ok"] is False, rail
+    assert rail["error"]["code"] == "not_found", rail
+    assert "It is a .global net" in rail["error"]["message"]
+    assert ".subckt load" not in rail["error"]["message"]
+
+
 async def test_net_netlist_refusal_lists_a_few_nodes_and_counts_them_all(
     work_dir: Path, state_no_sim: SessionState
 ):
