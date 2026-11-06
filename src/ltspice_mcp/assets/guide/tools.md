@@ -57,7 +57,7 @@ check or job action from plain words (`query="phase margin"`) and returns its
 fields, types, defaults and units; with no `query` it lists them all. Use it
 instead of guessing a name. Always use it when your tool schema has no
 argument descriptions, as with the server's default
-`[tools] tool_listing = "compact"`, which leaves them out.
+`[tools] listing = "compact"`, which leaves them out.
 
 ## Recovering a job
 
