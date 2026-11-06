@@ -887,7 +887,13 @@ def runs_page(
     run_fields: list[str] | None = None,
     *,
     cap: int = _RUN_PAGE_LIMIT,
+    warnings: list[str] | None = None,
 ) -> dict[str, Any]:
+    """The first page of ``cases``' run rows, projected by ``run_fields``.
+
+    A ``run_fields`` path no row on the page reaches is said in ``warnings``,
+    as :func:`project_receipt_runs` says it for a receipt read from a job.
+    """
     # Paged first, projected second: the projection is one row in, one row out,
     # so it only has to run over the rows this page actually carries. The cap is
     # floored at one row for the same reason ``page`` floors its limit — a page
@@ -903,6 +909,7 @@ def runs_page(
         [_run_item(case) for case in selected],
         run_fields,
         native_by_key=native_by_key,
+        warnings=warnings,
     )
     return page_of(rows, offset=0, total=len(cases))
 

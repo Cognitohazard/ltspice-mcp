@@ -1668,7 +1668,9 @@ async def _routing_failure_response(
 
     def build(limit: int, _rung: response_budget.Rung | None) -> ReceiptBuilt:
         rendered = copy.deepcopy(data)
-        rendered["runs"] = runs_page(cases, args.run_fields, cap=limit)
+        rendered["runs"] = runs_page(
+            cases, args.run_fields, cap=limit, warnings=rendered["warnings"]
+        )
         return rendered, str(exc)
 
     return await render_run_receipt(budget, build)

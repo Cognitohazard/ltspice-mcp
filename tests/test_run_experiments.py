@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock
 import jsonschema
 import pytest
 from pydantic import ValidationError
+from spicelib.simulators.ltspice_simulator import LTspice
 from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
 from ltspice_mcp.api import ApiCallError
@@ -1104,6 +1105,77 @@ class TestLeanReceipt:
 
         (row,) = data["runs"]["items"]
         assert row["raw"] and row["log"]
+
+    #: A path into a run row that no row on the page reaches.
+    _ABSENT_RUN_FIELDS: ClassVar[list[str]] = ["case_id", "assignments.not_assigned"]
+
+    @staticmethod
+    def _absent_run_field_warnings(data: dict) -> list[str]:
+        return [
+            warning
+            for warning in data.get("warnings", [])
+            if warning.startswith("run_fields path 'assignments.not_assigned' is absent")
+        ]
+
+    async def test_a_run_field_no_row_reaches_is_said_by_the_receipt_and_its_runs_page(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        fake_simulator(monkeypatch)
+        deck = _deck(work_dir / "absent_field.cir")
+
+        receipt = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "absent-field", run_fields=self._ABSENT_RUN_FIELDS), state_with_sim
+            )
+        )
+        runs = (
+            await handle_jobs(
+                JobsInput.model_validate(
+                    {
+                        "action": "runs",
+                        "job_id": receipt["job_id"],
+                        "run_fields": self._ABSENT_RUN_FIELDS,
+                    }
+                ),
+                state_with_sim,
+            )
+        ).structured_content
+        assert runs is not None
+
+        assert len(self._absent_run_field_warnings(receipt)) == 1, receipt
+        assert len(self._absent_run_field_warnings(runs)) == 1, runs
+
+    async def test_a_run_field_no_row_reaches_is_said_when_no_run_has_somewhere_to_write(
+        self,
+        config: ServerConfig,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """LTspice under WSL with no Windows-native directory fails every case
+        before staging; that receipt pages its run rows like any other."""
+
+        class WslLTspice(LTspice):
+            spice_exe: ClassVar[list[str]] = ["/mnt/c/Program Files/ADI/LTspice/LTspice.exe"]
+
+        state = SessionState.create(config, available={"ltspice": WslLTspice})
+        monkeypatch.setattr(wsl, "is_wsl", lambda: True)
+        monkeypatch.setattr(wsl, "get_windows_output_dir", lambda: None)
+        deck = _deck(work_dir / "nowhere.cir")
+
+        receipt = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "nowhere-to-write", run_fields=self._ABSENT_RUN_FIELDS), state
+            )
+        )
+
+        assert [failure["code"] for failure in receipt["failures"]] == [
+            "windows_native_storage_unavailable"
+        ], receipt
+        assert receipt["runs"]["items"] == [{"case_id": receipt["failures"][0]["case_id"]}]
+        assert len(self._absent_run_field_warnings(receipt)) == 1, receipt
 
     @pytest.mark.parametrize(
         ("request_id", "run_fields"),
