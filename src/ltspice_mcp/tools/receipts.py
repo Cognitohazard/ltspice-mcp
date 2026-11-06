@@ -144,8 +144,8 @@ _FAILURE_CODE_HINTS: dict[str, str] = {
         "a sectioned '.lib <file> <section>' as two plain includes and drops the "
         "section — so the corner select came back as a missing file. Set "
         '[simulator] ngbehavior = "hsa" in ltspice-mcp.toml (or '
-        "LTSPICE_MCP_NGBEHAVIOR=hsa) and restart the server, or add "
-        "'set ngbehavior=hsa' to a .spiceinit in the run directory."
+        "LTSPICE_MCP_NGBEHAVIOR=hsa) and restart the server. The server runs "
+        "ngspice without any .spiceinit, so a 'set ngbehavior' there has no effect."
     ),
     "run_timeout": (
         "The simulator ran past the per-case run timeout and was stopped. evidence "

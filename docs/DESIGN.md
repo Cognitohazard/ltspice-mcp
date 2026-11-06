@@ -54,7 +54,9 @@ instance names, so a schematic run on QSPICE or Xyce is refused and needs a
 hand-written netlist.
 ngspice runs in spicelib's default compatibility mode, `kiltpsa`, which drops
 the section name from a `.lib <file> <section>` line that selects a corner;
-set `[simulator] ngbehavior` (for example `hsa`) when a deck uses one.
+set `[simulator] ngbehavior` (for example `hsa`) when a deck uses one. Every
+ngspice run starts with `-n`, so a `.spiceinit` cannot change the mode the
+server reads the deck in.
 
 ### Why an MCP server instead of spicelib scripts
 

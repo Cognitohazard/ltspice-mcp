@@ -167,7 +167,8 @@ X1 input output myfilter rval=1k cval=1n
     `run_experiments` refuses such a deck (lint `lib-section-ngspice`); run
     elsewhere, it fails with "could not find include file". Set
     `[simulator] ngbehavior = "hsa"` in `ltspice-mcp.toml` (or
-    `LTSPICE_MCP_NGBEHAVIOR=hsa`) and restart to parse the section.
+    `LTSPICE_MCP_NGBEHAVIOR=hsa`) and restart to parse the section. A
+    `.spiceinit` cannot set the mode: the server runs ngspice with `-n`.
   Unlike `.include`, `.lib` skips global-scope circuit elements.
 - `.param` inside a subcircuit is local (it masks globals). Subcircuits nest
   up to 10 levels.

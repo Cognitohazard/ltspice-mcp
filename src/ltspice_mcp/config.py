@@ -664,7 +664,8 @@ class ServerConfig:
     as two plain includes, dropping the section. Set a mode with neither token
     (e.g. ``"hsa"`` or ``"kia"``) for standard-SPICE / PDK decks. Applied at
     startup to ``NGspiceSimulator._compatibility_mode``; ngspice-only, ignored by
-    other simulators."""
+    other simulators. This is the only place the mode is set: ngspice runs with
+    ``-n``, so a ``set ngbehavior`` in a ``.spiceinit`` is not read."""
 
     working_dir: Path = field(default_factory=Path.cwd)
     """Working directory for circuit files."""

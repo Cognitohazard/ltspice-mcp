@@ -124,7 +124,7 @@ variable. The settings you are most likely to change:
 [simulator]
 default = "ltspice"      # ltspice, ngspice, qspice, xyce (unset = auto-detect)
 path = ""                # explicit executable path (required on WSL)
-ngbehavior = "hsa"       # ngspice compatibility mode; "hsa" makes sectioned .lib corner selection work
+ngbehavior = "hsa"       # ngspice compatibility mode; "hsa" makes sectioned .lib corner selection work (a .spiceinit is not read)
 hidden_desktop = true    # Windows: run LTspice where its window can't take your keyboard focus; false shows it
 
 [simulator.executables]  # more builds, chosen per run as execution.simulator = "ltspice:xvii"

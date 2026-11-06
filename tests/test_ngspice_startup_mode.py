@@ -1,0 +1,184 @@
+"""Which compatibility mode ngspice reads a deck in.
+
+The server reads a deck in the mode it configures (``[simulator] ngbehavior``,
+read back by ``simulator.current_ngbehavior``). Hierarchy discovery, the
+``lib-section-ngspice`` lint rule and the failure classifier all answer from
+it, and the server hands it to ngspice as ``-D ngbehavior=<mode>``. ngspice
+applies that define before it runs its startup files, so a
+``set ngbehavior`` in a user's ``.spiceinit`` replaces it. ngspice looks for
+that file in the folder ``SPICE_USERINIT_DIR`` names, then in its working
+directory, then in the home directory (measured with ngspice-42).
+
+Each test puts a ``.spiceinit`` that sets ``hsa`` in one of those places,
+with the server configured for ``kiltpsa``, and checks what ngspice did
+against what the server says it does. The ordinary launch and the
+controlled launch of a recoverable job must agree.
+"""
+
+from __future__ import annotations
+
+import shutil
+from pathlib import Path
+
+import pytest
+from spicelib.simulators.ngspice_simulator import NGspiceSimulator
+
+from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.lib.services import resolve_job
+from ltspice_mcp.lib.simulator import detect_simulators
+from ltspice_mcp.state import SessionState
+from tests.conftest import needs_controlled_startup, terminal_experiment
+from tests.test_inspect_tools import _run
+from tests.test_ngspice_e2e import _analyze
+
+pytestmark = [
+    pytest.mark.asyncio,
+    pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH"),
+]
+
+LOCATIONS = ("SPICE_USERINIT_DIR", "working directory", "home directory")
+"""Where ngspice looks for a user's ``.spiceinit``, in the order it looks."""
+
+MULTIPLIER = (
+    "* m on an instance and on the card it calls\n"
+    "V1 a 0 1\n"
+    "X1 a r1 m=4\n"
+    ".subckt r1 p\nR1 p 0 1k m=3\n.ends\n"
+    ".op\n.end\n"
+)
+"""Outside the HSPICE modes ngspice gives R1 the instance's m, so 4 copies
+of 1k draw 4 mA from 1 V. In ``hsa`` it multiplies the two, 12 copies and
+12 mA."""
+
+KILTPSA_FLAGS = "ps lt ki a"
+"""How ngspice-42 names the flags of ``kiltpsa`` in its log."""
+
+
+def _kiltpsa_session(work_dir: Path, monkeypatch: pytest.MonkeyPatch) -> SessionState:
+    """A session that runs real ngspice and models decks in ``kiltpsa``."""
+    # detect_simulators sets the mode on spicelib's class for the whole
+    # process; recording the current value first restores it afterwards.
+    monkeypatch.setattr(
+        NGspiceSimulator, "_compatibility_mode", NGspiceSimulator._compatibility_mode
+    )
+    config = ServerConfig(
+        simulator="ngspice",
+        working_dir=work_dir,
+        allowed_paths=[work_dir],
+        ngbehavior="kiltpsa",
+    )
+    available = detect_simulators(config)
+    assert "ngspice" in available, available
+    return SessionState.create(config, available)
+
+
+def _spiceinit_sets_hsa(location: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Put a ``.spiceinit`` that sets ``hsa`` at ``location``. An ambient
+    ``SPICE_USERINIT_DIR`` is cleared, because ngspice would look there
+    first."""
+    folder = tmp_path / "user-startup"
+    folder.mkdir()
+    (folder / ".spiceinit").write_text("set ngbehavior=hsa\n", encoding="utf-8")
+    monkeypatch.delenv("SPICE_USERINIT_DIR", raising=False)
+    if location == "SPICE_USERINIT_DIR":
+        monkeypatch.setenv("SPICE_USERINIT_DIR", str(folder))
+    elif location == "working directory":
+        # A run's ngspice inherits the server's working directory.
+        monkeypatch.chdir(folder)
+    else:
+        # Which of the two a Windows build reads is not recorded, so both.
+        monkeypatch.setenv("HOME", str(folder))
+        monkeypatch.setenv("USERPROFILE", str(folder))
+
+
+def _log(state: SessionState, job_id: str) -> str:
+    job = resolve_job(job_id, state)
+    log_file = job.cases[0].log_file
+    assert log_file is not None
+    return log_file.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("location", LOCATIONS)
+@pytest.mark.parametrize(
+    "recoverable", [False, pytest.param(True, marks=needs_controlled_startup)]
+)
+async def test_ngspice_reads_the_deck_in_the_mode_the_server_models(
+    location: str,
+    recoverable: bool,
+    work_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    state = _kiltpsa_session(work_dir, monkeypatch)
+    _spiceinit_sets_hsa(location, tmp_path, monkeypatch)
+    deck = work_dir / "multiplier.cir"
+    deck.write_text(MULTIPLIER, encoding="utf-8")
+
+    (discovered,) = await _run(
+        state, [{"kind": "hierarchy", "path": str(deck), "simulator": "ngspice"}]
+    )
+    assert discovered["ok"], discovered
+    assert discovered["data"]["profile"]["ngbehavior"] == "kiltpsa"
+
+    receipt = await terminal_experiment(
+        state,
+        {
+            "request_id": f"startup-mode-{recoverable}",
+            "circuits": [{"path": str(deck)}],
+            "execution": {"simulator": "ngspice", "recoverable": recoverable, "wait_s": 90},
+        },
+    )
+    assert receipt["status"] == "completed", receipt
+    log = _log(state, receipt["job_id"])
+    assert f"Compatibility modes selected: {KILTPSA_FLAGS}" in log, log
+    result = await _analyze(
+        state, receipt["job_id"], [{"key": "op", "metric": "operating_point", "device": "V1"}]
+    )
+    op = result["results"]["op"]["values"][0]["value"]
+    (current,) = op["currents"].values()
+    assert abs(current) == pytest.approx(4e-3)
+
+
+@pytest.mark.parametrize("location", LOCATIONS)
+async def test_a_sectioned_lib_fails_where_the_server_says_it_will(
+    location: str,
+    work_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """``kiltpsa`` reads ``.lib <file> <section>`` as two plain includes, so
+    the lint refuses the deck and, with the lint off, the classifier names
+    the mode as the cause of the failed run. Both read the configured mode;
+    ngspice must read the same one."""
+    state = _kiltpsa_session(work_dir, monkeypatch)
+    _spiceinit_sets_hsa(location, tmp_path, monkeypatch)
+    (work_dir / "models.lib").write_text(
+        ".lib tt\n.model dmod d is=1e-14\n.endl tt\n", encoding="utf-8"
+    )
+    deck = work_dir / "corner.cir"
+    deck.write_text(
+        "* corner select\n.lib models.lib tt\nV1 a 0 1\nR1 a b 1k\nD1 b 0 dmod\n.op\n.end\n",
+        encoding="utf-8",
+    )
+
+    def request(lint: str) -> dict:
+        return {
+            "request_id": f"corner-{lint}",
+            "circuits": [{"path": str(deck)}],
+            "execution": {"simulator": "ngspice", "wait_s": 90},
+            "lint": lint,
+        }
+
+    refused = await terminal_experiment(state, request("block"))
+    assert refused["failures"][0]["code"] == "lint_blocked", refused
+
+    receipt = await terminal_experiment(state, request("off"))
+    (failure,) = receipt["failures"]
+    assert failure["code"] == "ngspice_lib_section", receipt
+    assert failure["evidence"]["ngbehavior"] == "kiltpsa"
+    log = _log(state, receipt["job_id"])
+    assert f"Compatibility modes selected: {KILTPSA_FLAGS}" in log, log
+    # The .spiceinit this test wrote did not fix the run, so the hint names
+    # the setting that does and does not offer a .spiceinit as another way.
+    assert '[simulator] ngbehavior = "hsa"' in failure["hint"]
+    assert "to a .spiceinit" not in failure["hint"]

@@ -41,7 +41,7 @@ from ltspice_mcp.lib.log_parser import (
 from ltspice_mcp.lib.pdk_native import LAUNCH_POLICY, NativeLaunchPolicy
 from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
 from ltspice_mcp.lib.raw_parser import other_raws
-from ltspice_mcp.lib.simulator import current_ngbehavior, is_ngspice
+from ltspice_mcp.lib.simulator import NGSPICE_NO_USER_INIT, current_ngbehavior, is_ngspice
 from ltspice_mcp.lib.simulator_build import executable_path, ltspice_before_24, reported_build
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
@@ -91,6 +91,19 @@ class NativeLaunchContext:
     cwd: Path
     verify_execution: Callable[[], None] | None = None
     policy: NativeLaunchPolicy = LAUNCH_POLICY
+
+
+def _launch_switches(simulator: type, native: NativeLaunchContext | None) -> list[str] | None:
+    """The command-line switches a run starts with.
+
+    A native setup's come from its recorded policy, which holds
+    ``NGSPICE_NO_USER_INIT``. Every other ngspice run, the recoverable
+    adapter's included, gets that switch here, so no user startup file
+    replaces the ``-D ngbehavior=`` the server models the deck in.
+    """
+    if native is not None:
+        return list(native.policy.switches)
+    return [NGSPICE_NO_USER_INIT] if is_ngspice(simulator) else None
 
 
 class RunOutcome(NamedTuple):
@@ -1026,7 +1039,7 @@ class RunnerBase:
             callback=completion_callback,
             callback_on_error=True,
             exe_log=True,
-            switches=list(native.policy.switches) if native else None,
+            switches=_launch_switches(simulator, native),
         )
         self._inflight_runners[run_filename] = runner
         return runner

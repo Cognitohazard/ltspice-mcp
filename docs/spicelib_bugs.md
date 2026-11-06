@@ -4004,3 +4004,122 @@ holds every recorded log of both builds to an entry for each measurement it
 printed and none for anything else. Once upstream reads the line, the reader
 keeps the name and `parse_measurements` no longer finds a line it skipped;
 the check stays.
+
+---
+
+## Bug 39 — `NGspiceSimulator.set_compatibility_mode` is replaced by a `set ngbehavior` in a startup file (limitation)
+
+**Status:** known limitation; draft for an upstream documentation and API
+change. Measured 2026-11-06 with ngspice-42 on Linux.
+**Affected version:** spicelib 1.5.1
+(`spicelib/simulators/ngspice_simulator.py`, `NGspiceSimulator.run` and
+`NGspiceSimulator.set_compatibility_mode`).
+**Our workaround:** every ngspice run the server starts carries `-n`
+(`simulator.NGSPICE_NO_USER_INIT`, passed by `runner_base.submit_netlist`
+through `_launch_switches`; the recoverable adapter in
+`controlled_ngspice.py` and the `pdk_native` launch policy use the same
+constant), so ngspice reads no user startup file.
+
+### Summary
+
+`set_compatibility_mode(mode)` makes `run` pass `-D ngbehavior=<mode>`, and
+its docstring presents that as setting ngspice's compatibility mode. ngspice
+applies a `-D` define before it runs its startup files, so a
+`set ngbehavior=<other>` in either of them replaces the mode spicelib passed,
+and nothing in spicelib's result says so:
+
+- the user's `.spiceinit` (or `spice.rc`), which ngspice looks for in the
+  folder `SPICE_USERINIT_DIR` names, then in its working directory, then in
+  the home directory, trying the next place when one has none;
+- the installation's `spinit`, found through `SPICE_SCRIPTS` or the
+  installation's own `scripts` folder.
+
+Pointing `SPICE_USERINIT_DIR` at an empty folder does not stop the user's
+file from being read, because ngspice then falls back to the working
+directory and the home directory. `-n` stops the user's file wherever it is.
+Nothing stops the `spinit` short of replacing it, and replacing it drops the
+code models it loads.
+
+### Affected code
+
+```python
+# ngspice_simulator.py, NGspiceSimulator.run
+extra_switches = []
+if cls._compatibility_mode:
+    extra_switches = ['-D', f"ngbehavior={cls._compatibility_mode}"]
+cmd_run = cls.spice_exe + cmd_line_switches + extra_switches + ['-b'] + ...
+```
+
+### Reproduction
+
+```text
+$ cat deck.cir
+* m multiplier
+V1 a 0 1
+X1 a r1 m=4
+.subckt r1 p
+R1 p 0 1k m=3
+.ends
+.op
+.end
+$ printf 'set ngbehavior=hsa\n' > .spiceinit
+$ ngspice -D ngbehavior=kiltpsa -b -o deck.log deck.cir
+$ grep -E 'Compatibility|v1#branch' deck.log
+Note: Compatibility modes selected: hs a
+	v1#branch                        -1.20000e-02
+$ ngspice -n -D ngbehavior=kiltpsa -b -o deck.log deck.cir
+$ grep -E 'Compatibility|v1#branch' deck.log
+Note: Compatibility modes selected: ps lt ki a
+	v1#branch                        -4.00000e-03
+```
+
+The same `hs a` comes back with the `.spiceinit` moved to the home directory
+(`HOME`), to a folder `SPICE_USERINIT_DIR` names, with
+`SPICE_USERINIT_DIR` pointing at an empty folder while the working directory
+holds the file, with the file named `spice.rc`, and with `-n` and a
+`spinit` (selected through `SPICE_SCRIPTS`) that ends in
+`set ngbehavior=hsa`. Through spicelib,
+`NGspiceSimulator.set_compatibility_mode("kiltpsa")` followed by
+`NGspiceSimulator.run(folder / "deck.cir", cwd=folder)`, with that
+`.spiceinit` in `folder`, also logs `hs a`.
+
+### Impact
+
+A caller that sets the mode through spicelib and reads the deck in that mode
+itself (to count the copies an `m` builds, to decide whether a sectioned
+`.lib` loads, to classify a failure) gets answers for another mode than the
+one ngspice ran. In the reproduction the two disagree by a factor of three in
+the current, with no error. This project's own recovery hint for a dropped
+`.lib` section used to suggest a `.spiceinit` that sets `hsa`, which is what
+makes the two disagree.
+
+### Proposed fix
+
+State in `set_compatibility_mode`'s docstring that a `set ngbehavior` in
+ngspice's `.spiceinit` or `spinit` overrides the mode it sets, and that `-n`
+(`--no-spiceinit`) keeps the user's file out. Optionally add a keyword to
+`set_compatibility_mode`, for example `exclusive=True`, that makes `run` add
+`-n` too, so a caller can ask for the mode it set to be the mode ngspice
+runs in. The default must stay as it is, because some users rely on a
+`.spiceinit` for other settings.
+
+### Suggested upstream test
+
+With ngspice on PATH, write the deck above and a `.spiceinit` holding
+`set ngbehavior=hsa` into a temporary working directory. Set the mode to
+`kiltpsa`, run once without and once with the new option (or with `-n` in
+`cmd_line_switches`), and assert that the log names `ps lt ki a` only in the
+second run.
+
+### Cross-reference
+
+`tests/test_ngspice_startup_mode.py::test_ngspice_reads_the_deck_in_the_mode_the_server_models`
+puts a `.spiceinit` that sets `hsa` in each of the three places ngspice
+looks, configures the server for `kiltpsa`, and runs the deck above through
+an ordinary and a recoverable job. It checks the mode hierarchy discovery
+reports, the mode ngspice's log names and the measured current.
+`::test_a_sectioned_lib_fails_where_the_server_says_it_will` does the same
+for the `lib-section-ngspice` lint rule and the `ngspice_lib_section`
+failure classifier. The workaround stays even with the option upstream,
+unless the option is how we pass `-n`. The `spinit` route is not worked
+around: ordinary runs read the installation's `spinit` for its code models.

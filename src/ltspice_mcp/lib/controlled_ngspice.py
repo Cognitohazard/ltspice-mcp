@@ -18,6 +18,7 @@ from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.ngspice_driver import seeded_commands, validate_seed
 from ltspice_mcp.lib.pdk_native import LAUNCH_POLICY, ArtifactDigest
 from ltspice_mcp.lib.recovery_records import ExecutionRecord, RecoveryError
+from ltspice_mcp.lib.simulator import NGSPICE_NO_USER_INIT
 from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
     executable_identity,
@@ -183,11 +184,14 @@ def controlled_ngspice(
             cwd: str | Path | None = None,
             exe_log: bool = False,
         ) -> int:
-            if cmd_line_switches and any(switch != "-n" for switch in cmd_line_switches):
+            if cmd_line_switches and any(
+                switch != NGSPICE_NO_USER_INIT for switch in cmd_line_switches
+            ):
                 raise RecoveryError("startup_policy", "Unrecorded ngspice switches refused")
             verify()
             deck = Path(netlist_file)
-            argv = [*command, "-n"]
+            # The recorded startup disables the user's init file (checked above).
+            argv = [*command, NGSPICE_NO_USER_INIT]
             if mode:
                 argv.extend(("-D", f"ngbehavior={mode}"))
             argv.extend(

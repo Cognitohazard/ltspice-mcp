@@ -218,6 +218,21 @@ tool-surface changes.
 
 ### Fixed
 
+- ngspice reads a deck in the compatibility mode the server models,
+  `[simulator] ngbehavior`. ngspice applies the `-D ngbehavior=` the server
+  passes before its startup files, so a `set ngbehavior` in a user's
+  `.spiceinit` replaced it. The run then used another mode than the one that
+  hierarchy discovery, the `lib-section-ngspice` lint rule and the failure
+  classifier read the deck in. For example, a `.spiceinit` that set `hsa`
+  made ngspice multiply an instance's `m` into a card's `m` (12 copies)
+  while the server, configured for `kiltpsa`, counted 4. Every ngspice run
+  now starts with `-n`, as recoverable and `pdk_native` runs already did, so
+  no `.spiceinit` or `spice.rc` is read from `SPICE_USERINIT_DIR`, the
+  working directory or the home directory. A setting that lived in a
+  `.spiceinit` goes in the server config (the mode) or in the deck
+  (`.options`). The installation's `spinit`, which loads
+  ngspice's code models, is still read. The `ngspice_lib_section` hint no
+  longer suggests a `.spiceinit`, and names only `[simulator] ngbehavior`.
 - A deck's first line, its title, and any card after `.end`, the deck's or
   an included file's, are no longer read as cards. `inspect(kind="components")` listed a part after `.end`, and
   `run_experiments` accepted assignments and random rules naming a part,
