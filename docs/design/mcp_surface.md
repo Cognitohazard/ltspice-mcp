@@ -2186,15 +2186,21 @@ independent; correlated Monte Carlo across decks is not supported.
 
 A random case's draws follow from the seed, its circuit id and its sample
 index, never from the case's position among the request's cases. Every case
-of one sample draws the same values whatever its `assign` values, so a sweep
-compares the same die at each corner, and adding a corner leaves the other
-draws as they were. Sample indices start at `sample_start` (default 0), and
-with the same seed `runs: 1` and `sample_start: k` replay sample k alone. An
-entry without `seed` gets one the server chooses after it has looked the
-request up for a replay, so a retry under the same `request_id` returns the
-job it made. Every case records its sample index as `_random_run`, its seed
-as `_random_seed` and, when the entry has one, its `id` as `_random_id`, in
-its assignments.
+of one sample draws the same deviation whatever its `assign` values, so a
+sweep compares the same die at each corner, and adding a corner leaves the
+other draws as they were. The value a deviation gives still follows what the
+case assigns: a relative tolerance scales with the assigned nominal, and a
+mismatch draw as 1/sqrt(m·W·L) of the assigned geometry. Sample indices start
+at `sample_start` (default 0; an integer, not a float, boolean or string), and
+with the same seed and circuit id `runs: 1` and `sample_start: k` replay
+sample k alone. An entry without `seed` gets one the server chooses after it
+has looked the request up for a replay, so a retry under the same
+`request_id` returns the job it made. Every case the entry expands to records
+its sample index as `_random_run`, its seed as `_random_seed` and, when the
+entry has one, its `id` as `_random_id`, in its assignments, a case skipped
+before it ran included. A circuit whose deck fails before its variations
+expand (an include that cannot be staged) records no assignments on its
+cases; their failure says why.
 
 ### A.2 Recipe
 
