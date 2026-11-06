@@ -524,6 +524,8 @@ FROZEN_ERROR_CODES = (
     "nested_fet_unsupported",
     "netlist_invalid",
     "ngspice_lib_section",
+    "ngspice_mode_mismatch",
+    "ngspice_mode_unverified",
     "no_axis",
     "no_chart",
     "no_table",

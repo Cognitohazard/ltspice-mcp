@@ -147,6 +147,13 @@ _FAILURE_CODE_HINTS: dict[str, str] = {
         "LTSPICE_MCP_NGBEHAVIOR=hsa) and restart the server. The server runs "
         "ngspice without any .spiceinit, so a 'set ngbehavior' there has no effect."
     ),
+    "ngspice_mode_mismatch": (
+        "ngspice read the deck in other compatibility modes than the ones the server "
+        "passed and read the deck in; evidence names both. The server already skips any "
+        ".spiceinit, so look for a 'set ngbehavior' in the installation's spinit (found "
+        "through SPICE_SCRIPTS or ngspice's own scripts folder). Remove it, or set "
+        "[simulator] ngbehavior to the same mode and restart the server."
+    ),
     "run_timeout": (
         "The simulator ran past the per-case run timeout and was stopped. evidence "
         "names the bound and whether it was the request's or the server default; "

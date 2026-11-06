@@ -381,7 +381,8 @@ def current_ngbehavior() -> str | None:
     ``-D ngbehavior=`` together with ``NGSPICE_NO_USER_INIT``, so no user
     startup file can replace it. A ``set ngbehavior`` in the installation's
     own ``spinit`` still would: an ordinary run reads that file, for its code
-    models, and the server does not model what it sets. A recoverable run
+    models, and the server does not model what it sets. So each run's log is
+    checked against the mode (``ngspice_mode.check_run``). A recoverable run
     replaces it with an empty one.
 
     ``getattr`` (not attribute access) is deliberate: it reads the protected

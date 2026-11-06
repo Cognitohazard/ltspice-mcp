@@ -224,7 +224,9 @@ because `write` captures only the current plot.
 is read. Put what one would hold in the deck: options on an `.options` line,
 and a model library in a `.control` block as `pre_osdi <file>` or
 `pre_codemodel <file>`, which run before ngspice reads the circuit. The
-compatibility mode is `[simulator] ngbehavior` alone.
+compatibility mode is `[simulator] ngbehavior` alone; a run that ngspice read
+in another (a `set ngbehavior` in the installation's `spinit`) fails with
+`ngspice_mode_mismatch`.
 
 **Variables vs vectors:**
 - `set` creates string/shell variables: `set myvar = "hello"` — access `$myvar`.

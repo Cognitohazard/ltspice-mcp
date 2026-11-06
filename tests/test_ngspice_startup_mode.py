@@ -10,10 +10,15 @@ that file in the folder ``SPICE_USERINIT_DIR`` names, then in its working
 directory, then in ``HOME``, then in ``USERPROFILE`` (measured with
 ngspice-42).
 
-Each test puts a ``.spiceinit`` that sets ``hsa`` in one of those places,
-with the server configured for ``kiltpsa``, and checks what ngspice did
-against what the server says it does. The ordinary launch and the
+The first tests put a ``.spiceinit`` that sets ``hsa`` in one of those
+places, with the server configured for ``kiltpsa``, and check what ngspice
+did against what the server says it does. The ordinary launch and the
 controlled launch of a recoverable job must agree.
+
+The installation's ``spinit`` can set ``ngbehavior`` too, and an ordinary run
+still reads it for ngspice's code models. The last tests point
+``SPICE_SCRIPTS`` at one that does, and check that the server compares the
+mode a run's log names with the mode it passed, and says when it cannot.
 """
 
 from __future__ import annotations
@@ -184,3 +189,114 @@ async def test_a_sectioned_lib_fails_where_the_server_says_it_will(
     # the setting that does and does not offer a .spiceinit as another way.
     assert '[simulator] ngbehavior = "hsa"' in failure["hint"]
     assert "to a .spiceinit" not in failure["hint"]
+
+
+def _spinit_sets(mode: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Point ``SPICE_SCRIPTS`` at a ``spinit`` that sets ``mode``, as an
+    installation's own could."""
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "spinit").write_text(f"set ngbehavior={mode}\n", encoding="utf-8")
+    monkeypatch.setenv("SPICE_SCRIPTS", str(scripts))
+
+
+async def _run_deck(state: SessionState, deck: Path, *, recoverable: bool = False, **request):
+    return await terminal_experiment(
+        state,
+        {
+            "request_id": f"{deck.stem}-{recoverable}-{request.get('lint', 'block')}",
+            "circuits": [{"path": str(deck)}],
+            "execution": {"simulator": "ngspice", "recoverable": recoverable, "wait_s": 90},
+            **request,
+        },
+    )
+
+
+MISMATCH_EVIDENCE = {
+    "ngbehavior": "kiltpsa",
+    "expected_modes": KILTPSA_FLAGS.split(),
+    "logged_modes": ["hs", "a"],
+}
+"""What a run read in ``hsa`` while the server passed ``kiltpsa`` reports."""
+
+
+async def test_a_run_ngspice_read_in_another_mode_fails(
+    work_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    state = _kiltpsa_session(work_dir, monkeypatch)
+    _spinit_sets("hsa", tmp_path, monkeypatch)
+    deck = work_dir / "multiplier.cir"
+    deck.write_text(MULTIPLIER, encoding="utf-8")
+
+    (discovered,) = await _run(
+        state, [{"kind": "hierarchy", "path": str(deck), "simulator": "ngspice"}]
+    )
+    assert discovered["data"]["profile"]["ngbehavior"] == "kiltpsa"
+
+    receipt = await _run_deck(state, deck)
+    (failure,) = receipt["failures"]
+    assert failure["code"] == "ngspice_mode_mismatch", receipt
+    assert failure["evidence"] == MISMATCH_EVIDENCE
+    assert "spinit" in failure["hint"]
+
+
+@needs_controlled_startup
+async def test_a_recoverable_run_does_not_read_the_spinit_that_sets_another_mode(
+    work_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    state = _kiltpsa_session(work_dir, monkeypatch)
+    _spinit_sets("hsa", tmp_path, monkeypatch)
+    deck = work_dir / "multiplier.cir"
+    deck.write_text(MULTIPLIER, encoding="utf-8")
+
+    receipt = await _run_deck(state, deck, recoverable=True)
+    assert receipt["status"] == "completed", receipt
+    assert f"Compatibility modes selected: {KILTPSA_FLAGS}" in _log(state, receipt["job_id"])
+
+
+async def test_a_sectioned_lib_read_in_another_mode_fails_on_the_mode(
+    work_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The lint refuses the deck in the mode the server passes. Run anyway,
+    ngspice reads it in the ``spinit``'s ``hsa`` and loads the section, and
+    the run fails on the mode instead of returning results the lint said
+    could not exist."""
+    state = _kiltpsa_session(work_dir, monkeypatch)
+    _spinit_sets("hsa", tmp_path, monkeypatch)
+    (work_dir / "models.lib").write_text(
+        ".lib tt\n.model dmod d is=1e-14\n.endl tt\n", encoding="utf-8"
+    )
+    deck = work_dir / "corner.cir"
+    deck.write_text(
+        "* corner select\n.lib models.lib tt\nV1 a 0 1\nR1 a b 1k\nD1 b 0 dmod\n.op\n.end\n",
+        encoding="utf-8",
+    )
+
+    refused = await _run_deck(state, deck, lint="block")
+    assert refused["failures"][0]["code"] == "lint_blocked", refused
+    receipt = await _run_deck(state, deck, lint="off")
+    (failure,) = receipt["failures"]
+    assert failure["code"] == "ngspice_mode_mismatch", receipt
+    assert failure["evidence"] == MISMATCH_EVIDENCE
+
+
+async def test_a_run_whose_log_names_no_mode_says_the_mode_is_unchecked(
+    work_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """ngspice's ``mc`` mode prints no compatibility note, so the log cannot
+    show which mode ngspice read the deck in. The run keeps its results and
+    says the check did not run."""
+    state = _kiltpsa_session(work_dir, monkeypatch)
+    _spinit_sets("mc", tmp_path, monkeypatch)
+    deck = work_dir / "divider.cir"
+    deck.write_text("* divider\nV1 a 0 1\nR1 a b 1k\nR2 b 0 1k\n.op\n.end\n", encoding="utf-8")
+
+    receipt = await _run_deck(state, deck)
+    assert receipt["status"] == "completed", receipt
+    assert "Compatibility mode" not in _log(state, receipt["job_id"])
+    (unchecked,) = [
+        item
+        for item in receipt.get("observations", [])
+        if item["code"] == "ngspice_mode_unverified"
+    ]
+    assert unchecked["evidence"] == {"ngbehavior": "kiltpsa"}

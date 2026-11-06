@@ -585,7 +585,12 @@ command line or the platform has changed since submission. A job without
 `recoverable` runs the simulator with the machine's own startup files
 (LTspice's `LTspice.ini`, ngspice's system `spinit`, which loads its code
 models), except a user's `.spiceinit`: every ngspice run gets `-n`, so the
-compatibility mode is the one `[simulator] ngbehavior` sets.
+compatibility mode is the one `[simulator] ngbehavior` sets. The `spinit` can
+still set another. After every ngspice run the server compares the mode the
+log names with the flags ngspice gives the mode it passed (asked once per
+mode, with no startup file). A run read in another mode fails with
+`ngspice_mode_mismatch`. A run with results whose log names no mode carries a
+`ngspice_mode_unverified` observation.
 
 `execution.simulator_seed` runs each case's saved deck through a short ngspice
 script that sets the random seed (`setseed`) immediately before it loads the

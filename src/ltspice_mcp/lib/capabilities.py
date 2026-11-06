@@ -467,10 +467,11 @@ ENTRIES: tuple[Entry, ...] = (
             "test:tests/test_config.py",
             "test:tests/test_hierarchy.py",
             "test:tests/test_ngspice_startup_mode.py",
+            "test:tests/test_ngspice_mode.py",
         ),
         mechanism=(
             "[simulator] ngbehavior, passed as -D ngbehavior= on every run, with -n so that "
-            "no .spiceinit replaces it."
+            "no .spiceinit replaces it; each run's logged mode is checked against it."
         ),
     ),
     Entry(

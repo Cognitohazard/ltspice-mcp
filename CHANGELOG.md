@@ -110,6 +110,17 @@ tool-surface changes.
 
 ### Added
 
+- Each ngspice run is checked against the compatibility mode the server
+  passed it and read the deck in. ngspice names the mode it read a circuit in
+  at the top of its log (`Note: Compatibility modes selected: ps lt ki a`);
+  the server compares that with the flags the same ngspice gives the passed
+  mode, which it asks ngspice once per mode with no startup file. A run read
+  in another mode, as when the installation's `spinit` sets `ngbehavior`,
+  fails with `ngspice_mode_mismatch`, whose evidence names both and whose
+  hint says where to look; until now its results came back as if read in the
+  configured mode. A run with results whose log names no mode (ngspice's
+  `mc` mode, an older build) keeps them and carries a
+  `ngspice_mode_unverified` observation.
 - The `bode_crossing` recipe takes `ref_hz`, which measures `level_db` from
   the gain at that frequency: `level_db: -3.0103, ref_hz: "1k"` finds where
   the gain falls 1/sqrt(2) below its value at 1 kHz, in one call instead of a

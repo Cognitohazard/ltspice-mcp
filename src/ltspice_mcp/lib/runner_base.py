@@ -38,6 +38,7 @@ from ltspice_mcp.lib.log_parser import (
     is_op_stepping_failure,
     op_ladder_exhausted,
 )
+from ltspice_mcp.lib.ngspice_mode import ModeCheck, check_run
 from ltspice_mcp.lib.pdk_native import LAUNCH_POLICY, NativeLaunchPolicy
 from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
 from ltspice_mcp.lib.raw_parser import other_raws
@@ -332,6 +333,45 @@ def _is_ngspice_lib_section_failure(
     if not _deck_has_sectioned_lib(netlist):
         return None
     return mode
+
+
+def _with_mode_check(outcome: RunOutcome, check: ModeCheck) -> RunOutcome:
+    """Fail a run ngspice read in another compatibility mode than the server
+    passed it, and say so on a run with results whose mode went unchecked.
+
+    The server read the deck in the mode it passed (lint, hierarchy,
+    variations, failure classification), so results read in another mode
+    answer for a different circuit. A failed run that could not be checked
+    gets nothing: it has no results to doubt.
+    """
+    if check.status == "agrees":
+        return outcome
+    if check.status == "unchecked":
+        if outcome.error is not None:
+            return outcome
+        observation = {
+            "code": "ngspice_mode_unverified",
+            "kind": "execution",
+            "detail": (
+                "The server could not check that ngspice read the deck in the compatibility "
+                f"mode it passed (ngbehavior={check.mode!r}): {check.reason}."
+            ),
+            "evidence": check.evidence(),
+        }
+        return outcome._replace(observations=(*outcome.observations, observation))
+    logged = " ".join(check.logged or ()) or "none"
+    expected = " ".join(check.expected or ()) or "none"
+    message = (
+        f"ngspice read the deck in compatibility modes '{logged}', not in '{expected}', "
+        f"those of ngbehavior={check.mode!r}, which the server passed and read the deck in. "
+        "A startup file ngspice read set another mode."
+    )
+    code = "ngspice_mode_mismatch"
+    return outcome._replace(
+        error=message if outcome.error is None else f"{message}\n\n{outcome.error}",
+        failure_code=code,
+        failure_evidence={**(outcome.failure_evidence or {}), **check.evidence()},
+    )
 
 
 def _raw_completion_outcome(raw_file: str, log_file: str) -> RunOutcome | None:
@@ -964,9 +1004,14 @@ class RunnerBase:
         electrical_deck = native.input_deck if native else netlist
         requirements = deck_requirements(electrical_deck)
         simulator = simulator_class or self.simulator_class
-        outcome_mode = native.policy.ngbehavior if native else None
-        if native is None and simulator_class is not None:
-            outcome_mode = getattr(simulator, "_compatibility_mode", None)
+        # The mode ngspice is handed and the server reads the deck in: a native
+        # setup's driver sets its own, every other run gets the class's -D.
+        # The failure classifier and the mode check both read this one.
+        passed_mode = (
+            native.policy.ngbehavior
+            if native
+            else getattr(simulator, "_compatibility_mode", None) or ""
+        )
 
         def verify_copied(copied: Path) -> None:
             if native is not None and native.verify_execution is not None:
@@ -1008,13 +1053,18 @@ class RunnerBase:
                         requirements,
                         netlist=electrical_deck,
                         simulator=simulator,
-                        ngbehavior=outcome_mode,
+                        ngbehavior=passed_mode,
                         exit_code=exit_code,
                         simulator_exception=simulator_exception,
                         logs=logs,
                         logs_error=logs_error,
                     )
                 outcome = outcome._replace(simulator_version=version)
+                if is_ngspice(simulator):
+                    log_path = Path(log_name) if log_name not in ("", ".") else None
+                    outcome = _with_mode_check(
+                        outcome, check_run(log_path, simulator, passed_mode)
+                    )
             except Exception as exc:
                 outcome = collect_run_outcome(
                     raw_name,
