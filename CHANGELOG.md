@@ -252,6 +252,9 @@ tool-surface changes.
 - The `run_experiments` receipt for LTspice under WSL with no Windows-native
   directory warns about a `run_fields` path that no run row reaches, as every
   other receipt does.
+- A `run_experiments` variation can name a part whose exported name holds
+  two `§` signs by the name the ngspice copy of the deck gives it, with every
+  `§` taken out. It accepted only the name with the first one taken out.
 - On a sheet holding two parts whose references differ only in case, an
   `edit_schematic` add or rename that is refused names the part whose
   reference is spelled exactly as asked, as every other op does, instead of
