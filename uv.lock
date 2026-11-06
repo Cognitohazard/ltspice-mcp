@@ -796,14 +796,10 @@ dependencies = [
     { name = "psutil" },
     { name = "pydantic" },
     { name = "rapidfuzz" },
+    { name = "resvg-py" },
     { name = "scipy" },
     { name = "spicelib" },
     { name = "tomlkit" },
-]
-
-[package.optional-dependencies]
-raster = [
-    { name = "resvg-py" },
 ]
 
 [package.dev-dependencies]
@@ -817,7 +813,6 @@ dev = [
     { name = "pytest-cov" },
     { name = "pytest-github-actions-annotate-failures" },
     { name = "pytest-xdist" },
-    { name = "resvg-py" },
     { name = "ruff" },
 ]
 
@@ -829,7 +824,7 @@ requires-dist = [
     { name = "psutil", specifier = ">=5.9,<8.0" },
     { name = "pydantic", specifier = ">=2.9,<3.0" },
     { name = "rapidfuzz", specifier = ">=3.0,<4.0" },
-    { name = "resvg-py", marker = "extra == 'raster'", specifier = ">=0.5,<0.6" },
+    { name = "resvg-py", specifier = ">=0.5,<0.6" },
     { name = "scipy", specifier = ">=1.12,<2.0" },
     { name = "spicelib", specifier = ">=1.4.9,<1.6" },
     { name = "tomlkit", specifier = ">=0.14.0,<1.0" },
@@ -847,7 +842,6 @@ dev = [
     { name = "pytest-cov", specifier = ">=7.0" },
     { name = "pytest-github-actions-annotate-failures", specifier = ">=0.4.2" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
-    { name = "resvg-py", specifier = ">=0.5,<0.6" },
     { name = "ruff", specifier = ">=0.11" },
 ]
 

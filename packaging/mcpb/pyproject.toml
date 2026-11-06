@@ -7,9 +7,10 @@
 # package = false: this is just a dependency set for `uv run`, not a buildable
 # package, so uv installs the dependencies without trying to build this project.
 #
-# The raster extra is included because a Desktop user cannot add an extra to a
-# bundle afterwards. Its rasterizer, resvg-py, ships as a wheel and needs no
-# native library.
+# The raster extra is named because a Desktop user cannot add an extra to a
+# bundle afterwards: up to 0.7.0 it was what installed resvg-py, the PNG
+# rasterizer. Later releases depend on resvg-py and keep the extra, empty, so
+# the line holds whichever release uv resolves.
 [project]
 name = "ltspice-mcp-desktop-extension"
 version = "0.1.0"

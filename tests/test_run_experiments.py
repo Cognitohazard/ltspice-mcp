@@ -1309,6 +1309,90 @@ class TestAttachedBlockPreflight:
         assert "analyze.group_by repeated 'R1'; each is read once." in data["warnings"]
 
 
+#: name -> (run_experiments arguments, the fingerprint 0.7.0 recorded for them).
+_STORED: dict[str, tuple[dict[str, Any], str]] = {
+    "random component rule": (
+        {
+            "request_id": "mc-1",
+            "circuits": [{"path": "dut.cir"}],
+            "variations": [
+                {
+                    "kind": "random",
+                    "runs": 3,
+                    "seed": 7,
+                    "rules": [{"rule": "component", "target": "R1", "tolerance": 0.1}],
+                }
+            ],
+        },
+        "117cfc08db971afe7feb4a936561e8da1f04699dd19987e0bb155f7f3de4734c",
+    ),
+    "random, every rule kind": (
+        {
+            "request_id": "pin-random",
+            "circuits": [{"path": "dut.cir", "id": "dut"}],
+            "variations": [
+                {
+                    "kind": "random",
+                    "id": "die",
+                    "runs": 4,
+                    "applies_to": ["dut"],
+                    "rules": [
+                        {
+                            "rule": "component",
+                            "target": "R*",
+                            "tolerance": 0.05,
+                            "distribution": "uniform",
+                        },
+                        {"rule": "param", "target": "vb", "tolerance": 0.01, "scale": "absolute"},
+                        {"rule": "model", "target": "NMOS1", "param": "VTO", "tolerance": 0.02},
+                        {"rule": "mismatch", "prefix": "M", "AVT": 3e-3, "AK": 0.01},
+                    ],
+                }
+            ],
+        },
+        "2864941587b9eb6c2adc5468f0ec10ca3b23ce106660ea638f39b913d03a3f25",
+    ),
+    "assign then random": (
+        {
+            "request_id": "pin-assign-random",
+            "circuits": [{"path": "dut.cir"}],
+            "variations": [
+                {
+                    "kind": "assign",
+                    "assign": {"R1": ["1k", "2k"], "C1": ["1n", "2n"]},
+                    "combine": "zip",
+                },
+                {
+                    "kind": "random",
+                    "runs": 2,
+                    "seed": 3,
+                    "rules": [{"rule": "component", "target": "R1", "tolerance": 0.1}],
+                },
+            ],
+            "execution": {"simulator": "ngspice"},
+        },
+        "ef716f2267fb6526e8545fbd9572b2573b17a0b20ac1b4f8d02e4d8ab4a4bd94",
+    ),
+    "pdk_native": (
+        {
+            "request_id": "pin-native",
+            "circuits": [{"path": "dut.cir"}],
+            "variations": [
+                {
+                    "kind": "pdk_native",
+                    "id": "mc",
+                    "runs": 2,
+                    "seed": 1,
+                    "profile": "sky130-e6f9c887-ngspice-v1",
+                    "mode": "mismatch",
+                }
+            ],
+        },
+        "2700e4dca929beef1cece176f40f808585504b107ec6267e1bb34965494598b8",
+    ),
+}
+
+
 class TestOptionalRequestId:
     """request_id may be omitted: a fresh id is generated per call, so a
     one-off run pays no idempotency ceremony, while an explicit id keeps the
@@ -1374,6 +1458,40 @@ class TestOptionalRequestId:
             canonical_fingerprint(args)
             == "8d5e2d07daeddf5f92339e9f999d441390c3bb830cbc16a88ed39d9478618861"
         )
+
+    @pytest.mark.parametrize(
+        ("payload", "recorded"),
+        [pytest.param(payload, digest, id=name) for name, (payload, digest) in _STORED.items()],
+    )
+    def test_a_stored_request_keeps_the_fingerprint_it_was_recorded_under(
+        self, payload: dict[str, Any], recorded: str
+    ):
+        """A retry of a stored request must hash as it did, or its request_id
+        comes back a conflict. A defaulted field added to any model the request
+        dumps changes those bytes unless strip_presentation leaves it out at
+        its default: `sample_start` on a random entry did. Each pin is the hash
+        the 0.7.0 release computed for these arguments."""
+        from ltspice_mcp.lib.experiment_runner import canonical_fingerprint
+
+        assert canonical_fingerprint(RunExperimentsInput.model_validate(payload)) == recorded
+
+    def test_a_random_sample_start_is_left_out_at_0_and_a_native_one_is_kept(self):
+        """The two entries treat a sample_start of 0 differently, each to keep
+        the bytes it was recorded with: random entries were recorded before the
+        field existed, pdk_native entries always had it. Any other start is a
+        different experiment for either."""
+        from ltspice_mcp.lib.experiment_runner import canonical_fingerprint
+
+        random_entry, _ = _STORED["random component rule"]
+        native_entry, _ = _STORED["pdk_native"]
+        for payload, kept in ((random_entry, False), (native_entry, True)):
+            args = RunExperimentsInput.model_validate(payload)
+            (entry,) = args.strip_presentation()["variations"]
+            assert ("sample_start" in entry) is kept
+            moved = copy.deepcopy(payload)
+            moved["variations"][0]["sample_start"] = 3
+            later = RunExperimentsInput.model_validate(moved)
+            assert canonical_fingerprint(later) != canonical_fingerprint(args)
 
     def test_serializing_an_attached_block_raises_no_pydantic_warning(self):
         """Every submission dumps this block twice — for the fingerprint and
@@ -3006,6 +3124,62 @@ class TestAttachedAnalysis:
         assert job.analysis.request is not None
         assert job.analysis.request["include"] is None
 
+    async def test_a_field_named_with_an_underscore_is_found_by_both_doors(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Every random case carries '_random_seed' and '_random_run' in its
+        assignments. The attached analysis checks a projection against a key
+        outline saved with the result, which left out every key starting with
+        '_' at any depth, so it warned that these paths were absent from every
+        row while each row it returned carried them. analyze_results checks
+        the rows themselves and never warned; both must give the same answer."""
+        recorded_fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "attached-underscore.cir")
+        recipes = [{"key": "summary", "metric": "summary"}]
+        fields = ["assignments._random_seed", "assignments._random_run"]
+        variations = [
+            {
+                "kind": "random",
+                "runs": 2,
+                "seed": 11,
+                "rules": [{"rule": "component", "target": "R1", "tolerance": 0.1}],
+            }
+        ]
+
+        attached = _assert_schema(
+            await _completed_analysis_receipt(
+                _args(
+                    deck,
+                    "attached-underscore",
+                    variations=variations,
+                    analyze={"recipes": recipes, "include": {"fields": fields}},
+                ),
+                state_with_sim,
+            )
+        )
+        standalone = await handle_analyze_results(
+            AnalyzeResultsInput.model_validate(
+                {
+                    "sources": [{"job_id": attached["job_id"], "runs": "all"}],
+                    "recipes": recipes,
+                    "include": {"fields": fields},
+                }
+            ),
+            state_with_sim,
+        )
+        assert standalone.structured_content is not None
+
+        for result in (attached["analysis"]["result"], standalone.structured_content):
+            block = result["results"]["summary"]
+            assert [row["assignments"] for row in block["values"]] == [
+                {"_random_seed": 11, "_random_run": 0},
+                {"_random_seed": 11, "_random_run": 1},
+            ]
+            assert not any("absent" in warning for warning in block.get("warnings", []))
+
     async def test_projection_survives_the_attached_continuation_and_replay_view_change(
         self,
         state_with_sim: SessionState,
@@ -3394,6 +3568,47 @@ class TestMonteCarloSampleIdentity:
 
         assert retry["job_id"] == first["job_id"]
         assert self._draws(retry) == self._draws(first)
+
+    async def test_a_sample_that_never_ran_still_records_how_to_replay_it(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A case skipped after its variations expanded but before it was drawn
+        (here by a blocking lint finding) keeps its sample index and the seed
+        the server chose, so a caller can send that sample again once the deck
+        is fixed."""
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "blocked.cir", "V1 in 0 1\nR1 out 1k\n.op\n.end\n")
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "mc-blocked",
+                    variations=[
+                        {
+                            "kind": "random",
+                            "id": "die",
+                            "runs": 2,
+                            "sample_start": 4,
+                            "rules": [self._RULE],
+                        }
+                    ],
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert submissions == []
+        assert data["failures"][0]["code"] == "lint_blocked"
+        rows = [item["assignments"] for item in data["runs"]["items"]]
+        assert [row["_random_run"] for row in rows] == [4, 5]
+        assert [row["_random_id"] for row in rows] == ["die", "die"]
+        (seed,) = {row["_random_seed"] for row in rows}
+        assert isinstance(seed, int)
 
 
 @pytest.mark.asyncio

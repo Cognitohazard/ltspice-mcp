@@ -67,7 +67,8 @@ def test_uv_bundle_declares_its_dependency() -> None:
     assert pyproject.is_file(), "type='uv' bundle must ship a pyproject.toml"
     deps = tomllib.loads(pyproject.read_text("utf-8"))["project"]["dependencies"]
     # With the raster extra: a Desktop user cannot add an extra to a bundle they
-    # did not build, so without it the server could never render a PNG there.
+    # did not build, and up to 0.7.0 the extra was what installed the PNG
+    # rasterizer. Later releases keep it, empty, so the line resolves on both.
     assert "ltspice-mcp[raster]" in deps
 
 
@@ -92,8 +93,9 @@ def test_bundle_versions_agree() -> None:
 
 def test_plugin_launches_with_the_raster_extra() -> None:
     """The plugin's launch line is fixed in its manifest, so a Claude Code user
-    cannot add the extra to it either. Launched without it, the server can
-    never render the PNG it returns inline."""
+    cannot add the extra to it either. Up to 0.7.0 a server launched without
+    it could never render the PNG it returns inline; later releases keep the
+    extra, empty, so the line resolves on both."""
     server = _plugin()["mcpServers"]["spice"]
     assert server["command"] == "uvx"
     assert server["args"] == ["--from", "ltspice-mcp[raster]", "ltspice-mcp"]

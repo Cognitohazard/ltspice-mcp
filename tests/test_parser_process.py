@@ -16,7 +16,7 @@ import threading
 import time
 from dataclasses import replace
 from pathlib import Path
-from typing import IO
+from typing import IO, Any
 
 import psutil
 import pytest
@@ -32,6 +32,7 @@ from ltspice_mcp.lib.parser_process import (
 )
 from ltspice_mcp.lib.store import parser_file_in
 from ltspice_mcp.lib.windows_job import python_launch
+from tests import parser_refusal
 from tests.conftest import (
     LIVENESS_S,
     await_until,
@@ -40,6 +41,7 @@ from tests.conftest import (
     wait_until,
     written,
 )
+from tests.parser_refusal import needs_parsing
 
 _FIXTURE = """
 import ctypes, json, os, struct, subprocess, sys
@@ -132,13 +134,22 @@ def call_dir(tmp_path):
     return create
 
 
-async def _started(directory: Path) -> list[psutil.Process | None]:
-    """The runaway decoder's processes, identified while they run."""
-    started = await await_until(
-        written(parser_file_in(directory, "started.json"), json.loads),
-        what="the real decoder to reach its runaway seam",
-    )
-    return [identify(pid) for pid in started.values()]
+async def _started(directory: Path, call: asyncio.Future[Any]) -> list[psutil.Process | None]:
+    """The runaway decoder's processes, identified while they run.
+
+    A ``call`` that ends before its decoder starts, as a refused one does,
+    ends the wait with its own outcome instead of the wait's timeout.
+    """
+    seen = written(parser_file_in(directory, "started.json"), json.loads)
+
+    def started() -> dict[str, int] | None:
+        found = seen()
+        if not found and call.done():
+            pytest.fail(f"the parser call ended before its decoder started: {call.result()!r}")
+        return found
+
+    found = await await_until(started, what="the real decoder to reach its runaway seam")
+    return [identify(pid) for pid in found.values()]
 
 
 def _assert_gone(processes):
@@ -176,7 +187,7 @@ async def test_timeout_reaps_gil_holding_decoder_and_detached_descendant(
             _worker_module="parser_fixture",
         )
     )
-    started = await _started(directory)
+    started = await _started(directory, task)
     # The deadline passes now that there is a decoder and a descendant to reap.
     parser_deadline_passed.set()
     with pytest.raises(ParserProcessError) as caught:
@@ -198,7 +209,7 @@ async def test_repeated_cancellation_waits_for_tree_reaping(call_dir, limits):
             _worker_module="parser_fixture",
         )
     )
-    started = await _started(directory)
+    started = await _started(directory, task)
     for _ in range(3):
         task.cancel()
         await asyncio.sleep(0)
@@ -211,15 +222,19 @@ async def test_repeated_cancellation_waits_for_tree_reaping(call_dir, limits):
 def test_sync_cancellation_event_reaps_worker(call_dir, limits):
     directory = call_dir()
     cancel = threading.Event()
+    test_ended = threading.Event()
     owned: list[psutil.Process | None] = []
+    seen = written(parser_file_in(directory, "started.json"), json.loads)
 
     def request_cancel():
+        # The test ending first, as it does when the call is refused, ends the wait.
         try:
-            started = wait_until(
-                written(parser_file_in(directory, "started.json"), json.loads),
+            started: dict[str, int] | bool = wait_until(
+                lambda: seen() or test_ended.is_set(),
                 what="the real decoder to reach its runaway seam",
             )
-            owned.extend(identify(pid) for pid in started.values())
+            if isinstance(started, dict):
+                owned.extend(identify(pid) for pid in started.values())
         finally:
             cancel.set()
 
@@ -240,10 +255,12 @@ def test_sync_cancellation_event_reaps_worker(call_dir, limits):
         assert len(owned) == 2
         _assert_gone(owned)
     finally:
+        test_ended.set()
         cancel.set()
         canceller.join(timeout=LIVENESS_S)
 
 
+@needs_parsing
 def test_owner_death_kills_and_reaps_decoder_tree(call_dir, limits):
     directory = call_dir()
     program = """
@@ -787,6 +804,7 @@ def test_existing_control_files_do_not_claim_empty_tree(call_dir, limits):
     assert not caught.value.reaped
 
 
+@needs_parsing
 def test_bootstrap_waits_before_import_or_input_access(call_dir, limits):
     directory = call_dir()
     executable, env = python_launch()
@@ -960,7 +978,14 @@ def test_a_sealed_windows_job_admits_no_further_process(tmp_path):
 
 @pytest.fixture
 def warm(tmp_path, limits):
-    """A warm parser running the fixture worker, and a maker of call directories."""
+    """A warm parser running the fixture worker, and a maker of call directories.
+
+    A warm parser is called past the supervisor's platform check, so where the
+    host refuses to parse, the refusal comes from the bootstrap in its child
+    process, which the refusal plugin cannot see; the tests skip here instead.
+    """
+    if parser_refusal.REFUSAL is not None:
+        pytest.skip(parser_refusal.REASON)
     home = tmp_path / "warm"
     home.mkdir()
     parser_file_in(home, "parser_fixture.py").write_text(_FIXTURE, encoding="utf-8")

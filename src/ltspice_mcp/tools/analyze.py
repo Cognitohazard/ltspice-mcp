@@ -54,6 +54,7 @@ from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.projection import (
     absent_path_warnings,
     keep_plan,
+    key_outline,
     project_row,
     resolve_field_paths,
 )
@@ -894,24 +895,6 @@ def _projection_warnings(records: list[dict[str, Any]], fields: list[str]) -> li
     return absent_path_warnings(
         records, fields, argument="include.fields", rows_name="row of this recipe"
     )
-
-
-def _projection_presence(records: list[dict[str, Any]]) -> dict[str, Any]:
-    """Bounded record-shaped union used for warnings after persistence."""
-    root: dict[str, Any] = {}
-
-    def add(node: dict[str, Any], value: Any) -> None:
-        if not isinstance(value, dict):
-            return
-        for key, child_value in value.items():
-            if str(key).startswith("_"):
-                continue
-            child = node.setdefault(str(key), {})
-            add(child, child_value)
-
-    for record in records:
-        add(root, record)
-    return root
 
 
 def _identity(
@@ -3445,7 +3428,7 @@ def _snapshot_from_assembly(a: AnalysisEvaluation) -> dict[str, Any]:
             "answer_rows": answer_rows,
             "answer_total": len(rows),
             "surface": ("per_run" if per_run is not None else "values" if had_values else "none"),
-            "projection_presence": _projection_presence(rows),
+            "projection_presence": key_outline(rows),
         }
         if per_run is not None:
             block["per_run"] = per_run
