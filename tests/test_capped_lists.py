@@ -18,13 +18,23 @@ from __future__ import annotations
 import ast
 from collections.abc import Mapping
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from ltspice_mcp.errors import python_route_text
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
+from ltspice_mcp.tools import experiments as experiments_mod
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
 from tests._source_scan import modules
-from tests.conftest import stage_recorded_fixture
+from tests.conftest import recorded_fixture_simulator, stage_recorded_fixture
+from tests.test_run_experiments import (
+    _args,
+    _assert_schema,
+    _completed_analysis_receipt,
+    _status_payload,
+)
 
 _NOTE_HELPERS = frozenset({"cap_note", "cap_list"})
 
@@ -249,3 +259,77 @@ async def test_capped_failures_give_the_true_total_and_the_route(
         f"api.analyze_results returns every record. {route} Coverage and recipe "
         "result presence still reflect the full call."
     )
+
+
+async def _capped_failures_on_every_route(
+    state: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[int, dict[str, dict[str, Any]]]:
+    """One job's run, analysed with more failing recipes than a page lists:
+    the analysis attached to run_experiments, as its receipt and jobs(status)
+    show it, and analyze_results over the same job."""
+    recorded_fixture_simulator(monkeypatch)
+    count = analyze_mod._FAILURE_CAP + 5
+    recipes = [
+        {"key": f"k{index}", "metric": "signal_stats", "signal": f"V(nx{index})"}
+        for index in range(count)
+    ]
+    deck = work_dir / "capped.cir"
+    deck.write_text("* deck\nV1 in 0 1\nR1 in 0 1k\n.op\n.end\n", encoding="utf-8")
+    receipt = _assert_schema(
+        await _completed_analysis_receipt(
+            _args(deck, "capped-failures", analyze={"recipes": recipes}), state
+        )
+    )
+    status = await _status_payload(receipt["job_id"], state)
+    # Under the label the attached analysis gives its own job, so each failure
+    # names the same place.
+    source = {"job_id": receipt["job_id"], "label": experiments_mod._ATTACHED_ANALYSIS_LABEL}
+    direct = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate({"sources": [source], "recipes": recipes}), state
+    )
+    assert direct.structured_content is not None
+    return count, {
+        "analyze_results": direct.structured_content,
+        "run_experiments": receipt["analysis"]["result"],
+        "jobs": status["analysis"]["result"],
+    }
+
+
+def _truncation(data: dict[str, Any]) -> str:
+    (note,) = (o for o in data["observations"] if o["code"] == "failures_truncated")
+    return note["detail"]
+
+
+async def test_capped_failures_give_the_same_total_on_every_route(
+    state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    count, replies = await _capped_failures_on_every_route(state_with_sim, work_dir, monkeypatch)
+    for route, data in replies.items():
+        assert len(data["failures"]) == analyze_mod._FAILURE_CAP, route
+        assert _truncation(data).startswith(
+            f"failures: showing {analyze_mod._FAILURE_CAP} of {count} failure records; "
+            "api.analyze_results returns every record."
+        ), route
+    assert {route: data["failures"] for route, data in replies.items()} == {
+        route: replies["analyze_results"]["failures"] for route in replies
+    }
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "known exception: the attached analysis stores its failures_truncated note "
+        "before it knows which session shows it, and its render adds where the api "
+        "snippet runs to each failure row but not to that note, so run_experiments "
+        "and jobs leave out the run_code route analyze_results gives"
+    ),
+)
+async def test_capped_failures_name_the_same_route_on_every_route(
+    state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _count, replies = await _capped_failures_on_every_route(state_with_sim, work_dir, monkeypatch)
+    route = python_route_text(state_with_sim.tool_dispatch)
+    assert {name: _truncation(data) for name, data in replies.items()} == {
+        name: _truncation(replies["analyze_results"]) for name in replies
+    }
+    assert route in _truncation(replies["analyze_results"])
