@@ -34,9 +34,9 @@ async def test_log_only_tf_run_is_produced_reloaded_and_publicly_readable(
 
     def parser_only(command, *args, **kwargs):
         assert isinstance(command, list)
-        if command[-1] == "-b":
-            # The mode check asks ngspice, with no deck, which flags it gives
-            # the passed mode (ngspice_mode.flags_for).
+        if Path(command[-1]).name == "probe.cir":
+            # The mode check asks ngspice, on a deck of its own, which flags
+            # it gives the passed mode (ngspice_mode.flags_for).
             mode_probes.append(command)
             return launch(command, *args, **kwargs)
         assert Path(command[0]).name.casefold().startswith("python")
