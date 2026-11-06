@@ -19,8 +19,8 @@ connect something by accident, such as a wire over another part's pin or a
 label that shorts two nets, is refused with the reason before anything is
 written, so the assistant can fix it on the next call. The server also
 reports parts and text drawn on top of each other, which make a sheet hard to
-read. With LTspice 26.1 or later on Windows, the edits appear in an LTspice window you
-have open ([Working with LTspice open](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#working-with-ltspice-open)).
+read. With LTspice 26.1 or later on Windows, the edits appear in an LTspice
+window you have open ([Working with LTspice open](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#working-with-ltspice-open)).
 
 The schematics and netlists are ordinary files that you can open in LTspice
 yourself. The same engine is also a Python package, `ltspice_mcp.api`, for
@@ -89,8 +89,8 @@ describes an LTspice setting you may want to change.
 
 ## What you can ask
 
-- *"Size this NMOS common-source stage for 100 µA at a gm/ID of 15, and check
-  that it stays in saturation at the slow and fast corners."*
+- *"Bias this common-source amplifier at 100 µA. What's its gain, and does the
+  transistor stay in saturation at the slow and fast corners?"*
 - *"Here's my LDO schematic. What are the overshoot and settling time for a
   1 mA to 100 mA load step, and how much phase margin does it have at full
   load?"*
