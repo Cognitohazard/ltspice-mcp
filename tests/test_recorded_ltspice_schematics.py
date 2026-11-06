@@ -366,6 +366,12 @@ async def test_a_name_on_no_net_is_refused_alike_on_a_sheet_and_on_its_export(
     # The export's refusal names the nodes there are.
     item = await inspect_item(state_no_sim, {"kind": "net", "path": str(export), "at": "nosuch"})
     assert "n, 0" in item["error"]["message"], item
+    # A pin of a part neither holds is refused alike too.
+    for path in (sheet, export):
+        item = await inspect_item(state_no_sim, {"kind": "net", "path": str(path), "at": "R9.1"})
+        assert not item["ok"], (path.name, item)
+        assert item["error"]["code"] == "not_found", (path.name, item)
+        assert "hint" not in item["error"], (path.name, item)
 
 
 @pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(CONNECTIVITY)))

@@ -22,6 +22,7 @@ from ltspice_mcp.lib.deck_nodes import node_kind
 from ltspice_mcp.lib.netlist_graph import compare_graphs, flatten_graph, parse_netlist_graph
 from ltspice_mcp.lib.spice_lex import lex_deck
 from ltspice_mcp.lib.spice_validator import is_ground_node, validate_netlist_bias_topology
+from ltspice_mcp.lib.trace_names import read_name
 from tests import _ltspice_recorded as rec
 from tests.conftest import LIVENESS_S
 from tests.test_inspect_tools import _run
@@ -152,6 +153,14 @@ async def test_every_reader_reads_gnd_bang_as_a_node_of_its_own(state_no_sim, wo
     assert not is_ground_node("gnd!")
     rows = await hierarchy_nodes(state_no_sim, work_dir, GND_BANG)
     assert rows[("R1",)][1] == ([], "gnd!")
+    # A result's node pair reads the same names as ground: V(a,gnd!) needs
+    # gnd!'s own voltage, where it read as V(a).
+    for xvii in (False, True):
+        assert read_name(["V(a)"], "V(a,gnd!)", xvii=xvii).refused == "missing"
+        pair = read_name(["V(a)", "V(gnd!)"], "V(a,gnd!)", xvii=xvii)
+        assert (pair.plus, pair.minus) == ("V(a)", "V(gnd!)")
+        grounded = read_name(["V(a)"], "V(a,GND)", xvii=xvii)
+        assert (grounded.refused, grounded.plus, grounded.minus) == (None, "V(a)", None)
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)

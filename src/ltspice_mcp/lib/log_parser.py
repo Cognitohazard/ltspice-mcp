@@ -252,14 +252,19 @@ _RE_OP_ITERATION = re.compile(
 # "<method> stepping failed" rungs are benign. Covers LTspice's Direct Newton /
 # Gmin / Source stepping ("... succeeded in finding operating point") and its
 # pseudo-transient fallback ("Pseudo Transient succeeded at <t>", which omits
-# "operating point"), and ngspice's transient op, which ngspice 42 announces
-# as "Note: Transient op finished successfully" after its gmin and source
-# stepping fail (tests/fixtures/ngspice_runs/op_device_params.log).
+# "operating point"), and ngspice's rungs, which ngspice 42 ends with "Note:
+# Source stepping completed" once one finds the bias point
+# (tests/fixtures/ngspice_runs/op_source_stepping.log).
+#
+# ngspice's last rung, "Note: Transient op finished successfully", is no such
+# line: ngspice 42 prints it for a circuit with no DC solution, such as a node
+# reached only through a capacitor (op_device_params.log there), and takes
+# the transient's last point for the bias point. Its stepping failures stay
+# errors, which the raw's node voltages may then clear (raw_parser).
 _RE_OP_SOLVE_SUCCEEDED = re.compile(
     r"succeeded in finding (?:the )?operating point"
     r"|pseudo[- ]?transient succeeded"
-    r"|stepping succeeded"
-    r"|transient op finished successfully",
+    r"|stepping (?:succeeded|completed)",
     re.IGNORECASE,
 )
 # Start of an OP-solve block. LTspice prints one "Direct Newton iteration ..."

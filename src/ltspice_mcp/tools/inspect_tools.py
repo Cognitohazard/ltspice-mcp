@@ -184,7 +184,7 @@ from ltspice_mcp.lib.schematic_ops import (
     netlist_card_value,
     require_asc,
 )
-from ltspice_mcp.lib.sheet import Sheet, SheetPart, read_sheet_file
+from ltspice_mcp.lib.sheet import Sheet, SheetPart, missing_part, read_sheet_file
 from ltspice_mcp.lib.simulator import (
     SIMULATORS,
     current_ngbehavior,
@@ -371,7 +371,15 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
         net = nets.of_label(first)
     elif args.pin is not None:
         # A pin answers its own net, which one of a part's pins stacked on a
-        # point may hold alone.
+        # point may hold alone. A part the sheet does not hold is refused as
+        # not_found, as a netlist refuses a card it does not hold: the file
+        # is sound.
+        reference = args.pin.rsplit(".", 1)[0]
+        if "." in args.pin and not sheet.parts_named(reference):
+            raise _QueryError(
+                "not_found",
+                str(missing_part(reference, (part.reference for part in sheet.parts))),
+            )
         pin = sheet.net_pin(args.pin)
         x, y = pin.point
         net = nets.of_pin(pin)

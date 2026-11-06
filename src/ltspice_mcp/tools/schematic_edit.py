@@ -118,7 +118,6 @@ from ltspice_mcp.tools._base import (
     registry,
     resolve_reference,
     safe_path,
-    sha256_from_open_in_ltspice,
 )
 from ltspice_mcp.tools.verify import (
     COMPARISON_SCHEMA,
@@ -1376,19 +1375,18 @@ _WINDOWS_REMEDY = (
 )
 
 
-#: Said on a dry run that finds a window's copy differing: the dry run sent no
-#: sha256 the call can quote, so the call names where to read it.
-_LISTED_SHA256 = sha256_from_open_in_ltspice("this path")
+#: Said on a dry run that finds a window's copy differing. Its reply carries
+#: the file's sha256, which the call quotes.
 _DRY_RUN_WINDOW_CALL = (
     "Ask the user whether to keep the changes in their LTspice window; then "
-    f"{open_window_call('this path', _LISTED_SHA256, f'{_SAVE}|{_DISCARD}')} "
+    f"{open_window_call('this path', _REPLY_SHA256, f'{_SAVE}|{_DISCARD}')} "
     "saves or drops the window's copy."
 )
 _DRY_RUN_WINDOWS_CALL = (
     "Ask the user which window's copy to keep; then "
-    + open_window_call("this path", _LISTED_SHA256, _SAVE, window_pid="that window's process")
+    + open_window_call("this path", _REPLY_SHA256, _SAVE, window_pid="that window's process")
     + " keeps that copy, or "
-    + open_window_call("this path", _LISTED_SHA256, _DISCARD)
+    + open_window_call("this path", _REPLY_SHA256, _DISCARD)
     + " drops every copy."
 )
 

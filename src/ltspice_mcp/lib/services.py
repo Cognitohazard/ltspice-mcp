@@ -331,19 +331,24 @@ def analysis_deadline(deadline: float | None):
 
 
 def run_selectors_beside_path(
-    *, run_index: int = 0, case_id: str | None = None, other_raw: str | None = None
+    *,
+    run_index: int = 0,
+    case_id: str | None = None,
+    other_raw: str | None = None,
+    case_ids: bool = False,
 ) -> str | None:
     """Why a read of the results file at a path refuses these selectors, or
     None when it takes them.
 
     The one answer for every reader that takes a path or a job_id:
-    ``inspect(kind="results")``, ``plot_waveform`` and the Python API's
-    ``load_raw``, ``measurements`` and ``device_op_points``. A path names one
-    file, while ``run_index``, ``case_id`` and ``other_raw`` choose within a
-    job; beside a path the file would be read as though they had not been
+    ``inspect(kind="results")``, ``plot_waveform``, ``analyze_results`` and
+    the Python API's ``load_raw``, ``measurements`` and ``device_op_points``.
+    A path names one file, while ``run_index``, ``case_id``, ``other_raw``
+    and ``analyze_results``' ``runs={case_ids}`` (``case_ids``) choose within
+    a job; beside a path the file would be read as though they had not been
     sent. ``run_index`` 0 is its default and chooses nothing.
-    ``analyze_results`` takes a list of runs instead, and reports a run a
-    path does not hold as missing.
+    ``analyze_results``' list of runs is not refused: a run a path does not
+    hold is reported missing, as for a job.
     """
     sent = [
         name
@@ -351,6 +356,7 @@ def run_selectors_beside_path(
             ("run_index", run_index != 0),
             ("case_id", case_id is not None),
             ("other_raw", other_raw is not None),
+            ("runs={case_ids}", case_ids),
         )
         if chosen
     ]

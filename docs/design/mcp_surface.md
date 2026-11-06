@@ -1859,7 +1859,7 @@ cursors where listed:
     A bare NAME is read as net:NAME on both: a net label on a .asc, a node
     name on a netlist. A name no label of the sheet carries, or no card of
     the deck's own is on, is refused on both as `not_found` rather
-    than answered as an empty net; ground is a node of every deck, and the
+    than answered as an empty net, as is a pin of a part neither holds; ground is a node of every deck, and the
     netlist's refusal lists its nodes and says what the query does not
     read: a subcircuit body that uses the name, a `.global` net only such
     a body uses, a file the deck includes, a card it could not read

@@ -45,7 +45,6 @@ from tests._ltspice_window import (
     follow_open_window_referral,
     put_windows,
     read_world,
-    sha256_ltspice_shows,
     write_world,
 )
 from tests._source_scan import modules, scopes
@@ -762,14 +761,41 @@ async def test_a_dry_run_reports_a_window_that_differs_and_is_not_refused(
     assert window.text(asc_file) == held
     assert "open_in_ltspice" not in data
 
-    # The call the note names, with the sha256 where it says to read it, drops
-    # the window's copy.
-    sha256 = await sha256_ltspice_shows(asc_state, asc_file)
+    # The call the note names, with the reply's sha256, drops the window's copy.
+    assert data["sha256"] == digest(asc_file)
     settled = await follow_open_window_referral(
-        asc_state, data["observations"][0], asc_file, "discard", sha256=sha256
+        asc_state, data["observations"][0], asc_file, "discard", sha256=data["sha256"]
     )
     assert settled["outcome"] == "complete", settled
     assert window.text(asc_file) == as_ltspice_reads(asc_file)
+
+
+@pytest.mark.parametrize("choice", ["save", "discard"])
+async def test_each_call_a_dry_run_under_two_different_windows_names_is_taken(
+    asc_state: SessionState, asc_file: Path, window: Window, tmp_path: Path, choice: str
+):
+    """A dry run under two windows with different copies names, as the refusal
+    does, the save of the copy the user chose with that window's process and
+    the discard of every copy, each with the reply's sha256."""
+    second = two_windows(tmp_path, asc_file)
+    data = await edit(asc_state, asc_file, dry_run=True)
+    assert data["commit_state"] == "not_committed"
+
+    settled = await follow_open_window_referral(
+        asc_state,
+        data["observations"][0],
+        asc_file,
+        choice,
+        sha256=data["sha256"],
+        window_pid=PID + 1,
+    )
+
+    assert settled["outcome"] == "complete", settled
+    kept = second if choice == "save" else as_ltspice_reads(asc_file)
+    held = {
+        entry["designs"][str(asc_file)] for entry in read_world(tmp_path / "world.json")["windows"]
+    }
+    assert held == {kept}
 
 
 async def test_a_sheet_no_window_has_open_is_edited_as_before(

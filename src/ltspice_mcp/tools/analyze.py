@@ -213,17 +213,13 @@ class AnalyzeSourceInput(OptionalRawSelectionFields, OtherRawFields, NotedModel)
             if any(index < 0 for index in self.runs):
                 raise ValueError("run indices must be non-negative integers")
             self.keep_first("runs")
-        if isinstance(self.runs, CaseSelection) and self.job_id is None:
-            raise ValueError(
-                "runs={case_ids} chooses cases within a job and needs its job_id, but "
-                "path names one results file: leave it out to read that file, or pass "
-                "the job's job_id instead of path."
-            )
-        # Beside a path, other_raw is refused as every reader of a path refuses
-        # it. A list of runs is not: a run the file does not hold is reported
-        # missing, as for a job.
+        # Beside a path, other_raw and a case selection are refused as every
+        # reader of a path refuses them. A list of runs is not: a run the file
+        # does not hold is reported missing, as for a job.
         if self.job_id is None and (
-            refusal := services.run_selectors_beside_path(other_raw=self.other_raw)
+            refusal := services.run_selectors_beside_path(
+                other_raw=self.other_raw, case_ids=isinstance(self.runs, CaseSelection)
+            )
         ):
             raise ValueError(refusal)
         if "label" not in self.model_fields_set:

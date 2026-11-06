@@ -7,5 +7,4 @@ refuse to count those steps, and `trace` and `value` already refused to read
 one. `step_count` and `steps` now count steps as the tools do, so for such a
 plot they raise `ResultError` with the reason `analyze_results` gives, while
 `signals`, `descriptor` and `plots` still read. The API contract in
-`docs/design/python_api.md` now states this. A `RawResult` is no longer built
-with `step_count` or `steps`: it reads them from its raw.
+`docs/design/python_api.md` now states this.

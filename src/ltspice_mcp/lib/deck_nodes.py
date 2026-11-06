@@ -12,10 +12,9 @@ all of them.
   LTspice that ``gnd`` is the port; to ngspice it is still ground. Both
   LTspice builds record this (``deck/gnd_alias``): the body's resistor to its
   ``gnd`` port carries the current on to the node the port is wired to.
-  ngspice 42 reads the same deck with the resistor to ground. In ngspice's
-  kiltpsa mode which ``gnd`` it reads as ground depends on its version, which
-  hierarchy discovery refuses to guess; this module answers for the other
-  modes.
+  ngspice 42 reads the same deck with the resistor to ground, in its kiltpsa
+  mode too. Whether every ngspice version reads ``gnd`` so in kiltpsa mode is
+  not established, so hierarchy discovery refuses to guess there.
 - A name a ``.global`` card lists is one net in every scope, also where a
   subcircuit names a port so: ngspice 42 wires a body's ``vdd`` to the
   global ``vdd``, not to the node its ``vdd`` port is given. LTspice is read
@@ -38,8 +37,7 @@ from ltspice_mcp.lib.spice_lex import SpiceCard, TokenKind, directive_head, toke
 #: Ground as a deck writes it, and as the readers name it.
 GROUND = "0"
 #: The names read as ground outside a subcircuit that has a port of the
-#: name, case-folded: by LTspice (``deck/gnd_alias``), and by ngspice but in
-#: its kiltpsa mode (above).
+#: name, case-folded: by LTspice (``deck/gnd_alias``) and by ngspice 42.
 GROUND_NAMES: frozenset[str] = frozenset({"0", "gnd"})
 
 NodeKind = Literal["ground", "global", "port", "local"]
