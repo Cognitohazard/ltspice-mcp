@@ -15,8 +15,8 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
-from ltspice_mcp.errors import SimulationError
-from ltspice_mcp.lib import experiment_store, now
+from ltspice_mcp.errors import ResultError, SimulationError
+from ltspice_mcp.lib import experiment_store, now, services
 from ltspice_mcp.lib.background import BackgroundTasks
 from ltspice_mcp.lib.controlled_ngspice import (
     controlled_ngspice,
@@ -198,6 +198,23 @@ def refuse_another_request(
         )
     if index.get("fingerprint") != fingerprint:
         raise payload_conflict(request_id, index.get("job_id"))
+
+
+async def resolve_recorded_job(state: SessionState, job_id: str) -> ExperimentJob | None:
+    """The job a recorded submission names, found as every read of a job id
+    finds it (``services.resolve_job_async``); None when no record answers.
+
+    The one route a replay takes to its job, whichever lookup found the
+    submission: the tool's before it stages, the request gate's, or the
+    recovery journal's, which a repeated resume reads too. The registry hands
+    back this process's live job when it runs one, writes back what the store
+    reconciled when the record's owner exited, and re-reads a job another
+    process runs. Nothing registers the job as a new submission.
+    """
+    try:
+        return await services.resolve_job_async(job_id, state)
+    except ResultError:  # an unknown job (JobNotFoundError) among them
+        return None
 
 
 def refuse_inconsistent_record(
@@ -737,11 +754,27 @@ class ExperimentRunner(RunnerBase):
         barrier: AdmissionResult,
         receipt_ready: asyncio.Future[ExperimentReceipt],
     ) -> None:
-        """Register the durable job and start it.
+        """Register the durable job and start it, or answer a replay from it.
 
         Split out so the caller can wrap it whole: past the barrier the job
         exists on disk, and every failure from here has to say so.
         """
+        should_start = not barrier.replayed if barrier.start is None else barrier.start
+        if not should_start:
+            # A replay, from the request gate or a recovery journal, answers
+            # from the job its id resolves to (``resolve_recorded_job``): the
+            # live job when this process runs it, else the record, with what
+            # the store reconciled written back. It is not a submission, so it
+            # is not registered as one. Only when no record is on disk yet (a
+            # journal's prepared attempt) does it answer from the barrier's copy.
+            job = await resolve_recorded_job(request.state, barrier.job.job_id) or barrier.job
+            if not receipt_ready.done():
+                receipt_ready.set_result(
+                    ExperimentReceipt(
+                        job=job, replayed=barrier.replayed, control_token=job.control_token
+                    )
+                )
+            return
         # Registration and execution-task creation intentionally have no
         # await between them. A replay racing the original barrier can
         # therefore never observe a durable job that this process has not
@@ -750,28 +783,18 @@ class ExperimentRunner(RunnerBase):
         registered = request.state.all_jobs.get(barrier.job.job_id)
         running = registry.live.get(barrier.job.job_id)
         coordinating = running is not None and running.coordinator is not None
-        should_start = not barrier.replayed if barrier.start is None else barrier.start
-        if should_start and registered is not barrier.job:
-            if self.owns_experiment_job(barrier.job.job_id) or coordinating:
-                raise RecoveryError(
-                    "recovery_owner_active", "A live coordinator owns this attempt"
-                )
-            job = barrier.job
-            request.state.add_experiment_job(job, already_persisted=True)
-        elif registered is not None and registered is not barrier.job:
-            # The live job, reserved by the admission that is starting it: a
-            # replay answers from that, never from the copy it read.
-            job = registered
-        else:
-            # Unregistered, or reserved by this admission: register it now.
-            job = barrier.job
-            request.state.add_experiment_job(job, already_persisted=True)
+        if registered is not barrier.job and (
+            self.owns_experiment_job(barrier.job.job_id) or coordinating
+        ):
+            raise RecoveryError("recovery_owner_active", "A live coordinator owns this attempt")
+        # Reserved by this admission, or an attempt taken over from an owner
+        # that exited: either way this process starts it now.
+        job = barrier.job
+        request.state.add_experiment_job(job, already_persisted=True)
         execution = None
-        if should_start and not self.owns_experiment_job(job.job_id) and not coordinating:
+        if not self.owns_experiment_job(job.job_id) and not coordinating:
             execution = self._new_execution(request, registry.reserve(job))
             self._executions[job.job_id] = execution
-        # A replay leaves the record as it is: the receipt's ``replayed`` says
-        # this call was answered from it, and only the owner writes a record.
         receipt = ExperimentReceipt(
             job=job,
             replayed=barrier.replayed,
@@ -807,7 +830,7 @@ class ExperimentRunner(RunnerBase):
         working_dir = request.state.working_dir
         gate = Store(working_dir).request_lock(request.request_id)
         async with request_gate(gate, request.request_id):
-            lookup = await asyncio.to_thread(self.read_request_index, request)
+            lookup = await self.read_request_index(request)
             if lookup.existing is not None:
                 return AdmissionResult(lookup.existing, replayed=True)
             try:
@@ -876,23 +899,32 @@ class ExperimentRunner(RunnerBase):
             logger.warning("could not discard the unclaimed run directory %s: %s", run_dir, exc)
 
     @staticmethod
-    def read_request_index(request: ExperimentRunRequest) -> _IndexLookup:
-        """The gate's lookup half: a replay, a conflict, or nothing recorded yet."""
-        working_dir = request.state.working_dir
+    def _load_request_index(request: ExperimentRunRequest) -> Mapping[str, Any] | None:
+        """What ``request_id`` was first used for, refused if it was another request.
+
+        Blocking: call off the loop.
+        """
         from ltspice_mcp.lib.experiment_resume import refuse_reserved_request
 
         refuse_reserved_request(request)
-        index = experiment_store.load_request_index(request.request_id, working_dir)
+        index = experiment_store.load_request_index(request.request_id, request.state.working_dir)
+        if index is not None:
+            refuse_another_request(
+                index, request.request_id, request.fingerprint, request.canonicalizer_version
+            )
+        return index
+
+    @staticmethod
+    async def read_request_index(request: ExperimentRunRequest) -> _IndexLookup:
+        """The gate's lookup half: a replay, a conflict, or nothing recorded yet.
+
+        The job the index names is found as every replay finds it
+        (``resolve_recorded_job``), so it is checked as the replay answers it.
+        """
+        index = await asyncio.to_thread(ExperimentRunner._load_request_index, request)
         if index is None:
             return _IndexLookup(existing=None, dangling=False)
-        refuse_another_request(
-            index, request.request_id, request.fingerprint, request.canonicalizer_version
-        )
-        indexed_job_id = str(index.get("job_id", ""))
-        try:
-            existing = experiment_store.load_job(indexed_job_id, working_dir)  # noqa: TID251 - the request gate reads the job its index names
-        except ValueError:
-            existing = None
+        existing = await resolve_recorded_job(request.state, str(index.get("job_id", "")))
         if existing is None:
             # The index names a record that is gone; this submission recreates it.
             return _IndexLookup(existing=None, dangling=True)
@@ -902,9 +934,9 @@ class ExperimentRunner(RunnerBase):
         # The cheap pre-staging replay check the caller may have run cannot see
         # a record written after it looked, so the same drift is re-checked
         # here, under the gate.
-        verify_replay(existing, request.request_id, request.simulator_executable)
-        if existing.restart_reconciled:
-            experiment_store.save_job(existing)
+        await asyncio.to_thread(
+            verify_replay, existing, request.request_id, request.simulator_executable
+        )
         return _IndexLookup(existing=existing, dangling=False)
 
     @staticmethod

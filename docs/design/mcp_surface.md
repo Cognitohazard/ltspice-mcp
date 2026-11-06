@@ -320,13 +320,15 @@ An explicit `request_id` is the durability key. At submission the server
 persists `{request_id -> job_id, fingerprint}`, where the fingerprint is the
 sha256 of the canonical (sorted-key) input payload. The same id with the same
 fingerprint returns the existing receipt with `replayed: true`; that field
-describes this call, and the replay does not change the job's record. The same
-id with a different fingerprint is an `idempotency_conflict` that names the job
-created under that id, which `jobs` and `analyze_results` read by its
-`job_id`. Ids are scoped to the server working directory's job store, and an
-id is deleted with its job ("Job model" below says when). If the client
-cancels a `run_experiments` request while the call waits for results
-("Receipt, then dwell" below), only the wait ends; the job keeps running.
+describes this call, and the replay adds nothing to the job's record. A record
+whose owner has exited is read as `interrupted` and written back, as any read
+of the job leaves it. The same id with a different fingerprint is an
+`idempotency_conflict` that names the job created under that id, which `jobs`
+and `analyze_results` read by its `job_id`. Ids are scoped to the server
+working directory's job store, and an id is deleted with its job ("Job model"
+below says when). If the client cancels a `run_experiments` request while the
+call waits for results ("Receipt, then dwell" below), only the wait ends; the
+job keeps running.
 
 **Circuit paths are resolved at submission.** Each circuit's path is resolved
 before a job exists. A path a sandbox refuses fails the call with `path_denied`

@@ -57,6 +57,7 @@ from ltspice_mcp.lib.experiment_runner import (
     canonical_fingerprint,
     refuse_another_request,
     refuse_inconsistent_record,
+    resolve_recorded_job,
     verify_replay,
 )
 from ltspice_mcp.lib.experiment_types import (
@@ -87,7 +88,7 @@ from ltspice_mcp.lib.recipes import (
     StepSelectionFields,
 )
 from ltspice_mcp.lib.recovery_records import CaseAttempt, CaseRecovery, RecoveryError
-from ltspice_mcp.lib.services import cp1252_ltspice, resolve_job_async
+from ltspice_mcp.lib.services import cp1252_ltspice
 from ltspice_mcp.lib.sheet_results import NotPlaced, check_request
 from ltspice_mcp.lib.simulator import (
     SIMULATOR_SELECTOR_PATTERN,
@@ -1473,13 +1474,10 @@ async def _load_matching_replay(
     if index is None:
         return None
     refuse_another_request(index, args.request_id, fingerprint, CANONICALIZER_VERSION)
-    # Resolved as every job id is: the registry adopts the record, writes back
-    # what the store reconciled when its owner died, and re-reads a job another
-    # process runs. An id the index names but no record answers is the request
-    # gate's to handle.
-    try:
-        job = await resolve_job_async(str(index.get("job_id", "")), state)
-    except ResultError:  # an unknown job (JobNotFoundError) among them
+    # Found as every replay finds its job (``resolve_recorded_job``). An id the
+    # index names but no record answers is the request gate's to handle.
+    job = await resolve_recorded_job(state, str(index.get("job_id", "")))
+    if job is None:
         return None
     refuse_inconsistent_record(job, args.request_id, fingerprint, CANONICALIZER_VERSION)
     # What this request would run on now, resolved as a fresh submission

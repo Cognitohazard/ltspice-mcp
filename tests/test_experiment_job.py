@@ -155,8 +155,10 @@ def _barrier_process(
     """
     working = Path(working_dir)
     circuit = Path(circuit_path)
+    # With persistence on, as a submission requires: the gate finds the other
+    # process's job through this registry, which reads it from the store.
     state = SimpleNamespace(
-        working_dir=working, job_registry=JobRegistry(persist_enabled=False, working_dir=working)
+        working_dir=working, job_registry=JobRegistry(persist_enabled=True, working_dir=working)
     )
     request = ExperimentRunRequest(
         state=cast("SessionState", state),
@@ -1090,9 +1092,9 @@ class TestRequestBarrier:
         circuit = work_dir / "deck.cir"
         circuit.write_text(".op\n.end\n")
 
-        def request(job_id: str) -> ExperimentRunRequest:
+        def request(state: SessionState, job_id: str) -> ExperimentRunRequest:
             return ExperimentRunRequest(
-                state=state_no_sim,
+                state=state,
                 request_id="shared-request",
                 fingerprint="a" * 64,
                 stage=staged_decks([_case(circuit)], [_source(circuit)]),
@@ -1100,7 +1102,7 @@ class TestRequestBarrier:
                 job_id=job_id,
             )
 
-        first = await _run_barrier(request("exp_first"))
+        first = await _run_barrier(request(state_no_sim, "exp_first"))
         record = Store(work_dir).job_record(first.job.job_id)
         real_open = Path.open
         denials = iter(range(2))
@@ -1112,7 +1114,11 @@ class TestRequestBarrier:
 
         monkeypatch.setattr(Path, "open", sharing_violation)
         monkeypatch.setattr("ltspice_mcp.lib.sys.platform", "win32")
-        second = await _run_barrier(request("exp_second"))
+        # Another session, so the gate has to read the record: this one would
+        # find the job it admitted in its own registry.
+        other = SessionState.create(state_no_sim.config, available={})
+        second = await _run_barrier(request(other, "exp_second"))
+        assert next(denials, None) is None, "the replay never read the record"
         assert second.replayed
         assert second.job.job_id == first.job.job_id
 
