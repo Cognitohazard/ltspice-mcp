@@ -1,10 +1,11 @@
 """load_raw(signals=...): a read that keeps only the traces some names read.
 
-The parser worker decides which traces to keep by the rule every reader of a
-signal uses (``trace_names``), cuts the file's header to them, and writes only
-those; the size limit then applies to what is kept, so a file too large to read
-whole can be read for a few signals. Each test reads a recorded file through
-the real parser process, most of them both ways, and compares.
+The parser worker decides which traces to keep, and why a name reads none,
+by the rule every reader of a signal uses (``trace_names.read_in_plot``), cuts
+the file's header to them, and writes only those; the size limit then applies
+to what is kept, so a file too large to read whole can be read for a few
+signals. Each test reads a recorded file through the real parser process, most
+of them both ways, and compares.
 """
 
 from __future__ import annotations
@@ -16,10 +17,10 @@ import numpy as np
 import pytest
 
 from ltspice_mcp.errors import ResultError
-from ltspice_mcp.lib import parser_service, services
+from ltspice_mcp.lib import parser_service
 from ltspice_mcp.lib.raw_header import leading_parameters
 from ltspice_mcp.lib.result_kinds import step_variables
-from ltspice_mcp.lib.trace_names import signal_names, step_value_note, traces_read
+from ltspice_mcp.lib.trace_names import signal_names, step_value_note
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
 from tests.conftest import FIXTURES_DIR, SyncApi, stage_recorded_fixture
@@ -109,7 +110,7 @@ def test_a_step_parameter_is_a_step_value_to_every_reader(
     with pytest.raises(ResultError) as chosen:
         api.load_raw(path=raw, signals=[parameter.upper()])
     assert step_value_note(parameter.upper()) in str(chosen.value)
-    assert full.signals[0] in str(chosen.value).split("Its traces:")[1]
+    assert full.signals[0] in str(chosen.value).split("This plot's traces:")[1]
 
 
 def test_a_pair_of_two_grounds_reads_no_trace(state_no_sim: SessionState, work_dir: Path):
@@ -117,7 +118,7 @@ def test_a_pair_of_two_grounds_reads_no_trace(state_no_sim: SessionState, work_d
     api = SyncApi(state_no_sim)
     with pytest.raises(ResultError, match="names ground twice"):
         api.load_raw(path=raw).trace("V(0,0)")
-    with pytest.raises(ResultError, match=r"'V\(gnd,0\)' names no trace of this result"):
+    with pytest.raises(ResultError, match=r"'V\(gnd,0\)' names ground twice"):
         api.load_raw(path=raw, signals=["V(gnd,0)"])
 
 
@@ -131,20 +132,68 @@ def test_a_signal_is_looked_for_in_the_plot_read(state_no_sim: SessionState, wor
     assert later.value("v(onoise_total)") == whole.value("v(onoise_total)")
     with pytest.raises(ResultError) as refused:
         api.load_raw(path, plot_index=0, dialect="ngspice", signals=["v(onoise_total)"])
-    listed = str(refused.value).split("Its traces:")[1]
+    listed = str(refused.value).split("This plot's traces:")[1]
     assert "onoise_spectrum" in listed and "onoise_total" not in listed
 
 
+@pytest.mark.parametrize("stamps", ["settled_stamps", "unsettled_stamps"])
 def test_a_chosen_read_and_a_whole_read_of_one_file_are_kept_apart(
-    state_no_sim: SessionState, work_dir: Path
+    stamps: str, request: pytest.FixtureRequest, state_no_sim: SessionState, work_dir: Path
 ):
+    """Served from the stamp cache (settled) or the parser's content cache
+    (unsettled), each read keeps what it asked for: the names in either order
+    are one read, and another plot or other names are not."""
+    request.getfixturevalue(stamps)
     raw = _rc(work_dir)
     api = SyncApi(state_no_sim)
     chosen = api.load_raw(path=raw, signals=["V(out)"])
     full = api.load_raw(path=raw)
     again = api.load_raw(path=raw, signals=["V(out)"])
+    both = api.load_raw(path=raw, signals=["V(out)", "V(in)"])
+    turned = api.load_raw(path=raw, signals=["V(in)", "V(out)"])
     assert len(full.signals) > len(chosen.signals) == len(again.signals) == 2
+    assert both.signals == turned.signals and len(both.signals) == 3
     assert not [o for o in full.observations if o["code"] == "signals_chosen"]
+    assert api.load_raw(path=raw).signals == full.signals
+
+
+def test_a_refusal_names_the_way_to_read_the_name(state_no_sim: SessionState, work_dir: Path):
+    """A chosen result refuses a trace it was not read for with how to read
+    it, and every other name as a whole read does, without that advice and
+    with the same flags; ``compare`` says so too."""
+    raw = _rc(work_dir)
+    api = SyncApi(state_no_sim)
+    full = api.load_raw(path=raw)
+    chosen = api.load_raw(path=raw, signals=["V(out)"])
+    for name in ("V(0,0)", "V(out)-V(in)", "V(out,nowhere)", "V(nowhere)"):
+        with pytest.raises(ResultError) as whole:
+            full.trace(name)
+        with pytest.raises(ResultError) as read:
+            chosen.trace(name)
+        advised = "load_raw again" in str(read.value)
+        assert advised == (name in ("V(out,nowhere)", "V(nowhere)")), name
+        assert str(read.value).startswith(str(whole.value).split(" Available signals:")[0])
+        assert (read.value.show_hint, read.value.python_route) == (
+            whole.value.show_hint,
+            whole.value.python_route,
+        ), name
+    with pytest.raises(ResultError, match=r"read with signals=\['V\(out\)'\]"):
+        full.compare(chosen, signals=["V(in)"])
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_step_value_in_a_chosen_result_is_refused_as_one(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    raw = rec.stage_run(build, "raw/step_op", work_dir)
+    api = SyncApi(state_no_sim)
+    full = api.load_raw(path=raw)
+    (parameter,) = full.steps[0]
+    chosen = api.load_raw(path=raw, signals=[full.signals[-1]])
+    with pytest.raises(ResultError) as refused:
+        chosen.trace(parameter)
+    assert step_value_note(parameter) in str(refused.value)
+    assert "load_raw again" not in str(refused.value)
 
 
 def test_compare_does_not_call_a_trace_not_read_missing(
@@ -178,8 +227,8 @@ def test_a_name_with_no_trace_is_refused_with_the_traces_there_are(
     with pytest.raises(ResultError) as refused:
         SyncApi(state_no_sim).load_raw(path=raw, signals=["V(out)", "V(nowhere)"])
     message = str(refused.value)
-    assert "'V(nowhere)' names no trace of this result" in message
-    assert "V(out)" in message.split("Its traces:")[1]
+    assert "Signal 'V(nowhere)' not found." in message
+    assert "V(out)" in message.split("This plot's traces:")[1]
 
 
 def test_an_unread_trace_says_the_result_was_read_for_others(
@@ -251,7 +300,18 @@ def test_signals_are_checked_before_a_read(state_no_sim: SessionState, work_dir:
     api = SyncApi(state_no_sim)
     raw = _rc(work_dir)
     many = [f"V(n{i})" for i in range(65)]
-    for wrong in ("V(out)", [], [""], ["  "], [["V(out)"]], [1], many, ["V(" + "a" * 300 + ")"]):
+    wide = [f"V({i:02d}" + "ü" * 250 + ")" for i in range(64)]
+    for wrong in (
+        "V(out)",
+        [],
+        [""],
+        ["  "],
+        [["V(out)"]],
+        [1],
+        many,
+        ["V(" + "a" * 300 + ")"],
+        wide,
+    ):
         with pytest.raises(ApiValidationError, match="signals"):
             api.load_raw(path=raw, signals=wrong)  # pyright: ignore[reportArgumentType]
 
@@ -260,20 +320,18 @@ def test_signals_are_checked_before_a_read(state_no_sim: SessionState, work_dir:
 @pytest.mark.parametrize(
     "case_id", ["raw/tran", "raw/subckt_names_tran", "raw/noise", "raw/step_op"]
 )
-def test_the_traces_a_name_reads_are_those_resolve_signal_reads(
+def test_a_chosen_read_reads_each_name_as_a_whole_read_does(
     build: str, case_id: str, state_no_sim: SessionState, work_dir: Path
 ):
-    """The worker keeps what ``traces_read`` names, from a header's names; the
-    readers of a decoded result go through ``resolve_signal``. Both answer
-    which traces a name reads, so they must agree, for every trace, its other
-    spellings and the node pairs of its voltages."""
-    from ltspice_mcp.lib.device_names import writes_xvii_names
-
+    """For every trace, its other spellings, the node pairs of its voltages
+    and names that read nothing, a chosen read through the parser worker gives
+    the values a whole read gives, or refuses with the reason it gives."""
     raw = rec.stage_run(build, case_id, work_dir)
-    decoded = SyncApi(state_no_sim).load_raw(path=raw)._raw
-    names = signal_names(decoded.header)
-    assert names == list(decoded.get_trace_names())
-    xvii = writes_xvii_names(decoded)
+    api = SyncApi(state_no_sim)
+    full = api.load_raw(path=raw)
+    header = full._raw.header
+    names = signal_names(header)
+    assert names == full.signals
     voltages = [name for name in names if name.lower().startswith("v(")]
     asked = [
         *names,
@@ -281,41 +339,52 @@ def test_the_traces_a_name_reads_are_those_resolve_signal_reads(
         *(name.replace(":", ".") for name in names),
         *(f"V({a[2:-1]},{b[2:-1]})" for a, b in pairwise(voltages)),
         *(f"V({a[2:-1]},0)" for a in voltages[:1]),
-        *step_variables(decoded.header),
+        *step_variables(header),
         "V(nowhere)",
         "V(0,0)",
         "V(gnd,0)",
+        "V(out)-V(in)",
     ]
-    for name in asked:
-        read = traces_read(names, name, xvii=xvii)
+    read: list[str] = []
+    refused: dict[str, str] = {}
+    for name in dict.fromkeys(asked):
         try:
-            signal = services.resolve_signal(decoded, name)
-        except ResultError as refused:
-            if "a .noise result holds spectral densities" in str(refused):
-                continue  # the next test pins this one difference
-            assert read is None, name
-            continue
-        assert read is not None and set(read) == {signal.plus, signal.minus} - {None}, name
+            full.trace(name)
+        except ResultError as whole:
+            refused[name] = str(whole).split(" Available signals:")[0]
+        else:
+            read.append(name)
+    assert read and refused
+    for start in range(0, len(read), 64):
+        some = read[start : start + 64]
+        chosen = api.load_raw(path=raw, signals=some)
+        for name in some:
+            for step in range(full.step_count):
+                _same(full.trace(name, step=step), chosen.trace(name, step=step))
+    with pytest.raises(ResultError) as chosen_refusal:
+        api.load_raw(path=raw, signals=list(refused))
+    for name, why in refused.items():
+        assert why in str(chosen_refusal.value), name
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
-def test_a_noise_node_pair_names_its_two_traces_and_is_refused_when_read(
+def test_a_noise_node_pair_is_refused_before_it_is_read(
     build: str, state_no_sim: SessionState, work_dir: Path
 ):
-    """The one place the two answers differ, on purpose: a noise result's
-    voltages are spectral densities, whose difference is not the noise
-    between two nodes. ``traces_read`` still names the pair's two traces, so a
-    chosen read keeps them; reading the pair is refused, with the reason, by
-    ``resolve_signal``, from a chosen read as from a whole one."""
+    """A noise result's voltages are spectral densities, whose difference is
+    not the noise between two nodes: a whole read refuses the pair when it is
+    read, and a chosen read before reading, with the same reason."""
     raw = rec.stage_run(build, "raw/noise", work_dir)
     api = SyncApi(state_no_sim)
-    names = api.load_raw(path=raw).signals
-    voltages = [name for name in names if name.lower().startswith("v(")][:2]
+    full = api.load_raw(path=raw)
+    voltages = [name for name in full.signals if name.lower().startswith("v(")][:2]
     pair = f"V({voltages[0][2:-1]},{voltages[1][2:-1]})"
-    assert traces_read(names, pair, xvii=False) == tuple(voltages)
-    chosen = api.load_raw(path=raw, signals=[pair])
-    assert set(chosen.signals[1:]) == set(voltages)
-    with pytest.raises(ResultError, match="spectral densities") as refused:
-        chosen.trace(pair.lower())
-    # The pair was read for; it is refused for its own reason, not as unread.
-    assert "load_raw again" not in str(refused.value)
+    with pytest.raises(ResultError, match="spectral densities") as whole:
+        full.trace(pair)
+    with pytest.raises(ResultError, match="spectral densities") as chosen:
+        api.load_raw(path=raw, signals=[pair])
+    assert str(whole.value) in str(chosen.value)
+    kept = api.load_raw(path=raw, signals=voltages)
+    with pytest.raises(ResultError, match="spectral densities") as read:
+        kept.trace(pair.lower())
+    assert "load_raw again" not in str(read.value)

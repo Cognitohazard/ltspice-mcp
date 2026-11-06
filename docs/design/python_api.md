@@ -474,11 +474,13 @@ ops.observations               # a log reader's dict (LogResult) says the same o
   stores a run, is still decoded whole while it is read, and a read holds
   that to 1 GiB of numbers; a file in LTspice's Fast Access layout (`LTspice
   -FastAccess <file>.raw` converts one) is decoded only for the traces kept.
-  A name the plot has no trace for, or one that holds each step's stepped
-  value, is refused with the traces it has; the result's `observations`
-  include `signals_chosen`, and `trace` of a trace not read says it was not
-  chosen. A whole-file read over the limit is refused with the file's size,
-  the limit and these ways around it.
+  A name is refused before the read for the reason `trace` would refuse it
+  (no such trace, a step value, an expression, a pair naming ground twice, a
+  node pair of a noise result), with the plot's traces; the result's
+  `observations` include `signals_chosen`, and `trace` of a trace not read
+  says how to read it. A whole-file read over the limit is refused with how
+  many bytes of numbers it counted (at least that many, in a file of several
+  plots), the limit and these ways around it.
 - Each of these reads takes exactly one of `path` and `job_id`. Neither or
   both, an empty `path`, or `run_index`, `case_id` or `other_raw` with a
   `path` raises `ApiValidationError`, as the operations do.

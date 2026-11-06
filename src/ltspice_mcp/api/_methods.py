@@ -6,6 +6,7 @@ import contextlib
 import copy
 import functools
 import inspect
+import json
 import os
 import subprocess
 import time
@@ -34,7 +35,7 @@ from ltspice_mcp.api._primitives import (
     measurements_of,
 )
 from ltspice_mcp.errors import InvalidCursorError, PathSecurityError
-from ltspice_mcp.lib import experiment_store, services
+from ltspice_mcp.lib import experiment_store, parser_service, services
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.log_types import LogSectionName
 from ltspice_mcp.lib.model_fields import (
@@ -1387,6 +1388,13 @@ def _chosen_signals(signals: Sequence[str] | None) -> tuple[str, ...] | None:
     names = tuple(dict.fromkeys(name.strip() for name in signals))
     if not 0 < len(names) <= 64 or any(not 0 < len(name) <= 256 for name in names):
         raise ApiValidationError("signals must name 1 to 64 traces, each in 1 to 256 characters")
+    # As the parser request spells them, where a character outside ASCII is escaped.
+    if len(json.dumps(list(names))) > parser_service.SIGNALS_BYTES:
+        raise ApiValidationError(
+            f"signals take more than {parser_service.SIGNALS_BYTES // 1024} KiB as the "
+            "parser reads them, where a character outside ASCII takes up to 6 bytes: "
+            "choose fewer or shorter names, or read them in more than one load"
+        )
     return names
 
 

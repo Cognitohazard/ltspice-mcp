@@ -22,7 +22,6 @@ from ltspice_mcp.lib.parser_capture import SourceFiles, capture_inputs, parser_c
 from ltspice_mcp.lib.raw_header import (
     RawHeader,
     RawLimits,
-    RawPlotHeader,
     RawTooLargeError,
     RawTooLargeToDecodeError,
     preflight_raw,
@@ -185,15 +184,10 @@ def _cut(
     """``header`` cut to the traces ``chosen`` reads (``trace_names.chosen_traces``),
     within the numeric budget a whole-file read is held to, and with no more
     numbers held while decoding (``held``) than ``chosen`` allows."""
-    from ltspice_mcp.lib.device_names import writes_xvii_command
     from ltspice_mcp.lib.trace_names import chosen_traces
 
-    def xvii(plot: RawPlotHeader) -> bool:
-        return writes_xvii_command(dict(plot.fields))
-
     cut = select_traces(
-        header,
-        chosen_traces(header.plots, chosen.signals, plot_index=chosen.plot_index, xvii=xvii),
+        header, chosen_traces(header.plots, chosen.signals, plot_index=chosen.plot_index)
     )
     if cut.numeric_bytes > limits.numeric_bytes:
         raise RawTooLargeError(cut.numeric_bytes, limits.numeric_bytes, chosen=True)

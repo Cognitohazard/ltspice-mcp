@@ -131,6 +131,10 @@ from ltspice_mcp.lib.signal_analysis import (
     window_and_clean,
 )
 from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build, reported_build
+from ltspice_mcp.lib.trace_names import (
+    find_trace,  # noqa: TID251 - an op-point value's name, read against the .log's names
+    pin_note,
+)
 from ltspice_mcp.state import SessionState
 
 #: One metric's answer. See the module docstring for why this is not a
@@ -1290,7 +1294,7 @@ async def _value_from_operating_point(
     # read through this path is the one case where the params come from the
     # .log and never appear as a trace, so refusing the documented spelling
     # here refuses it everywhere it is the only route.
-    found = services.find_trace(list(flat), recipe.expr, xvii=writes_xvii_names(raw))  # noqa: TID251 - an op-point value is named in the .log, never as a trace
+    found = find_trace(list(flat), recipe.expr, xvii=writes_xvii_names(raw))
     match = (found, flat[found]) if found is not None else None
     if match is None and services.is_node_pair(recipe.expr):
         # The pair resolves like it does on any raw; both node voltages are
@@ -1312,7 +1316,7 @@ async def _value_from_operating_point(
             present += f", ... ({len(flat)} total)"
         raise ResultError(
             f"{recipe.expr!r} is not present in this operating-point "
-            f"result.{services.pin_hint(raw, recipe.expr)} Address a value by the name it "
+            f"result.{pin_note(raw.header, recipe.expr)} Address a value by the name it "
             "carries (e.g. "
             "'@m1[gm]', 'V(out)') or a device parameter by the device's path "
             "and the parameter ('m1.gm', 'x1.m1.gm' for M1 inside X1). "

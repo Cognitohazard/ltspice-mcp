@@ -55,6 +55,10 @@ PROCESS_LIMITS = ParserProcessLimits(
     error_bytes=16 * 1024,
     cleanup_grace_s=3.0,
 )
+SIGNALS_BYTES = 20 * 1024
+"""The most a read's chosen signals may take of the parser request, as JSON:
+64 names of 256 plain characters, within the request's limit beside its paths.
+A character outside ASCII takes up to six bytes there."""
 DECODE_BYTES = PROCESS_LIMITS.memory_bytes // 2
 """The most numbers a read of chosen signals may have the parser hold while it
 decodes them (``raw_decode.numbers_held``): half its memory, the rest left to
@@ -172,7 +176,8 @@ def load_artifacts_sync(
     limits = raw_limits(state.config.max_raw_mb)
     chosen: dict[str, JsonValue] | None = (
         {
-            "signals": list(source.signals),
+            # In one order, so a read of the same names is one parse.
+            "signals": [*sorted(source.signals)],
             "plot_index": source.plot_index,
             "decode_bytes": DECODE_BYTES,
         }
@@ -372,9 +377,12 @@ def _load(
         if exc.code == "signals_not_found":
             raise ResultError(f"{label}: {exc}", show_hint=False) from exc
         if exc.code == "too_large":
+            chosen = policy.get("chosen") is not None
             raise ResultError(
-                _too_large(label, str(exc), chosen=policy.get("chosen") is not None),
+                _too_large(label, str(exc), chosen=chosen),
                 show_hint=False,
+                # A whole read's refusal ends in the Python read that keeps less.
+                python_route=not chosen,
             ) from exc
         if exc.code == "too_large_to_decode":
             raise ResultError(_too_large_to_decode(label, str(exc)), show_hint=False) from exc
@@ -403,12 +411,12 @@ def _too_large(label: object, reason: str, *, chosen: bool) -> str:
             "instead of keeping the waveform."
         )
     return (
-        f"{label} was not read: {reason}. Read only the traces you need: the Python "
-        "API's load_raw(..., signals=['V(out)', ...]) keeps those, the axis and any "
-        f"step parameters, from a file holding up to {DECODE_BYTES // 2**30} GiB of "
-        "numbers, or a larger one in LTspice's Fast Access layout. Or make the run "
-        "write fewer numbers: .save only the nodes you need, shorten the .tran, or "
-        "measure with .meas instead of keeping the waveform."
+        f"{label} was not read: {reason}. Make the run write fewer numbers: .save only "
+        "the nodes you need, shorten the .tran, or measure with .meas instead of keeping "
+        "the waveform. Or read only the traces you need, with the axis and any step "
+        f"parameters, from a file holding up to {DECODE_BYTES // 2**30} GiB of numbers "
+        "or a larger one in LTspice's Fast Access layout: "
+        "r = api.load_raw(..., signals=['V(out)', 'I(R1)'])"
     )
 
 

@@ -49,9 +49,10 @@ class RawTooLargeError(RawLimitError):
     parser_code = "too_large"
 
     def __init__(self, numeric_bytes: int, limit: int, *, chosen: bool) -> None:
-        traces = "the chosen traces" if chosen else "its traces"
+        # A whole file's count stops at the plot that crosses the limit.
+        traces = "the chosen traces hold" if chosen else "its traces hold at least"
         super().__init__(
-            f"numeric_bytes limit exceeded: {traces} hold {_size(numeric_bytes)} of numbers "
+            f"numeric_bytes limit exceeded: {traces} {_size(numeric_bytes)} of numbers "
             f"(at the widths the file stores them), over the {_size(limit)} one read keeps"
         )
         self.numeric_bytes = numeric_bytes

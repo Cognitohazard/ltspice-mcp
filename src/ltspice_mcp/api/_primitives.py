@@ -77,21 +77,30 @@ class RawResult:
         ``V(a) - V(b)`` from this step. Other trace math is ordinary numpy on
         the traces it combines.
         """
-        try:
-            signal = services.resolve_signal(self._raw, name)
-        except ResultError as exc:
-            # A name this result was read for is refused for its own reason
-            # (a noise pair); another one may name a trace it was not read for.
-            if self._chosen is None or name.strip().lower() in {
-                chosen.lower() for chosen in self._chosen
-            }:
-                raise
-            raise ResultError(
-                f"{exc} This result was read with signals={list(self._chosen)}, so it "
-                f"holds only their traces; load_raw again with {name!r} among them."
-            ) from exc
+        signal = self._resolve(name)
         self._validate_step(step)
         return np.array(signal.wave(self._raw, step), copy=True)
+
+    def _resolve(self, name: str) -> services.Signal:
+        """``name`` resolved against this result (``services.resolve_signal``).
+
+        A result read for chosen signals holds only their traces, so a trace
+        it lacks may be in the file: its refusal says how to read it. Any other
+        refusal (an expression, a step value, a noise pair) holds for the file
+        too, and is given as it is.
+        """
+        read = services.read_signal(self._raw, name)
+        if read.refused is None:
+            return services.Signal(read.name, read.plus, read.minus)
+        refused = services.signal_refused(self._raw, name, read)
+        if self._chosen is not None and read.refused == "missing":
+            raise ResultError(
+                f"{refused} This result was read with signals={list(self._chosen)}, so it "
+                f"holds only their traces; load_raw again with {name!r} among them.",
+                show_hint=refused.show_hint,
+                python_route=refused.python_route,
+            )
+        raise refused
 
     def value(self, name: str, *, step: int = 0) -> float | complex:
         """The one value of ``name`` in this step, for a plot of one point a
@@ -163,8 +172,9 @@ class RawResult:
     def observations(self) -> list[dict[str, Any]]:
         """What this result says of itself as it was read: ``partial_raw`` when
         it is a stopped case's kept raw, whose values end where the run was
-        stopped, and ``coarse_compressed_waveform`` when waveform compression
-        left a transient with few points. Empty when neither applies."""
+        stopped, ``coarse_compressed_waveform`` when waveform compression left a
+        transient with few points, and ``signals_chosen`` when it was read for
+        chosen signals. Empty when none applies."""
         return copy.deepcopy(list(self._observations))
 
     @property
@@ -292,8 +302,8 @@ class RawResult:
             pairs, missing, reasons = [], [], []
             for signal in signals:
                 try:
-                    ours = services.resolve_signal(self._raw, signal)
-                    theirs = services.resolve_signal(other._raw, signal)
+                    ours = self._resolve(signal)
+                    theirs = other._resolve(signal)
                 except ResultError as exc:
                     missing.append(signal)
                     reasons.append(str(exc))
