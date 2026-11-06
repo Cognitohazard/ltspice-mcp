@@ -90,6 +90,7 @@ from ltspice_mcp.lib import (
     atomic_write_bytes,
     capabilities,
 )
+from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.cursor_codec import CursorError, decode_cursor, encode_cursor
 from ltspice_mcp.lib.deck_prep import asc_export_lock, stage_sheet_copy
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding, refused_sheet_mark_note
@@ -121,7 +122,6 @@ from ltspice_mcp.lib.netlist_graph import (
     parse_netlist_graph,
 )
 from ltspice_mcp.lib.raster import RenderedImage
-from ltspice_mcp.lib.schematic_ops import is_asc
 from ltspice_mcp.lib.schematic_scene import Scene, build_scene, sheet_view
 from ltspice_mcp.lib.services import cp1252_ltspice
 from ltspice_mcp.lib.sheet_findings import (
