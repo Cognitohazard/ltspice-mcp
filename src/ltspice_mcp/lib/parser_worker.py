@@ -12,6 +12,7 @@ costs to start.
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -52,21 +53,32 @@ def _source_files(value: Any) -> SourceFiles:
 
 @dataclass(frozen=True)
 class _Chosen:
-    """What a read of chosen signals keeps, and how much it may decode."""
+    """What a selective read keeps (its signals' traces, a window of its
+    plot's axis, or both), and how much it may decode."""
 
-    signals: list[str]
+    signals: list[str] | None
+    window: tuple[float | None, float | None] | None
     plot_index: int
     decode_bytes: int
 
 
 def _chosen_request(value: Any) -> _Chosen | None:
-    """The request's choice of signals, or None for a read of every trace."""
+    """The request's choice of signals and window, or None for a whole read."""
     if value is None:
         return None
-    if not isinstance(value, dict) or set(value) != {"signals", "plot_index", "decode_bytes"}:
-        raise ValueError("Parser chosen signals must name signals, plot_index and decode_bytes")
-    signals = value["signals"]
-    if (
+    if not isinstance(value, dict) or set(value) != {
+        "signals",
+        "window",
+        "plot_index",
+        "decode_bytes",
+    }:
+        raise ValueError(
+            "Parser chosen read must name signals, window, plot_index and decode_bytes"
+        )
+    signals, window = value["signals"], value["window"]
+    if signals is None and window is None:
+        raise ValueError("Parser chosen read must choose signals or a window")
+    if signals is not None and (
         not isinstance(signals, list)
         or not 0 < len(signals) <= 64
         or any(not isinstance(item, str) or not 0 < len(item) <= 256 for item in signals)
@@ -75,7 +87,29 @@ def _chosen_request(value: Any) -> _Chosen | None:
     plot_index = value["plot_index"]
     if type(plot_index) is not int or plot_index < 0:
         raise ValueError("Parser plot_index must be a nonnegative integer")
-    return _Chosen(signals, plot_index, _positive(value["decode_bytes"], "decode_bytes"))
+    decode_bytes = _positive(value["decode_bytes"], "decode_bytes")
+    return _Chosen(signals, _window(window), plot_index, decode_bytes)
+
+
+def _window(value: Any) -> tuple[float | None, float | None] | None:
+    """A window ``[start, end]`` of finite bounds, either one open, or None."""
+    if value is None:
+        return None
+    if (
+        not isinstance(value, list)
+        or len(value) != 2
+        or value == [None, None]
+        or any(
+            bound is not None and (isinstance(bound, bool) or not isinstance(bound, int | float))
+            for bound in value
+        )
+        or any(bound is not None and not math.isfinite(bound) for bound in value)
+    ):
+        raise ValueError("Parser window must be [start, end] of finite numbers, one open at most")
+    start, end = value
+    if start is not None and end is not None and start >= end:
+        raise ValueError("Parser window must start before it ends")
+    return (None if start is None else float(start), None if end is None else float(end))
 
 
 def parse_request(request: dict[str, Any], directory: Path) -> None:
@@ -126,14 +160,21 @@ def parse_request(request: dict[str, Any], directory: Path) -> None:
     header = (
         preflight_raw(
             parser_file_in(directory, "input.raw"),
-            # A read of chosen signals holds the numeric budget to what it
-            # keeps and what it decodes (_cut), not to the whole file. A
+            # A selective read holds the numeric budget to what it keeps and
+            # what it decodes (_cut, decode_raw), not to the whole file. A
             # file's numbers take no more than four bytes for each byte it
             # stores them in: as many in binary, fewer in text, which spends
-            # at least four characters on a value it keeps in sixteen bytes.
+            # at least four characters on a value it keeps in sixteen bytes;
+            # and each point takes at least a byte. What is kept still holds
+            # every plot's axis, at eight bytes a point or more, so no more
+            # points than the budget's own limit on them.
             limits=raw_limits
             if chosen is None
-            else replace(raw_limits, numeric_bytes=4 * raw_limits.input_bytes),
+            else replace(
+                raw_limits,
+                numeric_bytes=4 * raw_limits.input_bytes,
+                points=raw_limits.input_bytes,
+            ),
             dialect=request["dialect"],
             producing_dialect=request["producing_dialect"],
         )
@@ -154,7 +195,7 @@ def parse_request(request: dict[str, Any], directory: Path) -> None:
         result["logs"] = decode_logs(captured, directory, limits=log_limits)
         result["raw"] = None
         if require_raw:
-            from ltspice_mcp.lib.raw_decode import decode_raw, numbers_held
+            from ltspice_mcp.lib.raw_decode import AxisWindow, decode_raw, numbers_held
 
             assert header is not None  # preflight ran for every RAW read
             result["raw"] = decode_raw(
@@ -167,6 +208,9 @@ def parse_request(request: dict[str, Any], directory: Path) -> None:
                 step_rows=step_rows,
                 preflight=header,
                 chosen=None if chosen is None else _cut(header, chosen, raw_limits, numbers_held),
+                window=None
+                if chosen is None or chosen.window is None
+                else AxisWindow(chosen.plot_index, *chosen.window),
             )
         result["status"] = "ok"
     payload = json.dumps(result, allow_nan=False, separators=(",", ":")).encode("utf-8")
@@ -182,14 +226,20 @@ def _cut(
     held: Callable[[RawHeader, RawHeader], int],
 ) -> RawHeader:
     """``header`` cut to the traces ``chosen`` reads (``trace_names.chosen_traces``),
-    within the numeric budget a whole-file read is held to, and with no more
-    numbers held while decoding (``held``) than ``chosen`` allows."""
+    every trace when it chooses none, with no more numbers held while decoding
+    (``held``) than ``chosen`` allows. Without a window it keeps no more than
+    the numeric budget a whole-file read is held to; with one, ``decode_raw``
+    holds the points the window keeps to it."""
     from ltspice_mcp.lib.trace_names import chosen_traces
 
-    cut = select_traces(
-        header, chosen_traces(header.plots, chosen.signals, plot_index=chosen.plot_index)
+    cut = (
+        header
+        if chosen.signals is None
+        else select_traces(
+            header, chosen_traces(header.plots, chosen.signals, plot_index=chosen.plot_index)
+        )
     )
-    if cut.numeric_bytes > limits.numeric_bytes:
+    if chosen.window is None and cut.numeric_bytes > limits.numeric_bytes:
         raise RawTooLargeError(cut.numeric_bytes, limits.numeric_bytes, chosen=True)
     decoded = held(header, cut)
     if decoded > chosen.decode_bytes:

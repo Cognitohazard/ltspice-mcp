@@ -177,11 +177,12 @@ def load_artifacts_sync(
     chosen: dict[str, JsonValue] | None = (
         {
             # In one order, so a read of the same names is one parse.
-            "signals": [*sorted(source.signals)],
+            "signals": None if source.signals is None else [*sorted(source.signals)],
+            "window": None if source.window is None else [*source.window],
             "plot_index": source.plot_index,
             "decode_bytes": DECODE_BYTES,
         }
-        if require_raw and source.signals is not None
+        if require_raw and (source.signals is not None or source.window is not None)
         else None
     )
     policy: dict[str, JsonValue] = {
@@ -374,7 +375,7 @@ def _load(
             raise failure from exc
         if exc.code == "deadline":
             raise AnalysisDeadlineExceeded("Artifact parsing exceeded its deadline") from exc
-        if exc.code == "signals_not_found":
+        if exc.code in ("signals_not_found", "window_refused"):
             raise ResultError(f"{label}: {exc}", show_hint=False) from exc
         if exc.code == "too_large":
             chosen = policy.get("chosen") is not None
@@ -405,18 +406,18 @@ def _too_large(label: object, reason: str, *, chosen: bool) -> str:
     """Why a result was not read, as the worker counted it, and what reads less."""
     if chosen:
         return (
-            f"{label} was not read: {reason}. Choose fewer signals, or read them in "
-            "more than one load. If one signal is already too many, the run wrote more "
-            "points than one read keeps: shorten the .tran, or measure with .meas "
-            "instead of keeping the waveform."
+            f"{label} was not read: {reason}. Choose fewer signals or a shorter window "
+            "(window=(start, end) keeps the points of the axis between them), or read "
+            "them in more than one load."
         )
     return (
         f"{label} was not read: {reason}. Make the run write fewer numbers: .save only "
         "the nodes you need, shorten the .tran, or measure with .meas instead of keeping "
-        "the waveform. Or read only the traces you need, with the axis and any step "
-        f"parameters, from a file holding up to {DECODE_BYTES // 2**30} GiB of numbers "
-        "or a larger one in LTspice's Fast Access layout: "
-        "r = api.load_raw(..., signals=['V(out)', 'I(R1)'])"
+        "the waveform. Or read only the traces you need, the stretch of the axis you "
+        "need, or both, with the axis and any step parameters, from a file holding up "
+        f"to {DECODE_BYTES // 2**30} GiB of numbers or a larger one in LTspice's Fast "
+        "Access layout: r = api.load_raw(..., signals=['V(out)', 'I(R1)'], "
+        "window=('1m', '2m'))"
     )
 
 

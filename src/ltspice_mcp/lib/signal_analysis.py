@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import cmath
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Literal, NotRequired, TypedDict
 
 import numpy as np
@@ -233,6 +233,57 @@ class MeasurementStatsEntry(TypedDict):
     min_step_index: int | None
     max_step_index: int | None
     histogram: list[HistogramBin]
+
+
+#: Points of an axis :func:`window_span` reads at a time, so a window over a
+#: long axis holds no copy of it.
+_WINDOW_CHUNK = 1 << 20
+
+
+class UnorderedAxisError(ValueError):
+    """An axis whose values decrease somewhere, which no window can be read from."""
+
+
+def window_span(
+    axis: np.ndarray,
+    start: float | None,
+    end: float | None,
+    *,
+    coordinate: Callable[[np.ndarray], np.ndarray] | None = None,
+) -> tuple[int, int]:
+    """``[lo, hi)``, the points of ``axis`` whose value lies in ``[start, end]``.
+
+    The one rule for which points a window of an axis keeps: every point at or
+    after ``start`` and at or before ``end``, an open end keeping all on its
+    side, and nothing interpolated at a bound. The values must not decrease
+    (``searchsorted`` reads a decreasing axis wrongly), and ``start`` must be
+    less than ``end``: a decrease raises :class:`UnorderedAxisError`, the
+    bounds ``ValueError``. An empty span is returned, not raised.
+    ``coordinate`` maps stored values to the ones the window is in (a
+    transient's deck time), a block at a time.
+    """
+    if start is None and end is None:
+        return 0, int(axis.size)
+    if start is not None and end is not None and start >= end:
+        raise ValueError(f"t_start ({start:g}) must be < t_end ({end:g}).")
+    lo = hi = 0
+    previous: float | None = None
+    for offset in range(0, int(axis.size), _WINDOW_CHUNK):
+        block = axis[offset : offset + _WINDOW_CHUNK]
+        values = np.real(block) if coordinate is None else coordinate(block)
+        if not bool(np.all(np.diff(values) >= 0)) or (
+            previous is not None and not values[0] >= previous
+        ):
+            raise UnorderedAxisError(
+                "Cannot apply a [t_start, t_end] window to a non-monotonic axis "
+                "(e.g. a descending sweep)"
+            )
+        previous = float(values[-1])
+        # The axis does not decrease, so each block's count below a bound adds up.
+        if start is not None:
+            lo += int(np.searchsorted(values, start, "left"))
+        hi += values.size if end is None else int(np.searchsorted(values, end, "right"))
+    return lo, hi
 
 
 def window_and_clean(

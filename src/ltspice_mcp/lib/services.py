@@ -187,6 +187,9 @@ class AnalysisSource:
     #: The signals a read keeps the traces of (``trace_names.chosen_traces``),
     #: with the axis and any step parameters; None reads every trace.
     signals: tuple[str, ...] | None = None
+    #: The span ``(start, end)`` of the read plot's axis whose points a read
+    #: keeps (``raw_decode.AxisWindow``), an end None for open; None keeps all.
+    window: tuple[float | None, float | None] | None = None
     # Resident facts belong to one evaluation, between fresh drift checks.
     captured: ParsedArtifacts | None = field(default=None, repr=False, compare=False)
 

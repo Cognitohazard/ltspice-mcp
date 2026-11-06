@@ -411,12 +411,15 @@ async def load_raw_result(
     dialect: str | None = None,
     other_raw: OtherRawKind | None = None,
     signals: tuple[str, ...] | None = None,
+    window: tuple[float | None, float | None] | None = None,
 ) -> RawResult:
     """Resolve and bounded-parse one raw result on the API event loop.
 
     With ``signals``, the parser keeps only the traces they read, with the
     plot's first variable and any step parameters
-    (``trace_names.chosen_traces``), and holds its numeric budget to those."""
+    (``trace_names.chosen_traces``); with ``window``, only the points of the
+    plot's axis in it (``raw_decode.AxisWindow``). It holds its numeric
+    budget to what it keeps."""
     if raw_path is not None:
         resolved = state.resolve_path(str(raw_path))
         source = services.source_for_raw_path(
@@ -431,8 +434,7 @@ async def load_raw_result(
         source = services.source_for_run(context, plot_index=plot_index, dialect=dialect)
         resolved = source.raw
 
-    if signals is not None:
-        source = dataclasses.replace(source, signals=signals)
+    source = dataclasses.replace(source, signals=signals, window=window)
     raw = await services.load_raw(source, state)
     observations = await asyncio.to_thread(services.read_observations, source, raw)
     if signals is not None:
@@ -445,6 +447,19 @@ async def load_raw_result(
                     f"Read with signals={list(signals)}: this result holds the traces "
                     "they read, the plot's first variable (its axis, where it has one) "
                     "and any step parameters, and no other trace."
+                ),
+            },
+        )
+    if window is not None:
+        start, end = ("None" if bound is None else f"{bound:g}" for bound in window)
+        observations = (
+            *observations,
+            {
+                "code": "window_chosen",
+                "kind": "provenance",
+                "detail": (
+                    f"Read with window=({start}, {end}): this result holds the points of "
+                    "its axis from the start to the end, in each step, and no other point."
                 ),
             },
         )

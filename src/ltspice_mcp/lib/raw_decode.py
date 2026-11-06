@@ -10,18 +10,21 @@ unchanged; engineering axes, units and time rebasing belong to the facade.
 from __future__ import annotations
 
 import codecs
+import functools
 import hashlib
 import io
 import math
 import os
 import stat
-from dataclasses import asdict
+from collections.abc import Callable
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, BinaryIO
 
 import numpy as np
 from spicelib.raw.plot_data import PlotData
 
+from ltspice_mcp.lib.decoded_raw import deck_time, transient_time_offset
 from ltspice_mcp.lib.encoding import decode_spice_bytes_strictly, encode_spice_text
 from ltspice_mcp.lib.log_parser import read_step_line
 from ltspice_mcp.lib.parser_capture import CAPTURED_NAMES, CapturedFile, CapturedInputs
@@ -30,10 +33,18 @@ from ltspice_mcp.lib.raw_header import (
     RawLimitError,
     RawLimits,
     RawPlotHeader,
+    RawTooLargeError,
     leading_parameters,
     preflight_raw,
 )
-from ltspice_mcp.lib.result_kinds import STEPPED_SWEEP, Analysis, header_analysis, stepped_kind
+from ltspice_mcp.lib.result_kinds import (
+    STEPPED_SWEEP,
+    Analysis,
+    header_analysis,
+    sampled_axis,
+    stepped_kind,
+)
+from ltspice_mcp.lib.signal_analysis import UnorderedAxisError, window_span
 from ltspice_mcp.lib.store import is_sha256, parser_file_in
 
 _CHUNK_BYTES = 64 * 1024
@@ -42,6 +53,35 @@ _DTYPES = {4: "<f4", 8: "<f8", 16: "<c16"}
 
 class RawDecodeError(ValueError):
     """Capture identity or dependency materialization did not satisfy the contract."""
+
+
+class WindowRefusedError(ValueError):
+    """A window of a plot's axis that keeps nothing a reader could use.
+
+    ``parser_code`` is the code the parser worker reports it under, so the
+    caller gets this message rather than a failed parse.
+    """
+
+    parser_code = "window_refused"
+
+
+@dataclass(frozen=True)
+class AxisWindow:
+    """The span ``[start, end]`` of plot ``plot_index``'s axis a read keeps, in
+    the axis's own unit (a transient's deck time); an open end keeps all on
+    its side. Points are kept by ``signal_analysis.window_span``, step by step."""
+
+    plot_index: int
+    start: float | None
+    end: float | None
+
+    def text(self) -> str:
+        """The window as a caller wrote it."""
+        return f"({_bound(self.start)}, {_bound(self.end)})"
+
+
+def _bound(value: float | None) -> str:
+    return "None" if value is None else f"{value:g}"
 
 
 def numbers_held(header: RawHeader, chosen: RawHeader) -> int:
@@ -463,6 +503,7 @@ def decode_raw(
     step_rows: int,
     preflight: RawHeader | None = None,
     chosen: RawHeader | None = None,
+    window: AxisWindow | None = None,
 ) -> dict[str, Any]:
     """Return header/arrays/plots/step_log only; no dependency object escapes.
 
@@ -479,6 +520,11 @@ def decode_raw(
     the whole file, only those traces are asked of it and written, and the
     result is the cut header with their arrays. What the dependency holds
     while it reads them is ``numbers_held``.
+
+    ``window`` keeps only the points of one plot's axis in a span
+    (``_windowed``); that plot's header then counts the points kept, and the
+    numeric limit holds what every plot keeps, checked before any array is
+    written.
     """
     _positive_limit(step_log_bytes, "step_log_bytes")
     _positive_limit(step_rows, "step_rows")
@@ -497,8 +543,11 @@ def decode_raw(
     kept = header if chosen is None else chosen
     if len(kept.plots) != len(header.plots) or kept.size_bytes != header.size_bytes:
         raise RawDecodeError("Chosen traces do not belong to this RAW preflight")
+    if window is not None and window.plot_index < len(kept.plots):
+        _check_windowed(kept.plots[window.plot_index], window)
     arrays = []
     plots = []
+    kept_plots = []
     for plot, keep in zip(header.plots, kept.plots, strict=True):
         source, start, header_end, end, encoding = _prepared_plot(path, directory, plot)
         with source.open("rb") as handle:
@@ -516,13 +565,90 @@ def decode_raw(
         # them, and a plot stored a point at a time whole (numbers_held).
         reader.read_trace_data([variable.name for variable in keep.variables])
         first = np.asarray(reader.get_trace(0).data)
+        facts = _step_facts(keep, first, reader.has_axis, log, len(header.plots), step_rows)
+        spans = None
+        if window is not None and plot.index == window.plot_index:
+            spans, windowed, facts = _windowed(keep, first, facts, window)
+            numbers = kept.numeric_bytes - keep.numeric_bytes + windowed.numeric_bytes
+            if numbers > limits.numeric_bytes:
+                raise RawTooLargeError(numbers, limits.numeric_bytes, chosen=True)
+            keep = windowed
         positions = {variable.name: variable.index for variable in plot.variables}
         for variable in keep.variables:
             trace = reader.get_trace(positions[variable.name])
             if trace.name != variable.name or trace.whattype != variable.declared_type:
                 raise RawDecodeError("Dependency trace metadata contradicts RAW preflight")
-            arrays.append(_write_array(np.asarray(trace.data), directory, keep, variable.index))
-        plots.append(_step_facts(keep, first, reader.has_axis, log, len(header.plots), step_rows))
+            data = np.asarray(trace.data)
+            if spans is not None:
+                data = np.concatenate([data[lo:hi] for lo, hi in spans])
+            arrays.append(_write_array(data, directory, keep, variable.index))
+        plots.append(facts)
+        kept_plots.append(keep)
+    kept = replace(
+        kept,
+        numeric_bytes=sum(plot.numeric_bytes for plot in kept_plots),
+        plots=tuple(kept_plots),
+    )
     if sum(item["byte_size"] for item in arrays) != kept.numeric_bytes:
         raise RawDecodeError("Numeric output aggregate disagrees with RAW preflight")
     return {"header": asdict(kept), "arrays": arrays, "plots": plots, "step_log": log}
+
+
+def _check_windowed(plot: RawPlotHeader, window: AxisWindow) -> None:
+    """Refuse, before decoding, a window of a plot that has no axis to window."""
+    if sampled_axis(header_analysis(plot), plot.first_type) is None:
+        raise WindowRefusedError(
+            f"window={window.text()} reads a span of a plot's axis, and plot "
+            f"{plot.index} ({plot.plot_name}) has none: it holds one point "
+            "(of each step), not a sweep. Read it without window."
+        )
+
+
+def _windowed(
+    plot: RawPlotHeader, first: np.ndarray, facts: dict[str, Any], window: AxisWindow
+) -> tuple[list[tuple[int, int]], RawPlotHeader, dict[str, Any]]:
+    """The spans of each step of ``plot`` that ``window`` keeps
+    (``window_span`` on the axis as a reader sees it), and the plot's header
+    and step facts for the points kept.
+
+    A step that keeps no point is refused, and so is an axis that decreases
+    within a step, where no span is one stretch of it.
+    """
+    coordinate: Callable[[np.ndarray], np.ndarray] | None = None
+    if header_analysis(plot) == "transient":
+        offset = transient_time_offset(plot)
+        coordinate = functools.partial(deck_time, offset=offset)
+
+    ranges = facts["step_ranges"] or [
+        {"step_index": 0, "offset": 0, "length": plot.point_count, "log_row": None}
+    ]
+    spans: list[tuple[int, int]] = []
+    kept_ranges: list[dict[str, Any]] = []
+    for part in ranges:
+        begin = part["offset"]
+        values = first[begin : begin + part["length"]]
+        try:
+            lo, hi = window_span(values, window.start, window.end, coordinate=coordinate)
+        except UnorderedAxisError as exc:
+            raise WindowRefusedError(
+                f"window={window.text()} keeps a span of plot {plot.index}'s axis, and the "
+                "axis decreases within a step (a sweep that runs downwards, or steps whose "
+                "boundaries were not found), so no span of it is one stretch. Read it "
+                "without window."
+            ) from exc
+        if hi <= lo:
+            ends = values[[0, -1]] if coordinate is None else coordinate(values[[0, -1]])
+            where = "" if facts["step_ranges"] is None else f"step {part['step_index']}'s "
+            raise WindowRefusedError(
+                f"window={window.text()} keeps no point of plot {plot.index}: "
+                f"{where}axis runs from {float(np.real(ends[0])):g} to "
+                f"{float(np.real(ends[1])):g}. Choose a window that meets it."
+            )
+        kept_ranges.append(
+            {**part, "offset": sum(end - start for start, end in spans), "length": hi - lo}
+        )
+        spans.append((begin + lo, begin + hi))
+    points = sum(end - start for start, end in spans)
+    windowed = replace(plot, point_count=points, numeric_bytes=points * sum(plot.value_bytes))
+    kept_facts = {**facts, "step_ranges": kept_ranges if facts["step_ranges"] else None}
+    return spans, windowed, kept_facts

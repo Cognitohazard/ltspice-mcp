@@ -119,6 +119,7 @@ from ltspice_mcp.lib.result_observations import (
 )
 from ltspice_mcp.lib.signal_analysis import (
     THD_HARMONICS_CAP,
+    UnorderedAxisError,
     analyze_disturbance_response,
     analyze_edge,
     analyze_periodic,
@@ -130,6 +131,7 @@ from ltspice_mcp.lib.signal_analysis import (
     compute_signal_stats,
     time_weighted_quantiles,
     window_and_clean,
+    window_span,
 )
 from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build, reported_build
 from ltspice_mcp.lib.trace_names import (
@@ -293,29 +295,21 @@ def guarded_axis(raw: DecodedRaw | DecodedPlot, step: int) -> np.ndarray:
 
 
 def window_indices(axis: np.ndarray, ts: float | None, te: float | None) -> tuple[int, int]:
-    """``[lo, hi)`` sample indices for the ``[ts, te]`` window on a real axis.
+    """``[lo, hi)`` sample indices for the ``[ts, te]`` window on a real axis
+    (``signal_analysis.window_span``).
 
     Unlike ``window_and_clean`` this keeps non-finite samples (full-fidelity
-    egress) and imposes no minimum sample count. It DOES reproduce the
-    monotonicity requirement: ``searchsorted`` returns silently-wrong indices on
-    a descending sweep, so refuse one rather than write a corrupt window.
-
-    An empty selection (``lo >= hi``) is returned, not raised: a stepped export
-    may legitimately have one step whose axis does not reach the window, and the
-    caller decides whether to skip that step or fail the whole export.
+    egress) and imposes no minimum sample count. An empty selection
+    (``lo >= hi``) is returned, not raised: a stepped export may legitimately
+    have one step whose axis does not reach the window, and the caller decides
+    whether to skip that step or fail the whole export.
     """
-    if ts is None and te is None:
-        return 0, int(axis.size)
-    if axis.size > 1 and not bool(np.all(np.diff(axis) >= 0)):
-        raise ResultError(
-            "Cannot apply a [t_start, t_end] window to a non-monotonic axis "
-            "(e.g. a descending sweep); omit the window to export the full axis."
-        )
-    if ts is not None and te is not None and ts >= te:
-        raise ResultError(f"t_start ({ts:g}) must be < t_end ({te:g}).")
-    lo = 0 if ts is None else int(np.searchsorted(axis, ts, side="left"))
-    hi = int(axis.size) if te is None else int(np.searchsorted(axis, te, side="right"))
-    return lo, hi
+    try:
+        return window_span(axis, ts, te)
+    except UnorderedAxisError as exc:
+        raise ResultError(f"{exc}; omit the window to export the full axis.") from exc
+    except ValueError as exc:
+        raise ResultError(str(exc)) from exc
 
 
 def apply_window(

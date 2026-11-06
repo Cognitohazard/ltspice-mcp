@@ -496,7 +496,14 @@ def _read_plot(
     count = scanner.integer(
         header["no. variables"], "No. Variables / variables", scanner.limits.variables
     )
-    points = scanner.integer(header["no. points"], "No. Points / points", scanner.limits.points)
+    # A count past the points limit is still read here, so that a plot too long
+    # for one read is refused below by the numbers it holds, which says what
+    # reads less; the limit on points is held after that.
+    points = scanner.integer(
+        header["no. points"],
+        "No. Points / points",
+        max(scanner.limits.points, scanner.limits.numeric_bytes),
+    )
     variables: list[RawVariable] = []
     names: set[str] = set()
     for index in range(count):
@@ -523,6 +530,8 @@ def _read_plot(
     scanner.numeric_bytes += numeric_bytes
     if scanner.numeric_bytes > scanner.limits.numeric_bytes:
         raise RawTooLargeError(scanner.numeric_bytes, scanner.limits.numeric_bytes, chosen=False)
+    if points > scanner.limits.points:
+        raise scanner.error(RawLimitError, "No. Points / points limit exceeded")
     payload_offset = scanner.handle.tell()
     if storage == "binary":
         end = payload_offset + numeric_bytes
