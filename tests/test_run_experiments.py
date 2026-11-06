@@ -21,7 +21,9 @@ import pytest
 from pydantic import ValidationError
 from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
+from ltspice_mcp.api import ApiCallError
 from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.errors import ERROR_HINTS, RecipeInvalidError, SimulationError
 from ltspice_mcp.lib import experiment_runner as experiment_runner_mod
 from ltspice_mcp.lib import experiment_store, response_budget, result_store, store, wsl
 from ltspice_mcp.lib.deck_staging import resolve_experiment_paths, sha256_file
@@ -55,8 +57,10 @@ from tests._mismatch_fixtures import MINI_FET
 from tests.conftest import (
     LIVENESS_S,
     FakeSim,
+    SyncApi,
     await_until,
     coordinator_returned,
+    dispatch,
     fake_artifact_paths,
     fake_simulator,
     job_done,
@@ -194,7 +198,7 @@ def test_the_random_rules_field_names_all_four_kinds_in_plain_words():
 
 
 def _deck(path: Path, body: str | None = None) -> Path:
-    path.write_text(body or "V1 in 0 1\nR1 in 0 1k\n.op\n.end\n")
+    path.write_text(body or "* deck\nV1 in 0 1\nR1 in 0 1k\n.op\n.end\n")
     return path
 
 
@@ -1218,6 +1222,72 @@ class TestLeanReceipt:
         _assert_attached_artifact(data, "p")
 
 
+def _refused_submissions(state: SessionState, arguments: dict[str, Any]) -> dict[str, Any]:
+    """The receipt each way into run_experiments answers a refused submission
+    with: its handler, the server's dispatch, and the Python API."""
+    # Read, so no reply carries the first-reply guide reminder after its hint.
+    state.guide_read = True
+    replies = {
+        "handler": asyncio.run(
+            handle_run_experiments(
+                RunExperimentsInput.model_validate({**arguments, "request_id": "refused-1"}),
+                state,
+            )
+        ),
+        "mcp": asyncio.run(dispatch(state, "run_experiments", {**arguments, "request_id": "r-2"})),
+    }
+    receipts: dict[str, Any] = {}
+    for door, result in replies.items():
+        assert result.is_error and result.structured_content is not None, door
+        receipts[door] = result.structured_content
+    with pytest.raises(ApiCallError) as refused:
+        SyncApi(state).run_experiments(**arguments, request_id="refused-3", wait=False)
+    receipts["api"] = refused.value.payload
+    return receipts
+
+
+class TestSubmissionRefusalHints:
+    """A submission refused before a job exists carries its failure kind's
+    recovery step from the one table every surface reads (``errors.ERROR_HINTS``),
+    after its message, as a jobs refusal does; a kind with none, or one that
+    says its own recovery, carries the message alone."""
+
+    def test_an_invalid_attached_recipe_carries_the_recipe_step(
+        self, state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        arguments = {
+            "circuits": [{"path": str(_deck(work_dir / "bad_recipe.cir"))}],
+            "analyze": {"recipes": [{"key": "x", "metric": "no_such_metric"}]},
+        }
+        for door, receipt in _refused_submissions(state_with_sim, arguments).items():
+            error = receipt["error"]
+            assert error["code"] == RecipeInvalidError.code, door
+            assert receipt["hint"] == f"{error['message']}\n\n{ERROR_HINTS[RecipeInvalidError]}"
+        assert submissions == []
+
+    def test_no_simulator_carries_the_simulator_step(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        arguments = {"circuits": [{"path": str(_deck(work_dir / "no_sim.cir"))}]}
+        for door, receipt in _refused_submissions(state_no_sim, arguments).items():
+            error = receipt["error"]
+            assert error["code"] == "submission_failed", door
+            assert receipt["hint"] == f"{error['message']}\n\n{ERROR_HINTS[SimulationError]}"
+
+    def test_a_refusal_that_names_its_own_recovery_carries_the_message_alone(
+        self, state_with_sim: SessionState, work_dir: Path
+    ):
+        arguments = {
+            "circuits": [{"path": str(_deck(work_dir / "unknown_sim.cir"))}],
+            # A family this session did not detect: the refusal lists what it has.
+            "execution": {"simulator": "xyce"},
+        }
+        for door, receipt in _refused_submissions(state_with_sim, arguments).items():
+            assert receipt["hint"] == receipt["error"]["message"], door
+
+
 @pytest.mark.asyncio
 class TestAttachedBlockPreflight:
     """A malformed attached analyze block is refused BEFORE anything runs.
@@ -1723,7 +1793,7 @@ class TestReplayRejectsChangedSources:
         outside.write_text(".param supply=5\n")
         deck = _deck(
             work_dir / "live.cir",
-            f'.include "{outside}"\nV1 in 0 {{supply}}\nR1 in 0 1k\n.op\n.end\n',
+            f'* live\n.include "{outside}"\nV1 in 0 {{supply}}\nR1 in 0 1k\n.op\n.end\n',
         )
         args = _args(deck, "live-include", lint="off", allow_live_includes=True)
         first = _assert_schema(await handle_run_experiments(args, state_with_sim))
@@ -1776,7 +1846,7 @@ class TestReplayRejectsChangedSources:
 
 
 # An export whose relative include names a file beside the schematic.
-_INCLUDING_EXPORT = ".include models.inc\nV1 in 0 1\nR1 in 0 {rval}\n.op\n.end\n"
+_INCLUDING_EXPORT = "* amp\n.include models.inc\nV1 in 0 1\nR1 in 0 {rval}\n.op\n.end\n"
 
 
 def _schematic_with_include(state: SessionState, project_dir: Path) -> tuple[Path, Path]:
@@ -2208,7 +2278,7 @@ class TestLintModes:
         (work_dir / "amp.inc").write_text(".subckt AMP a b\nRA a b 1k\n.ends AMP\n")
         deck = _deck(
             work_dir / "with_include.cir",
-            '.include "amp.inc"\nX1 in 0 AMP\nV1 in 0 1\n.op\n.end\n',
+            '* with include\n.include "amp.inc"\nX1 in 0 AMP\nV1 in 0 1\n.op\n.end\n',
         )
         route = resolve_experiment_paths
 
@@ -2526,7 +2596,7 @@ class TestPerCircuitFailuresAndAccounting:
         (work_dir / "support.inc").write_text(".param supply=1\n")
         deck = _deck(
             work_dir / "relative.cir",
-            '.include "support.inc"\nV1 in 0 {supply}\nR1 in 0 1k\n.op\n.end\n',
+            '* relative\n.include "support.inc"\nV1 in 0 {supply}\nR1 in 0 1k\n.op\n.end\n',
         )
 
         data = _assert_schema(
@@ -3460,7 +3530,7 @@ class TestAttachedAnalysis:
 
 
 _CORE_INC = ".subckt core in out\nR1 in mid 1k\nC1 mid out 1n\n.ends\n"
-_FACTORED_ROOT = '.include "core.inc"\nV1 in 0 1\nX1 in out core\n.op\n.end\n'
+_FACTORED_ROOT = '* factored\n.include "core.inc"\nV1 in 0 1\nX1 in out core\n.op\n.end\n'
 
 
 def _recording_simulator(monkeypatch: pytest.MonkeyPatch, submitted: list[Path]) -> None:
@@ -3715,7 +3785,10 @@ class TestVariationsReachIntoIncludes:
         _recording_simulator(monkeypatch, submitted)
         deck = _factored_deck(
             work_dir,
-            root='.include "core.inc"\nV1 in 0 1\nR1 in out 1k\nX1 out 0 core\n.op\n.end\n',
+            root=(
+                '* factored\n.include "core.inc"\nV1 in 0 1\nR1 in out 1k\nX1 out 0 core\n'
+                ".op\n.end\n"
+            ),
         )
 
         _assert_schema(
@@ -3746,7 +3819,7 @@ class TestVariationsReachIntoIncludes:
         (work_dir / "right.inc").write_text(".subckt right in out\nR1 in out 2k\n.ends\n")
         deck = _deck(
             work_dir / "two-cores.cir",
-            '.include "left.inc"\n.include "right.inc"\nV1 in 0 1\n'
+            '* two cores\n.include "left.inc"\n.include "right.inc"\nV1 in 0 1\n'
             "X1 in mid left\nX2 mid 0 right\n.op\n.end\n",
         )
 
@@ -3871,7 +3944,7 @@ class TestVariationsReachIntoIncludes:
         (work_dir / "mid.inc").write_text('.include "core.inc"\n')
         deck = _deck(
             work_dir / "nested.cir",
-            '.include "mid.inc"\nV1 in 0 1\nX1 in out core\n.op\n.end\n',
+            '* nested\n.include "mid.inc"\nV1 in 0 1\nX1 in out core\n.op\n.end\n',
         )
 
         data = _assert_schema(
@@ -4028,7 +4101,7 @@ class TestReceiptWeight:
         inside.write_text("R8 in 0 2k\n")
         deck = _deck(
             work_dir / "live.cir",
-            f".include {inside}\n.include {outside}\nV1 in 0 1\n.op\n.end\n",
+            f"* live\n.include {inside}\n.include {outside}\nV1 in 0 1\n.op\n.end\n",
         )
 
         data = _assert_schema(
@@ -4086,7 +4159,7 @@ class TestReceiptWeight:
         outside.write_text("R9 in 0 1k\n")
         deck = _deck(
             work_dir / "live-budget.cir",
-            f".include {outside}\nV1 in 0 1\n.op\n.end\n",
+            f"* live budget\n.include {outside}\nV1 in 0 1\n.op\n.end\n",
         )
 
         data = _assert_schema(

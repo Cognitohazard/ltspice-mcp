@@ -29,7 +29,7 @@ from ltspice_mcp.errors import (
     OtherRawNotWritten,
     PathSecurityError,
     ResultError,
-    error_hint,
+    ResultFileNotFoundError,
     python_route_text,
 )
 from ltspice_mcp.lib import (
@@ -76,7 +76,7 @@ from ltspice_mcp.lib.recipes import (
     StepSelector,
     WaveformRecipe,
     step_axis_key,
-    validate_recipe,
+    validate_recipe,  # noqa: TID251 - recipe_of_request, its owner, is in this module
 )
 from ltspice_mcp.lib.result_kinds import AC_SHAPED
 from ltspice_mcp.lib.result_observations import (
@@ -96,6 +96,7 @@ from ltspice_mcp.tools._base import (
     held_to_cap,
     outcome_of,
     page_schema,
+    recovery_hint,
     registry,
     resolve_response_budget,
     sanitize_payload,
@@ -969,9 +970,9 @@ def _unresolved_source(
     """The coverage row of a source that names nothing this call can read.
 
     Coded and hinted as every other surface reports the same failure: the
-    error's own code (``job_not_found``, ``result_unreadable``, ``path_denied``)
-    and its type's recovery step (``errors.error_hint``; a refused path's is
-    the sandbox guidance, since the file may be perfectly readable).
+    error's own code (``job_not_found``, ``result_file_not_found``,
+    ``path_denied``) and its kind's recovery step (``recovery_hint``; a refused
+    path's is the sandbox guidance, since the file may be perfectly readable).
     """
     error = exc if isinstance(exc, LTSpiceMCPError) else ResultError(str(exc))
     row: dict[str, Any] = {
@@ -981,7 +982,7 @@ def _unresolved_source(
         "code": error.code,
         "detail": str(exc),
     }
-    hint = state.sandbox_guidance() if isinstance(error, PathSecurityError) else error_hint(error)
+    hint = recovery_hint(error, state)
     if hint is not None:
         row["hint"] = hint
     return row
@@ -1021,13 +1022,15 @@ async def _resolve_sources(
             except (LTSpiceMCPError, OSError) as exc:
                 missing.append(_unresolved_source(source_input.label, 0, exc, state))
                 continue
+            # The file the source names, not only one read with it: a .raw path
+            # whose .log is there still names nothing to read signals from.
             named = resolved.raw if resolved.raw is not None else resolved.log
             if named is not None and not await asyncio.to_thread(os.path.isfile, named):
                 missing.append(
                     _unresolved_source(
                         source_input.label,
                         0,
-                        ResultError(f"No result file at {named}"),
+                        ResultFileNotFoundError(f"No result file at {named}"),
                         state,
                     )
                 )
@@ -4362,6 +4365,30 @@ async def _resolve_drive_start(
     return _DriveStart(item, position, intra_item, missing_offset, include, resumed)
 
 
+def recipe_of_request(raw_recipe: Any, labels: Collection[str]) -> Recipe:
+    """``raw_recipe`` as a recipe of a request whose sources carry ``labels``.
+
+    The one answer to whether a recipe can run in a request: its own fields
+    validate, and every label its ``sources`` names is a source's. Both
+    analyze_results, which fails that one recipe, and run_experiments, which
+    refuses an attached block at submission, ask here, so a block accepted at
+    submission is one the analysis after the runs can read. Raises
+    ``ValueError`` (a ``ValidationError`` for the recipe's own fields) or
+    ``TypeError``.
+    """
+    recipe = validate_recipe(raw_recipe)
+    unknown = set(recipe.sources or ()) - set(labels)
+    if unknown:
+        raise ValueError(
+            "recipe sources name unknown labels: "
+            + ", ".join(sorted(unknown))
+            + ". This request's sources are labelled "
+            + ", ".join(sorted(labels))
+            + "; leave sources out to read every source."
+        )
+    return recipe
+
+
 async def _evaluate_analysis_drive(
     args: AnalyzeResultsInput,
     state: SessionState,
@@ -4431,7 +4458,7 @@ async def _evaluate_analysis_drive(
         raw_recipe = work_item["recipe"]
         key = str(raw_recipe.get("key") or f"recipe_{work_item['index']}")
         try:
-            recipe = validate_recipe(raw_recipe)
+            recipe = recipe_of_request(raw_recipe, declared_labels)
         except (ValueError, TypeError) as exc:
             _skip(
                 Failure(
@@ -4439,20 +4466,6 @@ async def _evaluate_analysis_drive(
                     stage="validate",
                     where=f"recipes[{work_item['index']}]",
                     message=validation_error_detail("analyze_results", exc),
-                )
-            )
-            continue
-
-        unknown_labels = set(recipe.sources or ()) - declared_labels
-        if unknown_labels:
-            _skip(
-                Failure(
-                    code="recipe_invalid",
-                    stage="validate",
-                    where=f"recipes[{work_item['index']}]",
-                    message=(
-                        "recipe sources name unknown labels: " + ", ".join(sorted(unknown_labels))
-                    ),
                 )
             )
             continue

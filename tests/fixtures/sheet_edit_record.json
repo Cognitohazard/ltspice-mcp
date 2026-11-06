@@ -73,6 +73,15 @@
    "tests/test_edit_open_window.py::test_a_call_that_leaves_the_sheet_as_it_is_asks_no_window[plot panes only]"
   ]
  },
+ "0b3ad8c69693fe94": {
+  "answer": {
+   "reply": "22103d94e8cf9e94",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[1 k tc=0.001-add_component value]"
+  ]
+ },
  "0bc116483cbc224d": {
   "answer": {
    "reply": "3c20a5b6dcbcd85b",
@@ -100,6 +109,15 @@
    "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[vccs_stage_drawn]"
   ]
  },
+ "0ca955580c72a45b": {
+  "answer": {
+   "reply": "c7acd45ef179948b",
+   "sheet": "687e892a8c5188c9"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[voltage-AC 1-set_component_attribute]"
+  ]
+ },
  "0cc4c501bd638db6": {
   "answer": {
    "reply": "80de6882358070bf",
@@ -116,6 +134,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_reference_mismatch_stays_committed"
+  ]
+ },
+ "0d5691953b76f0ac": {
+  "answer": {
+   "reply": "351e2571e67041ce",
+   "sheet": "db36062f44229577"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[voltage-AC 1-add_component attributes]"
   ]
  },
  "0e14b6b4189e86da": {
@@ -575,6 +602,15 @@
    "tests/test_edit_schematic.py::test_reference_mismatch_is_a_partial_outcome"
   ]
  },
+ "2ae2b3e271d4acd7": {
+  "answer": {
+   "reply": "6118395b2eb07a56",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[10k 2-add_component attributes]"
+  ]
+ },
  "2aefc3ef74390adf": {
   "answer": {
    "reply": "ddf3e4197c80cb76",
@@ -713,6 +749,15 @@
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_ground_inside]"
   ]
  },
+ "39d6536bf437b1da": {
+  "answer": {
+   "reply": "39a9fcf51293ba78",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[10k 2-set_component_attribute]"
+  ]
+ },
  "3b41f2c13f80fac4": {
   "answer": {
    "message": "window_pid goes with open_window='save': it names the window whose copy the user keeps.",
@@ -775,6 +820,15 @@
   },
   "tests": [
    "tests/test_recorded_ltspice_schematics.py::test_an_edit_compared_with_its_export_names_its_unlabelled_nets[ltspice26]"
+  ]
+ },
+ "3ec2fd92b68d7e5d": {
+  "answer": {
+   "reply": "d044d3c35b9faa18",
+   "sheet": "687e892a8c5188c9"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[voltage-AC 1-set_component_value]"
   ]
  },
  "3f3e2d203aa11a5f": {
@@ -853,6 +907,15 @@
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/label_case_one_wire]"
   ]
  },
+ "44936f3231a1fddb": {
+  "answer": {
+   "reply": "1ab22dc4ef3a8d1e",
+   "sheet": "dd78c4a3320c7d3c"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[npn-2N3904 2 off-add_component value]"
+  ]
+ },
  "450b41289b03c9e4": {
   "answer": {
    "reply": "5d45c885e2c06e35",
@@ -860,6 +923,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_dry_run_seam_keeps_full_views_while_mcp_pages_them"
+  ]
+ },
+ "453251bfa44081dc": {
+  "answer": {
+   "reply": "a4da4b8b7180e8c5",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_is_checked_for_the_class_the_parts_own_prefix_gives[source-symbol-as-resistor-set_component_attribute]"
   ]
  },
  "45d74664fb2529fa": {
@@ -881,6 +953,15 @@
    "tests/test_inspect_tools.py::TestAReadDuringAnEdit::test_a_net_trace_shows_the_file"
   ]
  },
+ "46690aeaae2fd6a9": {
+  "answer": {
+   "reply": "dd367a654b2f24ea",
+   "sheet": "687e892a8c5188c9"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_prefix_written_or_cleared_holds_the_parts_value_to_its_new_class[clear-source-symbol-made-a-current-source]"
+  ]
+ },
  "47520cd2f71bcf5f": {
   "answer": {
    "reply": "548241e4d9829d6f",
@@ -888,6 +969,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_a_move_reply_says_what_moved"
+  ]
+ },
+ "48934a41d8835fa0": {
+  "answer": {
+   "reply": "4a010a91c959ccb0",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_prefix_written_or_cleared_holds_the_parts_value_to_its_new_class[clear-resistor-symbol-made-a-source]"
   ]
  },
  "4898be3a9e58c853": {
@@ -907,6 +997,15 @@
   },
   "tests": [
    "tests/test_set_plot_panes.py::test_no_panes_removes_the_analysis_and_then_the_file"
+  ]
+ },
+ "4a3a09b8a9f5ddf2": {
+  "answer": {
+   "reply": "6118395b2eb07a56",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[10k 2-add_component value]"
   ]
  },
  "4ae931fac1e49df3": {
@@ -935,6 +1034,15 @@
   "tests": [
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/two_labels_zeta_first]",
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/two_labels_zeta_first]"
+  ]
+ },
+ "4ba4a1b7ba08d10e": {
+  "answer": {
+   "reply": "ac0e0d61d0b2943f",
+   "sheet": "1104bfa0300d56eb"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_prefix_written_or_cleared_holds_the_parts_value_to_its_new_class[clear-source-symbol-made-a-current-source]"
   ]
  },
  "4d36fd38babe0985": {
@@ -975,6 +1083,15 @@
    "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[rectifier_labelled]"
   ]
  },
+ "50713347ba1b3a02": {
+  "answer": {
+   "reply": "1ab22dc4ef3a8d1e",
+   "sheet": "dd78c4a3320c7d3c"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[npn-2N3904 2 off-add_component attributes]"
+  ]
+ },
  "513ae433478091b9": {
   "tests": [
    "tests/test_edit_open_window.py::test_a_window_that_does_not_save_is_reported",
@@ -995,6 +1112,24 @@
    "tests/test_circuit_asc.py::TestSheetLocalSymbols::test_a_blank_build_finds_symbols_beside_its_target"
   ]
  },
+ "52e914d4dfae49e0": {
+  "answer": {
+   "reply": "22103d94e8cf9e94",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[1 k tc=0.001-add_component attributes]"
+  ]
+ },
+ "5379e1ea03866cbb": {
+  "answer": {
+   "reply": "a4f44e0e8b076754",
+   "sheet": "cad791b0bdbfb39d"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[npn-2N3904 2 off-set_component_value]"
+  ]
+ },
  "539e8d540060bbd6": {
   "answer": {
    "reply": "6133d7b61e9ebb18",
@@ -1011,6 +1146,15 @@
   },
   "tests": [
    "tests/test_set_plot_panes.py::test_no_panes_removes_the_analysis_and_then_the_file"
+  ]
+ },
+ "5706312ca4789315": {
+  "answer": {
+   "reply": "351e2571e67041ce",
+   "sheet": "19574e4df838ead1"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[voltage-PULSE(0 1 0 1n 1n 5n 10n)-add_component attributes]"
   ]
  },
  "57273bac973e2790": {
@@ -1031,6 +1175,15 @@
   "tests": [
    "tests/test_set_plot_panes.py::test_the_replaced_panes_put_back_undo_the_op[ltspice17-plot/math_grid.plt]",
    "tests/test_set_plot_panes.py::test_the_replaced_panes_put_back_undo_the_op[ltspice26-plot/math_grid.plt]"
+  ]
+ },
+ "57835fb3fc029907": {
+  "answer": {
+   "reply": "d5bf9a40c3ca49f3",
+   "sheet": "b4d06c1066053670"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_prefix_written_or_cleared_holds_the_parts_value_to_its_new_class[clear-resistor-symbol-made-a-source]"
   ]
  },
  "584820d522b4ca65": {
@@ -1062,6 +1215,24 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_empty_ops_with_views_reads_the_sheet"
+  ]
+ },
+ "5c773e098663d5fa": {
+  "answer": {
+   "reply": "c7acd45ef179948b",
+   "sheet": "b4d06c1066053670"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_is_checked_for_the_class_the_parts_own_prefix_gives[resistor-symbol-as-source-set_component_attribute]"
+  ]
+ },
+ "5cd6ce87f1759133": {
+  "answer": {
+   "reply": "351e2571e67041ce",
+   "sheet": "db36062f44229577"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[voltage-AC 1-add_component value]"
   ]
  },
  "5ecab07c8c2117c5": {
@@ -1150,6 +1321,15 @@
    "tests/test_edit_schematic.py::test_bad_op_aborts_transaction_nothing_written"
   ]
  },
+ "636be71e0cbc6d2c": {
+  "answer": {
+   "reply": "1d06c2197b7f7e3e",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[1 k tc=0.001-set_component_value]"
+  ]
+ },
  "63b5ebfa27f92415": {
   "answer": {
    "reply": "be0a940a87dd33ca",
@@ -1158,6 +1338,16 @@
   "tests": [
    "tests/test_edit_schematic.py::test_a_wire_a_later_op_removes_is_not_said_to_hang[move_component]",
    "tests/test_edit_schematic.py::test_a_wire_a_later_op_removes_is_not_said_to_hang[remove_component]"
+  ]
+ },
+ "641d3c5fb6549dc7": {
+  "answer": {
+   "reply": "ac0e0d61d0b2943f",
+   "sheet": "687e892a8c5188c9"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_prefix_written_or_cleared_holds_the_parts_value_to_its_new_class[set-source-symbol-as-current-source]",
+   "tests/test_edit_schematic.py::test_a_prefix_written_or_cleared_holds_the_parts_value_to_its_new_class[set-source-symbol-as-resistor]"
   ]
  },
  "648ac1dee9da05f4": {
@@ -1270,6 +1460,15 @@
    "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[common_source_drawn]"
   ]
  },
+ "6c50bf0e27d85246": {
+  "answer": {
+   "reply": "d99bf45b59266c65",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_prefix_written_or_cleared_holds_the_parts_value_to_its_new_class[set-source-symbol-as-resistor]"
+  ]
+ },
  "6c544a9bca78d10e": {
   "answer": {
    "reply": "c6959b2f48801107",
@@ -1350,6 +1549,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_missing_expected_sha_refusal_hands_back_the_current_digest"
+  ]
+ },
+ "715274c803fdb722": {
+  "answer": {
+   "reply": "7bbd6e9538b2b1fd",
+   "sheet": "4cc02c289c246bcd"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_is_checked_for_the_class_the_parts_own_prefix_gives[resistor-symbol-as-source-add_component attributes]"
   ]
  },
  "721e38944487c29c": {
@@ -1608,6 +1816,15 @@
    "tests/test_set_plot_panes.py::test_panes_the_file_already_holds_are_not_written_again"
   ]
  },
+ "8303cfdfc0afe2ff": {
+  "answer": {
+   "reply": "8b57631c7a125408",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[1 k-add_component value]"
+  ]
+ },
  "830e9f0ff13442c3": {
   "answer": {
    "message": "invalid view_cursors.label_only_pins: malformed page cursor: 'garbage'",
@@ -1760,6 +1977,33 @@
   },
   "tests": [
    "tests/test_edit_open_window.py::test_a_save_is_a_call_of_its_own[other2]"
+  ]
+ },
+ "8fecd6ff853a4d79": {
+  "answer": {
+   "reply": "14b128387c36c08c",
+   "sheet": "1180946a677f53bf"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[voltage-PULSE(0 1 0 1n 1n 5n 10n)-set_component_value]"
+  ]
+ },
+ "90da447427e60f5e": {
+  "answer": {
+   "reply": "7d6cb600cebf8118",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_prefix_written_or_cleared_holds_the_parts_value_to_its_new_class[clear-resistor-symbol-made-a-source]"
+  ]
+ },
+ "92d86276a120bbfb": {
+  "answer": {
+   "reply": "a73bb7954db5d2a8",
+   "sheet": "1d02f67029a3ec2b"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_prefix_written_or_cleared_holds_the_parts_value_to_its_new_class[set-source-symbol-as-current-source]"
   ]
  },
  "9397fc8deaa43c75": {
@@ -1919,6 +2163,15 @@
    "tests/test_edit_schematic.py::test_a_finding_the_batch_names_but_leaves_as_it_was_is_still_the_sheets[a_new_value_on_the_part_with_floating_pins]"
   ]
  },
+ "9cae6a769da8674f": {
+  "answer": {
+   "reply": "292e97934f5365af",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_is_checked_for_the_class_the_parts_own_prefix_gives[source-symbol-as-resistor-add_component attributes]"
+  ]
+ },
  "9e2161b1929171b5": {
   "answer": {
    "reply": "730df546e0c878f9",
@@ -2000,6 +2253,16 @@
    "tests/test_edit_schematic.py::test_a_new_value_on_a_text_that_overlapped_before_is_not_the_batchs"
   ]
  },
+ "a2dea32fae1ad83e": {
+  "answer": {
+   "reply": "ac0e0d61d0b2943f",
+   "sheet": "9c100ce020d7c08f"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_is_checked_for_the_class_the_parts_own_prefix_gives[source-symbol-as-resistor-set_component_attribute]",
+   "tests/test_edit_schematic.py::test_a_value_is_checked_for_the_class_the_parts_own_prefix_gives[source-symbol-as-resistor-set_component_value]"
+  ]
+ },
  "a33742ef33aad2cd": {
   "answer": {
    "reply": "0b72618f638e4600",
@@ -2026,6 +2289,15 @@
   "tests": [
    "tests/test_recorded_ltspice_schematics.py::test_a_rename_ends_a_reference_two_parts_share_in_another_case[ltspice17]",
    "tests/test_recorded_ltspice_schematics.py::test_a_rename_ends_a_reference_two_parts_share_in_another_case[ltspice26]"
+  ]
+ },
+ "a418c7cd44dbaed5": {
+  "answer": {
+   "reply": "292e97934f5365af",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_is_checked_for_the_class_the_parts_own_prefix_gives[source-symbol-as-resistor-add_component value]"
   ]
  },
  "a497cd44b7aa3d36": {
@@ -2064,6 +2336,15 @@
    "tests/test_edit_schematic.py::TestDataFlagPreservation::test_a_blank_base_starts_without_the_targets_data_flags"
   ]
  },
+ "a5f17f9b7b2fcd48": {
+  "answer": {
+   "reply": "f4fe737ca7bbf325",
+   "sheet": "687e892a8c5188c9"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_prefix_written_or_cleared_holds_the_parts_value_to_its_new_class[clear-source-symbol-made-a-current-source]"
+  ]
+ },
  "a715ba8289da03cd": {
   "answer": {
    "reply": "275be6f7003de360",
@@ -2081,6 +2362,24 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_dry_run_writes_nothing"
+  ]
+ },
+ "a813e38cd4a3563d": {
+  "answer": {
+   "reply": "f4fe737ca7bbf325",
+   "sheet": "1d02f67029a3ec2b"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_prefix_written_or_cleared_holds_the_parts_value_to_its_new_class[set-source-symbol-as-current-source]"
+  ]
+ },
+ "a81c8361bec3f628": {
+  "answer": {
+   "reply": "7bbd6e9538b2b1fd",
+   "sheet": "4cc02c289c246bcd"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_is_checked_for_the_class_the_parts_own_prefix_gives[resistor-symbol-as-source-add_component value]"
   ]
  },
  "a8858bc369732461": {
@@ -2110,6 +2409,15 @@
    "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[two_stage_opamp_labelled]"
   ]
  },
+ "a991f76114b06e8d": {
+  "answer": {
+   "reply": "d444c08849a01497",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_is_checked_for_the_class_the_parts_own_prefix_gives[source-symbol-as-resistor-set_component_value]"
+  ]
+ },
  "a9bd3c737f392b88": {
   "answer": {
    "reply": "251eefe1ec0613b6",
@@ -2127,6 +2435,15 @@
    "tests/test_edit_open_window.py::test_the_copy_the_user_chose_is_saved_and_the_other_window_is_handed_it"
   ],
   "varies": true
+ },
+ "abfe9bf99f931625": {
+  "answer": {
+   "reply": "d044d3c35b9faa18",
+   "sheet": "b4d06c1066053670"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_is_checked_for_the_class_the_parts_own_prefix_gives[resistor-symbol-as-source-set_component_value]"
+  ]
  },
  "ac2daaf8e59f8bb6": {
   "answer": {
@@ -2153,6 +2470,18 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_first_edit_commits_with_the_digest_inspect_reported"
+  ]
+ },
+ "ad8051471be4dd5a": {
+  "answer": {
+   "reply": "ac0e0d61d0b2943f",
+   "sheet": "c0063fde4aa98d23"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[voltage-AC 1-set_component_attribute]",
+   "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[voltage-AC 1-set_component_value]",
+   "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[voltage-PULSE(0 1 0 1n 1n 5n 10n)-set_component_attribute]",
+   "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[voltage-PULSE(0 1 0 1n 1n 5n 10n)-set_component_value]"
   ]
  },
  "ade6f222eb6bdc68": {
@@ -2209,6 +2538,35 @@
    "tests/test_edit_schematic.py::test_a_value_set_on_several_ops_is_said_once_of_the_sheet"
   ]
  },
+ "b491bac4539efc44": {
+  "answer": {
+   "reply": "0461656b5c5d1ab6",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[1 k-set_component_attribute]"
+  ]
+ },
+ "b4a8bc3d762c3f68": {
+  "answer": {
+   "reply": "d5bf9a40c3ca49f3",
+   "sheet": "658f1ed3eda906b8"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_is_checked_for_the_class_the_parts_own_prefix_gives[resistor-symbol-as-source-set_component_attribute]",
+   "tests/test_edit_schematic.py::test_a_value_is_checked_for_the_class_the_parts_own_prefix_gives[resistor-symbol-as-source-set_component_value]"
+  ]
+ },
+ "b4aa88448c3c3e06": {
+  "answer": {
+   "reply": "cf100e865ac19edf",
+   "sheet": "d9f7dcc1a8cc6399"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[npn-2N3904 2 off-set_component_attribute]",
+   "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[npn-2N3904 2 off-set_component_value]"
+  ]
+ },
  "b56a57e011555dda": {
   "answer": {
    "reply": "2ed4bd8e66a33e7a",
@@ -2255,6 +2613,15 @@
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/label_case_second_name]"
   ]
  },
+ "bdd80098bbb738e3": {
+  "answer": {
+   "reply": "4a010a91c959ccb0",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_prefix_written_or_cleared_holds_the_parts_value_to_its_new_class[set-source-symbol-as-resistor]"
+  ]
+ },
  "bde7daa060e2a966": {
   "answer": {
    "reply": "86053d7c7dfa7ae5",
@@ -2299,6 +2666,20 @@
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_bare]"
   ]
  },
+ "c0032d54959c9d09": {
+  "answer": {
+   "reply": "d5bf9a40c3ca49f3",
+   "sheet": "06ac18440e070874"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[1 k tc=0.001-set_component_attribute]",
+   "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[1 k tc=0.001-set_component_value]",
+   "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[1 k-set_component_attribute]",
+   "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[1 k-set_component_value]",
+   "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[10k 2-set_component_attribute]",
+   "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[10k 2-set_component_value]"
+  ]
+ },
  "c010c4914ab30191": {
   "answer": {
    "reply": "fb02b1f344cc4f71",
@@ -2315,6 +2696,30 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_post_commit_reference_error_returns_committed_envelope"
+  ]
+ },
+ "c16810207025819d": {
+  "answer": {
+   "reply": "176502c6b92a4daf",
+   "sheet": "55fb61d5c557bb76"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[1 k tc=0.001-add_component attributes]",
+   "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[1 k tc=0.001-add_component value]",
+   "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[1 k-add_component attributes]",
+   "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[1 k-add_component value]",
+   "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[10k 2-add_component attributes]",
+   "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[10k 2-add_component value]",
+   "tests/test_edit_schematic.py::test_a_value_is_checked_for_the_class_the_parts_own_prefix_gives[resistor-symbol-as-source-add_component attributes]",
+   "tests/test_edit_schematic.py::test_a_value_is_checked_for_the_class_the_parts_own_prefix_gives[resistor-symbol-as-source-add_component value]",
+   "tests/test_edit_schematic.py::test_a_value_is_checked_for_the_class_the_parts_own_prefix_gives[source-symbol-as-resistor-add_component attributes]",
+   "tests/test_edit_schematic.py::test_a_value_is_checked_for_the_class_the_parts_own_prefix_gives[source-symbol-as-resistor-add_component value]",
+   "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[npn-2N3904 2 off-add_component attributes]",
+   "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[npn-2N3904 2 off-add_component value]",
+   "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[voltage-AC 1-add_component attributes]",
+   "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[voltage-AC 1-add_component value]",
+   "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[voltage-PULSE(0 1 0 1n 1n 5n 10n)-add_component attributes]",
+   "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[voltage-PULSE(0 1 0 1n 1n 5n 10n)-add_component value]"
   ]
  },
  "c1981f3e0e08514d": {
@@ -2562,6 +2967,15 @@
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/wire_ends_meeting_on_wire_interior]"
   ]
  },
+ "d7e720cc3dccb643": {
+  "answer": {
+   "reply": "733e8a9c61bb1d21",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[1 k-set_component_value]"
+  ]
+ },
  "daf6cfa941c166e1": {
   "answer": {
    "message": "invalid view_cursors.preexisting: malformed page cursor: 'tampered'",
@@ -2665,6 +3079,15 @@
    "tests/test_edit_schematic.py::TestPathsThatLeaveTheSheetAsItIs::test_the_sheet_keeps_its_bytes[dry_run]"
   ]
  },
+ "e4f3c2c11c240112": {
+  "answer": {
+   "reply": "82a305ed9398cbf7",
+   "sheet": "cad791b0bdbfb39d"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[npn-2N3904 2 off-set_component_attribute]"
+  ]
+ },
  "e523464bdf8e14d3": {
   "answer": {
    "reply": "5dbfbd1cdb138e47",
@@ -2746,6 +3169,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_reference_anchors_are_honoured"
+  ]
+ },
+ "ebe7be52d41b87ab": {
+  "answer": {
+   "reply": "71b23517c068d3ed",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[1 k tc=0.001-set_component_attribute]"
   ]
  },
  "ec4c6a7a09e4f09c": {
@@ -2838,6 +3270,15 @@
    "tests/test_edit_schematic.py::test_label_only_pins_are_scoped_and_reconcile_with_the_sheet_totals"
   ]
  },
+ "f4fa1ef44948236a": {
+  "answer": {
+   "reply": "8b57631c7a125408",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[1 k-add_component attributes]"
+  ]
+ },
  "f57a8761b06d088e": {
   "answer": {
    "reply": "2699bf2b1e53a5d4",
@@ -2863,6 +3304,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_a_route_already_drawn_through_a_part_is_not_the_batchs"
+  ]
+ },
+ "f7900d27e0308298": {
+  "answer": {
+   "reply": "3785c0ffb2dfd684",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[10k 2-set_component_value]"
   ]
  },
  "f7e0ee4d22eead91": {
@@ -2992,6 +3442,24 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_dry_run_surfaces_all_op_failures"
+  ]
+ },
+ "ff5c1bb82e1f824c": {
+  "answer": {
+   "reply": "2bb7a2081b99eaf2",
+   "sheet": "1180946a677f53bf"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[voltage-PULSE(0 1 0 1n 1n 5n 10n)-set_component_attribute]"
+  ]
+ },
+ "ffa010f1f58ba95b": {
+  "answer": {
+   "reply": "351e2571e67041ce",
+   "sheet": "19574e4df838ead1"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[voltage-PULSE(0 1 0 1n 1n 5n 10n)-add_component value]"
   ]
  }
 }

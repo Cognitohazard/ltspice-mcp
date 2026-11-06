@@ -26,6 +26,8 @@ from ltspice_mcp.lib.spice_lex import (
     iter_body,
     iter_by_kind,
     lex,
+    lex_deck,
+    lex_for_edit,
     tokenize_body,
 )
 from ltspice_mcp.lib.spice_lex_views import (
@@ -373,6 +375,16 @@ class TestOps:
         out = emit(cards)
         assert "1k.MODEL" not in out
         assert "1k\n.MODEL" in out
+
+    def test_injected_lines_take_the_files_line_break(self) -> None:
+        """A block lexed from text with LF line breaks lands in a CRLF file with
+        CRLF ones, each of its lines and a predecessor missing one alike."""
+        from ltspice_mcp.lib.spice_lex_ops import inject_cards_before_end
+
+        cards = lex("* t\r\nR1 a b 1k\r\n.END\r\n").cards
+        cards[1].raw_lines = ["R1 a b 1k"]  # strip trailing newline
+        inject_cards_before_end(cards, lex(".SUBCKT S a\nR2 a 0 1\n.ENDS S").cards)
+        assert emit(cards) == "* t\r\nR1 a b 1k\r\n.SUBCKT S a\r\nR2 a 0 1\r\n.ENDS S\r\n.END\r\n"
 
     def test_rename_subckt_atomic(self) -> None:
         from ltspice_mcp.lib.spice_lex_ops import rename_subckt
@@ -821,6 +833,34 @@ class TestLexAndEmit:
         last = result.cards[-1]
         assert last.kind == "instance"
         assert last.trailing is True
+
+    def test_only_the_first_top_level_end_ends_the_deck(self) -> None:
+        """A second ``.END`` is a card after the first, and trailing like any
+        other; the first is not."""
+        result = lex("R1 a b 1k\n.END\nR2 c d 2k\n.END\n")
+        assert [(card.kind, card.trailing) for card in result.cards] == [
+            ("instance", False),
+            ("end", False),
+            ("instance", True),
+            ("end", True),
+        ]
+
+    @pytest.mark.parametrize("deck", [True, False], ids=["deck", "included-file"])
+    def test_an_edit_reads_the_cards_the_deck_reading_reads(self, deck: bool) -> None:
+        """``lex_for_edit`` offers an edit the cards ``lex_deck`` reads, with
+        ``title=deck``: no title of a deck, and no card after a file's
+        ``.END``. An included file's edit read ``R6`` after its ``.END``,
+        which ``lex_deck(title=False)`` leaves out."""
+        text = "R4 a 0 1k\nR5 a 0 1k\n.end\nR6 a 0 1k\n.include more.inc\n"
+        edit = lex_for_edit(text, deck=deck)
+        read = lex_deck(text, title=deck).cards
+        assert [(card.body, card.line_start) for card in edit.read] == [
+            (card.body, card.line_start) for card in read
+        ]
+        assert [card.name for card in edit.read if card.kind == "instance"] == (
+            ["R5"] if deck else ["R4", "R5"]
+        )
+        assert emit(edit.cards) == text
 
     def test_meas_classified_separately(self) -> None:
         text = ".MEAS AC fc WHEN mag(V(out))=0.7\n"

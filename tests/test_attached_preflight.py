@@ -11,18 +11,21 @@ too; every other field the block accepts runs.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
 import pytest
 from pydantic import ValidationError
 
+from ltspice_mcp.api import ApiCallError
 from ltspice_mcp.server import call_tool
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze, experiments
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
 from tests.conftest import (
     LIVENESS_S,
+    SyncApi,
     call_tool_params,
     fake_request_context,
     fake_simulator,
@@ -37,7 +40,16 @@ _INVALID_RECIPES = [
         {"key": "k", "metric": "signal_stats", "signal": "V(out)", "not_a_field": 1},
         id="unknown-field",
     ),
+    # A label no source of the request carries: analyze_results' sources here
+    # are labelled 'rc', the attached block's one source 'experiment'.
+    pytest.param(
+        {"key": "k", "metric": "signal_stats", "signal": "V(out)", "sources": ["main"]},
+        id="unknown-source-label",
+    ),
 ]
+
+#: The label the attached block's one source, the experiment itself, carries.
+_EXPERIMENT_LABEL = "experiment"
 
 
 def _deck(work_dir: Path) -> Path:
@@ -90,6 +102,47 @@ async def test_an_invalid_recipe_is_reported_as_analyze_results_reports_it(
     assert submissions == []
 
 
+def test_an_unknown_source_label_is_refused_by_every_path_that_takes_the_block(
+    state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The MCP call and the Python API both refuse the block before a case runs,
+    as analyze_results refuses the recipe, and the refusal names the label the
+    block's source does carry."""
+    recipe = {"key": "k", "metric": "signal_stats", "signal": "V(out)", "sources": ["main"]}
+    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+    api = SyncApi(state_with_sim)
+    analyzed = api.analyze_results(sources=[{"path": str(raw), "label": "rc"}], recipes=[recipe])
+    (failure,) = analyzed["failures"]
+    assert (failure["code"], failure["stage"]) == ("recipe_invalid", "validate")
+    assert "main" in failure["message"] and "rc" in failure["message"]
+
+    submissions: list[str] = []
+    fake_simulator(monkeypatch, submissions)
+    deck = _deck(work_dir)
+    arguments = {"circuits": [{"path": str(deck), "id": "dut"}], "analyze": {"recipes": [recipe]}}
+    errors: dict[str, dict[str, Any]] = {}
+
+    dispatched = asyncio.run(
+        call_tool(
+            fake_request_context(state_with_sim),
+            call_tool_params("run_experiments", {**arguments, "request_id": "label-mcp"}),
+        )
+    )
+    assert dispatched.is_error and dispatched.structured_content is not None
+    errors["mcp"] = dispatched.structured_content["error"]
+
+    with pytest.raises(ApiCallError) as refused:
+        # Not waited on: a block let through is a job this test would wait for.
+        api.run_experiments(**arguments, request_id="label-api", wait=False)
+    errors["api"] = refused.value.payload["error"]
+
+    for door, error in errors.items():
+        assert (error["code"], error["stage"]) == ("recipe_invalid", "validate"), door
+        assert error["commit_state"] == "not_started", door
+        assert "main" in error["message"] and _EXPERIMENT_LABEL in error["message"], door
+    assert submissions == []
+
+
 async def test_a_per_run_cursor_is_refused_at_submission(
     state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -126,7 +179,8 @@ async def test_every_field_the_block_accepts_runs_after_the_runs(
         {
             "recipes": [
                 {"key": "k", "metric": "signal_stats", "signal": "V(out)"},
-                {"key": "m", "metric": "summary"},
+                # The label submission accepts is the one the runs are read under.
+                {"key": "m", "metric": "summary", "sources": [_EXPERIMENT_LABEL]},
             ],
             "group_by": ["circuit"],
             "all_steps": True,

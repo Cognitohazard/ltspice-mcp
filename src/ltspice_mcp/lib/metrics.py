@@ -693,14 +693,17 @@ def meas_kinds_from_netlist(netlist: Path | None) -> dict[str, str]:
     ``"when"`` (bare WHEN — value is the constant trigger level, the crossing
     in ``at`` is the payload) vs ``"value"`` (everything else, including
     FIND...WHEN, whose FIND result is the payload). Names defined inside
-    includes stay absent and fall back to the heuristic.
+    includes stay absent and fall back to the heuristic. The deck's cards are
+    the ones the simulator reads (``spice_lex.lex_deck``): a ``.MEAS`` in its
+    title or after ``.END`` is never measured.
     """
     if netlist is None:
         return {}
     try:
-        from ltspice_mcp.lib.spice_lex import cards_from_path
+        from ltspice_mcp.lib.encoding import read_spice_text
+        from ltspice_mcp.lib.spice_lex import lex_deck
 
-        cards = cards_from_path(netlist).cards
+        cards = lex_deck(read_spice_text(netlist)).cards
     except Exception:
         return {}
     kinds: dict[str, str] = {}
@@ -892,13 +895,17 @@ def noise_input_source_unit(netlist: Path | None) -> str | None:
     more than one ``.NOISE`` directive that don't agree on the source type, or
     an unrecognized source prefix: the caller then falls back to the existing
     trace-derived unit rather than guessing which directive produced this raw.
+    A ``.NOISE`` in the deck's title or after ``.END`` is not one the simulator
+    reads (``spice_lex.lex_deck``), so it neither answers nor makes the answer
+    ambiguous.
     """
     if netlist is None:
         return None
     try:
-        from ltspice_mcp.lib.spice_lex import cards_from_path
+        from ltspice_mcp.lib.encoding import read_spice_text
+        from ltspice_mcp.lib.spice_lex import lex_deck
 
-        cards = cards_from_path(netlist).cards
+        cards = lex_deck(read_spice_text(netlist)).cards
     except Exception:
         return None
     units: set[str | None] = set()

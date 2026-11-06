@@ -216,7 +216,7 @@ def test_detach_must_be_a_bool(state_no_sim: SessionState) -> None:
     api = SyncApi(state_no_sim)
     # Cast away the annotation: the point is what a caller who ignored it gets.
     detach = cast(bool, "yes")
-    with pytest.raises(TypeError, match="detach must be a bool"):
+    with pytest.raises(ApiValidationError, match="detach must be a bool"):
         api.run_experiments(detach=detach, request_id="never", circuits=[{"path": "d.cir"}])
 
 

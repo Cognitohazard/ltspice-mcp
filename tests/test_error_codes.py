@@ -609,6 +609,7 @@ FROZEN_ERROR_CODES = (
     "recovery_startup_unsupported",
     "recovery_syntax_unsupported",
     "request_gate_busy",
+    "result_file_not_found",
     "result_unreadable",
     "results_missing",
     "results_not_beside_sheet",

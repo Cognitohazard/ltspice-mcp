@@ -13,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from ltspice_mcp.lib.netlist_graph import canon_ref
-from ltspice_mcp.lib.spice_lex import iter_by_kind, lex
+from ltspice_mcp.lib.spice_lex import iter_by_kind, lex_deck
 from ltspice_mcp.lib.spice_lex_views import read_instance
 
 
@@ -45,7 +45,9 @@ def exported_pin_nodes(
     wanted = {exported_name(reference, letter) for reference, letter, _ in parts}
     cards = {}
     # Top-level cards only: a child sheet's parts are inside .subckt bodies.
-    for card in iter_by_kind(lex(export_text).cards, "instance", scope=()):
+    # The cards LTspice reads, as every reader of a deck has them: an export's
+    # first line is its title.
+    for card in iter_by_kind(lex_deck(export_text).cards, "instance", scope=()):
         if card.name and canon_ref(card.name) in wanted and (line := read_instance(card)):
             cards[canon_ref(card.name)] = line.nodes
     nodes: dict[tuple[str, str], str] = {}

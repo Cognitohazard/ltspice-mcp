@@ -123,6 +123,20 @@ the field table of each branch the error names, and, for a field this
 operation does not accept, the operations that do. It is not a raw
 `pydantic.ValidationError`, which renders differently.
 
+Every other argument a method takes but cannot use raises `ApiValidationError`
+too: both spellings of one argument (`wait`'s `timeout_s` and `timeout`, a
+result read's `path` and its older keyword), a value `wait` cannot use, a
+`wait` or `detach` control that is not a bool, and a value a detached call
+cannot hand to its owner as given: one that is neither JSON, a path nor a
+model, a dictionary key that is not a string (JSON would write a number's as
+a string, a key the call never had), and a value that holds itself. A
+keyword a method's signature does not name raises
+Python's own `TypeError`, as for the constructor; the six operations take any
+keyword and refuse one they do not accept with `ApiValidationError`. The
+catalogue lookups `reference()` and `guide()` run no call and raise Python's
+own errors: a `ValueError` for a name they do not have, and `reference()` a
+`TypeError` for an operation name that is not a string.
+
 ```python
 api.run_experiments(**args)   # two-phase; see below
 api.jobs(**args)
@@ -189,8 +203,9 @@ successive `jobs(wait)` calls:
   raises `ApiInterrupted` (a `KeyboardInterrupt`) **that contains the receipt
   and job id**, so the caller keeps the handle.
 - `api.wait(job_id, timeout_s=None)` waits for a job. The older spelling
-  `timeout=` is still accepted. On timeout it returns the current `jobs(wait)`
-  snapshot with `timed_out: true` and leaves the job running.
+  `timeout=` is still accepted; giving both raises `ApiValidationError`. On
+  timeout it returns the current `jobs(wait)` snapshot with `timed_out: true`
+  and leaves the job running.
 - `wait=False` returns the submission receipt immediately, with the
   `process_owned_job` observation.
 - `wait=False, detach=True` is the only combination that does not submit
@@ -550,8 +565,9 @@ For a run with one value per `.meas`, such as one case of a sweep, the value
 is `row["value"]["measured"][name]`. It is null where the log holds no number
 for that name, and the name is then listed in
 `row["value"]["failed_measurements"]`. Where the log printed something other
-than a number for it (a WHEN threshold written as a parameter or an
-expression), `row["value"]["unreadable"][name]` gives the log line and the
+than a number for it (a WHEN threshold written as a parameter, an
+expression or, on LTspice 26, a braced expression),
+`row["value"]["unreadable"][name]` gives the log line and the
 reason, as `measurements()` does on the entry; only that name fails. Any
 crossing or `AT` point the log
 printed is under `row["value"]["at"][name]`. The per-name `stats` block is left
@@ -572,8 +588,9 @@ The six operations take exactly what their tools take, so an argument a tool
 renamed is refused there with the name that replaced it. The helpers keep an
 older keyword they had, as `wait` keeps `timeout`: `load_raw` takes
 `raw_path`, and `measurements` and `device_op_points` take `log_path`, in
-place of `path`; giving both is refused. A malformed or missing RAW fails
-only the RAW recipes. A result set's manifest records, for each source,
+place of `path`; giving both raises `ApiValidationError`. A malformed or
+missing RAW fails only the RAW recipes. A result set's manifest records, for
+each source,
 whether its RAW, log and console files existed and a hash of each one's
 content, so an empty file is distinguishable from a missing one. A new call
 reads a changed source again. A continuation (`continue` with a
