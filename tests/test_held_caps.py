@@ -2,23 +2,23 @@
 
 A cap bounds what one call costs, so asking for more of the same thing gets
 the most the call will serve and a note naming the cap. The hygiene check
-holds every upper bound on a tool-input number to that rule, except the bounds
-on what a value can mean; the rest send a value over each cap through its tool
-and read the note.
+finds every tool-input field that refuses a value above a bound (``le=`` or
+``lt=``, on the field or on the items it holds) and requires each to be a bound
+on what the value means rather than on what the call costs; the rest send a
+value over each cap through its tool and read the note.
 """
 
 from __future__ import annotations
 
 import math
 import shutil
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Annotated, Any, get_args, get_origin
 
 import annotated_types
 import numpy as np
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pydantic.fields import FieldInfo
 
 from ltspice_mcp import api
@@ -32,31 +32,15 @@ from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_result
 from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
 from tests.conftest import FIXTURES_DIR, needs_raster, ngspice_binary_raw
 
-#: Upper bounds that refuse a larger value, each with why: a bound on what the
-#: value can mean, where a larger one is not more of the same thing.
-_DOMAIN_BOUNDS: dict[tuple[str, str], str] = {
-    ("ExperimentExecution", "simulator_seed"): (
-        "ngspice's seed range: a larger number is no seed ngspice can take"
+#: The input fields that refuse a value above their bound, each with why the
+#: bound is on what the value means, so holding it would answer another question.
+_REFUSING_ALLOWED: dict[str, str] = {
+    "SignalStatsRecipe.quantiles": "a quantile is a fraction of the samples, at most 1",
+    "PdkNativeVariation.seed": "the largest root seed the sampler takes; another is another sample",
+    "ExperimentExecution.simulator_seed": (
+        "the largest seed ngspice takes; another seed is another run"
     ),
-    ("PdkNativeVariation", "seed"): "a 64-bit seed: a larger number is no seed",
-    ("SignalStatsRecipe", "quantiles"): "a quantile is a fraction of the window, at most 1",
 }
-
-
-def _upper_bounds(annotation: Any) -> Iterator[Any]:
-    """The ``le``/``lt`` markers inside a field's annotation: on a list's items
-    as well as on the field itself."""
-    if get_origin(annotation) is Annotated:
-        base, *metadata = get_args(annotation)
-        for marker in metadata:
-            # A Field(...) in the annotation keeps its bounds in its own metadata.
-            for inner in marker.metadata if isinstance(marker, FieldInfo) else [marker]:
-                if isinstance(inner, (annotated_types.Le, annotated_types.Lt)):
-                    yield inner
-        yield from _upper_bounds(base)
-        return
-    for member in get_args(annotation):
-        yield from _upper_bounds(member)
 
 
 def _every_input_model() -> set[type[BaseModel]]:
@@ -79,24 +63,63 @@ def _every_input_model() -> set[type[BaseModel]]:
     return seen
 
 
-def test_no_capped_argument_refuses_a_value_above_its_cap() -> None:
-    models = _every_input_model()
-    bounded = {
-        (model.__name__, name)
+def _constraints(annotation: Any) -> list[Any]:
+    """The constraints ``Annotated`` puts anywhere in ``annotation``: on it, on a
+    union's member, on a list's items."""
+    found: list[Any] = []
+    if get_origin(annotation) is Annotated:
+        for meta in annotation.__metadata__:
+            found += meta.metadata if isinstance(meta, FieldInfo) else [meta]
+    for argument in get_args(annotation):
+        found += _constraints(argument)
+    return found
+
+
+def _refusing_above(models: set[type[BaseModel]]) -> set[str]:
+    """``Model.field`` for every field of ``models`` that refuses a value above
+    a bound (``le=`` or ``lt=``), on the field itself or on what it holds."""
+    return {
+        f"{model.__name__}.{name}"
         for model in models
         for name, field in model.model_fields.items()
-        if any(isinstance(m, (annotated_types.Le, annotated_types.Lt)) for m in field.metadata)
-        or any(True for _ in _upper_bounds(field.annotation))
+        if any(
+            isinstance(meta, annotated_types.Le | annotated_types.Lt)
+            for meta in [*field.metadata, *_constraints(field.annotation)]
+        )
     }
-    assert set(_DOMAIN_BOUNDS) <= bounded, (
-        "these listed bounds are gone; drop them from _DOMAIN_BOUNDS: "
-        + ", ".join(sorted(".".join(key) for key in set(_DOMAIN_BOUNDS) - bounded))
-    )
-    refusing = sorted(".".join(key) for key in bounded - set(_DOMAIN_BOUNDS))
-    assert not refusing, (
+
+
+def test_no_capped_argument_refuses_a_value_above_its_cap() -> None:
+    models = _every_input_model()
+    assert len(models) >= 50, "the walk found too few input models to be checking anything"
+    refusing = _refusing_above(models)
+    unexplained = sorted(refusing - set(_REFUSING_ALLOWED))
+    assert not unexplained, (
         "these refuse a value above their bound instead of holding it with a note "
-        "(NotedModel.hold_to_cap, or held_to_cap where the value is read): " + ", ".join(refusing)
+        "(NotedModel.hold_to_cap), and are not listed as a bound on meaning: "
+        + ", ".join(unexplained)
     )
+    stale = sorted(set(_REFUSING_ALLOWED) - refusing)
+    assert not stale, "listed fields that no longer refuse above a bound: " + ", ".join(stale)
+
+
+def test_the_refusing_bound_rule_catches_what_it_names() -> None:
+    class Planted(BaseModel):
+        limit: int = Field(default=10, le=100)
+        wait_s: float | None = Field(default=None, lt=60)
+        depth: Annotated[int, Field(le=8)] | None = None
+        weights: list[Annotated[float, Field(le=1)]] = []
+        nested: dict[str, list[Annotated[int, Field(lt=4)]]] = {}
+        count: int = Field(default=1, ge=1)
+        names: list[str] = Field(default_factory=list, max_length=4)
+
+    assert _refusing_above({Planted}) == {
+        "Planted.limit",
+        "Planted.wait_s",
+        "Planted.depth",
+        "Planted.weights",
+        "Planted.nested",
+    }
 
 
 def _note(name: str, asked: int | float, cap: int | float, unit: str = "") -> str:
