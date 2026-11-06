@@ -1904,9 +1904,11 @@ class TestReplayRejectsChangedSources:
             source["sha256"] = ""
             source["manifest"] = []
         record.write_text(json.dumps(stored))
-        del state_with_sim.all_jobs[first["job_id"]]
+        # Read by a session that never held the job, as a record an older
+        # release left is: this session's own job answers for itself.
+        other = SessionState.create(state_with_sim.config, available={"fake": FakeSim})
 
-        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+        data = _assert_schema(await handle_run_experiments(args, other))
 
         message = data["error"]["message"]
         assert data["error"]["code"] == "idempotency_conflict"

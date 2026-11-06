@@ -233,7 +233,10 @@ tool-surface changes.
   from the recovery journal. Every replay now finds its job as any other read
   of a job id does: a job another process runs is reported as that process
   last recorded it, and a job whose owner has exited is saved as
-  `interrupted`.
+  `interrupted`. A replay that a second call answered while a resume or a
+  recovery was starting the job no longer leaves `jobs` showing the job's
+  first status for the rest of the session, and the job id in a replay's
+  receipt is found afterwards in a session with persistence off.
 - `edit_schematic` opens and edits a sheet with a subcircuit part that names a
   model library (`ModelFile`), wherever that library is. Before, it refused
   the sheet when the library could not be found, though `inspect` and
