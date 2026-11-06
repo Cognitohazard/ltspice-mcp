@@ -83,7 +83,6 @@ from ltspice_mcp.lib.component_value import POSITIONAL_KINDS
 from ltspice_mcp.lib.connectivity import (
     NamedNets,
     build_on_wire_predicate,
-    fold_case,
     is_ground,
     name_key,
     name_keys,
@@ -551,17 +550,14 @@ def _reference_taken(
     editor: AscEditor, reference: str, *, other_than: str | None = None
 ) -> str | None:
     """The reference of a part, other than ``other_than``, that ``reference``
-    names to LTspice; None when no part has it.
+    names to LTspice (``sheet.references_named``); None when no part has it.
 
     LTspice compares references without case: neither build netlists a sheet
     with parts named ``R1`` and ``r1`` (recorded as
     ``connectivity/shared_reference_case``).
     """
-    key = fold_case(reference)
-    return next(
-        (name for name in editor.components if name != other_than and fold_case(name) == key),
-        None,
-    )
+    others = [name for name in editor.components if name != other_than]
+    return next(iter(references_named(reference, others)), None)
 
 
 def part_reference(editor: AscEditor, reference: str) -> str:
