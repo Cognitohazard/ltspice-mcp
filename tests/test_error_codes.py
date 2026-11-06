@@ -422,7 +422,8 @@ def _error_classes() -> list[type[LTSpiceMCPError]]:
 # ADDING a code is fine — add it here in the same commit and the test passes.
 # RENAMING or REMOVING one is a public, client-visible change: a caller that
 # branches on `error.code` or reads an observation code has no way to notice,
-# so it needs a CHANGELOG entry saying which code changed and what replaced it.
+# so it needs a changelog fragment (changelog.d/) saying which code changed and
+# what replaced it.
 FROZEN_ERROR_CODES = (
     "ambiguous_inner_device",
     "ambiguous_instance_ref",
@@ -697,8 +698,9 @@ class TestErrorCodeVocabulary:
         )
         assert not gone, (
             f"These error codes are no longer emitted: {gone}. Renaming or removing "
-            "a code is a client-visible change: give it a CHANGELOG entry naming the "
-            "old code and its replacement, then update FROZEN_ERROR_CODES."
+            "a code is a client-visible change: add a changelog fragment under "
+            "changelog.d/ naming the old code and its replacement, then update "
+            "FROZEN_ERROR_CODES."
         )
 
     def test_frozen_list_is_sorted_and_unique(self):

@@ -111,6 +111,7 @@ dev = [
     "pytest-github-actions-annotate-failures>=0.4.2",
     "pytest-xdist>=3.8.0",
     "ruff>=0.11",
+    "towncrier>=26.9.0",
 ]
 
 [tool.ruff]
@@ -186,3 +187,48 @@ addopts = "--strict-markers --tb=short"
 # the job timeout, so the dump still reaches the log.
 faulthandler_timeout = 300
 faulthandler_exit_on_timeout = true
+
+# The changelog is rendered from fragments. A change adds one file under
+# changelog.d/, named +<change>.<type>.md and holding the entry's Markdown
+# without the leading "- "; scripts/release.sh runs `towncrier build`, which
+# writes the fragments as the release's section below the start marker in
+# CHANGELOG.md and deletes them. Fragments are hand-wrapped like the file:
+# towncrier's `wrap` would reflow a nested list or a second paragraph into one
+# line. Within a type, towncrier orders the entries by their text.
+[tool.towncrier]
+directory = "changelog.d"
+filename = "CHANGELOG.md"
+template = "changelog.d/_template.md"
+# The header scripts/release.sh checks for, in Keep a Changelog's shape.
+title_format = "## [{version}] - {project_date}"
+start_string = "<!-- towncrier release notes start -->\n"
+
+# Each type is a "### <name>" heading of a release section, rendered in this
+# order; its directory is the <type> in a fragment's name. A type with
+# showcontent = false renders nothing (the template skips it): `internal` is
+# the fragment for a change with nothing to tell users, which still satisfies
+# `towncrier check` on a pull request.
+[[tool.towncrier.type]]
+directory = "breaking"
+name = "Breaking"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "added"
+name = "Added"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "changed"
+name = "Changed"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "fixed"
+name = "Fixed"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "internal"
+name = "Internal"
+showcontent = false
