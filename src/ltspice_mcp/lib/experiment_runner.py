@@ -765,9 +765,12 @@ class ExperimentRunner(RunnerBase):
             # from the job its id resolves to (``resolve_recorded_job``): the
             # live job when this process runs it, else the record, with what
             # the store reconciled written back. It is not a submission, so it
-            # is not registered as one. Only when no record is on disk yet (a
-            # journal's prepared attempt) does it answer from the barrier's copy.
-            job = await resolve_recorded_job(request.state, barrier.job.job_id) or barrier.job
+            # is not registered as one. When no record answers (a journal's
+            # prepared attempt not written yet, or persistence off), it answers
+            # from the barrier's copy, adopted so the id it gives resolves.
+            job = await resolve_recorded_job(
+                request.state, barrier.job.job_id
+            ) or request.state.job_registry.adopt(barrier.job)
             if not receipt_ready.done():
                 receipt_ready.set_result(
                     ExperimentReceipt(

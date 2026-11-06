@@ -40,6 +40,7 @@ from ltspice_mcp.lib.recovery_journal import (
     save_journal,
 )
 from ltspice_mcp.lib.recovery_records import CaseAttempt, ProcessIdentity
+from ltspice_mcp.lib.services import resolve_job_async
 from ltspice_mcp.lib.simulator_build import executable_identity
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
@@ -262,6 +263,22 @@ async def test_a_replay_of_an_exited_owner_s_job_writes_back_its_reconciliation(
         assert "submitted" not in events
 
 
+@pytest.mark.asyncio
+async def test_a_replay_no_record_answers_still_names_a_job_its_session_finds(committed: Any):
+    """With persistence off, no store read answers a replay from the journal,
+    so the receipt is built from the journal's copy. The job id it gives is
+    then found by the session that replayed it, as every receipt's is. (A
+    resume refuses to run without persistence, so only the journal replay
+    reaches this.)"""
+    async with _journaled(committed) as submission:
+        submission.session.job_registry.persist_enabled = False
+        job_id = json.loads(submission.record.read_text(encoding="utf-8"))["job_id"]
+        replayed, _status = await submission.replay()
+        assert replayed is True
+        found = await resolve_job_async(job_id, submission.session)
+        assert found.job_id == job_id
+
+
 # ---------------------------------------------------------------------------
 # One route from a job id to a job
 # ---------------------------------------------------------------------------
@@ -288,7 +305,7 @@ def _named_uses(names: frozenset[str]) -> list[tuple[str, int]]:
 def test_only_the_runner_and_the_registry_register_a_job() -> None:
     stray = sorted(
         f"{module}:{line}"
-        for module, line in _named_uses(frozenset({"add_experiment_job"}))
+        for module, line in _named_uses(frozenset({"add_experiment_job", "adopt"}))
         if module not in _REGISTRARS
     )
     assert not stray, f"jobs registered around the runner and registry: {stray}"
