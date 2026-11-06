@@ -10,16 +10,16 @@ as cutoff frequency, phase margin, overshoot, or a transistor's gm and vth.
 Sweeps, corners and Monte Carlo run as background jobs, with statistics
 across the runs.
 
-The assistant can also build and edit LTspice `.asc` schematics. Edited as
-text, a schematic goes wrong without any error: a wire drawn across a pin
-connects it, and the mistake shows up only when a simulation gives the wrong
-answer, several turns later. Instead, the assistant names the pins to
-connect, and the server draws the wire. An edit that would connect
-something by accident, such as a wire over another part's pin or a label that
-shorts two nets, is refused with the reason before anything is written, so
-the assistant can fix it on the next call. The server also reports parts and
-text drawn on top of each other, so the finished sheet is easy to read. With
-LTspice 26.1 or later on Windows, the edits appear in an LTspice window you
+The assistant can also build and edit LTspice `.asc` schematics. Without the
+server, an assistant edits the `.asc` text directly and can connect a pin by
+mistake, for example by running a wire across it. Nothing reports this until
+a simulation gives a wrong answer, often several turns later. This server
+routes each wire itself, between pins the assistant names. An edit that would
+connect something by accident, such as a wire over another part's pin or a
+label that shorts two nets, is refused with the reason before anything is
+written, so the assistant can fix it on the next call. The server also
+reports parts and text drawn on top of each other, which make a sheet hard to
+read. With LTspice 26.1 or later on Windows, the edits appear in an LTspice window you
 have open ([Working with LTspice open](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#working-with-ltspice-open)).
 
 The schematics and netlists are ordinary files that you can open in LTspice
@@ -66,7 +66,7 @@ The plugin and the extension need [`uv`](https://docs.astral.sh/uv/).
 
 **macOS is not supported yet: the server cannot read simulation results
 there.** It reads each `.raw` and `.log` file in a separate process with a
-memory limit, and that has not been validated on macOS.
+memory limit, which has not been validated on macOS.
 
 **Make sure the assistant uses the server.** Some assistants run the
 simulator from the shell instead. Name the server `spice`, as the plugin
@@ -132,16 +132,16 @@ covers the simulators and common tasks, and looks up any option with
 
 The server runs without configuration. To change a setting, copy
 [`ltspice-mcp.example.toml`](https://github.com/cognitohazard/ltspice-mcp/blob/master/ltspice-mcp.example.toml) to `ltspice-mcp.toml`
-in your working directory. That file describes every option, and each can
-also be set with an `LTSPICE_MCP_` environment variable. The server keeps job
+in your working directory. That file describes every option. Any of them
+can also be set with an `LTSPICE_MCP_` environment variable. The server keeps job
 records and results in `.ltspice-mcp/` in the working directory; add that
 folder to `.gitignore`.
 
 **The tools can use any path unless you set a sandbox.**
 `[security] allowed_paths` limits them to the folders it lists. It does not
 limit `run_code`, which runs Python with the server's own permissions, so
-approve `run_code` in your client as you would a shell command, and set
-`[tools] run_code = false` if anyone else can reach the server.
+approve `run_code` in your client as you would a shell command. If anyone
+else can reach the server, set `[tools] run_code = false`.
 
 [docs/USAGE.md](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md) covers the common settings, WSL, the files the
 server creates, and running the server on another machine.
@@ -193,8 +193,7 @@ with Api(working_dir="circuits") as api:
 
 `api.reference()` lists the operations and `api.guide()` returns the guide.
 [Python API](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#python-api) explains how the API differs from the
-tools, and [docs/design/python_api.md](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/design/python_api.md) is the full
-specification.
+tools. The full specification is in [docs/design/python_api.md](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/design/python_api.md).
 
 ## Research behind the design
 
@@ -202,7 +201,7 @@ Published studies by other groups informed three design choices:
 
 - **Measurements are returned as named numbers.** A study of LLM workflows for switched-mode power supply design ([arXiv:2507.10639](https://arxiv.org/abs/2507.10639), first published as SPICEAssistant) found that GPT-4o could not reliably read a ripple value from a waveform given as numbers or as an image, so its tools extract such values from each LTspice run and return them as text. With that simulation feedback, o3 solved 84.9% of 269 power-supply design tasks, against 25.4% with no simulation. The study compared simulation feedback with none, not named numbers with raw output.
 - **Schematic edits are typed and checked.** NetlistBench ([arXiv:2608.12197](https://arxiv.org/html/2608.12197)) found that the strongest model's accuracy on netlist edits with dependent steps fell from 80% at 3 steps to 26% at 15. The study measured unassisted edits to text netlists. `edit_schematic`, which checks each typed operation before it writes the file, was designed in response; its effect has not been measured.
-- **The tool interface is typed.** A benchmark of agents that take chip designs from RTL to GDS ([arXiv:2607.17528](https://arxiv.org/html/2607.17528v3)) traced 31.7% of physical-design errors to failures at the tool interface. That is a different domain, and the effect has not been shown for circuit simulation. The server follows the benchmark's recommendations: registered APIs, persistent sessions and structured results.
+- **The tool interface is typed.** A benchmark of agents that take chip designs from RTL to GDS ([arXiv:2607.17528](https://arxiv.org/html/2607.17528v3)) traced 31.7% of physical-design errors to failures at the tool interface. That work is in a different domain, so it does not show the same effect in circuit simulation. The server follows the benchmark's recommendations: registered APIs, persistent sessions and structured results.
 
 ## Development
 
