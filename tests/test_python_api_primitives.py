@@ -268,10 +268,12 @@ def test_the_older_file_keywords_are_still_accepted(
         assert api.load_raw(raw_path=raw).signals == api.load_raw(raw).signals
         assert api.measurements(log_path=log) == api.measurements(log)
         assert api.device_op_points(log_path=log) == api.device_op_points(log)
-        with pytest.raises(TypeError, match="Give path or raw_path, not both"):
+        with pytest.raises(ApiValidationError, match="Give path or raw_path, not both"):
             api.load_raw(raw, raw_path=raw)
-        with pytest.raises(TypeError, match="Give path or log_path, not both"):
+        with pytest.raises(ApiValidationError, match="Give path or log_path, not both"):
             api.measurements(log, log_path=log)
+        with pytest.raises(ApiValidationError, match="Give path or log_path, not both"):
+            api.device_op_points(log, log_path=log)
 
 
 def test_measurements_support_cases_and_relay_contained_loader_failure(

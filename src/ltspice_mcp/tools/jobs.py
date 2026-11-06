@@ -33,7 +33,6 @@ from ltspice_mcp.errors import (
     JobNotFoundError,
     LTSpiceMCPError,
     PathSecurityError,
-    error_hint,
 )
 from ltspice_mcp.lib import experiment_store, recent, response_budget, services
 from ltspice_mcp.lib.experiment_runner import (
@@ -64,12 +63,12 @@ from ltspice_mcp.tools._base import (
     REPEATABLE_CHANGE_ANNOTATIONS,
     ResponseBudget,
     ToolInput,
+    failure_text,
     failures_schema,
     format_response,
     held_to_cap,
     outcome_of,
     page_schema,
-    path_denied_text,
     registry,
     resolve_response_budget,
     safe_path,
@@ -1432,23 +1431,14 @@ def failed_jobs_evaluation(
             head_job_id=receipt.job.job_id,
         )
     code, stage, retryable = _jobs_error_details(exc)
-    # The message, then the recovery step every surface gives this kind of
-    # failure (``errors.error_hint``), as ``path_denied_text`` does for a
-    # refused path.
-    remedy = error_hint(exc)
-    hint = (
-        path_denied_text(exc, state)
-        if isinstance(exc, PathSecurityError) and state is not None
-        else f"{exc}\n\n{remedy}"
-        if remedy is not None
-        else str(exc)
-    )
     error = _JobsError(
         code=code,
         message=str(exc),
         stage=stage,
         retryable=retryable,
-        hint=hint,
+        # The message, then the recovery step every surface gives this kind of
+        # failure, as run_experiments' refusals say it.
+        hint=failure_text(exc, state),
         commit_state=(
             "committed"
             if isinstance(exc, SubmissionCommitted)

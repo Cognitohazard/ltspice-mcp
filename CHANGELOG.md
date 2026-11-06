@@ -68,6 +68,26 @@ tool-surface changes.
   and moving a definition into an included file shows as the `.include` line
   added. The `mode` and tool descriptions now say what each mode compares,
   and that `structural_diff` does not compare nodes.
+- A `.raw` or `.log` path that names no file is reported as
+  `result_file_not_found` (in the Python API, `ResultFileNotFoundError`, a
+  `ResultError`) by `analyze_results`, `plot_waveform`, `inspect`,
+  `load_raw`, `measurements` and `device_op_points`. The tools' replies
+  carry a hint that says to check the path, or to read a run by its
+  `job_id`. Before, it was `result_unreadable`, with advice to check a job's
+  run state.
+  `result_unreadable` remains for a file that exists but cannot be read.
+- The Python API raises `ApiValidationError`, as the operations do, where it
+  raised `TypeError` or a plain `ValueError` for a misused argument: `path`
+  together with the older `raw_path` or `log_path` in `load_raw`,
+  `measurements` or `device_op_points`; an empty `job_id`, both `timeout_s`
+  and `timeout`, or a negative or non-numeric timeout in `wait`; a `wait` or
+  `detach` that is not a bool; and a detached call's argument that cannot be
+  handed to its owner, including a dictionary key that is not a string or a
+  value that holds itself, where a detached call raised `TypeError` or
+  `ValueError` or passed a number key on as text. `ApiValidationError` is a
+  `ValueError`, so code that caught `TypeError` here should catch
+  `ApiValidationError`. A value that holds itself no longer raises
+  `RecursionError` in any call.
 - A `random` variation's seed draws different values than it did in earlier
   versions, so a seeded Monte Carlo run from 0.7.0 does not reproduce. Its
   draws were keyed on the case's position in the expanded list, so with
@@ -210,6 +230,56 @@ tool-surface changes.
 
 ### Fixed
 
+- A deck's first line, its title, and any card after `.end`, the deck's or
+  an included file's, are no longer read as cards. `inspect(kind="components")` listed a part after `.end`, and
+  `run_experiments` accepted assignments and random rules naming a part,
+  `.param` or `.model` found only in the title or after `.end`, wrote the
+  change where LTspice never reads it, and reported it in the receipt.
+  Mismatch rules perturbed a title that reads as a transistor or a
+  subcircuit call. Staging copied, or refused to run without, an include
+  named in the title or after `.end`. The `.options logopinfo` added to an
+  `.op` run could land after the deck's `.end`, or be left out because of a
+  line LTspice ignores; it is now added before the `.end` that ends the deck,
+  also when the `.op` is in an included file or the deck is UTF-16, and a
+  comment that mentions `logopinfo` no longer keeps it out. The ngspice
+  `.control` write injection read the title too, so a deck titled
+  "Write-up ..." got no `write` and ended with no raw. Measurement kinds, the
+  noise input unit and the ngspice `.lib` section check read those lines
+  too. What LTspice does after an included file's `.end` is not recorded;
+  every reader now follows the reading the hierarchy already took.
+- Lines the server adds before a deck's `.end` end with the deck's own line
+  break, so a CRLF deck stays CRLF: `.options logopinfo`, the ngspice
+  `write`, and a mismatch rule's variant `.model` and subcircuit copy.
+- `edit_schematic`'s `add_component`, whether given `value` or a `Value` in
+  `attributes`, and `set_component_attribute` with attribute `Value` refuse a
+  Value LTspice would read as another node, such as a resistor's `1 k` or
+  `1 k tc=0.001`, as `set_component_value` did. Before, they wrote it and
+  the sheet netlisted with the wrong nodes. The check uses the element class
+  the part's own `Prefix` gives, including one set in the same op. Setting
+  or clearing a part's `Prefix` with `set_component_attribute` is refused
+  when the part's `Value` would read as another node in the new class, as
+  `add_component` refuses the same pair; before, a source holding `AC 1`
+  could be given Prefix `R`.
+- `run_experiments` refuses, at submission, an attached `analyze` block whose
+  recipe names in `sources` a label the experiment does not carry, as
+  `recipe_invalid` at stage `validate`, not retryable, naming the label the
+  block's source carries (`experiment`). Before, every case ran and the
+  recipe then failed.
+- `run_experiments`' refusals before a job exists give the message followed
+  by that kind of failure's recovery step in `hint`, where the hint repeated
+  the message. A failed resource read follows its message with the recovery
+  step and carries `{code, hint}` in the JSON-RPC error's `data`.
+  `inspect`'s `invalid_cursor` item carries the hint to send back the cursor
+  the previous page returned, as every other tool does.
+- On LTspice 26 a WHEN measurement whose threshold is written in braces
+  (`.meas tran t WHEN V(out)={vth}`) no longer disappears from a run's
+  measurements. It is reported as a threshold written as a parameter is: a
+  null value, `unreadable` with the log line and the reason, and the
+  crossing as `at`, in the `measurements` recipe, `inspect`'s measurements
+  view, the run summary and the Python API's `measurements`. A log with a
+  measurement that cannot be given an entry now fails the measurements read
+  and names it, where it was left out. An unreadable value is quoted as the
+  log printed it (`vth^2`), not as spicelib cut it short (`vth`).
 - An attached analysis on `run_experiments` no longer warns that an
   `include.fields` path whose key starts with `_` is absent from every row.
   It checks a projection against a key outline saved with the result, and

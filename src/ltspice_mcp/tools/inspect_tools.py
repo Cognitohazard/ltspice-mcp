@@ -131,9 +131,7 @@ from ltspice_mcp.errors import (
     InvalidCursorError,
     LTSpiceMCPError,
     NetlistError,
-    PathSecurityError,
     compact_validation_error,
-    error_hint,
 )
 from ltspice_mcp.lib import (
     NETLIST_SUFFIX_TEXT,
@@ -198,7 +196,7 @@ from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
     executable_identity,
 )
-from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex, lex_deck
+from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex_deck
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, symbol_info_of
 from ltspice_mcp.lib.symbol_library import SymbolResolver, symbol_files
@@ -219,6 +217,7 @@ from ltspice_mcp.tools._base import (
     format_response,
     outcome_of,
     outcome_schema,
+    recovery_hint,
     registry,
     resolve_response_budget,
     safe_library_path,
@@ -1018,9 +1017,12 @@ def _file_stamp(path: Path) -> list[int] | None:
         return None
 
 
-def _invalid_cursor(exc: PageCursorError) -> _QueryError:
-    """A tampered, stale, or cross-query cursor, isolated to the one query."""
-    return _QueryError(InvalidCursorError.code, f"cursor is invalid or stale: {exc}")
+def _invalid_cursor(exc: PageCursorError) -> InvalidCursorError:
+    """A tampered, stale, or cross-query cursor, isolated to the one query.
+
+    The typed error every tool raises for one, so the item carries that
+    kind's code and recovery step as every other tool's refusal does."""
+    return InvalidCursorError(f"cursor is invalid or stale: {exc}")
 
 
 def _paginate(
@@ -1728,11 +1730,13 @@ def _components_netlist_payload(
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """The component rows, plus the lexer's notes about how the deck read.
 
-    ``prefix`` is the upper-cased prefix :func:`_check_prefix` returns.
+    ``prefix`` is the upper-cased prefix :func:`_check_prefix` returns. The
+    rows are the cards the simulator reads (``spice_lex.lex_deck``), as the
+    net query's members are: neither the title line nor a card after ``.END``.
     """
     from ltspice_mcp.lib.spice_lex_views import body_has_stray_kv_remnant
 
-    lexed = lex(text)
+    lexed = lex_deck(text)
     cards = lexed.cards
     by_ref = instances_by_ref(cards)
     rows: list[dict[str, Any]] = []
@@ -2985,13 +2989,6 @@ async def _run_queries(
         try:
             query = _validate_query(raw)
             outcome = await _dispatch(query, state, view)
-        except PathSecurityError as exc:
-            # Every kind's refusal lands here, whichever resolver raised it (the
-            # hierarchy loader checks each file it opens), so all report one code
-            # and one remedy.
-            error = {"code": exc.code, "message": str(exc), "hint": state.sandbox_guidance()}
-            results.append(_failure_item(index, raw, error))
-            continue
         except _QueryError as exc:
             error = {"code": exc.code, "message": exc.message}
             if exc.supported is not None:
@@ -3008,10 +3005,12 @@ async def _run_queries(
             )
             continue
         except LTSpiceMCPError as exc:
-            # The error's own code (errors.py) and its type's recovery step, as
-            # every other tool reports it.
+            # The error's own code (errors.py) and its kind's recovery step, as
+            # every other tool reports it: a refused path's, whichever resolver
+            # raised it (the hierarchy loader checks each file it opens), is the
+            # sandbox guidance; an invalid cursor's sends it back to its own.
             error = {"code": exc.code, "message": str(exc)}
-            if (hint := error_hint(exc)) is not None:
+            if (hint := recovery_hint(exc, state)) is not None:
                 error["hint"] = hint
             results.append(_failure_item(index, raw, error))
             continue

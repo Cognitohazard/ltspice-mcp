@@ -3872,3 +3872,135 @@ def test_a_bare_name_is_not_found_below_the_sheet(tmp_path):
 `tests/test_recorded_ltspice_schematics.py::TestTheServerFindsASymbolWhereEitherBuildDoes::test_the_editor`
 holds the editor to `find_symbol` on every recorded search, with spicelib's
 cache empty and warmed by another folder's files.
+
+---
+
+## Bug 38 — `LTSpiceLogReader` skips a result line whose value starts with a character its pattern lacks
+
+**Status:** draft for an upstream spicelib pull request. Observed 2026-11-05.
+**Affected version:** spicelib 1.5.1 (`spicelib/log/ltsteps.py`,
+`LTSpiceLogReader.__init__`, the stepless measurement regex).
+**Our workaround:** `log_parser.printed_measurements` in
+`src/ltspice_mcp/lib/log_parser.py` finds every measurement the log printed
+from the text. `parse_measurements` reads a result line the reader skipped
+like any value it kept: a value that is not a number fails only that entry,
+with the line and the reason, and the `AT` crossing comes from
+`_RE_MEAS_AT_LINE`. The reason quotes the value as the log printed it
+(`printed_measurements`), not as the reader holds it, since the reader cuts
+`vth^2` to `vth`. The measurements check of `lib/log_decode.py` refuses a
+table that lacks a measurement the log printed.
+
+### Summary
+
+A WHEN measurement's result line prints the threshold after `=` as the deck
+writes it, and LTspice 26 keeps a braced threshold's braces:
+`t_braced: V(out)={vth} AT 6.98157501917e-05`. The stepless regex reads the
+value with a fixed character class that has no `{`. The value must start
+right after an `=`, so the line does not match at all, and the measurement,
+its crossing included, is missing from the reader's dataset and from
+`get_measure_names()`. Nothing says a line was skipped. The same threshold
+written as `vth` is read (as the text `'vth'`, with `_at` set), and LTspice
+XVII prints the braced threshold evaluated (`v(out)=0.5`), which is read.
+
+### Affected code
+
+```python
+# ltsteps.py, LTSpiceLogReader.__init__
+regx = re.compile(
+        r"^(?P<name>\w+)(:\s+.*)?=(?P<value>[\d(inf)E+\-\(\)dB,°(-/\w]+)( FROM (?P<from>[\d\.E+-]*) TO (?P<to>[\d\.E+-]*)|( at (?P<at>[\d\.E+-]*)))?",
+        re.IGNORECASE)
+...
+                if self.step_count == 0:  # then there are no steps,
+                    match = regx.match(line)
+                    if match:
+                        ...
+```
+
+A value starting with any other character (`{`, `[`, `'`, `!`, `<`, `>`)
+leaves the line unmatched. A value holding one after its start (`vth^2`) is
+cut there, and the `AT` clause after it is lost.
+
+### Reproduction
+
+The log LTspice 26.1.1 wrote for `.meas tran t_braced WHEN V(out)={vth}`
+with `.param vth=0.5` (recorded as
+`tests/fixtures/ltspice_recorded/ltspice26/log/meas_when_threshold_tran.log`):
+
+```
+t_number: V(out)=0.5 AT 6.98157501917e-05
+t_param: V(out)=vth AT 6.98157501917e-05
+t_expr: V(out)=1/sqrt(4) AT 6.98157501917e-05
+t_braced: V(out)={vth} AT 6.98157501917e-05
+vmax: MAX(V(out))=0.999954402447 FROM 0 TO 0.001
+t_meas: V(out)=vmax/2 AT 6.98111829185e-05
+```
+
+```python
+from spicelib.log.ltsteps import LTSpiceLogReader
+reader = LTSpiceLogReader("meas_when_threshold_tran.log")
+reader.get_measure_names()
+# ['t_number', 't_number_at', 't_param', 't_param_at', 't_expr', 't_expr_at',
+#  'vmax', 'vmax_from', 'vmax_to', 't_meas', 't_meas_at']   (no t_braced)
+"t_braced" in reader.dataset   # False
+```
+
+### Impact
+
+A WHEN measurement against a braced threshold is missing from every result
+read through the reader on LTspice 26, crossing and all, and is
+indistinguishable from one the deck never asked for. Before our workaround
+this project's reports left it out with no error, while the same measurement
+with the threshold written `vth` was reported.
+
+### Proposed fix
+
+Read the value as the text up to the next whitespace, whatever its
+characters, and end the expression at the first `=` (combined with the
+whitespace-tolerant clauses of Bug 1):
+
+```python
+regx = re.compile(
+    r"^(?P<name>\w+)(:\s+.*?)?=(?P<value>\S+)"
+    r"(\s+FROM\s+(?P<from>[\d\.E+-]*)\s+TO\s+(?P<to>[\d\.E+-]*)"
+    r"|\s+at\s+(?P<at>[\d\.E+-]*))?",
+    re.IGNORECASE)
+```
+
+On the recording above this reads `t_braced` as `'{vth}'` with
+`t_braced_at` 6.98157501917e-05, and every other line as before.
+`try_convert_value` keeps a value that is not a number as text, as it does
+for `vth`.
+
+### Suggested upstream test
+
+```python
+def test_a_braced_when_threshold_keeps_its_measurement(tmp_path):
+    log = tmp_path / "braced.log"
+    log.write_text(
+        "Circuit: * t\n\n"
+        "t_braced: V(out)={vth} AT 6.98157501917e-05\n"
+        "t_param: V(out)=vth AT 6.98157501917e-05\n",
+        encoding="utf-8",
+    )
+    reader = LTSpiceLogReader(str(log))
+    assert reader.dataset["t_braced"] == ["{vth}"]
+    assert reader.dataset["t_braced_at"] == [6.98157501917e-05]
+    assert reader.dataset["t_param_at"] == [6.98157501917e-05]
+```
+
+### Cross-reference
+
+`tests/test_recorded_ltspice_results.py::TestMeasurements::test_a_threshold_printed_in_braces_fails_only_its_own_entry`
+and `::test_a_when_against_a_non_number_fails_only_its_own_entry` pin the
+workaround against both builds' recordings; `tests/test_unreadable_measurement.py`
+reads the same entries through the Python API, `inspect`, the `measurements`
+recipe and the run summary; `tests/test_decoded_log.py::test_a_line_the_reader_does_not_match_fails_only_its_measurement`
+covers a log whose only measurement is such a line, and
+`::test_a_value_the_reader_cuts_short_is_quoted_as_the_log_printed_it` one
+whose value the reader cuts short; and
+`tests/test_log_decode.py::test_a_measurement_the_log_printed_and_the_table_lacks_fails_the_section`
+pins the check. `tests/test_recorded_log_measurements.py::test_every_recorded_logs_measurements_decode`
+holds every recorded log of both builds to an entry for each measurement it
+printed and none for anything else. Once upstream reads the line, the reader
+keeps the name and `parse_measurements` no longer finds a line it skipped;
+the check stays.

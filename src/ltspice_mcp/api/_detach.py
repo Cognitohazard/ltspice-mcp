@@ -24,7 +24,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal
 
-from ltspice_mcp.api._exceptions import ApiCallError, ApiInternalError
+from ltspice_mcp.api._exceptions import ApiCallError, ApiInternalError, ApiValidationError
 from ltspice_mcp.lib import atomic_write_json
 from ltspice_mcp.lib.experiment_runner import REQUEST_GATE_TIMEOUT_S
 from ltspice_mcp.lib.proc_kill import kill_process_group
@@ -118,7 +118,9 @@ def _owner_default(value: Any) -> Any:
     refused in the other is a difference nothing explains. Deliberately narrow:
     paths become strings and models their JSON form, and anything else is
     refused by name. A silently dropped or stringified value would give the
-    owner a different call, or a different engine, than the caller has.
+    owner a different call, or a different engine, than the caller has. The
+    refusal is an ``ApiValidationError``, as any argument an ``Api`` call
+    cannot use is; ``json.dumps`` passes it on as raised.
     """
     from pydantic import BaseModel
 
@@ -126,11 +128,45 @@ def _owner_default(value: Any) -> Any:
         return value.model_dump(mode="json")
     if isinstance(value, os.PathLike):
         return os.fspath(value)
-    raise TypeError(f"A detached owner cannot be given a {type(value).__name__}")
+    raise ApiValidationError(f"A detached owner cannot be given a {type(value).__name__}")
+
+
+def _refuse_unsendable(value: Any, holders: frozenset[int] = frozenset()) -> None:
+    """Refuse what JSON would not hand the owner as the caller gave it.
+
+    ``json.dumps`` writes a dict key that is a number, a bool or None as a
+    string, giving the owner a key the caller never wrote and a call the same
+    call in this process refuses; it raises ``TypeError`` for any other key
+    that is not a string, and ``ValueError`` for a value that holds itself,
+    before ``_owner_default`` is asked. Each is refused here, as an
+    ``ApiValidationError``. ``holders`` are the dicts, lists and tuples that
+    hold ``value``.
+    """
+    if isinstance(value, dict):
+        children: Any = value.values()
+    elif isinstance(value, (list, tuple)):
+        children = value
+    else:
+        return
+    if id(value) in holders:
+        raise ApiValidationError("A detached owner cannot be given a value that holds itself")
+    if isinstance(value, dict):
+        for key in value:
+            if not isinstance(key, str):
+                raise ApiValidationError(
+                    f"A detached owner cannot be given the {type(key).__name__} key {key!r}: "
+                    "every key it is handed is a string"
+                )
+    holders = holders | {id(value)}
+    for child in children:
+        _refuse_unsendable(child, holders)
 
 
 def _jsonable(value: Any) -> Any:
-    """One value in the form the owner's request file carries it."""
+    """One value in the form the owner's request file carries it, or an
+    ``ApiValidationError`` for one it cannot carry as given
+    (``_refuse_unsendable``, ``_owner_default``)."""
+    _refuse_unsendable(value)
     return json.loads(json.dumps(value, default=_owner_default))
 
 
@@ -192,6 +228,9 @@ def _failure(
         # submitting, and it died without saying. Claiming not_started here
         # would tell the caller a job that may exist does not.
         commit_state="unknown",
+        # The owner's failure is no kind the hint table names; the message says
+        # where its log is, and for a timeout how to replay the request.
+        hint=detail,
     )
     return ApiCallError(detail, payload=payload)
 

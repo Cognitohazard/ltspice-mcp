@@ -86,7 +86,13 @@ beside the item's fields that no branch takes.
 `tests/test_refusals_name_the_fix.py` holds every tool to this. A
 failure a tool raises instead of reporting in its envelope is `{error, code,
 hint?, suggestions?}` with the failure's own code, or `internal_error` for an
-unclassified one; a `path_denied` refusal is `{error, code, hint}`.
+unclassified one; a `path_denied` refusal is `{error, code, hint}`. A
+`run_experiments` or `jobs` refusal is the envelope's `error`, and its `hint`
+is the message followed by the same recovery step. A resource read that fails
+this way is a JSON-RPC invalid-params error whose message is the failure
+followed by that step, and whose `data` is `{code, hint?}`; an unknown URI's
+error has no `data`. Every surface takes the step for a kind of failure from
+one table (`errors.ERROR_HINTS`), a refused path's from the session's sandbox.
 
 **Error codes.** `code` is a stable public name for a failure. It depends on
 the kind of failure and never on the message, except that a failure inside a
@@ -104,6 +110,7 @@ Codes by kind of failure:
 | `symbol_unresolved` | the schematic opened, but a symbol or library it refers to was not found |
 | `simulation_failed` | the simulator could not be started, or the run failed |
 | `result_unreadable` | a `.raw` or `.log` could not be read |
+| `result_file_not_found` | no file is at a `.raw` or `.log` path the caller named; the `hint` says to check the path, or to read a run of this server's by its `job_id` |
 | `analysis_deadline` | a result read ran past its wall-clock bound and was abandoned |
 | `no_axis` | the selected plot is a table (an operating point, `.tf` or `.pz` result), so it has no sweep axis to query at |
 | `job_not_found` | no job with that `job_id` or `request_id` |
@@ -462,8 +469,13 @@ analyze              {recipes: list[Recipe], group_by?, step?, all_steps?,
                                         takes, and `step`/`all_steps` mean what
                                         they mean there, so an attached
                                         measurement and a standalone one read
-                                        the same `.step` iterations. Every
-                                        recipe is validated at SUBMISSION,
+                                        the same `.step` iterations. The
+                                        block's one source, the experiment,
+                                        is labelled `experiment`, the only
+                                        label a recipe's `sources` may name.
+                                        Every recipe is validated at
+                                        SUBMISSION, as `analyze_results`
+                                        validates it against its sources,
                                         before a deck is staged; an invalid
                                         one fails the call with
                                         `recipe_invalid`, stage `validate`,
@@ -1066,9 +1078,12 @@ each name the log has no number for (LTspice printed it as FAIL'ed, or
 printed a non-finite value, or printed something other than a number). A
 failed name's `measured` entry is null, not absent, and a null there is always
 listed in `failed_measurements`. A value printed as something other than a
-number, such as a WHEN threshold written as a parameter or an expression,
-fails only its own entry: `unreadable: {name: {line, reason}}` gives the log
-line and what it printed, and every other measurement of the log reads. The
+number, such as a WHEN threshold written as a parameter, an expression or (on
+LTspice 26) a braced expression, fails only its own entry:
+`unreadable: {name: {line, reason}}` gives the log line and what it printed,
+and every other measurement of the log reads. Every measurement the log
+printed has an entry; a log whose measurements cannot all be given one fails
+the measurements read, naming the ones it lacks. The
 same `unreadable {line, reason}` is on the entry in the summary's
 `measurements`, in `inspect(kind="results", view="measurements")` rows and in
 the Python API's `measurements`. The
@@ -1181,7 +1196,7 @@ continuation replays them.
 - A source that names nothing is a `coverage.missing_cases` row coded as
   every tool reports the same failure, with that failure's `hint`: an unknown
   `job_id` is `job_not_found`, and a `path` with no file is
-  `result_unreadable`.
+  `result_file_not_found`.
 - Before any recipe runs, the server reads every source once to record its
   file hashes and the simulator errors its log reports. A timeout during this
   first read raises `analysis_deadline` and creates no result set or cursor;
@@ -1830,7 +1845,9 @@ cursors where listed:
     `prefix` keeps references that start with it, case-insensitively, on
     both a .asc and a netlist: `"M"` for every MOSFET, `"LX"` for LX1, LX2
     but not L1. It is plain text; a wildcard is refused with the plain
-    spelling to use. On a netlist, `detail: "full"` adds each card's
+    spelling to use. A netlist's components are the cards the simulator
+    reads, as the net query's members are: neither the deck's first line,
+    its title, nor a card after `.end`. On a netlist, `detail: "full"` adds each card's
     `nodes`, `model` and `params`, keyed as written (a key given twice in
     one spelling reads as its last copy), and `repeated_params` for a
     parameter the card gives more than once, compared without case: every
@@ -2121,6 +2138,10 @@ each tool's `inputSchema`.
   an ngspice copy, and in verify_circuit) and by `Load` (its name on the
   sheet and in LTspice's results); a name two parts answer to is refused as
   ambiguous_target. The same holds for a random `component` rule's target.
+  Every target, and every rule's match, is resolved among the cards the
+  simulator reads: a part, `.param` or `.model` named only by the deck's
+  title line or after its `.end` is not one, so a target naming it is refused
+  as one that names nothing.
 
   At least one assign or instances target is required. `parameter` is required
   only for attribute "parameter". An `instances` target selects one instance
@@ -2351,6 +2372,20 @@ A key the part does not give is added to `SpiceLine`. A part that gives a key
 more than once gets the sheet's `duplicate_parameter` finding, which the reply
 lists because the op names the part. A behavioural source's value is one
 expression and replaces `Value` entirely.
+
+Every op that writes a part's `Value` holds it to one rule: `add_component`,
+by `value` or among its `attributes`, `set_component_value` and
+`set_component_attribute`. LTspice writes the `Value` after the part's nodes,
+so a space in it may only separate what the part's element class reads as one
+value: a source's spec, the area factor of a BJT, JFET or diode, the `off`
+of a transistor or diode, a model name followed by `KEY=VALUE` parameters,
+and anything inside braces, quotes or parentheses. Anything else, such as a resistor's `1 k`, puts a
+token where LTspice reads another node and is refused before the sheet
+changes. The class is the one the part's own `Prefix` gives, in the same op
+or before it, else its symbol's. Setting or clearing a `Prefix` with
+`set_component_attribute` changes the class, so the part's own `Value` is
+held to the new class, and an op that would leave a `Value` the new class
+splits is refused the same way.
 
 ### A.4 Inspect queries
 

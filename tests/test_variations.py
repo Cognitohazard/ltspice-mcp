@@ -32,6 +32,7 @@ from tests._mismatch_fixtures import MINI_FET, instance_params
 
 def _deck(path: Path, circuit_id: str = "dut") -> CircuitDeck:
     text = (
+        "* dut\n"
         "R1 in out 1k\n"
         "C1 out 0 1n\n"
         "V1 in 0 1\n"
@@ -163,7 +164,7 @@ class TestAssignExpansion:
 
     def test_b_source_assignment_preserves_source_kind_and_nodes(self, tmp_path: Path):
         path = tmp_path / "behavioral.cir"
-        text = "V1 in 0 1\nB1 out 0 V=V(in)\nR1 out 0 1k\n.op\n.end\n"
+        text = "* behavioral\nV1 in 0 1\nB1 out 0 V=V(in)\nR1 out 0 1k\n.op\n.end\n"
         circuit = CircuitDeck("behavioral", path, text)
         variation = AssignVariation(
             kind="assign",
@@ -180,7 +181,7 @@ class TestAssignExpansion:
 
     def test_pulse_source_assignment_preserves_complete_source_card(self, tmp_path: Path):
         path = tmp_path / "pulse.cir"
-        text = "V1 in 0 PULSE(0 1 1n 1n 1n 5n 10n)\nR1 in 0 1k\n.tran 1n 20n\n.end\n"
+        text = "* pulse\nV1 in 0 PULSE(0 1 1n 1n 1n 5n 10n)\nR1 in 0 1k\n.tran 1n 20n\n.end\n"
         circuit = CircuitDeck("pulse", path, text)
         pulse = "PULSE(0 5 2n 1n 1n 4n 10n)"
         variation = AssignVariation(kind="assign", assign={"V1": [pulse]})
@@ -195,7 +196,7 @@ class TestAssignExpansion:
 
     def test_param_wins_over_same_named_component(self, tmp_path: Path):
         path = tmp_path / "collision.cir"
-        text = "R1 in out 1k\n.param R1=7\n.op\n.end\n"
+        text = "* collision\nR1 in out 1k\n.param R1=7\n.op\n.end\n"
         circuit = CircuitDeck("collision", path, text)
         variation = AssignVariation(kind="assign", assign={"R1": [9]})
 
@@ -210,7 +211,7 @@ class TestAssignExpansion:
 
     def test_nonfirst_param_on_shared_card_is_resolved_and_rewritten(self, tmp_path: Path):
         path = tmp_path / "multi-param.cir"
-        text = "R1 in out 1k\n.param first=1 target=2 last=3\n.op\n.end\n"
+        text = "* multi\nR1 in out 1k\n.param first=1 target=2 last=3\n.op\n.end\n"
         circuit = CircuitDeck("multi", path, text)
         variation = AssignVariation(kind="assign", assign={"target": ["4.7k"]})
 
@@ -224,7 +225,7 @@ class TestAssignExpansion:
 
     def test_a_component_value_given_twice_is_set_in_both_copies(self, tmp_path: Path):
         path = tmp_path / "twice.cir"
-        text = "V1 in 0 1\nR1 in out R=1k R=1k\n.op\n.end\n"
+        text = "* twice\nV1 in 0 1\nR1 in out R=1k R=1k\n.op\n.end\n"
         circuit = CircuitDeck("twice", path, text)
         variation = AssignVariation(kind="assign", assign={"R1": ["2k"]})
 
@@ -242,7 +243,7 @@ class TestAssignExpansion:
 
         path = tmp_path / "model_twice.cir"
         text = (
-            "V1 d 0 1\nM1 d d 0 0 NM W=10u L=1u\n"
+            "* model twice\nV1 d 0 1\nM1 d d 0 0 NM W=10u L=1u\n"
             ".model NM NMOS(VTO=0.7 KP=100u VTO=0.7)\n.op\n.end\n"
         )
         circuit = CircuitDeck("model-twice", path, text)
@@ -685,7 +686,7 @@ def _closure(
         path.write_text(text)
         files.append(DeckFile(path, text))
         references += f'{reference} "{path}"\n'
-    root_text = f"{references}{root_body}.op\n.end\n"
+    root_text = f"* dut\n{references}{root_body}.op\n.end\n"
     root = staged / "dut.cir"
     root.write_text(root_text)
     return CircuitDeck("dut", root, root_text, tuple(files))
@@ -1165,7 +1166,9 @@ class TestOneFileDeclaringOneNameTwice:
         models = staged / "models"
         model_text = ".model NM NMOS(VTO=0.7)\n"
         models.write_text(model_text)
-        root_text = ".lib models\n.subckt buf in out\nR1 in out 9k\n.ends\nR1 a b 1k\n.op\n.end\n"
+        root_text = (
+            "* dut\n.lib models\n.subckt buf in out\nR1 in out 9k\n.ends\nR1 a b 1k\n.op\n.end\n"
+        )
         root = staged / "dut.cir"
         root.write_text(root_text)
         circuit = CircuitDeck("dut", root, root_text, (DeckFile(models, model_text),))
@@ -1430,7 +1433,7 @@ class TestSeedStability:
         position in a match list or among the rules, so widening a pattern or
         adding a rule can only add draws: the ones already drawn stay put."""
         text = (
-            "R1 in out 1k\nR2 out 0 2k\nV1 in 0 1\n.param gain=2\n"
+            "* seed stability\nR1 in out 1k\nR2 out 0 2k\nV1 in 0 1\n.param gain=2\n"
             ".model NM NMOS(VTO=0.7 KP=100u)\n"
             "M1 out in 0 0 NM W=10u L=1u\nM2 out in 0 0 NM W=10u L=1u\n.op\n.end\n"
         )
@@ -2056,6 +2059,45 @@ def test_a_random_rule_has_no_nominal_on_a_part_number(tmp_path: Path, card: str
         materialize_variants(circuit, expand_variations([circuit], [variation]), tmp_path / "out")
 
     assert excinfo.value.code == "random_nominal_unavailable"
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        {"rule": "mismatch", "prefix": "M", "AVT": 3e-3, "AK": 0.02},
+        {"rule": "mismatch", "prefix": "XN", "AVT": 3e-3},
+    ],
+    ids=["variant-model-card", "patched-subcircuit-copy"],
+)
+def test_a_card_added_before_end_takes_the_decks_line_breaks(tmp_path: Path, rule: dict):
+    """A mismatch rule adds cards before the deck's ``.end`` through the same
+    splice as the ``.options logopinfo`` an operating-point run is given: a
+    variant ``.model`` for a top-level transistor, a patched copy of a
+    subcircuit for a device inside one. Each line added ends with the deck's
+    own line break, so a CRLF deck has no bare LF line afterwards."""
+    text = (
+        "* crlf deck\n"
+        ".model nch nmos(vto=0.7 kp=100u)\n"
+        "M1 a g 0 0 nch W=1u L=1u\n"
+        f"{MINI_FET}"
+        "XN0 a g 0 0 minifet W=1 L=0.15\n"
+        "Vg g 0 1\n"
+        ".op\n"
+        ".end\n"
+    ).replace("\n", "\r\n")
+    path = tmp_path / "crlf.cir"
+    path.write_bytes(text.encode("ascii"))
+    circuit = CircuitDeck("dut", path, text)
+    variation = RandomVariation.model_validate(
+        {"kind": "random", "runs": 1, "seed": 1, "rules": [rule]}
+    )
+
+    (case,) = materialize_variants(
+        circuit, expand_variations([circuit], [variation]), tmp_path / "out"
+    )
+
+    assert case.text.count("\r\n") > text.count("\r\n")
+    assert "\n" not in case.text.replace("\r\n", "")
 
 
 # A card with a brace left open cannot be split into its parts, so what it
