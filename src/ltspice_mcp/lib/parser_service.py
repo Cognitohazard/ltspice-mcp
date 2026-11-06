@@ -55,6 +55,14 @@ PROCESS_LIMITS = ParserProcessLimits(
     error_bytes=16 * 1024,
     cleanup_grace_s=3.0,
 )
+SIGNALS_BYTES = 20 * 1024
+"""The most a read's chosen signals may take of the parser request, as JSON:
+64 names of 256 plain characters, within the request's limit beside its paths.
+A character outside ASCII takes up to six bytes there."""
+DECODE_BYTES = PROCESS_LIMITS.memory_bytes // 2
+"""The most numbers a read of chosen signals may have the parser hold while it
+decodes them (``raw_decode.numbers_held``): half its memory, the rest left to
+the interpreter and the arithmetic on the axis."""
 _DIALECTS = {"ltspice", "ngspice", "qspice", "xyce"}
 _ROLES = ("raw", "log", "console")
 _SETTLE_NS = 100_000_000
@@ -166,6 +174,16 @@ def load_artifacts_sync(
     if type(source.plot_index) is not int or source.plot_index < 0:
         raise ResultError("RAW plot_index must be a nonnegative integer")
     limits = raw_limits(state.config.max_raw_mb)
+    chosen: dict[str, JsonValue] | None = (
+        {
+            # In one order, so a read of the same names is one parse.
+            "signals": [*sorted(source.signals)],
+            "plot_index": source.plot_index,
+            "decode_bytes": DECODE_BYTES,
+        }
+        if require_raw and source.signals is not None
+        else None
+    )
     policy: dict[str, JsonValue] = {
         "dialect": _dialect(source.explicit_dialect),
         "producing_dialect": _dialect(source.dialect),
@@ -175,6 +193,7 @@ def load_artifacts_sync(
             "step_rows": STEP_ROWS,
             "metadata_bytes": METADATA_BYTES,
         },
+        "chosen": chosen,
     }
     try:
         _check_active(deadline, cancel)
@@ -355,6 +374,18 @@ def _load(
             raise failure from exc
         if exc.code == "deadline":
             raise AnalysisDeadlineExceeded("Artifact parsing exceeded its deadline") from exc
+        if exc.code == "signals_not_found":
+            raise ResultError(f"{label}: {exc}", show_hint=False) from exc
+        if exc.code == "too_large":
+            chosen = policy.get("chosen") is not None
+            raise ResultError(
+                _too_large(label, str(exc), chosen=chosen),
+                show_hint=False,
+                # A whole read's refusal ends in the Python read that keeps less.
+                python_route=not chosen,
+            ) from exc
+        if exc.code == "too_large_to_decode":
+            raise ResultError(_too_large_to_decode(label, str(exc)), show_hint=False) from exc
         raise ResultError(f"Failed to parse result file {label}: {exc}") from exc
     except (ValueError, OSError) as exc:
         if not reaped:
@@ -368,3 +399,33 @@ def _load(
                 shutil.rmtree(directory)
             except OSError as exc:
                 raise ParserCleanupError(directory) from exc
+
+
+def _too_large(label: object, reason: str, *, chosen: bool) -> str:
+    """Why a result was not read, as the worker counted it, and what reads less."""
+    if chosen:
+        return (
+            f"{label} was not read: {reason}. Choose fewer signals, or read them in "
+            "more than one load. If one signal is already too many, the run wrote more "
+            "points than one read keeps: shorten the .tran, or measure with .meas "
+            "instead of keeping the waveform."
+        )
+    return (
+        f"{label} was not read: {reason}. Make the run write fewer numbers: .save only "
+        "the nodes you need, shorten the .tran, or measure with .meas instead of keeping "
+        "the waveform. Or read only the traces you need, with the axis and any step "
+        f"parameters, from a file holding up to {DECODE_BYTES // 2**30} GiB of numbers "
+        "or a larger one in LTspice's Fast Access layout: "
+        "r = api.load_raw(..., signals=['V(out)', 'I(R1)'])"
+    )
+
+
+def _too_large_to_decode(label: object, reason: str) -> str:
+    """Why a read of chosen signals was not made, and how the file can be read for them."""
+    return (
+        f"{label} was not read: {reason}. If LTspice wrote it, convert it to LTspice's "
+        "Fast Access layout, which stores each trace whole so that a read decodes only "
+        "the traces it keeps: run LTspice with -FastAccess and the .raw file's path. "
+        "Or make the run write fewer numbers: .save only the nodes you need, shorten "
+        "the .tran, or measure with .meas instead of keeping the waveform."
+    )

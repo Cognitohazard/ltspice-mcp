@@ -544,6 +544,9 @@ def _call_result(
                 "deadline",
                 "cancelled",
                 "memory_limit",
+                "too_large",
+                "too_large_to_decode",
+                "signals_not_found",
             }:
                 raise ValueError("Invalid parser error code")
             raise ParserProcessError(

@@ -160,7 +160,7 @@ known-first-party = ["ltspice_mcp"]
 # marker whose line no longer uses a banned name (RUF100), so the allowed uses
 # only shrink. A name imported into another module is banned there too.
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
-"ltspice_mcp.lib.services.find_trace".msg = "Resolve a caller's signal with services.resolve_signal, which also reads a node pair."
+"ltspice_mcp.lib.trace_names.find_trace".msg = "Resolve a caller's signal with services.resolve_signal, or ask what it reads of a header with trace_names.read_in_plot; both also read a node pair."
 "ltspice_mcp.lib.format.parse_plain_value".msg = "Read a value a simulator runs with format.parse_spice_value; the plain reader only tells a number from a name."
 "ltspice_mcp.lib.variations.parse_plain_value".msg = "Read a value a simulator runs with format.parse_spice_value; the plain reader only tells a number from a name."
 "ltspice_mcp.lib.simulator_build.is_cp1252_ltspice_executable".msg = "Ask simulator_build.ltspice_before_24, which also reads the build a run reported."

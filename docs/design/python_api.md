@@ -447,6 +447,7 @@ preview mode, and the only way to get paging identical to the MCP tools'.
 ```python
 raw = api.load_raw(path, plot_index=0, dialect=None)  # XOR: path | job_id
 raw = api.load_raw(job_id=..., run_index=0, case_id=None, other_raw=None)  # "fra_1" | "op"
+raw = api.load_raw(path, signals=["V(out)", "V(a,b)"])  # only these, the axis and step parameters
 raw.signals                    # list[str]
 raw.trace("V(out)", step=0)    # np.ndarray — complex values preserved
 raw.value("V(out)", step=0)    # one point a step (.op): float, or complex
@@ -464,6 +465,22 @@ ops.observations               # a log reader's dict (LogResult) says the same o
 ```
 
 - `RawResult` is this project's type; the API returns no spicelib types.
+- `signals` reads only the traces those names read, by the rule `trace` reads
+  a name with: one trace, or a node pair's two node voltages. The plot's
+  first variable (its axis, where it has one) and any step parameters are
+  always kept. The read's numeric limit (512 MiB at the widths the file
+  stores) applies to the traces kept, so a file too large to read whole can
+  be read for a few signals. A file stored a point at a time, as LTspice
+  stores a run, is still decoded whole while it is read, and a read holds
+  that to 1 GiB of numbers; a file in LTspice's Fast Access layout (`LTspice
+  -FastAccess <file>.raw` converts one) is decoded only for the traces kept.
+  A name is refused before the read for the reason `trace` would refuse it
+  (no such trace, a step value, an expression, a pair naming ground twice, a
+  node pair of a noise result), with the plot's traces; the result's
+  `observations` include `signals_chosen`, and `trace` of a trace not read
+  says how to read it. A whole-file read over the limit is refused with how
+  many bytes of numbers it counted (at least that many, in a file of several
+  plots), the limit and these ways around it.
 - Each of these reads takes exactly one of `path` and `job_id`. Neither or
   both, an empty `path`, or `run_index`, `case_id` or `other_raw` with a
   `path` raises `ApiValidationError`, as the operations do.
@@ -497,7 +514,10 @@ ops.observations               # a log reader's dict (LogResult) says the same o
   plot with no axis is compared point by point and must have the same number
   of points. `max_rel` is `max_abs` divided by the signal's largest magnitude
   in this result, and is null when that magnitude is 0. Complex values are
-  compared as complex numbers. No tolerance is applied.
+  compared as complex numbers. No tolerance is applied. A result read with
+  `signals` holds no other trace, so when `other` was, the traces only this
+  result holds are `unread_there` and `only_here` is empty, and when this
+  result was, the other's are `unread_here` and `only_there` is empty.
 - `device_op_points` reads, by device and parameter, the semiconductor
   operating points that LTspice prints in the log of an `.op` run. LTspice 26
   prints them under `.options logopinfo`; XVII always prints them and refuses

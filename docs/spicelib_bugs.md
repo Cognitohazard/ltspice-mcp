@@ -4169,3 +4169,127 @@ def test_a_sheet_whose_part_library_was_read_saves(tmp_path):
 edits such a sheet through `edit_schematic` with the library beside it and
 asserts the part has no resolved subcircuit. Once upstream saves the sheet,
 the workaround can read the library again if a reader comes to need it.
+
+---
+
+## Bug 40 — `PlotData.read_trace_data` holds every trace of a plot stored a point at a time, whichever traces are asked for
+
+**Status:** draft for an upstream spicelib pull request. Observed 2026-11-06.
+**Affected version:** spicelib 1.5.1 (`spicelib/raw/plot_data.py`,
+`PlotData.read_trace_data`, the normal-access binary branch, and
+`PlotData._read_ascii_vector`).
+**Our workaround:** a read of chosen signals (`load_raw(signals=...)`) holds
+what decoding them would hold, `raw_decode.numbers_held` in
+`src/ltspice_mcp/lib/raw_decode.py`, to `parser_service.DECODE_BYTES` (half
+the parser process's memory). A file over it is refused before spicelib reads
+it (`RawTooLargeToDecodeError` in `src/ltspice_mcp/lib/raw_header.py`), and
+the refusal names LTspice's Fast Access layout, which spicelib reads a trace
+at a time.
+
+### Summary
+
+Asked for some traces of a binary plot stored a point at a time (LTspice's
+usual layout), `read_trace_data` reads the whole data section into one `bytes` object and
+views the wanted fields of it as a structured array. Every number of the plot
+is in memory while the traces are read, and stays there for as long as any
+trace read from it is alive, since each trace is a view into that buffer. A
+text (`Values:`) plot is read by the constructor into a full array for every
+trace, before any trace is asked for. Only a Fast Access plot, stored a trace
+at a time, is read one trace after another.
+
+So `RawRead(path, traces_to_read=["V(out)"])` needs as much memory as reading
+every trace, and a file larger than the memory a process has cannot be read
+for one trace.
+
+### Affected code
+
+```python
+# plot_data.py, PlotData.read_trace_data, normal access
+record_size = sum([np.dtype(t.dtype).itemsize for t in self._trace_info])
+raw_file.seek(self._fpos_data)
+raw_data = self._read_bytes_from_file(raw_file, self._nPoints * record_size)
+data = np.frombuffer(raw_data, dtype=read_dtypes)
+...
+trace_data = data[trace_info.name]   # a view that keeps raw_data alive
+```
+
+```python
+# plot_data.py, PlotData._read_ascii_vector, called from __init__
+for trace_info in self._trace_info:
+    ...
+    trace_data = np.zeros(self._nPoints, dtype=trace_info.dtype)
+```
+
+### Reproduction
+
+```python
+import tracemalloc
+import numpy as np
+from spicelib.raw.raw_read import RawRead
+from spicelib.raw.raw_write import RawWrite, Trace
+
+points, traces = 200_000, 50
+raw = RawWrite(plot_name="Transient Analysis", fastacces=False)
+raw.add_trace(Trace("time", np.linspace(0, 1e-3, points)))
+for i in range(traces):
+    raw.add_trace(Trace(f"V(n{i})", np.full(points, float(i))))
+raw.save("many.raw")
+
+tracemalloc.start()
+RawRead("many.raw", traces_to_read=["V(n0)"], verbose=False).get_trace("V(n0)").get_wave()
+print(tracemalloc.get_traced_memory()[1])
+# 41,640,876 bytes: the whole data section (200,000 points of 8 + 50 * 4
+# bytes). The same file written with fastacces=True peaks at 2,427,772 bytes,
+# about the axis and the one trace.
+```
+
+### Impact
+
+- A long transient that saved every node cannot be read for the few signals
+  a measurement needs once its data section is larger than the memory the
+  process may use; the read fails with `MemoryError` rather than returning
+  the traces asked for, though they would fit.
+- A reader that keeps one trace keeps the whole buffer alive with it.
+
+### Proposed fix
+
+Read the normal-access data section in blocks of records and copy each wanted
+field out, so memory is the wanted traces plus one block:
+
+```python
+record = np.dtype(read_dtypes)
+wanted = {name: np.empty(self._nPoints, dtype=record[name]) for name in names_to_read}
+raw_file.seek(self._fpos_data)
+block_points = max(1, (16 << 20) // record.itemsize)
+for start in range(0, self._nPoints, block_points):
+    count = min(block_points, self._nPoints - start)
+    block = np.frombuffer(
+        self._read_bytes_from_file(raw_file, count * record.itemsize), dtype=record
+    )
+    for name, out in wanted.items():
+        out[start:start + count] = block[name]
+```
+
+`np.memmap` would also avoid the copy, but a mapping of the whole section
+counts against a process's address-space limit as the buffer does. A text
+plot could be read the same way: parse every line, and store only the values
+of the traces asked for.
+
+### Suggested upstream test
+
+```python
+def test_reading_one_trace_holds_about_one_trace(tmp_path):
+    # the file of the reproduction, written to tmp_path
+    tracemalloc.start()
+    RawRead(tmp_path / "many.raw", traces_to_read=["V(n0)"]).get_trace("V(n0)")
+    assert tracemalloc.get_traced_memory()[1] < 4 * points * (8 + 4)
+```
+
+### Cross-reference
+
+`tests/test_chosen_signals.py::test_a_file_stored_a_point_at_a_time_is_held_to_what_decoding_it_holds`
+pins the budget: with it set between what the axis and one trace hold and
+what the whole file holds, the recorded LTspice transient stored a point at a
+time is refused, naming the Fast Access layout, and the same run converted to
+it is read. Once upstream reads only the traces asked for, `numbers_held`
+counts the kept traces for every layout, and the refusal and its test go.

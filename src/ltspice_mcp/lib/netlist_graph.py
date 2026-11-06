@@ -107,6 +107,7 @@ from ltspice_mcp.lib.spice_lex import (
 )
 from ltspice_mcp.lib.spice_lex_ops import without_section_sign
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, SubcktCard
+from ltspice_mcp.lib.trace_names import GROUND_ALIASES
 
 # An include-path resolver: given the filesystem path an ``.include``/``.lib``
 # resolved to (base directory joined with the target, or an absolute target),
@@ -118,7 +119,6 @@ IncludeResolver = Callable[[Path], "Path | None"]
 # LTspice writes ground as ``0``; ``GND``/``GND!`` are common hand-written
 # aliases. All fold to ``0`` so a schematic drawn with a GND flag and a netlist
 # written with node ``0`` compare equal.
-GROUND_ALIASES: frozenset[str] = frozenset({"0", "gnd", "gnd!"})
 _GROUND = "0"
 
 # Passive two-terminal devices whose terminals are electrically interchangeable.

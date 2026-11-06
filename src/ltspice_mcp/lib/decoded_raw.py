@@ -20,13 +20,14 @@ import numpy as np
 from numpy.typing import NDArray
 
 from ltspice_mcp.errors import NoAxisError, ResultError
-from ltspice_mcp.lib.raw_header import RawPlotHeader, leading_parameters
+from ltspice_mcp.lib.raw_header import RawPlotHeader
 from ltspice_mcp.lib.result_kinds import (
     Analysis,
     header_analysis,
     kind_named,
     plot_analysis,
     sampled_axis,
+    step_variables,
     stepped_kind,
 )
 
@@ -443,11 +444,6 @@ class DecodedPlot:
                 offset,
             )
         missing_steps = steps is None and step_status != "unstepped"
-        step_variables = (
-            tuple(header.variables[index].name for index in leading_parameters(header))
-            if kind is not None and kind.step_values == "raw"
-            else ()
-        )
         descriptor = PlotDescriptor(
             snapshot_id,
             header.index,
@@ -462,7 +458,7 @@ class DecodedPlot:
             header.dialect_evidence,
             step_status,
             None if kind is None else kind.name,
-            step_variables,
+            step_variables(header),
         )
         for wave in waves:
             wave.setflags(write=False)

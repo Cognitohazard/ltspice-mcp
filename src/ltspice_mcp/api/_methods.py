@@ -6,6 +6,7 @@ import contextlib
 import copy
 import functools
 import inspect
+import json
 import os
 import subprocess
 import time
@@ -34,7 +35,7 @@ from ltspice_mcp.api._primitives import (
     measurements_of,
 )
 from ltspice_mcp.errors import InvalidCursorError, PathSecurityError
-from ltspice_mcp.lib import experiment_store, services
+from ltspice_mcp.lib import experiment_store, parser_service, services
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.log_types import LogSectionName
 from ltspice_mcp.lib.model_fields import (
@@ -1248,6 +1249,7 @@ class ApiMethodsMixin(ABC):
         dialect: Literal["ltspice", "ngspice", "qspice", "xyce"] | None = None,
         other_raw: OtherRawKind | None = None,
         raw_path: str | os.PathLike[str] | None = None,
+        signals: Sequence[str] | None = None,
     ) -> RawResult:
         """Load one raw result through the bounded parser and return a safe wrapper.
 
@@ -1256,6 +1258,14 @@ class ApiMethodsMixin(ABC):
         ``other_raw`` reads the case's other raw of that kind, as its run row's
         ``other_raws`` lists it, instead of its raw: ``"fra_1"`` a frequency
         response analysis's results, ``"op"`` a transient's operating point.
+        ``signals`` reads only the traces those names read, as ``trace`` reads
+        a name (a node pair reads both nodes), with the plot's first variable
+        (its axis, where it has one) and any step parameters: a file too large
+        to read whole can be read this way, since the size limit applies to
+        what is kept. A file stored a point at a time, as LTspice stores a run
+        unless it is converted to its Fast Access layout, is still decoded
+        whole, which a read holds to 1 GiB of numbers. A name the plot has no
+        trace for is refused.
         ``raw_path`` is the older spelling of ``path``, still accepted."""
         self._check_process_and_thread()
         path = _older_spelling(path, "raw_path", raw_path)
@@ -1266,6 +1276,7 @@ class ApiMethodsMixin(ABC):
             raise ApiValidationError("dialect must be ltspice, ngspice, qspice, xyce or None")
         if other_raw is not None and other_raw not in OTHER_RAW_KINDS:
             raise ApiValidationError(f"other_raw must be one of {list(OTHER_RAW_KINDS)} or None")
+        chosen = _chosen_signals(signals)
         return self._marshal(
             load_raw_result(
                 state=self._state,
@@ -1276,6 +1287,7 @@ class ApiMethodsMixin(ABC):
                 plot_index=plot_index,
                 dialect=dialect,
                 other_raw=other_raw,
+                signals=chosen,
             ),
             cancelable=True,
             cancel_on_interrupt=True,
@@ -1359,6 +1371,31 @@ def _older_spelling(path: _PathArg, name: str, older: _PathArg) -> _PathArg:
     if path is not None:
         raise ApiValidationError(f"Give path or {name}, not both")
     return older
+
+
+def _chosen_signals(signals: Sequence[str] | None) -> tuple[str, ...] | None:
+    """``load_raw``'s ``signals`` as the parser takes them: 1 to 64 names, each
+    a string of 1 to 256 characters without the spaces around it, in the order
+    given, a repeat dropped."""
+    if signals is None:
+        return None
+    if (
+        isinstance(signals, str)
+        or not isinstance(signals, Sequence)
+        or any(not isinstance(name, str) for name in signals)
+    ):
+        raise ApiValidationError("signals must be a list of names, e.g. ['V(out)']")
+    names = tuple(dict.fromkeys(name.strip() for name in signals))
+    if not 0 < len(names) <= 64 or any(not 0 < len(name) <= 256 for name in names):
+        raise ApiValidationError("signals must name 1 to 64 traces, each in 1 to 256 characters")
+    # As the parser request spells them, where a character outside ASCII is escaped.
+    if len(json.dumps(list(names))) > parser_service.SIGNALS_BYTES:
+        raise ApiValidationError(
+            f"signals take more than {parser_service.SIGNALS_BYTES // 1024} KiB as the "
+            "parser reads them, where a character outside ASCII takes up to 6 bytes: "
+            "choose fewer or shorter names, or read them in more than one load"
+        )
+    return names
 
 
 def _one_source(

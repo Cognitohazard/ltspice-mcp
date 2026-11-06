@@ -12,12 +12,21 @@ costs to start.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from ltspice_mcp.lib.log_types import LogLimits
 from ltspice_mcp.lib.parser_capture import SourceFiles, capture_inputs, parser_cache_key
-from ltspice_mcp.lib.raw_header import RawLimits, preflight_raw
+from ltspice_mcp.lib.raw_header import (
+    RawHeader,
+    RawLimits,
+    RawTooLargeError,
+    RawTooLargeToDecodeError,
+    preflight_raw,
+    select_traces,
+)
 from ltspice_mcp.lib.store import is_sha256, parser_file_in
 
 
@@ -41,6 +50,34 @@ def _source_files(value: Any) -> SourceFiles:
     return SourceFiles(**paths)
 
 
+@dataclass(frozen=True)
+class _Chosen:
+    """What a read of chosen signals keeps, and how much it may decode."""
+
+    signals: list[str]
+    plot_index: int
+    decode_bytes: int
+
+
+def _chosen_request(value: Any) -> _Chosen | None:
+    """The request's choice of signals, or None for a read of every trace."""
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {"signals", "plot_index", "decode_bytes"}:
+        raise ValueError("Parser chosen signals must name signals, plot_index and decode_bytes")
+    signals = value["signals"]
+    if (
+        not isinstance(signals, list)
+        or not 0 < len(signals) <= 64
+        or any(not isinstance(item, str) or not 0 < len(item) <= 256 for item in signals)
+    ):
+        raise ValueError("Parser signals must be 1 to 64 names of up to 256 characters")
+    plot_index = value["plot_index"]
+    if type(plot_index) is not int or plot_index < 0:
+        raise ValueError("Parser plot_index must be a nonnegative integer")
+    return _Chosen(signals, plot_index, _positive(value["decode_bytes"], "decode_bytes"))
+
+
 def parse_request(request: dict[str, Any], directory: Path) -> None:
     """Capture and decode the fixed operation, writing one bounded result file."""
     expected = {
@@ -50,6 +87,7 @@ def parse_request(request: dict[str, Any], directory: Path) -> None:
         "dialect",
         "producing_dialect",
         "limits",
+        "chosen",
         "existing_cache_keys",
     }
     if set(request) != expected or type(request["version"]) is not int or request["version"] != 1:
@@ -69,6 +107,9 @@ def parse_request(request: dict[str, Any], directory: Path) -> None:
     }:
         raise ValueError("Parser limits must be explicit and complete")
     raw_limits = RawLimits(**limits["raw"])
+    chosen = _chosen_request(request["chosen"])
+    if chosen is not None and not require_raw:
+        raise ValueError("Only a RAW read chooses signals")
     log_limits = LogLimits(**limits["log"])
     step_rows = _positive(limits["step_rows"], "step_rows")
     metadata_bytes = _positive(limits["metadata_bytes"], "metadata_bytes")
@@ -85,7 +126,14 @@ def parse_request(request: dict[str, Any], directory: Path) -> None:
     header = (
         preflight_raw(
             parser_file_in(directory, "input.raw"),
-            limits=raw_limits,
+            # A read of chosen signals holds the numeric budget to what it
+            # keeps and what it decodes (_cut), not to the whole file. A
+            # file's numbers take no more than four bytes for each byte it
+            # stores them in: as many in binary, fewer in text, which spends
+            # at least four characters on a value it keeps in sixteen bytes.
+            limits=raw_limits
+            if chosen is None
+            else replace(raw_limits, numeric_bytes=4 * raw_limits.input_bytes),
             dialect=request["dialect"],
             producing_dialect=request["producing_dialect"],
         )
@@ -97,6 +145,7 @@ def parse_request(request: dict[str, Any], directory: Path) -> None:
         dialect=request["dialect"],
         producing_dialect=request["producing_dialect"],
         limits=limits,
+        chosen=None if chosen is None else request["chosen"],
     )
     result: dict[str, Any] = {"version": 1, "status": "cached", "cache_key": key}
     if key not in keys:
@@ -105,8 +154,9 @@ def parse_request(request: dict[str, Any], directory: Path) -> None:
         result["logs"] = decode_logs(captured, directory, limits=log_limits)
         result["raw"] = None
         if require_raw:
-            from ltspice_mcp.lib.raw_decode import decode_raw
+            from ltspice_mcp.lib.raw_decode import decode_raw, numbers_held
 
+            assert header is not None  # preflight ran for every RAW read
             result["raw"] = decode_raw(
                 captured,
                 directory,
@@ -116,9 +166,32 @@ def parse_request(request: dict[str, Any], directory: Path) -> None:
                 step_log_bytes=log_limits.log_bytes,
                 step_rows=step_rows,
                 preflight=header,
+                chosen=None if chosen is None else _cut(header, chosen, raw_limits, numbers_held),
             )
         result["status"] = "ok"
     payload = json.dumps(result, allow_nan=False, separators=(",", ":")).encode("utf-8")
     if len(payload) > metadata_bytes:
         raise ValueError("Parser result metadata exceeds its byte limit")
     parser_file_in(directory, "result.json").write_bytes(payload)
+
+
+def _cut(
+    header: RawHeader,
+    chosen: _Chosen,
+    limits: RawLimits,
+    held: Callable[[RawHeader, RawHeader], int],
+) -> RawHeader:
+    """``header`` cut to the traces ``chosen`` reads (``trace_names.chosen_traces``),
+    within the numeric budget a whole-file read is held to, and with no more
+    numbers held while decoding (``held``) than ``chosen`` allows."""
+    from ltspice_mcp.lib.trace_names import chosen_traces
+
+    cut = select_traces(
+        header, chosen_traces(header.plots, chosen.signals, plot_index=chosen.plot_index)
+    )
+    if cut.numeric_bytes > limits.numeric_bytes:
+        raise RawTooLargeError(cut.numeric_bytes, limits.numeric_bytes, chosen=True)
+    decoded = held(header, cut)
+    if decoded > chosen.decode_bytes:
+        raise RawTooLargeToDecodeError(decoded, chosen.decode_bytes)
+    return cut

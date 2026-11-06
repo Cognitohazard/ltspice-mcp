@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import dataclasses
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict
 from pathlib import Path
@@ -50,8 +51,10 @@ class RawResult:
         step_count: int,
         steps: list[dict[str, Any]],
         observations: tuple[dict[str, Any], ...] = (),
+        chosen: tuple[str, ...] | None = None,
     ) -> None:
         self._raw = raw
+        self._chosen = chosen
         self._signals = tuple(str(name) for name in raw.get_trace_names())
         # Takes ownership of the rows the caller just built; the detachment
         # contract is the per-read copy on the ``steps`` property.
@@ -74,9 +77,30 @@ class RawResult:
         ``V(a) - V(b)`` from this step. Other trace math is ordinary numpy on
         the traces it combines.
         """
-        signal = services.resolve_signal(self._raw, name)
+        signal = self._resolve(name)
         self._validate_step(step)
         return np.array(signal.wave(self._raw, step), copy=True)
+
+    def _resolve(self, name: str) -> services.Signal:
+        """``name`` resolved against this result (``services.resolve_signal``).
+
+        A result read for chosen signals holds only their traces, so a trace
+        it lacks may be in the file: its refusal says how to read it. Any other
+        refusal (an expression, a step value, a noise pair) holds for the file
+        too, and is given as it is.
+        """
+        read = services.read_signal(self._raw, name)
+        if read.refused is None:
+            return services.Signal(read.name, read.plus, read.minus)
+        refused = services.signal_refused(self._raw, name, read)
+        if self._chosen is not None and read.refused == "missing":
+            raise ResultError(
+                f"{refused} This result was read with signals={list(self._chosen)}, so it "
+                f"holds only their traces; load_raw again with {name!r} among them.",
+                show_hint=refused.show_hint,
+                python_route=refused.python_route,
+            )
+        raise refused
 
     def value(self, name: str, *, step: int = 0) -> float | complex:
         """The one value of ``name`` in this step, for a plot of one point a
@@ -148,8 +172,9 @@ class RawResult:
     def observations(self) -> list[dict[str, Any]]:
         """What this result says of itself as it was read: ``partial_raw`` when
         it is a stopped case's kept raw, whose values end where the run was
-        stopped, and ``coarse_compressed_waveform`` when waveform compression
-        left a transient with few points. Empty when neither applies."""
+        stopped, ``coarse_compressed_waveform`` when waveform compression left a
+        transient with few points, and ``signals_chosen`` when it was read for
+        chosen signals. Empty when none applies."""
         return copy.deepcopy(list(self._observations))
 
     @property
@@ -252,6 +277,12 @@ class RawResult:
         the largest difference, its share of this result's largest magnitude
         of that signal (None when that is 0), the axis value it is at, and
         the two values there. How large a difference may be is the caller's.
+        A result read for chosen signals (``load_raw(signals=...)``) holds no
+        other trace, so a trace only the other result holds was not read, and
+        is not known to be missing: when ``other`` was read so, those of this
+        result's traces are ``unread_there`` and ``only_here`` is empty, and
+        when this result was, the other's are ``unread_here`` and
+        ``only_there`` is empty.
         """
         self._validate_step(step)
         if other_step is None:
@@ -271,8 +302,8 @@ class RawResult:
             pairs, missing, reasons = [], [], []
             for signal in signals:
                 try:
-                    ours = services.resolve_signal(self._raw, signal)
-                    theirs = services.resolve_signal(other._raw, signal)
+                    ours = self._resolve(signal)
+                    theirs = other._resolve(signal)
                 except ResultError as exc:
                     missing.append(signal)
                     reasons.append(str(exc))
@@ -324,13 +355,20 @@ class RawResult:
                 "value": ours[worst].item(),
                 "other": theirs[worst].item(),
             }
-        return {
+        only_here = sorted(names[i] for key, i in here.items() if key not in there)
+        only_there = sorted(other_names[i] for key, i in there.items() if key not in here)
+        result: dict[str, Any] = {
             "signals": compared,
-            "only_here": sorted(names[i] for key, i in here.items() if key not in there),
-            "only_there": sorted(other_names[i] for key, i in there.items() if key not in here),
+            "only_here": only_here,
+            "only_there": only_there,
             "span": span,
             "points": points,
         }
+        if other._chosen is not None:
+            result["only_here"], result["unread_there"] = [], only_here
+        if self._chosen is not None:
+            result["only_there"], result["unread_here"] = [], only_there
+        return result
 
 
 #: One step of a signal of a result: ``read(raw, step)``.
@@ -372,8 +410,13 @@ async def load_raw_result(
     plot_index: int = 0,
     dialect: str | None = None,
     other_raw: OtherRawKind | None = None,
+    signals: tuple[str, ...] | None = None,
 ) -> RawResult:
-    """Resolve and bounded-parse one raw result on the API event loop."""
+    """Resolve and bounded-parse one raw result on the API event loop.
+
+    With ``signals``, the parser keeps only the traces they read, with the
+    plot's first variable and any step parameters
+    (``trace_names.chosen_traces``), and holds its numeric budget to those."""
     if raw_path is not None:
         resolved = state.resolve_path(str(raw_path))
         source = services.source_for_raw_path(
@@ -388,8 +431,23 @@ async def load_raw_result(
         source = services.source_for_run(context, plot_index=plot_index, dialect=dialect)
         resolved = source.raw
 
+    if signals is not None:
+        source = dataclasses.replace(source, signals=signals)
     raw = await services.load_raw(source, state)
     observations = await asyncio.to_thread(services.read_observations, source, raw)
+    if signals is not None:
+        observations = (
+            *observations,
+            {
+                "code": "signals_chosen",
+                "kind": "provenance",
+                "detail": (
+                    f"Read with signals={list(signals)}: this result holds the traces "
+                    "they read, the plot's first variable (its axis, where it has one) "
+                    "and any step parameters, and no other trace."
+                ),
+            },
+        )
     assert resolved is not None
     step_count = len(raw.descriptor.steps)
     steps: list[dict[str, Any]] = [StepValues(step.parameters) for step in raw.descriptor.steps]
@@ -400,6 +458,7 @@ async def load_raw_result(
         step_count=step_count,
         steps=steps,
         observations=observations,
+        chosen=signals,
     )
 
 
