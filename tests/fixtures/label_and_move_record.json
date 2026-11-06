@@ -2556,6 +2556,30 @@
     }
    }
   },
+  "fixtures/ltspice_recorded/inputs/export/sheet_part_names.asc": {
+   "labels": {
+    "proposals": 57,
+    "sha256": "b42338124d93808e3ab949fc321a21a8abb719ad8fef22bbb4e5dc9ea00410ad",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 13,
+     "placed [a name already here; 1 at the point, 1 named]": 5,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 13,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 13,
+     "placed [ground; 1 at the point, 1 named]": 5,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 5
+    }
+   },
+   "moves": {
+    "proposals": 127,
+    "sha256": "785009a9528047738c8b1ffd8a591db27ed3b54866d823a44aa4fd6f55fd6cea",
+    "shapes": {
+     "moved": 127
+    }
+   }
+  },
   "fixtures/ltspice_recorded/inputs/plot/div_dc.asc": {
    "labels": {
     "proposals": 52,

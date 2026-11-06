@@ -137,7 +137,7 @@ from ltspice_mcp.lib.signal_analysis import (
 from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build, reported_build
 from ltspice_mcp.lib.trace_names import (
     find_trace,  # noqa: TID251 - an op-point value's name, read against the .log's names
-    pin_note,
+    naming_note,
 )
 from ltspice_mcp.state import SessionState
 
@@ -1316,7 +1316,7 @@ async def _value_from_operating_point(
             present += f", ... ({len(flat)} total)"
         raise ResultError(
             f"{recipe.expr!r} is not present in this operating-point "
-            f"result.{pin_note(raw.header, recipe.expr)} Address a value by the name it "
+            f"result.{naming_note(raw.header, recipe.expr)} Address a value by the name it "
             "carries (e.g. "
             "'@m1[gm]', 'V(out)') or a device parameter by the device's path "
             "and the parameter ('m1.gm', 'x1.m1.gm' for M1 inside X1). "

@@ -111,7 +111,7 @@ extra = ["connectivity/res.asy"]
 
 [behaviour.net-naming]
 summary = "The name a node gets: a label, ground over a label, one of two labels, labels of one name on separate wires, labels whose names differ only in case, a GND label in any case, N001 for an unlabelled net, NC_01 for an unconnected pin, and a label touching nothing."
-model = ["lib/connectivity.py", "lib/schematic_ops.py", "lib/netlist_graph.py", "lib/pin_legend.py"]
+model = ["lib/connectivity.py", "lib/schematic_ops.py", "lib/netlist_graph.py", "lib/pin_legend.py", "lib/trace_names.py"]
 inputs = [
     "connectivity/two_labels_zeta_first.asc",
     "connectivity/two_labels_alpha_first.asc",
@@ -201,13 +201,13 @@ extra = ["export/res.asy"]
 
 [behaviour.export-instance-names]
 summary = "How an instance is named in the netlist when its name does not start with its element letter, on a library-style symbol and on a block symbol that has no sheet of its own, and what a run's raw calls such a resistor's current."
-model = ["lib/schematic_ops.py", "lib/netlist_graph.py", "lib/spice_lex_ops.py", "lib/deck_prep.py"]
+model = ["lib/schematic_ops.py", "lib/netlist_graph.py", "lib/spice_lex_ops.py", "lib/deck_prep.py", "lib/trace_names.py"]
 inputs = ["export/instance_names.asc", "export/block_symbol.asc"]
 extra = ["export/res.asy", "export/probe4.asy", "export/cell4.asy"]
 
 [behaviour.export-hierarchical-block]
 summary = "A sheet that places a hierarchical block whose own sheet and symbol sit beside it, the symbol drawn as LTspice draws one or given a Prefix of X: the netlist each build exports for it, and what a build writes when it runs the sheet."
-model = ["lib/deck_prep.py", "lib/schematic_ops.py", "lib/symbol_library.py"]
+model = ["lib/deck_prep.py", "lib/schematic_ops.py", "lib/symbol_library.py", "lib/trace_names.py"]
 # hier_plain.asy is a block symbol with pins IN and OUT and no attribute, as
 # LTspice makes one for a sheet; hier_amp.asy is the same block with
 # SYMATTR Prefix X. Each block's own sheet (hier_plain.asc, hier_amp.asc) is
@@ -215,6 +215,11 @@ model = ["lib/deck_prep.py", "lib/schematic_ops.py", "lib/symbol_library.py"]
 # block from a 1 V source into a 10k load and runs .op.
 inputs = ["export/hier_top.asc", "export/hier_plain_top.asc"]
 extra = ["export/hier_amp.asc", "export/hier_amp.asy", "export/hier_plain.asc", "export/hier_plain.asy"]
+
+[behaviour.sheet-part-trace-names]
+summary = "What a run of a sheet names the device inside a part whose symbol is given a Prefix of X and a reference that does not start with X, beside the same subcircuit called with X from a directive on the sheet, and the net the sheet leaves unlabelled."
+model = ["lib/trace_names.py"]
+pending = "Written where no LTspice runs. Record it on Windows with uv run python scripts/record_ltspice_fixtures.py --only 'export/sheet_part_names', then remove this key."
 
 [behaviour.export-instance-prefix]
 summary = "What an instance's own Prefix attribute does on export: the element letter it gives the card and how the instance name is then written, in either case of the letter, before or after InstName, on a library-style symbol, a stock symbol and a block symbol."
@@ -1204,6 +1209,20 @@ behaviour = "export-hierarchical-block"
 kind = "run"
 source = "export/hier_plain_top.asc"
 extra = ["export/hier_plain.asc", "export/hier_plain.asy"]
+keep = ["net", "log", "raw"]
+
+# A stock nmos4 placed as MB1 with a Prefix of X runs wrapped_nmos, an NMOS
+# card M1 wrapped in a subcircuit of its own; a directive on the sheet calls
+# the same subcircuit as XMB2; R1 feeds MB1's drain over a wire with no label.
+# The settings store the devices inside subcircuits, so the raw names M1 under
+# each instance as the build names it.
+[[case]]
+id = "export/sheet_part_names"
+behaviour = "sheet-part-trace-names"
+kind = "run"
+source = "export/sheet_part_names.asc"
+extra = ["export/wrapped_nmos.sub"]
+ini = { SaveSubcircuitNodeVoltages = "true", SaveSubcircuitDeviceCurrents = "true" }
 keep = ["net", "log", "raw"]
 
 # A frequency response analysis over two .step values: how the results file

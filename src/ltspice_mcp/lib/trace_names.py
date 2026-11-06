@@ -19,14 +19,17 @@ from __future__ import annotations
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
+from pathlib import PureWindowsPath
 from typing import Literal
 
+from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.deck_nodes import GROUND_NAMES
 from ltspice_mcp.lib.device_names import (
     device_param_name,
     find_trace_by_path,
     parse_device_param,
     parse_shorthand,
+    trace_key,
     writes_xvii_command,
 )
 from ltspice_mcp.lib.raw_header import RawPlotHeader, leading_parameters
@@ -39,6 +42,10 @@ NODE_PAIR_RE = re.compile(r"\s*v\(\s*([^\s(),]+)\s*,\s*([^\s(),]+)\s*\)\s*", re.
 
 #: A node voltage trace ``V(<node>)``, the node inside.
 V_TRACE_RE = re.compile(r"v\((.+)\)", re.IGNORECASE)
+
+#: The name LTspice's export gives a schematic's net that carries no label:
+#: ``N001``, ``N002``, ... (recorded: ``net-naming``).
+UNLABELLED_NET_RE = re.compile(r"n\d{3,}", re.IGNORECASE)
 
 #: What a trace of a result holds, as its name and declared type tell.
 TraceQuantity = Literal["node_voltage", "current", "device_parameter", "other"]
@@ -289,23 +296,19 @@ def why_not(read: NameRead, signal: str, plot: RawPlotHeader, *, listed: str = "
     if read.absent is not None and read.absent != signal:
         return (
             f"Signal '{signal}' reads as a node-pair difference, but node voltage "
-            f"'{read.absent}' is not in this result.{pin_note(plot, read.absent)}{listed}"
+            f"'{read.absent}' is not in this result.{naming_note(plot, read.absent)}{listed}"
         )
     return f"Signal '{signal}' not found.{_missing_note(plot, signal)}{listed}"
 
 
 def _missing_note(plot: RawPlotHeader, signal: str) -> str:
-    """What a name no trace answers to may mean instead, or nothing."""
+    """What a name no trace answers to may mean instead, or nothing: a naming
+    rule (``naming_note``), else where a device's parameters are read."""
     from ltspice_mcp.lib.log_parser import device_key  # Its parser is not needed here.
 
+    if note := naming_note(plot, signal):
+        return note
     lowered = signal.lower()
-    traces = {name.lower() for name in signal_names(plot)}
-    if lowered in ("v(onoise)", "v(inoise)") and traces & {"onoise_spectrum", "inoise_spectrum"}:
-        return " (ngspice names noise signals 'onoise_spectrum'/'inoise_spectrum')"
-    if lowered in ("onoise_spectrum", "inoise_spectrum") and traces & {"v(onoise)", "v(inoise)"}:
-        return " (LTspice names noise signals 'V(onoise)'/'V(inoise)')"
-    if pin := pin_note(plot, signal):
-        return pin
     device = parse_shorthand(lowered)
     if device or "@" in lowered:
         save_target = device_key(*device) if device else signal
@@ -318,7 +321,141 @@ def _missing_note(plot: RawPlotHeader, signal: str) -> str:
     return ""
 
 
-def pin_note(plot: RawPlotHeader, signal: str) -> str:
+def naming_note(plot: RawPlotHeader, signal: str) -> str:
+    """Why ``signal`` reads no trace of ``plot`` when a simulator names what it
+    means otherwise, and the name to read; empty when no naming rule explains it.
+
+    The one answer every reader of a name gives, a value read off an
+    operating point's bias point included: the noise traces' names on each
+    simulator, a pin of a subcircuit instance (``_pin_note``), an instance's
+    X (``_instance_x_note``), and a schematic's unlabelled nets
+    (``_unlabelled_net_note``).
+    """
+    lowered = signal.lower()
+    traces = {name.lower() for name in signal_names(plot)}
+    if lowered in ("v(onoise)", "v(inoise)") and traces & {"onoise_spectrum", "inoise_spectrum"}:
+        return " (ngspice names noise signals 'onoise_spectrum'/'inoise_spectrum')"
+    if lowered in ("onoise_spectrum", "inoise_spectrum") and traces & {"v(onoise)", "v(inoise)"}:
+        return " (LTspice names noise signals 'V(onoise)'/'V(inoise)')"
+    return (
+        _pin_note(plot, signal)
+        or _instance_x_note(plot, signal)
+        or _unlabelled_net_note(plot, signal)
+    )
+
+
+def _instance_x_note(plot: RawPlotHeader, signal: str) -> str:
+    """Name the one trace of ``plot`` that ``signal`` names once an instance on
+    its path gains or loses a leading X, and say why the result spells it so;
+    empty when no trace does, or more than one.
+
+    A part placed on a schematic is named in a raw by its reference, without
+    the X its netlist line puts in front: block X1, exported as ``X§X1`` by
+    LTspice 26 and ``XX1`` by XVII, is ``Ix(x1:in)`` (XVII: ``Ix(x1:IN)``),
+    and resistor Load, exported as ``R§Load``, is ``I(Load)`` (recorded:
+    ``export/hier_plain_top_run``, ``export/load_name_op``). LTspice 26 names
+    an instance a deck calls with X by that whole name (``Id(xa:Mdrv)``), and
+    XVII every instance without its X (``Id(a:Mdrv)``; recorded:
+    ``raw/subckt_names_tran_saved``). ``find_trace`` already reads a deck's
+    spelling of an instance on XVII, so a name gets here there only when it
+    mixes the two spellings. Only an instance is matched this way: the last
+    name on a path is a node or a device, which no X marks. The schematic's
+    rule is LTspice's, so it is not given as the reason on another
+    simulator's result, which is named but not explained.
+    """
+    asked_function, asked_path = trace_key(signal, xvii=False)
+    if not asked_function or len(asked_path) < 2:
+        return ""
+    found: list[tuple[str, list[tuple[str, str]]]] = []
+    for name in signal_names(plot):
+        function, path = trace_key(name, xvii=False)
+        if function != asked_function or len(path) != len(asked_path):
+            continue
+        if path[-1] != asked_path[-1]:
+            continue
+        differ = [(a, b) for a, b in zip(asked_path[:-1], path[:-1], strict=True) if a != b]
+        if differ and all(a == f"x{b}" or b == f"x{a}" for a, b in differ):
+            found.append((name, differ))
+    if len(found) != 1:
+        return ""
+    ((trace, differ),) = found
+    named = " and ".join(f"'{asked}' as '{spelled}'" for asked, spelled in differ)
+    if writes_xvii_command(dict(plot.fields)):
+        why = [
+            "LTspice XVII names each subcircuit instance without the X that starts its "
+            "name in the netlist."
+        ]
+    else:
+        why = []
+        if plot.dialect == "ltspice" and any(asked == f"x{spelled}" for asked, spelled in differ):
+            why.append(
+                "LTspice names a part placed on a schematic by its reference, without the X "
+                "its netlist line adds in front."
+            )
+        if any(spelled == f"x{asked}" for asked, spelled in differ):
+            why.append(
+                "An instance a deck calls with X keeps that X in the names a result gives it."
+            )
+    return "".join([f" {trace} is in this result, which names {named}.", *(f" {w}" for w in why)])
+
+
+def _unlabelled_net_note(plot: RawPlotHeader, signal: str) -> str:
+    """For a node ``V(<node>)`` at the top of a schematic's circuit
+    (``from_schematic``), name the nets of ``plot`` LTspice named itself
+    because the sheet put no label on them, and say a label names one; empty
+    for any other name, or a result that holds no such net.
+
+    LTspice's export names a sheet's net that carries no label ``N001``,
+    ``N002``, ... (recorded: ``net-naming``), and the run's raw holds it
+    under that name, ``V(n001)``, on both builds (``export/hier_plain_top_run``).
+    """
+    match = V_TRACE_RE.fullmatch(signal.strip())
+    if match is None:
+        return ""
+    node = match.group(1).strip()
+    if re.search(r"[\s:.,]", node) or node.casefold() in GROUND_NAMES:
+        return ""
+    if not from_schematic(plot):
+        return ""
+    unlabelled = [
+        name
+        for name in signal_names(plot)
+        if (voltage := V_TRACE_RE.fullmatch(name))
+        and UNLABELLED_NET_RE.fullmatch(voltage.group(1))
+    ]
+    if not unlabelled:
+        return ""
+    listed = ", ".join(unlabelled[:10])
+    if len(unlabelled) > 10:
+        listed += f" and {len(unlabelled) - 10} more"
+    note = (
+        " This result is a schematic's, and LTspice names a net that has no label "
+        f"N001, N002, ...: here {listed}."
+    )
+    if not UNLABELLED_NET_RE.fullmatch(node):
+        note += f" Put a net label {node} on the net and run it again to read V({node})."
+    return note
+
+
+def from_schematic(plot: RawPlotHeader) -> bool:
+    """Whether ``plot`` is of a run of a schematic, as its title says.
+
+    LTspice XVII titles a raw with its deck's first line, which a sheet's
+    export writes as ``* <sheet>.asc``. LTspice 26 titles it with the path of
+    the deck it ran, which for a sheet is the ``.net`` it exported; the server
+    runs a sheet's export under that suffix too (``deck_prep``). A deck's run
+    is titled by the deck's own first line or path (recorded on both builds:
+    ``export/hier_plain_top_run`` and ``export/load_name_op`` against every
+    deck's run). LTspice 26's title says no more than the suffix, so a deck its
+    author named ``.net`` reads as a schematic's. Either title names a Windows
+    path, read as one on any platform.
+    """
+    title = next((value for key, value in plot.fields if key.casefold() == "title"), "")
+    path = PureWindowsPath(title.strip())
+    return is_asc(path) or path.suffix.casefold() == ".net"
+
+
+def _pin_note(plot: RawPlotHeader, signal: str) -> str:
     """Say, for ``V(<instance>:<pin>)``, that ``pin`` is a pin of a subcircuit
     instance, which a result holds no voltage for; empty for any other name.
 
