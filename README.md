@@ -8,8 +8,8 @@ ltspice-mcp is an MCP server that lets an AI assistant simulate circuits with
 LTspice or ngspice and edit LTspice schematics. Its goals are speed,
 correctness, token efficiency and clean schematics.
 
-The assistant uses battle-tested tools, which know the quirks of SPICE and of
-each simulator, instead of improvised scripts.
+The assistant uses ready-made, well-tested tools, which know the quirks of
+SPICE and of each simulator, instead of improvised scripts.
 
 Mechanical checks catch common errors before a file is written or run, and
 direct the assistant's attention to the right place. Layout is left to the
