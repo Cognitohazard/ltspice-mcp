@@ -102,9 +102,11 @@ from ltspice_mcp.tools._base import (
     format_observations,
     format_response,
     image_content,
+    open_window_call,
     registry,
     safe_path,
     sandboxed,
+    sha256_from_open_in_ltspice,
     shown_in_window,
     window_difference,
 )
@@ -1117,10 +1119,10 @@ _TIED_NOTE = "The plot is tied to the sheet: a click on a net there plots it."
 _ALONE_NOTE = (
     "The plot is not tied to the sheet, so clicking a net there does not plot it, "
     "because LTspice opened the sheet before it had results and has unsaved changes "
-    "to it. Ask the user whether to keep those changes, then call edit_schematic with "
-    "ops=[] and open_window='save' or 'discard'. After 'discard', showing this run "
-    "again ties the plot; after 'save', the sheet holds their changes, so run it "
-    "again and show that run."
+    "to it. Ask the user whether to keep those changes, then call "
+    + open_window_call("this sheet", sha256_from_open_in_ltspice("this sheet"), "'save'|'discard'")
+    + ". After 'discard', showing this run again ties the plot; after 'save', the "
+    "sheet holds their changes, so run it again and show that run."
 )
 _BY_HAND_NOTE = (
     "The results are beside the sheet: View > Visible Traces on it in LTspice opens "

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sys
 import zlib
 from pathlib import Path
@@ -323,3 +324,73 @@ def as_ltspice_reads(sheet: Path) -> str:
 
 def digest(sheet: Path) -> str:
     return hashlib.sha256(sheet.read_bytes()).hexdigest()
+
+
+def _referrals(text: str) -> list[str]:
+    """Each place ``text`` sends its reader to ``edit_schematic``: each call it
+    writes out, through its closing parenthesis, or where it writes none, each
+    sentence from the tool's name on."""
+    calls: list[str] = []
+    sentences: list[str] = []
+    for start in (match.start() for match in re.finditer(r"\bedit_schematic\b", text)):
+        rest = text[start + len("edit_schematic") :]
+        if not rest.startswith("("):
+            sentences.append(text[start:].split(". ", 1)[0])
+            continue
+        depth = 0
+        for end, char in enumerate(rest):
+            depth += {"(": 1, ")": -1}.get(char, 0)
+            if depth == 0:
+                calls.append("edit_schematic" + rest[: end + 1])
+                break
+    return calls or sentences
+
+
+async def follow_open_window_referral(
+    state: SessionState,
+    text: str,
+    sheet: Path,
+    choice: str,
+    *,
+    sha256: str,
+    window_pid: int | None = None,
+) -> dict[str, Any]:
+    """Send the ``edit_schematic`` call that ``text`` tells its reader to send
+    to settle a window's copy of ``sheet`` with ``choice``, with the arguments
+    it names and no others, and return the reply's data.
+
+    ``sha256`` is the file's sha256, found where the referral says, and is
+    sent as ``expected_sha256`` only when the referral names that argument;
+    ``window_pid`` likewise. A referral that leaves out an argument the call
+    needs is followed without it, so the call is refused.
+    """
+    from ltspice_mcp.tools.schematic_edit import EditSchematicInput, handle_edit_schematic
+
+    offering = [call for call in _referrals(text) if f"'{choice}'" in call]
+    assert offering, f"no edit_schematic call with open_window={choice!r} in: {text}"
+    named = set(re.findall(r"\b(ops|expected_sha256|open_window|window_pid)\b", offering[0]))
+    assert {"ops", "open_window"} <= named, offering[0]
+    arguments: dict[str, Any] = {"path": str(sheet), "ops": [], "open_window": choice}
+    if "expected_sha256" in named:
+        arguments["expected_sha256"] = sha256
+    if "window_pid" in named:
+        assert window_pid is not None, offering[0]
+        arguments["window_pid"] = window_pid
+    result = await handle_edit_schematic(EditSchematicInput.model_validate(arguments), state)
+    data = result.structured_content
+    assert data is not None
+    assert data.get("error", {}).get("code") != "expected_sha256_required", (offering[0], data)
+    return data
+
+
+async def sha256_ltspice_shows(state: SessionState, sheet: Path) -> str:
+    """The file's sha256 as ``inspect(kind='open_in_ltspice')`` with ``sheet``
+    as its path gives it: what edit_schematic takes as expected_sha256."""
+    from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
+
+    queries: Any = [{"kind": "open_in_ltspice", "path": str(sheet)}]
+    result = await handle_inspect(InspectInput(queries=queries), state)
+    assert result.structured_content is not None
+    (item,) = result.structured_content["results"]
+    assert item["ok"], item
+    return item["data"]["sha256"]

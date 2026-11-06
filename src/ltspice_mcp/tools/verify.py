@@ -166,6 +166,7 @@ from ltspice_mcp.tools._base import (
     format_response,
     image_content,
     make_include_resolver,
+    open_window_call,
     outcome_of,
     outcome_schema,
     path_denied_text,
@@ -174,6 +175,7 @@ from ltspice_mcp.tools._base import (
     resolve_reference,
     safe_path,
     sandboxed,
+    sha256_from_open_in_ltspice,
     shown_in_window,
     window_difference,
 )
@@ -2331,6 +2333,14 @@ def _open_in_ltspice(state: SessionState, path: Path) -> dict[str, Any]:
     return report
 
 
+#: The call that settles the window's copy of the checked sheet, once the
+#: user has chosen. The reply names the sheet and not its sha256, which the
+#: open_in_ltspice query gives.
+_SETTLE_THIS_PATH = open_window_call(
+    "this path", sha256_from_open_in_ltspice("this path"), "'save'|'discard'"
+)
+
+
 def _ltspice_hint(shown: Mapping[str, Any] | None) -> str | None:
     """What the caller should know about the LTspice window, if it was asked for."""
     if shown is None:
@@ -2341,9 +2351,9 @@ def _ltspice_hint(shown: Mapping[str, Any] | None) -> str | None:
         return (
             "LTspice already had the sheet open and shows a different one from the file "
             f"that was checked ({shown['difference']}). {difference_in_full()} "
-            "Ask the user whether to keep the "
-            "window's copy, then call edit_schematic with ops=[] and open_window='save' "
-            "to write it to the file or open_window='discard' to open the file there."
+            "Ask the user whether to keep the window's copy, then call "
+            f"{_SETTLE_THIS_PATH}: 'save' writes it to the file and 'discard' opens the "
+            "file there."
         )
     if shown.get("started"):
         return "LTspice was started, with it in front."

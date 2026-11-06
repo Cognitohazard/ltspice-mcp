@@ -12,8 +12,10 @@ recorded ones.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import hashlib
+import re
 import shutil
 import sys
 from collections.abc import Coroutine
@@ -40,10 +42,12 @@ from tests._ltspice_window import (
     as_ltspice_reads,
     digest,
     fake_command,
+    follow_open_window_referral,
     put_windows,
     read_world,
     write_world,
 )
+from tests._source_scan import modules, scopes
 from tests.conftest import LIVENESS_S, await_until, written
 from tests.fake_ltspice_bridge import silence_of
 from tests.ltspice_bridge_recorder import FIXTURES, INPUTS, observed
@@ -191,6 +195,60 @@ async def test_an_edit_is_refused_while_the_window_holds_a_different_sheet(
     assert file_bytes(asc_file) == before
     assert window.text(asc_file) == held
     assert data["sha256"] == hashlib.sha256(before).hexdigest()
+
+
+async def test_the_call_a_refusal_under_a_different_window_names_is_taken(
+    asc_state: SessionState, asc_file: Path, window: Window
+):
+    """Sent as the hint writes it, with the expected_sha256 the refused call
+    sent, the call drops the window's copy, and the edit then goes through."""
+    sent = digest(asc_file)
+    window.shows(asc_file, a_change(asc_file))
+    refused = await edit(asc_state, asc_file, expected_sha256=sent)
+    assert refused["error"]["code"] == "open_window_differs"
+
+    settled = await follow_open_window_referral(
+        asc_state, refused["hint"], asc_file, "discard", sha256=sent
+    )
+
+    assert settled["outcome"] == "complete", settled
+    assert window.text(asc_file) == as_ltspice_reads(asc_file)
+    assert (await edit(asc_state, asc_file))["commit_state"] == "committed"
+
+
+def _docstrings(tree: ast.AST) -> set[int]:
+    """The ids of ``tree``'s strings that stand alone as a statement: the
+    docstrings of its module, classes, functions and attributes, which no
+    reply sends."""
+    return {
+        id(node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)
+    }
+
+
+def test_every_text_that_sends_the_caller_to_open_window_writes_the_call_out():
+    """Replies named edit_schematic's open_window in prose, without the
+    expected_sha256 the call needs, and the call they named was refused. Every
+    text of the package that names both is written by
+    ``_base.open_window_call``, which writes out each argument the call needs,
+    and the tests above follow each such reply."""
+    offenders = []
+    for module, tree in modules().items():
+        docstrings = _docstrings(tree)
+        for scope, nodes in scopes(tree):
+            if (module, scope) == ("tools/_base.py", "open_window_call"):
+                continue
+            for node in nodes:
+                if (
+                    isinstance(node, ast.Constant)
+                    and isinstance(node.value, str)
+                    and id(node) not in docstrings
+                    and re.search(r"\bedit_schematic\b", node.value)
+                    and re.search(r"\bopen_window\b", node.value)
+                ):
+                    offenders.append(f"{module}:{node.lineno} ({scope})")
+    assert offenders == []
 
 
 async def test_a_refusal_names_part_of_a_long_difference_and_the_call_that_reads_it_all(
@@ -491,7 +549,7 @@ async def test_two_windows_with_different_copies_save_nothing_until_one_is_chose
     assert data["error"]["message"] == (
         f"Nothing was saved: 2 LTspice windows hold different copies ({TWO_COPIES})."
     )
-    assert "window_pid set to that window's process" in data["hint"]
+    assert "window_pid=<that window's process>" in data["hint"]
     assert file_bytes(asc_file) == before
     assert all("commands" not in entry for entry in read_world(tmp_path / "world.json")["windows"])
 
@@ -589,6 +647,29 @@ async def test_an_edit_under_two_different_windows_names_both_and_asks_which_to_
         f"file ({TWO_COPIES}). Nothing was written."
     )
     assert data["hint"] == se._WINDOWS_REMEDY
+
+
+@pytest.mark.parametrize("choice", ["save", "discard"])
+async def test_each_call_a_refusal_under_two_different_windows_names_is_taken(
+    asc_state: SessionState, asc_file: Path, window: Window, tmp_path: Path, choice: str
+):
+    """Sent as the hint writes it, the save of the copy the user chose names
+    that window's process, and the discard of every copy needs none."""
+    sent = digest(asc_file)
+    second = two_windows(tmp_path, asc_file)
+    refused = await edit(asc_state, asc_file, expected_sha256=sent)
+    assert refused["error"]["code"] == "open_window_differs"
+
+    settled = await follow_open_window_referral(
+        asc_state, refused["hint"], asc_file, choice, sha256=sent, window_pid=PID + 1
+    )
+
+    assert settled["outcome"] == "complete", settled
+    kept = second if choice == "save" else as_ltspice_reads(asc_file)
+    held = {
+        entry["designs"][str(asc_file)] for entry in read_world(tmp_path / "world.json")["windows"]
+    }
+    assert held == {kept}
 
 
 async def test_the_box_ltspice_shows_instead_of_saving_is_quoted_and_cancelled(
@@ -823,6 +904,34 @@ async def test_a_window_changed_since_it_was_read_is_left_open_and_reported(
     assert "saving from it would overwrite this edit" in data["hint"]
     assert window.text(asc_file) == meanwhile
     assert "closed" not in read_world(tmp_path / "world.json")["windows"][0]
+
+
+async def test_the_call_the_note_of_a_window_left_showing_the_old_sheet_names_is_taken(
+    asc_state: SessionState, asc_file: Path, window: Window, tmp_path: Path
+):
+    """The note sends the caller to edit_schematic's open_window once the user
+    chooses. Sent as the note writes it, with the sha256 from where it says,
+    the call opens the committed file in the window. The note named no
+    expected_sha256, and the call it named was refused for want of one."""
+    world = tmp_path / "world.json"
+    held = as_ltspice_reads(asc_file)
+    window.shows(asc_file, held)
+    asc_state.open_windows = _DoesNotTakeIt(
+        world, held.replace("SYMATTR Value 1k", "SYMATTR Value 5k")
+    )
+    data = await edit(asc_state, asc_file)
+    assert data["commit_state"] == "committed"
+    assert data["open_in_ltspice"][0]["shown"] is False
+    # The window is reached again as before; only the one request failed.
+    put_windows(asc_state, world, read_world(world)["windows"])
+
+    settled = await follow_open_window_referral(
+        asc_state, data["hint"], asc_file, "discard", sha256=data["sha256"]
+    )
+
+    assert settled["outcome"] == "complete", settled
+    assert window.text(asc_file) == as_ltspice_reads(asc_file)
+    assert "SYMATTR Value 2.2k" in window.text(asc_file)
 
 
 async def test_a_window_that_does_not_close_either_is_reported(

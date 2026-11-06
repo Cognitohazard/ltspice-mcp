@@ -116,8 +116,8 @@ If the window does not take the edit, the server closes the sheet there and
 opens it again from the file, which clears its undo history in LTspice; the
 entry then says `reopened: true`. `shown: false` means that failed too, so the
 window still shows the old sheet and a save from it would overwrite yours.
-Ask the user, then drop that copy with `open_window="discard"` (below), which
-opens the file there. An edit that fails with `open_window_differs` wrote nothing, because the
+Ask the user, then drop that copy with `open_window="discard"` (below), quoting
+the reply's `sha256`, which opens the file there. An edit that fails with `open_window_differs` wrote nothing, because the
 window's copy differs from the file. Ask the user whether to keep the changes in
 their window, then call `edit_schematic` with `ops=[]`, the same
 `expected_sha256` and their choice in `open_window`. With `"save"`, LTspice saves
@@ -130,7 +130,10 @@ answer, because `"save"` writes their unsaved work into the file and
 window and each holds a different copy, the refusal lists them by process. Ask
 the user which copy to keep and pass that process as `window_pid` with
 `"save"`. The other windows are then handed the saved sheet, so their copies
-are gone, and `"discard"` drops every copy.
+are gone, and `"discard"` drops every copy. Every `open_window` call quotes the
+file's `sha256` as `expected_sha256` and is refused without it: after a refused
+edit the one that edit sent, after a commit the reply's, and otherwise the
+`sha256` that `inspect(kind="open_in_ltspice")` with the sheet as `path` gives.
 
 - Component attributes: Value, Value2, SpiceLine, SpiceLine2. A part's own
   `Prefix` replaces its symbol's element letter on export, on both builds, so

@@ -112,6 +112,7 @@ from ltspice_mcp.tools._base import (
     comparison_mismatch,
     difference_in_full,
     format_response,
+    open_window_call,
     outcome_of,
     page_schema,
     registry,
@@ -1351,18 +1352,26 @@ def _window_differs(differing: Sequence[tuple[OpenSheet, Difference]]) -> str:
 _DIFFERENCE_IN_ONE = difference_in_full()
 _DIFFERENCE_IN_EACH = difference_in_full(window="a window's process")
 
+#: Where a refusal's reader finds the sheet's sha256 for ``open_window_call``:
+#: the call they sent quoted the file's, or it would have been refused before
+#: any window was asked.
+_SENT_SHA256 = "the expected_sha256 this call sent"
+#: The same for the reply to a commit: its own sha256 is the file's, which a
+#: window left showing the sheet as it was differs from.
+_REPLY_SHA256 = "this reply's sha256"
+_SAVE, _DISCARD = "'save'", "'discard'"
 _WINDOW_REMEDY = (
     "Ask the user whether to keep the changes in their LTspice window; "
     f"{_DIFFERENCE_IN_ONE} Then call "
-    "edit_schematic with ops=[], this expected_sha256 and open_window='save' to keep "
-    "them or open_window='discard' to drop them, read the sheet again, and resubmit."
+    f"{open_window_call('this path', _SENT_SHA256, f'{_SAVE}|{_DISCARD}')}, "
+    "'save' to keep them or 'discard' to drop them, read the sheet again, and resubmit."
 )
 _WINDOWS_REMEDY = (
-    f"Ask the user which window's copy to keep; {_DIFFERENCE_IN_EACH} "
-    "Then call edit_schematic with ops=[], "
-    "this expected_sha256, open_window='save' and window_pid set to that window's "
-    "process, or open_window='discard' to drop every copy, read the sheet again, and "
-    "resubmit."
+    f"Ask the user which window's copy to keep; {_DIFFERENCE_IN_EACH} Then call "
+    + open_window_call("this path", _SENT_SHA256, _SAVE, window_pid="that window's process")
+    + " to keep that copy, or "
+    + open_window_call("this path", _SENT_SHA256, _DISCARD)
+    + " to drop every copy, read the sheet again, and resubmit."
 )
 
 
@@ -1466,8 +1475,8 @@ def _window_notes(shown: Sequence[Mapping[str, object]]) -> list[str]:
                 f"An LTspice window (process {row['pid']}) has this sheet open and could "
                 f"not be updated ({row.get('reason')}): it still shows the sheet as it "
                 "was, and saving from it would overwrite this edit. Ask the user, then "
-                "call edit_schematic with ops=[] and open_window='discard' to open the "
-                "file there."
+                f"call {open_window_call('this path', _REPLY_SHA256, _DISCARD)} to "
+                "open the file there."
             )
     return notes
 

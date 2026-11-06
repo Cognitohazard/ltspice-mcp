@@ -1409,7 +1409,12 @@ a window's copy and does not check. For one that replaces the sheet:
   its `hint` names `inspect(kind="open_in_ltspice")` with this path and the
   window's process as `pid` as the call that reads every entry. A dry run
   reports the same difference in a note, with the same call.
-  A call with no ops and `open_window` set to the user's choice settles it.
+  A call with no ops and `open_window` set to the user's choice settles it;
+  like any write to an existing sheet it quotes the file's sha256 as
+  `expected_sha256`. Every reply that sends the caller to this call writes it
+  out with each argument it needs (`_base.open_window_call`), naming where
+  that sha256 is: the refused call's own, a commit's reply, or
+  `inspect(kind="open_in_ltspice")` for a reply that carries none.
   With `"save"`, LTspice saves the sheet from that window, as Ctrl+S does,
   and the reply gives the file's new `sha256`. Where more than one window
   holds a different copy, `window_pid` names the process whose copy the user

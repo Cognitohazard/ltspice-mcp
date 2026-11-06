@@ -217,6 +217,7 @@ from ltspice_mcp.tools._base import (
     ToolInput,
     declare_output_schema,
     format_response,
+    open_window_call,
     outcome_of,
     outcome_schema,
     recovery_hint,
@@ -2193,6 +2194,18 @@ def _windows_error(exc: BridgeError) -> _QueryError:
     )
 
 
+#: Said of a listing in which a sheet's window differs from its file. Each
+#: row carries the file's sha256, which the call that settles it quotes.
+_DIFFERING_ROW_HINT = (
+    "A sheet whose window differs from its file is refused by edit_schematic until "
+    "the user chooses which to keep; then "
+    + open_window_call("its row's path", "its row's sha256", "'save'|'discard'")
+    + " saves or drops the window's copy, a save with window_pid set to its row's pid "
+    "where other windows hold other copies. A run or a check reads the file, not the "
+    "window. only_in_window and only_in_file list where the two differ."
+)
+
+
 async def _do_open_in_ltspice(
     q: OpenInLtspiceQuery, state: SessionState, view: _View
 ) -> dict[str, Any]:
@@ -2230,12 +2243,7 @@ async def _do_open_in_ltspice(
     data: dict[str, Any] = {"windows": count, "designs": rows, "total": page["total"]}
     hints: list[str] = []
     if any(row.get("differs_from_file") for row in rows):
-        hints.append(
-            "A sheet whose window differs from its file is refused by edit_schematic until "
-            "the user chooses which to keep and edit_schematic's open_window saves or drops "
-            "the window's copy; a run or a check reads the file, not the window. "
-            "only_in_window and only_in_file list where the two differ."
-        )
+        hints.append(_DIFFERING_ROW_HINT)
     if any(not row["in_sandbox"] for row in rows):
         hints.append(
             "A document outside the sandbox is listed and not read. " + state.sandbox_guidance()
