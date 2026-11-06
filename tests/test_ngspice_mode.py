@@ -95,3 +95,25 @@ def test_ngspice_is_asked_with_no_startup_file(
     command = tuple(NGspiceSimulator.spice_exe)
     assert flags_for(command, mode) == flags
     assert ngspice_mode._flags_by_mode == {(command, mode): flags}
+
+
+def test_an_error_asking_ngspice_leaves_the_run_unchecked_and_is_not_raised(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Whatever starting the probe raises, the run is only left unchecked: a
+    check that cannot run must not turn a good run into a failed one."""
+    monkeypatch.setattr(ngspice_mode, "_flags_by_mode", {})
+    log = tmp_path / "run.log"
+    log.write_text(ORDINARY, encoding="utf-8")
+
+    def refuse(*args, **kwargs):
+        raise RuntimeError("no process may start here")
+
+    monkeypatch.setattr(ngspice_mode.subprocess, "run", refuse)
+
+    class Present(NGspiceSimulator):
+        spice_exe: ClassVar[list[str]] = ["ngspice"]
+
+    check = check_run(log, Present, "kiltpsa")
+    assert check.status == "unchecked"
+    assert check.reason

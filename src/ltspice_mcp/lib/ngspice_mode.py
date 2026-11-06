@@ -106,7 +106,8 @@ def flags_for(command: tuple[str, ...], mode: str) -> tuple[str, ...] | None:
                 creationflags=_CREATE_NO_WINDOW if sys.platform == "win32" else 0,
                 check=False,
             )
-    except (OSError, subprocess.SubprocessError) as exc:
+    # Any failure: a check that cannot run must not fail the run it checks.
+    except Exception as exc:
         logger.warning("Could not ask %s which flags it gives mode %r: %s", command, mode, exc)
         return None
     flags = logged_flags(decode_spice_bytes(completed.stdout + completed.stderr))
