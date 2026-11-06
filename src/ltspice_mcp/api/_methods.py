@@ -1,4 +1,4 @@
-"""Tier-1 synchronous methods over the consolidated engine operations."""
+"""Tier-1 synchronous methods over the consolidated tool operations."""
 
 from __future__ import annotations
 
@@ -262,7 +262,7 @@ async def _anchored_on(base: Path, coroutine: Coroutine[Any, Any, _T]) -> _T:
     """Run one call with its relative path arguments taken from ``base``.
 
     Applied inside the coroutine for the same reason the automatic-mode flag is:
-    the path chokepoint reads the base from the engine loop's task context, and
+    the path chokepoint reads the base from the session loop's task context, and
     a set on the calling thread would never reach it.
     """
     with relative_paths_from(base):
@@ -274,7 +274,7 @@ async def _through_auto_door(coroutine: Coroutine[Any, Any, _T], tool: str) -> _
     and with ``tool``'s reply fields named, as its MCP replies name them.
 
     Marked inside the coroutine, not around the ``_call`` that marshals it: the
-    handlers read both from the engine loop's task context, and a set on the
+    handlers read both from the session loop's task context, and a set on the
     calling thread would never reach it.
     """
     # Deferred with the tool modules.
@@ -303,13 +303,13 @@ def _message_for_error(payload: Mapping[str, Any], result: types.CallToolResult)
     for content in result.content:
         if isinstance(content, mcp_types.TextContent):
             return content.text
-    return "The engine returned a call-level error"
+    return "The operation returned a call-level error"
 
 
 def _unwrap(result: types.CallToolResult) -> dict[str, Any]:
     structured = result.structured_content
     if not isinstance(structured, Mapping):
-        raise ApiInternalError("The engine response did not contain structuredContent")
+        raise ApiInternalError("The operation's response did not contain structuredContent")
     payload = copy.deepcopy(dict(structured))
     if result.is_error:
         raise ApiCallError(_message_for_error(payload, result), payload=payload)
@@ -369,7 +369,7 @@ async def _complete_run_receipt(
 def _note_process_owned_job(receipt: dict[str, Any]) -> dict[str, Any]:
     """Say, on the receipt itself, that this job dies with the interpreter.
 
-    ``Api.close()`` shuts the engine down, which cancels every job this process
+    ``Api.close()`` shuts the session down, which cancels every job this process
     owns. A ``wait=False`` receipt otherwise looks exactly like a durable
     submission, and the loss is silent — the caller learns of it only when a
     later status read reports a cancellation nobody asked for. The contract
@@ -668,7 +668,7 @@ async def _collect_jobs(
     evaluation = await jobs.evaluate_jobs(request, state)
     data = jobs.complete_jobs_data(evaluation)
     if evaluation.is_error or "error" in data:
-        message = _payload_message(data) or "The engine returned a call-level error"
+        message = _payload_message(data) or "The operation returned a call-level error"
         raise ApiCallError(message, payload=data)
     return data
 
@@ -755,7 +755,7 @@ class ApiMethodsMixin(ABC):
 
     _state: SessionState
     #: The constructor arguments a detached owner is given so it opens the same
-    #: engine this session opened.
+    #: session this one opened.
     _boot: _detach.DetachedBoot
     #: Owners spawned by this session. Held only so the finished ones can be
     #: reaped; a running one is never waited on.
@@ -790,8 +790,8 @@ class ApiMethodsMixin(ABC):
         flattened onto dotted paths, and a worked example. Generated from the
         models the call validates against, so it says what will be accepted.
 
-        A static method deliberately: reading the catalogue must not require an
-        engine session, so ``Api.reference('inspect')`` works before anything is
+        A static method deliberately: reading the catalogue must not require a
+        session, so ``Api.reference('inspect')`` works before anything is
         opened and without taking this process's single session lease.
         """
         return _reference.reference(op)
@@ -807,7 +807,7 @@ class ApiMethodsMixin(ABC):
         ``inspect(kind='guide')`` serves over MCP.
 
         A static method for the same reason as :meth:`reference`: reading the
-        guide must not require an engine session.
+        guide must not require a session.
         """
         from ltspice_mcp.lib import guide as _guide
 
@@ -1476,7 +1476,7 @@ def _one_source(
 # The six methods carry their operation's catalogue entry as their docstring —
 # from the same renderer api.reference uses, so the two can never disagree.
 # Installed LAZILY: rendering needs the live tool models, whose import is
-# exactly what the engine boot defers, so installation rides the first event
+# exactly what starting a session defers, so installation rides the first event
 # that pays that import anyway — the first deferred tool-module resolution
 # (any operation call) or the first catalogue read (reference()). Until one
 # of those happens — or a read of an operation's help() or signature, which

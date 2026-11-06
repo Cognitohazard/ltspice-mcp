@@ -291,7 +291,7 @@ class ExperimentExecution(StrictModel):
         default=None,
         pattern=SIMULATOR_SELECTOR_PATTERN,
         description=(
-            "Engine for every case; its family decides the dialect the results are "
+            "Simulator for every case; its family decides the dialect the results are "
             "parsed with. 'family:name' (e.g. 'ltspice:xvii') runs a named executable. "
             "inspect capabilities lists those and which simulators a run can select. "
             "Defaults to the server's default simulator."
@@ -301,8 +301,8 @@ class ExperimentExecution(StrictModel):
 
 class AnalysisPerRun(analyze.CappedPerRunLimit):
     # The limit and its cap are analyze_results' own, never a copy of its
-    # number: the attached block is handed straight to that engine, so a bound
-    # this schema held to and the engine's could not drift apart.
+    # number: the attached block is handed straight to that tool, so a bound
+    # this schema held to and the tool's could not drift apart.
     cursor: str | None = Field(
         default=None,
         description=(
@@ -1395,7 +1395,7 @@ def attached_analysis_callback(state: SessionState) -> AnalysisCallback:
             ) from exc
         # Resolved on the module, not bound at import: the analysis stage is
         # patched through ``tools.analyze`` in tests, and the attribute lookup
-        # is what keeps that seam where the engine actually lives.
+        # is what keeps that seam where the analysis actually lives.
         return await analyze.capture_attached_analysis(args, state)
 
     return run_attached_analysis

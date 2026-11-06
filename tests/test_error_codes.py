@@ -422,7 +422,7 @@ def _error_classes() -> list[type[LTSpiceMCPError]]:
 # codes built into the failure and observation records anywhere in the package.
 # The scan follows the whole tree rather than a list of directories, so a code's
 # membership follows where it is emitted — the tools, the analysis metrics, the
-# experiment coordinator, the variation and staging engines, and the Python
+# experiment coordinator, the variation and staging code, and the Python
 # API's detached hand-off all reach a client through one of these.
 #
 # ADDING a code is fine — add it here in the same commit and the test passes.

@@ -399,7 +399,7 @@ class DeckFile:
 
 @dataclass(frozen=True)
 class CircuitDeck:
-    """One uniquely named circuit deck supplied to the expansion engine."""
+    """One uniquely named circuit deck supplied to the variation expansion."""
 
     circuit_id: str
     path: Path
@@ -1428,7 +1428,7 @@ def _resolve_instance_param(
 
     ``X1:delvto`` names the single MOS device inside ``X1``; ``X1.M0:delvto``
     names one device in a body that holds several, and is required there.
-    Only the two parameters the mismatch engine owns are addressable this way —
+    Only the two parameters the mismatch draw owns are addressable this way —
     anything else would be a general hierarchical-parameter feature, which this
     is not.
 
@@ -1483,7 +1483,7 @@ def _resolve_instance_param(
 
 
 def _closure_files(closure: _DeckClosure, texts: dict[int, str]) -> list[ClosureFile]:
-    """Project the closure into the mismatch engine's view of it."""
+    """Project the closure into the mismatch draw's view of it."""
     return [
         ClosureFile(index=file.index, path=file.path, text=texts[file.index])
         for file in closure.files

@@ -40,7 +40,7 @@ Read one with `inspect(queries=[{"kind": "guide", "section": "<name>"}])`, or
 
 ## Python or tools
 
-Both run the same engine on the same job records, so either one can read a
+Both run the same code on the same job records, so either one can read a
 job the other started, by its `job_id`. Among the tools, `run_experiments`
 runs decks, sweeps and corners; `jobs` follows, waits on and cancels them;
 `analyze_results` measures finished runs; `inspect` reads circuits, symbols,

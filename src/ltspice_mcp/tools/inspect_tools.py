@@ -9,7 +9,7 @@ and the circuits it can reach. Each query names one supported kind:
   (``allowed_paths``, null when none is set), the active
   profile and which of the two tool listings this session was served, the
   configured limits, the linter version, and ``diagnostics``: the startup
-  notes (bad configured simulator path, a requested engine that fell back, WSL
+  notes (bad configured simulator path, a requested simulator that fell back, WSL
   auto-detection) that say whether this server started degraded. Pulled from
   ``state``/``config``/``lint_rules``; nothing is probed.
 * ``symbols`` — the legal ``.asy`` symbol names and the resolution-order
@@ -1179,7 +1179,7 @@ def _gated_tool_report(name: str, state: SessionState) -> dict[str, Any]:
 
 
 def _python_runtime_facts() -> dict[str, Any]:
-    """The interpreter this engine runs in, and whether it will still exist.
+    """The interpreter this server runs in, and whether it will still exist.
 
     An agent that wants the Python API (``from ltspice_mcp.api import
     Api``) must pick an interpreter that has the package — this one. The
@@ -1315,7 +1315,7 @@ def _do_capabilities(
             simulator_mod.platform_key(), state.available_simulators
         ),
         # What went wrong at startup, verbatim: a configured simulator path
-        # that does not exist, a requested engine that fell back to another,
+        # that does not exist, a requested simulator that fell back to another,
         # a WSL auto-detection. Otherwise these live only in the server's own
         # stderr log, which no client reads — so a session running degraded
         # looks identical to a healthy one from the outside.
@@ -1337,7 +1337,7 @@ def _do_capabilities(
                 "api.reference('run_experiments') lists an op's arguments; "
                 "help(Api.<op>) and inspect.signature(Api.<op>) answer too"
             ),
-            # The same engine behind a tool call, when the operator turned it
+            # The same code behind a tool call, when the operator turned it
             # on; the key and the restart are what an agent relays to them.
             "run_code": _gated_tool_report("run_code", state),
         },

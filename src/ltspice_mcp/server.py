@@ -285,7 +285,7 @@ def build_instructions(
 
     The server is named for LTspice, so a client that only has ngspice would
     otherwise read the LTspice-centric name and the "symbols disabled" log as
-    degradation. Stating the active engine up front removes that ambiguity.
+    degradation. Stating the active simulator up front removes that ambiguity.
     ``served`` is the session's tool set (the default configuration's surface
     when not given); the Python clause names run_code only when it is in it.
     """
@@ -311,7 +311,7 @@ def build_instructions(
             active += (
                 " (LTspice not detected; .asc editing needs its symbol files "
                 "and may be unavailable — simulation and analysis run on the "
-                "active engine, unaffected.)"
+                "active simulator, unaffected.)"
             )
     return f"{active}\n\n{instructions}"
 

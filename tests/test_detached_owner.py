@@ -135,12 +135,12 @@ def _pause_simulator(owner_pid: int) -> psutil.Process:
 def _detach_worker(
     work_dir: str, deck: str, request_id: str, ready, start, entered, result
 ) -> None:
-    """One caller process: open an engine, detach the shared request, report back.
+    """One caller process: open a session, detach the shared request, report back.
 
-    A separate process because the engine lease is per process — two callers
+    A separate process because the session lease is per process — two callers
     sharing a working directory is what this exercises, and it is what the
     idempotent-replay contract invites a user to do. Checks in (``check_in``)
-    once its engine is open.
+    once its session is open.
     """
     from ltspice_mcp.api import Api
 
@@ -174,7 +174,7 @@ def _detach_worker(
 
 
 # ---------------------------------------------------------------------------
-# Argument policy — no engine, no process
+# Argument policy — no session, no process
 # ---------------------------------------------------------------------------
 
 

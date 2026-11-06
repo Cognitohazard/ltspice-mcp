@@ -9,7 +9,7 @@ description: >
 
 # Working in Python
 
-`api` provides the six tool operations as methods. They run on the same engine
+`api` provides the six tool operations as methods. They run the same code
 as the tools and read and write the same job records and result files. The
 core has an example that reads a sweep back in one loop.
 
@@ -22,7 +22,7 @@ open on the server's working directory. The snippet also has
 `compute_signal_stats` and `time_weighted_quantiles` in scope. `print()`
 output and the repr of a trailing expression are returned, so print the result
 you need, such as the crossing or the worst corner, rather than the whole
-table. Each call gets a fresh namespace around the same engine, so keep state
+table. Each call gets a fresh namespace around the same `api`, so keep state
 on disk, in a file or in a job you can find again by its `request_id`. A
 snippet is bounded by `timeout_s` (60 s by default, held to the cap the
 `run_code` tool states), and one runs at a time. A blocking wait in it
@@ -59,7 +59,7 @@ operation's whole argument tree, with every field's type, default and allowed
 values, and a worked example; `help(api.analyze_results)` prints the same.
 Read it before guessing an argument. From a shell,
 `python -m ltspice_mcp.api reference analyze_results` prints it without
-starting the engine.
+starting a session.
 
 ## Running and waiting
 

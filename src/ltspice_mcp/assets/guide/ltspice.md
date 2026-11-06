@@ -231,7 +231,7 @@ C1 out 0 {C}
   is a warning, read as the bare number. These checks run on a netlist and on
   an `.asc`'s exported netlist.
 - **`.meas` names**: `e`, `k`, `pi` and `q` are constants of the expression
-  engine and cannot name a measurement. LTspice 26 refuses the whole deck and
+  evaluator and cannot name a measurement. LTspice 26 refuses the whole deck and
   XVII skips that measurement. `run_experiments` refuses them before the run
   (`meas-name-ltspice`), as do `verify_circuit`'s `syntax` check and
   `edit_schematic`'s directives (`meas_reserved_name`). `time`, `temp` and

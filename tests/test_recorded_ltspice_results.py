@@ -1700,7 +1700,7 @@ def _lint_refusals(case_id: str) -> list[tuple[str, str]]:
 @pytest.mark.parametrize("build", rec.BUILDS)
 @pytest.mark.parametrize("name", ["e", "k", "pi", "q"])
 def test_a_measurement_named_for_a_constant(build: str, name: str):
-    """The constants of the expression engine cannot name a .meas. LTspice 26
+    """The constants of the expression evaluator cannot name a .meas. LTspice 26
     refuses the deck and runs nothing; XVII names the constant and takes the
     other measurement. The directive check and the lint refuse the name
     before either."""
