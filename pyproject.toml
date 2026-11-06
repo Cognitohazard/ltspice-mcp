@@ -171,6 +171,13 @@ known-first-party = ["ltspice_mcp"]
 "ltspice_mcp.tools._base.held_to_cap".msg = "Import held_to_cap from ltspice_mcp.lib.format, which owns it."
 "ltspice_mcp.lib.schematic_ops.is_asc".msg = "Import is_asc from ltspice_mcp.lib.asc_document, which owns it."
 "ltspice_mcp.lib.spice_lex.cards_from_path".msg = "Read a deck with spice_lex.lex_deck, or spice_lex.lex_for_edit for an edit; a file's every card reads its title and the cards after .END as cards."
+"spicelib.utils.file_search.search_file_in_containers".msg = "Find a file a sheet names with the sheet's SymbolResolver (state.symbols.for_sheet); spicelib's search walks folders LTspice does not look in, the server's working directory among them."
+"spicelib.utils.file_search.find_file_in_directory".msg = "Find a file a sheet names with the sheet's SymbolResolver (state.symbols.for_sheet); spicelib's search walks folders LTspice does not look in, the server's working directory among them."
+"ltspice_mcp.lib.symbol_library.find_symbol".msg = "Ask the sheet's SymbolResolver (state.symbols.for_sheet), which searches the sheet's folder and the session's libraries, each once, in their order."
+"ltspice_mcp.lib.symbol_library.find_file".msg = "Ask the sheet's SymbolResolver (state.symbols.for_sheet), which searches the sheet's folder and the session's libraries, each once, in their order."
+"ltspice_mcp.lib.symbol_library.find_beside".msg = "Ask the sheet's SymbolResolver (state.symbols.for_sheet), which searches the sheet's folder and the session's libraries, each once, in their order."
+"ltspice_mcp.lib.symbol_library.find_in_library".msg = "Ask the sheet's SymbolResolver (state.symbols.for_sheet), which searches the sheet's folder and the session's libraries, each once, in their order."
+"ltspice_mcp.lib.symbol_library.symbol_files".msg = "List the names a sheet's lookups find with SymbolResolver.listing, which searches each folder once, as its lookups do."
 
 [tool.ruff.lint.per-file-ignores]
 # Tests exercise a banned name directly.

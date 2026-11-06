@@ -475,6 +475,16 @@
    "tests/test_build_benchmark.py::test_a_build_is_what_the_record_says[rlc_line_labelled]"
   ]
  },
+ "208941a3ec4b8817": {
+  "answer": {
+   "reply": "7f691759f968f301",
+   "sheet": "b2a5269bc3b2690a"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::TestTheServerFindsASymbolWhereEitherBuildDoes::test_every_tool[empty-search/library_folder_named]",
+   "tests/test_recorded_ltspice_schematics.py::TestTheServerFindsASymbolWhereEitherBuildDoes::test_every_tool[holding the symbol-search/library_folder_named]"
+  ]
+ },
  "212ca8c6790598e3": {
   "answer": {
    "message": "invalid view_cursors.touched: malformed page cursor: 'tampered'",
@@ -619,6 +629,16 @@
   "tests": [
    "tests/test_recorded_ltspice_schematics.py::TestSheetRecords::test_an_edit_keeps_the_data_labels_where_the_sheet_has_them[ltspice17]",
    "tests/test_recorded_ltspice_schematics.py::TestSheetRecords::test_an_edit_keeps_the_data_labels_where_the_sheet_has_them[ltspice26]"
+  ]
+ },
+ "2c255a72e90ef8a6": {
+  "answer": {
+   "reply": "3a5062cbdfdebce2",
+   "sheet": "e222861884212860"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_a_blocks_sheet_is_found_alike_whatever_the_working_directory[empty-gone]",
+   "tests/test_recorded_ltspice_schematics.py::test_a_blocks_sheet_is_found_alike_whatever_the_working_directory[holding a sheet of the block's name-gone]"
   ]
  },
  "2e5570504b8617b7": {
@@ -1146,6 +1166,16 @@
   },
   "tests": [
    "tests/test_set_plot_panes.py::test_no_panes_removes_the_analysis_and_then_the_file"
+  ]
+ },
+ "5657b124be8d7eb1": {
+  "answer": {
+   "reply": "3e36532d47863227",
+   "sheet": "13221f0b5bd03276"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::TestTheServerFindsASymbolWhereEitherBuildDoes::test_every_tool[empty-search_flat/named_folder_absent]",
+   "tests/test_recorded_ltspice_schematics.py::TestTheServerFindsASymbolWhereEitherBuildDoes::test_every_tool[holding the symbol-search_flat/named_folder_absent]"
   ]
  },
  "5706312ca4789315": {
@@ -1770,6 +1800,16 @@
   ],
   "varies": true
  },
+ "7e037dbf34f06e5b": {
+  "answer": {
+   "reply": "e006972413c5b09d",
+   "sheet": "13221f0b5bd03276"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::TestTheServerFindsASymbolWhereEitherBuildDoes::test_every_tool[empty-search/named_subfolder]",
+   "tests/test_recorded_ltspice_schematics.py::TestTheServerFindsASymbolWhereEitherBuildDoes::test_every_tool[holding the symbol-search/named_subfolder]"
+  ]
+ },
  "817a0848ec20b7af": {
   "answer": {
    "reply": "630ba84aafd584cf",
@@ -1850,6 +1890,16 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_a_directive_difference_says_the_wiring_matched"
+  ]
+ },
+ "85fcc3b4ce9fbef3": {
+  "answer": {
+   "reply": "2bc55c824d153815",
+   "sheet": "0ed304efa2288da3"
+  },
+  "tests": [
+   "tests/test_symbol_library.py::test_a_part_naming_a_model_library_opens_alike_whatever_the_working_directory[empty-nowhere]",
+   "tests/test_symbol_library.py::test_a_part_naming_a_model_library_opens_alike_whatever_the_working_directory[holding a library of that name-nowhere]"
   ]
  },
  "87318208619df721": {
@@ -1934,6 +1984,26 @@
    "tests/test_python_api_primitives.py::test_archetype_build_verify_and_recorded_analysis_through_api"
   ]
  },
+ "8ce196424a692a9e": {
+  "answer": {
+   "reply": "54e224bbffe92333",
+   "sheet": "b5cb765731bccac0"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::TestTheServerFindsASymbolWhereEitherBuildDoes::test_every_tool[empty-search/library_folder_wrong]",
+   "tests/test_recorded_ltspice_schematics.py::TestTheServerFindsASymbolWhereEitherBuildDoes::test_every_tool[holding the symbol-search/library_folder_wrong]"
+  ]
+ },
+ "8cfa998378bae07d": {
+  "answer": {
+   "message": "Cannot open .asc schematic: Symbol 'part' not found beside the sheet or in any symbol library\n\nA file the schematic refers to was not found; for a symbol, LTspice symbol libraries (.asy files) are required. Set [schematic] symbol_paths in ltspice-mcp.toml or LTSPICE_MCP_SYMBOL_PATHS environment variable.",
+   "raised": "SymbolResolutionError"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::TestTheServerFindsASymbolWhereEitherBuildDoes::test_every_tool[empty-search/in_subfolder]",
+   "tests/test_recorded_ltspice_schematics.py::TestTheServerFindsASymbolWhereEitherBuildDoes::test_every_tool[holding the symbol-search/in_subfolder]"
+  ]
+ },
  "8d2fb64858b60499": {
   "answer": {
    "reply": "c957ae5ab6c9d801",
@@ -1986,6 +2056,16 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[voltage-PULSE(0 1 0 1n 1n 5n 10n)-set_component_value]"
+  ]
+ },
+ "9004deb7bf2f9ff7": {
+  "answer": {
+   "reply": "2bc55c824d153815",
+   "sheet": "0ed304efa2288da3"
+  },
+  "tests": [
+   "tests/test_symbol_library.py::test_a_part_naming_a_model_library_opens_alike_whatever_the_working_directory[empty-beside the sheet]",
+   "tests/test_symbol_library.py::test_a_part_naming_a_model_library_opens_alike_whatever_the_working_directory[holding a library of that name-beside the sheet]"
   ]
  },
  "90da447427e60f5e": {
@@ -2567,6 +2647,16 @@
    "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[npn-2N3904 2 off-set_component_value]"
   ]
  },
+ "b4e0c6632b3c8f7f": {
+  "answer": {
+   "reply": "3a5062cbdfdebce2",
+   "sheet": "e222861884212860"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_a_blocks_sheet_is_found_alike_whatever_the_working_directory[empty-beside its symbol]",
+   "tests/test_recorded_ltspice_schematics.py::test_a_blocks_sheet_is_found_alike_whatever_the_working_directory[holding a sheet of the block's name-beside its symbol]"
+  ]
+ },
  "b56a57e011555dda": {
   "answer": {
    "reply": "2ed4bd8e66a33e7a",
@@ -2601,6 +2691,16 @@
   },
   "tests": [
    "tests/test_set_plot_panes.py::test_the_replaced_panes_put_back_undo_the_op[ltspice17-plot/math_grid.plt]"
+  ]
+ },
+ "bceca38024b302a1": {
+  "answer": {
+   "reply": "06d386a596563f40",
+   "sheet": "303be41b7dc63926"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::TestTheServerFindsASymbolWhereEitherBuildDoes::test_every_tool[empty-search/library_folder_bare]",
+   "tests/test_recorded_ltspice_schematics.py::TestTheServerFindsASymbolWhereEitherBuildDoes::test_every_tool[holding the symbol-search/library_folder_bare]"
   ]
  },
  "bd04fbc3bbabf3c1": {
@@ -3095,6 +3195,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_failure_after_a_completed_stage_is_not_reported_against_it"
+  ]
+ },
+ "e541aecca677f288": {
+  "answer": {
+   "reply": "6bf518947d12071f",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_measurement_with_a_parenthesis_left_open_is_not_added"
   ]
  },
  "e5b4c89d80e912b1": {

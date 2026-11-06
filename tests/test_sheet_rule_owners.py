@@ -252,3 +252,21 @@ def test_the_attribute_write_rule_catches_what_it_names():
         "set_value",
         "Ops.outer.inner",
     }
+
+
+#: spicelib's own searches for a file a sheet names: each walks every folder
+#: below the sheet's and the server's working directory, which neither LTspice
+#: build looks in (``docs/spicelib_bugs.md``, Bug 37). ``_get_subcircuit`` is
+#: the loader that calls them for a part's model library and a block's sheet.
+_SPICELIB_SEARCHES = ("_asy_file_find", "_lib_file_find", "_get_subcircuit")
+
+
+def test_a_sheets_files_are_found_by_the_sessions_library_alone():
+    """Which file a sheet's symbol, or a block's own sheet, is decided by
+    ``lib/symbol_library.py`` (the session's ``SymbolLibrary``), for the edit,
+    the check, the inspection and the drawing alike, wherever the server
+    runs. No module calls spicelib's own search for one. Ruff refuses an
+    import of spicelib's search functions and of the library's own rules
+    (``banned-api`` in ``pyproject.toml``); a method it cannot see is checked
+    here."""
+    assert [where for name in _SPICELIB_SEARCHES for where in _called(name)] == []

@@ -59,7 +59,6 @@ from spicelib.editor.base_schematic import (
 )
 from spicelib.editor.ltspice_utils import TEXT_REGEX, asc_text_align_set
 from spicelib.utils.detect_encoding import EncodingDetectError
-from spicelib.utils.file_search import search_file_in_containers
 
 # The concrete class to instantiate for a from-scratch .asc component.
 # spicelib 1.6 introduced ``AscComponent`` (the type its own .asc parser
@@ -1061,17 +1060,27 @@ def _unrecognised_sheet(path: Path, exc: EncodingDetectError) -> NetlistError:
     )
 
 
+class _PlacedSymbol(AsyReader):
+    """A part's symbol as the editor read it, with the name the sheet gives it."""
+
+    def __init__(self, path: Path, placed_as: str) -> None:
+        super().__init__(path)
+        self.placed_as = placed_as
+
+
 class _AscEditor(AscEditor):
-    """spicelib's editor, finding each symbol as the session does and opening a
-    sheet whose block symbol has no sheet.
+    """spicelib's editor, finding a sheet's files as the session does and opening
+    a sheet whose block symbol has no sheet.
 
     A part's symbol is the file ``symbols`` resolves its name to
     (``symbol_library.find_symbol``), the one ``inspect``, ``verify_circuit``
-    and the drawing read. spicelib's own search walked every folder under the
-    sheet's, so it found a bare name in a folder neither LTspice build looks
-    in; kept the folder a name gives, so it missed a symbol XVII finds beside
-    the sheet; and cached each name's file for the whole process
-    (``docs/spicelib_bugs.md``, Bug 17).
+    and the drawing read, and a block's own sheet the one it finds for the
+    block (``SymbolResolver.block_sheet``). spicelib's own searches walked
+    every folder under the sheet's and the folder the server runs in, so they
+    found a file where neither LTspice build looks; kept the folder a name
+    gives, so they missed a symbol XVII finds beside the sheet; and cached
+    each symbol's file for the whole process (``docs/spicelib_bugs.md``, Bugs
+    17 and 37).
 
     LTspice netlists an instance of a block symbol as a call to a subcircuit
     of the symbol's name, defined by its own sheet, by a library on the sheet,
@@ -1084,21 +1093,18 @@ class _AscEditor(AscEditor):
     reads no sheet for it even beside it (``export-hierarchical-block``;
     ``docs/spicelib_bugs.md``, Bug 33). A comment or directive drawn on its
     side stays on its side, which spicelib's reader drops (Bug 34).
+
+    A symbol that names a model library, a cell's or a block's, loads with no
+    resolved subcircuit either. Nothing that reads or edits a sheet here needs
+    the library, which a deck reads when it runs. spicelib looked for it as it
+    looked for symbols, refused the sheet where it found none, and where it
+    found one could not save the sheet (Bug 39).
     """
 
     def __init__(
-        self,
-        asc_file: str | Path,
-        encoding: str = "autodetect",
-        *,
-        symbols: SymbolResolver,
-        searched: dict[tuple[str, str], str | None] | None = None,
+        self, asc_file: str | Path, encoding: str = "autodetect", *, symbols: SymbolResolver
     ) -> None:
         self._symbols = symbols
-        # Where each sheet not beside its symbol was found, shared with the
-        # sheets this one opens: a search walks every folder it is given, and
-        # a sheet may place the same block many times.
-        self._searched = {} if searched is None else searched
         super().__init__(asc_file, encoding)
 
     def _get_symbol(self, symbol: str) -> AsyReader:
@@ -1107,7 +1113,7 @@ class _AscEditor(AscEditor):
             raise FileNotFoundError(
                 f"Symbol '{symbol}' not found beside the sheet or in any symbol library"
             )
-        return AsyReader(found)
+        return _PlacedSymbol(found, symbol)
 
     def reset_netlist(self, create_blank: bool = False) -> None:
         super().reset_netlist(create_blank)
@@ -1125,23 +1131,22 @@ class _AscEditor(AscEditor):
             asc_text_align_set(text, justification)
 
     def _get_subcircuit(self, symbol: Any) -> Any:
-        if symbol.symbol_type != "BLOCK" or symbol.get_library() is not None:
-            return super()._get_subcircuit(symbol)
-        if INSTANCE_PREFIX in symbol.attributes:
+        """What an instance of ``symbol`` (a ``_PlacedSymbol``) calls: a block's
+        own sheet, opened as one of these, or nothing resolved."""
+        if symbol.symbol_type not in ("CELL", "BLOCK"):
+            # spicelib's refusal of such a part, which it makes before it looks
+            # for any file, kept as it was.
+            raise ValueError(f"Symbol type {symbol.symbol_type} not supported")
+        if (
+            symbol.symbol_type == "CELL"
+            or symbol.get_library() is not None
+            or INSTANCE_PREFIX in symbol.attributes
+        ):
             return None
-        sheet = symbol.get_schematic_file()
-        if not sheet.exists():
-            folder = str(self.asc_file_path.parent)
-            if (sheet.name, folder) not in self._searched:
-                self._searched[sheet.name, folder] = search_file_in_containers(
-                    sheet.name, folder, ".", *self.custom_lib_paths
-                )
-            sheet = self._searched[sheet.name, folder]
+        sheet = self._symbols.block_sheet(symbol.placed_as)
         if sheet is None:
             return None
-        return type(self)(
-            sheet, symbols=self._symbols.for_sheet(Path(sheet)), searched=self._searched
-        )
+        return type(self)(sheet, symbols=self._symbols.for_sheet(sheet))
 
 
 def _refuse_lost_records(path: Path, editor: AscEditor) -> None:
@@ -1211,8 +1216,8 @@ def make_editor(path: Path, symbols: SymbolResolver | None = None) -> Editor:
     Raises NetlistError if the file is not found, has no Version line the
     schematic editor can find, holds a line it cannot read or would skip, or
     places two parts under one reference, and
-    SymbolResolutionError if a file the schematic refers to (a symbol, a
-    sub-sheet) is missing.
+    SymbolResolutionError if a symbol it or a block's own sheet places is
+    missing.
     """
     try:
         if not is_asc(path):
@@ -1235,7 +1240,7 @@ def make_editor(path: Path, symbols: SymbolResolver | None = None) -> Editor:
         if not path.is_file():
             raise NetlistError(f"File not found: {path}") from e
         # The schematic itself opened, so what is missing is something it
-        # refers to: a symbol or a model library.
+        # refers to: a symbol it or a block's own sheet places.
         # Which one it is comes from the file that is there, not from whether
         # the editor's message happened to spell ".asy".
         raise SymbolResolutionError(
