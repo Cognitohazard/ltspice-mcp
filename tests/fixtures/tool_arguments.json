@@ -113,6 +113,7 @@
       "ops[].panes[].x_scale",
       "ops[].panes[].y_scale",
       "ops[].pin",
+      "ops[].pins",
       "ops[].reference",
       "ops[].references",
       "ops[].region",

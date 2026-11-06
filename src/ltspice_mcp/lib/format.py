@@ -30,18 +30,23 @@ def held_to_cap(
     return cap, f"{name}={asked}{unit} is above its cap of {held}{unit}; {held}{unit} was used."
 
 
-def cap_list(payload: dict[str, Any], key: str, items: list, cap: int) -> None:
+def cap_list(payload: dict[str, Any], key: str, items: list, cap: int, rest: str) -> None:
     """Attach ``items`` under ``key``, bounded, with explicit truncation.
 
     The structured channel's one truncation convention: when the list exceeds
-    ``cap``, the first ``cap`` entries are attached and ``{key}_truncated``
-    carries the TOTAL count — a capped list is a surfaced fact, never silent.
-    Callers guard emptiness themselves (whether an empty list is attached or
-    omitted is a per-payload contract).
+    ``cap``, the first ``cap`` entries are attached, ``{key}_truncated``
+    carries the TOTAL count, and ``rest``, the call that reads the entries
+    left out, goes in the payload's ``hint`` (after any hint already there). A
+    capped list is a surfaced fact, never silent, and a count with no route
+    leaves the caller knowing there is more and no way to read it. Callers
+    guard emptiness themselves (whether an empty list is attached or omitted
+    is a per-payload contract).
     """
     if len(items) > cap:
         payload[key] = items[:cap]
         payload[f"{key}_truncated"] = len(items)
+        held = payload.get("hint")
+        payload["hint"] = f"{held} {rest}" if held else rest
     else:
         payload[key] = items
 

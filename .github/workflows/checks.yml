@@ -162,3 +162,29 @@ jobs:
 
       - name: Audit locked dependencies
         run: uv run --with pip-audit python -m pip_audit -r requirements.txt --no-deps --strict
+
+  changelog:
+    # A pull request tells users what it changed through a fragment under
+    # changelog.d/ (CLAUDE.md, "Working practice"); the release renders the
+    # fragments into CHANGELOG.md. `towncrier check` fails a pull request that
+    # adds none. A change with nothing to tell users adds a fragment of type
+    # `internal`, which the release renders as nothing. Pull requests only: a
+    # push to master and the publish workflow's release gate have no base
+    # branch to compare with.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The check diffs the branch against master, so master must be fetched.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Check for a changelog fragment
+        run: uv run towncrier check --compare-with origin/master

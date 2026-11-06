@@ -61,6 +61,7 @@ from ltspice_mcp.lib.schematic_ops import (
     OpRemoveDirective,
     OpRemoveNetLabel,
     OpRemoveWire,
+    OpReplaceComponent,
     OpReplaceDirective,
     OpSetComponentAttribute,
     OpSetComponentValue,
@@ -126,6 +127,7 @@ MoveComponentOp = OpMoveComponent
 MoveOp = OpMove
 RemoveComponentOp = OpRemoveComponent
 RemoveDirectiveOp = OpRemoveDirective
+ReplaceComponentOp = OpReplaceComponent
 ReplaceDirectiveOp = OpReplaceDirective
 RemoveNetLabelOp = OpRemoveNetLabel
 RemoveWireOp = OpRemoveWire
@@ -220,6 +222,7 @@ __all__ = [  # noqa: RUF022 - grouped by the operation that takes them
     "MoveOp",
     "RemoveComponentOp",
     "RemoveDirectiveOp",
+    "ReplaceComponentOp",
     "ReplaceDirectiveOp",
     "RemoveNetLabelOp",
     "RemoveWireOp",

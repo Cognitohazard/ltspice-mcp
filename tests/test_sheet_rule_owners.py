@@ -166,6 +166,9 @@ _PART_LOOKUPS: dict[str, str] = {
     "lib/schematic_ops.py:_apply_move": (
         "moves the parts _plan_move resolved with part_reference or took from the editor"
     ),
+    "lib/schematic_ops.py:_replace_component": (
+        "looks the part up after part_reference resolved it"
+    ),
     "lib/variations.py:_DeckTargets.component_sites": (
         "a deck's cards keyed by case-folded name, not a sheet's parts"
     ),
@@ -390,6 +393,10 @@ _ATTRIBUTE_WRITERS: dict[str, str] = {
     ),
     "lib/schematic_ops.py:_set_or_create_value": (
         "writes the Value _apply_component_value held to _attribute_texts first"
+    ),
+    "lib/schematic_ops.py:_replace_component.put_back": (
+        "puts back the texts the part held before a refused replace_component, "
+        "which the sheet gave it, so a refused op leaves the part as it was"
     ),
     "lib/schematic_ops.py:_set_instance_params": (
         "sets a parameter of the Value _apply_component_value held to "

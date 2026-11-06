@@ -807,11 +807,16 @@ def build_simulation_summary(
         "step_count": step_count,
     }
     # Cap the structured signal list: a device-heavy raw (.save all @m*[*],
-    # PDK-level node dumps) can carry hundreds-to-thousands of trace names,
-    # and this summary is re-sent on every run_simulation completion and
-    # check_job poll. The full list stays addressable via the
-    # spice://results/{job_id}/signals resource.
-    cap_list(summary, "signals", trace_names, _SIGNALS_STRUCTURED_CAP)
+    # PDK-level node dumps) can carry hundreds-to-thousands of trace names.
+    # The results query reads every name, paged, for a job or a path alike.
+    cap_list(
+        summary,
+        "signals",
+        trace_names,
+        _SIGNALS_STRUCTURED_CAP,
+        "inspect(kind='results', view='signals') with this run's path, or its job_id "
+        "and run_index, lists every signal, paged.",
+    )
 
     if logs is not None:
 

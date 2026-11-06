@@ -23,8 +23,10 @@ document needs fixing.
 A seventh tool, `plot_waveform`, is the interactive MCP Apps waveform widget
 and does not use the envelope. Its reply summarizes each plotted trace:
 minimum and maximum with their positions, first and final value, and on a
-transient the time-weighted mean. `attach_plot` adds a PNG of the chart for a
-vision model. Traces are split into panels by declared
+transient the time-weighted mean. Past 32 traces it summarizes the first 32,
+counts every plotted trace in `traces_truncated`, and names in `hint` the
+`analyze_results` call that reads the rest. `attach_plot` adds a PNG of the
+chart for a vision model. Traces are split into panels by declared
 unit, or by the caller's `panels`. A plot with no sampled axis (an operating
 point, a `.tf`, or a stepped `.op` or one-frequency `.ac`, which hold one point
 a step) has no chart: it is refused with `no_axis`, which says what the plot
@@ -2201,12 +2203,31 @@ top-level device does, which needs a model with one definition; a binned
 model is refused with `model_missing`. The draw uses the device's W and L
 after `assign` variations are applied. The area a draw stands for is `m·W·L`,
 because the simulator builds m parallel copies from one card and they share
-the draw. On ngspice m is the product of the device's own `m` and the `m` of
-every subcircuit instance above it; LTspice ignores `m` on an X line, so
-there m is the device's own. An inner `m={mult}` resolves in the scope its X
-line sets. An `m` that does not resolve to a positive number refuses the
-request with `mismatch_geometry_unresolved`. Draws across circuits are
-independent; correlated Monte Carlo across decks is not supported.
+the draw. LTspice ignores `m` on an X line, so there m is the device's own.
+ngspice, as measured on ngspice-42, drops the subcircuits no instance reaches
+and then reads the deck once in order, includes and `.lib` sections in
+place. An X line that carries `m` makes it rewrite the subcircuit called,
+unless that one declares `m` (on its `.subckt` line or in a body `.param`):
+the subcircuit gets an `m` parameter, default 1, and `m={m}` is appended to
+each C, D, F, G, I, J, L, M, Q, R, X and Z card of its body; an A, B, E, H,
+K, S, T, V or W card is left as written, and a card of another letter there
+has an unknown count. An X line so given
+`m` rewrites its own callee in turn only if it sits later in the deck than
+the line that rewrote its body. The appended `m` replaces a card's own
+outside the HSPICE modes (the `kiltpsa` spicelib runs by default) and
+multiplies it in them (`ngbehavior` `hsa`); an X line's `m` on a subcircuit
+that declares `m` is an ordinary parameter. So m is the device's `m` after
+that rewrite, read in the scope its X lines set. A deck where the rewrite
+gives `m` to an X line calling a subcircuit that takes no parameters is
+refused with `multiplier_rewrite_stops`, as ngspice stops on it. An inner `m={mult}` resolves in the scope
+its X line sets. An `m` that does not resolve to a positive number refuses
+the request with `mismatch_geometry_unresolved`. On ngspice, a case whose
+edits, the private subcircuit copies a nested target needs among them, would
+change what a card no edit writes builds is refused with
+`multiplier_rewrite_changed`, naming a fix where one keeps the circuit. A deck with no semantic profile (QSPICE, Xyce)
+counts the product of the X line's `m` and the device's own; neither
+simulator's rule is measured. Draws across circuits are independent;
+correlated Monte Carlo across decks is not supported.
 
 A random case's draws follow from the seed, its circuit id and its sample
 index, never from the case's position among the request's cases. Every case
@@ -2290,8 +2311,8 @@ library otherwise.
 
 ### A.3 Edit ops
 
-The fourteen op kinds, discriminated on `op`, are `add_component`,
-`move_component`, `move`, `remove_component`, `set_component_value`,
+The fifteen op kinds, discriminated on `op`, are `add_component`,
+`move_component`, `replace_component`, `move`, `remove_component`, `set_component_value`,
 `set_component_attribute`, `add_net_label`, `remove_net_label`, `wire_pins`,
 `remove_wire`, `add_directive`, `remove_directive`, `replace_directive`,
 `set_plot_panes`. The batch
@@ -2321,6 +2342,23 @@ them, in any case), before anything changes. The result's `moved` counts what
 moved and lists the parts. Applying the opposite offset to what it moved puts
 everything back. `move_component` places one part at a position and can turn
 it.
+
+`replace_component` gives a part a new `symbol` where it stands. The part
+keeps its reference, place, turn and attributes, and its value unless `value`
+gives one; the old symbol's attribute text placements are dropped, so the new
+symbol places its own. Each old pin is paired with the new pin of the same
+name, in any case, or as `pins` pairs them (old pin to new pin, each by name
+or SpiceOrder). A paired pin that moved is wired back to where its old
+wiring ends, by a route the `wire_pins` planner accepts: straight, round one
+corner, or across halfway with two; the result's `wires` lists what was
+drawn. The swap must then leave each paired pin joined to what its old pin
+was joined to, each unpaired new pin joined to nothing, and every other net
+as it was; otherwise it is refused with what the pin would join, and the
+sheet is left as it was. The result's `was` is the old symbol, `left_at`
+gives the place of each old pin that had wiring and no partner, whose wiring
+is left there joined to nothing of the part, and `unpaired_pins` names the
+new pins left unconnected. Applied again with `was` as the symbol it puts the
+symbol back; the wires it drew stay, for `remove_wire`.
 
 `remove_wire` removes an exact segment. `remove_component` takes
 `cleanup_wires` to also delete the wires its removal leaves dangling.

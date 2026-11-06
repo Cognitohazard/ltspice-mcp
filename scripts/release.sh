@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
-# Cut a release: stamp the plugin manifests, commit, tag.
+# Cut a release: render the changelog, stamp the plugin manifests, commit, tag.
 #
 # The package version comes from the git tag via hatch-vcs. The plugin
 # manifests are static JSON that Claude Code reads from the repo, so they
 # can't derive the version dynamically — this script is the single input
 # that keeps every manifest "version" slot in lockstep with the tag.
+#
+# The changelog section for the version is rendered from the fragments under
+# changelog.d/ (towncrier, configured in pyproject.toml), one per change, so
+# that branches never edit the same lines of CHANGELOG.md. The build deletes
+# the fragments it rendered; the section and the deletions land in the
+# release commit.
 #
 # Usage: scripts/release.sh 0.5.1
 set -euo pipefail
@@ -13,12 +19,20 @@ ver="${1:?usage: release.sh <version>  (e.g. 0.5.1)}"
 ver="${ver#v}"  # tolerate a leading v
 root="$(cd "$(dirname "$0")/.." && pwd)"
 
-# Refuse to tag a dirty tree or an unwritten release note: the tag is what
-# PyPI builds from, and the changelog section is what users read for it.
+# Refuse to tag a dirty tree: the tag is what PyPI builds from.
 if [ -n "$(git -C "$root" status --porcelain)" ]; then
   echo "release.sh: working tree is not clean; commit or stash first" >&2
   exit 1
 fi
+
+# Render the pending changelog fragments into this version's section of
+# CHANGELOG.md, dated today. towncrier stages the rewritten file and the
+# removal of the fragments, and refuses a version the file already has a
+# section for.
+(cd "$root" && uv run towncrier build --yes --version "$ver" --date "$(date +%F)")
+
+# The section is what users read for the release; its header is towncrier's
+# title_format in pyproject.toml. A cut whose render wrote nothing stops here.
 if ! grep -qE "^## \[$ver\] - [0-9]{4}-[0-9]{2}-[0-9]{2}" "$root/CHANGELOG.md"; then
   echo "release.sh: CHANGELOG.md has no dated '## [$ver] - YYYY-MM-DD' section" >&2
   exit 1

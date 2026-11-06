@@ -2516,6 +2516,15 @@
   ],
   "varies": true
  },
+ "ab6f6ba1108367bf": {
+  "answer": {
+   "reply": "eb8cec2f7a5370cc",
+   "sheet": "20ecf1b22dc47551"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_replace_component_reports_what_it_did"
+  ]
+ },
  "abfe9bf99f931625": {
   "answer": {
    "reply": "d044d3c35b9faa18",
@@ -2981,6 +2990,15 @@
   },
   "tests": [
    "tests/test_post_op_warnings.py::TestAbortedTransaction::test_aborted_transaction_writes_nothing_and_emits_no_warnings"
+  ]
+ },
+ "d26af1693561cee6": {
+  "answer": {
+   "reply": "a54b9942a021c478",
+   "sheet": "244bfcd5bae84e0c"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_replace_component_reports_what_it_did"
   ]
  },
  "d4281b0387bf13f0": {
