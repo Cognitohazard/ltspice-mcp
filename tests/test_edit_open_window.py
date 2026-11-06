@@ -45,6 +45,7 @@ from tests._ltspice_window import (
     follow_open_window_referral,
     put_windows,
     read_world,
+    sha256_ltspice_shows,
     write_world,
 )
 from tests._source_scan import modules, scopes
@@ -760,6 +761,15 @@ async def test_a_dry_run_reports_a_window_that_differs_and_is_not_refused(
     assert "A commit is refused until the window's copy is saved" in data["observations"][0]
     assert window.text(asc_file) == held
     assert "open_in_ltspice" not in data
+
+    # The call the note names, with the sha256 where it says to read it, drops
+    # the window's copy.
+    sha256 = await sha256_ltspice_shows(asc_state, asc_file)
+    settled = await follow_open_window_referral(
+        asc_state, data["observations"][0], asc_file, "discard", sha256=sha256
+    )
+    assert settled["outcome"] == "complete", settled
+    assert window.text(asc_file) == as_ltspice_reads(asc_file)
 
 
 async def test_a_sheet_no_window_has_open_is_edited_as_before(

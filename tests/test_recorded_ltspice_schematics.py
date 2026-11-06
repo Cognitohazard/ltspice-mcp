@@ -361,7 +361,7 @@ async def test_a_name_on_no_net_is_refused_alike_on_a_sheet_and_on_its_export(
         for at in ["nosuch", "net:nosuch"]:
             item = await inspect_item(state_no_sim, {"kind": "net", "path": str(path), "at": at})
             assert not item["ok"], (path.name, at, item)
-            assert item["error"]["code"] == "netlist_invalid", (path.name, at)
+            assert item["error"]["code"] == "not_found", (path.name, at)
             assert "'nosuch' not found" in item["error"]["message"], (path.name, at)
     # The export's refusal names the nodes there are.
     item = await inspect_item(state_no_sim, {"kind": "net", "path": str(export), "at": "nosuch"})

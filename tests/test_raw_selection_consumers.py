@@ -147,7 +147,7 @@ def test_a_case_selection_beside_a_path_needs_a_job(state_no_sim, work_dir, sele
     path and failed a case selection with an internal error."""
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     for job_id in ({"job_id": ""}, {}):
-        with pytest.raises(ApiValidationError, match="job_id" if job_id else "experiment job"):
+        with pytest.raises(ApiValidationError, match="job_id"):
             SyncApi(state_no_sim).analyze_results(
                 sources=[{"path": str(raw), "label": "a", **job_id, **selection}],
                 recipes=[{"metric": "summary", "key": "s"}],

@@ -183,7 +183,9 @@ async def _experiment_case(
             )
         )
     ):
-        raise ResultError(refusal)
+        # An argument mistake: the family's hint (check the run's state) does
+        # not apply, as for _direct_source's refusal of path with job_id.
+        raise ResultError(refusal, show_hint=False)
     return None
 
 

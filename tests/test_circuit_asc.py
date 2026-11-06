@@ -21,7 +21,7 @@ from ltspice_mcp.lib.netlist_graph import parse_netlist_graph
 from ltspice_mcp.lib.schematic_ops import OpWirePins, blank_sheet
 from ltspice_mcp.lib.symbol_library import SymbolLibrary
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools.inspect_tools import TraceNetInput, handle_trace_net
+from ltspice_mcp.tools.inspect_tools import TraceNetInput, _QueryError, handle_trace_net
 from tests._asc_ops import (
     add_component,
     add_net_label,
@@ -3385,8 +3385,11 @@ class TestTraceNet:
 
     async def test_trace_by_missing_net_name_raises(self, asc_state: SessionState, work_dir: Path):
         path = await _build_name_wired_rc("trace_miss", asc_state, work_dir)
-        with pytest.raises(NetlistError, match="not found"):
+        # A name on no net: the file is sound, so the net query reports it as
+        # not_found, as it does a node no card of a netlist is on.
+        with pytest.raises(_QueryError, match="not found") as refused:
             await handle_trace_net(TraceNetInput(path=path, pin="net:nonexistent"), asc_state)
+        assert refused.value.code == "not_found"
 
     async def test_short_detection(self, asc_state: SessionState, work_dir: Path):
         asc = work_dir / "short.asc"

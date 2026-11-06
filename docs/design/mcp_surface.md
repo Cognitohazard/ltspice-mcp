@@ -989,11 +989,13 @@ the swept source) lies within a step. A table plot, one whose first trace is
 not a sweep axis (such as an `.op`, `.tf` or `.pz` result), has no sampled
 axis. `snapshot_id` identifies the contents of a source's RAW, log and
 console files as they were read. A path names one results file, so
-`plot_waveform`, `inspect(kind="results")` and the Python API's `load_raw`,
-`measurements` and `device_op_points` refuse a `run_index` other than 0, a
-`case_id` or an `other_raw` beside it, in the same words, rather than read
-the file as though they had not been sent; `analyze_results` reports a run
-other than 0 of a path source as a missing case.
+`plot_waveform`, `inspect(kind="results")` and the Python API's `load_raw`
+refuse a `run_index` other than 0, a `case_id` or an `other_raw` beside it,
+and the API's `measurements` and `device_op_points` a `run_index` or a
+`case_id`, in the same words, rather than read the file as though they had
+not been sent. `analyze_results` refuses an `other_raw` beside a path in
+those words too, and reports a run other than 0 of a path source as a
+missing case.
 
 Input:
 
@@ -1856,10 +1858,11 @@ cursors where listed:
     `invalid_at` unless a node is called that.
     A bare NAME is read as net:NAME on both: a net label on a .asc, a node
     name on a netlist. A name no label of the sheet carries, or no card of
-    the deck's own is on, is refused on both as `netlist_invalid` rather
+    the deck's own is on, is refused on both as `not_found` rather
     than answered as an empty net; ground is a node of every deck, and the
-    netlist's refusal lists its nodes and names a subcircuit whose body
-    uses the name
+    netlist's refusal lists its nodes and says what the query does not
+    read: a subcircuit body that uses the name, a `.global` net only such
+    a body uses, a file the deck includes, a card it could not read
 {kind: "components", path, prefix?, detail: "list"|"full", cursor?}
     `prefix` keeps references that start with it, case-insensitively, on
     both a .asc and a netlist: `"M"` for every MOSFET, `"LX"` for LX1, LX2

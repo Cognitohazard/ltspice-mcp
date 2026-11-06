@@ -155,6 +155,7 @@ from ltspice_mcp.lib.connectivity import (
     named_labels,
 )
 from ltspice_mcp.lib.cursor_codec import canonical_hash
+from ltspice_mcp.lib.deck_nodes import global_names
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, TraceDescriptor
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import cap_note
@@ -198,7 +199,14 @@ from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
     executable_identity,
 )
-from ltspice_mcp.lib.spice_lex import LexResult, SpiceCard, SpiceLexError, lex_deck
+from ltspice_mcp.lib.spice_lex import (
+    INCLUDE_HEADS,
+    LexResult,
+    SpiceCard,
+    SpiceLexError,
+    directive_head,
+    lex_deck,
+)
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, symbol_info_of
 from ltspice_mcp.lib.symbol_library import SymbolResolver
@@ -351,10 +359,13 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
             default=None,
         )
         if first is None:
-            raise NetlistError(
+            # The net query's refusal of a name on no net, as a netlist's is
+            # (_deck_node): the file is sound, the name names nothing in it.
+            raise _QueryError(
+                "not_found",
                 f"Net label '{net_name}' not found in schematic. Add it with the "
                 "add_net_label op of edit_schematic first, or trace a "
-                "component pin / coordinate."
+                "component pin / coordinate.",
             )
         x, y = first.point
         net = nets.of_label(first)
@@ -1533,27 +1544,46 @@ def _deck_node(
 ) -> str:
     """``name``, when it is ground or one of the deck's own nodes
     (``spellings``, by :func:`_node_spellings`); else the refusal, which names
-    the deck's nodes and, for a name only a subcircuit's body uses, the query
-    that reads it."""
+    the deck's nodes, says what the query did not read (a file the deck
+    includes, a card that could not be read), and for a name a subcircuit's
+    body or a ``.global`` card gives, the query that reads it."""
     key = name_key(name)
     if key == GROUND or key in spellings:
         return name
-    message = f"Node '{name}' not found in netlist: no card of the deck is on it."
+    message = f"Node '{name}' not found in netlist: no card of the deck's own is on it."
+    globals_listed = {fold_case(text) for card in cards for text in _readable_global_names(card)}
     inside = _subcircuits_using(key, cards)
-    if inside:
+    if key in globals_listed:
+        message += (
+            " It is a .global net, one node across the deck, but the net query lists "
+            "only the deck's own cards"
+            + (f", and only .subckt {', '.join(inside)} uses it" if inside else "")
+            + ". inspect(kind='hierarchy') lists the nodes of each subcircuit instance."
+        )
+    elif inside:
         message += (
             f" It is a node inside .subckt {', '.join(inside)}, which the net query "
             "does not read: it lists the deck's own cards. inspect(kind='hierarchy') "
             "lists the nodes of each subcircuit instance."
         )
+    included = sum(
+        1 for card in cards if not card.scope and directive_head(card) in INCLUDE_HEADS
+    )
+    if included:
+        message += (
+            f" The deck reads {included} more file{'s' if included > 1 else ''} through "
+            ".include or .lib, which the net query does not read, so it may be on a "
+            "card there."
+        )
     if unread:
         message += (
             f" {unread} of the deck's own cards could not be read, so it may be on one of them."
         )
-    close = difflib.get_close_matches(fold_case(name), [fold_case(n) for n in spellings], n=1)
+    # Compared as the deck spells each node, so ground spelled gnd is offered as gnd.
+    written = {fold_case(spelling): spelling for spelling in spellings.values()}
+    close = difflib.get_close_matches(fold_case(name), list(written), n=1)
     if close:
-        guess = next(n for n in spellings.values() if fold_case(n) == close[0])
-        message += f" Did you mean '{guess}'?"
+        message += f" Did you mean '{written[close[0]]}'?"
     known = list(spellings.values())
     route = "inspect(kind='components', detail='full') lists each card's nodes"
     if len(known) > _NODES_LISTED:
@@ -1563,7 +1593,16 @@ def _deck_node(
         )
     elif known:
         message += f" Its nodes are {', '.join(known)}; {route}."
-    raise NetlistError(message)
+    raise _QueryError("not_found", message)
+
+
+def _readable_global_names(card: SpiceCard) -> tuple[str, ...]:
+    """The node names a ``.global`` card lists (``deck_nodes``), none for a
+    card that cannot be split into parts."""
+    try:
+        return global_names(card)
+    except SpiceLexError:
+        return ()
 
 
 def _subcircuits_using(key: str, cards: Sequence[SpiceCard]) -> list[str]:
@@ -1576,7 +1615,7 @@ def _subcircuits_using(key: str, cards: Sequence[SpiceCard]) -> list[str]:
             continue
         try:
             nodes = InstanceLine.from_card(card).nodes
-        except Exception:
+        except SpiceLexError:
             continue
         if any(name_key(node) == key for node in nodes):
             found[card.scope[-1]] = None

@@ -68,8 +68,10 @@ from ltspice_mcp.lib.result_observations import coarse_compressed_waveform, deck
 from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analysis, inspect_tools
+from ltspice_mcp.tools._base import recovery_hint
 from ltspice_mcp.tools.analyze import (
     AnalyzeResultsInput,
+    AnalyzeSourceInput,
     handle_analyze_results,
     render_attached_analysis,
 )
@@ -2504,6 +2506,44 @@ async def test_every_reader_of_a_path_refuses_a_run_index_beside_it(
         analysis.PlotWaveformInput(path=str(raw), open=False), state_no_sim
     )
     assert not alone.is_error
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_every_reader_of_a_path_refuses_other_raw_beside_it(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """``other_raw`` chooses another raw of a job's case, so beside a path it
+    is refused in the same words by every reader that takes one, including
+    ``analyze_results``, whose refusal named no fix; and ``plot_waveform``'s
+    refusal carries no hint to check the run's state, which does not apply."""
+    raw = rec.stage_run(build, "raw/tran", work_dir)
+    said = services.run_selectors_beside_path(other_raw="op")
+    assert said is not None
+
+    with pytest.raises(ApiValidationError) as api_error:
+        SyncApi(state_no_sim).load_raw(raw, other_raw="op")
+    assert str(api_error.value) == said
+
+    with pytest.raises(ResultError) as plot_error:
+        await analysis.handle_plot_waveform(
+            analysis.PlotWaveformInput(path=str(raw), other_raw="op", open=False), state_no_sim
+        )
+    assert str(plot_error.value) == said
+    assert recovery_hint(plot_error.value, state_no_sim) is None
+
+    reply = await inspect_tools.handle_inspect(
+        inspect_tools.InspectInput.model_validate(
+            {"queries": [{"kind": "results", "path": str(raw), "other_raw": "op"}]}
+        ),
+        state_no_sim,
+    )
+    assert reply.structured_content is not None
+    [item] = reply.structured_content["results"]
+    assert said in item["error"]["message"], item
+
+    with pytest.raises(ValidationError) as analyze_error:
+        AnalyzeSourceInput.model_validate({"path": str(raw), "other_raw": "op"})
+    assert said in str(analyze_error.value)
 
 
 def test_ltspice_xvii_refuses_a_frequency_response_analysis():

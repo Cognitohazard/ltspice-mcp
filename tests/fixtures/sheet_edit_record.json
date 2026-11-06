@@ -193,7 +193,7 @@
  },
  "0fcf2251bbe49520": {
   "answer": {
-   "reply": "797be211a251328d",
+   "reply": "1f3a4aa78d46132c",
    "sheet": null
   },
   "tests": [
@@ -3513,6 +3513,7 @@
  },
  "fca2672cec880bd2": {
   "tests": [
+   "tests/test_edit_open_window.py::test_a_dry_run_reports_a_window_that_differs_and_is_not_refused",
    "tests/test_edit_open_window.py::test_a_window_changed_while_ltspice_asks_is_left_open",
    "tests/test_edit_open_window.py::test_a_window_without_the_sheet_by_the_time_it_is_closed_has_nothing_to_drop[closes the sheet]",
    "tests/test_edit_open_window.py::test_a_window_without_the_sheet_by_the_time_it_is_closed_has_nothing_to_drop[quits LTspice]",

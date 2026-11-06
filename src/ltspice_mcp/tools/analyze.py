@@ -214,9 +214,18 @@ class AnalyzeSourceInput(OptionalRawSelectionFields, OtherRawFields, NotedModel)
                 raise ValueError("run indices must be non-negative integers")
             self.keep_first("runs")
         if isinstance(self.runs, CaseSelection) and self.job_id is None:
-            raise ValueError("case_ids selection is available only for experiment jobs")
-        if self.other_raw is not None and self.job_id is None:
-            raise ValueError("other_raw selects a raw of an experiment job's cases")
+            raise ValueError(
+                "runs={case_ids} chooses cases within a job and needs its job_id, but "
+                "path names one results file: leave it out to read that file, or pass "
+                "the job's job_id instead of path."
+            )
+        # Beside a path, other_raw is refused as every reader of a path refuses
+        # it. A list of runs is not: a run the file does not hold is reported
+        # missing, as for a job.
+        if self.job_id is None and (
+            refusal := services.run_selectors_beside_path(other_raw=self.other_raw)
+        ):
+            raise ValueError(refusal)
         if "label" not in self.model_fields_set:
             # One source, or several that name themselves: the label only has
             # to tell this source's rows apart, and its job or file does that.
