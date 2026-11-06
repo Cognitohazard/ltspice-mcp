@@ -2114,8 +2114,9 @@ _ADD_R2 = [{"op": "add_component", "reference": "R2", "symbol": "res", "x": 400,
 
 
 @pytest.mark.edit_reply_per_platform(
-    "the export's .lib line names a Windows install path, which only Windows "
-    "reads as absolute, so the equivalence check's include warnings differ"
+    "the export's .lib line names a Windows install path, which Windows reads as "
+    "absolute, WSL through its /mnt mount and other Linux as a relative name, so the "
+    "equivalence check's include warnings differ"
 )
 @pytest.mark.parametrize("mode", ["equivalence", "structural_diff"])
 async def test_asc_reference_is_exported_like_the_committed_sheet(
@@ -2127,7 +2128,7 @@ async def test_asc_reference_is_exported_like_the_committed_sheet(
     The committed sheet reaches the comparison as its LTspice export, so the
     reference .asc has to as well: read through the schematic editor instead,
     every SpiceLine read as a changed component and the exporter's boilerplate
-    as added directives, and the graph engine lexed the schematic as SPICE.
+    as added directives, and the netlist graph lexed the schematic as SPICE.
     """
     monkeypatch.setattr(se, "_export_asc_to_netlist", fake_netlister.export_asc_to_netlist)
     sheet = work_dir / "amp.asc"
@@ -2172,8 +2173,9 @@ _LOCAL_SYMBOL = INPUTS / "search" / "lib" / "part.asy"
 
 
 @pytest.mark.edit_reply_per_platform(
-    "the export's .lib line names a Windows install path, which only Windows "
-    "reads as absolute, so the comparison's include warnings differ"
+    "the export's .lib line names a Windows install path, which Windows reads as "
+    "absolute, WSL through its /mnt mount and other Linux as a relative name, so the "
+    "comparison's include warnings differ"
 )
 @pytest.mark.parametrize(
     ("folder", "symbol"),
@@ -2665,7 +2667,7 @@ class TestRenderAndCompareArguments:
         spec = self._edit(compare={"reference": "golden.cir"}).compare
         assert spec is not None
         assert spec.reference == "golden.cir"
-        # The tolerance and anchors keep the graph engine's own defaults.
+        # The tolerance and anchors keep the netlist graph's own defaults.
         assert spec.rtol == 1e-6
         assert spec.anchors is None
 

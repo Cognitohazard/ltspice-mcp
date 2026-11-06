@@ -627,7 +627,7 @@ class TestLayering:
     a ``lib`` module reaching back up closes a cycle. It resolves silently
     whenever a tool module happens to be imported first and explodes on the one
     entry point that imports the lib module first — which is how the schematic
-    engine's move out of ``tools/`` shipped a latent ImportError that only one
+    editor's move out of ``tools/`` shipped a latent ImportError that only one
     test file's import order revealed.
     """
 

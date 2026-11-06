@@ -1,6 +1,6 @@
 """Argument models the six operations validate against, importable by name.
 
-The engine validates every call against these pydantic models, so a rejection
+The API validates every call against these pydantic models, so a rejection
 names them: *"Input should be a valid dictionary or instance of RenderPolicy"*.
 Before this module there was no way to act on that — the type the message named
 could not be imported, and reaching it meant guessing at private modules. Here

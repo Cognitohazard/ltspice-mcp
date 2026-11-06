@@ -1,4 +1,4 @@
-"""``run_code`` — a Python snippet run in a warm worker that holds the engine.
+"""``run_code`` — a Python snippet run in a warm worker that holds the Python API.
 
 The server's side of :mod:`ltspice_mcp.code_worker`: one worker process per
 session, spawned on the first call, supervised here. Every call is a fresh
@@ -45,7 +45,7 @@ from ltspice_mcp.lib.windows_job import WindowsJob, python_launch
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import NotedModel, ToolInput, format_response, registry
 
-#: How long a worker gets to boot its engine before the call fails.
+#: How long a worker gets to start its session before the call fails.
 BOOT_TIMEOUT_S = 60.0
 #: After an interrupt, how long the worker gets to answer before it is killed.
 INTERRUPT_GRACE_S = 5.0
@@ -557,9 +557,9 @@ def worker_for(state: SessionState) -> CodeWorker:
 
 @registry.tool(
     name="run_code",
-    title="Run Python with the engine",
+    title="Run Python Code",
     description=(
-        "Run a Python snippet in a warm worker that holds this server's engine as "
+        "Run a Python snippet in a warm worker that holds this server's Python API as "
         "`api`. The snippet has the server process's own file and process "
         "authority, which no sandbox confines, so permission this tool like a shell. For "
         "loops over many runs, numpy on samples, and compute-decide-compute; a "
@@ -570,7 +570,7 @@ def worker_for(state: SessionState) -> CodeWorker:
         "np.percentile do not (guide section 'signals'). "
         f"In scope: {_IN_SCOPE} — reference('run_experiments') lists an op's "
         "arguments, so read it before guessing them. Every call is a fresh "
-        "namespace around the same live engine; keep state on disk (a job by "
+        "namespace around the same live `api`; keep state on disk (a job by "
         f"request_id, a file). stdout keeps the first {STDOUT_HEAD_CHARS} and last "
         f"{STDOUT_TAIL_CHARS} characters of print() output, stderr its last "
         f"{STDERR_TAIL_CHARS}, result the repr of a trailing expression "

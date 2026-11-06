@@ -114,7 +114,7 @@ def test_attached_per_run_limit_shares_the_analyze_page_cap():
     """One cap, both surfaces, held rather than refused.
 
     The attached block is handed straight to analyze_results, so its limit is
-    that engine's own model: an over-cap request is held to the cap at
+    that tool's own model: an over-cap request is held to the cap at
     submission, and the request the job records names the page it will serve.
     """
     assert issubclass(AnalysisPerRun, analyze_mod.CappedPerRunLimit)
@@ -3042,7 +3042,7 @@ class TestFailureChannel:
 
 @pytest.mark.asyncio
 class TestAttachedAnalysis:
-    """The analyze block runs on the real recipe engine, not a stub."""
+    """The analyze block runs on the real recipes, not a stub."""
 
     async def test_recipes_and_group_by_run_end_to_end(
         self,
@@ -3532,14 +3532,14 @@ class TestAttachedAnalysis:
         recorded_fixture_simulator(monkeypatch)
         deck = _deck(work_dir / "attached-bad.cir")
         # A malformed block is refused before submission now, so a STAGE-time
-        # failure needs the engine itself to fail — patched through
+        # failure needs the analysis itself to fail — patched through
         # tools.analyze, the seam the callback deliberately resolves late.
         analyze = {
             "recipes": [{"key": "vout", "metric": "value", "expr": "V(out)", "at": "900u"}],
         }
 
         async def exploding_engine(args, state):
-            raise ValueError("analysis engine failure injected by test")
+            raise ValueError("analysis failure injected by test")
 
         monkeypatch.setattr(analyze_mod, "capture_attached_analysis", exploding_engine)
         data = _assert_schema(
@@ -3555,7 +3555,7 @@ class TestAttachedAnalysis:
         assert data["completeness"]["produced"] == 1
         assert data["completeness"]["failed"] == 0
         assert data["analysis"]["status"] == "failed"
-        assert "analysis engine failure injected by test" in data["analysis"]["error"]
+        assert "analysis failure injected by test" in data["analysis"]["error"]
         assert [item["code"] for item in data["analysis"]["observations"]] == ["analysis_failed"]
         assert "attached analysis failed" in data["hint"]
         # The coordinator still records the stage failure on the job status.
@@ -3570,11 +3570,11 @@ class TestAttachedAnalysis:
         recorded_fixture_simulator(monkeypatch)
         deck = _deck(work_dir / "attached-wait.cir")
         released = asyncio.Event()
-        engine = analyze_mod.capture_attached_analysis
+        real_capture = analyze_mod.capture_attached_analysis
 
         async def gated(args, state):
             await released.wait()
-            return await engine(args, state)
+            return await real_capture(args, state)
 
         monkeypatch.setattr(analyze_mod, "capture_attached_analysis", gated)
 

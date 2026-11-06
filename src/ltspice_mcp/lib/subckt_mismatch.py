@@ -75,7 +75,7 @@ from ltspice_mcp.lib.spice_lex_views import InstanceLine, ModelCard, SubcktCard
 
 logger = logging.getLogger(__name__)
 
-# The two ngspice instance parameters this engine writes. ``delvto`` adds to
+# The two ngspice instance parameters this module writes. ``delvto`` adds to
 # the signed vth0, so a pFET (negative vth0) shifted by +30 mV shows a SMALLER
 # threshold magnitude; callers and receipts stay in the signed domain.
 VTH_PARAM = "delvto"
@@ -118,7 +118,7 @@ class MismatchPlanError(ValueError):
 
 @dataclass(frozen=True)
 class ClosureFile:
-    """One file of a deck's include closure, as this engine reads it.
+    """One file of a deck's include closure, as this module reads it.
 
     ``index`` is both the file's identity and its position in the closure a
     caller passes: every producer numbers its files in list order, and a plan
@@ -880,7 +880,7 @@ def _refuse_or_skip_without_mos(
             raise MismatchPlanError(
                 "nested_fet_unsupported",
                 f"Instance {x_ref!r} reaches its MOS device through two subcircuit "
-                f"levels ({subckt} -> {inner_view.model}); this engine patches exactly "
+                f"levels ({subckt} -> {inner_view.model}); mismatch patches exactly "
                 "one level, so instantiate the inner device wrapper directly",
             )
     skips.append(
@@ -937,7 +937,7 @@ def _refuse_preexisting(
                 "preexisting_mismatch_param",
                 f"The {where} of {x_ref!r} already sets {param!r}; applying a mismatch "
                 "value on top of it would silently double-apply the shift, so this deck "
-                f"is refused — remove the existing {param} to let the engine own it",
+                f"is refused — remove the existing {param} to let the mismatch draw set it",
             )
 
 
@@ -1027,7 +1027,7 @@ def _render_clone(
                 raise MismatchPlanError(
                     "param_namespace_collision",
                     f"Subcircuit {original!r} already declares a parameter named "
-                    f"{name!r}, which is the reserved name this engine forwards "
+                    f"{name!r}, which is the reserved name the mismatch draw forwards "
                     f"{param} through; rename the library parameter",
                 )
             forwarded[name] = "0" if param == VTH_PARAM else "1"

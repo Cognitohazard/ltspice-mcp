@@ -1,4 +1,4 @@
-"""Monte Carlo perturbation engine.
+"""Monte Carlo perturbation.
 
 Owns the math: given component nominal values, tolerances, distributions,
 and an optional seed, produce per-run perturbed values. Knows nothing
@@ -13,7 +13,7 @@ reproducibility). Owning the math gives us the intended
 
 Foundry-MC additions
 --------------------
-Beyond R/C/L value perturbation, the engine supports MOSFET-level MC the
+Beyond R/C/L value perturbation, this module supports MOSFET-level MC the
 way commercial PDKs do it (Spectre/HSPICE/Eldo conventions):
 
 - **Process variation** — sample once per ``.MODEL`` per run; every

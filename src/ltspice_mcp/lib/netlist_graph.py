@@ -113,7 +113,7 @@ from ltspice_mcp.lib.spice_lex_views import InstanceLine, SubcktCard
 
 # An include-path resolver: given the filesystem path an ``.include``/``.lib``
 # resolved to (base directory joined with the target, or an absolute target),
-# it returns the path to actually open, or ``None`` to deny the open. The engine
+# it returns the path to actually open, or ``None`` to deny the open. The graph
 # never reads a denied path — the callback is the sandbox seam the tool layer
 # wires to ``safe_path`` so an in-deck include cannot escape a sandbox.
 IncludeResolver = Callable[[Path], "Path | None"]

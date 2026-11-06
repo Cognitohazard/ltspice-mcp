@@ -577,7 +577,7 @@ def rc_transient_deck(directory: Path) -> Path:
 def recorded_fixture_simulator(
     monkeypatch: pytest.MonkeyPatch, fixture: str = "ltspice_tran_rc"
 ) -> list[str]:
-    """Instant engine behind ``ExperimentRunner.submit_netlist`` that hands back
+    """Instant stand-in simulator behind ``ExperimentRunner.submit_netlist`` that hands back
     a recorded real-LTspice raw+log pair, so analysis stages parse genuine
     simulator artifacts rather than a mock byte string. Name a different
     *fixture* to run a job over stepped artifacts. Returns the list each
@@ -1485,7 +1485,7 @@ def asc_symbols(_asc_symbol_cache: Path) -> Iterator[Path]:
     The server's own lookups read the session's library, which the ``config``
     fixture already makes the suite's. spicelib's editor, which still opens
     sheets, keeps its search paths as class attributes, so they are set here.
-    Re-asserted per test rather than once per session: booting the engine (any
+    Re-asserted per test rather than once per session: starting a session (any
     Api or server test) sets them process-wide to the host's real LTspice
     symbol library and never puts them back, so a session-scoped assignment
     would lose to whichever test ran first in the worker.

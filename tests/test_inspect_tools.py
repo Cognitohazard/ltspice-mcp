@@ -250,7 +250,7 @@ async def test_capabilities_reports_what_is_missing(
 
 async def test_capabilities_carries_startup_diagnostics(config: ServerConfig):
     """A server that started degraded — a configured simulator path that does
-    not exist, a requested engine that fell back to another — says so only in
+    not exist, a requested simulator that fell back to another — says so only in
     its own stderr log, which no client reads. The capabilities query is where
     a client can see it, so the notes have to ride there."""
     state = SessionState.create(
@@ -270,7 +270,7 @@ async def test_capabilities_names_the_keys_that_turn_a_simulator_on(cap_state: S
     """Every known-but-undetected simulator carries remediation naming the
     SAME config keys the loader reads — the config self-diagnosis surface.
     The fixture state detects only LTspice and ngspice, so the other two
-    engines are the specimens."""
+    simulators are the specimens."""
     from ltspice_mcp.config import SIM_PATH_ENV
 
     (res,) = await _run(cap_state, [{"kind": "capabilities"}])

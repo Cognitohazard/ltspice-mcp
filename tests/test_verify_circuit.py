@@ -1536,7 +1536,7 @@ async def test_additive_edit_against_the_original_asc_reports_only_the_addition(
 
 
 async def test_equivalence_exports_an_asc_reference(exporting_state, work_dir):
-    """The graph engine lexes whatever it is handed as SPICE, so an .asc
+    """The netlist graph lexes whatever it is handed as SPICE, so an .asc
     reference has to arrive as its export, not as the schematic text."""
     sheet = _write(work_dir, "amp.asc", fake_netlister.amp_asc())
 
@@ -2564,7 +2564,7 @@ def test_api_types_exports_the_models_errors_name():
     # matter which class had been re-exported there.
     assert api_types.VerifyRenderPolicy is _model_of(VerifyCircuitInput, "render")
     assert api_types.VerifyCompareSpec is _model_of(VerifyCircuitInput, "compare")
-    # Both tools take the same compare spec: one comparison engine, one shape.
+    # Both tools take the same compare spec: one comparison, one shape.
     assert api_types.VerifyCompareSpec is _model_of(EditSchematicInput, "compare")
     # RenderPolicy is exported as the base VerifyRenderPolicy subclasses; only
     # verify_circuit takes a render, so no tool field validates against it.

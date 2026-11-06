@@ -1,7 +1,7 @@
-"""Unit tests for the Monte Carlo perturbation engine and the runner scaffolding.
+"""Unit tests for the Monte Carlo perturbation and the runner scaffolding.
 
 The sampler, tolerance and mismatch math in ``montecarlo``, the card edits the
-variation engine applies to a lexed deck, and the parts of ``runner_base`` that
+variation expansion applies to a lexed deck, and the parts of ``runner_base`` that
 run without a simulator: outcome classification, generated-netlist cleanup,
 releasing a spicelib runner, and the bound put on the simulator process.
 """
@@ -38,7 +38,7 @@ def loop():
 
 
 class TestMCSampler:
-    """Our own MC perturbation engine. Replaces spicelib's Montecarlo class."""
+    """Our own MC perturbation. Replaces spicelib's Montecarlo class."""
 
     def test_normal_distribution_is_multiplicative(self):
         import statistics
@@ -96,7 +96,7 @@ class TestMCSampler:
 
         sampler = MCSampler(seed=0)
         # Deliberately bypass the Literal type to exercise the runtime
-        # error path — the engine validates the distribution name even
+        # error path — the sampler validates the distribution name even
         # though the static type system already constrains it.
         bad_spec = ToleranceSpec(tolerance=0.1, distribution="weibull")  # type: ignore[arg-type]
         with pytest.raises(ValueError, match="Unknown distribution"):
@@ -413,7 +413,7 @@ class TestMismatchRuleMatching:
 class TestStreamIsolation:
     """Per-stream RNGs in MCSampler — adding/removing a perturbation
     source mustn't shift other sources' samples. This is the property
-    that makes regression-fixed-seed tests stable as the engine evolves."""
+    that makes regression-fixed-seed tests stable as the code evolves."""
 
     def test_stream_keys_independent(self):
 
@@ -455,14 +455,14 @@ class TestStreamIsolation:
         assert child_a.stream("rcl:R1").gauss(0, 1) != child_c.stream("rcl:R1").gauss(0, 1)
 
     def test_adding_stream_doesnt_shift_existing(self):
-        """If a future engine version adds a new perturbation source, the
+        """If a future version adds a new perturbation source, the
         existing sources' sample sequences must be unchanged."""
 
-        # Old engine: only one stream "rcl:R1"
+        # Old version: only one stream "rcl:R1"
         old = MCSampler(seed=123)
         old_samples = [old.stream("rcl:R1").gauss(0, 1) for _ in range(5)]
 
-        # New engine: adds a "model:NMOS1.VTO" stream. Sampling from the
+        # New version: adds a "model:NMOS1.VTO" stream. Sampling from the
         # new stream first must not shift "rcl:R1"'s subsequent draws.
         new = MCSampler(seed=123)
         _ = [new.stream("model:NMOS1.VTO").gauss(0, 1) for _ in range(3)]
@@ -529,7 +529,7 @@ class TestCardEditPrimitives:
 
     A model parameter set in place, a variant model card injected before
     ``.END`` with an instance repointed at it, and a ``.PARAM`` value set in
-    place. How the variation engine composes them on a real case is covered in
+    place. How the variation expansion composes them on a real case is covered in
     ``test_variations.py`` (``TestRulesReadWhatEarlierRulesWrote``).
     """
 
