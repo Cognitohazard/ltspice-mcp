@@ -90,7 +90,7 @@ Monte Carlo setup to the assistant. This server does not need it. [Alongside
 LTspice's own MCP server](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#alongside-ltspices-own-mcp-server)
 describes an LTspice setting you may want to change.
 
-## What you can ask
+## Examples
 
 - *"Bias this common-source amplifier at 100 µA. What's its gain, and does the
   transistor stay in saturation at the slow and fast corners?"*
