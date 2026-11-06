@@ -90,8 +90,9 @@ def parser_cache_key(
 ) -> str:
     """One identity for raw and log facts captured under the same parser policy.
 
-    A read of ``chosen`` signals keeps other arrays than a whole-file read of
-    the same capture, and is refused for a signal its plot does not hold, so
+    A selective read (``chosen``: its signals, its window of a plot's axis,
+    that plot and its decode budget) keeps other arrays than a whole-file read
+    of the same capture, and is refused for what its plot does not hold, so
     the choice is part of its identity; a whole-file read's identity is as it
     was before reads could choose.
     """

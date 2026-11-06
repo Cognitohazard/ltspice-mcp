@@ -8,6 +8,7 @@ import functools
 import inspect
 import json
 import math
+import numbers
 import os
 import subprocess
 import time
@@ -1438,8 +1439,8 @@ def _window_bound(bound: float | str | None, name: str) -> float | None:
             value = parse_spice_value(bound.strip())
         except ValueError as exc:
             raise ApiValidationError(f"window {name} {bound!r} is not a value: {exc}") from exc
-    elif isinstance(bound, int | float) and not isinstance(bound, bool):
-        value = float(bound)
+    elif isinstance(bound, numbers.Real) and not isinstance(bound, bool):
+        value = float(bound)  # NumPy's numbers among them
     else:
         raise ApiValidationError(f"window {name} must be a number, SPICE text or None")
     if not math.isfinite(value):

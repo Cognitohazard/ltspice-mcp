@@ -261,6 +261,13 @@ def window_span(
     bounds ``ValueError``. An empty span is returned, not raised.
     ``coordinate`` maps stored values to the ones the window is in (a
     transient's deck time), a block at a time.
+
+    A read's or an export's window keeps the stored points, in their order,
+    and only selects them. A measurement's window is :func:`window_and_clean`,
+    which differs on purpose: it reads a downward sweep reversed, moves a
+    bound a few ulps past an axis end onto it, refuses one beyond the axis,
+    and needs three points to measure (``tests/test_axis_window.py`` pins the
+    difference).
     """
     if start is None and end is None:
         return 0, int(axis.size)
@@ -271,9 +278,13 @@ def window_span(
     for offset in range(0, int(axis.size), _WINDOW_CHUNK):
         block = axis[offset : offset + _WINDOW_CHUNK]
         values = np.real(block) if coordinate is None else coordinate(block)
-        if not bool(np.all(np.diff(values) >= 0)) or (
-            previous is not None and not values[0] >= previous
-        ):
+        # Across blocks as within one: a difference, so two infinities do not
+        # pass; their difference is not a number, which is the refusal.
+        with np.errstate(invalid="ignore"):
+            unordered = not bool(np.all(np.diff(values) >= 0)) or (
+                previous is not None and not values[0] - previous >= 0
+            )
+        if unordered:
             raise UnorderedAxisError(
                 "Cannot apply a [t_start, t_end] window to a non-monotonic axis "
                 "(e.g. a descending sweep)"
@@ -304,6 +315,12 @@ def window_and_clean(
     corruption: the axis and wave are flipped to ascending together so the
     windowing below stays correct. It stays off for time/frequency axes, where
     a non-monotonic axis means a corrupt result and must be refused.
+
+    A measurement's window, not :func:`window_span`, the window a read or an
+    export keeps stored points by, in their order: a measurement reads a
+    downward sweep reversed, needs three points, and takes a bound a few ulps
+    past an axis end as the end, where a read only selects
+    (``tests/test_axis_window.py`` pins the difference).
     """
     if len(t) != len(y):
         raise ValueError(f"Axis and wave have different lengths: {len(t)} vs {len(y)}")

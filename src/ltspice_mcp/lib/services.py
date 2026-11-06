@@ -52,6 +52,7 @@ from ltspice_mcp.lib.raw_parser import (
 from ltspice_mcp.lib.result_observations import (
     coarse_compressed_waveform,
     coarse_waveform_observation,
+    compressed_transient,
     deck_tran_max_step,
 )
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name
@@ -257,15 +258,52 @@ def coarse_waveform(source: AnalysisSource, raw: DecodedRaw) -> dict[str, float]
 
 def read_observations(source: AnalysisSource, raw: DecodedRaw) -> tuple[dict[str, Any], ...]:
     """What a read of ``raw`` from ``source`` says of the results it read: the
-    source's own (a stopped case's ``partial_raw``), and whether waveform
-    compression left a transient coarse (:func:`coarse_waveform`). Blocking:
-    it may read the deck."""
-    found = coarse_waveform(source, raw)
-    if found is None:
-        return source.observations
-    case_id = (source.identity or {}).get("case_id")
-    label = str(case_id) if case_id else (source.raw.name if source.raw else "this run")
-    return (*source.observations, dict(coarse_waveform_observation([(label, found)], run_cap=1)))
+    source's own (a stopped case's ``partial_raw``), whether waveform
+    compression left a transient coarse (:func:`coarse_waveform`), and which
+    signals and window a selective read kept. Blocking: it may read the deck.
+
+    Compression is judged over a run's every point, so a windowed read, which
+    holds some of them, does not judge it, and says so.
+    """
+    observations = list(source.observations)
+    found = None if source.window is not None else coarse_waveform(source, raw)
+    if found is not None:
+        case_id = (source.identity or {}).get("case_id")
+        label = str(case_id) if case_id else (source.raw.name if source.raw else "this run")
+        observations.append(dict(coarse_waveform_observation([(label, found)], run_cap=1)))
+    if source.signals is not None:
+        observations.append(
+            {
+                "code": "signals_chosen",
+                "kind": "provenance",
+                "detail": (
+                    f"Read with signals={list(source.signals)}: this result holds the "
+                    "traces they read, the plot's first variable (its axis, where it has "
+                    "one) and any step parameters, and no other trace."
+                ),
+            }
+        )
+    if source.window is not None:
+        start, end = ("None" if bound is None else f"{bound:g}" for bound in source.window)
+        unjudged = (
+            " Whether waveform compression left the run coarse "
+            "(coarse_compressed_waveform) is judged over all of a run's points, so it "
+            "was not judged here: read the run without window to see it."
+            if compressed_transient(raw)
+            else ""
+        )
+        observations.append(
+            {
+                "code": "window_chosen",
+                "kind": "provenance",
+                "detail": (
+                    f"Read with window=({start}, {end}): this result holds the points of "
+                    "its axis from the start to the end, in each step, and no other "
+                    f"point.{unjudged}"
+                ),
+            }
+        )
+    return tuple(observations)
 
 
 _analysis_deadline: contextvars.ContextVar[float | None] = contextvars.ContextVar(

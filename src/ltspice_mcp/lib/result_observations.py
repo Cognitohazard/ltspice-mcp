@@ -374,6 +374,19 @@ def deck_tran_max_step(netlist: Path) -> float | None:
     return _TRAN_MAX_STEPS.get(netlist, lambda path: _read_deck(path, tran_max_step))
 
 
+def compressed_transient(raw: DecodedRaw) -> bool:
+    """Whether ``raw`` is an LTspice transient saved with waveform compression
+    on, the plot ``coarse_compressed_waveform`` judges. LTspice adds
+    ``nocompression`` to a transient's flags when compression is off
+    (``raw/compress_*``)."""
+    descriptor = raw.descriptor
+    return (
+        descriptor.dialect == "ltspice"
+        and descriptor.analysis == "transient"
+        and not any(flag.lower() == "nocompression" for flag in raw.header.flags)
+    )
+
+
 def coarse_compressed_waveform(
     raw: DecodedRaw, *, max_step: float | None = None
 ) -> dict[str, float] | None:
@@ -383,15 +396,8 @@ def coarse_compressed_waveform(
     step, its points and span, and where the gap lies. None for any other
     plot. A gap no wider than the deck's own maximum step is what it asked for.
 
-    LTspice adds ``nocompression`` to a transient's flags when waveform
-    compression is off (``raw/compress_*``).
     """
-    descriptor = raw.descriptor
-    if (
-        descriptor.dialect != "ltspice"
-        or descriptor.analysis != "transient"
-        or any(flag.lower() == "nocompression" for flag in raw.header.flags)
-    ):
+    if not compressed_transient(raw):
         return None
     try:
         for step in raw.get_steps():

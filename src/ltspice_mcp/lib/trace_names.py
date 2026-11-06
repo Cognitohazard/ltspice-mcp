@@ -158,9 +158,7 @@ def _node_pair(
     """``V(plus_node, minus_node)`` read from the two node voltages among
     ``names``. A ground alias the result carries no voltage for is ground and
     contributes nothing, so ``V(a,0)`` is ``V(a)``."""
-    traces = {
-        node: find_trace(names, f"V({node})", xvii=xvii) for node in (plus_node, minus_node)
-    }
+    traces = {node: find_trace(names, f"V({node})", xvii=xvii) for node in (plus_node, minus_node)}
     grounded = {
         node for node, trace in traces.items() if trace is None and node.lower() in GROUND_ALIASES
     }

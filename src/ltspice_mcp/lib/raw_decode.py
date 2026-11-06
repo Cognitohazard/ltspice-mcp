@@ -523,8 +523,9 @@ def decode_raw(
 
     ``window`` keeps only the points of one plot's axis in a span
     (``_windowed``); that plot's header then counts the points kept, and the
-    numeric limit holds what every plot keeps, checked before any array is
-    written.
+    numeric limit holds what every plot keeps, checked before that plot's
+    arrays are written. Arrays an earlier plot wrote stay in the call's
+    directory for the caller to clean, as on any refusal.
     """
     _positive_limit(step_log_bytes, "step_log_bytes")
     _positive_limit(step_rows, "step_rows")
@@ -600,7 +601,8 @@ def _check_windowed(plot: RawPlotHeader, window: AxisWindow) -> None:
         raise WindowRefusedError(
             f"window={window.text()} reads a span of a plot's axis, and plot "
             f"{plot.index} ({plot.plot_name}) has none: it holds one point "
-            "(of each step), not a sweep. Read it without window."
+            "(of each step), not a sweep. Read it without window, choosing signals "
+            "if it is too large to read whole."
         )
 
 
@@ -632,17 +634,21 @@ def _windowed(
         except UnorderedAxisError as exc:
             raise WindowRefusedError(
                 f"window={window.text()} keeps a span of plot {plot.index}'s axis, and the "
-                "axis decreases within a step (a sweep that runs downwards, or steps whose "
-                "boundaries were not found), so no span of it is one stretch. Read it "
-                "without window."
+                "axis is not in increasing order within a step: a sweep that runs "
+                "downwards, a value that is not a number, or steps whose boundaries were "
+                "not found (they are read from the run's .log beside the .raw). No span of "
+                "it is one stretch. Read it without window, choosing signals if it is too "
+                "large to read whole."
             ) from exc
         if hi <= lo:
             ends = values[[0, -1]] if coordinate is None else coordinate(values[[0, -1]])
-            where = "" if facts["step_ranges"] is None else f"step {part['step_index']}'s "
+            stepped = len(ranges) > 1
+            where = f"step {part['step_index']}'s " if stepped else ""
             raise WindowRefusedError(
                 f"window={window.text()} keeps no point of plot {plot.index}: "
                 f"{where}axis runs from {float(np.real(ends[0])):g} to "
-                f"{float(np.real(ends[1])):g}. Choose a window that meets it."
+                f"{float(np.real(ends[1])):g}. Choose a window that meets "
+                f"{'every step' if stepped else 'it'}."
             )
         kept_ranges.append(
             {**part, "offset": sum(end - start for start, end in spans), "length": hi - lo}

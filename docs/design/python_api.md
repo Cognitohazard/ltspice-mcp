@@ -489,11 +489,16 @@ ops.observations               # a log reader's dict (LogResult) says the same o
   time, hertz, the swept value), each a number or SPICE text such as `"1m"`,
   and either may be None for an open end. The numeric limit applies to the
   points kept, so a file with too many points for one read can be read a
-  stretch at a time; decoding is held to 1 GiB as above. It combines with
-  `signals`. A plot with no axis (an operating point), an axis that decreases
-  within a step (a downward sweep, or a stepped run whose steps were not told
-  apart), and a window that meets no point of a step are refused. The
-  result's `observations` include `window_chosen`.
+  stretch at a time. Decoding is held to 1 GiB as above, and a window does
+  not lessen it: a Fast Access file's kept traces are decoded along their
+  whole axis before the window cuts them, so a window alone of a file over
+  that is refused, naming `signals`. It combines with `signals`. A plot with
+  no axis (an operating point), an axis that decreases within a step (a
+  downward sweep, or a stepped run whose steps were not told apart), and a
+  window that meets no point of a step are refused. The result's
+  `observations` include `window_chosen`; on a compressed LTspice transient
+  it says that whether compression left the run coarse, which is judged over
+  all of a run's points, was not judged from the window.
 - Each of these reads takes exactly one of `path` and `job_id`. Neither or
   both, an empty `path`, or `run_index`, `case_id` or `other_raw` with a
   `path` raises `ApiValidationError`, as the operations do.

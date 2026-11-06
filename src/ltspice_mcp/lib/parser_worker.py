@@ -239,9 +239,16 @@ def _cut(
             header, chosen_traces(header.plots, chosen.signals, plot_index=chosen.plot_index)
         )
     )
-    if chosen.window is None and cut.numeric_bytes > limits.numeric_bytes:
+    # A window cuts only the plot it names, so with no such plot it cuts
+    # nothing, and what is kept is held to the budget here.
+    windowed = chosen.window is not None and chosen.plot_index < len(header.plots)
+    if not windowed and cut.numeric_bytes > limits.numeric_bytes:
         raise RawTooLargeError(cut.numeric_bytes, limits.numeric_bytes, chosen=True)
     decoded = held(header, cut)
     if decoded > chosen.decode_bytes:
-        raise RawTooLargeToDecodeError(decoded, chosen.decode_bytes)
+        raise RawTooLargeToDecodeError(
+            decoded,
+            chosen.decode_bytes,
+            point_ordered=any(plot.storage_order != "trace" for plot in header.plots),
+        )
     return cut

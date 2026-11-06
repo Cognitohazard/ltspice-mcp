@@ -140,10 +140,11 @@ be read for the signals you need: `api.load_raw(..., signals=["V(out)",
 pair `V(a,b)` keeps both nodes. Its `observations` say which signals were
 chosen. A run with too many points for one read is read a stretch of the
 axis at a time: `api.load_raw(..., window=("1m", "2m"))` keeps the points from
-1 ms to 2 ms of each step, with or without `signals`. LTspice stores a run a
-point at a time, which is decoded whole even for a few traces or a short
-window, up to 1 GiB of numbers; for a larger file, convert it with
-`LTspice -FastAccess <file>.raw` first.
+1 ms to 2 ms of each step, with or without `signals`. Decoding holds at most
+1 GiB of numbers, whatever a read keeps: LTspice stores a run a point at a
+time, which is decoded whole, and a file in its Fast Access layout is decoded
+for the traces kept, each along its whole axis. For a larger file, convert it
+with `LTspice -FastAccess <file>.raw` and choose signals.
 
 `api.load_raw(..., plot_index=1, dialect=None)` selects a plot by its
 zero-based position in the file, separately from the case (or run) and the

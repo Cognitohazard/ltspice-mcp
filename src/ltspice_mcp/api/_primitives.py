@@ -173,8 +173,9 @@ class RawResult:
         """What this result says of itself as it was read: ``partial_raw`` when
         it is a stopped case's kept raw, whose values end where the run was
         stopped, ``coarse_compressed_waveform`` when waveform compression left a
-        transient with few points, and ``signals_chosen`` when it was read for
-        chosen signals. Empty when none applies."""
+        transient with few points, ``signals_chosen`` when it was read for
+        chosen signals and ``window_chosen`` for a window of its axis. Empty
+        when none applies."""
         return copy.deepcopy(list(self._observations))
 
     @property
@@ -437,32 +438,6 @@ async def load_raw_result(
     source = dataclasses.replace(source, signals=signals, window=window)
     raw = await services.load_raw(source, state)
     observations = await asyncio.to_thread(services.read_observations, source, raw)
-    if signals is not None:
-        observations = (
-            *observations,
-            {
-                "code": "signals_chosen",
-                "kind": "provenance",
-                "detail": (
-                    f"Read with signals={list(signals)}: this result holds the traces "
-                    "they read, the plot's first variable (its axis, where it has one) "
-                    "and any step parameters, and no other trace."
-                ),
-            },
-        )
-    if window is not None:
-        start, end = ("None" if bound is None else f"{bound:g}" for bound in window)
-        observations = (
-            *observations,
-            {
-                "code": "window_chosen",
-                "kind": "provenance",
-                "detail": (
-                    f"Read with window=({start}, {end}): this result holds the points of "
-                    "its axis from the start to the end, in each step, and no other point."
-                ),
-            },
-        )
     assert resolved is not None
     step_count = len(raw.descriptor.steps)
     steps: list[dict[str, Any]] = [StepValues(step.parameters) for step in raw.descriptor.steps]

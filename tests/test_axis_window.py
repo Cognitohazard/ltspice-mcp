@@ -18,10 +18,11 @@ import pytest
 from ltspice_mcp.api import ApiValidationError
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import metrics, parser_service, signal_analysis
-from ltspice_mcp.lib.signal_analysis import UnorderedAxisError, window_span
+from ltspice_mcp.lib.result_observations import compressed_transient
+from ltspice_mcp.lib.signal_analysis import UnorderedAxisError, window_and_clean, window_span
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
-from tests.conftest import FIXTURES_DIR, SyncApi
+from tests.conftest import FIXTURES_DIR, SyncApi, stage_recorded_fixture
 
 
 def _same(full: np.ndarray, kept: np.ndarray) -> None:
@@ -38,27 +39,44 @@ def _span(axis: np.ndarray, low: float, high: float) -> tuple[float, float]:
 @pytest.mark.parametrize("build", rec.BUILDS)
 @pytest.mark.parametrize(
     "case_id",
-    ["raw/tran", "raw/tran_fastaccess", "raw/tran_as_text", "raw/ac", "raw/step_tran"],
+    [
+        "raw/tran",
+        "raw/tran_fastaccess",
+        "raw/tran_as_text",
+        "raw/tran_window",
+        "raw/ac",
+        "raw/step_ac",
+        "raw/dc",
+        "raw/noise",
+        "raw/step_tran",
+    ],
 )
 @pytest.mark.parametrize("signals", [None, ["V(out)"]])
 def test_a_window_keeps_the_points_the_window_rule_keeps(
     build: str, case_id: str, signals: list[str] | None, state_no_sim: SessionState, work_dir: Path
 ):
-    """In every step, whatever the file's storage, with or without chosen
-    signals: the points a window of the whole read's axis keeps, and its steps."""
+    """In every step, whatever the file's storage, its analysis or a time
+    offset, with or without chosen signals: the points a window of the whole
+    read's axis keeps, and its steps."""
     raw = rec.stage_run(build, case_id, work_dir)
     api = SyncApi(state_no_sim)
     full = api.load_raw(path=raw)
+    signal = "V(onoise)" if case_id == "raw/noise" else "V(out)"
     start, end = _span(full.axis(step=0), 0.3, 0.7)
-    kept = api.load_raw(path=raw, signals=signals, window=(start, end))
+    kept = api.load_raw(
+        path=raw, signals=None if signals is None else [signal], window=(start, end)
+    )
     assert kept.steps == full.steps and kept.step_count == full.step_count
-    assert kept.signals == (full.signals if signals is None else [full.signals[0], "V(out)"])
+    if signals is None:
+        assert kept.signals == full.signals
+    else:
+        assert kept.signals[0] == full.signals[0] and len(kept.signals) == 2
     for step in range(full.step_count):
         axis = full.axis(step=step)
         lo, hi = metrics.window_indices(np.real(axis), start, end)
         assert 0 < hi - lo < axis.size
         _same(axis[lo:hi], kept.axis(step=step))
-        _same(full.trace("V(out)", step=step)[lo:hi], kept.trace("V(out)", step=step))
+        _same(full.trace(signal, step=step)[lo:hi], kept.trace(signal, step=step))
     (said,) = [o for o in kept.observations if o["code"] == "window_chosen"]
     assert "no other point" in said["detail"]
 
@@ -94,8 +112,61 @@ def test_a_window_that_meets_no_point_is_refused_with_where_the_axis_runs(
     with pytest.raises(ResultError) as refused:
         api.load_raw(path=raw, window=(beyond, beyond * 2))
     message = str(refused.value)
-    assert "keeps no point of plot 0" in message
+    assert "keeps no point of plot 0: axis runs from" in message
     assert f"axis runs from {float(axis[0]):g} to {float(axis[-1]):g}" in message
+    assert "Choose a window that meets it." in message
+
+
+def test_a_window_reads_the_plot_it_names(state_no_sim: SessionState, work_dir: Path):
+    """A file of two plots: a window cuts the plot read; the second plot,
+    integrated noise, holds one point and has no axis to window."""
+    path = stage_recorded_fixture(work_dir, "ngspice_noise_2plot")
+    api = SyncApi(state_no_sim)
+    full = api.load_raw(path, dialect="ngspice")
+    start, end = _span(full.axis(), 0.3, 0.7)
+    lo, hi = metrics.window_indices(np.real(full.axis()), start, end)
+    kept = api.load_raw(path, dialect="ngspice", window=(start, end))
+    _same(full.axis()[lo:hi], kept.axis())
+    _same(full.trace("onoise_spectrum")[lo:hi], kept.trace("onoise_spectrum"))
+    with pytest.raises(ResultError, match="has none: it holds one point"):
+        api.load_raw(path, plot_index=1, dialect="ngspice", window=(start, end))
+
+
+def test_a_window_past_the_file_s_plots_is_held_to_the_limit_and_refused_by_plot(
+    state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A window cuts only the plot it names. With no such plot it cuts
+    nothing: what is kept is held to the limit as a whole read is, and a read
+    within it is refused for its plot_index."""
+    raw = _rc(work_dir)
+    api = SyncApi(state_no_sim)
+    with pytest.raises(ResultError, match="plot_index 1 is outside"):
+        api.load_raw(path=raw, plot_index=1, window=(0, None))
+    monkeypatch.setattr(parser_service, "NUMERIC_BYTES", 4096)
+    other = work_dir / "copy.raw"
+    other.write_bytes(raw.read_bytes())
+    with pytest.raises(ResultError, match="numeric_bytes limit exceeded"):
+        api.load_raw(path=other, plot_index=1, window=(0, None))
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+@pytest.mark.parametrize("case_id", ["raw/tran_double", "raw/tran_window"])
+def test_compression_is_not_judged_from_a_window(
+    build: str, case_id: str, state_no_sim: SessionState, work_dir: Path
+):
+    """Whether compression left a run coarse is judged over all its points: a
+    window, which holds some of them, says it did not judge it, rather than
+    answering from the points it kept."""
+    raw = rec.stage_run(build, case_id, work_dir)
+    api = SyncApi(state_no_sim)
+    full = api.load_raw(path=raw)
+    axis = full.axis()
+    kept = api.load_raw(path=raw, window=(float(axis[1]), float(axis[3])))
+    codes = [o["code"] for o in kept.observations]
+    assert "coarse_compressed_waveform" not in codes
+    (said,) = [o for o in kept.observations if o["code"] == "window_chosen"]
+    assert compressed_transient(full._raw)
+    assert "was not judged here" in said["detail"]
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -117,8 +188,45 @@ def test_steps_not_told_apart_have_no_window(
     window = _span(api.load_raw(path=raw).axis(step=0), 0.3, 0.7)
     alone = work_dir / "alone.raw"
     alone.write_bytes(raw.read_bytes())
-    with pytest.raises(ResultError, match="decreases within a step"):
+    with pytest.raises(ResultError, match="not in increasing order within a step") as refused:
         api.load_raw(path=alone, window=window)
+    assert "read from the run's .log beside the .raw" in str(refused.value)
+
+
+@pytest.mark.parametrize(
+    ("case_id", "layout"),
+    [("raw/tran", "a point at a time"), ("raw/tran_fastaccess", "decoded whole along the axis")],
+)
+def test_a_window_alone_over_the_decode_budget_names_what_reads_less(
+    case_id: str,
+    layout: str,
+    state_no_sim: SessionState,
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A window does not lessen decoding: a file stored a point at a time is
+    decoded whole, and a Fast Access file's kept traces along their whole
+    axis. Over the budget, the refusal says which, and names what reads less:
+    the Fast Access layout, or choosing signals, which then reads it."""
+    raw = rec.stage_run(rec.BUILDS[0], case_id, work_dir)
+    api = SyncApi(state_no_sim)
+    full = api.load_raw(path=raw)
+    points = len(full.axis())
+    whole = sum(full.trace(name).itemsize for name in full.signals) * points
+    one = (full.axis().itemsize + full.trace("V(out)").itemsize) * points
+    monkeypatch.setattr(parser_service, "DECODE_BYTES", whole - 1)
+    window = _span(full.axis(), 0.3, 0.7)
+    other = work_dir / "copy.raw"
+    other.write_bytes(raw.read_bytes())
+    with pytest.raises(ResultError) as refused:
+        api.load_raw(path=other, window=window)
+    message = str(refused.value)
+    assert layout in message
+    if case_id == "raw/tran":
+        assert "-FastAccess" in message
+    else:
+        assert one < whole and "Choose fewer signals" in message
+        api.load_raw(path=other, signals=["V(out)"], window=window)
 
 
 def test_a_window_reads_a_file_with_too_many_points_for_one_read(
@@ -179,6 +287,24 @@ def test_a_window_is_checked_before_a_read(state_no_sim: SessionState, work_dir:
     ):
         with pytest.raises(ApiValidationError, match="window"):
             api.load_raw(path=raw, window=wrong)  # pyright: ignore[reportArgumentType]
+    middle = float(api.load_raw(path=raw).axis()[10])
+    # NumPy's numbers are read as numbers, as a caller's array element arrives.
+    bounds = (np.float64(middle), np.int64(1))
+    numpy_bounds = api.load_raw(path=raw, window=bounds)  # pyright: ignore[reportArgumentType]
+    plain = api.load_raw(path=raw, window=(middle, 1))
+    _same(plain.axis(), numpy_bounds.axis())
+
+
+def test_a_measurement_window_reverses_a_downward_sweep_that_a_read_window_refuses():
+    """The two window rules differ on purpose: a measurement reads a downward
+    sweep reversed (window_and_clean), and a read or an export keeps stored
+    points in their order and refuses it (window_span)."""
+    sweep = np.linspace(5.0, 0.0, 11)
+    values = sweep * 2
+    axis, wave, _ = window_and_clean(sweep, values, 1.0, 3.0, allow_descending=True)
+    assert list(axis) == [1.0, 1.5, 2.0, 2.5, 3.0] and list(wave) == [2.0, 3.0, 4.0, 5.0, 6.0]
+    with pytest.raises(UnorderedAxisError):
+        window_span(sweep, 1.0, 3.0)
 
 
 def test_the_window_rule_reads_an_axis_a_block_at_a_time(monkeypatch: pytest.MonkeyPatch):
@@ -211,3 +337,9 @@ def test_the_window_rule_reads_an_axis_a_block_at_a_time(monkeypatch: pytest.Mon
         turned[where] = turned[where - 1] - 1
         with pytest.raises(UnorderedAxisError):
             window_span(turned, 0, None)
+        # Two infinities in a row, the axis's last points, do not pass,
+        # between blocks as within one.
+        endless = np.arange(where + 1, dtype=float)
+        endless[where - 1 :] = np.inf
+        with pytest.raises(UnorderedAxisError):
+            window_span(endless, 0, None)
