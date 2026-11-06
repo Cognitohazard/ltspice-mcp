@@ -30,7 +30,14 @@ from ltspice_mcp.api._methods import ApiMethodsMixin
 from ltspice_mcp.api._primitives import load_raw_result
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.engine import BootstrapResult
-from ltspice_mcp.lib import hidden_desktop, now, parser_process, parser_service, raster
+from ltspice_mcp.lib import (
+    experiment_inputs,
+    hidden_desktop,
+    now,
+    parser_process,
+    parser_service,
+    raster,
+)
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner, StagedDecks
 from ltspice_mcp.lib.experiment_types import (
     Completeness,
@@ -40,9 +47,10 @@ from ltspice_mcp.lib.experiment_types import (
 )
 from ltspice_mcp.lib.job_lifecycle import WaitFor
 from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome, _raw_completion_outcome
+from ltspice_mcp.lib.simulator import platform_key
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import VALIDATION_WARNING_KINDS
-from tests import schedule_jitter, sheet_edit_record
+from tests import parser_refusal, schedule_jitter, sheet_edit_record
 from tests._schematic_fixtures import SUITE_LIBRARY_DIR
 from tests.schedule_jitter import (  # noqa: F401  (hooks and an autouse fixture)
     _schedule_jitter,
@@ -55,6 +63,7 @@ from tests.schedule_jitter import (  # noqa: F401  (hooks and an autouse fixture
 def pytest_configure(config: pytest.Config) -> None:
     schedule_jitter.pytest_configure(config)
     config.pluginmanager.register(sheet_edit_record, "sheet-edit-record")
+    config.pluginmanager.register(parser_refusal, "parser-refusal")
 
 
 _T = typing.TypeVar("_T")
@@ -1577,6 +1586,22 @@ _RASTER_SUPPORT = raster.raster_support()
 #: Skip a test that needs a real PNG where this host cannot make one.
 needs_raster = pytest.mark.skipif(
     not _RASTER_SUPPORT.png, reason=f"no PNG rasterizer here: {_RASTER_SUPPORT.reason}"
+)
+
+
+#: Whether the server refuses a recoverable ngspice run on this host
+#: (``recovery_startup_unsupported``), as it does on macOS. The server's own
+#: check decides, from the capability table.
+CONTROLLED_STARTUP_REFUSED = experiment_inputs._startup_unavailable("ngspice", platform_key())
+CONTROLLED_STARTUP_REASON = (
+    f"the server refuses a recoverable ngspice run on {platform_key()}: controlled "
+    "ngspice startup is not verified there (recovery_startup_unsupported)"
+)
+
+#: Skip a test that runs a recoverable ngspice experiment where the server
+#: refuses one.
+needs_controlled_startup = pytest.mark.skipif(
+    CONTROLLED_STARTUP_REFUSED, reason=CONTROLLED_STARTUP_REASON
 )
 
 

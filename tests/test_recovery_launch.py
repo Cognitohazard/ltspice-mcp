@@ -36,7 +36,14 @@ from ltspice_mcp.lib.recovery_journal import (
 from ltspice_mcp.lib.recovery_records import CaseAttempt, ProcessIdentity, RecoveryError
 from ltspice_mcp.lib.simulator_build import executable_identity
 from ltspice_mcp.lib.store import OwnerLiveness, Store
-from tests.conftest import LIVENESS_S, coordinator_returned, ngspice_binary_raw, staged_decks
+from tests.conftest import (
+    CONTROLLED_STARTUP_REASON,
+    CONTROLLED_STARTUP_REFUSED,
+    LIVENESS_S,
+    coordinator_returned,
+    ngspice_binary_raw,
+    staged_decks,
+)
 from tests.test_recovery_records import recovery_job
 
 
@@ -47,8 +54,8 @@ class RecordedNGspice(NGspiceSimulator):
 
 @pytest.fixture
 async def committed(state_no_sim, work_dir):
-    if sys.platform not in {"linux", "win32"}:
-        pytest.skip("Controlled ngspice startup is verified on Linux and Windows only")
+    if CONTROLLED_STARTUP_REFUSED:
+        pytest.skip(CONTROLLED_STARTUP_REASON)
     store = Store(work_dir)
     job = recovery_job(work_dir)
     assert job.recovery is not None
