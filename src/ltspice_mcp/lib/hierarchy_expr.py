@@ -195,10 +195,10 @@ def scaled_geometry(fact: NumericFact, scale: NumericFact) -> NumericFact:
 
 
 #: Element letters whose cards ngspice appends a rewritten subcircuit's ``m``
-#: to, and those it leaves as written, as ``listing expand`` shows on
-#: ngspice-42. Any other letter is not measured.
-NGSPICE_M_TAKERS = frozenset("CDFGILMQRX")
-NGSPICE_M_EXEMPT = frozenset("BEHKSTVW")
+#: to, and those it leaves as written (``A`` is an XSPICE code model), as
+#: ``listing expand`` shows on ngspice-42. Any other letter is not measured.
+NGSPICE_M_TAKERS = frozenset("CDFGIJLMQRXZ")
+NGSPICE_M_EXEMPT = frozenset("ABEHKSTVW")
 
 
 def ngspice_multiplies_m(ngbehavior: str | None) -> bool:

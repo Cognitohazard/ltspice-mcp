@@ -281,9 +281,11 @@ class NetlistError(LTSpiceMCPError):
 class MultiplierRewriteStop(NetlistError):
     """ngspice stops on a deck: the ``m`` it appends to an ``X`` line in a
     subcircuit it rewrote reaches a subcircuit that takes no parameters
-    (``hierarchy_expr.card_copies``)."""
+    (``hierarchy_expr.card_copies``). The message names both fixes and what
+    each builds, which the netlist family's hint does not."""
 
     code = "multiplier_rewrite_stops"
+    takes_family_hint = False
 
 
 class UnsupportedFileError(NetlistError):

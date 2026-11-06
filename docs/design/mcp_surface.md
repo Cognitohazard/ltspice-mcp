@@ -2183,7 +2183,9 @@ and then reads the deck once in order, includes and `.lib` sections in
 place. An X line that carries `m` makes it rewrite the subcircuit called,
 unless that one declares `m` (on its `.subckt` line or in a body `.param`):
 the subcircuit gets an `m` parameter, default 1, and `m={m}` is appended to
-each card of its body but a B, E, H, K, S, T, V or W card. An X line so given
+each C, D, F, G, I, J, L, M, Q, R, X and Z card of its body; an A, B, E, H,
+K, S, T, V or W card is left as written, and a card of another letter there
+has an unknown count. An X line so given
 `m` rewrites its own callee in turn only if it sits later in the deck than
 the line that rewrote its body. The appended `m` replaces a card's own
 outside the HSPICE modes (the `kiltpsa` spicelib runs by default) and
@@ -2191,12 +2193,12 @@ multiplies it in them (`ngbehavior` `hsa`); an X line's `m` on a subcircuit
 that declares `m` is an ordinary parameter. So m is the device's `m` after
 that rewrite, read in the scope its X lines set. A deck where the rewrite
 gives `m` to an X line calling a subcircuit that takes no parameters is
-refused, as ngspice stops on it. An inner `m={mult}` resolves in the scope
+refused with `multiplier_rewrite_stops`, as ngspice stops on it. An inner `m={mult}` resolves in the scope
 its X line sets. An `m` that does not resolve to a positive number refuses
 the request with `mismatch_geometry_unresolved`. On ngspice, a case whose
 edits, the private subcircuit copies a nested target needs among them, would
 change what a card no edit writes builds is refused with
-`multiplier_rewrite_changed`. A deck with no semantic profile (QSPICE, Xyce)
+`multiplier_rewrite_changed`, naming a fix where one keeps the circuit. A deck with no semantic profile (QSPICE, Xyce)
 counts the product of the X line's `m` and the device's own; neither
 simulator's rule is measured. Draws across circuits are independent;
 correlated Monte Carlo across decks is not supported.

@@ -167,8 +167,8 @@ class XFetTarget:
     model_name: str
     width: float | None
     length: float | None
-    #: The X line's ``m`` times the inner device's ``m``, as ngspice multiplies
-    #: them; unresolved, with the reason, when either is written but cannot be read.
+    #: The X line's ``m`` times the inner device's ``m`` (``_device_multiplier``);
+    #: unresolved, with the reason, when either is written but cannot be read.
     multiplier: NumericFact = _ONE_COPY
 
     @property

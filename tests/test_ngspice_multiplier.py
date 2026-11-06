@@ -23,7 +23,8 @@ from tests.conftest import LIVENESS_S
 
 pytestmark = pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH")
 
-MODES = ("kiltpsa", "hsa")
+#: The modes a profile names; "" is ngspice's own default, run with no -D.
+MODES = ("kiltpsa", "hsa", "")
 
 #: name -> the deck's cards between its title and ``.op``, in deck order, and
 #: the files it includes. Every deck hangs off ``Va`` on node ``a``.
@@ -132,7 +133,8 @@ DECKS: dict[str, tuple[str, dict[str, str]]] = {
         ".model dd d\n.model qq npn\n.subckt els p\nR1 p 0 1k\nC1 p 0 1p\nL1 p q 1n\n"
         "L2 q r 1n\nK1 L1 L2 0.5\nR2 r 0 1k\nR9 q 0 1meg\nI1 p 0 1m\nG1 p 0 p 0 1m\n"
         "V9 s 0 0\nR3 s 0 1k\nF1 p 0 V9 1\nE1 t 0 p 0 1\nR4 t 0 1k\nD1 p 0 dd\nQ1 p p 0 qq\n"
-        ".ends\nX1 a els m=4",
+        "J1 p p 0 jj\nZ1 p p 0 zz\nA1 p u amp\nR5 u 0 1k\n"
+        ".ends\n.model jj njf\n.model zz nmf\n.model amp gain(gain=1)\nX1 a els m=4",
         {},
     ),
 }
@@ -165,7 +167,7 @@ def _ngspice(path: Path, mode: str, names: list[str]) -> str:
     home = path.parent / "home"
     home.mkdir(exist_ok=True)
     run = subprocess.run(
-        ["ngspice", "-D", f"ngbehavior={mode}", "-b", str(measured)],
+        ["ngspice", *(["-D", f"ngbehavior={mode}"] if mode else []), "-b", str(measured)],
         capture_output=True,
         text=True,
         timeout=LIVENESS_S,
@@ -187,8 +189,10 @@ def _ngspice_name(instance: tuple[str, ...]) -> str:
 @pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("name", list(DECKS))
 def test_each_card_builds_the_copies_ngspice_builds(tmp_path: Path, name: str, mode: str):
-    if ".lib" in DECKS[name][0] and mode != "hsa":
-        pytest.skip("kiltpsa reads a .lib section as a plain include, so discovery refuses it")
+    if ".lib" in DECKS[name][0] and ("lt" in mode or "ps" in mode):
+        pytest.skip(
+            "an lt or ps mode reads a .lib section as a plain include; discovery refuses it"
+        )
     path = _write(tmp_path, name)
     profile = SemanticProfile("ngspice", mode)
     try:
@@ -278,7 +282,32 @@ def test_a_nested_draw_refuses_a_copy_that_would_change_what_ngspice_builds(
     with pytest.raises(VariationError) as caught:
         _materialize(tmp_path / "case", mode, _SPLIT_DECK, entries)
     assert caught.value.code == "multiplier_rewrite_changed"
-    assert "XB.R1" in str(caught.value) and "hsa" in str(caught.value)
+    assert "XB.R1" in str(caught.value) and "Write m=1 on XB" in str(caught.value)
+
+    # The fix it names keeps the circuit: with m=1 on XB the copy is rewritten
+    # as cell is, and the case deck builds what the deck as written does.
+    fixed = _SPLIT_DECK.replace("XB b g cell\n", "XB b g cell m=1\n")
+    (case,) = _materialize(tmp_path / "fixed", mode, fixed, entries)
+    for device in ("r.xa.r1", "r.xb.r1"):
+        assert _copies(tmp_path, case.text, mode, device) == _copies(tmp_path, fixed, mode, device)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_a_card_that_builds_one_copy_either_way_does_not_refuse_a_draw(tmp_path: Path, mode: str):
+    """XB.J1 and XB.M0 build one copy whether or not XB's private copy of
+    cell is rewritten, so drawing XB.M0 changes nothing and goes ahead; a JFET
+    is a card ngspice appends m to like any other."""
+    deck = _SPLIT_DECK.replace("R1 d 0 1k m=3\n", "J1 d d 0 jj\n").replace(
+        ".model n nmos level=54\n", ".model n nmos level=54\n.model jj njf\n"
+    )
+    rule = {"rule": "mismatch", "instance": ["XB", "M0"], "AVT": 0.003}
+    entries = [{"kind": "random", "runs": 1, "seed": 5, "rules": [rule]}]
+
+    (case,) = _materialize(tmp_path / "case", mode, deck, entries)
+
+    assert any("delvto" in key for key in case.assignments), case.assignments
+    for device in ("j.xb.j1", "j.xa.j1"):
+        assert _copies(tmp_path, case.text, mode, device) == _copies(tmp_path, deck, mode, device)
 
 
 @pytest.mark.parametrize("mode", MODES)

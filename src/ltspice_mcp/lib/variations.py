@@ -7,7 +7,7 @@ import fnmatch
 import hashlib
 import math
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from itertools import product
 from pathlib import Path
@@ -2700,8 +2700,9 @@ def _refuse_a_changed_m_rewrite(
     only the X lines on its path call, can move that rewrite, so a card the
     case does not edit builds another number of copies than the deck as
     written, or ngspice stops. Every card whose own ``m`` and whose ancestors'
-    ``m`` no edit wrote must build what it did. Returns the edited deck's
-    hierarchy when it resolved one, for the lineage to reuse.
+    ``m`` no edit wrote must build what it did; a card whose count is unknown
+    on either side (an element letter not measured) is not compared. Returns
+    the edited deck's hierarchy when it resolved one, for the lineage to reuse.
     """
     profile = as_written.profile
     if profile.simulator != "ngspice":
@@ -2713,41 +2714,76 @@ def _refuse_a_changed_m_rewrite(
     except MultiplierRewriteStop as exc:
         raise VariationError(
             "multiplier_rewrite_changed",
-            f"the edits this case needs, private subcircuit copies included, would make {exc}",
+            f"the edits this case needs, private subcircuit copies included, would leave "
+            f"a deck ngspice cannot run. {exc}",
         ) from exc
     if not as_written.m_rewritten and not edited.m_rewritten:
         return edited
     rows = {row.instance: row for row in edited.instances}
     written = {row.instance: dict(row.parameters).get("m") for row in as_written.instances}
     now = {path: dict(row.parameters).get("m") for path, row in rows.items()}
-    moved = sorted(as_written.m_rewritten ^ edited.m_rewritten)
-    hint = (
-        "In ngspice's HSPICE modes (ngbehavior hsa) the appended m multiplies a card's "
-        "own m instead of replacing it, so a caller that writes no m keeps its cards' own m"
-        if not ngspice_multiplies_m(profile.ngbehavior)
-        else "Write on that card the m the deck means it to have"
-    )
     for row in as_written.instances:
         other = rows.get(row.instance)
         if other is None or row.multiplier is None or other.multiplier is None:
             continue
+        before, after = row.multiplier.value, other.multiplier.value
+        if before is None or after is None or before == after:
+            continue
         lineage = [row.instance[:depth] for depth in range(1, len(row.instance) + 1)]
         if any(written.get(path) != now.get(path) for path in lineage):
             continue
-        if row.multiplier.value != other.multiplier.value:
-            raise VariationError(
-                "multiplier_rewrite_changed",
-                f"the edits this case needs, private subcircuit copies included, change "
-                f"which subcircuits ngspice rewrites for m ({', '.join(moved) or 'their order'}), "
-                f"so {'.'.join(row.instance)}, which no edit writes, would build "
-                f"{_copies_text(other.multiplier)} where the deck as written builds "
-                f"{_copies_text(row.multiplier)}. {hint}",
-            )
+        raise VariationError(
+            "multiplier_rewrite_changed",
+            _rewrite_change_message(row, other, as_written, edited, written),
+        )
     return edited
 
 
-def _copies_text(fact: NumericFact) -> str:
-    return f"{fact.value:g} copies" if fact.value is not None else "an unknown number of copies"
+def _rewrite_change_message(
+    row: ResolvedInstance,
+    other: ResolvedInstance,
+    as_written: Hierarchy,
+    edited: Hierarchy,
+    written: Mapping[tuple[str, ...], NumericFact | None],
+) -> str:
+    """Why a card no edit writes would build another count, and a fix that keeps it."""
+    card = ".".join(row.instance)
+    body = row.source.definition or "the top level"
+    change = (
+        f"{card}, which no edit writes, would build {_copies_text(other.multiplier)} "
+        f"where the deck as written builds {_copies_text(row.multiplier)}"
+    )
+    was = (row.source.definition or "").casefold() in as_written.m_rewritten
+    now = (other.source.definition or "").casefold() in edited.m_rewritten
+    calls = [
+        ".".join(row.instance[:depth])
+        for depth in range(1, len(row.instance))
+        if written.get(row.instance[:depth]) is None
+    ]
+    if was and not now:
+        return (
+            f"ngspice rewrites {body} for m because one of its callers writes m, but the "
+            f"private copy this case gives {'.'.join(row.instance[:-1])} has no caller "
+            f"that does, so {change}. Write m=1 on {', '.join(calls) or 'its X line'}: "
+            "each card then builds what it does as written, and the copy is rewritten too"
+        )
+    hint = (
+        "In ngspice's HSPICE modes (ngbehavior hsa) the appended m multiplies a card's own "
+        "m instead, so a caller that writes no m keeps its cards' own m; every other count "
+        "then follows that mode too"
+        if not ngspice_multiplies_m(as_written.profile.ngbehavior)
+        else f"Write on {card} the m it should build"
+    )
+    return (
+        f"the edits this case needs change whether ngspice rewrites {body} for m, which "
+        f"replaces the m of every card in it for every caller, so {change}. {hint}"
+    )
+
+
+def _copies_text(fact: NumericFact | None) -> str:
+    if fact is None or fact.value is None:
+        return "an unknown number of copies"
+    return f"{fact.value:g} cop{'y' if fact.value == 1 else 'ies'}"
 
 
 def _path_multiplier(row: ResolvedInstance) -> float:

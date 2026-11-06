@@ -318,9 +318,12 @@ tool-surface changes.
   ngspice passes an X line's `m` down to a subcircuit that declares no `m`,
   replacing each card's own `m` or, in the HSPICE modes, multiplying it, in
   the order ngspice reads the deck and leaving out unused subcircuits, as
-  measured on ngspice-42. A deck ngspice stops on for that rewrite, and a
-  case whose edits or private subcircuit copies would change what a card no
-  edit writes builds, are refused. An `m`
+  measured on ngspice-42. A deck ngspice stops on for that rewrite is refused
+  with `multiplier_rewrite_stops`, and a case whose edits or private
+  subcircuit copies would change what a card no edit writes builds with
+  `multiplier_rewrite_changed`. A deck with no semantic profile (QSPICE,
+  Xyce) counts the product of the X line's `m` and the device's own, as
+  before; neither simulator's rule is measured. An `m`
   that does not resolve to a positive number refuses the request with
   `mismatch_geometry_unresolved` instead of being drawn as one copy. A refusal
   while drawing for a device one subcircuit level down now reaches the caller

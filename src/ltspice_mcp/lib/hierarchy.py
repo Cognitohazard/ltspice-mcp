@@ -594,7 +594,7 @@ def _card_multiplier(
         return None
     elif passed is not None and kind not in NGSPICE_M_TAKERS:
         return NumericFact(
-            None, reason=f"whether ngspice appends m to a {kind} card is not measured"
+            None, reason=f"whether ngspice appends m to {kind} cards is not measured"
         )
     return card_copies(
         own, passed, multiply=multiply, where=".".join(path), passed_from=".".join(scope)
