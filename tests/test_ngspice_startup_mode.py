@@ -299,4 +299,4 @@ async def test_a_run_whose_log_names_no_mode_says_the_mode_is_unchecked(
         for item in receipt.get("observations", [])
         if item["code"] == "ngspice_mode_unverified"
     ]
-    assert unchecked["evidence"] == {"ngbehavior": "kiltpsa"}
+    assert unchecked["evidence"] == {"ngbehavior": "kiltpsa", "reason": "no_mode_in_log"}

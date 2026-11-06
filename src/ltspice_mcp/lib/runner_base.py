@@ -341,20 +341,21 @@ def _with_mode_check(outcome: RunOutcome, check: ModeCheck) -> RunOutcome:
 
     The server read the deck in the mode it passed (lint, hierarchy,
     variations, failure classification), so results read in another mode
-    answer for a different circuit. A failed run that could not be checked
-    gets nothing: it has no results to doubt.
+    answer for a different circuit. A failed run is checked too, since its
+    failure is classified in the passed mode; only one that left no log says
+    nothing, as its failure already says the log is missing.
     """
     if check.status == "agrees":
         return outcome
     if check.status == "unchecked":
-        if outcome.error is not None:
+        if outcome.error is not None and check.reason == "no_log":
             return outcome
         observation = {
             "code": "ngspice_mode_unverified",
             "kind": "execution",
             "detail": (
                 "The server could not check that ngspice read the deck in the compatibility "
-                f"mode it passed (ngbehavior={check.mode!r}): {check.reason}."
+                f"mode it passed (ngbehavior={check.mode!r}): {check.explanation()}."
             ),
             "evidence": check.evidence(),
         }
@@ -364,7 +365,8 @@ def _with_mode_check(outcome: RunOutcome, check: ModeCheck) -> RunOutcome:
     message = (
         f"ngspice read the deck in compatibility modes '{logged}', not in '{expected}', "
         f"those of ngbehavior={check.mode!r}, which the server passed and read the deck in. "
-        "A startup file ngspice read set another mode."
+        "Something ngspice ran before the deck set another mode; every run skips a user's "
+        ".spiceinit, so on an ordinary run that is most likely the installation's spinit."
     )
     code = "ngspice_mode_mismatch"
     return outcome._replace(
@@ -1063,7 +1065,8 @@ class RunnerBase:
                 if is_ngspice(simulator):
                     log_path = Path(log_name) if log_name not in ("", ".") else None
                     outcome = _with_mode_check(
-                        outcome, check_run(log_path, simulator, passed_mode)
+                        outcome,
+                        check_run(log_path, simulator, passed_mode, driver=native is not None),
                     )
             except Exception as exc:
                 outcome = collect_run_outcome(
