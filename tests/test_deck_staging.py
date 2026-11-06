@@ -30,7 +30,7 @@ def _write(path: Path, text: str) -> Path:
 class TestManifestWalk:
     def test_walks_three_include_levels(self, tmp_path: Path):
         root = tmp_path / "root"
-        deck = _write(root / "deck.cir", '.include "a.inc"\n.op\n.end\n')
+        deck = _write(root / "deck.cir", '* deck\n.include "a.inc"\n.op\n.end\n')
         _write(root / "a.inc", '.include "b.inc"\n')
         _write(root / "b.inc", '.include "c.inc"\n')
         _write(root / "c.inc", ".param x=1\n")
@@ -85,7 +85,7 @@ class TestManifestWalk:
     def test_outside_allowed_root_fails_closed(self, tmp_path: Path):
         root = tmp_path / "root"
         outside = _write(tmp_path / "outside.inc", ".param x=1\n")
-        deck = _write(root / "deck.cir", f'.include "{outside}"\n.op\n.end\n')
+        deck = _write(root / "deck.cir", f'* deck\n.include "{outside}"\n.op\n.end\n')
 
         with pytest.raises(DeckStagingError, match="outside allowed roots"):
             stage_deck(deck, tmp_path / "stage", [root], origin=deck)
@@ -122,7 +122,7 @@ class TestManifestWalk:
     def test_allow_live_include_marks_manifest_and_observation(self, tmp_path: Path):
         root = tmp_path / "root"
         outside = _write(tmp_path / "outside.inc", ".param x=1\n")
-        deck = _write(root / "deck.cir", f'.include "{outside}"\n.op\n.end\n')
+        deck = _write(root / "deck.cir", f'* deck\n.include "{outside}"\n.op\n.end\n')
 
         staged = stage_deck(
             deck,
@@ -146,7 +146,7 @@ class TestManifestWalk:
         (proved necessary by a run that failed with "File not found" on exactly
         this shape)."""
         root = tmp_path / "root"
-        deck = _write(root / "deck.cir", '.include "models/device.lib"\n.op\n.end\n')
+        deck = _write(root / "deck.cir", '* deck\n.include "models/device.lib"\n.op\n.end\n')
         _write(root / "models" / "device.lib", '.include "params.inc"\n.model DFAST D\n')
         _write(root / "models" / "params.inc", ".param x=1\n")
 
@@ -156,7 +156,8 @@ class TestManifestWalk:
         assert staged_lib.is_file()
         assert staged.text == staged.staged_deck.read_text()
 
-        reference = staged.staged_deck.read_text().splitlines()[0].split()[1].strip('"')
+        # Line 1 is the deck's title.
+        reference = staged.staged_deck.read_text().splitlines()[1].split()[1].strip('"')
         assert Path(reference).is_absolute()
         assert Path(reference).resolve() == staged_lib.resolve()
 
@@ -165,7 +166,7 @@ class TestManifestWalk:
 
     def test_lib_section_is_recorded(self, tmp_path: Path):
         root = tmp_path / "root"
-        deck = _write(root / "deck.cir", '.lib "models.lib" TT\n.op\n.end\n')
+        deck = _write(root / "deck.cir", '* deck\n.lib "models.lib" TT\n.op\n.end\n')
         _write(root / "models.lib", ".lib TT\n.model DFAST D\n.endl TT\n")
 
         staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
@@ -176,7 +177,7 @@ class TestManifestWalk:
 
     def test_include_cycle_is_bounded(self, tmp_path: Path):
         root = tmp_path / "root"
-        deck = _write(root / "deck.cir", '.include "a.inc"\n.op\n.end\n')
+        deck = _write(root / "deck.cir", '* deck\n.include "a.inc"\n.op\n.end\n')
         _write(root / "a.inc", '.include "deck.cir"\n')
 
         staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
@@ -189,7 +190,7 @@ class TestManifestWalk:
         outside = _write(tmp_path / "outside.inc", ".param x=1\n")
         root.mkdir()
         symlink_or_skip(root / "escape.inc", outside)
-        deck = _write(root / "deck.cir", '.include "escape.inc"\n.op\n.end\n')
+        deck = _write(root / "deck.cir", '* deck\n.include "escape.inc"\n.op\n.end\n')
 
         with pytest.raises(DeckStagingError, match="outside allowed roots"):
             stage_deck(deck, tmp_path / "stage", [root], origin=deck)
@@ -198,7 +199,7 @@ class TestManifestWalk:
         root = tmp_path / "root"
         deck = _write(
             root / "deck.cir",
-            '.include "shared.inc"\n.include "shared.inc"\n.op\n.end\n',
+            '* deck\n.include "shared.inc"\n.include "shared.inc"\n.op\n.end\n',
         )
         shared = _write(root / "shared.inc", ".param x=1\n")
 
@@ -216,6 +217,7 @@ class TestManifestWalk:
         windows = _write(root / "windows.lib", ".model DW D\n")
         deck = _write(
             root / "deck.cir",
+            "* deck\n"
             '.include "models with spaces/quoted.lib"\n'
             '.include "C:\\vendor\\windows.lib"\n'
             ".op\n.end\n",
@@ -235,7 +237,7 @@ class TestManifestWalk:
 
     def test_source_change_after_manifest_does_not_change_staged_copy(self, tmp_path: Path):
         root = tmp_path / "root"
-        deck = _write(root / "deck.cir", '.include "value.inc"\n.op\n.end\n')
+        deck = _write(root / "deck.cir", '* deck\n.include "value.inc"\n.op\n.end\n')
         included = _write(root / "value.inc", ".param x=1\n")
         original_deck = deck.read_bytes()
         original_include = included.read_bytes()
@@ -340,7 +342,7 @@ class TestFoundryPdkShapes:
         as a filename fails every real PDK corner selection."""
         root = tmp_path / "root"
         pdk, lib = self._pdk(tmp_path)
-        deck = _write(root / "deck.cir", f'.lib "{lib}" tt\nM1 d g s b nfet\n.op\n.end\n')
+        deck = _write(root / "deck.cir", f'* deck\n.lib "{lib}" tt\nM1 d g s b nfet\n.op\n.end\n')
 
         staged = stage_deck(deck, tmp_path / "stage", [root, pdk], origin=deck)
 
@@ -355,12 +357,12 @@ class TestFoundryPdkShapes:
         resolve from anywhere, not just from the staging directory."""
         root = tmp_path / "root"
         pdk, lib = self._pdk(tmp_path)
-        deck = _write(root / "deck.cir", f'.lib "{lib}" tt\n.op\n.end\n')
+        deck = _write(root / "deck.cir", f'* deck\n.lib "{lib}" tt\n.op\n.end\n')
 
         staged = stage_deck(deck, tmp_path / "stage", [root, pdk], origin=deck)
 
         text = staged.staged_deck.read_text()
-        reference = text.splitlines()[0].split()[1].strip('"')
+        reference = text.splitlines()[1].split()[1].strip('"')
         assert Path(reference).is_absolute(), (
             f"root deck kept a relocatable-only path: {reference}"
         )
@@ -379,7 +381,7 @@ class TestFoundryPdkShapes:
         is that the same deck under a smaller bound fails."""
         root = tmp_path / "root"
         pdk, lib = self._pdk(tmp_path)
-        deck = _write(root / "deck.cir", f'.lib "{lib}" tt\n.op\n.end\n')
+        deck = _write(root / "deck.cir", f'* deck\n.lib "{lib}" tt\n.op\n.end\n')
 
         staged = stage_deck(deck, tmp_path / "stage", [root, pdk], origin=deck)
 
@@ -515,7 +517,7 @@ class TestSimulatorLibraryRoots:
         install = tmp_path / "LTspice" / "lib"
         _write(install / "cmp" / "standard.mos", ".model NMOS1 NMOS(VTO=0.7)\n")
         outside = _write(tmp_path / "vendor" / "secret.lib", ".model DX D\n")
-        deck = _write(root / "deck.cir", f'.include "{outside}"\n.op\n.end\n')
+        deck = _write(root / "deck.cir", f'* deck\n.include "{outside}"\n.op\n.end\n')
 
         with pytest.raises(DeckStagingError) as excinfo:
             stage_deck(
@@ -534,7 +536,7 @@ class TestSimulatorLibraryRoots:
         """Neither remedy fixes a reference to a file that is not there, and a
         refusal that names them sends the caller to edit the wrong thing."""
         root = tmp_path / "root"
-        deck = _write(root / "deck.cir", '.include "absent.inc"\n.op\n.end\n')
+        deck = _write(root / "deck.cir", '* deck\n.include "absent.inc"\n.op\n.end\n')
 
         with pytest.raises(DeckStagingError) as excinfo:
             stage_deck(deck, tmp_path / "stage", [root], origin=deck)

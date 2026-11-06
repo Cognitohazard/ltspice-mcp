@@ -263,9 +263,18 @@ def decode_logs(captured: CapturedInputs, directory: Path, *, limits: LogLimits)
 
             def measurements() -> Any:
                 value = log_parser.parse_measurements(log_path, reader=reader)
-                named = re.findall(r"^Measurement:\s*(\S+)", body, re.M)
-                if any(name.lower() not in value["measurements"] for name in named):
-                    raise LogDecodeError("Measurement blocks were not completely decoded")
+                # Every measurement the log printed, a result line as well as a
+                # stepped table or a FAIL'ed line, has an entry, or the section
+                # fails naming the ones it lacks: a left-out one is never silent.
+                decoded = {name.lower() for name in value["measurements"]}
+                missing = [
+                    name for name in log_parser.printed_measurements(body) if name not in decoded
+                ]
+                if missing:
+                    raise LogDecodeError(
+                        "Measurements the log printed were not decoded: "
+                        + ", ".join(map(repr, missing))
+                    )
                 return value
 
             sections["measurements"] = _section(measurements, limits)

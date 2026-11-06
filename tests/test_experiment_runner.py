@@ -47,7 +47,7 @@ class MockSimulator:
 
 def _cases(work_dir: Path, count: int) -> tuple[list[ExperimentCase], list[SourceRecord]]:
     circuit = work_dir / "deck.cir"
-    circuit.write_text(".op\n.end\n")
+    circuit.write_text("* deck\n.op\n.end\n")
     # The recorded digest is the file's real one: a replay checks the manifest
     # against the source on disk, so a fictional digest reads as an edited deck.
     digest = sha256_file(circuit)

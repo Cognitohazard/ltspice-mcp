@@ -197,8 +197,9 @@ def source_for_raw_path(
     """The source an already-validated caller-supplied ``.raw`` path resolves to.
 
     The path must already have passed ``safe_path``. Companion candidates are
-    authorized independently on load; only the contained capture worker checks
-    presence and writer evidence. Session simulator defaults are not provenance.
+    authorized independently on load, where a file the capture needs and does
+    not find is refused (``parser_service``); only the contained capture worker
+    reads writer evidence. Session simulator defaults are not provenance.
     """
     sibling = raw.with_suffix(".log")
     return AnalysisSource(
@@ -1155,11 +1156,13 @@ def extract_netlist_info(file_path: Path) -> dict[str, Any]:
     truncated/hierarchical netlists via the spice_lex foundation and
     surfaces its warnings (e.g. unclosed ``.SUBCKT``) instead of raising.
     Component values come from ``InstanceLine`` views — uniform across
-    behavioural sources, B-source ``V=expr`` forms, and active devices.
+    behavioural sources, B-source ``V=expr`` forms, and active devices. The
+    components are the cards the simulator reads (``spice_lex.lex_deck``):
+    neither the title line nor a card after ``.END``.
     """
     from ltspice_mcp.errors import NetlistError
     from ltspice_mcp.lib.encoding import read_spice_text
-    from ltspice_mcp.lib.spice_lex import lex
+    from ltspice_mcp.lib.spice_lex import lex_deck
     from ltspice_mcp.lib.spice_lex_views import (
         InstanceLine,
         body_has_stray_kv_remnant,
@@ -1169,7 +1172,7 @@ def extract_netlist_info(file_path: Path) -> dict[str, Any]:
         content = read_spice_text(file_path)
     except FileNotFoundError as e:
         raise NetlistError(f"File not found: {file_path}") from e
-    result = lex(content)
+    result = lex_deck(content)
     comp_list: list[dict[str, Any]] = []
     for card in result.cards:
         if card.kind != "instance" or not card.name:

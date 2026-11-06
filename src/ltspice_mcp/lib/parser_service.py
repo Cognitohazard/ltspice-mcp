@@ -23,11 +23,12 @@ from dataclasses import asdict
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from ltspice_mcp.errors import AnalysisDeadlineExceeded, ResultError
+from ltspice_mcp.errors import AnalysisDeadlineExceeded, ResultError, ResultFileNotFoundError
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedRaw
-from ltspice_mcp.lib.file_stamp import file_stamp
+from ltspice_mcp.lib.file_stamp import ABSENT, file_stamp
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
+from ltspice_mcp.lib.parser_capture import unavailable_inputs
 from ltspice_mcp.lib.parser_process import (
     JsonValue,
     ParserProcessError,
@@ -180,6 +181,8 @@ def load_artifacts_sync(
         admitted = _admit(source, state)
         stamped_at = _now_ns()
         stamps = _source_stamps(admitted)
+        if not source.trusted_job_artifact:
+            _refuse_missing(admitted, stamps, require_raw=require_raw)
         stamp_key = (
             None if stamps is None else json.dumps([admitted, stamps, policy], sort_keys=True)
         )
@@ -218,6 +221,31 @@ def _admit(source: AnalysisSource, state: SessionState) -> dict[str, JsonValue]:
         else:
             admitted[role] = str(state.resolve_path(str(path)))
     return admitted
+
+
+def _refuse_missing(
+    admitted: dict[str, JsonValue], stamps: tuple[object, ...] | None, *, require_raw: bool
+) -> None:
+    """Refuse a path a caller named when the files a capture needs are not there.
+
+    The capture's own rule (``parser_capture.unavailable_inputs``), asked of the
+    stamps just taken, so the failure is the caller's missing file, with that
+    kind's recovery, rather than a parse that failed. A role whose file could
+    not be stamped is left to the capture, as present. A job's own artifacts
+    are not asked here: a run whose file is gone is a fact about the run, and
+    the capture reports it as one.
+    """
+    found: dict[str, bool | None] = {}
+    for index, role in enumerate(_ROLES):
+        path = admitted[role]
+        if path is None:
+            found[role] = None
+            continue
+        stamp = stamps[index] if stamps is not None else file_stamp(str(path))
+        found[role] = stamp != ABSENT
+    if unavailable_inputs(found, require_raw=require_raw) is not None:
+        named = next(admitted[role] for role in _ROLES if admitted[role] is not None)
+        raise ResultFileNotFoundError(f"No result file at {named}")
 
 
 def _source_stamps(admitted: dict[str, JsonValue]) -> tuple[object, ...] | None:

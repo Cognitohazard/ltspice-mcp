@@ -454,7 +454,7 @@ class TestServerDispatch:
         assert result.is_error
         data = result.structured_content
         assert data is not None
-        assert data["code"] == "result_unreadable"
+        assert data["code"] == "result_file_not_found"
         assert data["hint"]
         assert text_json(result) == data
 

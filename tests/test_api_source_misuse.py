@@ -38,6 +38,14 @@ def _primitive_cases() -> list[tuple[str, _Misuse]]:
                 f"{method}: run_index with a path",
                 lambda api, f, m=method: getattr(api, m)(path=f, run_index=1),
             ),
+            # The file named twice, once by its older keyword: this raised a
+            # TypeError, which no ``except ValueError`` catches.
+            (
+                f"{method}: path and its older keyword",
+                lambda api, f, m=method: getattr(api, m)(
+                    path=f, **{"raw_path" if m == "load_raw" else "log_path": f}
+                ),
+            ),
         ]
     cases.append(
         ("load_raw: other_raw with a path", lambda api, f: api.load_raw(f, other_raw="op"))

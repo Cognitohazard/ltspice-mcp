@@ -53,6 +53,7 @@ from tests._asc_ops import (
     DIVIDER_DECK_REWIRED,
     DIVIDER_OPS,
     apply_ops,
+    build_sheet,
     file_at,
     sheet_findings,
 )
@@ -2349,6 +2350,214 @@ async def test_bad_op_aborts_transaction_nothing_written(asc_state, work_dir):
     assert "retryable" not in data["error"]
     assert data["error"]["commit_state"] == "not_started"
     assert not (work_dir / "abort.asc").exists()
+
+
+# ---------------------------------------------------------------------------
+# Which text a part's Value may be written with
+# ---------------------------------------------------------------------------
+
+#: Every way an op writes a part's Value: placing the part with ``value``,
+#: placing it with a ``Value`` among its ``attributes``, and setting it on a
+#: placed part with either op that can.
+_VALUE_WRITERS = (
+    "add_component value",
+    "add_component attributes",
+    "set_component_value",
+    "set_component_attribute",
+)
+
+
+async def _write_value(
+    state: SessionState, writer: str, symbol: str, value: str, prefix: str | None = None
+) -> tuple[dict, bytes, bytes]:
+    """Write ``value`` as the Value of part P1, placed from ``symbol`` with its
+    own ``prefix`` when one is given, through ``writer``, one edit_schematic call.
+
+    Returns the reply and the sheet's bytes before and after that call.
+    """
+    own = {"Prefix": prefix} if prefix else {}
+    place = {"op": "add_component", "reference": "P1", "symbol": symbol, "x": 400, "y": 300}
+    if writer.startswith("add_component"):
+        other = {"op": "add_component", "reference": "R9", "symbol": "res", "x": 800, "y": 300}
+        await build_sheet(state, "value_text", [{**other, "value": "1k"}])
+        if writer == "add_component value":
+            op = {**place, "value": value, **({"attributes": own} if own else {})}
+        else:
+            # The Value comes ahead of the Prefix, which still sets its class.
+            op = {**place, "attributes": {"Value": value, **own}}
+    else:
+        await build_sheet(state, "value_text", [{**place, **({"attributes": own} if own else {})}])
+        if writer == "set_component_value":
+            op = {"op": "set_component_value", "reference": "P1", "value": value}
+        else:
+            op = {
+                "op": "set_component_attribute",
+                "reference": "P1",
+                "attribute": "Value",
+                "value": value,
+            }
+    path = Path(state.working_dir) / "value_text.asc"
+    before = path.read_bytes()
+    data = await apply_ops(state, path.name, [op])
+    return data, before, path.read_bytes()
+
+
+@pytest.mark.parametrize("writer", _VALUE_WRITERS)
+@pytest.mark.parametrize("value", ["1 k tc=0.001", "1 k", "10k 2"])
+async def test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer(
+    asc_state, writer: str, value: str
+):
+    """LTspice writes a part's Value after its nodes, so a resistor's ``1 k``
+    puts ``1`` in the value slot and ``k`` past it. set_component_value refused
+    such a value while add_component and set_component_attribute wrote it."""
+    data, before, after = await _write_value(asc_state, writer, "res", value)
+
+    assert data["commit_state"] == "not_committed", data
+    assert [f["index"] for f in data["failures"]] == [0]
+    assert "R-class value is a single token" in data["failures"][0]["error"]
+    assert after == before
+
+
+@pytest.mark.parametrize("writer", _VALUE_WRITERS)
+@pytest.mark.parametrize(
+    ("symbol", "value"),
+    [("voltage", "AC 1"), ("voltage", "PULSE(0 1 0 1n 1n 5n 10n)"), ("npn", "2N3904 2 off")],
+)
+async def test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer(
+    asc_state, writer: str, symbol: str, value: str
+):
+    """A source's spec and a transistor's area factor and ``off`` follow the
+    model or the nodes as one value, so every writer takes them as given."""
+    data, _before, _after = await _write_value(asc_state, writer, symbol, value)
+
+    assert data["commit_state"] == "committed", data
+    editor = AscEditor(str(Path(asc_state.working_dir) / "value_text.asc"))
+    assert str(editor.get_component_value("P1")) == value
+
+
+@pytest.mark.parametrize("writer", _VALUE_WRITERS)
+@pytest.mark.parametrize(
+    ("symbol", "prefix", "refused"),
+    [("voltage", "R", True), ("res", "V", False)],
+    ids=["source-symbol-as-resistor", "resistor-symbol-as-source"],
+)
+async def test_a_value_is_checked_for_the_class_the_parts_own_prefix_gives(
+    asc_state, writer: str, symbol: str, prefix: str, refused: bool
+):
+    """A part's own Prefix sets the element letter it netlists as, ahead of its
+    symbol's, so a source spec on a source symbol made a resistor is refused,
+    and on a resistor symbol made a source is written, whichever writer sets it
+    and whether the Prefix comes in the same op or was there before."""
+    data, before, after = await _write_value(asc_state, writer, symbol, "AC 1", prefix)
+
+    if refused:
+        assert data["commit_state"] == "not_committed", data
+        assert "R-class value" in data["failures"][0]["error"]
+        assert after == before
+    else:
+        assert data["commit_state"] == "committed", data
+
+
+@pytest.mark.parametrize(
+    ("writer", "symbol", "prefix", "refused"),
+    [
+        ("set", "voltage", "R", True),
+        ("set", "voltage", "I", False),
+        ("clear", "res", "V", True),
+        ("clear", "voltage", "I", False),
+    ],
+    ids=[
+        "set-source-symbol-as-resistor",
+        "set-source-symbol-as-current-source",
+        "clear-resistor-symbol-made-a-source",
+        "clear-source-symbol-made-a-current-source",
+    ],
+)
+async def test_a_prefix_written_or_cleared_holds_the_parts_value_to_its_new_class(
+    asc_state, writer: str, symbol: str, prefix: str, refused: bool
+):
+    """Setting or clearing a part's Prefix changes the element class it
+    netlists as, so the Value it already has is checked for the new class, as
+    add_component checks the same Value and Prefix placed in one op. A Prefix
+    set to ``R`` on a source holding ``AC 1`` was written unchecked, leaving
+    a resistor whose netlist reads ``1`` as another node."""
+    value = "AC 1"
+    if writer == "set":
+        await build_sheet(
+            asc_state,
+            "value_text",
+            [
+                {
+                    "op": "add_component",
+                    "reference": "P1",
+                    "symbol": symbol,
+                    "x": 400,
+                    "y": 300,
+                    "value": value,
+                }
+            ],
+        )
+        op = {
+            "op": "set_component_attribute",
+            "reference": "P1",
+            "attribute": "Prefix",
+            "value": prefix,
+        }
+        final = {"Value": value, "Prefix": prefix}
+    else:
+        await build_sheet(
+            asc_state,
+            "value_text",
+            [
+                {
+                    "op": "add_component",
+                    "reference": "P1",
+                    "symbol": symbol,
+                    "x": 400,
+                    "y": 300,
+                    "attributes": {"Prefix": prefix, "Value": value},
+                }
+            ],
+        )
+        op = {
+            "op": "set_component_attribute",
+            "reference": "P1",
+            "attribute": "Prefix",
+            "value": "",
+        }
+        final = {"Value": value}
+    path = Path(asc_state.working_dir) / "value_text.asc"
+    before = path.read_bytes()
+
+    data = await apply_ops(asc_state, path.name, [op])
+    # The part the op would leave, placed in one op.
+    placed = await build_sheet(
+        asc_state,
+        "value_placed",
+        [
+            {
+                "op": "add_component",
+                "reference": "P1",
+                "symbol": symbol,
+                "x": 400,
+                "y": 300,
+                "attributes": final,
+            }
+        ],
+    )
+
+    if refused:
+        assert data["commit_state"] == "not_committed", data
+        error = data["failures"][0]["error"]
+        assert "R-class value" in error
+        assert "set_component_value" in error
+        assert path.read_bytes() == before
+        assert placed["commit_state"] == "not_committed", placed
+    else:
+        assert data["commit_state"] == "committed", data
+        assert placed["commit_state"] == "committed", placed
+        editor = AscEditor(str(path))
+        assert str(editor.get_component_value("P1")) == value
 
 
 # ---------------------------------------------------------------------------

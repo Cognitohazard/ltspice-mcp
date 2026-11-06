@@ -1119,24 +1119,24 @@ class TestMeasurements:
     ):
         """LTspice prints a crossing for each WHEN of these runs (all but XVII's
         ``f_param``, which it fails). Where the threshold it prints after ``=``
-        is a parameter, an expression or another measurement, the server's log
-        decoder fails that entry alone: its value is null and it carries the
-        line LTspice printed and the reason. Every other measurement of the log
-        reads. The same measurements stepped print a table of crossings, which
-        it reads."""
-        whens = {
-            name: line for name, line in self.printed(build, case_id).items() if name[1] == "_"
-        }
+        is a parameter, an expression, a braced expression or another
+        measurement, the server's log decoder fails that entry alone: its value
+        is null and it carries the line LTspice printed and the reason, with the
+        crossing as its ``at``. Every measurement the log printed has an entry,
+        and every other one reads. The same measurements stepped print a table
+        of crossings, which it reads."""
+        printed = self.printed(build, case_id)
+        whens = {name: line for name, line in printed.items() if name[1] == "_"}
         assert whens and all(" at " in line for line in whens.values())
         plain = rec.decode_log(build, case_id, tmp_path / "plain").section("measurements")
         assert plain["status"] == "parsed"
         entries = plain["value"]["measurements"]
+        assert set(printed) <= set(entries)
         unreadable = set()
         for name, line in whens.items():
-            if name not in entries:  # LTspice 26's braced threshold; pinned below
-                continue
-            threshold = line.split("=", 1)[1].rsplit(" at ", 1)[0]
+            threshold, crossing = line.split("=", 1)[1].rsplit(" at ", 1)
             entry = entries[name]
+            assert entry["at"] == float(crossing), name
             try:
                 float(threshold)
             except ValueError:
@@ -1156,13 +1156,30 @@ class TestMeasurements:
         stepped = rec.decode_log(build, f"{case_id}_step", tmp_path / "stepped")
         assert stepped.section("measurements")["status"] == "parsed"
 
-    def test_a_threshold_printed_in_braces_is_left_out_by_the_server(self, build: str):
-        """LTspice 26 prints ``t_braced: V(out)={vth} AT ...`` and the server's
-        parser leaves that measurement out; XVII prints ``v(out)=0.5``, which
-        it reads."""
-        names = set(self.measured(build, "log/meas_when_threshold_tran")["measurements"])
-        assert ("t_braced" in names) == (rec.generation(build) == "xvii")
-        assert {"t_number", "t_param", "t_expr", "t_meas"} <= names
+    def test_a_threshold_printed_in_braces_fails_only_its_own_entry(self, build: str):
+        """LTspice 26 prints ``t_braced: V(out)={vth} AT ...``, a line
+        spicelib's reader does not match. The server's parser still gives the
+        measurement an entry: unreadable, with the line and the reason, and the
+        crossing as its ``at``, as for the same threshold printed as ``vth``.
+        XVII prints ``v(out)=0.5``, which it reads. Either way the crossing is
+        the measurement's result."""
+        case_id = "log/meas_when_threshold_tran"
+        data = parse_measurements(rec.recorded(build, f"{case_id}.log"))
+        entries = cast(dict[str, Any], data["measurements"])
+        braced, param = entries["t_braced"], entries["t_param"]
+        assert braced["at"] == param["at"]
+        if rec.generation(build) == "xvii":
+            assert braced["values"] == [0.5]
+            assert "unreadable" not in braced
+        else:
+            assert braced["values"] == [None]
+            assert braced["unreadable"]["line"] == "t_braced: V(out)={vth} AT 6.98157501917e-05"
+            assert "'{vth}'" in braced["unreadable"]["reason"]
+        assert list(data["measurements"]) == [
+            "t_number", "t_param", "t_expr", "t_braced", "vmax", "t_meas",
+        ]  # fmt: skip
+        flat, _, _, _ = aggregate_log_measurements(data, INPUTS / f"{case_id}.cir")
+        assert flat["t_braced"] == flat["t_param"] == flat["t_number"]
 
     def test_only_xvii_fails_an_ac_when_against_a_parameter(self, build: str):
         """``WHEN mag(V(out))=k`` with ``.param k=0.70710678``: XVII prints it

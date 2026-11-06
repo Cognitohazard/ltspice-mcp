@@ -85,7 +85,6 @@ from ltspice_mcp.lib.recipes import (
     DORMANT_POINTER,
     Recipe,
     StepSelectionFields,
-    validate_recipe,
 )
 from ltspice_mcp.lib.recovery_records import CaseAttempt, CaseRecovery, RecoveryError
 from ltspice_mcp.lib.services import cp1252_ltspice, resolve_job_async
@@ -129,10 +128,10 @@ from ltspice_mcp.tools._base import (
     ResponseBudget,
     StrictModel,
     ToolInput,
+    failure_text,
     format_response,
     held_to_cap,
     outcome_of,
-    path_denied_text,
     registry,
     resolve_response_budget,
     resolve_run_simulator,
@@ -878,18 +877,19 @@ async def handle_run_experiments(
         return await _error_response(
             args.request_id,
             code=exc.code,
-            message=str(exc),
+            failure=exc,
             stage="submission",
             retryable=True,
             # The submission is durable; only the rest of the call fell over.
             commit_state="committed",
             budget=budget,
+            state=state,
         )
     except RequestGateBusy as exc:
         return await _error_response(
             args.request_id,
             code=exc.code,
-            message=str(exc),
+            failure=exc,
             stage="submission",
             retryable=True,
             # The holder is the submission that claims this id, and it was
@@ -898,78 +898,85 @@ async def handle_run_experiments(
             # experiment ends up running twice.
             commit_state="unknown",
             budget=budget,
+            state=state,
         )
     except IdempotencyConflictError as exc:
         return await _error_response(
             args.request_id,
             code=exc.code,
-            message=str(exc),
+            failure=exc,
             stage="submission",
             retryable=False,
             commit_state="not_started",
             budget=budget,
+            state=state,
         )
     except NativeRequestError as exc:
         return await _error_response(
             args.request_id,
             code="pdk_native_request",
-            message=str(exc),
+            failure=exc,
             stage="variation",
             retryable=False,
             commit_state="not_started",
             budget=budget,
+            state=state,
         )
     except VariationError as exc:
         return await _error_response(
             args.request_id,
             code=exc.code,
-            message=str(exc),
+            failure=exc,
             stage="variation",
             retryable=False,
             commit_state="not_started",
             budget=budget,
+            state=state,
         )
     except PathSecurityError as exc:
         return await _error_response(
             args.request_id,
             code=exc.code,
-            message=str(exc),
+            failure=exc,
             stage="resolution",
             retryable=False,
             commit_state="not_started",
             budget=budget,
-            hint=path_denied_text(exc, state),
+            state=state,
         )
     except UnsupportedFileError as exc:
         return await _error_response(
             args.request_id,
             code=exc.code,
-            message=str(exc),
+            failure=exc,
             stage="resolution",
             retryable=False,
             commit_state="not_started",
             budget=budget,
+            state=state,
         )
     except RecoveryError as exc:
         return await _error_response(
             args.request_id,
             code=exc.code,
-            message=str(exc),
+            failure=exc,
             stage="recovery",
             retryable=False,
             commit_state="not_started",
             budget=budget,
+            state=state,
         )
     except NotPlaced as exc:
         # The request asks for what its own circuits or simulator rule out.
         return await _error_response(
             args.request_id,
             code=exc.code,
-            message=str(exc),
+            failure=exc,
             stage="validate",
             retryable=False,
             commit_state="not_started",
             budget=budget,
+            state=state,
         )
     except RecipeInvalidError as exc:
         # As analyze_results reports the same recipe: the request is wrong, so
@@ -977,21 +984,23 @@ async def handle_run_experiments(
         return await _error_response(
             args.request_id,
             code=exc.code,
-            message=str(exc),
+            failure=exc,
             stage="validate",
             retryable=False,
             commit_state="not_started",
             budget=budget,
+            state=state,
         )
     except (SimulationError, ResultError, DeckStagingError, OSError, ValueError) as exc:
         return await _error_response(
             args.request_id,
             code=raise_site_code(exc) or "submission_failed",
-            message=str(exc),
+            failure=exc,
             stage="submission",
             retryable=True,
             commit_state="not_started",
             budget=budget,
+            state=state,
         )
 
 
@@ -1343,21 +1352,28 @@ def _validate_attached_analysis(analyze_block: AttachedAnalysis) -> None:
     registry.
     """
     request = analyze_block.model_dump(mode="json", exclude_unset=False)
+    refused = "The attached analyze block is not a valid analyze_results request: "
     try:
-        analyze.AnalyzeResultsInput.model_validate(
+        expanded = analyze.AnalyzeResultsInput.model_validate(
             _attached_analysis_payload("preflight", request)
         )
-        # The input model deliberately skips per-recipe validation
-        # (SkipValidation[Recipe] — items are validated lazily at execution so
-        # one bad recipe fails one item). At SUBMISSION that laziness is the
-        # bug: every recipe must parse before a simulator is asked to run.
-        for raw_recipe in request.get("recipes") or []:
-            validate_recipe(raw_recipe)
-    except (ValidationError, ValueError) as exc:
+    except ValidationError as exc:
         raise RecipeInvalidError(
-            "The attached analyze block is not a valid analyze_results request: "
-            f"{validation_error_detail('analyze_results', exc)}"
+            refused + validation_error_detail("analyze_results", exc)
         ) from exc
+    # The input model deliberately skips per-recipe validation
+    # (SkipValidation[Recipe] — items are validated lazily at execution so one
+    # bad recipe fails one item). At SUBMISSION that laziness is the bug: every
+    # recipe must be one the analysis after the runs can run, against the
+    # sources it will read, before a simulator is asked to run.
+    labels = [source.label for source in expanded.sources or []]
+    for index, raw_recipe in enumerate(request.get("recipes") or []):
+        try:
+            analyze.recipe_of_request(raw_recipe, labels)
+        except (ValueError, TypeError) as exc:
+            raise RecipeInvalidError(
+                f"{refused}recipes[{index}]: {validation_error_detail('analyze_results', exc)}"
+            ) from exc
 
 
 def attached_analysis_callback(state: SessionState) -> AnalysisCallback:
@@ -1668,19 +1684,21 @@ def submission_error_payload(
     stage: str,
     retryable: bool,
     commit_state: Literal["not_started", "committed", "unknown"],
-    hint: str | None = None,
+    hint: str,
 ) -> dict[str, Any]:
     """The receipt-shaped payload for a call that produced no job.
 
     Public because a submission can now fail outside this handler: the Python
     API's detached mode spawns a process to submit, and a failure there has to
-    reach the caller in the same shape as a failure here. ``hint`` defaults to
-    the message; a failure with a known remedy passes the message with it.
+    reach the caller in the same shape as a failure here. ``hint`` is the
+    message followed by the failure's recovery step (``failure_text``), as a
+    jobs refusal says it; there is no default, so no caller can leave the step
+    out by not asking for it.
     """
     data = _empty_payload(request_id)
     data.update(
         {
-            "hint": hint if hint is not None else message,
+            "hint": hint,
             "error": {
                 "code": code,
                 "message": message,
@@ -1697,21 +1715,23 @@ async def _error_response(
     request_id: str,
     *,
     code: str,
-    message: str,
+    failure: Exception,
     stage: str,
     retryable: bool,
     commit_state: Literal["not_started", "committed", "unknown"],
     budget: ResponseBudget,
-    hint: str | None = None,
+    state: SessionState,
 ) -> types.CallToolResult:
+    """A refusal before any job exists, hinted with ``failure``'s recovery
+    step from the one table every surface reads (``failure_text``)."""
     data = submission_error_payload(
         request_id,
         code=code,
-        message=message,
+        message=str(failure),
         stage=stage,
         retryable=retryable,
         commit_state=commit_state,
-        hint=hint,
+        hint=failure_text(failure, state),
     )
     return await _render_static_run_receipt(
         data,
