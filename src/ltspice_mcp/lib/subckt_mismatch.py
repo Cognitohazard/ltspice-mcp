@@ -48,7 +48,7 @@ from ltspice_mcp.lib.deck_staging import (
 )
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.hierarchy import ResolvedInstance, param_assignments
-from ltspice_mcp.lib.hierarchy_expr import Environment, NumericFact, multiplier_product
+from ltspice_mcp.lib.hierarchy_expr import Environment, NumericFact, card_copies
 from ltspice_mcp.lib.montecarlo import (
     InstanceGeometry,
     MCSampler,
@@ -177,8 +177,8 @@ class XFetTarget:
     model_name: str
     width: float | None
     length: float | None
-    #: The X line's ``m`` times the inner device's ``m``, as ngspice multiplies
-    #: them; unresolved, with the reason, when either is written but cannot be read.
+    #: The X line's ``m`` times the inner device's ``m`` (``_device_multiplier``);
+    #: unresolved, with the reason, when either is written but cannot be read.
     multiplier: NumericFact = _ONE_COPY
 
     @property
@@ -522,26 +522,24 @@ def _body_environment(
 def _device_multiplier(
     x_view: InstanceLine, inner: InstanceLine, body: Callable[[], Environment]
 ) -> NumericFact:
-    """How many parallel copies of ``inner`` ngspice builds under ``x_view``.
+    """How many parallel copies of ``inner`` the simulator builds under ``x_view``.
 
-    ngspice multiplies an X line's ``m`` into every device of the body, and an
-    inner device's own ``m`` (often ``m={mult}``, a parameter the X line sets)
-    on top of it, so the copies are the product. This plan serves a deck with
-    no semantic profile, so it applies ngspice's rule to QSPICE and Xyce too,
-    as it does ``delvto`` and ``mulu0``; LTspice ignores an X line's ``m``,
-    which ``variations._path_multiplier`` applies to a profiled deck. ``body``
-    builds the scope the inner ``m`` is read in, so a device that writes none
-    never builds it.
+    This plan serves a deck with no semantic profile, which a run gives only
+    a simulator other than LTspice and ngspice (QSPICE, Xyce), and neither's
+    rule for an ``X`` line's ``m`` is measured. It counts the product of the
+    ``X`` line's ``m`` and the inner device's own, ``m={mult}`` read from what
+    the ``X`` line sets, as ngspice's HSPICE modes do for a subcircuit that
+    declares no ``m`` (``hierarchy_expr.card_copies``). ``body`` builds the
+    scope the inner ``m`` is read in, so a device that writes none never
+    builds it.
     """
     x_m, inner_m = x_view.get_param("M"), inner.get_param("M")
-    return multiplier_product(
-        [
-            (
-                f"the X line {x_view.ref}",
-                None if x_m is None else Environment({}, simulator="ngspice").fact(x_m),
-            ),
-            (f"the inner device {inner.ref}", None if inner_m is None else body().fact(inner_m)),
-        ]
+    return card_copies(
+        None if inner_m is None else body().fact(inner_m),
+        None if x_m is None else Environment({}, simulator="ngspice").fact(x_m),
+        multiply=True,
+        where=f"the inner device {inner.ref}",
+        passed_from=f"the X line {x_view.ref}",
     )
 
 

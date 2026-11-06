@@ -23,7 +23,7 @@ from pydantic import (
     model_validator,
 )
 
-from ltspice_mcp.errors import NetlistError
+from ltspice_mcp.errors import MultiplierRewriteStop, NetlistError
 from ltspice_mcp.lib import RUN_DECK_SUFFIXES, atomic_write_bytes, component_value
 from ltspice_mcp.lib.deck_staging import (
     card_sections,
@@ -34,7 +34,7 @@ from ltspice_mcp.lib.deck_staging import (
 from ltspice_mcp.lib.encoding import encode_spice_text
 from ltspice_mcp.lib.format import parse_plain_value, parse_spice_value, unique_name  # noqa: TID251 - a written assignment must be a plain or SI value
 from ltspice_mcp.lib.hierarchy import Hierarchy, ResolvedInstance, SemanticProfile, Source
-from ltspice_mcp.lib.hierarchy_expr import multiplier_product
+from ltspice_mcp.lib.hierarchy_expr import NumericFact, ngspice_multiplies_m
 from ltspice_mcp.lib.instance_targeting import (
     InstanceEdit,
     SourceLineage,
@@ -947,6 +947,7 @@ def materialize_variants(
                 _closure_files(closure, closure.texts()), inputs, closure.semantic_profile
             )
             editor = TargetEditor(inputs, closure.semantic_profile, origins=origins)
+            as_written = editor.hierarchy
             structured.extend(_legacy_instance_edits(editor.hierarchy, aliases))
             _validate_write_sets(closure, ordinary, structured, editor.hierarchy, rules, origins)
             editor.apply(structured)
@@ -964,7 +965,7 @@ def materialize_variants(
                 editor = final_editor
             else:
                 draws = {}
-            lineage = editor.lineage()
+            lineage = editor.lineage(_refuse_a_changed_m_rewrite(as_written, final_files))
             assignments.update(draws)
             base_files = [
                 ClosureFile(
@@ -2739,40 +2740,122 @@ def _validate_write_sets(
                         )
 
 
-def _path_multiplier(
+def _refuse_a_changed_m_rewrite(
+    as_written: Hierarchy, final_files: Sequence[ClosureFile]
+) -> Hierarchy | None:
+    """Refuse a case whose edits change what ngspice builds where nothing asked.
+
+    ngspice rewrites a subcircuit for ``m`` according to which of its callers
+    write ``m`` and where they sit in the deck (``hierarchy_expr.card_copies``).
+    An edit that writes ``m`` on one call, or a private subcircuit copy that
+    only the X lines on its path call, can move that rewrite, so a card the
+    case does not edit builds another number of copies than the deck as
+    written, or ngspice stops. Every card whose own ``m`` and whose ancestors'
+    ``m`` no edit wrote must build what it did; a card whose count is unknown
+    on either side (an element letter not measured) is not compared. Returns
+    the edited deck's hierarchy when it resolved one, for the lineage to reuse.
+    """
+    profile = as_written.profile
+    if profile.simulator != "ngspice":
+        return None
+    from ltspice_mcp.lib.instance_targeting import captured_hierarchy
+
+    try:
+        edited = captured_hierarchy(final_files, profile)
+    except MultiplierRewriteStop as exc:
+        raise VariationError(
+            "multiplier_rewrite_changed",
+            f"the edits this case needs, private subcircuit copies included, would leave "
+            f"a deck ngspice cannot run. {exc}",
+        ) from exc
+    if not as_written.m_rewritten and not edited.m_rewritten:
+        return edited
+    rows = {row.instance: row for row in edited.instances}
+    written = {row.instance: dict(row.parameters).get("m") for row in as_written.instances}
+    now = {path: dict(row.parameters).get("m") for path, row in rows.items()}
+    for row in as_written.instances:
+        other = rows.get(row.instance)
+        if other is None or row.multiplier is None or other.multiplier is None:
+            continue
+        before, after = row.multiplier.value, other.multiplier.value
+        if before is None or after is None or before == after:
+            continue
+        lineage = [row.instance[:depth] for depth in range(1, len(row.instance) + 1)]
+        if any(written.get(path) != now.get(path) for path in lineage):
+            continue
+        raise VariationError(
+            "multiplier_rewrite_changed",
+            _rewrite_change_message(row, other, as_written, edited, written),
+        )
+    return edited
+
+
+def _rewrite_change_message(
     row: ResolvedInstance,
-    by_path: Mapping[tuple[str, ...], ResolvedInstance],
-    x_line_m: bool,
-) -> float:
+    other: ResolvedInstance,
+    as_written: Hierarchy,
+    edited: Hierarchy,
+    written: Mapping[tuple[str, ...], NumericFact | None],
+) -> str:
+    """Why a card no edit writes would build another count, and a fix that keeps it."""
+    card = ".".join(row.instance)
+    body = row.source.definition or "the top level"
+    change = (
+        f"{card}, which no edit writes, would build {_copies_text(other.multiplier)} "
+        f"where the deck as written builds {_copies_text(row.multiplier)}"
+    )
+    was = (row.source.definition or "").casefold() in as_written.m_rewritten
+    now = (other.source.definition or "").casefold() in edited.m_rewritten
+    calls = [
+        ".".join(row.instance[:depth])
+        for depth in range(1, len(row.instance))
+        if written.get(row.instance[:depth]) is None
+    ]
+    if was and not now:
+        return (
+            f"ngspice rewrites {body} for m because one of its callers writes m, but the "
+            f"private copy this case gives {'.'.join(row.instance[:-1])} has no caller "
+            f"that does, so {change}. Write m=1 on {', '.join(calls) or 'its X line'}: "
+            "each card then builds what it does as written, and the copy is rewritten too"
+        )
+    hint = (
+        "In ngspice's HSPICE modes (ngbehavior hsa) the appended m multiplies a card's own "
+        "m instead, so a caller that writes no m keeps its cards' own m; every other count "
+        "then follows that mode too"
+        if not ngspice_multiplies_m(as_written.profile.ngbehavior)
+        else f"Write on {card} the m it should build"
+    )
+    return (
+        f"the edits this case needs change whether ngspice rewrites {body} for m, which "
+        f"replaces the m of every card in it for every caller, so {change}. {hint}"
+    )
+
+
+def _copies_text(fact: NumericFact | None) -> str:
+    if fact is None or fact.value is None:
+        return "an unknown number of copies"
+    return f"{fact.value:g} cop{'y' if fact.value == 1 else 'ies'}"
+
+
+def _path_multiplier(row: ResolvedInstance) -> float:
     """How many parallel copies of ``row`` the simulator builds from its one card.
 
-    The device's own ``m``, times, when ``x_line_m``, the ``m`` of every
-    subcircuit instance above it. ngspice multiplies those in; LTspice ignores
-    ``m`` on an X line at any depth (recorded: ``raw/subckt_multiplier``,
-    ``deck/subckt_multiplier_nested``). Each ``m`` is read as hierarchy
-    discovery resolved it in its own scope, so an inner ``m={mult}`` takes the
-    value its X line gives, which both simulators honour. A deck with no
-    semantic profile is drawn by ``subckt_mismatch``, whose
-    ``_device_multiplier`` counts the X line's ``m`` as ngspice does. All the
-    copies share one mismatch draw, so the area the draw stands for is this
-    many times W·L. An ``m`` written but not resolvable to a positive number
+    Hierarchy discovery reads it with the simulator's rule
+    (``hierarchy_expr.card_copies``): LTspice ignores ``m`` on an X line at any
+    depth, and ngspice passes an X line's ``m`` down to the cards of a
+    subcircuit that does not declare ``m``, replacing each card's own ``m`` or,
+    in its HSPICE modes, multiplying it. A deck with no semantic profile is
+    drawn by ``subckt_mismatch``, which reads the same rule. All the copies
+    share one mismatch draw, so the area the draw stands for is this many
+    times W·L. An ``m`` written but not resolvable to a positive number
     refuses the rule: drawn as one copy, the sigma would be too large.
     """
-    holders = (
-        [by_path.get(row.instance[:depth]) for depth in range(1, len(row.instance) + 1)]
-        if x_line_m
-        else [row]
-    )
-    multiplier = multiplier_product(
-        (".".join(holder.instance), dict(holder.parameters).get("m"))
-        for holder in holders
-        if holder is not None
-    )
-    if multiplier.value is None:
+    multiplier = row.multiplier
+    if multiplier is None or multiplier.value is None:
+        why = "is unknown" if multiplier is None else multiplier.reason
         raise VariationError(
             "mismatch_geometry_unresolved",
-            f"multiplier {multiplier.reason}, so the mismatch area of "
-            f"{'.'.join(row.instance)} is unknown",
+            f"multiplier {why}, so the mismatch area of {'.'.join(row.instance)} is unknown",
         )
     return multiplier.value
 
@@ -2810,7 +2893,6 @@ def _nested_mismatch_edits(
     edits: list[InstanceEdit] = []
     draws: dict[str, float] = {}
     claimed: set[tuple[str, ...]] = set()
-    by_path = {row.instance: row for row in hierarchy.instances}
     simulator = hierarchy.profile.simulator
     nominals_by_model: dict[tuple[str, int], dict[str, float]] = {}
     for rule in rules:
@@ -2865,7 +2947,7 @@ def _nested_mismatch_edits(
                     row.model_name or "",
                     width,
                     length,
-                    _path_multiplier(row, by_path, x_line_m=simulator == "ngspice"),
+                    _path_multiplier(row),
                 ),
                 _engine_rule(rule),
             )
