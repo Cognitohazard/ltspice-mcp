@@ -49,9 +49,7 @@ def test_raw_result_reports_native_table_without_inventing_axis_or_units():
         [np.array([2 / 3]), np.array([1500.0])],
         snapshot_id="table-example",
     )
-    result = RawResult(
-        DecodedRaw([plot]), source=Path("table.raw"), dialect="ngspice", step_count=1, steps=[{}]
-    )
+    result = RawResult(DecodedRaw([plot]), source=Path("table.raw"), dialect="ngspice")
     assert result.analysis_type == "tf"
     assert result.plot_index == 0
     assert result.descriptor["axis"] is None
@@ -324,9 +322,7 @@ def test_native_table_wrapper_detaches_inventory_and_keeps_complex_values():
         [np.array([-2 + 3j])],
         snapshot_id="pz-example",
     )
-    result = RawResult(
-        DecodedRaw([plot]), source=Path("pz.raw"), dialect="ngspice", step_count=1, steps=[{}]
-    )
+    result = RawResult(DecodedRaw([plot]), source=Path("pz.raw"), dialect="ngspice")
     result.descriptor["traces"][0]["name"] = "changed"
     assert result.plots[0]["traces"][0]["name"] == "pole(1)"
     assert result.table()[0]["value"] == {"real": -2.0, "imag": 3.0}

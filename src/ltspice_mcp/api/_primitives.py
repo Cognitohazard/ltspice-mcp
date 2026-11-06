@@ -25,7 +25,7 @@ from ltspice_mcp.lib.device_names import (
     writes_xvii_names,
 )
 from ltspice_mcp.lib.log_types import LogSectionName
-from ltspice_mcp.lib.raw_parser import OtherRawKind
+from ltspice_mcp.lib.raw_parser import OtherRawKind, get_step_count
 from ltspice_mcp.lib.recipes import StepValues
 from ltspice_mcp.state import SessionState
 
@@ -39,7 +39,9 @@ class RawResult:
     ``table(step=k)`` a plot with no sampled axis, and ``compare(other)`` how
     far another run's traces are from these. ``analysis_type``, ``dialect``,
     ``descriptor``, ``plots``, ``plot_index``, ``source`` and ``observations``
-    say what was read.
+    say what was read. Of a plot whose steps cannot be told apart, every
+    read of its steps, ``step_count`` and ``steps`` included, is refused
+    with the reason, as the tools refuse it.
     """
 
     def __init__(
@@ -48,18 +50,14 @@ class RawResult:
         *,
         source: Path,
         dialect: str | None,
-        step_count: int,
-        steps: list[dict[str, Any]],
         observations: tuple[dict[str, Any], ...] = (),
         chosen: tuple[str, ...] | None = None,
     ) -> None:
         self._raw = raw
         self._chosen = chosen
         self._signals = tuple(str(name) for name in raw.get_trace_names())
-        # Takes ownership of the rows the caller just built; the detachment
-        # contract is the per-read copy on the ``steps`` property.
-        self._steps = tuple(steps)
-        self._step_count = step_count
+        # The detachment contract is the per-read copy on the ``steps`` property.
+        self._steps = tuple(StepValues(step.parameters) for step in raw.descriptor.steps)
         self._analysis_type = raw.descriptor.analysis
         self._dialect = raw.descriptor.dialect
         self._source = source
@@ -133,24 +131,27 @@ class RawResult:
 
     def _validate_step(self, step: int) -> None:
         # Refused, with why, when the plot's steps cannot be told apart.
-        self._raw.get_steps()
-        if step < 0 or step >= self._step_count:
-            raise ResultError(
-                f"Step {step} out of range. Valid range: 0 to {self._step_count - 1}"
-            )
+        services.validate_step(self._raw, step)
 
     @property
     def step_count(self) -> int:
-        return self._step_count
+        """How many steps the plot holds, 1 for a run that is not stepped:
+        counted as the tools count them (``raw_parser.get_step_count``), so
+        a plot whose steps cannot be told apart, such as the operating-point
+        raw LTspice 26 writes beside a stepped ``.tran`` or ``.ac``, is
+        refused with the reason rather than counted as none."""
+        return get_step_count(self._raw)
 
     @property
     def steps(self) -> list[dict[str, Any]]:
-        """Parameter metadata aligned one-for-one with the result steps.
+        """Parameter metadata aligned one-for-one with the result steps,
+        refused as :attr:`step_count` is.
 
         Each entry finds a parameter as a step selector does, whatever the
         case of its name: LTspice writes ``rd`` for a deck's ``RD``, and
         ``steps[0]["RD"]`` reads it (:class:`~ltspice_mcp.lib.recipes.StepValues`).
         """
+        get_step_count(self._raw)
         return copy.deepcopy(list(self._steps))
 
     @property
@@ -236,7 +237,7 @@ class RawResult:
     def _step_with(self, parameters: dict[str, Any]) -> int:
         """The step whose parameters are ``parameters``; step 0 of a result
         that is not stepped."""
-        if self._step_count == 1 and not self._steps[0]:
+        if self.step_count == 1 and not self._steps[0]:
             return 0
         try:
             return self._steps.index(parameters)
@@ -439,14 +440,10 @@ async def load_raw_result(
     raw = await services.load_raw(source, state)
     observations = await asyncio.to_thread(services.read_observations, source, raw)
     assert resolved is not None
-    step_count = len(raw.descriptor.steps)
-    steps: list[dict[str, Any]] = [StepValues(step.parameters) for step in raw.descriptor.steps]
     return RawResult(
         raw,
         source=resolved,
         dialect=raw.descriptor.dialect,
-        step_count=step_count,
-        steps=steps,
         observations=observations,
         chosen=signals,
     )

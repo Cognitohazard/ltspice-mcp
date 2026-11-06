@@ -23,6 +23,7 @@ from pydantic import ValidationError
 from ltspice_mcp.api import ApiValidationError
 from ltspice_mcp.errors import NoAxisError, OtherRawNotWritten, ResultError
 from ltspice_mcp.lib import metrics, services
+from ltspice_mcp.lib.decoded_raw import DecodedRaw
 from ltspice_mcp.lib.device_names import (
     owner_path,
     parse_device_param,
@@ -51,6 +52,7 @@ from ltspice_mcp.lib.metrics import aggregate_log_measurements
 from ltspice_mcp.lib.raw_header import RawHeaderError, preflight_raw
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
+    get_step_count,
     has_valid_raw_header,
     may_hold_compressed_transient,
     raw_writer_command,
@@ -913,6 +915,77 @@ def test_the_api_says_why_26s_op_raw_of_a_stepped_run_has_no_steps(
     with pytest.raises(ResultError, match="does not say which step") as refused:
         loaded.trace(loaded.signals[0])
     assert "run .op under the same .step" in str(refused.value)
+
+
+def _step_count_reply(state: SessionState, raw: Path) -> dict[str, Any]:
+    """What ``analyze_results`` answers for a raw's summary, which counts its
+    steps: the one value, or the one failure."""
+    reply = SyncApi(state).analyze_results(
+        sources=[{"path": str(raw), "label": "raw"}],
+        recipes=[{"key": "summary", "metric": "summary"}],
+        include={"fields": ["value"]},
+    )
+    if reply.get("failures"):
+        [failure] = reply["failures"]
+        return failure
+    [row] = reply["results"]["summary"]["values"]
+    return row["value"]
+
+
+def _steps_refused(state: SessionState, raw: Path, decoded: DecodedRaw) -> str:
+    """The reason every reader of how many steps ``raw`` has gives for not
+    counting them: the tools' step count, the API's ``step_count`` and
+    ``steps``, and ``analyze_results``. Each gives the same one."""
+    with pytest.raises(ResultError) as counted:
+        get_step_count(decoded)
+    reason = str(counted.value)
+    loaded = SyncApi(state).load_raw(raw)
+    for read in (lambda: loaded.step_count, lambda: loaded.steps):
+        with pytest.raises(ResultError) as refused:
+            read()
+        assert str(refused.value) == reason
+    assert reason in _step_count_reply(state, raw)["message"]
+    return reason
+
+
+@pytest.mark.parametrize("run", ["step_tran_op_raw", "step_ac_op_raw"])
+def test_no_reader_counts_steps_in_26s_op_raw_of_a_stepped_run(
+    run: str, state_no_sim: SessionState, work_dir: Path, tmp_path: Path
+):
+    """The run took three steps and LTspice 26 wrote one point, with nothing
+    that says whose step it is: no reader counts its steps, none as zero."""
+    raw = rec.stage_run("ltspice26", f"raw/{run}.op", work_dir)
+    decoded = rec.decode("ltspice26", f"raw/{run}.op", tmp_path).raw
+    reason = _steps_refused(state_no_sim, raw, decoded)
+    assert "does not say which step" in reason
+    assert "run .op under the same .step" in reason
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_no_reader_counts_steps_in_a_stepped_sweep_read_without_its_log(
+    build: str, state_no_sim: SessionState, work_dir: Path, tmp_path: Path
+):
+    """A stepped transient's step values are in its log, and a raw read
+    alone cannot be split into steps by them."""
+    raw = work_dir / "step_tran.raw"
+    raw.write_bytes(rec.recorded(build, "raw/step_tran.raw").read_bytes())
+    decoded = rec.decode_file(raw, tmp_path).raw
+    assert "Step boundaries are unresolved" in _steps_refused(state_no_sim, raw, decoded)
+
+
+def test_every_reader_counts_the_step_of_xviis_op_raw_of_a_stepped_run(
+    state_no_sim: SessionState, work_dir: Path, tmp_path: Path
+):
+    """XVII writes the same file's one point after the stepped ``r`` it was
+    solved at, so it is one step that says which it is, and every reader
+    counts that one."""
+    raw = rec.stage_run("ltspice17", "raw/step_tran_op_raw.op", work_dir)
+    decoded = rec.decode("ltspice17", "raw/step_tran_op_raw.op", tmp_path).raw
+    loaded = SyncApi(state_no_sim).load_raw(raw)
+    assert loaded.step_count == len(loaded.steps) == get_step_count(decoded) == 1
+    assert loaded.steps == [dict(step.parameters) for step in decoded.descriptor.steps]
+    assert list(loaded.steps[0]) == ["r"]
+    assert _step_count_reply(state_no_sim, raw)["step_count"] == 1
 
 
 def test_the_apis_log_readers_say_a_stopped_cases_results_end_early(
