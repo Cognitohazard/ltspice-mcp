@@ -2114,8 +2114,9 @@ _ADD_R2 = [{"op": "add_component", "reference": "R2", "symbol": "res", "x": 400,
 
 
 @pytest.mark.edit_reply_per_platform(
-    "the export's .lib line names a Windows install path, which only Windows "
-    "reads as absolute, so the equivalence check's include warnings differ"
+    "the export's .lib line names a Windows install path, which Windows reads as "
+    "absolute, WSL through its /mnt mount and other Linux as a relative name, so the "
+    "equivalence check's include warnings differ"
 )
 @pytest.mark.parametrize("mode", ["equivalence", "structural_diff"])
 async def test_asc_reference_is_exported_like_the_committed_sheet(
@@ -2172,8 +2173,9 @@ _LOCAL_SYMBOL = INPUTS / "search" / "lib" / "part.asy"
 
 
 @pytest.mark.edit_reply_per_platform(
-    "the export's .lib line names a Windows install path, which only Windows "
-    "reads as absolute, so the comparison's include warnings differ"
+    "the export's .lib line names a Windows install path, which Windows reads as "
+    "absolute, WSL through its /mnt mount and other Linux as a relative name, so the "
+    "comparison's include warnings differ"
 )
 @pytest.mark.parametrize(
     ("folder", "symbol"),

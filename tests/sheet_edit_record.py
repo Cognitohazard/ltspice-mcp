@@ -28,11 +28,13 @@ not its bytes, so two ways of writing the same records compare equal.
   another writer changed before it could be read back is neither recorded nor
   compared. The run's summary counts each kind of call.
 - **A test marked** ``edit_reply_per_platform`` makes calls whose replies
-  differ on Windows and Linux, such as one reading a path only Windows takes
-  as absolute. Their keys and their entries hold the platform, so each
-  platform compares them only with a recording made on it. A recording keeps
-  only its own platform's entries for them, so one made on Windows replaces
-  the Linux entries with Windows ones.
+  differ by platform, such as one reading a drive path like ``C:\\lib``,
+  which Windows takes as absolute, WSL reads through its ``/mnt`` mount and
+  another POSIX system takes as a relative name. Their keys and their entries
+  hold the platform (``windows``, ``wsl`` or ``posix``), so each platform
+  compares them only with a recording made on it. A recording keeps only its
+  own platform's entries for them, so one made on Windows replaces the Linux
+  entries with Windows ones.
 - **A stale record fails the run.** Each entry names the tests that made its
   call. In a run of the whole suite, an entry no call matched is stale when a
   test that made it passed, or when none of them ran: a test that no longer
@@ -68,7 +70,7 @@ from typing import Any
 import pytest
 
 from ltspice_mcp.errors import LTSpiceMCPError
-from ltspice_mcp.lib import asc_document
+from ltspice_mcp.lib import asc_document, wsl
 from ltspice_mcp.lib.plot_settings import plot_settings_path
 from ltspice_mcp.lib.symbol_library import SymbolResolver
 from ltspice_mcp.tools import schematic_edit
@@ -81,7 +83,10 @@ RECORD = TESTS / "fixtures" / "sheet_edit_record.json"
 RECORD_ENV = "LTSPICE_MCP_RECORD_SHEET_EDITS"
 PER_PLATFORM = "edit_reply_per_platform"
 _OUTPUT = "sheet_edit_record"
-_PLATFORM = "windows" if sys.platform == "win32" else "posix"
+#: The platform a reply that differs by platform is compared on. Read once, from
+#: the machine: a test that forces WSL detection off (``scripts/nonwsl_plugin.py``)
+#: changes the server's answer, not the platform its recording was made on.
+_PLATFORM = "windows" if sys.platform == "win32" else "wsl" if wsl.is_wsl() else "posix"
 
 #: What an edit can read beside its sheet whichever file a part, a directive's
 #: include or a compare reference names: symbols, libraries and netlists. Which
@@ -390,8 +395,9 @@ def pytest_configure(config: pytest.Config) -> None:
     global _record
     config.addinivalue_line(
         "markers",
-        f"{PER_PLATFORM}(reason): the test's edit_schematic replies differ on Windows "
-        "and Linux, so its calls are compared only with a recording made on the same one",
+        f"{PER_PLATFORM}(reason): the test's edit_schematic replies differ on Windows, "
+        "WSL and other Linux, so its calls are compared only with a recording made on "
+        "the same one",
     )
     schematic_edit._evaluate_edit_schematic = _recorded_evaluate  # pyright: ignore[reportPrivateUsage]
     if not _recording and RECORD.is_file():
