@@ -1,5 +1,6 @@
 """Which file a name on a sheet means, on folders made for the purpose: a
-part's symbol, the model library its symbol names, and a block's own sheet.
+part's symbol and a block's own sheet; a model library its symbol names is
+looked for by no tool.
 
 What LTspice does with the same arrangements is in
 ``test_recorded_ltspice_schematics.py``; this holds the rule itself, and that
