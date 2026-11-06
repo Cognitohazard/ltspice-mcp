@@ -330,6 +330,42 @@ def analysis_deadline(deadline: float | None):
         _analysis_deadline.reset(token)
 
 
+def run_selectors_beside_path(
+    *, run_index: int = 0, case_id: str | None = None, other_raw: str | None = None
+) -> str | None:
+    """Why a read of the results file at a path refuses these selectors, or
+    None when it takes them.
+
+    The one answer for every reader that takes a path or a job_id:
+    ``inspect(kind="results")``, ``plot_waveform`` and the Python API's
+    ``load_raw``, ``measurements`` and ``device_op_points``. A path names one
+    file, while ``run_index``, ``case_id`` and ``other_raw`` choose within a
+    job; beside a path the file would be read as though they had not been
+    sent. ``run_index`` 0 is its default and chooses nothing.
+    ``analyze_results`` takes a list of runs instead, and reports a run a
+    path does not hold as missing.
+    """
+    sent = [
+        name
+        for name, chosen in (
+            ("run_index", run_index != 0),
+            ("case_id", case_id is not None),
+            ("other_raw", other_raw is not None),
+        )
+        if chosen
+    ]
+    if not sent:
+        return None
+    one = len(sent) == 1
+    names = sent[0] if one else f"{', '.join(sent[:-1])} and {sent[-1]}"
+    return (
+        f"{names} {'chooses' if one else 'choose'} within a job and "
+        f"{'needs' if one else 'need'} its job_id, but path names one results file: "
+        f"leave {'it' if one else 'them'} out to read that file, or pass the job's "
+        "job_id instead of path."
+    )
+
+
 def resolve_experiment_run(
     job_id: str,
     state: SessionState,

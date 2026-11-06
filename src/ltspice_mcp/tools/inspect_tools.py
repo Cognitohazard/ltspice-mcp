@@ -812,9 +812,11 @@ class ResultsQuery(OptionalRawSelectionFields, OtherRawFields, NotedModel):
         if (self.path is None) == (self.job_id is None):
             raise ValueError("provide exactly one of path or job_id")
         if self.path is not None and (
-            self.case_id is not None or self.run_index != 0 or self.other_raw is not None
+            refusal := services.run_selectors_beside_path(
+                run_index=self.run_index, case_id=self.case_id, other_raw=self.other_raw
+            )
         ):
-            raise ValueError("run_index, case_id and other_raw require job_id")
+            raise ValueError(refusal)
         if self.view == "plots" and self.prefix is not None:
             raise ValueError("prefix does not apply to plot inventory")
         if self.view in ("measurements", "native_tables") and (

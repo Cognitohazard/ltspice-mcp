@@ -988,7 +988,12 @@ iteration of the deck's own `.step`, and a sampled axis (time, frequency or
 the swept source) lies within a step. A table plot, one whose first trace is
 not a sweep axis (such as an `.op`, `.tf` or `.pz` result), has no sampled
 axis. `snapshot_id` identifies the contents of a source's RAW, log and
-console files as they were read.
+console files as they were read. A path names one results file, so
+`plot_waveform`, `inspect(kind="results")` and the Python API's `load_raw`,
+`measurements` and `device_op_points` refuse a `run_index` other than 0, a
+`case_id` or an `other_raw` beside it, in the same words, rather than read
+the file as though they had not been sent; `analyze_results` reports a run
+other than 0 of a path source as a missing case.
 
 Input:
 

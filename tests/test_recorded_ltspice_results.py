@@ -2373,16 +2373,14 @@ def test_the_api_reads_a_jobs_fra_results_by_job_and_case(
 async def test_other_raw_reads_only_a_job(state_no_sim: SessionState, work_dir: Path):
     """An other raw is a case's: a path names its file instead."""
     raw = work_dir / "fra.fra_1.raw"
-    with pytest.raises(
-        ApiValidationError, match="case_id and other_raw are only valid with job_id"
-    ):
+    with pytest.raises(ApiValidationError, match="other_raw chooses within a job"):
         SyncApi(state_no_sim).load_raw(raw, other_raw="fra_1")
-    with pytest.raises(ResultError, match="case_id and other_raw select a run_experiments case"):
+    with pytest.raises(ResultError, match="other_raw chooses within a job"):
         await analysis.handle_plot_waveform(
             analysis.PlotWaveformInput(path=str(raw), other_raw="fra_1", open=False),
             state_no_sim,
         )
-    with pytest.raises(ValidationError, match="other_raw require job_id"):
+    with pytest.raises(ValidationError, match="other_raw chooses within a job"):
         inspect_tools.ResultsQuery.model_validate(
             {"kind": "results", "path": str(raw), "other_raw": "fra_1"}
         )
@@ -2390,6 +2388,49 @@ async def test_other_raw_reads_only_a_job(state_no_sim: SessionState, work_dir: 
         inspect_tools.ResultsQuery.model_validate(
             {"kind": "results", "view": "measurements", "job_id": "exp_fra", "other_raw": "op"}
         )
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_every_reader_of_a_path_refuses_a_run_index_beside_it(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """A path names one results file, and ``run_index`` chooses a run of a
+    job. ``plot_waveform`` plotted the file and said nothing of a
+    ``run_index: 3`` sent beside it, where ``inspect`` and the Python API's
+    ``load_raw`` refused it. All three now refuse it, in the same words."""
+    raw = rec.stage_run(build, "raw/tran", work_dir)
+    refusals: dict[str, str] = {}
+
+    with pytest.raises(ApiValidationError) as api_error:
+        SyncApi(state_no_sim).load_raw(raw, run_index=3)
+    refusals["load_raw"] = str(api_error.value)
+
+    with pytest.raises(ResultError) as plot_error:
+        await analysis.handle_plot_waveform(
+            analysis.PlotWaveformInput(path=str(raw), run_index=3, open=False), state_no_sim
+        )
+    refusals["plot_waveform"] = str(plot_error.value)
+
+    reply = await inspect_tools.handle_inspect(
+        inspect_tools.InspectInput.model_validate(
+            {"queries": [{"kind": "results", "path": str(raw), "run_index": 3}]}
+        ),
+        state_no_sim,
+    )
+    assert reply.structured_content is not None
+    [item] = reply.structured_content["results"]
+    assert not item["ok"], item
+    refusals["inspect"] = item["error"]["message"]
+
+    said = refusals["load_raw"]
+    assert "run_index" in said and "job_id" in said, said
+    assert refusals["plot_waveform"] == said
+    assert said in refusals["inspect"], refusals
+    # The file is still plotted by its path alone.
+    alone = await analysis.handle_plot_waveform(
+        analysis.PlotWaveformInput(path=str(raw), open=False), state_no_sim
+    )
+    assert not alone.is_error
 
 
 def test_ltspice_xvii_refuses_a_frequency_response_analysis():

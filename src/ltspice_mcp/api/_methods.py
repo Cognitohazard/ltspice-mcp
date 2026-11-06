@@ -1465,8 +1465,12 @@ def _one_source(
         raise ApiValidationError("Pass exactly one of path or job_id")
     if path is not None and not os.fspath(path).strip():
         raise ApiValidationError("path is empty; pass a file or job_id")
-    if path is not None and (run_index != 0 or case_id is not None or other_raw is not None):
-        raise ApiValidationError("run_index, case_id and other_raw are only valid with job_id")
+    if path is not None and (
+        refusal := services.run_selectors_beside_path(
+            run_index=run_index, case_id=case_id, other_raw=other_raw
+        )
+    ):
+        raise ApiValidationError(refusal)
 
 
 # The six methods carry their operation's catalogue entry as their docstring —
