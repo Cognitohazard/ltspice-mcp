@@ -159,26 +159,38 @@ def _caps(trees: Mapping[str, ast.Module]) -> set[str]:
     }
 
 
+def _calls(function: ast.AST) -> set[str]:
+    return {
+        node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call)
+    }
+
+
 def _capping_functions(trees: Mapping[str, ast.Module]) -> dict[str, set[str]]:
     """Every function of ``trees`` that slices or compares by a cap, with the
-    names it calls."""
+    names it calls. A call to a function of the same module that calls a note
+    helper counts as a call to that helper: the note is then built in one place
+    that another route (a stored analysis's render) can build it from too."""
     caps = _caps(trees) - set(_NOT_REPLY_LISTS)
     found: dict[str, set[str]] = {}
     for where, tree in trees.items():
-        for function in ast.walk(tree):
-            if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
+        functions = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        ]
+        noting = {function.name for function in functions if _calls(function) & _NOTE_HELPERS}
+        for function in functions:
             bounded = any(
                 isinstance(node, (ast.Compare, ast.Slice)) and _names_in(node) & caps
                 for node in ast.walk(function)
             )
             if not bounded:
                 continue
-            calls = {
-                node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", "")
-                for node in ast.walk(function)
-                if isinstance(node, ast.Call)
-            }
+            calls = _calls(function)
+            if calls & noting:
+                calls |= _NOTE_HELPERS
             found[f"{where}:{function.name}"] = calls
     return found
 
@@ -222,15 +234,32 @@ def test_the_cap_rule_catches_what_it_names() -> None:
         "        return first <= index < first + other._PAGE_CAP\n"
         "def noted(rows):\n"
         "    return cap_note(rows[:_PAGE_CAP])\n"
+        "def _note_text(rows):\n"
+        "    return cap_note(len(rows))\n"
+        "def delegated(rows):\n"
+        "    return rows[:_PAGE_CAP], _note_text(rows)\n"
+        "def _plain_text(rows):\n"
+        "    return str(len(rows))\n"
+        "def undelegated(rows):\n"
+        "    return rows[:_PAGE_CAP], _plain_text(rows)\n"
         "def unbounded(rows, n):\n"
         "    return rows[:n], rows[:3], _TIMEOUT > 1, _RETRIES == 3\n"
     )
     found = _capping_functions({"planted.py": planted})
     assert set(found) == {
-        "planted.py:" + name for name in ("limited", "sliced", "compared", "window", "noted")
+        "planted.py:" + name
+        for name in (
+            "limited",
+            "sliced",
+            "compared",
+            "window",
+            "noted",
+            "delegated",
+            "undelegated",
+        )
     }
     assert _unnoted(found) == {
-        "planted.py:" + name for name in ("limited", "sliced", "compared", "window")
+        "planted.py:" + name for name in ("limited", "sliced", "compared", "window", "undelegated")
     }
 
 
@@ -315,15 +344,6 @@ async def test_capped_failures_give_the_same_total_on_every_route(
     }
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "known exception: the attached analysis stores its failures_truncated note "
-        "before it knows which session shows it, and its render adds where the api "
-        "snippet runs to each failure row but not to that note, so run_experiments "
-        "and jobs leave out the run_code route analyze_results gives"
-    ),
-)
 async def test_capped_failures_name_the_same_route_on_every_route(
     state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
