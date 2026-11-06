@@ -23,10 +23,6 @@ from tests import _ltspice_recorded as rec
 from tests._source_scan import PACKAGE, parsed
 from tests.conftest import SyncApi
 
-SOURCE = PACKAGE / "lib"
-#: The modules that read an AC response's -3 dB points.
-READERS = ("ac_analysis.py", "metrics.py", "raw_parser.py")
-
 
 def test_the_level_is_the_half_power_point():
     half_power = 20 * math.log10(1 / math.sqrt(2))
@@ -172,38 +168,136 @@ def test_a_resonance_flank_is_read_at_the_half_power_level():
     assert peak["q_factor"] == pytest.approx(q, rel=1e-3)
 
 
-def _three_db_literals(path: Path) -> list[int]:
-    """Lines where 3.0 is used as a level in dB: added to or subtracted from
-    something, or given as a default, outside the definition of HALF_POWER_DB."""
-    tree = parsed(path)
+def _is_three(node: ast.AST) -> bool:
+    """``3`` or ``-3``, written as an int or a float."""
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub | ast.UAdd):
+        node = node.operand
+    if not isinstance(node, ast.Constant):
+        return False
+    value = node.value
+    return isinstance(value, int | float) and not isinstance(value, bool) and abs(value) == 3
+
+
+def _is_float(node: ast.AST) -> bool:
+    if isinstance(node, ast.UnaryOp):
+        node = node.operand
+    return isinstance(node, ast.Constant) and isinstance(node.value, float)
+
+
+def _says_db(word: str) -> bool:
+    """Whether a name or key says it holds decibels: a ``db`` part, as in
+    ``level_db``, ``HALF_POWER_DB`` or ``"magnitude_db"``."""
+    return "db" in word.lower().split("_")
+
+
+def _mentions_db(node: ast.AST) -> bool:
+    """Whether ``node`` reads a name, attribute or key that holds decibels."""
+    return any(
+        (isinstance(inner, ast.Name) and _says_db(inner.id))
+        or (isinstance(inner, ast.Attribute) and _says_db(inner.attr))
+        or (
+            isinstance(inner, ast.Constant)
+            and isinstance(inner.value, str)
+            and _says_db(inner.value)
+        )
+        for inner in ast.walk(node)
+    )
+
+
+def _gives_three(node: ast.AST) -> bool:
+    """``node`` is 3 dB, or a call given it (``Field(default=-3.0)``)."""
+    if isinstance(node, ast.Call):
+        return any(_is_three(given) for given in [*node.args, *(k.value for k in node.keywords)])
+    return _is_three(node)
+
+
+#: Names given 3 dB that is not a half-power level, with what it is instead.
+_OTHER_THREE_DB: dict[str, str] = {
+    "min_prominence_db": "how far a peak must stand above its surroundings to be one",
+    "_NOTCH_UNDERSAMPLED_GAP_DB": (
+        "how far above a notch's sampled null a neighbouring sample may lie before "
+        "the null is reported as falling between samples"
+    ),
+}
+
+
+def _three_db_levels_in(tree: ast.AST) -> list[int]:
+    """The lines of ``tree`` that write 3 dB (``3`` or ``-3``, int or float) where
+    a dB level is read: added to, subtracted from or compared with something
+    that holds decibels; bound to, defaulted for or passed as a name that holds
+    decibels; or given under such a key in a dict. A float ``3.0`` added or
+    subtracted is read as a dB level whatever it is added to."""
     found: list[int] = []
 
-    def is_three(node: ast.AST) -> bool:
-        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
-            node = node.operand
-        return isinstance(node, ast.Constant) and node.value == 3.0 and type(node.value) is float
+    def named(name: str, value: ast.expr | None) -> None:
+        if (
+            value is not None
+            and _says_db(name)
+            and name not in _OTHER_THREE_DB
+            and _gives_three(value)
+        ):
+            found.append(value.lineno)
 
     for node in ast.walk(tree):
-        if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub)):
-            if is_three(node.left) or is_three(node.right):
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add | ast.Sub):
+            pair = (node.left, node.right)
+            if any(
+                _is_three(one) and (_mentions_db(other) or _is_float(one))
+                for one, other in (pair, pair[::-1])
+            ):
                 found.append(node.lineno)
+        elif isinstance(node, ast.Compare):
+            sides = [node.left, *node.comparators]
+            if any(_is_three(side) for side in sides) and any(map(_mentions_db, sides)):
+                found.append(node.lineno)
+        elif isinstance(node, ast.Assign | ast.AnnAssign | ast.NamedExpr):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name | ast.Attribute):
+                    named(target.id if isinstance(target, ast.Name) else target.attr, node.value)
         elif isinstance(node, ast.arguments):
-            defaults = [*node.defaults, *(d for d in node.kw_defaults if d is not None)]
-            args = [*node.posonlyargs, *node.args][-len(node.defaults) :] if node.defaults else []
-            named = list(zip(args, node.defaults, strict=True)) + [
-                (arg, default)
-                for arg, default in zip(node.kwonlyargs, node.kw_defaults, strict=True)
-                if default is not None
-            ]
-            assert len(named) == len(defaults)
-            found += [
-                default.lineno
-                for arg, default in named
-                if is_three(default) and arg.arg.endswith("_db") and "prominence" not in arg.arg
-            ]
-    return found
+            positional = [*node.posonlyargs, *node.args]
+            for arg, default in zip(
+                positional[len(positional) - len(node.defaults) :], node.defaults, strict=True
+            ):
+                named(arg.arg, default)
+            for arg, default in zip(node.kwonlyargs, node.kw_defaults, strict=True):
+                named(arg.arg, default)
+        elif isinstance(node, ast.keyword) and node.arg is not None:
+            named(node.arg, node.value)
+        elif isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values, strict=True):
+                if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                    named(key.value, value)
+    return sorted(set(found))
 
 
-@pytest.mark.parametrize("module", READERS)
-def test_no_reader_writes_its_own_three_db_level(module: str):
-    assert _three_db_literals(SOURCE / module) == []
+def test_no_module_writes_its_own_three_db_level():
+    found = [
+        f"{path.relative_to(PACKAGE).as_posix()}:{line}"
+        for path in sorted(PACKAGE.rglob("*.py"))
+        for line in _three_db_levels_in(parsed(path))
+    ]
+    assert found == []
+
+
+def test_the_three_db_rule_catches_what_it_names():
+    tree = ast.parse(
+        "def offset(peak_db):\n"
+        "    return peak_db - 3\n"  # 2
+        "def added(ref):\n"
+        "    return ref['magnitude_db'] + -3.0\n"  # 4
+        "def compared(gain_db):\n"
+        "    return gain_db < -3\n"  # 6
+        "LEVEL_DB = -3\n"  # 7
+        "class Recipe:\n"
+        "    level_db: float = Field(default=-3.0)\n"  # 9
+        "async def read(signal, cutoff_db=-3.0, *, floor_db=3):\n"  # 10
+        "    return crossing(signal, level_db=-3)\n"  # 11
+        "SPEC = {'ref_db': 3.0}\n"  # 12
+        "def floated(magnitude):\n"
+        "    return magnitude - 3.0\n"  # 14
+        "def unrelated(index, times):\n"
+        "    return index - 3, times[3], 3 + index, {'count': 3}, level(db=None)\n"
+    )
+    assert _three_db_levels_in(tree) == [2, 4, 6, 7, 9, 10, 11, 12, 14]
