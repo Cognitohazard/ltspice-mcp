@@ -19,6 +19,7 @@ import json
 import shutil
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -177,11 +178,12 @@ def load_artifacts_sync(
     chosen: dict[str, JsonValue] | None = (
         {
             # In one order, so a read of the same names is one parse.
-            "signals": [*sorted(source.signals)],
+            "signals": None if source.signals is None else [*sorted(source.signals)],
+            "window": None if source.window is None else [*source.window],
             "plot_index": source.plot_index,
             "decode_bytes": DECODE_BYTES,
         }
-        if require_raw and source.signals is not None
+        if require_raw and (source.signals is not None or source.window is not None)
         else None
     )
     policy: dict[str, JsonValue] = {
@@ -374,15 +376,15 @@ def _load(
             raise failure from exc
         if exc.code == "deadline":
             raise AnalysisDeadlineExceeded("Artifact parsing exceeded its deadline") from exc
-        if exc.code == "signals_not_found":
+        if exc.code in ("signals_not_found", "window_refused"):
             raise ResultError(f"{label}: {exc}", show_hint=False) from exc
         if exc.code == "too_large":
-            chosen = policy.get("chosen") is not None
+            chosen = policy.get("chosen")
             raise ResultError(
-                _too_large(label, str(exc), chosen=chosen),
+                _too_large(label, str(exc), chosen=chosen if isinstance(chosen, dict) else None),
                 show_hint=False,
                 # A whole read's refusal ends in the Python read that keeps less.
-                python_route=not chosen,
+                python_route=chosen is None,
             ) from exc
         if exc.code == "too_large_to_decode":
             raise ResultError(_too_large_to_decode(label, str(exc)), show_hint=False) from exc
@@ -401,31 +403,31 @@ def _load(
                 raise ParserCleanupError(directory) from exc
 
 
-def _too_large(label: object, reason: str, *, chosen: bool) -> str:
+def _too_large(label: object, reason: str, *, chosen: Mapping[str, JsonValue] | None) -> str:
     """Why a result was not read, as the worker counted it, and what reads less."""
-    if chosen:
-        return (
-            f"{label} was not read: {reason}. Choose fewer signals, or read them in "
-            "more than one load. If one signal is already too many, the run wrote more "
-            "points than one read keeps: shorten the .tran, or measure with .meas "
-            "instead of keeping the waveform."
+    if chosen is not None:
+        fewer = (
+            "Choose a shorter window, or keep only the traces you need with signals=[...]"
+            if chosen.get("signals") is None
+            else "Choose fewer signals or a shorter window (window=(start, end) keeps "
+            "the points of the axis between them), or read them in more than one load"
         )
+        return f"{label} was not read: {reason}. {fewer}."
     return (
         f"{label} was not read: {reason}. Make the run write fewer numbers: .save only "
         "the nodes you need, shorten the .tran, or measure with .meas instead of keeping "
-        "the waveform. Or read only the traces you need, with the axis and any step "
-        f"parameters, from a file holding up to {DECODE_BYTES // 2**30} GiB of numbers "
-        "or a larger one in LTspice's Fast Access layout: "
-        "r = api.load_raw(..., signals=['V(out)', 'I(R1)'])"
+        "the waveform. Or read only the traces you need, the stretch of the axis you "
+        "need, or both, with the axis and any step parameters, from a file holding up "
+        f"to {DECODE_BYTES // 2**30} GiB of numbers or a larger one in LTspice's Fast "
+        "Access layout: r = api.load_raw(..., signals=['V(out)', 'I(R1)'], "
+        "window=('1m', '2m'))"
     )
 
 
 def _too_large_to_decode(label: object, reason: str) -> str:
-    """Why a read of chosen signals was not made, and how the file can be read for them."""
+    """Why a selective read was not made: the worker's reason names what reads less."""
     return (
-        f"{label} was not read: {reason}. If LTspice wrote it, convert it to LTspice's "
-        "Fast Access layout, which stores each trace whole so that a read decodes only "
-        "the traces it keeps: run LTspice with -FastAccess and the .raw file's path. "
-        "Or make the run write fewer numbers: .save only the nodes you need, shorten "
-        "the .tran, or measure with .meas instead of keeping the waveform."
+        f"{label} was not read: {reason}. Or make the run write fewer numbers: .save only "
+        "the nodes you need, shorten the .tran, or measure with .meas instead of keeping "
+        "the waveform."
     )

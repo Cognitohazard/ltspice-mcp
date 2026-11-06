@@ -672,10 +672,12 @@ FROZEN_ERROR_CODES = (
     "unsupported_variant",
     "unwrap_warning",
     "widget_unavailable",
+    "window_chosen",
     "window_empty_steps",
     "window_not_chosen",
     "window_not_discarded",
     "window_not_saved",
+    "window_refused",
     "windows_native_storage_unavailable",
     "worker_crashed",
 )

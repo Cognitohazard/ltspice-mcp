@@ -448,6 +448,7 @@ preview mode, and the only way to get paging identical to the MCP tools'.
 raw = api.load_raw(path, plot_index=0, dialect=None)  # XOR: path | job_id
 raw = api.load_raw(job_id=..., run_index=0, case_id=None, other_raw=None)  # "fra_1" | "op"
 raw = api.load_raw(path, signals=["V(out)", "V(a,b)"])  # only these, the axis and step parameters
+raw = api.load_raw(path, window=("1m", "2m"))  # only the points of the axis from 1 ms to 2 ms
 raw.signals                    # list[str]
 raw.trace("V(out)", step=0)    # np.ndarray — complex values preserved
 raw.value("V(out)", step=0)    # one point a step (.op): float, or complex
@@ -481,6 +482,23 @@ ops.observations               # a log reader's dict (LogResult) says the same o
   says how to read it. A whole-file read over the limit is refused with how
   many bytes of numbers it counted (at least that many, in a file of several
   plots), the limit and these ways around it.
+- `window=(start, end)` reads only the points of the plot's axis from `start`
+  to `end`, in each step, by the rule the exports' windows keep points with:
+  every point at or after the start and at or before the end, with nothing
+  interpolated at a bound. The bounds are in the axis's unit (seconds of deck
+  time, hertz, the swept value), each a number or SPICE text such as `"1m"`,
+  and either may be None for an open end. The numeric limit applies to the
+  points kept, so a file with too many points for one read can be read a
+  stretch at a time. Decoding is held to 1 GiB as above, and a window does
+  not lessen it: a Fast Access file's kept traces are decoded along their
+  whole axis before the window cuts them, so a window alone of a file over
+  that is refused, naming `signals`. It combines with `signals`. A plot with
+  no axis (an operating point), an axis that decreases within a step (a
+  downward sweep, or a stepped run whose steps were not told apart), and a
+  window that meets no point of a step are refused. The result's
+  `observations` include `window_chosen`; on a compressed LTspice transient
+  it says that whether compression left the run coarse, which is judged over
+  all of a run's points, was not judged from the window.
 - Each of these reads takes exactly one of `path` and `job_id`. Neither or
   both, an empty `path`, or `run_index`, `case_id` or `other_raw` with a
   `path` raises `ApiValidationError`, as the operations do.

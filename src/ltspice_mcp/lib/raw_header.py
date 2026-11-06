@@ -60,21 +60,35 @@ class RawTooLargeError(RawLimitError):
 
 
 class RawTooLargeToDecodeError(RawLimitError):
-    """The traces a read keeps fit, but decoding them would hold more numbers
-    than the decoder may: a plot stored a point at a time is decoded whole,
-    whichever of its traces are kept (``raw_decode.numbers_held``).
+    """What a selective read keeps fits, but decoding it would hold more
+    numbers than the decoder may (``raw_decode.numbers_held``): a plot stored
+    a point at a time is decoded whole, and one in LTspice's Fast Access layout
+    each kept trace whole, before a window cuts it. The message says which,
+    and what reads less.
 
     ``parser_code`` is the code the parser worker reports it under.
     """
 
     parser_code = "too_large_to_decode"
 
-    def __init__(self, held: int, limit: int) -> None:
-        super().__init__(
-            "the file stores its numbers a point at a time, so reading any of its traces "
-            f"decodes all of them: {_size(held)} of numbers, over the {_size(limit)} a read "
-            "of chosen signals may decode"
-        )
+    def __init__(self, held: int, limit: int, *, point_ordered: bool) -> None:
+        if point_ordered:
+            why = (
+                "the file stores its numbers a point at a time, so reading any of its "
+                f"traces decodes all of them: {_size(held)} of numbers, over the "
+                f"{_size(limit)} a selective read may decode. If LTspice wrote it, convert "
+                "it to LTspice's Fast Access layout, which stores each trace whole so that "
+                "a read decodes only the traces it keeps: run LTspice with -FastAccess and "
+                "the .raw file's path, then choose the signals you need"
+            )
+        else:
+            why = (
+                "each trace it keeps is decoded whole along the axis, before a window "
+                f"cuts it: {_size(held)} of numbers, over the {_size(limit)} a selective "
+                "read may decode. Choose fewer signals (signals=[...]), or read them in "
+                "more than one load"
+            )
+        super().__init__(why)
         self.held = held
         self.limit = limit
 
@@ -496,7 +510,14 @@ def _read_plot(
     count = scanner.integer(
         header["no. variables"], "No. Variables / variables", scanner.limits.variables
     )
-    points = scanner.integer(header["no. points"], "No. Points / points", scanner.limits.points)
+    # A count past the points limit is still read here, so that a plot too long
+    # for one read is refused below by the numbers it holds, which says what
+    # reads less; the limit on points is held after that.
+    points = scanner.integer(
+        header["no. points"],
+        "No. Points / points",
+        max(scanner.limits.points, scanner.limits.numeric_bytes),
+    )
     variables: list[RawVariable] = []
     names: set[str] = set()
     for index in range(count):
@@ -523,6 +544,8 @@ def _read_plot(
     scanner.numeric_bytes += numeric_bytes
     if scanner.numeric_bytes > scanner.limits.numeric_bytes:
         raise RawTooLargeError(scanner.numeric_bytes, scanner.limits.numeric_bytes, chosen=False)
+    if points > scanner.limits.points:
+        raise scanner.error(RawLimitError, "No. Points / points limit exceeded")
     payload_offset = scanner.handle.tell()
     if storage == "binary":
         end = payload_offset + numeric_bytes

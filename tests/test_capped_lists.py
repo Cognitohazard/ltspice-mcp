@@ -81,6 +81,9 @@ _ALLOWED: dict[str, str] = {
         "a refusal's sample of validation errors, ending in 'and N more'"
     ),
     "lib/recipes.py:_listed": "a refusal's sample of step values, ending in '(N in all)'",
+    "lib/signal_analysis.py:window_span": (
+        "reads an axis a block of _WINDOW_CHUNK points at a time, every block; cuts nothing"
+    ),
     "tools/analyze.py:_snapshot_from_assembly": (
         "an internal snapshot; answer_total keeps the total and the cursor bases the route"
     ),

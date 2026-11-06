@@ -7,6 +7,8 @@ import copy
 import functools
 import inspect
 import json
+import math
+import numbers
 import os
 import subprocess
 import time
@@ -36,6 +38,7 @@ from ltspice_mcp.api._primitives import (
 )
 from ltspice_mcp.errors import InvalidCursorError, PathSecurityError
 from ltspice_mcp.lib import experiment_store, parser_service, services
+from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.log_types import LogSectionName
 from ltspice_mcp.lib.model_fields import (
@@ -1250,6 +1253,7 @@ class ApiMethodsMixin(ABC):
         other_raw: OtherRawKind | None = None,
         raw_path: str | os.PathLike[str] | None = None,
         signals: Sequence[str] | None = None,
+        window: tuple[float | str | None, float | str | None] | None = None,
     ) -> RawResult:
         """Load one raw result through the bounded parser and return a safe wrapper.
 
@@ -1266,6 +1270,11 @@ class ApiMethodsMixin(ABC):
         unless it is converted to its Fast Access layout, is still decoded
         whole, which a read holds to 1 GiB of numbers. A name the plot has no
         trace for is refused.
+        ``window=(start, end)`` keeps only the points of the plot's axis from
+        ``start`` to ``end``, in each step, in the axis's unit (seconds of
+        deck time, hertz, the swept value); a number or SPICE text such as
+        ``"1m"``, either end None for open. The size limit then applies to the
+        points kept. A plot with no axis, or whose axis decreases, is refused.
         ``raw_path`` is the older spelling of ``path``, still accepted."""
         self._check_process_and_thread()
         path = _older_spelling(path, "raw_path", raw_path)
@@ -1277,6 +1286,7 @@ class ApiMethodsMixin(ABC):
         if other_raw is not None and other_raw not in OTHER_RAW_KINDS:
             raise ApiValidationError(f"other_raw must be one of {list(OTHER_RAW_KINDS)} or None")
         chosen = _chosen_signals(signals)
+        span = _chosen_window(window)
         return self._marshal(
             load_raw_result(
                 state=self._state,
@@ -1288,6 +1298,7 @@ class ApiMethodsMixin(ABC):
                 dialect=dialect,
                 other_raw=other_raw,
                 signals=chosen,
+                window=span,
             ),
             cancelable=True,
             cancel_on_interrupt=True,
@@ -1396,6 +1407,45 @@ def _chosen_signals(signals: Sequence[str] | None) -> tuple[str, ...] | None:
             "choose fewer or shorter names, or read them in more than one load"
         )
     return names
+
+
+def _chosen_window(
+    window: tuple[float | str | None, float | str | None] | None,
+) -> tuple[float | None, float | None] | None:
+    """``load_raw``'s ``window`` as the parser takes it: two finite bounds, a
+    number as given or SPICE text read as a value LTspice runs with, either
+    one None, and the start before the end."""
+    if window is None:
+        return None
+    if isinstance(window, str) or not isinstance(window, Sequence) or len(window) != 2:
+        raise ApiValidationError("window must be (start, end), e.g. ('1m', '2m') or (0, None)")
+    bounds = tuple(
+        _window_bound(bound, name) for bound, name in zip(window, ("start", "end"), strict=True)
+    )
+    start, end = bounds
+    if start is None and end is None:
+        raise ApiValidationError("window needs a start or an end; leave it out to read all")
+    if start is not None and end is not None and start >= end:
+        raise ApiValidationError(f"window must start before it ends; got ({start:g}, {end:g})")
+    return start, end
+
+
+def _window_bound(bound: float | str | None, name: str) -> float | None:
+    """One end of a window: None, a finite number, or SPICE text such as '1m'."""
+    if bound is None:
+        return None
+    if isinstance(bound, str):
+        try:
+            value = parse_spice_value(bound.strip())
+        except ValueError as exc:
+            raise ApiValidationError(f"window {name} {bound!r} is not a value: {exc}") from exc
+    elif isinstance(bound, numbers.Real) and not isinstance(bound, bool):
+        value = float(bound)  # NumPy's numbers among them
+    else:
+        raise ApiValidationError(f"window {name} must be a number, SPICE text or None")
+    if not math.isfinite(value):
+        raise ApiValidationError(f"window {name} must be finite, got {bound!r}")
+    return value
 
 
 def _one_source(
