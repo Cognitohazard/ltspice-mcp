@@ -23,6 +23,7 @@ from pydantic import ValidationError
 from ltspice_mcp.api import ApiValidationError
 from ltspice_mcp.errors import NoAxisError, OtherRawNotWritten, ResultError
 from ltspice_mcp.lib import metrics, services
+from ltspice_mcp.lib.decoded_raw import DecodedRaw
 from ltspice_mcp.lib.device_names import (
     owner_path,
     parse_device_param,
@@ -51,6 +52,7 @@ from ltspice_mcp.lib.metrics import aggregate_log_measurements
 from ltspice_mcp.lib.raw_header import RawHeaderError, preflight_raw
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
+    get_step_count,
     has_valid_raw_header,
     may_hold_compressed_transient,
     raw_writer_command,
@@ -66,8 +68,10 @@ from ltspice_mcp.lib.result_observations import coarse_compressed_waveform, deck
 from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analysis, inspect_tools
+from ltspice_mcp.tools._base import recovery_hint
 from ltspice_mcp.tools.analyze import (
     AnalyzeResultsInput,
+    AnalyzeSourceInput,
     handle_analyze_results,
     render_attached_analysis,
 )
@@ -913,6 +917,77 @@ def test_the_api_says_why_26s_op_raw_of_a_stepped_run_has_no_steps(
     with pytest.raises(ResultError, match="does not say which step") as refused:
         loaded.trace(loaded.signals[0])
     assert "run .op under the same .step" in str(refused.value)
+
+
+def _step_count_reply(state: SessionState, raw: Path) -> dict[str, Any]:
+    """What ``analyze_results`` answers for a raw's summary, which counts its
+    steps: the one value, or the one failure."""
+    reply = SyncApi(state).analyze_results(
+        sources=[{"path": str(raw), "label": "raw"}],
+        recipes=[{"key": "summary", "metric": "summary"}],
+        include={"fields": ["value"]},
+    )
+    if reply.get("failures"):
+        [failure] = reply["failures"]
+        return failure
+    [row] = reply["results"]["summary"]["values"]
+    return row["value"]
+
+
+def _steps_refused(state: SessionState, raw: Path, decoded: DecodedRaw) -> str:
+    """The reason every reader of how many steps ``raw`` has gives for not
+    counting them: the tools' step count, the API's ``step_count`` and
+    ``steps``, and ``analyze_results``. Each gives the same one."""
+    with pytest.raises(ResultError) as counted:
+        get_step_count(decoded)
+    reason = str(counted.value)
+    loaded = SyncApi(state).load_raw(raw)
+    for read in (lambda: loaded.step_count, lambda: loaded.steps):
+        with pytest.raises(ResultError) as refused:
+            read()
+        assert str(refused.value) == reason
+    assert reason in _step_count_reply(state, raw)["message"]
+    return reason
+
+
+@pytest.mark.parametrize("run", ["step_tran_op_raw", "step_ac_op_raw"])
+def test_no_reader_counts_steps_in_26s_op_raw_of_a_stepped_run(
+    run: str, state_no_sim: SessionState, work_dir: Path, tmp_path: Path
+):
+    """The run took three steps and LTspice 26 wrote one point, with nothing
+    that says whose step it is: no reader counts its steps, none as zero."""
+    raw = rec.stage_run("ltspice26", f"raw/{run}.op", work_dir)
+    decoded = rec.decode("ltspice26", f"raw/{run}.op", tmp_path).raw
+    reason = _steps_refused(state_no_sim, raw, decoded)
+    assert "does not say which step" in reason
+    assert "run .op under the same .step" in reason
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_no_reader_counts_steps_in_a_stepped_sweep_read_without_its_log(
+    build: str, state_no_sim: SessionState, work_dir: Path, tmp_path: Path
+):
+    """A stepped transient's step values are in its log, and a raw read
+    alone cannot be split into steps by them."""
+    raw = work_dir / "step_tran.raw"
+    raw.write_bytes(rec.recorded(build, "raw/step_tran.raw").read_bytes())
+    decoded = rec.decode_file(raw, tmp_path).raw
+    assert "Step boundaries are unresolved" in _steps_refused(state_no_sim, raw, decoded)
+
+
+def test_every_reader_counts_the_step_of_xviis_op_raw_of_a_stepped_run(
+    state_no_sim: SessionState, work_dir: Path, tmp_path: Path
+):
+    """XVII writes the same file's one point after the stepped ``r`` it was
+    solved at, so it is one step that says which it is, and every reader
+    counts that one."""
+    raw = rec.stage_run("ltspice17", "raw/step_tran_op_raw.op", work_dir)
+    decoded = rec.decode("ltspice17", "raw/step_tran_op_raw.op", tmp_path).raw
+    loaded = SyncApi(state_no_sim).load_raw(raw)
+    assert loaded.step_count == len(loaded.steps) == get_step_count(decoded) == 1
+    assert loaded.steps == [dict(step.parameters) for step in decoded.descriptor.steps]
+    assert list(loaded.steps[0]) == ["r"]
+    assert _step_count_reply(state_no_sim, raw)["step_count"] == 1
 
 
 def test_the_apis_log_readers_say_a_stopped_cases_results_end_early(
@@ -2373,16 +2448,14 @@ def test_the_api_reads_a_jobs_fra_results_by_job_and_case(
 async def test_other_raw_reads_only_a_job(state_no_sim: SessionState, work_dir: Path):
     """An other raw is a case's: a path names its file instead."""
     raw = work_dir / "fra.fra_1.raw"
-    with pytest.raises(
-        ApiValidationError, match="case_id and other_raw are only valid with job_id"
-    ):
+    with pytest.raises(ApiValidationError, match="other_raw chooses within a job"):
         SyncApi(state_no_sim).load_raw(raw, other_raw="fra_1")
-    with pytest.raises(ResultError, match="case_id and other_raw select a run_experiments case"):
+    with pytest.raises(ResultError, match="other_raw chooses within a job"):
         await analysis.handle_plot_waveform(
             analysis.PlotWaveformInput(path=str(raw), other_raw="fra_1", open=False),
             state_no_sim,
         )
-    with pytest.raises(ValidationError, match="other_raw require job_id"):
+    with pytest.raises(ValidationError, match="other_raw chooses within a job"):
         inspect_tools.ResultsQuery.model_validate(
             {"kind": "results", "path": str(raw), "other_raw": "fra_1"}
         )
@@ -2390,6 +2463,87 @@ async def test_other_raw_reads_only_a_job(state_no_sim: SessionState, work_dir: 
         inspect_tools.ResultsQuery.model_validate(
             {"kind": "results", "view": "measurements", "job_id": "exp_fra", "other_raw": "op"}
         )
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_every_reader_of_a_path_refuses_a_run_index_beside_it(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """A path names one results file, and ``run_index`` chooses a run of a
+    job. ``plot_waveform`` plotted the file and said nothing of a
+    ``run_index: 3`` sent beside it, where ``inspect`` and the Python API's
+    ``load_raw`` refused it. All three now refuse it, in the same words."""
+    raw = rec.stage_run(build, "raw/tran", work_dir)
+    refusals: dict[str, str] = {}
+
+    with pytest.raises(ApiValidationError) as api_error:
+        SyncApi(state_no_sim).load_raw(raw, run_index=3)
+    refusals["load_raw"] = str(api_error.value)
+
+    with pytest.raises(ResultError) as plot_error:
+        await analysis.handle_plot_waveform(
+            analysis.PlotWaveformInput(path=str(raw), run_index=3, open=False), state_no_sim
+        )
+    refusals["plot_waveform"] = str(plot_error.value)
+
+    reply = await inspect_tools.handle_inspect(
+        inspect_tools.InspectInput.model_validate(
+            {"queries": [{"kind": "results", "path": str(raw), "run_index": 3}]}
+        ),
+        state_no_sim,
+    )
+    assert reply.structured_content is not None
+    [item] = reply.structured_content["results"]
+    assert not item["ok"], item
+    refusals["inspect"] = item["error"]["message"]
+
+    said = refusals["load_raw"]
+    assert "run_index" in said and "job_id" in said, said
+    assert refusals["plot_waveform"] == said
+    assert said in refusals["inspect"], refusals
+    # The file is still plotted by its path alone.
+    alone = await analysis.handle_plot_waveform(
+        analysis.PlotWaveformInput(path=str(raw), open=False), state_no_sim
+    )
+    assert not alone.is_error
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_every_reader_of_a_path_refuses_other_raw_beside_it(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """``other_raw`` chooses another raw of a job's case, so beside a path it
+    is refused in the same words by every reader that takes one, including
+    ``analyze_results``, whose refusal named no fix; and ``plot_waveform``'s
+    refusal carries no hint to check the run's state, which does not apply."""
+    raw = rec.stage_run(build, "raw/tran", work_dir)
+    said = services.run_selectors_beside_path(other_raw="op")
+    assert said is not None
+
+    with pytest.raises(ApiValidationError) as api_error:
+        SyncApi(state_no_sim).load_raw(raw, other_raw="op")
+    assert str(api_error.value) == said
+
+    with pytest.raises(ResultError) as plot_error:
+        await analysis.handle_plot_waveform(
+            analysis.PlotWaveformInput(path=str(raw), other_raw="op", open=False), state_no_sim
+        )
+    assert str(plot_error.value) == said
+    assert recovery_hint(plot_error.value, state_no_sim) is None
+
+    reply = await inspect_tools.handle_inspect(
+        inspect_tools.InspectInput.model_validate(
+            {"queries": [{"kind": "results", "path": str(raw), "other_raw": "op"}]}
+        ),
+        state_no_sim,
+    )
+    assert reply.structured_content is not None
+    [item] = reply.structured_content["results"]
+    assert said in item["error"]["message"], item
+
+    with pytest.raises(ValidationError) as analyze_error:
+        AnalyzeSourceInput.model_validate({"path": str(raw), "other_raw": "op"})
+    assert said in str(analyze_error.value)
 
 
 def test_ltspice_xvii_refuses_a_frequency_response_analysis():

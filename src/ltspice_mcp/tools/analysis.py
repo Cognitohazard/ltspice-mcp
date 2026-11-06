@@ -102,9 +102,11 @@ from ltspice_mcp.tools._base import (
     format_observations,
     format_response,
     image_content,
+    open_window_call,
     registry,
     safe_path,
     sandboxed,
+    sha256_from_open_in_ltspice,
     shown_in_window,
     window_difference,
 )
@@ -157,9 +159,11 @@ async def _experiment_case(
     """The case a ``job_id`` names when it is a run_experiments job, else ``None``.
 
     Experiment runs are addressed by case, never through ``resolve_run`` — the
-    same split ``Api.load_raw`` makes. ``case_id`` and ``other_raw`` only mean
-    something here, so they are refused beside a path. A path together with
-    job_id is left to ``_direct_source``'s exclusivity error.
+    same split ``Api.load_raw`` makes. ``run_index``, ``case_id`` and
+    ``other_raw`` only mean something here, so beside a path they are refused
+    as every reader of a path refuses them
+    (``services.run_selectors_beside_path``). A path together with job_id, or
+    neither, is left to ``_direct_source``'s exclusivity error.
     """
     job = (
         await services.resolve_job_async(job_id, state)
@@ -170,11 +174,18 @@ async def _experiment_case(
         return services.experiment_run_context(
             job, state, run_index=run_index, case_id=case_id, other_raw=other_raw
         )
-    if case_id is not None or other_raw is not None:
-        raise ResultError(
-            "case_id and other_raw select a run_experiments case; pass them with that "
-            "job's job_id."
+    if (
+        path is not None
+        and job_id is None
+        and (
+            refusal := services.run_selectors_beside_path(
+                run_index=run_index, case_id=case_id, other_raw=other_raw
+            )
         )
+    ):
+        # An argument mistake: the family's hint (check the run's state) does
+        # not apply, as for _direct_source's refusal of path with job_id.
+        raise ResultError(refusal, show_hint=False)
     return None
 
 
@@ -1110,10 +1121,10 @@ _TIED_NOTE = "The plot is tied to the sheet: a click on a net there plots it."
 _ALONE_NOTE = (
     "The plot is not tied to the sheet, so clicking a net there does not plot it, "
     "because LTspice opened the sheet before it had results and has unsaved changes "
-    "to it. Ask the user whether to keep those changes, then call edit_schematic with "
-    "ops=[] and open_window='save' or 'discard'. After 'discard', showing this run "
-    "again ties the plot; after 'save', the sheet holds their changes, so run it "
-    "again and show that run."
+    "to it. Ask the user whether to keep those changes, then call "
+    + open_window_call("this sheet", sha256_from_open_in_ltspice("this sheet"), "'save'|'discard'")
+    + ". After 'discard', showing this run again ties the plot; after 'save', the "
+    "sheet holds their changes, so run it again and show that run."
 )
 _BY_HAND_NOTE = (
     "The results are beside the sheet: View > Visible Traces on it in LTspice opens "

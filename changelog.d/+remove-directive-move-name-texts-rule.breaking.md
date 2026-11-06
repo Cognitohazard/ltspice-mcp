@@ -1,4 +1,4 @@
-**Breaking:** `remove_directive` and `move` name texts by one rule: a
+`remove_directive` and `move` name texts by one rule: a
 literal names every text equal to it, surrounding space ignored, and
 `regex:` names every text the pattern is found in, case-sensitive.
 `remove_directive` removes every text it names. It removed only the first

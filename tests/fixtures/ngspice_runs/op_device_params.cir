@@ -1,0 +1,9 @@
+* floating gate: node x reaches the supplies only through C1
+Vd d 0 20m
+Vg g 0 20m
+C1 g x 1p
+M1 d x 0 0 NM L=1u W=10u AD=10p AS=10p PD=22u PS=22u
+.model NM NMOS (LEVEL=49 VERSION=3.3)
+.save @m1[vth] @m1[gm] @m1[id]
+.op
+.end

@@ -29,7 +29,12 @@ from ltspice_mcp.lib.lint_rules import lint_deck
 from ltspice_mcp.lib.log_parser import parse_measurements
 from ltspice_mcp.lib.log_types import MeasurementsOutput
 from ltspice_mcp.lib.netlist_diff import read_deck, structural_delta
-from ltspice_mcp.lib.netlist_graph import compare_graphs, parse_netlist_graph, values_equal
+from ltspice_mcp.lib.netlist_graph import (
+    compare_graphs,
+    flatten_graph,
+    parse_netlist_graph,
+    values_equal,
+)
 from ltspice_mcp.lib.result_observations import parse_requested_outputs, parse_source_amplitudes
 from ltspice_mcp.lib.runner_base import deck_requirements
 from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build, is_cp1252_ltspice_executable
@@ -40,6 +45,8 @@ from ltspice_mcp.lib.spice_validator import (
     _instance_terminals,
     validate_directive,
     validate_netlist_arity,
+    validate_netlist_bias_topology,
+    validate_netlist_dangling_nodes,
 )
 from ltspice_mcp.lib.variations import (
     AssignVariation,
@@ -648,6 +655,68 @@ class TestDeckStructure:
             assert (ground.get("scope", []), ground["name"]) == ([], "0"), instance
         port = rows[("X2", "R1")]["nodes"][1]
         assert (port.get("scope", []), port["name"]) == ([], "mid")
+
+    async def test_every_reader_of_a_deck_reads_a_port_named_gnd_as_the_port(
+        self, build: str, tmp_path: Path, state_no_sim, work_dir: Path
+    ):
+        """Inside ``.subckt ported top gnd``, ``R1 top gnd`` goes to the port:
+        the run puts v(c) at 2000, not 1000. So the comparison flattens the
+        resistor onto the node the port is wired to; it matches the same deck
+        with the port renamed, and not the deck with the resistor to node 0;
+        and the floating- and dangling-node checks read the port as they read
+        the renamed one."""
+        voltages = rec.operating_point(build, "deck/gnd_alias", tmp_path)
+        assert voltages["v(c)"] == pytest.approx(2000.0)
+        text = deck_text("deck/gnd_alias")
+
+        def body(header: str, card: str, deck: str = text) -> str:
+            changed = deck.replace(".subckt ported top gnd\nR1 top gnd 1k", f"{header}\n{card}")
+            assert changed != deck
+            return changed
+
+        renamed = body(".subckt ported top p", "R1 top p 1k")
+        to_ground = body(".subckt ported top gnd", "R1 top 0 1k")
+
+        nodes = {
+            c.ref.lower(): c.nodes for c in flatten_graph(parse_netlist_graph(text)).components
+        }
+        assert nodes["x2.r1"] == ("c", "mid")
+        assert nodes["x1.r1"] == ("b", "0")
+        assert nodes["r1"] == ("a", "0")
+        assert compare_graphs(text, renamed).equivalent
+        assert not compare_graphs(text, to_ground).equivalent
+        path = work_dir / "gnd_alias.cir"
+        path.write_text(text, encoding="utf-8")
+        for reference, equivalent in ((renamed, True), (to_ground, False)):
+            verified = await handle_verify_circuit(
+                VerifyCircuitInput.model_validate(
+                    {"path": str(path), "checks": ["compare"], "compare": {"reference": reference}}
+                ),
+                state_no_sim,
+            )
+            assert verified.structured_content is not None
+            assert verified.structured_content["comparison"]["equivalent"] is equivalent
+
+        # With its only path to ground a capacitor, the node the port is wired
+        # to floats, whatever the port is called.
+        floating = text.replace("R3 mid 0 1k", "C3 mid 0 1n")
+        floating_renamed = body(".subckt ported top p", "R1 top p 1k", floating)
+        found = validate_netlist_bias_topology(lex_deck(floating).cards)
+        assert found
+        assert [i["message"] for i in found] == [
+            i["message"] for i in validate_netlist_bias_topology(lex_deck(floating_renamed).cards)
+        ]
+        # A port wired to nothing in its body is reported whatever it is called.
+        unused = body(".subckt ported top gnd", "R1 top 0 1k")
+        unused_renamed = body(".subckt ported top p", "R1 top 0 1k")
+        dangling = [
+            str(i["message"]).replace("'gnd'", "'p'")
+            for i in validate_netlist_dangling_nodes(lex_deck(unused).cards)
+        ]
+        assert dangling
+        assert dangling == [
+            i["message"] for i in validate_netlist_dangling_nodes(lex_deck(unused_renamed).cards)
+        ]
 
     @pytest.mark.parametrize("at", ["0", "gnd", "GND"])
     async def test_the_net_query_reads_gnd_as_node_0(

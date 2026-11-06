@@ -192,13 +192,12 @@
   ]
  },
  "0fcf2251bbe49520": {
-  "answer": {
-   "reply": "797be211a251328d",
-   "sheet": null
-  },
   "tests": [
-   "tests/test_edit_open_window.py::test_a_dry_run_reports_a_window_that_differs_and_is_not_refused"
-  ]
+   "tests/test_edit_open_window.py::test_a_dry_run_reports_a_window_that_differs_and_is_not_refused",
+   "tests/test_edit_open_window.py::test_each_call_a_dry_run_under_two_different_windows_names_is_taken[discard]",
+   "tests/test_edit_open_window.py::test_each_call_a_dry_run_under_two_different_windows_names_is_taken[save]"
+  ],
+  "varies": true
  },
  "1011beab1d41ed5e": {
   "answer": {
@@ -382,6 +381,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_blank_build_parity_with_the_shared_op_runner"
+  ]
+ },
+ "1bf2d19d74753314": {
+  "answer": {
+   "reply": "b6b2390354dc7859",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_open_window.py::test_the_call_the_note_of_a_window_left_showing_the_old_sheet_names_is_taken"
   ]
  },
  "1c1a17e02e87f498": {
@@ -1278,6 +1286,10 @@
    "tests/test_edit_open_window.py::test_a_window_that_does_not_take_the_edit_is_closed_and_opened_again",
    "tests/test_edit_open_window.py::test_an_edit_is_refused_while_the_window_holds_a_different_sheet",
    "tests/test_edit_open_window.py::test_an_edit_under_two_different_windows_names_both_and_asks_which_to_keep",
+   "tests/test_edit_open_window.py::test_each_call_a_refusal_under_two_different_windows_names_is_taken[discard]",
+   "tests/test_edit_open_window.py::test_each_call_a_refusal_under_two_different_windows_names_is_taken[save]",
+   "tests/test_edit_open_window.py::test_the_call_a_refusal_under_a_different_window_names_is_taken",
+   "tests/test_edit_open_window.py::test_the_call_the_note_of_a_window_left_showing_the_old_sheet_names_is_taken",
    "tests/test_edit_open_window.py::test_with_the_setting_off_no_window_is_asked",
    "tests/test_edit_open_window.py::test_with_the_users_agreement_ltspice_saves_the_window_and_the_edit_goes_on",
    "tests/test_edit_open_window.py::test_with_the_users_agreement_the_window_is_closed_and_opened_from_the_file",
@@ -2512,6 +2524,8 @@
   "tests": [
    "tests/test_edit_open_window.py::test_a_window_pid_without_a_different_copy_saves_nothing[4243-holds the file's copy]",
    "tests/test_edit_open_window.py::test_a_window_that_does_not_take_the_chosen_copy_is_opened_again_from_the_file",
+   "tests/test_edit_open_window.py::test_each_call_a_dry_run_under_two_different_windows_names_is_taken[save]",
+   "tests/test_edit_open_window.py::test_each_call_a_refusal_under_two_different_windows_names_is_taken[save]",
    "tests/test_edit_open_window.py::test_the_copy_the_user_chose_is_saved_and_the_other_window_is_handed_it"
   ],
   "varies": true
@@ -2990,6 +3004,15 @@
   },
   "tests": [
    "tests/test_post_op_warnings.py::TestAbortedTransaction::test_aborted_transaction_writes_nothing_and_emits_no_warnings"
+  ]
+ },
+ "d16b55fad9a70bf1": {
+  "answer": {
+   "reply": "770673ddd0fe7d12",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_plot_in_ltspice.py::test_the_call_the_note_of_a_plot_standing_alone_names_is_taken"
   ]
  },
  "d26af1693561cee6": {
@@ -3481,7 +3504,7 @@
  },
  "fb87493e75e12e8d": {
   "answer": {
-   "reply": "32fbe551f2b11ec8",
+   "reply": "54b87467a92657a9",
    "sheet": null
   },
   "tests": [
@@ -3490,12 +3513,18 @@
  },
  "fca2672cec880bd2": {
   "tests": [
+   "tests/test_edit_open_window.py::test_a_dry_run_reports_a_window_that_differs_and_is_not_refused",
    "tests/test_edit_open_window.py::test_a_window_changed_while_ltspice_asks_is_left_open",
    "tests/test_edit_open_window.py::test_a_window_without_the_sheet_by_the_time_it_is_closed_has_nothing_to_drop[closes the sheet]",
    "tests/test_edit_open_window.py::test_a_window_without_the_sheet_by_the_time_it_is_closed_has_nothing_to_drop[quits LTspice]",
+   "tests/test_edit_open_window.py::test_each_call_a_dry_run_under_two_different_windows_names_is_taken[discard]",
+   "tests/test_edit_open_window.py::test_each_call_a_refusal_under_two_different_windows_names_is_taken[discard]",
    "tests/test_edit_open_window.py::test_every_window_with_a_different_copy_is_closed_and_opened_from_the_file",
    "tests/test_edit_open_window.py::test_nothing_is_done_where_no_window_holds_a_different_sheet[discard-dropped-closed]",
-   "tests/test_edit_open_window.py::test_with_the_users_agreement_the_window_is_closed_and_opened_from_the_file"
+   "tests/test_edit_open_window.py::test_the_call_a_refusal_under_a_different_window_names_is_taken",
+   "tests/test_edit_open_window.py::test_with_the_users_agreement_the_window_is_closed_and_opened_from_the_file",
+   "tests/test_inspect_open_in_ltspice.py::test_the_call_the_listing_names_for_a_differing_sheet_is_taken",
+   "tests/test_verify_in_ltspice.py::test_the_call_the_hint_names_for_a_window_showing_another_sheet_is_taken"
   ],
   "varies": true
  },

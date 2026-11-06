@@ -197,8 +197,9 @@ def name_key(name: str) -> str:
 
     The netlist net query compares a deck's node names the same way: the
     ``deck-structure`` recording has ``gnd`` as node 0 in a deck too.
-    ``netlist_graph.canon_net``, which compares whole decks, also takes
-    ``gnd!`` for ground and strips the name; no recording has ``gnd!``.
+    ``netlist_graph.canon_net``, which compares whole decks, also strips the
+    name. Inside a subcircuit body a name can stand for a port or a
+    ``.global`` net instead (``deck_nodes``).
     """
     return GROUND if is_ground(name) else fold_case(name)
 

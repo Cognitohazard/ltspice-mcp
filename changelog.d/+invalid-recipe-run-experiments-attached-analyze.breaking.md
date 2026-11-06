@@ -1,4 +1,4 @@
-**Breaking:** an invalid recipe in `run_experiments`' attached `analyze`
+An invalid recipe in `run_experiments`' attached `analyze`
 block is refused as `recipe_invalid` at stage `validate`, not retryable, as
 `analyze_results` refuses it. It was `submission_failed` with
 `retryable: true`, so a client that honoured the flag resent the same

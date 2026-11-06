@@ -77,6 +77,7 @@ from ltspice_mcp.lib.raw_parser import (
     is_operating_point,
     is_transient_analysis,
     nearest_index,
+    node_voltages,
     query_point_value,
     real_axis,
     safe_magnitude_db,
@@ -1039,22 +1040,26 @@ async def summary(
         raise ResultError(f"Failed to build summary: {e}", show_hint=False) from e
 
     # Compute AC bandwidth metrics on AC raws. When ``signal`` is omitted,
-    # auto-pick the first V(...) trace and warn — silently dropping
+    # auto-pick the first node voltage and warn — silently dropping
     # ac_bandwidth_metrics leaves the caller wondering why their AC summary had
-    # no metrics.
+    # no metrics. A device parameter (ngspice's v(@m1[vth])) is none.
     ac_metrics = None
     ac_signal_used: str | None = None
     if is_ac_analysis(raw):
         ac_signal_used = signal
         if ac_signal_used is None:
-            ac_signal_used = next(
-                (t for t in facts["signals"] if t.upper().startswith("V(")), None
-            )
+            ac_signal_used = next(iter(node_voltages(raw)), None)
             if ac_signal_used is not None:
                 facts.setdefault("warnings", []).append(
                     f"AC summary built without an explicit ``signal``; "
                     f"defaulted to {ac_signal_used!r} for ac_bandwidth_metrics. "
                     "Pass ``signal=`` to choose a different trace."
+                )
+            else:
+                facts.setdefault("warnings", []).append(
+                    "AC summary built without an explicit ``signal``, and the plot "
+                    "holds no node voltage to default to, so it has no "
+                    "ac_bandwidth_metrics. Pass ``signal=`` to compute them on a trace."
                 )
         if ac_signal_used:
             with contextlib.suppress(Exception):

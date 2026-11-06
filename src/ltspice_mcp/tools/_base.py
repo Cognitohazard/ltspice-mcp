@@ -323,6 +323,37 @@ def difference_in_full(sheet: str = "this path", window: str = "the window's pro
     )
 
 
+def sha256_from_open_in_ltspice(sheet: str) -> str:
+    """Where a reply that carries no sha256 of a sheet tells its reader to find
+    it: ``inspect``'s ``open_in_ltspice`` query given the sheet as ``path``,
+    whose reply gives the file's ``sha256``. ``sheet`` says where the reply
+    gives the sheet."""
+    return f"the sha256 that inspect(kind='open_in_ltspice') with path set to {sheet} gives"
+
+
+def open_window_call(
+    sheet: str, sha256: str, choice: str, *, window_pid: str | None = None
+) -> str:
+    """The ``edit_schematic`` call that saves or drops an LTspice window's copy
+    of a sheet once the user has chosen, as every reply that sends its reader
+    there writes it.
+
+    The call acts on an existing file, so like every write to one it is
+    refused without the file's sha256 as ``expected_sha256``
+    (``expected_sha256_required``): each argument it needs is written out,
+    ``sheet`` saying where the reply gives the sheet's path and ``sha256``
+    where its reader finds that sha256. ``choice`` is the ``open_window``
+    value as the call is to be written (``'save'``, ``'discard'``, or
+    ``'save'|'discard'``); ``window_pid`` says which window's process, for a
+    save where several windows hold different copies.
+    """
+    pid = f", window_pid=<{window_pid}>" if window_pid is not None else ""
+    return (
+        f"edit_schematic(path=<{sheet}>, ops=[], expected_sha256=<{sha256}>, "
+        f"open_window={choice}{pid})"
+    )
+
+
 def window_difference(on_disk: bytes, window_text: str, *, entries: int = 0) -> dict[str, Any]:
     """Whether an LTspice window's copy of a sheet is the file's, as a reply says it:
     ``differs_from_file``, and ``difference`` when it does.

@@ -453,7 +453,7 @@ raw.signals                    # list[str]
 raw.trace("V(out)", step=0)    # np.ndarray — complex values preserved
 raw.value("V(out)", step=0)    # one point a step (.op): float, or complex
 raw.axis(step=0)               # real sampled axis; refuses a native table
-raw.step_count; raw.steps      # captured metadata aligned per step
+raw.step_count; raw.steps      # counted as the tools count them; refused when steps are not told apart
 raw.plots; raw.descriptor; raw.plot_index  # inventory and selected plot facts
 raw.table(step=0)              # native table rows; complex values use real/imag
 raw.compare(other, signals=None, step=0, other_step=None)  # per-signal differences
@@ -510,6 +510,15 @@ ops.observations               # a log reader's dict (LogResult) says the same o
   empty for a whole result. `measurements` and `device_op_points` return a
   `LogResult`, a plain `dict` that has the same `observations` for the log it
   read.
+- `step_count` counts a plot's steps as the tools count them, 1 for a run that
+  is not stepped, and `steps` holds one parameter dict a step. A plot whose
+  steps cannot be told apart is loaded, so its `signals`, `descriptor` (with
+  its `step_status`) and `plots` can be read, but `step_count`, `steps` and
+  every read of a step refuse it with the reason `analyze_results` gives:
+  the operating-point raw LTspice 26 writes beside a stepped `.tran` or
+  `.ac` holds one point and does not say which step it is, and a stepped
+  sweep read without the log that holds its step values has none to split
+  it by.
 - `value` reads a plot with one point per step, such as an operating point, as
   a number. It returns a float, or a complex number for a complex trace. A
   trace with more points is refused rather than cut to its first point; read

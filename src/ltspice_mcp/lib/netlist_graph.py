@@ -41,9 +41,11 @@ the include (the usual LTspice layout), not because it is inline.
   errors. It never returns a bare bool.
 
 Ground normalization follows LTspice's export convention (verified against real
-exports: LTspice emits ``0`` for ground). ``0`` and ``GND`` — and the common
-``GND!`` variant — are treated as the same net. All net and reference matching
-is case-insensitive, per SPICE.
+exports: LTspice emits ``0`` for ground). Which net a name stands for is read
+as ``deck_nodes`` reads it: ``0`` and ``GND`` in any case are the same net,
+``GND!`` is a node of its own, and inside a subcircuit body a name can stand
+for a port or a ``.global`` net. All net and reference matching is
+case-insensitive, per SPICE.
 
 A transistor drawn with a three-pin symbol is exported with four nodes: a BJT's
 substrate at ``0``, a MOSFET's bulk at its source. A three-node ``Q`` card is
@@ -81,12 +83,13 @@ verdict is unaffected.
 from __future__ import annotations
 
 from collections import Counter
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TypeVar
 
 from ltspice_mcp.lib.asc_document import is_asc
+from ltspice_mcp.lib.deck_nodes import GROUND, global_names, node_kind
 from ltspice_mcp.lib.deck_staging import (
     card_sections,
     closure_depth,
@@ -107,7 +110,6 @@ from ltspice_mcp.lib.spice_lex import (
 )
 from ltspice_mcp.lib.spice_lex_ops import without_section_sign
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, SubcktCard
-from ltspice_mcp.lib.trace_names import GROUND_ALIASES
 
 # An include-path resolver: given the filesystem path an ``.include``/``.lib``
 # resolved to (base directory joined with the target, or an absolute target),
@@ -116,10 +118,16 @@ from ltspice_mcp.lib.trace_names import GROUND_ALIASES
 # wires to ``safe_path`` so an in-deck include cannot escape a sandbox.
 IncludeResolver = Callable[[Path], "Path | None"]
 
-# LTspice writes ground as ``0``; ``GND``/``GND!`` are common hand-written
-# aliases. All fold to ``0`` so a schematic drawn with a GND flag and a netlist
-# written with node ``0`` compare equal.
-_GROUND = "0"
+# Ground as the graph names it: every name ``deck_nodes`` reads as ground
+# (``0``, ``gnd`` in any case) folds to it, so a deck written with ``gnd`` and
+# one written with ``0`` compare equal.
+_GROUND = GROUND
+# The comparison reads a deck as LTspice does, whichever simulator the deck is
+# for: a port named ``gnd`` is the port, where ngspice reads it as ground, and
+# ``gnd`` is ground, which ngspice's kiltpsa mode may read otherwise
+# (``deck_nodes``). Hierarchy discovery, which is told the simulator, reads
+# each as that simulator does; tests/test_deck_nodes.py pins the difference.
+_READ_AS = "ltspice"
 
 # Passive two-terminal devices whose terminals are electrically interchangeable.
 # Their pins share one role so a resistor authored "backwards" (b a instead of
@@ -180,7 +188,8 @@ class Component:
 
     ``ref`` has the LTspice ``§`` marker stripped but otherwise preserves source
     spelling; matching is case-insensitive (:func:`canon_ref`). ``nodes`` are
-    canonicalized net names (ground folded to ``0``, lowercased). ``type_letter``
+    canonicalized net names (ground folded to ``0``, lowercased; in a
+    subcircuit body, a port named like ground keeps its name). ``type_letter``
     is the uppercased element prefix. ``model`` is the model / subcircuit name
     for M/Q/J/X (and controlling-source name for F/H); ``value`` is the passive
     value or source spec for R/C/L/V/I. ``params`` are the ``key=value`` tokens
@@ -293,6 +302,9 @@ class NetlistGraph:
     warnings: list[str] = field(default_factory=list)
     missing_includes: tuple[MissingInclude, ...] = ()
     duplicate_subckts: tuple[DuplicateSubckt, ...] = ()
+    #: The node names the deck's ``.global`` cards list, lowercased: one net
+    #: in every subcircuit body.
+    global_nets: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -532,10 +544,12 @@ class GraphComparison:
 # ---------------------------------------------------------------------------
 
 
-def canon_net(name: str) -> str:
-    """Canonicalize a net name: strip, lowercase, fold ground aliases to ``0``."""
+def canon_net(name: str, ports: Sequence[str] = ()) -> str:
+    """Canonicalize a net name as a scope whose ports are ``ports`` reads it
+    (none at the top level): stripped and lowercased, with ground
+    (``deck_nodes``) as ``0``."""
     n = name.strip().lower()
-    return _GROUND if n in GROUND_ALIASES else n
+    return _GROUND if node_kind(n, ports=ports, simulator=_READ_AS) == "ground" else n
 
 
 def canon_ref(ref: str) -> str:
@@ -704,6 +718,7 @@ def parse_netlist_graph(
         warnings=list(result.warnings),
         missing_includes=tuple(registry.missing),
         duplicate_subckts=registry.duplicate_records(),
+        global_nets=frozenset(registry.global_nets),
     )
 
 
@@ -715,6 +730,7 @@ class _SubcktRegistry:
     sources: dict[str, str] = field(default_factory=dict)
     ignored: dict[str, list[str]] = field(default_factory=dict)
     missing: list[MissingInclude] = field(default_factory=list)
+    global_nets: set[str] = field(default_factory=set)
 
     def register(self, definition: SubcktDef, source: str) -> None:
         key = definition.name.lower()
@@ -744,7 +760,7 @@ def _subckt_def_from(cards: list[SpiceCard], opener_index: int) -> SubcktDef:
     """
     view = SubcktCard.from_card(cards[opener_index])
     body = [
-        _component_from_card(card)
+        _component_from_card(card, view.ports)
         for _, card in subckt_children(cards, opener_index)
         if card.kind == "instance"
     ]
@@ -805,6 +821,8 @@ def _collect_subckts(
     for index, (card, card_section) in enumerate(zip(cards, sections, strict=True)):
         if wanted is not None and card_section is not None and card_section.casefold() != wanted:
             continue
+        # Every directive here could be split into parts (checked above).
+        registry.global_nets.update(name.lower() for name in global_names(card))
         if card.kind == "subckt":
             try:
                 registry.register(_subckt_def_from(cards, index), source)
@@ -913,8 +931,9 @@ def _follow_include(
     )
 
 
-def _component_from_card(card: object) -> Component:
-    """Build a :class:`Component` from an instance card via the typed view."""
+def _component_from_card(card: object, ports: Sequence[str] = ()) -> Component:
+    """Build a :class:`Component` from an instance card via the typed view, in
+    a scope whose ports are ``ports`` (none at the top level)."""
     try:
         line = InstanceLine.from_card(card)  # type: ignore[arg-type]
     except SpiceLexError as exc:
@@ -928,7 +947,7 @@ def _component_from_card(card: object) -> Component:
     return Component(
         ref=ref,
         type_letter=ref[:1].upper(),
-        nodes=tuple(canon_net(n) for n in line.nodes),
+        nodes=tuple(canon_net(n, ports) for n in line.nodes),
         model=line.model,
         value=line.value,
         params=tuple(line.param_pairs()),
@@ -974,6 +993,7 @@ def _flatten(
             graph.subckts,
             path=(),
             net_map=None,
+            global_nets=graph.global_nets,
             out=leaves,
             stack=(),
             unresolved=unresolved,
@@ -994,6 +1014,7 @@ def _expand(
     *,
     path: tuple[str, ...],
     net_map: dict[str, str] | None,
+    global_nets: frozenset[str],
     out: list[FlatComponent],
     stack: tuple[str, ...],
     unresolved: set[str],
@@ -1069,13 +1090,14 @@ def _expand(
     assert model_key is not None
     sub = subckts[model_key]
     child_path = (*path, comp.ref)
-    child_map = _build_child_net_map(sub, flat_nodes, ".".join(child_path))
+    child_map = _build_child_net_map(sub, flat_nodes, ".".join(child_path), global_nets)
     for child in sub.components:
         _expand(
             child,
             subckts,
             path=child_path,
             net_map=child_map,
+            global_nets=global_nets,
             out=out,
             stack=(*stack, model_key),
             unresolved=unresolved,
@@ -1084,23 +1106,32 @@ def _expand(
 
 
 def _build_child_net_map(
-    sub: SubcktDef, bound_ports: tuple[str, ...], prefix: str
+    sub: SubcktDef, bound_ports: tuple[str, ...], prefix: str, global_nets: frozenset[str]
 ) -> dict[str, str]:
-    """Map every net named inside ``sub``'s body to its flattened name.
+    """Map every net named inside ``sub``'s body to its flattened name, by
+    what the name stands for there (``deck_nodes``).
 
-    Ports map to the caller's already-flattened connection nets; ground stays
-    ``0``; everything else is an internal net, given a unique ``<prefix>/<net>``
-    name (prefix lowercased to stay consistent with canonical net names).
+    Ground stays ``0`` and a ``.global`` name stays itself; a port maps to the
+    caller's already-flattened connection net; everything else is an internal
+    net, given a unique ``<prefix>/<net>`` name (prefix lowercased to stay
+    consistent with canonical net names).
     """
     key = f"{prefix.lower()}/"
-    port_bind = {canon_net(port): bound_ports[i] for i, port in enumerate(sub.ports)}
-    net_map: dict[str, str] = dict(port_bind)
-    net_map[_GROUND] = _GROUND
+    bound = {port.casefold(): bound_ports[i] for i, port in enumerate(sub.ports)}
+    net_map: dict[str, str] = {}
     for child in sub.components:
         for net in child.nodes:
             if net in net_map:
                 continue
-            net_map[net] = f"{key}{net}"
+            kind = node_kind(net, ports=sub.ports, global_names=global_nets, simulator=_READ_AS)
+            if kind == "ground":
+                net_map[net] = _GROUND
+            elif kind == "global":
+                net_map[net] = net
+            elif kind == "port":
+                net_map[net] = bound[net.casefold()]
+            else:
+                net_map[net] = f"{key}{net}"
     return net_map
 
 

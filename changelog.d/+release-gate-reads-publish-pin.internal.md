@@ -1,0 +1,1 @@
+The release gate's publisher metadata check reads the publish action's pinned image from `.github/workflows/publish.yml`, so it checks with the same checker a release publishes with, and the container and publisher shapes skip when no docker daemon answers.

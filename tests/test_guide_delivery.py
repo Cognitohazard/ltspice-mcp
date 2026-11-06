@@ -8,6 +8,8 @@ the same text), the instructions that send a model there, and the one reminder
 a session gets when it skipped them.
 """
 
+import contextlib
+import dataclasses
 import os
 import re
 import subprocess
@@ -18,7 +20,7 @@ import pytest
 from mcp import types
 
 from ltspice_mcp.api import Api
-from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.config import ServerConfig, config_key
 from ltspice_mcp.lib import guide
 from ltspice_mcp.lib.recipes import DISCRIMINANTS
 from ltspice_mcp.lib.response_budget import BUDGET_MIN_TOKENS
@@ -166,6 +168,44 @@ def test_every_section_pointer_resolves():
                 if name not in names:
                     dangling.append(f"{path.relative_to(ROOT)}: {name!r}")
     assert not dangling, "pointers to sections the guide does not have:\n" + "\n".join(dangling)
+
+
+def _config_keys() -> set[str]:
+    """Every ``section.key`` the config file takes, one per ``ServerConfig``
+    field that has one (``config_key``); a field read only from the
+    environment has none."""
+    keys = set()
+    for config_field in dataclasses.fields(ServerConfig):
+        with contextlib.suppress(KeyError):
+            keys.add(config_key(config_field.name))
+    return keys
+
+
+def test_every_config_key_the_guide_names_is_one_the_server_reads():
+    """The guide named ``[tools] tool_listing``, which the server does not
+    read: the key is ``listing``, and an unknown key is dropped without a
+    word, so following the guide changed nothing. Every key it names, as
+    ``[section] key``, as a table ``[section.key]`` or as ``section.key``, is
+    one the config file takes."""
+    keys = _config_keys()
+    sections = "|".join(sorted({key.partition(".")[0] for key in keys}))
+    patterns = (
+        r"`\[([a-z_]+)\] ([a-z_]+)\b",
+        r"`\[([a-z_]+)\.([a-z_]+)\]`",
+        rf"`({sections})\.([a-z_]+)`",
+    )
+    named: dict[str, list[str]] = {}
+    for path in sorted(GUIDE_DIR.glob("*.md")):
+        text = " ".join(path.read_text(encoding="utf-8").split())
+        for pattern in patterns:
+            for section_name, key in re.findall(pattern, text):
+                named.setdefault(f"{section_name}.{key}", []).append(path.name)
+    # The scan reads each form: a pattern that matched nothing would pass anything.
+    assert {"security.allowed_paths", "simulator.executables", "simulator.ltspice_ini"} <= set(
+        named
+    )
+    unknown = {key: files for key, files in named.items() if key not in keys}
+    assert unknown == {}, f"the config file takes none of these: {unknown}"
 
 
 class TestSectionContent:

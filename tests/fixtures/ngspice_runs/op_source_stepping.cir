@@ -1,0 +1,10 @@
+* a high-gain latch: gmin stepping fails, source stepping finds the bias point
+V1 in 0 0.1
+B1 x 0 V=5*tanh(1e3*(V(in)-V(y)))
+R1 x y 1k
+C1 y 0 1p
+B2 0 y I=1e-3*tanh(1e3*V(y))
+R2 y 0 1meg
+.save @r1[i]
+.op
+.end

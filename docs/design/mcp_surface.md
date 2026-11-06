@@ -988,7 +988,14 @@ iteration of the deck's own `.step`, and a sampled axis (time, frequency or
 the swept source) lies within a step. A table plot, one whose first trace is
 not a sweep axis (such as an `.op`, `.tf` or `.pz` result), has no sampled
 axis. `snapshot_id` identifies the contents of a source's RAW, log and
-console files as they were read.
+console files as they were read. A path names one results file, so
+`plot_waveform`, `inspect(kind="results")` and the Python API's `load_raw`
+refuse a `run_index` other than 0, a `case_id` or an `other_raw` beside it,
+and the API's `measurements` and `device_op_points` a `run_index` or a
+`case_id`, in the same words, rather than read the file as though they had
+not been sent. `analyze_results` refuses an `other_raw` beside a path in
+those words too, and reports a run other than 0 of a path source as a
+missing case.
 
 Input:
 
@@ -1404,7 +1411,12 @@ a window's copy and does not check. For one that replaces the sheet:
   its `hint` names `inspect(kind="open_in_ltspice")` with this path and the
   window's process as `pid` as the call that reads every entry. A dry run
   reports the same difference in a note, with the same call.
-  A call with no ops and `open_window` set to the user's choice settles it.
+  A call with no ops and `open_window` set to the user's choice settles it;
+  like any write to an existing sheet it quotes the file's sha256 as
+  `expected_sha256`. Every reply that sends the caller to this call writes it
+  out with each argument it needs (`_base.open_window_call`), naming where
+  that sha256 is: the refused call's own, a commit's reply, or
+  `inspect(kind="open_in_ltspice")` for a reply that carries none.
   With `"save"`, LTspice saves the sheet from that window, as Ctrl+S does,
   and the reply gives the file's new `sha256`. Where more than one window
   holds a different copy, `window_pid` names the process whose copy the user
@@ -1845,7 +1857,12 @@ cursors where listed:
     and a name after one of the deck's references (`M1.D`) is refused as
     `invalid_at` unless a node is called that.
     A bare NAME is read as net:NAME on both: a net label on a .asc, a node
-    name on a netlist
+    name on a netlist. A name no label of the sheet carries, or no card of
+    the deck's own is on, is refused on both as `not_found` rather
+    than answered as an empty net, as is a pin of a part neither holds; ground is a node of every deck, and the
+    netlist's refusal lists its nodes and says what the query does not
+    read: a subcircuit body that uses the name, a `.global` net only such
+    a body uses, a file the deck includes, a card it could not read
 {kind: "components", path, prefix?, detail: "list"|"full", cursor?}
     `prefix` keeps references that start with it, case-insensitively, on
     both a .asc and a netlist: `"M"` for every MOSFET, `"LX"` for LX1, LX2

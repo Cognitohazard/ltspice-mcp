@@ -1,4 +1,4 @@
-**Breaking:** `verify_circuit`'s `export_to` defaults to `"managed"`: the
+`verify_circuit`'s `export_to` defaults to `"managed"`: the
 export check exports a copy in the server's own folder and writes nothing
 next to the schematic. It used to overwrite `<name>.net` beside the sheet
 unless asked not to, the one default left that wrote into the caller's
