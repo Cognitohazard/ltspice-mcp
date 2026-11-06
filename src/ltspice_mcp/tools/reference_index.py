@@ -465,6 +465,11 @@ _SYNONYMS: dict[tuple[str, str], tuple[str, ...]] = {
     ("edit_schematic", "remove_wire"): ("delete a wire", "disconnect"),
     ("edit_schematic", "add_directive"): (".tran", ".ac", "spice directive", "simulation command"),
     ("edit_schematic", "remove_directive"): ("delete a directive",),
+    ("edit_schematic", "replace_component"): (
+        "swap a symbol",
+        "change a part's symbol",
+        "replace a part",
+    ),
     ("edit_schematic", "replace_directive"): (
         "change a directive",
         "edit a directive",

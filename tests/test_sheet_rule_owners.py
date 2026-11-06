@@ -163,6 +163,10 @@ _ATTRIBUTE_WRITERS: dict[str, str] = {
     "lib/schematic_ops.py:_set_or_create_value": (
         "writes the Value _apply_component_value held to _attribute_texts first"
     ),
+    "lib/schematic_ops.py:_replace_component.put_back": (
+        "puts back the texts the part held before a refused replace_component, "
+        "which the sheet gave it, so a refused op leaves the part as it was"
+    ),
     "lib/schematic_ops.py:_set_instance_params": (
         "sets a parameter of the Value _apply_component_value held to "
         "_attribute_texts first, in the slot that already gives it"
