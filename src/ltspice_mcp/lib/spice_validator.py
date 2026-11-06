@@ -497,10 +497,12 @@ def validate_netlist_arity(
 
 # The names ``deck_nodes`` reads as ground, always considered connected.
 _GROUND_NODES = GROUND_NAMES
-# The floating- and dangling-node checks read a deck as LTspice does. The one
-# difference ngspice makes here is a port named ``gnd``, which is the port to
-# LTspice and ground to ngspice (``deck_nodes``): for an ngspice deck these
-# checks can report a node floating that such a port ties to ground.
+# The floating- and dangling-node checks read a deck as LTspice does, whichever
+# simulator the deck is for: a port named ``gnd`` is the port, where ngspice
+# reads it as ground (``deck_nodes``), so for an ngspice deck they can report a
+# node floating that such a port ties to ground. Hierarchy discovery, which is
+# told the simulator, reads it as that simulator does; tests/test_deck_nodes.py
+# pins the difference.
 _READ_AS = "ltspice"
 
 

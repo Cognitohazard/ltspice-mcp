@@ -3,9 +3,10 @@ a deck's nodes: hierarchy discovery, the connectivity comparison and the
 floating- and dangling-node checks (``lib/deck_nodes.py``).
 
 A port named ``gnd`` is pinned against the LTspice recordings in
-``tests/test_recorded_ltspice_decks.py``. No LTspice recording has a
-``.global`` card or a node named ``gnd!``, so the runs here are ngspice's,
-where ngspice is on PATH.
+``tests/test_recorded_ltspice_decks.py``. A node named ``gnd!`` and a port
+named like a ``.global`` net are written as the ``deck-node-names`` recorded
+behaviour, not yet recorded on LTspice, so until then the runs here are
+ngspice's, where ngspice is on PATH, and the readers follow them.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from ltspice_mcp.lib.deck_nodes import node_kind
 from ltspice_mcp.lib.netlist_graph import compare_graphs, flatten_graph, parse_netlist_graph
 from ltspice_mcp.lib.spice_lex import lex_deck
 from ltspice_mcp.lib.spice_validator import is_ground_node, validate_netlist_bias_topology
+from tests import _ltspice_recorded as rec
 from tests.conftest import LIVENESS_S
 from tests.test_inspect_tools import _run
 
@@ -57,7 +59,12 @@ def ngspice_voltages(tmp_path: Path, deck: str, *nodes: str) -> dict[str, float]
     path = tmp_path / "deck.cir"
     path.write_text(deck.replace(".end\n", control), encoding="utf-8")
     done = subprocess.run(
-        [executable, "-b", str(path)], capture_output=True, text=True, timeout=LIVENESS_S
+        [executable, "-b", str(path)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=LIVENESS_S,
     )
     found = dict(re.findall(r"^v\((\S+)\) = (\S+)$", done.stdout, re.MULTILINE))
     return {node: float(found[node]) for node in nodes}
@@ -145,3 +152,35 @@ async def test_every_reader_reads_gnd_bang_as_a_node_of_its_own(state_no_sim, wo
     assert not is_ground_node("gnd!")
     rows = await hierarchy_nodes(state_no_sim, work_dir, GND_BANG)
     assert rows[("R1",)][1] == ([], "gnd!")
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_ltspice_reads_gnd_bang_and_a_port_named_like_a_global_as_the_readers_do(
+    build: str, tmp_path: Path
+):
+    """What the readers above follow ngspice in: ``gnd!`` is a node of its
+    own, and a body's ``vdd`` that is both a port and a ``.global`` net is the
+    global. Checked against each LTspice build once recorded."""
+    if rec.CASES.behaviours["deck-node-names"].pending:
+        pytest.skip("deck-node-names is not recorded on LTspice yet")
+    bang = rec.operating_point(build, "deck/gnd_bang", tmp_path / "bang")
+    assert bang["v(a)"] == pytest.approx(2000.0)
+    rail = rec.operating_point(build, "deck/global_port", tmp_path / "rail")
+    assert (rail["v(c)"], rail["v(mid)"]) == (pytest.approx(6.0), pytest.approx(0.0))
+
+
+async def test_the_comparison_and_the_netlist_checks_read_a_port_named_gnd_as_ltspice_does_where_hierarchy_reads_the_simulator_given(
+    state_no_sim, work_dir: Path
+):
+    """The comparison and the floating- and dangling-node checks are told no
+    simulator, and read a deck as LTspice does: inside ``.subckt ported top
+    gnd`` the body's ``gnd`` is the port. Hierarchy discovery is told the
+    simulator, and for ngspice reads that ``gnd`` as ground, as ngspice 42
+    runs it."""
+    deck = (
+        "* a port named gnd\n.subckt ported top gnd\nR1 top gnd 1k\n.ends\n"
+        "I3 0 c 1\nX2 c mid ported\nR3 mid 0 1k\n.op\n.end\n"
+    )
+    assert flat_nodes(deck)["x2.r1"] == ("c", "mid")
+    rows = await hierarchy_nodes(state_no_sim, work_dir, deck)
+    assert rows[("X2", "R1")][1] == ([], "0")

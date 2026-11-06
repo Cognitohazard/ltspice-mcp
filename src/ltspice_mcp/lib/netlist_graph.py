@@ -41,9 +41,11 @@ the include (the usual LTspice layout), not because it is inline.
   errors. It never returns a bare bool.
 
 Ground normalization follows LTspice's export convention (verified against real
-exports: LTspice emits ``0`` for ground). ``0`` and ``GND`` — and the common
-``GND!`` variant — are treated as the same net. All net and reference matching
-is case-insensitive, per SPICE.
+exports: LTspice emits ``0`` for ground). Which net a name stands for is read
+as ``deck_nodes`` reads it: ``0`` and ``GND`` in any case are the same net,
+``GND!`` is a node of its own, and inside a subcircuit body a name can stand
+for a port or a ``.global`` net. All net and reference matching is
+case-insensitive, per SPICE.
 
 A transistor drawn with a three-pin symbol is exported with four nodes: a BJT's
 substrate at ``0``, a MOSFET's bulk at its source. A three-node ``Q`` card is
@@ -120,9 +122,11 @@ IncludeResolver = Callable[[Path], "Path | None"]
 # (``0``, ``gnd`` in any case) folds to it, so a deck written with ``gnd`` and
 # one written with ``0`` compare equal.
 _GROUND = GROUND
-# The comparison reads a deck as LTspice does. The one difference ngspice makes
-# here is a port named ``gnd``, which is the port to LTspice and ground to
-# ngspice (``deck_nodes``).
+# The comparison reads a deck as LTspice does, whichever simulator the deck is
+# for: a port named ``gnd`` is the port, where ngspice reads it as ground, and
+# ``gnd`` is ground, which ngspice's kiltpsa mode may read otherwise
+# (``deck_nodes``). Hierarchy discovery, which is told the simulator, reads
+# each as that simulator does; tests/test_deck_nodes.py pins the difference.
 _READ_AS = "ltspice"
 
 # Passive two-terminal devices whose terminals are electrically interchangeable.

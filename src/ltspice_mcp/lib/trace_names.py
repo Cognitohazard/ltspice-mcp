@@ -21,6 +21,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
 
+from ltspice_mcp.lib.deck_nodes import GROUND_NAMES
 from ltspice_mcp.lib.device_names import (
     device_param_name,
     find_trace_by_path,
@@ -30,9 +31,6 @@ from ltspice_mcp.lib.device_names import (
 )
 from ltspice_mcp.lib.raw_header import RawPlotHeader, leading_parameters
 from ltspice_mcp.lib.result_kinds import header_analysis, step_variables
-
-#: The names a netlist gives ground: node 0, and the aliases simulators accept.
-GROUND_ALIASES: frozenset[str] = frozenset({"0", "gnd", "gnd!"})
 
 #: A node-pair voltage ``V(a,b)``. SPICE syntax names it, but no simulator
 #: writes it as a trace, so it is read as ``V(a) - V(b)``. A node name holds
@@ -79,6 +77,12 @@ def trace_quantity(name: str, declared: str | None, *, axis: bool = False) -> Tr
     point files its values by it, a recovered bias point is vouched for only
     by the traces it calls node voltages, the value scan compares only those
     with the deck's sources, and an AC summary defaults to the first.
+
+    It reads no plot's analysis, so the readers ask it of a plot's traces
+    through ``raw_parser.node_voltages``, which lists none for a noise plot:
+    LTspice types its traces as voltages (``v(onoise)``, a source's
+    contribution ``v(R1)``; recorded: ``raw/noise``), and they are spectral
+    densities.
     """
     if axis:
         return "other"
@@ -211,11 +215,11 @@ def _node_pair(
     names: Sequence[str], signal: str, plus_node: str, minus_node: str, *, xvii: bool, noise: bool
 ) -> NameRead:
     """``V(plus_node, minus_node)`` read from the two node voltages among
-    ``names``. A ground alias the result carries no voltage for is ground and
-    contributes nothing, so ``V(a,0)`` is ``V(a)``."""
+    ``names``. A name a deck reads as ground (``deck_nodes``) that the result
+    carries no voltage for contributes nothing, so ``V(a,0)`` is ``V(a)``."""
     traces = {node: find_trace(names, f"V({node})", xvii=xvii) for node in (plus_node, minus_node)}
     grounded = {
-        node for node, trace in traces.items() if trace is None and node.lower() in GROUND_ALIASES
+        node for node, trace in traces.items() if trace is None and node.casefold() in GROUND_NAMES
     }
     if minus_node not in grounded and noise:
         return NameRead(signal, refused="noise_pair")
