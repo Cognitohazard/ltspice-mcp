@@ -215,8 +215,47 @@ tool-surface changes.
   holds a `\n` escape, and one backslash where it holds `\\`. It gave the
   record's spelling, so a client that compared it with the `.asc` line now
   sees a different string.
+- `verify_circuit` draws a `render.scale` above 4 at 4, with a warning,
+  instead of refusing it. An `analyze_results` `thd` recipe's `harmonics`
+  above 50 is summed to the 50th harmonic, with a warning in the recipe's
+  `warnings`, instead of being refused; `ltspice_mcp.api.analyze_thd` does
+  the same for `n_harmonics`, warning in its result, instead of raising
+  `ValueError`. Neither schema declares a maximum for these fields any more.
+- `jobs` `wait` and `resume` hold their waits to the caps `run_experiments`
+  declares, read where they are declared, and the guide says where each wait
+  cap is stated instead of repeating the number.
 
 ### Fixed
+
+- A `run_experiments` call that repeats a `request_id`, or a
+  `jobs(action="resume")` that repeats a `resume_request_id`, is no longer
+  logged as a new submission when the repeat reaches the request gate or comes
+  from the recovery journal. Every replay now finds its job as any other read
+  of a job id does: a job another process runs is reported as that process
+  last recorded it, and a job whose owner has exited is saved as
+  `interrupted`.
+- `edit_schematic` opens and edits a sheet with a subcircuit part that names a
+  model library (`ModelFile`), wherever that library is. Before, it refused
+  the sheet when the library could not be found, though `inspect` and
+  `verify_circuit` read it, and when the library was beside the sheet or in
+  the folder the server was started in, every edit failed. A hierarchical
+  block's own sheet is looked for beside the block's symbol, then beside the
+  sheet and in the symbol libraries, and never in the server's working
+  directory, so where the server was started no longer decides whether a
+  sheet can be edited. `inspect(kind="symbols")` lists exactly the names a
+  lookup finds, including when a configured symbol folder is the sheet's own
+  folder written another way.
+- When an analysis attached to `run_experiments` lists only the first 100
+  failures, its `failures_truncated` note, as `run_experiments` and `jobs`
+  show it, says where to run `api.analyze_results` for every record, as
+  `analyze_results` already did.
+- The `run_experiments` receipt for LTspice under WSL with no Windows-native
+  directory warns about a `run_fields` path that no run row reaches, as every
+  other receipt does.
+- On a sheet holding two parts whose references differ only in case, an
+  `edit_schematic` add or rename that is refused names the part whose
+  reference is spelled exactly as asked, as every other op does, instead of
+  the first part found.
 
 - A deck's first line, its title, and any card after `.end`, the deck's or
   an included file's, are no longer read as cards. `inspect(kind="components")` listed a part after `.end`, and
