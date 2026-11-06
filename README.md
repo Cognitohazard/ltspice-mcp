@@ -9,23 +9,34 @@ LTspice or ngspice, and build or edit LTspice schematics. The aim is for the
 assistant to get a circuit right in fewer turns and fewer tokens, and to draw
 schematics that a person can read.
 
-Working on circuit files as text, an assistant makes mistakes that nothing
-reports, such as a wire that touches the wrong pin, and finds them only turns
-later. The server checks each change against LTspice's own rules before it is
-written or run, and points the assistant to what needs its attention.
+The assistant calls tested tools instead of writing a script for each task.
+The tools are covered by thousands of tests, and the code that reads
+LTspice's files is checked against results recorded from LTspice itself. A
+tool call also costs fewer tokens than the script it replaces, and it works
+in a client that can't run code on your machine.
+
+An assistant working on circuit files as text makes mistakes that SPICE
+accepts without complaint, such as a wire that touches the wrong pin, or
+`1M` written for a megohm, which SPICE reads as a milliohm. It finds them
+only turns later, when a result comes out wrong. The server checks each
+change against the simulator's own rules before it is written or run, and
+points the assistant to what needs its attention.
 
 Results come back as named numbers, such as a phase margin or a transistor's
 gm, instead of waveforms to read. A sweep, a set of process corners or a
 Monte Carlo run takes one call. The server runs the cases in parallel as a
-background job and replies with statistics across them. The assistant can
-keep working while a long job runs. Each run's results stay on disk, where a
+background job and replies with statistics across them. When a run
+finishes but a value is suspect, such as a measurement the simulator
+skipped, the reply says so. The assistant can keep working while a long job
+runs. Each run's results stay on disk, where a
 later call or a restarted server can read them. Repeating a request returns
 the job that already ran instead of running it again.
 
 You and the assistant can work on the same schematic. The assistant picks up
 your saved changes on its next call. With the schematic open in LTspice (26.1
 or later, on Windows), its edits appear in your window, where Ctrl+Z undoes
-them. Changes you haven't saved are never overwritten. See [Working with
+them. Changes you haven't saved are never overwritten, and the LTspice runs
+the server starts don't take your keyboard focus. See [Working with
 LTspice open](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#working-with-ltspice-open).
 
 The same engine is a Python package, `ltspice_mcp.api`, for scripts. The
