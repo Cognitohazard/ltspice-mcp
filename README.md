@@ -5,25 +5,24 @@
 > **Work in progress.** Expect breaking changes across versions.
 
 ltspice-mcp is an MCP server that lets an AI assistant simulate circuits with
-LTspice or ngspice, and build or edit LTspice schematics.
+LTspice or ngspice, and build or edit LTspice schematics. The aim is for the
+assistant to get a circuit right in fewer turns and fewer tokens, and to draw
+schematics that a person can read.
 
-An assistant editing circuit files as text makes mistakes that nothing
-reports, such as a wire that touches the wrong pin. It finds them only turns
-later, when a simulation comes out wrong. This server checks a schematic edit
-mechanically before writing it, and a netlist before running it. When it
-refuses something, it says what to fix. A check that covers only part of a
-circuit says which part. The rules behind the checks, such as which points of
-a schematic form one net, come from recordings of what LTspice 26 and XVII
-do.
+Working on circuit files as text, an assistant makes mistakes that nothing
+reports, such as a wire that touches the wrong pin, and finds them only turns
+later. The server checks each change against LTspice's own rules before it is
+written or run, and points the assistant to what needs its attention. Results
+come back as named numbers, such as a phase margin or a transistor's gm,
+instead of waveforms to read. A sweep, a Monte Carlo run or a whole schematic
+build is one call.
 
-The server is also built to keep the assistant's context small. Results come
-back as named numbers, such as a phase margin or a transistor's gm, instead
-of waveforms to read. A sweep, a Monte Carlo run or a whole schematic build
-is one call. Large results stay on disk until the assistant asks for them.
+You and the assistant can work on the same schematic. The assistant picks up
+your saved changes on its next call. With the schematic open in LTspice (26.1
+or later, on Windows), its edits appear in your window, where Ctrl+Z undoes
+them. Changes you haven't saved are never overwritten. See [Working with
+LTspice open](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#working-with-ltspice-open).
 
-You can open anything the server writes in LTspice. On Windows, with LTspice
-26.1 or later, its edits also appear in an LTspice window you have open
-([Working with LTspice open](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#working-with-ltspice-open)).
 The same engine is a Python package, `ltspice_mcp.api`, for scripts. The
 server is built on [spicelib](https://github.com/nunobrum/spicelib).
 
