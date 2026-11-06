@@ -38,16 +38,19 @@ def _ngspice_run(name: str, tmp_path: Path):
 
 
 def test_a_device_parameter_named_v_is_no_node_voltage_to_any_reader(tmp_path: Path):
-    """``op_device_params``: a floating gate, whose bias point every stepping
-    method fails to find before ngspice's transient op finds one, in words
-    the log parser does not read as success. The deck saves three device
-    parameters and no node, and ngspice writes them ``v(@m1[vth])`` (typed
-    voltage), ``@m1[gm]`` and ``i(@m1[id])`` (typed current). The operating
-    point files them with the device, the stepping-failure gate finds no node
-    voltage to vouch for the bias point, and the value scan does not compare
-    the 1.8 V threshold with the 20 mV supplies."""
+    """``op_device_params``: a floating gate, whose bias point ngspice's gmin
+    and source stepping fail to find before its transient op finds one. The
+    deck saves three device parameters and no node, and ngspice writes them
+    ``v(@m1[vth])`` (typed voltage), ``@m1[gm]`` and ``i(@m1[id])`` (typed
+    current). The operating point files them with the device, and the value
+    scan does not compare the 1.8 V threshold with the 20 mV supplies.
+
+    The log says the transient op finished, so the stepping failures are no
+    error. Without that line the log does not say the solve recovered, and
+    the stepping-failure gate finds no node voltage to vouch for a bias point:
+    the device parameter, finite as it is, does not."""
     raw = _ngspice_run("op_device_params", tmp_path)
-    log = captured_log_facts(tmp_path, NGSPICE_RUNS / "op_device_params.log")
+    written = (NGSPICE_RUNS / "op_device_params.log").read_text(encoding="utf-8")
     deck = (NGSPICE_RUNS / "op_device_params.cir").read_text(encoding="utf-8")
     assert raw.get_trace_names() == ["v(@m1[vth])", "@m1[gm]", "i(@m1[id])"]
     assert raw.get_trace("v(@m1[vth])").whattype == "voltage"
@@ -55,18 +58,27 @@ def test_a_device_parameter_named_v_is_no_node_voltage_to_any_reader(tmp_path: P
     op = extract_operating_point(raw)
     assert set(op["device_op_points"]) == {"v(@m1[vth])", "@m1[gm]", "i(@m1[id])"}
     assert op["voltages"] == op["currents"] == op["other"] == {}
+    assert raw_parser.node_voltages(raw) == []
 
-    summary = build_simulation_summary(
-        raw, log, value_scan=True, source_amplitudes=parse_source_amplitudes(deck)
+    recovered = build_simulation_summary(
+        raw,
+        captured_log_facts(tmp_path, NGSPICE_RUNS / "op_device_params.log"),
+        value_scan=True,
+        source_amplitudes=parse_source_amplitudes(deck),
     )
+    assert "Note: Transient op finished successfully" in written
+    assert not recovered.get("errors"), recovered
+    assert not any(o["code"] == "extreme_value" for o in recovered["observations"])
+
+    unannounced = written.replace("Note: Transient op finished successfully\n", "")
+    assert unannounced != written
+    summary = build_simulation_summary(raw, captured_log_facts(tmp_path, text=unannounced))
     assert summary["errors"] == [
         "Warning: Dynamic gmin stepping failed",
         "Warning: True gmin stepping failed",
         "Warning: source stepping failed",
     ]
     assert not any("finite node data" in w for w in summary.get("warnings", []))
-    assert not any(o["code"] == "extreme_value" for o in summary["observations"])
-    assert raw_parser.node_voltages(raw) == []
 
 
 def test_a_dc_sweeps_own_variable_is_no_node_voltage_to_any_reader(tmp_path: Path):
@@ -161,3 +173,15 @@ def test_the_prefix_rule_catches_what_it_names():
         "    return name.startswith('v(output_impedance_at_'), 'V(' + name + ')'\n"
     )
     assert _prefix_tests_in(tree) == [2, 4, 6, 8]
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_noise_plots_densities_are_no_node_voltages(build: str, tmp_path: Path):
+    """LTspice types a noise plot's traces as voltages (``V(onoise)``, each
+    source's contribution); they are spectral densities, so no reader of
+    node voltages takes one."""
+    raw = rec.decode(build, "raw/noise", tmp_path).raw
+    assert raw.descriptor.analysis == "noise"
+    typed = [t.name for t in raw.descriptor.signals() if t.declared_type == "voltage"]
+    assert typed, raw.descriptor.signals()
+    assert raw_parser.node_voltages(raw) == []

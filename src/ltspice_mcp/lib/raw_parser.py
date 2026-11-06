@@ -641,7 +641,10 @@ def compute_ac_bandwidth_metrics(raw: RawData, trace_name: str, step: int = 0) -
 def node_voltages(raw: DecodedRaw | DecodedPlot) -> list[str]:
     """The selected plot's signals that hold a node voltage, in its order: by
     each one's name and declared type, its axis apart
-    (``trace_names.trace_quantity``)."""
+    (``trace_names.trace_quantity``). A noise plot holds none: its traces are
+    spectral densities, though typed as voltages."""
+    if raw.descriptor.analysis == "noise":
+        return []
     axis = _axis_name(raw)
     return [
         trace.name

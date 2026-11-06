@@ -1055,6 +1055,12 @@ async def summary(
                     f"defaulted to {ac_signal_used!r} for ac_bandwidth_metrics. "
                     "Pass ``signal=`` to choose a different trace."
                 )
+            else:
+                facts.setdefault("warnings", []).append(
+                    "AC summary built without an explicit ``signal``, and the plot "
+                    "holds no node voltage to default to, so it has no "
+                    "ac_bandwidth_metrics. Pass ``signal=`` to compute them on a trace."
+                )
         if ac_signal_used:
             with contextlib.suppress(Exception):
                 ac_metrics = compute_ac_bandwidth_metrics(raw, ac_signal_used, step)

@@ -12,8 +12,11 @@ with no `signal` named could compute its bandwidth on a device parameter.
 Every reader now uses one rule: a plot's sweep variable and a device
 parameter are never node voltages, a trace's declared type decides
 otherwise, and a name is read only when the trace has no type. A stepping
-failure in a run that saved no node voltage stays an error, and an AC
-summary with no node voltage computes no default bandwidth. The operating
+failure in a run that saved no node voltage stays an error unless the log
+says the solve recovered: ngspice's `Transient op finished successfully`,
+which the log reader now reads as the recovery it is, as it reads LTspice's.
+An AC summary with no node voltage computes no default bandwidth, and says
+so. The operating
 point read from a `.dc` sweep now lists the sweep variable (`V1` from
 LTspice, `v(v-sweep)` from ngspice) under `other` rather than `voltages`;
 `sweep_value` still gives it when `at` is set.

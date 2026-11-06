@@ -247,16 +247,19 @@ _RE_OP_ITERATION = re.compile(
     r"|for \.op point succeeded)",
     re.IGNORECASE,
 )
-# Terminal success line of LTspice's OP-solve escalation ladder. Any of these
-# means the bias point WAS found (possibly via a fallback method), so the
-# earlier "<method> stepping failed to find operating point" rungs are benign.
-# Covers Direct Newton / Gmin / Source stepping ("... succeeded in finding
-# operating point") and the pseudo-transient fallback ("Pseudo Transient
-# succeeded at <t>", which omits "operating point").
+# Terminal success line of an OP-solve escalation ladder. Any of these means
+# the bias point WAS found (possibly via a fallback method), so the earlier
+# "<method> stepping failed" rungs are benign. Covers LTspice's Direct Newton /
+# Gmin / Source stepping ("... succeeded in finding operating point") and its
+# pseudo-transient fallback ("Pseudo Transient succeeded at <t>", which omits
+# "operating point"), and ngspice's transient op, which ngspice 42 announces
+# as "Note: Transient op finished successfully" after its gmin and source
+# stepping fail (tests/fixtures/ngspice_runs/op_device_params.log).
 _RE_OP_SOLVE_SUCCEEDED = re.compile(
     r"succeeded in finding (?:the )?operating point"
     r"|pseudo[- ]?transient succeeded"
-    r"|stepping succeeded",
+    r"|stepping succeeded"
+    r"|transient op finished successfully",
     re.IGNORECASE,
 )
 # Start of an OP-solve block. LTspice prints one "Direct Newton iteration ..."
