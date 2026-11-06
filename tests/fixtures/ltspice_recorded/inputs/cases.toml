@@ -465,7 +465,7 @@ inputs = ["raw/ac.cir", "raw/ac_numdgt7.cir", "raw/ac_numdgt15.cir", "raw/step_a
 
 [behaviour.raw-dc]
 summary = "A DC sweep raw: the swept source as the axis."
-model = ["lib/raw_header.py", "lib/raw_parser.py"]
+model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/trace_names.py"]
 inputs = ["raw/dc.cir"]
 
 [behaviour.raw-noise]

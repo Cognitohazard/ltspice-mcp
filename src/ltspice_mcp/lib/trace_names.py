@@ -24,6 +24,7 @@ from typing import Literal
 from ltspice_mcp.lib.device_names import (
     device_param_name,
     find_trace_by_path,
+    parse_device_param,
     parse_shorthand,
     writes_xvii_command,
 )
@@ -40,6 +41,60 @@ NODE_PAIR_RE = re.compile(r"\s*v\(\s*([^\s(),]+)\s*,\s*([^\s(),]+)\s*\)\s*", re.
 
 #: A node voltage trace ``V(<node>)``, the node inside.
 V_TRACE_RE = re.compile(r"v\((.+)\)", re.IGNORECASE)
+
+#: What a trace of a result holds, as its name and declared type tell.
+TraceQuantity = Literal["node_voltage", "current", "device_parameter", "other"]
+
+#: The declared types that say a trace holds a node voltage or a current. A
+#: trace declared with any other type holds another quantity, whatever its
+#: name: a declared impedance does not become a voltage by its spelling.
+_QUANTITY_BY_TYPE: dict[str, TraceQuantity] = {
+    "voltage": "node_voltage",
+    "current": "current",
+    "device_current": "current",
+}
+
+#: A current named with no declared type: ``I(R1)``, or a terminal current
+#: of a device of more terminals, ``Ic(Q1)`` or ``Id(M1)``.
+_CURRENT_NAME = re.compile(r"i[a-z]?\(", re.IGNORECASE)
+
+
+def trace_quantity(name: str, declared: str | None, *, axis: bool = False) -> TraceQuantity:
+    """What the trace ``name``, declared by the simulator as ``declared``
+    (None where nothing declares it), holds; ``axis`` when it is the sampled
+    axis of its plot.
+
+    A plot's axis is the variable it is swept along, not a quantity of the
+    circuit's solution, though a ``.dc V1`` sweep's is typed voltage: LTspice
+    names it ``V1`` (recorded: ``raw/dc``) and ngspice ``v(v-sweep)``
+    (``dc_current_only`` in ``tests/fixtures/ngspice_runs``). A device's
+    parameter (``@m1[gm]``) is one whatever its type and its wrapping: ngspice
+    writes a saved ``@m1[vth]`` as ``v(@m1[vth])``, typed voltage, and
+    ``@m1[id]`` as ``i(@m1[id])``, typed current (``op_device_params`` there).
+    Otherwise the declared type decides, and only a trace with none is read
+    by its name: ``V(...)`` a node voltage, ``I(...)`` or ``Ic(...)`` a
+    current.
+
+    The one rule for whether a trace holds a node voltage: the operating
+    point files its values by it, a recovered bias point is vouched for only
+    by the traces it calls node voltages, the value scan compares only those
+    with the deck's sources, and an AC summary defaults to the first.
+    """
+    if axis:
+        return "other"
+    if parse_device_param(name) is not None:
+        return "device_parameter"
+    if declared:
+        return _QUANTITY_BY_TYPE.get(declared.strip().lower(), "other")
+    if name[:2].lower() == "v(":
+        return "node_voltage"
+    return "current" if _CURRENT_NAME.match(name) else "other"
+
+
+def is_node_voltage(name: str, declared: str | None, *, axis: bool = False) -> bool:
+    """Whether the trace ``name``, declared as ``declared``, holds a node
+    voltage (:func:`trace_quantity`)."""
+    return trace_quantity(name, declared, axis=axis) == "node_voltage"
 
 
 def find_trace(names: Sequence[str], signal: str, *, xvii: bool) -> str | None:
