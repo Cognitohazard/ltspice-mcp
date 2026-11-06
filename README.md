@@ -7,17 +7,23 @@
 ltspice-mcp is an MCP server for circuit simulation. It lets an AI assistant
 run LTspice or ngspice and get the results back as named measurements, such
 as cutoff frequency, phase margin, overshoot, or a transistor's gm and vth.
-Sweeps, corners and Monte Carlo run as background jobs, with
-statistics across the runs.
+Sweeps, corners and Monte Carlo run as background jobs, with statistics
+across the runs.
 
-The assistant can also build and edit LTspice `.asc` schematics. The server
-checks the wiring of each edit before it writes the file, compares a
-schematic with a netlist, and on Windows shows its edits in an LTspice window
-you have open. The schematics and netlists are ordinary files that you can
-open in LTspice yourself.
+The assistant can also build and edit LTspice `.asc` schematics. Edited as
+text, a schematic goes wrong without any error: a wire drawn across a pin
+connects it, and the mistake shows up only when a simulation gives the wrong
+answer, several turns later. Instead, the assistant names the pins to
+connect, and the server draws the wire. An edit that would connect
+something by accident, such as a wire over another part's pin or a label that
+shorts two nets, is refused with the reason before anything is written, so
+the assistant can fix it on the next call. The server also reports parts and
+text drawn on top of each other, so the finished sheet is easy to read. On
+Windows, the edits appear in an LTspice window you have open.
 
-The same engine is a Python package, `ltspice_mcp.api`, for scripts and
-optimizers. The server is built on [spicelib](https://github.com/nunobrum/spicelib).
+The schematics and netlists are ordinary files that you can open in LTspice
+yourself. The same engine is also a Python package, `ltspice_mcp.api`, for
+scripts and optimizers. The server is built on [spicelib](https://github.com/nunobrum/spicelib).
 
 ## Quick start
 
@@ -29,8 +35,8 @@ optimizers. The server is built on [spicelib](https://github.com/nunobrum/spicel
 ```
 
 **Claude Desktop:** build the extension in [`packaging/mcpb/`](https://github.com/cognitohazard/ltspice-mcp/tree/master/packaging/mcpb)
-and drag the `.mcpb` file onto Claude Desktop. It asks for a sandbox folder;
-leave it blank for none.
+and drag the `.mcpb` file onto Claude Desktop. The extension asks for an
+optional sandbox folder. If you leave it blank, there is no sandbox.
 
 **Any other MCP client** ([Cursor](https://cursor.com/docs/mcp), [Windsurf](https://docs.devin.ai/desktop/cascade/mcp), [Gemini CLI](https://google-gemini.github.io/gemini-cli/docs/tools/mcp-server.html), [Continue](https://docs.continue.dev/customize/deep-dives/mcp), [Cline](https://docs.cline.bot/mcp/mcp-overview), [Zed](https://zed.dev/docs/ai/mcp), …): install the server and add it to the client's MCP config.
 
@@ -53,13 +59,13 @@ JSON.
 **You also need LTspice or ngspice** on the same machine. The server finds
 either one on Windows and Linux. On WSL, set the LTspice path yourself
 ([WSL](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#wsl)).
-Editing `.asc` schematics needs LTspice's symbol libraries; reading and
-checking netlists needs no simulator. The plugin and the extension need
+Editing `.asc` schematics needs LTspice, because the server uses LTspice's
+symbol libraries. Reading and checking netlists works without a simulator. The plugin and the extension need
 [`uv`](https://docs.astral.sh/uv/).
 
-**macOS is not supported yet.** The server refuses to read results there,
-because the memory-limited process it reads them in has not been validated
-on macOS.
+**macOS is not supported yet: the server cannot read simulation results
+there.** It reads each `.raw` and `.log` file in a separate process with a
+memory limit, and that has not been validated on macOS.
 
 **Make sure the assistant uses the server.** Some assistants run the
 simulator from the shell instead. Name the server `spice`, as the plugin
@@ -70,8 +76,8 @@ Then add this rule to your project's `CLAUDE.md` or your client's equivalent:
 > or analysis. Do not invoke ngspice or LTspice from the shell, and do not
 > hand-parse `.raw` files or `wrdata` output.
 
-[When the shell is fine](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#when-the-shell-is-fine)
-lists the cases where a looser rule works.
+If you prefer a less strict rule, [When the shell is fine](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#when-the-shell-is-fine)
+lists the cases in which running the simulator from the shell is acceptable.
 
 ## What you can ask
 
@@ -94,10 +100,11 @@ The server reads the simulator's binary output itself and measures:
   gds, vth and other small-signal parameters, on both simulators.
 - **`.meas`:** the deck's own measurements, including those that failed.
 
-A value can be checked against a limit. Simulator warnings come back beside
-the values they affect: an ngspice run can warn of a singular matrix and
-still write plausible numbers. The server can also measure a `.raw` file
-simulated elsewhere.
+A measurement can be given a limit, and the reply says whether each run
+meets it. The reply lists simulator warnings next to the values they affect,
+such as a singular-matrix warning from an ngspice run that still wrote
+plausible values. The server can also measure a `.raw` file simulated
+elsewhere.
 
 - *"What's the overshoot and settling time of this regulator's step response?"*
 - *"Is this loop stable?"* (phase and gain margin at every crossover)
@@ -111,8 +118,8 @@ One `run_experiments` call can sweep several parameters at once, swap models
 for process corners, and run Monte Carlo with component tolerances, `.MODEL`
 parameter spread and Pelgrom device mismatch. A parameter can be set on one
 device inside nested subcircuits. With an installed Sky130 PDK, the server
-samples process and mismatch variation from the PDK's own statistical models
-(its 1.8 V NMOS only, so far). The reply gives statistics across the runs,
+samples process and mismatch variation from the PDK's own statistical
+models. Only its 1.8 V NMOS is supported so far. The reply gives statistics across the runs,
 and any single run can be measured on its own.
 
 - *"Run a 200-run Monte Carlo with 5% resistors and tell me the output spread."*
@@ -130,9 +137,12 @@ restarted server can still read earlier jobs. A job submitted with
 
 The server creates and edits LTspice `.asc` files: it places, moves and
 replaces parts, wires pins, labels nets and adds directives. A batch of edits
-is written whole or not at all. The server refuses diagonal wires, wires that
-cross a pin or junction, and any edit to a file that changed since the
-assistant last read it. It reports floating pins and dangling labels.
+is written whole or not at all, so a whole build is one call, and a batch
+that fails leaves the file as it was. Besides accidental connections, the
+server refuses diagonal wires, which LTspice connects anywhere along their
+length, and any edit to a file that changed since the assistant last read it,
+so it never overwrites a change you made. It reports floating pins and
+dangling wires and labels, which are usually unfinished work.
 
 The assistant edits netlists (`.cir`, `.net`, `.sp`) with its own file tools,
 and the server checks them before they run. It can trace a net or list the
@@ -231,7 +241,8 @@ pip install ltspice-mcp        # or: uv add ltspice-mcp
 
 A script needs this install even if you use the plugin or the Desktop
 extension, which keep the server in an environment of their own. An
-assistant can already reach the API through `run_code`.
+assistant in a session does not need it, because it can use the API through
+`run_code`.
 
 With an RC low-pass in `circuits/rc.cir`:
 
