@@ -18,14 +18,13 @@ from ltspice_mcp.lib.experiment_types import ExperimentStatus
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.jobs import handle_jobs
-from tests._source_scan import PACKAGE, parsed
+from tests._source_scan import PACKAGE, parsed, scopes
 from tests.test_jobs_tool import _args, _assert_jobs_schema, _circuit, _experiment
 
 #: The modules that own the vocabulary and the transitions between its words.
 _OWNERS = frozenset({"lib/experiment_types.py", "lib/job_types.py", "lib/job_lifecycle.py"})
-#: Words only a set of job statuses holds: no case or analysis status is
-#: ``completed_with_failures``, and ``queued`` is a job's status and a case's.
-_JOB_STATUS_WORDS = frozenset({"completed_with_failures", "queued"})
+#: Every word a job record's status may be.
+_JOB_STATUS_WORDS = frozenset(get_args(ExperimentStatus))
 
 
 def test_live_and_terminal_statuses_split_the_vocabulary() -> None:
@@ -34,20 +33,21 @@ def test_live_and_terminal_statuses_split_the_vocabulary() -> None:
     assert not TERMINAL_STATUSES & NON_TERMINAL_LIVE_STATUSES
 
 
-def _set_literal_strings(node: ast.AST) -> set[str] | None:
-    """The strings of a set display, or of ``frozenset``/``set`` over a list or
-    tuple display (one over a set display is the set display)."""
+_COLLECTIONS = (ast.Set, ast.Tuple, ast.List)
+
+
+def _collection_strings(node: ast.AST) -> set[str]:
+    """The strings of a set, tuple or list display, or of ``frozenset``,
+    ``set``, ``tuple`` or ``list`` over one; empty for any other node."""
     if (
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)
-        and node.func.id in {"frozenset", "set"}
+        and node.func.id in {"frozenset", "set", "tuple", "list"}
         and node.args
-        and isinstance(node.args[0], ast.List | ast.Tuple)
     ):
         node = node.args[0]
-    elif not isinstance(node, ast.Set):
-        return None
-    assert isinstance(node, ast.Set | ast.List | ast.Tuple)
+    if not isinstance(node, _COLLECTIONS):
+        return set()
     return {
         elt.value
         for elt in node.elts
@@ -55,17 +55,97 @@ def _set_literal_strings(node: ast.AST) -> set[str] | None:
     }
 
 
+def _status_sets_in(tree: ast.AST) -> set[str]:
+    """The scopes in ``tree`` that write a collection of two or more job status
+    words, a ``Literal[...]`` of them included."""
+    return {
+        name
+        for name, nodes in scopes(tree)
+        if any(len(_collection_strings(node) & _JOB_STATUS_WORDS) >= 2 for node in nodes)
+    }
+
+
+#: The scopes outside the owners that write two or more job status words, each
+#: with what its collection holds. A case's and an attached analysis's
+#: statuses share words with a job's ("failed", "cancelled"), so a set of
+#: theirs is listed here too.
+_STATUS_SETS: dict[str, str] = {
+    "lib/experiment_resume.py:_make_child": "case statuses: a case that ended with no output",
+    "lib/experiment_runner.py:ExperimentRunner.materialize_job": (
+        "case statuses: a case that ended with no output"
+    ),
+    "lib/experiment_runner.py:ExperimentRunner._mark_case": (
+        "case statuses: the type of a terminal case status, and a case that ended with no output"
+    ),
+    "lib/experiment_runner.py:ExperimentRunner._finish_unstarted_analysis": (
+        "analysis statuses: the type of an analysis that never started"
+    ),
+    "lib/experiment_store.py:_reconcile_restart": "analysis statuses: an analysis that failed",
+    "lib/native_execution.py:prepare_native_cases": (
+        "case statuses: a case that ended with no output"
+    ),
+    "lib/observability.py:<module>": "job event names, a vocabulary of their own (JobEvent)",
+    "tools/receipts.py:<module>": "the completeness counters a receipt's schema requires",
+    "tools/receipts.py:_recovery_routes": "analysis statuses: an analysis that failed",
+    # Known exceptions: job statuses written out again, left for a source fix.
+    "lib/experiment_runner.py:ExperimentRunner._run_job": (
+        "known exception: whether a cancelled stop may still move the job to "
+        "'cancelled', written as {'cancelled', 'failed'}; the job's transitions "
+        "(lib/job_lifecycle.py) refuse a move from every terminal status, "
+        "'interrupted' and both completed ones included"
+    ),
+    "lib/observability.py:emit_job_event": (
+        "known exception: the events that end a job, written as four of the "
+        "terminal statuses rather than read from TERMINAL_STATUSES"
+    ),
+}
+
+
 def test_no_other_module_spells_a_set_of_job_statuses() -> None:
     """Every other module reads ``TERMINAL_STATUSES`` and
-    ``NON_TERMINAL_LIVE_STATUSES`` rather than writing its own."""
-    found = sorted(
-        f"{path.relative_to(PACKAGE).as_posix()}:{getattr(node, 'lineno', 0)}"
+    ``NON_TERMINAL_LIVE_STATUSES`` rather than writing its own: no set, tuple,
+    list or ``Literal`` of two or more job status words, in any scope."""
+    found = {
+        f"{path.relative_to(PACKAGE).as_posix()}:{name}"
         for path in PACKAGE.rglob("*.py")
         if path.relative_to(PACKAGE).as_posix() not in _OWNERS
-        for node in ast.walk(parsed(path))
-        if (strings := _set_literal_strings(node)) and strings & _JOB_STATUS_WORDS
+        for name in _status_sets_in(parsed(path))
+    }
+    assert found == set(_STATUS_SETS)
+
+
+def test_the_status_set_rule_catches_what_it_names() -> None:
+    tree = ast.parse(
+        "def failure(job):\n"
+        "    return job.status in {'failed', 'timeout', 'interrupted'}\n"
+        "def finished(job):\n"
+        "    return job.status in ('completed', 'cancelled')\n"
+        "def listed(job):\n"
+        "    return job.status not in ['queued', 'running']\n"
+        "FROZEN = frozenset({'completed_with_failures', 'failed'})\n"
+        "class Job:\n"
+        "    LIVE = frozenset(['queued', 'analyzing'])\n"
+        "    async def wait(self):\n"
+        "        return tuple(('running', 'interrupted'))\n"
+        "def typed(status: Literal['completed', 'failed']):\n"
+        "    def inner():\n"
+        "        return set(('queued', 'cancelled'))\n"
+        "    return inner\n"
+        "def single(job):\n"
+        "    return job.status in {'failed', 'skipped'}, job.status == 'completed'\n"
+        "def read(job):\n"
+        "    return job.status in TERMINAL_STATUSES, {'produced', 'skipped'}\n"
     )
-    assert not found, f"job status sets spelled outside {sorted(_OWNERS)}: {found}"
+    assert _status_sets_in(tree) == {
+        "failure",
+        "finished",
+        "listed",
+        "<module>",
+        "Job",
+        "Job.wait",
+        "typed",
+        "typed.inner",
+    }
 
 
 @pytest.mark.asyncio
