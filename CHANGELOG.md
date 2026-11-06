@@ -316,9 +316,11 @@ tool-surface changes.
   down and a nested `instance` target alike: on LTspice the device's own `m`,
   including an inner `m={mult}` set from the X line; on ngspice its `m` after
   ngspice passes an X line's `m` down to a subcircuit that declares no `m`,
-  replacing each card's own `m` or, in the HSPICE modes, multiplying it, as
+  replacing each card's own `m` or, in the HSPICE modes, multiplying it, in
+  the order ngspice reads the deck and leaving out unused subcircuits, as
   measured on ngspice-42. A deck ngspice stops on for that rewrite, and a
-  draw whose private subcircuit copy would change it, are refused. An `m`
+  case whose edits or private subcircuit copies would change what a card no
+  edit writes builds, are refused. An `m`
   that does not resolve to a positive number refuses the request with
   `mismatch_geometry_unresolved` instead of being drawn as one copy. A refusal
   while drawing for a device one subcircuit level down now reaches the caller

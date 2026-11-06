@@ -1,268 +1,218 @@
 """How many parallel copies ngspice builds from one card, against ngspice itself.
 
-ngspice gives a subcircuit that declares no ``m`` an ``m`` parameter whenever an
-X line calls it with ``m``, and appends ``m={m}`` to the cards of its body: the
-appended ``m`` replaces a card's own outside the HSPICE modes and multiplies it
-in them (``hierarchy_expr.card_copies``). Each deck here is run through ngspice
-in both modes the server runs, and the copies it builds are compared with what
-the server reads: hierarchy discovery (a deck with a semantic profile) and the
-one-level mismatch plan (a deck without one). Every resistor hangs off the one
-source at 1 V through 1 kOhm, so the source's current in mA counts the copies;
-a MOS deck is read against the same deck with one plain device.
+ngspice rewrites a subcircuit for an X line's ``m`` before it expands a deck
+(``hierarchy_expr.card_copies``). Each deck here runs through ngspice in both
+modes the server runs, isolated from any ``.spiceinit``, and ngspice reports
+each card's ``m`` (``@r.x1.r1[m]``); hierarchy discovery must give every card
+the same copies, or, where ngspice stops on the deck, refuse it.
 """
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
-from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
-from ltspice_mcp.errors import NetlistError
+from ltspice_mcp.errors import MultiplierRewriteStop
 from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
-from ltspice_mcp.lib.subckt_mismatch import ClosureFile, MismatchPlanError, build_plan
 from tests.conftest import LIVENESS_S
 
 pytestmark = pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH")
 
 MODES = ("kiltpsa", "hsa")
 
-#: name -> (definitions, X lines); every resistor is 1 kOhm from node a's side to ground.
-RESISTOR_DECKS: dict[str, tuple[str, str]] = {
-    "x line m, nothing declared": (".subckt r1 p\nR1 p 0 1k\n.ends", "X1 a r1 m=4"),
+#: name -> the deck's cards between its title and ``.op``, in deck order, and
+#: the files it includes. Every deck hangs off ``Va`` on node ``a``.
+DECKS: dict[str, tuple[str, dict[str, str]]] = {
+    "x line m, nothing declared": (".subckt r1 p\nR1 p 0 1k\n.ends\nX1 a r1 m=4", {}),
     "m declared on the .subckt line": (
-        ".subckt r1 p params: m=1\nR1 p 0 1k\n.ends",
-        "X1 a r1 m=4",
+        ".subckt r1 p params: m=1\nR1 p 0 1k\n.ends\nX1 a r1 m=4",
+        {},
     ),
     "declared m read by the card": (
-        ".subckt r1 p params: m=1\nR1 p 0 1k m={m}\n.ends",
-        "X1 a r1 m=4",
+        ".subckt r1 p params: m=1\nR1 p 0 1k m={m}\n.ends\nX1 a r1 m=4",
+        {},
     ),
     "m declared by a body .param": (
-        ".subckt r1 p\n.param m=2\nR1 p 0 1k m=3\n.ends",
-        "X1 a r1 m=4",
+        ".subckt r1 p\n.param m=2\nR1 p 0 1k m=3\n.ends\nX1 a r1 m=4",
+        {},
     ),
-    "card's own m under an x line m": (".subckt r1 p\nR1 p 0 1k m=3\n.ends", "X1 a r1 m=4"),
-    "own m and none in one body": (
-        ".subckt r1 p\nR1 p 0 1k m=3\nR2 p 0 1k\n.ends",
-        "X1 a r1 m=4",
-    ),
+    "a card's own m under an x line m": (".subckt r1 p\nR1 p 0 1k m=3\n.ends\nX1 a r1 m=4", {}),
     "m={mult} under an x line m": (
-        ".subckt r1 p params: mult=3\nR1 p 0 1k m={mult}\n.ends",
-        "X1 a r1 m=4",
+        ".subckt r1 p params: mult=3\nR1 p 0 1k m={mult}\n.ends\nX1 a r1 m=4",
+        {},
     ),
-    "a sibling call without m": (".subckt r1 p\nR1 p 0 1k m=3\n.ends", "X1 a r1 m=4\nX2 a r1"),
-    "own m with no x line m": (".subckt r1 p\nR1 p 0 1k m=3\n.ends", "X1 a r1"),
-    "nested calls, both with m": (
-        ".subckt inner p\nR1 p 0 1k\n.ends\n.subckt outer p\nX2 p inner m=3\n.ends",
+    "a sibling call without m": (
+        ".subckt r1 p\nR1 p 0 1k m=3\nR2 p 0 1k\n.ends\nX1 a r1 m=4\nX2 a r1",
+        {},
+    ),
+    "own m and no x line m": (".subckt r1 p\nR1 p 0 1k m=3\n.ends\nX1 a r1", {}),
+    "nested, both calls with m": (
+        ".subckt inner p\nR1 p 0 1k\n.ends\n.subckt outer p\nX2 p inner m=3\n.ends\n"
         "X1 a outer m=2",
+        {},
     ),
     "nested, inner declares m": (
-        ".subckt inner p params: m=1\nR1 p 0 1k\n.ends\n.subckt outer p\nX2 p inner m=3\n.ends",
+        ".subckt inner p params: m=1\nR1 p 0 1k\n.ends\n.subckt outer p\nX2 p inner m=3\n.ends\n"
         "X1 a outer m=2",
+        {},
     ),
-    "nested, outer declares m": (
-        ".subckt inner p\nR1 p 0 1k\n.ends\n.subckt outer p params: m=1\nX2 p inner m=3\n.ends",
+    "nested, outer passes its declared m on": (
+        ".subckt inner p\nR1 p 0 1k\n.ends\n.subckt outer p params: m=1\nX2 p inner m={m}\n.ends\n"
         "X1 a outer m=2",
+        {},
     ),
-    "nested, outer passes its m on": (
-        ".subckt inner p\nR1 p 0 1k\n.ends\n.subckt outer p params: m=1\nX2 p inner m={m}\n.ends",
-        "X1 a outer m=2",
-    ),
-    "inner call gets m from a body rewrite": (
-        ".subckt leaf p params: k=1\nR1 p 0 1k\n.ends\n.subckt block p\nXleaf p leaf\n.ends",
+    "inner call reaches a subcircuit with other parameters": (
+        ".subckt leaf p params: k=1\nR1 p 0 1k\n.ends\n.subckt block p\nXleaf p leaf\n.ends\n"
         "X1 a block m=4",
+        {},
     ),
     "inner subcircuit rewritten by another call": (
-        ".subckt leaf p\nR1 p 0 1k\n.ends\n.subckt block p\nXleaf p leaf\n.ends",
+        ".subckt leaf p\nR1 p 0 1k\n.ends\n.subckt block p\nXleaf p leaf\n.ends\n"
         "X1 a block m=4\nX9 a leaf m=2",
+        {},
     ),
-    "an element that takes no m": (
-        ".subckt r1 p\nV9 p q 0\nR1 q 0 1k\n.ends",
-        "X1 a r1 m=4",
+    "definitions before the call, inner takes no parameters": (
+        ".subckt leaf p\nR1 p 0 1k\n.ends\n.subckt block p\nXleaf p leaf\n.ends\nX1 a block m=4",
+        {},
+    ),
+    "call before the definitions": (
+        "X1 a block m=4\n.subckt block p\nXleaf p leaf\n.ends\n.subckt leaf p\nR1 p 0 1k\n.ends",
+        {},
+    ),
+    "call before the definitions, inner with other parameters": (
+        "X1 a g blk m=3\nVg g 0 1.2\n.subckt blk d g\nXf d g fet\n.ends\n"
+        ".subckt fet d g params: k=1\nM0 d g 0 0 n w=1u l=1u\n.ends\n.model n nmos level=54",
+        {},
+    ),
+    "top-down definitions, then the call": (
+        ".subckt top p\nXb p block\n.ends\n.subckt block p\nXl p leaf\n.ends\n"
+        ".subckt leaf p\nR1 p 0 1k\n.ends\nX1 a top m=2",
+        {},
+    ),
+    "top-down definitions after the call": (
+        "X1 a top m=2\n.subckt top p\nXb p block\n.ends\n.subckt block p\nXl p leaf\n.ends\n"
+        ".subckt leaf p\nR1 p 0 1k\n.ends",
+        {},
+    ),
+    "definitions in an include after the call": (
+        'X1 a block m=4\n.include "defs.inc"',
+        {"defs.inc": ".subckt block p\nXleaf p leaf\n.ends\n.subckt leaf p\nR1 p 0 1k\n.ends\n"},
+    ),
+    "a call with m inside an unused subcircuit": (
+        ".subckt r1 p\nR1 p 0 1k m=3\n.ends\n.subckt unused p\nXu p r1 m=7\n.ends\nX1 a r1",
+        {},
+    ),
+    "a call with m inside an unused subcircuit of a .lib section": (
+        '.lib "defs.lib" sec\nX1 a r1',
+        {
+            "defs.lib": ".lib sec\n.subckt r1 p\nR1 p 0 1k m=3\n.ends\n"
+            ".subckt unused p\nXu p r1 m=7\n.ends\n.endl sec\n"
+        },
+    ),
+    "an unused call would make a used body take m": (
+        ".subckt q p\nR1 p 0 1k\n.ends\n.subckt r1 p\nXq p q\n.ends\n"
+        ".subckt unused p\nXu p r1 m=7\n.ends\nX1 a r1",
+        {},
+    ),
+    "a leaf called with m only from an unused subcircuit": (
+        ".subckt leaf p\nR1 p 0 1k\n.ends\n.subckt block p\nXleaf p leaf\n.ends\n"
+        ".subckt unused p\nXu p leaf m=2\n.ends\nX1 a block m=4",
+        {},
+    ),
+    "an unused subcircuit's call ngspice would refuse to read": (
+        ".subckt r1 p\nR1 p 0 1k\n.ends\n.subckt unused p\nXu p r1 k=1 K=2\n.ends\nX1 a r1 m=2",
+        {},
+    ),
+    "every element kind": (
+        ".model dd d\n.model qq npn\n.subckt els p\nR1 p 0 1k\nC1 p 0 1p\nL1 p q 1n\n"
+        "L2 q r 1n\nK1 L1 L2 0.5\nR2 r 0 1k\nR9 q 0 1meg\nI1 p 0 1m\nG1 p 0 p 0 1m\n"
+        "V9 s 0 0\nR3 s 0 1k\nF1 p 0 V9 1\nE1 t 0 p 0 1\nR4 t 0 1k\nD1 p 0 dd\nQ1 p p 0 qq\n"
+        ".ends\nX1 a els m=4",
+        {},
     ),
 }
 
-#: Decks ngspice stops on: an X line given m by a body rewrite calls a
-#: subcircuit that takes no parameters.
-REFUSED_DECKS: dict[str, tuple[str, str]] = {
-    "rewrite reaches a call to a subcircuit with no parameters": (
-        ".subckt leaf p\nR1 p 0 1k\n.ends\n.subckt block p\nXleaf p leaf\n.ends",
-        "X1 a block m=4",
-    ),
-    "the same with an own m inside": (
-        ".subckt inner p\nR1 p 0 1k m=5\n.ends\n.subckt outer p\nX2 p inner\n.ends",
-        "X1 a outer m=2",
-    ),
-}
+
+def _isolated_environment(home: Path) -> dict[str, str]:
+    """ngspice's environment with no user ``.spiceinit`` in reach, which can
+    set a compatibility mode over the ``-D ngbehavior`` the run passes."""
+    return {**os.environ, "SPICE_USERINIT_DIR": str(home), "HOME": str(home)}
 
 
-_MEASURE = ".control\nop\nprint -i(Va)*1000\n.endc\n"
+def _write(tmp_path: Path, name: str) -> Path:
+    cards, includes = DECKS[name]
+    for file, text in includes.items():
+        (tmp_path / file).write_text(text, encoding="ascii")
+    path = tmp_path / "deck.cir"
+    path.write_text(f"* multiplier\nVa a 0 1\n{cards}\n.op\n.end\n", encoding="ascii")
+    return path
 
 
-def _deck(definitions: str, calls: str) -> str:
-    return f"* multiplier\nVa a 0 1\n{definitions}\n{calls}\n.op\n.end\n"
-
-
-def _ngspice(path: Path, mode: str) -> subprocess.CompletedProcess[str]:
-    """Run ``path`` with a control block that prints the source's current,
-    from a copy beside it: hierarchy discovery reads the deck without one."""
+def _ngspice(path: Path, mode: str, names: list[str]) -> str:
+    """Run ``path`` from a copy that prints each named device's ``m``:
+    hierarchy discovery reads the deck without a control block."""
+    prints = "".join(f"print @{name}[m]\n" for name in names)
     measured = path.with_name(f"measured_{path.name}")
     measured.write_text(
-        path.read_text(encoding="ascii").replace(".end\n", _MEASURE + ".end\n"), encoding="ascii"
+        path.read_text(encoding="ascii").replace(".end\n", f".control\nop\n{prints}.endc\n.end\n"),
+        encoding="ascii",
     )
-    return subprocess.run(
+    home = path.parent / "home"
+    home.mkdir(exist_ok=True)
+    run = subprocess.run(
         ["ngspice", "-D", f"ngbehavior={mode}", "-b", str(measured)],
         capture_output=True,
         text=True,
         timeout=LIVENESS_S,
         check=False,
+        cwd=home,
+        env=_isolated_environment(home),
     )
+    return run.stdout + run.stderr
 
 
-def _measured(path: Path, mode: str) -> float:
-    run = _ngspice(path, mode)
-    found = re.search(r"-i\(va\)\*1000\s*=\s*(\S+)", run.stdout + run.stderr)
-    assert found, run.stdout + run.stderr
-    return float(found[1])
-
-
-def _hierarchy_copies(path: Path, mode: str, element: str) -> dict[tuple[str, ...], float]:
-    hierarchy = load_hierarchy(str(path), [path.parent], SemanticProfile("ngspice", mode))
-    copies = {}
-    for row in hierarchy.instances:
-        if row.element == element:
-            assert row.multiplier is not None and row.multiplier.value is not None, row
-            copies[row.instance] = row.multiplier.value
-    return copies
+def _ngspice_name(instance: tuple[str, ...]) -> str:
+    """ngspice's name for a card: its letter, then the X path, then itself."""
+    reference = instance[-1].lower()
+    if len(instance) == 1:
+        return reference
+    return ".".join((reference[0], *(part.lower() for part in instance[:-1]), reference))
 
 
 @pytest.mark.parametrize("mode", MODES)
-@pytest.mark.parametrize("name", list(RESISTOR_DECKS))
-def test_hierarchy_reads_the_copies_ngspice_builds(tmp_path: Path, name: str, mode: str):
-    path = tmp_path / "deck.cir"
-    path.write_text(_deck(*RESISTOR_DECKS[name]), encoding="ascii")
-
-    copies = _hierarchy_copies(path, mode, "R")
-
-    assert sum(copies.values()) == pytest.approx(_measured(path, mode), rel=1e-6), copies
-
-
-@pytest.mark.parametrize("mode", MODES)
-@pytest.mark.parametrize("name", list(REFUSED_DECKS))
-def test_hierarchy_refuses_a_deck_ngspice_stops_on(tmp_path: Path, name: str, mode: str):
-    path = tmp_path / "deck.cir"
-    path.write_text(_deck(*REFUSED_DECKS[name]), encoding="ascii")
-
-    run = _ngspice(path, mode)
-    assert "0 formal but 1 actual params" in run.stdout + run.stderr
-
-    with pytest.raises(NetlistError, match="ngspice stops on this deck"):
-        load_hierarchy(str(path), [path.parent], SemanticProfile("ngspice", mode))
-
-
-# --- one subcircuit level, the plan a deck with no semantic profile is drawn by ---
-
-_MOS_MODEL = ".model n nmos level=54"
-_MOS_SOURCES = "Va a 0 1\nVb b 0 1\nVg g 0 1.2"
-
-#: name -> (definition of fet, X lines, the X line drawn); X1 sits on node a, X2 on b.
-MOS_DECKS: dict[str, tuple[str, str]] = {
-    "x line m, nothing declared": (
-        ".subckt fet d g\nM0 d g 0 0 n w=1u l=1u\n.ends",
-        "X1 a g fet m=4",
-    ),
-    "m declared on the .subckt line": (
-        ".subckt fet d g params: m=1\nM0 d g 0 0 n w=1u l=1u\n.ends",
-        "X1 a g fet m=4",
-    ),
-    "declared m read by the device": (
-        ".subckt fet d g params: m=1\nM0 d g 0 0 n w=1u l=1u m={m}\n.ends",
-        "X1 a g fet m=4",
-    ),
-    "m declared by a body .param": (
-        ".subckt fet d g\n.param m=2\nM0 d g 0 0 n w=1u l=1u m=3\n.ends",
-        "X1 a g fet m=4",
-    ),
-    "device's own m under an x line m": (
-        ".subckt fet d g\nM0 d g 0 0 n w=1u l=1u m=3\n.ends",
-        "X1 a g fet m=4",
-    ),
-    "m={mult} beside an x line m": (
-        ".subckt fet d g params: mult=1\nM0 d g 0 0 n w=1u l=1u m={mult}\n.ends",
-        "X1 a g fet mult=3 m=2",
-    ),
-    "both callers drawn": (
-        ".subckt fet d g\nM0 d g 0 0 n w=1u l=1u m=3\n.ends",
-        "X1 a g fet m=4\nX2 b g fet",
-    ),
-}
-
-
-def _mos_deck(definition: str, calls: str) -> str:
-    return f"* mos multiplier\n{_MOS_SOURCES}\n{_MOS_MODEL}\n{definition}\n{calls}\n.op\n.end\n"
-
-
-def _one_device(tmp_path: Path, mode: str) -> float:
-    path = tmp_path / "one.cir"
-    path.write_text(
-        _mos_deck(".subckt fet d g\nM0 d g 0 0 n w=1u l=1u\n.ends", "X1 a g fet"),
-        encoding="ascii",
-    )
-    return _measured(path, mode)
-
-
-def _plan_copies(text: str, selectors: list[str], mode: str, monkeypatch) -> dict[str, float]:
-    monkeypatch.setattr(NGspiceSimulator, "_compatibility_mode", mode)
-    plan = build_plan([ClosureFile(0, Path("/deck/deck.cir"), text)], selectors=selectors)
-    copies = {}
-    for target in plan.targets:
-        assert target.multiplier.value is not None, target
-        copies[target.x_ref] = target.multiplier.value
-    return copies
-
-
-@pytest.mark.parametrize("mode", MODES)
-@pytest.mark.parametrize("name", list(MOS_DECKS))
-def test_both_readers_count_the_copies_ngspice_builds_of_a_drawn_device(
-    tmp_path: Path, name: str, mode: str, monkeypatch
-):
-    text = _mos_deck(*MOS_DECKS[name])
-    path = tmp_path / "deck.cir"
-    path.write_text(text, encoding="ascii")
-    selectors = ["X1", "X2"] if "X2" in MOS_DECKS[name][1] else ["X1"]
-
-    ngspice = _measured(path, mode) / _one_device(tmp_path, mode)
-    hierarchy = _hierarchy_copies(path, mode, "M")[("X1", "M0")]
-    plan = _plan_copies(text, selectors, mode, monkeypatch)["X1"]
-
-    assert hierarchy == pytest.approx(ngspice, rel=1e-6)
-    assert plan == pytest.approx(ngspice, rel=1e-6)
-
-
-@pytest.mark.parametrize("mode", MODES)
-def test_the_plan_refuses_a_copy_that_would_change_what_ngspice_builds(
-    tmp_path: Path, mode: str, monkeypatch
-):
-    """Drawing X1 alone re-points it at a copy of fet, so fet keeps only X2,
-    which writes no m. Outside the HSPICE modes ngspice then stops rewriting
-    fet, and X2's device goes from the 1 copy the rewrite left it to its own 3:
-    the plan refuses rather than run another circuit. In the HSPICE modes the
-    rewrite multiplies, X2 builds 3 copies either way, and the plan draws."""
-    text = _mos_deck(*MOS_DECKS["both callers drawn"])
-    if mode == "hsa":
-        assert _plan_copies(text, ["X1"], mode, monkeypatch) == {"X1": 12.0}
+@pytest.mark.parametrize("name", list(DECKS))
+def test_each_card_builds_the_copies_ngspice_builds(tmp_path: Path, name: str, mode: str):
+    if ".lib" in DECKS[name][0] and mode != "hsa":
+        pytest.skip("kiltpsa reads a .lib section as a plain include, so discovery refuses it")
+    path = _write(tmp_path, name)
+    profile = SemanticProfile("ngspice", mode)
+    try:
+        hierarchy = load_hierarchy(str(path), [tmp_path], profile)
+    except MultiplierRewriteStop:
+        assert "0 formal but 1 actual params" in _ngspice(path, mode, [])
         return
-    with pytest.raises(MismatchPlanError) as caught:
-        _plan_copies(text, ["X1"], mode, monkeypatch)
-    assert caught.value.code == "multiplier_rewrite_changed"
-    assert "fet" in str(caught.value) and "X1" in str(caught.value)
+
+    copies = {
+        _ngspice_name(row.instance): row.multiplier
+        for row in hierarchy.instances
+        if row.multiplier is not None and row.element != "X"
+    }
+    output = _ngspice(path, mode, list(copies))
+    assert "0 formal but 1 actual params" not in output
+    measured = {
+        found[1].lower(): float(found[2])
+        for found in re.finditer(r"@(\S+)\[m\]\s*=\s*(\S+)", output, re.IGNORECASE)
+    }
+    assert copies and set(measured) == set(copies), output
+    assert {key: fact.value for key, fact in copies.items()} == pytest.approx(measured)
 
 
-# --- a nested target's private copies, drawn with a semantic profile ---
+# --- edits and private copies on a deck with a semantic profile ---
 
 _SPLIT_DECK = (
     "* split\nVa a 0 1\nVb b 0 1\nVg g 0 1.2\n.model n nmos level=54\n"
@@ -271,7 +221,7 @@ _SPLIT_DECK = (
 )
 
 
-def _draw_on_xb(tmp_path: Path, mode: str):
+def _materialize(tmp_path: Path, mode: str, text: str, entries: list[dict]):
     from pydantic import TypeAdapter
 
     from ltspice_mcp.lib.variations import (
@@ -282,16 +232,21 @@ def _draw_on_xb(tmp_path: Path, mode: str):
     )
 
     tmp_path.mkdir()
-    path = tmp_path / "split.cir"
-    path.write_text(_SPLIT_DECK, encoding="ascii")
+    path = tmp_path / "deck.cir"
+    path.write_text(text, encoding="ascii")
     circuit = CircuitDeck(
-        "split", path, _SPLIT_DECK, (), semantic_profile=SemanticProfile("ngspice", mode)
+        "deck", path, text, (), semantic_profile=SemanticProfile("ngspice", mode)
     )
-    rule = {"rule": "mismatch", "instance": ["XB", "M0"], "AVT": 0.003}
-    variations = TypeAdapter(list[Variation]).validate_python(
-        [{"kind": "random", "runs": 1, "seed": 5, "rules": [rule]}]
-    )
+    variations = TypeAdapter(list[Variation]).validate_python(entries)
     return materialize_variants(circuit, expand_variations([circuit], variations), tmp_path)
+
+
+def _copies(tmp_path: Path, text: str, mode: str, device: str) -> float:
+    path = tmp_path / f"{device.replace('.', '_')}_{mode}_{len(text)}.cir"
+    path.write_text(text, encoding="ascii")
+    found = re.search(rf"@{re.escape(device)}\[m\]\s*=\s*(\S+)", _ngspice(path, mode, [device]))
+    assert found
+    return float(found[1])
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -301,30 +256,58 @@ def test_a_nested_draw_refuses_a_copy_that_would_change_what_ngspice_builds(
     """Drawing XB.M0 gives XB a private copy of cell, and no caller of that
     copy writes m, so ngspice no longer rewrites it. Outside the HSPICE modes
     XB's R1 then builds its own 3 copies instead of the 1 the rewrite gave it,
-    as ngspice shows on the two decks; the draw is refused. In the HSPICE modes
-    the rewrite multiplies, R1 builds 3 either way, and the draw goes ahead."""
+    as ngspice shows on the deck and its hand-made copy; the draw is refused.
+    In the HSPICE modes the rewrite multiplies, R1 builds 3 either way, and
+    the draw goes ahead."""
     from ltspice_mcp.lib.variations import VariationError
 
-    written = tmp_path / "written.cir"
-    written.write_text(
-        _SPLIT_DECK.replace("Va a 0 1", "Va b 0 1").replace("Vb b 0 1", "Vb a 0 1"),
-        encoding="ascii",
+    copied = _SPLIT_DECK.replace(
+        "XB b g cell\n",
+        ".subckt cellb d g\nR1 d 0 1k m=3\nM0 d g 0 0 n w=1u l=1u\n.ends\nXB b g cellb\n",
     )
-    copied = tmp_path / "copied.cir"
-    copied.write_text(
-        written.read_text(encoding="ascii").replace(
-            "XB b g cell\n",
-            ".subckt cellb d g\nR1 d 0 1k m=3\nM0 d g 0 0 n w=1u l=1u\n.ends\nXB b g cellb\n",
-        ),
-        encoding="ascii",
-    )
+    as_written = _copies(tmp_path, _SPLIT_DECK, mode, "r.xb.r1")
+    with_copy = _copies(tmp_path, copied, mode, "r.xb.r1")
+    rule = {"rule": "mismatch", "instance": ["XB", "M0"], "AVT": 0.003}
+    entries = [{"kind": "random", "runs": 1, "seed": 5, "rules": [rule]}]
     if mode == "hsa":
-        assert _measured(written, mode) == pytest.approx(_measured(copied, mode), rel=1e-9)
-        (case,) = _draw_on_xb(tmp_path / "case", mode)
+        assert as_written == with_copy == 3
+        (case,) = _materialize(tmp_path / "case", mode, _SPLIT_DECK, entries)
         assert any("delvto" in key for key in case.assignments), case.assignments
         return
-    assert _measured(written, mode) != pytest.approx(_measured(copied, mode), rel=1e-3)
+    assert (as_written, with_copy) == (1, 3)
     with pytest.raises(VariationError) as caught:
-        _draw_on_xb(tmp_path / "case", mode)
+        _materialize(tmp_path / "case", mode, _SPLIT_DECK, entries)
     assert caught.value.code == "multiplier_rewrite_changed"
-    assert "XB.R1" in str(caught.value)
+    assert "XB.R1" in str(caught.value) and "hsa" in str(caught.value)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_an_m_written_on_one_call_that_changes_another_call_is_refused(tmp_path: Path, mode: str):
+    """No X line of this deck writes m, so XB's R1 builds its own 3 copies. An
+    edit writing m=4 on XA makes ngspice rewrite cell for every caller, and
+    outside the HSPICE modes XB's R1 then builds 1, as ngspice shows; an edit
+    to XA must not change XB, so it is refused. In the HSPICE modes XB's R1
+    stays at 3 and the edit is made."""
+    from ltspice_mcp.lib.variations import VariationError
+
+    unwritten = _SPLIT_DECK.replace("XA a g cell m=4\n", "XA a g cell\n")
+    as_written = _copies(tmp_path, unwritten, mode, "r.xb.r1")
+    edited = _copies(tmp_path, _SPLIT_DECK, mode, "r.xb.r1")
+    entries = [
+        {
+            "kind": "assign",
+            "instances": [
+                {"instance": ["XA"], "attribute": "parameter", "parameter": "m", "values": ["4"]}
+            ],
+        }
+    ]
+    if mode == "hsa":
+        assert as_written == edited == 3
+        (case,) = _materialize(tmp_path / "case", mode, unwritten, entries)
+        assert "XA a g cell m=4" in case.text
+        return
+    assert (as_written, edited) == (3, 1)
+    with pytest.raises(VariationError) as caught:
+        _materialize(tmp_path / "case", mode, unwritten, entries)
+    assert caught.value.code == "multiplier_rewrite_changed"
+    assert "XB.R1" in str(caught.value) and "cell" in str(caught.value)

@@ -521,6 +521,7 @@ FROZEN_ERROR_CODES = (
     "multiple_random_variations",
     "multiple_stochastic_families",
     "multiplier_rewrite_changed",
+    "multiplier_rewrite_stops",
     "native_log_output",
     "nested_fet_unsupported",
     "netlist_invalid",

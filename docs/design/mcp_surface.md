@@ -2178,23 +2178,28 @@ model is refused with `model_missing`. The draw uses the device's W and L
 after `assign` variations are applied. The area a draw stands for is `m·W·L`,
 because the simulator builds m parallel copies from one card and they share
 the draw. LTspice ignores `m` on an X line, so there m is the device's own.
-ngspice gives a subcircuit that declares no `m` (on its `.subckt` line or in a
-body `.param`) an `m` parameter, default 1, whenever an X line anywhere in the
-deck calls it with `m`, and appends `m={m}` to every card of its body but a
-V, E, H or B card. The appended `m` replaces the card's own outside the
-HSPICE modes (the `kiltpsa` spicelib runs by default) and multiplies it in
-them (`ngbehavior` `hsa`); an X line's `m` on a subcircuit that declares `m`
-is an ordinary parameter. So m is the device's `m` after that rewrite, read
-in the scope its X lines set, as measured on ngspice-42. A deck where the
-rewrite appends `m` to an X line calling a subcircuit that takes no
-parameters is refused, as ngspice stops on it. An inner `m={mult}` resolves
-in the scope its X line sets. An `m` that does not resolve to a positive
-number refuses the request with `mismatch_geometry_unresolved`. A device one
-subcircuit level down is drawn on a private copy of its subcircuit that only
-the drawn X lines call; outside the HSPICE modes, where that copy would change
-which callers ngspice rewrites and so the `m` a card of the subcircuit builds,
-the request is refused with `multiplier_rewrite_changed`. Draws across circuits are
-independent; correlated Monte Carlo across decks is not supported.
+ngspice, as measured on ngspice-42, drops the subcircuits no instance reaches
+and then reads the deck once in order, includes and `.lib` sections in
+place. An X line that carries `m` makes it rewrite the subcircuit called,
+unless that one declares `m` (on its `.subckt` line or in a body `.param`):
+the subcircuit gets an `m` parameter, default 1, and `m={m}` is appended to
+each card of its body but a B, E, H, K, S, T, V or W card. An X line so given
+`m` rewrites its own callee in turn only if it sits later in the deck than
+the line that rewrote its body. The appended `m` replaces a card's own
+outside the HSPICE modes (the `kiltpsa` spicelib runs by default) and
+multiplies it in them (`ngbehavior` `hsa`); an X line's `m` on a subcircuit
+that declares `m` is an ordinary parameter. So m is the device's `m` after
+that rewrite, read in the scope its X lines set. A deck where the rewrite
+gives `m` to an X line calling a subcircuit that takes no parameters is
+refused, as ngspice stops on it. An inner `m={mult}` resolves in the scope
+its X line sets. An `m` that does not resolve to a positive number refuses
+the request with `mismatch_geometry_unresolved`. On ngspice, a case whose
+edits, the private subcircuit copies a nested target needs among them, would
+change what a card no edit writes builds is refused with
+`multiplier_rewrite_changed`. A deck with no semantic profile (QSPICE, Xyce)
+counts the product of the X line's `m` and the device's own; neither
+simulator's rule is measured. Draws across circuits are independent;
+correlated Monte Carlo across decks is not supported.
 
 A random case's draws follow from the seed, its circuit id and its sample
 index, never from the case's position among the request's cases. Every case

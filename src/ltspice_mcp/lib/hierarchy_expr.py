@@ -194,10 +194,11 @@ def scaled_geometry(fact: NumericFact, scale: NumericFact) -> NumericFact:
     return NumericFact(fact.expression, value, "m", "resolved")
 
 
-#: Element letters ngspice appends a subcircuit's ``m`` to (measured on
-#: ngspice-42 with ``listing expand``: a voltage source and a VCVS are left as
-#: written, and ngspice's source skips CCVS and behavioural sources too).
-NGSPICE_M_EXEMPT = frozenset("VEHB")
+#: Element letters whose cards ngspice appends a rewritten subcircuit's ``m``
+#: to, and those it leaves as written, as ``listing expand`` shows on
+#: ngspice-42. Any other letter is not measured.
+NGSPICE_M_TAKERS = frozenset("CDFGILMQRX")
+NGSPICE_M_EXEMPT = frozenset("BEHKSTVW")
 
 
 def ngspice_multiplies_m(ngbehavior: str | None) -> bool:
@@ -224,17 +225,32 @@ def card_copies(
 
     LTspice ignores ``m`` on an ``X`` line at any depth (recorded:
     ``raw/subckt_multiplier``, ``deck/subckt_multiplier_nested``), so to it a
-    card's copies are its own ``m`` and ``passed`` is always None. ngspice gives a subcircuit that does not declare ``m`` (on its ``.subckt``
-    line or in a body ``.param``) an ``m`` parameter, default 1, whenever any
-    ``X`` line in the deck calls it with ``m``, and appends ``m={m}`` to every
-    card of its body but those of ``NGSPICE_M_EXEMPT``. ``passed`` is that
-    parameter's value in the body ``own`` sits in, or None where the body is
-    not rewritten. A subcircuit that declares ``m`` takes the ``X`` line's
-    ``m`` as an ordinary parameter, which only a card writing ``m={m}`` reads.
+    card's copies are its own ``m`` and ``passed`` is always None.
 
-    With ``passed`` the appended ``m`` replaces the card's own (``multiply``
-    False) or multiplies it (``multiply`` True, the HSPICE modes); without it
-    the card's own ``m`` stands, and no ``m`` is one copy. An ``m`` that is not
+    ngspice rewrites a subcircuit for ``m`` before it expands the deck
+    (measured on ngspice-42 against ``listing expand``):
+
+    - it first drops every subcircuit no instance reaches from the top level,
+      so an ``X`` line inside one never counts;
+    - it then reads the deck once, in order, includes and ``.lib`` sections
+      in place. At an ``X`` line that carries ``m`` it rewrites the
+      subcircuit called, unless that subcircuit declares ``m`` (on its
+      ``.subckt`` line or in a body ``.param``) or was rewritten already: the
+      subcircuit gets an ``m`` parameter, default 1, and every card of its
+      body in ``NGSPICE_M_TAKERS`` gets ``m={m}`` appended;
+    - an ``X`` line so given ``m`` rewrites its own callee too, but only when
+      the reading reaches it after the rewrite, that is when it sits later in
+      the deck than the line that rewrote its body;
+    - every caller of a rewritten subcircuit then passes its ``m``, 1 where it
+      writes none; one that calls a subcircuit taking no parameters stops
+      ngspice ("Mismatch: 0 formal but 1 actual params").
+
+    ``passed`` is the ``m`` a rewritten body's cards receive, or None where
+    the body is not rewritten. With it the appended ``m`` replaces the card's
+    own (``multiply`` False) or multiplies it (``multiply`` True, the HSPICE
+    modes); without it the card's own ``m`` stands, and no ``m`` is one copy.
+    A subcircuit that declares ``m`` takes an ``X`` line's ``m`` as an ordinary
+    parameter, which only a card writing ``m={m}`` reads. An ``m`` that is not
     a positive number leaves the answer unresolved, with a reason naming where
     it is written.
     """

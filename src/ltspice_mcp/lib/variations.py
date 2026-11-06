@@ -23,7 +23,7 @@ from pydantic import (
     model_validator,
 )
 
-from ltspice_mcp.errors import NetlistError
+from ltspice_mcp.errors import MultiplierRewriteStop, NetlistError
 from ltspice_mcp.lib import RUN_DECK_SUFFIXES, atomic_write_bytes, component_value
 from ltspice_mcp.lib.deck_staging import (
     card_sections,
@@ -34,6 +34,7 @@ from ltspice_mcp.lib.deck_staging import (
 from ltspice_mcp.lib.encoding import encode_spice_text
 from ltspice_mcp.lib.format import parse_plain_value, parse_spice_value, unique_name  # noqa: TID251 - a written assignment must be a plain or SI value
 from ltspice_mcp.lib.hierarchy import Hierarchy, ResolvedInstance, SemanticProfile, Source
+from ltspice_mcp.lib.hierarchy_expr import NumericFact, ngspice_multiplies_m
 from ltspice_mcp.lib.instance_targeting import (
     InstanceEdit,
     SourceLineage,
@@ -940,8 +941,7 @@ def materialize_variants(
                 editor = final_editor
             else:
                 draws = {}
-            _refuse_a_changed_m_rewrite(as_written, final_files)
-            lineage = editor.lineage()
+            lineage = editor.lineage(_refuse_a_changed_m_rewrite(as_written, final_files))
             assignments.update(draws)
             base_files = [
                 ClosureFile(
@@ -2689,39 +2689,44 @@ def _validate_write_sets(
                         )
 
 
-def _refuse_a_changed_m_rewrite(as_written: Hierarchy, final_files: Sequence[ClosureFile]) -> None:
-    """Refuse a case whose private subcircuit copies change what ngspice builds.
+def _refuse_a_changed_m_rewrite(
+    as_written: Hierarchy, final_files: Sequence[ClosureFile]
+) -> Hierarchy | None:
+    """Refuse a case whose edits change what ngspice builds where nothing asked.
 
-    A copy is called only by the X lines on its path, and ngspice rewrites a
-    subcircuit for ``m`` only if one of its own callers writes ``m``
-    (``hierarchy_expr.card_copies``). So a copy can move that rewrite: a card
-    of the copy, or of the original the other callers keep, then builds
-    another number of copies than the deck as written, or ngspice stops on an
-    X line the rewrite gives ``m`` to a subcircuit that takes no parameters.
-    Every card whose own ``m`` and whose ancestors' ``m`` no edit wrote must
-    build what it did. Only a deck with a rewritten subcircuit is read again.
+    ngspice rewrites a subcircuit for ``m`` according to which of its callers
+    write ``m`` and where they sit in the deck (``hierarchy_expr.card_copies``).
+    An edit that writes ``m`` on one call, or a private subcircuit copy that
+    only the X lines on its path call, can move that rewrite, so a card the
+    case does not edit builds another number of copies than the deck as
+    written, or ngspice stops. Every card whose own ``m`` and whose ancestors'
+    ``m`` no edit wrote must build what it did. Returns the edited deck's
+    hierarchy when it resolved one, for the lineage to reuse.
     """
     profile = as_written.profile
-    if profile.simulator != "ngspice" or not as_written.m_rewritten:
-        return
+    if profile.simulator != "ngspice":
+        return None
     from ltspice_mcp.lib.instance_targeting import captured_hierarchy
 
-    fix = (
-        "write m on every X line that calls the subcircuit, or declare m on it, so "
-        "ngspice treats each copy as it treats the original"
-    )
     try:
         edited = captured_hierarchy(final_files, profile)
-    except NetlistError as exc:
-        if not str(exc).startswith("ngspice stops"):
-            raise
+    except MultiplierRewriteStop as exc:
         raise VariationError(
             "multiplier_rewrite_changed",
-            f"the private subcircuit copies this case needs would make ngspice stop: {exc}; {fix}",
+            f"the edits this case needs, private subcircuit copies included, would make {exc}",
         ) from exc
+    if not as_written.m_rewritten and not edited.m_rewritten:
+        return edited
     rows = {row.instance: row for row in edited.instances}
     written = {row.instance: dict(row.parameters).get("m") for row in as_written.instances}
     now = {path: dict(row.parameters).get("m") for path, row in rows.items()}
+    moved = sorted(as_written.m_rewritten ^ edited.m_rewritten)
+    hint = (
+        "In ngspice's HSPICE modes (ngbehavior hsa) the appended m multiplies a card's "
+        "own m instead of replacing it, so a caller that writes no m keeps its cards' own m"
+        if not ngspice_multiplies_m(profile.ngbehavior)
+        else "Write on that card the m the deck means it to have"
+    )
     for row in as_written.instances:
         other = rows.get(row.instance)
         if other is None or row.multiplier is None or other.multiplier is None:
@@ -2732,11 +2737,17 @@ def _refuse_a_changed_m_rewrite(as_written: Hierarchy, final_files: Sequence[Clo
         if row.multiplier.value != other.multiplier.value:
             raise VariationError(
                 "multiplier_rewrite_changed",
-                f"the private subcircuit copies this case needs change which callers "
-                f"ngspice rewrites for m, so {'.'.join(row.instance)} would build "
-                f"{other.multiplier.value or 'an unknown number of'} copies where the deck "
-                f"as written builds {row.multiplier.value or 'an unknown number'}; {fix}",
+                f"the edits this case needs, private subcircuit copies included, change "
+                f"which subcircuits ngspice rewrites for m ({', '.join(moved) or 'their order'}), "
+                f"so {'.'.join(row.instance)}, which no edit writes, would build "
+                f"{_copies_text(other.multiplier)} where the deck as written builds "
+                f"{_copies_text(row.multiplier)}. {hint}",
             )
+    return edited
+
+
+def _copies_text(fact: NumericFact) -> str:
+    return f"{fact.value:g} copies" if fact.value is not None else "an unknown number of copies"
 
 
 def _path_multiplier(row: ResolvedInstance) -> float:

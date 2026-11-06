@@ -98,9 +98,10 @@ A device the simulator builds as m parallel copies from one card shares that
 card's one draw, so its area is `m·W·L`. LTspice ignores `m` on an X line, so
 there m is the device's own. On ngspice an X line's `m` reaches the cards of a
 subcircuit that declares no `m` of its own: it replaces each card's own `m`,
-or multiplies it in the HSPICE modes (`ngbehavior` `hsa`). A subcircuit that
-declares `m` takes the X line's `m` as an ordinary parameter. On both, an
-inner `m={mult}` takes the value its X line gives. A device written as 12 fingers of 1 µm
+or multiplies it in the HSPICE modes (`ngbehavior` `hsa`), and reaches a
+subcircuit called from that body only where the call sits later in the deck.
+A subcircuit that declares `m` takes the X line's `m` as an ordinary
+parameter. On both, an inner `m={mult}` takes the value its X line gives. A device written as 12 fingers of 1 µm
 (`W=1u m=12`) gets the σ of a 12 µm device. An `m` that does not resolve to a
 positive number refuses the request with `mismatch_geometry_unresolved`.
 
