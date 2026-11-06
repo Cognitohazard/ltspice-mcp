@@ -65,6 +65,7 @@ from ltspice_mcp.lib.ltspice_window import (
 from ltspice_mcp.lib.metrics import (
     guarded_axis,
     parse_time,
+    signal_stats_defined,
     window_indices,
 )
 from ltspice_mcp.lib.plot_html import (
@@ -413,8 +414,8 @@ _DEFAULT_PLOT_MAX_POINTS = 100_000
 _PLOT_MAX_CELLS = 10_000_000
 
 # Most per-trace summaries one reply carries. A stepped or Monte Carlo overlay
-# can plot hundreds of traces; past this many the reply lists the first ones and
-# says how many there were, and analyze_results' signal_stats reads the rest.
+# can plot hundreds of traces; past this many the reply lists the first ones,
+# says how many there were, and names the call that reads the rest.
 _TRACE_SUMMARY_MAX = 32
 # The attached image is budgeted by the points it draws in all. Its plot area is
 # under 700 px wide, so past about two points per pixel column a series gains
@@ -1396,6 +1397,54 @@ def _ltspice_line(report: Mapping[str, Any]) -> str:
     return f"Not shown in LTspice: {report['reason']}. " + str(report.get("note", ""))
 
 
+def _rest_of_summary(
+    args: PlotWaveformInput, analysis: str, *, n_steps: int, run_index: int
+) -> str:
+    """The call that reads the traces a summary cut at ``_TRACE_SUMMARY_MAX``
+    leaves out, as the reply's ``hint`` names it, reading what this call
+    plotted: the same run, window and steps.
+
+    analyze_results' signal_stats recipe reads them where it defines
+    statistics for the plot over its window (``signal_stats_defined``), else
+    its waveform recipe returns their samples, as it does for any plot with a
+    sampled axis. An analyze_results source takes this tool's path, job_id,
+    plot_index, other_raw and dialect, but picks a job's run with ``runs``.
+    """
+    windowed = args.t_start is not None or args.t_end is not None
+    if signal_stats_defined(analysis, windowed=windowed):
+        recipes = "a signal_stats recipe for each signal, at most 256 a call"
+    else:
+        recipes = "waveform recipes naming their signals, at most 32 a recipe; they return samples"
+    if windowed:
+        window = {
+            edge: value
+            for edge, value in (("start", args.t_start), ("end", args.t_end))
+            if value is not None
+        }
+        recipes += f"; each with window={json.dumps(window)}"
+    source = (
+        "the path or job_id this call named, with its plot_index, other_raw and dialect if any"
+    )
+    if args.job_id is not None:
+        runs = {"case_ids": [args.case_id]} if args.case_id is not None else [run_index]
+        source += f", and runs={json.dumps(runs)}"
+    said = [
+        "analyze_results reads the traces this summary leaves out.",
+        f"Source: {source}.",
+        f"Recipes: {recipes}.",
+    ]
+    if n_steps > 1:
+        if isinstance(args.step, StepSelector):
+            said.append(f"Steps: step={json.dumps(args.step.model_dump(mode='json'))}.")
+        elif args.step is not None:
+            said.append(
+                f"Steps: all_steps=true; this plot's step is the rows with step_index {args.step}."
+            )
+        else:
+            said.append("Steps: all_steps=true, one row per step.")
+    return " ".join(said)
+
+
 @registry.tool(
     name="plot_waveform",
     title="Plot Waveforms",
@@ -1438,7 +1487,13 @@ def _ltspice_line(report: Mapping[str, Any]) -> str:
             "window_used": {"type": "array", "items": {"type": "number"}},
             "x_unit": {"type": ["string", "null"]},
             "traces": {"type": "array", "items": schema_from_typeddict(TraceSummary)},
-            "traces_truncated": {"type": "integer"},
+            "traces_truncated": {
+                "type": "integer",
+                "description": (
+                    "Present when traces summarizes only the first plotted traces: "
+                    "how many were plotted. hint names the call that reads the rest."
+                ),
+            },
             "delivery": {"type": "string", "enum": ["terminal", "ui"]},
             "opened": {"type": "boolean"},
             "opener": {"type": ["string", "null"]},
@@ -1520,9 +1575,12 @@ def _ltspice_line(report: Mapping[str, Any]) -> str:
             "image": _IMAGE_SCHEMA,
             "image_path": {"type": "string"},
             "observations": OBSERVATIONS_SCHEMA,
-            # Carried only when the server adds its one read-the-guide
-            # reminder to a session's first reply (server.call_tool).
-            "hint": {"type": "string"},
+            # Also carries the read-the-guide reminder the server adds to a
+            # session's first reply (server.call_tool).
+            "hint": {
+                "type": "string",
+                "description": "With traces_truncated: the call that reads the traces left out.",
+            },
         },
     },
 )
@@ -1745,17 +1803,6 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     # fields already say (the panels, series and steps drawn, `opened`,
     # `delivery`) is not restated here.
     observations = list(await asyncio.to_thread(services.read_observations, source, raw))
-    if traces_total > len(traces):
-        observations.append(
-            {
-                "code": "trace_summary_truncated",
-                "kind": "coverage",
-                "detail": (
-                    f"Summarized {len(traces)} of {traces_total} plotted traces; "
-                    "analyze_results' signal_stats reads any of the rest."
-                ),
-            }
-        )
     if plan.unverified_units:
         observations.append(
             {
@@ -1889,9 +1936,12 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     }
     # format.cap_list's convention: a cut list carries its total beside it. The
     # summaries past the cap were never computed, so the total is counted, not
-    # sliced from a list.
+    # sliced from a list. The hint beside it names the call that reads the rest.
+    rest: str | None = None
     if traces_total > len(traces):
+        rest = _rest_of_summary(args, analysis_type, n_steps=n_steps, run_index=run_index)
         data["traces_truncated"] = traces_total
+        data["hint"] = rest
     held = args.argument_notes()
     if held:
         data["warnings"] = held
@@ -1915,6 +1965,8 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
         lines.append(f"Attached a PNG of the chart ({image.width}x{image.height}, {png_path}).")
     lines.append(f"Traces ({len(traces)} of {traces_total}):")
     lines.extend(_summary_lines(traces, plan.x_unit))
+    if rest is not None:
+        lines.append(rest)
     lines.extend(format_observations(observations))
     lines.extend(data.get("warnings", []))
     result = format_response("\n".join(lines), data)
