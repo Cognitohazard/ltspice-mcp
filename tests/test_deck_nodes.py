@@ -2,11 +2,11 @@
 a deck's nodes: hierarchy discovery, the connectivity comparison and the
 floating- and dangling-node checks (``lib/deck_nodes.py``).
 
-A port named ``gnd`` is pinned against the LTspice recordings in
-``tests/test_recorded_ltspice_decks.py``. A node named ``gnd!`` and a port
-named like a ``.global`` net are written as the ``deck-node-names`` recorded
-behaviour, not yet recorded on LTspice, so until then the runs here are
-ngspice's, where ngspice is on PATH, and the readers follow them.
+A port named ``gnd``, a port named like a ``.global`` net and a node named
+``gnd!`` are pinned against the LTspice recordings in
+``tests/test_recorded_ltspice_decks.py``. The runs here are ngspice's, where
+ngspice is on PATH, and pin where hierarchy discovery reads a deck for ngspice
+otherwise than the LTspice readers do.
 """
 
 from __future__ import annotations
@@ -23,7 +23,6 @@ from ltspice_mcp.lib.netlist_graph import compare_graphs, flatten_graph, parse_n
 from ltspice_mcp.lib.spice_lex import lex_deck
 from ltspice_mcp.lib.spice_validator import is_ground_node, validate_netlist_bias_topology
 from ltspice_mcp.lib.trace_names import read_name
-from tests import _ltspice_recorded as rec
 from tests.conftest import LIVENESS_S
 from tests.test_inspect_tools import _run
 
@@ -42,7 +41,8 @@ UNTIED = (
     "* a rail the body does not reach\n.subckt load out\nR1 vdd out 1k\n.ends\n"
     "V1 vdd 0 5\nX1 a load\nR2 a 0 1k\n.op\n.end\n"
 )
-#: A port named like a global: the body's ``vdd`` is still the global.
+#: A port named like a global: the body's ``vdd`` is the port to LTspice
+#: (``deck/global_port``) and the global to ngspice 42.
 GLOBAL_PORT = (
     "* a port named like a global\n.global vdd\n.subckt leg top vdd\nR1 top vdd 1k\n.ends\n"
     "V1 vdd 0 5\nI3 0 c 1m\nX2 c mid leg\nR3 mid 0 1k\n.op\n.end\n"
@@ -71,15 +71,17 @@ def ngspice_voltages(tmp_path: Path, deck: str, *nodes: str) -> dict[str, float]
     return {node: float(found[node]) for node in nodes}
 
 
-async def hierarchy_nodes(state, work_dir: Path, deck: str) -> dict[tuple[str, ...], list]:
-    """Each instance's nodes as hierarchy discovery reads them for ngspice,
-    as (scope, name) pairs."""
+async def hierarchy_nodes(
+    state, work_dir: Path, deck: str, simulator: str = "ngspice"
+) -> dict[tuple[str, ...], list]:
+    """Each instance's nodes as hierarchy discovery reads them for
+    ``simulator`` (ngspice in its hsa mode), as (scope, name) pairs."""
     path = work_dir / "deck.cir"
     path.write_text(deck, encoding="utf-8")
-    (result,) = await _run(
-        state,
-        [{"kind": "hierarchy", "path": str(path), "simulator": "ngspice", "ngbehavior": "hsa"}],
-    )
+    query = {"kind": "hierarchy", "path": str(path), "simulator": simulator}
+    if simulator == "ngspice":
+        query["ngbehavior"] = "hsa"
+    (result,) = await _run(state, [query])
     assert result["ok"], result
     return {
         tuple(row["instance"]): [(n.get("scope", []), n["name"]) for n in row["nodes"]]
@@ -100,7 +102,8 @@ def flat_nodes(deck: str) -> dict[str, tuple[str, ...]]:
         ("gnd", ("top", "GND"), (), "ltspice", "port"),
         ("Gnd", ("top", "gnd"), (), "ngspice", "ground"),
         ("0", ("0",), (), "ltspice", "ground"),
-        ("VDD", ("vdd",), ("vdd",), "ltspice", "global"),
+        ("VDD", ("vdd",), ("vdd",), "ltspice", "port"),
+        ("VDD", ("vdd",), ("vdd",), "ngspice", "global"),
         ("vdd", ("Vdd",), (), "ltspice", "port"),
         ("vdd", (), ("VDD",), "ngspice", "global"),
         ("gnd!", (), (), "ltspice", "local"),
@@ -127,18 +130,29 @@ async def test_every_reader_wires_a_body_name_listed_by_global_to_the_global_net
 ):
     """The comparison flattens the body's resistor onto the global rail, as
     hierarchy discovery reads it, so the deck matches the one that passes the
-    rail as a port and not the one whose body never reaches it; a port named
-    like the global is the global too."""
+    rail as a port and not the one whose body never reaches it."""
     assert flat_nodes(GLOBAL)["x1.r1"] == ("vdd", "a")
     assert compare_graphs(GLOBAL, PORTED).structurally_equivalent
     assert not compare_graphs(GLOBAL, UNTIED).structurally_equivalent
-    rows = await hierarchy_nodes(state_no_sim, work_dir, GLOBAL)
-    assert rows[("X1", "R1")][0] == ([], "vdd")
+    for simulator in ("ngspice", "ltspice"):
+        rows = await hierarchy_nodes(state_no_sim, work_dir, GLOBAL, simulator)
+        assert rows[("X1", "R1")][0] == ([], "vdd"), simulator
 
-    assert flat_nodes(GLOBAL_PORT)["x2.r1"] == ("c", "vdd")
-    rows = await hierarchy_nodes(state_no_sim, work_dir, GLOBAL_PORT)
+
+async def test_the_comparison_and_the_netlist_checks_read_a_port_named_like_a_global_as_ltspice_does_where_hierarchy_reads_the_simulator_given(
+    state_no_sim, work_dir: Path
+):
+    """Inside ``.subckt leg top vdd`` with ``.global vdd``, the body's ``vdd``
+    is the port to both LTspice builds (``deck/global_port``) and the global
+    to ngspice 42. The comparison and the floating- and dangling-node checks
+    are told no simulator and read the port, as LTspice does. Hierarchy
+    discovery is told the simulator and reads each one's net."""
+    assert flat_nodes(GLOBAL_PORT)["x2.r1"] == ("c", "mid")
+    rows = await hierarchy_nodes(state_no_sim, work_dir, GLOBAL_PORT, "ltspice")
+    assert rows[("X2", "R1")][1] == ([], "mid")
+    rows = await hierarchy_nodes(state_no_sim, work_dir, GLOBAL_PORT, "ngspice")
     assert rows[("X2", "R1")][1] == ([], "vdd")
-    # The rail is driven, so nothing floats.
+    # Through the port and R3, c and mid reach ground, so nothing floats.
     assert validate_netlist_bias_topology(lex_deck(GLOBAL_PORT).cards) == []
 
 
@@ -161,21 +175,6 @@ async def test_every_reader_reads_gnd_bang_as_a_node_of_its_own(state_no_sim, wo
         assert (pair.plus, pair.minus) == ("V(a)", "V(gnd!)")
         grounded = read_name(["V(a)"], "V(a,GND)", xvii=xvii)
         assert (grounded.refused, grounded.plus, grounded.minus) == (None, "V(a)", None)
-
-
-@pytest.mark.parametrize("build", rec.BUILDS)
-def test_ltspice_reads_gnd_bang_and_a_port_named_like_a_global_as_the_readers_do(
-    build: str, tmp_path: Path
-):
-    """What the readers above follow ngspice in: ``gnd!`` is a node of its
-    own, and a body's ``vdd`` that is both a port and a ``.global`` net is the
-    global. Checked against each LTspice build once recorded."""
-    if rec.CASES.behaviours["deck-node-names"].pending:
-        pytest.skip("deck-node-names is not recorded on LTspice yet")
-    bang = rec.operating_point(build, "deck/gnd_bang", tmp_path / "bang")
-    assert bang["v(a)"] == pytest.approx(2000.0)
-    rail = rec.operating_point(build, "deck/global_port", tmp_path / "rail")
-    assert (rail["v(c)"], rail["v(mid)"]) == (pytest.approx(6.0), pytest.approx(0.0))
 
 
 async def test_the_comparison_and_the_netlist_checks_read_a_port_named_gnd_as_ltspice_does_where_hierarchy_reads_the_simulator_given(

@@ -352,13 +352,12 @@ inputs = [
 
 [behaviour.deck-node-names]
 summary = "Which net a node name stands for where no other recording says: whether gnd! is ground or a node of its own, and whether a subcircuit body's name that is both a port and a .global net is the port or the global."
-model = ["lib/deck_nodes.py", "lib/netlist_graph.py", "lib/spice_validator.py", "lib/hierarchy.py", "lib/trace_names.py", "lib/connectivity.py"]
+model = ["lib/deck_nodes.py", "lib/netlist_graph.py", "lib/spice_validator.py", "lib/hierarchy.py", "lib/trace_names.py", "lib/connectivity.py", "tools/inspect_tools.py"]
 # gnd_bang: 1 A through R1 into gnd!, then R2 to ground; v(a) is 1000 if gnd!
 # is ground and 2000 if it is a node. global_port: 1 mA from c through the
 # body's R1 to its vdd; v(c) is 6 and v(mid) 0 if vdd is the global 5 V rail,
 # and v(c) 2 and v(mid) 1 if it is the port wired to mid.
 inputs = ["deck/gnd_bang.cir", "deck/global_port.cir"]
-pending = "Written on Linux, where no LTspice runs; the server reads both as ngspice 42 does. Record them on Windows with `uv run python scripts/record_ltspice_fixtures.py --only 'deck/gnd_bang' --only 'deck/global_port'`, on both builds, then delete this key; the recorder test fails while a pending behaviour is recorded, and while a build's recording is missing once it is not."
 
 [behaviour.deck-forms]
 summary = "Card forms the lint and arity rules accept or refuse: B-source R= and P=, a spaced B expression, comma-separated IC= values, Q= and Flux=, a value keyed as R=, C= or L=, params: on a subcircuit, trailing area factors, device type names as models, .tran shorthands, two analyses in one deck."

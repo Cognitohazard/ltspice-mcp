@@ -123,10 +123,11 @@ IncludeResolver = Callable[[Path], "Path | None"]
 # one written with ``0`` compare equal.
 _GROUND = GROUND
 # The comparison reads a deck as LTspice does, whichever simulator the deck is
-# for: a port named ``gnd`` is the port, where ngspice reads it as ground, and
-# ``gnd`` is ground, which ngspice's kiltpsa mode may read otherwise
-# (``deck_nodes``). Hierarchy discovery, which is told the simulator, reads
-# each as that simulator does; tests/test_deck_nodes.py pins the difference.
+# for: a port named ``gnd`` or named like a ``.global`` net is the port, where
+# ngspice reads it as ground or the global, and ``gnd`` is ground, which
+# ngspice's kiltpsa mode may read otherwise (``deck_nodes``). Hierarchy
+# discovery, which is told the simulator, reads each as that simulator does;
+# tests/test_deck_nodes.py pins the difference.
 _READ_AS = "ltspice"
 
 # Passive two-terminal devices whose terminals are electrically interchangeable.

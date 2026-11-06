@@ -155,7 +155,7 @@ from ltspice_mcp.lib.connectivity import (
     named_labels,
 )
 from ltspice_mcp.lib.cursor_codec import canonical_hash
-from ltspice_mcp.lib.deck_nodes import global_names
+from ltspice_mcp.lib.deck_nodes import global_names, node_kind
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, TraceDescriptor
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import cap_note
@@ -207,7 +207,7 @@ from ltspice_mcp.lib.spice_lex import (
     directive_head,
     lex_deck,
 )
-from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
+from ltspice_mcp.lib.spice_lex_views import InstanceLine, SubcktCard, instances_by_ref
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, symbol_info_of
 from ltspice_mcp.lib.symbol_library import SymbolResolver
 from ltspice_mcp.state import SessionState
@@ -1562,6 +1562,20 @@ def _deck_node(
     globals_listed = {fold_case(text) for card in cards for text in _readable_global_names(card)}
     inside = _subcircuits_using(key, cards)
     if key in globals_listed:
+        # A body whose port has the name reads it as that port, as LTspice
+        # does (``deck_nodes``), so only the other bodies are on the global.
+        ports = _subcircuit_ports(cards)
+        inside = [
+            name
+            for name in inside
+            if node_kind(
+                key,
+                ports=ports.get(fold_case(name), ()),
+                global_names=globals_listed,
+                simulator="ltspice",
+            )
+            == "global"
+        ]
         message += (
             " It is a .global net, one node across the deck, but the net query lists "
             "only the deck's own cards"
@@ -1611,6 +1625,21 @@ def _readable_global_names(card: SpiceCard) -> tuple[str, ...]:
         return global_names(card)
     except SpiceLexError:
         return ()
+
+
+def _subcircuit_ports(cards: Sequence[SpiceCard]) -> dict[str, tuple[str, ...]]:
+    """The ports each subcircuit's header names, by its case-folded name;
+    none for a header that cannot be split into parts."""
+    ports: dict[str, tuple[str, ...]] = {}
+    for card in cards:
+        if card.kind != "subckt":
+            continue
+        try:
+            sub = SubcktCard.from_card(card)
+        except SpiceLexError:
+            continue
+        ports.setdefault(fold_case(sub.name), tuple(sub.ports))
+    return ports
 
 
 def _subcircuits_using(key: str, cards: Sequence[SpiceCard]) -> list[str]:
