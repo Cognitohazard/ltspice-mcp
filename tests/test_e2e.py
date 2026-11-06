@@ -821,7 +821,7 @@ class TestInspectCapabilities:
 # ---------------------------------------------------------------------------
 
 
-#: A run_code call may first start the worker, which imports the engine.
+#: A run_code call may first start the worker, which imports the Python API.
 _RUN_CODE_S = 2 * LIVENESS_S
 
 

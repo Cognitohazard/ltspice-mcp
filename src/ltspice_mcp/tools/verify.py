@@ -22,7 +22,7 @@ Checks by file kind:
   made on a text deck: it carries no geometry and no symbol library.
 
 ``compare`` runs in one of two modes: ``equivalence`` graph-compares through the
-connectivity engine (every include/lib open gated by ``safe_path``, so with a
+netlist graph (every include/lib open gated by ``safe_path``, so with a
 sandbox set an in-deck include that escapes it is denied and never read), and
 compares the directives outside subcircuit definitions with ``structural_diff``'s
 reader; ``structural_diff`` lexes both decks and reports an added/removed/changed

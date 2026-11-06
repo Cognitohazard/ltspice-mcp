@@ -588,7 +588,7 @@ inputs = ["log/meas_cplxfmt_polar.cir", "log/meas_cplxfmt_cartesian.cir"]
 keep = ["log"]
 
 [behaviour.log-meas-reserved-name]
-summary = "A .meas named for a constant of the expression engine (e, k, pi, q): LTspice 26 refuses the deck, XVII reports the name and takes the other measurements. Names such as time, temp and boltz are not reserved."
+summary = "A .meas named for a constant of the expression evaluator (e, k, pi, q): LTspice 26 refuses the deck, XVII reports the name and takes the other measurements. Names such as time, temp and boltz are not reserved."
 model = ["lib/spice_validator.py", "lib/log_parser.py"]
 # One deck per name: LTspice 26 stops at the first refusal.
 inputs = [

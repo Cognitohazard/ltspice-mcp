@@ -1073,7 +1073,7 @@ _ABSENT_SIGNAL_RECIPE: dict[str, Any] = {
 
 @pytest.fixture
 def grid_deck(work_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """The grid's deck, run by an engine that hands back a recorded raw+log."""
+    """The grid's deck, run by a stand-in simulator that hands back a recorded raw+log."""
     recorded_fixture_simulator(monkeypatch)
     deck = work_dir / "grid.cir"
     deck.write_text(_GRID_DECK)

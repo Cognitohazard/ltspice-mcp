@@ -452,7 +452,7 @@ def _meas_name_ltspice(
     context: _LintContext,
     rule: LintRule,
 ) -> list[LintFinding]:
-    """A ``.meas`` named for a constant of the expression engine (``e``, ``k``,
+    """A ``.meas`` named for a constant of the expression evaluator (``e``, ``k``,
     ``pi``, ``q``): LTspice 26 refuses the deck, XVII skips that measurement
     (recorded on both)."""
     return [

@@ -226,7 +226,7 @@ class LTSpiceMCPError(Exception):
     "verify with check_job / simulation_summary" hint doesn't misdirect.
 
     ``python_route`` — the message ends in a Python snippet written against the
-    engine object ``api``. Where that snippet runs depends on which tools the
+    ``api`` object. Where that snippet runs depends on which tools the
     session serves, which the raise site cannot see, so the MCP surfaces follow
     the message with :func:`python_route_text`. A Python API caller reads the
     message as is.

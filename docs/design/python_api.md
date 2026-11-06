@@ -1,6 +1,6 @@
 # Python API reference — `ltspice_mcp.api`
 
-`ltspice_mcp.api` is the in-process Python interface to the engine the MCP
+`ltspice_mcp.api` is the in-process Python interface to the code the MCP
 server exposes.
 
 The source is authoritative. Where this document disagrees with it, fix the
@@ -47,7 +47,7 @@ overrides: `simulator`, `enabled_simulators`, `simulator_exe`,
 `preload_recent_count`. Any other keyword raises `TypeError`, including the
 server-only settings in `[logging]` and `[tools]`, and `tool_profile`.
 
-The precedence holds for the life of the session. The engine re-reads
+The precedence holds for the life of the session. The session re-reads
 `[security] allowed_paths` when the config file changes, so a sandbox can be
 set, widened or removed without a restart. An explicit `Api(allowed_paths=...)`
 pins the sandbox, and an empty list pins the session to no sandbox. A TOML
@@ -69,12 +69,12 @@ with Api(working_dir="~/designs/ldo") as api:
     receipt = api.run_experiments(...)
 ```
 
-**One live engine session per process.** A second concurrent `Api`, or an
+**One live session per process.** A second concurrent `Api`, or an
 `Api` inside a process already running the MCP server, raises
 `ApiSessionError`. Shutdown cancels the jobs a process owns, so two sessions in
 one process would cancel each other's jobs.
 
-Each `Api` runs the engine on a private event-loop thread. Calls from several
+Each `Api` runs its session on a private event-loop thread. Calls from several
 threads run concurrently there, so one thread can cancel a job while another is
 blocked waiting on it.
 
@@ -365,7 +365,7 @@ with TemporaryDirectory() as directory:
 The tree writes out every field with its type, default, enum members and union
 branches, flattens nested models onto dotted paths, and includes one worked
 example. It contains no JSON Schema syntax or `$ref` chains. It is a
-**staticmethod** and needs no engine session, so it works before any `Api` is
+**staticmethod** and needs no session, so it works before any `Api` is
 opened. It renders from the Pydantic models the call validates against, so it
 always matches them.
 
@@ -377,7 +377,7 @@ index, it returns that part. It is a staticmethod for the same reason as
 `spice://guide` resources. Its `python` section covers this interface.
 
 `python -m ltspice_mcp.api reference [OP]` prints the same catalogue without
-starting the engine, and `python -m ltspice_mcp.api guide [SECTION]` prints the
+starting a session, and `python -m ltspice_mcp.api guide [SECTION]` prints the
 guide.
 
 Each of the six methods has its `reference()` text as its `__doc__`, so
@@ -391,7 +391,7 @@ directory otherwise; its `spice://netlists/` resource lists that same folder.
 
 ## 6. Errors
 
-- When an operation raises one of the engine's own exceptions (subclasses of
+- When an operation raises one of the server's own exceptions (subclasses of
   `LTSpiceMCPError` in `ltspice_mcp.errors`, such as `PathSecurityError` or
   `AnalysisDeadlineExceeded`), the exception propagates unchanged; the MCP
   server would return it as an `isError` result instead. A
@@ -818,7 +818,7 @@ Ownership, records and cancellation work the same on both platforms.
 ## Coexistence with a server
 
 The API and an MCP server on the same working directory share the job records
-and the store, and each process holds one engine session (§4). A job submitted
+and the store, and each process holds one session (§4). A job submitted
 through the API with `run_experiments(wait=False)` is owned by the submitting
 process and is cancelled when that process exits; adding `detach=True` hands it
 to a detached owner started for that job, which outlives the script (§11).

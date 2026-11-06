@@ -2128,7 +2128,7 @@ async def test_asc_reference_is_exported_like_the_committed_sheet(
     The committed sheet reaches the comparison as its LTspice export, so the
     reference .asc has to as well: read through the schematic editor instead,
     every SpiceLine read as a changed component and the exporter's boilerplate
-    as added directives, and the graph engine lexed the schematic as SPICE.
+    as added directives, and the netlist graph lexed the schematic as SPICE.
     """
     monkeypatch.setattr(se, "_export_asc_to_netlist", fake_netlister.export_asc_to_netlist)
     sheet = work_dir / "amp.asc"
@@ -2667,7 +2667,7 @@ class TestRenderAndCompareArguments:
         spec = self._edit(compare={"reference": "golden.cir"}).compare
         assert spec is not None
         assert spec.reference == "golden.cir"
-        # The tolerance and anchors keep the graph engine's own defaults.
+        # The tolerance and anchors keep the netlist graph's own defaults.
         assert spec.rtol == 1e-6
         assert spec.anchors is None
 

@@ -334,13 +334,13 @@ class TestSectionContent:
 
 
 class TestMismatchExemplarMatchesTheEngineUnit:
-    """The guide's worked AVT number and the engine that reads it are one class.
+    """The guide's worked AVT number and the code that reads it are one class.
 
     ``montecarlo.py`` converts W/L to µm before dividing, so AVT is V·µm. The
     same coefficient written in V·m is 1e6 too small, and nothing errors: the
     draw is negligible, every run is the nominal deck, and the receipt says
     complete. A wrong exponent here is unfalsifiable from the result, so it is
-    pinned against the engine's own field documentation instead.
+    pinned against the code's own field documentation instead.
     """
 
     # Real technology coefficients are single-digit to tens of mV·µm; a V·m
@@ -414,7 +414,7 @@ class TestTheDoorsAgree:
 
     def test_the_guide_reads_without_starting_the_engine(self, tmp_path: Path):
         """``python -m ltspice_mcp.api guide`` is the shell door; like the
-        catalogue it must not pay for the engine, which a cold process proves."""
+        catalogue it must not pay for a session, which a cold process proves."""
         probe = (
             "import runpy, sys\n"
             "sys.argv = ['ltspice_mcp.api', 'guide', 'python']\n"

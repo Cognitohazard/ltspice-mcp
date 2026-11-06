@@ -610,8 +610,8 @@ class AnalyzeInclude(NotedModel):
 def include_flag_coercer(model: type[StrictModel]) -> Callable[[Any], Any]:
     """Build the ``include=['outliers', 'per_run']`` -> ``{name: True}`` reader.
 
-    The list is what a caller writes first; the dict is the shape the engine
-    wants, and rejecting the list bought nothing. The accepted names are read
+    The list is what a caller writes first; the dict is the shape the recipes
+    want, and rejecting the list bought nothing. The accepted names are read
     off the model, so a flag added later is spellable both ways without a
     second list to keep in step — minus ``fields``, which takes row paths
     rather than a boolean and cannot mean anything inside a list. An unknown

@@ -1,6 +1,6 @@
 """The record of what every ``edit_schematic`` call answers (``tests/sheet_edit_record.py``).
 
-Its comparison of sheets must not tell apart the ways two engines write one
+Its comparison of sheets must not tell apart the ways two editors write one
 sheet (record order across kinds, line endings, an attribute line's place, a
 directive's trailing spaces), and must tell apart any change to a record. A
 call on two spellings of one sheet must have one key, and a call answering

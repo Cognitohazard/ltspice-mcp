@@ -1,6 +1,6 @@
 """Pre-flight validation for SPICE directives.
 
-The simulator's measurement engine has a narrower expression vocabulary
+The simulator's measurement evaluator has a narrower expression vocabulary
 than the waveform viewer. Directives that look syntactically correct
 (e.g. ``.MEAS AC fc WHEN vdb(out)=-3``) silently fail post-hoc inside
 the .log file. This module catches the common pitfalls before the
@@ -85,7 +85,7 @@ class _Rule:
 _RULES: tuple[_Rule, ...] = (
     _Rule(
         name="vdb_in_meas",
-        # LTspice's measurement engine accepts mag/re/im/ph but NOT vdb —
+        # LTspice's measurement evaluator accepts mag/re/im/ph but NOT vdb —
         # that's a waveform-viewer-only function.
         blocked_function="vdb",
         simulators=frozenset({"LTspice"}),
@@ -127,7 +127,7 @@ _RULES: tuple[_Rule, ...] = (
 )
 
 
-#: The constants of LTspice's expression engine (its help lists E, pi, K and
+#: The constants of LTspice's expression evaluator (its help lists E, pi, K and
 #: Q), which neither build takes as a .meas name: LTspice 26 refuses the deck
 #: ("Expected a name that is not a reserved name here.") and XVII skips the
 #: measurement ('"k" is a reserved constant name.'). time, temp and boltz are
@@ -144,7 +144,7 @@ def meas_name_refused(card: SpiceCard, simulator: str = "LTspice") -> Validation
     return ValidationError(
         rule_name="meas_reserved_name",
         message=(
-            f'"{name}" is one of the constants LTspice\'s expression engine '
+            f'"{name}" is one of the constants LTspice\'s expression evaluator '
             f"defines ({names}), so a .meas cannot take it as a name: LTspice 26 "
             "refuses the deck and runs nothing, and LTspice XVII skips the "
             "measurement."

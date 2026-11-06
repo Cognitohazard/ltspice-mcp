@@ -2,7 +2,7 @@
 
 ``analyze_results`` follows such a message with where the snippet runs for the
 session's tools. The attached analysis of ``run_experiments`` is the same
-engine, stored when the job's runs finish and shown later, by whichever
+analysis, stored when the job's runs finish and shown later, by whichever
 session asks; it says the same thing when it is shown, and the Python API,
 which reads the message as is, gets it without.
 """

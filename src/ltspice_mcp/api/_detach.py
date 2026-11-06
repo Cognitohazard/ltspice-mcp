@@ -38,7 +38,7 @@ from ltspice_mcp.lib.windows_job import detached_creation_flags, python_launch
 from ltspice_mcp.state import SessionState
 
 #: What the owner gets on top of its own longest legitimate wait: a cold
-#: interpreter start, the engine bootstrap, argument validation, and staging a
+#: interpreter start, the session bootstrap, argument validation, and staging a
 #: large include closure on a slow filesystem.
 _OWNER_BOOT_ALLOWANCE_S = 60.0
 
@@ -114,11 +114,11 @@ def _owner_default(value: Any) -> Any:
     """What may cross into the owner process, for anything JSON refuses itself.
 
     One answer for both halves of the hand-off — the call's arguments and the
-    engine's configuration overrides — because a type that is legal in one and
+    session's configuration overrides — because a type that is legal in one and
     refused in the other is a difference nothing explains. Deliberately narrow:
     paths become strings and models their JSON form, and anything else is
     refused by name. A silently dropped or stringified value would give the
-    owner a different call, or a different engine, than the caller has. The
+    owner a different call, or a different session, than the caller has. The
     refusal is an ``ApiValidationError``, as any argument an ``Api`` call
     cannot use is; ``json.dumps`` passes it on as raised.
     """

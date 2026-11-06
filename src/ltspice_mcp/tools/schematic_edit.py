@@ -21,7 +21,7 @@ reported but never un-commits the sheet.
 """
 
 # The op models, the in-place applier and the sheet's nets are the
-# shared engine in lib/schematic_ops.py, imported rather than duplicated.
+# shared schematic editor in lib/schematic_ops.py, imported rather than duplicated.
 from __future__ import annotations
 
 import asyncio
@@ -142,7 +142,7 @@ _DEFAULT_VIEW_LIMIT = 100
 # it, an unknown op is one error naming every accepted kind, and a known op with
 # a bad field reports against that kind alone.
 #
-# The members are the engine's own op list, so an op the engine applies is one
+# The members are the editor's own op list, so an op the editor applies is one
 # the tool accepts, and the reverse.
 ConsolidatedOp = Annotated[SchematicOp, Field(discriminator="op")]
 

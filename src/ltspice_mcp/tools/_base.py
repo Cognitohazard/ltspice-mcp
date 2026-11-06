@@ -1378,7 +1378,7 @@ _AUTOMATIC_DOOR: contextvars.ContextVar[bool] = contextvars.ContextVar(
 def automatic_door() -> Iterator[None]:
     """Mark the handler calls inside as arriving through the API's automatic mode.
 
-    Entered from inside the coroutine the engine loop runs, so the flag lives in
+    Entered from inside the coroutine the API's event loop runs, so the flag lives in
     that one task's context: a co-resident MCP server sharing the process (and
     the same :class:`ServerConfig`) cannot see it, which a config field or a
     session attribute could not promise.
@@ -1638,7 +1638,7 @@ def make_include_resolver(state: SessionState) -> IncludeResolver:
     """An include resolver that routes every include/lib open through
     ``safe_library_path``.
 
-    The graph engine calls this before opening any include, so with a sandbox
+    The netlist graph calls this before opening any include, so with a sandbox
     set an in-deck include that escapes it and the simulator's own library is
     denied and never read. The library roots are worked out once per resolver
     rather than per include.

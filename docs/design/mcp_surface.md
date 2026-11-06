@@ -36,7 +36,7 @@ observation.
 
 An eighth tool, `run_code`, is always registered and is served unless the
 operator sets `[tools] run_code = false`. It runs a Python snippet in a warm
-worker process that holds the engine as `api` (the six operations as methods
+worker process that holds the Python API as `api` (the six operations as methods
 returning complete results), for loops over runs and numpy on samples. It does
 not use the envelope either. It returns `status` (ok, error, timeout, busy,
 reset) and the captured output, and its tool description is its contract. The
@@ -2099,7 +2099,7 @@ Suppression is per call, and `linter_version` is reported in provenance.
 | `lib-section-ngspice` | blocking | ngspice in `kiltpsa` mode |
 | `analysis-count-ltspice` | blocking | refused by LTspice 26 and XVII: two of `.tran`/`.ac`/`.dc`/`.noise` (`.op` may appear with one) |
 | `meas-function-ltspice` | blocking | refused by LTspice 26 and XVII: `vdb()`, `phase()` or `group_delay()` in a `.meas` |
-| `meas-name-ltspice` | blocking | refused by LTspice 26 and XVII: a `.meas` named `e`, `k`, `pi` or `q`, constants of the expression engine |
+| `meas-name-ltspice` | blocking | refused by LTspice 26 and XVII: a `.meas` named `e`, `k`, `pi` or `q`, constants of the expression evaluator |
 | `meas-unclosed-paren-ltspice` | blocking | a `.meas` with a parenthesis left open. LTspice 26 refused the recorded one before the run and ran nothing, and XVII ran that deck without the measurement; any such `.meas` is refused, since LTspice 26's error names the parenthesis, not the form. `verify_circuit`'s `syntax` check reports the same as a `directive_syntax` error, and `edit_schematic` refuses to write it |
 | `lib-section-ltspice` | blocking | refused by LTspice 26 and XVII: `.lib file section`, which LTspice reads as one file name |
 | `byte-85-ltspice` | warning | LTspice: a byte 0x85 in an 8-bit deck or include with a card after it on the line, which LTspice 24 and later read as a line break and XVII does not; not reported when the session's LTspice is known to be XVII |

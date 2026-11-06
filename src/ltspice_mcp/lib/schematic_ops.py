@@ -1,4 +1,4 @@
-"""The .asc schematic edit engine: op models, appliers, geometry and net tracing.
+"""The .asc schematic editor: op models, appliers, geometry and net tracing.
 
 One implementation, three consumers — ``edit_schematic`` applies the ops,
 ``inspect`` reads the same nets and components through the same cached editor,

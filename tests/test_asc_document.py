@@ -1,6 +1,6 @@
 """The lossless ``.asc`` document: a sheet reads into records and writes back as
 it was, an edit changes only the records it touched, and a formatted record is
-the line the present schematic engine writes.
+the line the present schematic editor writes.
 """
 
 from __future__ import annotations
@@ -429,7 +429,7 @@ class TestEdits:
 
 class TestTheFormatThePresentEngineWrites:
     """A formatted record is the line spicelib's writer produces, so moving the
-    engine onto this document changes no byte of a sheet built from blank."""
+    editor onto this document changes no byte of a sheet built from blank."""
 
     @pytest.mark.parametrize("name", ["Draft1.asc", "nmos4_mirrored_quarter_turns.asc"])
     def test_spicelibs_own_output_formats_back_to_itself(

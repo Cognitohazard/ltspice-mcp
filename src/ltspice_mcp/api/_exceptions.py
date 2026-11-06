@@ -33,7 +33,7 @@ class ApiCallError(ApiError):
 
 
 class ApiSessionError(ApiError):
-    """The process cannot safely use or create the requested engine session."""
+    """The process cannot safely use or create the requested session."""
 
 
 class ApiClosedError(ApiSessionError):
