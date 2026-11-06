@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from spicelib.sim.sim_runner import SimRunner
+from spicelib.sim.sim_runner import SimRunner  # noqa: TID251 - this module owns every launch
 
 from ltspice_mcp.lib import RUN_DECK_SUFFIXES
 from ltspice_mcp.lib.cache import FileCache
@@ -97,9 +97,10 @@ def _launch_switches(simulator: type, native: NativeLaunchContext | None) -> lis
     """The command-line switches a run starts with.
 
     A native setup's come from its recorded policy, which holds
-    ``NGSPICE_NO_USER_INIT``. Every other ngspice run, the recoverable
-    adapter's included, gets that switch here, so no user startup file
-    replaces the ``-D ngbehavior=`` the server models the deck in.
+    ``NGSPICE_NO_USER_INIT``. Every other ngspice run gets that switch here,
+    so no user startup file replaces the ``-D ngbehavior=`` the server models
+    the deck in. The recoverable adapter accepts only this switch and puts
+    it on its own command line.
     """
     if native is not None:
         return list(native.policy.switches)

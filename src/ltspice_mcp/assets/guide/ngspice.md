@@ -220,6 +220,12 @@ off. You need one of your own for each result you want kept whenever the
 script runs several analyses or writes per iteration in a Monte Carlo loop,
 because `write` captures only the current plot.
 
+**Startup commands.** The server runs ngspice with `-n`, so no `.spiceinit`
+is read. Put what one would hold in the deck: options on an `.options` line,
+and a model library in a `.control` block as `pre_osdi <file>` or
+`pre_codemodel <file>`, which run before ngspice reads the circuit. The
+compatibility mode is `[simulator] ngbehavior` alone.
+
 **Variables vs vectors:**
 - `set` creates string/shell variables: `set myvar = "hello"` — access `$myvar`.
 - `let` creates numeric vectors: `let x = 2*pi` — access `$&x` to get a number.

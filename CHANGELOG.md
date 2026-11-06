@@ -10,6 +10,16 @@ tool-surface changes.
 
 ### Breaking
 
+- The server runs ngspice with `-n`, as recoverable and `pdk_native` runs
+  already did, so it no longer reads a user's `.spiceinit` or `spice.rc`
+  from `SPICE_USERINIT_DIR`, the working directory, `HOME` or `USERPROFILE`.
+  Such a file could replace the compatibility mode the server reads the deck
+  in (see Fixed). Everything else it did is gone too, so move it: the mode to
+  `[simulator] ngbehavior`, options to an `.options` line in the deck, and
+  commands such as `osdi` or `codemodel` to the deck's `.control` block as
+  `pre_osdi` or `pre_codemodel`, which run before ngspice reads the circuit.
+  The installation's `spinit`, which loads ngspice's own code models, is
+  still read.
 - `resvg-py`, the PNG rasterizer, is a dependency: every install draws a
   schematic or an attached plot as a PNG, which is the only image an
   assistant can see, without the `raster` extra. The extra stays, empty, so a
@@ -223,16 +233,12 @@ tool-surface changes.
   passes before its startup files, so a `set ngbehavior` in a user's
   `.spiceinit` replaced it. The run then used another mode than the one that
   hierarchy discovery, the `lib-section-ngspice` lint rule and the failure
-  classifier read the deck in. For example, a `.spiceinit` that set `hsa`
-  made ngspice multiply an instance's `m` into a card's `m` (12 copies)
-  while the server, configured for `kiltpsa`, counted 4. Every ngspice run
-  now starts with `-n`, as recoverable and `pdk_native` runs already did, so
-  no `.spiceinit` or `spice.rc` is read from `SPICE_USERINIT_DIR`, the
-  working directory or the home directory. A setting that lived in a
-  `.spiceinit` goes in the server config (the mode) or in the deck
-  (`.options`). The installation's `spinit`, which loads
-  ngspice's code models, is still read. The `ngspice_lib_section` hint no
-  longer suggests a `.spiceinit`, and names only `[simulator] ngbehavior`.
+  classifier read the deck in. For example, with a `.spiceinit` that set
+  `hsa`, ngspice built 12 copies of `R1 p 0 1k m=3` called by `X1 a r1 m=4`,
+  where `kiltpsa`, the configured mode, builds 4; and a sectioned `.lib`
+  that the lint refused ran without error. Every ngspice run now starts with
+  `-n` (see Breaking). The `ngspice_lib_section` hint no longer suggests a
+  `.spiceinit`, and names only `[simulator] ngbehavior`.
 - A deck's first line, its title, and any card after `.end`, the deck's or
   an included file's, are no longer read as cards. `inspect(kind="components")` listed a part after `.end`, and
   `run_experiments` accepted assignments and random rules naming a part,

@@ -582,10 +582,10 @@ the machine's startup files do not affect the run. A `pdk_native` sample
 (Appendix A.1) keeps its recorded sample index and seed. A resume or a later
 launch is refused with `recovery_execution_changed` if the executable, its
 command line or the platform has changed since submission. A job without
-`recoverable` runs the simulator with the machine's own system startup file
-(ngspice's `spinit`, which loads its code models). ngspice still gets `-n`,
-so no user `.spiceinit` is read and the compatibility mode is the one
-`[simulator] ngbehavior` sets.
+`recoverable` runs the simulator with the machine's own startup files
+(LTspice's `LTspice.ini`, ngspice's system `spinit`, which loads its code
+models), except a user's `.spiceinit`: every ngspice run gets `-n`, so the
+compatibility mode is the one `[simulator] ngbehavior` sets.
 
 `execution.simulator_seed` runs each case's saved deck through a short ngspice
 script that sets the random seed (`setseed`) immediately before it loads the

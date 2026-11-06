@@ -4030,13 +4030,13 @@ and nothing in spicelib's result says so:
 
 - the user's `.spiceinit` (or `spice.rc`), which ngspice looks for in the
   folder `SPICE_USERINIT_DIR` names, then in its working directory, then in
-  the home directory, trying the next place when one has none;
+  `HOME`, then in `USERPROFILE`, trying the next place when one has none;
 - the installation's `spinit`, found through `SPICE_SCRIPTS` or the
   installation's own `scripts` folder.
 
 Pointing `SPICE_USERINIT_DIR` at an empty folder does not stop the user's
 file from being read, because ngspice then falls back to the working
-directory and the home directory. `-n` stops the user's file wherever it is.
+directory, `HOME` and `USERPROFILE`. `-n` stops the user's file wherever it is.
 Nothing stops the `spinit` short of replacing it, and replacing it drops the
 code models it loads.
 
@@ -4073,8 +4073,8 @@ Note: Compatibility modes selected: ps lt ki a
 	v1#branch                        -4.00000e-03
 ```
 
-The same `hs a` comes back with the `.spiceinit` moved to the home directory
-(`HOME`), to a folder `SPICE_USERINIT_DIR` names, with
+The same `hs a` comes back with the `.spiceinit` moved to `HOME`, to
+`USERPROFILE` with an empty `HOME`, to a folder `SPICE_USERINIT_DIR` names, with
 `SPICE_USERINIT_DIR` pointing at an empty folder while the working directory
 holds the file, with the file named `spice.rc`, and with `-n` and a
 `spinit` (selected through `SPICE_SCRIPTS`) that ends in
@@ -4101,7 +4101,9 @@ ngspice's `.spiceinit` or `spinit` overrides the mode it sets, and that `-n`
 `set_compatibility_mode`, for example `exclusive=True`, that makes `run` add
 `-n` too, so a caller can ask for the mode it set to be the mode ngspice
 runs in. The default must stay as it is, because some users rely on a
-`.spiceinit` for other settings.
+`.spiceinit` for other settings. A caller that adds `-n` can move those
+into the deck: `pre_osdi` and `pre_codemodel` in a `.control` block run
+before ngspice reads the circuit.
 
 ### Suggested upstream test
 
@@ -4114,8 +4116,8 @@ second run.
 ### Cross-reference
 
 `tests/test_ngspice_startup_mode.py::test_ngspice_reads_the_deck_in_the_mode_the_server_models`
-puts a `.spiceinit` that sets `hsa` in each of the three places ngspice
-looks, configures the server for `kiltpsa`, and runs the deck above through
+puts a `.spiceinit` that sets `hsa` in `SPICE_USERINIT_DIR`, the working
+directory and the home directory (`HOME` and `USERPROFILE`), configures the server for `kiltpsa`, and runs the deck above through
 an ordinary and a recoverable job. It checks the mode hierarchy discovery
 reports, the mode ngspice's log names and the measured current.
 `::test_a_sectioned_lib_fails_where_the_server_says_it_will` does the same

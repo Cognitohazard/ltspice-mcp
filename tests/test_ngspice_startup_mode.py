@@ -7,7 +7,8 @@ it, and the server hands it to ngspice as ``-D ngbehavior=<mode>``. ngspice
 applies that define before it runs its startup files, so a
 ``set ngbehavior`` in a user's ``.spiceinit`` replaces it. ngspice looks for
 that file in the folder ``SPICE_USERINIT_DIR`` names, then in its working
-directory, then in the home directory (measured with ngspice-42).
+directory, then in ``HOME``, then in ``USERPROFILE`` (measured with
+ngspice-42).
 
 Each test puts a ``.spiceinit`` that sets ``hsa`` in one of those places,
 with the server configured for ``kiltpsa``, and checks what ngspice did
@@ -73,20 +74,21 @@ def _kiltpsa_session(work_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Session
 
 
 def _spiceinit_sets_hsa(location: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Put a ``.spiceinit`` that sets ``hsa`` at ``location``. An ambient
-    ``SPICE_USERINIT_DIR`` is cleared, because ngspice would look there
-    first."""
+    """Put a ``.spiceinit`` that sets ``hsa`` at ``location``, and leave the
+    places ngspice looks in before it empty, so that file is the one read."""
     folder = tmp_path / "user-startup"
     folder.mkdir()
     (folder / ".spiceinit").write_text("set ngbehavior=hsa\n", encoding="utf-8")
+    empty = tmp_path / "no-startup"
+    empty.mkdir()
     monkeypatch.delenv("SPICE_USERINIT_DIR", raising=False)
+    # A run's ngspice inherits the server's working directory.
+    monkeypatch.chdir(folder if location == "working directory" else empty)
     if location == "SPICE_USERINIT_DIR":
         monkeypatch.setenv("SPICE_USERINIT_DIR", str(folder))
-    elif location == "working directory":
-        # A run's ngspice inherits the server's working directory.
-        monkeypatch.chdir(folder)
-    else:
-        # Which of the two a Windows build reads is not recorded, so both.
+    elif location == "home directory":
+        # ngspice reads HOME, then USERPROFILE; a Windows session may set
+        # only the second.
         monkeypatch.setenv("HOME", str(folder))
         monkeypatch.setenv("USERPROFILE", str(folder))
 

@@ -380,7 +380,9 @@ def current_ngbehavior() -> str | None:
     It is the mode ngspice reads a deck in because every run passes it as
     ``-D ngbehavior=`` together with ``NGSPICE_NO_USER_INIT``, so no user
     startup file can replace it. A ``set ngbehavior`` in the installation's
-    own ``spinit`` still would; the server does not read that file.
+    own ``spinit`` still would: an ordinary run reads that file, for its code
+    models, and the server does not model what it sets. A recoverable run
+    replaces it with an empty one.
 
     ``getattr`` (not attribute access) is deliberate: it reads the protected
     ``_compatibility_mode`` without tripping pyright's reportPrivateUsage, and
@@ -396,11 +398,11 @@ in the mode the server passes it and models (``current_ngbehavior``).
 ngspice applies the ``-D ngbehavior=<mode>`` it is given before it runs its
 startup files, so a ``set ngbehavior`` in a user's ``.spiceinit`` (or
 ``spice.rc``) replaces the mode. ngspice looks for that file in the folder
-``SPICE_USERINIT_DIR`` names, then in its working directory, then in the home
-directory, trying the next place when one has none. Pointing
-``SPICE_USERINIT_DIR`` at an empty folder therefore still reads the other
-two. ``-n`` stops ngspice reading any of them (measured with ngspice-42). It
-leaves the installation's ``spinit``, which loads ngspice's code models.
+``SPICE_USERINIT_DIR`` names, then in its working directory, then in
+``HOME``, then in ``USERPROFILE``, trying the next place when one has none.
+Pointing ``SPICE_USERINIT_DIR`` at an empty folder therefore still reads the
+others. ``-n`` stops ngspice reading any of them (measured with ngspice-42).
+It leaves the installation's ``spinit``, which loads ngspice's code models.
 """
 
 
