@@ -450,9 +450,12 @@ class TargetEditor:
                 line += len(emit([card]).splitlines())
         return result
 
-    def lineage(self) -> tuple[SourceLineage, ...]:
+    def lineage(self, hierarchy: Hierarchy | None = None) -> tuple[SourceLineage, ...]:
+        """Where each card of the edited files came from. ``hierarchy`` is
+        ``captured_hierarchy`` of ``result()``, when the caller has resolved it."""
         origins = self.output_origins()
-        hierarchy = captured_hierarchy(self.result(), self.profile)
+        if hierarchy is None:
+            hierarchy = captured_hierarchy(self.result(), self.profile)
         return tuple(
             SourceLineage(
                 occurrence.source, origins[(occurrence.source.path, occurrence.source.line)]
