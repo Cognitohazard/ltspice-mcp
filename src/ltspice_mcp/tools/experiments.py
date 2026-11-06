@@ -257,8 +257,8 @@ class ExperimentExecution(StrictModel):
         default=60.0,
         ge=0.0,
         description=(
-            "Dwell before returning, held to 120s; the job keeps running. "
-            "Continue with jobs(action='wait'); 0 returns immediately."
+            f"Dwell before returning, held to {SUBMISSION_DWELL_CAP_S:g}s; the job keeps "
+            "running. Continue with jobs(action='wait'); 0 returns immediately."
         ),
     )
 

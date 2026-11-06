@@ -105,11 +105,11 @@ shut down while they ran) or `job_deadline` are retried by default; add
 explicit cancellation.
 `case_ids` limits the retry to those of the eligible cases, and naming an
 unknown or `produced` case returns `recovery_case_selection`. `wait_s`
-defaults to zero and is capped at 120 s. The child copies the parent's
-`produced` cases with their original `.raw` and `.log` files instead of
-running them again. `completeness.reused` counts them, each run's
-`attempt.execution_job_id` names the job that ran it, and `attempt.reused` is
-true for a copied case.
+defaults to zero and is held to the cap of `execution.wait_s`. The child
+copies the parent's `produced` cases with their original `.raw` and `.log`
+files instead of running them again. `completeness.reused` counts them, each
+run's `attempt.execution_job_id` names the job that ran it, and
+`attempt.reused` is true for a copied case.
 
 The child has a new job id and token. Repeating the same resume request returns
 that same child, and a repeat with a different selection or different retry

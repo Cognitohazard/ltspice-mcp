@@ -57,6 +57,7 @@ from ltspice_mcp.lib.pagination import page as _page
 from ltspice_mcp.lib.recovery_records import RecoveryError
 from ltspice_mcp.lib.sheet_results import NotPlaced, check_case, place_case
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools import experiments
 from ltspice_mcp.tools._base import (
     ENVELOPE_ERROR_SCHEMA,
     HINT_SCHEMA,
@@ -73,11 +74,7 @@ from ltspice_mcp.tools._base import (
     resolve_response_budget,
     safe_path,
 )
-from ltspice_mcp.tools.experiments import (
-    JOBS_WAIT_CAP_S,
-    SUBMISSION_DWELL_CAP_S,
-    attached_analysis_callback,
-)
+from ltspice_mcp.tools.experiments import attached_analysis_callback
 from ltspice_mcp.tools.receipts import (
     CASE_FAILURE_SCHEMA,
     JOB_STATUS_SCHEMA,
@@ -201,8 +198,9 @@ class JobsWaitInput(_AddressedJobsInput):
         default=60.0,
         ge=0.0,
         description=(
-            "How long to block, held to 300s. Timing out is not a failure: the "
-            "response says timed_out and the job keeps running, so wait again."
+            f"How long to block, held to {experiments.JOBS_WAIT_CAP_S:g}s. Timing out is "
+            "not a failure: the response says timed_out and the job keeps running, so "
+            "wait again."
         ),
     )
     wait_for: WaitFor = Field(
@@ -286,7 +284,10 @@ class JobsResumeInput(JobsInput):
         default=0.0,
         strict=True,
         ge=0.0,
-        description="Dwell on the returned job, held to 120s; presentation only, default 0.",
+        description=(
+            f"Dwell on the returned job, held to {experiments.SUBMISSION_DWELL_CAP_S:g}s; "
+            "presentation only, default 0."
+        ),
     )
 
 
@@ -1284,7 +1285,9 @@ async def evaluate_jobs(args: JobsInput, state: SessionState) -> JobsEvaluation:
         if isinstance(args, JobsResumeInput):
             from ltspice_mcp.lib.experiment_resume import resume_experiment
 
-            wait_s, note = held_to_cap("wait_s", args.wait_s, SUBMISSION_DWELL_CAP_S, "s")
+            wait_s, note = held_to_cap(
+                "wait_s", args.wait_s, experiments.SUBMISSION_DWELL_CAP_S, "s"
+            )
             receipt = await asyncio.shield(
                 resume_experiment(
                     state,
@@ -1374,7 +1377,9 @@ async def evaluate_jobs(args: JobsInput, state: SessionState) -> JobsEvaluation:
         timed_out: bool | None = None
         held: tuple[str, ...] = ()
         if isinstance(args, JobsWaitInput):
-            timeout_s, note = held_to_cap("timeout_s", args.timeout_s, JOBS_WAIT_CAP_S, "s")
+            timeout_s, note = held_to_cap(
+                "timeout_s", args.timeout_s, experiments.JOBS_WAIT_CAP_S, "s"
+            )
             held = () if note is None else (f"{note} Wait again to keep waiting.",)
             job, timed_out = await state.job_registry.wait(job, timeout_s, wait_for=args.wait_for)
         # A runs page carries no observations, so it skips the progress reads.
