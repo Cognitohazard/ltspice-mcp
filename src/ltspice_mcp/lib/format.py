@@ -6,7 +6,28 @@ Used throughout the analysis tools to accept human-friendly frequency and time v
 
 import re
 from collections.abc import Container
-from typing import Any
+from typing import Any, TypeVar
+
+_Number = TypeVar("_Number", int, float)
+
+
+def held_to_cap(
+    name: str, requested: _Number, cap: _Number, unit: str = ""
+) -> tuple[_Number, str | None]:
+    """The value to use for an argument with a cap, and the warning when it was held.
+
+    A cap bounds what one call costs, so a larger value is served at the cap
+    and said so, not refused: the caller asked for more of the same thing.
+    """
+    if requested <= cap:
+        return requested, None
+
+    def spelled(value: _Number) -> str:
+        # An integer is written out whole: 3000000, not 3e+06.
+        return f"{value:d}" if isinstance(value, int) else f"{value:g}"
+
+    asked, held = spelled(requested), spelled(cap)
+    return cap, f"{name}={asked}{unit} is above its cap of {held}{unit}; {held}{unit} was used."
 
 
 def cap_list(payload: dict[str, Any], key: str, items: list, cap: int) -> None:

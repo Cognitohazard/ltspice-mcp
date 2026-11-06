@@ -965,9 +965,10 @@ has no top-level `warnings`. The other tools hold their caps the same way: an
 `inspect` results `limit` above 100 or reference `limit` above 20 (in the
 item's `data.warnings`), a `plot_waveform` `max_points` above 2000000 (in
 `warnings`), a `run_code` `timeout_s` above 600 (in `warnings` and the
-`hint`), and a `waveform` recipe's `max_points` above the server's
-`[analysis] max_points` (in the recipe's `warnings`). The schema declares no
-`maximum` for these fields.
+`hint`), a `waveform` recipe's `max_points` above the server's
+`[analysis] max_points` and a `thd` recipe's `harmonics` above 50 (each in the
+recipe's `warnings`), and a `verify_circuit` `render.scale` above 4 (in
+`warnings` and the `hint`). The schema declares no `maximum` for these fields.
 
 Only the owning process or a caller with a valid control token can cancel;
 any other caller gets `cancel_not_authorized`. Once a cancel is acknowledged,
@@ -2261,7 +2262,7 @@ it, and reported when the caller names it.
 | `timing` | tran | `from{signal, edge, level}`, `to{...}` | `nth?`, `window?` |
 | `periodic` | tran | `signal` | `window?`; period, frequency, duty cycle |
 | `transient_response` | tran | `signal`, `mode: "step"\|"disturbance"` | `input` is required for `disturbance` and rejected for `step`; `window?` |
-| `thd` | tran | `signal` | `fundamental_hz?`, `harmonics?` (default 7), `window?` |
+| `thd` | tran | `signal` | `fundamental_hz?`, `harmonics?` (default 7, held to 50), `window?` |
 | `tone` | tran | `signal`, `frequency_hz` | `window?`; cut to the whole periods of `frequency_hz` that fit from the window's first sample and resampled by linear interpolation onto evenly spaced times, as `thd` does by default, so samples weigh by time. `amplitude` (peak, signal unit), `phase_deg` in (-180, 180] for `dc + amplitude*sin(2*pi*f*t + phase_deg)` with `t` the run's own time from zero, `sin_component`, `cos_component`, `dc`, plus `t_start`, `t_end`, `n_cycles`. Reducible leaves: `amplitude`, `phase_deg`, `dc`, `sin_component`, `cos_component`; a spread of `phase_deg` that straddles 180 degrees reduces the wrapped value, the components do not wrap |
 | `bode_filter` | ac | `signal` | filter characteristics: fc, bw, Q, type; a cutoff is read at the half-power level (-3.0103 dB) below the passband |
 | `bode_point` | ac | `signal`, `at_hz` | gain and phase at a frequency |

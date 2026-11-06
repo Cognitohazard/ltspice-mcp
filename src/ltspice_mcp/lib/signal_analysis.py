@@ -20,6 +20,7 @@ from typing import Literal, NotRequired, TypedDict
 
 import numpy as np
 
+from ltspice_mcp.lib.format import held_to_cap
 from ltspice_mcp.lib.log_types import measurement_named
 
 _LEVEL_EPSILON = 1e-12
@@ -1340,6 +1341,11 @@ def _resample_uniform(
     return np.interp(tu, t, y), warnings
 
 
+#: The highest harmonic a THD sums, the fundamental counted as the first. A
+#: larger count is summed to it, and the warnings say so.
+THD_HARMONICS_CAP = 50
+
+
 def analyze_thd(
     t: np.ndarray,
     y: np.ndarray,
@@ -1369,12 +1375,15 @@ def analyze_thd(
         raise ValueError(f"t/y length mismatch: {t.size} vs {y.size}")
     if t.size < 8:
         raise ValueError(f"Need at least 8 samples for an FFT; got {t.size}")
-    if not 1 <= n_harmonics <= 50:
-        raise ValueError(f"n_harmonics must be 1..50; got {n_harmonics}")
+    if n_harmonics < 1:
+        raise ValueError(f"n_harmonics must be at least 1; got {n_harmonics}")
     if window not in ("coherent", "hann"):
         raise ValueError(f"window must be 'coherent' or 'hann'; got {window!r}")
 
     warnings: list[str] = []
+    n_harmonics, held = held_to_cap("n_harmonics", n_harmonics, THD_HARMONICS_CAP)
+    if held is not None:
+        warnings.append(held)
     span = float(t[-1]) - float(t[0])
     if span <= 0:
         raise ValueError("Time window has zero span.")

@@ -66,6 +66,7 @@ from ltspice_mcp.lib.experiment_types import (
     ExperimentJob,
     SourceRecord,
 )
+from ltspice_mcp.lib.format import held_to_cap
 from ltspice_mcp.lib.hierarchy import SUPPORTED_FAMILIES, SemanticProfile
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.lint_rules import RULES_BY_ID, lint_deck, linter_version
@@ -131,7 +132,6 @@ from ltspice_mcp.tools._base import (
     ToolInput,
     failure_text,
     format_response,
-    held_to_cap,
     outcome_of,
     registry,
     resolve_response_budget,

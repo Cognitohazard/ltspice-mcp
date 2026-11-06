@@ -49,6 +49,7 @@ from ltspice_mcp.lib.experiment_types import (
     ExperimentJob,
 )
 from ltspice_mcp.lib.filelock import circuit_file_lock
+from ltspice_mcp.lib.format import held_to_cap
 from ltspice_mcp.lib.job_lifecycle import WaitFor
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.pagination import decode_offset, unpaged
@@ -66,7 +67,6 @@ from ltspice_mcp.tools._base import (
     failure_text,
     failures_schema,
     format_response,
-    held_to_cap,
     outcome_of,
     page_schema,
     registry,
