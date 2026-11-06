@@ -12,10 +12,15 @@ schematics that a person can read.
 Working on circuit files as text, an assistant makes mistakes that nothing
 reports, such as a wire that touches the wrong pin, and finds them only turns
 later. The server checks each change against LTspice's own rules before it is
-written or run, and points the assistant to what needs its attention. Results
-come back as named numbers, such as a phase margin or a transistor's gm,
-instead of waveforms to read. A sweep, a Monte Carlo run or a whole schematic
-build is one call.
+written or run, and points the assistant to what needs its attention.
+
+Results come back as named numbers, such as a phase margin or a transistor's
+gm, instead of waveforms to read. A sweep, a set of process corners or a
+Monte Carlo run takes one call. The server runs the cases in parallel as a
+background job and replies with statistics across them. The assistant can
+keep working while a long job runs. Each run's results stay on disk, where a
+later call or a restarted server can read them. Repeating a request returns
+the job that already ran instead of running it again.
 
 You and the assistant can work on the same schematic. The assistant picks up
 your saved changes on its next call. With the schematic open in LTspice (26.1
