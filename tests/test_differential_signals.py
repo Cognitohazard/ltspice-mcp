@@ -18,10 +18,12 @@ import numpy as np
 import pytest
 
 from ltspice_mcp.api import RawResult
+from ltspice_mcp.api._primitives import load_raw_result
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.recipes import RECIPE_MODELS, _discriminant_of
 from ltspice_mcp.server import call_tool
 from ltspice_mcp.state import SessionState
+from tests import _ltspice_recorded as rec
 from tests.conftest import (
     SyncApi,
     call_tool_params,
@@ -489,3 +491,96 @@ async def test_noise_integral_refuses_a_genuine_pair(state_no_sim: SessionState,
         state_no_sim, path, [{"key": "n", "metric": "noise_integral", "signal": "V(onoise,R1)"}]
     )
     assert "spectral densities" in _failure_message(data)
+
+
+# ---------------------------------------------------------------------------
+# One node pair, every route
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_one_node_pair_reads_alike_on_every_route(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """``raw/tran`` (R1 from in to out, C1 from out to ground) as each LTspice
+    build wrote it. ``V(in,out)``, the drop across R1, is V(in) - V(out)
+    through RawResult.trace, RawResult.compare (one build's run against the
+    other's), the value recipe and plot_waveform."""
+    paths = {build: rec.stage_run(build, "raw/tran", work_dir / build) for build in rec.BUILDS}
+    raws = {
+        build: await load_raw_result(
+            state=state_no_sim, raw_path=path, job_id=None, run_index=0, case_id=None
+        )
+        for build, path in paths.items()
+    }
+    drops = {build: raw.trace("V(in)") - raw.trace("V(out)") for build, raw in raws.items()}
+
+    for build, raw in raws.items():
+        np.testing.assert_array_equal(raw.trace("V(in,out)"), drops[build])
+
+        axis = raw.axis()
+        index = _nearest(axis, 900e-6)
+        data = await _analyze(
+            state_no_sim,
+            paths[build],
+            [{"key": "drop", "metric": "value", "expr": "V(in,out)", "at": "900u"}],
+        )
+        value = _value(data, "drop")
+        assert (value["signal"], value["actual_x"]) == ("V(in,out)", float(axis[index]))
+        assert value["value"] == float(drops[build][index])
+
+        plotted = await _plot(state_no_sim, path=str(paths[build]), signals=["V(in,out)"])
+        (trace,) = plotted["traces"]
+        assert trace["signal"] == "V(in,out)"
+        assert (trace["min"], trace["max"], trace["final"]) == pytest.approx(
+            (drops[build].min(), drops[build].max(), drops[build][-1]), rel=1e-12, abs=1e-15
+        )
+
+    here, there = rec.BUILDS
+    compared = raws[here].compare(raws[there], signals=["V(in,out)"])
+    (name,) = compared["signals"]
+    entry = compared["signals"][name]
+    assert name == "V(in,out)"
+    axis, other_axis = raws[here].axis(), raws[there].axis()
+    at = int(np.flatnonzero(axis == entry["at"])[0])
+    assert entry["value"] == float(drops[here][at])
+    assert entry["other"] == pytest.approx(
+        float(np.interp(entry["at"], other_axis, drops[there])), rel=1e-9, abs=1e-12
+    )
+    assert entry["max_abs"] == pytest.approx(abs(entry["value"] - entry["other"]), abs=1e-15)
+
+
+@pytest.mark.asyncio
+async def test_one_node_pair_at_a_bias_point_reads_alike_on_every_route(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """``raw/op``, a 1k over 4k divider from 5 V, as each build wrote it: the
+    drop across R1, ``V(in,out)``, is 1 V through RawResult.value,
+    RawResult.compare and the value recipe, which reads a run with no axis off
+    its bias point. A plot has no axis to draw it on."""
+    paths = {build: rec.stage_run(build, "raw/op", work_dir / build) for build in rec.BUILDS}
+    raws = {
+        build: await load_raw_result(
+            state=state_no_sim, raw_path=path, job_id=None, run_index=0, case_id=None
+        )
+        for build, path in paths.items()
+    }
+    for build, raw in raws.items():
+        drop = raw.value("V(in)") - raw.value("V(out)")
+        assert drop == pytest.approx(1.0, rel=1e-6)
+        assert raw.value("V(in,out)") == drop
+        data = await _analyze(
+            state_no_sim,
+            paths[build],
+            [{"key": "drop", "metric": "value", "expr": "V(in,out)"}],
+        )
+        value = _value(data, "drop")
+        assert (value["signal"], value["value"], value["unit"]) == ("V(in,out)", drop, "V")
+
+    here, there = rec.BUILDS
+    entry = raws[here].compare(raws[there], signals=["V(in,out)"])["signals"]["V(in,out)"]
+    assert (entry["at"], entry["value"], entry["other"]) == (
+        None,
+        raws[here].value("V(in,out)"),
+        raws[there].value("V(in,out)"),
+    )
