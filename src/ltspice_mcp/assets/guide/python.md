@@ -132,6 +132,12 @@ The other run is read at this run's points over the span both cover,
 interpolated where its axis differs (as in a compressed LTspice raw, guide
 section 'ltspice'). You choose the tolerance.
 
+A file too large to read whole (one read keeps 512 MiB of numbers) can still
+be read for the signals you need: `api.load_raw(..., signals=["V(out)",
+"I(R1)"])` decodes only those traces, the axis and any step parameters. A node
+pair `V(a,b)` keeps both nodes. Its `observations` say which signals were
+chosen.
+
 `api.load_raw(..., plot_index=1, dialect=None)` selects a plot by its
 zero-based position in the file, separately from the case (or run) and the
 step. `plot_index` defaults to zero and takes a nonnegative integer. `dialect`

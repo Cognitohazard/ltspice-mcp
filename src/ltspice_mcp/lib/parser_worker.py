@@ -12,12 +12,19 @@ costs to start.
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from ltspice_mcp.lib.log_types import LogLimits
 from ltspice_mcp.lib.parser_capture import SourceFiles, capture_inputs, parser_cache_key
-from ltspice_mcp.lib.raw_header import RawLimits, preflight_raw
+from ltspice_mcp.lib.raw_header import (
+    RawHeader,
+    RawLimits,
+    RawTooLargeError,
+    preflight_raw,
+    select_traces,
+)
 from ltspice_mcp.lib.store import is_sha256, parser_file_in
 
 
@@ -41,6 +48,19 @@ def _source_files(value: Any) -> SourceFiles:
     return SourceFiles(**paths)
 
 
+def _signals(value: Any) -> list[str] | None:
+    """The signals a read keeps the traces of, or None for every trace."""
+    if value is None:
+        return None
+    if (
+        not isinstance(value, list)
+        or not 0 < len(value) <= 64
+        or any(not isinstance(item, str) or not 0 < len(item) <= 256 for item in value)
+    ):
+        raise ValueError("Parser signals must be 1 to 64 names of up to 256 characters")
+    return value
+
+
 def parse_request(request: dict[str, Any], directory: Path) -> None:
     """Capture and decode the fixed operation, writing one bounded result file."""
     expected = {
@@ -50,6 +70,7 @@ def parse_request(request: dict[str, Any], directory: Path) -> None:
         "dialect",
         "producing_dialect",
         "limits",
+        "signals",
         "existing_cache_keys",
     }
     if set(request) != expected or type(request["version"]) is not int or request["version"] != 1:
@@ -69,6 +90,9 @@ def parse_request(request: dict[str, Any], directory: Path) -> None:
     }:
         raise ValueError("Parser limits must be explicit and complete")
     raw_limits = RawLimits(**limits["raw"])
+    signals = _signals(request["signals"])
+    if signals is not None and not require_raw:
+        raise ValueError("Only a RAW read chooses signals")
     log_limits = LogLimits(**limits["log"])
     step_rows = _positive(limits["step_rows"], "step_rows")
     metadata_bytes = _positive(limits["metadata_bytes"], "metadata_bytes")
@@ -85,7 +109,14 @@ def parse_request(request: dict[str, Any], directory: Path) -> None:
     header = (
         preflight_raw(
             parser_file_in(directory, "input.raw"),
-            limits=raw_limits,
+            # A read of chosen signals holds the numeric budget to what it
+            # keeps (below), not to the whole file. A file's numbers take no
+            # more than four bytes for each byte it stores them in: as many
+            # in binary, fewer in text, which spends at least two characters
+            # on a value it keeps in eight bytes.
+            limits=raw_limits
+            if signals is None
+            else replace(raw_limits, numeric_bytes=4 * raw_limits.input_bytes),
             dialect=request["dialect"],
             producing_dialect=request["producing_dialect"],
         )
@@ -97,6 +128,7 @@ def parse_request(request: dict[str, Any], directory: Path) -> None:
         dialect=request["dialect"],
         producing_dialect=request["producing_dialect"],
         limits=limits,
+        signals=signals,
     )
     result: dict[str, Any] = {"version": 1, "status": "cached", "cache_key": key}
     if key not in keys:
@@ -107,6 +139,7 @@ def parse_request(request: dict[str, Any], directory: Path) -> None:
         if require_raw:
             from ltspice_mcp.lib.raw_decode import decode_raw
 
+            assert header is not None  # preflight ran for every RAW read
             result["raw"] = decode_raw(
                 captured,
                 directory,
@@ -116,9 +149,27 @@ def parse_request(request: dict[str, Any], directory: Path) -> None:
                 step_log_bytes=log_limits.log_bytes,
                 step_rows=step_rows,
                 preflight=header,
+                chosen=None if signals is None else _chosen(header, signals, raw_limits),
             )
         result["status"] = "ok"
     payload = json.dumps(result, allow_nan=False, separators=(",", ":")).encode("utf-8")
     if len(payload) > metadata_bytes:
         raise ValueError("Parser result metadata exceeds its byte limit")
     parser_file_in(directory, "result.json").write_bytes(payload)
+
+
+def _chosen(header: RawHeader, signals: list[str], limits: RawLimits) -> RawHeader:
+    """``header`` cut to the traces ``signals`` read (``trace_names.chosen_traces``),
+    within the numeric budget a whole-file read is held to."""
+    from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build
+    from ltspice_mcp.lib.trace_names import chosen_traces
+
+    def xvii(plot: Any) -> bool:
+        # As device_names.writes_xvii_names reads a decoded raw's Command.
+        command = next((value for key, value in plot.fields if key.lower() == "command"), "")
+        return is_cp1252_ltspice_build(command)
+
+    chosen = select_traces(header, chosen_traces(header.plots, signals, xvii=xvii))
+    if chosen.numeric_bytes > limits.numeric_bytes:
+        raise RawTooLargeError(chosen.numeric_bytes, limits.numeric_bytes, chosen=True)
+    return chosen

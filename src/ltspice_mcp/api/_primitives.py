@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import dataclasses
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict
 from pathlib import Path
@@ -50,8 +51,10 @@ class RawResult:
         step_count: int,
         steps: list[dict[str, Any]],
         observations: tuple[dict[str, Any], ...] = (),
+        chosen: tuple[str, ...] | None = None,
     ) -> None:
         self._raw = raw
+        self._chosen = chosen
         self._signals = tuple(str(name) for name in raw.get_trace_names())
         # Takes ownership of the rows the caller just built; the detachment
         # contract is the per-read copy on the ``steps`` property.
@@ -74,7 +77,15 @@ class RawResult:
         ``V(a) - V(b)`` from this step. Other trace math is ordinary numpy on
         the traces it combines.
         """
-        signal = services.resolve_signal(self._raw, name)
+        try:
+            signal = services.resolve_signal(self._raw, name)
+        except ResultError as exc:
+            if self._chosen is None:
+                raise
+            raise ResultError(
+                f"{exc} This result was read with signals={list(self._chosen)}, so it "
+                f"holds only their traces; load_raw again with {name!r} among them."
+            ) from exc
         self._validate_step(step)
         return np.array(signal.wave(self._raw, step), copy=True)
 
@@ -372,8 +383,13 @@ async def load_raw_result(
     plot_index: int = 0,
     dialect: str | None = None,
     other_raw: OtherRawKind | None = None,
+    signals: tuple[str, ...] | None = None,
 ) -> RawResult:
-    """Resolve and bounded-parse one raw result on the API event loop."""
+    """Resolve and bounded-parse one raw result on the API event loop.
+
+    With ``signals``, the parser keeps only the traces they read, with the
+    axis and any step parameters (``trace_names.chosen_traces``), and holds
+    its numeric budget to those."""
     if raw_path is not None:
         resolved = state.resolve_path(str(raw_path))
         source = services.source_for_raw_path(
@@ -388,8 +404,22 @@ async def load_raw_result(
         source = services.source_for_run(context, plot_index=plot_index, dialect=dialect)
         resolved = source.raw
 
+    if signals is not None:
+        source = dataclasses.replace(source, signals=signals)
     raw = await services.load_raw(source, state)
     observations = await asyncio.to_thread(services.read_observations, source, raw)
+    if signals is not None:
+        observations = (
+            *observations,
+            {
+                "code": "signals_chosen",
+                "kind": "provenance",
+                "detail": (
+                    f"Read with signals={list(signals)}: this result holds the traces "
+                    "they read, the axis and any step parameters, and no other trace."
+                ),
+            },
+        )
     assert resolved is not None
     step_count = len(raw.descriptor.steps)
     steps: list[dict[str, Any]] = [StepValues(step.parameters) for step in raw.descriptor.steps]
@@ -400,6 +430,7 @@ async def load_raw_result(
         step_count=step_count,
         steps=steps,
         observations=observations,
+        chosen=signals,
     )
 
 

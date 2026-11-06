@@ -126,6 +126,7 @@ def read_parsed_artifacts(
         dialect=request["dialect"],
         producing_dialect=request["producing_dialect"],
         limits=request["limits"],
+        signals=request.get("signals"),
     )
     if key != reply.cache_key:
         raise ValueError("Parser capture identity disagrees with its result")

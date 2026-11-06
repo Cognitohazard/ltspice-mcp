@@ -32,8 +32,6 @@ from ltspice_mcp.lib import recent
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, RawData
 from ltspice_mcp.lib.device_names import (
-    device_param_name,
-    find_trace_by_path,
     parse_shorthand,
     writes_xvii_names,
 )
@@ -45,7 +43,6 @@ from ltspice_mcp.lib.experiment_types import (
 )
 from ltspice_mcp.lib.job_lifecycle import runs_done
 from ltspice_mcp.lib.log_parser import LogDiagnostics, device_key
-from ltspice_mcp.lib.netlist_graph import GROUND_ALIASES
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.parser_service import ParserCleanupError, select_raw
 from ltspice_mcp.lib.parser_service import load_artifacts_sync as _parse_artifacts_sync
@@ -69,6 +66,11 @@ from ltspice_mcp.lib.simulator_build import (
     executable_identity,
     ltspice_before_24,
     same_executable,
+)
+from ltspice_mcp.lib.trace_names import (
+    GROUND_ALIASES,
+    NODE_PAIR_RE,
+    find_trace,  # noqa: TID251 - resolve_signal's own reads, and the name metrics' allowance uses
 )
 from ltspice_mcp.state import SessionState
 
@@ -187,6 +189,9 @@ class AnalysisSource:
     #: What a read of these results says of them, from the case that made them
     #: (``RunContext.observations``); none for a bare path.
     observations: tuple[dict[str, Any], ...] = ()
+    #: The signals a read keeps the traces of (``trace_names.chosen_traces``),
+    #: with the axis and any step parameters; None reads every trace.
+    signals: tuple[str, ...] | None = None
     # Resident facts belong to one evaluation, between fresh drift checks.
     captured: ParsedArtifacts | None = field(default=None, repr=False, compare=False)
 
@@ -743,11 +748,6 @@ def load_logs_sync(source: AnalysisSource, state: SessionState) -> DecodedLog:
     return _parse_logs_sync(source, state, deadline=deadline)
 
 
-#: A node-pair voltage ``V(a,b)``. SPICE syntax names it, but no simulator
-#: writes it as a trace, so it is read as ``V(a) - V(b)``. A node name holds
-#: no comma, parenthesis or space, which keeps the split unambiguous.
-_NODE_PAIR_RE = re.compile(r"\s*v\(\s*([^\s(),]+)\s*,\s*([^\s(),]+)\s*\)\s*", re.IGNORECASE)
-
 _V_TRACE_RE = re.compile(r"v\((.+)\)", re.IGNORECASE)
 
 
@@ -794,46 +794,6 @@ def _find_trace(raw: RawData, signal: str) -> str | None:
     """The raw's own name for one trace ``signal`` addresses, or None
     (``find_trace`` over the raw's trace names)."""
     return find_trace(raw.get_trace_names(), signal, xvii=writes_xvii_names(raw))
-
-
-def find_trace(names: Sequence[str], signal: str, *, xvii: bool) -> str | None:
-    """The name among ``names`` that ``signal`` addresses, or None.
-
-    Lookup is case-insensitive: SPICE node names are case-insensitive per
-    SPICE conventions, but spicelib preserves the case the simulator wrote.
-    LTspice writes ``V(out)`` for transient/AC/DC sweep raws but ``v(onoise)``
-    for ``.NOISE`` raws — case-sensitive match would reject the user's
-    ``V(onoise)`` even though the data exists. ``xvii`` is for names a build
-    wrote that names subcircuit members as XVII does. The one rule behind
-    every reader that finds a trace or an operating-point value by name.
-    """
-    if signal in names:
-        return signal
-    sig_lower = signal.lower()
-    by_lower = {name.lower(): name for name in names}
-    if sig_lower in by_lower:
-        return by_lower[sig_lower]
-
-    # Resolve cross-simulator / shorthand aliases transparently instead of
-    # forcing a guaranteed retry on a deterministic rename:
-    #   - noise: LTspice V(onoise)/V(inoise) <-> ngspice onoise_spectrum/
-    #     inoise_spectrum, plus bare onoise/inoise shorthand
-    #   - hierarchical separator: LTspice ':' (V(X1:mid)) <-> ngspice '.'
-    #   - a path through subcircuits, which XVII writes without each
-    #     instance's X (V(xa.xin.mid) is its V(a:in:mid))
-    candidates: list[str] = []
-    for kind in ("onoise", "inoise"):
-        if sig_lower in (kind, f"v({kind})", f"{kind}_spectrum"):
-            candidates += [f"v({kind})", f"{kind}_spectrum", kind]
-    if ":" in sig_lower:
-        candidates.append(sig_lower.replace(":", "."))
-    if "." in sig_lower:
-        candidates.append(sig_lower.replace(".", ":"))
-
-    for cand in candidates:
-        if cand in by_lower:
-            return by_lower[cand]
-    return find_trace_by_path(names, signal, xvii=xvii) or device_param_name(names, signal)
 
 
 def _looks_like_expression(signal: str) -> bool:
@@ -972,6 +932,8 @@ def _node_pair(
     grounded = {
         node for node, trace in traces.items() if trace is None and node.lower() in GROUND_ALIASES
     }
+    # The traces stand (trace_names.traces_read names them, and a chosen read
+    # keeps them); what they hold on a noise result does not subtract.
     if minus_node not in grounded and is_noise_analysis(raw):
         raise ResultError(
             f"Signal '{signal}' is a node-pair difference, and a .noise result holds "
@@ -1013,7 +975,7 @@ def resolve_signal(raw: DecodedRaw | DecodedPlot, signal: str) -> Signal:
     trace = _find_trace(raw, signal)
     if trace is not None:
         return Signal(trace, trace)
-    pair = _NODE_PAIR_RE.fullmatch(signal)
+    pair = NODE_PAIR_RE.fullmatch(signal)
     if pair is not None:
         return _node_pair(raw, signal, pair.group(1), pair.group(2))
     raise _not_found(raw, signal)
@@ -1021,7 +983,7 @@ def resolve_signal(raw: DecodedRaw | DecodedPlot, signal: str) -> Signal:
 
 def is_node_pair(signal: str) -> bool:
     """Whether ``signal`` is spelled as a node-pair voltage ``V(a,b)``."""
-    return _NODE_PAIR_RE.fullmatch(signal) is not None
+    return NODE_PAIR_RE.fullmatch(signal) is not None
 
 
 def validate_step(raw: RawData, step: int) -> None:

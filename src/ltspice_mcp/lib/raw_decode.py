@@ -445,6 +445,7 @@ def decode_raw(
     step_log_bytes: int,
     step_rows: int,
     preflight: RawHeader | None = None,
+    chosen: RawHeader | None = None,
 ) -> dict[str, Any]:
     """Return header/arrays/plots/step_log only; no dependency object escapes.
 
@@ -455,6 +456,11 @@ def decode_raw(
     captured logs together (console is verified but not interpreted); step_rows
     bounds log rows and RAW step ranges. The RAW line budget also bounds step
     rows. Scratch and output files stay for the caller to clean after exit.
+
+    ``chosen`` is the preflight cut to the traces a read keeps
+    (``raw_header.select_traces``): the dependency is still checked against
+    the whole file, only those traces are read, and the result is the cut
+    header with their arrays.
     """
     _positive_limit(step_log_bytes, "step_log_bytes")
     _positive_limit(step_rows, "step_rows")
@@ -470,9 +476,12 @@ def decode_raw(
     if header.size_bytes != records["raw"].size_bytes:
         raise RawDecodeError("Supplied RAW preflight does not match captured size")
     log = _step_log(records.get("log"), directory, header, limits, step_log_bytes, step_rows)
+    kept = header if chosen is None else chosen
+    if len(kept.plots) != len(header.plots) or kept.size_bytes != header.size_bytes:
+        raise RawDecodeError("Chosen traces do not belong to this RAW preflight")
     arrays = []
     plots = []
-    for plot in header.plots:
+    for plot, keep in zip(header.plots, kept.plots, strict=True):
         source, start, header_end, end, encoding = _prepared_plot(path, directory, plot)
         with source.open("rb") as handle:
             view = _PlotView(handle, start, end, header_end=header_end, encoding=encoding)
@@ -485,14 +494,16 @@ def decode_raw(
             or reader.aliases
         ):
             raise RawDecodeError("Dependency plot metadata contradicts RAW preflight")
-        reader.read_trace_data(reader.get_trace_names())
+        # Only the kept traces are read; spicelib reads the axis with them.
+        reader.read_trace_data([variable.name for variable in keep.variables])
         first = np.asarray(reader.get_trace(0).data)
-        for index, variable in enumerate(plot.variables):
-            trace = reader.get_trace(index)
+        positions = {variable.name: variable.index for variable in plot.variables}
+        for variable in keep.variables:
+            trace = reader.get_trace(positions[variable.name])
             if trace.name != variable.name or trace.whattype != variable.declared_type:
                 raise RawDecodeError("Dependency trace metadata contradicts RAW preflight")
-            arrays.append(_write_array(np.asarray(trace.data), directory, plot, index))
-        plots.append(_step_facts(plot, first, reader.has_axis, log, len(header.plots), step_rows))
-    if sum(item["byte_size"] for item in arrays) != header.numeric_bytes:
+            arrays.append(_write_array(np.asarray(trace.data), directory, keep, variable.index))
+        plots.append(_step_facts(keep, first, reader.has_axis, log, len(header.plots), step_rows))
+    if sum(item["byte_size"] for item in arrays) != kept.numeric_bytes:
         raise RawDecodeError("Numeric output aggregate disagrees with RAW preflight")
-    return {"header": asdict(header), "arrays": arrays, "plots": plots, "step_log": log}
+    return {"header": asdict(kept), "arrays": arrays, "plots": plots, "step_log": log}

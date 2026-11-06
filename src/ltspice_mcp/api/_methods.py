@@ -1248,6 +1248,7 @@ class ApiMethodsMixin(ABC):
         dialect: Literal["ltspice", "ngspice", "qspice", "xyce"] | None = None,
         other_raw: OtherRawKind | None = None,
         raw_path: str | os.PathLike[str] | None = None,
+        signals: Sequence[str] | None = None,
     ) -> RawResult:
         """Load one raw result through the bounded parser and return a safe wrapper.
 
@@ -1256,6 +1257,11 @@ class ApiMethodsMixin(ABC):
         ``other_raw`` reads the case's other raw of that kind, as its run row's
         ``other_raws`` lists it, instead of its raw: ``"fra_1"`` a frequency
         response analysis's results, ``"op"`` a transient's operating point.
+        ``signals`` reads only the traces those names read, as ``trace`` reads
+        a name (a node pair reads both nodes), with the axis and any step
+        parameters: a file too large to read whole can be read this way, since
+        the size limit applies to what is kept. A name the file has no trace
+        for is refused.
         ``raw_path`` is the older spelling of ``path``, still accepted."""
         self._check_process_and_thread()
         path = _older_spelling(path, "raw_path", raw_path)
@@ -1266,6 +1272,7 @@ class ApiMethodsMixin(ABC):
             raise ApiValidationError("dialect must be ltspice, ngspice, qspice, xyce or None")
         if other_raw is not None and other_raw not in OTHER_RAW_KINDS:
             raise ApiValidationError(f"other_raw must be one of {list(OTHER_RAW_KINDS)} or None")
+        chosen = _chosen_signals(signals)
         return self._marshal(
             load_raw_result(
                 state=self._state,
@@ -1276,6 +1283,7 @@ class ApiMethodsMixin(ABC):
                 plot_index=plot_index,
                 dialect=dialect,
                 other_raw=other_raw,
+                signals=chosen,
             ),
             cancelable=True,
             cancel_on_interrupt=True,
@@ -1359,6 +1367,21 @@ def _older_spelling(path: _PathArg, name: str, older: _PathArg) -> _PathArg:
     if path is not None:
         raise ApiValidationError(f"Give path or {name}, not both")
     return older
+
+
+def _chosen_signals(signals: Sequence[str] | None) -> tuple[str, ...] | None:
+    """``load_raw``'s ``signals`` as the parser takes them: 1 to 64 names, each
+    a non-empty string, in the order given, a repeat dropped."""
+    if signals is None:
+        return None
+    if isinstance(signals, str) or not isinstance(signals, Sequence):
+        raise ApiValidationError("signals must be a list of names, e.g. ['V(out)']")
+    names = tuple(dict.fromkeys(signals))
+    if not 0 < len(names) <= 64 or any(
+        not isinstance(name, str) or not 0 < len(name.strip()) <= 256 for name in names
+    ):
+        raise ApiValidationError("signals must name 1 to 64 traces, each in 1 to 256 characters")
+    return names
 
 
 def _one_source(

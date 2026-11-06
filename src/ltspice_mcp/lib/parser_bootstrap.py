@@ -75,7 +75,12 @@ def _error(
         return
     # Serialize after truncating, then shrink further for JSON escaping overhead.
     message = f"{type(error).__name__}: {error}"[:limit]
-    if isinstance(error, TimeoutError):
+    # An error the caller is told about as it is (a read too large, a signal
+    # not in the result) names its own code, and its message is its own words.
+    named = getattr(type(error), "parser_code", None)
+    if isinstance(named, str):
+        code, message = named, str(error)[:limit]
+    elif isinstance(error, TimeoutError):
         code = "deadline"
     elif isinstance(error, EOFError):
         code = "cancelled"

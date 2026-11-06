@@ -86,12 +86,21 @@ def parser_cache_key(
     dialect: str | None,
     producing_dialect: str | None,
     limits: dict,
+    signals: list[str] | None = None,
 ) -> str:
-    """One identity for raw and log facts captured under the same parser policy."""
+    """One identity for raw and log facts captured under the same parser policy.
+
+    A read of chosen ``signals`` keeps other arrays than a whole-file read of
+    the same capture, so they are part of its identity; a whole-file read's
+    identity is as it was before reads could choose.
+    """
+    policy: dict = {"decoder": PARSER_REVISION, "limits": limits}
+    if signals is not None:
+        policy["signals"] = signals
     return captured.cache_key(
         dialect=dialect,
         producing_dialect=producing_dialect,
-        revision=json.dumps({"decoder": PARSER_REVISION, "limits": limits}, sort_keys=True),
+        revision=json.dumps(policy, sort_keys=True),
     )
 
 

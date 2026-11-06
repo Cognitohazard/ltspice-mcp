@@ -447,6 +447,7 @@ preview mode, and the only way to get paging identical to the MCP tools'.
 ```python
 raw = api.load_raw(path, plot_index=0, dialect=None)  # XOR: path | job_id
 raw = api.load_raw(job_id=..., run_index=0, case_id=None, other_raw=None)  # "fra_1" | "op"
+raw = api.load_raw(path, signals=["V(out)", "V(a,b)"])  # only these, the axis and step parameters
 raw.signals                    # list[str]
 raw.trace("V(out)", step=0)    # np.ndarray — complex values preserved
 raw.value("V(out)", step=0)    # one point a step (.op): float, or complex
@@ -464,6 +465,16 @@ ops.observations               # a log reader's dict (LogResult) says the same o
 ```
 
 - `RawResult` is this project's type; the API returns no spicelib types.
+- `signals` reads only the traces those names read, by the rule `trace` reads
+  a name with (`lib/trace_names.py`): one trace, or a node pair's two node
+  voltages. The axis and any step parameters are always kept. The parser
+  worker decodes only those traces, and the read's numeric limit (512 MiB at
+  the widths the file stores) applies to them, so a file too large to read
+  whole can be read for a few signals. A name the file has no trace for is
+  refused with the traces it has; the result's `observations` include
+  `signals_chosen`, and `trace` of a trace not read says it was not chosen. A
+  whole-file read over the limit is refused with the file's size, the limit
+  and these ways around it.
 - Each of these reads takes exactly one of `path` and `job_id`. Neither or
   both, an empty `path`, or `run_index`, `case_id` or `other_raw` with a
   `path` raises `ApiValidationError`, as the operations do.

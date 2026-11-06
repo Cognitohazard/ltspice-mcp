@@ -100,6 +100,14 @@ tool-surface changes.
 
 ### Added
 
+- The Python API's `load_raw` takes `signals`: a read that keeps only the
+  traces those names read (one trace, or a node pair's two nodes, as
+  `trace` reads them), the axis and any step parameters. The parser decodes
+  only those, and the 512 MiB limit on a read's numbers applies to what is
+  kept, so a raw too large to read whole, such as a long transient saving
+  every node, can be read for the few signals a measurement needs. A name
+  the file has no trace for is refused with the traces it has, and the
+  result's `observations` include `signals_chosen`.
 - `edit_schematic`'s `replace_component` op gives a part a new symbol where it
   stands, in one call: a gate for a buffer, `nmos4` for `nmos`. The part
   keeps its reference, place, turn, attributes and value (unless `value`
@@ -214,6 +222,10 @@ tool-surface changes.
 
 ### Changed
 
+- A raw whose numbers exceed what one read keeps is refused with its size,
+  the limit, and the ways around it (`load_raw(..., signals=[...])`, `.save`,
+  a shorter `.tran`, `.meas`), where the refusal read "numeric_bytes limit
+  exceeded" and a byte count.
 - A signal named `V(<instance>:<pin>)` for a subcircuit's pin is refused with
   the reason: a result holds no voltage under a pin's name, because the pin's
   voltage is the net it connects to in the circuit above. The refusal lists

@@ -166,6 +166,9 @@ def load_artifacts_sync(
     if type(source.plot_index) is not int or source.plot_index < 0:
         raise ResultError("RAW plot_index must be a nonnegative integer")
     limits = raw_limits(state.config.max_raw_mb)
+    signals: list[JsonValue] | None = (
+        list(source.signals) if require_raw and source.signals is not None else None
+    )
     policy: dict[str, JsonValue] = {
         "dialect": _dialect(source.explicit_dialect),
         "producing_dialect": _dialect(source.dialect),
@@ -175,6 +178,7 @@ def load_artifacts_sync(
             "step_rows": STEP_ROWS,
             "metadata_bytes": METADATA_BYTES,
         },
+        "signals": signals,
     }
     try:
         _check_active(deadline, cancel)
@@ -355,6 +359,12 @@ def _load(
             raise failure from exc
         if exc.code == "deadline":
             raise AnalysisDeadlineExceeded("Artifact parsing exceeded its deadline") from exc
+        if exc.code == "signals_not_found":
+            raise ResultError(f"{label}: {exc}", show_hint=False) from exc
+        if exc.code == "too_large":
+            raise ResultError(
+                _too_large(label, str(exc), chosen=bool(policy.get("signals"))), show_hint=False
+            ) from exc
         raise ResultError(f"Failed to parse result file {label}: {exc}") from exc
     except (ValueError, OSError) as exc:
         if not reaped:
@@ -368,3 +378,19 @@ def _load(
                 shutil.rmtree(directory)
             except OSError as exc:
                 raise ParserCleanupError(directory) from exc
+
+
+def _too_large(label: object, reason: str, *, chosen: bool) -> str:
+    """Why a result was not read, as the worker counted it, and what reads less."""
+    if chosen:
+        return (
+            f"{label} was not read: {reason}. Choose fewer signals, or read them in "
+            "more than one load."
+        )
+    return (
+        f"{label} was not read: {reason}. Read only the traces you need: the Python "
+        "API's load_raw(..., signals=['V(out)', ...]) keeps those, the axis and any "
+        "step parameters. Or make the run write fewer numbers: .save only the "
+        "nodes you need, shorten the .tran, or measure with .meas instead of keeping "
+        "the waveform."
+    )
