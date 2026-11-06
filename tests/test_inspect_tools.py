@@ -234,7 +234,7 @@ async def test_capabilities_reports_png_rendering(cap_state: SessionState):
 
 @pytest.mark.parametrize(
     ("absence", "missing"),
-    [("raster_extra_missing", "extra"), ("raster_native_missing", "native_library")],
+    [("raster_dependency_missing", "dependency"), ("raster_native_missing", "native_library")],
 )
 async def test_capabilities_reports_what_is_missing(
     cap_state: SessionState, request: pytest.FixtureRequest, absence: str, missing: str

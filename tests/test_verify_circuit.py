@@ -2143,24 +2143,24 @@ async def test_render_png_present(state_no_sim, work_dir, asc_symbols):
     assert render["width"] and render["height"]
 
 
-async def test_render_png_forced_absent_declares_extra(
-    state_no_sim, work_dir, asc_symbols, raster_extra_missing
+async def test_render_png_forced_absent_declares_the_dependency(
+    state_no_sim, work_dir, asc_symbols, raster_dependency_missing
 ):
     asc = _write(work_dir, "rf.asc", _RES_ASC)
     data = await _run(state_no_sim, path=str(asc), render={"mode": "only", "format": "png"})
     render = data["render"]
     assert render["image_format"] == "svg"
-    assert "raster" in (render["note"] or "")
+    assert "resvg-py" in (render["note"] or "")
     render_failures = [f for f in data["failures"] if f["stage"] == "render"]
-    assert render_failures, "a PNG request without the extra must declare a per-item failure"
-    assert "'raster' extra" in render_failures[0]["error"]
-    assert "ltspice-mcp[raster]" in (render_failures[0]["remedy"] or "")
+    assert render_failures, "a PNG request without a rasterizer must declare a per-item failure"
+    assert "resvg-py, which ltspice-mcp depends on" in render_failures[0]["error"]
+    assert "uv tool install --reinstall ltspice-mcp" in (render_failures[0]["remedy"] or "")
 
 
 async def test_the_default_format_falling_back_is_not_a_failure(
-    state_no_sim, work_dir, asc_symbols, raster_extra_missing
+    state_no_sim, work_dir, asc_symbols, raster_dependency_missing
 ):
-    """PNG is the default, so without the extra every render came back
+    """PNG is the default, so without a rasterizer every render came back
     partial although the caller asked for no format. The SVG is what the
     server can draw; the note and the headline say why and how to get a PNG."""
     asc = _write(work_dir, "rd.asc", _RES_ASC)
@@ -2168,24 +2168,25 @@ async def test_the_default_format_falling_back_is_not_a_failure(
     assert data["render"]["image_format"] == "svg"
     assert "failures" not in data
     assert data["outcome"] == "complete"
-    assert "'raster' extra" in data["render"]["note"]
-    assert "ltspice-mcp[raster]" in data["hint"]
+    assert "resvg-py, which ltspice-mcp depends on" in data["render"]["note"]
+    assert "uv tool install --reinstall ltspice-mcp" in data["hint"]
 
 
 async def test_render_png_without_native_cairo_blames_the_library(
     state_no_sim, work_dir, asc_symbols, raster_native_missing
 ):
     """With cairosvg installed and libcairo absent, the failure names the
-    native library. The remedy offers the extra, whose rasterizer needs no
-    native library, then the library for the platform the server runs on."""
+    native library. The remedy offers reinstalling, which brings back resvg-py,
+    whose rasterizer needs no native library, then the library for the
+    platform the server runs on."""
     asc = _write(work_dir, "rn.asc", _RES_ASC)
     data = await _run(state_no_sim, path=str(asc), render={"mode": "only", "format": "png"})
     assert data["render"]["image_format"] == "svg"
     (failure,) = [f for f in data["failures"] if f["stage"] == "render"]
     assert "Cairo" in failure["error"]
     assert "not installed" not in failure["error"]
-    assert failure["remedy"].startswith("install it where the server runs")
-    assert "ltspice-mcp[raster]" in failure["remedy"]
+    assert failure["remedy"].startswith("reinstall the server where it runs")
+    assert "uv tool install --reinstall ltspice-mcp" in failure["remedy"]
     assert failure["remedy"].endswith(raster.native_library_remedy(sys.platform))
     assert "Cairo" in data["render"]["note"]
     # The headline a structured-only client reads carries it too.
@@ -2225,7 +2226,7 @@ async def test_an_inline_svg_request_returns_the_markup(state_no_sim, work_dir, 
 
 
 async def test_an_inline_png_request_without_raster_returns_the_svg(
-    state_no_sim, work_dir, asc_symbols, raster_extra_missing
+    state_no_sim, work_dir, asc_symbols, raster_dependency_missing
 ):
     asc = _write(work_dir, "rj.asc", _RES_ASC)
     data = await _run(
@@ -2239,7 +2240,7 @@ async def test_an_inline_png_request_without_raster_returns_the_svg(
     assert render["svg"] == _written_svg(render)
     note = render["note"] or ""
     # Why the PNG could not be made, then what came back in its place.
-    assert "'raster' extra" in note
+    assert "resvg-py, which ltspice-mcp depends on" in note
     assert "render.svg" in note
 
 

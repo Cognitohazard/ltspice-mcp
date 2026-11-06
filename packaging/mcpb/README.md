@@ -33,9 +33,9 @@ because the geometry comes from those symbol files. An LTspice install
 supplies them, and the server finds them automatically on Windows. Running
 simulations needs a simulator.
 
-**PNG schematic renders.** The bundle installs the `raster` extra. Its
-rasterizer, `resvg-py`, ships as a prebuilt wheel and needs no native
-library, so PNG renders work without further setup.
+**PNG schematic renders.** The bundle installs `resvg-py`, the PNG
+rasterizer, which ships as a prebuilt wheel and needs no native library, so
+PNG renders work without further setup.
 `inspect(kind="capabilities")` reports `render.png`, and when it is false it
 names what is missing and how to install it. See
 [PNG rendering](../../docs/USAGE.md#png-rendering).
