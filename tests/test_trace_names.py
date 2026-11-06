@@ -59,18 +59,28 @@ def test_only_an_instance_on_the_path_is_read_without_its_x(tmp_path: Path):
     assert refusal(plot, "V(xout)") == "Signal 'V(xout)' not found."
 
 
-def test_the_schematics_rule_is_given_as_the_reason_on_ltspices_result_only(tmp_path: Path):
+def test_the_schematics_rule_is_the_reason_on_ltspices_run_of_a_schematic_only(tmp_path: Path):
     """A name with an X more than an instance's in the trace is a schematic
-    part's netlist spelling on LTspice. Another simulator's result names the
-    trace, and gives no LTspice rule as the reason."""
+    part's netlist spelling on LTspice's run of a sheet. On a deck's run, or
+    another simulator's, nothing puts the X there: the trace is named, and no
+    rule is given as the reason."""
     names = ("V(out)", "Ix(x1:in)")
-    for command, reason in ((LTSPICE_26, True), ("ngspice-42", False)):
-        text = refusal(operating_point(tmp_path, "deck.cir", names, command=command), "Ix(xx1:in)")
-        assert text.startswith(
-            "Signal 'Ix(xx1:in)' not found. Ix(x1:in) is in this result, which names 'xx1' as 'x1'."
+    for command, title, reason in (
+        (LTSPICE_26, r"C:\work\sheet.net", True),
+        (LTSPICE_26, r"C:\work\deck.cir", False),
+        ("ngspice-42", r"* C:\work\sheet.asc", False),
+    ):
+        plot = operating_point(tmp_path, title, names, command=command)
+        text = refusal(plot, "Ix(xx1:in)")
+        assert text == "Signal 'Ix(xx1:in)' not found. Ix(x1:in) is in this result, " + (
+            "which names 'xx1' as 'x1'."
+            + (
+                " LTspice names a part placed on a schematic by its reference, without "
+                "the X its netlist line adds in front."
+                if reason
+                else ""
+            )
         ), text
-        assert ("placed on a schematic by its reference" in text) == reason, text
-        assert not text.endswith(" "), text
 
 
 def test_a_decks_nodes_named_like_a_sheets_get_no_note_on_labels(tmp_path: Path):
@@ -92,3 +102,17 @@ def test_a_name_of_ltspices_own_form_is_not_told_to_take_a_label(tmp_path: Path)
     text = refusal(plot, "V(n003)")
     assert "here V(n001), V(n002)." in text
     assert "net label" not in text.split("here", 1)[1]
+
+
+def test_a_device_parameter_is_told_where_parameters_are_read_not_to_take_a_label(
+    tmp_path: Path,
+):
+    """``V(@m1[vth])`` is ngspice's spelling of a saved parameter, not a node:
+    a schematic's result that holds unlabelled nets still says where a
+    device's parameters are read."""
+    for title in (r"* C:\work\sheet.asc", r"C:\work\run_1.net"):
+        plot = operating_point(tmp_path, title, ("V(n001)", "I(V1)"))
+        for asked in ("V(@m1[vth])", "v(@m1[gm])"):
+            text = refusal(plot, asked)
+            assert "Per-device small-signal params" in text, text
+            assert "net label" not in text, text

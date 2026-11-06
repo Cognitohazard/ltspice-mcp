@@ -921,7 +921,14 @@ SCHEMATIC_REFERENCE = (
     "its netlist line adds in front."
 )
 DECK_INSTANCE_X = "An instance a deck calls with X keeps that X in the names a result gives it."
-XVII_DROPS_X = "LTspice XVII names each subcircuit instance without the X that starts its name in the netlist."
+XVII_DROPS_X = (
+    "The LTspice build that wrote this result names each subcircuit instance "
+    "without the X that starts its name in the netlist."
+)
+SCHEMATIC_KEEPS_X = (
+    "LTspice keeps the X of a schematic part whose reference starts with one, "
+    "and of an instance a deck line calls with X."
+)
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -1000,13 +1007,84 @@ async def test_plot_waveform_names_a_deck_instances_trace_by_its_x(
     assert f"{trace} is in this result, which names {named}. {why}" in str(refused.value)
 
 
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_the_reason_for_an_instances_x_is_the_rule_of_the_results_source(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """The reason given for an instance's X is the rule of where the result
+    came from. A sheet's block X1 is ``x1`` on LTspice 26 because its
+    reference starts with X, so ``Ix(1:in)`` gets the schematic's rule and
+    not a deck's; on XVII it is netlist ``XX1`` without its X. A deck's
+    ``Xa`` is ``xa`` on LTspice 26, so ``Id(xxa:Mdrv)`` adds an X no rule
+    puts there: the trace is named with no reason. On XVII, where ``Xa`` is
+    ``a``, that name is two X from any trace and is named nothing."""
+    sheet = rec.stage_run(build, "export/hier_plain_top_run", work_dir / "sheet")
+    deck = rec.stage_run(build, "raw/subckt_names_tran_saved", work_dir / "deck")
+    reasons = (SCHEMATIC_REFERENCE, SCHEMATIC_KEEPS_X, DECK_INSTANCE_X, XVII_DROPS_X)
+    xvii = rec.generation(build) == "xvii"
+    expected = (
+        f"Ix(x1:IN) is in this result, which names '1' as 'x1'. {XVII_DROPS_X}"
+        if xvii
+        else f"Ix(x1:in) is in this result, which names '1' as 'x1'. {SCHEMATIC_KEEPS_X}"
+    )
+    for text in refusals_of(state_no_sim, sheet, "Ix(1:in)"):
+        assert expected in text, text
+        assert DECK_INSTANCE_X not in text, text
+    for text in refusals_of(state_no_sim, deck, "Id(xxa:Mdrv)", at="0.5u"):
+        assert ("is in this result" in text) == (not xvii), text
+        if not xvii:
+            assert "Id(xa:Mdrv) is in this result, which names 'xxa' as 'xa'." in text, text
+        assert not any(reason in text for reason in reasons), text
+
+
+#: A pin asked for under its instance's other X: the instance as the refusal
+#: names it, the current into the pin, the pins the raw lists for it (None
+#: where it lists none), how the result names the instance and why, per
+#: build generation. XVII reads either spelling of these instances, so its
+#: refusal is the plain pin note under the name as asked.
+X_SPELLED_PINS: dict[tuple[str, str], dict[str, tuple[str, str, str | None, str, str]]] = {
+    ("export/hier_plain_top_run", "V(xx1:in)"): {
+        "current": ("x1", "Ix(x1:in)", "in, out", "'xx1' as 'x1'", SCHEMATIC_REFERENCE),
+        "xvii": ("xx1", "Ix(x1:IN)", "in, out", "", ""),
+    },
+    ("raw/subckt_names_tran_saved", "V(a:out)"): {
+        "current": ("xa", "Ix(xa:out)", "top, out", "'a' as 'xa'", DECK_INSTANCE_X),
+        "xvii": ("a", "Ix(a:OUT)", None, "", ""),
+    },
+}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+@pytest.mark.parametrize(("case_id", "asked"), list(X_SPELLED_PINS))
+def test_every_reader_says_a_pin_is_its_parents_net_under_either_x(
+    build: str, case_id: str, asked: str, state_no_sim: SessionState, work_dir: Path
+):
+    """A pin asked for under its sheet part's netlist spelling
+    (``V(xx1:in)``), or under a deck instance's name without its X
+    (``V(a:out)``), is still a pin: every reader says so under the instance's
+    name in the result, says how the result names it and why, lists its pins
+    where the raw does, and names the current into it."""
+    raw = rec.stage_run(build, case_id, work_dir)
+    instance, current, pins, named, why = X_SPELLED_PINS[case_id, asked][rec.generation(build)]
+    pin = asked[asked.index(":") + 1 : -1]
+    at = None if case_id.startswith("export/") else "0.5u"
+    for text in refusals_of(state_no_sim, raw, asked, at=at):
+        assert f"'{pin}' is a pin of subcircuit instance {instance}," in text, text
+        assert f"{current} is the current into the pin." in text, text
+        assert (f"{instance}'s pins are {pins}," in text) == (pins is not None), text
+        if named:
+            assert f"This result names {named}. {why}" in text, text
+        else:
+            assert "This result names" not in text, text
+
+
 UNLABELLED_NETS = (
     "This result is a schematic's, and LTspice names a net that has no label N001, N002, ..."
 )
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
-def test_every_reader_says_a_schematics_unlabelled_nets_are_named_n001_on(
+def test_every_reader_says_a_schematics_unlabelled_nets_are_named_n001(
     build: str, state_no_sim: SessionState, work_dir: Path
 ):
     """``export/hier_plain_top_run`` drives block X1 from V1 over a wire with

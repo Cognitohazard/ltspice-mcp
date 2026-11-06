@@ -329,7 +329,8 @@ def naming_note(plot: RawPlotHeader, signal: str) -> str:
     operating point's bias point included: the noise traces' names on each
     simulator, a pin of a subcircuit instance (``_pin_note``), an instance's
     X (``_instance_x_note``), and a schematic's unlabelled nets
-    (``_unlabelled_net_note``).
+    (``_unlabelled_net_note``). A device's parameter (``V(@m1[vth])``) names
+    no node or instance, so only the noise names can be its answer here.
     """
     lowered = signal.lower()
     traces = {name.lower() for name in signal_names(plot)}
@@ -337,6 +338,8 @@ def naming_note(plot: RawPlotHeader, signal: str) -> str:
         return " (ngspice names noise signals 'onoise_spectrum'/'inoise_spectrum')"
     if lowered in ("onoise_spectrum", "inoise_spectrum") and traces & {"v(onoise)", "v(inoise)"}:
         return " (LTspice names noise signals 'V(onoise)'/'V(inoise)')"
+    if parse_device_param(signal) is not None:
+        return ""
     return (
         _pin_note(plot, signal)
         or _instance_x_note(plot, signal)
@@ -344,10 +347,24 @@ def naming_note(plot: RawPlotHeader, signal: str) -> str:
     )
 
 
-def _instance_x_note(plot: RawPlotHeader, signal: str) -> str:
-    """Name the one trace of ``plot`` that ``signal`` names once an instance on
-    its path gains or loses a leading X, and say why the result spells it so;
-    empty when no trace does, or more than one.
+@dataclass(frozen=True)
+class _Respelled:
+    """The one trace a name reads once an instance on its path gains or loses
+    a leading X (``_respelled``)."""
+
+    #: The trace, as the result spells it.
+    trace: str
+    #: The instances as asked and as the result names them: ``'xx1' as 'x1'``.
+    named: str
+    #: Why the result names them so, each sentence led by a space; empty where
+    #: no recorded rule explains it.
+    why: str
+
+
+def _respelled(plot: RawPlotHeader, signal: str) -> _Respelled | None:
+    """The one trace of ``plot`` that ``signal`` names once an instance on its
+    path gains or loses a leading X, and why the result spells it so; None
+    when no trace does, or more than one.
 
     A part placed on a schematic is named in a raw by its reference, without
     the X its netlist line puts in front: block X1, exported as ``X§X1`` by
@@ -359,13 +376,16 @@ def _instance_x_note(plot: RawPlotHeader, signal: str) -> str:
     ``raw/subckt_names_tran_saved``). ``find_trace`` already reads a deck's
     spelling of an instance on XVII, so a name gets here there only when it
     mixes the two spellings. Only an instance is matched this way: the last
-    name on a path is a node or a device, which no X marks. The schematic's
-    rule is LTspice's, so it is not given as the reason on another
-    simulator's result, which is named but not explained.
+    name on a path is a node or a device, which no X marks.
+
+    The reason given is the rule of the result's own source
+    (``from_schematic``): a schematic's rule for a sheet's run on LTspice, a
+    deck's for a deck's run. An X the caller added to a deck's instance has no
+    rule behind it, and gets none.
     """
     asked_function, asked_path = trace_key(signal, xvii=False)
     if not asked_function or len(asked_path) < 2:
-        return ""
+        return None
     found: list[tuple[str, list[tuple[str, str]]]] = []
     for name in signal_names(plot):
         function, path = trace_key(name, xvii=False)
@@ -377,26 +397,40 @@ def _instance_x_note(plot: RawPlotHeader, signal: str) -> str:
         if differ and all(a == f"x{b}" or b == f"x{a}" for a, b in differ):
             found.append((name, differ))
     if len(found) != 1:
-        return ""
+        return None
     ((trace, differ),) = found
     named = " and ".join(f"'{asked}' as '{spelled}'" for asked, spelled in differ)
+    added = any(asked == f"x{spelled}" for asked, spelled in differ)
+    kept = any(spelled == f"x{asked}" for asked, spelled in differ)
+    why: list[str] = []
     if writes_xvii_command(dict(plot.fields)):
-        why = [
-            "LTspice XVII names each subcircuit instance without the X that starts its "
-            "name in the netlist."
-        ]
-    else:
-        why = []
-        if plot.dialect == "ltspice" and any(asked == f"x{spelled}" for asked, spelled in differ):
+        why.append(
+            "The LTspice build that wrote this result names each subcircuit instance "
+            "without the X that starts its name in the netlist."
+        )
+    elif plot.dialect == "ltspice" and from_schematic(plot):
+        if added:
             why.append(
                 "LTspice names a part placed on a schematic by its reference, without the X "
                 "its netlist line adds in front."
             )
-        if any(spelled == f"x{asked}" for asked, spelled in differ):
+        if kept:
             why.append(
-                "An instance a deck calls with X keeps that X in the names a result gives it."
+                "LTspice keeps the X of a schematic part whose reference starts with one, "
+                "and of an instance a deck line calls with X."
             )
-    return "".join([f" {trace} is in this result, which names {named}.", *(f" {w}" for w in why)])
+    elif kept:
+        why.append("An instance a deck calls with X keeps that X in the names a result gives it.")
+    return _Respelled(trace, named, "".join(f" {sentence}" for sentence in why))
+
+
+def _instance_x_note(plot: RawPlotHeader, signal: str) -> str:
+    """Name the one trace ``signal`` reads once an instance on its path gains
+    or loses a leading X, and why (``_respelled``); empty when there is none."""
+    found = _respelled(plot, signal)
+    if found is None:
+        return ""
+    return f" {found.trace} is in this result, which names {found.named}.{found.why}"
 
 
 def _unlabelled_net_note(plot: RawPlotHeader, signal: str) -> str:
@@ -466,6 +500,9 @@ def _pin_note(plot: RawPlotHeader, signal: str) -> str:
     its pins in the order the instance line lists their nets (the
     ``export-hierarchical-block`` recordings; XVII writes that line for a
     sheet's block but not for a netlist's instance, ``raw/subckt_names_tran``).
+    An instance asked for with an X more or less than the result names it
+    (``_respelled``) is known by its current under the result's name, and
+    the note says how the result names it.
     """
     match = V_TRACE_RE.fullmatch(signal.strip())
     if match is None or ":" not in match.group(1):
@@ -478,6 +515,19 @@ def _pin_note(plot: RawPlotHeader, signal: str) -> str:
         f"Ix({instance}:{pin})",
         xvii=writes_xvii_command(dict(plot.fields)),
     )
+    respelled = None
+    if current is None and not pins:
+        # The instance as the result names it once its X is read otherwise
+        # (_respelled), known as one by the current into the pin.
+        respelled = _respelled(plot, f"Ix({instance}:{pin})")
+        if respelled is not None:
+            current = respelled.trace
+            instance = _current_instance(current)
+            pins = _instance_pins(plot, instance)
+    elif current is not None and not pins:
+        # XVII reads a deck's spelling (xx1 for its x1); its Backannotation
+        # line names the instance as the result does.
+        pins = _instance_pins(plot, _current_instance(current))
     if current is None and pin.lower() not in (p.lower() for p in pins):
         return ""
     hint = (
@@ -485,6 +535,8 @@ def _pin_note(plot: RawPlotHeader, signal: str) -> str:
         "voltage under a pin's name: the pin's voltage is the net it connects to in the "
         "circuit above, under that net's name."
     )
+    if respelled is not None:
+        hint += f" This result names {respelled.named}.{respelled.why}"
     if pins:
         hint += (
             f" {instance}'s pins are {', '.join(pins)}, in the order its instance line "
@@ -493,6 +545,11 @@ def _pin_note(plot: RawPlotHeader, signal: str) -> str:
     if current is not None:
         hint += f" {current} is the current into the pin."
     return hint
+
+
+def _current_instance(current: str) -> str:
+    """The instance a port current ``Ix(<instance>:<pin>)`` names, as spelled."""
+    return current[current.index("(") + 1 : -1].rpartition(":")[0]
 
 
 def _instance_pins(plot: RawPlotHeader, instance: str) -> list[str]:
