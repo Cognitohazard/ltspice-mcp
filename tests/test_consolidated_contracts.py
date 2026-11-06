@@ -728,7 +728,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 95 characters for bode_crossing's ref_hz, which measures
     # a crossing from the gain at a chosen frequency in one call instead of a
     # bode_point read and a second crossing. Measured 21,281.
-    "analyze_results": 21290,
+    # Raised by about 40 characters: thd's harmonics is held at its cap rather
+    # than refused, so its description names the cap the dropped maximum
+    # stated, and what the count is. Measured 21,321.
+    "analyze_results": 21330,
     # Ten query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.

@@ -14,6 +14,7 @@ import pytest
 
 from ltspice_mcp.lib.model_fields import literal_values, model_union
 from ltspice_mcp.lib.recipes import DISCRIMINANTS
+from ltspice_mcp.lib.signal_analysis import THD_HARMONICS_CAP
 from ltspice_mcp.tools import reference_index
 from ltspice_mcp.tools.reference_index import (
     build_index,
@@ -195,9 +196,17 @@ class TestEntryShape:
         assert "not a device filter" in indexed["applies_to"].lower()
 
     def test_bounds_are_read_off_the_model(self):
+        native = _named("run_experiments", "pdk_native")
+        seed = next(field for field in native.fields if field.name == "seed")
+        assert ">= 0" in seed.type and f"<= {2**63 - 1}" in seed.type
+
+    def test_a_cap_that_holds_is_not_advertised_as_a_bound(self):
+        """A value above the harmonics cap is summed to the cap, not refused, so
+        the index states no upper bound for it; the description names the cap."""
         thd = _named("analyze_results", "thd")
         harmonics = next(field for field in thd.fields if field.name == "harmonics")
-        assert ">= 1" in harmonics.type and "<= 50" in harmonics.type
+        assert ">= 1" in harmonics.type and "<=" not in harmonics.type
+        assert f"held to {THD_HARMONICS_CAP}" in harmonics.description
 
     def test_a_check_with_no_model_still_names_its_argument(self):
         compare = _named("verify_circuit", "compare")

@@ -51,8 +51,8 @@ def numbers_held(header: RawHeader, chosen: RawHeader) -> int:
     spicelib reads a plot stored a trace at a time (LTspice's Fast Access)
     one trace after another, so it holds only the traces kept. A plot stored
     a point at a time it reads whole whichever traces are asked for: binary
-    into one buffer, text into every trace (``docs/spicelib_bugs.md``, "A
-    read of some traces holds every trace"). Plots are decoded one after
+    into one buffer, text into every trace (``docs/spicelib_bugs.md``, Bug
+    40). Plots are decoded one after
     another, so the sum over them bounds what is held at once.
     """
     return sum(

@@ -32,6 +32,7 @@ from ltspice_mcp.lib.projection import keep_plan, project_row
 from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools import experiments as experiments_module
 from ltspice_mcp.tools import get_tools
 from ltspice_mcp.tools import jobs as jobs_module
 from ltspice_mcp.tools._base import as_sent
@@ -1257,14 +1258,18 @@ class TestWait:
         assert runs_done["status"] == "analyzing"
         assert runs_done["analysis_status"] == "running"
 
+    @pytest.mark.parametrize("cap", [JOBS_WAIT_CAP_S, 2.0], ids=["declared", "changed"])
     async def test_a_wait_past_its_cap_is_held_to_it_and_says_so(
         self,
         state_no_sim: SessionState,
         work_dir: Path,
         monkeypatch: pytest.MonkeyPatch,
+        cap: float,
     ):
-        # A timeout_s above 300 was refused at validation, so asking to wait
-        # longer cost a round trip; the wait runs at the cap and says so.
+        # A timeout_s above the cap was refused at validation, so asking to wait
+        # longer cost a round trip; the wait runs at the cap and says so. The
+        # cap is read where it is declared, so a changed cap is the one held.
+        monkeypatch.setattr(experiments_module, "JOBS_WAIT_CAP_S", cap)
         circuit = _circuit(work_dir)
         running = _experiment(work_dir, circuit, status="running")
         state_no_sim.all_jobs[running.job_id] = running
@@ -1280,10 +1285,13 @@ class TestWait:
             await handle_jobs(_args("wait", job_id=running.job_id, timeout_s=900), state_no_sim)
         )
 
-        assert waited == [JOBS_WAIT_CAP_S]
+        assert waited == [cap]
         assert data["timed_out"] is True
         (note,) = [w for w in data["warnings"] if "timeout_s" in w]
-        assert "timeout_s=900s" in note and "300s was used" in note
+        assert note == (
+            f"timeout_s=900s is above its cap of {cap:g}s; {cap:g}s was used. "
+            "Wait again to keep waiting."
+        )
 
     async def test_foreign_wait_refreshes_a_second_registry_from_sidecar(
         self,

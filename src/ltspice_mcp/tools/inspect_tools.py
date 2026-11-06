@@ -199,7 +199,7 @@ from ltspice_mcp.lib.simulator_build import (
 from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex_deck
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, symbol_info_of
-from ltspice_mcp.lib.symbol_library import SymbolResolver, symbol_files
+from ltspice_mcp.lib.symbol_library import SymbolResolver
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     HINT_SCHEMA,
@@ -1344,47 +1344,24 @@ def _do_capabilities(
 # ---------------------------------------------------------------------------
 
 
-def _symbol_precedence(asc_path: Path | None, state: SessionState) -> list[tuple[Path, str]]:
-    """The ordered (dir, tier) search precedence of the session's library for
-    the sheet at ``asc_path`` (``SymbolResolver.precedence``), the order every
-    lookup searches in.
-
-    A schematic-local dir (when a ``path`` is given) leads, then configured
-    project libraries, then the LTspice build's own. Duplicates — including a
-    symlink pointing at an already-listed directory — collapse to their
-    highest-precedence occurrence (keyed by resolved real path).
-    """
-    ordered = state.symbols.for_sheet(asc_path).precedence
-
-    seen: set[str] = set()
-    deduped: list[tuple[Path, str]] = []
-    for path, tier in ordered:
-        try:
-            key = str(path.resolve())
-        except OSError:
-            key = str(path)
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append((path, tier))
-    return deduped
-
-
 def _symbols_payload(
-    precedence: list[tuple[Path, str]], name_filter: str | None
+    resolver: SymbolResolver, name_filter: str | None
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Walk the precedence dirs, collecting the ``.asy`` names they resolve
-    (``symbol_library.symbol_files``; immutable I/O)."""
+    """The folders the sheet's lookups search, in their order, and the names
+    each offers (``SymbolResolver.listing``), the first folder's file of a name
+    standing for it; immutable I/O.
+
+    The sheet's own folder (when a ``path`` is given) leads, then configured
+    project libraries, then the LTspice build's own, each folder once however
+    it is spelled.
+    """
     prec_report: list[dict[str, Any]] = []
     names: list[str] = []
     seen_names: set[str] = set()
     filt = name_filter.lower() if name_filter else None
-    for path, tier in precedence:
-        exists = path.is_dir()
-        prec_report.append({"dir": str(path), "tier": tier, "exists": exists})
-        if not exists:
-            continue
-        for asy in symbol_files(path, beside_sheet=tier == "schematic-local"):
+    for path, tier, files in resolver.listing():
+        prec_report.append({"dir": str(path), "tier": tier, "exists": path.is_dir()})
+        for asy in files:
             stem = asy.stem
             if stem in seen_names:
                 continue
@@ -1398,8 +1375,8 @@ def _symbols_payload(
 
 async def _do_symbols(q: SymbolsQuery, state: SessionState, view: _View) -> dict[str, Any]:
     asc_path = safe_path(q.path, state) if q.path is not None else None
-    precedence = _symbol_precedence(asc_path, state)
-    prec_report, names = await asyncio.to_thread(_symbols_payload, precedence, q.filter)
+    resolver = state.symbols.for_sheet(asc_path)
+    prec_report, names = await asyncio.to_thread(_symbols_payload, resolver, q.filter)
 
     # No sources: the rows are directory listings, not the content of named
     # files, so there is nothing here a stamp could bind (see _CURSOR_DESCRIPTION).

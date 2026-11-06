@@ -29,6 +29,7 @@ from ltspice_mcp.lib.experiment_runner import CancelNotAuthorized, ExperimentCan
 from ltspice_mcp.lib.netlist_graph import PortArityMismatch, flatten_graph, parse_netlist_graph
 from ltspice_mcp.lib.raw_parser import query_point_value
 from ltspice_mcp.lib.schematic_ops import make_editor
+from ltspice_mcp.lib.symbol_library import SymbolLibrary
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
@@ -251,24 +252,29 @@ class TestSchematicDependencyIsTyped:
         assert not isinstance(exc.value, SymbolResolutionError)
         assert "File not found" in str(exc.value)
 
-    def test_missing_model_library_is_a_dependency_failure(
+    def test_missing_symbol_of_a_blocks_sheet_is_a_dependency_failure(
         self, work_dir: Path, asc_symbols: Path
     ):
-        # A subcircuit symbol whose model library is gone: the editor names the
-        # missing .lib, so a ".asy" match would blame the schematic that opened.
-        (work_dir / "myamp.asy").write_text(
-            "Version 4\nSymbolType CELL\nSYMATTR Prefix X\nSYMATTR ModelFile nosuch.lib\n"
-            "SYMATTR Value myamp\nPIN 0 0 LEFT 8\nPINATTR PinName A\n",
+        # A block whose own sheet places a symbol that is gone: the schematic
+        # opened, so the failure is its dependency's, named in the message. A
+        # missing model library is none: no reader of a sheet needs one, and
+        # the sheet opens (test_symbol_library.py).
+        (work_dir / "myblock.asy").write_text(
+            "Version 4\nSymbolType BLOCK\nPIN 0 0 LEFT 8\nPINATTR PinName A\n",
+            encoding="utf-8",
+        )
+        (work_dir / "myblock.asc").write_text(
+            "Version 4\nSHEET 1 880 680\nSYMBOL nosuch 0 0 R0\nSYMATTR InstName X1\n",
             encoding="utf-8",
         )
         sheet = work_dir / "top.asc"
         sheet.write_text(
-            "Version 4\nSHEET 1 880 680\nSYMBOL myamp 0 0 R0\nSYMATTR InstName X1\n",
+            "Version 4\nSHEET 1 880 680\nSYMBOL myblock 0 0 R0\nSYMATTR InstName X1\n",
             encoding="utf-8",
         )
         with pytest.raises(SymbolResolutionError) as exc:
-            make_editor(sheet)
-        assert "nosuch.lib" in str(exc.value)
+            make_editor(sheet, SymbolLibrary().for_sheet(sheet))
+        assert "'nosuch'" in str(exc.value)
 
 
 class TestNoAxisIsTyped:

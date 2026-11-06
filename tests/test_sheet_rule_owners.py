@@ -10,16 +10,23 @@ from __future__ import annotations
 
 import ast
 import functools
+from collections.abc import Mapping
 
-from tests._source_scan import modules
+from tests._source_scan import modules, own_nodes, scopes
 
 
 @functools.cache
 def _called(name: str) -> list[str]:
-    """Where a function or method of that name is called, as ``module:line``."""
+    """Where a function or method of that name is called in the package, as
+    ``module:line``."""
+    return _calls_in(name, modules())
+
+
+def _calls_in(name: str, trees: Mapping[str, ast.AST]) -> list[str]:
+    """Where a function or method of that name is called in ``trees``."""
     return [
         f"{module}:{node.lineno}"
-        for module, tree in modules().items()
+        for module, tree in trees.items()
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and (
@@ -61,53 +68,277 @@ def test_which_points_are_one_net_is_answered_by_the_nets_ltspice_makes():
     assert defined == []
 
 
-def _is_parts(node: ast.expr) -> bool:
-    """Whether ``node`` is a schematic editor's parts, as the server's code names
-    one: ``editor.components`` or ``editor.get_components()``."""
-    name = "components"
+def _is_parts(node: ast.AST) -> bool:
+    """Whether ``node`` is a collection of parts keyed by reference, whatever it
+    is called: ``x.components`` or ``x.get_components()``, or either's
+    ``.keys()``."""
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "keys"
+    ):
+        node = node.func.value
     if isinstance(node, ast.Call):
-        node, name = node.func, "get_components"
-    return (
-        isinstance(node, ast.Attribute)
-        and node.attr == name
-        and isinstance(node.value, ast.Name)
-        and node.value.id == "editor"
-    )
+        return isinstance(node.func, ast.Attribute) and node.func.attr == "get_components"
+    return isinstance(node, ast.Attribute) and node.attr == "components"
+
+
+#: spicelib's editor methods that find a part by the reference they are given,
+#: spelled exactly.
+_EXACT_PART_METHODS = frozenset(
+    {
+        "get_component",
+        "get_component_attribute",
+        "get_component_floatvalue",
+        "get_component_info",
+        "get_component_nodes",
+        "get_component_parameters",
+        "get_component_position",
+        "get_component_value",
+        "remove_component",
+        "set_component_attribute",
+        "set_component_parameters",
+        "set_component_position",
+        "set_component_value",
+    }
+)
+
+
+def _looks_up_a_part(node: ast.AST) -> bool:
+    """Whether ``node`` finds a part by its reference spelled exactly: ``r in
+    parts``, ``r not in parts``, ``parts[r]``, ``parts.get(r)``, or one of
+    spicelib's lookups by reference (``_EXACT_PART_METHODS``) on any receiver."""
+    if isinstance(node, ast.Compare):
+        return any(isinstance(op, (ast.In, ast.NotIn)) for op in node.ops) and any(
+            _is_parts(side) for side in node.comparators
+        )
+    if isinstance(node, ast.Subscript):
+        return isinstance(node.ctx, ast.Load) and _is_parts(node.value)
+    if isinstance(node, ast.Call):
+        callee = node.func
+        if isinstance(callee, ast.Name):
+            return callee.id in _EXACT_PART_METHODS
+        if isinstance(callee, ast.Attribute):
+            return callee.attr in _EXACT_PART_METHODS or (
+                callee.attr == "get" and _is_parts(callee.value)
+            )
+    return False
+
+
+def _part_lookups_in(tree: ast.AST) -> set[str]:
+    """The scopes in ``tree`` that find a part by its reference spelled exactly."""
+    return {name for name, nodes in scopes(tree) if any(_looks_up_a_part(node) for node in nodes)}
+
+
+#: The scopes that find a part by a reference spelled exactly, each with the
+#: reason that reference is already one the parts are keyed by.
+_PART_LOOKUPS: dict[str, str] = {
+    "lib/schematic_ops.py:_attributes_of": (
+        "reads the part apply_op_inplace resolved with part_reference"
+    ),
+    "lib/schematic_ops.py:_apply_component_value": (
+        "sets the part apply_op_inplace resolved with part_reference"
+    ),
+    "lib/schematic_ops.py:_set_instance_params": (
+        "sets the part _apply_component_value was given, resolved with part_reference"
+    ),
+    "lib/schematic_ops.py:placed_geometry": (
+        "takes a reference the editor holds: one part_reference resolved, or one "
+        "read from the editor's own parts"
+    ),
+    "lib/schematic_ops.py:element_class": (
+        "takes a reference the editor holds; a part about to be placed has none yet "
+        "and is read from its reference"
+    ),
+    "lib/schematic_ops.py:resolve_pin": "looks the part up after part_reference resolved it",
+    "lib/schematic_ops.py:apply_op_inplace": (
+        "each op looks its part up after part_reference resolved it"
+    ),
+    "lib/schematic_ops.py:_asc_component_value": (
+        "reads the part _set_or_create_value was given, resolved with part_reference"
+    ),
+    "lib/schematic_ops.py:_set_or_create_value": (
+        "sets the part _apply_component_value was given, resolved with part_reference"
+    ),
+    "lib/schematic_ops.py:_plan_move.inside": (
+        "reads a reference taken from the editor's own parts"
+    ),
+    "lib/schematic_ops.py:_apply_move": (
+        "moves the parts _plan_move resolved with part_reference or took from the editor"
+    ),
+    "lib/schematic_ops.py:_replace_component": (
+        "looks the part up after part_reference resolved it"
+    ),
+    "lib/variations.py:_DeckTargets.component_sites": (
+        "a deck's cards keyed by case-folded name, not a sheet's parts"
+    ),
+    "lib/variations.py:_resolve_instance_param": (
+        "a deck's cards keyed by case-folded name, not a sheet's parts"
+    ),
+}
 
 
 def test_a_reference_is_looked_up_among_a_sheets_parts_in_one_place():
     """``sheet.references_named`` says which part a reference names, as LTspice
-    compares references, for every op and for ``inspect``. A test of a name's
-    membership in an editor's parts compares it exactly, and refused ``r1`` for
-    a part ``R1`` that ``add_component`` said it names."""
-    found = [
-        f"{module}:{node.lineno}"
-        for module, tree in modules().items()
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Compare)
-        and any(isinstance(op, (ast.In, ast.NotIn)) for op in node.ops)
-        and any(_is_parts(side) for side in node.comparators)
-    ]
-    assert found == []
+    compares references, for every op and for ``inspect``; ``part_reference``
+    applies it to an editor. A lookup by the reference as spelled (``in``,
+    ``[]``, ``.get`` or ``get_component`` on any collection of parts) compares
+    it exactly, and refused ``r1`` for a part ``R1`` that ``add_component`` said
+    it names."""
+    lookups = {
+        f"{module}:{name}" for module, tree in modules().items() for name in _part_lookups_in(tree)
+    }
+    assert lookups == set(_PART_LOOKUPS)
+
+
+def test_the_part_lookup_rule_catches_what_it_names():
+    tree = ast.parse(
+        "def member(editor, ref):\n"
+        "    return ref in editor.components\n"
+        "def absent(sheet, ref):\n"
+        "    return ref not in sheet.get_components()\n"
+        "def keyed(parts, ref):\n"
+        "    return ref in parts.components.keys()\n"
+        "def indexed(asc, ref):\n"
+        "    return asc.components[ref].symbol\n"
+        "def got(doc, ref):\n"
+        "    return doc.components.get(ref)\n"
+        "async def handler(state, ref):\n"
+        "    return state.editor.get_component(ref)\n"
+        "def bare(ref):\n"
+        "    return get_component(ref)\n"
+        "def placed(editor, ref):\n"
+        "    return editor.get_component_position(ref)\n"
+        "def valued(editor, ref):\n"
+        "    editor.set_component_value(ref, '1k')\n"
+        "class Ops:\n"
+        "    found = REF in EDITOR.components\n"
+        "    def outer(self, editor, ref):\n"
+        "        def inner():\n"
+        "            return editor.components[ref]\n"
+        "        return inner\n"
+        "if 'R1' in EDITOR.components:\n"
+        "    pass\n"
+        "def written(editor, ref, part):\n"
+        "    editor.components[ref] = part\n"
+        "    for name in editor.components:\n"
+        "        pass\n"
+        "    return references_named(ref, editor.components), len(editor.components)\n"
+    )
+    assert _part_lookups_in(tree) == {
+        "member",
+        "absent",
+        "keyed",
+        "indexed",
+        "got",
+        "handler",
+        "bare",
+        "placed",
+        "valued",
+        "Ops",
+        "Ops.outer.inner",
+        "<module>",
+    }
+
+
+def _names_sheet_suffix(node: ast.AST) -> bool:
+    """Whether ``node`` holds the text ``.asc``, in any case."""
+    return any(
+        isinstance(inner, ast.Constant)
+        and isinstance(inner.value, str)
+        and inner.value.lower() == ".asc"
+        for inner in ast.walk(node)
+    )
+
+
+def _tests_sheet_suffix(node: ast.AST) -> bool:
+    """Whether ``node`` tests a text against ``.asc``: a comparison (``==``,
+    ``!=``, ``in``) with it on either side, ``endswith`` given it, or a
+    ``case`` matching it."""
+    if isinstance(node, ast.Compare):
+        return any(_names_sheet_suffix(side) for side in (node.left, *node.comparators))
+    if isinstance(node, ast.Call):
+        return (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr == "endswith"
+            and any(_names_sheet_suffix(argument) for argument in node.args)
+        )
+    if isinstance(node, ast.match_case):
+        return _names_sheet_suffix(node.pattern)
+    return False
+
+
+#: The one scope that tests a path against ``.asc``.
+_SHEET_SUFFIX_OWNER = "lib/asc_document.py:is_asc"
+
+
+def _sheet_suffix_tests_in(tree: ast.AST) -> set[str]:
+    """The scopes in ``tree`` that test a text against ``.asc``."""
+    return {
+        name for name, nodes in scopes(tree) if any(_tests_sheet_suffix(node) for node in nodes)
+    }
 
 
 def test_whether_a_path_is_a_sheet_is_answered_by_is_asc():
     """``asc_document.is_asc`` says whether a path names a sheet; a comparison
-    with ``.asc`` written anywhere else, however the suffix was folded first,
-    is a second answer."""
-    found = [
-        f"{module}:{node.lineno}"
+    with ``.asc`` written anywhere else, in any function, class or module body
+    and however the suffix was folded first, is a second answer."""
+    tests = {
+        f"{module}:{name}"
         for module, tree in modules().items()
-        for function in ast.walk(tree)
-        if isinstance(function, ast.FunctionDef) and function.name != "is_asc"
-        for node in ast.walk(function)
-        if isinstance(node, ast.Compare)
-        and any(
-            isinstance(side, ast.Constant) and side.value == ".asc"
-            for side in (node.left, *node.comparators)
-        )
-    ]
-    assert found == []
+        for name in _sheet_suffix_tests_in(tree)
+    }
+    assert tests == {_SHEET_SUFFIX_OWNER}
+
+
+def test_the_sheet_suffix_rule_catches_what_it_names():
+    tree = ast.parse(
+        "def equal(path):\n"
+        "    return path.suffix.lower() == '.asc'\n"
+        "def unequal(path):\n"
+        "    return path.suffix.casefold() != '.ASC'\n"
+        "def among(path):\n"
+        "    return path.suffix in ('.asc', '.net')\n"
+        "def in_set(path):\n"
+        "    return path.suffix.lower() not in frozenset({'.asc'})\n"
+        "def ends(name):\n"
+        "    return name.lower().endswith('.asc')\n"
+        "def ends_any(name):\n"
+        "    return name.endswith(('.net', '.asc'))\n"
+        "def renamed(path):\n"
+        "    return path == path.with_suffix('.asc')\n"
+        "def matched(path):\n"
+        "    match path.suffix:\n"
+        "        case '.asc':\n"
+        "            return True\n"
+        "async def handler(args):\n"
+        "    return args.path.endswith('.asc')\n"
+        "class Kinds:\n"
+        "    SHEET = SUFFIX == '.asc'\n"
+        "    def outer(self, path):\n"
+        "        def inner():\n"
+        "            return path.suffix == '.asc'\n"
+        "        return inner\n"
+        "if SUFFIX == '.asc':\n"
+        "    pass\n"
+        "def written(path):\n"
+        "    sheet = path.with_suffix('.asc')\n"
+        "    return sheet, {'.asc', '.net'} - {'.asc'}, is_asc(sheet), kind == 'asc'\n"
+    )
+    assert _sheet_suffix_tests_in(tree) == {
+        "equal",
+        "unequal",
+        "among",
+        "in_set",
+        "ends",
+        "ends_any",
+        "renamed",
+        "matched",
+        "handler",
+        "Kinds",
+        "Kinds.outer.inner",
+        "<module>",
+    }
 
 
 def test_no_text_is_matched_by_spicelibs_instruction_removers():
@@ -187,23 +418,9 @@ def _attribute_writes_in(tree: ast.AST, prefix: str = "") -> set[str]:
             continue
         name = f"{prefix}{node.name}"
         found |= _attribute_writes_in(node, f"{name}.")
-        if any(_writes_attributes(inner) for inner in _own_nodes(node)):
+        if any(_writes_attributes(inner) for inner in own_nodes(node)):
             found.add(name)
     return found
-
-
-def _own_nodes(function: ast.AST) -> list[ast.AST]:
-    """The nodes of ``function``'s body, not those of a function or class
-    defined in it, which is named on its own."""
-    own: list[ast.AST] = []
-    pending = list(ast.iter_child_nodes(function))
-    while pending:
-        node = pending.pop()
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            continue
-        own.append(node)
-        pending.extend(ast.iter_child_nodes(node))
-    return own
 
 
 def _is_attributes(node: ast.AST) -> bool:
@@ -256,3 +473,41 @@ def test_the_attribute_write_rule_catches_what_it_names():
         "set_value",
         "Ops.outer.inner",
     }
+
+
+#: spicelib's own searches for a file a sheet names: each walks every folder
+#: below the sheet's and the server's working directory, which neither LTspice
+#: build looks in (``docs/spicelib_bugs.md``, Bug 37). ``_get_subcircuit`` is
+#: the loader that calls them for a part's model library and a block's sheet.
+_SPICELIB_SEARCHES = ("_asy_file_find", "_lib_file_find", "_get_subcircuit")
+
+
+def test_a_sheets_files_are_found_by_the_sessions_library_alone():
+    """Which file a sheet's symbol, or a block's own sheet, is decided by
+    ``lib/symbol_library.py`` (the session's ``SymbolLibrary``), for the edit,
+    the check, the inspection and the drawing alike, wherever the server
+    runs. No module calls spicelib's own search for one. Ruff refuses an
+    import of spicelib's search functions and of the library's own rules
+    (``banned-api`` in ``pyproject.toml``); a method it cannot see is checked
+    here."""
+    assert [where for name in _SPICELIB_SEARCHES for where in _called(name)] == []
+
+
+def test_the_spicelib_search_rule_catches_what_it_names():
+    tree = ast.parse(
+        "class Editor(AscEditor):\n"
+        "    def _get_subcircuit(self, symbol):\n"
+        "        return super()._get_subcircuit(symbol)\n"  # 3
+        "    def symbol(self, name):\n"
+        "        return self._asy_file_find(name)\n"  # 5
+        "def library(name):\n"
+        "    return _lib_file_find(name)\n"  # 7
+        "def found(resolver, name):\n"
+        "    return resolver.resolve(name), _get_subcircuit\n"
+    )
+    planted = {"planted.py": tree}
+    assert sorted(where for name in _SPICELIB_SEARCHES for where in _calls_in(name, planted)) == [
+        "planted.py:3",
+        "planted.py:5",
+        "planted.py:7",
+    ]

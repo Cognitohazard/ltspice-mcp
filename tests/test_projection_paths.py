@@ -11,11 +11,12 @@ repeat is read once, and a leaf no row has is said with the keys that are.
 from __future__ import annotations
 
 import ast
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from ltspice_mcp.lib import result_store
 from ltspice_mcp.lib.projection import absent_path_warnings, key_outline
@@ -29,18 +30,30 @@ from ltspice_mcp.tools.analyze import (
 )
 from tests._source_scan import PACKAGE, parsed
 from tests.conftest import make_experiment_job, stage_recorded_fixture
+from tests.test_held_caps import _every_input_model
 
 # ---------------------------------------------------------------------------
 # Every dotted-path argument goes through the one resolver
 # ---------------------------------------------------------------------------
 
-#: (module, model, field): every input field documented as dotted row paths.
-_DOTTED_FIELDS = (
-    ("tools/analyze.py", "AnalyzeInclude", "fields"),
-    ("tools/experiments.py", "AnalysisInclude", "fields"),
-    ("tools/experiments.py", "RunExperimentsInput", "run_fields"),
-    ("tools/jobs.py", "JobsRunsInput", "run_fields"),
-)
+
+def _dotted_fields(models: Iterable[type[BaseModel]]) -> list[tuple[str, str, str]]:
+    """(module, model, field) for every field of ``models`` documented as
+    dotted paths: its description says ``dotted``."""
+    return sorted(
+        (
+            model.__module__.removeprefix("ltspice_mcp.").replace(".", "/") + ".py",
+            model.__name__,
+            name,
+        )
+        for model in models
+        for name, field in model.model_fields.items()
+        if "dotted" in (field.description or "").lower()
+    )
+
+
+#: Every tool-input field documented as dotted row paths.
+_DOTTED_FIELDS = _dotted_fields(_every_input_model())
 
 #: The per-argument readings, each of which reads through ``resolve_field_paths``.
 _READERS = {
@@ -71,37 +84,100 @@ def test_each_reader_reads_through_the_shared_resolver() -> None:
         assert "resolve_field_paths" in _calls(function), f"{path}:{name}"
 
 
+def _read_by_the_shared_resolver(tree: ast.AST, model: str, field: str) -> bool:
+    """Whether a validator of class ``model`` in ``tree`` hands ``field`` to the
+    shared resolver or one of its per-argument readings: a ``field_validator``
+    of that field that calls one, or a validator whose call of one is given
+    ``self.<field>``."""
+    (cls,) = (
+        node for node in ast.walk(tree) if isinstance(node, ast.ClassDef) and node.name == model
+    )
+    readers = set(_READERS.values()) | {"resolve_field_paths"}
+    for function in cls.body:
+        if not isinstance(function, ast.FunctionDef):
+            continue
+        decorators = [
+            decorator
+            for decorator in function.decorator_list
+            if isinstance(decorator, ast.Call)
+            and getattr(decorator.func, "id", "") in {"model_validator", "field_validator"}
+        ]
+        validated = {
+            argument.value
+            for decorator in decorators
+            if getattr(decorator.func, "id", "") == "field_validator"
+            for argument in decorator.args
+            if isinstance(argument, ast.Constant)
+        }
+        for call in ast.walk(function):
+            if not decorators or not (isinstance(call, ast.Call) and _calls(call) & readers):
+                continue
+            given = [*call.args, *(keyword.value for keyword in call.keywords)]
+            if field in validated or any(
+                isinstance(node, ast.Attribute) and node.attr == field
+                for argument in given
+                for node in ast.walk(argument)
+            ):
+                return True
+    return False
+
+
+def test_every_dotted_field_is_found() -> None:
+    """The walk reaches each tool's dotted fields: analyze_results' and the
+    attached analysis's include.fields, and the run rows' run_fields."""
+    assert {(model, field) for _, model, field in _DOTTED_FIELDS} >= {
+        ("AnalyzeInclude", "fields"),
+        ("AnalysisInclude", "fields"),
+        ("RunExperimentsInput", "run_fields"),
+        ("JobsRunsInput", "run_fields"),
+    }
+
+
 @pytest.mark.parametrize(("path", "model", "field"), _DOTTED_FIELDS)
 def test_each_dotted_field_is_read_by_the_shared_resolver(
     path: str, model: str, field: str
 ) -> None:
-    (cls,) = (
-        node
-        for node in ast.walk(_module(path))
-        if isinstance(node, ast.ClassDef) and node.name == model
+    assert _read_by_the_shared_resolver(_module(path), model, field), (
+        f"{model}.{field} is not read by the shared projection resolver"
     )
-    readers = set(_READERS.values()) | {"resolve_field_paths"}
-    validators = [
-        function
-        for function in cls.body
-        if isinstance(function, ast.FunctionDef)
-        and any(
-            isinstance(decorator, ast.Call)
-            and getattr(decorator.func, "id", "") in {"model_validator", "field_validator"}
-            for decorator in function.decorator_list
-        )
-        and _calls(function) & readers
+
+
+def test_the_dotted_field_rule_catches_what_it_names() -> None:
+    class Planted(BaseModel):
+        keep: list[str] | None = Field(default=None, description="Dotted paths to keep.")
+        columns: list[str] | None = Field(default=None, description="Keep these DOTTED keys.")
+        names: list[str] | None = Field(default=None, description="Names to keep.")
+
+    assert [found[1:] for found in _dotted_fields([Planted])] == [
+        ("Planted", "columns"),
+        ("Planted", "keep"),
     ]
-    assert validators, f"{model}.{field} is not read by the shared projection resolver"
-    mentioned = {
-        node.attr if isinstance(node, ast.Attribute) else node.value
-        for function in validators
-        for decorator_or_body in [function]
-        for node in ast.walk(decorator_or_body)
-        if isinstance(node, ast.Attribute)
-        or (isinstance(node, ast.Constant) and isinstance(node.value, str))
-    }
-    assert field in mentioned, f"{model}'s resolver call does not read {field!r}"
+    source = ast.parse(
+        "class Shared(BaseModel):\n"
+        "    @field_validator('keep')\n"
+        "    def _keep(cls, value):\n"
+        "        return resolve_field_paths(value)\n"
+        "class Own(BaseModel):\n"
+        "    @field_validator('keep')\n"
+        "    def _keep(cls, value):\n"
+        "        return [path.split('.') for path in value]\n"
+        "class Other(BaseModel):\n"
+        "    @model_validator(mode='after')\n"
+        "    def _read(self):\n"
+        "        self.rows = resolve_row_fields(self.rows)\n"
+        "        self.keep = [path.split('.') for path in self.keep]\n"
+        "class Given(BaseModel):\n"
+        "    @model_validator(mode='after')\n"
+        "    def _read(self):\n"
+        "        self.keep = analyze.resolve_row_fields(self.keep)\n"
+        "class Undecorated(BaseModel):\n"
+        "    def read(self):\n"
+        "        return resolve_field_paths(self.keep)\n"
+    )
+    assert [
+        _read_by_the_shared_resolver(source, model, "keep")
+        for model in ("Shared", "Own", "Other", "Given", "Undecorated")
+    ] == [True, False, False, True, False]
 
 
 # ---------------------------------------------------------------------------

@@ -2277,13 +2277,13 @@ stochastic function or analysis.
 `AscEditor.reset_netlist` and `AscEditor._get_subcircuit`).
 **Our workaround:** `lib/schematic_ops.py::_AscEditor`, which `make_editor`
 uses to open every sheet, overrides `_get_subcircuit` for a block symbol with
-no library. It looks for the sheet in the same places as spicelib and, when
-there is none, leaves the instance without a resolved subcircuit, as spicelib
-already does for a cell symbol with no library. A sheet that exists also opens
-as an `_AscEditor`, so a block deeper in the hierarchy is read the same way.
-spicelib's search walks every folder it is given and is not cached, so the
-override looks for each missing sheet once each time the parent is opened
-instead of once per instance.
+no library. It finds the sheet with the session's symbol library
+(`SymbolResolver.block_sheet`, which replaced spicelib's search; see Bug 37)
+and, when there is none, leaves the instance without a resolved subcircuit,
+as spicelib already does for a cell symbol with no library. A sheet that
+exists also opens as an `_AscEditor`, so a block deeper in the hierarchy is
+read the same way. The resolver keeps what it found for the request, so a
+block placed many times is looked for once each time the parent is opened.
 
 ### Summary
 
@@ -3779,26 +3779,45 @@ sheet reader's on every sheet in the suite.
 
 ---
 
-## Bug 37 — `AscEditor` finds a symbol where LTspice does not, and misses one where LTspice finds it (limitation)
+## Bug 37 — `AscEditor` finds a sheet's files where LTspice does not, and misses some where LTspice finds them (limitation)
 
-**Status:** known limitation, recorded against LTspice's own behaviour.
-Observed 2026-11-04.
+**Status:** known limitation, recorded against LTspice's own behaviour for a
+symbol. Observed 2026-11-04 for a symbol, 2026-11-06 for a part's model
+library and a block's own sheet.
 **Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
-`AscEditor._get_symbol` and `_asy_file_find`; `spicelib/utils/file_search.py`,
-`find_file_in_directory`).
-**Our workaround:** `_AscEditor._get_symbol` in `lib/schematic_ops.py` finds
-the file through the session's `SymbolResolver`, which follows
-`lib/symbol_library.py` `find_symbol`, and reads it with `AsyReader`.
+`AscEditor._get_symbol`, `_asy_file_find`, `_get_subcircuit` and
+`_lib_file_find`; `spicelib/utils/file_search.py`,
+`search_file_in_containers` and `find_file_in_directory`).
+**Our workaround:** `_AscEditor` in `lib/schematic_ops.py` finds every file a
+sheet names through the session's `SymbolResolver` (`lib/symbol_library.py`):
+`_get_symbol` a part's symbol (`find_symbol`), read with `AsyReader`, and
+`_get_subcircuit` a block's own sheet (`SymbolResolver.block_sheet`). It looks
+for no model library at all (Bug 39). `pyproject.toml` bans an import of
+spicelib's search functions, and `tests/test_sheet_rule_owners.py` fails on a
+call of the editor's own search methods.
 
 ### Summary
 
-`_get_symbol` turns a part's symbol name into a relative path, keeping any
-folder the name gives (`lib\part` becomes `lib/part.asy`), and
-`_asy_file_find` walks the sheet's folder, the working directory, each
-library's `sym` folder and the custom library paths, each with `os.walk`,
-for a file of that name in any case. LTspice 26 and LTspice XVII were
-recorded doing otherwise (the `symbol-beside-sheet` and
-`symbol-named-with-a-folder-it-is-not-in` cases):
+The editor finds three kinds of file a sheet names, each by walking folders
+with `os.walk` for a file of that name in any case:
+
+- a part's symbol: `_get_symbol` turns the name into a relative path, keeping
+  any folder the name gives (`lib\part` becomes `lib/part.asy`), and
+  `_asy_file_find` walks the sheet's folder, the working directory, each
+  library's `sym` folder and the custom library paths;
+- a block's own sheet, when it is not beside the block's symbol:
+  `_get_subcircuit` walks the sheet's folder, the working directory and the
+  custom library paths;
+- the model library a cell's symbol names (`ModelFile` and the attributes
+  `get_library` reads): `_lib_file_find` walks the sheet's folder, the
+  working directory, each library's `sub` folder and the custom library
+  paths, then looks in `~/AppData/Local/Programs/ADI/LTspice/lib.zip` and
+  extracts what it finds there into `spice_lib_temp` under the working
+  directory. When it finds none, `_get_subcircuit` raises
+  `FileNotFoundError` and the sheet does not open.
+
+LTspice 26 and LTspice XVII were recorded finding a symbol otherwise (the
+`symbol-beside-sheet` and `symbol-named-with-a-folder-it-is-not-in` cases):
 
 - neither build finds a bare name in a folder below the sheet's, which the
   walk does (`search/in_subfolder`);
@@ -3807,8 +3826,15 @@ recorded doing otherwise (the `symbol-beside-sheet` and
   `<sheet folder>/lib` (`search_flat/named_folder_absent`);
 - neither build searches the working directory of the process.
 
-The result is also cached for the whole process by file name (Bug 17), so
-which file a name means depends on what the process opened before.
+Both builds read a block's own sheet beside its symbol
+(`export-hierarchical-block`); where else they look for one, and where they
+look for a model library, is not recorded. The working directory is the
+folder the process happened to start in, so with it in the search, whether a
+sheet opens, which sheet a block reads, and which library a part reads depend
+on where the program was started and not on the sheet.
+
+The symbol's file is also cached for the whole process by file name (Bug 17),
+so which file a name means depends on what the process opened before.
 
 ### Affected code
 
@@ -3817,6 +3843,17 @@ def _get_symbol(self, symbol: str) -> AsyReader:
     asy_filename = symbol + os.path.extsep + "asy"
     ...
     asy_path = self._asy_file_find(asy_filename)
+
+def _get_subcircuit(self, symbol: AsyReader) -> 'SpiceEditor | AscEditor':
+    ...
+            asc_path = search_file_in_containers(asc_filename.stem + os.path.extsep + "asc",
+                                                 os.path.split(self.asc_file_path)[0],
+                                                 os.path.curdir,
+                                                 *self.custom_lib_paths)
+    ...
+        lib_path = self._lib_file_find(lib)
+        if lib_path is None:
+            raise FileNotFoundError(f"File {lib} not found")
 
 def find_file_in_directory(directory, filename):
     path, filename = os.path.split(filename)
@@ -3829,6 +3866,7 @@ def find_file_in_directory(directory, filename):
 ### Reproduction
 
 ```python
+import os
 from pathlib import Path
 from spicelib import AscEditor
 
@@ -3841,6 +3879,13 @@ AscEditor("sub.asc")        # opens
 
 # The sheet says "lib\part"; part.asy is beside it and there is no lib/.
 # LTspice XVII netlists it; spicelib raises FileNotFoundError.
+
+# top.asc places X1 of amp.asy, a CELL with Prefix X and ModelFile amp.lib,
+# both in sheet/; amp.lib is nowhere.
+os.chdir("elsewhere")
+AscEditor("../sheet/top.asc")   # FileNotFoundError: File amp.lib not found
+Path("amp.lib").write_text("* amp\n.subckt amp a b\nR1 a b 1k\n.ends amp\n")
+AscEditor("../sheet/top.asc")   # opens, with the library of the working directory
 ```
 
 ### Impact
@@ -3848,13 +3893,22 @@ AscEditor("sub.asc")        # opens
 `edit_schematic` refused a sheet that LTspice XVII netlists and that
 `inspect` and `verify_circuit` read, and its advice to set `symbol_paths` did
 not help. It also opened a sheet neither build netlists, placing the part
-with a symbol no other reader of the sheet found.
+with a symbol no other reader of the sheet found. It refused a sheet whose
+part names a model library it found nowhere, though no reader of the sheet
+needs the library, and opened the same sheet when the server was started in
+a folder holding a library of that name. A block's sheet missing from beside
+its symbol was read from the working directory when one of its name was
+there, and the sheet placing the block was refused when that one could not
+be opened.
 
 ### Proposed fix
 
 Search beside the sheet only where the name says, then under its bare name
 beside the sheet, and walk folders only in the libraries, as
-`lib/symbol_library.py` `find_symbol` does; leave out the working directory.
+`lib/symbol_library.py` `find_symbol` does; leave out the working directory
+and the archive. Look for a block's sheet beside its symbol first. Do not
+fail a sheet's load for a model library it does not find: leave the instance
+without a resolved subcircuit, as for a cell symbol with no library.
 
 ### Suggested upstream test
 
@@ -3865,13 +3919,33 @@ def test_a_bare_name_is_not_found_below_the_sheet(tmp_path):
     (tmp_path / "sub.asc").write_text(SHEET_PLACING_part)
     with pytest.raises(FileNotFoundError):
         AscEditor(tmp_path / "sub.asc")
+
+
+def test_the_working_directory_is_not_searched(tmp_path, monkeypatch):
+    (tmp_path / "sheet").mkdir()
+    (tmp_path / "sheet" / "amp.asy").write_text(AMP_ASY_NAMING_amp_lib)
+    (tmp_path / "sheet" / "top.asc").write_text(SHEET_PLACING_X1_amp)
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "elsewhere" / "amp.lib").write_text(AMP_LIB)
+    monkeypatch.chdir(tmp_path / "elsewhere")
+    editor = AscEditor(tmp_path / "sheet" / "top.asc")
+    assert editor.get_component("X1").attributes["_SUBCKT"] is None
 ```
 
 ### Cross-reference
 
-`tests/test_recorded_ltspice_schematics.py::TestTheServerFindsASymbolWhereEitherBuildDoes::test_the_editor`
-holds the editor to `find_symbol` on every recorded search, with spicelib's
-cache empty and warmed by another folder's files.
+`tests/test_recorded_ltspice_schematics.py::TestTheServerFindsASymbolWhereEitherBuildDoes`
+holds the editor (`test_the_editor`, with spicelib's cache empty and warmed by
+another folder's files), `edit_schematic`, `inspect` and `verify_circuit`
+(`test_every_tool`, with the working directory empty and holding the symbol)
+to `find_symbol` on every recorded search.
+`test_a_blocks_sheet_is_found_alike_whatever_the_working_directory` in the
+same file holds a block's sheet to the recorded place, whatever the working
+directory holds, and
+`tests/test_symbol_library.py::test_a_part_naming_a_model_library_opens_alike_whatever_the_working_directory`
+opens and edits a sheet whose part names a library beside it, nowhere, or in
+the working directory only. `tests/test_symbol_library.py::TestABlocksSheet`
+holds the rule for a block's sheet.
 
 ---
 
@@ -4007,7 +4081,98 @@ the check stays.
 
 ---
 
-## Bug 39 — `PlotData.read_trace_data` holds every trace of a plot stored a point at a time, whichever traces are asked for
+## Bug 39 — `AscEditor.save_netlist` fails on a sheet whose part's model library it read
+
+**Status:** draft for an upstream spicelib pull request. Observed 2026-11-06.
+**Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
+`AscEditor.save_netlist` and `_get_subcircuit`; `spicelib/editor/spice_editor.py`,
+`SpiceCircuit`).
+**Our workaround:** `_AscEditor._get_subcircuit` in `lib/schematic_ops.py`
+reads no model library: a part whose symbol names one loads with no resolved
+subcircuit, as a cell symbol with no library already does in spicelib.
+Nothing that reads or edits a sheet in the server uses the subcircuit.
+
+### Summary
+
+While it loads a sheet, the editor reads the subcircuit a part named `X...`
+calls from the model library its symbol names (`ModelFile` and the other
+attributes `AsyReader.get_library` reads), with
+`SpiceEditor.find_subckt_in_lib`, and keeps it as the part's `_SUBCKT`: a
+read-only `SpiceCircuit`. `save_netlist` then asks every `X` part's `_SUBCKT`
+whether it was `updated`, to save a changed sub-sheet with its parent. A
+`SpiceCircuit` has no `updated`, so saving the sheet raises
+`AttributeError`. A sheet whose library part's library was found can be
+opened and changed, but never saved.
+
+### Affected code
+
+```python
+# asc_editor.py, AscEditor.save_netlist
+if component.reference.startswith('X') and "_SUBCKT" in component.attributes:
+    # writing the sub-circuit if it was updated
+    sub_circuit: AscEditor = component.attributes['_SUBCKT']
+    if sub_circuit is not None and sub_circuit.updated:
+        sub_circuit.save_netlist(sub_circuit.asc_file_path)
+```
+
+### Reproduction
+
+```python
+from pathlib import Path
+from spicelib import AscEditor
+
+Path("amp.asy").write_text(
+    "Version 4\nSymbolType CELL\nRECTANGLE Normal -32 -32 32 32\nSYMATTR Prefix X\n"
+    "SYMATTR ModelFile amp.lib\nSYMATTR Value amp\nPIN -32 0 NONE 0\nPINATTR PinName a\n"
+    "PINATTR SpiceOrder 1\nPIN 32 0 NONE 0\nPINATTR PinName b\nPINATTR SpiceOrder 2\n"
+)
+Path("amp.lib").write_text("* amp\n.subckt amp a b\nR1 a b 1k\n.ends amp\n")
+Path("top.asc").write_text(
+    "Version 4\nSHEET 1 880 680\nSYMBOL amp 96 96 R0\nSYMATTR InstName X1\n"
+)
+editor = AscEditor("top.asc")
+type(editor.get_component("X1").attributes["_SUBCKT"])   # SpiceCircuit
+editor.save_netlist("copy.asc")
+# AttributeError: 'SpiceCircuit' object has no attribute 'updated'
+```
+
+A library whose first character is not `*`, a letter or a space is not read
+(`find_subckt_in_lib` refuses its encoding), and that sheet saves.
+
+### Impact
+
+`edit_schematic` could not edit a sheet with a subcircuit part whose library
+sat beside the sheet, under the server's working directory, or in a library
+folder: every edit failed with the `AttributeError`.
+
+### Proposed fix
+
+Save only a sub-sheet: ask `isinstance(sub_circuit, AscEditor)` before
+`sub_circuit.updated`, or give `SpiceCircuit` an `updated` that stays false
+for a read-only one.
+
+### Suggested upstream test
+
+```python
+def test_a_sheet_whose_part_library_was_read_saves(tmp_path):
+    (tmp_path / "amp.asy").write_text(AMP_ASY)
+    (tmp_path / "amp.lib").write_text("* amp\n.subckt amp a b\nR1 a b 1k\n.ends amp\n")
+    (tmp_path / "top.asc").write_text(SHEET_PLACING_X1_amp)
+    editor = AscEditor(tmp_path / "top.asc")
+    editor.save_netlist(tmp_path / "copy.asc")
+    assert "SYMATTR InstName X1" in (tmp_path / "copy.asc").read_text()
+```
+
+### Cross-reference
+
+`tests/test_symbol_library.py::test_a_part_naming_a_model_library_opens_alike_whatever_the_working_directory`
+edits such a sheet through `edit_schematic` with the library beside it and
+asserts the part has no resolved subcircuit. Once upstream saves the sheet,
+the workaround can read the library again if a reader comes to need it.
+
+---
+
+## Bug 40 — `PlotData.read_trace_data` holds every trace of a plot stored a point at a time, whichever traces are asked for
 
 **Status:** draft for an upstream spicelib pull request. Observed 2026-11-06.
 **Affected version:** spicelib 1.5.1 (`spicelib/raw/plot_data.py`,
