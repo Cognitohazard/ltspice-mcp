@@ -1848,6 +1848,48 @@ async def test_replace_directive_reports_what_it_changed(asc_state, work_dir):
     assert "TEXT 64 96 Left 2 !.tran 0 5m" in target.read_text(encoding="utf-8")
 
 
+async def test_replace_component_reports_what_it_did(asc_state, work_dir):
+    """One call swaps a resistor for a capacitor whose pins sit nearer its
+    middle: the reply names the old symbol and the wires that reach each pin's
+    label where it moved, and the part keeps its name and value."""
+    await _build_blank(
+        asc_state,
+        "swap",
+        [
+            {
+                "op": "add_component",
+                "reference": "R1",
+                "symbol": "res",
+                "x": 0,
+                "y": 0,
+                "value": "1k",
+            },
+            {"op": "add_net_label", "net": "in", "pin": "R1.1"},
+            {"op": "add_net_label", "net": "0", "pin": "R1.2"},
+        ],
+    )
+    target = work_dir / "swap.asc"
+    data = _assert_schema(
+        await handle_edit_schematic(
+            _edit_input(
+                path="swap.asc",
+                expected_sha256=_sha(target),
+                ops=[{"op": "replace_component", "reference": "R1", "symbol": "cap"}],
+            ),
+            asc_state,
+        )
+    )
+    assert data["commit_state"] == "committed"
+    (result,) = data["results"]
+    assert result["was"] == "res"
+    assert sorted((w["from"]["y"], w["to"]["y"]) for w in result["wires"]) == [
+        (-32, -48),
+        (32, 48),
+    ]
+    text = target.read_text(encoding="utf-8")
+    assert "SYMBOL cap 0 0 R0" in text and "SYMATTR Value 1k" in text
+
+
 async def test_a_dry_run_compares_the_sheet_it_would_write(asc_state, work_dir, monkeypatch):
     """A dry run with a reference returns the verdict on the sheet the batch
     would write, exported from a staged copy of it, and writes nothing."""

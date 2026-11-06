@@ -143,6 +143,9 @@ _DECLARED_INVERSES: dict[str, str] = {
     # Re-applied with its result's x and y, now as instruction and was as text,
     # it puts the text back.
     "replace_directive": _SELF_INVERSE,
+    # Re-applied with its result's was as the symbol, it puts the symbol back;
+    # the wires it drew stay, for remove_wire.
+    "replace_component": _SELF_INVERSE,
     "set_component_value": _SELF_INVERSE,
     "set_component_attribute": _SELF_INVERSE,
     "move_component": _SELF_INVERSE,

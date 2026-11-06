@@ -815,7 +815,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # pick one of several texts its instruction names: two identical texts
     # could not be told apart, so the op's own undo failed on them. Measured
     # 15,730.
-    "edit_schematic": 15730,
+    # Raised by about 660 characters for replace_component, the fifteenth op:
+    # a part's symbol changed in place with its wiring kept, where a removal,
+    # an addition and a wire per pin took a dozen ops. Its descriptions are a
+    # line each; the rest is the op's four fields. Measured 16,387.
+    "edit_schematic": 16400,
     # Checks, the render policy and the compare spec (each with the
     # verify-only fields on a subclass), each in one spelling. The checks are
     # named in the tool's own description because a caller cannot ask for what

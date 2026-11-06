@@ -36,7 +36,7 @@ import importlib
 import math
 import re
 import traceback
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import AsyncIterator, Callable, Container, Iterable, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
@@ -2134,6 +2134,19 @@ class OpMoveComponent(StrictModel):
     )
 
 
+class OpReplaceComponent(StrictModel):
+    """Swap a part's symbol in place; each moved pin is wired back to its net."""
+
+    op: Literal["replace_component"]
+    reference: str = Field(description=_REFERENCE_DESCRIPTION)
+    symbol: str = Field(description="The new symbol, without .asy.")
+    pins: dict[str, str] | None = Field(
+        default=None,
+        description="Old pin to new pin (name or SpiceOrder) where names differ; others pair by name.",
+    )
+    value: str | None = Field(default=None, description="New value; omit to keep the old one.")
+
+
 class SheetRegion(StrictModel):
     """Two opposite corners; the edges are inside."""
 
@@ -2328,6 +2341,7 @@ SchematicOp = (
     | OpSetComponentAttribute
     | OpRemoveComponent
     | OpMoveComponent
+    | OpReplaceComponent
     | OpMove
     | OpAddNetLabel
     | OpRemoveNetLabel
@@ -2436,6 +2450,7 @@ OP_RESULT_FACTS: dict[str, tuple[str, ...]] = {
     "remove_directive": ("removed_texts",),
     "replace_directive": ("text",),
     "remove_component": ("deleted_wires",),
+    "replace_component": ("was", "wires", "left_at", "unpaired_pins"),
     "move": ("moved",),
     "set_plot_panes": ("plot_settings", "replaced_panes"),
 }
@@ -2459,6 +2474,254 @@ def _set_plot_panes(op: OpSetPlotPanes, plot: SheetPlotSettings) -> dict[str, ob
     plot.settings = with_panes(plot.settings, op.analysis, inherit_grid(before, panes))
     replaced = pane_specs(before.panes if before is not None else ())
     return {"op": op.op, "plot_settings": str(plot.path), "replaced_panes": replaced}
+
+
+def _pin_pairs(
+    op: OpReplaceComponent,
+    reference: str,
+    old_symbol: str,
+    old_pins: Sequence[PlacedPin],
+    new_pins: Sequence[PlacedPin],
+) -> list[tuple[PlacedPin, PlacedPin]]:
+    """Each old pin with the new pin it becomes: as ``op.pins`` names them
+    (by name or SpiceOrder, as ``placed_pin`` reads a pin), then by a name the
+    two symbols share, in any case, where each has one pin of it."""
+    pairs: list[tuple[PlacedPin, PlacedPin]] = []
+    for old_name, new_name in (op.pins or {}).items():
+        old = placed_pin(old_pins, reference, old_symbol, old_name)
+        new = placed_pin(new_pins, reference, op.symbol, new_name)
+        if any(old is o for o, _ in pairs) or any(new is n for _, n in pairs):
+            raise NetlistError(
+                f"replace_component pairs each pin once, and pins names {old_name!r} or "
+                f"{new_name!r} twice."
+            )
+        pairs.append((old, new))
+
+    def by_name(pins: Sequence[PlacedPin]) -> dict[str, PlacedPin]:
+        names = Counter(pin.name.casefold() for pin in pins if pin.name)
+        return {
+            pin.name.casefold(): pin
+            for pin in pins
+            if pin.name and names[pin.name.casefold()] == 1
+        }
+
+    new_named = by_name(new_pins)
+    for name, old in by_name(old_pins).items():
+        new = new_named.get(name)
+        if new is None or any(old is o for o, _ in pairs) or any(new is n for _, n in pairs):
+            continue
+        pairs.append((old, new))
+    return pairs
+
+
+def _joins(nets: NamedNets, reference: str) -> tuple[dict[str, frozenset], frozenset]:
+    """What each pin of ``reference`` is one net with apart from the part
+    itself (other parts' pins and labels), by pin, and how everything else on
+    the sheet is grouped into nets. The two are what ``replace_component``
+    must leave as they were."""
+    others: dict[int, set[tuple]] = defaultdict(set)
+    for pin in nets.pins:
+        if pin.reference != reference:
+            others[nets.of_pin(pin)].add(("pin", pin.qualified_name, pin.point))
+    for label in nets.labels:
+        others[nets.of_label(label)].add(("label", label.text, label.point))
+    own = {
+        _pin_key(pin.name, pin.order): frozenset(others.get(nets.of_pin(pin), ()))
+        for pin in nets.pins
+        if pin.reference == reference
+    }
+    return own, frozenset(frozenset(group) for group in others.values())
+
+
+def _pin_key(name: str, order: int) -> str:
+    """A pin as ``_joins`` keys it: its name, or its SpiceOrder for a pin with none."""
+    return name or str(order)
+
+
+def _joined_text(joined: frozenset) -> str:
+    """What a pin is one net with, as a reader names it."""
+    if not joined:
+        return "nothing"
+    names = sorted(
+        f"{name}" if kind == "pin" else f"label '{name}'" for kind, name, _point in joined
+    )
+    return ", ".join(names[:6]) + (f" and {len(names) - 6} more" if len(names) > 6 else "")
+
+
+def _replace_component(editor: AscEditor, op: OpReplaceComponent) -> dict[str, object]:
+    """Swap ``op.reference``'s symbol where it stands and reconnect its pins.
+
+    The part keeps its name, place, turn and attributes (its value too, unless
+    ``op.value`` gives one); the old symbol's text placements (``WINDOW``) go,
+    so the new symbol places its own. Each paired pin that moved gets a wire
+    from where it is now to where the old one was, planned and checked as
+    ``wire_pins`` plans one. Then the sheet must join each paired pin to what
+    its old pin joined, an unpaired new pin to nothing, and everything else as
+    before (``_joins``); otherwise the op is refused and the sheet put back.
+    """
+    reference = part_reference(editor, op.reference)
+    component = editor.components[reference]
+    old_symbol = component.symbol or ""
+    old_geometry = placed_geometry(editor, reference)
+    if old_geometry is None:
+        raise NetlistError(
+            f"Cannot replace {reference}: its symbol '{old_symbol}' is not found, so its "
+            "pins, which the new symbol's take over, are unknown."
+        )
+    new_info = symbol_info_for(editor, op.symbol)
+    if new_info is None:
+        raise NetlistError(
+            f"Symbol '{op.symbol}' not found beside the schematic or in any configured "
+            "symbol library."
+        )
+    position, rotation = editor.get_component_position(reference)
+    x, y = int(position.X), int(position.Y)
+    turn = rotation.name if rotation else "R0"
+    new_geometry = compute_placed_geometry(new_info, x, y, turn)
+
+    def placed(pins: Sequence[Mapping[str, Any]]) -> list[PlacedPin]:
+        return [PlacedPin(p["name"], p["order"], p["x"], p["y"], p["dir"]) for p in pins]
+
+    old_pins, new_pins = placed(old_geometry["pins"]), placed(new_geometry["pins"])
+    pairs = _pin_pairs(op, reference, old_symbol, old_pins, new_pins)
+    _pins_on_crossings(
+        editor,
+        reference,
+        new_geometry["pins"],
+        f"replace {reference}",
+        already={(pin.x, pin.y) for pin in old_pins},
+    )
+    before = sheet_nets(editor)
+    joined_before, groups_before = _joins(before, reference)
+
+    attributes = component.attributes
+    kept_attributes = dict(attributes)
+    wire_count = len(editor.wires)
+
+    def put_back() -> None:
+        component.symbol = old_symbol  # pyright: ignore[reportAttributeAccessIssue]
+        attributes.clear()
+        attributes.update(kept_attributes)
+        del editor.wires[wire_count:]
+
+    component.symbol = op.symbol  # pyright: ignore[reportAttributeAccessIssue]
+    for name in [name for name in attributes if name.startswith(("_WINDOW", "_SUBCKT"))]:
+        del attributes[name]
+    try:
+        if op.value is not None:
+            _apply_component_value(editor, reference, op.value, element_class(editor, reference))
+        drawn: list[tuple[int, int, int, int]] = []
+        for old, new in pairs:
+            old_key = _pin_key(old.name, old.order)
+            if (old.x, old.y) == (new.x, new.y) or not joined_before.get(old_key):
+                continue
+            drawn += _bridge(editor, reference, old, new)
+        after = sheet_nets(editor)
+        joined_after, groups_after = _joins(after, reference)
+        paired = {_pin_key(new.name, new.order): old for old, new in pairs}
+        for new in new_pins:
+            key = _pin_key(new.name, new.order)
+            old = paired.get(key)
+            want = (
+                joined_before.get(_pin_key(old.name, old.order), frozenset())
+                if old
+                else frozenset()
+            )
+            if joined_after.get(key, frozenset()) != want:
+                said = (
+                    f"its old pin {old.name or old.order} was joined to"
+                    if old
+                    else "no old pin pairs with it, so it should join"
+                )
+                raise NetlistError(
+                    f"Refused to replace {reference} with {op.symbol}: its pin "
+                    f"{new.name or new.order} at ({new.x},{new.y}) would be joined to "
+                    f"{_joined_text(joined_after.get(key, frozenset()))}, where {said} "
+                    f"{_joined_text(want)}. Pair the pins with pins (old pins: "
+                    f"{', '.join(p.name or str(p.order) for p in old_pins)}; new pins: "
+                    f"{', '.join(p.name or str(p.order) for p in new_pins)}), or move the "
+                    "part first so the new pins land clear of other wiring."
+                )
+        if groups_after != groups_before:
+            raise NetlistError(
+                f"Refused to replace {reference} with {op.symbol}: the new symbol or the "
+                "wires that reconnect its pins would join or split other nets of the "
+                "sheet. Move the part first, or reconnect its pins with wire_pins."
+            )
+    except (NetlistError, ValueError):
+        put_back()
+        raise
+    paired_old = {id(old) for old, _ in pairs}
+    left = [
+        {"pin": old.name or str(old.order), "x": old.x, "y": old.y}
+        for old in old_pins
+        if id(old) not in paired_old and joined_before.get(_pin_key(old.name, old.order))
+    ]
+    paired_new = {id(new) for _, new in pairs}
+    unpaired = [new.name or str(new.order) for new in new_pins if id(new) not in paired_new]
+    result: dict[str, object] = {
+        "op": "replace_component",
+        "reference": reference,
+        "symbol": op.symbol,
+        "was": old_symbol,
+    }
+    if drawn:
+        result["wires"] = [segment_json(segment) for segment in drawn]
+    if left:
+        result["left_at"] = left
+    if unpaired:
+        result["unpaired_pins"] = unpaired
+    return result
+
+
+def _bridge(
+    editor: AscEditor, reference: str, old: PlacedPin, new: PlacedPin
+) -> list[tuple[int, int, int, int]]:
+    """Draw a wire from ``new``, where the pin is now, to ``old``, where the
+    wiring of the pin it replaces ends, by the first route the route planner
+    accepts (``_plan_connect_route``, as ``wire_pins`` plans a wire): straight
+    where the two share a line, else round one corner, either way, else across
+    between them with two (``_bridge_routes``)."""
+    start, end = GridPoint(x=new.x, y=new.y), GridPoint(x=old.x, y=old.y)
+    refusal: NetlistError | None = None
+    for waypoints in _bridge_routes((new.x, new.y), (old.x, old.y)):
+        try:
+            plan = _plan_connect_route(
+                editor, start, end, [GridPoint(x=x, y=y) for x, y in waypoints]
+            )
+        except NetlistError as exc:
+            refusal = refusal or exc
+            continue
+        already = _append_wire_segments(editor, plan.segments)
+        return [segment for segment in plan.segments if segment not in already]
+    raise NetlistError(
+        f"Refused to replace {reference}: its pin {new.name or new.order} moves to "
+        f"({new.x},{new.y}), and no wire back to ({old.x},{old.y}), where its wiring "
+        f"ends, can be drawn: {refusal}"
+    )
+
+
+#: LTspice's grid step, in sheet units: where the pins of its symbols land.
+_GRID = 16
+
+
+def _bridge_routes(start: tuple[int, int], end: tuple[int, int]) -> list[list[tuple[int, int]]]:
+    """The corners of each route ``_bridge`` offers the planner, in order: none
+    when the ends share a line; else one corner, either way round; else two,
+    crossing over halfway on the 16-unit grid, either way round. A route of one
+    corner can run along the old wiring it ends on, which the planner refuses;
+    one that crosses over halfway meets it at a right angle."""
+    (x1, y1), (x2, y2) = start, end
+    if x1 == x2 or y1 == y2:
+        return [[]]
+    routes: list[list[tuple[int, int]]] = [[(x1, y2)], [(x2, y1)]]
+    mid_y = round((y1 + y2) / 2 / _GRID) * _GRID
+    if mid_y not in (y1, y2):
+        routes.append([(x1, mid_y), (x2, mid_y)])
+    mid_x = round((x1 + x2) / 2 / _GRID) * _GRID
+    if mid_x not in (x1, x2):
+        routes.append([(mid_x, y1), (mid_x, y2)])
+    return routes
 
 
 def apply_op_inplace(
@@ -2597,6 +2860,9 @@ def apply_op_inplace(
         # (dangling_wire_end), as for remove_component.
         editor.set_component_position(reference, Point(op.x, op.y), new_rot)
         return {"op": "move_component", "reference": reference}
+
+    if isinstance(op, OpReplaceComponent):
+        return _replace_component(editor, op)
 
     if isinstance(op, OpMove):
         return {"op": "move", **_apply_move(editor, op)}

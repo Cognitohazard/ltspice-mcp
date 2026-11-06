@@ -2128,6 +2128,15 @@
   ],
   "varies": true
  },
+ "ab6f6ba1108367bf": {
+  "answer": {
+   "reply": "eb8cec2f7a5370cc",
+   "sheet": "20ecf1b22dc47551"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_replace_component_reports_what_it_did"
+  ]
+ },
  "ac2daaf8e59f8bb6": {
   "answer": {
    "reply": "bff86fa1f94a6f6a",
@@ -2478,6 +2487,15 @@
    "tests/test_post_op_warnings.py::TestAbortedTransaction::test_aborted_transaction_writes_nothing_and_emits_no_warnings"
   ]
  },
+ "d26af1693561cee6": {
+  "answer": {
+   "reply": "a54b9942a021c478",
+   "sheet": "244bfcd5bae84e0c"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_replace_component_reports_what_it_did"
+  ]
+ },
  "d4281b0387bf13f0": {
   "answer": {
    "reply": "ae474fbe23413690",
@@ -2672,6 +2690,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_failure_after_a_completed_stage_is_not_reported_against_it"
+  ]
+ },
+ "e541aecca677f288": {
+  "answer": {
+   "reply": "6bf518947d12071f",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_measurement_with_a_parenthesis_left_open_is_not_added"
   ]
  },
  "e5b4c89d80e912b1": {

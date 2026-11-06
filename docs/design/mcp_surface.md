@@ -2266,8 +2266,8 @@ library otherwise.
 
 ### A.3 Edit ops
 
-The fourteen op kinds, discriminated on `op`, are `add_component`,
-`move_component`, `move`, `remove_component`, `set_component_value`,
+The fifteen op kinds, discriminated on `op`, are `add_component`,
+`move_component`, `replace_component`, `move`, `remove_component`, `set_component_value`,
 `set_component_attribute`, `add_net_label`, `remove_net_label`, `wire_pins`,
 `remove_wire`, `add_directive`, `remove_directive`, `replace_directive`,
 `set_plot_panes`. The batch
@@ -2297,6 +2297,23 @@ them, in any case), before anything changes. The result's `moved` counts what
 moved and lists the parts. Applying the opposite offset to what it moved puts
 everything back. `move_component` places one part at a position and can turn
 it.
+
+`replace_component` gives a part a new `symbol` where it stands. The part
+keeps its reference, place, turn and attributes, and its value unless `value`
+gives one; the old symbol's attribute text placements are dropped, so the new
+symbol places its own. Each old pin is paired with the new pin of the same
+name, in any case, or as `pins` pairs them (old pin to new pin, each by name
+or SpiceOrder). A paired pin that moved is wired back to where its old
+wiring ends, by a route the `wire_pins` planner accepts: straight, round one
+corner, or across halfway with two; the result's `wires` lists what was
+drawn. The swap must then leave each paired pin joined to what its old pin
+was joined to, each unpaired new pin joined to nothing, and every other net
+as it was; otherwise it is refused with what the pin would join, and the
+sheet is left as it was. The result's `was` is the old symbol, `left_at`
+gives the place of each old pin that had wiring and no partner, whose wiring
+is left there joined to nothing of the part, and `unpaired_pins` names the
+new pins left unconnected. Applied again with `was` as the symbol it puts the
+symbol back; the wires it drew stay, for `remove_wire`.
 
 `remove_wire` removes an exact segment. `remove_component` takes
 `cleanup_wires` to also delete the wires its removal leaves dangling.
