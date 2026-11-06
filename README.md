@@ -5,49 +5,28 @@
 > **Work in progress.** Expect breaking changes across versions.
 
 ltspice-mcp is an MCP server that lets an AI assistant simulate circuits with
-LTspice or ngspice, and build or edit LTspice schematics. The aim is for the
-assistant to get a circuit right in fewer turns and fewer tokens, and to draw
-schematics that a person can read.
+LTspice or ngspice and edit LTspice schematics. Its goals are speed,
+correctness, token efficiency and clean schematics.
 
-The assistant calls tested tools instead of writing a script for each task.
-The tools, and the guide that comes with them, help the assistant through the
-quirks of SPICE and of each simulator, such as `1M` meaning a milliohm rather
-than a megohm, or ngspice having no `.step`. The tools are covered by
-thousands of tests, and the code that reads LTspice's files is checked
-against results recorded from LTspice itself. A tool call also costs fewer
-tokens than the script it replaces, and it works in a client that can't run
-code on your machine.
+The assistant uses battle-tested tools, which know the quirks of SPICE and of
+each simulator, instead of improvised scripts.
 
-An assistant working on circuit files as text makes mistakes that nothing
-reports, such as a wire that touches the wrong pin, and finds them only turns
-later. The server checks each change against the simulator's own rules before
-it is written or run, and points the assistant to what needs its attention.
-Layout is left to the assistant's judgment of what reads well, not to an
-auto-router.
+Mechanical checks catch common errors before a file is written or run, and
+direct the assistant's attention to the right place. Layout is left to the
+assistant's judgment, not an auto-router.
 
-Results come back as named numbers, such as a phase margin or a transistor's
-gm, instead of waveforms to read. When you want to see a waveform yourself,
-the assistant shows an interactive chart in the chat, or in your browser if
-the client can't display one. When a run finishes but a value is suspect,
-such as a measurement the simulator skipped, the reply says so.
+Results come back as named numbers, such as a phase margin, instead of
+waveforms to read. To see a waveform yourself, ask for an interactive chart,
+shown in the chat where the client supports it.
 
-A sweep, a set of process corners or a Monte Carlo run takes one call. The
-server runs the cases in parallel in the background while the assistant keeps
-working, and replies with statistics across them. Every Monte Carlo sample
-records its seed, so an outlier can be run again on its own. Each run's
-results stay on disk, where a later call or a restarted server can read them.
-Repeating a request returns the job that already ran instead of running it
-again.
+Sweeps, corners and Monte Carlo take one call and run as background jobs that
+survive a restart and can be replayed.
 
-You and the assistant can work on the same schematic. The assistant picks up
-your saved changes on its next call. With the schematic open in LTspice (26.1
-or later, on Windows), its edits appear in your window, where Ctrl+Z undoes
-them. Changes you haven't saved are never overwritten, and the LTspice runs
-the server starts don't take your keyboard focus. See [Working with LTspice
-open](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#working-with-ltspice-open).
+With LTspice 26.1 or later on Windows, you and the assistant can edit the same
+open schematic ([Working with LTspice open](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#working-with-ltspice-open)).
 
-The same engine is a Python package, `ltspice_mcp.api`, for scripts. The
-server is built on [spicelib](https://github.com/nunobrum/spicelib).
+The same engine is also a Python package, `ltspice_mcp.api`, built on
+[spicelib](https://github.com/nunobrum/spicelib).
 
 ## Quick start
 
