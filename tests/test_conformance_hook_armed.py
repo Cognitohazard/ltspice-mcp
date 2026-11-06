@@ -129,6 +129,26 @@ async def test_hook_rejects_a_list_cut_short_with_no_way_to_read_the_rest(
         )
 
 
+async def test_hook_rejects_a_count_of_what_was_left_out_with_no_way_on(
+    state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A count of what a list left out says beside it how to read the rest, as
+    a truncated flag does. plot_waveform's trace summary, capped and with its
+    hint left empty, emits traces_truncated with no way on, and the hook must
+    refuse it."""
+    from ltspice_mcp.tools import analysis as analysis_mod
+
+    monkeypatch.setattr(analysis_mod, "_TRACE_SUMMARY_MAX", 1)
+    monkeypatch.setattr(analysis_mod, "_rest_of_summary", lambda *args, **kwargs: "")
+    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+
+    with pytest.raises(AssertionError, match="traces_truncated says a list was cut short"):
+        await analysis_mod.handle_plot_waveform(
+            analysis_mod.PlotWaveformInput(path=str(raw), signals=["V(out)"], open=False),
+            state_no_sim,
+        )
+
+
 def _scenario_tool_names() -> set[str]:
     """Tool names passed to ``session.call_tool(...)`` in the scenario script."""
     source = (Path(__file__).parent / "scenario_active_filter.py").read_text(encoding="utf-8")

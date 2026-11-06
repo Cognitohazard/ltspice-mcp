@@ -649,7 +649,6 @@ FROZEN_ERROR_CODES = (
     "submission_failed",
     "symbol_not_found",
     "symbol_unresolved",
-    "trace_summary_truncated",
     "trace_unit_unknown",
     "transport_delay",
     "unencodable_device_ref",
