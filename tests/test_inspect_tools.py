@@ -427,6 +427,59 @@ async def test_net_netlist_lists_the_decks_own_cards_only(
     assert "warnings" not in by_pin["data"]
 
 
+async def test_net_netlist_refuses_a_name_that_is_no_node_of_the_decks_own_cards(
+    work_dir: Path, state_no_sim: SessionState
+):
+    """``b`` is on cards of ``cell``'s body only, ``X9.b`` and ``ot`` on no
+    card at all: each was answered as a net with nothing on it. Each is now
+    refused, as a sheet refuses a name none of its labels carries, naming the
+    deck's nodes, the subcircuit that uses ``b``, and the node ``ot`` misspells.
+    Ground is a node of every deck."""
+    deck = work_dir / "scoped.cir"
+    deck.write_text(
+        "* scoped\nR1 a out 1k\n.subckt cell a b\nR1 a b 1k\n.ends\nX1 a out cell\n.end\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    inner, dotted, typo, ground = await _run(
+        state_no_sim,
+        [
+            {"kind": "net", "path": str(deck), "at": "net:b"},
+            {"kind": "net", "path": str(deck), "at": "X9.b"},
+            {"kind": "net", "path": str(deck), "at": "ot"},
+            {"kind": "net", "path": str(deck), "at": "gnd"},
+        ],
+    )
+    for item in (inner, dotted, typo):
+        assert item["ok"] is False, item
+        assert item["error"]["code"] == "netlist_invalid"
+        assert "Its nodes are a, out;" in item["error"]["message"]
+    assert ".subckt cell" in inner["error"]["message"]
+    assert "inspect(kind='hierarchy')" in inner["error"]["message"]
+    assert ".subckt" not in dotted["error"]["message"]
+    assert "Did you mean 'out'?" in typo["error"]["message"]
+    assert ground["ok"] is True, ground
+    assert ground["data"]["total_members"] == 0
+
+
+async def test_net_netlist_refusal_lists_a_few_nodes_and_counts_them_all(
+    work_dir: Path, state_no_sim: SessionState
+):
+    """The refusal of a name that is no node lists the deck's first few nodes,
+    the total, and the query that lists every one."""
+    deck = work_dir / "ladder.cir"
+    cards = "".join(f"R{i} n{i} n{i + 1} 1k\n" for i in range(1, 11))
+    deck.write_text(f"* ladder\n{cards}.end\n", encoding="utf-8", newline="\n")
+
+    (res,) = await _run(state_no_sim, [{"kind": "net", "path": str(deck), "at": "nosuch"}])
+
+    assert res["error"]["code"] == "netlist_invalid"
+    assert res["error"]["message"].endswith(
+        "Its nodes include n1, n2, n3, n4, n5, n6, n7, n8: showing 8 of 11 nodes; "
+        "inspect(kind='components', detail='full') lists each card's nodes."
+    )
+
+
 async def test_net_netlist_carries_the_lexers_warnings(work_dir: Path, state_no_sim: SessionState):
     """The lexer's notes on a deck it had to guess about reach the reply, as
     they do for ``components``; they were dropped."""

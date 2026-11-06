@@ -107,6 +107,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import difflib
 import hashlib
 import sys
 from bisect import bisect_right
@@ -156,6 +157,7 @@ from ltspice_mcp.lib.connectivity import (
 from ltspice_mcp.lib.cursor_codec import canonical_hash
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, TraceDescriptor
 from ltspice_mcp.lib.encoding import read_spice_text
+from ltspice_mcp.lib.format import cap_note
 from ltspice_mcp.lib.hierarchy import SUPPORTED_FAMILIES, SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.library_manager import (
     LibraryManager,
@@ -196,7 +198,7 @@ from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
     executable_identity,
 )
-from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex_deck
+from ltspice_mcp.lib.spice_lex import LexResult, SpiceCard, SpiceLexError, lex_deck
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, symbol_info_of
 from ltspice_mcp.lib.symbol_library import SymbolResolver
@@ -1455,20 +1457,39 @@ async def _do_symbol(q: SymbolQuery, state: SessionState) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _netlist_node_from_at(at: str | list[int], nodes_of: dict[str, list[str]]) -> str:
-    """Resolve a netlist ``at`` to a node name. Netlists carry no geometry, so a
-    coordinate is rejected; ``REF.<terminal>`` maps to the node at that 1-based
-    terminal; ``net:NAME`` and a bare name are node names directly. A card has
-    no pin names, so ``REF.NAME`` for one of the deck's cards is refused, unless
-    a node is called that: answered as a node, it would be an empty net."""
+#: How many of a deck's node names a refusal of a name that is none of them lists.
+_NODES_LISTED = 8
+
+
+def _netlist_node_from_at(
+    at: str | list[int],
+    nodes_of: dict[str, list[str]],
+    *,
+    cards: Sequence[SpiceCard],
+    unread: int,
+) -> str:
+    """Resolve a netlist ``at`` to a node of the deck's own cards.
+
+    Netlists carry no geometry, so a coordinate is rejected; ``REF.<terminal>``
+    maps to the node at that 1-based terminal; ``net:NAME`` and a bare name
+    are node names directly. A card has no pin names, so ``REF.NAME`` for one
+    of the deck's cards is refused, unless a node is called that.
+
+    ``nodes_of`` holds the nodes of each of the deck's own cards that read
+    (``unread`` did not), and ``cards`` all of the deck's cards. A name none of
+    them is on is refused, as a sheet refuses a name none of its labels
+    carries (:func:`handle_trace_net`): answered, it would be an empty net,
+    which reads as a node with nothing on it. Ground is always a node.
+    """
     if isinstance(at, list):
         raise _QueryError(
             "invalid_at",
             "coordinates address geometry; a netlist net is addressed by node name "
             "(at='net:NAME' or at='REF.<terminal>')",
         )
+    spellings = _node_spellings(nodes_of)
     if at.startswith("net:"):
-        return at[4:]
+        return _deck_node(at[4:], spellings, cards=cards, unread=unread)
     if "." in at:
         ref, _, term = at.rpartition(".")
         if term.isdigit():
@@ -1483,17 +1504,80 @@ def _netlist_node_from_at(at: str | list[int], nodes_of: dict[str, list[str]]) -
                 )
             return nodes[index - 1]
         nodes = nodes_of.get(ref.lower())
-        named = {name_key(node) for card_nodes in nodes_of.values() for node in card_nodes}
-        if nodes is not None and name_key(at) not in named:
+        if nodes is not None and name_key(at) not in spellings:
             raise _QueryError(
                 "invalid_at",
                 f"'{ref}' is a card of this netlist, and a netlist addresses its pins by "
                 f"terminal number, not by name: use at='{ref}.<terminal>' (1 to "
                 f"{len(nodes)}), or at='net:NAME' for a node",
             )
-        # A dotted name whose tail is not a terminal index is a hierarchical node.
-        return at
-    return at
+    # A dotted name whose tail is not a terminal index is a node of that name.
+    return _deck_node(at, spellings, cards=cards, unread=unread)
+
+
+def _node_spellings(nodes_of: dict[str, list[str]]) -> dict[str, str]:
+    """The nodes of the deck's own cards by name key, each as the deck first
+    spells it, in the order the cards give them."""
+    spellings: dict[str, str] = {}
+    for card_nodes in nodes_of.values():
+        for node in card_nodes:
+            spellings.setdefault(name_key(node), node)
+    return spellings
+
+
+def _deck_node(
+    name: str, spellings: Mapping[str, str], *, cards: Sequence[SpiceCard], unread: int
+) -> str:
+    """``name``, when it is ground or one of the deck's own nodes
+    (``spellings``, by :func:`_node_spellings`); else the refusal, which names
+    the deck's nodes and, for a name only a subcircuit's body uses, the query
+    that reads it."""
+    key = name_key(name)
+    if key == GROUND or key in spellings:
+        return name
+    message = f"Node '{name}' not found in netlist: no card of the deck is on it."
+    inside = _subcircuits_using(key, cards)
+    if inside:
+        message += (
+            f" It is a node inside .subckt {', '.join(inside)}, which the net query "
+            "does not read: it lists the deck's own cards. inspect(kind='hierarchy') "
+            "lists the nodes of each subcircuit instance."
+        )
+    if unread:
+        message += (
+            f" {unread} of the deck's own cards could not be read, so it may be on one of them."
+        )
+    close = difflib.get_close_matches(fold_case(name), [fold_case(n) for n in spellings], n=1)
+    if close:
+        guess = next(n for n in spellings.values() if fold_case(n) == close[0])
+        message += f" Did you mean '{guess}'?"
+    known = list(spellings.values())
+    route = "inspect(kind='components', detail='full') lists each card's nodes"
+    if len(known) > _NODES_LISTED:
+        shown = ", ".join(known[:_NODES_LISTED])
+        message += (
+            f" Its nodes include {shown}: {cap_note(_NODES_LISTED, len(known), 'nodes', route)}."
+        )
+    elif known:
+        message += f" Its nodes are {', '.join(known)}; {route}."
+    raise NetlistError(message)
+
+
+def _subcircuits_using(key: str, cards: Sequence[SpiceCard]) -> list[str]:
+    """The subcircuits one of whose own body cards is on a node of name key
+    ``key``, in the order the deck first gives one; a card of a nested
+    subcircuit is its innermost subcircuit's."""
+    found: dict[str, None] = {}
+    for card in cards:
+        if card.kind != "instance" or not card.scope or card.scope[-1] in found:
+            continue
+        try:
+            nodes = InstanceLine.from_card(card).nodes
+        except Exception:
+            continue
+        if any(name_key(node) == key for node in nodes):
+            found[card.scope[-1]] = None
+    return list(found)
 
 
 def _route_circuit_kind(path: Path, query: str) -> Literal["asc", "netlist"]:
@@ -1563,7 +1647,7 @@ def _net_netlist_payload(text: str, at: str | list[int]) -> dict[str, Any]:
         parsed[ref_lower] = line
         nodes_of[ref_lower] = line.nodes
 
-    node = _netlist_node_from_at(at, nodes_of)
+    node = _netlist_node_from_at(at, nodes_of, cards=lexed.cards, unread=unparseable)
     node_key = name_key(node)
     members: list[dict[str, Any]] = []
     spellings = {node}

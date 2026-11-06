@@ -45,6 +45,7 @@ from ltspice_mcp.lib.symbol_library import SymbolLibrary, SymbolResolver, find_s
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import verify as verify_tool
 from tests import _ltspice_recorded as rec
+from tests._asc_ops import _inspect_item as inspect_item
 from tests._asc_ops import apply_ops, inspect_one, inspect_refusal, sha_of, sheet_findings
 from tests._schematic_fixtures import open_editor
 from tests.conftest import FIXTURES_DIR, FakeSim
@@ -331,6 +332,40 @@ async def test_node_names_that_differ_only_in_case_are_one_node(
     assert {(p["reference"], p["pin"]) for p in on_sheet["pins"]} == {("R1", "1"), ("R2", "1")}
     assert on_sheet["labels"] == ["OUT", "out"]
     assert "is_shorted" not in on_sheet
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_a_name_on_no_net_is_refused_alike_on_a_sheet_and_on_its_export(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """``same_name_labels`` labels R1's and R2's top pins ``n`` and grounds the
+    others; LTspice exports ``R1 n 0`` and ``R2 n 0``. The net query reads the
+    sheet and the export alike: ``n`` and every spelling of ground hold both
+    parts, and a name that is neither a label of the sheet nor a node of the
+    export is refused by both. On the export it was answered as a net with
+    nothing on it, so a mistyped node read as an empty net."""
+    case_id = "connectivity/same_name_labels"
+    sheet = rec.stage_sheet(build, case_id, work_dir)
+    export = work_dir / f"{sheet.stem}.net"
+    export.write_bytes(rec.recorded(build, f"{case_id}.net").read_bytes())
+
+    for path in (sheet, export):
+        for at, terminal in [("n", 1), ("net:n", 1), ("0", 2), ("gnd", 2), ("net:GND", 2)]:
+            data = await inspect_one(state_no_sim, {"kind": "net", "path": str(path), "at": at})
+            rows = data["pins"] if path == sheet else data["members"]
+            terminals = {
+                (row["reference"], int(row["pin"] if path == sheet else row["terminal"]))
+                for row in rows
+            }
+            assert terminals == {("R1", terminal), ("R2", terminal)}, (path.name, at)
+        for at in ["nosuch", "net:nosuch"]:
+            item = await inspect_item(state_no_sim, {"kind": "net", "path": str(path), "at": at})
+            assert not item["ok"], (path.name, at, item)
+            assert item["error"]["code"] == "netlist_invalid", (path.name, at)
+            assert "'nosuch' not found" in item["error"]["message"], (path.name, at)
+    # The export's refusal names the nodes there are.
+    item = await inspect_item(state_no_sim, {"kind": "net", "path": str(export), "at": "nosuch"})
+    assert "n, 0" in item["error"]["message"], item
 
 
 @pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(CONNECTIVITY)))

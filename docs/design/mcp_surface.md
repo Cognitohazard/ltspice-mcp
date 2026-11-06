@@ -1845,7 +1845,11 @@ cursors where listed:
     and a name after one of the deck's references (`M1.D`) is refused as
     `invalid_at` unless a node is called that.
     A bare NAME is read as net:NAME on both: a net label on a .asc, a node
-    name on a netlist
+    name on a netlist. A name no label of the sheet carries, or no card of
+    the deck's own is on, is refused on both as `netlist_invalid` rather
+    than answered as an empty net; ground is a node of every deck, and the
+    netlist's refusal lists its nodes and names a subcircuit whose body
+    uses the name
 {kind: "components", path, prefix?, detail: "list"|"full", cursor?}
     `prefix` keeps references that start with it, case-insensitively, on
     both a .asc and a netlist: `"M"` for every MOSFET, `"LX"` for LX1, LX2
