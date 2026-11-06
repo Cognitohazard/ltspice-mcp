@@ -293,6 +293,12 @@ on the pin, so it stays, and the wire stretches to it. A wire dragged off its
 axis turns diagonal, and the sheet findings report it (`diagonal_wire`).
 `move_component` places one part at a position or turns it, and moves the
 part alone: the wires and labels at its old pins stay where they were.
+To change a part's symbol (a gate for a buffer, `nmos4` for `nmos`), use
+`replace_component` instead of removing and adding it: the part keeps its
+name, place and value, its pins pair with the new symbol's by name (or as
+`pins` pairs them), and a pin that moved is wired back to its net. The result
+names the old pins whose wiring was left with nothing (`left_at`) and the new
+pins left unconnected (`unpaired_pins`).
 
 **Ground and net labels:**
 - **Ground**: give each grounded pin its own ground (`0`) label with an
