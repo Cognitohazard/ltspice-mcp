@@ -22,7 +22,7 @@ from pydantic import ValidationError
 
 from ltspice_mcp.api import ApiValidationError
 from ltspice_mcp.errors import NoAxisError, OtherRawNotWritten, ResultError
-from ltspice_mcp.lib import metrics, services
+from ltspice_mcp.lib import metrics, services, trace_names
 from ltspice_mcp.lib.decoded_raw import DecodedRaw
 from ltspice_mcp.lib.device_names import (
     owner_path,
@@ -876,6 +876,266 @@ async def test_plot_waveform_says_a_subcircuit_pin_is_its_parents_net(
     current = "ix(a:top)" if build == "ltspice17" else "ix(xa:top)"
     assert f"{current} is the current into the pin" in text, text
     assert ("pins are top, out" in text) == (build != "ltspice17"), text
+
+
+def refusals_of(state: SessionState, raw: Path, asked: str, *, at: str | None = None) -> list[str]:
+    """What each reader of a signal by name says of ``asked``, which must read
+    no trace of ``raw``: the Python API's trace, a read of that signal alone
+    (refused by the parser process), and the value recipe through
+    analyze_results, read off an operating point's bias point or at ``at``."""
+    api = SyncApi(state)
+    texts = []
+    with pytest.raises(ResultError) as refused:
+        api.load_raw(path=raw).trace(asked)
+    texts.append(str(refused.value))
+    with pytest.raises(ResultError) as refused:
+        api.load_raw(path=raw, signals=[asked])
+    texts.append(str(refused.value))
+    recipe = {"metric": "value", "key": "v", "expr": asked, **({"at": at} if at else {})}
+    analyzed = api.analyze_results(sources=[{"path": str(raw), "label": "run"}], recipes=[recipe])
+    (failure,) = analyzed["failures"]
+    texts.append(failure["message"])
+    return texts
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_every_reader_says_a_deck_instances_pin_is_its_parents_net(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """``raw/op_one_subckt`` calls ``X1 in a div``, so pin OUT of x1 is net
+    ``a``, and the raw holds ``V(a)`` and the current into the pin but no
+    ``V(x1:out)``. Every reader says OUT is a pin and names the current, as
+    for a sheet's block above; only LTspice 26 writes a ``Backannotation``
+    line for a deck's instance, so only its refusals list the pins."""
+    raw = rec.stage_run(build, "raw/op_one_subckt", work_dir)
+    current = "ix(1:out)" if rec.generation(build) == "xvii" else "ix(x1:out)"
+    for text in refusals_of(state_no_sim, raw, "V(x1:out)"):
+        lowered = text.lower()
+        assert "'out' is a pin of subcircuit instance x1" in lowered, text
+        assert f"{current} is the current into the pin" in lowered, text
+        assert ("pins are top, out" in lowered) == (rec.generation(build) != "xvii"), text
+
+
+SCHEMATIC_REFERENCE = (
+    "LTspice names a part placed on a schematic by its reference, without the X "
+    "its netlist line adds in front."
+)
+DECK_INSTANCE_X = "An instance a deck calls with X keeps that X in the names a result gives it."
+XVII_DROPS_X = (
+    "The LTspice build that wrote this result names each subcircuit instance "
+    "without the X that starts its name in the netlist."
+)
+SCHEMATIC_KEEPS_X = (
+    "LTspice keeps the X of a schematic part whose reference starts with one, "
+    "and of an instance a deck line calls with X."
+)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_every_reader_names_a_schematic_part_by_its_reference(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """``export/hier_plain_top_run`` places block X1 on a sheet. Its netlist
+    line calls it ``X§X1`` on LTspice 26 and ``XX1`` on XVII, and each build's
+    raw names it by its reference, ``Ix(x1:in)``. XVII names every instance
+    without its X, so the netlist's spelling ``Ix(xx1:in)`` reads that trace
+    there. On LTspice 26 it reads none, and every reader names the trace and
+    says why."""
+    raw = rec.stage_run(build, "export/hier_plain_top_run", work_dir)
+    if rec.generation(build) == "xvii":
+        api = SyncApi(state_no_sim)
+        loaded = api.load_raw(path=raw)
+        assert loaded.trace("Ix(xx1:in)") == pytest.approx(loaded.trace("Ix(x1:IN)"))
+        assert "Ix(x1:IN)" in api.load_raw(path=raw, signals=["Ix(xx1:in)"]).signals
+        return
+    for text in refusals_of(state_no_sim, raw, "Ix(xx1:in)"):
+        assert "Ix(x1:in) is in this result, which names 'xx1' as 'x1'." in text, text
+        assert SCHEMATIC_REFERENCE in text, text
+
+
+#: Names that miss a trace of ``raw/subckt_names_tran_saved`` only by the X of
+#: an instance on their path, and per build generation the trace the refusal
+#: names, what the result names otherwise, and why. None where the build
+#: reads the name as it is: XVII writes ``Id(a:Mdrv)`` itself.
+DECK_X_SPELLINGS: dict[str, dict[str, tuple[str, str, str] | None]] = {
+    "Id(a:Mdrv)": {
+        "current": ("Id(xa:Mdrv)", "'a' as 'xa'", DECK_INSTANCE_X),
+        "xvii": None,
+    },
+    "I(a:xin:Rin)": {
+        "current": ("I(xa:xin:Rin)", "'a' as 'xa'", DECK_INSTANCE_X),
+        "xvii": ("I(a:in:Rin)", "'xin' as 'in'", XVII_DROPS_X),
+    },
+}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+@pytest.mark.parametrize("asked", list(DECK_X_SPELLINGS))
+def test_every_reader_names_a_deck_instances_trace_by_its_x(
+    build: str, asked: str, state_no_sim: SessionState, work_dir: Path
+):
+    """``raw/subckt_names_tran_saved`` holds the devices inside ``Xa`` and
+    ``Xa``'s ``Xin``: LTspice 26 names them with each instance's X
+    (``Id(xa:Mdrv)``) and XVII without (``Id(a:Mdrv)``). A name that differs
+    from one of them only by an instance's X reads no trace, and every reader
+    names the one it reads instead and says why. plot_waveform's is the next
+    test."""
+    raw = rec.stage_run(build, "raw/subckt_names_tran_saved", work_dir)
+    expected = DECK_X_SPELLINGS[asked][rec.generation(build)]
+    if expected is None:
+        assert SyncApi(state_no_sim).load_raw(path=raw).trace(asked).size > 0
+        return
+    trace, named, why = expected
+    for text in refusals_of(state_no_sim, raw, asked, at="0.5u"):
+        assert f"{trace} is in this result, which names {named}." in text, text
+        assert why in text, text
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_plot_waveform_names_a_deck_instances_trace_by_its_x(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    raw = rec.stage_run(build, "raw/subckt_names_tran_saved", work_dir)
+    trace, named, why = cast(
+        "tuple[str, str, str]", DECK_X_SPELLINGS["I(a:xin:Rin)"][rec.generation(build)]
+    )
+    with pytest.raises(ResultError) as refused:
+        await analysis.handle_plot_waveform(
+            analysis.PlotWaveformInput(path=str(raw), signals=["I(a:xin:Rin)"], open=False),
+            state_no_sim,
+        )
+    assert f"{trace} is in this result, which names {named}. {why}" in str(refused.value)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_the_reason_for_an_instances_x_is_the_rule_of_the_results_source(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """The reason given for an instance's X is the rule of where the result
+    came from. A sheet's block X1 is ``x1`` on LTspice 26 because its
+    reference starts with X, so ``Ix(1:in)`` gets the schematic's rule and
+    not a deck's; on XVII it is netlist ``XX1`` without its X. A deck's
+    ``Xa`` is ``xa`` on LTspice 26, so ``Id(xxa:Mdrv)`` adds an X no rule
+    puts there: the trace is named with no reason. On XVII, where ``Xa`` is
+    ``a``, that name is two X from any trace and is named nothing."""
+    sheet = rec.stage_run(build, "export/hier_plain_top_run", work_dir / "sheet")
+    deck = rec.stage_run(build, "raw/subckt_names_tran_saved", work_dir / "deck")
+    reasons = (SCHEMATIC_REFERENCE, SCHEMATIC_KEEPS_X, DECK_INSTANCE_X, XVII_DROPS_X)
+    xvii = rec.generation(build) == "xvii"
+    expected = (
+        f"Ix(x1:IN) is in this result, which names '1' as 'x1'. {XVII_DROPS_X}"
+        if xvii
+        else f"Ix(x1:in) is in this result, which names '1' as 'x1'. {SCHEMATIC_KEEPS_X}"
+    )
+    for text in refusals_of(state_no_sim, sheet, "Ix(1:in)"):
+        assert expected in text, text
+        assert DECK_INSTANCE_X not in text, text
+    for text in refusals_of(state_no_sim, deck, "Id(xxa:Mdrv)", at="0.5u"):
+        assert ("is in this result" in text) == (not xvii), text
+        if not xvii:
+            assert "Id(xa:Mdrv) is in this result, which names 'xxa' as 'xa'." in text, text
+        assert not any(reason in text for reason in reasons), text
+
+
+#: A pin asked for under its instance's other X: the instance as the refusal
+#: names it, the current into the pin, the pins the raw lists for it (None
+#: where it lists none), how the result names the instance and why, per
+#: build generation. XVII reads either spelling of these instances, so its
+#: refusal is the plain pin note under the name as asked.
+X_SPELLED_PINS: dict[tuple[str, str], dict[str, tuple[str, str, str | None, str, str]]] = {
+    ("export/hier_plain_top_run", "V(xx1:in)"): {
+        "current": ("x1", "Ix(x1:in)", "in, out", "'xx1' as 'x1'", SCHEMATIC_REFERENCE),
+        "xvii": ("xx1", "Ix(x1:IN)", "in, out", "", ""),
+    },
+    ("raw/subckt_names_tran_saved", "V(a:out)"): {
+        "current": ("xa", "Ix(xa:out)", "top, out", "'a' as 'xa'", DECK_INSTANCE_X),
+        "xvii": ("a", "Ix(a:OUT)", None, "", ""),
+    },
+}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+@pytest.mark.parametrize(("case_id", "asked"), list(X_SPELLED_PINS))
+def test_every_reader_says_a_pin_is_its_parents_net_under_either_x(
+    build: str, case_id: str, asked: str, state_no_sim: SessionState, work_dir: Path
+):
+    """A pin asked for under its sheet part's netlist spelling
+    (``V(xx1:in)``), or under a deck instance's name without its X
+    (``V(a:out)``), is still a pin: every reader says so under the instance's
+    name in the result, says how the result names it and why, lists its pins
+    where the raw does, and names the current into it."""
+    raw = rec.stage_run(build, case_id, work_dir)
+    instance, current, pins, named, why = X_SPELLED_PINS[case_id, asked][rec.generation(build)]
+    pin = asked[asked.index(":") + 1 : -1]
+    at = None if case_id.startswith("export/") else "0.5u"
+    for text in refusals_of(state_no_sim, raw, asked, at=at):
+        assert f"'{pin}' is a pin of subcircuit instance {instance}," in text, text
+        assert f"{current} is the current into the pin." in text, text
+        assert (f"{instance}'s pins are {pins}," in text) == (pins is not None), text
+        if named:
+            assert f"This result names {named}. {why}" in text, text
+        else:
+            assert "This result names" not in text, text
+
+
+UNLABELLED_NETS = (
+    "This result is a schematic's, and LTspice names a net that has no label N001, N002, ..."
+)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_every_reader_says_a_schematics_unlabelled_nets_are_named_n001(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """``export/hier_plain_top_run`` drives block X1 from V1 over a wire with
+    no label, which each build's raw holds as ``V(n001)``. A name the sheet
+    gives no net, ``V(inp)``, reads nothing, and every reader says how LTspice
+    named the sheet's unlabelled nets, lists them, and says a label names one:
+    a single node, and a pair's node."""
+    raw = rec.stage_run(build, "export/hier_plain_top_run", work_dir)
+    texts = refusals_of(state_no_sim, raw, "V(inp)")
+    with pytest.raises(ResultError) as refused:
+        SyncApi(state_no_sim).load_raw(path=raw).trace("V(inp,out)")
+    texts.append(str(refused.value))
+    for text in texts:
+        assert f"{UNLABELLED_NETS}: here V(n001)." in text, text
+        assert "Put a net label inp on the net and run it again to read V(inp)." in text, text
+
+
+@pytest.mark.parametrize(("build", "case_id"), ALL_COMPLETE)
+def test_a_result_is_known_as_a_schematics_by_its_title(build: str, case_id: str, tmp_path: Path):
+    """Whether a run was of a sheet, which is when its unlabelled nets are
+    N001, …, is read off the raw's title: XVII writes a deck's first line,
+    which a sheet's export writes as ``* <sheet>.asc``, and LTspice 26 the
+    path of the deck it ran, a sheet's exported ``.net``. Every recorded run
+    of a sheet reads as one, and every run of a deck as none."""
+    header = rec.decode(build, case_id, tmp_path).raw.header
+    assert trace_names.from_schematic(header) == rec.CASES.case(case_id).source.endswith(".asc")
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_device_inside_a_schematic_part_is_named_under_its_reference(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """``export/sheet_part_names`` places a stock NMOS given a Prefix of X
+    as MB1, running a subcircuit that wraps an NMOS card M1, and calls the
+    same subcircuit from a directive as XMB2. LTspice 26 names the device
+    inside the part by the part's reference and the one inside the deck's
+    instance with its X, so the netlist's spelling of the part's device
+    reads nothing and the refusal names the trace. XVII names both without
+    the X and reads that spelling."""
+    if not rec.has(build, "export/sheet_part_names.raw"):
+        pytest.skip(rec.CASES.behaviours["sheet-part-trace-names"].pending)
+    raw = rec.stage_run(build, "export/sheet_part_names", work_dir)
+    names = SyncApi(state_no_sim).load_raw(path=raw).signals
+    if rec.generation(build) == "xvii":
+        assert {"Id(mb1:M1)", "Id(mb2:M1)"} <= set(names), names
+        assert SyncApi(state_no_sim).load_raw(path=raw).trace("Id(xmb1:M1)").size == 1
+        return
+    assert {"Id(mb1:M1)", "Id(xmb2:M1)"} <= set(names), names
+    for text in refusals_of(state_no_sim, raw, "Id(xmb1:M1)"):
+        assert "Id(mb1:M1) is in this result, which names 'xmb1' as 'mb1'." in text, text
+        assert SCHEMATIC_REFERENCE in text, text
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
