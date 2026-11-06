@@ -25,7 +25,8 @@ survive a restart and can be replayed.
 With LTspice 26.1 or later on Windows, you and the assistant can edit the same
 open schematic ([Working with LTspice open](https://github.com/cognitohazard/ltspice-mcp/blob/master/docs/USAGE.md#working-with-ltspice-open)).
 
-The same engine is also a Python package, `ltspice_mcp.api`, built on
+Everything the tools do is also available from Python, as the
+`ltspice_mcp.api` package. The server is built on
 [spicelib](https://github.com/nunobrum/spicelib).
 
 ## Quick start
@@ -150,7 +151,7 @@ server creates, and running the server on another machine.
 
 ## Python API
 
-Scripts and notebooks can import the same engine as `ltspice_mcp.api`. Use it
+Scripts and notebooks can do what the tools do by importing `ltspice_mcp.api`. Use it
 for optimizers, curve fits, CI checks, or any loop where each run depends on
 the last. The API returns complete results and numpy arrays, where the tools
 return pages. Scripts and the server share the job records in the working
