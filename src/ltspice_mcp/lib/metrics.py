@@ -61,7 +61,7 @@ from ltspice_mcp.lib.device_names import (
     path_text,
     writes_xvii_names,
 )
-from ltspice_mcp.lib.format import format_spice_value, parse_spice_value
+from ltspice_mcp.lib.format import format_spice_value, held_to_cap, parse_spice_value
 from ltspice_mcp.lib.log_parser import DEVICE_OP_TABLE_DIGITS, device_key
 from ltspice_mcp.lib.log_types import MeasurementsOutput, measurement_named
 from ltspice_mcp.lib.raw_parser import (
@@ -118,6 +118,7 @@ from ltspice_mcp.lib.result_observations import (
     relay_observations,
 )
 from ltspice_mcp.lib.signal_analysis import (
+    THD_HARMONICS_CAP,
     analyze_disturbance_response,
     analyze_edge,
     analyze_periodic,
@@ -1827,6 +1828,8 @@ async def thd(
     axis, wave = await load_real_signal(source, recipe.signal, step, state)
     t, y, _ = apply_window(axis, wave, t_start, t_end)
     f0 = parse_time(spice_text(recipe.fundamental_hz), "fundamental")
+    # Held here as well as in analyze_thd, so the note names the recipe's argument.
+    harmonics, held = held_to_cap("harmonics", recipe.harmonics, THD_HARMONICS_CAP)
     data = await run_metric(
         source,
         state,
@@ -1834,9 +1837,12 @@ async def thd(
         t,
         y,
         fundamental=f0,
-        n_harmonics=recipe.harmonics,
+        n_harmonics=harmonics,
         window=window,
     )
+    if held is not None:
+        # A record's warnings become its recipe's, as the waveform recipe's cap does.
+        data["warnings"] = [held, *data.get("warnings", [])]
     data["signal"] = recipe.signal
     await _label_unit(source, recipe.signal, data, state)
     return await relay_solve_failures(source, data, state)

@@ -24,11 +24,12 @@ output and the repr of a trailing expression are returned, so print the result
 you need, such as the crossing or the worst corner, rather than the whole
 table. Each call gets a fresh namespace around the same engine, so keep state
 on disk, in a file or in a job you can find again by its `request_id`. A
-snippet is bounded by `timeout_s` (60 s by default, 600 at most), and one runs
-at a time. A blocking wait in it (`run_experiments` with `wait=True`, or
-`api.wait`) ends just before `timeout_s` and raises `ApiInterrupted` naming
-its job. The job keeps running, so read it with `api.wait(job_id)` in a later
-snippet, or submit a long run with `wait=False` from the start. The snippet
+snippet is bounded by `timeout_s` (60 s by default, held to the cap the
+`run_code` tool states), and one runs at a time. A blocking wait in it
+(`run_experiments` with `wait=True`, or `api.wait`) ends just before
+`timeout_s` and raises `ApiInterrupted` naming its job. The job keeps
+running, so read it with `api.wait(job_id)` in a later snippet, or submit a
+long run with `wait=False` from the start. The snippet
 runs with the server process's own file and process authority. A sandbox
 (`[security] allowed_paths`) applies only to the paths passed to `api` calls
 and does not restrict the snippet's own code.
@@ -103,8 +104,9 @@ process. Detach applies only to resume and cannot be combined with
 `raw_page=True`. As with any resume, pass the parent's `control_token` unless
 this process submitted or resumed the parent. The token is checked before the
 owner process starts. The resume's `wait_s` is honored, defaults to zero and
-is capped at 120 s. For a full wait, call `api.wait` on the child receipt's
-job id.
+is held to `limits.dwell.run_experiments_wait_max_s` in
+`inspect(kind="capabilities")`. For a full wait, call `api.wait` on the child
+receipt's job id.
 
 ## Reading results
 

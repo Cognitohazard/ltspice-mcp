@@ -80,9 +80,9 @@ class RunCodeInput(ToolInput, NotedModel):
         default=60.0,
         ge=1.0,
         description=(
-            "Wall-clock bound in seconds, held to 600; a wait on a run ends just before "
-            "it, naming the job, which keeps running. A run longer than this belongs to "
-            "api.run_experiments(wait=False) and jobs(wait)."
+            f"Wall-clock bound in seconds, held to {RUN_CODE_TIMEOUT_CAP_S:g}; a wait on a "
+            "run ends just before it, naming the job, which keeps running. A run longer "
+            "than this belongs to api.run_experiments(wait=False) and jobs(wait)."
         ),
     )
     reset: bool = Field(
@@ -189,8 +189,8 @@ RUN_CODE_OUTPUT_SCHEMA: dict[str, Any] = {
 _EOF: dict[str, Any] = {"op": "eof"}
 
 _TIMEOUT_HINT = (
-    "Interrupted at timeout_s (max 600). A simulation longer than that: "
-    "api.run_experiments(wait=False) then jobs(wait) or api.wait(job_id)."
+    f"Interrupted at timeout_s (max {RUN_CODE_TIMEOUT_CAP_S:g}). A simulation longer than "
+    "that: api.run_experiments(wait=False) then jobs(wait) or api.wait(job_id)."
 )
 _RESTART_HINT = (
     "The worker was restarted; jobs the previous one owned read as interrupted in jobs(list)."
@@ -574,9 +574,9 @@ def worker_for(state: SessionState) -> CodeWorker:
         f"request_id, a file). stdout keeps the first {STDOUT_HEAD_CHARS} and last "
         f"{STDOUT_TAIL_CHARS} characters of print() output, stderr its last "
         f"{STDERR_TAIL_CHARS}, result the repr of a trailing expression "
-        f"({RESULT_CHARS}). Bound: timeout_s, default 60 (max 600); a timeout "
-        "interrupts the snippet and cancels a run it waits on. One snippet at a "
-        "time: a call during another is answered busy, not queued."
+        f"({RESULT_CHARS}). Bound: timeout_s, default 60 (max {RUN_CODE_TIMEOUT_CAP_S:g}); "
+        "a timeout interrupts the snippet and cancels a run it waits on. One snippet at "
+        "a time: a call during another is answered busy, not queued."
     ),
     input_model=RunCodeInput,
     annotations=types.ToolAnnotations(

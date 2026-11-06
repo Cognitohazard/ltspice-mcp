@@ -24,6 +24,7 @@ from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.models import StrictModel
 from ltspice_mcp.lib.raw_header import STEPPED_TEMPERATURE
+from ltspice_mcp.lib.signal_analysis import THD_HARMONICS_CAP
 
 ReduceStat = Literal["min", "max", "mean", "stddev", "p50", "p90", "count"]
 
@@ -640,7 +641,11 @@ class ThdRecipe(ScalarRecipe):
     metric: Literal["thd"]
     signal: str
     fundamental_hz: float | str | None = None
-    harmonics: int = Field(default=7, ge=1, le=50)
+    harmonics: int = Field(
+        default=7,
+        ge=1,
+        description=f"Highest harmonic summed; held to {THD_HARMONICS_CAP}.",
+    )
     window: Window | None = None
 
 

@@ -100,9 +100,7 @@ def _recorded() -> dict[str, Any]:
 
 def _unreleased() -> str:
     """The changelog entries not yet released: the fragments under changelog.d/."""
-    return "\n".join(
-        path.read_text(encoding="utf-8") for path in sorted(FRAGMENTS.glob("+*.md"))
-    )
+    return "\n".join(path.read_text(encoding="utf-8") for path in sorted(FRAGMENTS.glob("+*.md")))
 
 
 def _beyond(names: dict[str, list[str]], others: dict[str, list[str]]) -> dict[str, list[str]]:
@@ -211,8 +209,8 @@ async def test_a_retired_name_is_refused_with_its_referral_and_announced(
     message = result.structured_content["error"]
     told = f"is now {_name(new)!r}" if new is not None else f"was removed: {why}"
     assert f"{_name(old)!r} {told}" in message, message
-    changelog = _unreleased() if unrecorded else (
-        _unreleased() + CHANGELOG.read_text(encoding="utf-8")
+    changelog = (
+        _unreleased() if unrecorded else (_unreleased() + CHANGELOG.read_text(encoding="utf-8"))
     )
     assert f"`{_name(old)}`" in changelog or f"`{_name(old)}=" in changelog, (
         f"no fragment under changelog.d/{'' if unrecorded else ' and no section of CHANGELOG.md'}"

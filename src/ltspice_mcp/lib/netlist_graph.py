@@ -105,7 +105,7 @@ from ltspice_mcp.lib.spice_lex import (
     subckt_children,
     unreadable_cards,
 )
-from ltspice_mcp.lib.spice_lex_ops import SECTION_SIGN
+from ltspice_mcp.lib.spice_lex_ops import without_section_sign
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, SubcktCard
 
 # An include-path resolver: given the filesystem path an ``.include``/``.lib``
@@ -539,13 +539,9 @@ def canon_net(name: str) -> str:
 
 
 def canon_ref(ref: str) -> str:
-    """Canonicalize a reference for matching: drop the ``§`` marker, lowercase."""
-    return ref.replace(SECTION_SIGN, "").strip().lower()
-
-
-def _strip_marker(ref: str) -> str:
-    """Drop the LTspice ``§`` marker while preserving reference casing."""
-    return ref.replace(SECTION_SIGN, "")
+    """Canonicalize a reference for matching: drop the ``§`` marker
+    (``without_section_sign``), lowercase."""
+    return without_section_sign(ref).strip().lower()
 
 
 def _normalize_value_text(text: str) -> str:
@@ -928,7 +924,7 @@ def _component_from_card(card: object) -> Component:
             line=getattr(card, "line_start", None),
             card=raw,
         ) from exc
-    ref = _strip_marker(line.ref)
+    ref = without_section_sign(line.ref)
     return Component(
         ref=ref,
         type_letter=ref[:1].upper(),

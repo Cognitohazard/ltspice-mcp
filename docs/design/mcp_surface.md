@@ -109,7 +109,7 @@ Codes by kind of failure:
 | `path_denied` | a sandbox (`allowed_paths`) is set and the path resolves outside it, or the path cannot be resolved; a `hint` describes the change to make (for a sandbox, the config file and key that widen it), returned as an item's `error.hint`, a finding's `evidence.hint`, a failure or coverage row's `hint`, or the envelope's `hint` for a call-level refusal |
 | `invalid_arguments` | the call's arguments failed validation before the tool ran |
 | `netlist_invalid` | the netlist, or a component reference in it, could not be read |
-| `symbol_unresolved` | the schematic opened, but a symbol or library it refers to was not found |
+| `symbol_unresolved` | the schematic opened, but a symbol it, or a hierarchical block's own sheet, places was not found |
 | `simulation_failed` | the simulator could not be started, or the run failed |
 | `result_unreadable` | a `.raw` or `.log` could not be read |
 | `result_file_not_found` | no file is at a `.raw` or `.log` path the caller named; the `hint` says to check the path, or to read a run of this server's by its `job_id` |
@@ -322,13 +322,15 @@ An explicit `request_id` is the durability key. At submission the server
 persists `{request_id -> job_id, fingerprint}`, where the fingerprint is the
 sha256 of the canonical (sorted-key) input payload. The same id with the same
 fingerprint returns the existing receipt with `replayed: true`; that field
-describes this call, and the replay does not change the job's record. The same
-id with a different fingerprint is an `idempotency_conflict` that names the job
-created under that id, which `jobs` and `analyze_results` read by its
-`job_id`. Ids are scoped to the server working directory's job store, and an
-id is deleted with its job ("Job model" below says when). If the client
-cancels a `run_experiments` request while the call waits for results
-("Receipt, then dwell" below), only the wait ends; the job keeps running.
+describes this call, and the replay adds nothing to the job's record. A record
+whose owner has exited is read as `interrupted` and written back, as any read
+of the job leaves it. The same id with a different fingerprint is an
+`idempotency_conflict` that names the job created under that id, which `jobs`
+and `analyze_results` read by its `job_id`. Ids are scoped to the server
+working directory's job store, and an id is deleted with its job ("Job model"
+below says when). If the client cancels a `run_experiments` request while the
+call waits for results ("Receipt, then dwell" below), only the wait ends; the
+job keeps running.
 
 **Circuit paths are resolved at submission.** Each circuit's path is resolved
 before a job exists. A path a sandbox refuses fails the call with `path_denied`
@@ -965,9 +967,10 @@ has no top-level `warnings`. The other tools hold their caps the same way: an
 `inspect` results `limit` above 100 or reference `limit` above 20 (in the
 item's `data.warnings`), a `plot_waveform` `max_points` above 2000000 (in
 `warnings`), a `run_code` `timeout_s` above 600 (in `warnings` and the
-`hint`), and a `waveform` recipe's `max_points` above the server's
-`[analysis] max_points` (in the recipe's `warnings`). The schema declares no
-`maximum` for these fields.
+`hint`), a `waveform` recipe's `max_points` above the server's
+`[analysis] max_points` and a `thd` recipe's `harmonics` above 50 (each in the
+recipe's `warnings`), and a `verify_circuit` `render.scale` above 4 (in
+`warnings` and the `hint`). The schema declares no `maximum` for these fields.
 
 Only the owning process or a caller with a valid control token can cancel;
 any other caller gets `cancel_not_authorized`. Once a cancel is acknowledged,
@@ -2280,7 +2283,7 @@ it, and reported when the caller names it.
 | `timing` | tran | `from{signal, edge, level}`, `to{...}` | `nth?`, `window?` |
 | `periodic` | tran | `signal` | `window?`; period, frequency, duty cycle |
 | `transient_response` | tran | `signal`, `mode: "step"\|"disturbance"` | `input` is required for `disturbance` and rejected for `step`; `window?` |
-| `thd` | tran | `signal` | `fundamental_hz?`, `harmonics?` (default 7), `window?` |
+| `thd` | tran | `signal` | `fundamental_hz?`, `harmonics?` (default 7, held to 50), `window?` |
 | `tone` | tran | `signal`, `frequency_hz` | `window?`; cut to the whole periods of `frequency_hz` that fit from the window's first sample and resampled by linear interpolation onto evenly spaced times, as `thd` does by default, so samples weigh by time. `amplitude` (peak, signal unit), `phase_deg` in (-180, 180] for `dc + amplitude*sin(2*pi*f*t + phase_deg)` with `t` the run's own time from zero, `sin_component`, `cos_component`, `dc`, plus `t_start`, `t_end`, `n_cycles`. Reducible leaves: `amplitude`, `phase_deg`, `dc`, `sin_component`, `cos_component`; a spread of `phase_deg` that straddles 180 degrees reduces the wrapped value, the components do not wrap |
 | `bode_filter` | ac | `signal` | filter characteristics: fc, bw, Q, type; a cutoff is read at the half-power level (-3.0103 dB) below the passband |
 | `bode_point` | ac | `signal`, `at_hz` | gain and phase at a frequency |

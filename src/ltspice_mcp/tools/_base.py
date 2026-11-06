@@ -13,12 +13,13 @@ from pathlib import Path
 from typing import Any, Literal, NamedTuple, TypedDict, TypeVar, get_args, get_origin
 
 from mcp import types
-from pydantic import Field, PrivateAttr
+from pydantic import Field, PrivateAttr, model_validator
 
 from ltspice_mcp.config import SIM_EXECUTABLES_KEY as _SIM_EXECUTABLES_KEY
 from ltspice_mcp.config import SIM_SECTION as _SIM_SECTION
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError, SimulationError, error_hint
 from ltspice_mcp.lib import atomic_write_bytes, response_budget
+from ltspice_mcp.lib.format import held_to_cap
 
 # Re-exported façade names: the strict Pydantic base lives in ``lib`` (models
 # below the tool layer declare models too), and the tool modules reach it here.
@@ -709,28 +710,6 @@ def replying_as(tool: str) -> Iterator[None]:
         yield
 
 
-_Number = TypeVar("_Number", int, float)
-
-
-def held_to_cap(
-    name: str, requested: _Number, cap: _Number, unit: str = ""
-) -> tuple[_Number, str | None]:
-    """The value to use for an argument with a cap, and the warning when it was held.
-
-    A cap bounds what one call costs, so a larger value is served at the cap
-    and said so, not refused: the caller asked for more of the same thing.
-    """
-    if requested <= cap:
-        return requested, None
-
-    def spelled(value: _Number) -> str:
-        # An integer is written out whole: 3000000, not 3e+06.
-        return f"{value:d}" if isinstance(value, int) else f"{value:g}"
-
-    asked, held = spelled(requested), spelled(cap)
-    return cap, f"{name}={asked}{unit} is above its cap of {held}{unit}; {held}{unit} was used."
-
-
 def first_seen(values: list[Any]) -> tuple[list[Any], list[Any]]:
     """``values`` without repeats, in first-seen order, and the repeats dropped."""
     seen: set[Any] = set()
@@ -765,7 +744,7 @@ class NotedModel(StrictModel):
     def hold_to_cap(self, name: str, cap: float, unit: str = "") -> None:
         """Hold numeric field ``name`` at ``cap`` rather than refuse it, and note it.
 
-        The rule of :func:`held_to_cap`: a cap bounds one call's cost, so a
+        The rule of :func:`held_to_cap` (``lib/format.py``): a cap bounds one call's cost, so a
         larger value is served at the cap and said so. The model carries the
         held value, so whatever reads it serves what the note says. An unset
         (``None``) field is left alone.
@@ -959,7 +938,11 @@ def page_schema(
 # ---------------------------------------------------------------------------
 
 
-class RenderPolicy(StrictModel):
+#: The largest render scale drawn; a larger scale is drawn at it, not refused.
+RENDER_SCALE_CAP = 4.0
+
+
+class RenderPolicy(NotedModel):
     """How to draw a schematic: the choices any renderer here can honour."""
 
     format: Literal["png", "svg"] = Field(
@@ -972,10 +955,9 @@ class RenderPolicy(StrictModel):
     scale: float = Field(
         default=DEFAULT_SCALE,
         ge=0.5,
-        le=4.0,
         description=(
-            "Render scale. Image token cost tracks pixel area, so halving the "
-            "scale costs about a quarter as much."
+            f"Render scale, held to {RENDER_SCALE_CAP:g}. Image token cost tracks "
+            "pixel area, so halving the scale costs about a quarter as much."
         ),
     )
     max_pixels: int | None = Field(
@@ -986,6 +968,11 @@ class RenderPolicy(StrictModel):
             "a reduced scale that fits, and 'downscaled' is set. Bounds inline cost."
         ),
     )
+
+    @model_validator(mode="after")
+    def _hold_scale(self) -> "RenderPolicy":
+        self.hold_to_cap("scale", RENDER_SCALE_CAP)
+        return self
 
 
 class CompareSpec(StrictModel):

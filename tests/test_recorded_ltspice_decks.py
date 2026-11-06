@@ -390,6 +390,32 @@ def test_a_part_exported_with_a_section_sign_is_a_target_by_its_names(
         assert drawn_for(text, export, target, tmp_path / f"random{index}") == [load], target
 
 
+def test_a_name_holding_two_section_signs_is_one_name_without_them(tmp_path: Path):
+    """Every route that names an instance without its marker drops each ``§``:
+    the ngspice copy of the deck, a variation's target on LTspice's copy, and
+    the netlist comparison. Where LTspice itself puts a second ``§`` is not
+    recorded; these are the server's own names, which must agree."""
+    text = "* two signs\nV1 a 0 1\nR§a§b a 0 1k\n.op\n.end\n"
+    export = tmp_path / "two.net"
+    export.write_text(text, encoding="utf-8")
+    _stem, data = deck_prep._read_export(export, for_ngspice=True)
+    ngspice = decode_spice_bytes_with_encoding(data)[0]
+    (ngspice_name,) = [
+        line.ref for line in map(read_instance, lex(ngspice).cards) if line and line.ref != "V1"
+    ]
+    assert ngspice_name == "Rab"
+    # The name the ngspice copy gives the part is a target on LTspice's copy.
+    assert variant_values(text, export, ngspice_name, tmp_path / "assign") == {
+        "V1": "1",
+        "R§a§b": "2k",
+    }
+    assert drawn_for(text, export, ngspice_name, tmp_path / "random") == ["R§a§b"]
+    # And the comparison pairs the two copies' parts by that name.
+    comparison = compare_graphs(text, ngspice)
+    assert comparison.equivalent, comparison
+    assert not comparison.renamed, comparison
+
+
 def test_a_name_two_parts_answer_to_is_refused(tmp_path: Path):
     """``RLoad`` is both a part and the other name of ``R§Load``, which an
     ngspice copy would also call ``RLoad``: no target can mean one of them."""
