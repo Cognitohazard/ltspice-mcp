@@ -21,7 +21,7 @@ import pytest
 from spicelib.simulators.ltspice_simulator import LTspice
 
 from ltspice_mcp.config import ServerConfig
-from ltspice_mcp.lib import services
+from ltspice_mcp.lib import services, wsl
 from ltspice_mcp.lib.simulator_build import executable_identity
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
@@ -103,8 +103,12 @@ def _payload(deck: Path, request_id: str) -> dict:
     [("XVIIx64.exe", True), ("LTspiceXVII.exe", False), ("LTspice.exe", False)],
 )
 async def test_an_xvii_is_known_by_its_name_or_by_what_its_runs_report(
-    name: str, known_by_name: bool, work_dir: Path
+    name: str, known_by_name: bool, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    # WSL interop is off whatever the host: the recorded XVII is an LTspice,
+    # which under WSL would have its runs moved to the Windows temp directory,
+    # and a Linux container on a WSL kernel has none.
+    monkeypatch.setattr(wsl, "is_wsl", lambda: False)
     state, simulator = _session(work_dir, name)
     deck = work_dir / "divider.cir"
     deck.write_text(_DECK, encoding="utf-8")
