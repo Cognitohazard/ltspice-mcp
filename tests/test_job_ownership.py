@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import ast
 import json
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
@@ -176,46 +177,122 @@ def test_a_record_this_process_writes_names_it_by_pid_and_start_marker(work_dir:
 _OWNER = "lib/store.py"
 
 
-def _names_an_owner_pid(node: ast.AST) -> bool:
+def _is_owner_pid(node: ast.AST) -> bool:
     """``x.owner_pid``, ``owner_pid``, or ``x.owner.pid``."""
-    for inner in ast.walk(node):
-        if isinstance(inner, ast.Attribute) and inner.attr == "owner_pid":
-            return True
-        if isinstance(inner, ast.Name) and inner.id == "owner_pid":
-            return True
-        if (
-            isinstance(inner, ast.Attribute)
-            and inner.attr == "pid"
-            and isinstance(inner.value, ast.Attribute | ast.Name)
-            and getattr(inner.value, "attr", getattr(inner.value, "id", None)) == "owner"
-        ):
-            return True
-    return False
+    if isinstance(node, ast.Attribute) and node.attr == "owner_pid":
+        return True
+    if isinstance(node, ast.Name) and node.id == "owner_pid":
+        return True
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "pid"
+        and isinstance(node.value, ast.Attribute | ast.Name)
+        and getattr(node.value, "attr", getattr(node.value, "id", None)) == "owner"
+    )
 
 
-def _calls_getpid(node: ast.AST) -> bool:
-    return any(
-        isinstance(inner, ast.Call)
-        and (
-            (isinstance(inner.func, ast.Attribute) and inner.func.attr == "getpid")
-            or (isinstance(inner.func, ast.Name) and inner.func.id == "getpid")
+def _is_getpid(node: ast.AST) -> bool:
+    return isinstance(node, ast.Call) and (
+        (isinstance(node.func, ast.Attribute) and node.func.attr == "getpid")
+        or (isinstance(node.func, ast.Name) and node.func.id == "getpid")
+    )
+
+
+def _holder(node: ast.AST) -> str | None:
+    """The name a variable or an attribute (``self._pid``) is read or bound by."""
+    if isinstance(node, ast.Name):
+        return node.id
+    return node.attr if isinstance(node, ast.Attribute) else None
+
+
+def _holds(node: ast.AST, kind: Callable[[ast.AST], bool], holders: set[str]) -> bool:
+    """Whether ``node`` reads a value of ``kind`` itself or through a holder."""
+    return any(kind(inner) or _holder(inner) in holders for inner in ast.walk(node))
+
+
+def _binding(node: ast.AST) -> tuple[list[ast.expr], ast.expr] | None:
+    """The targets and value of an ``=``, ``:=`` or annotated assignment."""
+    if isinstance(node, ast.Assign):
+        return node.targets, node.value
+    if isinstance(node, ast.AnnAssign | ast.NamedExpr) and node.value is not None:
+        return [node.target], node.value
+    return None
+
+
+def _holders_of(tree: ast.AST, kind: Callable[[ast.AST], bool]) -> set[str]:
+    """The variables and attributes ``tree`` binds (``=``, ``:=``, an annotated
+    assignment) to a value of ``kind``, or to another such variable."""
+    bindings = [found for node in ast.walk(tree) if (found := _binding(node)) is not None]
+    holders: set[str] = set()
+    while True:
+        grown = holders | {
+            name
+            for targets, value in bindings
+            if _holds(value, kind, holders)
+            for target in targets
+            if (name := _holder(target)) is not None
+        }
+        if grown == holders:
+            return holders
+        holders = grown
+
+
+def _pid_comparisons_in(tree: ast.AST) -> list[int]:
+    """The lines of ``tree`` that compare a job's owner pid with this process's
+    pid, each read directly or through a variable or attribute bound to it."""
+    owners = _holders_of(tree, _is_owner_pid)
+    ours = _holders_of(tree, _is_getpid)
+    return sorted(
+        node.lineno
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Compare)
+        and any(
+            _holds(one, _is_owner_pid, owners) and _holds(other, _is_getpid, ours)
+            for one in (node.left, *node.comparators)
+            for other in (node.left, *node.comparators)
+            if one is not other
         )
-        for inner in ast.walk(node)
     )
 
 
 def test_no_module_but_the_owner_compares_a_job_s_owner_pid_with_its_own() -> None:
-    """``owner_pid == os.getpid()`` and ``owner_pid in (0, os.getpid())`` read
-    a reused pid as this process; the registry (``JobRegistry.owns``) and the
-    store's identity checks (``owner_liveness``, ``is_this_process``) answer
-    instead."""
-    found = sorted(
-        f"{path.relative_to(PACKAGE).as_posix()}:{node.lineno}"
-        for path in PACKAGE.rglob("*.py")
+    """``owner_pid == os.getpid()`` and ``owner_pid in (0, os.getpid())``, each
+    side read directly or through a variable, read a reused pid as this
+    process; the registry (``JobRegistry.owns``) and the store's identity
+    checks (``owner_liveness``, ``is_this_process``) answer instead."""
+    found = [
+        f"{path.relative_to(PACKAGE).as_posix()}:{line}"
+        for path in sorted(PACKAGE.rglob("*.py"))
         if path.relative_to(PACKAGE).as_posix() != _OWNER
-        for node in ast.walk(parsed(path))
-        if isinstance(node, ast.Compare)
-        and any(_names_an_owner_pid(side) for side in (node.left, *node.comparators))
-        and any(_calls_getpid(side) for side in (node.left, *node.comparators))
-    )
+        for line in _pid_comparisons_in(parsed(path))
+    ]
     assert not found, f"a job's owner decided by pid outside {_OWNER}: {found}"
+
+
+def test_the_owner_pid_rule_catches_what_it_names() -> None:
+    tree = ast.parse(
+        "def direct(job):\n"
+        "    return job.owner_pid == os.getpid()\n"  # 2
+        "def among(owner_pid):\n"
+        "    return owner_pid in (0, os.getpid())\n"  # 4
+        "def nested(job):\n"
+        "    return job.owner.pid != getpid()\n"  # 6
+        "def ours_in_a_variable(job):\n"
+        "    me = os.getpid()\n"
+        "    return job.owner_pid == me\n"  # 9
+        "def theirs_in_a_variable(job):\n"
+        "    owner = job.owner_pid\n"
+        "    copied = owner\n"
+        "    return copied == os.getpid()\n"  # 13
+        "def walrus(record):\n"
+        "    return (mine := os.getpid()) == record.owner_pid\n"  # 15
+        "class Session:\n"
+        "    def __init__(self):\n"
+        "        self._pid: int = os.getpid()\n"
+        "    async def owns(self, job):\n"
+        "        return job.owner_pid == self._pid\n"  # 20
+        "def unrelated(other_pid, job, recorded):\n"
+        "    pid = os.getpid()\n"
+        "    return pid == other_pid, job.owner_pid == recorded\n"
+    )
+    assert _pid_comparisons_in(tree) == [2, 4, 6, 9, 13, 15, 20]
