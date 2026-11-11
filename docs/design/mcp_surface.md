@@ -1669,14 +1669,18 @@ because the caller asked for nothing the server could not do.
 component set, values, normalized parameters, which pins share a node
 (matched by the wiring, not by node names), the number of terminals, and
 `anchors`, the named nets (ports, rails, outputs) that must also match by
-name; ground always must. It also compares the directives outside subcircuit
-definitions, read as `structural_diff` reads them (below), so the two modes
-agree about every directive. A subcircuit definition is compared as wiring
-wherever it is defined, inline or in an included file, so its `.subckt` line,
-its `PARAMS:` defaults and the directives in its body are not compared. An
-`.include` or `.lib` line is a directive, so moving a definition into an
-included file shows as that line added. `equivalent` is true only when the wiring, the parts and values
-and the directives all match. Beside a false one, `structurally_equivalent`
+name; ground always must. It also compares the directives, read as
+`structural_diff` reads them (below), so the two modes agree about every
+directive, scope by scope: the top level's, and those of each subcircuit both
+circuits call, wherever it is defined, inline or in an included file. A
+subcircuit's own directives are its body's and its `PARAMS:` defaults, and
+each is listed with `(in .subckt NAME)` after it; a `.param` moved from a
+subcircuit's body to the top level is a difference. A subcircuit the circuit
+does not call is not compared. An `.include` or `.lib` line is a directive,
+but one whose file defines subcircuits and nothing else is compared by those
+definitions instead, so moving a definition into such a file changes nothing.
+`equivalent` is true only when the wiring, the parts and values and the
+directives all match. Beside a false one, `structurally_equivalent`
 says whether the wiring matched and `directives_equivalent` whether the
 directives did, and `directives_added` and `directives_removed` list the
 directives only this circuit has and those only the reference has.

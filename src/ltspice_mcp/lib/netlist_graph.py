@@ -145,6 +145,11 @@ _SYMMETRIC_TWO_TERMINAL: frozenset[str] = frozenset({"R", "C", "L"})
 # section declaration as an include of a file named ``tt``.
 _MAX_INCLUDE_DEPTH = 3
 
+# The cards a scope holds as its directives: what a subcircuit's body or the
+# deck's top level says beside its components. A ``.subckt``/``.ends`` pair is a
+# definition of its own, and ``.end`` closes the deck.
+_DIRECTIVE_CARD_KINDS = frozenset({"model", "param", "meas", "directive", "control"})
+
 
 class NetlistGraphError(ValueError):
     """A netlist could not be turned into a connectivity graph.
@@ -220,6 +225,10 @@ class SubcktDef:
     ports: tuple[str, ...]
     components: tuple[Component, ...]
     param_defaults: tuple[tuple[str, str], ...] = ()
+    #: The directive cards one level inside the body (``.param``, ``.model``,
+    #: ``.meas`` and the rest): what the comparison reads as the subcircuit's
+    #: own directives. A nested definition's are its own entry's.
+    directives: tuple[SpiceCard, ...] = field(default=(), compare=False)
 
 
 @dataclass(frozen=True)
@@ -306,6 +315,12 @@ class NetlistGraph:
     #: The node names the deck's ``.global`` cards list, lowercased: one net
     #: in every subcircuit body.
     global_nets: frozenset[str] = frozenset()
+    #: The deck's directive cards outside every subcircuit definition and
+    #: before its ``.end``. An ``.include`` or ``.lib`` whose file defines
+    #: subcircuits and nothing else is left out, here and in each
+    #: definition's ``directives``: what it brings is those definitions, which
+    #: are compared themselves.
+    directives: tuple[SpiceCard, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -713,13 +728,26 @@ def parse_netlist_graph(
     )
 
     components = [_component_from_card(card) for card in iter_by_kind(cards, "instance", scope=())]
+    skipped = registry.definitions_only
+
+    def own(directives: Iterable[SpiceCard]) -> tuple[SpiceCard, ...]:
+        return tuple(card for card in directives if id(card) not in skipped)
+
     return NetlistGraph(
         components=components,
-        subckts=registry.subckts,
+        subckts={
+            key: replace(definition, directives=own(definition.directives))
+            for key, definition in registry.subckts.items()
+        },
         warnings=list(result.warnings),
         missing_includes=tuple(registry.missing),
         duplicate_subckts=registry.duplicate_records(),
         global_nets=frozenset(registry.global_nets),
+        directives=own(
+            card
+            for card in cards
+            if not card.scope and not card.trailing and card.kind in _DIRECTIVE_CARD_KINDS
+        ),
     )
 
 
@@ -732,6 +760,10 @@ class _SubcktRegistry:
     ignored: dict[str, list[str]] = field(default_factory=dict)
     missing: list[MissingInclude] = field(default_factory=list)
     global_nets: set[str] = field(default_factory=set)
+    #: The ``id`` of each include card whose file defines subcircuits and
+    #: nothing else, and whether each file (and section) read so far does.
+    definitions_only: set[int] = field(default_factory=set)
+    files: dict[tuple[Path, str | None], bool] = field(default_factory=dict)
 
     def register(self, definition: SubcktDef, source: str) -> None:
         key = definition.name.lower()
@@ -760,16 +792,14 @@ def _subckt_def_from(cards: list[SpiceCard], opener_index: int) -> SubcktDef:
     of this one.
     """
     view = SubcktCard.from_card(cards[opener_index])
-    body = [
-        _component_from_card(card, view.ports)
-        for _, card in subckt_children(cards, opener_index)
-        if card.kind == "instance"
-    ]
+    children = [card for _, card in subckt_children(cards, opener_index)]
+    body = [_component_from_card(card, view.ports) for card in children if card.kind == "instance"]
     return SubcktDef(
         name=view.name,
         ports=tuple(view.ports),
         components=tuple(body),
         param_defaults=tuple(view.param_defaults.items()),
+        directives=tuple(card for card in children if card.kind in _DIRECTIVE_CARD_KINDS),
     )
 
 
@@ -785,8 +815,9 @@ def _collect_subckts(
     strict: bool,
     include_resolver: IncludeResolver | None = None,
     section: str | None = None,
-) -> None:
-    """Walk ``cards`` in textual order, registering definitions and following includes.
+) -> bool:
+    """Walk ``cards`` in textual order, registering definitions and following
+    includes; return whether they define subcircuits and nothing else.
 
     Order is what makes first-wins precedence correct: an include contributes its
     definitions at the position its directive appears, exactly as textual
@@ -796,6 +827,11 @@ def _collect_subckts(
     ``strict`` the caller's own malformed card raises; for an included file
     it is downgraded to a :class:`MissingInclude` record so a third-party library
     cannot break the comparison.
+
+    Outside every definition, a card that is no section marker (``.lib
+    <name>``, ``.endl``) and no ``.end``, and an include whose file does more
+    than define subcircuits, is something else; one that cannot be read is
+    taken as something else too, since what it holds is not known.
     """
     try:
         # Every directive that cannot be split into parts is a malformed card
@@ -817,8 +853,9 @@ def _collect_subckts(
         registry.missing.append(
             MissingInclude(target=source, reason=f"malformed directive: {exc}")
         )
-        return
+        return False
     wanted = section.casefold() if section is not None else None
+    only_definitions = True
     for index, (card, card_section) in enumerate(zip(cards, sections, strict=True)):
         if wanted is not None and card_section is not None and card_section.casefold() != wanted:
             continue
@@ -845,8 +882,10 @@ def _collect_subckts(
             continue
         reference = references.get(id(card))
         if reference is None:
+            if not card.scope and not _definition_neutral(card):
+                only_definitions = False
             continue
-        _follow_include(
+        defines_only = _follow_include(
             reference.raw_path,
             section=reference.section,
             base_dir=base_dir,
@@ -858,6 +897,21 @@ def _collect_subckts(
             # The deck's own directives are at depth 0; an included file names itself.
             source=None if depth == 0 else source,
         )
+        if defines_only:
+            registry.definitions_only.add(id(card))
+        elif not card.scope:
+            only_definitions = False
+    return only_definitions
+
+
+def _definition_neutral(card: SpiceCard) -> bool:
+    """Whether a card outside every definition, and no include, says nothing
+    about the circuit: a blank, a comment, ``.end``, or a library's section
+    marker (``.lib <name>`` declaring one, ``.endl`` closing it)."""
+    if card.kind in ("blank", "comment", "end", "subckt", "ends"):
+        return True
+    head = card.body.split(None, 1)[0].casefold() if card.body.strip() else ""
+    return head in (".lib", ".endl")
 
 
 def _follow_include(
@@ -871,24 +925,24 @@ def _follow_include(
     include_resolver: IncludeResolver | None = None,
     line: int,
     source: str | None,
-) -> None:
+) -> bool:
     """Load one include target's definitions (only ``section``'s, when the
-    reference selects one), or record why it contributed none.
+    reference selects one), or record why it contributed none; return whether
+    it defines subcircuits and nothing else (False for one not read).
 
     ``line`` is the line of the directive that names it, and ``source`` the
     included file holding that directive (None for the deck itself), which a
     record of why it contributed nothing carries.
     """
 
-    def missing(reason: str) -> None:
+    def missing(reason: str) -> bool:
         registry.missing.append(MissingInclude(target, reason, line=line, source=source))
+        return False
 
     if base_dir is None:
-        missing("no base directory (netlist parsed from text)")
-        return
+        return missing("no base directory (netlist parsed from text)")
     if depth >= _MAX_INCLUDE_DEPTH:
-        missing(f"include depth limit ({_MAX_INCLUDE_DEPTH}) reached")
-        return
+        return missing(f"include depth limit ({_MAX_INCLUDE_DEPTH}) reached")
     # One resolver for the whole product: staging's answer to "which file does
     # this reference name?" is the answer here too. A local join would read
     # `C:\...\standard.mos` — the spelling LTspice's own netlister writes — as a
@@ -901,24 +955,23 @@ def _follow_include(
         # relies on. The resolver may also redirect to a canonical safe path.
         approved = include_resolver(path)
         if approved is None:
-            missing("path denied by include resolver")
-            return
+            return missing("path denied by include resolver")
         path = approved
     try:
         key = path.resolve()
     except OSError:
-        missing("unresolvable path")
-        return
+        return missing("unresolvable path")
     selected = (key, section.casefold() if section is not None else None)
     if selected in seen:
-        return  # already contributed; revisiting is how an include cycle stops
+        # Already contributed; revisiting is how an include cycle stops. One
+        # still being read is taken as doing more, since that is not known yet.
+        return registry.files.get(selected, False)
     seen.add(selected)
     try:
         included = lex_deck(read_spice_text(path), title=False)
     except (OSError, UnicodeDecodeError, ValueError) as exc:
-        missing(f"unreadable: {exc}")
-        return
-    _collect_subckts(
+        return missing(f"unreadable: {exc}")
+    registry.files[selected] = _collect_subckts(
         included.cards,
         origin=path,
         section=section,
@@ -930,6 +983,7 @@ def _follow_include(
         strict=False,
         include_resolver=include_resolver,
     )
+    return registry.files[selected]
 
 
 def _component_from_card(card: object, ports: Sequence[str] = ()) -> Component:

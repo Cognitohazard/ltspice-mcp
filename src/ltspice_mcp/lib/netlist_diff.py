@@ -5,8 +5,10 @@ What ``verify_circuit``'s ``structural_diff`` mode and the sidecar export's
 added or removed. Both sides are netlists — an ``.asc`` is compared as its LTspice
 export — read with the foundation lexer, so a ``+`` continuation belongs to the
 card it continues and an inline comment is not part of it. The equivalence mode
-compares a circuit's directives with the same reader (:func:`circuit_directives`,
-:func:`directive_delta`), so the two modes cannot disagree about a directive.
+compares a circuit's directives with the same reader (:func:`parse_directive`,
+:func:`directive_delta`), so the two modes cannot disagree about a directive;
+it compares them scope by scope, over the circuit its wiring comparison resolves
+(:func:`circuit_directive_delta`).
 
 Two rules keep the delta quiet when nothing changed:
 
@@ -31,13 +33,14 @@ equivalence is the mode that compares wiring.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from itertools import takewhile
 from pathlib import Path
 
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import fold_micro_sign
-from ltspice_mcp.lib.netlist_graph import canon_ref, rekey_across_added_x
+from ltspice_mcp.lib.netlist_graph import NetlistGraph, SubcktDef, canon_ref, rekey_across_added_x
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
@@ -223,24 +226,66 @@ def read_deck(source: str | Path) -> Deck:
     return deck
 
 
-def circuit_directives(source: str | Path) -> list[Directive]:
-    """The directives of a netlist (a path, or its text) outside any subcircuit
-    definition, read as :func:`read_deck` reads them.
+def circuit_directive_delta(
+    baseline: NetlistGraph, compared: NetlistGraph
+) -> tuple[list[str], list[str]]:
+    """``(added, removed)``: the directives two circuits differ by, scope by
+    scope, each as :func:`directive_delta` reads one scope's.
 
-    What the equivalence mode compares beside the wiring. A ``.subckt`` card,
-    its body and its ``.ends`` are left out: the wiring comparison reads each
-    definition the circuit uses, wherever it is defined, inline or in an
-    included file. A card after the deck's top-level ``.end`` is left out too,
-    since LTspice ignores it. Raises what reading the file raises.
+    The scopes are the deck's top level and each subcircuit both circuits use
+    and define, wherever it is defined (inline or in an included file), as the
+    wiring comparison expands it (``netlist_graph``). A subcircuit's
+    directives are its own: a ``.param`` in its body against one at the top
+    level is a difference, and its ``PARAMS:`` defaults count among them. A
+    subcircuit's entries carry ``(in .subckt NAME)``. A subcircuit only one
+    side uses or defines is the wiring comparison's to report. An include
+    whose file only defines subcircuits is not compared by its line
+    (``NetlistGraph.directives``): its definitions are compared themselves.
     """
-    return [
-        directive
-        for card in _cards(source)
-        if not card.scope
-        and not card.trailing
-        and card.kind not in ("subckt", "ends")
-        and (directive := _directive_of(card)) is not None
-    ]
+    added, removed = directive_delta(_scope(baseline.directives), _scope(compared.directives))
+    for key in sorted(_used(baseline) & _used(compared)):
+        before, after = baseline.subckts[key], compared.subckts[key]
+        more, fewer = directive_delta(_definition(before), _definition(after))
+        added += [f"{text} (in .subckt {after.name})" for text in more]
+        removed += [f"{text} (in .subckt {before.name})" for text in fewer]
+    return added, removed
+
+
+def _scope(cards: Iterable[SpiceCard]) -> list[Directive]:
+    """One scope's directive cards, read for comparison."""
+    return [directive for card in cards if (directive := _directive_of(card)) is not None]
+
+
+def _definition(definition: SubcktDef) -> list[Directive]:
+    """A subcircuit's own directives: its body's, and its ``PARAMS:`` defaults
+    read as one assignment card, in any order."""
+    directives = _scope(definition.directives)
+    if definition.param_defaults:
+        pairs = sorted(
+            (f"{key}={_canonical_value(value)}" for key, value in definition.param_defaults),
+            key=str.casefold,
+        )
+        text = "PARAMS: " + " ".join(f"{key}={value}" for key, value in definition.param_defaults)
+        directives.append(Directive(comparable(" ".join(["params:", *pairs])), text))
+    return directives
+
+
+def _used(graph: NetlistGraph) -> set[str]:
+    """The subcircuits a circuit uses and defines, by key: those its ``X``
+    instances call, and those theirs call, as flattening expands them."""
+    used: set[str] = set()
+    calls = [c.model.lower() for c in graph.components if c.type_letter == "X" and c.model]
+    while calls:
+        key = calls.pop()
+        if key in used or key not in graph.subckts:
+            continue
+        used.add(key)
+        calls += [
+            c.model.lower()
+            for c in graph.subckts[key].components
+            if c.type_letter == "X" and c.model
+        ]
+    return used
 
 
 def _by_key(directives: list[Directive]) -> dict[str, list[str]]:

@@ -1228,22 +1228,111 @@ async def test_equivalence_reads_directives_as_structural_diff_does(state_no_sim
         assert comparison["directives_removed"] == [".tran 0 2m"]
 
 
-async def test_equivalence_compares_a_subcircuit_as_wiring_wherever_it_is_defined(
-    state_no_sim, work_dir
-):
-    """A definition moved into an included file is the same wiring, so only the
-    include line is a directive difference; the definition's own lines are not
-    directives here."""
+async def test_equivalence_compares_a_subcircuit_wherever_it_is_defined(state_no_sim, work_dir):
+    """A definition moved into an included file that defines nothing else is
+    the same circuit: the include line brings that definition, which is
+    compared, wiring and directives, wherever it is."""
     block = ".subckt DIV a b\n.param half=1k\nR1 a mid {half}\nR2 mid b {half}\n.ends DIV\n"
     _write(work_dir, "div.lib", block)
     deck = _write(work_dir, "cand.cir", "* top\nV1 in 0 5\nX1 in 0 DIV\n.include div.lib\n.end\n")
     ref = _write(work_dir, "ref.cir", f"* top\nV1 in 0 5\nX1 in 0 DIV\n{block}.end\n")
     data = await _run(state_no_sim, path=str(deck), reference=str(ref))
+    assert data["comparison"]["equivalent"] is True
+    # The same definition with another .param in its body is another circuit.
+    _write(work_dir, "div.lib", block.replace("half=1k", "half=2k"))
+    data = await _run(state_no_sim, path=str(deck), reference=str(ref))
     comparison = data["comparison"]
     assert comparison["equivalent"] is False
+    assert comparison["directives_added"] == [".param half=2k (in .subckt DIV)"]
+    assert comparison["directives_removed"] == [".param half=1k (in .subckt DIV)"]
+
+
+async def test_an_include_that_brings_more_than_definitions_is_compared_by_its_line(
+    state_no_sim, work_dir
+):
+    """A file that also holds a model is more than the definitions it brings,
+    so its include line stays a directive of the deck."""
+    block = ".subckt DIV a b\nR1 a b 1k\n.ends DIV\n"
+    _write(work_dir, "div.lib", block + ".model D1 D(Is=1e-14)\n")
+    deck = _write(work_dir, "cand.cir", "* top\nV1 in 0 5\nX1 in 0 DIV\n.include div.lib\n.end\n")
+    ref = _write(work_dir, "ref.cir", f"* top\nV1 in 0 5\nX1 in 0 DIV\n{block}.end\n")
+    data = await _run(state_no_sim, path=str(deck), reference=str(ref))
+    assert data["comparison"]["directives_added"] == [".include div.lib"]
+
+
+#: A deck calling subcircuit AMP, whose body holds BODY; TOP goes at the top level.
+_AMP = (
+    "* amp\n.subckt AMP in out{params}\n{body}R1 in out {{g*1k}}\n.ends AMP\n"
+    "{top}V1 a 0 1\nX1 a b AMP\nR2 b 0 1k\n.op\n.end\n"
+)
+
+
+def _amp(body: str = ".param g=2\n", top: str = "", params: str = "") -> str:
+    return _AMP.format(body=body, top=top, params=params)
+
+
+@pytest.mark.parametrize(
+    ("candidate", "added", "removed"),
+    [
+        (_amp(".param g=3\n"), [".param g=3 (in .subckt AMP)"], [".param g=2 (in .subckt AMP)"]),
+        (_amp("", top=".param g=2\n"), [".param g=2"], [".param g=2 (in .subckt AMP)"]),
+        (
+            _amp(".param g=2\n.meas op vb FIND V(out)\n"),
+            [".meas op vb FIND V(out) (in .subckt AMP)"],
+            [],
+        ),
+        (
+            _amp("", params=" params: g=3"),
+            ["PARAMS: g=3 (in .subckt AMP)"],
+            [".param g=2 (in .subckt AMP)"],
+        ),
+    ],
+    ids=["param_value", "param_moved_to_the_top", "meas_added", "params_default"],
+)
+async def test_equivalence_compares_each_subcircuit_s_own_directives(
+    state_no_sim, work_dir, candidate: str, added: list[str], removed: list[str]
+):
+    """Two circuits whose subcircuit defines its parameter otherwise differ,
+    though the wiring and the value text ``{g*1k}`` are the same."""
+    ref = _write(work_dir, "ref.cir", _amp())
+    deck = _write(work_dir, "cand.cir", candidate)
+    comparison = (await _run(state_no_sim, path=str(deck), reference=str(ref)))["comparison"]
     assert comparison["structurally_equivalent"] is True
-    assert comparison["directives_added"] == [".include div.lib"]
-    assert "directives_removed" not in comparison
+    assert comparison["equivalent"] is False
+    assert comparison.get("directives_added", []) == added
+    assert comparison.get("directives_removed", []) == removed
+
+
+async def test_structural_diff_also_tells_a_subcircuit_s_parameter_apart(state_no_sim, work_dir):
+    """The node-blind mode reads every directive, a subcircuit's included, so
+    it disagrees with neither the old nor the new equivalence on this deck."""
+    ref = _write(work_dir, "ref.cir", _amp())
+    deck = _write(work_dir, "cand.cir", _amp(".param g=3\n"))
+    data = await _run(
+        state_no_sim, path=str(deck), reference=str(ref), compare_mode="structural_diff"
+    )
+    assert data["comparison"]["equivalent"] is False
+    assert data["comparison"]["directives_added"] == [".param g=3"]
+
+
+async def test_a_subcircuit_the_circuit_does_not_call_is_not_compared(state_no_sim, work_dir):
+    """A library's other definitions are no part of the circuit."""
+    unused = ".subckt SPARE a b\n.param k=1\nR9 a b {k}\n.ends SPARE\n"
+    body = _amp().split("\n", 1)[1]  # the deck below its title line
+    ref = _write(work_dir, "ref.cir", "* spare\n" + unused + body)
+    deck = _write(work_dir, "cand.cir", "* spare\n" + unused.replace("k=1", "k=5") + body)
+    comparison = (await _run(state_no_sim, path=str(deck), reference=str(ref)))["comparison"]
+    assert comparison["equivalent"] is True
+
+
+async def test_a_nested_subcircuit_s_directives_are_compared(state_no_sim, work_dir):
+    inner = ".subckt INNER a b\n.param r={r0}\nR1 a b {r}\n.ends INNER\n"
+    outer = ".subckt OUTER a b\nXI a b INNER\n.ends OUTER\n"
+    top = "V1 in 0 1\nX1 in 0 OUTER\n.param r0=1k\n.op\n.end\n"
+    ref = _write(work_dir, "ref.cir", "* n\n" + inner + outer + top)
+    deck = _write(work_dir, "cand.cir", "* n\n" + inner.replace("{r0}", "{2*r0}") + outer + top)
+    comparison = (await _run(state_no_sim, path=str(deck), reference=str(ref)))["comparison"]
+    assert comparison["directives_added"] == [".param r={2*r0} (in .subckt INNER)"]
 
 
 # ---------------------------------------------------------------------------
