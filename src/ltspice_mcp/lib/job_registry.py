@@ -22,7 +22,7 @@ from typing import Any
 
 from ltspice_mcp.lib.background import BackgroundTasks
 from ltspice_mcp.lib.experiment_types import OWNER_STOPPED, ExperimentJob
-from ltspice_mcp.lib.job_lifecycle import LiveJob, WaitFor, finished, stop_for_owner
+from ltspice_mcp.lib.job_lifecycle import LiveJob, WaitFor, finished
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.observability import emit_job_event
 
@@ -143,7 +143,7 @@ class JobRegistry:
         emit_job_event("submitted", job, total_cases=job.completeness.expanded)
 
     def reserve(self, job: ExperimentJob) -> LiveJob:
-        """Make ``job`` one this process runs, and the one its id resolves to.
+        """Make ``job`` one this session runs, and the one its id resolves to.
 
         Called before the job's record or request index is written, so any
         reader that finds the id on disk from then on, a replay above all, gets
@@ -160,13 +160,15 @@ class JobRegistry:
         return live
 
     def owns(self, job: ExperimentJob) -> bool:
-        """Whether this process runs ``job``: it admitted the job, so its live
+        """Whether this session runs ``job``: it admitted the job, so its live
         job is here (``reserve``).
 
         The one answer to "is this job ours?". A pid never answers it: a record
         a dead server left can carry this process's pid once the pid is reused,
-        quickly on Windows, and a record read back from the store is never one
-        this process can wait on, cancel without a token, or settle at shutdown.
+        quickly on Windows, another session of this process (an ``Api`` opened
+        after another closed) runs nothing the first admitted, and a record
+        read back from the store is never one this session can wait on, cancel
+        or resume without a token, or settle at shutdown.
         """
         return job.job_id in self.live
 
@@ -689,14 +691,16 @@ class JobRegistry:
         return self._pending_persist.pending(job_id)
 
     async def cancel_running(self, runners, session_state) -> None:
-        """Stop the jobs this process runs (``owns``) that are still live.
+        """Stop the jobs this session runs (``owns``) that are still live.
 
-        The process running them is stopping, so each ends as it would had the
+        The session running them is stopping, so each ends as it would had the
         process been killed and its record read back afterwards: settled by
-        ``job_lifecycle.stop_for_owner``, ``interrupted`` while runs were
-        left, with its unfinished cases failed with ``OWNER_STOPPED``, which a
-        resume retries by default. Nobody asked to cancel them, so none ends
-        ``cancelled``.
+        ``LiveJob.stop_for_owner``, ``interrupted`` while runs were left, with
+        its unfinished cases failed with ``OWNER_STOPPED``, which a resume
+        retries by default. Nobody asked to cancel them, so none ends
+        ``cancelled``. A job is settled once, whether its coordinator settles
+        it, this pass does, or both do because the coordinator's last write
+        outlasted the bound.
 
         Runners' ``cancel`` APIs take a SessionState for historical reasons;
         the caller passes it through rather than the registry reaching back
@@ -706,15 +710,11 @@ class JobRegistry:
         # and a concurrent registration would change the dict under us —
         # "dictionary changed size during iteration".
         #
-        # Only THIS process's jobs are stopped: another server's live job also
+        # Only THIS session's jobs are stopped: another server's live job also
         # sits in the registry as running (loaded from its record with the
         # owner still alive) and must not be killed or relabeled by our
         # shutdown, whatever pid its record names.
         experiments = [job for job in self.jobs.values() if self.owns(job)]
-        # Whether each job's runs were done as the process began to stop, which
-        # decides the status the bookkeeping below gives a job its cancel left
-        # live, as it decides the coordinator's own.
-        runs_were_finished = {job.job_id: finished(job, "runs") for job in experiments}
         await _issue_cancels(
             [
                 runner.cancel(experiment, reason=OWNER_STOPPED)
@@ -730,14 +730,17 @@ class JobRegistry:
         # raised, or never existed, and this pass is the last thing that can
         # write it a terminal status before the process exits. Skipping it would
         # persist a sidecar reading "running" under a pid that no longer exists.
+        #
+        # Its coordinator may have settled it already and be inside the write
+        # that comes before its status changes: settling again changes nothing,
+        # and gives the status the coordinator chose, with the runs as the stop
+        # found them.
         for experiment in experiments:
             if experiment.status not in NON_TERMINAL_LIVE_STATUSES:
                 continue
-            status = stop_for_owner(
-                experiment, runs_were_finished=runs_were_finished[experiment.job_id]
-            )
             # Still live, so still here: eviction takes only finished jobs.
-            self.live[experiment.job_id].transition(status)
+            live = self.live[experiment.job_id]
+            live.transition(live.stop_for_owner())
             self.persist_job(experiment)
 
         # A job that finished during the cancels may have been evicted since.

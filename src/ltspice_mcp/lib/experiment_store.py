@@ -29,7 +29,7 @@ from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.job_lifecycle import (
     finished,
     reconcile_experiment_restart,
-    stop_for_owner,
+    stop_for_owner,  # noqa: TID251 - a record whose owner died has no live job
 )
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.native_records import NativeCaseRecord

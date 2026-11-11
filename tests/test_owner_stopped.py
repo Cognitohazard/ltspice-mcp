@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -24,8 +26,10 @@ import pytest
 
 from ltspice_mcp.api import Api
 from ltspice_mcp.config import ServerConfig
-from ltspice_mcp.lib import job_registry
+from ltspice_mcp.lib import experiment_store, job_registry
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
+from ltspice_mcp.lib.job_lifecycle import LiveJob, finished, owner_stopped_observation
+from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
@@ -38,6 +42,8 @@ from tests.conftest import (
     await_until,
     exited_pid,
     fake_simulator,
+    make_experiment_job,
+    needs_controlled_startup,
     patch_stub_bootstrap,
     wait_until,
 )
@@ -49,14 +55,14 @@ _OWNER_STOPPED = "server_restarted"
 _DECK = "* divider\nV1 in 0 1\nR1 in out 1k\nR2 out 0 1k\n.op\n.end\n"
 
 
-def _payload(request_id: str) -> dict[str, Any]:
+def _payload(request_id: str, **execution: Any) -> dict[str, Any]:
     """Two cases, one at a time, with an attached analysis: whichever stage the
     process stops at, one case is launched and one is not, or every run is done
     and only the analysis is left."""
     return {
         "request_id": request_id,
         "circuits": [{"path": "first.cir"}, {"path": "second.cir"}],
-        "execution": {"max_parallel": 1},
+        "execution": {"max_parallel": 1, **execution},
         "analyze": {"recipes": [{"key": "vout", "metric": "summary"}]},
         "lint": "off",
     }
@@ -111,12 +117,10 @@ def _session(config: ServerConfig) -> SessionState:
     return SessionState.create(config, available={"fake": FakeSim})
 
 
-async def _start(session: SessionState, request_id: str, stage: _Stage) -> str:
+async def _start(session: SessionState, request_id: str, stage: _Stage, **execution: Any) -> str:
     """Submit through ``run_experiments`` and wait until the job is at ``stage``."""
     result = await handle_run_experiments(
-        RunExperimentsInput.model_validate(
-            {**_payload(request_id), "execution": {"max_parallel": 1, "wait_s": 0}}
-        ),
+        RunExperimentsInput.model_validate(_payload(request_id, wait_s=0, **execution)),
         session,
     )
     assert not result.is_error, result.structured_content
@@ -261,3 +265,89 @@ async def test_a_shutdown_whose_stop_outlasts_its_bound_leaves_the_same_record(
     await asyncio.wait_for(wedged.shutdown(), LIVENESS_S)
 
     assert await _as_read(reader, wedged_id) == await _as_read(reader, stopped_id)
+
+
+@needs_controlled_startup
+@pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH")
+@pytest.mark.parametrize("checkpoint", ["written", "refused"])
+async def test_a_shutdown_whose_bound_ends_in_the_final_checkpoint_settles_the_job_once(
+    checkpoint: str,
+    config: ServerConfig,
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A recoverable job's coordinator settles a stopped job and then writes its
+    final record before it changes the job's status. When the shutdown's bound
+    runs out during that write, the shutdown's own bookkeeping finishes the job
+    as well. The job is still settled once: one lifecycle observation, the
+    status the coordinator chose, and no error added once the write returns,
+    whether the disk took it or refused it."""
+    from tests.test_resume_surface import _state
+
+    for name in ("first.cir", "second.cir"):
+        (work_dir / name).write_text(_DECK, encoding="utf-8")
+    reader = SessionState.create(config, available={})
+    stage = _Stage("running", monkeypatch)
+    loop = asyncio.get_running_loop()
+    held = asyncio.Event()
+    released = threading.Event()
+    write = experiment_store.save_job
+    checkpoints: list[str] = []
+
+    def save_job(job):
+        # The first record written with a terminal status is the coordinator's
+        # final checkpoint: hold it until the shutdown has finished the job.
+        if job.status in TERMINAL_STATUSES and not checkpoints:
+            checkpoints.append(job.status)
+            loop.call_soon_threadsafe(held.set)
+            released.wait(LIVENESS_S)
+            if checkpoint == "refused":
+                raise OSError("the disk refused the final checkpoint")
+        return write(job)
+
+    monkeypatch.setattr(experiment_store, "save_job", save_job)
+    server = _state(work_dir)
+    job_id = await _start(server, "checkpoint-outlasts-bound", stage, recoverable=True)
+    job = server.all_jobs[job_id]
+    coordinator = server.job_registry.live[job_id].task
+    assert job.recovery is not None and coordinator is not None
+
+    # timing: the bound under test; the coordinator reaches its final checkpoint well inside it
+    monkeypatch.setattr(job_registry, "_SHUTDOWN_CANCEL_TIMEOUT_S", 1.0)
+    shutdown = asyncio.create_task(server.shutdown())
+    await asyncio.wait_for(held.wait(), LIVENESS_S)
+    # The coordinator, not the shutdown, reached the write: it settled the job
+    # and has not moved it yet.
+    assert job.status == "running"
+    await await_until(
+        lambda: job.status in TERMINAL_STATUSES, what="the shutdown to finish the job"
+    )
+    released.set()
+    await asyncio.wait_for(shutdown, LIVENESS_S)
+    await asyncio.wait({coordinator}, timeout=LIVENESS_S)
+
+    assert checkpoints == ["interrupted"]
+    assert job.status == "interrupted"
+    assert job.error is None, job.error
+    read = await _as_read(reader, job_id)
+    assert read["status"] == "interrupted"
+    assert len(read["stopped"]) == len(read["analysis_stopped"]) == 1, read
+    assert [code for code, _message, _count in read["failures"]] == [_OWNER_STOPPED]
+
+
+def test_a_live_job_is_settled_with_the_runs_as_the_stop_first_found_them(
+    state_no_sim: SessionState,
+):
+    """The coordinator reads the runs as the stop reaches it; the shutdown's
+    bookkeeping settles the job after its bound. A case that finishes between
+    the two gives neither a second reading, and settling the job a second time
+    records nothing again."""
+    job = make_experiment_job(state_no_sim, job_id="exp_stopping", status="running")
+    live = LiveJob(job)
+
+    assert live.runs_done_at_owner_stop() is False  # as the stop reaches the coordinator
+    job.cases[0].status = "produced"  # the run ends before the bookkeeping settles the job
+    assert finished(job, "runs")
+    assert live.stop_for_owner() == "interrupted"
+    assert live.stop_for_owner() == "interrupted"
+    assert job.observations.count(owner_stopped_observation()) == 1

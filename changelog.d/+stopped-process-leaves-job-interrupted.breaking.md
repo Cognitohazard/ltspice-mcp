@@ -14,8 +14,14 @@ The rest of the job reads as after a crash too:
 - unfinished cases fail with code `server_restarted` as before, and every
   route now gives them one message, which says the process running the job
   stopped rather than that the server did, since a closed `Api` is no server;
-- the job and the analysis each carry a `server_restarted` lifecycle
-  observation, which a shutdown left out.
+- the job and the analysis each carry one `server_restarted` lifecycle
+  observation, which a shutdown left out;
+- a job run with `execution.results_beside_sheet` copies nothing beside its
+  sheets once its process begins to stop, even when every run had finished,
+  and each sheet whose case produced has a `results_not_placed` observation
+  with `reason_code` `server_restarted` that names
+  `jobs(action="place_beside_sheet")`, where the receipt said only that the
+  results were in the job folder.
 
 Resume is unchanged: a resume takes any terminal job, and the cases a shutdown
 stops were already `failed` with `server_restarted`, which a default resume

@@ -165,6 +165,7 @@ known-first-party = ["ltspice_mcp"]
 "ltspice_mcp.lib.variations.parse_plain_value".msg = "Read a value a simulator runs with format.parse_spice_value; the plain reader only tells a number from a name."
 "ltspice_mcp.lib.simulator_build.is_cp1252_ltspice_executable".msg = "Ask simulator_build.ltspice_before_24, which also reads the build a run reported."
 "ltspice_mcp.lib.job_lifecycle.runs_terminal".msg = "Ask services.runs_unready, services.case_unreadable or job_lifecycle.runs_done whether runs can be read."
+"ltspice_mcp.lib.job_lifecycle.stop_for_owner".msg = "Settle a job this session runs with LiveJob.stop_for_owner, which gives its coordinator and the shutdown's bookkeeping one reading of the runs; only a record whose owner died is settled directly."
 "ltspice_mcp.lib.experiment_store.load_job".msg = "Resolve a job through the registry (JobRegistry.get_or_load), which reconciles a record another process owns."
 "ltspice_mcp.lib.experiment_store.load_job_from_path".msg = "Resolve a job through the registry (JobRegistry.get_or_load), which reconciles a record another process owns."
 "ltspice_mcp.lib.proc_kill.process_start_marker".msg = "Read this process's identity with store.this_process_start_marker; ask whether a process a record names is still running with store.owner_liveness or proc_kill.process_identity_presence; ask whether this process runs a job with JobRegistry.owns."

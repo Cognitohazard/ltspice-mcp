@@ -50,7 +50,6 @@ from ltspice_mcp.lib.job_lifecycle import (
     LiveJob,
     finished,
     stop_analysis_for_owner,
-    stop_for_owner,
 )
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.native_execution import prepare_native_cases
@@ -80,7 +79,7 @@ from ltspice_mcp.lib.runner_base import (
     inject_logopinfo,
     inject_ngspice_control_write,
 )
-from ltspice_mcp.lib.sheet_results import place_job_beside_sheets
+from ltspice_mcp.lib.sheet_results import not_placed_for_owner_stop, place_job_beside_sheets
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name, is_ngspice, raw_extension_for
 from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
@@ -562,10 +561,6 @@ class _Execution:
     # Held for two attribute writes at a time, never across a launch.
     launch_lock: threading.Lock = field(default_factory=threading.Lock)
     stop_reason: JobStopReason | None = None
-    #: With ``stop_reason`` ``OWNER_STOPPED``: whether every run was done when
-    #: the process began to stop, which decides the status the job ends with
-    #: (``job_lifecycle.stop_for_owner``).
-    runs_finished_at_stop: bool = False
     slots_held: set[str] = field(default_factory=set)
     retained_slots: set[str] = field(default_factory=set)
     futures: dict[str, asyncio.Future[RunOutcome]] = field(default_factory=dict)
@@ -1074,10 +1069,12 @@ class ExperimentRunner(RunnerBase):
                 await asyncio.gather(*execution.case_tasks.values(), return_exceptions=True)
             self._reconcile_unfinished_cases(execution)
             job.completeness.validate_terminal()
-            if request.results_beside_sheet and execution.stop_reason not in (
-                "cancelled",
-                OWNER_STOPPED,
-            ):
+            if request.results_beside_sheet and execution.stop_reason == OWNER_STOPPED:
+                # Not copied while this process stops, even when every run had
+                # finished: the receipt says so per sheet, with the action that
+                # copies them (``not_placed_for_owner_stop``).
+                job.observations.extend(not_placed_for_owner_stop(job))
+            elif request.results_beside_sheet and execution.stop_reason != "cancelled":
                 # Before this process counts the runs done and before the job's
                 # final status, so a wait on either reads a receipt that says
                 # where the results are.
@@ -1090,6 +1087,16 @@ class ExperimentRunner(RunnerBase):
                 analysis_failed = await self._run_analysis(execution)
             await self._finish_job(execution, analysis_failed=analysis_failed)
         except Exception as exc:
+            if job.status in TERMINAL_STATUSES:
+                # The shutdown's bookkeeping finished the job while this
+                # coordinator was inside a write, after the coordinator had
+                # settled it (``JobRegistry.cancel_running``). That record is
+                # the job's; a write that then failed is not the job's error.
+                logger.exception(
+                    "Experiment job %s: its coordinator failed after shutdown finished it",
+                    job.job_id,
+                )
+                return
             logger.exception("Experiment job %s failed", job.job_id)
             job.error = str(exc)
             self._reconcile_unfinished_cases(execution)
@@ -1124,20 +1131,22 @@ class ExperimentRunner(RunnerBase):
         """Move the job to the terminal status its runs and its stop leave it in.
 
         A job whose process is stopping ends as any stopped owner leaves one
-        (``job_lifecycle.stop_for_owner``); a cancel ends it ``cancelled``; the
+        (``LiveJob.stop_for_owner``); a cancel ends it ``cancelled``; the
         deadline and a fallen-short run or analysis end it
         ``completed_with_failures``.
 
         A job already terminal is left as it is: shutdown's own bookkeeping
         (``JobRegistry.cancel_running``) finishes a job whose stop outlasted
-        its bound, and this coordinator may get here after it has.
+        its bound, and this coordinator may get here after it has. It may also
+        finish one while this coordinator is inside the write below, having
+        settled it already; settling it again there changes nothing.
         """
         job = execution.job
         if job.status in TERMINAL_STATUSES:
             return
         reason = execution.stop_reason
         if reason == OWNER_STOPPED:
-            status = stop_for_owner(job, runs_were_finished=execution.runs_finished_at_stop)
+            status = execution.live.stop_for_owner()
         elif reason == "cancelled":
             self._finish_unstarted_analysis(
                 job,
@@ -1983,7 +1992,9 @@ class ExperimentRunner(RunnerBase):
         if execution.stop_reason is None:
             execution.stop_reason = reason
             if reason == OWNER_STOPPED:
-                execution.runs_finished_at_stop = finished(execution.job, "runs")
+                # Before any run is stopped below: the one moment both this
+                # coordinator and the shutdown's bookkeeping read the runs at.
+                execution.live.runs_done_at_owner_stop()
         # A case mid-launch either stamped itself submitted before this point --
         # and is stopped through the kill path, which can actually reach its
         # simulator -- or sees the flag and never launches. Reading the statuses

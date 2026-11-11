@@ -823,7 +823,12 @@ action would refuse with (`sheet_changed` when the sheet was edited during
 the run), `sheet_locked` when another server process held the sheet, or
 `copy_failed`; the last two name the action that copies the results once that
 is fixed. Neither observation costs the job its status. A cancelled job
-copies nothing, and a case that produced nothing leaves its sheet alone.
+copies nothing, and a case that produced nothing leaves its sheet alone. Nor
+does a job whose process stops before the copy, even once every run has
+finished: the copy waits on each sheet's lock and copies whole raws, which can
+outlast the bound a stopping process gives its jobs. Each sheet whose case
+produced then has a `results_not_placed` with `reason_code`
+`server_restarted`, naming the action that copies its results.
 The request is refused before it runs (`commit_state: "not_started"`) when a
 circuit is a netlist (`not_a_sheet`), when the job does not run on LTspice
 (`not_ltspice`), and when a sheet would run more than one case, by a

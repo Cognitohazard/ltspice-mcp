@@ -191,8 +191,16 @@ def stop_for_owner(job: ExperimentJob, *, runs_were_finished: bool) -> str:
     ``interrupted``. With none, the runs earned a completed status and the
     stop took only the analysis: ``completed_with_failures`` when a run fell
     short or the analysis did not complete, else ``completed``.
+
+    Settling a job already settled changes nothing on it, and with the same
+    ``runs_were_finished`` gives the same status: a shutdown can reach a job
+    both through its coordinator and through its own bookkeeping
+    (``JobRegistry.cancel_running``), and the job is stopped once. A job this
+    session runs is settled through ``LiveJob.stop_for_owner``, which gives
+    both the same ``runs_were_finished``.
     """
-    job.observations.append(owner_stopped_observation())
+    if owner_stopped_observation() not in job.observations:
+        job.observations.append(owner_stopped_observation())
     stop_analysis_for_owner(job)
     stopped = [case for case in job.cases if case.status not in TERMINAL_CASE_STATUSES]
     stopped_at = now()
@@ -317,6 +325,9 @@ class LiveJob:
     task: asyncio.Task[None] | None = None
     _runs_done: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     _done: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
+    #: Whether every run was done when the stop of this process reached them,
+    #: once something has asked (``runs_done_at_owner_stop``).
+    _runs_done_at_owner_stop: bool | None = field(default=None, repr=False)
 
     @property
     def done(self) -> bool:
@@ -336,6 +347,32 @@ class LiveJob:
     def mark_runs_done(self) -> None:
         """Record that every case is terminal and completeness is reconciled."""
         self._runs_done.set()
+
+    def runs_done_at_owner_stop(self) -> bool:
+        """Whether every run was done when the stop of this process reached them.
+
+        Read from the record the first time it is asked and kept, so the job
+        has one answer however the stop reaches it: the coordinator asks as
+        the stop reaches it (``ExperimentRunner.cancel``), before it stops a
+        run, and the shutdown's bookkeeping, which settles a job whose
+        coordinator did not finish within the bound, then takes the same
+        answer; if the stop never reached a coordinator, the bookkeeping asks
+        as it stops the runs itself. A case that finishes in between is never
+        read one way by one and the other way by the other.
+        """
+        if self._runs_done_at_owner_stop is None:
+            self._runs_done_at_owner_stop = finished(self.job, "runs")
+        return self._runs_done_at_owner_stop
+
+    def stop_for_owner(self) -> str:
+        """Settle the job because this process is stopping; return its status.
+
+        ``stop_for_owner`` with the runs as the stop found them
+        (``runs_done_at_owner_stop``). The coordinator and the shutdown's
+        bookkeeping both settle through here, so the second to arrive changes
+        nothing and gets the status the first got.
+        """
+        return stop_for_owner(self.job, runs_were_finished=self.runs_done_at_owner_stop())
 
     def transition(
         self, new_status: str, *, state: SessionState | None = None, **event_extra: Any
