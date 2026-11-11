@@ -318,32 +318,44 @@ class NamedNets:
         """The net a label of ``name`` is on, in any case; None if no label carries it."""
         return self._net_named.get(self.nets.name_key(name))
 
-    def own_names(self, point: Point, *, landing: bool = True) -> frozenset[str]:
+    def own_names(
+        self, point: Point, *, landing: bool = True, drawn: bool = False
+    ) -> frozenset[str]:
         """The names something put on ``point`` would carry from what it
         touches (``Nets.touched_at``, or with ``landing`` false only the runs
         of wire through it): each net's own labels, ground left out.
+
+        With ``drawn``, only what is drawn on the point counts (``Nets.nets_at``):
+        a run LTspice drops that the point lies inside joins nothing. That is
+        what the end of a wire laid along the run joins, since the wire merges
+        into the run, which stays dropped (the ``same_instance_overlap``
+        recordings), where a label, a pin or a wire leaving the run's line
+        keeps it.
 
         A net is known across a join by those names. One whose only label is a
         ground flag carries none, so joining it to a named net grounds that
         net, which a net may be whatever else is grounded; it joins no name.
         """
-        touched = (
-            self.nets.touched_at(point)
-            if landing
-            else [net for _run, nets in self.nets.runs_through(point) for net in nets]
-        )
+        if drawn:
+            touched: Iterable[int] = self.nets.nets_at(point)
+        elif landing:
+            touched = self.nets.touched_at(point)
+        else:
+            touched = [net for _run, nets in self.nets.runs_through(point) for net in nets]
         return frozenset(name for net in touched for name in self._own.get(net, ()))
 
     def own_names_of(self, pin: PinAt) -> frozenset[str]:
         """The names ``pin``'s net carries on its own wiring (:meth:`own_names`)."""
         return frozenset(self._own.get(self.nets.of_pin(pin), ()))
 
-    def named_at(self, point: Point, *, landing: bool = True) -> frozenset[int]:
+    def named_at(
+        self, point: Point, *, landing: bool = True, drawn: bool = False
+    ) -> frozenset[int]:
         """The named nets something put on ``point`` would join: the net each
         of its :meth:`own_names` is on."""
         return frozenset(
             self._net_named[self.nets.name_key(name)]
-            for name in self.own_names(point, landing=landing)
+            for name in self.own_names(point, landing=landing, drawn=drawn)
         )
 
     def pins_on(self, net: int) -> list[PinAt]:
@@ -409,47 +421,49 @@ def _merge_collinear_runs(
     """Collapse straight runs of collinear wire segments into single segments,
     mirroring LTspice's netlist-time wire merge.
 
-    A vertex breaks a run — stays its own node — when it is a pin or a label
-    coordinate (``node_coords``), a corner/junction (its incident segment ends
-    are not exactly two ends of one orientation), or a point another wire
-    passes through: the two ends there are each on that wire, and join it, as
-    a single end on a wire's interior does (recorded:
-    ``wire_ends_meeting_on_wire_interior``). Only pure pass-through vertices
-    (degree-2, both ends collinear, nothing on them) are merged across. This is
-    what makes a *collinear* waypoint disappear: an in-line bend leaves only
-    bare pass-through vertices, so the run collapses back to one segment; a
-    bend that turns a corner leaves the corner vertices as breaks, so its
-    segments stay split. Verticals (``x1==x2``) and horizontals (``y1==y2``) are merged
-    per-line by interval union split at breaks; any diagonal passes through
-    unchanged.
+    Wires on one line that touch or overlap are one run. A wire end breaks the
+    runs through it — stays its own node — when it is a pin or a label
+    coordinate (``node_coords``), or when a wire off the run's line touches
+    it: a corner, a T-junction, or two ends meeting on another wire's interior,
+    where each end joins that wire as a single end on a wire's interior does
+    (recorded: ``wire_ends_meeting_on_wire_interior``). The ends of wires on
+    the run's own line break nothing, whether two meet end to end or one lies
+    inside another that overlaps it (recorded: the ``same_instance_overlap``
+    sheets, whose overlapped pin-to-pin run is dropped). This is what makes a
+    *collinear* waypoint disappear: an in-line bend leaves only bare vertices
+    on the line, so the run collapses back to one segment; a bend that turns a
+    corner leaves the corner vertices as breaks, so its segments stay split.
+    Verticals (``x1==x2``) and horizontals (``y1==y2``) are merged per-line by
+    interval union split at breaks; any diagonal passes through unchanged.
     """
-    ends: dict[tuple[int, int], list[str]] = defaultdict(list)
+    ends: set[tuple[int, int]] = set()
     verticals: dict[int, list[tuple[int, int]]] = defaultdict(list)
     horizontals: dict[int, list[tuple[int, int]]] = defaultdict(list)
     merged: list[tuple[int, int, int, int]] = []
     wires: list[Segment] = []
+    vertical_wires: list[Segment] = []
+    horizontal_wires: list[Segment] = []
     for x1, y1, x2, y2 in segments:
         if (x1, y1) == (x2, y2):
             continue  # zero-length record (hand-corrupted WIRE) — nothing to merge
         wires.append(((x1, y1), (x2, y2)))
         if x1 == x2:
             verticals[x1].append((min(y1, y2), max(y1, y2)))
-            ends[(x1, y1)].append("V")
-            ends[(x2, y2)].append("V")
+            vertical_wires.append(((x1, y1), (x2, y2)))
+            ends.update(((x1, y1), (x2, y2)))
         elif y1 == y2:
             horizontals[y1].append((min(x1, x2), max(x1, x2)))
-            ends[(x1, y1)].append("H")
-            ends[(x2, y2)].append("H")
+            horizontal_wires.append(((x1, y1), (x2, y2)))
+            ends.update(((x1, y1), (x2, y2)))
         else:
             merged.append((x1, y1, x2, y2))  # diagonal — passed through as-is
 
+    # Every wire through a point that is not on the run's line is one leaving
+    # it, so the point breaks the vertical run through it when it lies on more
+    # wires than vertical ones, and the horizontal run likewise.
     through = build_wire_counter(wires)
-
-    def _breaks(coord: tuple[int, int]) -> bool:
-        es = ends.get(coord, [])
-        return (
-            coord in node_coords or len(es) != 2 or len(set(es)) != 1 or through(coord) > len(es)
-        )
+    through_vertical = build_wire_counter(vertical_wires)
+    through_horizontal = build_wire_counter(horizontal_wires)
 
     def _emit(intervals: list[tuple[int, int]], cuts: set[int], vertical: bool, line: int) -> None:
         intervals.sort()
@@ -466,51 +480,27 @@ def _merge_collinear_runs(
 
     # A component pin, a label or a ground flag on the interior of a run is a
     # junction too — LTspice splits the wire there — but it is not a wire
-    # endpoint, so it never appears in ``ends`` and a break test over ``ends``
-    # alone would miss it. Add every such point sitting on the line as a cut
-    # candidate; ``_emit`` keeps only those strictly inside a run's span, so one
-    # at a run end (already a natural node) or off any run adds nothing.
+    # endpoint, so it never appears in ``ends``. Add every such point as a cut
+    # on both its lines; ``_emit`` keeps only those strictly inside a run's
+    # span, so one at a run end (already a natural node) or off any run adds
+    # nothing. Two wires that merely cross are no candidate: no end is there.
     cuts_on_x: dict[int, set[int]] = defaultdict(set)
     cuts_on_y: dict[int, set[int]] = defaultdict(set)
-    for cx, cy in itertools.chain((end for end in ends if _breaks(end)), node_coords):
+    for cx, cy in node_coords:
         cuts_on_x[cx].add(cy)
         cuts_on_y[cy].add(cx)
+    for end in ends:
+        cx, cy = end
+        wired = through(end)
+        if wired > through_vertical(end):
+            cuts_on_x[cx].add(cy)
+        if wired > through_horizontal(end):
+            cuts_on_y[cy].add(cx)
     for x, iv in verticals.items():
         _emit(iv, cuts_on_x.get(x, set()), vertical=True, line=x)
     for y, iv in horizontals.items():
         _emit(iv, cuts_on_y.get(y, set()), vertical=False, line=y)
     return merged
-
-
-def same_instance_dropped_segments(
-    pin_owners: dict[tuple[int, int], list[tuple[str, str]]],
-    segments: list[tuple[int, int, int, int]],
-    labels: Iterable[Point],
-) -> list[dict]:
-    """Wire segments LTspice discards from the exported netlist.
-
-    LTspice drops a wire run whose two ends both land exactly on pins of the
-    SAME single component instance (recorded from the ``-netlist`` export of
-    LTspice 26 and of LTspice XVII: such a run never reaches the netlist, so the
-    two pins stay on separate nodes and the drawn tie has no electrical
-    effect). Several runs still get kept, all in the same recordings: a run
-    spanning two *different* instances, a same-instance tie that turns a corner
-    OUT OF LINE with the two pins, and one with something on it between the
-    pins (another part's pin, another wire's end, a label or a ground flag, on
-    its interior or at a vertex). A waypoint that stays *collinear* with the
-    pins and has nothing on it does NOT survive — LTspice merges the in-line
-    segments back into one and drops it — so the segments are collinear-merged
-    (:func:`_merge_collinear_runs`) before this check, which is what catches an
-    all-in-line waypoint route as well as the bare direct wire. A net label on
-    one pin does not rescue the run.
-
-    Returns one dict per dropped run with ``segment`` (the merged ``(x1, y1, x2,
-    y2)`` tuple), ``ref`` (the shared instance), and ``pins`` (the two pin
-    names on that instance), ordered deterministically. ``pin_owners`` maps each
-    pin coordinate to its ``(ref, pin_name)`` owners, and ``labels`` are the
-    points of the sheet's labels, ground flags among them.
-    """
-    return _runs_and_drops(segments, pin_owners, labels)[1]
 
 
 def _runs_and_drops(
@@ -519,7 +509,31 @@ def _runs_and_drops(
     labels: Iterable[Point],
 ) -> tuple[list[tuple[int, int, int, int]], list[dict]]:
     """The collinear-merged runs of ``segments``, cut at every pin and label,
-    and the runs among them LTspice drops (:func:`same_instance_dropped_segments`)."""
+    and the runs among them LTspice discards from the exported netlist.
+
+    LTspice drops a wire run whose two ends both land exactly on pins of the
+    SAME single component instance (recorded from the ``-netlist`` export of
+    LTspice 26 and of LTspice XVII: such a run never reaches the netlist, so the
+    two pins stay on separate nodes and the drawn tie has no electrical
+    effect). Several runs still get kept, all in the same recordings: a run
+    spanning two *different* instances, a same-instance tie that turns a corner
+    OUT OF LINE with the two pins, and one with something on it between the
+    pins (another part's pin, the end of a wire that leaves the line, a label
+    or a ground flag, on its interior or at a vertex). A waypoint that stays
+    *collinear* with the pins and has nothing on it does NOT survive — LTspice
+    merges the in-line segments back into one and drops it — and neither does
+    a run that a second wire on the same line overlaps, from a pin or between
+    them. So the segments are collinear-merged (:func:`_merge_collinear_runs`)
+    before this check, which is what catches an all-in-line waypoint route and
+    an overlapped run as well as the bare direct wire. A net label on one pin
+    does not rescue the run.
+
+    Each dropped run is a dict with ``segment`` (the merged ``(x1, y1, x2,
+    y2)`` tuple), ``ref`` (the shared instance), and ``pins`` (the two pin
+    names on that instance), ordered deterministically. ``pin_owners`` maps each
+    pin coordinate to its ``(ref, pin_name)`` owners, and ``labels`` are the
+    points of the sheet's labels, ground flags among them.
+    """
     runs = _merge_collinear_runs(list(segments), set(pin_owners) | set(labels))
     return runs, _dropped_among(runs, pin_owners)
 
@@ -528,7 +542,7 @@ def _dropped_among(
     runs: list[tuple[int, int, int, int]],
     pin_owners: Mapping[Point, Sequence[tuple[Hashable, str]]],
 ) -> list[dict]:
-    """:func:`same_instance_dropped_segments` for runs that are already merged."""
+    """The runs of :func:`_runs_and_drops` LTspice drops, for runs already merged."""
     dropped: list[dict] = []
     for seg in runs:
         sx1, sy1, sx2, sy2 = seg

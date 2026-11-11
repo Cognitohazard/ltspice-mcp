@@ -1844,6 +1844,87 @@
         ".net"
       ]
     },
+    "connectivity/same_instance_overlap_from_first_pin": {
+      "behaviour": "same-instance-wire",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/same_instance_overlap_from_first_pin.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/same_instance_overlap_from_first_pin.asc": "cd2468a8c1ac49b134e074d3eba0bf6ebf81fc15ef7668dbca15f7d46f6ae3da"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/same_instance_overlap_from_first_pin.net": {
+          "bytes": 124,
+          "sha256": "65f329837c7b2f25d67f1c0846b72ea341a2be6f46f076f1b87f2898cdb6cc8c"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "connectivity/same_instance_overlap_from_second_pin": {
+      "behaviour": "same-instance-wire",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/same_instance_overlap_from_second_pin.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/same_instance_overlap_from_second_pin.asc": "b08c51e0125c6bd4ca75b85bdd70ae3f16ac8e7b75367001654591c300880e35"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/same_instance_overlap_from_second_pin.net": {
+          "bytes": 125,
+          "sha256": "76c0f738142dcfce439cc69fee25de596da13f2f31ab150c082016f58eacf27b"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "connectivity/same_instance_overlap_within": {
+      "behaviour": "same-instance-wire",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/same_instance_overlap_within.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/same_instance_overlap_within.asc": "3230c3072cbe73353b94c722b464d32a0f44cf9f7d8ed567baa495fe19033c8a"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/same_instance_overlap_within.net": {
+          "bytes": 116,
+          "sha256": "979b231b2aa20cbbf9ca579521d48fcac87c691a0fb78a6cc116c1e87a439afb"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "connectivity/same_instance_pin_inside": {
       "behaviour": "same-instance-wire",
       "command": [
