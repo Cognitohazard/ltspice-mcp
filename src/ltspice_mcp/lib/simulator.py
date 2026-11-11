@@ -24,6 +24,7 @@ from ltspice_mcp.config import (
 )
 from ltspice_mcp.lib import capabilities, hidden_desktop
 from ltspice_mcp.lib.families import FAMILIES
+from ltspice_mcp.lib.ngspice_compat import mode_as_given
 from ltspice_mcp.lib.symbol_library import SymbolLibrary
 from ltspice_mcp.lib.wsl import is_wsl
 
@@ -366,7 +367,7 @@ def _apply_ngbehavior(config: ServerConfig | None) -> None:
     When unset it RESETS to spicelib's captured default rather than no-opping —
     otherwise a prior override would leak into a later re-entrant config load.
     """
-    override = config.ngbehavior.strip().lower() if config and config.ngbehavior else ""
+    override = mode_as_given(config.ngbehavior) if config and config.ngbehavior else ""
     mode = override or _SPICELIB_DEFAULT_NGBEHAVIOR
     # spicelib's public setter for the ``-D ngbehavior=`` it injects on every run.
     NGspiceSimulator.set_compatibility_mode(mode)
@@ -377,11 +378,56 @@ def _apply_ngbehavior(config: ServerConfig | None) -> None:
 def current_ngbehavior() -> str | None:
     """Return the ngbehavior string ngspice runs with (spicelib class attribute).
 
+    It is the mode ngspice reads a deck in because every run passes it as
+    ``-D ngbehavior=`` together with ``NGSPICE_NO_USER_INIT``, so no user
+    startup file can replace it. A ``set ngbehavior`` in the installation's
+    own ``spinit`` still would: an ordinary run reads that file, for its code
+    models, and the server does not model what it sets. So each run's log is
+    checked against the mode (``ngspice_mode.check_run``). A recoverable run
+    replaces it with an empty one.
+
     ``getattr`` (not attribute access) is deliberate: it reads the protected
     ``_compatibility_mode`` without tripping pyright's reportPrivateUsage, and
     spicelib exposes no public getter.
+
+    This is the session's configured mode. The mode a run passes is
+    ``run_ngbehavior``'s.
     """
     return getattr(NGspiceSimulator, "_compatibility_mode", None)
+
+
+def run_ngbehavior(simulator: type | None = None, mode: str | None = None) -> str:
+    """The compatibility mode a run passes ngspice, which the server reads its
+    deck in.
+
+    ``mode`` when the run sets its own: a native setup's policy, a query's
+    ``ngbehavior``, or a caller that already holds the run's mode. Otherwise
+    the mode the run's ngspice class passes as ``-D ngbehavior=``: the
+    session's ``[simulator] ngbehavior`` (``current_ngbehavior``), or for a
+    recoverable run's controlled class the mode its record holds. Admission
+    (the lint, the hierarchy profile, the recovery record), the launch, the
+    failure classifier and the per-run mode check all take the mode from here,
+    so none can read a deck in a mode the run does not pass.
+    """
+    if mode is not None:
+        return mode
+    owner = simulator if simulator is not None else NGspiceSimulator
+    return getattr(owner, "_compatibility_mode", None) or ""
+
+
+NGSPICE_NO_USER_INIT = "-n"
+"""The switch every ngspice run starts with, so that ngspice reads the deck
+in the mode the server passes it and models (``current_ngbehavior``).
+
+ngspice applies the ``-D ngbehavior=<mode>`` it is given before it runs its
+startup files, so a ``set ngbehavior`` in a user's ``.spiceinit`` (or
+``spice.rc``) replaces the mode. ngspice looks for that file in the folder
+``SPICE_USERINIT_DIR`` names, then in its working directory, then in
+``HOME``, then in ``USERPROFILE``, trying the next place when one has none.
+Pointing ``SPICE_USERINIT_DIR`` at an empty folder therefore still reads the
+others. ``-n`` stops ngspice reading any of them (measured with ngspice-42).
+It leaves the installation's ``spinit``, which loads ngspice's code models.
+"""
 
 
 def generation_of(simulator_class: type | None) -> str | None:

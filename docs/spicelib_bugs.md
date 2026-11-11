@@ -4397,3 +4397,233 @@ def test_a_short_window_line_is_read_past(tmp_path):
 opens each recorded sheet with the editor and asserts the refusal names the
 line. Once upstream reads past the line, `_ShortWindowLine` and its
 catches go and the test asserts the sheet opens.
+
+## Bug 42 — `NGspiceSimulator.set_compatibility_mode` is replaced by a `set ngbehavior` in a startup file (limitation)
+
+**Status:** known limitation; draft for an upstream documentation and API
+change. Measured 2026-11-06 with ngspice-42 on Linux.
+**Affected version:** spicelib 1.5.1
+(`spicelib/simulators/ngspice_simulator.py`, `NGspiceSimulator.run` and
+`NGspiceSimulator.set_compatibility_mode`).
+**Our workaround:** every ngspice run the server starts carries `-n`
+(`simulator.NGSPICE_NO_USER_INIT`, passed by `runner_base.submit_netlist`
+through `_launch_switches`; the recoverable adapter in
+`controlled_ngspice.py` and the `pdk_native` launch policy use the same
+constant), so ngspice reads no user startup file.
+
+### Summary
+
+`set_compatibility_mode(mode)` makes `run` pass `-D ngbehavior=<mode>`, and
+its docstring presents that as setting ngspice's compatibility mode. ngspice
+applies a `-D` define before it runs its startup files, so a
+`set ngbehavior=<other>` in either of them replaces the mode spicelib passed,
+and nothing in spicelib's result says so:
+
+- the user's `.spiceinit` (or `spice.rc`), which ngspice looks for in the
+  folder `SPICE_USERINIT_DIR` names, then in its working directory, then in
+  `HOME`, then in `USERPROFILE`, trying the next place when one has none;
+- the installation's `spinit`, found through `SPICE_SCRIPTS` or the
+  installation's own `scripts` folder.
+
+Pointing `SPICE_USERINIT_DIR` at an empty folder does not stop the user's
+file from being read, because ngspice then falls back to the working
+directory, `HOME` and `USERPROFILE`. `-n` stops the user's file wherever it is.
+Nothing stops the `spinit` short of replacing it, and replacing it drops the
+code models it loads.
+
+### Affected code
+
+```python
+# ngspice_simulator.py, NGspiceSimulator.run
+extra_switches = []
+if cls._compatibility_mode:
+    extra_switches = ['-D', f"ngbehavior={cls._compatibility_mode}"]
+cmd_run = cls.spice_exe + cmd_line_switches + extra_switches + ['-b'] + ...
+```
+
+### Reproduction
+
+```text
+$ cat deck.cir
+* m multiplier
+V1 a 0 1
+X1 a r1 m=4
+.subckt r1 p
+R1 p 0 1k m=3
+.ends
+.op
+.end
+$ printf 'set ngbehavior=hsa\n' > .spiceinit
+$ ngspice -D ngbehavior=kiltpsa -b -o deck.log deck.cir
+$ grep -E 'Compatibility|v1#branch' deck.log
+Note: Compatibility modes selected: hs a
+	v1#branch                        -1.20000e-02
+$ ngspice -n -D ngbehavior=kiltpsa -b -o deck.log deck.cir
+$ grep -E 'Compatibility|v1#branch' deck.log
+Note: Compatibility modes selected: ps lt ki a
+	v1#branch                        -4.00000e-03
+```
+
+The same `hs a` comes back with the `.spiceinit` moved to `HOME`, to
+`USERPROFILE` with an empty `HOME`, to a folder `SPICE_USERINIT_DIR` names, with
+`SPICE_USERINIT_DIR` pointing at an empty folder while the working directory
+holds the file, with the file named `spice.rc`, and with `-n` and a
+`spinit` (selected through `SPICE_SCRIPTS`) that ends in
+`set ngbehavior=hsa`. Through spicelib,
+`NGspiceSimulator.set_compatibility_mode("kiltpsa")` followed by
+`NGspiceSimulator.run(folder / "deck.cir", cwd=folder)`, with that
+`.spiceinit` in `folder`, also logs `hs a`.
+
+### Impact
+
+A caller that sets the mode through spicelib and reads the deck in that mode
+itself (to count the copies an `m` builds, to decide whether a sectioned
+`.lib` loads, to classify a failure) gets answers for another mode than the
+one ngspice ran. In the reproduction the two disagree by a factor of three in
+the current, with no error. This project's own recovery hint for a dropped
+`.lib` section used to suggest a `.spiceinit` that sets `hsa`, which is what
+makes the two disagree.
+
+### Proposed fix
+
+State in `set_compatibility_mode`'s docstring that a `set ngbehavior` in
+ngspice's `.spiceinit` or `spinit` overrides the mode it sets, and that `-n`
+(`--no-spiceinit`) keeps the user's file out. Optionally add a keyword to
+`set_compatibility_mode`, for example `exclusive=True`, that makes `run` add
+`-n` too, so a caller can ask for the mode it set to be the mode ngspice
+runs in. The default must stay as it is, because some users rely on a
+`.spiceinit` for other settings. A caller that adds `-n` can move those
+into the deck: `pre_osdi` and `pre_codemodel` in a `.control` block run
+before ngspice reads the circuit.
+
+### Suggested upstream test
+
+With ngspice on PATH, write the deck above and a `.spiceinit` holding
+`set ngbehavior=hsa` into a temporary working directory. Set the mode to
+`kiltpsa`, run once without and once with the new option (or with `-n` in
+`cmd_line_switches`), and assert that the log names `ps lt ki a` only in the
+second run.
+
+### Cross-reference
+
+`tests/test_ngspice_startup_mode.py::test_ngspice_reads_the_deck_in_the_mode_the_server_models`
+puts a `.spiceinit` that sets `hsa` in `SPICE_USERINIT_DIR`, the working
+directory and the home directory (`HOME` and `USERPROFILE`), configures the
+server for `kiltpsa`, and runs the deck above through an ordinary and a
+recoverable job. It checks the mode hierarchy discovery reports, the mode
+ngspice's log names and the measured current.
+`::test_a_sectioned_lib_fails_where_the_server_says_it_will` does the same
+for the `lib-section-ngspice` lint rule and the `ngspice_lib_section`
+failure classifier. The workaround stays even with the option upstream,
+unless the option is how we pass `-n`.
+
+The `spinit` route cannot be closed on an ordinary run, which reads the
+installation's `spinit` for its code models. It is detected instead:
+`src/ltspice_mcp/lib/ngspice_mode.py::check_run` compares the mode each
+run's log names with the flags the same ngspice gives the passed mode, asked
+with no startup file, and a run that differs fails with
+`ngspice_mode_mismatch`. In `tests/test_ngspice_startup_mode.py`,
+`::test_a_run_ngspice_read_in_another_mode_fails` and
+`::test_a_sectioned_lib_read_in_another_mode_fails_on_the_mode` point
+`SPICE_SCRIPTS` at a `spinit` that sets `hsa`;
+`::test_a_recoverable_run_does_not_read_the_spinit_that_sets_another_mode`
+pins that a recoverable run is not affected.
+
+## Bug 43 — `PlotData._read_ascii_vector` refuses a real vector in a complex ASCII plot (bug)
+
+**Status:** open; draft for an upstream issue. Measured 2026-11-11 with
+ngspice-42 on Linux and the official ngspice-47 Windows build.
+**Affected version:** spicelib 1.5.1
+(`spicelib/raw/plot_data.py`, `PlotData._read_ascii_vector`).
+**Our workaround:** none yet. The server's own preflight read
+(`raw_header.py`, `text_payload`) refuses the same file first, with the
+same rule.
+
+### Summary
+
+In an AC (complex) plot, ngspice's batch-mode ASCII raw writer writes a
+vector that holds real values, such as a device parameter saved with
+`.save @m1[vth]`, as one number per point, with no imaginary part. The
+header gives no sign of it: `Flags: complex`, and the variable's line names
+only its type. `_read_ascii_vector` requires `re,im` for every trace of a
+complex plot and raises, so the whole file cannot be read. ngspice writes
+ASCII raw files when `filetype=ascii` is set, which the official Windows
+build's `spinit` does, or when `SPICE_ASCIIRAWFILE` is set, so on Windows
+every AC run that saves a device parameter is unreadable.
+
+### Affected code
+
+```python
+# plot_data.py, PlotData._read_ascii_vector
+var = self._trace_info[var_index]
+if var.dtype == 'complex':
+    v = value.split(',')
+    if len(v) != 2:
+        raise SpiceReadException(
+            f"Invalid RAW file. ... {value} is not a complex value")
+```
+
+### Reproduction
+
+```text
+$ cat ac.cir
+* common-source stage
+Vd vdd 0 1.8
+Vg g 0 0.9 AC 1
+Rd vdd out 10k
+M1 out g 0 0 NM L=1u W=10u AD=10p AS=10p PD=22u PS=22u
+.model NM NMOS (LEVEL=49 VERSION=3.3)
+.save @m1[vth] i(vd)
+.ac dec 10 1k 1G
+.end
+$ SPICE_ASCIIRAWFILE=1 ngspice -n -b -r ac.raw ac.cir
+$ sed -n 8,14p ac.raw
+	0	frequency	frequency	grid=3
+	1	i(vd)	current
+	2	v(@m1[vth])	voltage
+Values:
+0		1.000000000000000e+03,4.657388940848079e-310
+	-6.846492106890288e-15,1.760408054298856e-11
+	1.815172031040211e+00
+```
+
+`RawRead("ac.raw", dialect="ngspice")` raises `SpiceReadException: Invalid
+RAW file. Plot nr. 1: Invalid data for trace v(@m1[vth]):
+1.815172031040211e+00 is not a complex value`. The same deck written with
+ngspice's binary format reads.
+
+### Impact
+
+Every AC run whose ASCII raw file holds a real vector cannot be read, on any
+platform where ngspice writes ASCII: on Windows with the official build, by
+default.
+
+### Proposed fix
+
+In a complex plot, read a value with no comma as a real number with a zero
+imaginary part:
+
+```python
+if var.dtype == 'complex':
+    v = value.split(',')
+    if len(v) == 1:
+        self._read_traces[var.name].data[point] = complex(float(v[0]), 0.0)
+    elif len(v) == 2:
+        self._read_traces[var.name].data[point] = complex(float(v[0]), float(v[1]))
+    else:
+        raise SpiceReadException(...)
+```
+
+### Suggested upstream test
+
+Read an ASCII raw file whose complex plot has a line with one number for a
+trace, and assert that the trace holds that number with a zero imaginary
+part at that point.
+
+### Cross-reference
+
+`tests/test_ngspice_e2e.py::test_an_ac_summary_defaults_to_no_device_parameter`
+runs the deck above with ngspice's ASCII format (`SPICE_ASCIIRAWFILE=1`)
+and as the installed ngspice writes it. It is marked as an expected failure
+(`xfail`, strict) where the file is ASCII, so it fails again once a
+workaround makes it pass.

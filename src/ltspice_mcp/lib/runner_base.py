@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from spicelib.sim.sim_runner import SimRunner
+from spicelib.sim.sim_runner import SimRunner  # noqa: TID251 - this module owns every launch
 
 from ltspice_mcp.lib import RUN_DECK_SUFFIXES
 from ltspice_mcp.lib.cache import FileCache
@@ -38,10 +38,13 @@ from ltspice_mcp.lib.log_parser import (
     is_op_stepping_failure,
     op_ladder_exhausted,
 )
+from ltspice_mcp.lib.ngspice_compat import reads_lib_as_includes
+from ltspice_mcp.lib.ngspice_driver import control_path
+from ltspice_mcp.lib.ngspice_mode import ModeCheck, check_run
 from ltspice_mcp.lib.pdk_native import LAUNCH_POLICY, NativeLaunchPolicy
 from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
 from ltspice_mcp.lib.raw_parser import other_raws
-from ltspice_mcp.lib.simulator import current_ngbehavior, is_ngspice
+from ltspice_mcp.lib.simulator import NGSPICE_NO_USER_INIT, is_ngspice, run_ngbehavior
 from ltspice_mcp.lib.simulator_build import executable_path, ltspice_before_24, reported_build
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
@@ -91,6 +94,20 @@ class NativeLaunchContext:
     cwd: Path
     verify_execution: Callable[[], None] | None = None
     policy: NativeLaunchPolicy = LAUNCH_POLICY
+
+
+def _launch_switches(simulator: type, native: NativeLaunchContext | None) -> list[str] | None:
+    """The command-line switches a run starts with.
+
+    A native setup's come from its recorded policy, which holds
+    ``NGSPICE_NO_USER_INIT``. Every other ngspice run gets that switch here,
+    so no user startup file replaces the ``-D ngbehavior=`` the server models
+    the deck in. The recoverable adapter accepts only this switch and puts
+    it on its own command line.
+    """
+    if native is not None:
+        return list(native.policy.switches)
+    return [NGSPICE_NO_USER_INIT] if is_ngspice(simulator) else None
 
 
 class RunOutcome(NamedTuple):
@@ -305,19 +322,61 @@ def _is_ngspice_lib_section_failure(
 
     ngspice's LTspice/PSPICE compatibility modes read ``.lib <file> <section>``
     as two plain includes and drop the section, so the corner select comes back
-    as a missing include file. Fires only when the run used ngspice, the mode
-    still contains ``lt`` or ``ps`` (a mode with neither parses the section
-    correctly), and the deck really does select a section. The deck read is
+    as a missing include file. Fires only when the run used ngspice, ngspice
+    reads the mode with ``lt`` or ``ps`` set (``reads_lib_as_includes``; an
+    ``s3`` mode drops the section without a missing include, so it is not
+    asked here), and the deck really does select a section. The deck read is
     last, so the two cheap checks gate it.
     """
     if netlist is None or not is_ngspice(simulator):
         return None
-    mode = (ngbehavior if ngbehavior is not None else current_ngbehavior() or "").lower()
-    if "lt" not in mode and "ps" not in mode:
+    mode = run_ngbehavior(simulator, ngbehavior)
+    if not reads_lib_as_includes(mode):
         return None
     if not _deck_has_sectioned_lib(netlist):
         return None
     return mode
+
+
+def _with_mode_check(outcome: RunOutcome, check: ModeCheck) -> RunOutcome:
+    """Fail a run ngspice read in another compatibility mode than the server
+    passed it, and say so on a run with results whose mode went unchecked.
+
+    The server read the deck in the mode it passed (lint, hierarchy,
+    variations, failure classification), so results read in another mode
+    answer for a different circuit. A failed run is checked too, since its
+    failure is classified in the passed mode; only one that left no log says
+    nothing, as its failure already says the log is missing.
+    """
+    if check.status == "agrees":
+        return outcome
+    if check.status == "unchecked":
+        if outcome.error is not None and check.reason == "no_log":
+            return outcome
+        observation = {
+            "code": "ngspice_mode_unverified",
+            "kind": "execution",
+            "detail": (
+                "The server could not check that ngspice read the deck in the compatibility "
+                f"mode it passed (ngbehavior={check.mode!r}): {check.explanation()}."
+            ),
+            "evidence": check.evidence(),
+        }
+        return outcome._replace(observations=(*outcome.observations, observation))
+    logged = " ".join(check.logged or ()) or "none"
+    expected = " ".join(check.expected or ()) or "none"
+    message = (
+        f"ngspice read the deck in compatibility modes '{logged}', not in '{expected}', "
+        f"those of ngbehavior={check.mode!r}, which the server passed and read the deck in. "
+        "Something ngspice ran before the deck set another mode; every run skips a user's "
+        ".spiceinit, so on an ordinary run that is most likely the installation's spinit."
+    )
+    code = "ngspice_mode_mismatch"
+    return outcome._replace(
+        error=message if outcome.error is None else f"{message}\n\n{outcome.error}",
+        failure_code=code,
+        failure_evidence={**(outcome.failure_evidence or {}), **check.evidence()},
+    )
 
 
 def _raw_completion_outcome(raw_file: str, log_file: str) -> RunOutcome | None:
@@ -604,9 +663,12 @@ def inject_ngspice_control_write(
     This is ngspice runtime behavior, not a spicelib bug: a ``.control``
     block replaces the raw ngspice would otherwise write from the ``-r
     <rawfile>`` switch spicelib always passes — the script runs instead, and
-    unless it calls ``write``/``wrdata`` itself, no raw file is ever
-    produced. ``collect_run_outcome`` already classifies that as a clean
-    log-only completion (not a failure), but nothing then exists for
+    unless it calls ``write``/``wrdata`` itself, ngspice may write no raw
+    file. ngspice-42 still writes the ``-r`` raw after a script that only
+    ``run``s the deck's analyses, but not after one that ends with ``quit``
+    or issues the analysis as a command (``tran``, ``op``).
+    ``collect_run_outcome`` already classifies that as a clean log-only
+    completion (not a failure), but nothing then exists for
     get_waveform/signal_stats/etc. to read. Injecting a canonical ``write
     <rawpath>`` gives the deck a raw at the exact path the runner expects for
     this job, so the existing raw>0 code path (raw_parser + every analysis
@@ -617,11 +679,10 @@ def inject_ngspice_control_write(
     inside a loop, needs its own explicit writes to capture each one — guard
     (c) below leaves any deck that already writes its own output alone
     rather than duplicating or fighting it. A second, unrelated limitation:
-    ngspice's ``write`` parser cannot handle a target containing whitespace
-    at all — neither quoting nor backslash-escaping works, both fail with
-    "No such file or directory" (verified empirically). So a run whose
-    output folder path contains a space can't get an auto-injected write
-    either (guard (d)) — that run just stays log-only, same as today.
+    the target is written by ``ngspice_driver.control_path``, which
+    single-quotes a name with a space (ngspice keeps double quotes as part
+    of the name) and refuses one the control language would change, such as
+    a name with braces (guard (d)); such a run stays log-only.
 
     The deck is read as the simulator reads it (``spice_lex.lex_for_edit``):
     its title and a line after its ``.END`` are neither a block nor a
@@ -634,7 +695,8 @@ def inject_ngspice_control_write(
         e.g. which block's last analysis is "the" result).
     (c) no existing ``write``/``wrdata`` anywhere in the deck — never
         override a user who already captures their own output.
-    (d) the write target has no whitespace (see the limitation above).
+    (d) the write target has a spelling that reaches ngspice intact
+        (``control_path``; see the limitation above).
     (e) the deck's bytes decode exactly, so it can be written back in its
         own encoding with only the ``write`` added, which ends with the
         deck's own line break.
@@ -645,7 +707,7 @@ def inject_ngspice_control_write(
     ``.with_suffix('.raw')``. It must be absolute: the runner's SimRunner
     passes no ``cwd``, so ngspice inherits the MCP server's own working
     directory, not the output folder — a relative ``write`` target would land
-    there instead. Written UNQUOTED — see the whitespace limitation above.
+    there instead. Quoted only when it needs to be (``control_path``).
     Inserted before the block's LAST ``quit``/``exit`` (if any) so it
     actually runs — those commands end script execution, so a ``write``
     placed after one would never fire; otherwise inserted just before
@@ -690,11 +752,12 @@ def inject_ngspice_control_write(
         return netlist_path
     body = blocks[0][1:-1]
 
-    raw_path = (output_folder / f"{job_id}.raw").as_posix()
-    # ngspice's `write` parser cannot handle a spaced target at all — not
-    # quoted, not escaped (verified empirically) — so a spaced output folder
-    # can't get an auto-injected write; that run just stays log-only.
-    if any(c.isspace() for c in raw_path):
+    try:
+        raw_path = control_path((output_folder / f"{job_id}.raw").as_posix(), codec)
+    except ValueError:
+        # A folder name the control language would change (a brace, a
+        # quote), or a non-ASCII one the deck's codec would make invalid
+        # UTF-8, which stops ngspice: the run stays log-only instead.
         return netlist_path
 
     # Insert before .endc, UNLESS the block's last statement is an
@@ -950,9 +1013,10 @@ class RunnerBase:
         electrical_deck = native.input_deck if native else netlist
         requirements = deck_requirements(electrical_deck)
         simulator = simulator_class or self.simulator_class
-        outcome_mode = native.policy.ngbehavior if native else None
-        if native is None and simulator_class is not None:
-            outcome_mode = getattr(simulator, "_compatibility_mode", None)
+        # The mode ngspice is handed and the server reads the deck in: a native
+        # setup's driver sets its own, every other run gets the class's -D.
+        # The failure classifier and the mode check both read this one.
+        passed_mode = run_ngbehavior(simulator, native.policy.ngbehavior if native else None)
 
         def verify_copied(copied: Path) -> None:
             if native is not None and native.verify_execution is not None:
@@ -994,13 +1058,19 @@ class RunnerBase:
                         requirements,
                         netlist=electrical_deck,
                         simulator=simulator,
-                        ngbehavior=outcome_mode,
+                        ngbehavior=passed_mode,
                         exit_code=exit_code,
                         simulator_exception=simulator_exception,
                         logs=logs,
                         logs_error=logs_error,
                     )
                 outcome = outcome._replace(simulator_version=version)
+                if is_ngspice(simulator):
+                    log_path = Path(log_name) if log_name not in ("", ".") else None
+                    outcome = _with_mode_check(
+                        outcome,
+                        check_run(log_path, simulator, passed_mode, driver=native is not None),
+                    )
             except Exception as exc:
                 outcome = collect_run_outcome(
                     raw_name,
@@ -1026,7 +1096,7 @@ class RunnerBase:
             callback=completion_callback,
             callback_on_error=True,
             exe_log=True,
-            switches=list(native.policy.switches) if native else None,
+            switches=_launch_switches(simulator, native),
         )
         self._inflight_runners[run_filename] = runner
         return runner

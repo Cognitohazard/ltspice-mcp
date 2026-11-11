@@ -13,6 +13,7 @@ lived. Run shape assertions on REAL ngspice output, not hand-built fixtures.
 import asyncio
 import math
 import shutil
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -114,7 +115,7 @@ async def _signals(state: SessionState, job_id: str) -> list[str]:
         [{"key": "sum", "metric": "summary"}],
         include={"signals_available": True},
     )
-    available = data["signals_available"]
+    available = data.get("signals_available")
     assert available, data
     return [name for names in available.values() for name in names]
 
@@ -517,9 +518,35 @@ async def test_a_bias_point_source_stepping_finds_is_no_failure(
     assert relayed == [], relayed
 
 
+def _raw_formats(reason: str) -> list[Any]:
+    """The raw format ngspice writes as installed, and its ASCII format, with an
+    ASCII file an expected failure for ``reason``. The official Windows
+    build's spinit makes raw files ASCII, so there the installed one is too."""
+    ascii_fails = pytest.mark.xfail(strict=True, reason=reason)
+    return [
+        pytest.param("installed", marks=ascii_fails if sys.platform == "win32" else ()),
+        pytest.param("ascii", marks=ascii_fails),
+    ]
+
+
+def _write_raw_as(raw_format: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    if raw_format == "ascii":
+        # ngspice writes its raw files as ASCII while this is set.
+        monkeypatch.setenv("SPICE_ASCIIRAWFILE", "1")
+
+
+@pytest.mark.parametrize(
+    "raw_format",
+    _raw_formats(
+        "ngspice writes the real device parameter of this complex AC plot as one number in "
+        "an ASCII raw file, which the raw reader, like spicelib's (docs/spicelib_bugs.md, "
+        "Bug 43), refuses as not complex"
+    ),
+)
 async def test_an_ac_summary_defaults_to_no_device_parameter(
-    ngspice_state: SessionState, work_dir: Path
+    ngspice_state: SessionState, work_dir: Path, raw_format: str, monkeypatch: pytest.MonkeyPatch
 ):
+    _write_raw_as(raw_format, monkeypatch)
     # With no signal named, an AC summary computes its bandwidth on the first
     # node voltage. The deck saves a branch current and @m1[vth], which
     # ngspice writes after it as v(@m1[vth]), typed voltage: a parameter of
@@ -865,12 +892,20 @@ async def test_run_timeout_reports_the_killed_runs_diagnostics_and_progress(
     assert not leftovers, "the killed run's raw was left on disk"
 
 
+@pytest.mark.parametrize(
+    "raw_format",
+    _raw_formats(
+        "the server keeps no partial raw of a stopped run whose raw file is ASCII: the "
+        "run_timeout failure carries no partial_raw"
+    ),
+)
 async def test_a_kept_partial_raw_is_read_to_where_the_run_was_stopped(
-    ngspice_state: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ngspice_state: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch, raw_format: str
 ):
     """With keep_partial_raw, a real ngspice run killed at its run timeout
     keeps its raw, cut to its whole points, and analyze_results and inspect
     read it, each saying that its values end where the run was stopped."""
+    _write_raw_as(raw_format, monkeypatch)
 
     async def progressing(_runner: ExperimentRunner, execution: Any, _future: Any) -> bool:
         live = await live_run_progress(execution.job)
@@ -902,6 +937,7 @@ async def test_a_kept_partial_raw_is_read_to_where_the_run_was_stopped(
 
     [failure] = receipt["failures"]
     assert failure["code"] == "run_timeout"
+    assert "partial_raw" in failure["evidence"], receipt
     held = failure["evidence"]["partial_raw"]
     [row] = receipt["runs"]["items"]
     assert row["status"] == "failed"

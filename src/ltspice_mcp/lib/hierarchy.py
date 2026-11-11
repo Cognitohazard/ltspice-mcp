@@ -35,10 +35,10 @@ from ltspice_mcp.lib.hierarchy_expr import (
     Environment,
     NumericFact,
     card_copies,
-    ngspice_multiplies_m,
     references_sibling,
     scaled_geometry,
 )
+from ltspice_mcp.lib.ngspice_compat import drops_lib_sections, multiplies_m
 from ltspice_mcp.lib.pathutil import resolve_safe_path, with_roots
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
@@ -67,6 +67,22 @@ _SAFE_NODE = re.compile(r"[A-Za-z0-9_]+\Z")
 Family = Literal["ltspice", "ngspice"]
 SUPPORTED_FAMILIES: frozenset[str] = frozenset(get_args(Family))
 
+ESTABLISHED_NGBEHAVIOR: frozenset[str] = frozenset({"", "hsa", "kiltpsa"})
+"""The ngspice modes whose reading rules this module follows were checked
+against ngspice for (``tests/test_hierarchy.py``,
+``test_discovery_to_real_device_operating_point``), spelled as ngspice reads
+them: it matches mode letters case-sensitively, so ``HSA`` is native mode to
+it. In any other mode ``gnd`` is refused, as in ``kiltpsa``; a duplicate
+``.param`` is refused in every mode but ``hsa``; the sectioned ``.lib`` rule
+reads the mode's letters as in any mode. ``inspect`` answers in such a mode
+only where ngspice confirms the values (``hierarchy_check``), and code that
+edits a deck by these rules refuses (``require_established``)."""
+
+
+def established_modes() -> str:
+    """The established modes, for a message."""
+    return ", ".join(repr(mode) for mode in sorted(ESTABLISHED_NGBEHAVIOR))
+
 
 @dataclass(frozen=True)
 class SemanticProfile:
@@ -86,16 +102,39 @@ class SemanticProfile:
             raise NetlistError("xvii_names is only valid for ltspice")
         if self.simulator == "ngspice" and self.ngbehavior is None:
             raise NetlistError("ngspice hierarchy requires its effective ngbehavior")
-        if self.simulator == "ngspice" and (self.ngbehavior or "").casefold() not in {
-            "",
-            "hsa",
-            "kiltpsa",
-        }:
-            raise NetlistError(
-                "unsupported hierarchy ngbehavior; supported profiles are '', hsa, kiltpsa"
-            )
         if self.evaluation_context != "initial_deck":
             raise NetlistError("hierarchy supports only initial_deck evaluation context")
+
+    @property
+    def established(self) -> bool:
+        """Whether the reader's rules for this profile were checked against
+        the simulator (``ESTABLISHED_NGBEHAVIOR``); always for LTspice."""
+        return self.simulator != "ngspice" or (self.ngbehavior or "") in ESTABLISHED_NGBEHAVIOR
+
+
+def require_established(profile: SemanticProfile, purpose: str) -> None:
+    """Refuse ``purpose`` in a mode the reader's rules were not checked for.
+
+    Code that edits a deck by the reader's answers calls this: those answers
+    are not confirmed against ngspice there, as ``inspect`` confirms them.
+    """
+    reason = unestablished_reason(profile, purpose)
+    if reason is not None:
+        raise NetlistError(reason)
+
+
+def unestablished_reason(profile: SemanticProfile, purpose: str) -> str | None:
+    """Why ``purpose`` is refused in ``profile``'s mode, or None when its
+    rules are established."""
+    if profile.established:
+        return None
+    return (
+        f"unsupported hierarchy ngbehavior {profile.ngbehavior!r} for {purpose}: the "
+        f"hierarchy reader's rules are established for {established_modes()} only; set "
+        "[simulator] ngbehavior to hsa or kiltpsa (unset, the server uses kiltpsa) and "
+        "restart the server. inspect(kind='hierarchy') still reads the deck in this "
+        "mode where ngspice confirms its values."
+    )
 
 
 @dataclass(frozen=True)
@@ -198,6 +237,8 @@ class Hierarchy:
     include_bindings: tuple[IncludeBinding, ...] = ()
     #: The subcircuits ngspice rewrites for ``m`` (``_rewritten_for_m``).
     m_rewritten: frozenset[str] = frozenset()
+    #: The deck the hierarchy was read from.
+    root: Path | None = None
 
     def binding(self) -> dict[str, Any]:
         return {
@@ -394,10 +435,11 @@ def walk_active(
                 if (
                     ref.section
                     and profile.simulator == "ngspice"
-                    and any(mode in (profile.ngbehavior or "").casefold() for mode in ("lt", "ps"))
+                    and drops_lib_sections(profile.ngbehavior)
                 ):
                     raise NetlistError(
-                        "sectioned libraries require ngbehavior without lt/ps reinterpretation"
+                        "sectioned libraries require an ngbehavior ngspice reads without "
+                        "lt, ps or s3, which drop the section"
                     )
                 target = targets.get(ref.raw_path)
                 if target is None:
@@ -759,15 +801,27 @@ def resolve_hierarchy(
     )
     scale = global_env.fact(scale_expression)
     rewritten = _rewritten_for_m(occurrences, definitions, top, profile)
-    multiply_m = ngspice_multiplies_m(profile.ngbehavior)
+    multiply_m = multiplies_m(profile.ngbehavior)
     rows: list[ResolvedInstance] = []
     node_cache: dict[tuple[tuple[str, ...], str], Node] = {}
 
     def node(name: str, scope: tuple[str, ...], ports: Mapping[str, Node]) -> Node:
         folded = name.casefold()
-        if folded == "gnd" and profile.simulator == "ngspice" and profile.ngbehavior == "kiltpsa":
+        # Ground is established for native and hsa mode only; kiltpsa's
+        # reading differs across ngspice versions, and no other mode's is
+        # recorded, so those refuse rather than guess.
+        if (
+            folded == "gnd"
+            and profile.simulator == "ngspice"
+            and profile.ngbehavior not in ("", "hsa")
+        ):
+            reading = (
+                "version-dependent"
+                if profile.ngbehavior == "kiltpsa"
+                else "unrecorded reading of the"
+            )
             raise NetlistError(
-                "version-dependent ground alias 'gnd' in kiltpsa mode; "
+                f"{reading} ground alias 'gnd' in {profile.ngbehavior} mode; "
                 "use explicit node 0 or inspect a supported native/hsa deck"
             )
         kind = node_kind(name, ports=ports, global_names=globals_, simulator=profile.simulator)
@@ -985,4 +1039,5 @@ def resolve_hierarchy(
         scale,
         tuple(include_bindings),
         rewritten,
+        root,
     )

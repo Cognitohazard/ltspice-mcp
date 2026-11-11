@@ -32,6 +32,8 @@ and the circuits it can reach. Each query names one supported kind:
 * ``hierarchy`` — bounded netlist instance expansion, scoped ports, numeric
   facts and backend addresses from captured active dependencies. See
   ``lib/hierarchy.py`` for supported grammar and explicit refusal boundaries.
+  An ngspice query adds ``ngspice_check``, the resolved values compared with
+  ngspice's own reading of the deck (``lib/hierarchy_check.py``).
 * ``results`` — RAW plot inventory, selected signal descriptors and axisless
   quantities, or detached log measurements/native print rows. Pages bind the
   captured snapshot; RAW reads accept explicit plot/dialect selection.
@@ -125,6 +127,7 @@ from pydantic import (
     SkipValidation,
     TypeAdapter,
     ValidationError,
+    field_validator,
     model_validator,
 )
 
@@ -159,7 +162,13 @@ from ltspice_mcp.lib.deck_nodes import global_names, node_kind
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, TraceDescriptor
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import cap_note
-from ltspice_mcp.lib.hierarchy import SUPPORTED_FAMILIES, SemanticProfile, load_hierarchy
+from ltspice_mcp.lib.hierarchy import (
+    SUPPORTED_FAMILIES,
+    SemanticProfile,
+    established_modes,
+    load_hierarchy,  # noqa: TID251 - another mode answers only when hierarchy_check confirms it
+)
+from ltspice_mcp.lib.hierarchy_check import check_hierarchy
 from ltspice_mcp.lib.library_manager import (
     LibraryManager,
     model_row,
@@ -177,6 +186,7 @@ from ltspice_mcp.lib.ltspice_window import (
 )
 from ltspice_mcp.lib.model_fields import literal_values, model_union
 from ltspice_mcp.lib.montecarlo import matches_prefix
+from ltspice_mcp.lib.ngspice_compat import mode_as_given
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
 from ltspice_mcp.lib.raster import RasterSupport, raster_support
 from ltspice_mcp.lib.routing import segment_json, wires_through
@@ -188,9 +198,10 @@ from ltspice_mcp.lib.schematic_ops import (
 from ltspice_mcp.lib.sheet import Sheet, SheetPart, missing_part, read_sheet_file
 from ltspice_mcp.lib.simulator import (
     SIMULATORS,
-    current_ngbehavior,
+    current_ngbehavior,  # noqa: TID251 - shows the session's configured mode
     dialect_for_simulator_name,
     family_refusal,
+    run_ngbehavior,
     selector_pattern,
     simulator_family,
     simulator_library_roots,
@@ -739,6 +750,11 @@ class HierarchyQuery(StrictModel):
     @property
     def family(self) -> Literal["ltspice", "ngspice"]:
         return "ltspice" if self.simulator.partition(":")[0] == "ltspice" else "ngspice"
+
+    @field_validator("ngbehavior")
+    @classmethod
+    def _as_given(cls, value: str | None) -> str | None:
+        return None if value is None else mode_as_given(value)
 
     @model_validator(mode="after")
     def _profile(self) -> HierarchyQuery:
@@ -2436,9 +2452,7 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
     simulator = _hierarchy_simulator(q.simulator, state)
     profile = SemanticProfile(
         family,
-        (q.ngbehavior if q.ngbehavior is not None else current_ngbehavior())
-        if family == "ngspice"
-        else None,
+        run_ngbehavior(simulator, q.ngbehavior) if family == "ngspice" else None,
         xvii_names=family == "ltspice" and services.simulator_before_24(state, simulator),
     )
     sandbox = state.allowed_paths()
@@ -2450,6 +2464,16 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
         simulator_roots=(() if sandbox is None else simulator_library_roots(simulator)),
         relative_to=state.config.working_dir,
     )
+    check = check_hierarchy(hierarchy, simulator) if family == "ngspice" else None
+    if check is not None and not profile.established and not check.confirms_all:
+        # Outside the modes the reader's rules were checked for, an answer is
+        # given only where ngspice confirms every value it was asked for.
+        raise NetlistError(
+            f"unsupported hierarchy ngbehavior {profile.ngbehavior!r}: the reader's rules are "
+            f"established for {established_modes()}, and in another mode it answers only "
+            f"when ngspice confirms its values, but {check.explanation()}. Query with one of "
+            "those modes, or with ngspice installed and the deck readable by it."
+        )
     selected = tuple(p.casefold() for p in q.instance) if q.instance else ()
     if selected and not any(
         tuple(p.casefold() for p in row.instance) == selected for row in hierarchy.instances
@@ -2473,6 +2497,7 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
             "instances": [row.row() for row in page["items"]],
             "profile": identity["profile"],
             "inputs": identity["inputs"],
+            "ngspice_check": check.payload() if check is not None else None,
             "total": page["total"],
             "returned": page["returned"],
         },

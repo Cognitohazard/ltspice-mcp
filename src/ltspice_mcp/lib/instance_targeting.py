@@ -26,8 +26,9 @@ from ltspice_mcp.lib.hierarchy import (
     SemanticProfile,
     Source,
     parse_hierarchy_cards,
-    resolve_hierarchy,
-    walk_active,
+    require_established,
+    resolve_hierarchy,  # noqa: TID251 - captured_hierarchy calls require_established first
+    walk_active,  # noqa: TID251 - source_lineage calls require_established first
 )
 from ltspice_mcp.lib.montecarlo import render_variant_model_card
 from ltspice_mcp.lib.spice_lex import SpiceCard, TokenKind, emit, lex, tokenize_body
@@ -159,7 +160,12 @@ def _captured_inputs(files: Sequence[ClosureFile]) -> dict[Path, CapturedFile]:
     return captured
 
 
+RECORDING_LINEAGE = "recording where the cards of an edited or recoverable run came from"
+"""What ``source_lineage`` reads the deck for, as a refusal names it."""
+
+
 def captured_hierarchy(files: Sequence[ClosureFile], profile: SemanticProfile) -> Hierarchy:
+    require_established(profile, "editing a deck by instance")
     return resolve_hierarchy(files[0].path.resolve(), _captured_inputs(files), profile)
 
 
@@ -175,6 +181,7 @@ def source_lineage(
     before: Sequence[ClosureFile], after: Sequence[ClosureFile], profile: SemanticProfile
 ) -> tuple[SourceLineage, ...]:
     """Map active contexts through ordinary edits that preserve card population."""
+    require_established(profile, RECORDING_LINEAGE)
     captured = _captured_inputs(before)
     occurrences = walk_active(
         before[0].path.resolve(), lambda path, depth: captured[path], profile

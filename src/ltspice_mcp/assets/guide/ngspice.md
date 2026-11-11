@@ -163,11 +163,12 @@ X1 input output myfilter rval=1k cval=1n
   - **This server's default `kiltpsa`** (a mixed LTspice/PSPICE-compatibility
     mode) inverts this. A bare `.lib <file>` loads an unsectioned file, but a
     sectioned `.lib <file> <section>` (the PDK corner idiom) is split by the
-    `lt`/`ps` tokens into two plain includes that drop the section.
+    `lt`/`ps` flags into two plain includes that drop the section.
     `run_experiments` refuses such a deck (lint `lib-section-ngspice`); run
     elsewhere, it fails with "could not find include file". Set
     `[simulator] ngbehavior = "hsa"` in `ltspice-mcp.toml` (or
-    `LTSPICE_MCP_NGBEHAVIOR=hsa`) and restart to parse the section.
+    `LTSPICE_MCP_NGBEHAVIOR=hsa`) and restart to parse the section. A
+    `.spiceinit` cannot set the mode: the server runs ngspice with `-n`.
   Unlike `.include`, `.lib` skips global-scope circuit elements.
 - `.param` inside a subcircuit is local (it masks globals). Subcircuits nest
   up to 10 levels.
@@ -209,15 +210,27 @@ wrdata output.txt V(out)          $ save as CSV-like text
 .endc
 ```
 
-**Scripts without `write`/`wrdata`.** A `.control` block replaces ngspice's
-default raw output, so a script that never calls `write`/`wrdata` produces no
-rawfile even though the run completes cleanly. When the deck has exactly one
+**Scripts without `write`/`wrdata`.** A `.control` block takes over ngspice's
+default raw output: a script that only `run`s the deck's analyses still gets
+one, but a script that ends with `quit`, or issues an analysis as a command
+(`tran`, `op`), produces no rawfile even though the run completes cleanly
+(ngspice-42). When the deck has exactly one
 `.control` block and no `write`/`wrdata` of its own, `run_experiments` adds a
 `write <the run's raw path>` before `.endc` and reports this in the receipt's
 `observations`. Your own `write` (or `wrdata`) anywhere in the deck turns this
 off. You need one of your own for each result you want kept whenever the
 script runs several analyses or writes per iteration in a Monte Carlo loop,
 because `write` captures only the current plot.
+
+**Startup commands.** The server runs ngspice with `-n`, so no `.spiceinit`
+is read. Put what one would hold in the deck: options on an `.options` line,
+and a model library in a `.control` block as `pre_osdi <file>` or
+`pre_codemodel <file>`, which run before ngspice reads the circuit. Leave
+out a `seed` option: `simulator_draws` and `execution.simulator_seed` set the
+seed, and refuse a deck that sets its own. The
+compatibility mode is `[simulator] ngbehavior` alone; a run that ngspice read
+in another (a `set ngbehavior` in the installation's `spinit`) fails with
+`ngspice_mode_mismatch`.
 
 **Variables vs vectors:**
 - `set` creates string/shell variables: `set myvar = "hello"` — access `$myvar`.

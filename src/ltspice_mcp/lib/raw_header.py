@@ -358,7 +358,8 @@ class _Scanner:
                 if len(parts) != expected or any(not _NUMBER.fullmatch(p.strip()) for p in parts):
                     raise self.error(
                         RawHeaderError,
-                        f"invalid numeric text payload at point {point}, variable {index}",
+                        f"invalid numeric text payload at point {point}, variable {index}: "
+                        f"{line[:60]!r}",
                     )
 
     def skip_text_separators(self, encoding: str) -> None:

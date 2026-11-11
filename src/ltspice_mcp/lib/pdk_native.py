@@ -23,6 +23,7 @@ from ltspice_mcp.lib.cursor_codec import canonical_hash, canonical_json
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.projection import KeepPlan, project_row
+from ltspice_mcp.lib.simulator import NGSPICE_NO_USER_INIT
 from ltspice_mcp.lib.spice_lex import INCLUDE_HEADS, SpiceCard, TokenKind, lex, tokenize_body
 from ltspice_mcp.lib.store import is_sha256
 
@@ -37,7 +38,7 @@ ADAPTER_VERSION = "ngspice-preload-v1"
 
 @dataclass(frozen=True)
 class NativeLaunchPolicy:
-    switches: tuple[str, ...] = ("-n",)
+    switches: tuple[str, ...] = (NGSPICE_NO_USER_INIT,)
     ngbehavior: str = "hsa"
     ng_nomodcheck: bool = True
 
@@ -710,7 +711,7 @@ def driver_bytes(seed: int, paths: NativePaths, token: str) -> bytes:
     return (
         f"Native PDK initialization\n.control\nset ngbehavior={LAUNCH_POLICY.ngbehavior}\n"
         + ("set ng_nomodcheck\n" if LAUNCH_POLICY.ng_nomodcheck else "")
-        + seeded_commands(seed, paths.electrical_input.name, paths.raw.name)
+        + seeded_commands(seed, paths.electrical_input.name, paths.raw.name, "ascii")
         + ".endc\n.end\n"
     ).encode("ascii")
 

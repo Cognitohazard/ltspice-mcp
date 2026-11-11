@@ -9,7 +9,12 @@ from pathlib import Path, PurePath
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.deck_staging import StagedDeck, sha256_file
 from ltspice_mcp.lib.encoding import decode_spice_bytes
-from ltspice_mcp.lib.hierarchy import Hierarchy, SemanticProfile, Source, load_hierarchy
+from ltspice_mcp.lib.hierarchy import (
+    Hierarchy,
+    SemanticProfile,
+    Source,
+    load_hierarchy,  # noqa: TID251 - always hsa, an established mode
+)
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.pdk_native import (
     ENTRYPOINT,

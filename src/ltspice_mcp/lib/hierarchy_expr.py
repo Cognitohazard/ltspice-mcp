@@ -201,17 +201,6 @@ NGSPICE_M_TAKERS = frozenset("CDFGIJLMQRXZ")
 NGSPICE_M_EXEMPT = frozenset("ABEHKSTVW")
 
 
-def ngspice_multiplies_m(ngbehavior: str | None) -> bool:
-    """Whether ngspice in this compatibility mode multiplies a card's own ``m``
-    by the ``m`` its subcircuit passes down, rather than replacing it.
-
-    Only the HSPICE modes multiply (``hs``, ``hsa``); every other mode, the
-    ``kiltpsa`` spicelib runs by default included, replaces it. Measured on
-    ngspice-42: ``R1 p 0 1k m=3`` in a body called with ``m=4`` builds 12
-    copies under ``hsa`` and 4 under ``kiltpsa``.
-    """
-    return "hs" in (ngbehavior or "").casefold()
-
 
 def card_copies(
     own: NumericFact | None,

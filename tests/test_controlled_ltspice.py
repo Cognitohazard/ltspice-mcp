@@ -339,6 +339,22 @@ def test_unrecorded_switches_refused(adapter_module, tmp_path, monkeypatch, swit
     run.assert_not_called()
 
 
+def test_a_record_captured_for_ltspice_names_no_ngspice_mode(adapter_module, tmp_path):
+    """The mode a recovery record holds is ngspice's alone: an LTspice record
+    that named one, even an empty one, is refused by the controlled policy."""
+    from spicelib.simulators.ltspice_simulator import LTspice
+    from spicelib.simulators.ngspice_simulator import NGspiceSimulator
+
+    from ltspice_mcp.lib.experiment_resume import recorded_ngbehavior
+
+    execution = replace(_execution(_template(tmp_path)), ngbehavior=recorded_ngbehavior(LTspice))
+    adapter_module.verify_ltspice_execution(execution)
+    with pytest.raises(RecoveryError):
+        adapter_module.verify_ltspice_execution(replace(execution, ngbehavior=""))
+    own = type("NGspiceSimulator", (NGspiceSimulator,), {"_compatibility_mode": "hsa"})
+    assert recorded_ngbehavior(own) == "hsa"
+
+
 @pytest.mark.parametrize("change", ["build", "platform", "seed", "native", "argv", "startup"])
 def test_unsupported_execution_refused(adapter_module, tmp_path, change):
     execution = _execution(_template(tmp_path))

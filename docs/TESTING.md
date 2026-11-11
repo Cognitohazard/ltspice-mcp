@@ -113,7 +113,19 @@ is imported, and of the parser's cleanup after a deadline, after repeated
 cancellation and after the server process dies, including a child process
 that tries to break away from the parser's process tree.
 
-CI's full tier (*CI tiers* below) also runs the suite on a native macOS
+Both CI tiers (*CI tiers* below) run the suite on a native Windows runner
+(`check-windows` in `.github/workflows/checks.yml`): Python 3.12, one xdist
+worker per core, no coverage gate, and the official Windows build of ngspice,
+the one users install, pinned by version and SHA-256, unpacked to
+`C:\Spice64` as its install notes say. Its console program,
+`ngspice_con.exe`, is put on PATH as `ngspice.exe`, as above. That build's
+`spinit` loads the code models and sets `filetype=ascii`, so on Windows ngspice
+writes ASCII raw files, as it does for its users; the job fails before the
+suite runs unless ngspice reads it. The runner's code page is cp1252 and its
+paths have no spaces, so a run on a user's machine still covers what this job
+cannot.
+
+CI's full tier also runs the suite on a native macOS
 runner (`check-macos` in `.github/workflows/checks.yml`): Python 3.12,
 ngspice and Cairo from Homebrew, one xdist worker per core, and no coverage gate. Because the server
 refuses to parse there, a test that reads a result fails there for that reason

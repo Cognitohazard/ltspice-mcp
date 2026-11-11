@@ -67,7 +67,8 @@ from ltspice_mcp.lib.experiment_types import (
     SourceRecord,
 )
 from ltspice_mcp.lib.format import held_to_cap
-from ltspice_mcp.lib.hierarchy import SUPPORTED_FAMILIES, SemanticProfile
+from ltspice_mcp.lib.hierarchy import SUPPORTED_FAMILIES, SemanticProfile, unestablished_reason
+from ltspice_mcp.lib.instance_targeting import RECORDING_LINEAGE
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.lint_rules import RULES_BY_ID, lint_deck, linter_version
 from ltspice_mcp.lib.native_inputs import NativeCaseValidator
@@ -93,7 +94,7 @@ from ltspice_mcp.lib.services import cp1252_ltspice
 from ltspice_mcp.lib.sheet_results import NotPlaced, check_request
 from ltspice_mcp.lib.simulator import (
     SIMULATOR_SELECTOR_PATTERN,
-    current_ngbehavior,
+    run_ngbehavior,
     simulator_dialect,
     simulator_library_roots,
 )
@@ -1035,6 +1036,8 @@ async def _prepare_circuit(
     circuit_id = circuit_input.circuit_id
     source_path = circuit_input.path
     native = _native_family(circuit_id, args.variations)
+    # The mode the run passes ngspice, and the lint and the hierarchy read it in.
+    mode = run_ngbehavior(simulator, NGBEHAVIOR if native is not None else None)
     expected_count = projected_case_count(circuit_id, args.variations)
     runnable: Path | None = None
     expanded: list[ExpandedCase] | None = None
@@ -1104,7 +1107,7 @@ async def _prepare_circuit(
                     (included.staged_path, included.text, included.codec)
                     for included in staged.includes
                 ],
-                ngbehavior=NGBEHAVIOR if native is not None else None,
+                ngbehavior=mode,
                 codec=staged.codec,
                 cp1252_reader=cp1252_reader,
             )
@@ -1144,15 +1147,20 @@ async def _prepare_circuit(
             semantic_profile=(
                 SemanticProfile(
                     "ngspice" if dialect == "ngspice" else "ltspice",
-                    (NGBEHAVIOR if native is not None else current_ngbehavior() or "")
-                    if dialect == "ngspice"
-                    else None,
+                    mode if dialect == "ngspice" else None,
                 )
                 if dialect in SUPPORTED_FAMILIES
                 else None
             ),
             record_source_lineage=native is not None or args.execution.recoverable,
         )
+        # A recoverable run records its cards' sources by the hierarchy
+        # reader's rules; refuse before any case exists, as other recovery
+        # refusals do, rather than fail each case.
+        if deck.record_source_lineage and deck.semantic_profile is not None:
+            refusal = unestablished_reason(deck.semantic_profile, RECORDING_LINEAGE)
+            if refusal is not None:
+                raise RecoveryError("recovery_ngbehavior_unsupported", refusal)
         expanded = await asyncio.to_thread(
             expand_variations,
             [deck],

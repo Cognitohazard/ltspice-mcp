@@ -326,7 +326,12 @@ ENTRIES: tuple[Entry, ...] = (
         "supported",
         ("recorded:subckt-device-names", "recorded:save-subckt-names", "recorded:deck-semantics"),
     ),
-    Entry("ngspice", "hierarchy", "supported", ("test:tests/test_hierarchy.py",)),
+    Entry(
+        "ngspice",
+        "hierarchy",
+        "supported",
+        ("test:tests/test_hierarchy.py", "test:tests/test_hierarchy_check.py"),
+    ),
     *_each(
         _UNMODELLED,
         "hierarchy",
@@ -459,7 +464,7 @@ ENTRIES: tuple[Entry, ...] = (
         "supported",
         ("test:tests/test_controlled_ngspice.py",),
         hosts=frozenset({"linux", "wsl", "windows"}),
-        mechanism="An immutable spinit, selected through SPICE_SCRIPTS.",
+        mechanism="An immutable spinit, selected through SPICE_SCRIPTS, and -n, so no .spiceinit is read.",
     ),
     *_each(
         _UNMODELLED,
@@ -504,8 +509,16 @@ ENTRIES: tuple[Entry, ...] = (
         "ngspice",
         "compatibility_modes",
         "supported",
-        ("test:tests/test_config.py", "test:tests/test_hierarchy.py"),
-        mechanism="[simulator] ngbehavior, passed as -D ngbehavior= on every run.",
+        (
+            "test:tests/test_config.py",
+            "test:tests/test_hierarchy.py",
+            "test:tests/test_ngspice_startup_mode.py",
+            "test:tests/test_ngspice_mode.py",
+        ),
+        mechanism=(
+            "[simulator] ngbehavior, passed as -D ngbehavior= on every run, with -n so that "
+            "no .spiceinit replaces it; each run's logged mode is checked against it."
+        ),
     ),
     Entry(
         "ngspice",

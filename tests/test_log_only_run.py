@@ -11,7 +11,7 @@ from spicelib.sim.run_task import RunTask
 from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
 from ltspice_mcp.errors import ResultError
-from ltspice_mcp.lib import services
+from ltspice_mcp.lib import ngspice_mode, services
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner, ExperimentRunRequest
 from ltspice_mcp.lib.experiment_types import ExperimentCase, ManifestEntry, SourceRecord
@@ -25,9 +25,20 @@ async def test_log_only_tf_run_is_produced_reloaded_and_publicly_readable(
 ):
     launch = subprocess.Popen
     parser_launches = []
+    mode_probes = []
+    # The recorded log was written with no compatibility mode, so the run is
+    # passed none; the mode check then finds the log agrees.
+    monkeypatch.setattr(NGspiceSimulator, "_compatibility_mode", "")
+    # The answer is kept per process; start without one so this run asks.
+    monkeypatch.setattr(ngspice_mode, "_flags_by_mode", {})
 
     def parser_only(command, *args, **kwargs):
         assert isinstance(command, list)
+        if Path(command[-1]).name == "probe.cir":
+            # The mode check asks ngspice, on a deck of its own, which flags
+            # it gives the passed mode (ngspice_mode.flags_for).
+            mode_probes.append(command)
+            return launch(command, *args, **kwargs)
         assert Path(command[0]).name.casefold().startswith("python")
         assert command[1:3] == ["-m", "ltspice_mcp.lib.parser_bootstrap"]
         parser_launches.append(command)
@@ -110,6 +121,11 @@ async def test_log_only_tf_run_is_produced_reloaded_and_publicly_readable(
             item for item in case.observations if item["code"] == "native_log_output"
         )
         assert observation["evidence"]["analysis_extent"] == "unknown"
+        # With ngspice installed it is asked once and the log agrees; without
+        # it the mode is unchecked and the run says so.
+        unchecked = "ngspice_mode_unverified" in {item["code"] for item in case.observations}
+        assert len(mode_probes) == (1 if NGspiceSimulator.spice_exe else 0)
+        assert unchecked == (not NGspiceSimulator.spice_exe)
 
         stored = json.loads(job.store_path.read_text(encoding="utf-8"))
         assert stored["cases"][0]["status"] == "produced"

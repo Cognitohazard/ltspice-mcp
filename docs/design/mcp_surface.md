@@ -596,7 +596,18 @@ machine's startup files do not affect the run. A `pdk_native` sample
 (Appendix A.1) keeps its recorded sample index and seed. A resume or a later
 launch is refused with `recovery_execution_changed` if the executable, its
 command line or the platform has changed since submission. A job without
-`recoverable` runs the simulator with the machine's own startup files.
+`recoverable` runs the simulator with the machine's own startup files
+(LTspice's `LTspice.ini`, ngspice's system `spinit`, which loads its code
+models), except a user's `.spiceinit`: every ngspice run gets `-n`, so the
+compatibility mode is the one `[simulator] ngbehavior` sets. The `spinit` can
+still set another. After every ngspice run the server compares the mode the
+log names for the deck (its first note, or the second when a driver sources
+the deck) with the flags ngspice gives the mode it passed, asked once per
+mode with no startup file. A run read in another mode fails with
+`ngspice_mode_mismatch`. A run whose mode could not be checked carries an
+`ngspice_mode_unverified` observation whose `evidence.reason` says why:
+`no_mode_in_log`, `deck_note_missing`, `log_unreadable`, `ngspice_not_asked`
+or `no_log`.
 
 `execution.simulator_seed` runs each case's saved deck through a short ngspice
 script that sets the random seed (`setseed`) immediately before it loads the
@@ -2197,7 +2208,7 @@ Suppression is per call, and `linter_version` is reported in provenance.
 | `save-pattern-unrecorded` | warning | any `.save` of the deck names signals by a pattern (`V(*)`, `I(R*)`), no `.save` saves all or cannot be read, and a `.meas` reads a signal no `.save` names: which signals a pattern saves is not recorded, so the signal is reported as not checked rather than refused, whichever kind of signal the pattern names |
 | `meas-ngspice-batch` | warning | ngspice: the deck runs and only the top-level `.meas` is skipped, which the run reports when it is read |
 | `meas-trig-degrees` | blocking | LTspice: a `.meas` that calls `sin`, `cos`, `tan`, `asin`, `acos`, `atan` or `atan2`, whose angle LTspice 26 and XVII read in degrees on their default settings where a B source reads radians; `verify_circuit`'s `syntax` check reports the same as `meas_trig_degrees` |
-| `lib-section-ngspice` | blocking | ngspice in `kiltpsa` mode |
+| `lib-section-ngspice` | blocking | ngspice in a mode it reads with its `lt`, `ps` or `s3` flag set, `kiltpsa` (the default) among them |
 | `analysis-count-ltspice` | blocking | refused by LTspice 26 and XVII: two of `.tran`/`.ac`/`.dc`/`.noise` (`.op` may appear with one) |
 | `meas-function-ltspice` | blocking | refused by LTspice 26 and XVII: `vdb()`, `phase()` or `group_delay()` in a `.meas` |
 | `meas-name-ltspice` | blocking | refused by LTspice 26 and XVII: a `.meas` named `e`, `k`, `pi` or `q`, constants of the expression evaluator |
@@ -2685,10 +2696,56 @@ one line fail the query.
 changes it. No installed executable is needed. For ngspice, omit `ngbehavior`
 to use the mode the server runs ngspice with; setting it changes only how this
 query reads the deck, so configure simulation to use the same mode. The
-supported modes are `hsa`, `kiltpsa` and the empty string (native SPICE
-mode); others are refused. A `.lib file section` line needs a mode without
-`lt` or `ps` in its name (`hsa` or native mode), because those modes read it
-as two plain includes. The deck's first line is its title and is skipped; an
+reader's rules were established against ngspice for `hsa`, `kiltpsa` and the
+empty string (native SPICE mode).
+
+When an ngspice executable is available, `data.ngspice_check` reports how the
+values discovery resolved compare with the ones ngspice reads
+(`lib/hierarchy_check.py`). ngspice reads the deck through a driver that
+`source`s it in the query's mode, as a run would, and prints each value: a
+resistor's `value` (ngspice's `resistance`), a MOSFET's `geometry` W and L
+(`w`, `l`, both scaled), and the copies discovery counts for either card,
+which instance mismatch uses (`multiplier`, not a reply field), against
+ngspice's `m`. The copies are compared on every card, so the check also
+tests which subcircuits discovery says ngspice rewrites for an `X` line's
+`m`, and how, which differs by mode. The driver runs no analysis, so
+ngspice prints 0 for an `m` nothing set, which is read as one copy where the
+card writes no `m`. ngspice reads a 0 ohm resistor as 1 milliohm, so a 0 ohm
+value is not compared. `status` is `agrees`, `differs` (with `differences`, each the
+`instance`, the `field` it is about, and the `reader` and `ngspice` values) or
+`not_run`. A `not_run` result has a `reason` and a `detail` that explains it:
+`no_ngspice`, `nothing_to_compare`, `path_unsupported` (a quote, `$`, `` ` ``,
+a backslash, a brace, a tab or a line break in the path, or a non-ASCII path
+on Windows), `ngspice_failed`, `inputs_changed` (a file changed before ngspice
+read it), `deck_not_read` (ngspice printed no value), `mode_unchecked`, or
+`mode_differs` (a startup file ngspice reads set another mode). `compared`
+counts the values compared when the check ran. `not_compared` counts the rest
+by reason: `no_ngspice_name` (an element the reader gives no ngspice device
+name), `unresolved`, `zero_resistance`, `no_ngspice_m` (one copy of a
+device ngspice has but gives no `m` parameter, such as B3SOIDD, which builds
+one) and `no_ngspice_value` (ngspice printed none, or 0 for a W its device
+sets only in an analysis, as MOS levels 4, 5 and 6 do). Nodes, models and
+sources are not compared. A result,
+a failure to run ngspice included, is kept per deck content, mode and
+executable, so later pages do not ask again. The check covers the whole deck,
+not only the selected instances.
+
+The server lower-cases a mode wherever it takes one, in this argument and in
+`[simulator] ngbehavior` alike, so `HSA` names `hsa`. In any other mode than
+those above, the query
+answers only when ngspice was asked for every value and gave the same ones, and
+is otherwise refused with what the check found. The reader then refuses `gnd`,
+as in `kiltpsa`, and a `.param` declared twice. A run in such a mode needs no
+hierarchy reading and is not affected. An instance edit is refused, and a
+recoverable run is refused before the job is recorded
+(`recovery_ngbehavior_unsupported`), because both read the deck by these
+rules. A `.lib file section` line needs a mode ngspice reads without its
+`lt`, `ps` or `s3` flag (`hsa` or native mode): `lt` and `ps` read it as two
+plain includes, and `s3` does not read `.lib` at all. The server reads a mode's flags as ngspice
+does (`lib/ngspice_compat.py`): letters match case-sensitively, `spe` clears `ps`, `lt`, `ki` and `eg`, then `ps` clears
+`hs`, and `mc` turns off every flag but `s3`. So `spelt` and `ltmc` read a
+section, `hsps` replaces a card's `m` instead of multiplying it, and `s3mc`
+skips a section. The deck's first line is its title and is skipped; an
 included file has no title line, so its first line is read as a card. In
 ngspice native and `hsa` modes, `gnd` is ground like `0` everywhere, even
 where a subcircuit has a port named `gnd`; on LTspice such a port is that

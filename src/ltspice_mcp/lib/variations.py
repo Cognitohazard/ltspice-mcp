@@ -35,7 +35,7 @@ from ltspice_mcp.lib.deck_staging import (
 from ltspice_mcp.lib.encoding import encode_spice_text
 from ltspice_mcp.lib.format import parse_plain_value, parse_spice_value, unique_name  # noqa: TID251 - a written assignment must be a plain or SI value
 from ltspice_mcp.lib.hierarchy import Hierarchy, ResolvedInstance, SemanticProfile, Source
-from ltspice_mcp.lib.hierarchy_expr import NumericFact, ngspice_multiplies_m
+from ltspice_mcp.lib.hierarchy_expr import NumericFact
 from ltspice_mcp.lib.instance_targeting import (
     InstanceEdit,
     SourceLineage,
@@ -63,6 +63,7 @@ from ltspice_mcp.lib.montecarlo import (
     variant_model_name,
 )
 from ltspice_mcp.lib.montecarlo import MismatchRule as EngineMismatchRule
+from ltspice_mcp.lib.ngspice_compat import multiplies_m
 from ltspice_mcp.lib.ngspice_driver import SEED_MAX, deck_seeds
 from ltspice_mcp.lib.spice_lex import (
     EditCards,
@@ -2945,7 +2946,7 @@ def _rewrite_change_message(
         "In ngspice's HSPICE modes (ngbehavior hsa) the appended m multiplies a card's own "
         "m instead, so a caller that writes no m keeps its cards' own m; every other count "
         "then follows that mode too"
-        if not ngspice_multiplies_m(as_written.profile.ngbehavior)
+        if not multiplies_m(as_written.profile.ngbehavior)
         else f"Write on {card} the m it should build"
     )
     return (
