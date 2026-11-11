@@ -727,6 +727,8 @@ def build_simulation_summary(
         step: Which .step iteration to summarize (axis/range/point_count).
             Defaults to 0. Callers exposing a step (simulation_summary) thread
             it through so the range reflects the chosen step, not always step 0.
+            What the log says (measurements, Fourier, diagnostics) is the
+            whole run's at any step.
         requested: Parsed ``.meas``/``.four`` names from the deck, for the
             requested-vs-produced reconciliation in the observation surfacer.
             None when the caller has no netlist (skips reconciliation).
@@ -847,6 +849,13 @@ def build_simulation_summary(
 
         meas_data = section_value("measurements", "measurements")
         if meas_data is not None:
+            # The whole run's measurements, whichever ``step`` this summarises:
+            # each entry holds every step's value and the steps LTspice printed
+            # it failed at (``failed_steps``), so ``failed_measurements`` beside
+            # them names what failed at any step, as they show it. A
+            # measurements recipe row read at one step is that step's and names
+            # only what failed there (``metrics.measurement_rows``). Pinned by
+            # test_a_summary_names_failures_at_any_step_and_a_step_row_its_own.
             if meas_data["measurements"]:
                 summary["measurements"] = meas_data["measurements"]
             # A failed measurement is distinct from an absent request or a

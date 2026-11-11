@@ -1114,9 +1114,16 @@ of three places, by why:
 that carries it. The summary, `inspect(kind="results", view="measurements")`
 and the Python API's `measurements` name each measurement LTspice printed as
 failed at any step, and an entry whose stepped table printed `failed` lists
-those steps, from 0, in `failed_steps`. Every measurement the log printed has
-an entry; a log whose measurements cannot all be given one fails the
-measurements read, naming the ones it lacks. The same `unreadable {line,
+those steps, from 0, in `failed_steps`. The summary does so at whichever
+`step` it reads: its `measurements` are the whole run's, every step's value,
+and the step selects what it reads from the RAW (range, `point_count`, AC
+bandwidth) and its `temp_c`. A `measurements` row read at one step names only
+what failed at that step, so at a step where a measurement was taken the row
+does not name it and the summary beside it does. `inspect` marks each value
+LTspice printed as failed with `failed: true` on its row, so a failed value
+reads apart from one that is null for another reason. Every measurement the
+log printed has an entry; a log whose measurements cannot all be given one
+fails the measurements read, naming the ones it lacks. The same `unreadable {line,
 reason}` is on the entry in the summary's `measurements`, in
 `inspect(kind="results", view="measurements")` rows and in the Python API's
 `measurements`. The default row omits the per-name `stats` block;
@@ -1938,7 +1945,10 @@ cursors where listed:
     only for the same file contents (snapshot_id), view and selection. For
     measurements and native_tables, path is a log path, the RAW is
     optional, and plot_index must be omitted. measurements pages the
-    recorded values, range and AT points by value_index (not by step).
+    recorded values, range and AT points by value_index (not by step), and
+    marks a value LTspice printed as failed `failed: true` (a FAIL'ed
+    `.meas`, or `failed` in that row of its stepped table); the page's
+    `failed_measurements` names each measurement with such a value.
     native_tables pages the value blocks ngspice prints in the log, as
     `name = value` entries and `Index frequency` rows, each with its
     block's first and last line (`line_start`, `line_end`), what ended the
@@ -2321,7 +2331,7 @@ it, and reported when the caller names it.
 
 | discriminant | run type | own required fields | notes |
 |-|-|-|-|
-| `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics. Fourier is each `.four` table as the build printed it, phase included; LTspice 26 and XVII print phase in different conventions |
+| `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics. Fourier is each `.four` table as the build printed it, phase included; LTspice 26 and XVII print phase in different conventions. What the log says (measurements, `failed_measurements`, Fourier, diagnostics) is the whole run's at any `step`; the step selects the range, `point_count`, `temp_c` and AC bandwidth |
 | `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); per run, `stats` for each `.meas` name, keyed lower-cased as the log reader holds it. A name in `names` or `field` is matched in any case, and one the log does not hold fails the run with the names it holds. A run with one value per name also has `measured` {name: value} and `at`, and a null there is named under `failed_measurements` (LTspice printed it failed), `unreadable` or `not_finite`; its default row shows only those (§3.3) |
 | `value` | any | `expr` — one trace or node pair, not arithmetic | `at`, required when the axis has more than one sample; reads the nearest sample, no interpolation; a bias-point run is read by name; step-aware |
 | `signal_stats` | tran | `signal` | `window?`, `quantiles?` — levels in [0, 1], weighted by time, not by sample; each adds `q<percent>` (0.99 is `q99`, 0.999 is `q99_9`) and two or more add `quantile_peak_to_peak`, all reducible. `min`/`max`/`peak_to_peak` stay the sample extremes |

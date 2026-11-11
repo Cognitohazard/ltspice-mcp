@@ -559,13 +559,13 @@ evidence = "every recorded log; a stepped temperature writes the one non-ASCII c
 
 [behaviour.log-meas]
 summary = "How each .meas form is printed: MAX/MIN/PP/AVG/RMS/INTEG with FROM and TO, FIND AT, WHEN, TRIG/TARG, PARAM, complex AC results, the tables of a stepped run, and a stepped .op, whose log has no .step lines and which neither build prints a table for."
-model = ["lib/log_parser.py", "lib/log_types.py", "lib/metrics.py", "lib/log_decode.py", "lib/result_observations.py", "tools/analyze.py"]
+model = ["lib/log_parser.py", "lib/log_types.py", "lib/metrics.py", "lib/log_decode.py", "lib/result_observations.py", "lib/raw_parser.py", "tools/analyze.py", "tools/inspect_tools.py"]
 inputs = ["log/meas_forms.cir", "log/meas_ac.cir", "log/meas_step.cir", "log/meas_step_op.cir"]
 keep = ["log"]
 
 [behaviour.log-meas-failed]
 summary = "What the log says of a measurement that cannot be taken or does not parse, and what happens to the measurements around it."
-model = ["lib/log_parser.py", "lib/log_types.py", "lib/metrics.py", "lib/result_observations.py", "lib/lint_rules.py", "lib/spice_validator.py", "tools/analyze.py"]
+model = ["lib/log_parser.py", "lib/log_types.py", "lib/metrics.py", "lib/result_observations.py", "lib/raw_parser.py", "lib/lint_rules.py", "lib/spice_validator.py", "tools/analyze.py", "tools/inspect_tools.py"]
 inputs = ["log/meas_failed.cir", "log/meas_bad_syntax.cir"]
 keep = ["log"]
 

@@ -11,4 +11,9 @@ every null reads `not_finite` and `unreadable` beside it, or the nulls in
 and the Python API's `measurements()` now also name a measurement whose
 stepped table LTspice 24 and later printed `failed` for some step, and its
 entry lists those steps, from 0, in `failed_steps`; a stepped run's recipe row
-carries `failed_measurements` beside its `stats`.
+carries `failed_measurements` beside its `stats`. Each row of the `inspect`
+view whose value LTspice printed as failed now carries `failed: true`, so a
+failed value reads apart from one that is null for another reason. The run
+summary's measurements, and so its `failed_measurements`, are the whole run's
+at whichever `step` it reads, while a recipe row read at one step names only
+what failed at that step.

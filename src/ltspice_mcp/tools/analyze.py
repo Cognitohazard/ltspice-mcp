@@ -2847,7 +2847,9 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
                     "items": {"type": "string"},
                     "description": (
                         "The measurements LTspice printed as failed at the step(s) "
-                        "the row reads: FAIL'ed, or 'failed' in a stepped table."
+                        "the row reads: FAIL'ed, or 'failed' in a stepped table. A "
+                        "summary's measurements are the whole run's at any step, so "
+                        "its list names those that failed at any step."
                     ),
                 },
                 "not_finite": {

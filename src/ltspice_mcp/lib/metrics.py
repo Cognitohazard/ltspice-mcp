@@ -1179,7 +1179,11 @@ async def measurement_rows(
         row: dict[str, Any] = {"stats": stats}
         # What LTspice printed as failed, at the steps this row reads: the
         # log decoder's answer, never a null's (a null may be unreadable or
-        # not finite instead).
+        # not finite instead). A row read at one step names only that step's.
+        # The run summary beside it shows the whole run's measurements at any
+        # step, and so names what failed at any step
+        # (raw_parser.build_simulation_summary). Pinned by
+        # test_a_summary_names_failures_at_any_step_and_a_step_row_its_own.
         failed = [name for name in table["failed_measurements"] if name in stats]
         if failed:
             row["failed_measurements"] = failed

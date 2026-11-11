@@ -605,7 +605,8 @@ measured = api.analyze_results(
 ```
 
 The `measurements` inspect view pages measured values with their recorded
-range and `AT` metadata. `native_tables` pages literal scalar entries or
+range and `AT` metadata, and marks a value LTspice printed as failed
+`failed: True`. `native_tables` pages literal scalar entries or
 printed frequency rows, keeping section boundaries, printed labels and
 real/imaginary components. A unit the log does not establish is left out, and a
 block's `analysis_extent`, whether its rows cover the whole analysis, is
