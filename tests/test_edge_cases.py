@@ -718,7 +718,7 @@ class TestSanitizePayloadNonFinite:
     def test_format_response_applies_scrub(self):
         from ltspice_mcp.tools._base import format_response
 
-        res = format_response("Value: nan", {"value": float("nan")})
+        res = format_response({"value": float("nan")})
         assert res.structured_content is not None
         assert res.structured_content["value"] is None
         assert "warnings" in res.structured_content
