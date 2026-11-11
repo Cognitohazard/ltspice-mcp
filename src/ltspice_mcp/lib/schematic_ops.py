@@ -2153,14 +2153,18 @@ def _plan_connect_route(
     # (name_key): a net named VOUT and one named Vout, or two names a wire
     # already joins, are one node already. An end's nets are known by the
     # names they carry themselves (NamedNets.named_at), so a wire grounded on
-    # its own joins no name: it grounds what it is routed to. An end inside a
-    # run LTspice drops keeps the run only if the sheet with the route on it
-    # no longer drops it there: a route that leaves the run's line keeps it, and
-    # one laid along it merges into it and joins nothing there (``drawn``).
+    # its own joins no name: it grounds what it is routed to. Where the sheet
+    # with the route on it drops a run through an end, that sheet decides what
+    # the end joins: a route laid along the run merges into it, with any wire
+    # it extends there, and joins only what is drawn on the point (``drawn``).
+    # The names are read back as the nets they are on before the route.
     after = sheet_nets(editor, extra_segments=segments, geometry=component_geo)
 
     def end_nets(end: tuple[int, int]) -> frozenset[int]:
-        return before.named_at(end, drawn=bool(after.nets.dropped_at(end)))
+        if not after.nets.dropped_at(end):
+            return before.named_at(end)
+        names = after.own_names(end, drawn=True)
+        return frozenset(net for name in names if (net := before.net_named(name)) is not None)
 
     from_nets, to_nets = end_nets((x1, y1)), end_nets((x2, y2))
     from_labels_before = set().union(*(before.names(net) for net in from_nets))

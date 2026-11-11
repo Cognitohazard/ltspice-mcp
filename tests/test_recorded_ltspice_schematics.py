@@ -668,6 +668,46 @@ async def test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops(
         assert "same-instance wire" in data["failures"][0]["error"]
 
 
+@pytest.mark.parametrize("labelled", [True, False], ids=["labelled", "bare"])
+@pytest.mark.parametrize("routed", [0, 1], ids=["to_second_pin", "to_first_pin"])
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_wire_pins_refuses_a_route_that_extends_a_stub_into_a_run_ltspice_drops(
+    build: str, routed: int, labelled: bool, state_no_sim: SessionState, work_dir: Path
+):
+    """``same_instance_inline_vertex`` is two wires meeting end to end on the
+    line between R1's pins, and the export drops the run they make. Without
+    one of them the other is a stub from a pin; routing the missing wire from
+    the stub's end to its pin draws that sheet again. The stub merges into the
+    dropped run with the route, so the route's end on it joins neither
+    label's net: the refusal is that the wire is dropped, not that two named
+    nets would short. Without the labels the answer is the same."""
+    case_id = "connectivity/same_instance_inline_vertex"
+    staged = rec.stage_sheet(build, case_id, work_dir)
+    lines = staged.read_bytes().split(b"\n")
+    wires = [line for line in lines if line.startswith(b"WIRE ")]
+    assert len(wires) == 2
+    wire = wires[routed]
+    kept = [line for line in lines if line != wire and (labelled or not line.startswith(b"FLAG "))]
+    staged.write_bytes(b"\n".join(kept))
+
+    def ends(line: bytes) -> tuple[tuple[int, int], tuple[int, int]]:
+        x1, y1, x2, y2 = (int(n) for n in line.split()[1:])
+        return (x1, y1), (x2, y2)
+
+    (stub_end,) = set(ends(wire)) & set(ends(wires[1 - routed]))
+    pin_end = next(point for point in ends(wire) if point != stub_end)
+    pin = next(f"R1.{order}" for order, at in placed_pins(staged)["R1"].items() if at == pin_end)
+    data = await apply_ops(
+        state_no_sim,
+        staged.name,
+        [{"op": "wire_pins", "from_pin": {"x": stub_end[0], "y": stub_end[1]}, "to_pin": pin}],
+    )
+    first, second = exported_card(build, case_id, "R1").nodes
+    assert first != second
+    assert data["commit_state"] == "not_committed", data
+    assert "same-instance wire" in data["failures"][0]["error"], data["failures"]
+
+
 def netlisted_groups(sheet: Path) -> set[frozenset[str]]:
     """The pins on each net of the sheet's signature, as ``REF.order`` sets."""
     editor = _editor(sheet)
