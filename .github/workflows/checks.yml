@@ -76,7 +76,8 @@ jobs:
     # interpreter guards those paths — this proves platform correctness, not
     # every interpreter version.
     runs-on: windows-latest
-    timeout-minutes: 20
+    # The real-ngspice tests run here too, which the job's runtime has to cover.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
         with:
@@ -90,13 +91,41 @@ jobs:
       - name: Pin Python 3.12
         run: uv python pin "3.12"
 
+      # The official Windows build of ngspice, the one users install, so the
+      # real-ngspice tests run on Windows as well (docs/TESTING.md). In it,
+      # ngspice.exe is the GUI program, which writes no console output, and
+      # ngspice_con.exe the console one; the tests and spicelib start
+      # `ngspice` from PATH, so the console program is copied over the GUI
+      # one. Its spinit loads the code models by paths relative to bin and sets
+      # filetype=ascii, so the Spice64 tree stays whole. The archive is pinned
+      # by SHA-256; SourceForge publishes its SHA-1 and MD5, which matched.
+      - name: Install ngspice (official Windows console build)
+        shell: pwsh
+        env:
+          NGSPICE_VERSION: "47"
+          NGSPICE_SHA256: 59225971bd68cdd1199443649aa4615a9e6d684933f205ab49006a3942518f5a
+        run: |
+          $name = "ngspice-${env:NGSPICE_VERSION}_64.7z"
+          $archive = Join-Path $env:RUNNER_TEMP $name
+          curl.exe --fail --silent --show-error --location --retry 5 --retry-all-errors `
+            --output $archive `
+            "https://downloads.sourceforge.net/project/ngspice/ng-spice-rework/${env:NGSPICE_VERSION}/$name"
+          if ($LASTEXITCODE -ne 0) { throw "downloading $name failed" }
+          $hash = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          if ($hash -ne $env:NGSPICE_SHA256) { throw "$name has SHA-256 $hash, expected $env:NGSPICE_SHA256" }
+          7z x $archive "-o$env:RUNNER_TEMP" -y | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "unpacking $name failed" }
+          $bin = Join-Path $env:RUNNER_TEMP "Spice64\bin"
+          Copy-Item (Join-Path $bin "ngspice_con.exe") (Join-Path $bin "ngspice.exe") -Force
+          Add-Content -Path $env:GITHUB_PATH -Value $bin
+          & (Join-Path $bin "ngspice.exe") --version
+          if ($LASTEXITCODE -ne 0) { throw "ngspice --version failed" }
+
       # No lint step: ruff results are platform-independent and already
       # enforced by the static job — this job exists for win32 code paths.
-      # No coverage gate here: ngspice is not installed on this runner (the
-      # real-ngspice e2e tier is Linux-only above), so its tests skip and the
-      # whole-package coverage would fall below the threshold for reasons
-      # unrelated to Windows correctness. The 80% floor is enforced on the
-      # Linux job; this job proves the win32 code paths and Windows-aware tests.
+      # No coverage gate here: the 80% floor is enforced on the Linux job, and
+      # this job proves the win32 code paths, the Windows-aware tests and the
+      # real-ngspice tests on Windows.
       # One xdist worker per core, as on Linux: a serial run here spent most of
       # the job's time waiting on processes starting one after another. The
       # release gate's serial run keeps the one-process test order covered.

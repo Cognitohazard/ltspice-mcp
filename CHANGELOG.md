@@ -211,6 +211,10 @@ tool-surface changes.
   `m` on an X line, so the draw's area counts only the device's own `m`.
   Such a rule used to be refused with `unsupported_backend`, a code the server
   no longer returns.
+- CI: the `checks / check-windows` job installs the official Windows build
+  of ngspice (47, pinned by SHA-256) and puts its console program on PATH, so
+  the real-ngspice tests run on Windows too instead of skipping there. That
+  build writes ASCII raw files, as its `spinit` sets `filetype=ascii`.
 - CI: a `checks / check-macos` job runs the suite on a native macOS runner,
   with ngspice and Cairo from Homebrew. Reading results is still refused on
   macOS, so a test that fails only because of that refusal is reported as

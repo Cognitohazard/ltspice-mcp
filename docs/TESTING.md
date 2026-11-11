@@ -112,6 +112,15 @@ is imported, and of the parser's cleanup after a deadline, after repeated
 cancellation and after the server process dies, including a child process
 that tries to break away from the parser's process tree.
 
+CI runs the suite on a native Windows runner (`check-windows` in
+`.github/workflows/checks.yml`): Python 3.12, one xdist worker per core, no
+coverage gate, and the official Windows build of ngspice, the one users
+install, pinned by version and SHA-256. Its console program,
+`ngspice_con.exe`, is put on PATH as `ngspice.exe`, as above. That build's
+`spinit` sets `filetype=ascii`, so on Windows ngspice writes ASCII raw files,
+as it does for its users. The runner's code page is cp1252 and its paths have
+no spaces, so a run on a user's machine still covers what this job cannot.
+
 CI also runs the suite on a native macOS runner (`check-macos` in
 `.github/workflows/checks.yml`): Python 3.12, ngspice and Cairo from
 Homebrew, one xdist worker per core, and no coverage gate. Because the server
