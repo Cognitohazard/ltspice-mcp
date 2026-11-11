@@ -135,6 +135,47 @@ def _hierarchy_models(family: str) -> bool:
     return True
 
 
+def _samples_differ(family: str) -> bool:
+    """Whether two samples of a random variation draw different values for a
+    deck run on ``family``, through the profile its runs get."""
+    import tempfile
+
+    from pydantic import TypeAdapter
+
+    from ltspice_mcp.lib.variations import (
+        CircuitDeck,
+        Variation,
+        expand_variations,
+        materialize_variants,
+    )
+
+    profile = (
+        hierarchy.SemanticProfile(family, "kiltpsa" if family == "ngspice" else None)  # type: ignore[arg-type]
+        if _hierarchy_models(family)
+        else None
+    )
+    text = "* sampled\nV1 in 0 1\nR1 in 0 1k\n.op\n.end\n"
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "deck.cir"
+        path.write_text(text, encoding="ascii")
+        circuit = CircuitDeck("deck", path, text, (), semantic_profile=profile)
+        variations = TypeAdapter(list[Variation]).validate_python(
+            [
+                {
+                    "kind": "random",
+                    "runs": 2,
+                    "seed": 1,
+                    "rules": [{"rule": "component", "target": "R1", "tolerance": 0.1}],
+                }
+            ]
+        )
+        cases = materialize_variants(
+            circuit, expand_variations([circuit], variations), Path(folder)
+        )
+    first, second = (case.assignments["random:component:R1"] for case in cases)
+    return first != second
+
+
 _PROBES = {
     "lint_rules": lambda family: any(rule.family == family for rule in lint_rules.RULES),
     "validator_rules": lambda family: any(
@@ -143,6 +184,7 @@ _PROBES = {
     ),
     "hierarchy": _hierarchy_models,
     "reads_asc_export": lambda family: asc_export_refusal(SIMULATORS[family]) is None,
+    "statistical_sampling": _samples_differ,
 }
 
 
