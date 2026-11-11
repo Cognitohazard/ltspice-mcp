@@ -30,6 +30,7 @@ from ltspice_mcp.tools.analysis import (
     _panel,
     handle_plot_waveform,
 )
+from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
 from tests import _ltspice_recorded as rec
 from tests.conftest import (
     make_experiment_job,
@@ -882,6 +883,19 @@ async def _raw_series(state: SessionState, raw_path: Path, name: str, step: int 
     return guarded_axis(raw, step), np.asarray(raw.get_wave(name, step=step))
 
 
+async def _analyze(state: SessionState, source: dict, recipe: dict, **extra) -> dict:
+    """One analyze_results call with one recipe, keyed ``r``: the call a capped
+    summary's hint names."""
+    result = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate(
+            {"sources": [source], "recipes": [{"key": "r", **recipe}], **extra}
+        ),
+        state,
+    )
+    assert result.structured_content is not None
+    return result.structured_content
+
+
 def _series_labels(blob: dict) -> list[list[str]]:
     return [[s["label"] for s in p["series"]] for p in blob["panels"]]
 
@@ -965,19 +979,232 @@ class TestTraceSummary:
         _, y1 = await _raw_series(state_no_sim, raw, "V(out)", step=1)
         assert trace["final"] == pytest.approx(float(y1[-1]))
 
-    async def test_summary_is_capped_and_says_so(
+    async def test_a_capped_summary_names_the_call_that_reads_the_rest(
         self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
     ):
+        """The count of traces the summary left out came with no way to read
+        them in structuredContent: the route was only in an observation's
+        prose. The hint beside the count names the call, and that call reads
+        a trace the summary left out."""
         import ltspice_mcp.tools.analysis as mod
 
         monkeypatch.setattr(mod, "_TRACE_SUMMARY_MAX", 2)
         raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
-        data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"])
-        assert data["n_steps"] > 2
-        assert len(data["traces"]) == 2
-        assert data["traces_truncated"] == data["n_steps"]
-        (obs,) = [o for o in data["observations"] if o["code"] == "trace_summary_truncated"]
-        assert f"2 of {data['n_steps']}" in obs["detail"]
+        result = await handle_plot_waveform(
+            PlotWaveformInput(path=str(raw), signals=["V(out)"], open=False), state_no_sim
+        )
+        data = result.structured_content
+        assert data is not None
+        assert data["n_steps"] == 3
+        assert [t["step"] for t in data["traces"]] == [0, 1]
+        assert data["traces_truncated"] == 3
+        assert "analyze_results" in data["hint"]
+        assert "signal_stats" in data["hint"]
+        assert "all_steps=true" in data["hint"]
+        assert data["hint"] in result.content[0].text
+        # The hint and traces_truncated say it; an observation does not say it again.
+        assert "trace_summary_truncated" not in {o["code"] for o in data.get("observations", [])}
+
+        stats = await _analyze(
+            state_no_sim,
+            {"path": str(raw)},
+            {"metric": "signal_stats", "signal": "V(out)"},
+            all_steps=True,
+        )
+        rows = {row["step_index"]: row for row in stats["results"]["r"]["values"]}
+        _, left_out = await _raw_series(state_no_sim, raw, "V(out)", step=2)
+        assert rows[2]["value"]["max"] == pytest.approx(float(np.max(left_out)))
+        assert rows[2]["value"]["min"] == pytest.approx(float(np.min(left_out)))
+
+    async def test_the_call_for_the_rest_reads_the_plotted_window(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The summaries are read over [t_start, t_end]; the call the hint
+        names carries the same window, so it reads the traces left out over
+        the range the summarized ones were read over, not the whole run."""
+        import ltspice_mcp.tools.analysis as mod
+
+        raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+        t, _ = await _raw_series(state_no_sim, raw, "V(out)", step=2)
+        t_start, t_end = (f"{float(t[len(t) * k // 4]):.12g}" for k in (1, 2))
+        window = {"path": str(raw), "signals": ["V(out)"], "t_start": t_start, "t_end": t_end}
+        whole = await _plot(state_no_sim, **window)
+        monkeypatch.setattr(mod, "_TRACE_SUMMARY_MAX", 2)
+        capped = await _plot(state_no_sim, **window)
+
+        assert capped["traces_truncated"] == 3
+        hint = capped["hint"]
+        assert "signal_stats" in hint
+        assert f'window={{"start": "{t_start}", "end": "{t_end}"}}' in hint
+        stats = await _analyze(
+            state_no_sim,
+            {"path": str(raw)},
+            {
+                "metric": "signal_stats",
+                "signal": "V(out)",
+                "window": {"start": t_start, "end": t_end},
+            },
+            all_steps=True,
+        )
+        rows = {row["step_index"]: row["value"] for row in stats["results"]["r"]["values"]}
+        left_out = whole["traces"][2]
+        assert rows[2]["max"] == pytest.approx(left_out["max"])
+        assert rows[2]["min"] == pytest.approx(left_out["min"])
+
+    async def test_the_call_for_the_rest_of_a_windowed_ac_plot_reads_its_samples(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """signal_stats reads an AC sweep whole and refuses a window, so for a
+        windowed AC plot the hint names the waveform recipe with the window,
+        whose samples are the ones the summary was read from."""
+        import ltspice_mcp.tools.analysis as mod
+
+        raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
+        window = {"path": str(raw), "signals": ["V(out)"], "t_start": "1k", "t_end": "100k"}
+        whole = await _plot(state_no_sim, **window)
+        monkeypatch.setattr(mod, "_TRACE_SUMMARY_MAX", 1)
+        capped = await _plot(state_no_sim, **window)
+
+        assert capped["n_steps"] > 1
+        hint = capped["hint"]
+        assert "waveform recipes" in hint
+        assert "signal_stats" not in hint
+        assert 'window={"start": "1k", "end": "100k"}' in hint
+        assert "all_steps=true" in hint
+
+        refused = await _analyze(
+            state_no_sim,
+            {"path": str(raw)},
+            {"metric": "signal_stats", "signal": "V(out)", "window": {"start": "1k"}},
+        )
+        (failure,) = refused["failures"]
+        assert "takes no window" in failure["message"]
+        assert "waveform recipe" in failure["message"]
+
+        read = await _analyze(
+            state_no_sim,
+            {"path": str(raw)},
+            {
+                "metric": "waveform",
+                "signals": ["V(out)"],
+                "window": {"start": "1k", "end": "100k"},
+            },
+            all_steps=True,
+        )
+        rows = {row["step_index"]: row["value"] for row in read["results"]["r"]["values"]}
+        (series,) = rows[1]["series"]
+        assert min(rows[1]["x"]) >= 1e3 and max(rows[1]["x"]) <= 1e5
+        assert max(series["magnitude_db"]) == pytest.approx(whole["traces"][1]["max"])
+        assert min(series["magnitude_db"]) == pytest.approx(whole["traces"][1]["min"])
+
+    async def test_the_call_for_the_rest_reads_the_plotted_step(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A plot of one step of a stepped run: the hint passes on the step
+        selector it was given, which analyze_results reads the same way, and
+        for a step given by index names the rows that are that step's, since
+        analyze_results selects a step by its value only."""
+        import ltspice_mcp.tools.analysis as mod
+
+        monkeypatch.setattr(mod, "_TRACE_SUMMARY_MAX", 1)
+        raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
+        signals = ["V(out)", "V(in)"]
+        by_value = await _plot(
+            state_no_sim, path=str(raw), signals=signals, step={"axis": "r", "value": "25"}
+        )
+        assert by_value["traces_truncated"] == 2
+        assert 'step={"axis": "r", "value": "25"}' in by_value["hint"]
+        assert "all_steps" not in by_value["hint"]
+        stats = await _analyze(
+            state_no_sim,
+            {"path": str(raw)},
+            {"metric": "signal_stats", "signal": "V(in)"},
+            step={"axis": "r", "value": "25"},
+        )
+        (row,) = stats["results"]["r"]["values"]
+        _, left_out = await _raw_series(state_no_sim, raw, "V(in)", step=1)
+        assert row["step_index"] == 1
+        assert row["value"]["max"] == pytest.approx(float(np.max(left_out)))
+
+        by_index = await _plot(state_no_sim, path=str(raw), signals=signals, step=2)
+        assert "all_steps=true" in by_index["hint"]
+        assert "step_index 2" in by_index["hint"]
+
+    async def test_the_call_for_the_rest_reads_the_plotted_run_of_a_job(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """plot_waveform picks a job's run with run_index or case_id, which an
+        analyze_results source does not take: the hint names the runs that
+        select the same run, and that call reads that run alone."""
+        import ltspice_mcp.tools.analysis as mod
+
+        monkeypatch.setattr(mod, "_TRACE_SUMMARY_MAX", 1)
+        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
+        make_experiment_job(state_no_sim, job_id="ex1", count=2, raw=raw)
+        signals = ["V(out)", "V(in)"]
+        by_index = await _plot(state_no_sim, job_id="ex1", run_index=1, signals=signals)
+        by_case = await _plot(state_no_sim, job_id="ex1", case_id="case-0001", signals=signals)
+        assert "runs=[1]" in by_index["hint"]
+        assert 'runs={"case_ids": ["case-0001"]}' in by_case["hint"]
+
+        for runs in ([1], {"case_ids": ["case-0001"]}):
+            stats = await _analyze(
+                state_no_sim,
+                {"job_id": "ex1", "runs": runs},
+                {"metric": "signal_stats", "signal": "V(in)"},
+            )
+            (row,) = stats["results"]["r"]["values"]
+            assert row["run_index"] == 1
+
+    async def test_a_capped_summary_of_a_plot_signal_stats_refuses_names_its_samples(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """signal_stats defines no statistics for an ngspice distortion sweep,
+        so the call the hint names for its left-out traces is the waveform
+        recipe, which returns their samples."""
+        import ltspice_mcp.tools.analysis as mod
+
+        monkeypatch.setattr(mod, "_TRACE_SUMMARY_MAX", 1)
+        freqs = [1e3, 1e4, 1e5]
+        rows = "".join(
+            f"{i}\t{f:.15e},0.0\n\t{0.1 * (i + 1):.15e},0.0\n\t{0.5 + i:.15e},0.0\n"
+            for i, f in enumerate(freqs)
+        )
+        raw = work_dir / "disto.raw"
+        # Bytes, so the file holds exactly these newlines on every platform.
+        raw.write_bytes(
+            (
+                "Title: * distortion\nDate: x\nPlotname: DISTORTION - 2nd harmonic\n"
+                f"Flags: complex\nNo. Variables: 3\nNo. Points: {len(freqs)}\n"
+                "Command: ngspice-44\nVariables:\n\t0\tfrequency\tfrequency\n"
+                "\t1\tv(out)\tvoltage\n\t2\tv(in)\tvoltage\nValues:\n" + rows
+            ).encode("ascii")
+        )
+
+        data = await _plot(state_no_sim, path=str(raw), signals=["v(out)", "v(in)"])
+        assert data["analysis_type"] == "disto"
+        assert [t["signal"] for t in data["traces"]] == ["v(out)"]
+        assert data["traces_truncated"] == 2
+        assert "waveform recipes" in data["hint"]
+        assert "signal_stats" not in data["hint"]
+        assert "all_steps" not in data["hint"]  # one run, no steps
+
+        refused = await _analyze(
+            state_no_sim, {"path": str(raw)}, {"metric": "signal_stats", "signal": "v(in)"}
+        )
+        # signal_stats' own refusal names the same route as the hint.
+        (failure,) = refused["failures"]
+        assert "signal_stats does not define statistics" in failure["message"]
+        assert "waveform recipe" in failure["message"]
+        read = await _analyze(
+            state_no_sim, {"path": str(raw)}, {"metric": "waveform", "signals": ["v(in)"]}
+        )
+        assert "failures" not in read, read["failures"]
+        (row,) = read["results"]["r"]["values"]
+        (series,) = row["value"]["series"]
+        assert series["signal"] == "v(in)"
+        assert row["value"]["x"] == pytest.approx(freqs)
+        assert series["real"] == pytest.approx([0.5, 1.5, 2.5])
 
     async def test_ac_summary_reads_magnitude_in_db_and_phase_ends(
         self, state_no_sim: SessionState, work_dir: Path
@@ -1126,7 +1353,7 @@ def _images(result) -> list[types.ImageContent]:
 @pytest.mark.asyncio
 class TestAttachedImage:
     """``attach_plot`` adds a static PNG a vision model can read, rendered from
-    the same panels; without the raster extra it is skipped and reported."""
+    the same panels; without a rasterizer it is skipped and reported."""
 
     @needs_raster
     async def test_attach_plot_returns_a_png(self, state_no_sim: SessionState, work_dir: Path):
@@ -1192,25 +1419,26 @@ class TestAttachedImage:
         (obs,) = [o for o in sc["observations"] if o["code"] == "image_unavailable"]
         return obs["detail"]
 
-    async def test_a_missing_extra_is_named_with_its_install_step(
-        self, state_no_sim: SessionState, work_dir: Path, raster_extra_missing
+    async def test_a_missing_dependency_is_named_with_its_install_step(
+        self, state_no_sim: SessionState, work_dir: Path, raster_dependency_missing
     ):
         detail = self._skipped_image_detail(
             await self._plot_asking_for_an_image(state_no_sim, work_dir)
         )
-        assert "'raster' extra" in detail
-        assert "pip install 'ltspice-mcp[raster]'" in detail
+        assert "resvg-py, which ltspice-mcp depends on" in detail
+        assert "pip install --force-reinstall ltspice-mcp" in detail
 
     async def test_a_missing_native_library_is_named_as_itself(
         self, state_no_sim: SessionState, work_dir: Path, raster_native_missing
     ):
         # cairosvg is installed but libcairo is not: the library is named, and
-        # the extra, whose rasterizer needs no native library, is offered.
+        # reinstalling, which brings back resvg-py and needs no native library,
+        # is offered.
         detail = self._skipped_image_detail(
             await self._plot_asking_for_an_image(state_no_sim, work_dir)
         )
         assert "native Cairo library" in detail
-        assert "pip install 'ltspice-mcp[raster]'" in detail
+        assert "pip install --force-reinstall ltspice-mcp" in detail
 
     @needs_raster
     async def test_ui_host_gets_the_widget_and_the_image(

@@ -121,6 +121,92 @@ def test_the_line_walk_rule_catches_what_it_names():
     assert _line_walks_in(tree) == {"cards", "directives"}
 
 
+#: Functions that call ``spice_lex.lex`` itself, with what each lexes. ``lex``
+#: reads every line of a text as a card, a deck's title and the cards after
+#: its ``.END`` among them, so a whole deck is read through ``lex_deck`` or,
+#: by an edit that writes every card back, ``lex_for_edit``.
+_PLAIN_LEX: dict[str, str] = {
+    "lib/library_parser.py:parse_library_file": "a model library, not a deck",
+    "lib/lint_rules.py:_LintContext.files": (
+        "the staged included files; the deck itself is lex_deck's. What LTspice "
+        "reads past an included file's .END is not recorded"
+    ),
+    "lib/lint_rules.py:_models_from_staged_dependencies.walk": "an included file the walk reaches",
+    "lib/montecarlo.py:render_variant_model_card": "one .model card",
+    "lib/montecarlo.py:parse_model_params": "one .model card",
+    "lib/spice_lex_ops.py:inject_card_before_end": "the one card to insert",
+    "lib/spice_validator.py:validate_directive": "one directive",
+    "lib/subckt_mismatch.py:_render_clone": "one subcircuit block, copied out of a file",
+    "lib/subckt_mismatch.py:render": "a patched subcircuit block the plan rendered",
+    "lib/variations.py:_validate_write_sets": "one card the hierarchy resolved",
+    "lib/instance_targeting.py:TargetEditor._copy_includes": "one include card, rewritten",
+    "lib/instance_targeting.py:TargetEditor.clone_model": "one .model card",
+    "lib/instance_targeting.py:source_lineage": (
+        "every card of a file, matched to its edited copy by line; which cards "
+        "are read is the hierarchy's answer (lex_deck), and only its lines are looked up"
+    ),
+    "lib/instance_targeting.py:TargetEditor.__init__": (
+        "every card of a file by line, for an edit to emit; the cards it edits are "
+        "the hierarchy's (lex_deck)"
+    ),
+    "lib/native_inputs.py:_Sources.occurrence": (
+        "every card of a staged file and its original, matched by line; only "
+        "lines the hierarchy (lex_deck) resolved are looked up"
+    ),
+    "lib/pdk_native.py:_original_cards": (
+        "every card of an original capture by line; only lines the hierarchy "
+        "(lex_deck) resolved are looked up"
+    ),
+    "lib/deck_prep.py:_read_export": (
+        "an LTspice export scrubbed for ngspice's parser: every card loses .backanno "
+        "and the section sign, read or not, which changes nothing either simulator reads"
+    ),
+}
+
+
+def _plain_lex_calls_in(tree: ast.AST) -> set[str]:
+    """The functions in ``tree`` that call ``lex`` in their own body."""
+    found: set[str] = set()
+    for name, function in _functions(tree):
+        pending = list(ast.iter_child_nodes(function))
+        while pending:
+            node = pending.pop()
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                continue
+            pending.extend(ast.iter_child_nodes(node))
+            if not isinstance(node, ast.Call):
+                continue
+            callee = node.func
+            called = callee.id if isinstance(callee, ast.Name) else getattr(callee, "attr", "")
+            if called == "lex":
+                found.add(name)
+    return found
+
+
+def test_a_deck_is_lexed_only_through_its_reading():
+    callers = {
+        f"{module}:{name}"
+        for module, tree in modules().items()
+        if module != "lib/spice_lex.py"
+        for name in _plain_lex_calls_in(tree)
+    }
+    assert callers == set(_PLAIN_LEX)
+
+
+def test_the_plain_lex_rule_catches_what_it_names():
+    tree = ast.parse(
+        "def deck(text):\n"
+        "    return lex(text).cards\n"
+        "def outer(text):\n"
+        "    def inner():\n"
+        "        return spice_lex.lex(text)\n"
+        "    return inner\n"
+        "def reading(text):\n"
+        "    return lex_deck(text).cards\n"
+    )
+    assert _plain_lex_calls_in(tree) == {"deck", "outer.inner"}
+
+
 # --------------------------------------------------------------------------
 # Which file and section an include names is read by staging's scanner
 # --------------------------------------------------------------------------
@@ -159,7 +245,10 @@ _PROBE_PATTERN = re.compile(r"\[[VvIi]{2}\](?:\\s\*)?\\\(|(?:(?<![A-Za-z])|(?<=\
 
 #: Modules that compile a probe pattern for text that is not a deck's card.
 _PROBE_PATTERN_READERS: dict[str, str] = {
-    "lib/services.py": "the results side: a caller's signal name, read against a raw's traces",
+    "lib/trace_names.py": (
+        "the results side: a caller's signal name or node pair V(a,b), read against a "
+        "raw's traces"
+    ),
     "lib/decoded_raw.py": "the results side: a trace name a raw file holds",
 }
 

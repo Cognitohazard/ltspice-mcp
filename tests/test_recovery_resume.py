@@ -17,12 +17,19 @@ from ltspice_mcp.lib.recovery_records import RecoveryError
 from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
-from tests.conftest import LIVENESS_S, coordinator_returned, job_done, recorded_fixture_simulator
+from tests.conftest import (
+    LIVENESS_S,
+    coordinator_returned,
+    job_done,
+    needs_controlled_startup,
+    recorded_fixture_simulator,
+)
 from tests.test_resume_surface import _DECK, _fail_second_case, _state, _submit
 
 pytestmark = [
     pytest.mark.asyncio,
     pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH"),
+    needs_controlled_startup,
 ]
 
 

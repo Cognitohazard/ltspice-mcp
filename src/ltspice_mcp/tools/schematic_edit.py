@@ -21,7 +21,7 @@ reported but never un-commits the sheet.
 """
 
 # The op models, the in-place applier and the sheet's nets are the
-# shared engine in lib/schematic_ops.py, imported rather than duplicated.
+# shared schematic editor in lib/schematic_ops.py, imported rather than duplicated.
 from __future__ import annotations
 
 import asyncio
@@ -112,6 +112,7 @@ from ltspice_mcp.tools._base import (
     comparison_mismatch,
     difference_in_full,
     format_response,
+    open_window_call,
     outcome_of,
     page_schema,
     registry,
@@ -141,7 +142,7 @@ _DEFAULT_VIEW_LIMIT = 100
 # it, an unknown op is one error naming every accepted kind, and a known op with
 # a bad field reports against that kind alone.
 #
-# The members are the engine's own op list, so an op the engine applies is one
+# The members are the editor's own op list, so an op the editor applies is one
 # the tool accepts, and the reverse.
 ConsolidatedOp = Annotated[SchematicOp, Field(discriminator="op")]
 
@@ -1351,18 +1352,42 @@ def _window_differs(differing: Sequence[tuple[OpenSheet, Difference]]) -> str:
 _DIFFERENCE_IN_ONE = difference_in_full()
 _DIFFERENCE_IN_EACH = difference_in_full(window="a window's process")
 
+#: Where a refusal's reader finds the sheet's sha256 for ``open_window_call``:
+#: the call they sent quoted the file's, or it would have been refused before
+#: any window was asked.
+_SENT_SHA256 = "the expected_sha256 this call sent"
+#: The same for the reply to a commit: its own sha256 is the file's, which a
+#: window left showing the sheet as it was differs from.
+_REPLY_SHA256 = "this reply's sha256"
+_SAVE, _DISCARD = "'save'", "'discard'"
 _WINDOW_REMEDY = (
     "Ask the user whether to keep the changes in their LTspice window; "
     f"{_DIFFERENCE_IN_ONE} Then call "
-    "edit_schematic with ops=[], this expected_sha256 and open_window='save' to keep "
-    "them or open_window='discard' to drop them, read the sheet again, and resubmit."
+    f"{open_window_call('this path', _SENT_SHA256, f'{_SAVE}|{_DISCARD}')}, "
+    "'save' to keep them or 'discard' to drop them, read the sheet again, and resubmit."
 )
 _WINDOWS_REMEDY = (
-    f"Ask the user which window's copy to keep; {_DIFFERENCE_IN_EACH} "
-    "Then call edit_schematic with ops=[], "
-    "this expected_sha256, open_window='save' and window_pid set to that window's "
-    "process, or open_window='discard' to drop every copy, read the sheet again, and "
-    "resubmit."
+    f"Ask the user which window's copy to keep; {_DIFFERENCE_IN_EACH} Then call "
+    + open_window_call("this path", _SENT_SHA256, _SAVE, window_pid="that window's process")
+    + " to keep that copy, or "
+    + open_window_call("this path", _SENT_SHA256, _DISCARD)
+    + " to drop every copy, read the sheet again, and resubmit."
+)
+
+
+#: Said on a dry run that finds a window's copy differing. Its reply carries
+#: the file's sha256, which the call quotes.
+_DRY_RUN_WINDOW_CALL = (
+    "Ask the user whether to keep the changes in their LTspice window; then "
+    f"{open_window_call('this path', _REPLY_SHA256, f'{_SAVE}|{_DISCARD}')} "
+    "saves or drops the window's copy."
+)
+_DRY_RUN_WINDOWS_CALL = (
+    "Ask the user which window's copy to keep; then "
+    + open_window_call("this path", _REPLY_SHA256, _SAVE, window_pid="that window's process")
+    + " keeps that copy, or "
+    + open_window_call("this path", _REPLY_SHA256, _DISCARD)
+    + " drops every copy."
 )
 
 
@@ -1466,8 +1491,8 @@ def _window_notes(shown: Sequence[Mapping[str, object]]) -> list[str]:
                 f"An LTspice window (process {row['pid']}) has this sheet open and could "
                 f"not be updated ({row.get('reason')}): it still shows the sheet as it "
                 "was, and saving from it would overwrite this edit. Ask the user, then "
-                "call edit_schematic with ops=[] and open_window='discard' to open the "
-                "file there."
+                f"call {open_window_call('this path', _REPLY_SHA256, _DISCARD)} to "
+                "open the file there."
             )
     return notes
 
@@ -1746,7 +1771,9 @@ async def _evaluate_edit_schematic(
             if differs is not None and dry_run:
                 window_notes.append(
                     f"{differs} A commit is refused until the window's copy is saved or "
-                    "dropped (open_window, with the user's answer) or the sheet is closed. "
+                    "dropped, or the sheet is closed. "
+                    + (_DRY_RUN_WINDOW_CALL if one else _DRY_RUN_WINDOWS_CALL)
+                    + " "
                     + (_DIFFERENCE_IN_ONE if one else _DIFFERENCE_IN_EACH)
                 )
             elif differs is not None:

@@ -139,7 +139,7 @@ class TestBuildInstructions:
         # Accurate: .asc editing depends on LTspice symbol files, not the
         # executable — don't over-claim a flat "unavailable".
         assert says(text, ".asc", "symbol")
-        assert not says(text, "(default)")  # no default marker for a single engine
+        assert not says(text, "(default)")  # no default marker for a single simulator
 
     def test_ltspice_only(self):
         text = build_instructions({"ltspice": _LT}, _LT)
@@ -148,7 +148,7 @@ class TestBuildInstructions:
 
     def test_both_marks_default(self):
         text = build_instructions({"ltspice": _LT, "ngspice": _NG}, _LT)
-        # Both engines named, and the default marker on the one that is it.
+        # Both simulators named, and the default marker on the one that is it.
         assert says(text, "LTspice (default)", "ngspice")
         assert not says(text, "ngspice (default)")
         assert not says(text, "not detected")
@@ -454,7 +454,7 @@ class TestServerDispatch:
         assert result.is_error
         data = result.structured_content
         assert data is not None
-        assert data["code"] == "result_unreadable"
+        assert data["code"] == "result_file_not_found"
         assert data["hint"]
         assert text_json(result) == data
 

@@ -1,4 +1,4 @@
-"""Shared engine startup for MCP server and in-process callers."""
+"""Shared startup for the MCP server and in-process callers."""
 
 from __future__ import annotations
 
@@ -219,7 +219,7 @@ async def bootstrap_server_engine(
     on_config_loaded: ConfigLoadedHook,
     logger: logging.Logger,
 ) -> BootstrapResult:
-    """Create the engine session behind the MCP server's lifespan.
+    """Create the session behind the MCP server's lifespan.
 
     Configuration comes from the process environment and TOML only — there is
     no override channel here. ``on_config_loaded`` keeps process-wide logging
@@ -236,7 +236,7 @@ async def bootstrap_library_engine(
     config_path: str | os.PathLike[str] | None = None,
     **overrides: object,
 ) -> BootstrapResult:
-    """Create the engine session behind an in-process :class:`Api`.
+    """Create the session behind an in-process :class:`Api`.
 
     Overrides are applied after environment and TOML values, and every name
     must be a ``ServerConfig`` field the library exposes. Supplying

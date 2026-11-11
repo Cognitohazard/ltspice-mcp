@@ -56,6 +56,7 @@ from ltspice_mcp.lib.spice_lex import (
     SpiceLexErrorCategory,
     find_matching_ends,
     lex,
+    line_break,
 )
 from ltspice_mcp.lib.spice_lex_views import (
     InstanceLine,
@@ -86,6 +87,8 @@ def inject_card_before_end(
     with a trailing newline if it lacks one — without that fix,
     ``emit`` concatenates two cards' raw_lines on the same line and
     produces a malformed netlist (e.g. ``R1 a b 1k.MODEL X NMOS``).
+    The card's lines end with the file's own line break, whatever
+    ``text`` ends with (``inject_cards_before_end``).
     Replaces the legacy ``montecarlo.inject_card_before_end``.
     """
     sub = lex(text).cards
@@ -106,29 +109,39 @@ def inject_cards_before_end(cards: list[SpiceCard], block: list[SpiceCard]) -> N
 
     The multi-card form of ``inject_card_before_end``, for a caller that has
     built its cards itself — a whole ``.SUBCKT`` body, say — and would only be
-    re-lexing them to hand over text. Same newline handling: both the block's
-    last line and the line it lands after are given a trailing newline if they
-    lack one, or ``emit`` glues two cards onto one line.
+    re-lexing them to hand over text. Every line of the block ends with the
+    file's own line break (``spice_lex.line_break`` of ``cards``), so a
+    CRLF deck stays CRLF whatever text the block was lexed from, and the
+    line it lands after is given one if it lacks one, or ``emit`` glues two
+    cards onto one line.
 
     ``block`` is spliced in as given, so the caller's card objects (and any
     scope they carry) are what ends up in ``cards``.
     """
     if not block:
         return
-    # Guard the block's OWN trailing newline: when it lands before a .END,
-    # emit would otherwise glue ".END" onto its last line (the predecessor
-    # guard below only fixes the line before the insertion point).
-    last = block[-1]
-    if last.raw_lines and not last.raw_lines[-1].endswith("\n"):
-        last.raw_lines = [*last.raw_lines[:-1], last.raw_lines[-1] + "\n"]
+    eol = line_break(cards)
+    # Every line of the block, its last included: when the block lands
+    # before a .END, emit would otherwise glue ".END" onto its last line (the
+    # predecessor guard below only fixes the line before the insertion point).
+    for card in block:
+        card.raw_lines = [_ended(raw, eol) for raw in card.raw_lines]
     # Find the top-level .END (scope=()) and insert before it; no .END, append.
     at = next((i for i, c in enumerate(cards) if c.kind == "end" and c.scope == ()), len(cards))
-    _ensure_predecessor_ends_with_newline(cards, at)
+    _ensure_predecessor_ends_with_newline(cards, at, eol)
     cards[at:at] = block
 
 
-def _ensure_predecessor_ends_with_newline(cards: list[SpiceCard], insert_idx: int) -> None:
-    """Patch ``cards[insert_idx - 1]``'s last raw_line so it ends with a newline.
+def _ended(raw: str, eol: str) -> str:
+    """``raw``, one line, ending with ``eol`` in place of its own line break."""
+    return raw.removesuffix("\n").removesuffix("\r") + eol
+
+
+def _ensure_predecessor_ends_with_newline(
+    cards: list[SpiceCard], insert_idx: int, eol: str
+) -> None:
+    """Patch ``cards[insert_idx - 1]``'s last raw_line so it ends with ``eol``,
+    the file's line break, when it ends with none.
 
     No-op when there is no predecessor (insert at the start) or when
     the predecessor already ends with ``\\n``/``\\r\\n``. Modifies
@@ -145,7 +158,7 @@ def _ensure_predecessor_ends_with_newline(cards: list[SpiceCard], insert_idx: in
     last = prev.raw_lines[-1]
     if last.endswith("\n"):
         return
-    prev.raw_lines = [*prev.raw_lines[:-1], last + "\n"]
+    prev.raw_lines = [*prev.raw_lines[:-1], last + eol]
 
 
 # ---------------------------------------------------------------------------
@@ -455,17 +468,24 @@ def fold_micro_suffix_cards(cards: list[SpiceCard]) -> tuple[ValueSuffixSite, ..
 SECTION_SIGN = "§"
 
 
+def without_section_sign(ref: str) -> str:
+    """An instance name with every ``§`` taken out: the name an ngspice copy of
+    the deck gives it (``strip_instance_section_signs``), which
+    ``section_sign_names`` accepts and the netlist comparison matches on."""
+    return ref.replace(SECTION_SIGN, "")
+
+
 def section_sign_names(ref: str) -> tuple[str, ...]:
     """The other names of an instance LTspice exported with its section sign.
 
     ``R§Load`` is ``RLoad`` without the marker, as an ngspice copy of the deck
-    names it (``strip_instance_section_signs``) and ``verify_circuit`` reports
-    it, and ``Load``, the part's own name on the sheet, which LTspice's results
-    use (``I(Load)``, recorded ``deck/section_sign_*``). A reference without
-    the marker has no other name.
+    names it (``without_section_sign``) and ``verify_circuit`` reports it, and
+    ``Load``, the part's own name on the sheet, which LTspice's results use
+    (``I(Load)``, recorded ``deck/section_sign_*``). A reference without the
+    marker has no other name.
     """
-    letter, sign, own = ref.partition(SECTION_SIGN)
-    return (letter + own, own) if sign and own else ()
+    _letter, sign, own = ref.partition(SECTION_SIGN)
+    return (without_section_sign(ref), own) if sign and own else ()
 
 
 def strip_instance_section_signs(cards: list[SpiceCard]) -> None:
@@ -478,7 +498,7 @@ def strip_instance_section_signs(cards: list[SpiceCard]) -> None:
     string or an include path is part of a file name or text, not an instance.
     """
     renamed = {
-        card.instance_ref: card.instance_ref.replace(SECTION_SIGN, "")
+        card.instance_ref: without_section_sign(card.instance_ref)
         for card in cards
         if card.kind == "instance" and card.instance_ref and SECTION_SIGN in card.instance_ref
     }

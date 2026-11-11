@@ -25,7 +25,7 @@ from ltspice_mcp.lib.variations import (
     expand_variations,
     materialize_variants,
 )
-from tests.conftest import symlink_or_skip
+from tests.conftest import CONTROLLED_STARTUP_REASON, CONTROLLED_STARTUP_REFUSED, symlink_or_skip
 from tests.test_native_records import _record
 from tests.test_recovery_records import recovery_job
 
@@ -290,8 +290,8 @@ def test_native_recapture_refuses_prepared_file_hash_conflict(tmp_path, changed)
 
 @pytest.mark.parametrize("operation", ["validate", "startup"])
 def test_lineage_refuses_peer_redirect(tmp_path, operation):
-    if operation == "startup" and sys.platform not in {"linux", "win32"}:
-        pytest.skip("controlled startup is verified on Linux and Windows")
+    if operation == "startup" and CONTROLLED_STARTUP_REFUSED:
+        pytest.skip(CONTROLLED_STARTUP_REASON)
     store = Store(tmp_path)
     original = store.run_dir("exp_original")
     peer = store.run_dir("exp_peer")

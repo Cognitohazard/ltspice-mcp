@@ -36,6 +36,10 @@ dependencies = [
     # the spelling it accepts instead of only accepting it.
     "pydantic>=2.9,<3.0",
     "rapidfuzz>=3.0,<4.0",
+    # Rasterizes a rendered schematic or plot to PNG, the only image an
+    # assistant can see. Prebuilt abi3 wheels for Windows, macOS and Linux
+    # (glibc and musl), and no native library to load (see lib/raster.py).
+    "resvg-py>=0.5,<0.6",
     "scipy>=1.12,<2.0",
     # Capped below 1.6 (tested range). spicelib 1.6 refactored the editor model:
     # .PARAM values now come back typed (e.g. 1k -> a number) rather than as
@@ -49,12 +53,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Rasterizing a rendered schematic to PNG. resvg-py ships prebuilt wheels and
-# needs no native library; a server that never returns an image need not carry
-# it: without this extra a render still comes back, as SVG markup rather than a
-# bitmap (see lib/raster.py). cairosvg, if installed, is used when resvg-py is
-# not.
-raster = ["resvg-py>=0.5,<0.6"]
+# Empty: resvg-py, which this extra used to add, is a dependency now. Kept so
+# that a launch line naming it (uvx --from 'ltspice-mcp[raster]'), which
+# earlier releases needed for PNG, still resolves.
+raster = []
 
 [project.urls]
 Homepage = "https://github.com/cognitohazard/ltspice-mcp"
@@ -96,11 +98,9 @@ only-include = [
 
 [dependency-groups]
 dev = [
-    # The 'raster' extra's rasterizer, and cairosvg, used when it is absent: dev
-    # requirements, so both PNG paths run in CI rather than every rasterization
-    # test skipping.
+    # cairosvg, the rasterizer used when resvg-py cannot be imported: a dev
+    # requirement, so both PNG paths run in CI.
     "cairosvg>=2.7,<3.0",
-    "resvg-py>=0.5,<0.6",
     "hypothesis>=6.152.4",
     # Reads LTspice's own drawing of schematic text in the layout tests.
     "pillow>=11",
@@ -111,6 +111,7 @@ dev = [
     "pytest-github-actions-annotate-failures>=0.4.2",
     "pytest-xdist>=3.8.0",
     "ruff>=0.11",
+    "towncrier>=26.9.0",
 ]
 
 [tool.ruff]
@@ -159,13 +160,25 @@ known-first-party = ["ltspice_mcp"]
 # marker whose line no longer uses a banned name (RUF100), so the allowed uses
 # only shrink. A name imported into another module is banned there too.
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
-"ltspice_mcp.lib.services.find_trace".msg = "Resolve a caller's signal with services.resolve_signal, which also reads a node pair."
+"ltspice_mcp.lib.trace_names.find_trace".msg = "Resolve a caller's signal with services.resolve_signal, or ask what it reads of a header with trace_names.read_in_plot; both also read a node pair."
 "ltspice_mcp.lib.format.parse_plain_value".msg = "Read a value a simulator runs with format.parse_spice_value; the plain reader only tells a number from a name."
 "ltspice_mcp.lib.variations.parse_plain_value".msg = "Read a value a simulator runs with format.parse_spice_value; the plain reader only tells a number from a name."
 "ltspice_mcp.lib.simulator_build.is_cp1252_ltspice_executable".msg = "Ask simulator_build.ltspice_before_24, which also reads the build a run reported."
 "ltspice_mcp.lib.job_lifecycle.runs_terminal".msg = "Ask services.runs_unready, services.case_unreadable or job_lifecycle.runs_done whether runs can be read."
 "ltspice_mcp.lib.experiment_store.load_job".msg = "Resolve a job through the registry (JobRegistry.get_or_load), which reconciles a record another process owns."
 "ltspice_mcp.lib.experiment_store.load_job_from_path".msg = "Resolve a job through the registry (JobRegistry.get_or_load), which reconciles a record another process owns."
+"ltspice_mcp.lib.recipes.validate_recipe".msg = "Validate a request's recipe with analyze.recipe_of_request, which also checks the source labels it names."
+"ltspice_mcp.tools.analyze.validate_recipe".msg = "Validate a request's recipe with analyze.recipe_of_request, which also checks the source labels it names."
+"ltspice_mcp.tools._base.held_to_cap".msg = "Import held_to_cap from ltspice_mcp.lib.format, which owns it."
+"ltspice_mcp.lib.schematic_ops.is_asc".msg = "Import is_asc from ltspice_mcp.lib.asc_document, which owns it."
+"ltspice_mcp.lib.spice_lex.cards_from_path".msg = "Read a deck with spice_lex.lex_deck, or spice_lex.lex_for_edit for an edit; a file's every card reads its title and the cards after .END as cards."
+"spicelib.utils.file_search.search_file_in_containers".msg = "Find a file a sheet names with the sheet's SymbolResolver (state.symbols.for_sheet); spicelib's search walks folders LTspice does not look in, the server's working directory among them."
+"spicelib.utils.file_search.find_file_in_directory".msg = "Find a file a sheet names with the sheet's SymbolResolver (state.symbols.for_sheet); spicelib's search walks folders LTspice does not look in, the server's working directory among them."
+"ltspice_mcp.lib.symbol_library.find_symbol".msg = "Ask the sheet's SymbolResolver (state.symbols.for_sheet), which searches the sheet's folder and the session's libraries, each once, in their order."
+"ltspice_mcp.lib.symbol_library.find_file".msg = "Ask the sheet's SymbolResolver (state.symbols.for_sheet), which searches the sheet's folder and the session's libraries, each once, in their order."
+"ltspice_mcp.lib.symbol_library.find_beside".msg = "Ask the sheet's SymbolResolver (state.symbols.for_sheet), which searches the sheet's folder and the session's libraries, each once, in their order."
+"ltspice_mcp.lib.symbol_library.find_in_library".msg = "Ask the sheet's SymbolResolver (state.symbols.for_sheet), which searches the sheet's folder and the session's libraries, each once, in their order."
+"ltspice_mcp.lib.symbol_library.symbol_files".msg = "List the names a sheet's lookups find with SymbolResolver.listing, which searches each folder once, as its lookups do."
 
 [tool.ruff.lint.per-file-ignores]
 # Tests exercise a banned name directly.
@@ -183,3 +196,48 @@ addopts = "--strict-markers --tb=short"
 # the job timeout, so the dump still reaches the log.
 faulthandler_timeout = 300
 faulthandler_exit_on_timeout = true
+
+# The changelog is rendered from fragments. A change adds one file under
+# changelog.d/, named +<change>.<type>.md and holding the entry's Markdown
+# without the leading "- "; scripts/release.sh runs `towncrier build`, which
+# writes the fragments as the release's section below the start marker in
+# CHANGELOG.md and deletes them. Fragments are hand-wrapped like the file:
+# towncrier's `wrap` would reflow a nested list or a second paragraph into one
+# line. Within a type, towncrier orders the entries by their text.
+[tool.towncrier]
+directory = "changelog.d"
+filename = "CHANGELOG.md"
+template = "changelog.d/_template.md"
+# The header scripts/release.sh checks for, in Keep a Changelog's shape.
+title_format = "## [{version}] - {project_date}"
+start_string = "<!-- towncrier release notes start -->\n"
+
+# Each type is a "### <name>" heading of a release section, rendered in this
+# order; its directory is the <type> in a fragment's name. A type with
+# showcontent = false renders nothing (the template skips it): `internal` is
+# the fragment for a change with nothing to tell users, which still satisfies
+# `towncrier check` on a pull request.
+[[tool.towncrier.type]]
+directory = "breaking"
+name = "Breaking"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "added"
+name = "Added"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "changed"
+name = "Changed"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "fixed"
+name = "Fixed"
+showcontent = true
+
+[[tool.towncrier.type]]
+directory = "internal"
+name = "Internal"
+showcontent = false

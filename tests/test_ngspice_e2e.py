@@ -30,7 +30,7 @@ from ltspice_mcp.tools.jobs import (
     JobsInput,
     handle_jobs,
 )
-from tests.conftest import await_until, start_when, terminal_experiment
+from tests.conftest import FIXTURES_DIR, await_until, start_when, terminal_experiment
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -477,6 +477,77 @@ async def test_mosfet_op_surfaces_device_op_points(ngspice_state: SessionState, 
     assert idd > 0, internals
     # vth is a parameter, never a node voltage — it must NOT be in voltages.
     assert not any("@" in k for k in op["voltages"]), op["voltages"]
+
+
+async def test_a_device_parameter_does_not_vouch_for_a_transient_op_bias_point(
+    ngspice_state: SessionState, work_dir: Path
+):
+    # A floating gate: ngspice's gmin and source stepping fail and it takes
+    # its transient op's last point for the bias point, saying "Transient op
+    # finished successfully", which it says of a circuit with no DC solution
+    # too, so the stepping failures stand as errors unless the raw holds a
+    # finite node voltage. The deck saves device parameters and no node:
+    # ngspice writes @m1[vth] as v(@m1[vth]), typed voltage, which is the
+    # device's parameter and vouches for no bias point.
+    deck = FIXTURES_DIR / "ngspice_runs" / "op_device_params.cir"
+    shutil.copy(deck, work_dir / deck.name)
+    receipt = await _run_one(ngspice_state, "ng-device-params-op", deck.name)
+    data = await _analyze(ngspice_state, receipt["job_id"], [{"key": "sum", "metric": "summary"}])
+    warnings = data["results"]["sum"].get("warnings", [])
+    assert not any("finite node data" in w for w in warnings), warnings
+    relayed = [o["evidence"]["log"] for o in data["observations"] if o["code"] == "solve_failure"]
+    assert "Warning: Dynamic gmin stepping failed" in relayed, data["observations"]
+    op = await _op(ngspice_state, receipt["job_id"])
+    assert not op.get("voltages"), op
+    assert set(op["device_op_points"]) == {"v(@m1[vth])", "@m1[gm]", "i(@m1[id])"}
+
+
+async def test_a_bias_point_source_stepping_finds_is_no_failure(
+    ngspice_state: SessionState, work_dir: Path
+):
+    # A high-gain latch: ngspice's gmin stepping fails, and its source stepping
+    # finds the bias point, saying "Source stepping completed". The failed
+    # rungs are no failure of the run, though the deck saves no node voltage
+    # to vouch for it.
+    deck = FIXTURES_DIR / "ngspice_runs" / "op_source_stepping.cir"
+    shutil.copy(deck, work_dir / deck.name)
+    receipt = await _run_one(ngspice_state, "ng-source-stepping-op", deck.name)
+    data = await _analyze(ngspice_state, receipt["job_id"], [{"key": "sum", "metric": "summary"}])
+    relayed = [o for o in data.get("observations", []) if o["code"] == "solve_failure"]
+    assert relayed == [], relayed
+
+
+async def test_an_ac_summary_defaults_to_no_device_parameter(
+    ngspice_state: SessionState, work_dir: Path
+):
+    # With no signal named, an AC summary computes its bandwidth on the first
+    # node voltage. The deck saves a branch current and @m1[vth], which
+    # ngspice writes after it as v(@m1[vth]), typed voltage: a parameter of
+    # the device, so there is no node voltage to default to, and no
+    # bandwidth of a device parameter; the summary says why it has none.
+    net = _write(
+        work_dir,
+        "acvth.cir",
+        "* common-source stage\n"
+        "Vd vdd 0 1.8\n"
+        "Vg g 0 0.9 AC 1\n"
+        "Rd vdd out 10k\n"
+        "M1 out g 0 0 NM L=1u W=10u AD=10p AS=10p PD=22u PS=22u\n"
+        ".model NM NMOS (LEVEL=49 VERSION=3.3)\n"
+        ".save @m1[vth] i(vd)\n"
+        ".ac dec 10 1k 1G\n"
+        ".end\n",
+    )
+    receipt = await _run_one(ngspice_state, "ng-ac-device-param", net)
+    signals = await _signals(ngspice_state, receipt["job_id"])
+    assert signals == ["frequency", "i(vd)", "v(@m1[vth])"]
+    summary = await _summary(ngspice_state, receipt["job_id"])
+    assert "ac_signal_used" not in summary, summary
+    assert "ac_bandwidth_metrics" not in summary, summary
+    # Said, not left out unexplained.
+    data = await _analyze(ngspice_state, receipt["job_id"], [{"key": "sum", "metric": "summary"}])
+    warnings = data["results"]["sum"].get("warnings", [])
+    assert any("holds no node voltage to default to" in w for w in warnings), data
 
 
 async def test_mosfet_dc_sweep_internal_reachable_by_shorthand(

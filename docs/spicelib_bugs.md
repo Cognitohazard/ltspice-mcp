@@ -2277,13 +2277,13 @@ stochastic function or analysis.
 `AscEditor.reset_netlist` and `AscEditor._get_subcircuit`).
 **Our workaround:** `lib/schematic_ops.py::_AscEditor`, which `make_editor`
 uses to open every sheet, overrides `_get_subcircuit` for a block symbol with
-no library. It looks for the sheet in the same places as spicelib and, when
-there is none, leaves the instance without a resolved subcircuit, as spicelib
-already does for a cell symbol with no library. A sheet that exists also opens
-as an `_AscEditor`, so a block deeper in the hierarchy is read the same way.
-spicelib's search walks every folder it is given and is not cached, so the
-override looks for each missing sheet once each time the parent is opened
-instead of once per instance.
+no library. It finds the sheet with the session's symbol library
+(`SymbolResolver.block_sheet`, which replaced spicelib's search; see Bug 37)
+and, when there is none, leaves the instance without a resolved subcircuit,
+as spicelib already does for a cell symbol with no library. A sheet that
+exists also opens as an `_AscEditor`, so a block deeper in the hierarchy is
+read the same way. The resolver keeps what it found for the request, so a
+block placed many times is looked for once each time the parent is opened.
 
 ### Summary
 
@@ -3779,26 +3779,45 @@ sheet reader's on every sheet in the suite.
 
 ---
 
-## Bug 37 — `AscEditor` finds a symbol where LTspice does not, and misses one where LTspice finds it (limitation)
+## Bug 37 — `AscEditor` finds a sheet's files where LTspice does not, and misses some where LTspice finds them (limitation)
 
-**Status:** known limitation, recorded against LTspice's own behaviour.
-Observed 2026-11-04.
+**Status:** known limitation, recorded against LTspice's own behaviour for a
+symbol. Observed 2026-11-04 for a symbol, 2026-11-06 for a part's model
+library and a block's own sheet.
 **Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
-`AscEditor._get_symbol` and `_asy_file_find`; `spicelib/utils/file_search.py`,
-`find_file_in_directory`).
-**Our workaround:** `_AscEditor._get_symbol` in `lib/schematic_ops.py` finds
-the file through the session's `SymbolResolver`, which follows
-`lib/symbol_library.py` `find_symbol`, and reads it with `AsyReader`.
+`AscEditor._get_symbol`, `_asy_file_find`, `_get_subcircuit` and
+`_lib_file_find`; `spicelib/utils/file_search.py`,
+`search_file_in_containers` and `find_file_in_directory`).
+**Our workaround:** `_AscEditor` in `lib/schematic_ops.py` finds every file a
+sheet names through the session's `SymbolResolver` (`lib/symbol_library.py`):
+`_get_symbol` a part's symbol (`find_symbol`), read with `AsyReader`, and
+`_get_subcircuit` a block's own sheet (`SymbolResolver.block_sheet`). It looks
+for no model library at all (Bug 39). `pyproject.toml` bans an import of
+spicelib's search functions, and `tests/test_sheet_rule_owners.py` fails on a
+call of the editor's own search methods.
 
 ### Summary
 
-`_get_symbol` turns a part's symbol name into a relative path, keeping any
-folder the name gives (`lib\part` becomes `lib/part.asy`), and
-`_asy_file_find` walks the sheet's folder, the working directory, each
-library's `sym` folder and the custom library paths, each with `os.walk`,
-for a file of that name in any case. LTspice 26 and LTspice XVII were
-recorded doing otherwise (the `symbol-beside-sheet` and
-`symbol-named-with-a-folder-it-is-not-in` cases):
+The editor finds three kinds of file a sheet names, each by walking folders
+with `os.walk` for a file of that name in any case:
+
+- a part's symbol: `_get_symbol` turns the name into a relative path, keeping
+  any folder the name gives (`lib\part` becomes `lib/part.asy`), and
+  `_asy_file_find` walks the sheet's folder, the working directory, each
+  library's `sym` folder and the custom library paths;
+- a block's own sheet, when it is not beside the block's symbol:
+  `_get_subcircuit` walks the sheet's folder, the working directory and the
+  custom library paths;
+- the model library a cell's symbol names (`ModelFile` and the attributes
+  `get_library` reads): `_lib_file_find` walks the sheet's folder, the
+  working directory, each library's `sub` folder and the custom library
+  paths, then looks in `~/AppData/Local/Programs/ADI/LTspice/lib.zip` and
+  extracts what it finds there into `spice_lib_temp` under the working
+  directory. When it finds none, `_get_subcircuit` raises
+  `FileNotFoundError` and the sheet does not open.
+
+LTspice 26 and LTspice XVII were recorded finding a symbol otherwise (the
+`symbol-beside-sheet` and `symbol-named-with-a-folder-it-is-not-in` cases):
 
 - neither build finds a bare name in a folder below the sheet's, which the
   walk does (`search/in_subfolder`);
@@ -3807,8 +3826,15 @@ recorded doing otherwise (the `symbol-beside-sheet` and
   `<sheet folder>/lib` (`search_flat/named_folder_absent`);
 - neither build searches the working directory of the process.
 
-The result is also cached for the whole process by file name (Bug 17), so
-which file a name means depends on what the process opened before.
+Both builds read a block's own sheet beside its symbol
+(`export-hierarchical-block`); where else they look for one, and where they
+look for a model library, is not recorded. The working directory is the
+folder the process happened to start in, so with it in the search, whether a
+sheet opens, which sheet a block reads, and which library a part reads depend
+on where the program was started and not on the sheet.
+
+The symbol's file is also cached for the whole process by file name (Bug 17),
+so which file a name means depends on what the process opened before.
 
 ### Affected code
 
@@ -3817,6 +3843,17 @@ def _get_symbol(self, symbol: str) -> AsyReader:
     asy_filename = symbol + os.path.extsep + "asy"
     ...
     asy_path = self._asy_file_find(asy_filename)
+
+def _get_subcircuit(self, symbol: AsyReader) -> 'SpiceEditor | AscEditor':
+    ...
+            asc_path = search_file_in_containers(asc_filename.stem + os.path.extsep + "asc",
+                                                 os.path.split(self.asc_file_path)[0],
+                                                 os.path.curdir,
+                                                 *self.custom_lib_paths)
+    ...
+        lib_path = self._lib_file_find(lib)
+        if lib_path is None:
+            raise FileNotFoundError(f"File {lib} not found")
 
 def find_file_in_directory(directory, filename):
     path, filename = os.path.split(filename)
@@ -3829,6 +3866,7 @@ def find_file_in_directory(directory, filename):
 ### Reproduction
 
 ```python
+import os
 from pathlib import Path
 from spicelib import AscEditor
 
@@ -3841,6 +3879,13 @@ AscEditor("sub.asc")        # opens
 
 # The sheet says "lib\part"; part.asy is beside it and there is no lib/.
 # LTspice XVII netlists it; spicelib raises FileNotFoundError.
+
+# top.asc places X1 of amp.asy, a CELL with Prefix X and ModelFile amp.lib,
+# both in sheet/; amp.lib is nowhere.
+os.chdir("elsewhere")
+AscEditor("../sheet/top.asc")   # FileNotFoundError: File amp.lib not found
+Path("amp.lib").write_text("* amp\n.subckt amp a b\nR1 a b 1k\n.ends amp\n")
+AscEditor("../sheet/top.asc")   # opens, with the library of the working directory
 ```
 
 ### Impact
@@ -3848,13 +3893,22 @@ AscEditor("sub.asc")        # opens
 `edit_schematic` refused a sheet that LTspice XVII netlists and that
 `inspect` and `verify_circuit` read, and its advice to set `symbol_paths` did
 not help. It also opened a sheet neither build netlists, placing the part
-with a symbol no other reader of the sheet found.
+with a symbol no other reader of the sheet found. It refused a sheet whose
+part names a model library it found nowhere, though no reader of the sheet
+needs the library, and opened the same sheet when the server was started in
+a folder holding a library of that name. A block's sheet missing from beside
+its symbol was read from the working directory when one of its name was
+there, and the sheet placing the block was refused when that one could not
+be opened.
 
 ### Proposed fix
 
 Search beside the sheet only where the name says, then under its bare name
 beside the sheet, and walk folders only in the libraries, as
-`lib/symbol_library.py` `find_symbol` does; leave out the working directory.
+`lib/symbol_library.py` `find_symbol` does; leave out the working directory
+and the archive. Look for a block's sheet beside its symbol first. Do not
+fail a sheet's load for a model library it does not find: leave the instance
+without a resolved subcircuit, as for a cell symbol with no library.
 
 ### Suggested upstream test
 
@@ -3865,10 +3919,377 @@ def test_a_bare_name_is_not_found_below_the_sheet(tmp_path):
     (tmp_path / "sub.asc").write_text(SHEET_PLACING_part)
     with pytest.raises(FileNotFoundError):
         AscEditor(tmp_path / "sub.asc")
+
+
+def test_the_working_directory_is_not_searched(tmp_path, monkeypatch):
+    (tmp_path / "sheet").mkdir()
+    (tmp_path / "sheet" / "amp.asy").write_text(AMP_ASY_NAMING_amp_lib)
+    (tmp_path / "sheet" / "top.asc").write_text(SHEET_PLACING_X1_amp)
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "elsewhere" / "amp.lib").write_text(AMP_LIB)
+    monkeypatch.chdir(tmp_path / "elsewhere")
+    editor = AscEditor(tmp_path / "sheet" / "top.asc")
+    assert editor.get_component("X1").attributes["_SUBCKT"] is None
 ```
 
 ### Cross-reference
 
-`tests/test_recorded_ltspice_schematics.py::TestTheServerFindsASymbolWhereEitherBuildDoes::test_the_editor`
-holds the editor to `find_symbol` on every recorded search, with spicelib's
-cache empty and warmed by another folder's files.
+`tests/test_recorded_ltspice_schematics.py::TestTheServerFindsASymbolWhereEitherBuildDoes`
+holds the editor (`test_the_editor`, with spicelib's cache empty and warmed by
+another folder's files), `edit_schematic`, `inspect` and `verify_circuit`
+(`test_every_tool`, with the working directory empty and holding the symbol)
+to `find_symbol` on every recorded search.
+`test_a_blocks_sheet_is_found_alike_whatever_the_working_directory` in the
+same file holds a block's sheet to the recorded place, whatever the working
+directory holds, and
+`tests/test_symbol_library.py::test_a_part_naming_a_model_library_opens_alike_whatever_the_working_directory`
+opens and edits a sheet whose part names a library beside it, nowhere, or in
+the working directory only. `tests/test_symbol_library.py::TestABlocksSheet`
+holds the rule for a block's sheet.
+
+---
+
+## Bug 38 — `LTSpiceLogReader` skips a result line whose value starts with a character its pattern lacks
+
+**Status:** draft for an upstream spicelib pull request. Observed 2026-11-05.
+**Affected version:** spicelib 1.5.1 (`spicelib/log/ltsteps.py`,
+`LTSpiceLogReader.__init__`, the stepless measurement regex).
+**Our workaround:** `log_parser.printed_measurements` in
+`src/ltspice_mcp/lib/log_parser.py` finds every measurement the log printed
+from the text. `parse_measurements` reads a result line the reader skipped
+like any value it kept: a value that is not a number fails only that entry,
+with the line and the reason, and the `AT` crossing comes from
+`_RE_MEAS_AT_LINE`. The reason quotes the value as the log printed it
+(`printed_measurements`), not as the reader holds it, since the reader cuts
+`vth^2` to `vth`. The measurements check of `lib/log_decode.py` refuses a
+table that lacks a measurement the log printed.
+
+### Summary
+
+A WHEN measurement's result line prints the threshold after `=` as the deck
+writes it, and LTspice 26 keeps a braced threshold's braces:
+`t_braced: V(out)={vth} AT 6.98157501917e-05`. The stepless regex reads the
+value with a fixed character class that has no `{`. The value must start
+right after an `=`, so the line does not match at all, and the measurement,
+its crossing included, is missing from the reader's dataset and from
+`get_measure_names()`. Nothing says a line was skipped. The same threshold
+written as `vth` is read (as the text `'vth'`, with `_at` set), and LTspice
+XVII prints the braced threshold evaluated (`v(out)=0.5`), which is read.
+
+### Affected code
+
+```python
+# ltsteps.py, LTSpiceLogReader.__init__
+regx = re.compile(
+        r"^(?P<name>\w+)(:\s+.*)?=(?P<value>[\d(inf)E+\-\(\)dB,°(-/\w]+)( FROM (?P<from>[\d\.E+-]*) TO (?P<to>[\d\.E+-]*)|( at (?P<at>[\d\.E+-]*)))?",
+        re.IGNORECASE)
+...
+                if self.step_count == 0:  # then there are no steps,
+                    match = regx.match(line)
+                    if match:
+                        ...
+```
+
+A value starting with any other character (`{`, `[`, `'`, `!`, `<`, `>`)
+leaves the line unmatched. A value holding one after its start (`vth^2`) is
+cut there, and the `AT` clause after it is lost.
+
+### Reproduction
+
+The log LTspice 26.1.1 wrote for `.meas tran t_braced WHEN V(out)={vth}`
+with `.param vth=0.5` (recorded as
+`tests/fixtures/ltspice_recorded/ltspice26/log/meas_when_threshold_tran.log`):
+
+```
+t_number: V(out)=0.5 AT 6.98157501917e-05
+t_param: V(out)=vth AT 6.98157501917e-05
+t_expr: V(out)=1/sqrt(4) AT 6.98157501917e-05
+t_braced: V(out)={vth} AT 6.98157501917e-05
+vmax: MAX(V(out))=0.999954402447 FROM 0 TO 0.001
+t_meas: V(out)=vmax/2 AT 6.98111829185e-05
+```
+
+```python
+from spicelib.log.ltsteps import LTSpiceLogReader
+reader = LTSpiceLogReader("meas_when_threshold_tran.log")
+reader.get_measure_names()
+# ['t_number', 't_number_at', 't_param', 't_param_at', 't_expr', 't_expr_at',
+#  'vmax', 'vmax_from', 'vmax_to', 't_meas', 't_meas_at']   (no t_braced)
+"t_braced" in reader.dataset   # False
+```
+
+### Impact
+
+A WHEN measurement against a braced threshold is missing from every result
+read through the reader on LTspice 26, crossing and all, and is
+indistinguishable from one the deck never asked for. Before our workaround
+this project's reports left it out with no error, while the same measurement
+with the threshold written `vth` was reported.
+
+### Proposed fix
+
+Read the value as the text up to the next whitespace, whatever its
+characters, and end the expression at the first `=` (combined with the
+whitespace-tolerant clauses of Bug 1):
+
+```python
+regx = re.compile(
+    r"^(?P<name>\w+)(:\s+.*?)?=(?P<value>\S+)"
+    r"(\s+FROM\s+(?P<from>[\d\.E+-]*)\s+TO\s+(?P<to>[\d\.E+-]*)"
+    r"|\s+at\s+(?P<at>[\d\.E+-]*))?",
+    re.IGNORECASE)
+```
+
+On the recording above this reads `t_braced` as `'{vth}'` with
+`t_braced_at` 6.98157501917e-05, and every other line as before.
+`try_convert_value` keeps a value that is not a number as text, as it does
+for `vth`.
+
+### Suggested upstream test
+
+```python
+def test_a_braced_when_threshold_keeps_its_measurement(tmp_path):
+    log = tmp_path / "braced.log"
+    log.write_text(
+        "Circuit: * t\n\n"
+        "t_braced: V(out)={vth} AT 6.98157501917e-05\n"
+        "t_param: V(out)=vth AT 6.98157501917e-05\n",
+        encoding="utf-8",
+    )
+    reader = LTSpiceLogReader(str(log))
+    assert reader.dataset["t_braced"] == ["{vth}"]
+    assert reader.dataset["t_braced_at"] == [6.98157501917e-05]
+    assert reader.dataset["t_param_at"] == [6.98157501917e-05]
+```
+
+### Cross-reference
+
+`tests/test_recorded_ltspice_results.py::TestMeasurements::test_a_threshold_printed_in_braces_fails_only_its_own_entry`
+and `::test_a_when_against_a_non_number_fails_only_its_own_entry` pin the
+workaround against both builds' recordings; `tests/test_unreadable_measurement.py`
+reads the same entries through the Python API, `inspect`, the `measurements`
+recipe and the run summary; `tests/test_decoded_log.py::test_a_line_the_reader_does_not_match_fails_only_its_measurement`
+covers a log whose only measurement is such a line, and
+`::test_a_value_the_reader_cuts_short_is_quoted_as_the_log_printed_it` one
+whose value the reader cuts short; and
+`tests/test_log_decode.py::test_a_measurement_the_log_printed_and_the_table_lacks_fails_the_section`
+pins the check. `tests/test_recorded_log_measurements.py::test_every_recorded_logs_measurements_decode`
+holds every recorded log of both builds to an entry for each measurement it
+printed and none for anything else. Once upstream reads the line, the reader
+keeps the name and `parse_measurements` no longer finds a line it skipped;
+the check stays.
+
+---
+
+## Bug 39 — `AscEditor.save_netlist` fails on a sheet whose part's model library it read
+
+**Status:** draft for an upstream spicelib pull request. Observed 2026-11-06.
+**Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
+`AscEditor.save_netlist` and `_get_subcircuit`; `spicelib/editor/spice_editor.py`,
+`SpiceCircuit`).
+**Our workaround:** `_AscEditor._get_subcircuit` in `lib/schematic_ops.py`
+reads no model library: a part whose symbol names one loads with no resolved
+subcircuit, as a cell symbol with no library already does in spicelib.
+Nothing that reads or edits a sheet in the server uses the subcircuit.
+
+### Summary
+
+While it loads a sheet, the editor reads the subcircuit a part named `X...`
+calls from the model library its symbol names (`ModelFile` and the other
+attributes `AsyReader.get_library` reads), with
+`SpiceEditor.find_subckt_in_lib`, and keeps it as the part's `_SUBCKT`: a
+read-only `SpiceCircuit`. `save_netlist` then asks every `X` part's `_SUBCKT`
+whether it was `updated`, to save a changed sub-sheet with its parent. A
+`SpiceCircuit` has no `updated`, so saving the sheet raises
+`AttributeError`. A sheet whose library part's library was found can be
+opened and changed, but never saved.
+
+### Affected code
+
+```python
+# asc_editor.py, AscEditor.save_netlist
+if component.reference.startswith('X') and "_SUBCKT" in component.attributes:
+    # writing the sub-circuit if it was updated
+    sub_circuit: AscEditor = component.attributes['_SUBCKT']
+    if sub_circuit is not None and sub_circuit.updated:
+        sub_circuit.save_netlist(sub_circuit.asc_file_path)
+```
+
+### Reproduction
+
+```python
+from pathlib import Path
+from spicelib import AscEditor
+
+Path("amp.asy").write_text(
+    "Version 4\nSymbolType CELL\nRECTANGLE Normal -32 -32 32 32\nSYMATTR Prefix X\n"
+    "SYMATTR ModelFile amp.lib\nSYMATTR Value amp\nPIN -32 0 NONE 0\nPINATTR PinName a\n"
+    "PINATTR SpiceOrder 1\nPIN 32 0 NONE 0\nPINATTR PinName b\nPINATTR SpiceOrder 2\n"
+)
+Path("amp.lib").write_text("* amp\n.subckt amp a b\nR1 a b 1k\n.ends amp\n")
+Path("top.asc").write_text(
+    "Version 4\nSHEET 1 880 680\nSYMBOL amp 96 96 R0\nSYMATTR InstName X1\n"
+)
+editor = AscEditor("top.asc")
+type(editor.get_component("X1").attributes["_SUBCKT"])   # SpiceCircuit
+editor.save_netlist("copy.asc")
+# AttributeError: 'SpiceCircuit' object has no attribute 'updated'
+```
+
+A library whose first character is not `*`, a letter or a space is not read
+(`find_subckt_in_lib` refuses its encoding), and that sheet saves.
+
+### Impact
+
+`edit_schematic` could not edit a sheet with a subcircuit part whose library
+sat beside the sheet, under the server's working directory, or in a library
+folder: every edit failed with the `AttributeError`.
+
+### Proposed fix
+
+Save only a sub-sheet: ask `isinstance(sub_circuit, AscEditor)` before
+`sub_circuit.updated`, or give `SpiceCircuit` an `updated` that stays false
+for a read-only one.
+
+### Suggested upstream test
+
+```python
+def test_a_sheet_whose_part_library_was_read_saves(tmp_path):
+    (tmp_path / "amp.asy").write_text(AMP_ASY)
+    (tmp_path / "amp.lib").write_text("* amp\n.subckt amp a b\nR1 a b 1k\n.ends amp\n")
+    (tmp_path / "top.asc").write_text(SHEET_PLACING_X1_amp)
+    editor = AscEditor(tmp_path / "top.asc")
+    editor.save_netlist(tmp_path / "copy.asc")
+    assert "SYMATTR InstName X1" in (tmp_path / "copy.asc").read_text()
+```
+
+### Cross-reference
+
+`tests/test_symbol_library.py::test_a_part_naming_a_model_library_opens_alike_whatever_the_working_directory`
+edits such a sheet through `edit_schematic` with the library beside it and
+asserts the part has no resolved subcircuit. Once upstream saves the sheet,
+the workaround can read the library again if a reader comes to need it.
+
+---
+
+## Bug 40 — `PlotData.read_trace_data` holds every trace of a plot stored a point at a time, whichever traces are asked for
+
+**Status:** draft for an upstream spicelib pull request. Observed 2026-11-06.
+**Affected version:** spicelib 1.5.1 (`spicelib/raw/plot_data.py`,
+`PlotData.read_trace_data`, the normal-access binary branch, and
+`PlotData._read_ascii_vector`).
+**Our workaround:** a read of chosen signals (`load_raw(signals=...)`) holds
+what decoding them would hold, `raw_decode.numbers_held` in
+`src/ltspice_mcp/lib/raw_decode.py`, to `parser_service.DECODE_BYTES` (half
+the parser process's memory). A file over it is refused before spicelib reads
+it (`RawTooLargeToDecodeError` in `src/ltspice_mcp/lib/raw_header.py`), and
+the refusal names LTspice's Fast Access layout, which spicelib reads a trace
+at a time.
+
+### Summary
+
+Asked for some traces of a binary plot stored a point at a time (LTspice's
+usual layout), `read_trace_data` reads the whole data section into one `bytes` object and
+views the wanted fields of it as a structured array. Every number of the plot
+is in memory while the traces are read, and stays there for as long as any
+trace read from it is alive, since each trace is a view into that buffer. A
+text (`Values:`) plot is read by the constructor into a full array for every
+trace, before any trace is asked for. Only a Fast Access plot, stored a trace
+at a time, is read one trace after another.
+
+So `RawRead(path, traces_to_read=["V(out)"])` needs as much memory as reading
+every trace, and a file larger than the memory a process has cannot be read
+for one trace.
+
+### Affected code
+
+```python
+# plot_data.py, PlotData.read_trace_data, normal access
+record_size = sum([np.dtype(t.dtype).itemsize for t in self._trace_info])
+raw_file.seek(self._fpos_data)
+raw_data = self._read_bytes_from_file(raw_file, self._nPoints * record_size)
+data = np.frombuffer(raw_data, dtype=read_dtypes)
+...
+trace_data = data[trace_info.name]   # a view that keeps raw_data alive
+```
+
+```python
+# plot_data.py, PlotData._read_ascii_vector, called from __init__
+for trace_info in self._trace_info:
+    ...
+    trace_data = np.zeros(self._nPoints, dtype=trace_info.dtype)
+```
+
+### Reproduction
+
+```python
+import tracemalloc
+import numpy as np
+from spicelib.raw.raw_read import RawRead
+from spicelib.raw.raw_write import RawWrite, Trace
+
+points, traces = 200_000, 50
+raw = RawWrite(plot_name="Transient Analysis", fastacces=False)
+raw.add_trace(Trace("time", np.linspace(0, 1e-3, points)))
+for i in range(traces):
+    raw.add_trace(Trace(f"V(n{i})", np.full(points, float(i))))
+raw.save("many.raw")
+
+tracemalloc.start()
+RawRead("many.raw", traces_to_read=["V(n0)"], verbose=False).get_trace("V(n0)").get_wave()
+print(tracemalloc.get_traced_memory()[1])
+# 41,640,876 bytes: the whole data section (200,000 points of 8 + 50 * 4
+# bytes). The same file written with fastacces=True peaks at 2,427,772 bytes,
+# about the axis and the one trace.
+```
+
+### Impact
+
+- A long transient that saved every node cannot be read for the few signals
+  a measurement needs once its data section is larger than the memory the
+  process may use; the read fails with `MemoryError` rather than returning
+  the traces asked for, though they would fit.
+- A reader that keeps one trace keeps the whole buffer alive with it.
+
+### Proposed fix
+
+Read the normal-access data section in blocks of records and copy each wanted
+field out, so memory is the wanted traces plus one block:
+
+```python
+record = np.dtype(read_dtypes)
+wanted = {name: np.empty(self._nPoints, dtype=record[name]) for name in names_to_read}
+raw_file.seek(self._fpos_data)
+block_points = max(1, (16 << 20) // record.itemsize)
+for start in range(0, self._nPoints, block_points):
+    count = min(block_points, self._nPoints - start)
+    block = np.frombuffer(
+        self._read_bytes_from_file(raw_file, count * record.itemsize), dtype=record
+    )
+    for name, out in wanted.items():
+        out[start:start + count] = block[name]
+```
+
+`np.memmap` would also avoid the copy, but a mapping of the whole section
+counts against a process's address-space limit as the buffer does. A text
+plot could be read the same way: parse every line, and store only the values
+of the traces asked for.
+
+### Suggested upstream test
+
+```python
+def test_reading_one_trace_holds_about_one_trace(tmp_path):
+    # the file of the reproduction, written to tmp_path
+    tracemalloc.start()
+    RawRead(tmp_path / "many.raw", traces_to_read=["V(n0)"]).get_trace("V(n0)")
+    assert tracemalloc.get_traced_memory()[1] < 4 * points * (8 + 4)
+```
+
+### Cross-reference
+
+`tests/test_chosen_signals.py::test_a_file_stored_a_point_at_a_time_is_held_to_what_decoding_it_holds`
+pins the budget: with it set between what the axis and one trace hold and
+what the whole file holds, the recorded LTspice transient stored a point at a
+time is refused, naming the Fast Access layout, and the same run converted to
+it is read. Once upstream reads only the traces asked for, `numbers_held`
+counts the kept traces for every layout, and the refusal and its test go.

@@ -29,8 +29,10 @@ from tests._ltspice_window import (
     FakeStart,
     a_window,
     as_ltspice_reads,
+    follow_open_window_referral,
     put_windows,
     read_world,
+    sha256_ltspice_shows,
 )
 
 
@@ -126,6 +128,28 @@ async def test_a_window_showing_another_sheet_than_the_file_is_said_to(
     (in_window,) = whole["data"]["only_in_window"]
     (in_file,) = whole["data"]["only_in_file"]
     assert "SYMATTR Value 5k" in in_window and "SYMATTR Value 1k" in in_file
+
+
+async def test_the_call_the_hint_names_for_a_window_showing_another_sheet_is_taken(
+    asc_state: SessionState, asc_file: Path, tmp_path: Path
+):
+    """The hint sends the caller to edit_schematic's open_window once the user
+    chooses. Sent as the hint writes it, with the sha256 from where it says,
+    the call opens the file in the window. The hint named no expected_sha256,
+    and the call it named was refused for want of one."""
+    held = as_ltspice_reads(asc_file).replace("SYMATTR Value 1k", "SYMATTR Value 5k")
+    world = tmp_path / "world.json"
+    one_window(asc_state, world, {str(asc_file): held})
+
+    data = await check(asc_state, asc_file, in_ltspice=True)
+    assert data["ltspice"]["differs_from_file"] is True
+    sha256 = await sha256_ltspice_shows(asc_state, asc_file)
+    settled = await follow_open_window_referral(
+        asc_state, data["hint"], asc_file, "discard", sha256=sha256
+    )
+
+    assert settled["outcome"] == "complete", settled
+    assert window_of(world)["designs"][str(asc_file)] == as_ltspice_reads(asc_file)
 
 
 async def test_a_netlist_is_opened_too(asc_state: SessionState, work_dir: Path, tmp_path: Path):

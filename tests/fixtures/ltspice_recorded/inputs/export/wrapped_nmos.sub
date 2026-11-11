@@ -1,0 +1,5 @@
+* an NMOS card wrapped in a subcircuit of its own
+.subckt wrapped_nmos d g s b
+M1 d g s b NM W=20u L=2u
+.ends wrapped_nmos
+.model NM NMOS(VTO=0.7 KP=100u)

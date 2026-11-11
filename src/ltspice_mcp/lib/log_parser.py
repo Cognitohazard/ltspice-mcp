@@ -247,16 +247,24 @@ _RE_OP_ITERATION = re.compile(
     r"|for \.op point succeeded)",
     re.IGNORECASE,
 )
-# Terminal success line of LTspice's OP-solve escalation ladder. Any of these
-# means the bias point WAS found (possibly via a fallback method), so the
-# earlier "<method> stepping failed to find operating point" rungs are benign.
-# Covers Direct Newton / Gmin / Source stepping ("... succeeded in finding
-# operating point") and the pseudo-transient fallback ("Pseudo Transient
-# succeeded at <t>", which omits "operating point").
+# Terminal success line of an OP-solve escalation ladder. Any of these means
+# the bias point WAS found (possibly via a fallback method), so the earlier
+# "<method> stepping failed" rungs are benign. Covers LTspice's Direct Newton /
+# Gmin / Source stepping ("... succeeded in finding operating point") and its
+# pseudo-transient fallback ("Pseudo Transient succeeded at <t>", which omits
+# "operating point"), and ngspice's rungs, which ngspice 42 ends with "Note:
+# Source stepping completed" once one finds the bias point
+# (tests/fixtures/ngspice_runs/op_source_stepping.log).
+#
+# ngspice's last rung, "Note: Transient op finished successfully", is no such
+# line: ngspice 42 prints it for a circuit with no DC solution, such as a node
+# reached only through a capacitor (op_device_params.log there), and takes
+# the transient's last point for the bias point. Its stepping failures stay
+# errors, which the raw's node voltages may then clear (raw_parser).
 _RE_OP_SOLVE_SUCCEEDED = re.compile(
     r"succeeded in finding (?:the )?operating point"
     r"|pseudo[- ]?transient succeeded"
-    r"|stepping succeeded",
+    r"|stepping (?:succeeded|completed)",
     re.IGNORECASE,
 )
 # Start of an OP-solve block. LTspice prints one "Direct Newton iteration ..."
@@ -1171,6 +1179,72 @@ _RE_MEAS_AT_LINE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 
+# A number in the FROM/TO or AT clause of a result line.
+_MEAS_CLAUSE_NUMBER = r"[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?"
+
+# A measurement's result line in the log of a run with no .step: its name,
+# then ``: <expression>=<value>`` (``=<value>`` alone for a TRIG/TARG), and the
+# ``FROM <a> TO <b>`` of an interval or the ``AT <x>`` of a point. A value
+# followed by such a clause may be any text, since a WHEN's threshold is
+# printed as the deck writes it (LTspice 26 keeps a braced one's braces:
+# ``t_braced: V(out)={vth} AT 6.98e-05``, recorded as
+# log/meas_when_threshold_tran); a value with no clause after it is one word
+# (a PARAM's number). The expression ends at the first ``=`` a value can
+# follow. A warning such as ``Warning: Pd = 0 is less than W.`` is neither.
+_RE_MEAS_RESULT_LINE = re.compile(
+    r"^(?P<name>\w+)(?::[ \t]+[^\r\n]*?)?="
+    r"(?:(?P<value>\S[^\r\n]*?)[ \t]+"
+    rf"(?:FROM[ \t]+{_MEAS_CLAUSE_NUMBER}[ \t]+TO[ \t]+{_MEAS_CLAUSE_NUMBER}"
+    rf"|AT[ \t]+{_MEAS_CLAUSE_NUMBER})"
+    r"|(?P<word>\S+))[ \t]*\r?$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# The heading of a stepped run's table for one measurement.
+_RE_MEAS_HEADING = re.compile(r"^Measurement:[ \t]*(?P<name>\S+)", re.MULTILINE)
+
+
+@dataclass(frozen=True)
+class PrintedMeasurement:
+    """A measurement as a log printed it: the line that printed it and, for a
+    result line, the text printed after ``=`` (None for a stepped table's
+    heading or a FAIL'ed line)."""
+
+    line: str
+    value: str | None = None
+
+
+def _line_at(text: str, position: int) -> str:
+    """The line of ``text`` holding ``position``, without its line break."""
+    start = text.rfind("\n", 0, position) + 1
+    end = text.find("\n", position)
+    return text[start : len(text) if end == -1 else end].strip()
+
+
+def printed_measurements(text: str) -> dict[str, PrintedMeasurement]:
+    """Every measurement a log printed, by name in lower case, in the order
+    printed: each result line of a run with no ``.step``, each table heading
+    of a stepped run, and each ``Measurement "name" FAIL'ed`` line.
+
+    The one answer to which measurements a run printed:
+    :func:`parse_measurements` gives each of them an entry, and the log
+    decoder refuses a table that lacks one. The ``Circuit:`` line that names
+    the deck is not a measurement, whatever its title holds.
+    """
+    found: list[tuple[int, str, PrintedMeasurement]] = []
+    for match in _RE_MEAS_RESULT_LINE.finditer(text):
+        if match["name"].lower() != _NGSPICE_TITLE_PSEUDO_MEAS:
+            printed = PrintedMeasurement(match[0].strip(), match["value"] or match["word"])
+            found.append((match.start(), match["name"], printed))
+    for pattern in (_RE_MEAS_HEADING, _RE_MEAS_FAILED):
+        for match in pattern.finditer(text):
+            line = PrintedMeasurement(_line_at(text, match.start()))
+            found.append((match.start(), match[1], line))
+    measurements: dict[str, PrintedMeasurement] = {}
+    for _, name, printed in sorted(found, key=lambda item: item[0]):
+        measurements.setdefault(name.lower(), printed)
+    return measurements
+
 
 _RE_FOURIER_NAN = re.compile(
     r"^(Total Harmonic Distortion|Partial Harmonic Distortion):\s*[-+]?(?:nan|inf)%?",
@@ -1312,17 +1386,6 @@ def empty_measurements(
     }
 
 
-def _printed_measurement_line(log_text: str, name: str) -> str | None:
-    """The log line that printed measurement ``name``: its ``name: ...`` line,
-    or the ``Measurement: name`` heading of its table in a stepped run."""
-    escaped = re.escape(name)
-    for pattern in (rf"^[ \t]*{escaped}:[^\r\n]*", rf"^Measurement:[ \t]*{escaped}[ \t]*$"):
-        found = re.search(pattern, log_text, re.IGNORECASE | re.MULTILINE)
-        if found:
-            return found.group(0).strip()
-    return None
-
-
 def parse_measurements(
     log_path: Path, reader: LTSpiceLogReader | None = None
 ) -> MeasurementsOutput:
@@ -1332,6 +1395,12 @@ def parse_measurements(
     emits as side-effects of ``FROM``/``TO``/``AT`` arguments are folded
     into the parent measurement's :class:`MeasurementEntry` rather than
     surfaced as standalone entries.
+
+    Every measurement the log printed (:func:`printed_measurements`) gets an
+    entry: its value, or, for a value that is not a number, null with
+    ``unreadable`` giving the line and the reason. That holds for a result
+    line spicelib's reader does not match too (``docs/spicelib_bugs.md``,
+    Bug 38).
 
     Args:
         log_path: Path to .log file
@@ -1369,7 +1438,28 @@ def parse_measurements(
     measure_names = [
         n for n in reader.get_measure_names() if n.lower() != _NGSPICE_TITLE_PSEUDO_MEAS
     ]
-    if not measure_names:
+    # A result line spicelib's reader skips whole (docs/spicelib_bugs.md,
+    # Bug 38): its value pattern lacks '{', so LTspice 26's braced WHEN
+    # threshold (``t_braced: V(out)={vth} AT ...``) leaves no trace in its
+    # dataset. Name -> what the line printed after '=', read below like a
+    # value the reader kept, and placed in the log's order among the others.
+    logged = printed_measurements(log_text)
+    kept = {name.lower() for name in measure_names}
+    skipped = {
+        name: line.value
+        for name, line in logged.items()
+        if line.value is not None and name not in kept
+    }
+    order = {name: index for index, name in enumerate(logged)}
+    pending = list(skipped)
+    names: list[str] = []
+    for name in measure_names:
+        index = order.get(name.lower())
+        while pending and index is not None and order[pending[0]] < index:
+            names.append(pending.pop(0))
+        names.append(name)
+    names.extend(pending)
+    if not names:
         # Surface any errors AND warnings from the log that explain why
         # measurements are missing. ngspice's "No .measure possible in batch
         # mode" is a *warning*-class diagnostic; without carrying it, callers
@@ -1378,8 +1468,8 @@ def parse_measurements(
         return empty_measurements(extract_log_diagnostics(log_path), failed_names)
 
     # A value LTspice printed that is not a number (a WHEN's threshold written
-    # as a parameter or an expression) fails its own entry, not the table:
-    # name (as the reader keys it) -> the text it printed.
+    # as a parameter, an expression or a braced expression) fails its own
+    # entry, not the table: name (as the reader keys it) -> the text it printed.
     unreadable: dict[str, str] = {}
 
     def _coerce(values: list, name: str) -> list[float | None]:
@@ -1405,7 +1495,10 @@ def parse_measurements(
     measure_name_set = set(measure_names)
     parents: dict[str, list[float | None]] = {}
     metadata: dict[str, dict[str, float | list[float | None] | None]] = {}
-    for name in measure_names:
+    for name in names:
+        if name in skipped:
+            parents[name] = _coerce([skipped[name]], name)
+            continue
         coerced = _coerce(reader.dataset.get(name.lower(), []), name)
         suffix_match = next(
             ((suffix, key) for suffix, key in _MEAS_METADATA_SUFFIXES if name.endswith(suffix)),
@@ -1456,17 +1549,27 @@ def parse_measurements(
             override = at_overrides.get(name.lower())
             if override:
                 entry["at"] = override[0] if all(v == override[0] for v in override) else override
-        printed = unreadable.get(name) or next(
-            (
-                unreadable[meta]
-                for suffix, _key in _MEAS_METADATA_SUFFIXES
-                if (meta := name + suffix) in unreadable
-            ),
-            None,
+        shown = logged.get(name.lower())
+        # The text quoted is the log's own: spicelib cuts a value short at a
+        # character its pattern lacks (docs/spicelib_bugs.md, Bug 38), reading
+        # ``vth^2`` as ``vth``, so a result line's value is taken from what it
+        # printed. A stepped table's cell or a metadata value has no such text,
+        # and is quoted as the reader holds it.
+        printed = (
+            (shown.value if shown is not None and shown.value is not None else unreadable[name])
+            if name in unreadable
+            else next(
+                (
+                    unreadable[meta]
+                    for suffix, _key in _MEAS_METADATA_SUFFIXES
+                    if (meta := name + suffix) in unreadable
+                ),
+                None,
+            )
         )
         if printed is not None:
             entry["unreadable"] = {
-                "line": _printed_measurement_line(log_text, name),
+                "line": shown.line if shown is not None else None,
                 "reason": f"the log gives {printed!r} where a number belongs",
             }
         measurements[name] = entry

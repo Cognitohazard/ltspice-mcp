@@ -9,6 +9,7 @@ of the same corner.
 from __future__ import annotations
 
 import ast
+import json
 import math
 from pathlib import Path
 
@@ -21,10 +22,6 @@ from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
 from tests._source_scan import PACKAGE, parsed
 from tests.conftest import SyncApi
-
-SOURCE = PACKAGE / "lib"
-#: The modules that read an AC response's -3 dB points.
-READERS = ("ac_analysis.py", "metrics.py", "raw_parser.py")
 
 
 def test_the_level_is_the_half_power_point():
@@ -96,6 +93,68 @@ def test_every_reader_of_the_rc_corner_agrees_with_ltspices_meas(
     assert filtered["cutoff_high_hz"] == pytest.approx(corner, rel=3e-4)
 
 
+@pytest.mark.parametrize("build", rec.BUILDS)
+@pytest.mark.parametrize("ref_hz", ["10", 100.0, "2.5k"])
+def test_a_crossing_below_the_gain_at_a_frequency_takes_one_call(
+    build: str, ref_hz: str | float, state_no_sim: SessionState, work_dir: Path
+):
+    """``ref_hz`` measures ``level_db`` from the gain at that frequency: the
+    half-power point below the gain at 10 Hz (the sweep's first point), at
+    100 Hz (between points) or at 2.5 kHz (past the corner) is the crossing at
+    the absolute level bode_point reads there, plus ``HALF_POWER_DB``. Two
+    calls before; one now."""
+    raw = rec.stage_run(build, "raw/ac", work_dir)
+    reference = _rc_reply(
+        state_no_sim,
+        raw,
+        [{"key": "ref", "metric": "bode_point", "signal": "V(out)", "at_hz": ref_hz}],
+    )["ref"]
+    absolute, relative = (
+        _rc_reply(state_no_sim, raw, [{"key": key, **recipe}])[key]
+        for key, recipe in (
+            (
+                "absolute",
+                {
+                    "metric": "bode_crossing",
+                    "signal": "V(out)",
+                    "level_db": reference["magnitude_db"] + HALF_POWER_DB,
+                },
+            ),
+            (
+                "relative",
+                {
+                    "metric": "bode_crossing",
+                    "signal": "V(out)",
+                    "level_db": HALF_POWER_DB,
+                    "ref_hz": ref_hz,
+                },
+            ),
+        )
+    )
+    assert relative["first_crossing_hz"] == pytest.approx(absolute["first_crossing_hz"], rel=1e-12)
+    assert relative["level"] == pytest.approx(absolute["level"], rel=1e-12)
+    assert relative["reference"]["magnitude_db"] == reference["magnitude_db"]
+    assert relative["reference"]["level_db"] == HALF_POWER_DB
+
+
+@pytest.mark.parametrize(
+    ("recipe", "refused"),
+    [
+        ({"ref_hz": "1meg", "level_db": -3.0}, "outside the sweep"),
+        ({"ref_hz": "1k", "level_deg": -45.0}, "a phase level is not relative"),
+    ],
+)
+def test_a_reference_the_crossing_cannot_be_measured_from_is_refused(
+    recipe: dict, refused: str, state_no_sim: SessionState, work_dir: Path
+):
+    raw = rec.stage_run(rec.BUILDS[0], "raw/ac", work_dir)
+    reply = SyncApi(state_no_sim).analyze_results(
+        sources=[{"path": str(raw), "label": "rc"}],
+        recipes=[{"key": "c", "metric": "bode_crossing", "signal": "V(out)", **recipe}],
+    )
+    assert refused in json.dumps(reply)
+
+
 def test_a_resonance_flank_is_read_at_the_half_power_level():
     """A second-order band-pass of Q 5 at 10 kHz: its half-power bandwidth is
     exactly f0/Q, 2 kHz."""
@@ -109,38 +168,144 @@ def test_a_resonance_flank_is_read_at_the_half_power_level():
     assert peak["q_factor"] == pytest.approx(q, rel=1e-3)
 
 
-def _three_db_literals(path: Path) -> list[int]:
-    """Lines where 3.0 is used as a level in dB: added to or subtracted from
-    something, or given as a default, outside the definition of HALF_POWER_DB."""
-    tree = parsed(path)
+def _is_three(node: ast.AST) -> bool:
+    """``3`` or ``-3``, written as an int or a float."""
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub | ast.UAdd):
+        node = node.operand
+    if not isinstance(node, ast.Constant):
+        return False
+    value = node.value
+    return isinstance(value, int | float) and not isinstance(value, bool) and abs(value) == 3
+
+
+def _is_float(node: ast.AST) -> bool:
+    if isinstance(node, ast.UnaryOp):
+        node = node.operand
+    return isinstance(node, ast.Constant) and isinstance(node.value, float)
+
+
+def _says_db(word: str) -> bool:
+    """Whether a name or key says it holds decibels: a ``db`` part, as in
+    ``level_db``, ``HALF_POWER_DB`` or ``"magnitude_db"``."""
+    return "db" in word.lower().split("_")
+
+
+def _mentions_db(node: ast.AST) -> bool:
+    """Whether ``node`` reads a name, attribute or key that holds decibels."""
+    return any(
+        (isinstance(inner, ast.Name) and _says_db(inner.id))
+        or (isinstance(inner, ast.Attribute) and _says_db(inner.attr))
+        or (
+            isinstance(inner, ast.Constant)
+            and isinstance(inner.value, str)
+            and _says_db(inner.value)
+        )
+        for inner in ast.walk(node)
+    )
+
+
+def _gives_three(node: ast.AST) -> bool:
+    """``node`` is 3 dB, or a call given it (``Field(default=-3.0)``)."""
+    if isinstance(node, ast.Call):
+        return any(_is_three(given) for given in [*node.args, *(k.value for k in node.keywords)])
+    return _is_three(node)
+
+
+#: Names given 3 dB that is not a half-power level, with what it is instead.
+_OTHER_THREE_DB: dict[str, str] = {
+    "min_prominence_db": "how far a peak must stand above its surroundings to be one",
+    "_NOTCH_UNDERSAMPLED_GAP_DB": (
+        "how far above a notch's sampled null a neighbouring sample may lie before "
+        "the null is reported as falling between samples"
+    ),
+}
+
+
+def _three_db_levels_in(tree: ast.AST, exempted: set[str] | None = None) -> list[int]:
+    """The lines of ``tree`` that write 3 dB (``3`` or ``-3``, int or float) where
+    a dB level is read: added to, subtracted from or compared with something
+    that holds decibels; bound to, defaulted for or passed as a name that holds
+    decibels; or given under such a key in a dict. A float ``3.0`` added or
+    subtracted is read as a dB level whatever it is added to. A name listed in
+    ``_OTHER_THREE_DB`` is passed over, and added to ``exempted``."""
     found: list[int] = []
 
-    def is_three(node: ast.AST) -> bool:
-        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
-            node = node.operand
-        return isinstance(node, ast.Constant) and node.value == 3.0 and type(node.value) is float
+    def named(name: str, value: ast.expr | None) -> None:
+        if value is None or not _says_db(name) or not _gives_three(value):
+            return
+        if name in _OTHER_THREE_DB:
+            if exempted is not None:
+                exempted.add(name)
+            return
+        found.append(value.lineno)
 
     for node in ast.walk(tree):
-        if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Add, ast.Sub)):
-            if is_three(node.left) or is_three(node.right):
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add | ast.Sub):
+            pair = (node.left, node.right)
+            if any(
+                _is_three(one) and (_mentions_db(other) or _is_float(one))
+                for one, other in (pair, pair[::-1])
+            ):
                 found.append(node.lineno)
+        elif isinstance(node, ast.Compare):
+            sides = [node.left, *node.comparators]
+            if any(_is_three(side) for side in sides) and any(map(_mentions_db, sides)):
+                found.append(node.lineno)
+        elif isinstance(node, ast.Assign | ast.AnnAssign | ast.NamedExpr):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name | ast.Attribute):
+                    named(target.id if isinstance(target, ast.Name) else target.attr, node.value)
         elif isinstance(node, ast.arguments):
-            defaults = [*node.defaults, *(d for d in node.kw_defaults if d is not None)]
-            args = [*node.posonlyargs, *node.args][-len(node.defaults) :] if node.defaults else []
-            named = list(zip(args, node.defaults, strict=True)) + [
-                (arg, default)
-                for arg, default in zip(node.kwonlyargs, node.kw_defaults, strict=True)
-                if default is not None
-            ]
-            assert len(named) == len(defaults)
-            found += [
-                default.lineno
-                for arg, default in named
-                if is_three(default) and arg.arg.endswith("_db") and "prominence" not in arg.arg
-            ]
-    return found
+            positional = [*node.posonlyargs, *node.args]
+            for arg, default in zip(
+                positional[len(positional) - len(node.defaults) :], node.defaults, strict=True
+            ):
+                named(arg.arg, default)
+            for arg, default in zip(node.kwonlyargs, node.kw_defaults, strict=True):
+                named(arg.arg, default)
+        elif isinstance(node, ast.keyword) and node.arg is not None:
+            named(node.arg, node.value)
+        elif isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values, strict=True):
+                if isinstance(key, ast.Constant) and isinstance(key.value, str):
+                    named(key.value, value)
+    return sorted(set(found))
 
 
-@pytest.mark.parametrize("module", READERS)
-def test_no_reader_writes_its_own_three_db_level(module: str):
-    assert _three_db_literals(SOURCE / module) == []
+def test_no_module_writes_its_own_three_db_level():
+    exempted: set[str] = set()
+    found = [
+        f"{path.relative_to(PACKAGE).as_posix()}:{line}"
+        for path in sorted(PACKAGE.rglob("*.py"))
+        for line in _three_db_levels_in(parsed(path), exempted)
+    ]
+    assert found == []
+    stale = sorted(set(_OTHER_THREE_DB) - exempted)
+    assert not stale, "listed names no longer given 3 dB: " + ", ".join(stale)
+
+
+def test_the_three_db_rule_catches_what_it_names():
+    tree = ast.parse(
+        "def offset(peak_db):\n"
+        "    return peak_db - 3\n"  # 2
+        "def added(ref):\n"
+        "    return ref['magnitude_db'] + -3.0\n"  # 4
+        "def compared(gain_db):\n"
+        "    return gain_db < -3\n"  # 6
+        "LEVEL_DB = -3\n"  # 7
+        "class Recipe:\n"
+        "    level_db: float = Field(default=-3.0)\n"  # 9
+        "async def read(signal, cutoff_db=-3.0, *, floor_db=3):\n"  # 10
+        "    return crossing(signal, level_db=-3)\n"  # 11
+        "SPEC = {'ref_db': 3.0}\n"  # 12
+        "def floated(magnitude):\n"
+        "    return magnitude - 3.0\n"  # 14
+        "def unrelated(index, times):\n"
+        "    return index - 3, times[3], 3 + index, {'count': 3}, level(db=None)\n"
+    )
+    assert _three_db_levels_in(tree) == [2, 4, 6, 7, 9, 10, 11, 12, 14]
+    exempted: set[str] = set()
+    listed = ast.parse("def peaks(x, min_prominence_db=3.0):\n    return x\n")
+    assert _three_db_levels_in(listed, exempted) == []
+    assert exempted == {"min_prominence_db"}

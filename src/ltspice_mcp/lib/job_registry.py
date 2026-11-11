@@ -238,13 +238,28 @@ class JobRegistry:
         A record the store had to reconcile (its owner died mid-run) is written
         back, because the reconciliation is a fact about the job that nothing
         else will persist.
+
+        A job this process runs (``owns``) is answered by its live job: a read
+        that started before the job was reserved and returned after it brings
+        back a record nothing here updates, and must not replace the job.
         """
         if not self._on_event_loop():
             return job
+        live = self.live.get(job.job_id)
+        if live is not None:
+            return live.job
         self.jobs[job.job_id] = job
         if job.restart_reconciled:
             self.persist_job(job)
         return job
+
+    def adopt(self, job: ExperimentJob) -> ExperimentJob:
+        """Take in a record no store read returns: a recovery journal's copy of
+        an attempt whose record is not written yet, or any record while
+        persistence is off. Adopted as a store read is (``_adopt``), so the id
+        resolves from then on and a job this process runs keeps its live job.
+        """
+        return self._adopt(job)
 
     def _load_from_store(self, job_id: str) -> ExperimentJob | None:
         """Blocking read of one experiment record from this session's store."""

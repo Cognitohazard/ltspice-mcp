@@ -744,7 +744,7 @@ class ServerConfig:
     """Stderr logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL).
 
     WARNING by default because the server's stderr is not always a log file. A
-    caller driving the engine in-process, or spawning a server per script, gets
+    caller using the Python API in-process, or spawning a server per script, gets
     it interleaved with their own output — and a ~34-line INFO startup banner
     there is answered with a blanket ``2>/dev/null``, which then hides the
     tracebacks that mattered. Startup detail is still one setting away
@@ -793,7 +793,7 @@ class ServerConfig:
 
     run_code: bool = True
     """Advertise the ``run_code`` tool: a Python snippet run in a warm worker
-    process that holds this server's engine as ``api``. On by default: the
+    process that holds this server's Python API as ``api``. On by default: the
     server is a local stdio process serving one trusted client, and the snippet
     runs with that process's own file and process authority rather than inside
     ``allowed_paths``, so an operator who exposes the server more widely (a

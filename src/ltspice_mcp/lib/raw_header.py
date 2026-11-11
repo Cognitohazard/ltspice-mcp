@@ -25,7 +25,8 @@ from __future__ import annotations
 import os
 import re
 import stat
-from dataclasses import dataclass, fields
+from collections.abc import Sequence
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import BinaryIO
 
@@ -36,6 +37,66 @@ class RawHeaderError(ValueError):
 
 class RawLimitError(RawHeaderError):
     """A caller-supplied preflight budget was exceeded."""
+
+
+class RawTooLargeError(RawLimitError):
+    """The traces a read would keep hold more numbers than one read keeps.
+
+    ``parser_code`` is the code the parser worker reports it under, so the
+    caller can say what to do instead of only that the read failed.
+    """
+
+    parser_code = "too_large"
+
+    def __init__(self, numeric_bytes: int, limit: int, *, chosen: bool) -> None:
+        # A whole file's count stops at the plot that crosses the limit.
+        traces = "the chosen traces hold" if chosen else "its traces hold at least"
+        super().__init__(
+            f"numeric_bytes limit exceeded: {traces} {_size(numeric_bytes)} of numbers "
+            f"(at the widths the file stores them), over the {_size(limit)} one read keeps"
+        )
+        self.numeric_bytes = numeric_bytes
+        self.limit = limit
+
+
+class RawTooLargeToDecodeError(RawLimitError):
+    """What a selective read keeps fits, but decoding it would hold more
+    numbers than the decoder may (``raw_decode.numbers_held``): a plot stored
+    a point at a time is decoded whole, and one in LTspice's Fast Access layout
+    each kept trace whole, before a window cuts it. The message says which,
+    and what reads less.
+
+    ``parser_code`` is the code the parser worker reports it under.
+    """
+
+    parser_code = "too_large_to_decode"
+
+    def __init__(self, held: int, limit: int, *, point_ordered: bool) -> None:
+        if point_ordered:
+            why = (
+                "the file stores its numbers a point at a time, so reading any of its "
+                f"traces decodes all of them: {_size(held)} of numbers, over the "
+                f"{_size(limit)} a selective read may decode. If LTspice wrote it, convert "
+                "it to LTspice's Fast Access layout, which stores each trace whole so that "
+                "a read decodes only the traces it keeps: run LTspice with -FastAccess and "
+                "the .raw file's path, then choose the signals you need"
+            )
+        else:
+            why = (
+                "each trace it keeps is decoded whole along the axis, before a window "
+                f"cuts it: {_size(held)} of numbers, over the {_size(limit)} a selective "
+                "read may decode. Choose fewer signals (signals=[...]), or read them in "
+                "more than one load"
+            )
+        super().__init__(why)
+        self.held = held
+        self.limit = limit
+
+
+def _size(count: int) -> str:
+    """A byte count as a reader takes it in."""
+    mib = 1024 * 1024
+    return f"{count / mib:.0f} MiB" if count >= 10 * mib else f"{count:,} bytes"
 
 
 class RawDialectError(RawHeaderError):
@@ -449,7 +510,14 @@ def _read_plot(
     count = scanner.integer(
         header["no. variables"], "No. Variables / variables", scanner.limits.variables
     )
-    points = scanner.integer(header["no. points"], "No. Points / points", scanner.limits.points)
+    # A count past the points limit is still read here, so that a plot too long
+    # for one read is refused below by the numbers it holds, which says what
+    # reads less; the limit on points is held after that.
+    points = scanner.integer(
+        header["no. points"],
+        "No. Points / points",
+        max(scanner.limits.points, scanner.limits.numeric_bytes),
+    )
     variables: list[RawVariable] = []
     names: set[str] = set()
     for index in range(count):
@@ -474,7 +542,10 @@ def _read_plot(
     widths, order = _layout(scanner, resolved, header, storage, count)
     numeric_bytes = points * sum(widths)
     scanner.numeric_bytes += numeric_bytes
-    scanner.check_limit("numeric_bytes", scanner.numeric_bytes)
+    if scanner.numeric_bytes > scanner.limits.numeric_bytes:
+        raise RawTooLargeError(scanner.numeric_bytes, scanner.limits.numeric_bytes, chosen=False)
+    if points > scanner.limits.points:
+        raise scanner.error(RawLimitError, "No. Points / points limit exceeded")
     payload_offset = scanner.handle.tell()
     if storage == "binary":
         end = payload_offset + numeric_bytes
@@ -557,3 +628,35 @@ def preflight_raw(
         if (initial.st_size, initial.st_mtime_ns) != (final.st_size, final.st_mtime_ns):
             raise RawHeaderError("RAW input changed during preflight; use an immutable snapshot")
     return RawHeader(initial.st_size, scanner.header_bytes, scanner.numeric_bytes, tuple(plots))
+
+
+def select_traces(header: RawHeader, kept: Sequence[Sequence[int]]) -> RawHeader:
+    """``header`` with each plot cut to the traces at the positions ``kept``
+    names for it, in file order and numbered anew from 0, and their numbers
+    counted again. What the file itself states (its size, its header bytes, a
+    plot's fields and payload span) stays the file's.
+
+    The header a read of chosen traces decodes and the parent admits: every
+    variable it lists has its one array, as a whole-file read's does.
+    """
+    plots = []
+    for plot, keep in zip(header.plots, kept, strict=True):
+        order = sorted(set(keep))
+        if not order or order[0] < 0 or order[-1] >= plot.variable_count:
+            raise ValueError("Chosen traces must be positions of the plot's own variables")
+        widths = tuple(plot.value_bytes[position] for position in order)
+        plots.append(
+            replace(
+                plot,
+                variable_count=len(order),
+                variables=tuple(
+                    replace(plot.variables[position], index=index)
+                    for index, position in enumerate(order)
+                ),
+                value_bytes=widths,
+                numeric_bytes=plot.point_count * sum(widths),
+            )
+        )
+    return replace(
+        header, numeric_bytes=sum(plot.numeric_bytes for plot in plots), plots=tuple(plots)
+    )

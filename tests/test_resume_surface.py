@@ -23,7 +23,12 @@ from ltspice_mcp.tools._schema import build_input_schema
 from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
 from ltspice_mcp.tools.jobs import JOBS_OUTPUT_SCHEMA, JobsInput, JobsResumeInput, handle_jobs
 from ltspice_mcp.tools.receipts import RUN_EXPERIMENTS_OUTPUT_SCHEMA
-from tests.conftest import LIVENESS_S, SyncApi, recorded_fixture_simulator
+from tests.conftest import (
+    LIVENESS_S,
+    SyncApi,
+    needs_controlled_startup,
+    recorded_fixture_simulator,
+)
 
 
 def test_recoverable_opt_in_is_strict_and_part_of_request_identity():
@@ -60,7 +65,7 @@ def test_only_resume_can_detach(state_no_sim: SessionState):
     api = SyncApi(state_no_sim)
     with pytest.raises(ApiValidationError, match="resume"):
         api.jobs(action="list", detach=True)
-    with pytest.raises(TypeError, match="detach must be a bool"):
+    with pytest.raises(ApiValidationError, match="detach must be a bool"):
         api.jobs(action="list", detach=cast(bool, "true"))
 
 
@@ -123,6 +128,7 @@ async def _submit(state: SessionState, *, variations=None, analyze=None) -> dict
     return _data(result, RUN_EXPERIMENTS_OUTPUT_SCHEMA)
 
 
+@needs_controlled_startup
 @_LIVE
 @pytest.mark.asyncio
 async def test_terminal_root_token_noop_replay_and_read_only_views(
@@ -174,6 +180,7 @@ async def test_terminal_root_token_noop_replay_and_read_only_views(
     await state.job_registry.drain_pending()
 
 
+@needs_controlled_startup
 @_LIVE
 @pytest.mark.asyncio
 async def test_resume_child_reuses_success_and_replays_after_source_deletion(
@@ -283,6 +290,7 @@ async def test_resume_child_reuses_success_and_replays_after_source_deletion(
     await state.job_registry.drain_pending()
 
 
+@needs_controlled_startup
 @_LIVE
 def test_detached_resume_delegates_owning_parent_and_keeps_terminal_child_token(
     work_dir: Path,

@@ -20,11 +20,14 @@ from ltspice_mcp.lib.experiment_types import ManifestEntry
 from ltspice_mcp.lib.spice_lex import (
     INCLUDE_HEADS,
     SpiceCard,
+    SpiceLexError,
     Token,
     TokenKind,
+    directive_head,
     emit,
-    lex,
+    lex_for_edit,
     tokenize_body,
+    unreadable_cards,
 )
 from ltspice_mcp.lib.spice_lex_ops import (
     MICRO_SIGN_READERS,
@@ -359,10 +362,21 @@ def stage_deck(
         processing.add(resolved)
         try:
             text, encoding = decode_spice_bytes_with_encoding(data)
-            parsed = lex(text)
+            # The deck's references and values are the cards LTspice reads: an
+            # include named in its title or after its .END is not staged, and
+            # those cards are copied as they are.
+            parsed = lex_for_edit(text, deck=depth == 0)
             changed = False
             anchor = stands_at if resolved == source else resolved
-            for reference in scan_include_references(parsed.cards, anchor, depth=depth):
+            for card, error in unreadable_references(parsed.read):
+                raise DeckStagingError(
+                    "include_unstaged",
+                    f"Cannot stage the reference on line {card.line_start} of "
+                    f"{resolved}: {error.message}, so which file it names is not "
+                    f"known. {error.suggestion[:1].upper()}{error.suggestion[1:]}.",
+                    reference=" ".join(card.body.split()),
+                )
+            for reference in scan_include_references(parsed.read, anchor, depth=depth):
                 target = resolve_reference(anchor.parent, reference.raw_path)
                 target_resolved = resolve_existing(target)
                 target_root = None
@@ -477,7 +491,7 @@ def stage_deck(
             # is spelled 'u', which every simulator in every encoding reads as
             # micro: a UTF-8 µ reaches LTspice XVII as the two cp1252
             # characters 'Âµ' and silently loses its scale.
-            folded = fold_micro_suffix_cards(parsed.cards)
+            folded = fold_micro_suffix_cards(parsed.read)
             if folded:
                 changed = True
                 if cp1252_reader is not None:
@@ -550,8 +564,14 @@ def stage_deck(
 
 
 def staged_reference_targets(text: str, source: Path, *, depth: int) -> list[Path]:
-    """Return the resolved paths one staged file's include references name."""
-    return staged_card_reference_targets(lex(text).cards, source, depth=depth)
+    """Return the resolved paths one staged file's include references name.
+
+    At ``depth`` 0 the file is the deck, and its references are the ones
+    staging followed: none in its title or after its ``.END``.
+    """
+    return staged_card_reference_targets(
+        lex_for_edit(text, deck=depth == 0).read, source, depth=depth
+    )
 
 
 def staged_card_reference_targets(
@@ -578,12 +598,13 @@ def rewrite_staged_references(
     files, a Windows absolute path handed to LTspice across the WSL boundary —
     survives untouched. That is why ``renames`` is keyed by resolved path and
     valued by bare filename: a copy that is not a sibling of its original
-    cannot be addressed this way.
+    cannot be addressed this way. At ``depth`` 0 the file is the deck, and a
+    reference in its title or after its ``.END`` is left as it is.
     """
-    cards = lex(text).cards
+    lexed = lex_for_edit(text, deck=depth == 0)
     return (
-        emit(cards)
-        if rewrite_staged_reference_cards(cards, source, renames, depth=depth)
+        emit(lexed.cards)
+        if rewrite_staged_reference_cards(lexed.read, source, renames, depth=depth)
         else text
     )
 
@@ -713,7 +734,15 @@ def scan_include_references(
     for card in cards:
         if card.kind != "directive":
             continue
-        tokens = tokenize_body(card.body)
+        try:
+            tokens = tokenize_body(card.body)
+        except SpiceLexError:
+            if directive_head(card) in INCLUDE_HEADS:
+                # Which file it names is not known, so the references read
+                # are not all of them. Staging refuses the card by its line
+                # (``unreadable_references``) before reading any.
+                raise
+            continue  # a directive that names no file
         if len(tokens) < 2 or tokens[0].text.casefold() not in INCLUDE_HEADS:
             continue
         path_token = tokens[1]
@@ -737,6 +766,20 @@ def scan_include_references(
             )
         )
     return references
+
+
+def unreadable_references(cards: list[SpiceCard]) -> list[tuple[SpiceCard, SpiceLexError]]:
+    """The include and library cards whose path cannot be read, because the
+    card cannot be split into parts (``spice_lex.unreadable_cards``): an
+    unclosed quote, brace or parenthesis, or a closer with nothing open.
+    ``scan_include_references`` raises the lexer's error on any of them and
+    ``card_sections`` on a ``.lib``, so staging refuses them by line first,
+    instead of running a deck whose files it could not check."""
+    return [
+        (card, error)
+        for card, error in unreadable_cards(cards)
+        if card.kind == "directive" and directive_head(card) in INCLUDE_HEADS
+    ]
 
 
 def closure_depth(index: int) -> int:
@@ -778,9 +821,18 @@ def card_sections(
         sections.append(stack[-1] if stack else None)
         if card.kind != "directive":
             continue
-        tokens = [
-            token for token in tokenize_body(card.body) if token.kind != TokenKind.COMMENT_TRAIL
-        ]
+        try:
+            body_tokens = tokenize_body(card.body)
+        except SpiceLexError:
+            head = directive_head(card)
+            if head == ".lib":
+                # Whether it opens a section is not known; staging refuses it
+                # by its line (``unreadable_references``).
+                raise
+            if head == ".endl" and stack:
+                stack.pop()
+            continue
+        tokens = [token for token in body_tokens if token.kind != TokenKind.COMMENT_TRAIL]
         if not tokens:
             continue
         head = tokens[0].text.casefold()

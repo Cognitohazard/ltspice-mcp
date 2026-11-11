@@ -57,6 +57,7 @@ from ltspice_mcp.lib.experiment_runner import (
     canonical_fingerprint,
     refuse_another_request,
     refuse_inconsistent_record,
+    resolve_recorded_job,
     verify_replay,
 )
 from ltspice_mcp.lib.experiment_types import (
@@ -65,6 +66,7 @@ from ltspice_mcp.lib.experiment_types import (
     ExperimentJob,
     SourceRecord,
 )
+from ltspice_mcp.lib.format import held_to_cap
 from ltspice_mcp.lib.hierarchy import SUPPORTED_FAMILIES, SemanticProfile
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.lint_rules import RULES_BY_ID, lint_deck, linter_version
@@ -85,10 +87,10 @@ from ltspice_mcp.lib.recipes import (
     DORMANT_POINTER,
     Recipe,
     StepSelectionFields,
-    validate_recipe,
 )
 from ltspice_mcp.lib.recovery_records import CaseAttempt, CaseRecovery, RecoveryError
-from ltspice_mcp.lib.services import cp1252_ltspice, resolve_job_async
+from ltspice_mcp.lib.services import cp1252_ltspice
+from ltspice_mcp.lib.sheet_results import NotPlaced, check_request
 from ltspice_mcp.lib.simulator import (
     SIMULATOR_SELECTOR_PATTERN,
     current_ngbehavior,
@@ -128,10 +130,9 @@ from ltspice_mcp.tools._base import (
     ResponseBudget,
     StrictModel,
     ToolInput,
+    failure_text,
     format_response,
-    held_to_cap,
     outcome_of,
-    path_denied_text,
     registry,
     resolve_response_budget,
     resolve_run_simulator,
@@ -224,6 +225,15 @@ class ExperimentExecution(StrictModel):
         ),
     )
 
+    results_beside_sheet: bool = Field(
+        default=False,
+        strict=True,
+        description=(
+            "When the runs finish, copy each sheet's results beside it, under its name, "
+            "for LTspice to open. One case per sheet; LTspice only; not with recoverable."
+        ),
+    )
+
     @model_validator(mode="after")
     def _seed_requires_recovery(self) -> ExperimentExecution:
         if self.simulator_seed is not None and (
@@ -235,14 +245,20 @@ class ExperimentExecution(StrictModel):
                 "execution.keep_partial_raw cannot be combined with recoverable: a "
                 "resumed job runs its stopped cases again"
             )
+        if self.results_beside_sheet and self.recoverable:
+            raise ValueError(
+                "execution.results_beside_sheet cannot be combined with recoverable: a "
+                "resumed job's runs would finish without it. Copy a case's results "
+                "afterwards with jobs(action='place_beside_sheet')"
+            )
         return self
 
     wait_s: float = Field(
         default=60.0,
         ge=0.0,
         description=(
-            "Dwell before returning, held to 120s; the job keeps running. "
-            "Continue with jobs(action='wait'); 0 returns immediately."
+            f"Dwell before returning, held to {SUBMISSION_DWELL_CAP_S:g}s; the job keeps "
+            "running. Continue with jobs(action='wait'); 0 returns immediately."
         ),
     )
 
@@ -275,7 +291,7 @@ class ExperimentExecution(StrictModel):
         default=None,
         pattern=SIMULATOR_SELECTOR_PATTERN,
         description=(
-            "Engine for every case; its family decides the dialect the results are "
+            "Simulator for every case; its family decides the dialect the results are "
             "parsed with. 'family:name' (e.g. 'ltspice:xvii') runs a named executable. "
             "inspect capabilities lists those and which simulators a run can select. "
             "Defaults to the server's default simulator."
@@ -285,8 +301,8 @@ class ExperimentExecution(StrictModel):
 
 class AnalysisPerRun(analyze.CappedPerRunLimit):
     # The limit and its cap are analyze_results' own, never a copy of its
-    # number: the attached block is handed straight to that engine, so a bound
-    # this schema held to and the engine's could not drift apart.
+    # number: the attached block is handed straight to that tool, so a bound
+    # this schema held to and the tool's could not drift apart.
     cursor: str | None = Field(
         default=None,
         description=(
@@ -467,7 +483,11 @@ class RunExperimentsInput(ToolInput):
     }
 
     def strip_presentation(self) -> dict[str, Any]:
-        """Return the execution-shaped request with render controls removed."""
+        """Return the execution-shaped request with render controls removed.
+
+        These are the bytes a request's fingerprint hashes, so a field added
+        after requests were recorded is left out at its default here.
+        """
         payload = self.model_dump(
             mode="json",
             exclude_unset=False,
@@ -481,8 +501,17 @@ class RunExperimentsInput(ToolInput):
             payload["execution"].pop("simulator_seed", None)
         if not self.execution.keep_partial_raw:
             payload["execution"].pop("keep_partial_raw", None)
+        if not self.execution.results_beside_sheet:
+            payload["execution"].pop("results_beside_sheet", None)
         if self.analyze is not None and self.analyze.other_raw is None:
             payload["analyze"].pop("other_raw", None)
+        # A random entry's sample_start came after random requests were
+        # recorded; at its default it starts the samples where they always did.
+        # A pdk_native entry keeps its sample_start: it had the field from its
+        # first release, so its recorded bytes carry it.
+        for variation, rendered in zip(self.variations, payload["variations"], strict=True):
+            if isinstance(variation, RandomVariation) and variation.sample_start == 0:
+                rendered.pop("sample_start", None)
 
         def collapse_optional_models(
             model: StrictModel,
@@ -713,6 +742,14 @@ async def handle_run_experiments(
             projected_case_count(circuit.circuit_id, args.variations) for circuit in circuit_inputs
         )
         check_case_cap(projected, state.config.max_experiment_cases)
+        if args.execution.results_beside_sheet:
+            check_request(
+                [
+                    (circuit.path, projected_case_count(circuit.circuit_id, args.variations))
+                    for circuit in circuit_inputs
+                ],
+                simulator.__name__,
+            )
         if args.analyze is not None:
             _validate_attached_analysis(args.analyze)
 
@@ -802,6 +839,7 @@ async def handle_run_experiments(
             recoverable=args.execution.recoverable,
             simulator_seed=args.execution.simulator_seed,
             keep_partial_raw=args.execution.keep_partial_raw,
+            results_beside_sheet=args.execution.results_beside_sheet,
             analysis_request=analysis_request,
             analysis_callback=(
                 attached_analysis_callback(state) if analysis_request is not None else None
@@ -840,18 +878,19 @@ async def handle_run_experiments(
         return await _error_response(
             args.request_id,
             code=exc.code,
-            message=str(exc),
+            failure=exc,
             stage="submission",
             retryable=True,
             # The submission is durable; only the rest of the call fell over.
             commit_state="committed",
             budget=budget,
+            state=state,
         )
     except RequestGateBusy as exc:
         return await _error_response(
             args.request_id,
             code=exc.code,
-            message=str(exc),
+            failure=exc,
             stage="submission",
             retryable=True,
             # The holder is the submission that claims this id, and it was
@@ -860,67 +899,85 @@ async def handle_run_experiments(
             # experiment ends up running twice.
             commit_state="unknown",
             budget=budget,
+            state=state,
         )
     except IdempotencyConflictError as exc:
         return await _error_response(
             args.request_id,
             code=exc.code,
-            message=str(exc),
+            failure=exc,
             stage="submission",
             retryable=False,
             commit_state="not_started",
             budget=budget,
+            state=state,
         )
     except NativeRequestError as exc:
         return await _error_response(
             args.request_id,
             code="pdk_native_request",
-            message=str(exc),
+            failure=exc,
             stage="variation",
             retryable=False,
             commit_state="not_started",
             budget=budget,
+            state=state,
         )
     except VariationError as exc:
         return await _error_response(
             args.request_id,
             code=exc.code,
-            message=str(exc),
+            failure=exc,
             stage="variation",
             retryable=False,
             commit_state="not_started",
             budget=budget,
+            state=state,
         )
     except PathSecurityError as exc:
         return await _error_response(
             args.request_id,
             code=exc.code,
-            message=str(exc),
+            failure=exc,
             stage="resolution",
             retryable=False,
             commit_state="not_started",
             budget=budget,
-            hint=path_denied_text(exc, state),
+            state=state,
         )
     except UnsupportedFileError as exc:
         return await _error_response(
             args.request_id,
             code=exc.code,
-            message=str(exc),
+            failure=exc,
             stage="resolution",
             retryable=False,
             commit_state="not_started",
             budget=budget,
+            state=state,
         )
     except RecoveryError as exc:
         return await _error_response(
             args.request_id,
             code=exc.code,
-            message=str(exc),
+            failure=exc,
             stage="recovery",
             retryable=False,
             commit_state="not_started",
             budget=budget,
+            state=state,
+        )
+    except NotPlaced as exc:
+        # The request asks for what its own circuits or simulator rule out.
+        return await _error_response(
+            args.request_id,
+            code=exc.code,
+            failure=exc,
+            stage="validate",
+            retryable=False,
+            commit_state="not_started",
+            budget=budget,
+            state=state,
         )
     except RecipeInvalidError as exc:
         # As analyze_results reports the same recipe: the request is wrong, so
@@ -928,21 +985,23 @@ async def handle_run_experiments(
         return await _error_response(
             args.request_id,
             code=exc.code,
-            message=str(exc),
+            failure=exc,
             stage="validate",
             retryable=False,
             commit_state="not_started",
             budget=budget,
+            state=state,
         )
     except (SimulationError, ResultError, DeckStagingError, OSError, ValueError) as exc:
         return await _error_response(
             args.request_id,
             code=raise_site_code(exc) or "submission_failed",
-            message=str(exc),
+            failure=exc,
             stage="submission",
             retryable=True,
             commit_state="not_started",
             budget=budget,
+            state=state,
         )
 
 
@@ -1220,7 +1279,9 @@ async def _prepare_circuit(
 def _seed_random_variations(args: RunExperimentsInput) -> RunExperimentsInput:
     """Give each random entry that has no seed one chosen now, so that every
     Monte Carlo the server runs can be replayed from what its cases record."""
-    if not any(isinstance(item, RandomVariation) and item.seed is None for item in args.variations):
+    if not any(
+        isinstance(item, RandomVariation) and item.seed is None for item in args.variations
+    ):
         return args
     variations = [
         item.model_copy(update={"seed": secrets.randbelow(2**31)})
@@ -1292,21 +1353,28 @@ def _validate_attached_analysis(analyze_block: AttachedAnalysis) -> None:
     registry.
     """
     request = analyze_block.model_dump(mode="json", exclude_unset=False)
+    refused = "The attached analyze block is not a valid analyze_results request: "
     try:
-        analyze.AnalyzeResultsInput.model_validate(
+        expanded = analyze.AnalyzeResultsInput.model_validate(
             _attached_analysis_payload("preflight", request)
         )
-        # The input model deliberately skips per-recipe validation
-        # (SkipValidation[Recipe] — items are validated lazily at execution so
-        # one bad recipe fails one item). At SUBMISSION that laziness is the
-        # bug: every recipe must parse before a simulator is asked to run.
-        for raw_recipe in request.get("recipes") or []:
-            validate_recipe(raw_recipe)
-    except (ValidationError, ValueError) as exc:
+    except ValidationError as exc:
         raise RecipeInvalidError(
-            "The attached analyze block is not a valid analyze_results request: "
-            f"{validation_error_detail('analyze_results', exc)}"
+            refused + validation_error_detail("analyze_results", exc)
         ) from exc
+    # The input model deliberately skips per-recipe validation
+    # (SkipValidation[Recipe] — items are validated lazily at execution so one
+    # bad recipe fails one item). At SUBMISSION that laziness is the bug: every
+    # recipe must be one the analysis after the runs can run, against the
+    # sources it will read, before a simulator is asked to run.
+    labels = [source.label for source in expanded.sources or []]
+    for index, raw_recipe in enumerate(request.get("recipes") or []):
+        try:
+            analyze.recipe_of_request(raw_recipe, labels)
+        except (ValueError, TypeError) as exc:
+            raise RecipeInvalidError(
+                f"{refused}recipes[{index}]: {validation_error_detail('analyze_results', exc)}"
+            ) from exc
 
 
 def attached_analysis_callback(state: SessionState) -> AnalysisCallback:
@@ -1327,7 +1395,7 @@ def attached_analysis_callback(state: SessionState) -> AnalysisCallback:
             ) from exc
         # Resolved on the module, not bound at import: the analysis stage is
         # patched through ``tools.analyze`` in tests, and the attribute lookup
-        # is what keeps that seam where the engine actually lives.
+        # is what keeps that seam where the analysis actually lives.
         return await analyze.capture_attached_analysis(args, state)
 
     return run_attached_analysis
@@ -1406,13 +1474,10 @@ async def _load_matching_replay(
     if index is None:
         return None
     refuse_another_request(index, args.request_id, fingerprint, CANONICALIZER_VERSION)
-    # Resolved as every job id is: the registry adopts the record, writes back
-    # what the store reconciled when its owner died, and re-reads a job another
-    # process runs. An id the index names but no record answers is the request
-    # gate's to handle.
-    try:
-        job = await resolve_job_async(str(index.get("job_id", "")), state)
-    except ResultError:  # an unknown job (JobNotFoundError) among them
+    # Found as every replay finds its job (``resolve_recorded_job``). An id the
+    # index names but no record answers is the request gate's to handle.
+    job = await resolve_recorded_job(state, str(index.get("job_id", "")))
+    if job is None:
         return None
     refuse_inconsistent_record(job, args.request_id, fingerprint, CANONICALIZER_VERSION)
     # What this request would run on now, resolved as a fresh submission
@@ -1603,7 +1668,9 @@ async def _routing_failure_response(
 
     def build(limit: int, _rung: response_budget.Rung | None) -> ReceiptBuilt:
         rendered = copy.deepcopy(data)
-        rendered["runs"] = runs_page(cases, args.run_fields, cap=limit)
+        rendered["runs"] = runs_page(
+            cases, args.run_fields, cap=limit, warnings=rendered["warnings"]
+        )
         return rendered, str(exc)
 
     return await render_run_receipt(budget, build)
@@ -1617,19 +1684,21 @@ def submission_error_payload(
     stage: str,
     retryable: bool,
     commit_state: Literal["not_started", "committed", "unknown"],
-    hint: str | None = None,
+    hint: str,
 ) -> dict[str, Any]:
     """The receipt-shaped payload for a call that produced no job.
 
     Public because a submission can now fail outside this handler: the Python
     API's detached mode spawns a process to submit, and a failure there has to
-    reach the caller in the same shape as a failure here. ``hint`` defaults to
-    the message; a failure with a known remedy passes the message with it.
+    reach the caller in the same shape as a failure here. ``hint`` is the
+    message followed by the failure's recovery step (``failure_text``), as a
+    jobs refusal says it; there is no default, so no caller can leave the step
+    out by not asking for it.
     """
     data = _empty_payload(request_id)
     data.update(
         {
-            "hint": hint if hint is not None else message,
+            "hint": hint,
             "error": {
                 "code": code,
                 "message": message,
@@ -1646,21 +1715,23 @@ async def _error_response(
     request_id: str,
     *,
     code: str,
-    message: str,
+    failure: Exception,
     stage: str,
     retryable: bool,
     commit_state: Literal["not_started", "committed", "unknown"],
     budget: ResponseBudget,
-    hint: str | None = None,
+    state: SessionState,
 ) -> types.CallToolResult:
+    """A refusal before any job exists, hinted with ``failure``'s recovery
+    step from the one table every surface reads (``failure_text``)."""
     data = submission_error_payload(
         request_id,
         code=code,
-        message=message,
+        message=str(failure),
         stage=stage,
         retryable=retryable,
         commit_state=commit_state,
-        hint=hint,
+        hint=failure_text(failure, state),
     )
     return await _render_static_run_receipt(
         data,

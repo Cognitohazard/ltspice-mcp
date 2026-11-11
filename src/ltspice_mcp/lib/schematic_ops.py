@@ -1,4 +1,4 @@
-"""The .asc schematic edit engine: op models, appliers, geometry and net tracing.
+"""The .asc schematic editor: op models, appliers, geometry and net tracing.
 
 One implementation, three consumers — ``edit_schematic`` applies the ops,
 ``inspect`` reads the same nets and components through the same cached editor,
@@ -36,7 +36,7 @@ import importlib
 import math
 import re
 import traceback
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import AsyncIterator, Callable, Container, Iterable, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, field
@@ -59,7 +59,6 @@ from spicelib.editor.base_schematic import (
 )
 from spicelib.editor.ltspice_utils import TEXT_REGEX, asc_text_align_set
 from spicelib.utils.detect_encoding import EncodingDetectError
-from spicelib.utils.file_search import search_file_in_containers
 
 # The concrete class to instantiate for a from-scratch .asc component.
 # spicelib 1.6 introduced ``AscComponent`` (the type its own .asc parser
@@ -83,12 +82,12 @@ from ltspice_mcp.lib.component_value import POSITIONAL_KINDS
 from ltspice_mcp.lib.connectivity import (
     NamedNets,
     build_on_wire_predicate,
-    fold_case,
     is_ground,
     name_key,
     name_keys,
     named_labels,
     named_nets,
+    point_on_segment,
     same_instance_dropped_segments,
 )
 from ltspice_mcp.lib.encoding import refused_sheet_mark, refused_sheet_mark_note
@@ -96,7 +95,7 @@ from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
 from ltspice_mcp.lib.format import is_scaled_number, parse_spice_value
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.models import StrictModel
-from ltspice_mcp.lib.nets import PinAt
+from ltspice_mcp.lib.nets import LabelAt, Member, PinAt, net_change
 from ltspice_mcp.lib.pin_legend import pin_ties
 from ltspice_mcp.lib.plot_settings import (
     SECTION_NAMES,
@@ -163,15 +162,10 @@ def _reject_empty_attr_value(reference: str, attribute: str, value: str) -> None
         )
 
 
-def _attribute_value(reference: str, attribute: str, value: str) -> str:
-    """The value an attribute is written with.
-
-    A ``Prefix`` must start with the element letter it gives the part, and is
-    written in upper case, the way spicelib reads it back; LTspice reads either
-    case the same.
-    """
-    if attribute != INSTANCE_PREFIX:
-        return value
+def _prefix_text(reference: str, value: str) -> str:
+    """The text a ``Prefix`` is written with: it must start with the element
+    letter it gives the part, and is written in upper case, the way spicelib
+    reads it back; LTspice reads either case the same."""
     letter = value.strip()[:1]
     if not (letter.isascii() and letter.isalpha()):
         raise NetlistError(
@@ -180,6 +174,68 @@ def _attribute_value(reference: str, attribute: str, value: str) -> str:
             "subcircuit."
         )
     return value.strip().upper()
+
+
+def _attribute_texts(
+    editor: AscEditor,
+    part: SchematicComponent,
+    given: Mapping[str, str],
+    *,
+    cleared: Container[str] = (),
+) -> dict[str, str]:
+    """The text each attribute in ``given`` is written with on ``part``, a part
+    on ``editor``'s sheet or one about to be placed on it, in ``given``'s order.
+    ``cleared`` names the attributes the same op removes from the part.
+
+    Every op that writes or clears a part's attributes takes their text from
+    here (``add_component``, ``set_component_value``,
+    ``set_component_attribute``), so a text one op refuses no other op writes:
+
+    - a ``Prefix`` is written as ``_prefix_text`` gives it;
+    - the part's ``Value`` once the op is done, the one in ``given`` or else
+      its own, must be one LTspice reads whole as the value of the element
+      class the part then netlists as (``_validate_component_value``): the
+      class given by the ``Prefix`` in ``given``, else by the part's own
+      unless ``cleared`` removes it, else by its symbol's. A ``Prefix``
+      written or cleared changes that class, so it holds the part's own Value
+      to the new class.
+
+    Raises NetlistError for a text the part cannot be given.
+    """
+    texts = {
+        name: _prefix_text(part.reference, text) if name == INSTANCE_PREFIX else text
+        for name, text in given.items()
+    }
+    touched = {*texts, *(name for name in ("Value", INSTANCE_PREFIX) if name in cleared)}
+    if not touched & {"Value", INSTANCE_PREFIX}:
+        return texts
+    own = getattr(part, "attributes", None) or {}
+    after = {
+        name: str(own[name])
+        for name in ("Value", INSTANCE_PREFIX)
+        if name in own and name not in cleared
+    }
+    after.update(texts)
+    if "Value" not in after:
+        return texts
+    element = _element_of(editor, part, part.reference, after.get(INSTANCE_PREFIX))
+    try:
+        _validate_component_value(part.reference, after["Value"], element)
+    except NetlistError as exc:
+        if "Value" in texts:
+            raise
+        change = (
+            f"set Prefix {texts[INSTANCE_PREFIX]!r} on"
+            if INSTANCE_PREFIX in texts
+            else "clear the Prefix of"
+        )
+        raise NetlistError(
+            f"Refused to {change} {part.reference!r}: it would netlist as a "
+            f"{element}-class part, and its Value does not read as one. {exc} "
+            "Give it a Value that class reads (set_component_value) in an op "
+            "ahead of this one."
+        ) from exc
+    return texts
 
 
 def _require_clearable_attr(reference: str, attribute: str) -> None:
@@ -243,16 +299,19 @@ def create_component(
     comp.symbol = symbol  # pyright: ignore[reportAttributeAccessIssue]
     comp.position = Point(x, y)
     comp.rotation = rotation
+    # ``value`` is the Value attribute; a Value in ``attributes`` as well
+    # replaces it, in its place. An empty value writes the 2-token SYMATTR
+    # line that corrupts the .asc on the next read.
+    given: dict[str, str] = {}
     if value is not None:
-        # An empty Value writes the same 2-token SYMATTR line that corrupts the
-        # .asc on the next read, so guard this path too (not just attributes).
         _reject_empty_attr_value(reference, "Value", value)
-        comp.attributes["Value"] = value
-    if attributes:
-        for attr_name, attr_val in attributes.items():
-            _reject_unknown_attr(attr_name)
-            _reject_empty_attr_value(reference, attr_name, attr_val)
-            comp.attributes[attr_name] = _attribute_value(reference, attr_name, attr_val)
+        given["Value"] = value
+    for attr_name, attr_val in (attributes or {}).items():
+        _reject_unknown_attr(attr_name)
+        _reject_empty_attr_value(reference, attr_name, attr_val)
+        given[attr_name] = attr_val
+    # Every text is checked before the part reaches the sheet.
+    comp.attributes.update(_attribute_texts(editor, comp, given))
     editor.add_component(comp)
 
 
@@ -491,17 +550,14 @@ def _reference_taken(
     editor: AscEditor, reference: str, *, other_than: str | None = None
 ) -> str | None:
     """The reference of a part, other than ``other_than``, that ``reference``
-    names to LTspice; None when no part has it.
+    names to LTspice (``sheet.references_named``); None when no part has it.
 
     LTspice compares references without case: neither build netlists a sheet
     with parts named ``R1`` and ``r1`` (recorded as
     ``connectivity/shared_reference_case``).
     """
-    key = fold_case(reference)
-    return next(
-        (name for name in editor.components if name != other_than and fold_case(name) == key),
-        None,
-    )
+    others = [name for name in editor.components if name != other_than]
+    return next(iter(references_named(reference, others)), None)
 
 
 def part_reference(editor: AscEditor, reference: str) -> str:
@@ -597,7 +653,7 @@ def _set_or_create_value(editor, reference: str, value: str) -> None:
         editor.set_component_value(reference, value)
 
 
-def _apply_component_value(editor, reference: str, value: str, element: str) -> None:
+def _apply_component_value(editor, reference: str, value: str) -> None:
     """Set a component's value, splitting trailing ``KEY=VALUE`` tokens off.
 
     spicelib's ``set_component_value`` writes only the model/value field of
@@ -616,7 +672,8 @@ def _apply_component_value(editor, reference: str, value: str, element: str) -> 
     cases like ``M1 d g s b "NMOS_lvt" W=10u`` and
     ``R1 n1 n2 {1/(2*pi*RC)}`` route correctly.
     """
-    _validate_component_value(reference, value, element)
+    _attribute_texts(editor, editor.get_component(reference), {"Value": value})
+    element = element_class(editor, reference)
     # Behavioral sources: the whole value IS an equation whose first token is
     # V=/I=/R=... — not a model name with trailing parameters. The KEY=VALUE
     # split below would route it to set_component_parameters, which the .asc
@@ -744,14 +801,20 @@ def placed_geometry(editor: AscEditor, reference: str) -> dict | None:
 def element_class(editor: AscEditor, reference: str) -> str:
     """The element letter a placed part netlists as (``sheet.element_letter``),
     read from the editor's part and its symbol."""
-    comp = editor.components.get(reference)
-    symbol = getattr(comp, "symbol", None)
-    info = symbol_info_for(editor, symbol) if symbol else None
-    return element_letter(
-        (getattr(comp, "attributes", None) or {}).get(INSTANCE_PREFIX),
-        info.prefix if info is not None else None,
-        reference,
+    part = editor.components.get(reference)
+    return _element_of(
+        editor, part, reference, (getattr(part, "attributes", None) or {}).get(INSTANCE_PREFIX)
     )
+
+
+def _element_of(editor: AscEditor, part: object, reference: str, own_prefix: str | None) -> str:
+    """The element letter ``part`` netlists as (``sheet.element_letter``), on
+    ``editor``'s sheet or about to be placed on it, with ``own_prefix`` as its
+    own ``Prefix``, the one it has or is about to have: from that, else from
+    its symbol's, else from ``reference``."""
+    symbol = getattr(part, "symbol", None)
+    info = symbol_info_for(editor, symbol) if symbol else None
+    return element_letter(own_prefix, info.prefix if info is not None else None, reference)
 
 
 def export_parts(editor: AscEditor, geometry: Iterable[dict]) -> list[tuple[str, str, list[str]]]:
@@ -802,6 +865,7 @@ def sheet_nets(
     extra_segments: Sequence[tuple[int, int, int, int]] = (),
     without: str | None = None,
     geometry: Iterable[dict] | None = None,
+    wires: Sequence[tuple[int, int, int, int]] | None = None,
 ) -> NamedNets:
     """The sheet's nets as LTspice netlists them (``connectivity.named_nets``).
 
@@ -814,7 +878,9 @@ def sheet_nets(
     segments (e.g. the route ``wire_pins`` is about to add) so checks operate
     on the post-route net layout. ``without`` leaves one part's pins out: the
     sheet as it is apart from a part about to be placed or moved.
-    ``geometry`` is the parts' geometry when the caller already holds it.
+    ``geometry`` is the parts' geometry when the caller already holds it, and
+    ``wires`` the wires to read in place of the sheet's, for the sheet as an
+    op would leave it before the op changes it.
     """
     parts = [
         (entry["ref"], [(pin["name"], (pin["x"], pin["y"])) for pin in entry["pins"]])
@@ -822,7 +888,7 @@ def sheet_nets(
         if entry["ref"] != without
     ]
     labels = [((int(lbl.coord.X), int(lbl.coord.Y)), lbl.text) for lbl in editor.labels]
-    segments = [*wire_segments_of(editor), *extra_segments]
+    segments = [*(wire_segments_of(editor) if wires is None else wires), *extra_segments]
     return named_nets(parts, labels, [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in segments])
 
 
@@ -998,17 +1064,27 @@ def _unrecognised_sheet(path: Path, exc: EncodingDetectError) -> NetlistError:
     )
 
 
+class _PlacedSymbol(AsyReader):
+    """A part's symbol as the editor read it, with the name the sheet gives it."""
+
+    def __init__(self, path: Path, placed_as: str) -> None:
+        super().__init__(path)
+        self.placed_as = placed_as
+
+
 class _AscEditor(AscEditor):
-    """spicelib's editor, finding each symbol as the session does and opening a
-    sheet whose block symbol has no sheet.
+    """spicelib's editor, finding a sheet's files as the session does and opening
+    a sheet whose block symbol has no sheet.
 
     A part's symbol is the file ``symbols`` resolves its name to
     (``symbol_library.find_symbol``), the one ``inspect``, ``verify_circuit``
-    and the drawing read. spicelib's own search walked every folder under the
-    sheet's, so it found a bare name in a folder neither LTspice build looks
-    in; kept the folder a name gives, so it missed a symbol XVII finds beside
-    the sheet; and cached each name's file for the whole process
-    (``docs/spicelib_bugs.md``, Bug 17).
+    and the drawing read, and a block's own sheet the one it finds for the
+    block (``SymbolResolver.block_sheet``). spicelib's own searches walked
+    every folder under the sheet's and the folder the server runs in, so they
+    found a file where neither LTspice build looks; kept the folder a name
+    gives, so they missed a symbol XVII finds beside the sheet; and cached
+    each symbol's file for the whole process (``docs/spicelib_bugs.md``, Bugs
+    17 and 37).
 
     LTspice netlists an instance of a block symbol as a call to a subcircuit
     of the symbol's name, defined by its own sheet, by a library on the sheet,
@@ -1021,21 +1097,18 @@ class _AscEditor(AscEditor):
     reads no sheet for it even beside it (``export-hierarchical-block``;
     ``docs/spicelib_bugs.md``, Bug 33). A comment or directive drawn on its
     side stays on its side, which spicelib's reader drops (Bug 34).
+
+    A symbol that names a model library, a cell's or a block's, loads with no
+    resolved subcircuit either. Nothing that reads or edits a sheet here needs
+    the library, which a deck reads when it runs. spicelib looked for it as it
+    looked for symbols, refused the sheet where it found none, and where it
+    found one could not save the sheet (Bug 39).
     """
 
     def __init__(
-        self,
-        asc_file: str | Path,
-        encoding: str = "autodetect",
-        *,
-        symbols: SymbolResolver,
-        searched: dict[tuple[str, str], str | None] | None = None,
+        self, asc_file: str | Path, encoding: str = "autodetect", *, symbols: SymbolResolver
     ) -> None:
         self._symbols = symbols
-        # Where each sheet not beside its symbol was found, shared with the
-        # sheets this one opens: a search walks every folder it is given, and
-        # a sheet may place the same block many times.
-        self._searched = {} if searched is None else searched
         super().__init__(asc_file, encoding)
 
     def _get_symbol(self, symbol: str) -> AsyReader:
@@ -1044,7 +1117,7 @@ class _AscEditor(AscEditor):
             raise FileNotFoundError(
                 f"Symbol '{symbol}' not found beside the sheet or in any symbol library"
             )
-        return AsyReader(found)
+        return _PlacedSymbol(found, symbol)
 
     def reset_netlist(self, create_blank: bool = False) -> None:
         super().reset_netlist(create_blank)
@@ -1062,23 +1135,22 @@ class _AscEditor(AscEditor):
             asc_text_align_set(text, justification)
 
     def _get_subcircuit(self, symbol: Any) -> Any:
-        if symbol.symbol_type != "BLOCK" or symbol.get_library() is not None:
-            return super()._get_subcircuit(symbol)
-        if INSTANCE_PREFIX in symbol.attributes:
+        """What an instance of ``symbol`` (a ``_PlacedSymbol``) calls: a block's
+        own sheet, opened as one of these, or nothing resolved."""
+        if symbol.symbol_type not in ("CELL", "BLOCK"):
+            # spicelib's refusal of such a part, which it makes before it looks
+            # for any file, kept as it was.
+            raise ValueError(f"Symbol type {symbol.symbol_type} not supported")
+        if (
+            symbol.symbol_type == "CELL"
+            or symbol.get_library() is not None
+            or INSTANCE_PREFIX in symbol.attributes
+        ):
             return None
-        sheet = symbol.get_schematic_file()
-        if not sheet.exists():
-            folder = str(self.asc_file_path.parent)
-            if (sheet.name, folder) not in self._searched:
-                self._searched[sheet.name, folder] = search_file_in_containers(
-                    sheet.name, folder, ".", *self.custom_lib_paths
-                )
-            sheet = self._searched[sheet.name, folder]
+        sheet = self._symbols.block_sheet(symbol.placed_as)
         if sheet is None:
             return None
-        return type(self)(
-            sheet, symbols=self._symbols.for_sheet(Path(sheet)), searched=self._searched
-        )
+        return type(self)(sheet, symbols=self._symbols.for_sheet(sheet))
 
 
 def _refuse_lost_records(path: Path, editor: AscEditor) -> None:
@@ -1148,8 +1220,8 @@ def make_editor(path: Path, symbols: SymbolResolver | None = None) -> Editor:
     Raises NetlistError if the file is not found, has no Version line the
     schematic editor can find, holds a line it cannot read or would skip, or
     places two parts under one reference, and
-    SymbolResolutionError if a file the schematic refers to (a symbol, a
-    sub-sheet) is missing.
+    SymbolResolutionError if a symbol it or a block's own sheet places is
+    missing.
     """
     try:
         if not is_asc(path):
@@ -1172,7 +1244,7 @@ def make_editor(path: Path, symbols: SymbolResolver | None = None) -> Editor:
         if not path.is_file():
             raise NetlistError(f"File not found: {path}") from e
         # The schematic itself opened, so what is missing is something it
-        # refers to: a symbol or a model library.
+        # refers to: a symbol it or a block's own sheet places.
         # Which one it is comes from the file that is there, not from whether
         # the editor's message happened to spell ".asy".
         raise SymbolResolutionError(
@@ -1455,11 +1527,20 @@ def _plan_move(editor: AscEditor, op: "OpMove", geometry: dict[str, dict]) -> _M
         moving |= {_xy(editor.labels[i].coord) for i in labels}
         moving |= {end for i in wires for end in keys[i]}
         # LTspice joins a point anywhere along a wire, so what lies along one
-        # that moves whole is attached to it as what sits on its ends is.
-        along = build_on_wire_predicate([keys[i] for i in wires])
+        # that moves whole is attached to it as what sits on its ends is. A
+        # wire both of whose ends move moves whole too, so what lies along it
+        # goes with it, and that can take further wires whole in turn.
+        whole = {keys[i] for i in wires}
+        along = build_on_wire_predicate(list(whole))
 
         def moves(end: tuple[int, int]) -> bool:
             return end in moving or along(end) or (region is not None and region.holds(end))
+
+        while grown := {
+            key for key in keys if key not in whole and moves(key[0]) and moves(key[1])
+        }:
+            whole |= grown
+            along = build_on_wire_predicate(list(whole))
 
         # A label or ground on what moves goes with it rather than being left on nothing.
         labels.update(i for i, lbl in enumerate(editor.labels) if moves(_xy(lbl.coord)))
@@ -1471,8 +1552,10 @@ def _plan_move(editor: AscEditor, op: "OpMove", geometry: dict[str, dict]) -> _M
 
 
 def _apply_move(editor: AscEditor, op: "OpMove") -> dict[str, object]:
-    """Apply a ``move``: plan it, refuse a move that would short two named nets,
-    then shift every selected record and dragged wire end by ``(dx, dy)``.
+    """Apply a ``move``: plan it, refuse a move that would short two named nets
+    or, with ``drag``, cut something that stays off from what moves (both read
+    off ``nets.net_change``), then shift every selected record and dragged wire
+    end by ``(dx, dy)``.
 
     Nothing is changed before the check, so a refused move leaves the sheet as
     it was even in a batch that goes on past a failed op. What the moved sheet
@@ -1510,24 +1593,26 @@ def _apply_move(editor: AscEditor, op: "OpMove") -> dict[str, object]:
         ],
         ends,
     )
-    # A net of the moved sheet, by its wiring, with two names on it joins them;
-    # that is a short unless the sheet as it is already made them one node
-    # (names compared as LTspice compares them, nets that share a name or a
-    # ground already one).
-    names_on: dict[int, set[str]] = defaultdict(set)
-    for label in after.labels:
-        names_on[after.nets.of_label(label)].update(named_labels([label.text]))
-    before: NamedNets | None = None
-    for names in names_on.values():
-        if len(name_keys(names)) < 2:
-            continue
-        before = before or sheet_nets(editor, geometry=geometry.values())
-        if len({before.net_named(name) for name in names}) > 1:
+    # What the move does to the nets, against the sheet as it is: nets that
+    # share a name, in any case, or a ground are one in both.
+    change = net_change(sheet_nets(editor, geometry=geometry.values()).nets, after.nets)
+    # Nets it joins that each carry a name are shorted together; a net whose
+    # only label is a ground flag carries none, and joining it grounds the other.
+    for groups in change.joined:
+        names = [named_labels(m.text for m in group if isinstance(m, LabelAt)) for group in groups]
+        if sum(1 for carried in names if carried) > 1:
             raise NetlistError(
-                f"Refused to move: it would join nets that each carry a name {sorted(names)}, "
-                "shorting them together. Move it clear of the other net's wiring, or "
-                "rename one side if they are meant to be one net."
+                "Refused to move: it would join nets that each carry a name "
+                f"{sorted(set().union(*names))}, shorting them together. Move it clear of "
+                "the other net's wiring, or rename one side if they are meant to be one net."
             )
+    if op.drag and change.split:
+        # Dragging promises that what is joined to what moves stays joined.
+        # A net the move would divide breaks it: something that stays was
+        # joined to something that goes.
+        raise NetlistError(
+            _drag_split_refusal(change.split[0], plan, op, geometry, wire_segments_of(editor))
+        )
 
     for ref in plan.parts:
         position, rotation = editor.get_component_position(ref)
@@ -1550,9 +1635,71 @@ def _apply_move(editor: AscEditor, op: "OpMove") -> dict[str, object]:
     }
 
 
+def _drag_split_refusal(
+    pieces: Sequence[Sequence[Member]],
+    plan: _MovePlan,
+    op: "OpMove",
+    geometry: dict[str, dict],
+    wires: Sequence[tuple[int, int, int, int]],
+) -> str:
+    """Why a move with ``drag`` that would divide one net into ``pieces`` is
+    refused: what would no longer be joined, what stays, and how to take it
+    along. Naming every part of the net that stays moves the whole net, so
+    that is the way round where a part stays; a label stays only on a wire
+    that does not move whole, which moves whole once it is selected."""
+    members = [member for piece in pieces for member in piece]
+    staying = sorted({m.reference for m in members if isinstance(m, PinAt)} - set(plan.parts))
+    left = [m for m in members if isinstance(m, LabelAt) and m.index not in plan.labels]
+
+    def stays(member: Member) -> bool:
+        if isinstance(member, PinAt):
+            return member.reference in staying
+        return member.index not in plan.labels
+
+    divided = _divided_text(pieces, stays=stays)
+    one = len(staying) == 1
+    named, them = " and ".join(staying), "it" if one else "them"
+    region = op.region
+    crossing = [
+        ref
+        for ref in staying
+        if region is not None
+        and any(
+            region.holds((pin["x"], pin["y"])) for pin in geometry.get(ref, {}).get("pins", ())
+        )
+    ]
+    if crossing:
+        listed, alone = " and ".join(crossing), len(crossing) == 1
+        why = (
+            f" {listed} {'is' if alone else 'are'} not taken: part of "
+            f"{'its' if alone else 'their'} box lies outside the region, though a pin lies "
+            "inside it."
+        )
+        fix = f"Widen the region to hold all of {listed}, or name {'it' if alone else 'them'} in references"
+    elif staying:
+        why = f" {named} {'stays' if one else 'stay'}."
+        fix = f"Name {them} in references to move {them} too"
+    elif left:
+        label = left[0]
+        on = next(
+            (w for w in wires if point_on_segment(label.point, (w[0], w[1]), (w[2], w[3]))), None
+        )
+        where = f"the wire {segment_text(on)}" if on else f"({label.point[0]},{label.point[1]})"
+        why = f" {_members_text([label])} stays on {where}, which does not move whole."
+        fix = "Name that wire in wires so it moves whole" if on else "Name it in labels"
+    else:
+        why = ""
+        fix = "Select the wires that join what moves as well"
+    return (
+        f"Refused to move: with drag, what is joined to what moves stays joined, but this "
+        f"move would {divided}.{why} {fix}, or move without drag to leave the wiring "
+        "where it is."
+    )
+
+
 def _drop_wires_at(editor: AscEditor, coords: set[tuple[int, int]]) -> int:
     """Remove every wire with an endpoint in ``coords``; return how many were
-    dropped. Shared by remove_component's wire cleanup and the remove_wire op."""
+    dropped: ``remove_wire``'s point form, which asks for exactly that."""
     if not coords:
         return 0
     kept = [
@@ -1563,6 +1710,77 @@ def _drop_wires_at(editor: AscEditor, coords: set[tuple[int, int]]) -> int:
     dropped = len(editor.wires) - len(kept)
     editor.wires = kept
     return dropped
+
+
+def _drop_dangling_wires_at(editor: AscEditor, points: set[tuple[int, int]]) -> int:
+    """Remove the wires a removed part left dangling at ``points``, its pins;
+    return how many went.
+
+    A wire with an end on one of the points is left dangling when taking it
+    away parts nothing from anything by wire (``nets.net_change``): its other
+    end and what lies along it reach no pin or label that something else does
+    not join them to. Two wires that met at the pin still meet each other
+    there, so they stay, as does a wire that joins pins or labels along it.
+    Called with the part already removed, one wire at a time, so wires that
+    were joined only to each other go together. ``points`` leave out a pin
+    point another part's pin shares: a wire ending there is still on that pin,
+    so the removal did not leave it dangling.
+
+    Unlike every other edit's question, this one is asked of the wiring alone
+    (``folded=False``): a wire between two labels of one name still joins them
+    on the sheet, though the name joins them too, so it is not dangling.
+    Pinned by ``test_cleanup_keeps_a_wire_between_labels_of_one_name``.
+    """
+    geometry = collect_component_geometry(editor)
+    kept = list(editor.wires)
+    for wire in list(kept):
+        if _xy(wire.V1) not in points and _xy(wire.V2) not in points:
+            continue
+        without = [w for w in kept if w is not wire]
+        change = net_change(
+            sheet_nets(editor, geometry=geometry, wires=_segments(kept)).nets,
+            sheet_nets(editor, geometry=geometry, wires=_segments(without)).nets,
+            folded=False,
+        )
+        if not change.split:
+            kept = without
+    dropped = len(editor.wires) - len(kept)
+    editor.wires = kept
+    return dropped
+
+
+def _segments(wires: Iterable[Any]) -> list[tuple[int, int, int, int]]:
+    """``wires`` as flat ``(x1, y1, x2, y2)`` integer tuples."""
+    return [(int(w.V1.X), int(w.V1.Y), int(w.V2.X), int(w.V2.Y)) for w in wires]
+
+
+def _members_text(members: Iterable[Member], shown: int = 3) -> str:
+    """Pins and labels as a reader names them: ``REF.PIN`` and ``label 'x'``."""
+    names = [
+        member.qualified_name if isinstance(member, PinAt) else f"label '{member.text}'"
+        for member in members
+    ]
+    more = len(names) - shown
+    return ", ".join(names[:shown]) + (f" and {more} more" if more > 0 else "")
+
+
+def _divided_text(
+    pieces: Sequence[Sequence[Member]], stays: Callable[[Member], bool] = lambda _member: False
+) -> str:
+    """What dividing one net into ``pieces`` does, as a reader says it: the
+    piece that holds what ``stays`` picks out, else the smaller, is the one
+    cut off."""
+    if len(pieces) == 2:
+        apart, rest = sorted(pieces, key=lambda piece: (not any(map(stays, piece)), len(piece)))
+        return f"cut {_members_text(apart)} off from {_members_text(rest)}"
+    return f"divide one net into {len(pieces)}: " + "; ".join(
+        _members_text(piece) for piece in pieces
+    )
+
+
+def _joined_text_of(groups: Sequence[Sequence[Member]]) -> str:
+    """What joining the nets ``groups`` into one does, as a reader says it."""
+    return "join " + " with ".join(_members_text(group) for group in groups)
 
 
 def _pins_on_crossings(
@@ -1582,7 +1800,7 @@ def _pins_on_crossings(
     so those are the ways placing or moving a part makes one net of two. Two
     that each carry a name are a short, refused as a wire or a label that
     joined them is. Any other join is taken as meant, and the finished sheet
-    says it (the ``joined_at_crossing`` rule).
+    says it (the ``joined_at_crossing`` and ``pin_inside_wire`` rules).
 
     The sheet is read without the part itself, and ``already`` is where its
     pins are now: what a pin joins from where it already is, is not this
@@ -1775,7 +1993,7 @@ class _ConnectPlan(NamedTuple):
 
 def wire_segments_of(editor: AscEditor) -> list[tuple[int, int, int, int]]:
     """Every wire as a flat ``(x1, y1, x2, y2)`` integer tuple."""
-    return [(int(w.V1.X), int(w.V1.Y), int(w.V2.X), int(w.V2.Y)) for w in editor.wires]
+    return _segments(editor.wires)
 
 
 def wires_of_one_net(
@@ -2116,8 +2334,8 @@ class OpRemoveComponent(StrictModel):
     cleanup_wires: bool = Field(
         default=False,
         description=(
-            "Also delete wires left dangling at the removed component's pins; a "
-            "later add_component does not restore them, and there is no undo."
+            "Also delete wires left dangling at the removed component's pins: those "
+            "joining nothing else once it is gone. There is no undo."
         ),
     )
 
@@ -2132,6 +2350,19 @@ class OpMoveComponent(StrictModel):
     rotation: _RotationLiteral | None = Field(
         default=None, description=f"Omit to keep the current rotation; {_ROTATION_DESCRIPTION}"
     )
+
+
+class OpReplaceComponent(StrictModel):
+    """Swap a part's symbol in place; each moved pin is wired back to its net."""
+
+    op: Literal["replace_component"]
+    reference: str = Field(description=_REFERENCE_DESCRIPTION)
+    symbol: str = Field(description="The new symbol, without .asy.")
+    pins: dict[str, str] | None = Field(
+        default=None,
+        description="Old pin to new pin (name or SpiceOrder) where names differ; others pair by name.",
+    )
+    value: str | None = Field(default=None, description="New value; omit to keep the old one.")
 
 
 class SheetRegion(StrictModel):
@@ -2172,7 +2403,7 @@ class OpMove(StrictModel):
     )
     region: SheetRegion | None = Field(
         default=None,
-        description="Also what lies inside: a part's box, a wire's ends, a label, a text's anchor.",
+        description="Also what lies inside: a part's whole box, a wire's ends, a label, a text's anchor.",
     )
     drag: bool = Field(
         default=False,
@@ -2328,6 +2559,7 @@ SchematicOp = (
     | OpSetComponentAttribute
     | OpRemoveComponent
     | OpMoveComponent
+    | OpReplaceComponent
     | OpMove
     | OpAddNetLabel
     | OpRemoveNetLabel
@@ -2436,6 +2668,7 @@ OP_RESULT_FACTS: dict[str, tuple[str, ...]] = {
     "remove_directive": ("removed_texts",),
     "replace_directive": ("text",),
     "remove_component": ("deleted_wires",),
+    "replace_component": ("was", "wires", "left_at", "unpaired_pins"),
     "move": ("moved",),
     "set_plot_panes": ("plot_settings", "replaced_panes"),
 }
@@ -2459,6 +2692,264 @@ def _set_plot_panes(op: OpSetPlotPanes, plot: SheetPlotSettings) -> dict[str, ob
     plot.settings = with_panes(plot.settings, op.analysis, inherit_grid(before, panes))
     replaced = pane_specs(before.panes if before is not None else ())
     return {"op": op.op, "plot_settings": str(plot.path), "replaced_panes": replaced}
+
+
+def _pin_pairs(
+    op: OpReplaceComponent,
+    reference: str,
+    old_symbol: str,
+    old_pins: Sequence[PlacedPin],
+    new_pins: Sequence[PlacedPin],
+) -> list[tuple[PlacedPin, PlacedPin]]:
+    """Each old pin with the new pin it becomes: as ``op.pins`` names them
+    (by name or SpiceOrder, as ``placed_pin`` reads a pin), then by a name the
+    two symbols share, in any case, where each has one pin of it."""
+    pairs: list[tuple[PlacedPin, PlacedPin]] = []
+    for old_name, new_name in (op.pins or {}).items():
+        old = placed_pin(old_pins, reference, old_symbol, old_name)
+        new = placed_pin(new_pins, reference, op.symbol, new_name)
+        if any(old is o for o, _ in pairs) or any(new is n for _, n in pairs):
+            raise NetlistError(
+                f"replace_component pairs each pin once, and pins names {old_name!r} or "
+                f"{new_name!r} twice."
+            )
+        pairs.append((old, new))
+
+    def by_name(pins: Sequence[PlacedPin]) -> dict[str, PlacedPin]:
+        names = Counter(pin.name.casefold() for pin in pins if pin.name)
+        return {
+            pin.name.casefold(): pin
+            for pin in pins
+            if pin.name and names[pin.name.casefold()] == 1
+        }
+
+    new_named = by_name(new_pins)
+    for name, old in by_name(old_pins).items():
+        new = new_named.get(name)
+        if new is None or any(old is o for o, _ in pairs) or any(new is n for _, n in pairs):
+            continue
+        pairs.append((old, new))
+    return pairs
+
+
+def _joins(nets: NamedNets, reference: str) -> dict[str, frozenset]:
+    """What each pin of ``reference`` is one net with apart from the part
+    itself (other parts' pins and labels), by pin: what ``replace_component``
+    must leave as it was. How the rest of the sheet is grouped into nets,
+    which it must leave as well, is ``nets.net_change``'s to compare."""
+    others: dict[int, set[tuple]] = defaultdict(set)
+    for pin in nets.pins:
+        if pin.reference != reference:
+            others[nets.of_pin(pin)].add(("pin", pin.qualified_name, pin.point))
+    for label in nets.labels:
+        others[nets.of_label(label)].add(("label", label.text, label.point))
+    return {
+        _pin_key(pin.name, pin.order): frozenset(others.get(nets.of_pin(pin), ()))
+        for pin in nets.pins
+        if pin.reference == reference
+    }
+
+
+def _pin_key(name: str, order: int) -> str:
+    """A pin as ``_joins`` keys it: its name, or its SpiceOrder for a pin with none."""
+    return name or str(order)
+
+
+def _joined_text(joined: frozenset) -> str:
+    """What a pin is one net with, as a reader names it."""
+    if not joined:
+        return "nothing"
+    names = sorted(
+        f"{name}" if kind == "pin" else f"label '{name}'" for kind, name, _point in joined
+    )
+    return ", ".join(names[:6]) + (f" and {len(names) - 6} more" if len(names) > 6 else "")
+
+
+def _replace_component(editor: AscEditor, op: OpReplaceComponent) -> dict[str, object]:
+    """Swap ``op.reference``'s symbol where it stands and reconnect its pins.
+
+    The part keeps its name, place, turn and attributes (its value too, unless
+    ``op.value`` gives one); the old symbol's text placements (``WINDOW``) go,
+    so the new symbol places its own. Each paired pin that moved gets a wire
+    from where it is now to where the old one was, planned and checked as
+    ``wire_pins`` plans one. Then the sheet must join each paired pin to what
+    its old pin joined, an unpaired new pin to nothing (``_joins``), and
+    everything else as before (``nets.net_change``); otherwise the op is
+    refused and the sheet put back.
+    """
+    reference = part_reference(editor, op.reference)
+    component = editor.components[reference]
+    old_symbol = component.symbol or ""
+    old_geometry = placed_geometry(editor, reference)
+    if old_geometry is None:
+        raise NetlistError(
+            f"Cannot replace {reference}: its symbol '{old_symbol}' is not found, so its "
+            "pins, which the new symbol's take over, are unknown."
+        )
+    new_info = symbol_info_for(editor, op.symbol)
+    if new_info is None:
+        raise NetlistError(
+            f"Symbol '{op.symbol}' not found beside the schematic or in any configured "
+            "symbol library."
+        )
+    position, rotation = editor.get_component_position(reference)
+    x, y = int(position.X), int(position.Y)
+    turn = rotation.name if rotation else "R0"
+    new_geometry = compute_placed_geometry(new_info, x, y, turn)
+
+    def placed(pins: Sequence[Mapping[str, Any]]) -> list[PlacedPin]:
+        return [PlacedPin(p["name"], p["order"], p["x"], p["y"], p["dir"]) for p in pins]
+
+    old_pins, new_pins = placed(old_geometry["pins"]), placed(new_geometry["pins"])
+    pairs = _pin_pairs(op, reference, old_symbol, old_pins, new_pins)
+    _pins_on_crossings(
+        editor,
+        reference,
+        new_geometry["pins"],
+        f"replace {reference}",
+        already={(pin.x, pin.y) for pin in old_pins},
+    )
+    before = sheet_nets(editor)
+    joined_before = _joins(before, reference)
+
+    kept_attributes = dict(component.attributes)
+    wire_count = len(editor.wires)
+
+    def put_back() -> None:
+        component.symbol = old_symbol  # pyright: ignore[reportAttributeAccessIssue]
+        component.attributes.clear()
+        component.attributes.update(kept_attributes)
+        del editor.wires[wire_count:]
+
+    component.symbol = op.symbol  # pyright: ignore[reportAttributeAccessIssue]
+    # The old symbol's text placements and hierarchical block, not texts.
+    for name in [n for n in component.attributes if n.startswith(("_WINDOW", "_SUBCKT"))]:
+        del component.attributes[name]
+    try:
+        if op.value is not None:
+            _apply_component_value(editor, reference, op.value)
+        drawn: list[tuple[int, int, int, int]] = []
+        for old, new in pairs:
+            old_key = _pin_key(old.name, old.order)
+            if (old.x, old.y) == (new.x, new.y) or not joined_before.get(old_key):
+                continue
+            drawn += _bridge(editor, reference, old, new)
+        after = sheet_nets(editor)
+        joined_after = _joins(after, reference)
+        paired = {_pin_key(new.name, new.order): old for old, new in pairs}
+        for new in new_pins:
+            key = _pin_key(new.name, new.order)
+            old = paired.get(key)
+            want = (
+                joined_before.get(_pin_key(old.name, old.order), frozenset())
+                if old
+                else frozenset()
+            )
+            if joined_after.get(key, frozenset()) != want:
+                said = (
+                    f"its old pin {old.name or old.order} was joined to"
+                    if old
+                    else "no old pin pairs with it, so it should join"
+                )
+                raise NetlistError(
+                    f"Refused to replace {reference} with {op.symbol}: its pin "
+                    f"{new.name or new.order} at ({new.x},{new.y}) would be joined to "
+                    f"{_joined_text(joined_after.get(key, frozenset()))}, where {said} "
+                    f"{_joined_text(want)}. Pair the pins with pins (old pins: "
+                    f"{', '.join(p.name or str(p.order) for p in old_pins)}; new pins: "
+                    f"{', '.join(p.name or str(p.order) for p in new_pins)}), or move the "
+                    "part first so the new pins land clear of other wiring."
+                )
+        change = net_change(
+            before.nets,
+            after.nets,
+            leaving=lambda member: isinstance(member, PinAt) and member.reference == reference,
+        )
+        if change.split or change.joined:
+            done = (
+                _joined_text_of(change.joined[0])
+                if change.joined
+                else _divided_text(change.split[0])
+            )
+            raise NetlistError(
+                f"Refused to replace {reference} with {op.symbol}: the new symbol or the "
+                f"wires that reconnect its pins would change other nets of the sheet: they "
+                f"would {done}. Move the part first, or reconnect its pins with wire_pins."
+            )
+    except (NetlistError, ValueError):
+        put_back()
+        raise
+    paired_old = {id(old) for old, _ in pairs}
+    left = [
+        {"pin": old.name or str(old.order), "x": old.x, "y": old.y}
+        for old in old_pins
+        if id(old) not in paired_old and joined_before.get(_pin_key(old.name, old.order))
+    ]
+    paired_new = {id(new) for _, new in pairs}
+    unpaired = [new.name or str(new.order) for new in new_pins if id(new) not in paired_new]
+    result: dict[str, object] = {
+        "op": "replace_component",
+        "reference": reference,
+        "symbol": op.symbol,
+        "was": old_symbol,
+    }
+    if drawn:
+        result["wires"] = [segment_json(segment) for segment in drawn]
+    if left:
+        result["left_at"] = left
+    if unpaired:
+        result["unpaired_pins"] = unpaired
+    return result
+
+
+def _bridge(
+    editor: AscEditor, reference: str, old: PlacedPin, new: PlacedPin
+) -> list[tuple[int, int, int, int]]:
+    """Draw a wire from ``new``, where the pin is now, to ``old``, where the
+    wiring of the pin it replaces ends, by the first route the route planner
+    accepts (``_plan_connect_route``, as ``wire_pins`` plans a wire): straight
+    where the two share a line, else round one corner, either way, else across
+    between them with two (``_bridge_routes``)."""
+    start, end = GridPoint(x=new.x, y=new.y), GridPoint(x=old.x, y=old.y)
+    refusal: NetlistError | None = None
+    for waypoints in _bridge_routes((new.x, new.y), (old.x, old.y)):
+        try:
+            plan = _plan_connect_route(
+                editor, start, end, [GridPoint(x=x, y=y) for x, y in waypoints]
+            )
+        except NetlistError as exc:
+            refusal = refusal or exc
+            continue
+        already = _append_wire_segments(editor, plan.segments)
+        return [segment for segment in plan.segments if segment not in already]
+    raise NetlistError(
+        f"Refused to replace {reference}: its pin {new.name or new.order} moves to "
+        f"({new.x},{new.y}), and no wire back to ({old.x},{old.y}), where its wiring "
+        f"ends, can be drawn: {refusal}"
+    )
+
+
+#: LTspice's grid step, in sheet units: where the pins of its symbols land.
+_GRID = 16
+
+
+def _bridge_routes(start: tuple[int, int], end: tuple[int, int]) -> list[list[tuple[int, int]]]:
+    """The corners of each route ``_bridge`` offers the planner, in order: none
+    when the ends share a line; else one corner, either way round; else two,
+    crossing over halfway on the 16-unit grid, either way round. A route of one
+    corner can run along the old wiring it ends on, which the planner refuses;
+    one that crosses over halfway meets it at a right angle."""
+    (x1, y1), (x2, y2) = start, end
+    if x1 == x2 or y1 == y2:
+        return [[]]
+    routes: list[list[tuple[int, int]]] = [[(x1, y2)], [(x2, y1)]]
+    mid_y = round((y1 + y2) / 2 / _GRID) * _GRID
+    if mid_y not in (y1, y2):
+        routes.append([(x1, mid_y), (x2, mid_y)])
+    mid_x = round((x1 + x2) / 2 / _GRID) * _GRID
+    if mid_x not in (x1, x2):
+        routes.append([(mid_x, y1), (mid_x, y2)])
+    return routes
 
 
 def apply_op_inplace(
@@ -2524,7 +3015,7 @@ def apply_op_inplace(
     if isinstance(op, OpSetComponentValue):
         reference = part_reference(editor, op.reference)
         before = _attributes_of(editor, reference)
-        _apply_component_value(editor, reference, op.value, element_class(editor, reference))
+        _apply_component_value(editor, reference, op.value)
         result: dict[str, object] = {
             "op": "set_component_value",
             "reference": reference,
@@ -2543,15 +3034,16 @@ def apply_op_inplace(
             # representation (a 2-token SYMATTR line is unreadable), so the
             # line is removed instead.
             _require_clearable_attr(reference, op.attribute)
-            editor.get_component(reference).attributes.pop(op.attribute, None)
+            part = editor.get_component(reference)
+            _attribute_texts(editor, part, {}, cleared={op.attribute})
+            part.attributes.pop(op.attribute, None)
         elif op.attribute == "InstName":
             return _rename_component(editor, reference, op.value.strip())
         else:
-            editor.set_component_attribute(
-                reference,
-                op.attribute,
-                _attribute_value(reference, op.attribute, op.value),
-            )
+            text = _attribute_texts(
+                editor, editor.get_component(reference), {op.attribute: op.value}
+            )[op.attribute]
+            editor.set_component_attribute(reference, op.attribute, text)
         attr_result: dict[str, object] = {
             "op": "set_component_attribute",
             "reference": reference,
@@ -2572,7 +3064,7 @@ def apply_op_inplace(
         # (dangling_wire_end), so a later op of the batch that removes or
         # reconnects it leaves nothing said.
         if op.cleanup_wires and target_only:
-            rm_result["deleted_wires"] = _drop_wires_at(editor, target_only)
+            rm_result["deleted_wires"] = _drop_dangling_wires_at(editor, target_only)
         return rm_result
 
     if isinstance(op, OpMoveComponent):
@@ -2597,6 +3089,9 @@ def apply_op_inplace(
         # (dangling_wire_end), as for remove_component.
         editor.set_component_position(reference, Point(op.x, op.y), new_rot)
         return {"op": "move_component", "reference": reference}
+
+    if isinstance(op, OpReplaceComponent):
+        return _replace_component(editor, op)
 
     if isinstance(op, OpMove):
         return {"op": "move", **_apply_move(editor, op)}
@@ -2638,41 +3133,24 @@ def apply_op_inplace(
                 # fact, not a pin fact: cutting a duplicated bridge between two
                 # wired stubs splits the net while every pin still touches some
                 # wire, so a floating-pin scan blesses exactly the cut this
-                # guard exists to refuse. The oracle is the sheet's wired nets.
-                nets_before = sheet_nets(editor).nets
-                on_net: dict[int, list[PinAt]] = {}
-                for pin in nets_before.pins:
-                    on_net.setdefault(nets_before.of_pin(pin), []).append(pin)
-                original, editor.wires = editor.wires, kept
-                nets_after = sheet_nets(editor).nets
-                for pins in on_net.values():
-                    sides: dict[int, list[PinAt]] = {}
-                    for pin in pins:
-                        sides.setdefault(nets_after.of_pin(pin), []).append(pin)
-                    if len(sides) < 2:
-                        continue
-                    editor.wires = original
-
-                    def _side_names(side: list[PinAt]) -> str:
-                        names = [
-                            f"{pin.reference}.{pin.name}" if pin.name else pin.reference
-                            for pin in sorted(
-                                side, key=lambda pin: (pin.point, pin.part, pin.order)
-                            )
-                        ]
-                        return ", ".join(names[:3]) + (", ..." if len(names) > 3 else "")
-
-                    first, second, *_ = sorted(sides.values(), key=len, reverse=True)
+                # guard exists to refuse. The oracle is the sheet's nets.
+                geometry = collect_component_geometry(editor)
+                split = net_change(
+                    sheet_nets(editor, geometry=geometry).nets,
+                    sheet_nets(editor, geometry=geometry, wires=_segments(kept)).nets,
+                ).split
+                if split:
+                    first, second, *_ = sorted(split[0], key=len, reverse=True)
                     raise NetlistError(
                         f"Refusing to remove the {copies} copies of "
                         f"({op.x1},{op.y1})->({op.x2},{op.y2}): they are one connection "
                         f"drawn {copies} times, and removing it would split the net, "
-                        f"leaving {_side_names(second)} disconnected from "
-                        f"{_side_names(first)}. Remove the pin's other segments first "
-                        "if the disconnection is what you want."
+                        f"leaving {_members_text(second)} disconnected from "
+                        f"{_members_text(first)}. If cutting the connection is what you "
+                        "want, remove the wire by a point instead (the x and y of one end), "
+                        "which takes every wire ending there."
                     )
-            else:
-                editor.wires = kept
+            editor.wires = kept
         elif op.pin is not None or (op.x is not None and op.y is not None):
             # Incident-point form: drop every segment touching the coordinate.
             _drop_wires_at(editor, {_resolve_op_xy(op, editor)})

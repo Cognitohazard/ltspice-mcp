@@ -33,7 +33,7 @@ class ApiCallError(ApiError):
 
 
 class ApiSessionError(ApiError):
-    """The process cannot safely use or create the requested engine session."""
+    """The process cannot safely use or create the requested session."""
 
 
 class ApiClosedError(ApiSessionError):
@@ -61,4 +61,11 @@ class ApiInternalError(ApiError):
 
 
 class ApiValidationError(ValueError):
-    """Python arguments failed the consolidated operation's validation."""
+    """An argument an ``Api`` call takes but cannot use.
+
+    A field the operation's model refuses, a value or a pair of values a
+    result read, ``wait`` or a ``wait``/``detach`` control refuses, and a value
+    a detached call cannot hand to its owner are all refused with this. The
+    catalogue lookups ``reference()`` and ``guide()`` run no call and raise
+    Python's own errors instead (``_reference.reference``).
+    """

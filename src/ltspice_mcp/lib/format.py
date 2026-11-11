@@ -6,21 +6,47 @@ Used throughout the analysis tools to accept human-friendly frequency and time v
 
 import re
 from collections.abc import Container
-from typing import Any
+from typing import Any, TypeVar
+
+_Number = TypeVar("_Number", int, float)
 
 
-def cap_list(payload: dict[str, Any], key: str, items: list, cap: int) -> None:
+def held_to_cap(
+    name: str, requested: _Number, cap: _Number, unit: str = ""
+) -> tuple[_Number, str | None]:
+    """The value to use for an argument with a cap, and the warning when it was held.
+
+    A cap bounds what one call costs, so a larger value is served at the cap
+    and said so, not refused: the caller asked for more of the same thing.
+    """
+    if requested <= cap:
+        return requested, None
+
+    def spelled(value: _Number) -> str:
+        # An integer is written out whole: 3000000, not 3e+06.
+        return f"{value:d}" if isinstance(value, int) else f"{value:g}"
+
+    asked, held = spelled(requested), spelled(cap)
+    return cap, f"{name}={asked}{unit} is above its cap of {held}{unit}; {held}{unit} was used."
+
+
+def cap_list(payload: dict[str, Any], key: str, items: list, cap: int, rest: str) -> None:
     """Attach ``items`` under ``key``, bounded, with explicit truncation.
 
     The structured channel's one truncation convention: when the list exceeds
-    ``cap``, the first ``cap`` entries are attached and ``{key}_truncated``
-    carries the TOTAL count — a capped list is a surfaced fact, never silent.
-    Callers guard emptiness themselves (whether an empty list is attached or
-    omitted is a per-payload contract).
+    ``cap``, the first ``cap`` entries are attached, ``{key}_truncated``
+    carries the TOTAL count, and ``rest``, the call that reads the entries
+    left out, goes in the payload's ``hint`` (after any hint already there). A
+    capped list is a surfaced fact, never silent, and a count with no route
+    leaves the caller knowing there is more and no way to read it. Callers
+    guard emptiness themselves (whether an empty list is attached or omitted
+    is a per-payload contract).
     """
     if len(items) > cap:
         payload[key] = items[:cap]
         payload[f"{key}_truncated"] = len(items)
+        held = payload.get("hint")
+        payload["hint"] = f"{held} {rest}" if held else rest
     else:
         payload[key] = items
 

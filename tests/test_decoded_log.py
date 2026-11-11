@@ -13,6 +13,7 @@ import pytest
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.log_decode import decode_logs
+from ltspice_mcp.lib.log_parser import printed_measurements
 from ltspice_mcp.lib.parser_capture import SourceFiles, capture_inputs
 from tests.test_log_decode import FIXTURES, LIMITS, capture, fourier_text
 
@@ -326,6 +327,49 @@ def test_a_value_printed_as_text_fails_only_its_measurement(tmp_path):
     assert entries["gain"]["unreadable"]["line"] == "gain: V(out)=bad"
     assert "'bad'" in entries["gain"]["unreadable"]["reason"]
     assert entries["vo"]["values"] == [1.5]
+
+
+@pytest.mark.parametrize(
+    "others", ["", "vo: MAX(V(out))=1.5 FROM 0 TO 0.001\n"], ids=["alone", "with_another"]
+)
+def test_a_line_the_reader_does_not_match_fails_only_its_measurement(tmp_path, others):
+    """A WHEN whose threshold LTspice 26 prints in braces is a line spicelib's
+    reader does not match (the recorded ``log/meas_when_threshold_tran``). It
+    still gets an entry, with its line, the reason and its crossing, whether
+    or not the log printed another measurement."""
+    captured, directory = capture(
+        tmp_path, text=f"Circuit: test\nt: V(out)={{vth}} AT 6.98e-05\n{others}"
+    )
+    log = resident(decode_logs(captured, directory, limits=LIMITS))
+    assert log.section("measurements")["status"] == "parsed"
+    entries = log.value("measurements")["measurements"]
+    assert entries["t"] == {
+        "values": [None],
+        "at": 6.98e-05,
+        "unreadable": {
+            "line": "t: V(out)={vth} AT 6.98e-05",
+            "reason": "the log gives '{vth}' where a number belongs",
+        },
+    }
+    assert set(entries) == ({"t", "vo"} if others else {"t"})
+
+
+def test_a_value_the_reader_cuts_short_is_quoted_as_the_log_printed_it(tmp_path):
+    """spicelib's reader cuts a value at the first character its pattern
+    lacks (docs/spicelib_bugs.md, Bug 38), reading a WHEN threshold printed
+    as ``vth^2`` as ``'vth'``. The reason quoted that cut text; it quotes the
+    value the log printed, as ``printed_measurements`` reads it."""
+    line = "t_x: V(out)=vth^2 AT 6.98e-05"
+    text = f"Circuit: test\n{line}\n"
+    captured, directory = capture(tmp_path, text=text)
+    log = resident(decode_logs(captured, directory, limits=LIMITS))
+    entries = log.value("measurements")["measurements"]
+    assert printed_measurements(text)["t_x"].value == "vth^2"
+    assert entries["t_x"] == {
+        "values": [None],
+        "at": 6.98e-05,
+        "unreadable": {"line": line, "reason": "the log gives 'vth^2' where a number belongs"},
+    }
 
 
 @pytest.mark.parametrize(

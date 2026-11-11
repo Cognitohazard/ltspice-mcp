@@ -2713,6 +2713,38 @@
         ".raw"
       ]
     },
+    "deck/global_port": {
+      "behaviour": "deck-node-names",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/global_port.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/global_port.cir": "2f130f51923af59f7319bf1f020e62b875cac335be15e964ee57bf62ad0d0ae5"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/global_port.log": {
+          "bytes": 462,
+          "sha256": "9df826cdaaa97c519af8ab9934e2406fd7390028e1e50e01bc5b2b92836fc1b9"
+        },
+        "deck/global_port.raw": {
+          "bytes": 932,
+          "sha256": "9dddde5e6b29ebe8b65fec1ab68aed75fead8bfc363b3fdec4e379ae70bf84e8"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
     "deck/gnd_alias": {
       "behaviour": "deck-structure",
       "command": [
@@ -2736,6 +2768,38 @@
         "deck/gnd_alias.raw": {
           "bytes": 1226,
           "sha256": "8a6b5da779b6211ce98107ebf4d0867dadb61f7f1d2b1d03c972d6ab9c9f7636"
+        }
+      },
+      "reported_build": "Linear Technology Corporation LTspice XVII",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/gnd_bang": {
+      "behaviour": "deck-node-names",
+      "command": [
+        "XVIIx64.exe",
+        "-Run",
+        "-b",
+        "<dir>/gnd_bang.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/gnd_bang.cir": "3ebb052cc9816dccc1e94b5fdc7a9775112ae11c63356822be1b97e3d0e942a7"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/gnd_bang.log": {
+          "bytes": 382,
+          "sha256": "c0223de4abdd2f970e893c274667c9950d3ee5dc5319fe6d73e70406b76cb667"
+        },
+        "deck/gnd_bang.raw": {
+          "bytes": 762,
+          "sha256": "6956767af2d995e5e994b7b2dc222eccea92ae6f7f697570398a578914cdf85f"
         }
       },
       "reported_build": "Linear Technology Corporation LTspice XVII",

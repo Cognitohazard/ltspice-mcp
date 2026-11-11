@@ -14,7 +14,7 @@ from ltspice_mcp.lib.spice_lex_views import InstanceLine
 
 # The device every deck here instantiates. LEVEL 54 is ngspice's
 # HSPICE-compatible BSIM4 numbering, which is the level that accepts the
-# delvto/mulu0 pair the engine writes.
+# delvto/mulu0 pair the mismatch draw writes.
 MINI_FET = (
     ".subckt minifet d g s b\n"
     ".param w = 1 l = 0.15\n"
@@ -25,7 +25,7 @@ MINI_FET = (
 
 # The same device with the model card in the BINNED spelling a foundry uses
 # (``.model <name>.0``), which instances still name unsuffixed. The extra
-# parameter is there so a body with more declared parameters than the engine
+# parameter is there so a body with more declared parameters than the mismatch draw
 # forwards stays covered.
 BINNED_MINI_FET = (
     ".subckt minifet d g s b\n"

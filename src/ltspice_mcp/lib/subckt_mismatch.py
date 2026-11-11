@@ -48,7 +48,7 @@ from ltspice_mcp.lib.deck_staging import (
 )
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.hierarchy import ResolvedInstance, param_assignments
-from ltspice_mcp.lib.hierarchy_expr import Environment, NumericFact, multiplier_product
+from ltspice_mcp.lib.hierarchy_expr import Environment, NumericFact, card_copies
 from ltspice_mcp.lib.montecarlo import (
     InstanceGeometry,
     MCSampler,
@@ -59,12 +59,14 @@ from ltspice_mcp.lib.montecarlo import (
     sample_instance_mismatch,
 )
 from ltspice_mcp.lib.spice_lex import (
+    EditCards,
     SpiceCard,
     SpiceLexError,
     TokenKind,
     emit,
     find_matching_ends,
     lex,
+    lex_for_edit,
     subckt_children,
     tokenize_body,
 )
@@ -73,7 +75,7 @@ from ltspice_mcp.lib.spice_lex_views import InstanceLine, ModelCard, SubcktCard
 
 logger = logging.getLogger(__name__)
 
-# The two ngspice instance parameters this engine writes. ``delvto`` adds to
+# The two ngspice instance parameters this module writes. ``delvto`` adds to
 # the signed vth0, so a pFET (negative vth0) shifted by +30 mV shows a SMALLER
 # threshold magnitude; callers and receipts stay in the signed domain.
 VTH_PARAM = "delvto"
@@ -116,7 +118,7 @@ class MismatchPlanError(ValueError):
 
 @dataclass(frozen=True)
 class ClosureFile:
-    """One file of a deck's include closure, as this engine reads it.
+    """One file of a deck's include closure, as this module reads it.
 
     ``index`` is both the file's identity and its position in the closure a
     caller passes: every producer numbers its files in list order, and a plan
@@ -131,6 +133,14 @@ class ClosureFile:
     @property
     def depth(self) -> int:
         return closure_depth(self.index)
+
+    def lexed(self) -> EditCards:
+        """This file lexed for an edit: every card to write back, and the
+        cards a plan may select among them: the cards LTspice reads, not a
+        card after the file's ``.END`` nor the deck's (index 0) title
+        (``spice_lex.lex_for_edit``). Planning and rendering both read this,
+        so a card the plan chose is the card a run writes."""
+        return lex_for_edit(self.text, deck=self.depth == 0)
 
 
 def require_positional(files: Sequence[ClosureFile]) -> None:
@@ -167,8 +177,8 @@ class XFetTarget:
     model_name: str
     width: float | None
     length: float | None
-    #: The X line's ``m`` times the inner device's ``m``, as ngspice multiplies
-    #: them; unresolved, with the reason, when either is written but cannot be read.
+    #: The X line's ``m`` times the inner device's ``m`` (``_device_multiplier``);
+    #: unresolved, with the reason, when either is written but cannot be read.
     multiplier: NumericFact = _ONE_COPY
 
     @property
@@ -326,19 +336,21 @@ def closure_from_deck(
     defined, even though only the deck is ever rewritten. A reference that does
     not resolve is left out rather than raised on — the simulator is the
     authority on whether a deck is runnable, and a plan that cannot see a file
-    simply finds no device there.
+    simply finds no device there. The deck's references are those LTspice
+    reads (``ClosureFile.lexed``): one in its title or after its ``.END``
+    pulls nothing in.
     """
     files = [ClosureFile(index=0, path=path, text=text)]
     seen = {path.resolve()}
-    frontier = [(path, text, 0)]
+    frontier = [(files[0], 0)]
     while frontier:
-        source, source_text, depth = frontier.pop(0)
+        source, depth = frontier.pop(0)
         if depth >= max_depth:
             continue
         for reference in scan_include_references(
-            lex(source_text).cards, source, depth=closure_depth(depth)
+            source.lexed().read, source.path, depth=source.depth
         ):
-            resolved = resolve_existing(resolve_reference(source.parent, reference.raw_path))
+            resolved = resolve_existing(resolve_reference(source.path.parent, reference.raw_path))
             if resolved is None or resolved in seen:
                 continue
             try:
@@ -347,7 +359,7 @@ def closure_from_deck(
                 continue
             seen.add(resolved)
             files.append(ClosureFile(index=len(files), path=resolved, text=included))
-            frontier.append((resolved, included, depth + 1))
+            frontier.append((files[-1], depth + 1))
     return files
 
 
@@ -359,13 +371,21 @@ def closure_from_deck(
 @dataclass
 class _FileIndex:
     file: ClosureFile
-    cards: list[SpiceCard]
+    lexed: EditCards
     sections: list[str | None]
     # Sections a caller selected for this file, or None when every card is
     # active (a plain .include, or a library nobody entered by section).
     active: frozenset[str] | None = None
 
+    @property
+    def cards(self) -> list[SpiceCard]:
+        return self.lexed.cards
+
     def is_active(self, card_index: int) -> bool:
+        """Is the card at ``card_index`` in the circuit: one the file's reading
+        holds (``ClosureFile.lexed``), outside any section nobody entered?"""
+        if not self.lexed.reads(self.cards[card_index]):
+            return False
         if self.active is None:
             return True
         section = self.sections[card_index]
@@ -376,8 +396,8 @@ def _index_files(files: Sequence[ClosureFile]) -> list[_FileIndex]:
     indexes = [
         _FileIndex(
             file=f,
-            cards=(cards := lex(f.text).cards),
-            sections=card_sections(cards, f.path, f.depth),
+            lexed=(lexed := f.lexed()),
+            sections=card_sections(lexed.cards, f.path, f.depth),
         )
         for f in files
     ]
@@ -397,7 +417,7 @@ def _mark_active_sections(indexes: list[_FileIndex]) -> None:
     selected: dict[int, set[str]] = {}
     for index in indexes:
         for reference in scan_include_references(
-            index.cards, index.file.path, depth=index.file.depth
+            index.lexed.read, index.file.path, depth=index.file.depth
         ):
             if reference.section is None:
                 continue
@@ -502,26 +522,24 @@ def _body_environment(
 def _device_multiplier(
     x_view: InstanceLine, inner: InstanceLine, body: Callable[[], Environment]
 ) -> NumericFact:
-    """How many parallel copies of ``inner`` ngspice builds under ``x_view``.
+    """How many parallel copies of ``inner`` the simulator builds under ``x_view``.
 
-    ngspice multiplies an X line's ``m`` into every device of the body, and an
-    inner device's own ``m`` (often ``m={mult}``, a parameter the X line sets)
-    on top of it, so the copies are the product. This plan serves a deck with
-    no semantic profile, so it applies ngspice's rule to QSPICE and Xyce too,
-    as it does ``delvto`` and ``mulu0``; LTspice ignores an X line's ``m``,
-    which ``variations._path_multiplier`` applies to a profiled deck. ``body``
-    builds the scope the inner ``m`` is read in, so a device that writes none
-    never builds it.
+    This plan serves a deck with no semantic profile, which a run gives only
+    a simulator other than LTspice and ngspice (QSPICE, Xyce), and neither's
+    rule for an ``X`` line's ``m`` is measured. It counts the product of the
+    ``X`` line's ``m`` and the inner device's own, ``m={mult}`` read from what
+    the ``X`` line sets, as ngspice's HSPICE modes do for a subcircuit that
+    declares no ``m`` (``hierarchy_expr.card_copies``). ``body`` builds the
+    scope the inner ``m`` is read in, so a device that writes none never
+    builds it.
     """
     x_m, inner_m = x_view.get_param("M"), inner.get_param("M")
-    return multiplier_product(
-        [
-            (
-                f"the X line {x_view.ref}",
-                None if x_m is None else Environment({}, simulator="ngspice").fact(x_m),
-            ),
-            (f"the inner device {inner.ref}", None if inner_m is None else body().fact(inner_m)),
-        ]
+    return card_copies(
+        None if inner_m is None else body().fact(inner_m),
+        None if x_m is None else Environment({}, simulator="ngspice").fact(x_m),
+        multiply=True,
+        where=f"the inner device {inner.ref}",
+        passed_from=f"the X line {x_view.ref}",
     )
 
 
@@ -862,7 +880,7 @@ def _refuse_or_skip_without_mos(
             raise MismatchPlanError(
                 "nested_fet_unsupported",
                 f"Instance {x_ref!r} reaches its MOS device through two subcircuit "
-                f"levels ({subckt} -> {inner_view.model}); this engine patches exactly "
+                f"levels ({subckt} -> {inner_view.model}); mismatch patches exactly "
                 "one level, so instantiate the inner device wrapper directly",
             )
     skips.append(
@@ -919,7 +937,7 @@ def _refuse_preexisting(
                 "preexisting_mismatch_param",
                 f"The {where} of {x_ref!r} already sets {param!r}; applying a mismatch "
                 "value on top of it would silently double-apply the shift, so this deck "
-                f"is refused — remove the existing {param} to let the engine own it",
+                f"is refused — remove the existing {param} to let the mismatch draw set it",
             )
 
 
@@ -1009,7 +1027,7 @@ def _render_clone(
                 raise MismatchPlanError(
                     "param_namespace_collision",
                     f"Subcircuit {original!r} already declares a parameter named "
-                    f"{name!r}, which is the reserved name this engine forwards "
+                    f"{name!r}, which is the reserved name the mismatch draw forwards "
                     f"{param} through; rename the library parameter",
                 )
             forwarded[name] = "0" if param == VTH_PARAM else "1"
@@ -1096,19 +1114,14 @@ def render(
     files: Sequence[ClosureFile],
     plan: MismatchPlan,
     values: dict[str, MismatchValues],
-    *,
-    cards: dict[int, list[SpiceCard]] | None = None,
 ) -> dict[int, str]:
     """Apply one run's per-instance values; return the text of changed files.
 
     Keys of ``values`` are hierarchical device references (``X1.M0``) as the
     plan reports them. Files not named in the result are unchanged, so a caller
-    only stages what actually moved.
-
-    ``cards`` hands over files the caller already holds lexed — a run that has
-    just perturbed the deck card by card would otherwise emit it and have it
-    parsed straight back. A file supplied this way is written from those cards
-    and its ``ClosureFile.text`` is never read.
+    only stages what actually moved. Each file is read as planning read it
+    (``ClosureFile.lexed``), so an instance or a definition is looked up among
+    the cards the plan could choose.
     """
     require_positional(files)
     by_ref = plan.by_ref
@@ -1124,16 +1137,16 @@ def render(
     if not applied:
         return {}
 
-    cards_by_file: dict[int, list[SpiceCard]] = dict(cards or {})
+    cards_by_file: dict[int, EditCards] = {}
     instances_by_file: dict[int, dict[str, SpiceCard]] = {}
     # A file read to copy a subcircuit out of is not a file that changed, so
     # rewriting is tracked separately from lexing: only what actually moved is
     # handed back for the caller to stage.
     rewritten: set[int] = set()
 
-    def cards_for(index: int) -> list[SpiceCard]:
+    def cards_for(index: int) -> EditCards:
         if index not in cards_by_file:
-            cards_by_file[index] = lex(files[index].text).cards
+            cards_by_file[index] = files[index].lexed()
         return cards_by_file[index]
 
     def instance_in(index: int, folded: str) -> SpiceCard | None:
@@ -1147,7 +1160,7 @@ def render(
         lookup = instances_by_file.get(index)
         if lookup is None:
             lookup = {}
-            for card in cards_for(index):
+            for card in cards_for(index).read:
                 if card.kind == "instance" and card.name:
                     lookup.setdefault(card.name.casefold(), card)
             instances_by_file[index] = lookup
@@ -1176,7 +1189,7 @@ def render(
                 view.set_param(forwarded_param(MOBILITY_PARAM, target.inner_ref), value.mulu0)
 
     used = {target.clone.casefold() for target in applied}
-    root = cards_for(0)
+    root = cards_for(0).cards
     for clone in plan.clones:
         if clone.name.casefold() not in used:
             continue
@@ -1184,13 +1197,13 @@ def render(
             block = lex(clone.text).cards
         else:
             source = files[clone.def_file]
-            def_cards = cards_for(clone.def_file)
+            def_cards = cards_for(clone.def_file).read
             opener = _locate_subckt(def_cards, source, clone)
             block = _render_clone(source, def_cards, opener, clone.name, clone.inner_refs)
         inject_cards_before_end(root, block)
         rewritten.add(0)
 
-    return {index: emit(cards_by_file[index]) for index in sorted(rewritten)}
+    return {index: emit(cards_by_file[index].cards) for index in sorted(rewritten)}
 
 
 def _locate_subckt(cards: list[SpiceCard], source: ClosureFile, clone: MismatchClone) -> int:

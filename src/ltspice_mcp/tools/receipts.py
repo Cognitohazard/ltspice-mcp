@@ -46,7 +46,7 @@ from ltspice_mcp.lib.projection import (
     resolve_field_paths,
 )
 from ltspice_mcp.lib.raw_parser import other_raw_path
-from ltspice_mcp.lib.sheet_results import run_by_ltspice
+from ltspice_mcp.lib.sheet_results import run_by_ltspice, sheets_reported
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze
@@ -887,7 +887,13 @@ def runs_page(
     run_fields: list[str] | None = None,
     *,
     cap: int = _RUN_PAGE_LIMIT,
+    warnings: list[str] | None = None,
 ) -> dict[str, Any]:
+    """The first page of ``cases``' run rows, projected by ``run_fields``.
+
+    A ``run_fields`` path no row on the page reaches is said in ``warnings``,
+    as :func:`project_receipt_runs` says it for a receipt read from a job.
+    """
     # Paged first, projected second: the projection is one row in, one row out,
     # so it only has to run over the rows this page actually carries. The cap is
     # floored at one row for the same reason ``page`` floors its limit — a page
@@ -903,6 +909,7 @@ def runs_page(
         [_run_item(case) for case in selected],
         run_fields,
         native_by_key=native_by_key,
+        warnings=warnings,
     )
     return page_of(rows, offset=0, total=len(cases))
 
@@ -1055,11 +1062,15 @@ def snapshot_receipt(
             live = live_progress.get(case.case_id)
             if live is not None:
                 observations.append(copy.deepcopy(live))
+    # A sheet the job's own placement reported on has its own observation.
+    reported = sheets_reported(job.observations)
     sheets = sorted(
         {
             case.circuit_path.name
             for case in job.cases
-            if case.status == "produced" and is_asc(case.circuit_path)
+            if case.status == "produced"
+            and is_asc(case.circuit_path)
+            and str(case.circuit_path) not in reported
         }
     )
     if sheets and run_by_ltspice(job.simulator):

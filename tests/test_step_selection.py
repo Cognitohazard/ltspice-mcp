@@ -18,6 +18,7 @@ from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.log_parser import parse_step_iterations
 from ltspice_mcp.lib.recipes import StepSelector
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools.analysis import PlotWaveformInput, handle_plot_waveform
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
 from tests import _ltspice_recorded as rec
 from tests._ltspice_recorded import header_fields
@@ -220,3 +221,69 @@ def test_an_axis_named_as_the_deck_spells_it_selects_the_step(build: str):
     assert steps == [{"rv": 1000.0}, {"rv": 2000.0}]
     assert StepSelector(axis="Rv", value="2k").pick(steps) == 1
     assert StepSelector(axis="RV", value=1000).pick(steps) == 0
+
+
+# --------------------------------------------------------------------------
+# An axis named in another case reads the deck's axis on every route
+# --------------------------------------------------------------------------
+
+
+async def _signal_stats(state: SessionState, raw: Path, **selection: Any) -> dict[str, Any]:
+    request = AnalyzeResultsInput.model_validate(
+        {
+            "sources": [{"path": str(raw), "label": "dut"}],
+            "recipes": [{"key": "s", "metric": "signal_stats", "signal": "V(out)"}],
+            "include": {"fields": ["step_index", "step_values", "value.max"]},
+            **selection,
+        }
+    )
+    reply = (await handle_analyze_results(request, state)).structured_content
+    assert reply is not None
+    assert reply.get("failures", []) == [], reply.get("failures", [])
+    return reply["results"]["s"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_an_axis_named_in_another_case_reads_the_same_step_on_every_route(
+    build: str, state_no_sim: SessionState, work_dir: Path, tmp_path: Path
+):
+    """``raw/step_tran`` steps ``r`` (``.step param r list 1k 2k 4k``) and the
+    caller names it ``R``. The selector, analyze_results' ``step`` and
+    ``group_by``, and plot_waveform's ``step`` each read it as the deck's
+    ``r``, and the step they pick peaks at the same voltage."""
+    deck = (rec.INPUTS / "raw/step_tran.cir").read_text(encoding="utf-8")
+    assert ".step param r list 1k 2k 4k" in deck
+    steps = [
+        dict(step.parameters)
+        for step in rec.decode(build, "raw/step_tran", tmp_path).raw.descriptor.steps
+    ]
+    assert steps == [{"r": 1000.0}, {"r": 2000.0}, {"r": 4000.0}]
+    assert StepSelector(axis="R", value="2k").pick(steps) == 1
+
+    raw = rec.stage_run(build, "raw/step_tran", work_dir / build)
+    selected = await _signal_stats(state_no_sim, raw, step={"axis": "R", "value": "2k"})
+    (row,) = selected["values"]
+    assert (row["step_index"], row["step_values"]) == (1, {"r": 2000.0})
+    grouped = await _signal_stats(state_no_sim, raw, all_steps=True, group_by=["R"])
+    assert [(group["by"], group["count"]) for group in grouped["groups"]] == [
+        ({"R": 1000.0}, 1),
+        ({"R": 2000.0}, 1),
+        ({"R": 4000.0}, 1),
+    ]
+
+    plotted = await handle_plot_waveform(
+        PlotWaveformInput.model_validate(
+            {
+                "path": str(raw),
+                "signals": ["V(out)"],
+                "step": {"axis": "R", "value": "2k"},
+                "open": False,
+            }
+        ),
+        state_no_sim,
+    )
+    assert plotted.structured_content is not None
+    (trace,) = plotted.structured_content["traces"]
+    assert trace["step"] == 1
+    assert trace["max"] == pytest.approx(row["value"]["max"], rel=1e-12)

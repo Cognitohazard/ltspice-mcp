@@ -18,11 +18,14 @@
 # its WSL path (for example /mnt/c/Users/<you>/ltspice-mcp-ci). The Windows
 # path is derived with wslpath. Without it those shapes SKIP loudly.
 #
-# Shape 6 needs docker; the image tag must match the SHA pinned on the publish
-# step in .github/workflows/publish.yml.
+# Shapes 3 and 6 need a running docker daemon. Shape 6 runs the image of the
+# publish action pinned in .github/workflows/publish.yml, read from that file so
+# a bump of the action moves the check with it.
 set -uo pipefail
 cd "$(dirname "$0")/.."
-PUBLISH_IMAGE=ghcr.io/pypa/gh-action-pypi-publish:dc37677b2e1c63e2034f94d8a5b11f265b73ba33
+publish_sha=$(sed -n 's/.*pypa\/gh-action-pypi-publish@\([0-9a-f]\{40\}\).*/\1/p' .github/workflows/publish.yml | head -1)
+PUBLISH_IMAGE=ghcr.io/pypa/gh-action-pypi-publish:$publish_sha
+docker_up() { command -v docker >/dev/null && docker info >/dev/null 2>&1; }
 scratch=$(mktemp -d)
 status=0
 report() { printf '%-4s %s\n' "$1" "$2"; [ "$1" = FAIL ] && status=1; return 0; }
@@ -53,7 +56,7 @@ fi
 
 # 3. Container, non-root, --init (clones the LOCAL master, so commit first or
 #    accept that the container tests the last commit, not the working tree)
-if command -v docker >/dev/null; then
+if docker_up; then
   docker run --rm --init -v "$PWD":/src:ro ubuntu:24.04 bash -c '
 set -o pipefail; export DEBIAN_FRONTEND=noninteractive CI=true GITHUB_ACTIONS=true
 apt-get update -qq >/dev/null && apt-get install -y -qq git ngspice libcairo2 curl ca-certificates >/dev/null 2>&1
@@ -67,7 +70,7 @@ uv sync -q; uv run pytest tests/ -q -p no:cacheprovider --no-header --cov=ltspic
     report FAIL "container: $(tail -3 "$scratch/container.txt" | tr '\n' ' ')"
   fi
 else
-  report SKIP "container: docker not on PATH"
+  report SKIP "container: no docker daemon reachable"
 fi
 
 # 4/5. Windows native, both interpreters, checkout with conversion on
@@ -96,7 +99,9 @@ else
 fi
 
 # 6. The publisher's own metadata check
-if command -v docker >/dev/null; then
+if [ -z "$publish_sha" ]; then
+  report FAIL "publisher metadata check: no pinned pypa/gh-action-pypi-publish SHA in .github/workflows/publish.yml"
+elif docker_up; then
   rm -rf "$scratch/dist" && uv build -q -o "$scratch/dist" > "$scratch/build.txt" 2>&1 \
     && docker run --rm --entrypoint python -v "$scratch/dist":/dist:ro "$PUBLISH_IMAGE" -m twine check --strict /dist/* > "$scratch/twine.txt" 2>&1
   if [ $? -eq 0 ]; then
@@ -105,7 +110,7 @@ if command -v docker >/dev/null; then
     report FAIL "publisher metadata check: $(grep -E 'ERROR|error' "$scratch/twine.txt" | head -1)"
   fi
 else
-  report SKIP "publisher metadata check: docker not on PATH"
+  report SKIP "publisher metadata check: no docker daemon reachable"
 fi
 
 echo "logs: $scratch"

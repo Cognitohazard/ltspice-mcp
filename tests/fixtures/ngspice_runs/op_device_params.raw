@@ -1,0 +1,12 @@
+Title: * floating gate: node x reaches the supplies only through c1
+Date: Fri Nov  6 08:23:18  2026
+Plotname: Operating Point
+Flags: real
+No. Variables: 3
+No. Points: 1       
+Variables:
+	0	v(@m1[vth])	voltage
+	1	@m1[gm]	admittance
+	2	i(@m1[id])	current
+Binary:
+ªŠF£‰ý?ûhy3Ž÷:íP~þ¯{®:

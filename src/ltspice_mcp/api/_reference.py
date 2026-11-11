@@ -385,6 +385,8 @@ def _find(name: str) -> _Operation:
         if operation.name == name:
             return operation
     known = ", ".join(operation.name for operation in _operations())
+    # A plain ValueError, not the ApiValidationError an Api call refuses an
+    # argument with: see ``reference``.
     raise ValueError(f"unknown operation {name!r}; the six operations are: {known}")
 
 
@@ -451,6 +453,12 @@ def reference(op: str | None = None) -> str:
     _methods.ensure_method_docs()
     if op is None:
         return index()
+    # A catalogue lookup runs no call, so it refuses with Python's own errors,
+    # as the guide's lookup does, which the MCP server shares and which knows
+    # nothing of the Python API; ``python -m ltspice_mcp.api`` relays the
+    # ValueError for an unknown name.
+    # An argument an Api call cannot use is an ApiValidationError instead
+    # (test_a_catalogue_lookup_refuses_with_pythons_errors_not_api_validation_error).
     if not isinstance(op, str):
         raise TypeError("op must be an operation name or None")
     return op_reference(op)

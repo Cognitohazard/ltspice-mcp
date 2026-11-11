@@ -116,6 +116,13 @@ async def test_backend_default_body_precedence(state_no_sim, hierarchy_deck, sim
         (".control\nalter R1 2\n.endc", "opaque control"),
         (".subckt a p q\n.ends a\nX0 n a", "port arity"),
         ("R1 a 0 1k x=2 bad", "unsupported tokens"),
+        # A card it needs but cannot split into parts is refused by its line,
+        # with the fix, not with the lexer's error.
+        ("R1 a 0 {1k", "invalid.cir:2 into its parts: unterminated {...}."),
+        (".param a={1\nR1 a 0 {a}", "Check for a missing } matching the {."),
+        ('.include "absent.inc', "invalid.cir:2 into its parts: unterminated quoted string."),
+        # Left open inside its parameter list, which the card's own split leaves whole.
+        (".model DX D(is={1e-14)\nR1 a 0 1k", "invalid.cir:2 into its parts: unterminated {...}."),
     ],
 )
 async def test_structural_refusals_are_isolated(state_no_sim, work_dir, body, message):
@@ -131,6 +138,30 @@ async def test_structural_refusals_are_isolated(state_no_sim, work_dir, body, me
     assert not bad["ok"], bad
     assert message in bad["error"]["message"]
     assert good["ok"], good
+
+
+async def test_a_card_it_cannot_split_in_an_include_is_refused_by_that_file(
+    state_no_sim, work_dir
+):
+    # The refusal named only the line, which is another card of the deck.
+    (work_dir / "sub.inc").write_text("V2 b 0 1\nR2 b 0 1k\nR1 a 0 {1k\n", encoding="utf-8")
+    path = work_dir / "top.cir"
+    path.write_text("* t\nV1 a 0 1\n.include sub.inc\n.end\n", encoding="utf-8")
+
+    result = await _inspect(state_no_sim, path)
+
+    assert not result["ok"], result
+    assert "sub.inc:3 into its parts" in result["error"]["message"], result
+
+
+async def test_a_directive_the_hierarchy_does_not_need_cannot_stop_it(state_no_sim, work_dir):
+    # The walk split every card, and raised the lexer's error on this one.
+    path = work_dir / "open.cir"
+    path.write_text("* t\nV1 a 0 1\nR1 a 0 1k\n.tran 0 1m )\n.end\n", encoding="utf-8")
+
+    result = await _inspect(state_no_sim, path)
+
+    assert result["ok"], result
 
 
 async def test_non_node_references_and_ambiguous_mos_are_unknown(state_no_sim, work_dir):

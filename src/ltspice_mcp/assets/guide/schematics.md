@@ -84,6 +84,12 @@ its name, replacing any there, without opening anything. It refuses a case
 whose sheet has changed since the run, since the results would not match it,
 and, like every read of a job's runs, a case of a job whose runs have not all
 finished (`job_not_terminal`; `jobs(action="wait", wait_for="runs")` first).
+When the user wants that before the run starts, pass
+`execution={"results_beside_sheet": true}` to `run_experiments` instead: each
+sheet's results are copied beside it as the runs finish, and the receipt's
+`results_placed_beside_sheet` or `results_not_placed` says what happened. It
+takes LTspice runs of sheets with one case each, so for a sweep, copy the
+chosen case afterwards with the action.
 A case with variations shows values the sheet does not; the reply's
 `assignments` lists them, so tell the user. A plot with no sampled axis (a
 stepped `.op`, say) has no chart, and `plot_waveform(..., in_ltspice=true)`
@@ -110,8 +116,8 @@ If the window does not take the edit, the server closes the sheet there and
 opens it again from the file, which clears its undo history in LTspice; the
 entry then says `reopened: true`. `shown: false` means that failed too, so the
 window still shows the old sheet and a save from it would overwrite yours.
-Ask the user, then drop that copy with `open_window="discard"` (below), which
-opens the file there. An edit that fails with `open_window_differs` wrote nothing, because the
+Ask the user, then drop that copy with `open_window="discard"` (below), quoting
+the reply's `sha256`, which opens the file there. An edit that fails with `open_window_differs` wrote nothing, because the
 window's copy differs from the file. Ask the user whether to keep the changes in
 their window, then call `edit_schematic` with `ops=[]`, the same
 `expected_sha256` and their choice in `open_window`. With `"save"`, LTspice saves
@@ -124,7 +130,10 @@ answer, because `"save"` writes their unsaved work into the file and
 window and each holds a different copy, the refusal lists them by process. Ask
 the user which copy to keep and pass that process as `window_pid` with
 `"save"`. The other windows are then handed the saved sheet, so their copies
-are gone, and `"discard"` drops every copy.
+are gone, and `"discard"` drops every copy. Every `open_window` call quotes the
+file's `sha256` as `expected_sha256` and is refused without it: after a refused
+edit the one that edit sent, after a commit the reply's, and otherwise the
+`sha256` that `inspect(kind="open_in_ltspice")` with the sheet as `path` gives.
 
 - Component attributes: Value, Value2, SpiceLine, SpiceLine2. A part's own
   `Prefix` replaces its symbol's element letter on export, on both builds, so
@@ -284,9 +293,20 @@ with it, so they stay attached. To move one part with the labels and grounds
 on its pins, name it in `references` with `drag: true`; there is no need to
 remove and add it again. A label at the far end of a wire from the pin is not
 on the pin, so it stays, and the wire stretches to it. A wire dragged off its
-axis turns diagonal, and the sheet findings report it (`diagonal_wire`).
+axis turns diagonal, and the sheet findings report it (`diagonal_wire`). A
+dragged move that would cut off anything that stays (a part, a label left on
+a stretched wire) is refused with what stays and how to take it along. A
+region takes a part only when its whole box is inside, so a region that holds
+a pin of a part but not the part is refused that way; widen the region or
+name the part.
 `move_component` places one part at a position or turns it, and moves the
 part alone: the wires and labels at its old pins stay where they were.
+To change a part's symbol (a gate for a buffer, `nmos4` for `nmos`), use
+`replace_component` instead of removing and adding it: the part keeps its
+name, place and value, its pins pair with the new symbol's by name (or as
+`pins` pairs them), and a pin that moved is wired back to its net. The result
+names the old pins whose wiring was left with nothing (`left_at`) and the new
+pins left unconnected (`unpaired_pins`).
 
 **Ground and net labels:**
 - **Ground**: give each grounded pin its own ground (`0`) label with an

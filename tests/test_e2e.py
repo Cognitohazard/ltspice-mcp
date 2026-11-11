@@ -753,7 +753,7 @@ class TestAnalysisDegraded:
         assert data["coverage"]["runs_analyzed"] == 0
         assert data.get("failures", []) == []
         missing = data["coverage"]["missing_cases"]["items"][0]
-        assert missing["code"] == "result_unreadable"
+        assert missing["code"] == "result_file_not_found"
         assert "missing.raw" in missing["detail"]
         assert missing["hint"]
 
@@ -821,7 +821,7 @@ class TestInspectCapabilities:
 # ---------------------------------------------------------------------------
 
 
-#: A run_code call may first start the worker, which imports the engine.
+#: A run_code call may first start the worker, which imports the Python API.
 _RUN_CODE_S = 2 * LIVENESS_S
 
 

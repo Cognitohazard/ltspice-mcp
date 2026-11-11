@@ -1,4 +1,4 @@
-"""Monte Carlo perturbation engine.
+"""Monte Carlo perturbation.
 
 Owns the math: given component nominal values, tolerances, distributions,
 and an optional seed, produce per-run perturbed values. Knows nothing
@@ -13,7 +13,7 @@ reproducibility). Owning the math gives us the intended
 
 Foundry-MC additions
 --------------------
-Beyond R/C/L value perturbation, the engine supports MOSFET-level MC the
+Beyond R/C/L value perturbation, this module supports MOSFET-level MC the
 way commercial PDKs do it (Spectre/HSPICE/Eldo conventions):
 
 - **Process variation** — sample once per ``.MODEL`` per run; every
@@ -45,6 +45,7 @@ from ltspice_mcp.lib.spice_lex import (
     TokenKind,
     emit,
     lex,
+    lex_for_edit,
     tokenize_body,
 )
 from ltspice_mcp.lib.spice_lex_ops import inject_card_before_end as _ops_inject
@@ -450,60 +451,67 @@ def parse_model_params(card_text: str) -> dict[str, float]:
     return out
 
 
-def inject_card_before_end(netlist_text: str, card: str) -> str:
+def inject_card_before_end(netlist_text: str, card: str, *, deck: bool) -> str:
     """Insert a ``.MODEL`` card (or any directive block) just before ``.END``.
 
     SPICE simulators reject definitions after ``.END`` — for variant
     model cards we want them visible to the rest of the deck. If no
-    ``.END`` is present, append at the end. Routes through
-    ``spice_lex_ops.inject_card_before_end``.
+    ``.END`` is present, append at the end. ``deck`` says ``netlist_text``
+    is a deck, whose first line is its title and never its ``.END``
+    (``spice_lex.lex_for_edit``), rather than an included file. Routes
+    through ``spice_lex_ops.inject_card_before_end``.
     """
     if not card.endswith("\n"):
         card = card + "\n"
-    cards = lex(netlist_text).cards
+    cards = lex_for_edit(netlist_text, deck=deck).cards
     _ops_inject(cards, card)
     return emit(cards)
 
 
 def _top_level_instances(cards: list[SpiceCard]) -> dict[str, SpiceCard]:
-    """The deck's own instance cards by lowercased reference: not one inside a
-    ``.subckt`` body, which is another device that only shares the name, nor
-    one after ``.END``, which no simulator reads. The extraction and the
-    rewrite below both read this, so the card rewritten is the card measured."""
-    return instances_by_ref((card for card in cards if not card.trailing), scope=())
+    """The instance cards by lowercased reference among ``cards``, the ones a
+    file's ``lex_for_edit`` reads (none after its ``.END``): not one inside a
+    ``.subckt`` body, which is another device that only shares the name. The
+    extraction and the rewrite below both read this, so the card rewritten is
+    the card measured."""
+    return instances_by_ref(cards, scope=())
 
 
 def rewrite_instance_model(
     netlist_text: str,
     instance_ref: str,
     new_model_name: str,
+    *,
+    deck: bool,
 ) -> str:
     """Replace the model token on a top-level transistor (M/Q/J) instance line.
 
     The instance line is matched by reference (case-insensitive) among the
     deck's own cards, the ones ``extract_mosfet_instances`` reads, so a
-    same-named device inside a ``.subckt`` is never the one rewritten.
-    Routes through ``InstanceLine.set_model``, which uses the
-    classified-token rule to identify the model position correctly
-    even with quoted model tokens and trailing params. Raises
-    ``ValueError`` if the instance isn't found.
+    same-named device inside a ``.subckt`` is never the one rewritten, nor
+    the title of a deck (``deck``) that reads as one. Routes through
+    ``InstanceLine.set_model``, which uses the classified-token rule to
+    identify the model position correctly even with quoted model tokens and
+    trailing params. Raises ``ValueError`` if the instance isn't found.
     """
-    result = lex(netlist_text)
-    card = _top_level_instances(result.cards).get(instance_ref.lower())
+    lexed = lex_for_edit(netlist_text, deck=deck)
+    card = _top_level_instances(lexed.read).get(instance_ref.lower())
     if card is None:
         raise ValueError(f"Instance {instance_ref!r} not found in netlist")
     view = InstanceLine.from_card(card)
     if view.model is None:
         raise ValueError(f"Instance {instance_ref!r} has no model token to rewrite: {card.body!r}")
     view.set_model(new_model_name)
-    return emit(result.cards)
+    return emit(lexed.cards)
 
 
-def extract_mosfet_instances(netlist_text: str) -> list[InstanceGeometry]:
+def extract_mosfet_instances(netlist_text: str, *, deck: bool) -> list[InstanceGeometry]:
     """Find every ``Mxxx`` instance and parse its model name + W/L geometry.
 
     Top-level only — subcircuit-instantiated transistors (``X1.M1``)
-    aren't visible at the top level and so aren't returned. W/L are
+    aren't visible at the top level and so aren't returned — and, in a deck
+    (``deck``), only the cards the simulator reads (``spice_lex.lex_for_edit``):
+    not the title, nor a card after ``.END``. W/L are
     pulled from the ``InstanceLine.params`` dict, parsed via
     ``parse_spice_value`` so engineering suffixes (``10u``, ``180n``)
     work. Instances missing W, L, or a model are skipped (Pelgrom σ
@@ -515,8 +523,7 @@ def extract_mosfet_instances(netlist_text: str) -> list[InstanceGeometry]:
     drawn as if it were one copy.
     """
     instances: list[InstanceGeometry] = []
-    result = lex(netlist_text)
-    for c in _top_level_instances(result.cards).values():
+    for c in _top_level_instances(lex_for_edit(netlist_text, deck=deck).read).values():
         if not c.name or c.name[:1].upper() != "M":
             continue
         view = InstanceLine.from_card(c)

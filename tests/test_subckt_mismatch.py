@@ -438,7 +438,7 @@ class TestForwardedParamNaming:
 class TestPatchedDeckStillValidates:
     """A patched deck has to survive the checks a hand-written one gets.
 
-    The engine writes parameters onto X lines and a cloned subcircuit into the
+    The mismatch draw writes parameters onto X lines and a cloned subcircuit into the
     deck; a validator that read either as malformed would reject exactly the
     decks this feature produces.
     """
@@ -484,11 +484,11 @@ PDK_SPICE = PDK_ROOT / "libs.ref/sky130_fd_pr/spice"
     reason="set LTSPICE_MCP_TEST_PDK_ROOT to an installed sky130A PDK root to run these",
 )
 class TestOpenPdkDevice:
-    """The engine against a real foundry device deck, end to end.
+    """The mismatch draw against a real foundry device deck, end to end.
 
     Needs a locally installed PDK, so CI skips it. This is the measurement the
     whole mechanism rests on — two instances of one cell taking different exact
-    threshold shifts — reproduced through the engine rather than a hand-patched
+    threshold shifts — reproduced through the mismatch draw rather than a hand-patched
     file.
     """
 
@@ -764,7 +764,7 @@ V1 dtt 0 0.9
         assert {t.subckt for t in plan.targets} == {"minifet", "fffet"}
 
     def test_an_instance_outside_both_sections_is_still_ambiguous(self, tmp_path: Path):
-        # Nothing says which corner it means, and the engine will not pick one.
+        # Nothing says which corner it means, and the mismatch draw will not pick one.
         deck = self.DECK.replace("V1 dtt 0 0.9", "XR0 dr g 0 0 minifet W=1 L=0.15\nV1 dtt 0 0.9")
         (tmp_path / "inc1.spice").write_text(self.SHARED)
         files = closure(deck, self.SHARED, root=tmp_path)

@@ -2,7 +2,7 @@
 
 :func:`build_plot_html` turns a plain ``PlotSpec`` dict (arrays + labels,
 ignorant of job/RunRef internals) into one offline HTML file with uPlot and the
-data inlined — no CDN, no network, no template engine. ``plot_waveform`` writes
+data inlined — no CDN, no network, no templating library. ``plot_waveform`` writes
 it to disk and opens it on the desktop (terminal clients).
 
 :func:`build_widget_html` builds the *generic* MCP Apps renderer template
