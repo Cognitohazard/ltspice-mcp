@@ -62,6 +62,12 @@ _SEED_CASES = [
         "LTspice",
     ),
     (
+        "save-pattern-unrecorded",
+        "V1 in 0 1\n.save V(i*)\n.meas tran peak MAX V(out)\n.tran 1u 1m\n.end\n",
+        None,
+        "LTspice",
+    ),
+    (
         "meas-ngspice-batch",
         "V1 in 0 1\n.meas tran peak MAX V(in)\n.tran 1u 1m\n.end\n",
         "ngspice",
@@ -245,6 +251,68 @@ def test_save_meas_coverage_accepts_saved_signal(tmp_path: Path):
     deck = "V1 in 0 1\n.save V(out)\n.meas tran peak MAX V(out)\n.tran 1u 1m\n.end\n"
 
     assert "save-meas-coverage" not in _ids(deck, tmp_path)
+
+
+#: Two measured nodes, out and vr, and a current, for the .save under test.
+_PATTERN_DECK = (
+    "* t\nV1 in 0 1\nR1 in out 1k\nR2 out vr 1k\nR3 vr 0 1k\n{save}\n"
+    ".meas tran a MAX V(out)\n.meas tran b MAX V(vr)\n.meas tran c MAX I(R1)\n"
+    ".tran 1u 1m\n.end\n"
+)
+
+
+def _coverage_findings(tmp_path: Path, save: str) -> dict[str, list[list[str]]]:
+    """Each coverage rule's signals per finding, for the deck saved by ``save``."""
+    found: dict[str, list[list[str]]] = {}
+    for f in lint_deck(
+        _PATTERN_DECK.format(save=save), tmp_path / "deck.cir", "ltspice", "LTspice"
+    ):
+        if f["rule_id"] == "save-meas-coverage":
+            found.setdefault(f["rule_id"], []).append(f["evidence"]["missing_signals"])
+        elif f["rule_id"] == "save-pattern-unrecorded":
+            found.setdefault(f["rule_id"], []).append(f["evidence"]["unchecked_signals"])
+    return found
+
+
+@pytest.mark.parametrize(
+    ("save", "expected"),
+    [
+        (
+            ".save V(*)",
+            {"save-pattern-unrecorded": [["v(out)"], ["v(vr)"], ["i(r1)"]]},
+        ),
+        (
+            ".save V(*) I(R1)",
+            {"save-pattern-unrecorded": [["v(out)"], ["v(vr)"]]},
+        ),
+        (
+            ".save V(o*) V(st:rst) I(R1)",
+            {"save-pattern-unrecorded": [["v(out)"], ["v(vr)"]]},
+        ),
+        (
+            ".save I(*)",
+            {"save-pattern-unrecorded": [["v(out)"], ["v(vr)"], ["i(r1)"]]},
+        ),
+        (".save V(out) V(vr) I(R1)", {}),
+        (".save all", {}),
+    ],
+    ids=["v_pattern", "v_pattern_and_a_current", "prefix_pattern", "i_pattern", "named", "all"],
+)
+def test_a_save_pattern_is_not_read_as_a_name(
+    tmp_path: Path, save: str, expected: dict[str, list[list[str]]]
+):
+    """Which signals a pattern saves, of either kind, is not recorded, so
+    beside a pattern a signal the .save does not name is not refused as
+    unsaved but said to be unchecked. A list of names alone is held as before."""
+    assert _coverage_findings(tmp_path, save) == expected
+
+
+def test_the_unchecked_signals_are_a_warning(tmp_path: Path):
+    assert RULES_BY_ID["save-pattern-unrecorded"].disposition == "warning"
+    findings = lint_deck(
+        _PATTERN_DECK.format(save=".save V(*) I(R1)"), tmp_path / "deck.cir", "ltspice", "LTspice"
+    )
+    assert {f["severity"] for f in findings if f["rule_id"].startswith("save-")} == {"warning"}
 
 
 @pytest.mark.parametrize("mode", ["hsa", ""])

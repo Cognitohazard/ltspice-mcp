@@ -244,15 +244,6 @@
    "tests/test_edit_schematic.py::TestRecordTheEditorCannotRead::test_an_edit_names_the_record_and_its_line[-empty]"
   ]
  },
- "13c2e21dc0562fc2": {
-  "answer": {
-   "reply": "654d63d6cb9b3dca",
-   "sheet": "852d81e67e545ce9"
-  },
-  "tests": [
-   "tests/test_recorded_ltspice_schematics.py::test_an_edit_writes_a_text_that_reads_as_it_was_given"
-  ]
- },
  "13e37f29f7e017a4": {
   "answer": {
    "reply": "2873f5794cff8e3e",
@@ -629,15 +620,6 @@
    "tests/test_edit_schematic.py::test_reference_mismatch_is_a_partial_outcome"
   ]
  },
- "28cba25b53c5578e": {
-  "answer": {
-   "reply": "d0fbb5282503b110",
-   "sheet": "175c72c90935824a"
-  },
-  "tests": [
-   "tests/test_recorded_ltspice_schematics.py::test_an_edit_of_a_sources_value_keeps_its_own_parameters_on_a_sheet"
-  ]
- },
  "2a34f41928fc501b": {
   "answer": {
    "reply": "3cc34a936e604cac",
@@ -767,15 +749,6 @@
    "tests/test_edit_schematic.py::test_render_failure_leaves_the_target_and_evicts_the_edited_editor"
   ]
  },
- "3576a518bef589f0": {
-  "answer": {
-   "reply": "a8544c1223d107a1",
-   "sheet": "fbe31f09a267ed46"
-  },
-  "tests": [
-   "tests/test_recorded_ltspice_schematics.py::test_an_edit_of_a_sources_value_keeps_its_own_parameters_on_a_sheet"
-  ]
- },
  "36cd9720f52e6a2c": {
   "answer": {
    "reply": "d60023a8593dd0ee",
@@ -875,15 +848,6 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_empty_ops_without_views_is_rejected"
-  ]
- },
- "3e8d65f9cc293ddf": {
-  "answer": {
-   "reply": "78724c34ce46a5a6",
-   "sheet": "4fcc2dfe8d1b0bdd"
-  },
-  "tests": [
-   "tests/test_recorded_ltspice_schematics.py::test_an_edit_writes_a_text_that_reads_as_it_was_given"
   ]
  },
  "3ebd2bdf3546a9a8": {
@@ -1015,15 +979,6 @@
   "tests": [
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/gnd_label_lower_case]",
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/gnd_label_lower_case]"
-  ]
- },
- "45f6a17067bcf5e9": {
-  "answer": {
-   "reply": "243854d4c3969389",
-   "sheet": "3ae5ec160b4db496"
-  },
-  "tests": [
-   "tests/test_recorded_ltspice_schematics.py::test_an_edit_of_a_sources_value_keeps_its_own_parameters_on_a_sheet"
   ]
  },
  "464deaa02ce2ccfc": {
@@ -1380,15 +1335,6 @@
    "tests/test_edit_schematic.py::test_an_edit_says_of_a_sheet_what_a_check_of_it_says"
   ]
  },
- "610f135d0a62a114": {
-  "answer": {
-   "reply": "7acafad85f641b99",
-   "sheet": "3c8790aeafdd3295"
-  },
-  "tests": [
-   "tests/test_recorded_ltspice_schematics.py::test_an_edit_writes_a_text_that_reads_as_it_was_given"
-  ]
- },
  "612a5873becde290": {
   "answer": {
    "reply": "fd3d0b1c3d85fea4",
@@ -1445,15 +1391,6 @@
    "tests/test_edit_schematic.py::test_a_wire_a_later_op_removes_is_not_said_to_hang[remove_component]"
   ]
  },
- "63eb2235ddf362e4": {
-  "answer": {
-   "reply": "f667498b3f80bb9f",
-   "sheet": "d6aacb280a76708b"
-  },
-  "tests": [
-   "tests/test_recorded_ltspice_schematics.py::test_an_edit_of_a_sources_value_keeps_its_own_parameters_on_a_sheet"
-  ]
- },
  "641d3c5fb6549dc7": {
   "answer": {
    "reply": "d45f005a33ad985c",
@@ -1480,6 +1417,18 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_crash_after_rename_stays_committed"
+  ]
+ },
+ "64f539e7e5e61cd2": {
+  "answer": {
+   "reply": "5313878ca5a045e3",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_every_route_names_a_pins_net_by_every_spelling_of_its_labels[ltspice17]",
+   "tests/test_recorded_ltspice_schematics.py::test_every_route_names_a_pins_net_by_every_spelling_of_its_labels[ltspice26]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_python_api_names_a_pins_net_by_every_spelling_of_its_labels[ltspice17]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_python_api_names_a_pins_net_by_every_spelling_of_its_labels[ltspice26]"
   ]
  },
  "65b88a7751c1f73d": {
@@ -1728,6 +1677,16 @@
   "tests": [
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/collinear_overlap]",
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/collinear_overlap]"
+  ]
+ },
+ "73aa8cdaaa1c956b": {
+  "answer": {
+   "reply": "2203658e6d2af277",
+   "sheet": "3e35e1b8961535f6"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_that_changes_a_label_only_pins_net_names_lists_the_pin[ltspice17]",
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_that_changes_a_label_only_pins_net_names_lists_the_pin[ltspice26]"
   ]
  },
  "73e5782b31b157b8": {
@@ -2059,15 +2018,6 @@
    "tests/test_edit_schematic.py::test_replace_directive_reports_what_it_changed"
   ]
  },
- "8bb32888c7cdd716": {
-  "answer": {
-   "reply": "749343a3ce00fff5",
-   "sheet": "556243696339db8d"
-  },
-  "tests": [
-   "tests/test_recorded_ltspice_schematics.py::test_an_edit_of_a_sources_value_keeps_its_own_parameters_on_a_sheet"
-  ]
- },
  "8bf304039fe263f6": {
   "answer": {
    "message": "invalid view_cursors.pin_legend: malformed page cursor: 'garbage'",
@@ -2269,15 +2219,6 @@
   },
   "tests": [
    "tests/test_set_plot_panes.py::test_a_dc_sweep_and_a_noise_run_have_panes_of_their_own[dc-DC transfer characteristic-scales0]"
-  ]
- },
- "98ac8b7021c0b21b": {
-  "answer": {
-   "reply": "aab2dd35a391c5c9",
-   "sheet": "fd1b44a5ccb29ad1"
-  },
-  "tests": [
-   "tests/test_recorded_ltspice_schematics.py::test_an_edit_of_a_sources_value_keeps_its_own_parameters_on_a_sheet"
   ]
  },
  "98dbc0c6c5be7ce1": {
@@ -2853,6 +2794,18 @@
    "tests/test_edit_schematic.py::test_default_view_covers_only_the_refs_the_batch_touched"
   ]
  },
+ "be6f36ed708b0e9a": {
+  "answer": {
+   "reply": "351b7796bee5a2ee",
+   "sheet": "bec10ad5c19d0a32"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_every_route_names_a_pins_net_by_every_spelling_of_its_labels[ltspice17]",
+   "tests/test_recorded_ltspice_schematics.py::test_every_route_names_a_pins_net_by_every_spelling_of_its_labels[ltspice26]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_python_api_names_a_pins_net_by_every_spelling_of_its_labels[ltspice17]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_python_api_names_a_pins_net_by_every_spelling_of_its_labels[ltspice26]"
+  ]
+ },
  "bec0e67ca59f4455": {
   "answer": {
    "reply": "858efdf7646fad90",
@@ -3281,15 +3234,6 @@
    "tests/test_edit_schematic.py::TestRecordTheEditorCannotRead::test_a_record_in_a_sheet_the_target_loads_names_that_sheet"
   ]
  },
- "e2a92b73197a9159": {
-  "answer": {
-   "reply": "dfe3ecd4c6ad6cf7",
-   "sheet": null
-  },
-  "tests": [
-   "tests/test_recorded_ltspice_schematics.py::test_an_edit_refuses_a_step_with_nothing_to_step"
-  ]
- },
  "e300422d689d4883": {
   "answer": {
    "reply": "90b2b3c08687e1df",
@@ -3392,13 +3336,14 @@
    "tests/test_edit_schematic.py::TestDataFlagPreservation::test_a_data_flag_is_written_back_in_the_sheets_codec"
   ]
  },
- "e908c9174a2ec0c1": {
+ "e7cb9ce8a10513d7": {
   "answer": {
-   "reply": "01693653ee0e96de",
-   "sheet": "6d1d759062eb5518"
+   "reply": "c0cf22fc2820d5ad",
+   "sheet": "bec10ad5c19d0a32"
   },
   "tests": [
-   "tests/test_recorded_ltspice_schematics.py::test_an_edit_of_a_sources_value_keeps_its_own_parameters_on_a_sheet"
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_that_changes_a_label_only_pins_net_names_lists_the_pin[ltspice17]",
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_that_changes_a_label_only_pins_net_names_lists_the_pin[ltspice26]"
   ]
  },
  "e9f96d301c87cc8c": {
@@ -3517,15 +3462,6 @@
   },
   "tests": [
    "tests/test_circuit_asc.py::TestJudgedOnTheFinishedSheet::test_a_part_moved_onto_a_crossing_is_said_whichever_op_moved_it"
-  ]
- },
- "f15f26e5915d467b": {
-  "answer": {
-   "reply": "ff7a0981212bf877",
-   "sheet": null
-  },
-  "tests": [
-   "tests/test_recorded_ltspice_schematics.py::test_an_edit_refuses_a_value_for_a_source_that_plays_a_file_on_a_sheet"
   ]
  },
  "f1bea3b6d0f2ab59": {

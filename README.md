@@ -42,7 +42,7 @@ Everything the tools do is also available from Python, as the
 and drag the `.mcpb` file onto Claude Desktop. The extension asks for an
 optional sandbox folder. If you leave it blank, there is no sandbox.
 
-**Any other MCP client** ([Cursor](https://cursor.com/docs/mcp), [Windsurf](https://docs.devin.ai/desktop/cascade/mcp), [Gemini CLI](https://google-gemini.github.io/gemini-cli/docs/tools/mcp-server.html), [Continue](https://docs.continue.dev/customize/deep-dives/mcp), [Cline](https://docs.cline.bot/mcp/mcp-overview), [Zed](https://zed.dev/docs/ai/mcp), …): install the server and add it to the client's MCP config.
+**Cursor, Codex and other MCP clients** ([Windsurf](https://docs.devin.ai/desktop/cascade/mcp), [Gemini CLI](https://google-gemini.github.io/gemini-cli/docs/tools/mcp-server.html), [Continue](https://docs.continue.dev/customize/deep-dives/mcp), [Cline](https://docs.cline.bot/mcp/mcp-overview), [Zed](https://zed.dev/docs/ai/mcp), …): install the server and add it to the client's MCP config.
 
 ```bash
 uv tool install ltspice-mcp        # or: pipx install ltspice-mcp
@@ -56,7 +56,22 @@ uv tool install ltspice-mcp        # or: pipx install ltspice-mcp
 }
 ```
 
-The server needs Python 3.11 or newer. In Claude Code,
+[Cursor](https://cursor.com/docs/mcp) reads this JSON from `.cursor/mcp.json`
+in the project, or from `~/.cursor/mcp.json` for every project.
+[Codex](https://developers.openai.com/codex/mcp) reads TOML from
+`~/.codex/config.toml`:
+
+```toml
+[mcp_servers.spice]
+command = "ltspice-mcp"
+tool_timeout_sec = 660
+```
+
+Codex stops a tool call after 300 s by default; `run_code` can run for 600 s.
+
+The server needs Python 3.11 or newer. If a client cannot find `ltspice-mcp`,
+set `command` to its full path (on Windows, the `ltspice-mcp.exe` in the
+folder `uv tool dir --bin` prints). In Claude Code,
 `claude mcp add -s project spice -- ltspice-mcp` adds it without editing the
 JSON.
 

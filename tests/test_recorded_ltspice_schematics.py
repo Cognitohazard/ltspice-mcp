@@ -13,6 +13,7 @@ import dataclasses
 import re
 from collections.abc import Iterator
 from pathlib import Path, PureWindowsPath
+from typing import Any
 
 import pytest
 from spicelib.editor.asc_editor import AscEditor
@@ -52,7 +53,7 @@ from tests import _ltspice_recorded as rec
 from tests._asc_ops import _inspect_item as inspect_item
 from tests._asc_ops import apply_ops, inspect_one, inspect_refusal, sha_of, sheet_findings
 from tests._schematic_fixtures import open_editor
-from tests.conftest import FIXTURES_DIR, FakeSim
+from tests.conftest import FIXTURES_DIR, FakeSim, SyncApi
 from tests.ltspice_recorder import INPUTS
 from tests.test_verify_circuit import _run as run_verify_circuit
 
@@ -336,6 +337,147 @@ async def test_node_names_that_differ_only_in_case_are_one_node(
     assert {(p["reference"], p["pin"]) for p in on_sheet["pins"]} == {("R1", "1"), ("R2", "1")}
     assert on_sheet["labels"] == ["OUT", "out"]
     assert "is_shorted" not in on_sheet
+
+
+#: ``label_case_separate_wires`` with a third resistor whose top pin carries
+#: ``OUT`` on its own point and no wire: a label-only pin of the node R1's
+#: ``out`` and R2's ``OUT`` name. Its bottom pin is grounded as theirs are.
+_LABEL_ONLY_ON_OUT = [
+    {"op": "add_component", "reference": "R3", "symbol": "res", "x": 480, "y": 144},
+    {"op": "add_net_label", "net": "OUT", "pin": "R3.1"},
+    {"op": "add_net_label", "net": "0", "pin": "R3.2"},
+]
+#: The pins of that node, and where R3's sits.
+_ON_OUT = {"R1.1", "R2.1", "R3.1"}
+_R3_TOP = [480, 96]
+#: Each place a trace of that node starts: each pin, either name, R3's point.
+_TRACES_OF_OUT: list[str | list[int]] = [*sorted(_ON_OUT), "OUT", "net:out", _R3_TOP]
+
+
+def _names_shown_of_out(
+    edit: dict[str, Any], read: dict[str, Any], traces: list[dict[str, Any]]
+) -> dict[str, set[str | None]]:
+    """The names each route gives the pins of the ``OUT`` node, by route.
+
+    ``edit`` is the reply to the batch that adds R3, with its touched view and
+    the pin legend; ``read`` an op-less read after it, with the legend and the
+    preexisting view, which lists every label-only pin; ``traces`` the net
+    query from each of ``_TRACES_OF_OUT``, whose labels are a net's names.
+    """
+    shown: dict[str, set[str | None]] = {}
+    for name, reply in (("edit", edit), ("read", read)):
+        views = reply["views"]
+        for view in ("touched", "pin_legend"):
+            for row in views.get(view, {}).get("items", []):
+                for pin in row["pins"]:
+                    if f"{row['ref']}.{pin['name']}" in _ON_OUT:
+                        shown.setdefault(f"{name} {view}", set()).add(pin.get("net"))
+        rows = {
+            f"{name} wiring.label_only_pins": reply["wiring"]["label_only_pins"].get("items", []),
+            f"{name} preexisting": views.get("preexisting", {}).get("items", []),
+        }
+        for route, items in rows.items():
+            for row in items:
+                if row.get("pin") in _ON_OUT:
+                    shown.setdefault(route, set()).add(row.get("net"))
+    for at, trace in zip(_TRACES_OF_OUT, traces, strict=True):
+        shown[f"inspect net at {at}"] = {"/".join(trace["labels"])}
+    return shown
+
+
+#: Every route above that names a pin of the node. The edit lists R3's pins in
+#: its touched view and as label-only, since it placed R3; the read lists
+#: R3.1 under preexisting, since nothing in an op-less read is new.
+_ROUTES_OF_OUT = {
+    "edit touched",
+    "edit pin_legend",
+    "edit wiring.label_only_pins",
+    "read pin_legend",
+    "read preexisting",
+    *(f"inspect net at {at}" for at in _TRACES_OF_OUT),
+}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_every_route_names_a_pins_net_by_every_spelling_of_its_labels(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """Names that differ only in case are one node, and an export keeps each
+    label's spelling (``test_node_names_that_differ_only_in_case_are_one_node``),
+    so the names of a pin's net are every spelling its labels carry, wherever a
+    pin's net is named: the pin legend and the touched view, the label-only
+    pins an edit lists and the preexisting view, and the net query from a pin,
+    a name or a point. A label-only pin was named by the labels on its own
+    point alone, ``OUT``, while the legend named the same pin ``OUT/out``."""
+    sheet = rec.stage_sheet(build, "connectivity/label_case_separate_wires", work_dir)
+    edit = await apply_ops(
+        state_no_sim, sheet.name, _LABEL_ONLY_ON_OUT, return_views=["touched", "pin_legend"]
+    )
+    assert edit["commit_state"] == "committed", edit
+    read = await apply_ops(
+        state_no_sim, sheet.name, [], return_views=["pin_legend", "preexisting"]
+    )
+    traces = [
+        await inspect_one(state_no_sim, {"kind": "net", "path": str(sheet), "at": at})
+        for at in _TRACES_OF_OUT
+    ]
+
+    shown = _names_shown_of_out(edit, read, traces)
+    assert set(shown) == _ROUTES_OF_OUT
+    assert shown == {route: {"OUT/out"} for route in _ROUTES_OF_OUT}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_the_python_api_names_a_pins_net_by_every_spelling_of_its_labels(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """The same sheet and the same routes through the Python API, whose edit
+    views are the MCP reply's unpaged."""
+    sheet = rec.stage_sheet(build, "connectivity/label_case_separate_wires", work_dir)
+    api = SyncApi(state_no_sim)
+    edit = api.edit_schematic(
+        path=sheet.name,
+        ops=_LABEL_ONLY_ON_OUT,
+        expected_sha256=sha_of(sheet),
+        return_views=["touched", "pin_legend"],
+    )
+    assert edit["commit_state"] == "committed", edit
+    read = api.edit_schematic(
+        path=sheet.name,
+        ops=[],
+        expected_sha256=sha_of(sheet),
+        return_views=["pin_legend", "preexisting"],
+    )
+    queries = [{"kind": "net", "path": str(sheet), "at": at} for at in _TRACES_OF_OUT]
+    items = api.inspect(queries=queries)["results"]
+    assert all(item["ok"] for item in items), items
+
+    shown = _names_shown_of_out(edit, read, [item["data"] for item in items])
+    assert set(shown) == _ROUTES_OF_OUT
+    assert shown == {route: {"OUT/out"} for route in _ROUTES_OF_OUT}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_an_edit_that_changes_a_label_only_pins_net_names_lists_the_pin(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """A label-only pin is listed by the edit that changes its row, as a
+    finding is, and its row names its net: removing the ``out`` label from
+    R1's wire leaves R3's top pin on a net named ``OUT`` alone, though the
+    batch names neither R3 nor its point. The grounded pins' net is named as
+    it was, so they stay counted under preexisting."""
+    sheet = rec.stage_sheet(build, "connectivity/label_case_separate_wires", work_dir)
+    added = await apply_ops(state_no_sim, sheet.name, _LABEL_ONLY_ON_OUT)
+    assert added["commit_state"] == "committed", added
+
+    data = await apply_ops(
+        state_no_sim, sheet.name, [{"op": "remove_net_label", "x": 96, "y": 64}]
+    )
+
+    assert data["commit_state"] == "committed", data
+    listed = data["wiring"]["label_only_pins"]["items"]
+    assert [(row["pin"], row["net"]) for row in listed] == [("R3.1", "OUT")]
+    assert data["preexisting"]["label_only_pins"] == 3
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)

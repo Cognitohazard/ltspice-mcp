@@ -11,7 +11,8 @@ connectivity itself — which net a pin is on, whether a wire passes through a
 point — is resolved by the caller through ``schematic_ops.sheet_nets`` and
 ``connectivity.build_on_wire_predicate`` and handed in as plain data +
 closures, so this stays a pure leaf module (no ``tools`` import, no
-re-implementation of the nets).
+re-implementation of the nets). Both views name a pin's net through the one
+:data:`NetNameOf` the caller gives them, so they cannot name it apart.
 """
 
 from __future__ import annotations
@@ -25,10 +26,12 @@ from ltspice_mcp.lib.cursor_codec import CursorError, decode_cursor, encode_curs
 # tool layer) so this module has no upward dependency.
 DEFAULT_PAGE_SIZE = 100
 
-# A pin, as its part's reference, its place among the part's pins and its
-# coordinate → its net's display name (a net-label like ``vout``/``0``, or
-# ``None`` when the net is unnamed). Built by the caller from ``sheet_nets``.
-NetNameOf = Callable[[str, int, "tuple[int, int]"], "str | None"]
+# A pin, as its part's reference and its place among the part's pins → its
+# net's display name: the text of every label on the net, wherever it sits,
+# joined with ``/`` (``vout``, ``0``, ``OUT/out``), or ``None`` when no label
+# names the net. Built by the caller from ``sheet_nets``. It takes no
+# coordinate: the labels on a pin's own point are not all its net's names.
+NetNameOf = Callable[[str, int], "str | None"]
 
 # How a pin is tied to its net: by a wire through it, by a label on it alone,
 # or by neither (floating, or touching another pin only).
@@ -53,12 +56,11 @@ def build_pin_legend(
     for comp in geometry:
         pins: list[dict[str, Any]] = []
         for index, p in enumerate(comp["pins"]):
-            coord = (p["x"], p["y"])
             entry: dict[str, Any] = {
                 "name": p["name"],
                 "x": p["x"],
                 "y": p["y"],
-                "net": net_name_of(comp["ref"], index, coord),
+                "net": net_name_of(comp["ref"], index),
             }
             if p.get("dir") is not None:
                 entry["dir"] = p["dir"]
@@ -96,7 +98,11 @@ def find_label_only_pins(
     net_name_of: NetNameOf,
 ) -> list[dict[str, Any]]:
     """Pins connected to their net by a net-label only (no wire through them,
-    :func:`pin_ties`), as an addressable list: ``[{ref, pin, net, x, y}]``."""
+    :func:`pin_ties`), as an addressable list: ``[{ref, pin, net, x, y}]``.
+
+    ``net`` is ``net_name_of``'s, as in :func:`build_pin_legend`: the names of
+    the pin's whole net, of which the labels on its own point may be one.
+    """
     out: list[dict[str, Any]] = []
     for comp, index, tie in pin_ties(geometry, is_wired=is_wired, is_labeled=is_labeled):
         if tie != "label":
@@ -106,7 +112,7 @@ def find_label_only_pins(
             {
                 "ref": ref,
                 "pin": f"{ref}.{p['name']}",
-                "net": net_name_of(ref, index, (p["x"], p["y"])),
+                "net": net_name_of(ref, index),
                 "x": p["x"],
                 "y": p["y"],
             }

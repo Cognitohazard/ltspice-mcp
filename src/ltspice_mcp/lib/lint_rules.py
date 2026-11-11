@@ -34,6 +34,7 @@ from ltspice_mcp.lib.spice_lex_views import (
     InstanceLine,
     MeasCard,
     ProbeRef,
+    probe_is_pattern,
     probe_refs,
     read_instance,
     save_cards,
@@ -194,10 +195,23 @@ def _probe_signals(probe: ProbeRef) -> set[str]:
     return {_normalize_signal(probe.text)}
 
 
-def _save_meas_coverage(
-    context: _LintContext,
-    rule: LintRule,
-) -> list[LintFinding]:
+class _Unsaved(NamedTuple):
+    """What a ``.meas`` reads that no ``.save`` names: ``missing`` when the
+    ``.save`` list names its signals one by one, ``unchecked`` when it also
+    names some by a pattern (``V(*)``), since which signals a pattern saves,
+    of either kind, is not recorded."""
+
+    card: SpiceCard
+    missing: list[str]
+    unchecked: list[str]
+    saved: list[str]
+    patterns: list[str]
+
+
+def _unsaved(context: _LintContext) -> list[_Unsaved]:
+    """For each ``.meas`` of a deck with a ``.save`` list, what it reads that
+    the list does not name: the one reading of a ``.save``'s coverage both
+    rules below report."""
     saves = save_cards(context.cards)
     measurements = [card for card in context.cards if card.kind == "meas"]
     if not saves or not measurements:
@@ -206,26 +220,71 @@ def _save_meas_coverage(
     # any signal, so none is reported missing on a guess about it.
     if any(save.saves_all for save in saves) or unreadable_cards(save.card for save in saves):
         return []
-    saved = {signal for save in saves for probe in save.probes for signal in _probe_signals(probe)}
-    findings = []
+    probes = [probe for save in saves for probe in save.probes]
+    patterns = [probe for probe in probes if probe_is_pattern(probe)]
+    saved = {
+        signal
+        for probe in probes
+        if not probe_is_pattern(probe)
+        for signal in _probe_signals(probe)
+    }
+    found = []
     for card in measurements:
         required = {signal for probe in probe_refs(card) for signal in _probe_signals(probe)}
-        missing = sorted(required - saved)
-        if missing:
-            findings.append(
-                _finding(
-                    context,
-                    rule,
-                    line=card.line_start,
-                    subject=card.name or ".meas",
-                    evidence={
-                        "missing_signals": missing,
-                        "saved_signals": sorted(saved),
-                        "directive": card.body,
-                    },
-                )
+        unnamed = sorted(required - saved)
+        missing, unchecked = ([], unnamed) if patterns else (unnamed, [])
+        if unnamed:
+            found.append(
+                _Unsaved(card, missing, unchecked, sorted(saved), [p.text for p in patterns])
             )
-    return findings
+    return found
+
+
+def _save_meas_coverage(
+    context: _LintContext,
+    rule: LintRule,
+) -> list[LintFinding]:
+    return [
+        _finding(
+            context,
+            rule,
+            line=unsaved.card.line_start,
+            subject=unsaved.card.name or ".meas",
+            evidence={
+                "missing_signals": unsaved.missing,
+                "saved_signals": unsaved.saved,
+                "directive": unsaved.card.body,
+            },
+        )
+        for unsaved in _unsaved(context)
+        if unsaved.missing
+    ]
+
+
+def _save_pattern_unrecorded(
+    context: _LintContext,
+    rule: LintRule,
+) -> list[LintFinding]:
+    return [
+        _finding(
+            context,
+            rule,
+            line=unsaved.card.line_start,
+            subject=unsaved.card.name or ".meas",
+            evidence={
+                "unchecked_signals": unsaved.unchecked,
+                "patterns": unsaved.patterns,
+                "directive": unsaved.card.body,
+                "reason": (
+                    "A .save names signals by a pattern, and which signals a pattern "
+                    "saves is not recorded, so these were not checked. Name them in "
+                    "the .save to have them checked."
+                ),
+            },
+        )
+        for unsaved in _unsaved(context)
+        if unsaved.unchecked
+    ]
 
 
 def _meas_ngspice_batch(
@@ -1074,6 +1133,7 @@ _ARITY_DISPOSITION: dict[str, Disposition] = {
 
 RULES: tuple[LintRule, ...] = (
     LintRule("save-meas-coverage", "blocking", _save_meas_coverage),
+    LintRule("save-pattern-unrecorded", "warning", _save_pattern_unrecorded),
     # A warning, not blocking: ngspice runs the deck and skips only the
     # top-level .meas, and reading the run relays ngspice's own notice of the
     # skip. Refusing the deck would cost the caller the rest of the run.

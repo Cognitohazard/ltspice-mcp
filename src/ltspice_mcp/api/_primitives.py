@@ -26,7 +26,7 @@ from ltspice_mcp.lib.device_names import (
 )
 from ltspice_mcp.lib.log_types import LogSectionName
 from ltspice_mcp.lib.raw_parser import OtherRawKind, get_step_count
-from ltspice_mcp.lib.recipes import StepValues
+from ltspice_mcp.lib.step_values import StepValues, listed_steps, step_values_text, step_with
 from ltspice_mcp.state import SessionState
 
 
@@ -149,7 +149,7 @@ class RawResult:
 
         Each entry finds a parameter as a step selector does, whatever the
         case of its name: LTspice writes ``rd`` for a deck's ``RD``, and
-        ``steps[0]["RD"]`` reads it (:class:`~ltspice_mcp.lib.recipes.StepValues`).
+        ``steps[0]["RD"]`` reads it (:class:`~ltspice_mcp.lib.step_values.StepValues`).
         """
         get_step_count(self._raw)
         return copy.deepcopy(list(self._steps))
@@ -234,18 +234,20 @@ class RawResult:
             keyed[key] = index
         return {key: index for key, index in keyed.items() if key not in shared}
 
-    def _step_with(self, parameters: dict[str, Any]) -> int:
-        """The step whose parameters are ``parameters``; step 0 of a result
-        that is not stepped."""
+    def _step_with(self, parameters: Mapping[str, Any]) -> int:
+        """The step whose parameters are ``parameters``, each value matched as
+        a step selector matches it (``step_values.step_with``); step 0 of a
+        result that is not stepped."""
         if self.step_count == 1 and not self._steps[0]:
             return 0
-        try:
-            return self._steps.index(parameters)
-        except ValueError:
+        found = step_with(self._steps, parameters)
+        if found is None:
             raise ResultError(
                 f"No step of the other result has this step's parameters "
-                f"({parameters or 'none'}); pass other_step."
-            ) from None
+                f"({step_values_text(parameters)}): its steps are "
+                f"{listed_steps(self._steps)}; pass other_step."
+            )
+        return found
 
     def compare(
         self,
@@ -272,7 +274,10 @@ class RawResult:
         complex numbers.
 
         ``other_step`` defaults to the step of ``other`` whose parameters are
-        this ``step``'s, or step 0 of a result that is not stepped.
+        this ``step``'s, each the same value as a step selector reads it
+        (``1k`` is 1000, to a part in a million), or step 0 of a result that is
+        not stepped. When no step of ``other`` has them, the refusal lists the
+        steps it has.
 
         Returns ``{"signals": {name: {"max_abs", "max_rel", "at", "value",
         "other"}}, "only_here", "only_there", "span", "points"}``: per signal

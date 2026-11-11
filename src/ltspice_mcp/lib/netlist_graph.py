@@ -97,7 +97,12 @@ from ltspice_mcp.lib.deck_staging import (
     scan_include_references,
 )
 from ltspice_mcp.lib.encoding import read_spice_text
-from ltspice_mcp.lib.format import fold_micro_sign, parse_spice_value
+from ltspice_mcp.lib.format import (
+    SAME_VALUE_RTOL,
+    fold_micro_sign,
+    parse_spice_value,
+    same_value,
+)
 from ltspice_mcp.lib.spice_lex import (
     LexResult,
     SpiceCard,
@@ -626,12 +631,7 @@ def _tokens_equal(a: str, b: str, rtol: float) -> bool:
         va, vb = parse_spice_value(a), parse_spice_value(b)
     except ValueError:
         return a.lower() == b.lower()
-    if va == vb:
-        return True
-    scale = max(abs(va), abs(vb))
-    if scale == 0.0:
-        return True
-    return abs(va - vb) <= rtol * scale
+    return same_value(va, vb, rtol)
 
 
 def _pin_role(type_letter: str, index: int) -> int:
@@ -1236,7 +1236,7 @@ def compare_graphs(
     candidate: NetlistGraph | str | Path,
     *,
     anchors: list[str] | tuple[str, ...] | frozenset[str] | None = None,
-    rtol: float = 1e-6,
+    rtol: float = SAME_VALUE_RTOL,
 ) -> GraphComparison:
     """Compare two netlists for connectivity equivalence.
 

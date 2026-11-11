@@ -1,18 +1,89 @@
 name: CI
 
+# Runs the reusable checks (checks.yml) at the tier the trigger calls for:
+#
+#   full  every push to master; a pull request whose title starts with
+#         "Rollup"; a pull request labelled `full-ci`.
+#   docs  a pull request whose every changed file is under docs/ or
+#         changelog.d/, is a top-level *.md, or is a README.md under
+#         packaging/. The agent guide under src/ltspice_mcp/assets/guide/ is
+#         shipped code with its own tests, so a change there is not docs-only.
+#   pr    any other pull request.
+#
+# Adding the `full-ci` label starts a run at the full tier. Adding any other
+# label starts a run that does nothing: it has its own concurrency group, so
+# it cancels nothing, and its checks job is skipped before it calls
+# checks.yml, so it reports none of the checks' names and leaves the results
+# of the last real run in place.
+
 on:
   push:
     branches: [master]
   pull_request:
     branches: [master]
+    types: [opened, synchronize, reopened, labeled]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && format('-label-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  tier:
+    if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tier: ${{ steps.pick.outputs.tier }}
+    steps:
+      # The pull request's merge commit and its first parent, the base it
+      # merges into, so the diff between them is exactly what it changes.
+      # --no-renames lists a renamed file under its old path too, so moving a
+      # source file into docs/ is not read as a documentation-only change.
+      - uses: actions/checkout@v7
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Pick the tier
+        id: pick
+        env:
+          EVENT: ${{ github.event_name }}
+          TITLE: ${{ github.event.pull_request.title }}
+          FULL_CI_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
+        run: |
+          pick() {
+            if [ "$EVENT" != pull_request ]; then
+              echo "full: a $EVENT event"; tier=full; return
+            fi
+            case "$TITLE" in
+              Rollup*) echo "full: the title starts with Rollup"; tier=full; return ;;
+            esac
+            if [ "$FULL_CI_LABEL" = true ]; then
+              echo "full: the pull request is labelled full-ci"; tier=full; return
+            fi
+            changed=$(git -c core.quotePath=false diff --name-only --no-renames HEAD^1 HEAD)
+            if [ -z "$changed" ]; then
+              echo "pr: no changed files found"; tier=pr; return
+            fi
+            while IFS= read -r f; do
+              case "$f" in
+                docs/*|changelog.d/*|packaging/README.md|packaging/*/README.md) ;;
+                */*) echo "pr: $f is not documentation"; tier=pr; return ;;
+                *.md) ;;
+                *) echo "pr: $f is not documentation"; tier=pr; return ;;
+              esac
+            done <<< "$changed"
+            echo "docs: every changed file is documentation"; tier=docs
+          }
+          pick
+          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+
   checks:
+    needs: tier
     uses: ./.github/workflows/checks.yml
+    with:
+      tier: ${{ needs.tier.outputs.tier }}

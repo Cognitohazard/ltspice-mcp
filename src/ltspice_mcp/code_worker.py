@@ -31,7 +31,7 @@ the jobs it owns.
 
 Parent death: the reader thread sees EOF on the request pipe when the server
 dies. It interrupts the snippet, lets the main thread close the ``Api``
-(cancelling the jobs this process owns) and exits within a bound whether or
+(which stops the jobs its session runs) and exits within a bound whether or
 not either finished.
 """
 

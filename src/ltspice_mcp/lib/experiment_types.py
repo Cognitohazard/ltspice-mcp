@@ -22,7 +22,9 @@ if TYPE_CHECKING:
 #: The statuses of a job some process is still working on.
 LiveExperimentStatus = Literal["queued", "running", "analyzing"]
 #: The statuses of a finished job. 'interrupted' is one: the process running
-#: the job went away before its runs did.
+#: the job went away before its runs did, killed or shut down (the server's,
+#: or the Python API's ``close``). 'cancelled' is a job someone asked to
+#: cancel, and nothing else.
 TerminalExperimentStatus = Literal[
     "completed",
     "completed_with_failures",
@@ -57,7 +59,7 @@ AnalysisStatus = Literal[
 #: away: found dead by the next reader of the job's record, or shut down, the
 #: server's or the Python API's, while the case ran. One code for both, as
 #: distinct from an explicit cancel (``cancelled``), so a resume retries either
-#: by default.
+#: by default; ``job_lifecycle.stop_for_owner`` writes it for both.
 OwnerStopped = Literal["server_restarted"]
 OWNER_STOPPED: Final[OwnerStopped] = "server_restarted"
 

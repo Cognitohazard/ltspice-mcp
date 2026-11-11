@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from ltspice_mcp.lib.connectivity import named_nets
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.sheet_findings import (
     RULES,
@@ -381,6 +382,25 @@ class TestWhatJoinsAndWhatDoesNot:
         )
         (found,) = only(view, "net_with_two_names")
         assert found.facts == {"names": ("OUT", "b")}
+
+    def test_a_finding_names_a_name_once_where_a_pins_net_names_every_spelling(self) -> None:
+        """A finding counts names, and ``out`` and ``OUT`` are one, so it spells
+        that name once. The names of a pin's net, which the pin legend, the
+        label-only pins and the net trace give, are every spelling its labels
+        carry: they say which labels are on the pin's net."""
+        labels = ((0, 0, "out"), (64, 0, "OUT"), (32, 0, "b"))
+        view = SheetView(
+            parts=(Part("R1", pins=(("1", 48, 0),)),), wires=((0, 0, 64, 0),), labels=labels
+        )
+        nets = named_nets(
+            [("R1", [("1", (48, 0))])],
+            [((x, y), text) for x, y, text in labels],
+            [((0, 0), (64, 0))],
+        )
+        (pin,) = nets.pins
+        (found,) = only(view, "net_with_two_names")
+        assert found.facts == {"names": ("OUT", "b")}
+        assert nets.texts(nets.of_pin(pin)) == {"OUT", "out", "b"}
 
     @pytest.mark.parametrize(
         "names", [("out", "OUT"), ("a", "0"), ("a", "GND")], ids=["case", "ground", "gnd"]
