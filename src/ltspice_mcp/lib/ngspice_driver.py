@@ -1,10 +1,21 @@
-"""The ngspice command sequence that seeds electrical input evaluation."""
+"""How ngspice is seeded before it evaluates a deck: the command sequence the
+server's driver runs, and the seed option a deck can carry itself."""
 
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
+from typing import TYPE_CHECKING
+
+from ltspice_mcp.lib.spice_lex_views import read_instance
+
+if TYPE_CHECKING:
+    from ltspice_mcp.lib.spice_lex import EditCards, SpiceCard
 
 SEED_MAX = 2147483646
+
+_OPTION_HEAD = re.compile(r"\s*\.opt", re.IGNORECASE)
+_SEED_VALUE = re.compile(r"\bseed\s*=\s*(\S*)", re.IGNORECASE)
 
 
 def validate_seed(seed: int) -> None:
@@ -31,3 +42,56 @@ def seeded_commands(seed: int, electrical_input: str, raw_name: str) -> str:
         f"setseed {seed}\nsource {argument(electrical_input)}\n"
         f"run\nwrite {argument(raw_name)}\nquit\n"
     )
+
+
+def seed_option(card: SpiceCard) -> str | None:
+    """What an option card sets ngspice's random seed to, as written, or None.
+
+    ngspice takes every card starting ``.opt`` as an option card and, when it
+    loads the deck and before it evaluates any parameter, reads ``seed=`` on
+    each one and runs the routine the ``setseed`` command runs (ngspice-42
+    ``inp.c:eval_opt`` calls ``com_sseed``). Case, spaces around ``=`` and
+    other options on the card do not matter (measured on ngspice-42). Where a
+    deck sets it more than once the first in the deck wins, as ngspice
+    collects the cards in reverse (``options.c:inp_getopts``).
+    """
+    if card.kind != "directive" or not _OPTION_HEAD.match(card.body):
+        return None
+    match = _SEED_VALUE.search(card.body)
+    return None if match is None else match.group(1)
+
+
+def deck_seeds(files: Sequence[EditCards]) -> list[tuple[int, SpiceCard, str]]:
+    """The seed options ngspice may read in a deck's files, as the index of
+    the file each is in, its card and the value it sets (``seed_option``).
+
+    A card in a subcircuit that no ``X`` line of the files calls is left out:
+    ngspice drops such a subcircuit unread, seed and all, while one called
+    sets the seed (measured on ngspice-42 under kiltpsa, hsa, ltpsa and
+    spice3). Calls are matched by name across every file, so a subcircuit
+    called only from an uncalled one still counts, and a card in a ``.lib``
+    section counts whichever section the deck selects (kiltpsa reads every
+    section): the answer errs towards a card being read.
+    """
+    called = {
+        view.model.casefold()
+        for lexed in files
+        for card in lexed.read
+        if card.kind == "instance" and (card.name or "")[:1] in {"x", "X"}
+        if (view := read_instance(card)) is not None and view.model
+    }
+    return [
+        (index, card, value)
+        for index, lexed in enumerate(files)
+        for card in lexed.read
+        if (value := seed_option(card)) is not None
+        if all(name.casefold() in called for name in card.scope)
+    ]
+
+
+def fixed_seed(value: str) -> bool:
+    """Whether a seed option's value seeds ngspice alike on every run: a
+    positive decimal integer ngspice reads as an ``int``. ``random`` seeds it
+    from the clock, and a quoted or braced value stops the run (measured on
+    ngspice-42)."""
+    return value.isdecimal() and value.isascii() and 1 <= int(value) <= 2**31 - 1

@@ -105,14 +105,15 @@ def test_shared_sequence_preserves_the_audited_native_driver_bytes():
     )
 
 
-def _capture(tmp_path, body, *, seeded, analysis=b".op"):
+def _capture(tmp_path, body, *, seeded, analysis=b".op", dialect="ngspice"):
     job = recovery_job(tmp_path)
     assert job.output_folder is not None
     case = job.cases[0]
     case.recovery = None
     case.staged_deck.write_bytes(b"* seeded\n" + body + b"\n" + analysis + b"\n.end\n")
     case.deck_sha256 = sha256_file(case.staged_deck)
-    return capture_case_inputs(case, job.sources[0], lineage_root=job.output_folder, seeded=seeded)
+    source = replace(job.sources[0], dialect=dialect)
+    return capture_case_inputs(case, source, lineage_root=job.output_folder, seeded=seeded)
 
 
 @pytest.mark.parametrize(
@@ -124,11 +125,85 @@ def test_only_source_verified_static_random_functions_are_admitted(tmp_path, exp
     )
     verify_case_inputs(captured, seeded=True)
     with pytest.raises(RecoveryError) as error:
-        verify_case_inputs(captured)
+        verify_case_inputs(captured, dialect="ngspice")
     assert error.value.code == "recovery_random_unsupported"
     assert f"function `{expression.split('(')[0]}`" in str(error.value)
-    # A seed admits this function, so the refusal offers one.
-    assert "execution.simulator_seed admits" in str(error.value)
+    # A seed admits this function, so the refusal offers both ways to set one.
+    assert "execution.simulator_seed" in str(error.value)
+    assert "`.options seed=<n>`" in str(error.value)
+
+
+@pytest.mark.parametrize("option", [b".options seed=17", b".OPTION reltol=1e-3 SEED = 17"])
+def test_a_deck_that_fixes_its_own_seed_admits_static_random_functions(tmp_path, option):
+    """ngspice runs setseed's routine for a seed option when it loads the deck,
+    before it evaluates a parameter, so a deck that fixes its own seed draws
+    alike on every run, and needs no driver; nor does it need one analysis."""
+    captured = _capture(
+        tmp_path,
+        b".param draw=agauss(10,1,1)\nV1 n 0 {draw}\nR1 n 0 1k\n" + option,
+        seeded=False,
+        analysis=b".op\n.ac dec 3 1 10",
+    )
+    verify_case_inputs(captured, dialect="ngspice")
+    # A caller that does not say which simulator runs the deck gets the
+    # stricter answer.
+    with pytest.raises(RecoveryError) as unsaid:
+        verify_case_inputs(captured)
+    assert unsaid.value.code == "recovery_random_unsupported"
+
+
+@pytest.mark.parametrize("dialect", ["ltspice", "qspice", "xyce", None])
+def test_a_deck_seed_counts_only_where_ngspice_runs_the_deck(tmp_path, dialect):
+    """What LTspice, QSPICE or Xyce make of an .options seed card is not
+    recorded (LTspice can reseed its Monte Carlo from the clock), so their
+    static random functions stay refused whatever seed the deck writes."""
+    with pytest.raises(RecoveryError) as refused:
+        _capture(
+            tmp_path,
+            b".param draw=agauss(10,1,1)\nV1 n 0 {draw}\nR1 n 0 1k\n.options seed=17",
+            seeded=False,
+            dialect=dialect,
+        )
+    assert refused.value.code == "recovery_random_unsupported"
+
+
+@pytest.mark.parametrize("option", [b".options seed=5", b".options seed=random"])
+def test_a_seeded_run_refuses_a_deck_that_seeds_itself(tmp_path, option):
+    """ngspice reads a deck's seed option when it loads the deck, after the
+    driver's setseed, so the deck's seed wins: with seed=5 the run would record
+    the explicit seed while drawing from 5, and with seed=random a retry would
+    not draw again what it drew (measured on ngspice-42)."""
+    with pytest.raises(RecoveryError, match="overrides") as refused:
+        _capture(
+            tmp_path,
+            b".param draw=agauss(10,1,1)\nV1 n 0 {draw}\nR1 n 0 1k\n" + option,
+            seeded=True,
+        )
+    assert refused.value.code == "recovery_seed_unsupported"
+
+
+@pytest.mark.parametrize(
+    "option",
+    [
+        b".options seed=random",
+        b".options seed={17}",
+        b"* .options seed=17",
+        b".subckt holder a\n.options seed=17\nR1 a 0 1k\n.ends",
+        b".options seed=17\n.options seed=random",
+    ],
+)
+def test_a_seed_that_does_not_fix_the_draws_admits_nothing(tmp_path, option):
+    """A seed from the clock, one ngspice cannot read, a comment, one only in
+    a subcircuit nothing calls (ngspice drops it unread, measured on
+    ngspice-42), or a fixed seed beside one from the clock does not make the
+    deck's draws repeatable."""
+    with pytest.raises(RecoveryError) as refused:
+        _capture(
+            tmp_path,
+            b".param draw=agauss(10,1,1)\nV1 n 0 {draw}\nR1 n 0 1k\n" + option,
+            seeded=False,
+        )
+    assert refused.value.code == "recovery_random_unsupported"
 
 
 @pytest.mark.parametrize(
@@ -453,3 +528,142 @@ async def test_seeded_driver_changes_refuse_before_spawn(committed, monkeypatch,
     assert case.status == "failed"
     if change == "outputs":
         assert (job.output_folder / (case.run_token + ".raw")).read_bytes() == b"retained raw"
+
+
+async def _submit_drawn(state, request_id):
+    args = RunExperimentsInput.model_validate(
+        {
+            "request_id": request_id,
+            "circuits": [{"path": str(state.working_dir / "draw.cir")}],
+            "execution": {
+                "recoverable": True,
+                "wait_s": LIVENESS_S,
+                "run_timeout_s": LIVENESS_S,
+                "max_parallel": 1,
+            },
+            "variations": [{"kind": "random", "runs": 2, "seed": 8, "simulator_draws": True}],
+            "lint": "off",
+        }
+    )
+    result = await asyncio.wait_for(handle_run_experiments(args, state), LIVENESS_S)
+    assert not result.is_error, result.structured_content
+    job = state.all_jobs[result.structured_content["job_id"]]
+    await coordinator_returned(state, job)
+    await state.job_registry.drain_pending()
+    return job
+
+
+@needs_controlled_startup
+@pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH")
+@pytest.mark.asyncio
+async def test_a_retried_sample_draws_what_it_drew_from_its_own_seed(work_dir, monkeypatch):
+    """With simulator_draws each case's deck carries its own seed, so a
+    recoverable job admits the deck's agauss with no driver, and a sample that
+    failed and is retried draws what that sample draws in a job where it never
+    failed."""
+    _write_draw(work_dir)
+    state = _state(work_dir)
+    reference = await _submit_drawn(state, "drawn-reference")
+    assert reference.status == "completed", reference.failures
+    expected = [_voltage(case) for case in reference.cases]
+    assert expected[0] != expected[1]
+
+    original = ExperimentRunner.submit_netlist
+    failed = False
+
+    def fail_once(self, netlist, run_filename, callback, **kwargs):
+        nonlocal failed
+        if not failed and Path(run_filename).stem.endswith("_case_1"):
+            failed = True
+            self.loop.call_soon_threadsafe(
+                callback,
+                RunOutcome("", "", 0, "Simulator failed", failure_code="simulation_failed"),
+            )
+            return object()
+        return original(self, netlist, run_filename, callback, **kwargs)
+
+    monkeypatch.setattr(ExperimentRunner, "submit_netlist", fail_once)
+    parent = await _submit_drawn(state, "drawn-parent")
+    assert parent.status == "completed_with_failures", parent.failures
+    receipt = await resume_experiment(
+        state, job_id=parent.job_id, resume_request_id="drawn-retry", retry_failed=True
+    )
+    child = receipt.job
+    await coordinator_returned(state, child)
+    await state.job_registry.drain_pending()
+
+    assert child.status == "completed", child.failures
+    assert [_voltage(case) for case in child.cases] == expected
+    recoveries = [case.recovery for case in child.cases]
+    assert all(item is not None and item.attempt.seeded_driver is None for item in recoveries)
+
+
+@pytest.mark.parametrize(("call", "overridden"), [(b"", False), (b"X1 n holder\n", True)])
+def test_a_seeded_run_counts_a_subcircuit_seed_only_where_it_is_called(tmp_path, call, overridden):
+    """ngspice drops a subcircuit no X line calls, seed and all, so the
+    driver's seed stands; a called one sets the seed and overrides it (both
+    measured on ngspice-42 under setseed 17 and 99)."""
+    body = (
+        b".param draw=agauss(10,1,1)\nV1 n 0 {draw}\nR1 n 0 1k\n"
+        + call
+        + b".subckt holder a\n.options seed=5\nR9 a 0 1meg\n.ends"
+    )
+    if overridden:
+        with pytest.raises(RecoveryError, match="overrides"):
+            _capture(tmp_path, body, seeded=True)
+    else:
+        verify_case_inputs(_capture(tmp_path, body, seeded=True), seeded=True, dialect="ngspice")
+
+
+def test_a_seed_that_overrides_the_explicit_one_is_listed_with_the_other_constructs(
+    tmp_path,
+):
+    """A seeded deck that also sets its own seed is refused once, with the
+    seed card listed by line and card beside every other construct at fault,
+    so the deck is fixed in one pass."""
+    with pytest.raises(RecoveryError) as refused:
+        _capture(
+            tmp_path,
+            b".param draw=agauss(10,1,1)\nV1 n 0 {draw}\nR1 n 0 1k\n.options seed=5\n"
+            b"V2 m 0 trnoise(1 1n)",
+            seeded=True,
+        )
+    message = str(refused.value)
+    assert refused.value.code == "recovery_seed_unsupported"
+    assert "(recovery_seed_unsupported)" in message
+    assert "line 5: .options seed=5" in message
+    assert "(recovery_random_unsupported)" in message
+    assert "line 6: V2 m 0 trnoise(1 1n)" in message
+
+
+def test_a_seed_is_offered_only_where_one_admits_the_draws(tmp_path):
+    """The refusal of an unseeded random function offers ngspice's two seed
+    routes on ngspice only: neither exists on LTspice, whose deck seed is not
+    counted."""
+    body = b".param draw=gauss(10,.1,1)\nV1 n 0 {draw}\nR1 n 0 1k"
+    with pytest.raises(RecoveryError) as on_ngspice:
+        _capture(tmp_path / "ngspice", body, seeded=False)
+    with pytest.raises(RecoveryError) as on_ltspice:
+        _capture(tmp_path / "ltspice", body, seeded=False, dialect="ltspice")
+
+    assert "execution.simulator_seed" in str(on_ngspice.value)
+    assert on_ltspice.value.code == "recovery_random_unsupported"
+    assert "simulator_seed" not in str(on_ltspice.value)
+    assert "options seed" not in str(on_ltspice.value)
+
+
+def test_a_deck_seed_that_leaves_the_draws_unfixed_is_listed(tmp_path):
+    """A deck whose own seed options leave the draws unfixed blocks both seed
+    routes (simulator_seed is overridden, and a deck seed must be the only
+    kind), so the refusal lists each such option beside the random function,
+    rather than offer a seed that would be refused too."""
+    with pytest.raises(RecoveryError) as refused:
+        _capture(
+            tmp_path,
+            b".param draw=agauss(10,1,1)\nV1 n 0 {draw}\nR1 n 0 1k\n.options seed=random",
+            seeded=False,
+        )
+    message = str(refused.value)
+    assert refused.value.code == "recovery_random_unsupported"
+    assert "leaves ngspice's draws unfixed" in message
+    assert "line 5: .options seed=random" in message
