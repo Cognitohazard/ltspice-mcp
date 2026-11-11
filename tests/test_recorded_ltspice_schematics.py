@@ -2280,14 +2280,18 @@ class TestShortWindowLines:
     async def test_the_sheets_reading_reports_nothing_unread(
         self, case_id: str, state_no_sim: SessionState, work_dir: Path
     ):
-        """The line holds nothing LTspice reads, so neither the drawing nor
-        the listing says something was left out."""
+        """The line holds nothing LTspice reads, so none of the readers that
+        report a line left unread says so: the drawing, the listing and a
+        net's trace (``Sheet.unread_notes``)."""
         sheet = rec.stage_sheet(rec.BUILDS[0], case_id, work_dir / "sheet")
         scene = build_scene(sheet, SymbolResolver(local_dir=sheet.parent))
         assert not [note for note in scene.diagnostics if "WINDOW" in note]
         listed = await inspect_one(state_no_sim, {"kind": "components", "path": str(sheet)})
         assert [row["reference"] for row in listed["components"]] == ["R1"]
         assert not [note for note in listed.get("warnings", []) if "WINDOW" in note]
+        traced = await inspect_one(state_no_sim, {"kind": "net", "path": str(sheet), "at": "R1.1"})
+        assert [pin["reference"] for pin in traced["pins"]] == ["R1"]
+        assert not [note for note in traced.get("warnings", []) if "WINDOW" in note]
 
     @pytest.mark.parametrize("case_id", sorted(SHORT_WINDOWS))
     def test_the_editor_names_the_line_it_cannot_read(self, case_id: str, tmp_path: Path):
