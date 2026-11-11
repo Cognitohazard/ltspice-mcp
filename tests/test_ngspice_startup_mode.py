@@ -30,6 +30,7 @@ import pytest
 from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
 from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.lib.ngspice_mode import mode_notes
 from ltspice_mcp.lib.services import resolve_job
 from ltspice_mcp.lib.simulator import detect_simulators
 from ltspice_mcp.state import SessionState
@@ -183,8 +184,13 @@ async def test_a_sectioned_lib_fails_where_the_server_says_it_will(
     (failure,) = receipt["failures"]
     assert failure["code"] == "ngspice_lib_section", receipt
     assert failure["evidence"]["ngbehavior"] == "kiltpsa"
+    # The failure itself shows ngspice did not read hsa, which loads the
+    # section. Whether the log also names the mode depends on the build:
+    # ngspice-42 does so before the missing include, later builds only once
+    # the deck is read, which this one never is. Either way no line in it
+    # names another mode.
     log = _log(state, receipt["job_id"])
-    assert f"Compatibility modes selected: {KILTPSA_FLAGS}" in log, log
+    assert all(flags == tuple(KILTPSA_FLAGS.split()) for flags in mode_notes(log)), log
     # The .spiceinit this test wrote did not fix the run, so the hint names
     # the setting that does and does not offer a .spiceinit as another way.
     assert '[simulator] ngbehavior = "hsa"' in failure["hint"]
