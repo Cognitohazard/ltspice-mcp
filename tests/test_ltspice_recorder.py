@@ -271,6 +271,20 @@ class TestSettingsCopy:
         # Written into [Options], before the next section.
         assert copy.index(b"NoGreekMus=true") < copy.index(b"[Colors]")
 
+    def test_a_setting_can_name_the_folder_the_case_runs_in(self, tmp_path: Path):
+        """The block-sheet-search cases set the symbol search path to a folder
+        of their own; the run gets that folder and the manifest the setting
+        as written."""
+        case = CASES.case("blocks/sheet_in_search_path")
+        assert case.ini == {"SymbolSearchPath": "<dir>\\lib"}
+        given = case.settings_in(tmp_path)
+        assert given == {"SymbolSearchPath": f"{tmp_path}\\lib"}
+        copy = neutral_settings(self.ANSI, given)
+        assert read_settings(copy, BEHAVIOUR_KEYS) == given
+        for build in recorder.recorded_builds():
+            manifest = recorder.load_manifest(recorder.FIXTURES / build)
+            assert manifest["cases"][case.case_id]["settings"] == case.ini
+
     def test_a_utf16_file_stays_utf16(self):
         # LTspice 26 writes its settings as UTF-16 with a byte order mark.
         source = b"\xff\xfe" + self.ANSI.decode("ascii").encode("utf-16-le")

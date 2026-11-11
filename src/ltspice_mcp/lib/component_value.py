@@ -17,6 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from ltspice_mcp.errors import NetlistError
+from ltspice_mcp.lib.format import is_scaled_number
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
@@ -85,17 +86,20 @@ def apply_value_to_instance(card: SpiceCard, raw_value: str) -> ApplyResult:
             f"Component {ref!r} value {raw_value!r} contains an "
             "unrecognised token (stray equals sign or unbalanced quote)."
         )
-    seen_kv = False
-    for tok in user_tokens:
-        if tok.kind == TokenKind.KEY_VALUE:
-            seen_kv = True
-        elif seen_kv and tok.kind in POSITIONAL_KINDS:
-            raise NetlistError(
-                f"Component {ref!r} value {raw_value!r} contains trailing tokens "
-                "after a KEY=VALUE assignment. Wrap expressions in braces or "
-                "write function-call values without separating the function name "
-                "from its parentheses."
-            )
+    # A source's value may go on past a KEY=VALUE word (a PWL's
+    # ``TIME_SCALE_FACTOR=2 (0 4 1 4)``), which read_source_text reads.
+    if prefix not in SOURCE_PARAMETERS:
+        seen_kv = False
+        for tok in user_tokens:
+            if tok.kind == TokenKind.KEY_VALUE:
+                seen_kv = True
+            elif seen_kv and tok.kind in POSITIONAL_KINDS:
+                raise NetlistError(
+                    f"Component {ref!r} value {raw_value!r} contains trailing tokens "
+                    "after a KEY=VALUE assignment. Wrap expressions in braces or "
+                    "write function-call values without separating the function name "
+                    "from its parentheses."
+                )
 
     handler = _DISPATCH.get(prefix)
     if handler is None:
@@ -163,19 +167,153 @@ def _apply_passive(ctx: _ApplyCtx) -> ApplyResult:
 
 
 # ---------------------------------------------------------------------------
-# V / I — exactly 2 nodes; everything after is a multi-token value spec
+# V / I — exactly 2 nodes; then a multi-token value and the source's own
+# parameters
 # ---------------------------------------------------------------------------
+
+#: A source's own parameters by its letter, which both LTspice builds read
+#: after its value whatever form the value takes (the ``source-parameters``
+#: recordings): a voltage source's series resistance and parallel capacitance,
+#: and either source's AC magnitude, written ``AC=2`` or ``AC 2``. A value edit
+#: keeps them. Every other word after a source's nodes is its value, a PWL's
+#: ``TIME_SCALE_FACTOR=`` before its points among them, and is replaced.
+SOURCE_PARAMETERS: dict[str, frozenset[str]] = {
+    "V": frozenset({"rser", "cpar", "ac"}),
+    "I": frozenset({"ac"}),
+}
+#: The flag after a current source's value that makes it a load, which both
+#: builds read there (``deck/source_parameters``).
+LOAD_FLAG = "load"
+#: The keyword of a source that plays a .wav file, which sets its level in
+#: place of a value (``deck/wavefile_nodes``).
+WAVEFILE = "wavefile"
+
+
+@dataclass(frozen=True)
+class SourceText:
+    """The words after a V or I source's nodes: its value, its own parameters
+    in order, each as written, and the ``wavefile=`` word of a source that
+    plays a .wav file."""
+
+    value: str
+    own: tuple[str, ...]
+    played: str | None = None
+
+    @property
+    def text(self) -> str:
+        """The value then the own parameters, one space apart."""
+        return " ".join(word for word in (self.value, *self.own) if word)
+
+
+def text_without(text: str, spans: list[tuple[int, int]], end: int | None = None) -> str:
+    """``text`` up to ``end`` with each of ``spans`` (start, stop) cut out, in
+    order, the runs left kept as written and joined one space apart: a
+    value with some of its words taken out."""
+    parts, cursor = [], 0
+    for start, stop in spans:
+        parts.append(text[cursor:start].strip())
+        cursor = stop
+    parts.append(text[cursor : len(text) if end is None else end].strip())
+    return " ".join(part for part in parts if part)
+
+
+def source_word_key(word: str) -> str:
+    """The name a source's own parameter goes by: its key (``AC=2`` and
+    ``AC 2`` alike), or the flag itself."""
+    return word.split("=", 1)[0].split(None, 1)[0].strip().casefold()
+
+
+def _is_amount(token: Token) -> bool:
+    """A word that can be an AC magnitude or phase: a number or a braced expression."""
+    return token.kind == TokenKind.BRACED or (
+        token.kind == TokenKind.BARE and is_scaled_number(token.text)
+    )
+
+
+def read_source_text(text: str, prefix: str) -> SourceText:
+    """``text``, the words after a source's nodes (on a card, or in a sheet
+    part's Value), read as its value and its own parameters
+    (``SOURCE_PARAMETERS``, ``AC`` with its magnitude and any phase, and a
+    current source's ``load``): the one rule every edit of a source's value
+    keeps them by.
+
+    ``InstanceLine``, which display, comparison and the nested-instance edits
+    read a card through, takes a current source's ``load`` as part of its
+    value, and does not read a PWL with a scale keyword before its points,
+    which both builds run (``deck/source_parameters``); a test whose name says
+    so pins both differences.
+
+    Raises ``SpiceLexError`` for text that does not split into words.
+    """
+    letter = prefix[:1].upper()
+    own_keys = SOURCE_PARAMETERS.get(letter, frozenset())
+    tokens = []
+    end = len(text)
+    for tok in tokenize_body(text):
+        if tok.kind == TokenKind.COMMENT_TRAIL:
+            end = tok.body_offset
+            break
+        tokens.append(tok)
+    own: list[tuple[int, int]] = []
+    played = None
+    index = 0
+    while index < len(tokens):
+        tok = tokens[index]
+        key = (tok.key or "").casefold() if tok.kind == TokenKind.KEY_VALUE else ""
+        bare = tok.text.casefold() if tok.kind == TokenKind.BARE else ""
+        if key in own_keys or (letter == "I" and bare == LOAD_FLAG):
+            own.append((tok.body_offset, tok.body_end))
+        elif bare == "ac" and "ac" in own_keys:
+            # AC, its magnitude, and a phase where one follows.
+            amounts = 0
+            while amounts < 2 and index + 1 < len(tokens) and _is_amount(tokens[index + 1]):
+                index += 1
+                amounts += 1
+            own.append((tok.body_offset, tokens[index].body_end))
+        elif key == WAVEFILE:
+            played = text[tok.body_offset : tok.body_end]
+        index += 1
+    return SourceText(
+        value=text_without(text, own, end),
+        own=tuple(" ".join(text[start:stop].split()) for start, stop in own),
+        played=played,
+    )
+
+
+def edited_source(
+    reference: str, old: SourceText, new: SourceText, *, add_keyed: bool = True
+) -> SourceText:
+    """The source text an edit gives a source that held ``old``: ``new``'s
+    value, or ``old``'s where ``new`` is keyed parameters alone (``Rser=2``),
+    which is an edit of those; ``old``'s own parameters with every copy of one
+    ``new`` names replaced; then the ones ``new`` adds. A ``new`` with any
+    other word, an ``AC 1`` or a ``load`` among them, is the whole value.
+
+    ``add_keyed`` False leaves out an added ``KEY=VALUE`` parameter: a sheet
+    part sets that where it already gives the key, in any of its attributes
+    (``schematic_ops._set_source_value``), where a card has only one place.
+
+    A source that plays a .wav file has no value, so a value for one is
+    refused, naming what to change.
+    """
+    if old.played is not None and new.value and new.played is None:
+        raise NetlistError(
+            f"Component {reference!r} plays a .wav file ({old.played}), which sets "
+            "its level, so it has no value to replace. Remove the wavefile= (and any "
+            "chan=) from it to give it a value, or name another file there."
+        )
+    given = {source_word_key(word): word for word in new.own}
+    held = {source_word_key(word) for word in old.own}
+    own = [given.get(source_word_key(word), word) for word in old.own]
+    own += [
+        word for key, word in given.items() if key not in held and (add_keyed or "=" not in word)
+    ]
+    keyed_alone = not new.value and all("=" in word for word in new.own)
+    value = old.value if keyed_alone else new.value
+    return SourceText(value, tuple(own), new.played or old.played)
 
 
 def _apply_indep_source(ctx: _ApplyCtx) -> ApplyResult:
-    if ctx.user_kv:
-        raise NetlistError(
-            f"Component {ctx.ref!r}: independent sources don't take KEY=VALUE "
-            f"params via set_component_value (got {ctx.raw_value!r}). The DC/AC "
-            "magnitude and source spec are positional."
-        )
-    if not ctx.user_pos:
-        raise NetlistError(f"Component {ctx.ref!r}: empty value")
     pos = _positional_after_ref(ctx.body_tokens)
     if len(pos) < 2:
         raise NetlistError(
@@ -183,10 +321,12 @@ def _apply_indep_source(ctx: _ApplyCtx) -> ApplyResult:
             "can't determine where the value field starts."
         )
     n1, n2 = pos[0].text, pos[1].text
-    new_value = ctx.raw_value.strip()
-    old_value = " ".join(t.text for t in pos[2:])
-    ctx.card.replace_body(f"{ctx.ref} {n1} {n2} {new_value}")
-    return ApplyResult(ctx.ref, old_value, new_value)
+    letter = ctx.ref[:1]
+    old = read_source_text(ctx.card.body[pos[1].body_end :], letter)
+    # The value was split into words above, so this reading of it cannot fail.
+    edited = edited_source(ctx.ref, old, read_source_text(ctx.raw_value, letter))
+    ctx.card.replace_body(" ".join(w for w in (ctx.ref, n1, n2, edited.text) if w))
+    return ApplyResult(ctx.ref, old.text, edited.text)
 
 
 # ---------------------------------------------------------------------------

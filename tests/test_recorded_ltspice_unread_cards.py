@@ -16,8 +16,9 @@ analysis, an option, a measurement, and as many cards after ``.end``. Its
 answer for each must be its answer for the deck LTspice reads from it, the
 title a comment and nothing after ``.end`` (``as_ltspice_reads``).
 
-The last test is not a recording: it holds every reader to the one reading
-the server takes of an included file's ``.end``, which no recording shows.
+The last tests hold every reader to the reading both builds take of an
+included file: its first line is a card, and its own ``.end`` ends that file
+alone (``deck/include_end``).
 """
 
 from __future__ import annotations
@@ -56,6 +57,7 @@ from ltspice_mcp.lib.variations import (
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
 from tests._mismatch_fixtures import MINI_FET
+from tests.ltspice_recorder import INPUTS
 from tests.test_inspect_tools import _run
 from tests.test_recorded_ltspice_decks import as_ltspice_reads, deck_text
 from tests.test_recovery_records import recovery_job
@@ -412,19 +414,34 @@ INCLUDING = f"* a deck with an include\n.include part.inc\n{BODY}"
 INCLUDED = "R5 a 0 1k\n.end\n"
 
 
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_ltspice_reads_an_included_file_up_to_its_end_and_the_deck_on(build: str, tmp_path: Path):
+    """The included file's first line is R1 (1k) and R2 (3k) follows its
+    ``.end``: 1 A into a gives 1000 V, so R1 was read as a card and R2 was
+    not. I2 into R3 follows the ``.include`` line, and v(b) is 1000: the
+    included ``.end`` ended that file alone. The lexer reads the file so."""
+    voltages = rec.operating_point(build, "deck/include_end", tmp_path)
+    assert (voltages["v(a)"], voltages["v(b)"]) == (pytest.approx(1000.0), pytest.approx(1000.0))
+    included = read_spice_text(INPUTS / "deck/ends_early.inc")
+    read = [card.name for card in lex_deck(included, title=False).cards if card.kind == "instance"]
+    assert read == ["R1"]
+    deck = [card.name for card in lex_deck(deck_text("deck/include_end")).cards if card.name]
+    assert {"I1", "I2", "R3"} <= set(deck)
+
+
 @pytest.mark.parametrize("name", sorted(READERS))
 async def test_each_reader_reads_an_included_file_up_to_its_end(
     name: str, tmp_path: Path, state_no_sim: SessionState, monkeypatch: pytest.MonkeyPatch
 ):
-    """Not a recording: no recorded input shows what LTspice does with a card
-    after an included file's ``.end``. The hierarchy, the run's requirements
-    and the netlist graph leave such a card out (``lex_deck(title=False)``),
-    and every reader takes that same reading, so none acts on a card another
-    does not see. An assignment or a random rule named ``R2``, ``r`` or
-    ``nch`` after the included ``.end`` and reached it, and staging and the
-    mismatch plan followed its include, while ``lex_deck`` read only ``R5``.
-    Each reader's answer is its answer for the same file with nothing after
-    its ``.end``."""
+    """Both builds read an included file up to its ``.end`` and no further
+    (``deck/include_end``). The hierarchy, the run's requirements and the
+    netlist graph leave a card after it out (``lex_deck(title=False)``), and
+    every reader takes that same reading, so none acts on a card the run does
+    not see. An assignment or a random rule named ``R2``, ``r`` or ``nch``
+    after the included ``.end`` and reached it, and staging and the mismatch
+    plan followed its include, while ``lex_deck`` read only ``R5``. Each
+    reader's answer is its answer for the same file with nothing after its
+    ``.end``."""
     included = INCLUDED + AFTER_END
     assert [card.body for card in lex_deck(included, title=False).cards] == [
         card.body for card in lex_deck(INCLUDED, title=False).cards

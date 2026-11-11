@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from ltspice_mcp.lib.asc_document import parse_asc_text
+from ltspice_mcp.lib.schematic_scene import decode_text_lines
 from ltspice_mcp.lib.symbol_library import find_beside
 
 # The install directory the exporter writes into its ``.lib`` line.
@@ -30,17 +32,21 @@ _PIN_COUNT = {"nmos": 4, "pmos": 4}
 
 
 def _symbols_and_directives(asc_text: str) -> tuple[list[dict[str, str]], list[str]]:
-    symbols: list[dict[str, str]] = []
-    directives: list[str] = []
-    for line in asc_text.splitlines():
-        if line.startswith("SYMBOL "):
-            symbols.append({"symbol": line.split()[1]})
-        elif line.startswith("SYMATTR ") and symbols:
-            _, key, *rest = line.split(" ", 2)
-            symbols[-1][key] = rest[0] if rest else ""
-        elif line.startswith("TEXT ") and "!" in line:
-            # The .asc stores a multi-line TEXT block with literal "\n" breaks.
-            directives.extend(line.split("!", 1)[1].split("\\n"))
+    document = parse_asc_text(asc_text)
+    # An export writes an attribute's words one space apart
+    # (export/value_spaces).
+    symbols = [
+        {"symbol": part.symbol, **{key: " ".join(value.split()) for key, value in part.attrs}}
+        for part in document.symbols
+    ]
+    # A TEXT record holds a line break as \n and a backslash doubled, which an
+    # export reads a directive's lines by (export/text_backslash).
+    directives = [
+        line
+        for text in document.texts
+        if text.is_directive
+        for line in decode_text_lines(text.body)
+    ]
     return symbols, directives
 
 

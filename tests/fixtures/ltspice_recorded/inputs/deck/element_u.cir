@@ -1,0 +1,7 @@
+* a uniform RC line from a to b, its capacitance to ground
+I1 0 a 1
+U1 a b 0 rcline L=1
+R1 b 0 1k
+.model rcline URC(rperl=1k cperl=1p)
+.op
+.end

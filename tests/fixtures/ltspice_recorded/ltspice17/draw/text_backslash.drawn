@@ -1,0 +1,24 @@
+{
+"ellipses": [
+
+],
+"other": [
+
+],
+"strokes": [
+[1594, 16, 299, 16],
+[299, 1031, 299, 16]
+],
+"texts": [
+{"advances": [16, 31, 30, 22, 30, 48, 15, 31, 32, 41, 32, 15, 18, 15, 31, 32, 30, 29, 21, 44, 31], "align": 0, "at": [369, 563], "bounds": [369, 563, 962, 623], "escapement": 0, "font": "Tahoma", "height": 61, "text": ".param p1=1 ; one\\two", "weight": 700},
+{"advances": [16, 31, 30, 22, 30, 48, 15, 31, 32, 41, 32, 15, 18, 15, 33, 18], "align": 0, "at": [369, 651], "bounds": [369, 651, 795, 711], "escapement": 0, "font": "Tahoma", "height": 61, "text": ".param p2=2 ; C:", "weight": 700},
+{"advances": [30, 44, 29, 21, 30, 48, 31], "align": 0, "at": [369, 712], "bounds": [369, 712, 601, 772], "escapement": 0, "font": "Tahoma", "height": 61, "text": "ew\\temp", "weight": 700},
+{"advances": [16, 31, 30, 22, 30, 48, 15, 31, 32, 41, 32, 15, 18, 15, 21, 30, 15, 15, 29, 32, 32, 30, 30, 31], "align": 0, "at": [369, 791], "bounds": [369, 791, 1009, 851], "escapement": 0, "font": "Tahoma", "height": 61, "text": ".param p3=3 ; tail\\nhead", "weight": 700},
+{"advances": [16, 31, 30, 22, 30, 48, 15, 31, 32, 41, 32, 15, 18, 15, 30, 32, 31, 29], "align": 0, "at": [369, 878], "bounds": [369, 878, 866, 938], "escapement": 0, "font": "Tahoma", "height": 61, "text": ".param p4=4 ; end\\", "weight": 700},
+{"advances": [31, 32, 30, 29, 21, 44, 31], "align": 0, "at": [369, 126], "bounds": [369, 126, 586, 186], "escapement": 0, "font": "Tahoma", "height": 61, "text": "one\\two", "weight": 700},
+{"advances": [33, 18], "align": 0, "at": [369, 214], "bounds": [369, 214, 419, 274], "escapement": 0, "font": "Tahoma", "height": 61, "text": "C:", "weight": 700},
+{"advances": [30, 44, 29, 21, 30, 48, 31], "align": 0, "at": [369, 275], "bounds": [369, 275, 601, 335], "escapement": 0, "font": "Tahoma", "height": 61, "text": "ew\\temp", "weight": 700},
+{"advances": [21, 30, 15, 15, 29, 32, 32, 30, 30, 31], "align": 0, "at": [369, 301], "bounds": [369, 301, 633, 361], "escapement": 0, "font": "Tahoma", "height": 61, "text": "tail\\nhead", "weight": 700},
+{"advances": [30, 32, 31, 29], "align": 0, "at": [369, 389], "bounds": [369, 389, 490, 449], "escapement": 0, "font": "Tahoma", "height": 61, "text": "end\\", "weight": 700}
+]
+}
