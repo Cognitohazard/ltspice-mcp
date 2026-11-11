@@ -150,8 +150,11 @@ def per_build(case_ids: list[str]) -> Iterator[tuple[str, str]]:
 # --------------------------------------------------------------------------
 
 
-def parser_request(raw: Path | None, log: Path | None) -> dict[str, Any]:
-    """The request the server sends its parser process for these sources."""
+def parser_request(
+    raw: Path | None, log: Path | None, *, producing: str = "ltspice"
+) -> dict[str, Any]:
+    """The request the server sends its parser process for these sources, as
+    the server sends it for a run of the simulator ``producing`` names."""
     return {
         "version": 1,
         "op": "load_raw" if raw is not None else "load_logs",
@@ -161,13 +164,14 @@ def parser_request(raw: Path | None, log: Path | None) -> dict[str, Any]:
             "console": None,
         },
         "dialect": None,
-        "producing_dialect": "ltspice",
+        "producing_dialect": producing,
         "limits": {
             "raw": asdict(RAW_LIMITS),
             "log": asdict(LOG_LIMITS),
             "step_rows": 1000,
             "metadata_bytes": 2 * 1024**2,
         },
+        "chosen": None,
         "existing_cache_keys": [],
     }
 
@@ -193,9 +197,9 @@ def _decode(build: str, case_id: str, scratch: Path, *, raw: bool) -> ParsedArti
 
 
 def _decode_paths(
-    raw_path: Path | None, log_path: Path | None, directory: Path
+    raw_path: Path | None, log_path: Path | None, directory: Path, *, producing: str = "ltspice"
 ) -> ParsedArtifacts:
-    request = parser_request(raw_path, log_path)
+    request = parser_request(raw_path, log_path, producing=producing)
     directory.mkdir(parents=True)
     parse_request(request, directory)
     metadata = json.loads((directory / "result.json").read_bytes())
@@ -211,9 +215,12 @@ def decode(build: str, case_id: str, scratch: Path) -> DecodedRun:
     return DecodedRun(raw=parsed.raw, logs=parsed.logs)
 
 
-def decode_file(raw_path: Path, scratch: Path) -> DecodedRun:
-    """Decode a results file a test made, with no log, with the decoder the server runs."""
-    parsed = _decode_paths(raw_path, None, scratch / f"decode-{raw_path.stem}")
+def decode_file(raw_path: Path, scratch: Path, *, producing: str = "ltspice") -> DecodedRun:
+    """Decode a results file a test made, with no log, with the decoder the
+    server runs, as written by the simulator ``producing`` names."""
+    parsed = _decode_paths(
+        raw_path, None, scratch / f"decode-{raw_path.stem}", producing=producing
+    )
     assert parsed.raw is not None
     return DecodedRun(raw=parsed.raw, logs=parsed.logs)
 

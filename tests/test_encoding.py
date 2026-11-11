@@ -225,7 +225,8 @@ class TestReadCircuitEncodingZoo:
 
         cir = tmp_path / "trunc.cir"
         cir.write_text(
-            ".subckt amp in out\nR1 in mid 1k\nR2 mid out 1k\n* missing .ENDS\nV1 vdd 0 5\n.end\n"
+            "* truncated\n.subckt amp in out\nR1 in mid 1k\nR2 mid out 1k\n* missing .ENDS\n"
+            "V1 vdd 0 5\n.end\n"
         )
         info = extract_netlist_info(cir)
         assert "warnings" in info

@@ -213,7 +213,7 @@ class TestSignalStats:
             axis=freqs,
         )
         _inject_raw_mock(state_no_sim, raw_file, raw)
-        with pytest.raises(ResultError, match="not supported for AC"):
+        with pytest.raises(ResultError, match=r"reads a 'ac' plot whole.*takes no window"):
             await _metric(
                 state_no_sim,
                 raw_file.name,

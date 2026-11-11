@@ -1,0 +1,11 @@
+* a subcircuit port named like a .global net
+.global vdd
+.subckt leg top vdd
+R1 top vdd 1k
+.ends
+V1 vdd 0 5
+I3 0 c 1m
+X2 c mid leg
+R3 mid 0 1k
+.op
+.end

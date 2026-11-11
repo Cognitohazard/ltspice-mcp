@@ -143,6 +143,9 @@ _DECLARED_INVERSES: dict[str, str] = {
     # Re-applied with its result's x and y, now as instruction and was as text,
     # it puts the text back.
     "replace_directive": _SELF_INVERSE,
+    # Re-applied with its result's was as the symbol, it puts the symbol back;
+    # the wires it drew stay, for remove_wire.
+    "replace_component": _SELF_INVERSE,
     "set_component_value": _SELF_INVERSE,
     "set_component_attribute": _SELF_INVERSE,
     "move_component": _SELF_INVERSE,
@@ -624,7 +627,7 @@ class TestLayering:
     a ``lib`` module reaching back up closes a cycle. It resolves silently
     whenever a tool module happens to be imported first and explodes on the one
     entry point that imports the lib module first — which is how the schematic
-    engine's move out of ``tools/`` shipped a latent ImportError that only one
+    editor's move out of ``tools/`` shipped a latent ImportError that only one
     test file's import order revealed.
     """
 

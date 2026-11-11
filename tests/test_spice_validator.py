@@ -72,7 +72,7 @@ class TestGroupDelayInMeas:
 
 
 class TestMeasReservedName:
-    """e, k, pi and q are constants of LTspice's expression engine (recorded:
+    """e, k, pi and q are constants of LTspice's expression evaluator (recorded:
     test_recorded_ltspice_results.py::test_a_measurement_named_for_a_constant)."""
 
     @pytest.mark.parametrize("name", ["e", "k", "pi", "q", "K", "Pi"])

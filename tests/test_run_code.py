@@ -1,8 +1,8 @@
-"""The ``run_code`` tool: a Python snippet in a warm worker that holds the engine.
+"""The ``run_code`` tool: a Python snippet in a warm worker that holds the Python API.
 
 Every test here drives a REAL worker process with a real ``Api`` on a
 temporary working directory (no simulator), through the tool handler or the
-supervisor it uses. One worker serves the module: booting the engine is the
+supervisor it uses. One worker serves the module: starting the session is the
 whole cost, and what these tests pin — output caps, interrupts, busy,
 reset, death, respawn — is exactly the behaviour of one long-lived worker.
 """
@@ -56,7 +56,7 @@ def code_dir(tmp_path_factory) -> Path:
 
 @pytest.fixture(scope="module")
 def no_detection() -> Iterator[None]:
-    """The worker inherits the environment: keep its engine host-independent."""
+    """The worker inherits the environment: keep its session host-independent."""
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("LTSPICE_MCP_DISABLE_SIMULATOR_DETECTION", "1")
         yield

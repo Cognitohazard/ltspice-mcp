@@ -53,6 +53,7 @@ from tests._asc_ops import (
     DIVIDER_DECK_REWIRED,
     DIVIDER_OPS,
     apply_ops,
+    build_sheet,
     file_at,
     sheet_findings,
 )
@@ -1048,6 +1049,7 @@ async def test_a_reply_lists_every_rule_that_ran_with_what_it_found(asc_state):
         "subcircuit_value_slot": 0,
         "net_with_two_names": 0,
         "joined_at_crossing": 0,
+        "pin_inside_wire": 0,
         "unjoined_crossing": 0,
         "diagonal_wire": 0,
         "floating_pin": 6,
@@ -1798,6 +1800,21 @@ async def test_an_equivalent_comparison_commits_and_leaves_the_netlist_out(
     assert "stages" not in data
 
 
+async def test_a_measurement_with_a_parenthesis_left_open_is_not_added(asc_state, work_dir):
+    """LTspice 26 refused the recorded .meas like it and ran nothing
+    (log/meas_bad_syntax), so the sheet is not written with it."""
+    data = await _build_blank(
+        asc_state,
+        "open_meas",
+        [{"op": "add_directive", "instruction": ".meas tran m MAX V(out", "x": 64, "y": 96}],
+    )
+
+    assert data["outcome"] == "failed", data
+    assert data["commit_state"] == "not_committed"
+    assert "Add the ) that closes the ( it opens." in data["error"]["message"]
+    assert not (work_dir / "open_meas.asc").exists()
+
+
 async def test_replace_directive_reports_what_it_changed(asc_state, work_dir):
     """One call changes a directive's text, and the reply says where it was,
     what it was and what it is now."""
@@ -1831,6 +1848,48 @@ async def test_replace_directive_reports_what_it_changed(asc_state, work_dir):
         "now": ".tran 0 5m",
     }
     assert "TEXT 64 96 Left 2 !.tran 0 5m" in target.read_text(encoding="utf-8")
+
+
+async def test_replace_component_reports_what_it_did(asc_state, work_dir):
+    """One call swaps a resistor for a capacitor whose pins sit nearer its
+    middle: the reply names the old symbol and the wires that reach each pin's
+    label where it moved, and the part keeps its name and value."""
+    await _build_blank(
+        asc_state,
+        "swap",
+        [
+            {
+                "op": "add_component",
+                "reference": "R1",
+                "symbol": "res",
+                "x": 0,
+                "y": 0,
+                "value": "1k",
+            },
+            {"op": "add_net_label", "net": "in", "pin": "R1.1"},
+            {"op": "add_net_label", "net": "0", "pin": "R1.2"},
+        ],
+    )
+    target = work_dir / "swap.asc"
+    data = _assert_schema(
+        await handle_edit_schematic(
+            _edit_input(
+                path="swap.asc",
+                expected_sha256=_sha(target),
+                ops=[{"op": "replace_component", "reference": "R1", "symbol": "cap"}],
+            ),
+            asc_state,
+        )
+    )
+    assert data["commit_state"] == "committed"
+    (result,) = data["results"]
+    assert result["was"] == "res"
+    assert sorted((w["from"]["y"], w["to"]["y"]) for w in result["wires"]) == [
+        (-32, -48),
+        (32, 48),
+    ]
+    text = target.read_text(encoding="utf-8")
+    assert "SYMBOL cap 0 0 R0" in text and "SYMATTR Value 1k" in text
 
 
 async def test_a_dry_run_compares_the_sheet_it_would_write(asc_state, work_dir, monkeypatch):
@@ -2056,8 +2115,9 @@ _ADD_R2 = [{"op": "add_component", "reference": "R2", "symbol": "res", "x": 400,
 
 
 @pytest.mark.edit_reply_per_platform(
-    "the export's .lib line names a Windows install path, which only Windows "
-    "reads as absolute, so the equivalence check's include warnings differ"
+    "the export's .lib line names a Windows install path, which Windows reads as "
+    "absolute, WSL through its /mnt mount and other Linux as a relative name, so the "
+    "equivalence check's include warnings differ"
 )
 @pytest.mark.parametrize("mode", ["equivalence", "structural_diff"])
 async def test_asc_reference_is_exported_like_the_committed_sheet(
@@ -2069,7 +2129,7 @@ async def test_asc_reference_is_exported_like_the_committed_sheet(
     The committed sheet reaches the comparison as its LTspice export, so the
     reference .asc has to as well: read through the schematic editor instead,
     every SpiceLine read as a changed component and the exporter's boilerplate
-    as added directives, and the graph engine lexed the schematic as SPICE.
+    as added directives, and the netlist graph lexed the schematic as SPICE.
     """
     monkeypatch.setattr(se, "_export_asc_to_netlist", fake_netlister.export_asc_to_netlist)
     sheet = work_dir / "amp.asc"
@@ -2114,8 +2174,9 @@ _LOCAL_SYMBOL = INPUTS / "search" / "lib" / "part.asy"
 
 
 @pytest.mark.edit_reply_per_platform(
-    "the export's .lib line names a Windows install path, which only Windows "
-    "reads as absolute, so the comparison's include warnings differ"
+    "the export's .lib line names a Windows install path, which Windows reads as "
+    "absolute, WSL through its /mnt mount and other Linux as a relative name, so the "
+    "comparison's include warnings differ"
 )
 @pytest.mark.parametrize(
     ("folder", "symbol"),
@@ -2337,6 +2398,214 @@ async def test_bad_op_aborts_transaction_nothing_written(asc_state, work_dir):
 
 
 # ---------------------------------------------------------------------------
+# Which text a part's Value may be written with
+# ---------------------------------------------------------------------------
+
+#: Every way an op writes a part's Value: placing the part with ``value``,
+#: placing it with a ``Value`` among its ``attributes``, and setting it on a
+#: placed part with either op that can.
+_VALUE_WRITERS = (
+    "add_component value",
+    "add_component attributes",
+    "set_component_value",
+    "set_component_attribute",
+)
+
+
+async def _write_value(
+    state: SessionState, writer: str, symbol: str, value: str, prefix: str | None = None
+) -> tuple[dict, bytes, bytes]:
+    """Write ``value`` as the Value of part P1, placed from ``symbol`` with its
+    own ``prefix`` when one is given, through ``writer``, one edit_schematic call.
+
+    Returns the reply and the sheet's bytes before and after that call.
+    """
+    own = {"Prefix": prefix} if prefix else {}
+    place = {"op": "add_component", "reference": "P1", "symbol": symbol, "x": 400, "y": 300}
+    if writer.startswith("add_component"):
+        other = {"op": "add_component", "reference": "R9", "symbol": "res", "x": 800, "y": 300}
+        await build_sheet(state, "value_text", [{**other, "value": "1k"}])
+        if writer == "add_component value":
+            op = {**place, "value": value, **({"attributes": own} if own else {})}
+        else:
+            # The Value comes ahead of the Prefix, which still sets its class.
+            op = {**place, "attributes": {"Value": value, **own}}
+    else:
+        await build_sheet(state, "value_text", [{**place, **({"attributes": own} if own else {})}])
+        if writer == "set_component_value":
+            op = {"op": "set_component_value", "reference": "P1", "value": value}
+        else:
+            op = {
+                "op": "set_component_attribute",
+                "reference": "P1",
+                "attribute": "Value",
+                "value": value,
+            }
+    path = Path(state.working_dir) / "value_text.asc"
+    before = path.read_bytes()
+    data = await apply_ops(state, path.name, [op])
+    return data, before, path.read_bytes()
+
+
+@pytest.mark.parametrize("writer", _VALUE_WRITERS)
+@pytest.mark.parametrize("value", ["1 k tc=0.001", "1 k", "10k 2"])
+async def test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer(
+    asc_state, writer: str, value: str
+):
+    """LTspice writes a part's Value after its nodes, so a resistor's ``1 k``
+    puts ``1`` in the value slot and ``k`` past it. set_component_value refused
+    such a value while add_component and set_component_attribute wrote it."""
+    data, before, after = await _write_value(asc_state, writer, "res", value)
+
+    assert data["commit_state"] == "not_committed", data
+    assert [f["index"] for f in data["failures"]] == [0]
+    assert "R-class value is a single token" in data["failures"][0]["error"]
+    assert after == before
+
+
+@pytest.mark.parametrize("writer", _VALUE_WRITERS)
+@pytest.mark.parametrize(
+    ("symbol", "value"),
+    [("voltage", "AC 1"), ("voltage", "PULSE(0 1 0 1n 1n 5n 10n)"), ("npn", "2N3904 2 off")],
+)
+async def test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer(
+    asc_state, writer: str, symbol: str, value: str
+):
+    """A source's spec and a transistor's area factor and ``off`` follow the
+    model or the nodes as one value, so every writer takes them as given."""
+    data, _before, _after = await _write_value(asc_state, writer, symbol, value)
+
+    assert data["commit_state"] == "committed", data
+    editor = AscEditor(str(Path(asc_state.working_dir) / "value_text.asc"))
+    assert str(editor.get_component_value("P1")) == value
+
+
+@pytest.mark.parametrize("writer", _VALUE_WRITERS)
+@pytest.mark.parametrize(
+    ("symbol", "prefix", "refused"),
+    [("voltage", "R", True), ("res", "V", False)],
+    ids=["source-symbol-as-resistor", "resistor-symbol-as-source"],
+)
+async def test_a_value_is_checked_for_the_class_the_parts_own_prefix_gives(
+    asc_state, writer: str, symbol: str, prefix: str, refused: bool
+):
+    """A part's own Prefix sets the element letter it netlists as, ahead of its
+    symbol's, so a source spec on a source symbol made a resistor is refused,
+    and on a resistor symbol made a source is written, whichever writer sets it
+    and whether the Prefix comes in the same op or was there before."""
+    data, before, after = await _write_value(asc_state, writer, symbol, "AC 1", prefix)
+
+    if refused:
+        assert data["commit_state"] == "not_committed", data
+        assert "R-class value" in data["failures"][0]["error"]
+        assert after == before
+    else:
+        assert data["commit_state"] == "committed", data
+
+
+@pytest.mark.parametrize(
+    ("writer", "symbol", "prefix", "refused"),
+    [
+        ("set", "voltage", "R", True),
+        ("set", "voltage", "I", False),
+        ("clear", "res", "V", True),
+        ("clear", "voltage", "I", False),
+    ],
+    ids=[
+        "set-source-symbol-as-resistor",
+        "set-source-symbol-as-current-source",
+        "clear-resistor-symbol-made-a-source",
+        "clear-source-symbol-made-a-current-source",
+    ],
+)
+async def test_a_prefix_written_or_cleared_holds_the_parts_value_to_its_new_class(
+    asc_state, writer: str, symbol: str, prefix: str, refused: bool
+):
+    """Setting or clearing a part's Prefix changes the element class it
+    netlists as, so the Value it already has is checked for the new class, as
+    add_component checks the same Value and Prefix placed in one op. A Prefix
+    set to ``R`` on a source holding ``AC 1`` was written unchecked, leaving
+    a resistor whose netlist reads ``1`` as another node."""
+    value = "AC 1"
+    if writer == "set":
+        await build_sheet(
+            asc_state,
+            "value_text",
+            [
+                {
+                    "op": "add_component",
+                    "reference": "P1",
+                    "symbol": symbol,
+                    "x": 400,
+                    "y": 300,
+                    "value": value,
+                }
+            ],
+        )
+        op = {
+            "op": "set_component_attribute",
+            "reference": "P1",
+            "attribute": "Prefix",
+            "value": prefix,
+        }
+        final = {"Value": value, "Prefix": prefix}
+    else:
+        await build_sheet(
+            asc_state,
+            "value_text",
+            [
+                {
+                    "op": "add_component",
+                    "reference": "P1",
+                    "symbol": symbol,
+                    "x": 400,
+                    "y": 300,
+                    "attributes": {"Prefix": prefix, "Value": value},
+                }
+            ],
+        )
+        op = {
+            "op": "set_component_attribute",
+            "reference": "P1",
+            "attribute": "Prefix",
+            "value": "",
+        }
+        final = {"Value": value}
+    path = Path(asc_state.working_dir) / "value_text.asc"
+    before = path.read_bytes()
+
+    data = await apply_ops(asc_state, path.name, [op])
+    # The part the op would leave, placed in one op.
+    placed = await build_sheet(
+        asc_state,
+        "value_placed",
+        [
+            {
+                "op": "add_component",
+                "reference": "P1",
+                "symbol": symbol,
+                "x": 400,
+                "y": 300,
+                "attributes": final,
+            }
+        ],
+    )
+
+    if refused:
+        assert data["commit_state"] == "not_committed", data
+        error = data["failures"][0]["error"]
+        assert "R-class value" in error
+        assert "set_component_value" in error
+        assert path.read_bytes() == before
+        assert placed["commit_state"] == "not_committed", placed
+    else:
+        assert data["commit_state"] == "committed", data
+        assert placed["commit_state"] == "committed", placed
+        editor = AscEditor(str(path))
+        assert str(editor.get_component_value("P1")) == value
+
+
+# ---------------------------------------------------------------------------
 # Archetype-scale blank build (ops-at-scale through base:"blank")
 # ---------------------------------------------------------------------------
 
@@ -2399,7 +2668,7 @@ class TestRenderAndCompareArguments:
         spec = self._edit(compare={"reference": "golden.cir"}).compare
         assert spec is not None
         assert spec.reference == "golden.cir"
-        # The tolerance and anchors keep the graph engine's own defaults.
+        # The tolerance and anchors keep the netlist graph's own defaults.
         assert spec.rtol == 1e-6
         assert spec.anchors is None
 

@@ -3,6 +3,7 @@
 import asyncio
 import gc
 import os
+import re
 import struct
 import threading
 import time
@@ -14,7 +15,12 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from ltspice_mcp.errors import AnalysisDeadlineExceeded, PathSecurityError, ResultError
+from ltspice_mcp.errors import (
+    AnalysisDeadlineExceeded,
+    PathSecurityError,
+    ResultError,
+    ResultFileNotFoundError,
+)
 from ltspice_mcp.lib import parser_process, parser_service, services
 from ltspice_mcp.lib.decoded_raw import DecodedRaw
 from ltspice_mcp.lib.file_stamp import file_stamp
@@ -506,8 +512,10 @@ def test_absent_log_sections_preserved_but_no_inputs_refuses(state_no_sim, work_
     assert logs.section("measurements")["status"] == "absent"
     assert logs.section("measurements")["value"] is None
     path.unlink()
-    with pytest.raises(ResultError, match="No parser input files"):
+    # Refused as the caller's missing file before any parse starts.
+    with pytest.raises(ResultFileNotFoundError, match=re.escape(str(path))):
         services.load_logs_sync(selected, state_no_sim)
+    assert not list((state_no_sim.store.root / "parsing").glob("*"))
 
 
 def test_logs_continuation_binds_shared_snapshot_on_hits_and_changes(state_no_sim, work_dir):
@@ -549,7 +557,7 @@ def test_log_only_capture_ignores_sibling_raw_and_binds_log_console(state_no_sim
 def test_log_only_missing_inputs_error_names_log_source(state_no_sim, work_dir):
     log = work_dir / "absent.log"
     selected = services.resolve_analysis_source(state_no_sim, log_file=str(log))
-    with pytest.raises(ResultError, match="No parser input files") as failure:
+    with pytest.raises(ResultFileNotFoundError) as failure:
         services.load_logs_sync(selected, state_no_sim)
     assert str(log) in str(failure.value)
     assert not list((state_no_sim.store.root / "parsing").glob("*"))

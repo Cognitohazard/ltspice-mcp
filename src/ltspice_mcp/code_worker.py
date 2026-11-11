@@ -5,7 +5,7 @@ The server spawns this module once, lazily, as
     sys.executable -m ltspice_mcp.code_worker <working-dir> <config-path-or-empty>
 
 and keeps it for the session. It owns one ``Api`` on that working directory
-(its own process, so its own engine lease and its own runner) and runs each
+(its own process, so its own session lease and its own runner) and runs each
 snippet the server sends in a fresh namespace around that same live ``Api``.
 State between calls lives on disk — jobs, artifacts, files — exactly as it
 does for the six tools.
@@ -359,7 +359,7 @@ def serve(working_dir: str, config_path: str | None) -> int:
         _send(replies, {"op": "boot_failed", "error": f"{type(exc).__name__}: {exc}"})
         return 1
     # The server's stderr is this process's log too: read [logging] level
-    # off the booted engine, the way the server and the detached owner do.
+    # off the started session, the way the server and the detached owner do.
     configure_stderr_logging(api._state.config.log_level)  # pyright: ignore[reportPrivateUsage]
     _send(replies, {"op": "ready", "pid": os.getpid()})
 
@@ -392,7 +392,7 @@ def main(argv: list[str]) -> int:
         )
         return 2
     code = serve(argv[0], argv[1] or None)
-    # Never linger in interpreter teardown behind the engine's loop thread.
+    # Never linger in interpreter teardown behind the session's loop thread.
     sys.stderr.flush()
     os._exit(code)
 

@@ -1,4 +1,4 @@
-"""Behavior tests for the shared server and library engine bootstrap."""
+"""Behavior tests for the shared server and library bootstrap."""
 
 from __future__ import annotations
 

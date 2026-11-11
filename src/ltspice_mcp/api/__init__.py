@@ -1,6 +1,6 @@
 """Public in-process Python API and curated analysis primitives.
 
-Every public name resolves lazily (PEP 562): the engine's heavy imports
+Every public name resolves lazily (PEP 562): the heavy imports
 (scipy behind the signal primitives, the MCP SDK behind the session) cost
 over a second, which a catalogue lookup — ``python -m ltspice_mcp.api
 reference`` — must not pay. The no-boot property is pinned by a

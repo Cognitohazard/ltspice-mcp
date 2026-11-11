@@ -26,7 +26,9 @@ from tests._ltspice_window import (
     as_ltspice_reads,
     digest,
     fake_command,
+    follow_open_window_referral,
     put_windows,
+    read_world,
     write_world,
 )
 from tests.conftest import SyncApi
@@ -147,11 +149,30 @@ async def test_it_lists_what_is_open_and_which_document_is_in_front(
             "in_sandbox": False,
         },
     ]
-    assert (
-        "refused by edit_schematic until the user chooses which to keep and "
-        "edit_schematic's open_window saves or drops the window's copy"
-    ) in data["hint"]
+    assert "refused by edit_schematic until the user chooses which to keep" in data["hint"]
     assert "outside the sandbox is listed and not read" in data["hint"]
+
+
+async def test_the_call_the_listing_names_for_a_differing_sheet_is_taken(
+    asc_state: SessionState, asc_file: Path, tmp_path: Path
+):
+    """Sent as the hint writes it, with the path and sha256 of the row that
+    differs, the call drops the window's copy."""
+    world = tmp_path / "world.json"
+    changed = as_ltspice_reads(asc_file).replace("SYMATTR Value 1k", "SYMATTR Value 5k")
+    put_windows(asc_state, world, [a_window({str(asc_file): changed})])
+    data = (await ask(asc_state))["data"]
+    (row,) = data["designs"]
+    assert row["differs_from_file"] is True
+
+    settled = await follow_open_window_referral(
+        asc_state, data["hint"], Path(row["path"]), "discard", sha256=row["sha256"]
+    )
+
+    assert settled["outcome"] == "complete", settled
+    assert read_world(world)["windows"][0]["designs"] == {
+        str(asc_file): as_ltspice_reads(asc_file)
+    }
 
 
 async def test_a_long_difference_is_listed_up_to_a_limit_and_the_rest_counted(

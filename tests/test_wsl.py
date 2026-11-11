@@ -155,6 +155,15 @@ class TestToWindowsPath:
 
 
 class TestResolveWinEnv:
+    @pytest.fixture(autouse=True)
+    def _empty_cache(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Each test resolves through its own patched ``subprocess.run``. On a
+        WSL machine, a value an earlier test in the same process resolved for
+        real, such as ``TEMP``, would be read from the cache instead."""
+        import ltspice_mcp.lib.wsl as wsl_mod
+
+        monkeypatch.setattr(wsl_mod, "_win_env_cache", {})
+
     def test_failure_returns_none(self):
         with patch("subprocess.run", side_effect=Exception("boom")):
             assert _resolve_win_env("TEMP") is None

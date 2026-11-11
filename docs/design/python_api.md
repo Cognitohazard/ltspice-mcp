@@ -1,6 +1,6 @@
 # Python API reference — `ltspice_mcp.api`
 
-`ltspice_mcp.api` is the in-process Python interface to the engine the MCP
+`ltspice_mcp.api` is the in-process Python interface to the code the MCP
 server exposes.
 
 The source is authoritative. Where this document disagrees with it, fix the
@@ -47,7 +47,7 @@ overrides: `simulator`, `enabled_simulators`, `simulator_exe`,
 `preload_recent_count`. Any other keyword raises `TypeError`, including the
 server-only settings in `[logging]` and `[tools]`, and `tool_profile`.
 
-The precedence holds for the life of the session. The engine re-reads
+The precedence holds for the life of the session. The session re-reads
 `[security] allowed_paths` when the config file changes, so a sandbox can be
 set, widened or removed without a restart. An explicit `Api(allowed_paths=...)`
 pins the sandbox, and an empty list pins the session to no sandbox. A TOML
@@ -69,12 +69,12 @@ with Api(working_dir="~/designs/ldo") as api:
     receipt = api.run_experiments(...)
 ```
 
-**One live engine session per process.** A second concurrent `Api`, or an
+**One live session per process.** A second concurrent `Api`, or an
 `Api` inside a process already running the MCP server, raises
 `ApiSessionError`. Shutdown cancels the jobs a process owns, so two sessions in
 one process would cancel each other's jobs.
 
-Each `Api` runs the engine on a private event-loop thread. Calls from several
+Each `Api` runs its session on a private event-loop thread. Calls from several
 threads run concurrently there, so one thread can cancel a job while another is
 blocked waiting on it.
 
@@ -122,6 +122,20 @@ server returns for the same arguments: each error's field path and message,
 the field table of each branch the error names, and, for a field this
 operation does not accept, the operations that do. It is not a raw
 `pydantic.ValidationError`, which renders differently.
+
+Every other argument a method takes but cannot use raises `ApiValidationError`
+too: both spellings of one argument (`wait`'s `timeout_s` and `timeout`, a
+result read's `path` and its older keyword), a value `wait` cannot use, a
+`wait` or `detach` control that is not a bool, and a value a detached call
+cannot hand to its owner as given: one that is neither JSON, a path nor a
+model, a dictionary key that is not a string (JSON would write a number's as
+a string, a key the call never had), and a value that holds itself. A
+keyword a method's signature does not name raises
+Python's own `TypeError`, as for the constructor; the six operations take any
+keyword and refuse one they do not accept with `ApiValidationError`. The
+catalogue lookups `reference()` and `guide()` run no call and raise Python's
+own errors: a `ValueError` for a name they do not have, and `reference()` a
+`TypeError` for an operation name that is not a string.
 
 ```python
 api.run_experiments(**args)   # two-phase; see below
@@ -189,8 +203,9 @@ successive `jobs(wait)` calls:
   raises `ApiInterrupted` (a `KeyboardInterrupt`) **that contains the receipt
   and job id**, so the caller keeps the handle.
 - `api.wait(job_id, timeout_s=None)` waits for a job. The older spelling
-  `timeout=` is still accepted. On timeout it returns the current `jobs(wait)`
-  snapshot with `timed_out: true` and leaves the job running.
+  `timeout=` is still accepted; giving both raises `ApiValidationError`. On
+  timeout it returns the current `jobs(wait)` snapshot with `timed_out: true`
+  and leaves the job running.
 - `wait=False` returns the submission receipt immediately, with the
   `process_owned_job` observation.
 - `wait=False, detach=True` is the only combination that does not submit
@@ -350,7 +365,7 @@ with TemporaryDirectory() as directory:
 The tree writes out every field with its type, default, enum members and union
 branches, flattens nested models onto dotted paths, and includes one worked
 example. It contains no JSON Schema syntax or `$ref` chains. It is a
-**staticmethod** and needs no engine session, so it works before any `Api` is
+**staticmethod** and needs no session, so it works before any `Api` is
 opened. It renders from the Pydantic models the call validates against, so it
 always matches them.
 
@@ -362,7 +377,7 @@ index, it returns that part. It is a staticmethod for the same reason as
 `spice://guide` resources. Its `python` section covers this interface.
 
 `python -m ltspice_mcp.api reference [OP]` prints the same catalogue without
-starting the engine, and `python -m ltspice_mcp.api guide [SECTION]` prints the
+starting a session, and `python -m ltspice_mcp.api guide [SECTION]` prints the
 guide.
 
 Each of the six methods has its `reference()` text as its `__doc__`, so
@@ -376,7 +391,7 @@ directory otherwise; its `spice://netlists/` resource lists that same folder.
 
 ## 6. Errors
 
-- When an operation raises one of the engine's own exceptions (subclasses of
+- When an operation raises one of the server's own exceptions (subclasses of
   `LTSpiceMCPError` in `ltspice_mcp.errors`, such as `PathSecurityError` or
   `AnalysisDeadlineExceeded`), the exception propagates unchanged; the MCP
   server would return it as an `isError` result instead. A
@@ -432,11 +447,13 @@ preview mode, and the only way to get paging identical to the MCP tools'.
 ```python
 raw = api.load_raw(path, plot_index=0, dialect=None)  # XOR: path | job_id
 raw = api.load_raw(job_id=..., run_index=0, case_id=None, other_raw=None)  # "fra_1" | "op"
+raw = api.load_raw(path, signals=["V(out)", "V(a,b)"])  # only these, the axis and step parameters
+raw = api.load_raw(path, window=("1m", "2m"))  # only the points of the axis from 1 ms to 2 ms
 raw.signals                    # list[str]
 raw.trace("V(out)", step=0)    # np.ndarray — complex values preserved
 raw.value("V(out)", step=0)    # one point a step (.op): float, or complex
 raw.axis(step=0)               # real sampled axis; refuses a native table
-raw.step_count; raw.steps      # captured metadata aligned per step
+raw.step_count; raw.steps      # counted as the tools count them; refused when steps are not told apart
 raw.plots; raw.descriptor; raw.plot_index  # inventory and selected plot facts
 raw.table(step=0)              # native table rows; complex values use real/imag
 raw.compare(other, signals=None, step=0, other_step=None)  # per-signal differences
@@ -449,6 +466,39 @@ ops.observations               # a log reader's dict (LogResult) says the same o
 ```
 
 - `RawResult` is this project's type; the API returns no spicelib types.
+- `signals` reads only the traces those names read, by the rule `trace` reads
+  a name with: one trace, or a node pair's two node voltages. The plot's
+  first variable (its axis, where it has one) and any step parameters are
+  always kept. The read's numeric limit (512 MiB at the widths the file
+  stores) applies to the traces kept, so a file too large to read whole can
+  be read for a few signals. A file stored a point at a time, as LTspice
+  stores a run, is still decoded whole while it is read, and a read holds
+  that to 1 GiB of numbers; a file in LTspice's Fast Access layout (`LTspice
+  -FastAccess <file>.raw` converts one) is decoded only for the traces kept.
+  A name is refused before the read for the reason `trace` would refuse it
+  (no such trace, a step value, an expression, a pair naming ground twice, a
+  node pair of a noise result), with the plot's traces; the result's
+  `observations` include `signals_chosen`, and `trace` of a trace not read
+  says how to read it. A whole-file read over the limit is refused with how
+  many bytes of numbers it counted (at least that many, in a file of several
+  plots), the limit and these ways around it.
+- `window=(start, end)` reads only the points of the plot's axis from `start`
+  to `end`, in each step, by the rule the exports' windows keep points with:
+  every point at or after the start and at or before the end, with nothing
+  interpolated at a bound. The bounds are in the axis's unit (seconds of deck
+  time, hertz, the swept value), each a number or SPICE text such as `"1m"`,
+  and either may be None for an open end. The numeric limit applies to the
+  points kept, so a file with too many points for one read can be read a
+  stretch at a time. Decoding is held to 1 GiB as above, and a window does
+  not lessen it: a Fast Access file's kept traces are decoded along their
+  whole axis before the window cuts them, so a window alone of a file over
+  that is refused, naming `signals`. It combines with `signals`. A plot with
+  no axis (an operating point), an axis that decreases within a step (a
+  downward sweep, or a stepped run whose steps were not told apart), and a
+  window that meets no point of a step are refused. The result's
+  `observations` include `window_chosen`; on a compressed LTspice transient
+  it says that whether compression left the run coarse, which is judged over
+  all of a run's points, was not judged from the window.
 - Each of these reads takes exactly one of `path` and `job_id`. Neither or
   both, an empty `path`, or `run_index`, `case_id` or `other_raw` with a
   `path` raises `ApiValidationError`, as the operations do.
@@ -460,6 +510,15 @@ ops.observations               # a log reader's dict (LogResult) says the same o
   empty for a whole result. `measurements` and `device_op_points` return a
   `LogResult`, a plain `dict` that has the same `observations` for the log it
   read.
+- `step_count` counts a plot's steps as the tools count them, 1 for a run that
+  is not stepped, and `steps` holds one parameter dict a step. A plot whose
+  steps cannot be told apart is loaded, so its `signals`, `descriptor` (with
+  its `step_status`) and `plots` can be read, but `step_count`, `steps` and
+  every read of a step refuse it with the reason `analyze_results` gives:
+  the operating-point raw LTspice 26 writes beside a stepped `.tran` or
+  `.ac` holds one point and does not say which step it is, and a stepped
+  sweep read without the log that holds its step values has none to split
+  it by.
 - `value` reads a plot with one point per step, such as an operating point, as
   a number. It returns a float, or a complex number for a complex trace. A
   trace with more points is refused rather than cut to its first point; read
@@ -482,7 +541,10 @@ ops.observations               # a log reader's dict (LogResult) says the same o
   plot with no axis is compared point by point and must have the same number
   of points. `max_rel` is `max_abs` divided by the signal's largest magnitude
   in this result, and is null when that magnitude is 0. Complex values are
-  compared as complex numbers. No tolerance is applied.
+  compared as complex numbers. No tolerance is applied. A result read with
+  `signals` holds no other trace, so when `other` was, the traces only this
+  result holds are `unread_there` and `only_here` is empty, and when this
+  result was, the other's are `unread_here` and `only_there` is empty.
 - `device_op_points` reads, by device and parameter, the semiconductor
   operating points that LTspice prints in the log of an `.op` run. LTspice 26
   prints them under `.options logopinfo`; XVII always prints them and refuses
@@ -550,8 +612,9 @@ For a run with one value per `.meas`, such as one case of a sweep, the value
 is `row["value"]["measured"][name]`. It is null where the log holds no number
 for that name, and the name is then listed in
 `row["value"]["failed_measurements"]`. Where the log printed something other
-than a number for it (a WHEN threshold written as a parameter or an
-expression), `row["value"]["unreadable"][name]` gives the log line and the
+than a number for it (a WHEN threshold written as a parameter, an
+expression or, on LTspice 26, a braced expression),
+`row["value"]["unreadable"][name]` gives the log line and the
 reason, as `measurements()` does on the entry; only that name fails. Any
 crossing or `AT` point the log
 printed is under `row["value"]["at"][name]`. The per-name `stats` block is left
@@ -572,8 +635,9 @@ The six operations take exactly what their tools take, so an argument a tool
 renamed is refused there with the name that replaced it. The helpers keep an
 older keyword they had, as `wait` keeps `timeout`: `load_raw` takes
 `raw_path`, and `measurements` and `device_op_points` take `log_path`, in
-place of `path`; giving both is refused. A malformed or missing RAW fails
-only the RAW recipes. A result set's manifest records, for each source,
+place of `path`; giving both raises `ApiValidationError`. A malformed or
+missing RAW fails only the RAW recipes. A result set's manifest records, for
+each source,
 whether its RAW, log and console files existed and a hash of each one's
 content, so an empty file is distinguishable from a missing one. A new call
 reads a changed source again. A continuation (`continue` with a
@@ -754,7 +818,7 @@ Ownership, records and cancellation work the same on both platforms.
 ## Coexistence with a server
 
 The API and an MCP server on the same working directory share the job records
-and the store, and each process holds one engine session (§4). A job submitted
+and the store, and each process holds one session (§4). A job submitted
 through the API with `run_experiments(wait=False)` is owned by the submitting
 process and is cancelled when that process exits; adding `detach=True` hands it
 to a detached owner started for that job, which outlives the script (§11).

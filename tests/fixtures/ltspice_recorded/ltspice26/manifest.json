@@ -2692,6 +2692,38 @@
         ".raw"
       ]
     },
+    "deck/global_port": {
+      "behaviour": "deck-node-names",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/global_port.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/global_port.cir": "2f130f51923af59f7319bf1f020e62b875cac335be15e964ee57bf62ad0d0ae5"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/global_port.log": {
+          "bytes": 338,
+          "sha256": "7f3984e03c7b6646fe2df016ea87f1d2314c7983fcdcaf33f595a74277397ab9"
+        },
+        "deck/global_port.raw": {
+          "bytes": 948,
+          "sha256": "b846fe8c52e1f7f194f4b785d6f37056472a4c369e3a8a9aa6a613a695a1fe88"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
     "deck/gnd_alias": {
       "behaviour": "deck-structure",
       "command": [
@@ -2715,6 +2747,38 @@
         "deck/gnd_alias.raw": {
           "bytes": 1248,
           "sha256": "ba329b8d019d3d1b59839e9f3aa0dfb4e758cd99566bf8e9a8080af6a88c9564"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".raw"
+      ]
+    },
+    "deck/gnd_bang": {
+      "behaviour": "deck-node-names",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/gnd_bang.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/gnd_bang.cir": "3ebb052cc9816dccc1e94b5fdc7a9775112ae11c63356822be1b97e3d0e942a7"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/gnd_bang.log": {
+          "bytes": 332,
+          "sha256": "dc70fc3f256ded8a3a6123a68628ae42e2aa3c80eb161e615545618c64170c64"
+        },
+        "deck/gnd_bang.raw": {
+          "bytes": 726,
+          "sha256": "206e468cbbb19a82632b503d716c0cc7ff65d9826ad4cf38e0672f8dca1a1aa4"
         }
       },
       "reported_build": "LTspice 26.1.1 for Windows",

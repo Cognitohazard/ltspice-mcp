@@ -1,4 +1,4 @@
-"""Tier-1 synchronous methods over the consolidated engine operations."""
+"""Tier-1 synchronous methods over the consolidated tool operations."""
 
 from __future__ import annotations
 
@@ -6,6 +6,9 @@ import contextlib
 import copy
 import functools
 import inspect
+import json
+import math
+import numbers
 import os
 import subprocess
 import time
@@ -34,7 +37,8 @@ from ltspice_mcp.api._primitives import (
     measurements_of,
 )
 from ltspice_mcp.errors import InvalidCursorError, PathSecurityError
-from ltspice_mcp.lib import experiment_store, services
+from ltspice_mcp.lib import experiment_store, parser_service, services
+from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.log_types import LogSectionName
 from ltspice_mcp.lib.model_fields import (
@@ -117,16 +121,24 @@ def _validate(
         raise _validation_error(operation, exc, state) from None
 
 
-def _walk_fields(value: Any, path: tuple[str, ...] = ()) -> Iterator[tuple[str, ...]]:
+def _walk_fields(
+    value: Any, path: tuple[str, ...] = (), holders: frozenset[int] = frozenset()
+) -> Iterator[tuple[str, ...]]:
+    """Every field path in ``value``. A value that holds itself is walked
+    once: the operation's model refuses it, as the detached hand-off does,
+    and the walk must end so that either can. ``holders`` are the containers
+    that hold ``value``."""
+    if id(value) in holders:
+        return
     if isinstance(value, Mapping):
         for raw_key, child in value.items():
             key = str(raw_key)
             child_path = (*path, key)
             yield child_path
-            yield from _walk_fields(child, child_path)
+            yield from _walk_fields(child, child_path, holders | {id(value)})
     elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         for child in value:
-            yield from _walk_fields(child, path)
+            yield from _walk_fields(child, path, holders | {id(value)})
 
 
 #: What the automatic mode says about each class of wire-only control. The two
@@ -250,7 +262,7 @@ async def _anchored_on(base: Path, coroutine: Coroutine[Any, Any, _T]) -> _T:
     """Run one call with its relative path arguments taken from ``base``.
 
     Applied inside the coroutine for the same reason the automatic-mode flag is:
-    the path chokepoint reads the base from the engine loop's task context, and
+    the path chokepoint reads the base from the session loop's task context, and
     a set on the calling thread would never reach it.
     """
     with relative_paths_from(base):
@@ -262,7 +274,7 @@ async def _through_auto_door(coroutine: Coroutine[Any, Any, _T], tool: str) -> _
     and with ``tool``'s reply fields named, as its MCP replies name them.
 
     Marked inside the coroutine, not around the ``_call`` that marshals it: the
-    handlers read both from the engine loop's task context, and a set on the
+    handlers read both from the session loop's task context, and a set on the
     calling thread would never reach it.
     """
     # Deferred with the tool modules.
@@ -291,13 +303,13 @@ def _message_for_error(payload: Mapping[str, Any], result: types.CallToolResult)
     for content in result.content:
         if isinstance(content, mcp_types.TextContent):
             return content.text
-    return "The engine returned a call-level error"
+    return "The operation returned a call-level error"
 
 
 def _unwrap(result: types.CallToolResult) -> dict[str, Any]:
     structured = result.structured_content
     if not isinstance(structured, Mapping):
-        raise ApiInternalError("The engine response did not contain structuredContent")
+        raise ApiInternalError("The operation's response did not contain structuredContent")
     payload = copy.deepcopy(dict(structured))
     if result.is_error:
         raise ApiCallError(_message_for_error(payload, result), payload=payload)
@@ -357,7 +369,7 @@ async def _complete_run_receipt(
 def _note_process_owned_job(receipt: dict[str, Any]) -> dict[str, Any]:
     """Say, on the receipt itself, that this job dies with the interpreter.
 
-    ``Api.close()`` shuts the engine down, which cancels every job this process
+    ``Api.close()`` shuts the session down, which cancels every job this process
     owns. A ``wait=False`` receipt otherwise looks exactly like a durable
     submission, and the loss is silent — the caller learns of it only when a
     later status read reports a cancellation nobody asked for. The contract
@@ -656,7 +668,7 @@ async def _collect_jobs(
     evaluation = await jobs.evaluate_jobs(request, state)
     data = jobs.complete_jobs_data(evaluation)
     if evaluation.is_error or "error" in data:
-        message = _payload_message(data) or "The engine returned a call-level error"
+        message = _payload_message(data) or "The operation returned a call-level error"
         raise ApiCallError(message, payload=data)
     return data
 
@@ -743,7 +755,7 @@ class ApiMethodsMixin(ABC):
 
     _state: SessionState
     #: The constructor arguments a detached owner is given so it opens the same
-    #: engine this session opened.
+    #: session this one opened.
     _boot: _detach.DetachedBoot
     #: Owners spawned by this session. Held only so the finished ones can be
     #: reaped; a running one is never waited on.
@@ -778,8 +790,8 @@ class ApiMethodsMixin(ABC):
         flattened onto dotted paths, and a worked example. Generated from the
         models the call validates against, so it says what will be accepted.
 
-        A static method deliberately: reading the catalogue must not require an
-        engine session, so ``Api.reference('inspect')`` works before anything is
+        A static method deliberately: reading the catalogue must not require a
+        session, so ``Api.reference('inspect')`` works before anything is
         opened and without taking this process's single session lease.
         """
         return _reference.reference(op)
@@ -795,7 +807,7 @@ class ApiMethodsMixin(ABC):
         ``inspect(kind='guide')`` serves over MCP.
 
         A static method for the same reason as :meth:`reference`: reading the
-        guide must not require an engine session.
+        guide must not require a session.
         """
         from ltspice_mcp.lib import guide as _guide
 
@@ -895,9 +907,9 @@ class ApiMethodsMixin(ABC):
         """Submit an experiment and optionally wait for its complete receipt."""
         self._check_process_and_thread()
         if not isinstance(wait, bool):
-            raise TypeError("wait must be a bool")
+            raise ApiValidationError("wait must be a bool")
         if not isinstance(detach, bool):
-            raise TypeError("detach must be a bool")
+            raise ApiValidationError("detach must be a bool")
         if detach:
             if wait:
                 raise ApiValidationError(
@@ -1013,7 +1025,7 @@ class ApiMethodsMixin(ABC):
         """Control jobs, collecting list and receipt pages in automatic mode."""
         self._check_process_and_thread()
         if not isinstance(detach, bool):
-            raise TypeError("detach must be a bool")
+            raise ApiValidationError("detach must be a bool")
         if detach:
             if arguments.get("action") != "resume":
                 raise ApiValidationError("Only jobs(action='resume') accepts detach=True.")
@@ -1113,15 +1125,15 @@ class ApiMethodsMixin(ABC):
         """
         self._check_process_and_thread()
         if not isinstance(job_id, str) or not job_id:
-            raise ValueError("job_id must be a non-empty string")
+            raise ApiValidationError("job_id must be a non-empty string")
         if timeout is not None and timeout_s is not None:
-            raise ValueError("give timeout_s or timeout, not both")
+            raise ApiValidationError("give timeout_s or timeout, not both")
         timeout = timeout_s if timeout is None else timeout
         if timeout is not None:
             if not isinstance(timeout, (int, float)) or isinstance(timeout, bool):
-                raise ValueError("timeout_s must be a non-negative number or None")
+                raise ApiValidationError("timeout_s must be a non-negative number or None")
             if timeout < 0:
-                raise ValueError("timeout_s must be a non-negative number or None")
+                raise ApiValidationError("timeout_s must be a non-negative number or None")
 
         # Read before the clock: the first read imports the tool modules, over a
         # second that must not land on top of a dwell measured against a deadline.
@@ -1240,6 +1252,8 @@ class ApiMethodsMixin(ABC):
         dialect: Literal["ltspice", "ngspice", "qspice", "xyce"] | None = None,
         other_raw: OtherRawKind | None = None,
         raw_path: str | os.PathLike[str] | None = None,
+        signals: Sequence[str] | None = None,
+        window: tuple[float | str | None, float | str | None] | None = None,
     ) -> RawResult:
         """Load one raw result through the bounded parser and return a safe wrapper.
 
@@ -1248,6 +1262,19 @@ class ApiMethodsMixin(ABC):
         ``other_raw`` reads the case's other raw of that kind, as its run row's
         ``other_raws`` lists it, instead of its raw: ``"fra_1"`` a frequency
         response analysis's results, ``"op"`` a transient's operating point.
+        ``signals`` reads only the traces those names read, as ``trace`` reads
+        a name (a node pair reads both nodes), with the plot's first variable
+        (its axis, where it has one) and any step parameters: a file too large
+        to read whole can be read this way, since the size limit applies to
+        what is kept. A file stored a point at a time, as LTspice stores a run
+        unless it is converted to its Fast Access layout, is still decoded
+        whole, which a read holds to 1 GiB of numbers. A name the plot has no
+        trace for is refused.
+        ``window=(start, end)`` keeps only the points of the plot's axis from
+        ``start`` to ``end``, in each step, in the axis's unit (seconds of
+        deck time, hertz, the swept value); a number or SPICE text such as
+        ``"1m"``, either end None for open. The size limit then applies to the
+        points kept. A plot with no axis, or whose axis decreases, is refused.
         ``raw_path`` is the older spelling of ``path``, still accepted."""
         self._check_process_and_thread()
         path = _older_spelling(path, "raw_path", raw_path)
@@ -1258,6 +1285,8 @@ class ApiMethodsMixin(ABC):
             raise ApiValidationError("dialect must be ltspice, ngspice, qspice, xyce or None")
         if other_raw is not None and other_raw not in OTHER_RAW_KINDS:
             raise ApiValidationError(f"other_raw must be one of {list(OTHER_RAW_KINDS)} or None")
+        chosen = _chosen_signals(signals)
+        span = _chosen_window(window)
         return self._marshal(
             load_raw_result(
                 state=self._state,
@@ -1268,6 +1297,8 @@ class ApiMethodsMixin(ABC):
                 plot_index=plot_index,
                 dialect=dialect,
                 other_raw=other_raw,
+                signals=chosen,
+                window=span,
             ),
             cancelable=True,
             cancel_on_interrupt=True,
@@ -1349,8 +1380,72 @@ def _older_spelling(path: _PathArg, name: str, older: _PathArg) -> _PathArg:
     if older is None:
         return path
     if path is not None:
-        raise TypeError(f"Give path or {name}, not both")
+        raise ApiValidationError(f"Give path or {name}, not both")
     return older
+
+
+def _chosen_signals(signals: Sequence[str] | None) -> tuple[str, ...] | None:
+    """``load_raw``'s ``signals`` as the parser takes them: 1 to 64 names, each
+    a string of 1 to 256 characters without the spaces around it, in the order
+    given, a repeat dropped."""
+    if signals is None:
+        return None
+    if (
+        isinstance(signals, str)
+        or not isinstance(signals, Sequence)
+        or any(not isinstance(name, str) for name in signals)
+    ):
+        raise ApiValidationError("signals must be a list of names, e.g. ['V(out)']")
+    names = tuple(dict.fromkeys(name.strip() for name in signals))
+    if not 0 < len(names) <= 64 or any(not 0 < len(name) <= 256 for name in names):
+        raise ApiValidationError("signals must name 1 to 64 traces, each in 1 to 256 characters")
+    # As the parser request spells them, where a character outside ASCII is escaped.
+    if len(json.dumps(list(names))) > parser_service.SIGNALS_BYTES:
+        raise ApiValidationError(
+            f"signals take more than {parser_service.SIGNALS_BYTES // 1024} KiB as the "
+            "parser reads them, where a character outside ASCII takes up to 6 bytes: "
+            "choose fewer or shorter names, or read them in more than one load"
+        )
+    return names
+
+
+def _chosen_window(
+    window: tuple[float | str | None, float | str | None] | None,
+) -> tuple[float | None, float | None] | None:
+    """``load_raw``'s ``window`` as the parser takes it: two finite bounds, a
+    number as given or SPICE text read as a value LTspice runs with, either
+    one None, and the start before the end."""
+    if window is None:
+        return None
+    if isinstance(window, str) or not isinstance(window, Sequence) or len(window) != 2:
+        raise ApiValidationError("window must be (start, end), e.g. ('1m', '2m') or (0, None)")
+    bounds = tuple(
+        _window_bound(bound, name) for bound, name in zip(window, ("start", "end"), strict=True)
+    )
+    start, end = bounds
+    if start is None and end is None:
+        raise ApiValidationError("window needs a start or an end; leave it out to read all")
+    if start is not None and end is not None and start >= end:
+        raise ApiValidationError(f"window must start before it ends; got ({start:g}, {end:g})")
+    return start, end
+
+
+def _window_bound(bound: float | str | None, name: str) -> float | None:
+    """One end of a window: None, a finite number, or SPICE text such as '1m'."""
+    if bound is None:
+        return None
+    if isinstance(bound, str):
+        try:
+            value = parse_spice_value(bound.strip())
+        except ValueError as exc:
+            raise ApiValidationError(f"window {name} {bound!r} is not a value: {exc}") from exc
+    elif isinstance(bound, numbers.Real) and not isinstance(bound, bool):
+        value = float(bound)  # NumPy's numbers among them
+    else:
+        raise ApiValidationError(f"window {name} must be a number, SPICE text or None")
+    if not math.isfinite(value):
+        raise ApiValidationError(f"window {name} must be finite, got {bound!r}")
+    return value
 
 
 def _one_source(
@@ -1370,14 +1465,18 @@ def _one_source(
         raise ApiValidationError("Pass exactly one of path or job_id")
     if path is not None and not os.fspath(path).strip():
         raise ApiValidationError("path is empty; pass a file or job_id")
-    if path is not None and (run_index != 0 or case_id is not None or other_raw is not None):
-        raise ApiValidationError("run_index, case_id and other_raw are only valid with job_id")
+    if path is not None and (
+        refusal := services.run_selectors_beside_path(
+            run_index=run_index, case_id=case_id, other_raw=other_raw
+        )
+    ):
+        raise ApiValidationError(refusal)
 
 
 # The six methods carry their operation's catalogue entry as their docstring —
 # from the same renderer api.reference uses, so the two can never disagree.
 # Installed LAZILY: rendering needs the live tool models, whose import is
-# exactly what the engine boot defers, so installation rides the first event
+# exactly what starting a session defers, so installation rides the first event
 # that pays that import anyway — the first deferred tool-module resolution
 # (any operation call) or the first catalogue read (reference()). Until one
 # of those happens — or a read of an operation's help() or signature, which

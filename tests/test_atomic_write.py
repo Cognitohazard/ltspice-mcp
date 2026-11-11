@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import stat
 import sys
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 
+from ltspice_mcp import lib
 from ltspice_mcp.lib import (
     atomic_write,
     atomic_write_bytes,
@@ -179,28 +182,53 @@ class TestAtomicWriteContextManager:
 # ---------------------------------------------------------------------------
 
 
+@contextlib.contextmanager
+def watched_flushes(before: Callable[[int], None]) -> Iterator[None]:
+    """Call ``before(fd)`` ahead of every durable flush a write makes.
+
+    ``fsync_fd`` flushes a file with ``fcntl(F_FULLFSYNC)`` on macOS, falling
+    back to ``os.fsync``, and with ``os.fsync`` elsewhere; ``fsync_dir`` uses
+    ``os.fsync``. Each primitive is wrapped, so the real flush still runs
+    unless ``before`` raises.
+    """
+    real_fsync = os.fsync
+
+    def fsync(fd: int) -> None:
+        before(fd)
+        real_fsync(fd)
+
+    with contextlib.ExitStack() as stack:
+        stack.enter_context(patch("ltspice_mcp.lib.os.fsync", side_effect=fsync))
+        if lib._F_FULLFSYNC is not None and lib._fcntl is not None:
+            real_fcntl = lib._fcntl.fcntl
+
+            def fcntl(fd: int, command: int, *args: Any) -> Any:
+                if command == lib._F_FULLFSYNC:
+                    before(fd)
+                return real_fcntl(fd, command, *args)
+
+            stack.enter_context(patch.object(lib._fcntl, "fcntl", side_effect=fcntl))
+        yield
+
+
 class TestDurability:
     def test_fsync_called_on_file_by_default(self, tmp_path: Path) -> None:
         path = tmp_path / "out.txt"
-        real_fsync = os.fsync
-        fsync_calls: list[int] = []
+        flushed: list[int] = []
 
-        def tracking_fsync(fd: int) -> None:
-            fsync_calls.append(fd)
-            real_fsync(fd)
-
-        with patch("ltspice_mcp.lib.os.fsync", side_effect=tracking_fsync):
+        with watched_flushes(flushed.append):
             atomic_write_text(path, "data")
 
-        # File fd fsync plus (on POSIX) parent-dir fsync.
+        # The file's flush plus (on POSIX) the parent directory's.
         expected = 1 if sys.platform == "win32" else 2
-        assert len(fsync_calls) == expected
+        assert len(flushed) == expected
 
     def test_fsync_skipped_when_durable_false(self, tmp_path: Path) -> None:
         path = tmp_path / "out.txt"
-        with patch("ltspice_mcp.lib.os.fsync") as mock_fsync:
+        flushed: list[int] = []
+        with watched_flushes(flushed.append):
             atomic_write_text(path, "data", durable=False)
-        mock_fsync.assert_not_called()
+        assert not flushed
         assert path.read_text() == "data"
 
     def test_fsync_file_before_rename(self, tmp_path: Path) -> None:
@@ -209,19 +237,14 @@ class TestDurability:
         """
         path = tmp_path / "out.txt"
         events: list[str] = []
-        real_fsync = os.fsync
         real_replace = os.replace
-
-        def tracking_fsync(fd: int) -> None:
-            events.append("fsync")
-            real_fsync(fd)
 
         def tracking_replace(src, dst):
             events.append("replace")
             real_replace(src, dst)
 
         with (
-            patch("ltspice_mcp.lib.os.fsync", side_effect=tracking_fsync),
+            watched_flushes(lambda fd: events.append("fsync")),
             patch("ltspice_mcp.lib.os.replace", side_effect=tracking_replace),
         ):
             atomic_write_text(path, "data")
@@ -238,10 +261,10 @@ class TestDurability:
         path = tmp_path / "out.txt"
         path.write_text("original")
 
-        with (
-            patch("ltspice_mcp.lib.os.fsync", side_effect=OSError("io error")),
-            pytest.raises(OSError, match="io error"),
-        ):
+        def fail(fd: int) -> None:
+            raise OSError("io error")
+
+        with watched_flushes(fail), pytest.raises(OSError, match="io error"):
             atomic_write_text(path, "replacement")
 
         assert path.read_text() == "original"
@@ -254,16 +277,14 @@ class TestDurability:
         Swallow it rather than surfacing a confusing error to the caller.
         """
         path = tmp_path / "out.txt"
-        real_fsync = os.fsync
 
         def selective_fsync(fd: int) -> None:
             # Fail only on the dir fsync. Distinguish via fstat: file fsync
             # targets a regular file, dir fsync targets a directory.
             if stat.S_ISDIR(os.fstat(fd).st_mode):
                 raise OSError("dir sync failed")
-            real_fsync(fd)
 
-        with patch("ltspice_mcp.lib.os.fsync", side_effect=selective_fsync):
+        with watched_flushes(selective_fsync):
             atomic_write_text(path, "data")  # must not raise
 
         assert path.read_text() == "data"
@@ -271,22 +292,16 @@ class TestDurability:
     def test_dir_fsync_skipped_on_windows(self, tmp_path: Path) -> None:
         """When sys.platform is 'win32', the dir fsync path is skipped."""
         path = tmp_path / "out.txt"
-        real_fsync = os.fsync
-        fsync_count = 0
-
-        def counting_fsync(fd: int) -> None:
-            nonlocal fsync_count
-            fsync_count += 1
-            real_fsync(fd)
+        flushed: list[int] = []
 
         with (
             patch("ltspice_mcp.lib.sys.platform", "win32"),
-            patch("ltspice_mcp.lib.os.fsync", side_effect=counting_fsync),
+            watched_flushes(flushed.append),
         ):
             atomic_write_text(path, "data")
 
-        # Only the file fsync ran; dir fsync is a no-op on Windows.
-        assert fsync_count == 1
+        # Only the file's flush ran; dir fsync is a no-op on Windows.
+        assert len(flushed) == 1
         assert path.read_text() == "data"
 
 

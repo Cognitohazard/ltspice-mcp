@@ -1,0 +1,7 @@
+* divider swept by V1, saving only the current through V1
+V1 in 0 0
+R1 in out 1k
+R2 out 0 1k
+.save i(v1)
+.dc V1 0 10 5
+.end

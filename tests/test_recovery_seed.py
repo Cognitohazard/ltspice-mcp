@@ -23,7 +23,7 @@ from ltspice_mcp.lib.recovery_journal import new_root_journal, save_journal
 from ltspice_mcp.lib.recovery_records import ExecutionRecord, RecoveryError
 from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
-from tests.conftest import LIVENESS_S, coordinator_returned
+from tests.conftest import LIVENESS_S, coordinator_returned, needs_controlled_startup
 from tests.test_recovery_launch import _process, _start
 from tests.test_recovery_launch import committed as committed
 from tests.test_recovery_records import recovery_job
@@ -209,6 +209,7 @@ def _write_draw(folder):
     )
 
 
+@needs_controlled_startup
 @pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH")
 def test_python_api_preserves_seed_execution_field(work_dir):
     _write_draw(work_dir)
@@ -240,6 +241,7 @@ def test_python_api_preserves_seed_execution_field(work_dir):
         assert recorded.cases[0].native_statistics is None
 
 
+@needs_controlled_startup
 @pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH")
 @pytest.mark.asyncio
 async def test_real_seeded_coordinator_reproduces_electrical_results(work_dir):
@@ -263,6 +265,7 @@ async def test_real_seeded_coordinator_reproduces_electrical_results(work_dir):
         assert b"setseed" not in job.recovery.execution.startup.spinit.path.read_bytes()
 
 
+@needs_controlled_startup
 @pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH")
 @pytest.mark.asyncio
 async def test_real_seed_domain_endpoints(work_dir):
@@ -287,6 +290,7 @@ def _operating_point_values(case):
     return dict(zip(names, values, strict=True))
 
 
+@needs_controlled_startup
 @pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH")
 @pytest.mark.asyncio
 async def test_real_repeat_for_each_admitted_random_function(work_dir):
@@ -346,6 +350,7 @@ async def test_multiple_plot_inputs_refuse_before_claim(work_dir, monkeypatch, a
     assert await asyncio.to_thread(load_journal, Store(work_dir), args.request_id) is None
 
 
+@needs_controlled_startup
 @pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH")
 @pytest.mark.asyncio
 async def test_seeded_retry_keeps_successes_and_reuses_recorded_seed(work_dir, monkeypatch):

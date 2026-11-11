@@ -1,6 +1,6 @@
 """Argument models the six operations validate against, importable by name.
 
-The engine validates every call against these pydantic models, so a rejection
+The API validates every call against these pydantic models, so a rejection
 names them: *"Input should be a valid dictionary or instance of RenderPolicy"*.
 Before this module there was no way to act on that — the type the message named
 could not be imported, and reaching it meant guessing at private modules. Here
@@ -61,6 +61,7 @@ from ltspice_mcp.lib.schematic_ops import (
     OpRemoveDirective,
     OpRemoveNetLabel,
     OpRemoveWire,
+    OpReplaceComponent,
     OpReplaceDirective,
     OpSetComponentAttribute,
     OpSetComponentValue,
@@ -126,6 +127,7 @@ MoveComponentOp = OpMoveComponent
 MoveOp = OpMove
 RemoveComponentOp = OpRemoveComponent
 RemoveDirectiveOp = OpRemoveDirective
+ReplaceComponentOp = OpReplaceComponent
 ReplaceDirectiveOp = OpReplaceDirective
 RemoveNetLabelOp = OpRemoveNetLabel
 RemoveWireOp = OpRemoveWire
@@ -220,6 +222,7 @@ __all__ = [  # noqa: RUF022 - grouped by the operation that takes them
     "MoveOp",
     "RemoveComponentOp",
     "RemoveDirectiveOp",
+    "ReplaceComponentOp",
     "ReplaceDirectiveOp",
     "RemoveNetLabelOp",
     "RemoveWireOp",

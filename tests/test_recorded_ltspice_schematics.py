@@ -16,9 +16,8 @@ from pathlib import Path, PureWindowsPath
 
 import pytest
 from spicelib.editor.asc_editor import AscEditor
-from spicelib.utils.file_search import search_file_in_containers
 
-from ltspice_mcp.lib import schematic_ops
+from ltspice_mcp.lib import symbol_library
 from ltspice_mcp.lib.asc_document import parse_asc
 from ltspice_mcp.lib.connectivity import NamedNets, name_keys, named_labels, signature
 from ltspice_mcp.lib.deck_prep import stage_sheet
@@ -46,6 +45,7 @@ from ltspice_mcp.lib.symbol_library import SymbolLibrary, SymbolResolver, find_s
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import verify as verify_tool
 from tests import _ltspice_recorded as rec
+from tests._asc_ops import _inspect_item as inspect_item
 from tests._asc_ops import apply_ops, inspect_one, inspect_refusal, sha_of, sheet_findings
 from tests._schematic_fixtures import open_editor
 from tests.conftest import FIXTURES_DIR, FakeSim
@@ -332,6 +332,46 @@ async def test_node_names_that_differ_only_in_case_are_one_node(
     assert {(p["reference"], p["pin"]) for p in on_sheet["pins"]} == {("R1", "1"), ("R2", "1")}
     assert on_sheet["labels"] == ["OUT", "out"]
     assert "is_shorted" not in on_sheet
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_a_name_on_no_net_is_refused_alike_on_a_sheet_and_on_its_export(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """``same_name_labels`` labels R1's and R2's top pins ``n`` and grounds the
+    others; LTspice exports ``R1 n 0`` and ``R2 n 0``. The net query reads the
+    sheet and the export alike: ``n`` and every spelling of ground hold both
+    parts, and a name that is neither a label of the sheet nor a node of the
+    export is refused by both. On the export it was answered as a net with
+    nothing on it, so a mistyped node read as an empty net."""
+    case_id = "connectivity/same_name_labels"
+    sheet = rec.stage_sheet(build, case_id, work_dir)
+    export = work_dir / f"{sheet.stem}.net"
+    export.write_bytes(rec.recorded(build, f"{case_id}.net").read_bytes())
+
+    for path in (sheet, export):
+        for at, terminal in [("n", 1), ("net:n", 1), ("0", 2), ("gnd", 2), ("net:GND", 2)]:
+            data = await inspect_one(state_no_sim, {"kind": "net", "path": str(path), "at": at})
+            rows = data["pins"] if path == sheet else data["members"]
+            terminals = {
+                (row["reference"], int(row["pin"] if path == sheet else row["terminal"]))
+                for row in rows
+            }
+            assert terminals == {("R1", terminal), ("R2", terminal)}, (path.name, at)
+        for at in ["nosuch", "net:nosuch"]:
+            item = await inspect_item(state_no_sim, {"kind": "net", "path": str(path), "at": at})
+            assert not item["ok"], (path.name, at, item)
+            assert item["error"]["code"] == "not_found", (path.name, at)
+            assert "'nosuch' not found" in item["error"]["message"], (path.name, at)
+    # The export's refusal names the nodes there are.
+    item = await inspect_item(state_no_sim, {"kind": "net", "path": str(export), "at": "nosuch"})
+    assert "n, 0" in item["error"]["message"], item
+    # A pin of a part neither holds is refused alike too.
+    for path in (sheet, export):
+        item = await inspect_item(state_no_sim, {"kind": "net", "path": str(path), "at": "R9.1"})
+        assert not item["ok"], (path.name, item)
+        assert item["error"]["code"] == "not_found", (path.name, item)
+        assert "hint" not in item["error"], (path.name, item)
 
 
 @pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(CONNECTIVITY)))
@@ -789,15 +829,18 @@ def _found_by(build: str, case_id: str) -> bool:
     return bool(rec.entry(build, case_id)["outputs"])
 
 
-def _staged_search(case_id: str, directory: Path) -> tuple[Path, str, list[Path]]:
+def _staged_search(
+    case_id: str, directory: Path, library: Path | None = None
+) -> tuple[Path, str, list[Path]]:
     """The case's sheet with its symbol where the recording had it; the name the
     sheet uses; and, for a library case, a library that keeps ``battery`` in
-    ``Misc`` as both builds' do."""
+    ``Misc`` as both builds' do, at ``library`` (``directory/library`` unless
+    given)."""
     sheet = rec.stage_sheet(rec.BUILDS[0], case_id, directory / "sheet")
     name = parse_asc(sheet.read_bytes()).symbols[0].symbol
     libraries: list[Path] = []
     if case_id in IN_THE_LIBRARY:
-        library = directory / "library"
+        library = directory / "library" if library is None else library
         (library / "Misc").mkdir(parents=True)
         (library / "Misc" / "battery.asy").write_text(
             "Version 4\nSYMATTR Prefix V\nPIN 0 16 NONE 0\nPINATTR PinName +\n"
@@ -884,10 +927,16 @@ class TestTheServerFindsASymbolWhereEitherBuildDoes:
             opened = True
         assert opened == found
 
-    async def test_the_listing(self, case_id: str, config, work_dir: Path):
+    @pytest.mark.parametrize("sheets_folder", ["not a library", "a library spelled another way"])
+    async def test_the_listing(self, case_id: str, sheets_folder: str, config, work_dir: Path):
         """Every name ``inspect(kind="symbols")`` lists for the sheet resolves,
-        so ``inspect(kind="symbol")`` and ``add_component`` take it."""
+        so ``inspect(kind="symbol")`` and ``add_component`` take it, and a bare
+        name it does not list does not resolve. The sheet's own folder is
+        searched as the sheet's however a library names it too."""
         sheet, name, libraries = _staged_search(case_id, work_dir)
+        if sheets_folder != "not a library":
+            (work_dir / "other").mkdir()
+            libraries.append(work_dir / "other" / ".." / sheet.parent.name)
         state = SessionState.create(
             dataclasses.replace(config, symbol_paths=libraries), available={}
         )
@@ -896,6 +945,55 @@ class TestTheServerFindsASymbolWhereEitherBuildDoes:
         assert [one for one in listed if resolver.load(one) is None] == []
         bare = name.replace("\\", "/").rsplit("/", 1)[-1]
         assert (bare in listed) == (resolver.resolve(bare) is not None)
+        either = any(_found_by(build, case_id) for build in rec.BUILDS)
+        assert (resolver.resolve(name) is not None) == either
+
+    @pytest.mark.parametrize("cwd", ["empty", "holding the symbol"])
+    async def test_every_tool(
+        self,
+        case_id: str,
+        cwd: str,
+        config,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """``edit_schematic`` opens the sheet, ``inspect(kind="symbol")`` reads
+        the symbol, and ``verify_circuit`` finds it, exactly where either build
+        finds it, wherever the server runs. spicelib's own search also walked the
+        server's working directory. The library is kept below the sheet's folder,
+        where a lookup beside the sheet does not look, so that the edit's record
+        reads no symbol from outside it."""
+        from ltspice_mcp.errors import SymbolResolutionError
+
+        sheet, name, libraries = _staged_search(case_id, work_dir, work_dir / "sheet" / "library")
+        elsewhere = work_dir / "elsewhere"
+        elsewhere.mkdir()
+        if cwd != "empty":
+            part = (INPUTS / "search" / "lib" / "part.asy").read_bytes()
+            for spelled in ("part", "lib/part", "battery", "Misc/battery", "Wrong/battery"):
+                (elsewhere / spelled).parent.mkdir(parents=True, exist_ok=True)
+                (elsewhere / f"{spelled}.asy").write_bytes(part)
+        monkeypatch.chdir(elsewhere)
+        state = SessionState.create(
+            dataclasses.replace(config, symbol_paths=libraries), available={}
+        )
+        either = any(_found_by(build, case_id) for build in rec.BUILDS)
+
+        edit = [{"op": "add_directive", "instruction": ".op", "x": 96, "y": 400}]
+        relative = sheet.relative_to(work_dir).as_posix()
+        if either:
+            data = await apply_ops(state, relative, edit)
+            assert data["commit_state"] == "committed", data.get("error") or data.get("failures")
+        else:
+            with pytest.raises(SymbolResolutionError, match="not found beside the sheet"):
+                await apply_ops(state, relative, edit)
+        query = {"kind": "symbol", "name": name, "path": str(sheet)}
+        if either:
+            assert len((await inspect_one(state, query))["pins_by_rotation"]["R0"]) == 2
+        else:
+            assert "did not resolve" in await inspect_refusal(state, query)
+        checked = await run_verify_circuit(state, path=str(sheet), checks=["symbols"])
+        assert checked["rules_run"]["unresolved_symbol"] == (0 if either else 1), checked
 
 
 #: ``connectivity/bus_label``: the pins both builds put on one node, because a
@@ -1561,25 +1659,27 @@ class TestExportedNames:
         with pytest.raises(FileNotFoundError, match=r"probe4\.asc not found"):
             AscEditor(str(sheet))
         searched: list[str] = []
+        find_file = symbol_library.find_file
 
-        def search(filename: str, *containers: str) -> str | None:
-            searched.append(filename)
-            return search_file_in_containers(filename, *containers)
+        def search(name: str, sheet_folder: Path | None, libraries, suffix: str) -> Path | None:
+            if suffix == ".asc":
+                searched.append(name)
+            return find_file(name, sheet_folder, libraries, suffix)
 
-        monkeypatch.setattr(schematic_ops, "search_file_in_containers", search)
+        monkeypatch.setattr(symbol_library, "find_file", search)
         editor = _editor(sheet)
         assert sorted(editor.get_components()) == ["U1", "X2", "x3"]
         # Its symbol gives Prefix X, for which LTspice reads no sheet.
         assert searched == []
-        # A block that gives none is looked for. A search walks every folder
-        # it is given, so the block the sheet places three times is searched
-        # for once.
+        # A block that gives none is looked for. A search walks every folder of
+        # a library, so the block the sheet places three times is searched for
+        # once.
         symbol = sheet.parent / "probe4.asy"
         symbol.write_text(
             "".join(line for line in symbol.read_text().splitlines(True) if "Prefix" not in line)
         )
         _editor(sheet)
-        assert searched == ["probe4.asc"]
+        assert searched == ["probe4"]
 
     async def test_a_sheet_with_a_block_symbol_of_no_sheet_can_be_edited(
         self, build: str, state_no_sim, work_dir: Path
@@ -1785,3 +1885,52 @@ def test_the_editor_opens_a_blocks_sheet_where_ltspice_reads_it(
     editor = _editor(rec.stage_sheet("ltspice26", case_id, tmp_path))
     block = editor.get_subcircuit("X1")
     assert (None if block is None else sorted(block.get_components())) == inside
+
+
+#: A sheet that cannot be opened, for want of a symbol no library holds: read
+#: as a block's own sheet, it would make the sheet placing the block refuse.
+_UNOPENABLE_SHEET = (
+    "Version 4\nSHEET 1 880 680\nSYMBOL not_in_any_library 0 0 R0\nSYMATTR InstName X9\n"
+)
+
+
+@pytest.mark.parametrize("own_sheet", ["beside its symbol", "gone"])
+@pytest.mark.parametrize("cwd", ["empty", "holding a sheet of the block's name"])
+async def test_a_blocks_sheet_is_found_alike_whatever_the_working_directory(
+    own_sheet: str,
+    cwd: str,
+    state_no_sim: SessionState,
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The block is read from its own sheet beside its symbol, as both builds
+    export it, and with none there it is left unresolved (Bug 22), whatever
+    folder the server runs in. spicelib's own search walked the server's
+    working directory for a missing sheet, so there a sheet of the block's
+    name was read as the block's, and one that could not be opened refused
+    the sheet placing it. ``inspect`` and ``verify_circuit`` read the sheet
+    placing the block alike."""
+    sheet = rec.stage_sheet("ltspice26", "export/hier_plain_top", work_dir / "sheet")
+    if own_sheet == "gone":
+        (sheet.parent / "hier_plain.asc").unlink()
+    elsewhere = work_dir / "elsewhere"
+    elsewhere.mkdir()
+    if cwd != "empty":
+        (elsewhere / "hier_plain.asc").write_text(_UNOPENABLE_SHEET, encoding="utf-8")
+        (elsewhere / "blocks").mkdir()
+        (elsewhere / "blocks" / "hier_plain.asc").write_text(_UNOPENABLE_SHEET, encoding="utf-8")
+    monkeypatch.chdir(elsewhere)
+
+    block = _editor(sheet).get_subcircuit("X1")
+    inside = ["R1", "R2"] if own_sheet == "beside its symbol" else None
+    assert (None if block is None else sorted(block.get_components())) == inside
+    data = await apply_ops(
+        state_no_sim,
+        sheet.relative_to(work_dir).as_posix(),
+        [{"op": "add_directive", "instruction": ".op", "x": 96, "y": 800}],
+    )
+    assert data["commit_state"] == "committed", data.get("error") or data.get("failures")
+    components = await inspect_one(state_no_sim, {"kind": "components", "path": str(sheet)})
+    assert "X1" in {row["reference"] for row in components["components"]}
+    checked = await run_verify_circuit(state_no_sim, path=str(sheet), checks=["symbols"])
+    assert checked["rules_run"]["unresolved_symbol"] == 0, checked

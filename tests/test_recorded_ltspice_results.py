@@ -22,7 +22,8 @@ from pydantic import ValidationError
 
 from ltspice_mcp.api import ApiValidationError
 from ltspice_mcp.errors import NoAxisError, OtherRawNotWritten, ResultError
-from ltspice_mcp.lib import metrics, services
+from ltspice_mcp.lib import metrics, services, trace_names
+from ltspice_mcp.lib.decoded_raw import DecodedRaw
 from ltspice_mcp.lib.device_names import (
     owner_path,
     parse_device_param,
@@ -51,6 +52,7 @@ from ltspice_mcp.lib.metrics import aggregate_log_measurements
 from ltspice_mcp.lib.raw_header import RawHeaderError, preflight_raw
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
+    get_step_count,
     has_valid_raw_header,
     may_hold_compressed_transient,
     raw_writer_command,
@@ -66,8 +68,10 @@ from ltspice_mcp.lib.result_observations import coarse_compressed_waveform, deck
 from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analysis, inspect_tools
+from ltspice_mcp.tools._base import recovery_hint
 from ltspice_mcp.tools.analyze import (
     AnalyzeResultsInput,
+    AnalyzeSourceInput,
     handle_analyze_results,
     render_attached_analysis,
 )
@@ -817,6 +821,323 @@ def test_every_reader_finds_a_step_parameter_whatever_its_case(
     assert [group["by"] for group in groups] == [{"R": 1000.0}, {"R": 2000.0}, {"R": 4000.0}]
 
 
+def says_subcircuit_pin(text: str) -> None:
+    """``text`` says IN is a pin of x1, lists x1's pins, and names the current."""
+    assert "is a pin of subcircuit instance x1" in text.lower(), text
+    assert "pins are in, out" in text.lower(), text
+    assert "ix(x1:in) is the current into the pin" in text.lower(), text
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_every_reader_says_a_subcircuit_pin_is_its_parents_net(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """``export/hier_plain_top_run`` holds ``V(n001)`` and ``V(out)``, the
+    parent's nets on block ``x1``'s pins IN and OUT, and ``Ix(x1:in)``, the
+    current into IN, but no ``V(x1:in)``. Every reader of a signal says that
+    IN is a pin, lists the pins in the order the instance line lists their
+    nets (the raw's ``Backannotation`` line), and names the current: the
+    Python API's trace, a node pair, and analyze_results on this operating
+    point. plot_waveform's is the next test."""
+    raw = rec.stage_run(build, "export/hier_plain_top_run", work_dir)
+    loaded = SyncApi(state_no_sim).load_raw(path=raw)
+    for asked in ("V(x1:in)", "V(X1:IN)", "V(x1:in,out)"):
+        with pytest.raises(ResultError) as refused:
+            loaded.trace(asked)
+        says_subcircuit_pin(str(refused.value))
+    analyzed = SyncApi(state_no_sim).analyze_results(
+        sources=[{"path": str(raw), "label": "run"}],
+        recipes=[{"metric": "value", "key": "v", "expr": "V(x1:in)"}],
+    )
+    (failure,) = analyzed["failures"]
+    says_subcircuit_pin(failure["message"])
+    # A name inside the block that is no pin of it gets no such hint.
+    with pytest.raises(ResultError) as refused:
+        loaded.trace("V(x1:mid)")
+    assert "is a pin" not in str(refused.value)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_plot_waveform_says_a_subcircuit_pin_is_its_parents_net(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """plot_waveform charts no operating point, so its case is the transient
+    ``raw/subckt_names_tran``: TOP is a pin of ``xa``, whose current XVII
+    writes as ``Ix(a:TOP)`` and with no ``Backannotation`` line, so only
+    LTspice 26's reply lists the pins."""
+    raw = rec.stage_run(build, "raw/subckt_names_tran", work_dir)
+    with pytest.raises(ResultError) as refused:
+        await analysis.handle_plot_waveform(
+            analysis.PlotWaveformInput(path=str(raw), signals=["V(xa:top)"], open=False),
+            state_no_sim,
+        )
+    text = str(refused.value).lower()
+    assert "'top' is a pin of subcircuit instance xa" in text, text
+    current = "ix(a:top)" if build == "ltspice17" else "ix(xa:top)"
+    assert f"{current} is the current into the pin" in text, text
+    assert ("pins are top, out" in text) == (build != "ltspice17"), text
+
+
+def refusals_of(state: SessionState, raw: Path, asked: str, *, at: str | None = None) -> list[str]:
+    """What each reader of a signal by name says of ``asked``, which must read
+    no trace of ``raw``: the Python API's trace, a read of that signal alone
+    (refused by the parser process), and the value recipe through
+    analyze_results, read off an operating point's bias point or at ``at``."""
+    api = SyncApi(state)
+    texts = []
+    with pytest.raises(ResultError) as refused:
+        api.load_raw(path=raw).trace(asked)
+    texts.append(str(refused.value))
+    with pytest.raises(ResultError) as refused:
+        api.load_raw(path=raw, signals=[asked])
+    texts.append(str(refused.value))
+    recipe = {"metric": "value", "key": "v", "expr": asked, **({"at": at} if at else {})}
+    analyzed = api.analyze_results(sources=[{"path": str(raw), "label": "run"}], recipes=[recipe])
+    (failure,) = analyzed["failures"]
+    texts.append(failure["message"])
+    return texts
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_every_reader_says_a_deck_instances_pin_is_its_parents_net(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """``raw/op_one_subckt`` calls ``X1 in a div``, so pin OUT of x1 is net
+    ``a``, and the raw holds ``V(a)`` and the current into the pin but no
+    ``V(x1:out)``. Every reader says OUT is a pin and names the current, as
+    for a sheet's block above; only LTspice 26 writes a ``Backannotation``
+    line for a deck's instance, so only its refusals list the pins."""
+    raw = rec.stage_run(build, "raw/op_one_subckt", work_dir)
+    current = "ix(1:out)" if rec.generation(build) == "xvii" else "ix(x1:out)"
+    for text in refusals_of(state_no_sim, raw, "V(x1:out)"):
+        lowered = text.lower()
+        assert "'out' is a pin of subcircuit instance x1" in lowered, text
+        assert f"{current} is the current into the pin" in lowered, text
+        assert ("pins are top, out" in lowered) == (rec.generation(build) != "xvii"), text
+
+
+SCHEMATIC_REFERENCE = (
+    "LTspice names a part placed on a schematic by its reference, without the X "
+    "its netlist line adds in front."
+)
+DECK_INSTANCE_X = "An instance a deck calls with X keeps that X in the names a result gives it."
+XVII_DROPS_X = (
+    "The LTspice build that wrote this result names each subcircuit instance "
+    "without the X that starts its name in the netlist."
+)
+SCHEMATIC_KEEPS_X = (
+    "LTspice keeps the X of a schematic part whose reference starts with one, "
+    "and of an instance a deck line calls with X."
+)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_every_reader_names_a_schematic_part_by_its_reference(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """``export/hier_plain_top_run`` places block X1 on a sheet. Its netlist
+    line calls it ``X§X1`` on LTspice 26 and ``XX1`` on XVII, and each build's
+    raw names it by its reference, ``Ix(x1:in)``. XVII names every instance
+    without its X, so the netlist's spelling ``Ix(xx1:in)`` reads that trace
+    there. On LTspice 26 it reads none, and every reader names the trace and
+    says why."""
+    raw = rec.stage_run(build, "export/hier_plain_top_run", work_dir)
+    if rec.generation(build) == "xvii":
+        api = SyncApi(state_no_sim)
+        loaded = api.load_raw(path=raw)
+        assert loaded.trace("Ix(xx1:in)") == pytest.approx(loaded.trace("Ix(x1:IN)"))
+        assert "Ix(x1:IN)" in api.load_raw(path=raw, signals=["Ix(xx1:in)"]).signals
+        return
+    for text in refusals_of(state_no_sim, raw, "Ix(xx1:in)"):
+        assert "Ix(x1:in) is in this result, which names 'xx1' as 'x1'." in text, text
+        assert SCHEMATIC_REFERENCE in text, text
+
+
+#: Names that miss a trace of ``raw/subckt_names_tran_saved`` only by the X of
+#: an instance on their path, and per build generation the trace the refusal
+#: names, what the result names otherwise, and why. None where the build
+#: reads the name as it is: XVII writes ``Id(a:Mdrv)`` itself.
+DECK_X_SPELLINGS: dict[str, dict[str, tuple[str, str, str] | None]] = {
+    "Id(a:Mdrv)": {
+        "current": ("Id(xa:Mdrv)", "'a' as 'xa'", DECK_INSTANCE_X),
+        "xvii": None,
+    },
+    "I(a:xin:Rin)": {
+        "current": ("I(xa:xin:Rin)", "'a' as 'xa'", DECK_INSTANCE_X),
+        "xvii": ("I(a:in:Rin)", "'xin' as 'in'", XVII_DROPS_X),
+    },
+}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+@pytest.mark.parametrize("asked", list(DECK_X_SPELLINGS))
+def test_every_reader_names_a_deck_instances_trace_by_its_x(
+    build: str, asked: str, state_no_sim: SessionState, work_dir: Path
+):
+    """``raw/subckt_names_tran_saved`` holds the devices inside ``Xa`` and
+    ``Xa``'s ``Xin``: LTspice 26 names them with each instance's X
+    (``Id(xa:Mdrv)``) and XVII without (``Id(a:Mdrv)``). A name that differs
+    from one of them only by an instance's X reads no trace, and every reader
+    names the one it reads instead and says why. plot_waveform's is the next
+    test."""
+    raw = rec.stage_run(build, "raw/subckt_names_tran_saved", work_dir)
+    expected = DECK_X_SPELLINGS[asked][rec.generation(build)]
+    if expected is None:
+        assert SyncApi(state_no_sim).load_raw(path=raw).trace(asked).size > 0
+        return
+    trace, named, why = expected
+    for text in refusals_of(state_no_sim, raw, asked, at="0.5u"):
+        assert f"{trace} is in this result, which names {named}." in text, text
+        assert why in text, text
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_plot_waveform_names_a_deck_instances_trace_by_its_x(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    raw = rec.stage_run(build, "raw/subckt_names_tran_saved", work_dir)
+    trace, named, why = cast(
+        "tuple[str, str, str]", DECK_X_SPELLINGS["I(a:xin:Rin)"][rec.generation(build)]
+    )
+    with pytest.raises(ResultError) as refused:
+        await analysis.handle_plot_waveform(
+            analysis.PlotWaveformInput(path=str(raw), signals=["I(a:xin:Rin)"], open=False),
+            state_no_sim,
+        )
+    assert f"{trace} is in this result, which names {named}. {why}" in str(refused.value)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_the_reason_for_an_instances_x_is_the_rule_of_the_results_source(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """The reason given for an instance's X is the rule of where the result
+    came from. A sheet's block X1 is ``x1`` on LTspice 26 because its
+    reference starts with X, so ``Ix(1:in)`` gets the schematic's rule and
+    not a deck's; on XVII it is netlist ``XX1`` without its X. A deck's
+    ``Xa`` is ``xa`` on LTspice 26, so ``Id(xxa:Mdrv)`` adds an X no rule
+    puts there: the trace is named with no reason. On XVII, where ``Xa`` is
+    ``a``, that name is two X from any trace and is named nothing."""
+    sheet = rec.stage_run(build, "export/hier_plain_top_run", work_dir / "sheet")
+    deck = rec.stage_run(build, "raw/subckt_names_tran_saved", work_dir / "deck")
+    reasons = (SCHEMATIC_REFERENCE, SCHEMATIC_KEEPS_X, DECK_INSTANCE_X, XVII_DROPS_X)
+    xvii = rec.generation(build) == "xvii"
+    expected = (
+        f"Ix(x1:IN) is in this result, which names '1' as 'x1'. {XVII_DROPS_X}"
+        if xvii
+        else f"Ix(x1:in) is in this result, which names '1' as 'x1'. {SCHEMATIC_KEEPS_X}"
+    )
+    for text in refusals_of(state_no_sim, sheet, "Ix(1:in)"):
+        assert expected in text, text
+        assert DECK_INSTANCE_X not in text, text
+    for text in refusals_of(state_no_sim, deck, "Id(xxa:Mdrv)", at="0.5u"):
+        assert ("is in this result" in text) == (not xvii), text
+        if not xvii:
+            assert "Id(xa:Mdrv) is in this result, which names 'xxa' as 'xa'." in text, text
+        assert not any(reason in text for reason in reasons), text
+
+
+#: A pin asked for under its instance's other X: the instance as the refusal
+#: names it, the current into the pin, the pins the raw lists for it (None
+#: where it lists none), how the result names the instance and why, per
+#: build generation. XVII reads either spelling of these instances, so its
+#: refusal is the plain pin note under the name as asked.
+X_SPELLED_PINS: dict[tuple[str, str], dict[str, tuple[str, str, str | None, str, str]]] = {
+    ("export/hier_plain_top_run", "V(xx1:in)"): {
+        "current": ("x1", "Ix(x1:in)", "in, out", "'xx1' as 'x1'", SCHEMATIC_REFERENCE),
+        "xvii": ("xx1", "Ix(x1:IN)", "in, out", "", ""),
+    },
+    ("raw/subckt_names_tran_saved", "V(a:out)"): {
+        "current": ("xa", "Ix(xa:out)", "top, out", "'a' as 'xa'", DECK_INSTANCE_X),
+        "xvii": ("a", "Ix(a:OUT)", None, "", ""),
+    },
+}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+@pytest.mark.parametrize(("case_id", "asked"), list(X_SPELLED_PINS))
+def test_every_reader_says_a_pin_is_its_parents_net_under_either_x(
+    build: str, case_id: str, asked: str, state_no_sim: SessionState, work_dir: Path
+):
+    """A pin asked for under its sheet part's netlist spelling
+    (``V(xx1:in)``), or under a deck instance's name without its X
+    (``V(a:out)``), is still a pin: every reader says so under the instance's
+    name in the result, says how the result names it and why, lists its pins
+    where the raw does, and names the current into it."""
+    raw = rec.stage_run(build, case_id, work_dir)
+    instance, current, pins, named, why = X_SPELLED_PINS[case_id, asked][rec.generation(build)]
+    pin = asked[asked.index(":") + 1 : -1]
+    at = None if case_id.startswith("export/") else "0.5u"
+    for text in refusals_of(state_no_sim, raw, asked, at=at):
+        assert f"'{pin}' is a pin of subcircuit instance {instance}," in text, text
+        assert f"{current} is the current into the pin." in text, text
+        assert (f"{instance}'s pins are {pins}," in text) == (pins is not None), text
+        if named:
+            assert f"This result names {named}. {why}" in text, text
+        else:
+            assert "This result names" not in text, text
+
+
+UNLABELLED_NETS = (
+    "This result is a schematic's, and LTspice names a net that has no label N001, N002, ..."
+)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_every_reader_says_a_schematics_unlabelled_nets_are_named_n001(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """``export/hier_plain_top_run`` drives block X1 from V1 over a wire with
+    no label, which each build's raw holds as ``V(n001)``. A name the sheet
+    gives no net, ``V(inp)``, reads nothing, and every reader says how LTspice
+    named the sheet's unlabelled nets, lists them, and says a label names one:
+    a single node, and a pair's node."""
+    raw = rec.stage_run(build, "export/hier_plain_top_run", work_dir)
+    texts = refusals_of(state_no_sim, raw, "V(inp)")
+    with pytest.raises(ResultError) as refused:
+        SyncApi(state_no_sim).load_raw(path=raw).trace("V(inp,out)")
+    texts.append(str(refused.value))
+    for text in texts:
+        assert f"{UNLABELLED_NETS}: here V(n001)." in text, text
+        assert "Put a net label inp on the net and run it again to read V(inp)." in text, text
+
+
+@pytest.mark.parametrize(("build", "case_id"), ALL_COMPLETE)
+def test_a_result_is_known_as_a_schematics_by_its_title(build: str, case_id: str, tmp_path: Path):
+    """Whether a run was of a sheet, which is when its unlabelled nets are
+    N001, …, is read off the raw's title: XVII writes a deck's first line,
+    which a sheet's export writes as ``* <sheet>.asc``, and LTspice 26 the
+    path of the deck it ran, a sheet's exported ``.net``. Every recorded run
+    of a sheet reads as one, and every run of a deck as none."""
+    header = rec.decode(build, case_id, tmp_path).raw.header
+    assert trace_names.from_schematic(header) == rec.CASES.case(case_id).source.endswith(".asc")
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_device_inside_a_schematic_part_is_named_under_its_reference(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """``export/sheet_part_names`` places a stock NMOS given a Prefix of X
+    as MB1, running a subcircuit that wraps an NMOS card M1, and calls the
+    same subcircuit from a directive as XMB2. LTspice 26 names the device
+    inside the part by the part's reference and the one inside the deck's
+    instance with its X, so the netlist's spelling of the part's device
+    reads nothing and the refusal names the trace. XVII names both without
+    the X and reads that spelling."""
+    if not rec.has(build, "export/sheet_part_names.raw"):
+        pytest.skip(rec.CASES.behaviours["sheet-part-trace-names"].pending)
+    raw = rec.stage_run(build, "export/sheet_part_names", work_dir)
+    names = SyncApi(state_no_sim).load_raw(path=raw).signals
+    if rec.generation(build) == "xvii":
+        assert {"Id(mb1:M1)", "Id(mb2:M1)"} <= set(names), names
+        assert SyncApi(state_no_sim).load_raw(path=raw).trace("Id(xmb1:M1)").size == 1
+        return
+    assert {"Id(mb1:M1)", "Id(xmb2:M1)"} <= set(names), names
+    for text in refusals_of(state_no_sim, raw, "Id(xmb1:M1)"):
+        assert "Id(mb1:M1) is in this result, which names 'xmb1' as 'mb1'." in text, text
+        assert SCHEMATIC_REFERENCE in text, text
+
+
 @pytest.mark.parametrize("build", rec.BUILDS)
 async def test_plot_waveform_finds_a_step_parameter_whatever_its_case(
     build: str, state_no_sim: SessionState, work_dir: Path
@@ -856,6 +1177,77 @@ def test_the_api_says_why_26s_op_raw_of_a_stepped_run_has_no_steps(
     with pytest.raises(ResultError, match="does not say which step") as refused:
         loaded.trace(loaded.signals[0])
     assert "run .op under the same .step" in str(refused.value)
+
+
+def _step_count_reply(state: SessionState, raw: Path) -> dict[str, Any]:
+    """What ``analyze_results`` answers for a raw's summary, which counts its
+    steps: the one value, or the one failure."""
+    reply = SyncApi(state).analyze_results(
+        sources=[{"path": str(raw), "label": "raw"}],
+        recipes=[{"key": "summary", "metric": "summary"}],
+        include={"fields": ["value"]},
+    )
+    if reply.get("failures"):
+        [failure] = reply["failures"]
+        return failure
+    [row] = reply["results"]["summary"]["values"]
+    return row["value"]
+
+
+def _steps_refused(state: SessionState, raw: Path, decoded: DecodedRaw) -> str:
+    """The reason every reader of how many steps ``raw`` has gives for not
+    counting them: the tools' step count, the API's ``step_count`` and
+    ``steps``, and ``analyze_results``. Each gives the same one."""
+    with pytest.raises(ResultError) as counted:
+        get_step_count(decoded)
+    reason = str(counted.value)
+    loaded = SyncApi(state).load_raw(raw)
+    for read in (lambda: loaded.step_count, lambda: loaded.steps):
+        with pytest.raises(ResultError) as refused:
+            read()
+        assert str(refused.value) == reason
+    assert reason in _step_count_reply(state, raw)["message"]
+    return reason
+
+
+@pytest.mark.parametrize("run", ["step_tran_op_raw", "step_ac_op_raw"])
+def test_no_reader_counts_steps_in_26s_op_raw_of_a_stepped_run(
+    run: str, state_no_sim: SessionState, work_dir: Path, tmp_path: Path
+):
+    """The run took three steps and LTspice 26 wrote one point, with nothing
+    that says whose step it is: no reader counts its steps, none as zero."""
+    raw = rec.stage_run("ltspice26", f"raw/{run}.op", work_dir)
+    decoded = rec.decode("ltspice26", f"raw/{run}.op", tmp_path).raw
+    reason = _steps_refused(state_no_sim, raw, decoded)
+    assert "does not say which step" in reason
+    assert "run .op under the same .step" in reason
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_no_reader_counts_steps_in_a_stepped_sweep_read_without_its_log(
+    build: str, state_no_sim: SessionState, work_dir: Path, tmp_path: Path
+):
+    """A stepped transient's step values are in its log, and a raw read
+    alone cannot be split into steps by them."""
+    raw = work_dir / "step_tran.raw"
+    raw.write_bytes(rec.recorded(build, "raw/step_tran.raw").read_bytes())
+    decoded = rec.decode_file(raw, tmp_path).raw
+    assert "Step boundaries are unresolved" in _steps_refused(state_no_sim, raw, decoded)
+
+
+def test_every_reader_counts_the_step_of_xviis_op_raw_of_a_stepped_run(
+    state_no_sim: SessionState, work_dir: Path, tmp_path: Path
+):
+    """XVII writes the same file's one point after the stepped ``r`` it was
+    solved at, so it is one step that says which it is, and every reader
+    counts that one."""
+    raw = rec.stage_run("ltspice17", "raw/step_tran_op_raw.op", work_dir)
+    decoded = rec.decode("ltspice17", "raw/step_tran_op_raw.op", tmp_path).raw
+    loaded = SyncApi(state_no_sim).load_raw(raw)
+    assert loaded.step_count == len(loaded.steps) == get_step_count(decoded) == 1
+    assert loaded.steps == [dict(step.parameters) for step in decoded.descriptor.steps]
+    assert list(loaded.steps[0]) == ["r"]
+    assert _step_count_reply(state_no_sim, raw)["step_count"] == 1
 
 
 def test_the_apis_log_readers_say_a_stopped_cases_results_end_early(
@@ -1062,24 +1454,24 @@ class TestMeasurements:
     ):
         """LTspice prints a crossing for each WHEN of these runs (all but XVII's
         ``f_param``, which it fails). Where the threshold it prints after ``=``
-        is a parameter, an expression or another measurement, the server's log
-        decoder fails that entry alone: its value is null and it carries the
-        line LTspice printed and the reason. Every other measurement of the log
-        reads. The same measurements stepped print a table of crossings, which
-        it reads."""
-        whens = {
-            name: line for name, line in self.printed(build, case_id).items() if name[1] == "_"
-        }
+        is a parameter, an expression, a braced expression or another
+        measurement, the server's log decoder fails that entry alone: its value
+        is null and it carries the line LTspice printed and the reason, with the
+        crossing as its ``at``. Every measurement the log printed has an entry,
+        and every other one reads. The same measurements stepped print a table
+        of crossings, which it reads."""
+        printed = self.printed(build, case_id)
+        whens = {name: line for name, line in printed.items() if name[1] == "_"}
         assert whens and all(" at " in line for line in whens.values())
         plain = rec.decode_log(build, case_id, tmp_path / "plain").section("measurements")
         assert plain["status"] == "parsed"
         entries = plain["value"]["measurements"]
+        assert set(printed) <= set(entries)
         unreadable = set()
         for name, line in whens.items():
-            if name not in entries:  # LTspice 26's braced threshold; pinned below
-                continue
-            threshold = line.split("=", 1)[1].rsplit(" at ", 1)[0]
+            threshold, crossing = line.split("=", 1)[1].rsplit(" at ", 1)
             entry = entries[name]
+            assert entry["at"] == float(crossing), name
             try:
                 float(threshold)
             except ValueError:
@@ -1099,13 +1491,30 @@ class TestMeasurements:
         stepped = rec.decode_log(build, f"{case_id}_step", tmp_path / "stepped")
         assert stepped.section("measurements")["status"] == "parsed"
 
-    def test_a_threshold_printed_in_braces_is_left_out_by_the_server(self, build: str):
-        """LTspice 26 prints ``t_braced: V(out)={vth} AT ...`` and the server's
-        parser leaves that measurement out; XVII prints ``v(out)=0.5``, which
-        it reads."""
-        names = set(self.measured(build, "log/meas_when_threshold_tran")["measurements"])
-        assert ("t_braced" in names) == (rec.generation(build) == "xvii")
-        assert {"t_number", "t_param", "t_expr", "t_meas"} <= names
+    def test_a_threshold_printed_in_braces_fails_only_its_own_entry(self, build: str):
+        """LTspice 26 prints ``t_braced: V(out)={vth} AT ...``, a line
+        spicelib's reader does not match. The server's parser still gives the
+        measurement an entry: unreadable, with the line and the reason, and the
+        crossing as its ``at``, as for the same threshold printed as ``vth``.
+        XVII prints ``v(out)=0.5``, which it reads. Either way the crossing is
+        the measurement's result."""
+        case_id = "log/meas_when_threshold_tran"
+        data = parse_measurements(rec.recorded(build, f"{case_id}.log"))
+        entries = cast(dict[str, Any], data["measurements"])
+        braced, param = entries["t_braced"], entries["t_param"]
+        assert braced["at"] == param["at"]
+        if rec.generation(build) == "xvii":
+            assert braced["values"] == [0.5]
+            assert "unreadable" not in braced
+        else:
+            assert braced["values"] == [None]
+            assert braced["unreadable"]["line"] == "t_braced: V(out)={vth} AT 6.98157501917e-05"
+            assert "'{vth}'" in braced["unreadable"]["reason"]
+        assert list(data["measurements"]) == [
+            "t_number", "t_param", "t_expr", "t_braced", "vmax", "t_meas",
+        ]  # fmt: skip
+        flat, _, _, _ = aggregate_log_measurements(data, INPUTS / f"{case_id}.cir")
+        assert flat["t_braced"] == flat["t_param"] == flat["t_number"]
 
     def test_only_xvii_fails_an_ac_when_against_a_parameter(self, build: str):
         """``WHEN mag(V(out))=k`` with ``.param k=0.70710678``: XVII prints it
@@ -1392,7 +1801,15 @@ class TestMeasurements:
 
     def test_a_directive_that_does_not_parse(self, build: str):
         """LTspice 26 stops before the run and says where; XVII runs, reports
-        the directive and takes the measurements around it."""
+        the directive and takes the measurements around it. The directive
+        check and the lint refuse the parenthesis left open before either."""
+        card = next(c for c in rec.deck_cards("log/meas_bad_syntax.cir") if c.name == "broken")
+        error = validate_directive(card.body, "LTspice")
+        assert error is not None
+        assert error.rule_name == "meas_unclosed_paren"
+        assert _lint_refusals("log/meas_bad_syntax") == [
+            ("meas-unclosed-paren-ltspice", ".meas tran broken FIND V(out AT 0.5m")
+        ]
         log = rec.recorded(build, "log/meas_bad_syntax.log")
         diagnostics = extract_log_diagnostics(log)
         if rec.generation(build) == "xvii":
@@ -1404,6 +1821,8 @@ class TestMeasurements:
             assert block.splitlines()[0].endswith('(7): Expected ")" here.')
             (failed,) = diagnostics["meas_errors"]
             assert failed["directive"] == ".meas tran broken FIND V(out AT 0.5m"
+            # The relayed failure carries the directive check's fix.
+            assert failed["suggestion"] == error.suggestion
 
 
 #: How long log/meas_trig runs: two whole periods of its 1 kHz sine of amplitude 1.
@@ -1541,7 +1960,7 @@ def _lint_refusals(case_id: str) -> list[tuple[str, str]]:
 @pytest.mark.parametrize("build", rec.BUILDS)
 @pytest.mark.parametrize("name", ["e", "k", "pi", "q"])
 def test_a_measurement_named_for_a_constant(build: str, name: str):
-    """The constants of the expression engine cannot name a .meas. LTspice 26
+    """The constants of the expression evaluator cannot name a .meas. LTspice 26
     refuses the deck and runs nothing; XVII names the constant and takes the
     other measurement. The directive check and the lint refuse the name
     before either."""
@@ -2289,16 +2708,14 @@ def test_the_api_reads_a_jobs_fra_results_by_job_and_case(
 async def test_other_raw_reads_only_a_job(state_no_sim: SessionState, work_dir: Path):
     """An other raw is a case's: a path names its file instead."""
     raw = work_dir / "fra.fra_1.raw"
-    with pytest.raises(
-        ApiValidationError, match="case_id and other_raw are only valid with job_id"
-    ):
+    with pytest.raises(ApiValidationError, match="other_raw chooses within a job"):
         SyncApi(state_no_sim).load_raw(raw, other_raw="fra_1")
-    with pytest.raises(ResultError, match="case_id and other_raw select a run_experiments case"):
+    with pytest.raises(ResultError, match="other_raw chooses within a job"):
         await analysis.handle_plot_waveform(
             analysis.PlotWaveformInput(path=str(raw), other_raw="fra_1", open=False),
             state_no_sim,
         )
-    with pytest.raises(ValidationError, match="other_raw require job_id"):
+    with pytest.raises(ValidationError, match="other_raw chooses within a job"):
         inspect_tools.ResultsQuery.model_validate(
             {"kind": "results", "path": str(raw), "other_raw": "fra_1"}
         )
@@ -2306,6 +2723,87 @@ async def test_other_raw_reads_only_a_job(state_no_sim: SessionState, work_dir: 
         inspect_tools.ResultsQuery.model_validate(
             {"kind": "results", "view": "measurements", "job_id": "exp_fra", "other_raw": "op"}
         )
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_every_reader_of_a_path_refuses_a_run_index_beside_it(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """A path names one results file, and ``run_index`` chooses a run of a
+    job. ``plot_waveform`` plotted the file and said nothing of a
+    ``run_index: 3`` sent beside it, where ``inspect`` and the Python API's
+    ``load_raw`` refused it. All three now refuse it, in the same words."""
+    raw = rec.stage_run(build, "raw/tran", work_dir)
+    refusals: dict[str, str] = {}
+
+    with pytest.raises(ApiValidationError) as api_error:
+        SyncApi(state_no_sim).load_raw(raw, run_index=3)
+    refusals["load_raw"] = str(api_error.value)
+
+    with pytest.raises(ResultError) as plot_error:
+        await analysis.handle_plot_waveform(
+            analysis.PlotWaveformInput(path=str(raw), run_index=3, open=False), state_no_sim
+        )
+    refusals["plot_waveform"] = str(plot_error.value)
+
+    reply = await inspect_tools.handle_inspect(
+        inspect_tools.InspectInput.model_validate(
+            {"queries": [{"kind": "results", "path": str(raw), "run_index": 3}]}
+        ),
+        state_no_sim,
+    )
+    assert reply.structured_content is not None
+    [item] = reply.structured_content["results"]
+    assert not item["ok"], item
+    refusals["inspect"] = item["error"]["message"]
+
+    said = refusals["load_raw"]
+    assert "run_index" in said and "job_id" in said, said
+    assert refusals["plot_waveform"] == said
+    assert said in refusals["inspect"], refusals
+    # The file is still plotted by its path alone.
+    alone = await analysis.handle_plot_waveform(
+        analysis.PlotWaveformInput(path=str(raw), open=False), state_no_sim
+    )
+    assert not alone.is_error
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_every_reader_of_a_path_refuses_other_raw_beside_it(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """``other_raw`` chooses another raw of a job's case, so beside a path it
+    is refused in the same words by every reader that takes one, including
+    ``analyze_results``, whose refusal named no fix; and ``plot_waveform``'s
+    refusal carries no hint to check the run's state, which does not apply."""
+    raw = rec.stage_run(build, "raw/tran", work_dir)
+    said = services.run_selectors_beside_path(other_raw="op")
+    assert said is not None
+
+    with pytest.raises(ApiValidationError) as api_error:
+        SyncApi(state_no_sim).load_raw(raw, other_raw="op")
+    assert str(api_error.value) == said
+
+    with pytest.raises(ResultError) as plot_error:
+        await analysis.handle_plot_waveform(
+            analysis.PlotWaveformInput(path=str(raw), other_raw="op", open=False), state_no_sim
+        )
+    assert str(plot_error.value) == said
+    assert recovery_hint(plot_error.value, state_no_sim) is None
+
+    reply = await inspect_tools.handle_inspect(
+        inspect_tools.InspectInput.model_validate(
+            {"queries": [{"kind": "results", "path": str(raw), "other_raw": "op"}]}
+        ),
+        state_no_sim,
+    )
+    assert reply.structured_content is not None
+    [item] = reply.structured_content["results"]
+    assert said in item["error"]["message"], item
+
+    with pytest.raises(ValidationError) as analyze_error:
+        AnalyzeSourceInput.model_validate({"path": str(raw), "other_raw": "op"})
+    assert said in str(analyze_error.value)
 
 
 def test_ltspice_xvii_refuses_a_frequency_response_analysis():

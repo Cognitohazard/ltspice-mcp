@@ -1,4 +1,4 @@
-"""``run_code`` — a Python snippet run in a warm worker that holds the engine.
+"""``run_code`` — a Python snippet run in a warm worker that holds the Python API.
 
 The server's side of :mod:`ltspice_mcp.code_worker`: one worker process per
 session, spawned on the first call, supervised here. Every call is a fresh
@@ -47,7 +47,7 @@ from ltspice_mcp.lib.windows_job import WindowsJob, python_launch
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import NotedModel, ToolInput, format_response, registry
 
-#: How long a worker gets to boot its engine before the call fails.
+#: How long a worker gets to start its session before the call fails.
 BOOT_TIMEOUT_S = 60.0
 #: After an interrupt, how long the worker gets to answer before it is killed.
 INTERRUPT_GRACE_S = 5.0
@@ -84,9 +84,9 @@ class RunCodeInput(ToolInput, NotedModel):
         default=60.0,
         ge=1.0,
         description=(
-            "Wall-clock bound in seconds, held to 600; a wait on a run ends just before "
-            "it, naming the job, which keeps running. A run longer than this belongs to "
-            "api.run_experiments(wait=False) and jobs(wait)."
+            f"Wall-clock bound in seconds, held to {RUN_CODE_TIMEOUT_CAP_S:g}; a wait on a "
+            "run ends just before it, naming the job, which keeps running. A run longer "
+            "than this belongs to api.run_experiments(wait=False) and jobs(wait)."
         ),
     )
     reset: bool = Field(
@@ -193,8 +193,8 @@ RUN_CODE_OUTPUT_SCHEMA: dict[str, Any] = {
 _EOF: dict[str, Any] = {"op": "eof"}
 
 _TIMEOUT_HINT = (
-    "Interrupted at timeout_s (max 600). A simulation longer than that: "
-    "api.run_experiments(wait=False) then jobs(wait) or api.wait(job_id)."
+    f"Interrupted at timeout_s (max {RUN_CODE_TIMEOUT_CAP_S:g}). A simulation longer than "
+    "that: api.run_experiments(wait=False) then jobs(wait) or api.wait(job_id)."
 )
 _RESTART_HINT = (
     "The worker was restarted; jobs the previous one owned read as interrupted in jobs(list)."
@@ -712,9 +712,9 @@ def worker_for(state: SessionState) -> CodeWorker:
 
 @registry.tool(
     name="run_code",
-    title="Run Python with the engine",
+    title="Run Python Code",
     description=(
-        "Run a Python snippet in a warm worker that holds this server's engine as "
+        "Run a Python snippet in a warm worker that holds this server's Python API as "
         "`api`. The snippet has the server process's own file and process "
         "authority, which no sandbox confines, so permission this tool like a shell. For "
         "loops over many runs, numpy on samples, and compute-decide-compute; a "
@@ -725,15 +725,15 @@ def worker_for(state: SessionState) -> CodeWorker:
         "np.percentile do not (guide section 'signals'). "
         f"In scope: {_IN_SCOPE} — reference('run_experiments') lists an op's "
         "arguments, so read it before guessing them. Every call is a fresh "
-        "namespace around the same live engine; keep state on disk (a job by "
+        "namespace around the same live `api`; keep state on disk (a job by "
         f"request_id, a file). stdout keeps the first {STDOUT_HEAD_CHARS} and last "
         f"{STDOUT_TAIL_CHARS} characters of print() output, stderr its last "
         f"{STDERR_TAIL_CHARS}, result the repr of a trailing expression "
-        f"({RESULT_CHARS}). Bound: timeout_s, default 60 (max 600); a timeout "
-        "interrupts the snippet and cancels a run it waits on. The worker is stopped "
-        "if it holds more memory than [tools] run_code_memory_mb (default half the "
-        "machine's). One snippet at a "
-        "time: a call during another is answered busy, not queued."
+        f"({RESULT_CHARS}). Bound: timeout_s, default 60 (max {RUN_CODE_TIMEOUT_CAP_S:g}); "
+        "a timeout interrupts the snippet and cancels a run it waits on. The worker is "
+        "stopped if it holds more memory than [tools] run_code_memory_mb (default half "
+        "the machine's). One snippet at a time: a call during another is answered busy, "
+        "not queued."
     ),
     input_model=RunCodeInput,
     annotations=types.ToolAnnotations(

@@ -15,8 +15,9 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, get_args
 
-from ltspice_mcp.errors import NetlistError
+from ltspice_mcp.errors import MultiplierRewriteStop, NetlistError
 from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES
+from ltspice_mcp.lib.deck_nodes import GROUND, global_names, node_kind
 from ltspice_mcp.lib.deck_staging import (
     DEFAULT_INCLUDE_DEPTH,
     card_sections,
@@ -24,20 +25,27 @@ from ltspice_mcp.lib.deck_staging import (
     resolve_reference,
     scan_include_references,
     unquote,
+    unreadable_references,
 )
 from ltspice_mcp.lib.device_names import raw_name
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.hierarchy_expr import (
+    NGSPICE_M_EXEMPT,
+    NGSPICE_M_TAKERS,
     Environment,
     NumericFact,
+    card_copies,
+    ngspice_multiplies_m,
     references_sibling,
     scaled_geometry,
 )
 from ltspice_mcp.lib.pathutil import resolve_safe_path, with_roots
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
+    SpiceLexError,
     Token,
     TokenKind,
+    directive_head,
     find_matching_ends,
     lex_deck,
     tokenize_body,
@@ -147,6 +155,9 @@ class ResolvedInstance:
     save: str | None
     address_reason: str | None
     model_family: tuple[ModelDefinition, ...] = ()
+    #: How many parallel copies the simulator builds from this card
+    #: (``hierarchy_expr.card_copies``); None for a card that takes no ``m``.
+    multiplier: NumericFact | None = None
 
     def row(self) -> dict[str, Any]:
         return {
@@ -185,6 +196,8 @@ class Hierarchy:
     library_bindings: tuple[LibraryBinding, ...] = ()
     scale: NumericFact = field(default_factory=lambda: NumericFact("1", 1.0, status="resolved"))
     include_bindings: tuple[IncludeBinding, ...] = ()
+    #: The subcircuits ngspice rewrites for ``m`` (``_rewritten_for_m``).
+    m_rewritten: frozenset[str] = frozenset()
 
     def binding(self) -> dict[str, Any]:
         return {
@@ -232,21 +245,47 @@ class _Definition:
     closer: Source
 
 
-def _tokens(card: SpiceCard) -> list[Token]:
-    return [t for t in tokenize_body(card.body) if t.kind != TokenKind.COMMENT_TRAIL]
+def _unreadable(card: SpiceCard, error: SpiceLexError, where: object = None) -> NetlistError:
+    """The refusal of a card the hierarchy needs but cannot split into its
+    parts (``spice_lex.unreadable_cards``), with its line and the fix."""
+    at = f"{where}:{card.line_start}" if where is not None else f"line {card.line_start}"
+    fix = f" {error.suggestion[:1].upper()}{error.suggestion[1:]}." if error.suggestion else ""
+    return NetlistError(f"cannot split the card at {at} into its parts: {error.message}.{fix}")
 
 
-def _assignments(card: SpiceCard, *, only: bool = False) -> dict[str, str]:
+def _refuse_unreadable_references(cards: list[SpiceCard], path: Path) -> None:
+    """Refuse an include or library card that cannot be split into parts,
+    before the include and section readers raise on it: which file or
+    section it opens is not known."""
+    for card, error in unreadable_references(cards):
+        raise _unreadable(card, error, path)
+
+
+def _tokens(card: SpiceCard, where: str | None = None) -> list[Token]:
+    """A card's parts, or its refusal by ``where`` (its file) and line."""
+    try:
+        tokens = tokenize_body(card.body)
+    except SpiceLexError as exc:
+        raise _unreadable(card, exc, where) from exc
+    return [t for t in tokens if t.kind != TokenKind.COMMENT_TRAIL]
+
+
+def _assignments(
+    card: SpiceCard, *, only: bool = False, where: str | None = None
+) -> dict[str, str]:
     result: dict[str, str] = {}
-    tokens = _tokens(card)[1:]
+    tokens = _tokens(card, where)[1:]
     if card.kind == "model":
-        tokens = [
-            inner
-            for token in tokens
-            for inner in (
-                tokenize_body(token.text[1:-1]) if token.kind == TokenKind.PARENED else [token]
-            )
-        ]
+        try:
+            tokens = [
+                inner
+                for token in tokens
+                for inner in (
+                    tokenize_body(token.text[1:-1]) if token.kind == TokenKind.PARENED else [token]
+                )
+            ]
+        except SpiceLexError as exc:  # inside its parameter list: D(is={1e-14)
+            raise _unreadable(card, exc, where) from exc
     for token in tokens:
         if token.kind == TokenKind.KEY_VALUE:
             assert token.key is not None and token.value is not None
@@ -303,6 +342,7 @@ def walk_active(
         if count > MAX_CARDS:
             raise NetlistError(f"hierarchy exceeds {MAX_CARDS} cards")
         existence = dict(captured.existence)
+        _refuse_unreadable_references(cards, path)
         sections = card_sections(cards, path, len(stack), exists=existence.__getitem__)
         refs = {
             id(ref.card): ref
@@ -314,9 +354,11 @@ def walk_active(
         opened: str | None = None
         declared: set[str] = set()
         for card, owner in zip(cards, sections, strict=True):
-            tokens = _tokens(card)
-            head = tokens[0].text.casefold() if tokens else ""
+            # Only a section's own cards are split here, so a directive the
+            # walk does not need (``.tran 0 1m )``) cannot stop it.
+            head = directive_head(card)
             if head == ".lib" and id(card) not in refs:
+                tokens = _tokens(card, str(path))
                 if len(tokens) != 2 or opened is not None:
                     raise NetlistError(f"malformed library section at {path}:{card.line_start}")
                 opened = unquote(tokens[1].text).casefold()
@@ -325,6 +367,7 @@ def walk_active(
                 declared.add(opened)
                 continue
             if head == ".endl":
+                tokens = _tokens(card, str(path))
                 if (
                     opened is None
                     or len(tokens) > 2
@@ -435,6 +478,7 @@ def load_hierarchy(
                 existence[candidate] = candidate.exists()
             return existence[candidate]
 
+        _refuse_unreadable_references(cards, source)
         refs = scan_include_references(cards, source, depth=depth, exists=exists)
         card_sections(cards, source, depth, exists=exists)
         targets = tuple(
@@ -453,7 +497,7 @@ def _parameters(body: Sequence[_Occurrence], profile: SemanticProfile) -> dict[s
     params: dict[str, str] = {}
     for item in body:
         if item.card.kind == "param":
-            values = _assignments(item.card, only=True)
+            values = _assignments(item.card, only=True, where=item.source.path)
             if params.keys() & values.keys() and not (
                 profile.simulator == "ngspice" and profile.ngbehavior == "hsa"
             ):
@@ -467,7 +511,7 @@ def _models(body: Sequence[_Occurrence], enclosing: str | None) -> dict[str, Mod
     for item in body:
         if item.card.kind != "model":
             continue
-        _assignments(item.card)  # refuses a parameter the card gives twice
+        _assignments(item.card, where=item.source.path)  # refuses a parameter given twice
         model = ModelCard.from_card(item.card)
         key = model.name.casefold()
         if key in models:
@@ -478,9 +522,89 @@ def _models(body: Sequence[_Occurrence], enclosing: str | None) -> dict[str, Mod
     return models
 
 
-def _shape(card: SpiceCard) -> tuple[InstanceLine, bool]:
+def _rewritten_for_m(
+    occurrences: Sequence[_Occurrence],
+    definitions: Mapping[str, _Definition],
+    top: Sequence[_Occurrence],
+    profile: SemanticProfile,
+) -> frozenset[str]:
+    """The subcircuits ngspice rewrites for ``m``, read as ngspice reads them.
+
+    Only subcircuits an instance reaches from the top level count, and the
+    deck is read once in order, so an ``X`` line given ``m`` by an earlier
+    rewrite passes it on and one the reading passed before does not
+    (``hierarchy_expr.card_copies``). LTspice rewrites nothing.
+    """
+    if profile.simulator != "ngspice":
+        return frozenset()
+
+    def callee(item: _Occurrence) -> str | None:
+        if item.card.kind != "instance" or item.card.body.lstrip()[:1].upper() != "X":
+            return None
+        return (InstanceLine.from_card(item.card).model or "").casefold()
+
+    reached: set[str] = set()
+    pending = [name for item in top if (name := callee(item)) is not None]
+    while pending:
+        name = pending.pop()
+        if name in reached or name not in definitions:
+            continue
+        reached.add(name)
+        pending.extend(n for item in definitions[name].body if (n := callee(item)) is not None)
+    owner = {id(item): name for name in reached for item in definitions[name].body}
+    at_top = {id(item) for item in top}
+    declares = {
+        name: "m" in {key.casefold() for key in definitions[name].view.param_defaults}
+        or "m" in _parameters(definitions[name].body, profile)
+        for name in reached
+    }
+    rewritten: dict[str, int] = {}
+    for index, item in enumerate(occurrences):
+        name = callee(item)
+        if name is None or name not in reached or name in rewritten or declares[name]:
+            continue
+        body = owner.get(id(item))
+        if body is None and id(item) not in at_top:
+            continue
+        written = "m" in _assignments(item.card, where=item.source.path)
+        appended = body is not None and rewritten.get(body, index) < index
+        if written or appended:
+            rewritten[name] = index
+    return frozenset(rewritten)
+
+
+def _card_multiplier(
+    kind: str,
+    own: NumericFact | None,
+    passed: NumericFact | None,
+    profile: SemanticProfile,
+    multiply: bool,
+    path: tuple[str, ...],
+    scope: tuple[str, ...],
+) -> NumericFact | None:
+    """How many parallel copies the simulator builds from one card
+    (``hierarchy_expr.card_copies``), or None for a card that takes no ``m``:
+    an ``X`` line to LTspice, which ignores its ``m``, and a card ngspice
+    appends none to. A card whose letter is not measured under a rewrite is
+    unresolved, with that reason."""
+    if profile.simulator != "ngspice":
+        if kind == "X":
+            return None
+        passed = None
+    elif kind in NGSPICE_M_EXEMPT:
+        return None
+    elif passed is not None and kind not in NGSPICE_M_TAKERS:
+        return NumericFact(
+            None, reason=f"whether ngspice appends m to {kind} cards is not measured"
+        )
+    return card_copies(
+        own, passed, multiply=multiply, where=".".join(path), passed_from=".".join(scope)
+    )
+
+
+def _shape(card: SpiceCard, where: str | None = None) -> tuple[InstanceLine, bool]:
+    _assignments(card, where=where)  # first, so a card it cannot split is refused by its line
     view = InstanceLine.from_card(card)
-    _assignments(card)
     tokens = _tokens(card)[1:]
     first = next((i for i, t in enumerate(tokens) if t.kind == TokenKind.KEY_VALUE), len(tokens))
     if any(t.kind != TokenKind.KEY_VALUE for t in tokens[first:]):
@@ -557,7 +681,7 @@ def resolve_hierarchy(
         item = occurrences[i]
         card = item.card
         if card.kind == "subckt":
-            _assignments(card)
+            _assignments(card, where=item.source.path)
             view = SubcktCard.from_card(card)
             parameters_started = False
             for token in _tokens(card)[2:]:
@@ -569,7 +693,7 @@ def resolve_hierarchy(
             if end is None:
                 raise NetlistError(f"unclosed subcircuit {view.name}")
             closer = cards[end]
-            if len(_tokens(closer)) > 2:
+            if len(_tokens(closer, occurrences[end].source.path)) > 2:
                 raise NetlistError(f"malformed .ends for {view.name}")
             if closer.name and closer.name.casefold() != view.name.casefold():
                 raise NetlistError(f"mismatched .ends for {view.name}")
@@ -598,15 +722,13 @@ def resolve_hierarchy(
         top.append(item)
         i += 1
 
-    # ``gnd`` is node 0 to both simulators, at the top level and inside a
-    # subcircuit alike. They differ where a subcircuit names a port ``gnd``:
-    # see ``node`` below.
-    globals_: dict[str, str] = {"0": "0", "gnd": "0"}
+    # The names .global cards list, by folded name, as first written. Which
+    # net a name stands for is decided in deck_nodes (``node`` below).
+    globals_: dict[str, str] = {}
     scale_expression = "1"
     dynamic_reason = None
     for item in occurrences:
-        tokens = _tokens(item.card)
-        head = tokens[0].text.casefold() if tokens else ""
+        head = directive_head(item.card)
         if item.card.kind == "control":
             raise NetlistError(
                 "opaque control programs may alter hierarchy; discovery is unsupported"
@@ -618,10 +740,14 @@ def resolve_hierarchy(
         if head == ".step":
             dynamic_reason = "context-dependent .step: no single effective numeric value"
         if head == ".global":
-            for token in tokens[1:]:
-                globals_.setdefault(token.text.casefold(), token.text)
+            try:
+                listed = global_names(item.card)
+            except SpiceLexError as exc:
+                raise _unreadable(item.card, exc, item.source.path) from exc
+            for text in listed:
+                globals_.setdefault(text.casefold(), text)
         if head in {".option", ".options"}:
-            values = _assignments(item.card)
+            values = _assignments(item.card, where=item.source.path)
             if "scale" in values:
                 if profile.simulator == "ltspice":
                     raise NetlistError("explicit scale is unsupported by LTspice")
@@ -632,6 +758,8 @@ def resolve_hierarchy(
         _parameters(top, profile), simulator=profile.simulator, dynamic_reason=dynamic_reason
     )
     scale = global_env.fact(scale_expression)
+    rewritten = _rewritten_for_m(occurrences, definitions, top, profile)
+    multiply_m = ngspice_multiplies_m(profile.ngbehavior)
     rows: list[ResolvedInstance] = []
     node_cache: dict[tuple[tuple[str, ...], str], Node] = {}
 
@@ -642,14 +770,13 @@ def resolve_hierarchy(
                 "version-dependent ground alias 'gnd' in kiltpsa mode; "
                 "use explicit node 0 or inspect a supported native/hsa deck"
             )
-        if folded == "gnd" and profile.simulator == "ltspice" and folded in ports:
-            # To LTspice a port named gnd is that port; to ngspice it is still
-            # ground, which is the next branch.
+        kind = node_kind(name, ports=ports, global_names=globals_, simulator=profile.simulator)
+        if kind == "port":
             return ports[folded]
-        if folded in globals_:
+        if kind == "ground":
+            scope, name = (), GROUND
+        elif kind == "global":
             scope, name = (), globals_[folded]
-        elif folded in ports:
-            return ports[folded]
         key = (tuple(segment.casefold() for segment in scope), name.casefold())
         if key in node_cache:
             return node_cache[key]
@@ -673,14 +800,17 @@ def resolve_hierarchy(
         ports: Mapping[str, Node],
         stack: tuple[str, ...],
         enclosing: str | None,
+        passed: NumericFact | None,
     ) -> None:
+        """Expand ``body``; ``passed`` is the ``m`` ngspice appends to its cards
+        (``card_copies``), None where it appends none."""
         if len(scope) > MAX_INSTANCE_DEPTH:
             raise NetlistError(f"runtime hierarchy depth exceeds {MAX_INSTANCE_DEPTH}")
         refs: set[str] = set()
         for item in body:
             if item.card.kind != "instance":
                 continue
-            view, supported = _shape(item.card)
+            view, supported = _shape(item.card, item.source.path)
             folded = view.ref.casefold()
             if folded in refs:
                 raise NetlistError(f"duplicate active reference {view.ref} in {scope}")
@@ -688,7 +818,7 @@ def resolve_hierarchy(
             path = (*scope, view.ref)
             kind = view.ref[0].upper()
             nodes = tuple(node(n, scope, ports) for n in view.nodes) if supported else ()
-            params = _assignments(item.card)
+            params = _assignments(item.card, where=item.source.path)
             param_facts = tuple(
                 (
                     k,
@@ -700,7 +830,11 @@ def resolve_hierarchy(
                 )
                 for k, v in params.items()
             )
+            multiplier = _card_multiplier(
+                kind, dict(param_facts).get("m"), passed, profile, multiply_m, path, scope
+            )
             child = None
+            child_passed = None
             child_env = env
             mapped: tuple[tuple[str, Node], ...] = ()
             model_source = None
@@ -722,13 +856,31 @@ def resolve_hierarchy(
                     if profile.simulator == "ngspice"
                     else {**local, **defaults}
                 )
+                overrides = dict(param_facts)
+                rewrites = child.view.name.casefold() in rewritten
+                if passed is not None and multiplier is not None:
+                    # ngspice appended this body's m to the X line too, and
+                    # passes it to the callee as a parameter.
+                    overrides["m"] = multiplier
+                    if not rewrites and not defaults and not local:
+                        raise MultiplierRewriteStop(
+                            f"ngspice stops on this deck: {'.'.join(path)} calls "
+                            f"{child.view.name}, which takes no parameters, with the m ngspice "
+                            f"appends to every card of {enclosing} ('Mismatch: 0 formal but 1 "
+                            f"actual params'). To pass that m on to {child.view.name}'s cards, "
+                            f"write m=1 on {view.ref}; to keep their own m, declare m on "
+                            f"{child.view.name} (params: m=1)"
+                        )
+                if rewrites:
+                    expressions["m"] = "1"
                 child_env = Environment(
                     expressions,
                     simulator=profile.simulator,
                     parent=env,
-                    overrides=dict(param_facts),
+                    overrides=overrides,
                     dynamic_reason=dynamic_reason,
                 )
+                child_passed = child_env.fact("m") if rewrites else None
                 mapped = tuple(zip(child.view.ports, nodes, strict=True))
             elif kind == "M" and supported:
                 name = (view.model or "").casefold()
@@ -789,6 +941,7 @@ def resolve_hierarchy(
                     save,
                     reason,
                     model_family,
+                    multiplier,
                 )
             )
             if len(rows) > MAX_INSTANCES:
@@ -801,9 +954,10 @@ def resolve_hierarchy(
                     {k.casefold(): v for k, v in mapped},
                     (*stack, child.view.name.casefold()),
                     child.view.name,
+                    child_passed,
                 )
 
-    expand(top, (), global_env, {}, (), None)
+    expand(top, (), global_env, {}, (), None, None)
     if profile.simulator == "ltspice":
         # Existing operating-point selectors match ancestral suffixes. A suffix
         # that also names another runtime device cannot promise exact selection.
@@ -830,4 +984,5 @@ def resolve_hierarchy(
         tuple(library_bindings),
         scale,
         tuple(include_bindings),
+        rewritten,
     )

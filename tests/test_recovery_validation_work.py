@@ -40,7 +40,7 @@ def test_identical_copies_parse_once_but_each_file_is_verified(tmp_path, monkeyp
     body = b".include local.inc\nRcopy in 0 {r}\n"
     job, libraries = _copies(tmp_path, body)
     assert job.output_folder is not None
-    real_lex = experiment_inputs.lex
+    real_lex = experiment_inputs.lex_for_edit
     library_parses = 0
 
     def count_parse(text, **options):
@@ -49,8 +49,8 @@ def test_identical_copies_parse_once_but_each_file_is_verified(tmp_path, monkeyp
             library_parses += 1
         return real_lex(text, **options)
 
-    monkeypatch.setattr(experiment_inputs, "lex", count_parse)
-    monkeypatch.setattr(deck_staging, "lex", count_parse)
+    monkeypatch.setattr(experiment_inputs, "lex_for_edit", count_parse)
+    monkeypatch.setattr(deck_staging, "lex_for_edit", count_parse)
     frozen = experiment_inputs.capture_case_inputs(
         job.cases[0], job.sources[0], lineage_root=job.output_folder
     )

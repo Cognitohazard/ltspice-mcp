@@ -1139,9 +1139,6 @@ def lex(netlist_text: str, *, title: bool = False) -> LexResult:
         else:
             card_scope = tuple(scope)
 
-        if kind == "end" and not scope:
-            seen_top_end = True
-
         card = SpiceCard(
             kind=kind,
             raw_lines=raw_group,
@@ -1149,10 +1146,15 @@ def lex(netlist_text: str, *, title: bool = False) -> LexResult:
             line_start=line_start,
             name=name,
             scope=card_scope,
-            trailing=seen_top_end and kind != "end",
+            # The .END that ends the deck is read; every card after it is
+            # trailing, a second .END among them.
+            trailing=seen_top_end,
             body_layout=segments,
         )
         cards.append(card)
+
+        if kind == "end" and not scope:
+            seen_top_end = True
 
         if kind == "subckt":
             if name:
@@ -1173,6 +1175,13 @@ def lex(netlist_text: str, *, title: bool = False) -> LexResult:
     return LexResult(cards=cards, warnings=warnings)
 
 
+def _read_cards(cards: list[SpiceCard], *, title: bool) -> list[SpiceCard]:
+    """The cards a simulator reads of ``lex``'s cards: not the title, which
+    ``cards`` opens with when ``title``, nor a card after a top-level ``.END``.
+    The one place ``lex_deck`` and ``lex_for_edit`` say so."""
+    return [card for card in (cards[1:] if title else cards) if not card.trailing]
+
+
 def lex_deck(netlist_text: str, *, title: bool = True) -> LexResult:
     """The cards a simulator reads from a deck, and ``lex``'s warnings.
 
@@ -1182,15 +1191,53 @@ def lex_deck(netlist_text: str, *, title: bool = True) -> LexResult:
     ``.param`` its resistor needs. Nor is a card after a top-level ``.END``
     (``deck/after_end``). ``title=False`` reads an included file, which
     begins with a card. Every reader of what a deck holds goes through here,
-    so none of them can count a card the simulator never sees; an edit keeps
-    using ``lex``, which holds every line for a byte-faithful ``emit``.
+    so none of them can count a card the simulator never sees; an edit uses
+    ``lex_for_edit``, which also holds every line for a byte-faithful
+    ``emit``.
     """
     result = lex(netlist_text, title=title)
-    cards = result.cards[1:] if title else result.cards
-    return LexResult(
-        cards=[card for card in cards if not card.trailing],
-        warnings=result.warnings,
-    )
+    return LexResult(cards=_read_cards(result.cards, title=title), warnings=result.warnings)
+
+
+@dataclass
+class EditCards:
+    """A file lexed for an edit: every card, and the cards among them it may change.
+
+    ``cards`` holds every line of the file, so ``emit(cards)`` writes it back
+    byte for byte. ``read`` holds the cards among them that are read, the same
+    objects, so a change made through one is in what ``emit`` writes. An edit
+    chooses what to read or change from ``read`` alone: a change to a card
+    outside it changes nothing the simulator runs, while its receipt says it
+    did.
+    """
+
+    cards: list[SpiceCard]
+    read: list[SpiceCard]
+    warnings: list[str] = field(default_factory=list)
+    _read_ids: frozenset[int] = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        self._read_ids = frozenset(map(id, self.read))
+
+    def reads(self, card: SpiceCard) -> bool:
+        """Is ``card``, one of ``cards``, a card that is read?"""
+        return id(card) in self._read_ids
+
+
+def lex_for_edit(netlist_text: str, *, deck: bool) -> EditCards:
+    """``netlist_text`` lexed for an edit that writes every card back.
+
+    The cards read are the ones ``lex_deck`` reads, with ``title=deck``, both
+    taken by ``_read_cards``: for a deck (``deck``) the title is a comment card
+    of its own and is not read; an included file (``deck=False``) begins with
+    a card. In either a card after a top-level ``.END`` is kept but not read.
+    For an included file that follows the reading every other reader of one
+    already takes (``lex_deck(title=False)``); what LTspice does past an
+    included file's ``.END`` is not recorded.
+    """
+    result = lex(netlist_text, title=deck)
+    read = _read_cards(result.cards, title=deck)
+    return EditCards(cards=result.cards, read=read, warnings=result.warnings)
 
 
 def unreadable_cards(cards: Iterable[SpiceCard]) -> list[tuple[SpiceCard, SpiceLexError]]:
@@ -1211,6 +1258,24 @@ def unreadable_cards(cards: Iterable[SpiceCard]) -> list[tuple[SpiceCard, SpiceL
         except SpiceLexError as exc:
             found.append((card, exc))
     return found
+
+
+def directive_head(card: SpiceCard) -> str:
+    """The name a directive card starts with, casefolded (``.tran``,
+    ``.save``), or ``""`` for an empty body.
+
+    Read from the card's first part, or, when the card cannot be split into
+    parts (``unreadable_cards``), from its text up to where that part would
+    end: a directive's name is one word, readable even when a quote or
+    bracket after it is left open (``.include"models.lib`` is ``.include``).
+    """
+    try:
+        tokens = tokenize_body(card.body)
+    except SpiceLexError:
+        body = card.body.lstrip()
+        end = next((i for i, c in enumerate(body) if c in _BARE_TERMINATORS), len(body))
+        return body[:end].casefold()
+    return tokens[0].text.casefold() if tokens else ""
 
 
 # ---------------------------------------------------------------------------
@@ -1234,6 +1299,41 @@ def emit(cards: Sequence[SpiceCard]) -> str:
     for card in cards:
         out.extend(card.raw_lines)
     return "".join(out)
+
+
+def line_break(cards: Sequence[SpiceCard]) -> str:
+    """The line break of the text ``cards`` were lexed from: the one its
+    first line that has one ends with, else ``\\n``. A line an edit adds ends
+    with it, so a file keeps its own line breaks."""
+    for card in cards:
+        for raw in card.raw_lines:
+            if raw.endswith("\n"):
+                return "\r\n" if raw.endswith("\r\n") else "\n"
+    return "\n"
+
+
+def control_blocks(cards: Sequence[SpiceCard]) -> list[list[SpiceCard]]:
+    """Each ngspice ``.control`` ... ``.endc`` region among ``cards``, in order:
+    its cards from the ``.control`` line to the ``.endc`` line, as ``lex``
+    found the region. A region with no ``.endc`` is not one. Pass the cards
+    that are read (``lex_deck``, ``EditCards.read``), so a region in a deck's
+    title or after its ``.END`` is none."""
+    blocks: list[list[SpiceCard]] = []
+    current: list[SpiceCard] | None = None
+    for card in cards:
+        if card.kind != "control" or not card.raw_lines:
+            current = None
+            continue
+        head = _line_directive_head(card.raw_lines[0].lstrip())
+        if current is None:
+            if head in _OPAQUE_REGIONS:
+                current = [card]
+            continue
+        current.append(card)
+        if head == _OPAQUE_REGIONS[".control"]:
+            blocks.append(current)
+            current = None
+    return blocks
 
 
 # ---------------------------------------------------------------------------

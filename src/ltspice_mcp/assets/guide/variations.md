@@ -63,9 +63,11 @@ models, see guide section 'sky130'.
 
 Each case records its sample index (`_random_run`) and seed (`_random_seed`);
 without a `seed` the server picks one. To repeat sample 7 alone, send the same
-entry with that seed, `runs: 1` and `sample_start: 7`. A sample draws the same
-values at every `assign` value, so a sweep compares the same die at each
-corner, and adding a corner leaves the other draws as they were.
+entry with that seed, `runs: 1` and `sample_start: 7`, on the circuit under the
+same id. A sample draws the same deviation at every `assign` value, so a sweep
+compares the same die at each corner, and adding a corner leaves the other
+draws as they were. A relative tolerance still scales with an assigned
+nominal, and a mismatch draw as 1/sqrt(m·W·L) of an assigned geometry.
 
 The variation's `seed` controls these draws from your assumed coefficients. It
 does not affect random functions written in the deck (`agauss`, `gauss`,
@@ -93,10 +95,13 @@ To set a target σ instead of a technology coefficient, invert the formula to
 input-referred offset σ is √2 × the per-device figure.
 
 A device the simulator builds as m parallel copies from one card shares that
-card's one draw, so its area is `m·W·L`. On ngspice m is the product of the
-device's own `m` and the `m` of every subcircuit instance above it. LTspice
-ignores `m` on an X line, so there m is the device's own. On both, an inner
-`m={mult}` takes the value its X line gives. A device written as 12 fingers of 1 µm
+card's one draw, so its area is `m·W·L`. LTspice ignores `m` on an X line, so
+there m is the device's own. On ngspice an X line's `m` reaches the cards of a
+subcircuit that declares no `m` of its own: it replaces each card's own `m`,
+or multiplies it in the HSPICE modes (`ngbehavior` `hsa`), and reaches a
+subcircuit called from that body only where the call sits later in the deck.
+A subcircuit that declares `m` takes the X line's `m` as an ordinary
+parameter. On both, an inner `m={mult}` takes the value its X line gives. A device written as 12 fingers of 1 µm
 (`W=1u m=12`) gets the σ of a 12 µm device. An `m` that does not resolve to a
 positive number refuses the request with `mismatch_geometry_unresolved`.
 

@@ -19,9 +19,12 @@ from unittest.mock import AsyncMock
 import jsonschema
 import pytest
 from pydantic import ValidationError
+from spicelib.simulators.ltspice_simulator import LTspice
 from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
+from ltspice_mcp.api import ApiCallError
 from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.errors import ERROR_HINTS, RecipeInvalidError, SimulationError
 from ltspice_mcp.lib import experiment_runner as experiment_runner_mod
 from ltspice_mcp.lib import experiment_store, response_budget, result_store, store, wsl
 from ltspice_mcp.lib.deck_staging import resolve_experiment_paths, sha256_file
@@ -55,8 +58,10 @@ from tests._mismatch_fixtures import MINI_FET
 from tests.conftest import (
     LIVENESS_S,
     FakeSim,
+    SyncApi,
     await_until,
     coordinator_returned,
+    dispatch,
     fake_artifact_paths,
     fake_simulator,
     job_done,
@@ -109,7 +114,7 @@ def test_attached_per_run_limit_shares_the_analyze_page_cap():
     """One cap, both surfaces, held rather than refused.
 
     The attached block is handed straight to analyze_results, so its limit is
-    that engine's own model: an over-cap request is held to the cap at
+    that tool's own model: an over-cap request is held to the cap at
     submission, and the request the job records names the page it will serve.
     """
     assert issubclass(AnalysisPerRun, analyze_mod.CappedPerRunLimit)
@@ -194,7 +199,7 @@ def test_the_random_rules_field_names_all_four_kinds_in_plain_words():
 
 
 def _deck(path: Path, body: str | None = None) -> Path:
-    path.write_text(body or "V1 in 0 1\nR1 in 0 1k\n.op\n.end\n")
+    path.write_text(body or "* deck\nV1 in 0 1\nR1 in 0 1k\n.op\n.end\n")
     return path
 
 
@@ -1101,6 +1106,77 @@ class TestLeanReceipt:
         (row,) = data["runs"]["items"]
         assert row["raw"] and row["log"]
 
+    #: A path into a run row that no row on the page reaches.
+    _ABSENT_RUN_FIELDS: ClassVar[list[str]] = ["case_id", "assignments.not_assigned"]
+
+    @staticmethod
+    def _absent_run_field_warnings(data: dict) -> list[str]:
+        return [
+            warning
+            for warning in data.get("warnings", [])
+            if warning.startswith("run_fields path 'assignments.not_assigned' is absent")
+        ]
+
+    async def test_a_run_field_no_row_reaches_is_said_by_the_receipt_and_its_runs_page(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        fake_simulator(monkeypatch)
+        deck = _deck(work_dir / "absent_field.cir")
+
+        receipt = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "absent-field", run_fields=self._ABSENT_RUN_FIELDS), state_with_sim
+            )
+        )
+        runs = (
+            await handle_jobs(
+                JobsInput.model_validate(
+                    {
+                        "action": "runs",
+                        "job_id": receipt["job_id"],
+                        "run_fields": self._ABSENT_RUN_FIELDS,
+                    }
+                ),
+                state_with_sim,
+            )
+        ).structured_content
+        assert runs is not None
+
+        assert len(self._absent_run_field_warnings(receipt)) == 1, receipt
+        assert len(self._absent_run_field_warnings(runs)) == 1, runs
+
+    async def test_a_run_field_no_row_reaches_is_said_when_no_run_has_somewhere_to_write(
+        self,
+        config: ServerConfig,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """LTspice under WSL with no Windows-native directory fails every case
+        before staging; that receipt pages its run rows like any other."""
+
+        class WslLTspice(LTspice):
+            spice_exe: ClassVar[list[str]] = ["/mnt/c/Program Files/ADI/LTspice/LTspice.exe"]
+
+        state = SessionState.create(config, available={"ltspice": WslLTspice})
+        monkeypatch.setattr(wsl, "is_wsl", lambda: True)
+        monkeypatch.setattr(wsl, "get_windows_output_dir", lambda: None)
+        deck = _deck(work_dir / "nowhere.cir")
+
+        receipt = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "nowhere-to-write", run_fields=self._ABSENT_RUN_FIELDS), state
+            )
+        )
+
+        assert [failure["code"] for failure in receipt["failures"]] == [
+            "windows_native_storage_unavailable"
+        ], receipt
+        assert receipt["runs"]["items"] == [{"case_id": receipt["failures"][0]["case_id"]}]
+        assert len(self._absent_run_field_warnings(receipt)) == 1, receipt
+
     @pytest.mark.parametrize(
         ("request_id", "run_fields"),
         [
@@ -1218,6 +1294,72 @@ class TestLeanReceipt:
         _assert_attached_artifact(data, "p")
 
 
+def _refused_submissions(state: SessionState, arguments: dict[str, Any]) -> dict[str, Any]:
+    """The receipt each way into run_experiments answers a refused submission
+    with: its handler, the server's dispatch, and the Python API."""
+    # Read, so no reply carries the first-reply guide reminder after its hint.
+    state.guide_read = True
+    replies = {
+        "handler": asyncio.run(
+            handle_run_experiments(
+                RunExperimentsInput.model_validate({**arguments, "request_id": "refused-1"}),
+                state,
+            )
+        ),
+        "mcp": asyncio.run(dispatch(state, "run_experiments", {**arguments, "request_id": "r-2"})),
+    }
+    receipts: dict[str, Any] = {}
+    for door, result in replies.items():
+        assert result.is_error and result.structured_content is not None, door
+        receipts[door] = result.structured_content
+    with pytest.raises(ApiCallError) as refused:
+        SyncApi(state).run_experiments(**arguments, request_id="refused-3", wait=False)
+    receipts["api"] = refused.value.payload
+    return receipts
+
+
+class TestSubmissionRefusalHints:
+    """A submission refused before a job exists carries its failure kind's
+    recovery step from the one table every surface reads (``errors.ERROR_HINTS``),
+    after its message, as a jobs refusal does; a kind with none, or one that
+    says its own recovery, carries the message alone."""
+
+    def test_an_invalid_attached_recipe_carries_the_recipe_step(
+        self, state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        arguments = {
+            "circuits": [{"path": str(_deck(work_dir / "bad_recipe.cir"))}],
+            "analyze": {"recipes": [{"key": "x", "metric": "no_such_metric"}]},
+        }
+        for door, receipt in _refused_submissions(state_with_sim, arguments).items():
+            error = receipt["error"]
+            assert error["code"] == RecipeInvalidError.code, door
+            assert receipt["hint"] == f"{error['message']}\n\n{ERROR_HINTS[RecipeInvalidError]}"
+        assert submissions == []
+
+    def test_no_simulator_carries_the_simulator_step(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        arguments = {"circuits": [{"path": str(_deck(work_dir / "no_sim.cir"))}]}
+        for door, receipt in _refused_submissions(state_no_sim, arguments).items():
+            error = receipt["error"]
+            assert error["code"] == "submission_failed", door
+            assert receipt["hint"] == f"{error['message']}\n\n{ERROR_HINTS[SimulationError]}"
+
+    def test_a_refusal_that_names_its_own_recovery_carries_the_message_alone(
+        self, state_with_sim: SessionState, work_dir: Path
+    ):
+        arguments = {
+            "circuits": [{"path": str(_deck(work_dir / "unknown_sim.cir"))}],
+            # A family this session did not detect: the refusal lists what it has.
+            "execution": {"simulator": "xyce"},
+        }
+        for door, receipt in _refused_submissions(state_with_sim, arguments).items():
+            assert receipt["hint"] == receipt["error"]["message"], door
+
+
 @pytest.mark.asyncio
 class TestAttachedBlockPreflight:
     """A malformed attached analyze block is refused BEFORE anything runs.
@@ -1309,6 +1451,90 @@ class TestAttachedBlockPreflight:
         assert "analyze.group_by repeated 'R1'; each is read once." in data["warnings"]
 
 
+#: name -> (run_experiments arguments, the fingerprint 0.7.0 recorded for them).
+_STORED: dict[str, tuple[dict[str, Any], str]] = {
+    "random component rule": (
+        {
+            "request_id": "mc-1",
+            "circuits": [{"path": "dut.cir"}],
+            "variations": [
+                {
+                    "kind": "random",
+                    "runs": 3,
+                    "seed": 7,
+                    "rules": [{"rule": "component", "target": "R1", "tolerance": 0.1}],
+                }
+            ],
+        },
+        "117cfc08db971afe7feb4a936561e8da1f04699dd19987e0bb155f7f3de4734c",
+    ),
+    "random, every rule kind": (
+        {
+            "request_id": "pin-random",
+            "circuits": [{"path": "dut.cir", "id": "dut"}],
+            "variations": [
+                {
+                    "kind": "random",
+                    "id": "die",
+                    "runs": 4,
+                    "applies_to": ["dut"],
+                    "rules": [
+                        {
+                            "rule": "component",
+                            "target": "R*",
+                            "tolerance": 0.05,
+                            "distribution": "uniform",
+                        },
+                        {"rule": "param", "target": "vb", "tolerance": 0.01, "scale": "absolute"},
+                        {"rule": "model", "target": "NMOS1", "param": "VTO", "tolerance": 0.02},
+                        {"rule": "mismatch", "prefix": "M", "AVT": 3e-3, "AK": 0.01},
+                    ],
+                }
+            ],
+        },
+        "2864941587b9eb6c2adc5468f0ec10ca3b23ce106660ea638f39b913d03a3f25",
+    ),
+    "assign then random": (
+        {
+            "request_id": "pin-assign-random",
+            "circuits": [{"path": "dut.cir"}],
+            "variations": [
+                {
+                    "kind": "assign",
+                    "assign": {"R1": ["1k", "2k"], "C1": ["1n", "2n"]},
+                    "combine": "zip",
+                },
+                {
+                    "kind": "random",
+                    "runs": 2,
+                    "seed": 3,
+                    "rules": [{"rule": "component", "target": "R1", "tolerance": 0.1}],
+                },
+            ],
+            "execution": {"simulator": "ngspice"},
+        },
+        "ef716f2267fb6526e8545fbd9572b2573b17a0b20ac1b4f8d02e4d8ab4a4bd94",
+    ),
+    "pdk_native": (
+        {
+            "request_id": "pin-native",
+            "circuits": [{"path": "dut.cir"}],
+            "variations": [
+                {
+                    "kind": "pdk_native",
+                    "id": "mc",
+                    "runs": 2,
+                    "seed": 1,
+                    "profile": "sky130-e6f9c887-ngspice-v1",
+                    "mode": "mismatch",
+                }
+            ],
+        },
+        "2700e4dca929beef1cece176f40f808585504b107ec6267e1bb34965494598b8",
+    ),
+}
+
+
 class TestOptionalRequestId:
     """request_id may be omitted: a fresh id is generated per call, so a
     one-off run pays no idempotency ceremony, while an explicit id keeps the
@@ -1374,6 +1600,40 @@ class TestOptionalRequestId:
             canonical_fingerprint(args)
             == "8d5e2d07daeddf5f92339e9f999d441390c3bb830cbc16a88ed39d9478618861"
         )
+
+    @pytest.mark.parametrize(
+        ("payload", "recorded"),
+        [pytest.param(payload, digest, id=name) for name, (payload, digest) in _STORED.items()],
+    )
+    def test_a_stored_request_keeps_the_fingerprint_it_was_recorded_under(
+        self, payload: dict[str, Any], recorded: str
+    ):
+        """A retry of a stored request must hash as it did, or its request_id
+        comes back a conflict. A defaulted field added to any model the request
+        dumps changes those bytes unless strip_presentation leaves it out at
+        its default: `sample_start` on a random entry did. Each pin is the hash
+        the 0.7.0 release computed for these arguments."""
+        from ltspice_mcp.lib.experiment_runner import canonical_fingerprint
+
+        assert canonical_fingerprint(RunExperimentsInput.model_validate(payload)) == recorded
+
+    def test_a_random_sample_start_is_left_out_at_0_and_a_native_one_is_kept(self):
+        """The two entries treat a sample_start of 0 differently, each to keep
+        the bytes it was recorded with: random entries were recorded before the
+        field existed, pdk_native entries always had it. Any other start is a
+        different experiment for either."""
+        from ltspice_mcp.lib.experiment_runner import canonical_fingerprint
+
+        random_entry, _ = _STORED["random component rule"]
+        native_entry, _ = _STORED["pdk_native"]
+        for payload, kept in ((random_entry, False), (native_entry, True)):
+            args = RunExperimentsInput.model_validate(payload)
+            (entry,) = args.strip_presentation()["variations"]
+            assert ("sample_start" in entry) is kept
+            moved = copy.deepcopy(payload)
+            moved["variations"][0]["sample_start"] = 3
+            later = RunExperimentsInput.model_validate(moved)
+            assert canonical_fingerprint(later) != canonical_fingerprint(args)
 
     def test_serializing_an_attached_block_raises_no_pydantic_warning(self):
         """Every submission dumps this block twice — for the fingerprint and
@@ -1605,7 +1865,7 @@ class TestReplayRejectsChangedSources:
         outside.write_text(".param supply=5\n")
         deck = _deck(
             work_dir / "live.cir",
-            f'.include "{outside}"\nV1 in 0 {{supply}}\nR1 in 0 1k\n.op\n.end\n',
+            f'* live\n.include "{outside}"\nV1 in 0 {{supply}}\nR1 in 0 1k\n.op\n.end\n',
         )
         args = _args(deck, "live-include", lint="off", allow_live_includes=True)
         first = _assert_schema(await handle_run_experiments(args, state_with_sim))
@@ -1644,9 +1904,11 @@ class TestReplayRejectsChangedSources:
             source["sha256"] = ""
             source["manifest"] = []
         record.write_text(json.dumps(stored))
-        del state_with_sim.all_jobs[first["job_id"]]
+        # Read by a session that never held the job, as a record an older
+        # release left is: this session's own job answers for itself.
+        other = SessionState.create(state_with_sim.config, available={"fake": FakeSim})
 
-        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+        data = _assert_schema(await handle_run_experiments(args, other))
 
         message = data["error"]["message"]
         assert data["error"]["code"] == "idempotency_conflict"
@@ -1658,7 +1920,7 @@ class TestReplayRejectsChangedSources:
 
 
 # An export whose relative include names a file beside the schematic.
-_INCLUDING_EXPORT = ".include models.inc\nV1 in 0 1\nR1 in 0 {rval}\n.op\n.end\n"
+_INCLUDING_EXPORT = "* amp\n.include models.inc\nV1 in 0 1\nR1 in 0 {rval}\n.op\n.end\n"
 
 
 def _schematic_with_include(state: SessionState, project_dir: Path) -> tuple[Path, Path]:
@@ -2090,7 +2352,7 @@ class TestLintModes:
         (work_dir / "amp.inc").write_text(".subckt AMP a b\nRA a b 1k\n.ends AMP\n")
         deck = _deck(
             work_dir / "with_include.cir",
-            '.include "amp.inc"\nX1 in 0 AMP\nV1 in 0 1\n.op\n.end\n',
+            '* with include\n.include "amp.inc"\nX1 in 0 AMP\nV1 in 0 1\n.op\n.end\n',
         )
         route = resolve_experiment_paths
 
@@ -2115,6 +2377,63 @@ class TestLintModes:
         assert len(submissions) == 1
         assert data["outcome"] == "complete"
         assert "failures" not in data
+
+    async def test_a_directive_with_a_bracket_left_open_runs_and_is_reported(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Staging and the linter split each directive into parts, and one they
+        could not split stopped the run with the lexer's error, as a retryable
+        submission failure. The deck runs, and each such card is reported."""
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(
+            work_dir / "open.cir",
+            "* t\nV1 in 0 1\nR1 in 0 1k\n.save V(in\n.param r={1k\n.tran 0 1m )\n.end\n",
+        )
+
+        data = _assert_schema(
+            await handle_run_experiments(_args(deck, "open-directive"), state_with_sim)
+        )
+
+        assert len(submissions) == 1, json.dumps(data)[:3000]
+        assert [
+            finding["at"]["line"]
+            for finding in data["lint"][0]["findings"]
+            if finding["rule_id"] == "unreadable-card"
+        ] == [4, 5, 6]
+
+    # With no space after its name the card was not taken for an include, and
+    # was neither refused nor staged.
+    @pytest.mark.parametrize("card", ['.include "models.lib', '.include"models.lib'])
+    async def test_an_include_whose_path_cannot_be_read_is_refused_at_its_line(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        card: str,
+    ):
+        """Staging cannot tell which file an include with its quote left open
+        names, so it cannot stage or check it: the circuit fails with the line
+        and the fix, not with the lexer's error as a retryable failure."""
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(
+            work_dir / "open_include.cir",
+            f"* t\nV1 in 0 1\nR1 in 0 1k\n{card}\n.op\n.end\n",
+        )
+
+        data = _assert_schema(
+            await handle_run_experiments(_args(deck, "open-include"), state_with_sim)
+        )
+
+        assert submissions == []
+        row = data["failures"][0]
+        assert row["code"] == "include_unstaged", row
+        assert "line 4" in row["message"], row
+        assert 'Add a closing "' in row["message"], row
 
     async def test_off_skips_linter(
         self,
@@ -2351,7 +2670,7 @@ class TestPerCircuitFailuresAndAccounting:
         (work_dir / "support.inc").write_text(".param supply=1\n")
         deck = _deck(
             work_dir / "relative.cir",
-            '.include "support.inc"\nV1 in 0 {supply}\nR1 in 0 1k\n.op\n.end\n',
+            '* relative\n.include "support.inc"\nV1 in 0 {supply}\nR1 in 0 1k\n.op\n.end\n',
         )
 
         data = _assert_schema(
@@ -2723,7 +3042,7 @@ class TestFailureChannel:
 
 @pytest.mark.asyncio
 class TestAttachedAnalysis:
-    """The analyze block runs on the real recipe engine, not a stub."""
+    """The analyze block runs on the real recipes, not a stub."""
 
     async def test_recipes_and_group_by_run_end_to_end(
         self,
@@ -2949,6 +3268,62 @@ class TestAttachedAnalysis:
         assert job.analysis.request is not None
         assert job.analysis.request["include"] is None
 
+    async def test_a_field_named_with_an_underscore_is_found_by_both_doors(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """Every random case carries '_random_seed' and '_random_run' in its
+        assignments. The attached analysis checks a projection against a key
+        outline saved with the result, which left out every key starting with
+        '_' at any depth, so it warned that these paths were absent from every
+        row while each row it returned carried them. analyze_results checks
+        the rows themselves and never warned; both must give the same answer."""
+        recorded_fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "attached-underscore.cir")
+        recipes = [{"key": "summary", "metric": "summary"}]
+        fields = ["assignments._random_seed", "assignments._random_run"]
+        variations = [
+            {
+                "kind": "random",
+                "runs": 2,
+                "seed": 11,
+                "rules": [{"rule": "component", "target": "R1", "tolerance": 0.1}],
+            }
+        ]
+
+        attached = _assert_schema(
+            await _completed_analysis_receipt(
+                _args(
+                    deck,
+                    "attached-underscore",
+                    variations=variations,
+                    analyze={"recipes": recipes, "include": {"fields": fields}},
+                ),
+                state_with_sim,
+            )
+        )
+        standalone = await handle_analyze_results(
+            AnalyzeResultsInput.model_validate(
+                {
+                    "sources": [{"job_id": attached["job_id"], "runs": "all"}],
+                    "recipes": recipes,
+                    "include": {"fields": fields},
+                }
+            ),
+            state_with_sim,
+        )
+        assert standalone.structured_content is not None
+
+        for result in (attached["analysis"]["result"], standalone.structured_content):
+            block = result["results"]["summary"]
+            assert [row["assignments"] for row in block["values"]] == [
+                {"_random_seed": 11, "_random_run": 0},
+                {"_random_seed": 11, "_random_run": 1},
+            ]
+            assert not any("absent" in warning for warning in block.get("warnings", []))
+
     async def test_projection_survives_the_attached_continuation_and_replay_view_change(
         self,
         state_with_sim: SessionState,
@@ -3157,14 +3532,14 @@ class TestAttachedAnalysis:
         recorded_fixture_simulator(monkeypatch)
         deck = _deck(work_dir / "attached-bad.cir")
         # A malformed block is refused before submission now, so a STAGE-time
-        # failure needs the engine itself to fail — patched through
+        # failure needs the analysis itself to fail — patched through
         # tools.analyze, the seam the callback deliberately resolves late.
         analyze = {
             "recipes": [{"key": "vout", "metric": "value", "expr": "V(out)", "at": "900u"}],
         }
 
         async def exploding_engine(args, state):
-            raise ValueError("analysis engine failure injected by test")
+            raise ValueError("analysis failure injected by test")
 
         monkeypatch.setattr(analyze_mod, "capture_attached_analysis", exploding_engine)
         data = _assert_schema(
@@ -3180,7 +3555,7 @@ class TestAttachedAnalysis:
         assert data["completeness"]["produced"] == 1
         assert data["completeness"]["failed"] == 0
         assert data["analysis"]["status"] == "failed"
-        assert "analysis engine failure injected by test" in data["analysis"]["error"]
+        assert "analysis failure injected by test" in data["analysis"]["error"]
         assert [item["code"] for item in data["analysis"]["observations"]] == ["analysis_failed"]
         assert "attached analysis failed" in data["hint"]
         # The coordinator still records the stage failure on the job status.
@@ -3195,11 +3570,11 @@ class TestAttachedAnalysis:
         recorded_fixture_simulator(monkeypatch)
         deck = _deck(work_dir / "attached-wait.cir")
         released = asyncio.Event()
-        engine = analyze_mod.capture_attached_analysis
+        real_capture = analyze_mod.capture_attached_analysis
 
         async def gated(args, state):
             await released.wait()
-            return await engine(args, state)
+            return await real_capture(args, state)
 
         monkeypatch.setattr(analyze_mod, "capture_attached_analysis", gated)
 
@@ -3229,7 +3604,7 @@ class TestAttachedAnalysis:
 
 
 _CORE_INC = ".subckt core in out\nR1 in mid 1k\nC1 mid out 1n\n.ends\n"
-_FACTORED_ROOT = '.include "core.inc"\nV1 in 0 1\nX1 in out core\n.op\n.end\n'
+_FACTORED_ROOT = '* factored\n.include "core.inc"\nV1 in 0 1\nX1 in out core\n.op\n.end\n'
 
 
 def _recording_simulator(monkeypatch: pytest.MonkeyPatch, submitted: list[Path]) -> None:
@@ -3300,7 +3675,9 @@ class TestMonteCarloSampleIdentity:
                 _args(
                     deck,
                     "mc-reseeded",
-                    variations=[{"kind": "random", "runs": 3, "seed": seed, "rules": [self._RULE]}],
+                    variations=[
+                        {"kind": "random", "runs": 3, "seed": seed, "rules": [self._RULE]}
+                    ],
                 ),
                 state_with_sim,
             )
@@ -3335,6 +3712,47 @@ class TestMonteCarloSampleIdentity:
 
         assert retry["job_id"] == first["job_id"]
         assert self._draws(retry) == self._draws(first)
+
+    async def test_a_sample_that_never_ran_still_records_how_to_replay_it(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """A case skipped after its variations expanded but before it was drawn
+        (here by a blocking lint finding) keeps its sample index and the seed
+        the server chose, so a caller can send that sample again once the deck
+        is fixed."""
+        submissions: list[str] = []
+        fake_simulator(monkeypatch, submissions)
+        deck = _deck(work_dir / "blocked.cir", "V1 in 0 1\nR1 out 1k\n.op\n.end\n")
+
+        data = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "mc-blocked",
+                    variations=[
+                        {
+                            "kind": "random",
+                            "id": "die",
+                            "runs": 2,
+                            "sample_start": 4,
+                            "rules": [self._RULE],
+                        }
+                    ],
+                ),
+                state_with_sim,
+            )
+        )
+
+        assert submissions == []
+        assert data["failures"][0]["code"] == "lint_blocked"
+        rows = [item["assignments"] for item in data["runs"]["items"]]
+        assert [row["_random_run"] for row in rows] == [4, 5]
+        assert [row["_random_id"] for row in rows] == ["die", "die"]
+        (seed,) = {row["_random_seed"] for row in rows}
+        assert isinstance(seed, int)
 
 
 @pytest.mark.asyncio
@@ -3441,7 +3859,10 @@ class TestVariationsReachIntoIncludes:
         _recording_simulator(monkeypatch, submitted)
         deck = _factored_deck(
             work_dir,
-            root='.include "core.inc"\nV1 in 0 1\nR1 in out 1k\nX1 out 0 core\n.op\n.end\n',
+            root=(
+                '* factored\n.include "core.inc"\nV1 in 0 1\nR1 in out 1k\nX1 out 0 core\n'
+                ".op\n.end\n"
+            ),
         )
 
         _assert_schema(
@@ -3472,7 +3893,7 @@ class TestVariationsReachIntoIncludes:
         (work_dir / "right.inc").write_text(".subckt right in out\nR1 in out 2k\n.ends\n")
         deck = _deck(
             work_dir / "two-cores.cir",
-            '.include "left.inc"\n.include "right.inc"\nV1 in 0 1\n'
+            '* two cores\n.include "left.inc"\n.include "right.inc"\nV1 in 0 1\n'
             "X1 in mid left\nX2 mid 0 right\n.op\n.end\n",
         )
 
@@ -3597,7 +4018,7 @@ class TestVariationsReachIntoIncludes:
         (work_dir / "mid.inc").write_text('.include "core.inc"\n')
         deck = _deck(
             work_dir / "nested.cir",
-            '.include "mid.inc"\nV1 in 0 1\nX1 in out core\n.op\n.end\n',
+            '* nested\n.include "mid.inc"\nV1 in 0 1\nX1 in out core\n.op\n.end\n',
         )
 
         data = _assert_schema(
@@ -3754,7 +4175,7 @@ class TestReceiptWeight:
         inside.write_text("R8 in 0 2k\n")
         deck = _deck(
             work_dir / "live.cir",
-            f".include {inside}\n.include {outside}\nV1 in 0 1\n.op\n.end\n",
+            f"* live\n.include {inside}\n.include {outside}\nV1 in 0 1\n.op\n.end\n",
         )
 
         data = _assert_schema(
@@ -3812,7 +4233,7 @@ class TestReceiptWeight:
         outside.write_text("R9 in 0 1k\n")
         deck = _deck(
             work_dir / "live-budget.cir",
-            f".include {outside}\nV1 in 0 1\n.op\n.end\n",
+            f"* live budget\n.include {outside}\nV1 in 0 1\n.op\n.end\n",
         )
 
         data = _assert_schema(

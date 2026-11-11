@@ -1,6 +1,6 @@
 """Pre-flight validation for SPICE directives.
 
-The simulator's measurement engine has a narrower expression vocabulary
+The simulator's measurement evaluator has a narrower expression vocabulary
 than the waveform viewer. Directives that look syntactically correct
 (e.g. ``.MEAS AC fc WHEN vdb(out)=-3``) silently fail post-hoc inside
 the .log file. This module catches the common pitfalls before the
@@ -24,11 +24,14 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Literal
 
+from ltspice_mcp.lib.deck_nodes import GROUND_NAMES, global_names, node_kind
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
+    SpiceLexErrorCategory,
     TokenKind,
+    directive_head,
     lex,
     tokenize_body,
     unreadable_cards,
@@ -82,7 +85,7 @@ class _Rule:
 _RULES: tuple[_Rule, ...] = (
     _Rule(
         name="vdb_in_meas",
-        # LTspice's measurement engine accepts mag/re/im/ph but NOT vdb —
+        # LTspice's measurement evaluator accepts mag/re/im/ph but NOT vdb —
         # that's a waveform-viewer-only function.
         blocked_function="vdb",
         simulators=frozenset({"LTspice"}),
@@ -124,7 +127,7 @@ _RULES: tuple[_Rule, ...] = (
 )
 
 
-#: The constants of LTspice's expression engine (its help lists E, pi, K and
+#: The constants of LTspice's expression evaluator (its help lists E, pi, K and
 #: Q), which neither build takes as a .meas name: LTspice 26 refuses the deck
 #: ("Expected a name that is not a reserved name here.") and XVII skips the
 #: measurement ('"k" is a reserved constant name.'). time, temp and boltz are
@@ -141,13 +144,45 @@ def meas_name_refused(card: SpiceCard, simulator: str = "LTspice") -> Validation
     return ValidationError(
         rule_name="meas_reserved_name",
         message=(
-            f'"{name}" is one of the constants LTspice\'s expression engine '
+            f'"{name}" is one of the constants LTspice\'s expression evaluator '
             f"defines ({names}), so a .meas cannot take it as a name: LTspice 26 "
             "refuses the deck and runs nothing, and LTspice XVII skips the "
             "measurement."
         ),
         suggestion=f"Rename the measurement, for example to {name}_meas.",
     )
+
+
+def meas_unclosed_paren_refused(
+    card: SpiceCard, simulator: str = "LTspice"
+) -> ValidationError | None:
+    """The error for a lexed ``.meas`` card with a parenthesis left open,
+    which LTspice refuses.
+
+    Recorded for one card (log/meas_bad_syntax, ``FIND V(out AT 0.5m``):
+    LTspice 26 stopped at it before the run ('Expected ")" here.') and ran
+    nothing, and XVII ran the deck without that measurement. Any ``.meas``
+    with a parenthesis left open is taken the same way, since LTspice 26's
+    error names the missing parenthesis, not the form around it; what XVII
+    makes of another form is not recorded.
+    """
+    if simulator != "LTspice" or card.kind != "meas":
+        return None
+    try:
+        tokenize_body(card.body)
+    except SpiceLexError as exc:
+        if exc.category is not SpiceLexErrorCategory.UNBALANCED_PAREN:
+            return None
+        return ValidationError(
+            rule_name="meas_unclosed_paren",
+            message=(
+                "A parenthesis is left open in this .meas. LTspice 26 refuses such "
+                "a deck before the run ('Expected \")\" here.') and runs nothing, "
+                "and LTspice XVII has run one without the measurement."
+            ),
+            suggestion="Add the ) that closes the ( it opens.",
+        )
+    return None
 
 
 def leading_numeric_tokens(tokens: list[str]) -> list[float]:
@@ -233,7 +268,7 @@ def validate_directive(directive: str, simulator: str = "LTspice") -> Validation
 
     Returns the first matched rule's error, or None if no rule fires.
     Empty / whitespace-only input is a no-op. Covers ``.MEAS`` function
-    blocklists and reserved names, the ``.tran`` zero-step ngspice
+    blocklists, reserved names and a parenthesis left open, the ``.tran`` zero-step ngspice
     incompatibility, and the ``.backanno`` ngspice incompatibility; other
     directives pass through unchecked.
     """
@@ -273,6 +308,8 @@ def validate_directive_card(card: SpiceCard, simulator: str = "LTspice") -> Vali
     continuation line is checked whole. A card that is no directive passes.
     """
     if card.kind == "meas":
+        if (error := meas_unclosed_paren_refused(card, simulator)) is not None:
+            return error
         if (error := meas_name_refused(card, simulator)) is not None:
             return error
         refused = meas_functions_refused(card, simulator)
@@ -458,8 +495,16 @@ def validate_netlist_arity(
     return issues
 
 
-# Node spellings that are always considered connected (the SPICE ground).
-_GROUND_NODES = frozenset({"0", "gnd"})
+# The names ``deck_nodes`` reads as ground, always considered connected.
+_GROUND_NODES = GROUND_NAMES
+# The floating- and dangling-node checks read a deck as LTspice does, whichever
+# simulator the deck is for: a port named ``gnd`` or named like a ``.global``
+# net is the port, where ngspice reads it as ground or the global
+# (``deck_nodes``), so for an ngspice deck they can report a node floating that
+# such a port ties to ground or to the global. Hierarchy discovery, which is
+# told the simulator, reads it as that simulator does; tests/test_deck_nodes.py
+# pins the difference.
+_READ_AS = "ltspice"
 
 
 def is_ground_node(name: str) -> bool:
@@ -569,12 +614,44 @@ class _NodeUse:
     count: int = 1
 
 
-def _words_of_unread(card: SpiceCard) -> set[str]:
-    """Every word of a card no rule could split into parts
-    (``spice_lex.unreadable_cards``), lowercased: each may be a name or a node
-    the card defines or connects. The passes that may only ever hide a
-    warning, never make one on a guess, count them so."""
-    return {word.lower() for word in card.body.split()}
+# What separates the words of a card no rule could split into parts, and the
+# operators inside an expression word: a node a card names inside an
+# expression (``B1 out 0 V={V(in)*2``) is one of its words too.
+# A bus name keeps its brackets (``V(d[0])*2`` holds ``d[0]``), and an index
+# may be a node too, so the words are taken both with and without them.
+_UNREAD_SEPARATORS = (
+    re.compile(r"[\s(){}'\",=]+"),
+    re.compile(r"[\s(){}\[\]'\",=]+"),
+)
+_UNREAD_OPERATORS = re.compile(r"[*/+\-<>^&|!?:;%]+")
+
+
+def may_connect_nodes(card: SpiceCard) -> bool:
+    """Whether ``card`` may connect nodes: an instance, a ``.SUBCKT`` header or
+    a ``.GLOBAL``. A directive that only names a node (``.save``, ``.meas``)
+    connects none."""
+    return card.kind in ("instance", "subckt") or directive_head(card) == ".global"
+
+
+def _unread_connectors(cards: list[SpiceCard]) -> list[tuple[SpiceCard, set[str]]]:
+    """Each card that may connect nodes (``may_connect_nodes``) but that no
+    rule could split into parts (``spice_lex.unreadable_cards``), with every
+    word on it, lowercased: as written between spaces (``d[0]``), split again
+    at parentheses, braces and separators, with and without square brackets,
+    and again at operators, since any of them may
+    be a node or a name the card connects or defines. The passes here may
+    only hide a warning, never make one on a guess, so they count each as
+    connected."""
+    found: list[tuple[SpiceCard, set[str]]] = []
+    for card, _error in unreadable_cards(cards):
+        if not may_connect_nodes(card):
+            continue
+        body = card.body.lower()
+        words = set(body.split())
+        words |= {word for split in _UNREAD_SEPARATORS for word in split.split(body) if word}
+        words |= {part for word in words for part in _UNREAD_OPERATORS.split(word) if part}
+        found.append((card, words))
+    return found
 
 
 def _scan_global_nodes(cards: list[SpiceCard]) -> set[str]:
@@ -586,22 +663,32 @@ def _scan_global_nodes(cards: list[SpiceCard]) -> set[str]:
     """
     nodes: set[str] = set()
     for card in cards:
-        if card.kind != "directive":
-            continue
-        if not card.body.lstrip().lower().startswith(".global"):
-            continue
         try:
-            tokens = tokenize_body(card.body)
+            nodes.update(name.lower() for name in global_names(card))
         except SpiceLexError:
             continue
-        if not tokens or tokens[0].text.lower() != ".global":
-            continue
-        for tok in tokens[1:]:
-            if tok.kind == TokenKind.COMMENT_TRAIL:
-                break
-            if tok.kind == TokenKind.BARE:
-                nodes.add(tok.text.lower())
     return nodes
+
+
+def _scope_ports(cards: list[SpiceCard]) -> dict[tuple[str, ...], tuple[str, ...]]:
+    """Each subcircuit body's scope, and the ports its header names."""
+    ports: dict[tuple[str, ...], tuple[str, ...]] = {}
+    for card in cards:
+        if card.kind != "subckt":
+            continue
+        try:
+            sub = SubcktCard.from_card(card)
+        except SpiceLexError:
+            continue
+        ports[(*card.scope, sub.name)] = tuple(sub.ports)
+    return ports
+
+
+def _shared(node: str, ports: tuple[str, ...], global_nodes: set[str]) -> bool:
+    """Whether ``node``, written in a scope with ``ports``, is ground or a
+    ``.GLOBAL`` net, which every scope shares (``deck_nodes``)."""
+    kind = node_kind(node, ports=ports, global_names=global_nodes, simulator=_READ_AS)
+    return kind in ("ground", "global")
 
 
 def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, object]]:
@@ -625,17 +712,19 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
     create a false one.
     """
     global_nodes = _scan_global_nodes(cards)
+    scope_ports = _scope_ports(cards)
 
     # scope → lowercased node → first reference + total reference count.
     occurrences: dict[tuple[str, ...], dict[str, _NodeUse]] = {}
-    suppressed: set[str] = set()
+    # A card no rule could read may connect any word on it.
+    suppressed: set[str] = {word for _card, words in _unread_connectors(cards) for word in words}
 
     def record(
         scope: tuple[str, ...], node: str, referrer: str, card: SpiceCard, is_port: bool = False
     ) -> None:
-        key = node.lower()
-        if key in _GROUND_NODES or key in global_nodes:
+        if _shared(node, scope_ports.get(scope, ()), global_nodes):
             return
+        key = node.lower()
         nodes = occurrences.setdefault(scope, {})
         use = nodes.get(key)
         if use is None:
@@ -654,7 +743,6 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
             try:
                 sub = SubcktCard.from_card(card)
             except SpiceLexError:
-                suppressed.update(_words_of_unread(card))
                 continue
             body_scope = (*card.scope, sub.name)
             for port in sub.ports:
@@ -663,7 +751,6 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
             try:
                 inst = InstanceLine.from_card(card)
             except SpiceLexError:
-                suppressed.update(_words_of_unread(card))
                 continue
             terminals, rest = _instance_terminals(inst)
             for node in terminals:
@@ -753,12 +840,13 @@ def _known_names(cards: list[SpiceCard]) -> set[str]:
     """
     known: set[str] = set(_GROUND_NODES) | set(_RESERVED_TRACES)
     known |= _scan_global_nodes(cards)
+    # A card no rule could read may define any word on it.
+    known |= {word for _card, words in _unread_connectors(cards) for word in words}
     for card in cards:
         if card.kind == "subckt":
             try:
                 sub = SubcktCard.from_card(card)
             except SpiceLexError:
-                known.update(_words_of_unread(card))
                 continue
             known.add(sub.name.lower())
             known.update(p.lower() for p in sub.ports)
@@ -766,7 +854,6 @@ def _known_names(cards: list[SpiceCard]) -> set[str]:
             try:
                 inst = InstanceLine.from_card(card)
             except SpiceLexError:
-                known.update(_words_of_unread(card))
                 continue
             known.add(inst.ref.lower())
             terminals, rest = _instance_terminals(inst)
@@ -913,6 +1000,12 @@ def _dc_edges(
     return _star(terminals)
 
 
+#: The grounded ports of a subckt that cannot be read whole
+#: (``_subckt_internal_grounds``): any port may reach ground inside it, so an
+#: ``X`` of it counts every node it is wired to as grounded.
+_EVERY_PORT: frozenset[int] = frozenset({-1})
+
+
 def _apply_instance_edges(
     dsu: _DSU,
     inst: InstanceLine,
@@ -935,6 +1028,8 @@ def _apply_instance_edges(
             dsu.union(a.lower(), b.lower())
     if prefix == "X" and inst.model:
         nested = subckt_grounds.get(inst.model.lower(), frozenset())
+        if nested is _EVERY_PORT:
+            return [terminal.lower() for terminal in terminals]
         return [terminals[i].lower() for i in nested if i < len(terminals)]
     return []
 
@@ -1000,25 +1095,37 @@ def _subckt_internal_grounds(
     # Parse each body once up front; the fixpoint below only re-runs the
     # cheap union step, never re-lexes.
     defs: dict[str, tuple[list[str], list[tuple[InstanceLine, list[str]]]]] = {}
+    # A subckt whose header, or a card in whose body that may connect nodes,
+    # cannot be split into parts may tie any port to ground.
+    unread: set[str] = set()
     for card in cards:
         if card.kind != "subckt":
             continue
         try:
             sub = SubcktCard.from_card(card)
         except SpiceLexError:
+            if card.name:
+                unread.add(card.name.lower())
             continue
         body_cards = [c for c in cards if c.scope == (*card.scope, sub.name)]
+        if _unread_connectors(body_cards):
+            unread.add(sub.name.lower())
+            continue
         body = [(inst, terminals) for _c, inst, terminals in _iter_instances(body_cards)]
         defs[sub.name.lower()] = ([p.lower() for p in sub.ports], body)
+    for name in unread:
+        defs.pop(name, None)
 
-    sinks = _GROUND_NODES | global_nodes
     grounds: dict[str, frozenset[int]] = {name: frozenset() for name in defs}
+    grounds.update(dict.fromkeys(unread, _EVERY_PORT))
     for _ in range(len(defs) + 1):  # bounded fixpoint over nested grounding
         changed = False
         for name, (ports, body) in defs.items():
             dsu = _DSU()
-            for sink in sinks:
-                dsu.union(_GROUND_SINK, sink)
+            # Ground and the globals, but not a port named like either.
+            for sink in _GROUND_NODES | global_nodes:
+                if _shared(sink, tuple(ports), global_nodes):
+                    dsu.union(_GROUND_SINK, sink)
             for inst, terminals in body:
                 _union_instance(dsu, inst, terminals, grounds)
             groot = dsu.find(_GROUND_SINK)
@@ -1031,17 +1138,20 @@ def _subckt_internal_grounds(
     return grounds
 
 
-def _qualify(node: str, scope: tuple[str, ...], global_nodes: set[str]) -> str:
-    """Key a node for the deck-wide global-reachability graph.
+def _qualify(
+    node: str, scope: tuple[str, ...], global_nodes: set[str], ports: tuple[str, ...]
+) -> str:
+    """Key a node, written in ``scope`` whose ports are ``ports``, for the
+    deck-wide global-reachability graph.
 
-    Ground and global names stay shared (bare); every local name is
-    namespaced by its scope so identically-named locals in different
-    subckts never merge. The NUL / SOH separators cannot occur in a real
-    node name, so a namespaced local can never collide with a bare global
-    or the ground sentinel.
+    Ground and global names stay shared (bare); every local name, a port
+    included, is namespaced by its scope so identically-named locals in
+    different subckts never merge. The NUL / SOH separators cannot occur in a
+    real node name, so a namespaced local can never collide with a bare
+    global or the ground sentinel.
     """
     key = node.lower()
-    if key in _GROUND_NODES or key in global_nodes:
+    if _shared(node, ports, global_nodes):
         return key
     return "\x00".join(s.lower() for s in scope) + "\x01" + key
 
@@ -1067,8 +1177,10 @@ def _grounded_globals(
     dsu = _DSU()
     for sink in _GROUND_NODES:
         dsu.union(_GROUND_SINK, sink)
+    scope_ports = _scope_ports(cards)
     for card, inst, terminals in _iter_instances(cards):
-        qualified = [_qualify(t, card.scope, global_nodes) for t in terminals]
+        ports = scope_ports.get(card.scope, ())
+        qualified = [_qualify(t, card.scope, global_nodes, ports) for t in terminals]
         _union_instance(dsu, inst, qualified, subckt_grounds)
     ground_root = dsu.find(_GROUND_SINK)
     return {g for g in global_nodes if dsu.find(g) == ground_root}
@@ -1117,13 +1229,17 @@ def validate_netlist_bias_topology(cards: list[SpiceCard]) -> list[dict[str, obj
 
     # A card no rule could read may connect any word on it, to ground among
     # them, so in keeping with the over-connection each of its words is a
-    # sink: a net it touches is never flagged on a guess.
-    for card, _error in unreadable_cards(cards):
-        scopes = [card.scope]
-        if card.kind == "subckt" and card.name:
-            scopes.append((*card.scope, card.name))
-        for scope in scopes:
-            graphs.setdefault(scope, _BiasGraph()).sinks.update(_words_of_unread(card))
+    # sink: a net it touches is never flagged on a guess. A .SUBCKT header's
+    # words are its body's ports, and a .GLOBAL's are sinks in every scope.
+    unread_globals: set[str] = set()
+    for card, words in _unread_connectors(cards):
+        if card.kind == "instance":
+            graphs.setdefault(card.scope, _BiasGraph()).sinks.update(words)
+        elif card.kind == "subckt":
+            if card.name:
+                graphs.setdefault((*card.scope, card.name), _BiasGraph()).sinks.update(words)
+        else:
+            unread_globals |= words
 
     for card, inst, terminals in _iter_instances(cards):
         graph = graphs.setdefault(card.scope, _BiasGraph())
@@ -1145,7 +1261,7 @@ def validate_netlist_bias_topology(cards: list[SpiceCard]) -> list[dict[str, obj
 
     issues: list[dict[str, object]] = []
     for scope, graph in graphs.items():
-        for sink in graph.sinks | grounded_globals | _GROUND_NODES:
+        for sink in graph.sinks | grounded_globals | unread_globals | _GROUND_NODES:
             graph.dsu.union(_GROUND_SINK, sink)
         ground_root = graph.dsu.find(_GROUND_SINK)
 

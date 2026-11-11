@@ -16,8 +16,8 @@ named by its file stem (``ltspice``). The Claude Code plugin's one skill only
 points a session here, so there is no second copy of any of this text to drift.
 
 Nothing here imports beyond the standard library, so
-``python -m ltspice_mcp.api guide`` reads the guide without starting the
-engine.
+``python -m ltspice_mcp.api guide`` reads the guide without starting a
+session.
 """
 
 from __future__ import annotations

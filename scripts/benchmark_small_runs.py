@@ -8,7 +8,7 @@ reports one and never fails: it exits 0 whatever it measures.
 
 It times, each as the best of --repeat tries, through the Python API:
 
-- booting the engine;
+- starting an `Api` session;
 - a 5-case .op sweep on ngspice, when ngspice is installed;
 - reading ten of the recorded LTspice raws and one trace of each;
 - one edit_schematic batch that draws a divider, compared with a reference
@@ -77,7 +77,7 @@ def measure(repeat: int) -> dict[str, float | str]:
 
         for attempt in range(repeat):
             (work / f"boot{attempt}").mkdir()
-        timings["engine boot"] = _best_of(repeat, boot)
+        timings["session start"] = _best_of(repeat, boot)
 
         with Api(work, symbol_paths=symbols) as api:
             available = _available(api)

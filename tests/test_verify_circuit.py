@@ -839,6 +839,7 @@ async def test_layout_and_quality_hold_the_rules_an_edit_reports_too(
     # Each reply lists the rules its check ran and no others, zero included.
     assert layout["rules_run"] == {
         "joined_at_crossing": 0,
+        "pin_inside_wire": 0,
         "unjoined_crossing": 0,
         "diagonal_wire": 0,
         "floating_pin": 2,
@@ -1035,18 +1036,90 @@ async def test_a_card_no_rule_can_read_is_reported_and_misleads_no_other_rule(
     assert found == [("unreadable_card", 3), ("unreadable_card", 5)], found
 
 
-async def test_a_recorded_measurement_with_an_unclosed_parenthesis_is_reported(
+# Each deck holds one part no rule can split into parts. Every quality pass
+# counts the nodes on it as connected, those named inside its expression too,
+# so none reports the deck as missing what that part may supply.
+_UNREAD_PART_DECKS = {
+    # 'in' is wired to V1 and, inside B1's expression, read by B1.
+    "dangling_node": ("* t\nV1 in 0 5\nB1 out 0 V={V(in)*2\nR1 out 0 1k\n.op\n.end\n", 3),
+    # 'd[0]' is a node name with brackets in it, wired to R1 too.
+    "dangling_node, a bracketed name": ("* t\nV1 d[0] 0 1\nR1 d[0] 0 {1k\n.op\n.end\n", 3),
+    # ...and read by B1 inside its expression.
+    "dangling_node, a bracketed name in an expression": (
+        "* t\nV1 d[0] 0 1\nB1 out 0 V={V(d[0])*2\nR1 out 0 1k\n.op\n.end\n",
+        3,
+    ),
+    # 'sense' is named only inside B1's expression.
+    "undefined_reference": (
+        "* t\nV1 in 0 5\nB1 out 0 V={V(in)*V(sense)\nR1 out 0 1k\n"
+        ".meas op v FIND V(sense)\n.op\n.end\n",
+        3,
+    ),
+    # R1 may tie 'mid', which is otherwise between two capacitors, to ground.
+    "floating_net": (
+        "* t\nV1 in 0 5\nC1 in mid 1n\nC2 mid 0 1n\nR1 mid 0 {1k\n.op\n.end\n",
+        5,
+    ),
+    # MYSUB may tie its port to ground: its header cannot be read...
+    "floating_net through a subcircuit header": (
+        "* t\nV1 in 0 5\nC1 in mid 1n\nC2 mid 0 1n\nX1 mid MYSUB\n"
+        ".subckt MYSUB a params: r={1k\nR1 a 0 {r}\n.ends MYSUB\n.op\n.end\n",
+        6,
+    ),
+    # ...or a part in its body cannot.
+    "floating_net through a subcircuit body": (
+        "* t\nV1 in 0 5\nC1 in mid 1n\nC2 mid 0 1n\nX1 mid MYSUB\n"
+        ".subckt MYSUB a\nR1 a 0 {1k\n.ends MYSUB\n.op\n.end\n",
+        7,
+    ),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_UNREAD_PART_DECKS))
+async def test_a_part_no_rule_can_read_counts_as_connected(state_no_sim, work_dir, case):
+    text, line = _UNREAD_PART_DECKS[case]
+    deck = _write(work_dir, "unread_part.cir", text)
+
+    data = await _run(state_no_sim, path=str(deck), checks=["syntax", "quality"])
+
+    found = [(f["rule_id"], f["at"].get("line")) for f in data["findings"]]
+    assert found == [("unreadable_card", line)], found
+
+
+async def test_a_directive_no_rule_can_read_connects_nothing(state_no_sim, work_dir):
+    # '.save mid V(in' names 'mid' but ties it to nothing: 'mid', between two
+    # capacitors, still has no DC path to ground.
+    deck = _write(
+        work_dir,
+        "unread_save.cir",
+        "* t\nV1 in 0 5\nC1 in mid 1n\nC2 mid 0 1n\n.save mid V(in\n.op\n.end\n",
+    )
+
+    data = await _run(state_no_sim, path=str(deck), checks=["syntax", "quality"])
+
+    found = sorted((f["rule_id"], f["at"].get("line")) for f in data["findings"])
+    assert found == [("floating_net", 3), ("unreadable_card", 5)], found
+
+
+async def test_a_recorded_measurement_with_an_unclosed_parenthesis_is_an_error(
     state_no_sim, work_dir
 ):
-    # A deck both LTspice builds were recorded running (log/meas_bad_syntax).
+    """LTspice 26 refused this deck at line 7 and ran nothing, XVII ran it
+    without that measurement (log/meas_bad_syntax). The directive check
+    refuses it, as it does a .meas named for a constant, and as the linter's
+    meas-unclosed-paren-ltspice rule does."""
     source = FIXTURES_DIR / "ltspice_recorded" / "inputs" / "log" / "meas_bad_syntax.cir"
     deck = _write(work_dir, "meas_bad_syntax.cir", source.read_text(encoding="utf-8"))
 
     data = await _run(state_no_sim, path=str(deck), checks=["syntax"])
 
-    (finding,) = [f for f in data["findings"] if f["rule_id"] == "unreadable_card"]
+    (finding,) = data["findings"]
+    assert (finding["rule_id"], finding["severity"]) == ("directive_syntax", "error")
     assert finding["at"]["line"] == 7
     assert finding["subject"].startswith(".meas tran broken")
+    detail = finding["evidence"]["detail"]
+    assert "LTspice 26 refuses such a deck before the run" in detail
+    assert "Add the ) that closes the ( it opens." in detail
 
 
 async def test_a_refused_reference_is_filed_under_the_reference(state_no_sim, work_dir):
@@ -1464,7 +1537,7 @@ async def test_additive_edit_against_the_original_asc_reports_only_the_addition(
 
 
 async def test_equivalence_exports_an_asc_reference(exporting_state, work_dir):
-    """The graph engine lexes whatever it is handed as SPICE, so an .asc
+    """The netlist graph lexes whatever it is handed as SPICE, so an .asc
     reference has to arrive as its export, not as the schematic text."""
     sheet = _write(work_dir, "amp.asc", fake_netlister.amp_asc())
 
@@ -2071,24 +2144,24 @@ async def test_render_png_present(state_no_sim, work_dir, asc_symbols):
     assert render["width"] and render["height"]
 
 
-async def test_render_png_forced_absent_declares_extra(
-    state_no_sim, work_dir, asc_symbols, raster_extra_missing
+async def test_render_png_forced_absent_declares_the_dependency(
+    state_no_sim, work_dir, asc_symbols, raster_dependency_missing
 ):
     asc = _write(work_dir, "rf.asc", _RES_ASC)
     data = await _run(state_no_sim, path=str(asc), render={"mode": "only", "format": "png"})
     render = data["render"]
     assert render["image_format"] == "svg"
-    assert "raster" in (render["note"] or "")
+    assert "resvg-py" in (render["note"] or "")
     render_failures = [f for f in data["failures"] if f["stage"] == "render"]
-    assert render_failures, "a PNG request without the extra must declare a per-item failure"
-    assert "'raster' extra" in render_failures[0]["error"]
-    assert "ltspice-mcp[raster]" in (render_failures[0]["remedy"] or "")
+    assert render_failures, "a PNG request without a rasterizer must declare a per-item failure"
+    assert "resvg-py, which ltspice-mcp depends on" in render_failures[0]["error"]
+    assert "uv tool install --reinstall ltspice-mcp" in (render_failures[0]["remedy"] or "")
 
 
 async def test_the_default_format_falling_back_is_not_a_failure(
-    state_no_sim, work_dir, asc_symbols, raster_extra_missing
+    state_no_sim, work_dir, asc_symbols, raster_dependency_missing
 ):
-    """PNG is the default, so without the extra every render came back
+    """PNG is the default, so without a rasterizer every render came back
     partial although the caller asked for no format. The SVG is what the
     server can draw; the note and the headline say why and how to get a PNG."""
     asc = _write(work_dir, "rd.asc", _RES_ASC)
@@ -2096,24 +2169,25 @@ async def test_the_default_format_falling_back_is_not_a_failure(
     assert data["render"]["image_format"] == "svg"
     assert "failures" not in data
     assert data["outcome"] == "complete"
-    assert "'raster' extra" in data["render"]["note"]
-    assert "ltspice-mcp[raster]" in data["hint"]
+    assert "resvg-py, which ltspice-mcp depends on" in data["render"]["note"]
+    assert "uv tool install --reinstall ltspice-mcp" in data["hint"]
 
 
 async def test_render_png_without_native_cairo_blames_the_library(
     state_no_sim, work_dir, asc_symbols, raster_native_missing
 ):
     """With cairosvg installed and libcairo absent, the failure names the
-    native library. The remedy offers the extra, whose rasterizer needs no
-    native library, then the library for the platform the server runs on."""
+    native library. The remedy offers reinstalling, which brings back resvg-py,
+    whose rasterizer needs no native library, then the library for the
+    platform the server runs on."""
     asc = _write(work_dir, "rn.asc", _RES_ASC)
     data = await _run(state_no_sim, path=str(asc), render={"mode": "only", "format": "png"})
     assert data["render"]["image_format"] == "svg"
     (failure,) = [f for f in data["failures"] if f["stage"] == "render"]
     assert "Cairo" in failure["error"]
     assert "not installed" not in failure["error"]
-    assert failure["remedy"].startswith("install it where the server runs")
-    assert "ltspice-mcp[raster]" in failure["remedy"]
+    assert failure["remedy"].startswith("reinstall the server where it runs")
+    assert "uv tool install --reinstall ltspice-mcp" in failure["remedy"]
     assert failure["remedy"].endswith(raster.native_library_remedy(sys.platform))
     assert "Cairo" in data["render"]["note"]
     # The headline a structured-only client reads carries it too.
@@ -2153,7 +2227,7 @@ async def test_an_inline_svg_request_returns_the_markup(state_no_sim, work_dir, 
 
 
 async def test_an_inline_png_request_without_raster_returns_the_svg(
-    state_no_sim, work_dir, asc_symbols, raster_extra_missing
+    state_no_sim, work_dir, asc_symbols, raster_dependency_missing
 ):
     asc = _write(work_dir, "rj.asc", _RES_ASC)
     data = await _run(
@@ -2167,7 +2241,7 @@ async def test_an_inline_png_request_without_raster_returns_the_svg(
     assert render["svg"] == _written_svg(render)
     note = render["note"] or ""
     # Why the PNG could not be made, then what came back in its place.
-    assert "'raster' extra" in note
+    assert "resvg-py, which ltspice-mcp depends on" in note
     assert "render.svg" in note
 
 
@@ -2491,7 +2565,7 @@ def test_api_types_exports_the_models_errors_name():
     # matter which class had been re-exported there.
     assert api_types.VerifyRenderPolicy is _model_of(VerifyCircuitInput, "render")
     assert api_types.VerifyCompareSpec is _model_of(VerifyCircuitInput, "compare")
-    # Both tools take the same compare spec: one comparison engine, one shape.
+    # Both tools take the same compare spec: one comparison, one shape.
     assert api_types.VerifyCompareSpec is _model_of(EditSchematicInput, "compare")
     # RenderPolicy is exported as the base VerifyRenderPolicy subclasses; only
     # verify_circuit takes a render, so no tool field validates against it.

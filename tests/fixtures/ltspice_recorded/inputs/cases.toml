@@ -111,7 +111,7 @@ extra = ["connectivity/res.asy"]
 
 [behaviour.net-naming]
 summary = "The name a node gets: a label, ground over a label, one of two labels, labels of one name on separate wires, labels whose names differ only in case, a GND label in any case, N001 for an unlabelled net, NC_01 for an unconnected pin, and a label touching nothing."
-model = ["lib/connectivity.py", "lib/schematic_ops.py", "lib/netlist_graph.py", "lib/pin_legend.py"]
+model = ["lib/connectivity.py", "lib/schematic_ops.py", "lib/netlist_graph.py", "lib/pin_legend.py", "lib/trace_names.py"]
 inputs = [
     "connectivity/two_labels_zeta_first.asc",
     "connectivity/two_labels_alpha_first.asc",
@@ -201,13 +201,13 @@ extra = ["export/res.asy"]
 
 [behaviour.export-instance-names]
 summary = "How an instance is named in the netlist when its name does not start with its element letter, on a library-style symbol and on a block symbol that has no sheet of its own, and what a run's raw calls such a resistor's current."
-model = ["lib/schematic_ops.py", "lib/netlist_graph.py", "lib/spice_lex_ops.py", "lib/deck_prep.py"]
+model = ["lib/schematic_ops.py", "lib/netlist_graph.py", "lib/spice_lex_ops.py", "lib/deck_prep.py", "lib/trace_names.py"]
 inputs = ["export/instance_names.asc", "export/block_symbol.asc"]
 extra = ["export/res.asy", "export/probe4.asy", "export/cell4.asy"]
 
 [behaviour.export-hierarchical-block]
 summary = "A sheet that places a hierarchical block whose own sheet and symbol sit beside it, the symbol drawn as LTspice draws one or given a Prefix of X: the netlist each build exports for it, and what a build writes when it runs the sheet."
-model = ["lib/deck_prep.py", "lib/schematic_ops.py"]
+model = ["lib/deck_prep.py", "lib/schematic_ops.py", "lib/symbol_library.py", "lib/trace_names.py"]
 # hier_plain.asy is a block symbol with pins IN and OUT and no attribute, as
 # LTspice makes one for a sheet; hier_amp.asy is the same block with
 # SYMATTR Prefix X. Each block's own sheet (hier_plain.asc, hier_amp.asc) is
@@ -215,6 +215,11 @@ model = ["lib/deck_prep.py", "lib/schematic_ops.py"]
 # block from a 1 V source into a 10k load and runs .op.
 inputs = ["export/hier_top.asc", "export/hier_plain_top.asc"]
 extra = ["export/hier_amp.asc", "export/hier_amp.asy", "export/hier_plain.asc", "export/hier_plain.asy"]
+
+[behaviour.sheet-part-trace-names]
+summary = "What a run of a sheet names the device inside a part whose symbol is given a Prefix of X and a reference that does not start with X, beside the same subcircuit called with X from a directive on the sheet, and the net the sheet leaves unlabelled."
+model = ["lib/trace_names.py"]
+pending = "Written where no LTspice runs. Record it on Windows with uv run python scripts/record_ltspice_fixtures.py --only 'export/sheet_part_names', then remove this key."
 
 [behaviour.export-instance-prefix]
 summary = "What an instance's own Prefix attribute does on export: the element letter it gives the card and how the instance name is then written, in either case of the letter, before or after InstName, on a library-style symbol, a stock symbol and a block symbol."
@@ -314,7 +319,25 @@ inputs = [
 
 [behaviour.deck-structure]
 summary = "How a deck's lines are read: the title line, ; and $ comments, a $ inside a node name and at its start, + continuations, a ; comment on a line the card is continued past, inside a .model card's parentheses and outside them, cards after .end, a missing .end, CRLF line endings, case, and whether gnd is ground."
-model = ["lib/spice_lex.py", "lib/spice_validator.py", "lib/lint_rules.py", "lib/hierarchy.py", "lib/netlist_graph.py", "tools/inspect_tools.py", "lib/experiment_inputs.py"]
+model = [
+    "lib/spice_lex.py",
+    "lib/spice_validator.py",
+    "lib/lint_rules.py",
+    "lib/hierarchy.py",
+    "lib/netlist_graph.py",
+    "lib/netlist_diff.py",
+    "lib/result_observations.py",
+    "tools/inspect_tools.py",
+    "lib/experiment_inputs.py",
+    "lib/variations.py",
+    "lib/subckt_mismatch.py",
+    "lib/montecarlo.py",
+    "lib/deck_staging.py",
+    "lib/runner_base.py",
+    "lib/metrics.py",
+    "lib/export_nets.py",
+    "lib/services.py",
+]
 inputs = [
     "deck/comment_semicolon.cir",
     "deck/comment_dollar.cir",
@@ -331,6 +354,15 @@ inputs = [
     "deck/no_end.cir",
     "deck/case_insensitive.cir",
 ]
+
+[behaviour.deck-node-names]
+summary = "Which net a node name stands for where no other recording says: whether gnd! is ground or a node of its own, and whether a subcircuit body's name that is both a port and a .global net is the port or the global."
+model = ["lib/deck_nodes.py", "lib/netlist_graph.py", "lib/spice_validator.py", "lib/hierarchy.py", "lib/trace_names.py", "lib/connectivity.py", "tools/inspect_tools.py"]
+# gnd_bang: 1 A through R1 into gnd!, then R2 to ground; v(a) is 1000 if gnd!
+# is ground and 2000 if it is a node. global_port: 1 mA from c through the
+# body's R1 to its vdd; v(c) is 6 and v(mid) 0 if vdd is the global 5 V rail,
+# and v(c) 2 and v(mid) 1 if it is the port wired to mid.
+inputs = ["deck/gnd_bang.cir", "deck/global_port.cir"]
 
 [behaviour.deck-forms]
 summary = "Card forms the lint and arity rules accept or refuse: B-source R= and P=, a spaced B expression, comma-separated IC= values, Q= and Flux=, a value keyed as R=, C= or L=, params: on a subcircuit, trailing area factors, device type names as models, .tran shorthands, two analyses in one deck."
@@ -447,12 +479,12 @@ inputs = ["raw/ac.cir", "raw/ac_numdgt7.cir", "raw/ac_numdgt15.cir", "raw/step_a
 
 [behaviour.raw-dc]
 summary = "A DC sweep raw: the swept source as the axis."
-model = ["lib/raw_header.py", "lib/raw_parser.py"]
+model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/trace_names.py"]
 inputs = ["raw/dc.cir"]
 
 [behaviour.raw-noise]
 summary = "A noise raw: its plot name, the gain trace, and the onoise and inoise traces; and a noise analysis at one frequency, plain and stepped, which may store no frequency and one point a step; the same frequency named by a list, plain here and stepped under raw-stepped."
-model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/decoded_raw.py", "lib/metrics.py"]
+model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/decoded_raw.py", "lib/trace_names.py", "lib/metrics.py"]
 inputs = ["raw/noise.cir", "raw/noise_one_freq.cir", "raw/step_noise_one_freq.cir", "raw/noise_list_one_freq.cir"]
 
 [behaviour.raw-op]
@@ -473,7 +505,7 @@ inputs = ["raw/mos_multiplier.cir", "raw/subckt_multiplier.cir", "deck/subckt_mu
 
 [behaviour.raw-stepped]
 summary = "Stepped runs: the stepped flag, where one step ends and the next begins, the .step lines of the log (a temperature among them), what a stepped .op (over a parameter and over temperature) and a stepped .dc store, the .op.raw a stepped .tran and a stepped .ac leave, a stepped .noise sweep, a stepped .ac at one frequency, which stores no frequency and one point a step, and a stepped .noise at one frequency named by a list, which does the same."
-model = ["lib/raw_decode.py", "lib/raw_parser.py", "lib/log_parser.py", "lib/metrics.py"]
+model = ["lib/raw_decode.py", "lib/raw_parser.py", "lib/log_parser.py", "lib/trace_names.py", "lib/metrics.py"]
 inputs = ["raw/step_tran.cir", "raw/step_ac.cir", "raw/step_op.cir", "raw/step_dc.cir", "raw/step_temp.cir", "raw/step_temp_op.cir", "raw/step_ac_one_freq.cir", "raw/step_noise.cir", "raw/step_noise_list_one_freq.cir"]
 
 [behaviour.raw-transfer-function]
@@ -499,7 +531,7 @@ model = ["lib/raw_header.py", "lib/raw_decode.py"]
 
 [behaviour.raw-fastaccess]
 summary = "A raw converted to Fast Access layout: the fastaccess flag and samples stored trace by trace."
-model = ["lib/raw_header.py", "lib/raw_parser.py"]
+model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/raw_decode.py"]
 
 [behaviour.raw-partial]
 summary = "The raw a run leaves when it is stopped part way: a point count in the header that lags the samples after it, and, on LTspice XVII, samples past the count that go back in time."
@@ -525,7 +557,7 @@ keep = ["log"]
 
 [behaviour.log-meas-failed]
 summary = "What the log says of a measurement that cannot be taken or does not parse, and what happens to the measurements around it."
-model = ["lib/log_parser.py", "lib/result_observations.py"]
+model = ["lib/log_parser.py", "lib/result_observations.py", "lib/lint_rules.py", "lib/spice_validator.py"]
 inputs = ["log/meas_failed.cir", "log/meas_bad_syntax.cir"]
 keep = ["log"]
 
@@ -545,7 +577,7 @@ keep = ["log"]
 
 [behaviour.log-meas-when-threshold]
 summary = "How a WHEN is printed when its threshold is not a plain number: a parameter, an expression, a braced expression and another measurement, in a transient and an AC analysis, alone and in the tables of a stepped run. The stepped decks step a parameter written Rv, whose name both builds write in lower case in the log (.step rv=1000)."
-model = ["lib/log_parser.py", "lib/log_decode.py", "lib/metrics.py", "lib/recipes.py", "tools/analyze.py", "api/_primitives.py"]
+model = ["lib/log_parser.py", "lib/log_decode.py", "lib/metrics.py", "lib/recipes.py", "tools/analyze.py", "tools/inspect_tools.py", "api/_primitives.py"]
 inputs = [
     "log/meas_when_threshold_tran.cir",
     "log/meas_when_threshold_ac.cir",
@@ -561,7 +593,7 @@ inputs = ["log/meas_cplxfmt_polar.cir", "log/meas_cplxfmt_cartesian.cir"]
 keep = ["log"]
 
 [behaviour.log-meas-reserved-name]
-summary = "A .meas named for a constant of the expression engine (e, k, pi, q): LTspice 26 refuses the deck, XVII reports the name and takes the other measurements. Names such as time, temp and boltz are not reserved."
+summary = "A .meas named for a constant of the expression evaluator (e, k, pi, q): LTspice 26 refuses the deck, XVII reports the name and takes the other measurements. Names such as time, temp and boltz are not reserved."
 model = ["lib/spice_validator.py", "lib/log_parser.py"]
 # One deck per name: LTspice 26 stops at the first refusal.
 inputs = [
@@ -593,7 +625,7 @@ keep = ["log"]
 
 [behaviour.subckt-device-names]
 summary = "How each build names a device, a node and a port current inside named and nested subcircuit instances: in the .op device table with and without logopinfo, in an operating-point raw, and in a transient's raw, stepped and not."
-model = ["lib/device_names.py", "lib/metrics.py", "lib/log_parser.py"]
+model = ["lib/device_names.py", "lib/trace_names.py", "lib/metrics.py", "lib/log_parser.py"]
 inputs = ["log/subckt_names.cir", "log/subckt_names_off.cir", "raw/subckt_names_tran.cir", "raw/subckt_names_step.cir"]
 
 [behaviour.save-subckt-names]
@@ -1177,6 +1209,20 @@ behaviour = "export-hierarchical-block"
 kind = "run"
 source = "export/hier_plain_top.asc"
 extra = ["export/hier_plain.asc", "export/hier_plain.asy"]
+keep = ["net", "log", "raw"]
+
+# A stock nmos4 placed as MB1 with a Prefix of X runs wrapped_nmos, an NMOS
+# card M1 wrapped in a subcircuit of its own; a directive on the sheet calls
+# the same subcircuit as XMB2; R1 feeds MB1's drain over a wire with no label.
+# The settings store the devices inside subcircuits, so the raw names M1 under
+# each instance as the build names it.
+[[case]]
+id = "export/sheet_part_names"
+behaviour = "sheet-part-trace-names"
+kind = "run"
+source = "export/sheet_part_names.asc"
+extra = ["export/wrapped_nmos.sub"]
+ini = { SaveSubcircuitNodeVoltages = "true", SaveSubcircuitDeviceCurrents = "true" }
 keep = ["net", "log", "raw"]
 
 # A frequency response analysis over two .step values: how the results file
