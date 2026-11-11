@@ -1451,7 +1451,6 @@ def _settled_reply(
             open_in_ltspice=rows,
             hint=hint,
         ),
-        text=hint,
     )
 
 
@@ -1502,7 +1501,6 @@ class EditSchematicEvaluation:
     """One mutation result plus its complete transaction-bound in-memory views."""
 
     data: dict[str, Any]
-    text: str
     views: EditSchematicViews | None = None
     mcp_result: types.CallToolResult | None = None
 
@@ -1517,7 +1515,7 @@ def _finish_edit_evaluation(
         return evaluation
     return replace(
         evaluation,
-        mcp_result=format_response(evaluation.text, evaluation.data),
+        mcp_result=format_response(evaluation.data),
     )
 
 
@@ -1588,7 +1586,7 @@ async def _evaluate_edit_schematic(
         current = hashlib.sha256(on_disk).hexdigest() if on_disk is not None else None
 
         def refused(
-            *, code: str, stage: str, failure: str, message: str, hint: str, text: str
+            *, code: str, stage: str, failure: str, message: str, hint: str
         ) -> EditSchematicEvaluation:
             """The reply to a call refused before anything was written."""
             _failed(stage, failure)
@@ -1610,7 +1608,6 @@ async def _evaluate_edit_schematic(
                         },
                         hint=hint,
                     ),
-                    text=text,
                 )
             )
 
@@ -1640,11 +1637,6 @@ async def _evaluate_edit_schematic(
                         "Nothing was written. Resubmit the same ops with "
                         f"expected_sha256={current}."
                     ),
-                    text=(
-                        f"edit_schematic: {target.name} exists and needs "
-                        f"expected_sha256; its current sha256 is {current}. "
-                        "Nothing was written."
-                    ),
                 )
             if current != expected:
                 return refused(
@@ -1656,11 +1648,6 @@ async def _evaluate_edit_schematic(
                         f"file ({current}); nothing was written."
                     ),
                     hint="Re-read the target, then resubmit with its current sha256.",
-                    text=(
-                        f"edit_schematic: revision_conflict on {target.name} — the file "
-                        "changed since you read it. Re-read it and resubmit with the "
-                        "current sha256."
-                    ),
                 )
         revision_notes: list[str] = []
         if current is not None and expected is not None and current != expected:
@@ -1688,7 +1675,6 @@ async def _evaluate_edit_schematic(
                     failure=failure,
                     message=message,
                     hint=message,
-                    text=f"edit_schematic: {message}",
                 )
 
             if args.open_window == "discard":
@@ -1730,7 +1716,6 @@ async def _evaluate_edit_schematic(
                     failure=str(exc),
                     message=message,
                     hint=_WINDOWS_REMEDY,
-                    text=f"edit_schematic: {message} {_WINDOWS_REMEDY}",
                 )
             except BridgeError as exc:
                 state.editors.invalidate(target)
@@ -1783,10 +1768,6 @@ async def _evaluate_edit_schematic(
                     failure="the open LTspice window differs from the file",
                     message=f"{differs} Nothing was written.",
                     hint=remedy,
-                    text=(
-                        f"edit_schematic: {target.name} is open in an LTspice window that "
-                        f"holds a different sheet. Nothing was written. {remedy}"
-                    ),
                 )
 
         plot = SheetPlotSettings.beside(target)
@@ -1842,10 +1823,6 @@ async def _evaluate_edit_schematic(
                                 "retryable": False,
                             },
                             hint="Fix the failing op and resubmit with the same expected_sha256.",
-                        ),
-                        text=(
-                            f"edit_schematic: transaction aborted — {abort_reason}. "
-                            "No changes saved."
                         ),
                     )
                 )
@@ -1981,10 +1958,6 @@ async def _evaluate_edit_schematic(
                                 )
                             ),
                         ),
-                        text=(
-                            f"edit_schematic (dry run) on {target.name}: {len(results)} ops "
-                            "validated; nothing saved."
-                        ),
                         views=neutral_views,
                     )
                 )
@@ -2101,7 +2074,6 @@ async def _evaluate_edit_schematic(
                         open_in_ltspice=shown,
                         hint=hint,
                     ),
-                    text=f"edit_schematic committed {target.name} (build {build_id}).",
                     views=neutral_views,
                 )
             )
@@ -2394,7 +2366,6 @@ def _commit_failure_response(
                 },
                 hint="The sheet was not modified; retry with the same expected_sha256.",
             ),
-            text=f"edit_schematic: commit failed before rename ({error}); target unchanged.",
         ),
         present_mcp_views=present_mcp_views,
     )
@@ -2441,10 +2412,6 @@ def _post_commit_failure_response(
                     f"as expected_sha256 for your next edit. Only the post-commit {stage} stage "
                     "failed; re-run it separately if you need it."
                 ),
-            ),
-            text=(
-                f"edit_schematic committed {target.name} (build {build_id}), then the "
-                f"post-commit {stage} stage failed: {error}. The sheet IS written."
             ),
         ),
         present_mcp_views=present_mcp_views,

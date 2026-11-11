@@ -3188,7 +3188,7 @@ def _assemble(
     a: AnalysisEvaluation,
     rung: response_budget.Rung | None,
     limits: _Limits,
-) -> tuple[dict[str, Any], str]:
+) -> dict[str, Any]:
     """Build the response from finished work, at ``limits`` and ``rung``.
 
     ``rung`` is None when the caller set no budget, which is the only path that
@@ -3402,13 +3402,7 @@ def _assemble(
     hints.extend(a.argument_notes)
     if hints:
         data["hint"] = " ".join(hints)
-    # The summary line follows the reply's rule: a count of nothing is not said.
-    text = (
-        f"analyze_results: {outcome}; {len(delivered)} recipe result(s), "
-        + (f"{len(failures)} failure(s), " if failures else "")
-        + f"{coverage['runs_analyzed']}/{runs_requested} run(s) analyzed"
-    )
-    return data, text
+    return data
 
 
 def _snapshot_from_assembly(a: AnalysisEvaluation) -> dict[str, Any]:
@@ -3417,8 +3411,7 @@ def _snapshot_from_assembly(a: AnalysisEvaluation) -> dict[str, Any]:
     # Shown later, by a session not known yet: each failure row keeps whether
     # its message ends in an api snippet, for the render to say where it runs.
     wide = replace(a, include=wide_include, served=_DEFERRED_ROUTE)
-    requested, _ = _assemble(wide, None, _Limits.of(wide_include))
-    top = requested
+    top = _assemble(wide, None, _Limits.of(wide_include))
     requested_results = top.pop("results")
 
     def coverage_cursor_base(view: dict[str, Any]) -> str:
@@ -4025,16 +4018,13 @@ _BUDGET_NOTES = response_budget.Notes(
 )
 
 
-async def _negotiate_analysis(
-    budget: ResponseBudget, a: AnalysisEvaluation
-) -> tuple[dict[str, Any], str]:
+async def _negotiate_analysis(budget: ResponseBudget, a: AnalysisEvaluation) -> dict[str, Any]:
     """Assemble this analysis at the mildest ladder rung that fits ``budget``.
 
     Assembly re-renders finished work, so the shrink rung checks the page its
     estimate priced and searches below it when that page is still over.
     """
     base = _Limits.of(a.include)
-    text = ""
     rendered: dict[str, Any] = {}
     degrade = functools.partial(
         _degrade_analysis,
@@ -4048,13 +4038,13 @@ async def _negotiate_analysis(
     )
 
     def candidate(limits: _Limits, rung: response_budget.Rung) -> response_budget.Rendered:
-        data, line = _assemble(a, rung, limits)
-        return data, line, degrade(data, rung)
+        data = _assemble(a, rung, limits)
+        return data, degrade(data, rung)
 
     async def render(rung: response_budget.Rung) -> dict[str, Any]:
-        nonlocal text, rendered
+        nonlocal rendered
         if rung.shrink:
-            rendered, text, cut = response_budget.shrink_to_fit(
+            rendered, cut = response_budget.shrink_to_fit(
                 response_budget.RowMeasure.of(analysis_surfaces(rendered), page=rung.measured),
                 lambda limit: candidate(base.capped(limit), rung),
                 rung,
@@ -4065,14 +4055,14 @@ async def _negotiate_analysis(
             # The undegraded rung assembled this same page; degrade it in place.
             cut = degrade(rendered, rung)
         else:
-            rendered, text, cut = candidate(base, rung)
+            rendered, cut = candidate(base, rung)
         rung.cut.extend(cut)
         return rendered
 
     assert budget.tokens is not None  # the undegraded path never reaches here
     result = await response_budget.negotiate(budget.tokens, render, max_rung=budget.max_rung)
     response_budget.attach_notes(result, _BUDGET_NOTES)
-    return result.data, text
+    return result.data
 
 
 async def _evaluate_unit(
@@ -4690,7 +4680,7 @@ def complete_analysis_evaluations(drives: list[AnalysisEvaluation]) -> dict[str,
         fail_cases=max_rows,
         groups=None,
     )
-    data, _text = _assemble(combined, None, limits)
+    data = _assemble(combined, None, limits)
     # Every record, one per place: the page's collapse and cap are how a wire
     # response stays bounded, and a complete result has no bound to keep.
     data["failures"] = [failure.wire() for failure in combined.failure_inventory]
@@ -4769,9 +4759,9 @@ async def handle_analyze_results(
     )
     budget = resolve_response_budget(args.budget, state)
     if budget.tokens is None:
-        data, text = _assemble(assembly, None, _Limits.of(assembly.include))
+        data = _assemble(assembly, None, _Limits.of(assembly.include))
     else:
-        data, text = await _negotiate_analysis(budget, assembly)
+        data = await _negotiate_analysis(budget, assembly)
     # Sources are identified by their stamps within a call; a set handed to the
     # caller to resume gets content digests, which the resuming call compares.
-    return format_response(text, data)
+    return format_response(data)

@@ -28,7 +28,6 @@ from ltspice_mcp.lib.result_observations import (
     value_observations,
 )
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools._base import format_observations
 from tests import _ltspice_recorded as rec
 from tests.conftest import LTSPICE_TRAN_RC_VFINAL, make_raw_mock
 from tests.ltspice_recorder import INPUTS
@@ -528,24 +527,6 @@ class TestSurfaceObservations:
         }
         obs = surface_observations(summary, requested={"meas": ["vpp"], "four": []})
         assert all(o["code"] != "meas_batch_abort" for o in obs)
-
-
-class TestFormatObservations:
-    def test_omits_relay_renders_others(self):
-        obs = [
-            {"code": "log_error", "kind": "relay", "detail": "singular matrix"},
-            {"code": "unmet_request", "kind": "reconciliation", "detail": ".meas vpp missing"},
-            {"code": "extreme_value", "kind": "value", "detail": "V(n2) reaches |1e+30|"},
-        ]
-        lines = format_observations(obs)
-        # Relay omitted (it prints as an Error elsewhere); the others render.
-        assert not any("singular matrix" in ln for ln in lines)
-        assert any("reconciliation" in ln and "vpp" in ln for ln in lines)
-        assert any("value" in ln for ln in lines)
-
-    def test_empty_and_all_relay_return_empty(self):
-        assert format_observations([]) == []
-        assert format_observations([{"code": "log_error", "kind": "relay", "detail": "x"}]) == []
 
 
 class TestBuildSummaryWiring:

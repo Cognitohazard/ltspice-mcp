@@ -18,7 +18,7 @@ from pathlib import Path
 
 import psutil
 import pytest
-from mcp.types import TextContent, TextResourceContents
+from mcp.types import TextResourceContents
 
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import hidden_desktop
@@ -36,13 +36,6 @@ def _text(contents) -> str:
     """Extract text from a resource contents entry, asserting it is text."""
     assert isinstance(contents, TextResourceContents)
     return contents.text
-
-
-def _result_text(result) -> str:
-    """Extract text from a tool result's first content block, asserting it is text."""
-    item = result.content[0]
-    assert isinstance(item, TextContent)
-    return item.text
 
 
 def _make_ltspice_state(work_dir: Path) -> SessionState | None:
@@ -166,7 +159,7 @@ async def _recipe(state: SessionState, job_id: str, recipe: dict, **kw) -> dict:
         state,
     )
     data = result.structured_content
-    assert data is not None, result.content[0].text
+    assert data is not None, result.content
     return data
 
 
@@ -338,7 +331,7 @@ class TestManagedExport:
             state,
         )
         data = result.structured_content
-        assert data is not None, result.content[0].text
+        assert data is not None, result.content
         return data
 
     async def test_export_produces_a_netlist(

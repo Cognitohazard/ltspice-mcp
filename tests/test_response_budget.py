@@ -697,7 +697,7 @@ def _run_rows(count: int) -> list[dict[str, Any]]:
 def _run_receipt_build(rows: list[dict[str, Any]]) -> receipts_mod.ReceiptBuild:
     """A receipt builder over ``rows``, paging to whatever limit a rung asks for."""
 
-    def build(limit: int, _rung: Rung | None) -> receipts_mod.ReceiptBuilt:
+    def build(limit: int, _rung: Rung | None) -> dict[str, Any]:
         data = exp_mod._empty_payload("budgeted-runs")
         selected = rows[:limit]
         data.update(
@@ -713,7 +713,7 @@ def _run_receipt_build(rows: list[dict[str, Any]]) -> receipts_mod.ReceiptBuild:
                 },
             }
         )
-        return receipts_mod.finalize_receipt(data), "completed"
+        return receipts_mod.finalize_receipt(data)
 
     return build
 
@@ -953,20 +953,17 @@ class TestJobsBudget:
         def build(_limit: int, rung: Rung | None):
             answer_channel = rung is not None and rung.answer_channel
             built_for.append(answer_channel)
-            return (
-                {
-                    "analysis": {
-                        "view": "answer" if answer_channel else "detail",
-                        "payload": "" if answer_channel else "x" * 4_000,
-                    },
-                    "observations": [],
-                    "warnings": [],
-                    "failures": [],
+            return {
+                "analysis": {
+                    "view": "answer" if answer_channel else "detail",
+                    "payload": "" if answer_channel else "x" * 4_000,
                 },
-                "receipt",
-            )
+                "observations": [],
+                "warnings": [],
+                "failures": [],
+            }
 
-        data, _ = await jobs_mod._negotiate_jobs(ResponseBudget(600), build, 50)
+        data = await jobs_mod._negotiate_jobs(ResponseBudget(600), build, 50)
 
         assert built_for == [False, True]
         assert data["analysis"]["view"] == "answer"

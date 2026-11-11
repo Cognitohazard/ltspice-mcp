@@ -272,8 +272,8 @@ def largest_fitting(start: int, fits: Callable[[int], bool], *, floor: int = 0) 
     return low
 
 
-#: A rendered page, its text line, and the blocks its trim emptied of content.
-Rendered = tuple[dict[str, Any], str, list[str]]
+#: A rendered page and the blocks its trim emptied of content.
+Rendered = tuple[dict[str, Any], list[str]]
 
 
 def shrink_to_fit(

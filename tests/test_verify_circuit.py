@@ -2414,7 +2414,7 @@ async def test_an_inline_svg_request_returns_the_markup(state_no_sim, work_dir, 
     assert render["returned_inline"] is True
     assert render["svg"] == markup
     # Once: no image block carries a second copy of the drawing.
-    assert [c.type for c in result.content] == ["text"]
+    assert result.content == []
     # SVG was what the caller asked for: nothing to explain.
     assert "note" not in render
     assert "failures" not in data
@@ -2453,7 +2453,8 @@ async def test_artifact_delivery_returns_no_markup(state_no_sim, work_dir, asc_s
     assert "returned_inline" not in data["render"]
     assert "svg" not in data["render"]
     assert "note" not in data["render"]
-    assert [c.type for c in result.content] == ["text"]
+    # No image block: the server adds the reply's one text block.
+    assert result.content == []
 
 
 def _names(directory: Path) -> set[str]:

@@ -281,9 +281,10 @@ returns structured content SHOULD also return the serialized JSON in a
 TextContent block"). A failed call's text is its `{error, code, hint?,
 suggestions?}` that way, so a client that shows the model only the text of
 an error, as Claude Code does, still gives it the code and the recovery hint.
-Image blocks stay beside it, and a reply with no `structuredContent` keeps its
-text. A client that shows the model both channels sends the data twice; the
-specification accepts that cost.
+An image block comes ahead of it, as Anthropic's vision guidance places
+images ahead of the text about them, and a reply with no `structuredContent`
+keeps its text. A client that shows the model both channels sends the data
+twice; the specification accepts that cost.
 
 Three recipes, `periodic`, `return_loss` and `noise_integral`, are published
 in both modes as only their `metric` value and a one-sentence description that
