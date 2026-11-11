@@ -170,6 +170,28 @@ def test_a_three_pin_symbol_takes_over_a_four_pin_one(work_dir: Path, asc_symbol
     assert not any(pin.reference == "M1" for pin in nets.nets.pins_on(bulk))
 
 
+def test_a_swap_that_would_part_other_nets_is_refused_naming_them(
+    work_dir: Path, asc_symbols: Path
+):
+    """M1's bulk pin sits where wire a and wire b cross, which joins them. The
+    new symbol has no bulk pin, so the two would part: that changes nets that
+    are not the part's, and the sheet is left as it was."""
+    sheet = _write_sheet(
+        work_dir / "m_crossing.asc",
+        "WIRE 16 48 160 48",
+        "WIRE 48 16 48 80",
+        "FLAG 16 48 a",
+        "FLAG 48 16 b",
+        "SYMBOL nmos4 0 0 R0",
+        "SYMATTR InstName M1",
+        "SYMATTR Value NMOS",
+    )
+    before = sheet.read_bytes()
+    with pytest.raises(NetlistError, match="would cut label 'a' off from label 'b'"):
+        _replace(sheet, "M1", "nmos")
+    assert sheet.read_bytes() == before
+
+
 def test_a_new_pin_with_no_old_one_is_named(work_dir: Path, asc_symbols: Path):
     """The other way round, the bulk has no old pin: it is left unconnected,
     and the reply says so."""

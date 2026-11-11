@@ -251,6 +251,88 @@ class Nets:
         return tuple(run for run in self._dropped.at(point) if point not in run.segment)
 
 
+Member = PinAt | LabelAt
+#: The members of one net, as the later of two states places them.
+Group = tuple[Member, ...]
+
+
+@dataclass(frozen=True)
+class NetChange:
+    """How a later state of a sheet's nets differs from an earlier one, over
+    the pins and labels both hold (:func:`net_change`)."""
+
+    #: Each earlier net the later state divides, as its pieces.
+    split: tuple[tuple[Group, ...], ...] = ()
+    #: Each later net made of nets the earlier state kept apart, as those nets.
+    joined: tuple[tuple[Group, ...], ...] = ()
+
+
+def net_change(
+    before: Nets,
+    after: Nets,
+    *,
+    folded: bool = True,
+    leaving: Callable[[Member], bool] = lambda _member: False,
+) -> NetChange:
+    """Which nets an edit split and which it joined: the comparison every edit
+    that changes wiring reads to ask what it did to the nets (a move, the wire
+    cleanup of a removed part, a duplicated wire's removal, a replaced part).
+    Placing a pin, a label or a route asks instead what the one point it lands
+    on would join, before anything is drawn.
+
+    ``before`` and ``after`` are one sheet's nets before and after the edit,
+    made over its parts and labels in the same order, so a pin is the same pin
+    in both by its part's place and its SpiceOrder, and a label by its place
+    among the labels, wherever each now lies; two states that disagree on
+    which part or label stands in a place are refused. Members only one state
+    holds, and those ``leaving`` picks out of ``after``, are left out. Nets are
+    compared ``folded`` (nets that share a name are one) unless asked for
+    wiring alone.
+    """
+
+    def keyed(nets: Nets) -> dict[tuple[str, int, int], tuple[Member, int]]:
+        root = nets.folded if folded else (lambda net: net)
+        found: dict[tuple[str, int, int], tuple[Member, int]] = {}
+        for pin in nets.pins:
+            found["pin", pin.part, pin.order] = (pin, root(nets.of_pin(pin)))
+        for label in nets.labels:
+            found["label", label.index, 0] = (label, root(nets.of_label(label)))
+        return found
+
+    earlier, later = keyed(before), keyed(after)
+    for key, (member, _net) in later.items():
+        if key in earlier and _identity(earlier[key][0]) != _identity(member):
+            raise ValueError(
+                f"net_change compares one sheet's states, but {key} is "
+                f"{_identity(earlier[key][0])} before and {_identity(member)} after"
+            )
+    shared = [
+        key for key, (member, _net) in later.items() if key in earlier and not leaving(member)
+    ]
+
+    def regrouped(
+        outer: dict[tuple[str, int, int], tuple[Member, int]],
+        inner: dict[tuple[str, int, int], tuple[Member, int]],
+    ) -> tuple[tuple[Group, ...], ...]:
+        nets: dict[int, dict[int, list[Member]]] = {}
+        for key in shared:
+            pieces = nets.setdefault(outer[key][1], {})
+            pieces.setdefault(inner[key][1], []).append(later[key][0])
+        return tuple(
+            tuple(tuple(piece) for piece in pieces.values())
+            for pieces in nets.values()
+            if len(pieces) > 1
+        )
+
+    return NetChange(split=regrouped(earlier, later), joined=regrouped(later, earlier))
+
+
+def _identity(member: Member) -> str:
+    """What stands in a member's place: a pin's part (whose symbol, and so its
+    pins' names, an edit may change), a label's text."""
+    return f"part {member.reference}" if isinstance(member, PinAt) else f"label {member.text!r}"
+
+
 def _grouped(members: dict[_T, int], root: Callable[[int], int]) -> dict[int, tuple[_T, ...]]:
     """``members`` by the representative ``root`` gives each one's net."""
     grouped: dict[int, list[_T]] = {}

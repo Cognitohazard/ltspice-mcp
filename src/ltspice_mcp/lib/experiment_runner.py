@@ -41,6 +41,7 @@ from ltspice_mcp.lib.experiment_types import (
     OwnerStopped,
     SourceRecord,
     failure_row,
+    sample_index,
 )
 from ltspice_mcp.lib.filelock import async_file_lock, file_lock
 from ltspice_mcp.lib.job_lifecycle import (
@@ -65,6 +66,7 @@ from ltspice_mcp.lib.raw_parser import (
     other_raw_path,
     points_reached,
     read_partial_raw_progress,
+    result_digest,
 )
 from ltspice_mcp.lib.recovery_records import LaunchIntent, RecoveryError
 from ltspice_mcp.lib.runner_base import (
@@ -1543,6 +1545,16 @@ class ExperimentRunner(RunnerBase):
                 await self._stop_active_case(execution, case, future, stop_reason)
             elif outcome is not None:
                 self._apply_outcome(case, outcome)
+                if (
+                    outcome.error is None
+                    and case.raw_file is not None
+                    and sample_index(case) is not None
+                ):
+                    case.result_digest = await asyncio.to_thread(
+                        result_digest,
+                        case.raw_file,
+                        dialect_for_simulator_name(execution.job.simulator),
+                    )
                 if outcome.error is None:
                     if execution.job.recovery is not None:
                         assert case.recovery is not None

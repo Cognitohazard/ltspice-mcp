@@ -860,3 +860,124 @@ def test_a_card_naming_its_subcircuit_twice_says_so() -> None:
     )
     assert "Node 'lp6' is the subcircuit's own name" in error.detail
     assert not result.equivalent
+
+
+# ---------------------------------------------------------------------------
+# Each scope's directives, and the includes that only bring definitions
+# ---------------------------------------------------------------------------
+
+_AMP_LIB = ".subckt AMP in out\n.param g={g0}\nR1 in out {g*1k}\n.ends AMP\n"
+
+
+def _write_files(root: Path, files: dict[str, str]) -> None:
+    for name, text in files.items():
+        (root / name).write_text(text, encoding="utf-8", newline="\n")
+
+
+def _bodies(cards: tuple) -> list[str]:
+    return [" ".join(card.body.split()) for card in cards]
+
+
+def test_a_graph_holds_each_scope_s_directive_cards(tmp_path: Path) -> None:
+    deck = tmp_path / "d.cir"
+    deck.write_text(
+        "* d\n.param g0=2\n.subckt AMP in out params: k=1\n.param g={g0}\n"
+        "R1 in out {g*1k}\n.meas op x FIND V(out)\n.ends AMP\nX1 a b AMP\n.op\n.end\n"
+        ".param after_end=1\n",
+        newline="\n",
+    )
+    graph = parse_netlist_graph(deck)
+    assert _bodies(graph.directives) == [".param g0=2", ".op"]
+    assert _bodies(graph.subckts["amp"].directives) == [".param g={g0}", ".meas op x FIND V(out)"]
+    assert graph.subckts["amp"].param_defaults == (("k", "1"),)
+
+
+@pytest.mark.parametrize(
+    ("files", "line", "brings_definitions_only"),
+    [
+        ({"amp.lib": _AMP_LIB}, ".include amp.lib", True),
+        ({"amp.lib": "* a library\n" + _AMP_LIB + ".end\n"}, ".include amp.lib", True),
+        ({"amp.lib": ".include inner.lib\n", "inner.lib": _AMP_LIB}, ".include amp.lib", True),
+        (
+            {"amp.lib": ".lib tt\n" + _AMP_LIB + ".endl tt\n.lib ff\n.model D1 D\n.endl ff\n"},
+            ".lib amp.lib tt",
+            True,
+        ),
+        (
+            {"amp.lib": ".lib tt\n" + _AMP_LIB + ".endl tt\n.lib ff\n.model D1 D\n.endl ff\n"},
+            ".lib amp.lib ff",
+            False,
+        ),
+        ({"amp.lib": _AMP_LIB + ".model D1 D\n"}, ".include amp.lib", False),
+        ({"amp.lib": _AMP_LIB + ".param g0=3\n"}, ".include amp.lib", False),
+        ({"amp.lib": _AMP_LIB + ".global vdd\n"}, ".include amp.lib", False),
+        ({"amp.lib": _AMP_LIB + "R9 a 0 1k\n"}, ".include amp.lib", False),
+        (
+            {"amp.lib": ".include inner.lib\n", "inner.lib": ".model D1 D\n"},
+            ".include amp.lib",
+            False,
+        ),
+        ({}, ".include missing.lib", False),
+        ({"amp.lib": ".subckt AMP in out params: g={2\n.ends AMP\n"}, ".include amp.lib", False),
+        ({"amp.lib": ".lib tt\n" + _AMP_LIB + ".endl tt\n"}, ".lib amp.lib nosuch", False),
+    ],
+    ids=[
+        "definitions",
+        "definitions_comments_and_end",
+        "nested_include_of_definitions",
+        "section_of_definitions",
+        "section_with_a_model",
+        "a_model",
+        "a_param",
+        "a_global",
+        "a_part",
+        "nested_include_of_a_model",
+        "missing",
+        "malformed_subckt",
+        "a_section_the_file_lacks",
+    ],
+)
+def test_an_include_brings_definitions_only_when_its_file_defines_nothing_else(
+    tmp_path: Path, files: dict[str, str], line: str, brings_definitions_only: bool
+) -> None:
+    _write_files(tmp_path, files)
+    deck = tmp_path / "d.cir"
+    deck.write_text(f"* d\nV1 a 0 1\nX1 a b AMP\n{line}\n.op\n.end\n", newline="\n")
+    graph = parse_netlist_graph(deck)
+    assert _bodies(graph.definition_includes) == ([line] if brings_definitions_only else [])
+
+
+def test_a_file_included_twice_or_in_a_cycle_is_read_once(tmp_path: Path) -> None:
+    _write_files(
+        tmp_path,
+        {"amp.lib": ".include loop.lib\n" + _AMP_LIB, "loop.lib": ".include amp.lib\n"},
+    )
+    deck = tmp_path / "d.cir"
+    deck.write_text(
+        "* d\nV1 a 0 1\nX1 a b AMP\n.include amp.lib\n.include amp.lib\n.op\n.end\n",
+        newline="\n",
+    )
+    graph = parse_netlist_graph(deck)
+    assert len(graph.subckts) == 1
+    # The cycle's back edge is taken as unknown while the file is being read,
+    # so the outer file does more than define subcircuits as far as is known.
+    assert _bodies(graph.definition_includes) == []
+
+
+@pytest.mark.parametrize("padding", range(1, 9))
+def test_a_subcircuit_keeps_its_directives_however_many_files_were_read_first(
+    tmp_path: Path, padding: int
+) -> None:
+    """Cards of a file read and dropped earlier are no part of the graph, and
+    a card read later is never taken for one of them."""
+    spares = {f"s{i}.sub": f".subckt S{i} a b\nR{i} a b 1k\n.ends S{i}\n" for i in range(padding)}
+    vendor = "".join(f".include s{i}.sub\n" for i in range(padding))
+    _write_files(tmp_path, {**spares, "vendor.lib": vendor, "amp.lib": _AMP_LIB})
+    deck = tmp_path / "d.cir"
+    deck.write_text(
+        "* d\nV1 a 0 1\nX1 a b AMP\nR2 b 0 1k\n.include vendor.lib\n.include amp.lib\n.op\n.end\n",
+        newline="\n",
+    )
+    graph = parse_netlist_graph(deck)
+    assert _bodies(graph.subckts["amp"].directives) == [".param g={g0}"]
+    assert _bodies(graph.definition_includes) == [".include vendor.lib", ".include amp.lib"]
