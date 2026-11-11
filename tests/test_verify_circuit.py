@@ -1228,22 +1228,217 @@ async def test_equivalence_reads_directives_as_structural_diff_does(state_no_sim
         assert comparison["directives_removed"] == [".tran 0 2m"]
 
 
-async def test_equivalence_compares_a_subcircuit_as_wiring_wherever_it_is_defined(
-    state_no_sim, work_dir
-):
-    """A definition moved into an included file is the same wiring, so only the
-    include line is a directive difference; the definition's own lines are not
-    directives here."""
+async def test_equivalence_compares_a_subcircuit_wherever_it_is_defined(state_no_sim, work_dir):
+    """A definition moved into an included file that defines nothing else is
+    the same circuit: the include line brings that definition, which is
+    compared, wiring and directives, wherever it is."""
     block = ".subckt DIV a b\n.param half=1k\nR1 a mid {half}\nR2 mid b {half}\n.ends DIV\n"
     _write(work_dir, "div.lib", block)
     deck = _write(work_dir, "cand.cir", "* top\nV1 in 0 5\nX1 in 0 DIV\n.include div.lib\n.end\n")
     ref = _write(work_dir, "ref.cir", f"* top\nV1 in 0 5\nX1 in 0 DIV\n{block}.end\n")
     data = await _run(state_no_sim, path=str(deck), reference=str(ref))
+    assert data["comparison"]["equivalent"] is True
+    # The same definition with another .param in its body is another circuit.
+    _write(work_dir, "div.lib", block.replace("half=1k", "half=2k"))
+    data = await _run(state_no_sim, path=str(deck), reference=str(ref))
     comparison = data["comparison"]
     assert comparison["equivalent"] is False
+    assert comparison["directives_added"] == [".param half=2k (in .subckt DIV)"]
+    assert comparison["directives_removed"] == [".param half=1k (in .subckt DIV)"]
+
+
+async def test_an_include_that_brings_more_than_definitions_is_compared_by_its_line(
+    state_no_sim, work_dir
+):
+    """A file that also holds a model is more than the definitions it brings,
+    so its include line stays a directive of the deck."""
+    block = ".subckt DIV a b\nR1 a b 1k\n.ends DIV\n"
+    _write(work_dir, "div.lib", block + ".model D1 D(Is=1e-14)\n")
+    deck = _write(work_dir, "cand.cir", "* top\nV1 in 0 5\nX1 in 0 DIV\n.include div.lib\n.end\n")
+    ref = _write(work_dir, "ref.cir", f"* top\nV1 in 0 5\nX1 in 0 DIV\n{block}.end\n")
+    data = await _run(state_no_sim, path=str(deck), reference=str(ref))
+    assert data["comparison"]["directives_added"] == [".include div.lib"]
+
+
+#: A deck calling subcircuit AMP, whose body holds BODY; TOP goes at the top level.
+_AMP = (
+    "* amp\n.subckt AMP in out{params}\n{body}R1 in out {{g*1k}}\n.ends AMP\n"
+    "{top}V1 a 0 1\nX1 a b AMP\nR2 b 0 1k\n.op\n.end\n"
+)
+
+
+def _amp(body: str = ".param g=2\n", top: str = "", params: str = "") -> str:
+    return _AMP.format(body=body, top=top, params=params)
+
+
+@pytest.mark.parametrize(
+    ("candidate", "added", "removed"),
+    [
+        (_amp(".param g=3\n"), [".param g=3 (in .subckt AMP)"], [".param g=2 (in .subckt AMP)"]),
+        (_amp("", top=".param g=2\n"), [".param g=2"], [".param g=2 (in .subckt AMP)"]),
+        (
+            _amp(".param g=2\n.meas op vb FIND V(out)\n"),
+            [".meas op vb FIND V(out) (in .subckt AMP)"],
+            [],
+        ),
+    ],
+    ids=["param_value", "param_moved_to_the_top", "meas_added"],
+)
+async def test_equivalence_compares_each_subcircuit_s_own_directives(
+    state_no_sim, work_dir, candidate: str, added: list[str], removed: list[str]
+):
+    """Two circuits whose subcircuit defines its parameter otherwise differ,
+    though the wiring and the value text ``{g*1k}`` are the same."""
+    ref = _write(work_dir, "ref.cir", _amp())
+    deck = _write(work_dir, "cand.cir", candidate)
+    comparison = (await _run(state_no_sim, path=str(deck), reference=str(ref)))["comparison"]
     assert comparison["structurally_equivalent"] is True
-    assert comparison["directives_added"] == [".include div.lib"]
-    assert "directives_removed" not in comparison
+    assert comparison["equivalent"] is False
+    assert comparison.get("directives_added", []) == added
+    assert comparison.get("directives_removed", []) == removed
+
+
+@pytest.mark.parametrize(
+    ("reference", "candidate", "files", "equivalence_says", "structural_diff_says"),
+    [
+        (_amp(), _amp(".param g=3\n"), {}, False, False),
+        (_amp(), _amp("", top=".param g=2\n"), {}, False, True),
+        (
+            "* t\nV1 in 0 5\nX1 in 0 DIV\n.subckt DIV a b\nR1 a b 1k\n.ends DIV\n.end\n",
+            "* t\nV1 in 0 5\nX1 in 0 DIV\n.include div.lib\n.end\n",
+            {"div.lib": ".subckt DIV a b\nR1 a b 1k\n.ends DIV\n"},
+            True,
+            False,
+        ),
+        (
+            "* t\n.subckt SPARE a b\n.param k=1\nR9 a b {k}\n.ends SPARE\n"
+            + _amp().split("\n", 1)[1],
+            "* t\n.subckt SPARE a b\n.param k=5\nR9 a b {k}\n.ends SPARE\n"
+            + _amp().split("\n", 1)[1],
+            {},
+            True,
+            False,
+        ),
+    ],
+    ids=[
+        "both_tell_a_body_s_param_apart",
+        "a_param_moved_from_a_body_to_the_top_differs_in_equivalence_only",
+        "a_definition_moved_into_an_include_differs_in_structural_diff_only",
+        "an_uncalled_subcircuit_differs_in_structural_diff_only",
+    ],
+)
+async def test_the_two_modes_compare_directives_where_each_reads_them(
+    state_no_sim,
+    work_dir,
+    reference: str,
+    candidate: str,
+    files: dict[str, str],
+    equivalence_says: bool,
+    structural_diff_says: bool,
+):
+    """``structural_diff`` compares every directive card of the two files as
+    written; ``equivalence`` compares the circuit its wiring resolves, scope by
+    scope (``netlist_diff`` says why). Where they part is pinned here."""
+    for name, text in files.items():
+        _write(work_dir, name, text)
+    ref = _write(work_dir, "ref.cir", reference)
+    deck = _write(work_dir, "cand.cir", candidate)
+    said = {}
+    for mode in ("equivalence", "structural_diff"):
+        data = await _run(state_no_sim, path=str(deck), reference=str(ref), compare_mode=mode)
+        said[mode] = data["comparison"]["equivalent"]
+    assert said == {"equivalence": equivalence_says, "structural_diff": structural_diff_says}
+
+
+async def test_a_definition_each_side_names_otherwise_is_compared_through_its_instance(
+    state_no_sim, work_dir
+):
+    """X1 calls AMP in one circuit and AMP2 in the other: the wiring is the
+    same, so only the definitions' own directives tell them apart."""
+    ref = _write(work_dir, "ref.cir", _amp())
+    deck = _write(work_dir, "cand.cir", _amp(".param g=3\n").replace("AMP", "AMP2"))
+    comparison = (await _run(state_no_sim, path=str(deck), reference=str(ref)))["comparison"]
+    assert comparison["equivalent"] is False
+    assert comparison["directives_added"] == [".param g=3 (in .subckt AMP2 of X1)"]
+    assert comparison["directives_removed"] == [".param g=2 (in .subckt AMP of X1)"]
+
+
+async def test_an_instance_s_own_parameters_are_compared(state_no_sim, work_dir):
+    amp = _amp("", params=" params: g=2")
+    ref = _write(work_dir, "ref.cir", amp.replace("X1 a b AMP", "X1 a b AMP params: g=2"))
+    deck = _write(work_dir, "cand.cir", amp.replace("X1 a b AMP", "X1 a b AMP params: g=3"))
+    comparison = (await _run(state_no_sim, path=str(deck), reference=str(ref)))["comparison"]
+    assert comparison["equivalent"] is False
+    assert comparison["param_mismatches"] == [
+        {"ref": "X1", "key": "g", "reference_value": "2", "candidate_value": "3"}
+    ]
+
+
+@pytest.mark.parametrize(
+    ("reference", "candidate", "mismatch"),
+    [
+        (("2", ""), ("2", " g=2"), None),
+        (("2", ""), ("3", ""), ("2", "3")),
+        (("2", " g=5"), ("3", " g=5"), None),
+    ],
+    ids=["a_default_given_or_left_out", "a_default_the_instance_runs", "a_default_both_override"],
+)
+async def test_a_header_default_is_compared_through_the_instances_that_run_it(
+    state_no_sim,
+    work_dir,
+    reference: tuple[str, str],
+    candidate: tuple[str, str],
+    mismatch: tuple[str, str] | None,
+):
+    """An instance runs its definition with each parameter it gives, else the
+    header default (recorded: deck/params_keyword), so a default reaches the
+    circuit only where an instance leaves the parameter out."""
+
+    def deck(default: str, given: str) -> str:
+        return _amp("", params=f" params: g={default}").replace("X1 a b AMP", f"X1 a b AMP{given}")
+
+    ref = _write(work_dir, "ref.cir", deck(*reference))
+    cand = _write(work_dir, "cand.cir", deck(*candidate))
+    comparison = (await _run(state_no_sim, path=str(cand), reference=str(ref)))["comparison"]
+    rows = [
+        (row["reference_value"], row["candidate_value"])
+        for row in comparison.get("param_mismatches", [])
+    ]
+    assert rows == ([] if mismatch is None else [mismatch])
+    assert comparison["equivalent"] is (mismatch is None)
+    assert "directives_added" not in comparison and "directives_removed" not in comparison
+
+
+async def test_a_default_model_in_a_body_is_compared_against_the_top_level_s(
+    state_no_sim, work_dir
+):
+    """Inside AMP, the candidate's own parameterless NMOS stands in for the
+    reference's top-level NMOS with kp: a difference, not export boilerplate."""
+    model = ".model NMOS NMOS(kp=1m)\n"
+    ref = _write(work_dir, "ref.cir", _amp(top=model))
+    deck = _write(work_dir, "cand.cir", _amp(".param g=2\n.model NMOS NMOS\n", top=model))
+    comparison = (await _run(state_no_sim, path=str(deck), reference=str(ref)))["comparison"]
+    assert comparison["directives_added"] == [".model NMOS NMOS (in .subckt AMP)"]
+
+
+async def test_a_subcircuit_the_circuit_does_not_call_is_not_compared(state_no_sim, work_dir):
+    """A library's other definitions are no part of the circuit."""
+    unused = ".subckt SPARE a b\n.param k=1\nR9 a b {k}\n.ends SPARE\n"
+    body = _amp().split("\n", 1)[1]  # the deck below its title line
+    ref = _write(work_dir, "ref.cir", "* spare\n" + unused + body)
+    deck = _write(work_dir, "cand.cir", "* spare\n" + unused.replace("k=1", "k=5") + body)
+    comparison = (await _run(state_no_sim, path=str(deck), reference=str(ref)))["comparison"]
+    assert comparison["equivalent"] is True
+
+
+async def test_a_nested_subcircuit_s_directives_are_compared(state_no_sim, work_dir):
+    inner = ".subckt INNER a b\n.param r={r0}\nR1 a b {r}\n.ends INNER\n"
+    outer = ".subckt OUTER a b\nXI a b INNER\n.ends OUTER\n"
+    top = "V1 in 0 1\nX1 in 0 OUTER\n.param r0=1k\n.op\n.end\n"
+    ref = _write(work_dir, "ref.cir", "* n\n" + inner + outer + top)
+    deck = _write(work_dir, "cand.cir", "* n\n" + inner.replace("{r0}", "{2*r0}") + outer + top)
+    comparison = (await _run(state_no_sim, path=str(deck), reference=str(ref)))["comparison"]
+    assert comparison["directives_added"] == [".param r={2*r0} (in .subckt INNER)"]
 
 
 # ---------------------------------------------------------------------------

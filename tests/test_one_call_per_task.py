@@ -132,6 +132,32 @@ async def test_a_mismatch_is_reported_in_the_same_call_without_undoing_the_edit(
     assert "SYMATTR InstName R2" in sheet, "the mismatch undid the edit"
 
 
+async def test_an_edit_s_reference_comparison_reads_a_subcircuit_s_own_parameters(
+    asc_state: SessionState, monkeypatch: pytest.MonkeyPatch
+):
+    """The edit's comparison with its reference is the equivalence check, so a
+    subcircuit whose parameter differs is told apart there too."""
+    deck = (
+        "* amp\n.subckt AMP in out\n.param g=2\nR1 in out {g*1k}\n.ends AMP\n"
+        "V1 a 0 1\nX1 a b AMP\nR2 b 0 1k\n.op\n.end\n"
+    )
+
+    async def export(_sheet: Path, _state: SessionState) -> str:
+        return deck
+
+    monkeypatch.setattr(se, "_export_asc_to_netlist", export)
+    edited = await Client(asc_state).call(
+        "edit_schematic",
+        path="amp.asc",
+        base="blank",
+        ops=DIVIDER_OPS,
+        compare={"reference": deck.replace(".param g=2", ".param g=3")},
+    )
+    verification = edited["verification"]
+    assert verification["equivalent"] is False, edited
+    assert verification["comparison"]["directives_removed"] == [".param g=3 (in .subckt AMP)"]
+
+
 # ---------------------------------------------------------------------------
 # Two settings compared, and the comparison asked for again
 # ---------------------------------------------------------------------------
