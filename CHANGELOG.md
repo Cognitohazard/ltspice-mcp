@@ -263,6 +263,16 @@ tool-surface changes.
 
 ### Fixed
 
+- A file name with a space reaches ngspice in the control scripts the
+  server writes. ngspice keeps double quotes as part of a name and splits an
+  unquoted one at the space, and in both cases runs on without an error. So
+  the `write` added to a scripted deck was left out for a run folder whose
+  path has a space, and a script that ends with `quit` or issues its own
+  analysis then left no raw to read. And the seeded-run driver double-quoted
+  a name that needed quoting. One rule now writes every such name: a plain
+  name as it is, any other in single quotes, and a name with a quote, `$`, a
+  backtick, a backslash, a brace, a tab or a line break, which ngspice would
+  change, is not written.
 - A run on ngspice configured with a mode other than `hsa`, `kiltpsa` or
   native (`""`), such as the `kia` the `ngbehavior` setting's own
   documentation suggests, no longer fails every case with `submission_failed`.

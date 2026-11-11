@@ -109,15 +109,17 @@ class TestInjectNgspiceControlWrite:
         out_dir = self._out_dir(tmp_path)
         assert inject_ngspice_control_write(src, NGspiceSimulator, "job1", out_dir) == src
 
-    def test_noop_when_output_folder_has_a_space(self, tmp_path: Path):
-        # ngspice's `write` parser can't handle a spaced target at all — not
-        # quoted, not escaped — so a spaced output folder must skip the
-        # injection rather than emit a write ngspice would choke on; the run
-        # falls back to today's harmless log-only behavior.
+    def test_a_spaced_output_folder_is_single_quoted(self, tmp_path: Path):
+        # ngspice keeps a single-quoted name whole but keeps double quotes as
+        # part of the name (ngspice-42), so the write to a spaced output
+        # folder is single-quoted (ngspice_driver.control_path).
         src = self._write(tmp_path, self._DECK)
         out_dir = tmp_path / "run dir"
         out_dir.mkdir()
-        assert inject_ngspice_control_write(src, NGspiceSimulator, "job1", out_dir) == src
+        injected = inject_ngspice_control_write(src, NGspiceSimulator, "job1", out_dir)
+        assert injected != src
+        target = (out_dir / "job1.raw").as_posix()
+        assert f"write '{target}'\n" in injected.read_text(encoding="utf-8")
 
     def test_noop_with_two_control_blocks(self, tmp_path: Path):
         # Ambiguous which block's result is "the" answer — skip rather than guess.

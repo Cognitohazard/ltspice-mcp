@@ -51,6 +51,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from ltspice_mcp.lib.hierarchy import Hierarchy, ResolvedInstance
+from ltspice_mcp.lib.ngspice_driver import control_path
 from ltspice_mcp.lib.ngspice_mode import deck_flags, flags_for, mode_notes, run_batch
 from ltspice_mcp.lib.simulator import is_ngspice
 
@@ -63,11 +64,6 @@ _REL_TOL = 1e-6
 _PRINTED = re.compile(
     r"^@(?P<device>[^\s\[]+)\[(?P<quantity>[^\]\s]+)\]\s*=\s*(?P<value>\S+)", re.MULTILINE
 )
-_UNSAFE_PATH = re.compile(r"['\"$`\\{}\t\r\n]")
-"""Characters ngspice's control language would read in a single-quoted path:
-it drops braces and turns a tab into a space. A double-quoted path keeps its
-quotes as part of the name (ngspice-42)."""
-
 _CACHE_SIZE = 32
 _cache: OrderedDict[tuple[Any, ...], HierarchyCheck] = OrderedDict()
 _cache_lock = threading.Lock()
@@ -215,10 +211,15 @@ def plan(hierarchy: Hierarchy) -> tuple[list[Planned], Counter[str]]:
 
 def _driver(root: Path, planned: list[Planned]) -> bytes | None:
     path = root.as_posix()
-    if _UNSAFE_PATH.search(path) or (sys.platform == "win32" and not path.isascii()):
+    # The driver is UTF-8; on Windows ngspice reads it in the ANSI code page.
+    if sys.platform == "win32" and not path.isascii():
+        return None
+    try:
+        source = control_path(path)
+    except ValueError:
         return None
     prints = dict.fromkeys(f"print @{item.row.device}[{item.parameter}]" for item in planned)
-    lines = ["* hierarchy check", ".control", f"source '{path}'", *prints, "quit", ".endc", ".end"]
+    lines = ["* hierarchy check", ".control", f"source {source}", *prints, "quit", ".endc", ".end"]
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 

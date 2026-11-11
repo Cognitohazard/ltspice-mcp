@@ -38,6 +38,7 @@ from ltspice_mcp.lib.log_parser import (
     is_op_stepping_failure,
     op_ladder_exhausted,
 )
+from ltspice_mcp.lib.ngspice_driver import control_path
 from ltspice_mcp.lib.ngspice_mode import ModeCheck, check_run
 from ltspice_mcp.lib.pdk_native import LAUNCH_POLICY, NativeLaunchPolicy
 from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
@@ -660,8 +661,10 @@ def inject_ngspice_control_write(
     This is ngspice runtime behavior, not a spicelib bug: a ``.control``
     block replaces the raw ngspice would otherwise write from the ``-r
     <rawfile>`` switch spicelib always passes — the script runs instead, and
-    unless it calls ``write``/``wrdata`` itself, no raw file is ever
-    produced. ``collect_run_outcome`` already classifies that as a clean
+    unless it calls ``write``/``wrdata`` itself, ngspice may write no raw
+    file. ngspice-42 still writes the ``-r`` raw after a script that only
+    ``run``s the deck's analyses, but not after one that ends with ``quit``
+    or issues the analysis as a command (``tran``, ``op``). ``collect_run_outcome`` already classifies that as a clean
     log-only completion (not a failure), but nothing then exists for
     get_waveform/signal_stats/etc. to read. Injecting a canonical ``write
     <rawpath>`` gives the deck a raw at the exact path the runner expects for
@@ -673,11 +676,10 @@ def inject_ngspice_control_write(
     inside a loop, needs its own explicit writes to capture each one — guard
     (c) below leaves any deck that already writes its own output alone
     rather than duplicating or fighting it. A second, unrelated limitation:
-    ngspice's ``write`` parser cannot handle a target containing whitespace
-    at all — neither quoting nor backslash-escaping works, both fail with
-    "No such file or directory" (verified empirically). So a run whose
-    output folder path contains a space can't get an auto-injected write
-    either (guard (d)) — that run just stays log-only, same as today.
+    the target is written by ``ngspice_driver.control_path``, which
+    single-quotes a name with a space (ngspice keeps double quotes as part
+    of the name) and refuses one the control language would change, such as
+    a name with braces (guard (d)); such a run stays log-only.
 
     The deck is read as the simulator reads it (``spice_lex.lex_for_edit``):
     its title and a line after its ``.END`` are neither a block nor a
@@ -690,7 +692,8 @@ def inject_ngspice_control_write(
         e.g. which block's last analysis is "the" result).
     (c) no existing ``write``/``wrdata`` anywhere in the deck — never
         override a user who already captures their own output.
-    (d) the write target has no whitespace (see the limitation above).
+    (d) the write target has a spelling that reaches ngspice intact
+        (``control_path``; see the limitation above).
     (e) the deck's bytes decode exactly, so it can be written back in its
         own encoding with only the ``write`` added, which ends with the
         deck's own line break.
@@ -701,7 +704,7 @@ def inject_ngspice_control_write(
     ``.with_suffix('.raw')``. It must be absolute: the runner's SimRunner
     passes no ``cwd``, so ngspice inherits the MCP server's own working
     directory, not the output folder — a relative ``write`` target would land
-    there instead. Written UNQUOTED — see the whitespace limitation above.
+    there instead. Quoted only when it needs to be (``control_path``).
     Inserted before the block's LAST ``quit``/``exit`` (if any) so it
     actually runs — those commands end script execution, so a ``write``
     placed after one would never fire; otherwise inserted just before
@@ -746,11 +749,11 @@ def inject_ngspice_control_write(
         return netlist_path
     body = blocks[0][1:-1]
 
-    raw_path = (output_folder / f"{job_id}.raw").as_posix()
-    # ngspice's `write` parser cannot handle a spaced target at all — not
-    # quoted, not escaped (verified empirically) — so a spaced output folder
-    # can't get an auto-injected write; that run just stays log-only.
-    if any(c.isspace() for c in raw_path):
+    try:
+        raw_path = control_path((output_folder / f"{job_id}.raw").as_posix())
+    except ValueError:
+        # A folder name the control language would change (a brace, a
+        # quote): the run stays log-only rather than write elsewhere.
         return netlist_path
 
     # Insert before .endc, UNLESS the block's last statement is an
