@@ -198,8 +198,8 @@ chart panel, so volts and amps never share a y-axis. The chart plots every
 sample of a trace up to 100,000 points (the `max_points` argument); above that
 it keeps the minimum and maximum of each interval and reports that it
 downsampled. The PNG is off by default (`[analysis] attach_plot`), costs
-about 1,000 tokens for two panels, and needs the optional `raster` extra. The
-core install adds no plotting dependency; the chart library is bundled.
+about 1,000 tokens for two panels, and is drawn by `resvg-py`, a dependency.
+The chart needs no plotting dependency; its library is bundled.
 
 ### One call per intent
 

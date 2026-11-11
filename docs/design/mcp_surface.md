@@ -123,7 +123,7 @@ Codes by kind of failure:
 | `cancel_failed` | cancellation was authorized but could not be carried out |
 | `library_error` | a component library failed to load, parse, or resolve |
 | `batch_job_error` | a sweep or Monte Carlo config could not be used |
-| `raster_unavailable` | a PNG was requested without a usable rasterizer, because the optional `raster` extra is not installed, or only `cairosvg` is installed without the native Cairo library it loads |
+| `raster_unavailable` | a PNG was requested without a usable rasterizer: `resvg-py`, a dependency, cannot be imported (an install that lost it), and `cairosvg` is not installed or is installed without the native Cairo library it loads |
 | `internal_error` | an unclassified server failure |
 
 Codes named after the stage, used where the stage is the more useful fact:
@@ -1836,8 +1836,8 @@ cursors where listed:
     (`tool_listing`); limits; linter_version; the startup diagnostics
     (`diagnostics`), which show whether the server started degraded; and
     `render: {png, missing, reason, remedy}` (whether verify_circuit can
-    make the PNG it inlines and, if not, whether the `raster` extra is
-    missing or only cairosvg is, without native Cairo). `fields` (e.g.
+    make the PNG it inlines and, if not, whether `resvg-py` cannot be
+    imported or only cairosvg is installed, without native Cairo). `fields` (e.g.
     ["allowed_paths", "config_path"], to check after a config edit) returns
     only those top-level keys; without it the whole report is returned
 {kind: "symbols", path?, filter?, cursor?}
@@ -2295,7 +2295,7 @@ it, and reported when the caller names it.
 | `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics. Fourier is each `.four` table as the build printed it, phase included; LTspice 26 and XVII print phase in different conventions |
 | `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); per run, `stats` for each `.meas` name, keyed lower-cased as the log reader holds it. A name in `names` or `field` is matched in any case, and one the log does not hold fails the run with the names it holds. A run with one value per name also has `measured` {name: value}, `at` and `failed_measurements`, and its default row shows only those (§3.3) |
 | `value` | any | `expr` — one trace or node pair, not arithmetic | `at`, required when the axis has more than one sample; reads the nearest sample, no interpolation; a bias-point run is read by name; step-aware |
-| `signal_stats` | tran | `signal` | `window?`, `quantiles?` — levels in [0, 1], weighted by time, not by sample; each adds `q<percent>` (0.99 is `q99`, 0.999 is `q99_9`) and two or more add `quantile_peak_to_peak`, all reducible. `min`/`max`/`peak_to_peak` stay the sample extremes |
+| `signal_stats` | tran, dc, ac, noise | `signal` | `window?`, on tran and dc only; `quantiles?`, tran only — levels in [0, 1], weighted by time, not by sample; each adds `q<percent>` (0.99 is `q99`, 0.999 is `q99_9`) and two or more add `quantile_peak_to_peak`, all reducible. `min`/`max`/`peak_to_peak` stay the sample extremes. An AC or FRA run gives the magnitude in dB and the phase; a noise run has no `mean`. `metrics.signal_stats_defined` decides which runs it reads, over a window or whole |
 | `edges` | tran | `signal` | `levels?`, `edge?`, `window?` |
 | `timing` | tran | `from{signal, edge, level}`, `to{...}` | `nth?`, `window?` |
 | `periodic` | tran | `signal` | `window?`; period, frequency, duty cycle |
