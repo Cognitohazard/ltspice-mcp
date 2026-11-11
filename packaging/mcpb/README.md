@@ -33,6 +33,12 @@ because the geometry comes from those symbol files. An LTspice install
 supplies them, and the server finds them automatically on Windows. Running
 simulations needs a simulator.
 
+**Writing netlists.** The tools take a circuit as a file path, and a Claude
+Desktop chat has no file tools of its own. Install a filesystem extension so
+the assistant can write `.cir` files, or approve the `run_code` tool, which
+writes them in Python. `run_code` runs with the server's own file and process
+permissions, which the sandbox folder does not limit.
+
 **PNG schematic renders.** The bundle installs `resvg-py`, the PNG
 rasterizer, which ships as a prebuilt wheel and needs no native library, so
 PNG renders work without further setup.

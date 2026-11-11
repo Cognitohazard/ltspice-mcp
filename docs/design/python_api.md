@@ -22,7 +22,9 @@ which caps the size of an MCP reply, is dropped (§7).
 
 - No MCP resources, and no `budget` reply-size cap (§7 describes how `budget`
   is dropped, and the single-page mode).
-- No analysis the MCP tools do not offer.
+- Analysis can reach the API before a tool offers it. Until a tool offers it
+  or it is declared stable, its documentation marks it provisional, and §9's
+  stability promise does not cover it.
 - `ltspice_mcp.api` ships in the same package as the server.
 - An API process and an MCP server process may share a working directory. They
   coordinate as separate server sessions do. A lock on each circuit file stops

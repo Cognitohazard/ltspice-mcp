@@ -2090,8 +2090,10 @@ a named target, or return unbounded collections. They do not validate
 testbench physics. The linter checks SPICE and does not check the measurement
 setup.
 
-Circuits are passed as file paths; netlist text cannot be pasted into a tool
-call. The surface assumes an agent on the same machine as the server.
+A circuit to run or check is passed as a file path; only a comparison's
+`reference` also takes netlist text. A client without file tools writes the
+netlist with `run_code`. The surface assumes an agent on the same machine as
+the server.
 
 ---
 
