@@ -55,6 +55,16 @@
    "tests/test_edit_schematic.py::test_a_dry_run_reports_a_mismatch_with_the_netlist"
   ]
  },
+ "0645ad16881e6983": {
+  "answer": {
+   "reply": "1e3914c0ed1121f6",
+   "sheet": "c064b176635b7503"
+  },
+  "platform": "windows",
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_symbol_saved_beside_the_sheet_is_found_by_the_compare_export[beside]"
+  ]
+ },
  "078875ffcb92330e": {
   "answer": {
    "reply": "b764808779f76a17",
@@ -244,6 +254,15 @@
    "tests/test_edit_schematic.py::TestRecordTheEditorCannotRead::test_an_edit_names_the_record_and_its_line[-empty]"
   ]
  },
+ "13c2e21dc0562fc2": {
+  "answer": {
+   "reply": "654d63d6cb9b3dca",
+   "sheet": "852d81e67e545ce9"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_writes_a_text_that_reads_as_it_was_given"
+  ]
+ },
  "13e37f29f7e017a4": {
   "answer": {
    "reply": "2873f5794cff8e3e",
@@ -326,6 +345,16 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_reference_outside_sandbox_names_the_text_alternative"
+  ]
+ },
+ "19642cc2b293eb8d": {
+  "answer": {
+   "reply": "0b34a05f166a3180",
+   "sheet": "4f700298c191ce88"
+  },
+  "platform": "windows",
+  "tests": [
+   "tests/test_edit_schematic.py::test_asc_reference_is_exported_like_the_committed_sheet[equivalence]"
   ]
  },
  "19aca848f42578fd": {
@@ -620,6 +649,15 @@
    "tests/test_edit_schematic.py::test_reference_mismatch_is_a_partial_outcome"
   ]
  },
+ "28cba25b53c5578e": {
+  "answer": {
+   "reply": "d0fbb5282503b110",
+   "sheet": "175c72c90935824a"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_of_a_sources_value_keeps_its_own_parameters_on_a_sheet"
+  ]
+ },
  "2a34f41928fc501b": {
   "answer": {
    "reply": "3cc34a936e604cac",
@@ -749,6 +787,15 @@
    "tests/test_edit_schematic.py::test_render_failure_leaves_the_target_and_evicts_the_edited_editor"
   ]
  },
+ "3576a518bef589f0": {
+  "answer": {
+   "reply": "a8544c1223d107a1",
+   "sheet": "fbe31f09a267ed46"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_of_a_sources_value_keeps_its_own_parameters_on_a_sheet"
+  ]
+ },
  "36cd9720f52e6a2c": {
   "answer": {
    "reply": "d60023a8593dd0ee",
@@ -848,6 +895,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_empty_ops_without_views_is_rejected"
+  ]
+ },
+ "3e8d65f9cc293ddf": {
+  "answer": {
+   "reply": "78724c34ce46a5a6",
+   "sheet": "4fcc2dfe8d1b0bdd"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_writes_a_text_that_reads_as_it_was_given"
   ]
  },
  "3ebd2bdf3546a9a8": {
@@ -979,6 +1035,15 @@
   "tests": [
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/gnd_label_lower_case]",
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/gnd_label_lower_case]"
+  ]
+ },
+ "45f6a17067bcf5e9": {
+  "answer": {
+   "reply": "243854d4c3969389",
+   "sheet": "3ae5ec160b4db496"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_of_a_sources_value_keeps_its_own_parameters_on_a_sheet"
   ]
  },
  "464deaa02ce2ccfc": {
@@ -1306,16 +1371,6 @@
   ],
   "varies": true
  },
- "5f6fb2a9f3c08420": {
-  "answer": {
-   "reply": "476136ca19f531d8",
-   "sheet": "4f700298c191ce88"
-  },
-  "platform": "posix",
-  "tests": [
-   "tests/test_edit_schematic.py::test_asc_reference_is_exported_like_the_committed_sheet[structural_diff]"
-  ]
- },
  "5f7747cb71640096": {
   "answer": {
    "reply": "b09eaf8228cad572",
@@ -1333,6 +1388,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_an_edit_says_of_a_sheet_what_a_check_of_it_says"
+  ]
+ },
+ "610f135d0a62a114": {
+  "answer": {
+   "reply": "7acafad85f641b99",
+   "sheet": "3c8790aeafdd3295"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_writes_a_text_that_reads_as_it_was_given"
   ]
  },
  "612a5873becde290": {
@@ -1389,6 +1453,15 @@
   "tests": [
    "tests/test_edit_schematic.py::test_a_wire_a_later_op_removes_is_not_said_to_hang[move_component]",
    "tests/test_edit_schematic.py::test_a_wire_a_later_op_removes_is_not_said_to_hang[remove_component]"
+  ]
+ },
+ "63eb2235ddf362e4": {
+  "answer": {
+   "reply": "f667498b3f80bb9f",
+   "sheet": "d6aacb280a76708b"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_of_a_sources_value_keeps_its_own_parameters_on_a_sheet"
   ]
  },
  "641d3c5fb6549dc7": {
@@ -1558,6 +1631,16 @@
   "tests": [
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/same_instance_detour]",
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_detour]"
+  ]
+ },
+ "6d66d0050941af71": {
+  "answer": {
+   "reply": "476136ca19f531d8",
+   "sheet": "4f700298c191ce88"
+  },
+  "platform": "windows",
+  "tests": [
+   "tests/test_edit_schematic.py::test_asc_reference_is_exported_like_the_committed_sheet[structural_diff]"
   ]
  },
  "6d78df2f4a93c062": {
@@ -2018,6 +2101,15 @@
    "tests/test_edit_schematic.py::test_replace_directive_reports_what_it_changed"
   ]
  },
+ "8bb32888c7cdd716": {
+  "answer": {
+   "reply": "749343a3ce00fff5",
+   "sheet": "556243696339db8d"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_of_a_sources_value_keeps_its_own_parameters_on_a_sheet"
+  ]
+ },
  "8bf304039fe263f6": {
   "answer": {
    "message": "invalid view_cursors.pin_legend: malformed page cursor: 'garbage'",
@@ -2221,6 +2313,15 @@
    "tests/test_set_plot_panes.py::test_a_dc_sweep_and_a_noise_run_have_panes_of_their_own[dc-DC transfer characteristic-scales0]"
   ]
  },
+ "98ac8b7021c0b21b": {
+  "answer": {
+   "reply": "aab2dd35a391c5c9",
+   "sheet": "fd1b44a5ccb29ad1"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_of_a_sources_value_keeps_its_own_parameters_on_a_sheet"
+  ]
+ },
  "98dbc0c6c5be7ce1": {
   "answer": {
    "message": "Cannot open WORK/top.asc: WORK/bus.asc, a sheet it loads, starts with a UTF-8 byte order mark; neither LTspice 26 nor LTspice XVII reads a sheet that does (26 exports nothing from it, XVII stops on \"Unknown schematic syntax\"). Save it without the mark.",
@@ -2228,16 +2329,6 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::TestRecordTheEditorCannotRead::test_a_byte_order_mark_on_a_sheet_the_target_loads_names_that_sheet"
-  ]
- },
- "9a5ababd62273080": {
-  "answer": {
-   "reply": "1e3914c0ed1121f6",
-   "sheet": "44202d5c22063149"
-  },
-  "platform": "posix",
-  "tests": [
-   "tests/test_edit_schematic.py::test_a_symbol_saved_beside_the_sheet_is_found_by_the_compare_export[in-the-folder-its-name-says]"
   ]
  },
  "9ae1f963be6acdc2": {
@@ -2548,16 +2639,6 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_a_value_is_checked_for_the_class_the_parts_own_prefix_gives[source-symbol-as-resistor-set_component_value]"
-  ]
- },
- "a9bd3c737f392b88": {
-  "answer": {
-   "reply": "1e3914c0ed1121f6",
-   "sheet": "c064b176635b7503"
-  },
-  "platform": "posix",
-  "tests": [
-   "tests/test_edit_schematic.py::test_a_symbol_saved_beside_the_sheet_is_found_by_the_compare_export[beside]"
   ]
  },
  "aa5d7ab0b02d9f4c": {
@@ -2985,6 +3066,16 @@
    "tests/test_edit_schematic.py::test_render_failure_leaves_the_target_and_evicts_the_edited_editor"
   ]
  },
+ "c6f24b40036b9874": {
+  "answer": {
+   "reply": "1e3914c0ed1121f6",
+   "sheet": "44202d5c22063149"
+  },
+  "platform": "windows",
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_symbol_saved_beside_the_sheet_is_found_by_the_compare_export[in-the-folder-its-name-says]"
+  ]
+ },
  "c77db94b400b78d7": {
   "answer": {
    "reply": "421d80f6201c6374",
@@ -3234,6 +3325,15 @@
    "tests/test_edit_schematic.py::TestRecordTheEditorCannotRead::test_a_record_in_a_sheet_the_target_loads_names_that_sheet"
   ]
  },
+ "e2a92b73197a9159": {
+  "answer": {
+   "reply": "dfe3ecd4c6ad6cf7",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_refuses_a_step_with_nothing_to_step"
+  ]
+ },
  "e300422d689d4883": {
   "answer": {
    "reply": "90b2b3c08687e1df",
@@ -3346,6 +3446,15 @@
    "tests/test_recorded_ltspice_schematics.py::test_an_edit_that_changes_a_label_only_pins_net_names_lists_the_pin[ltspice26]"
   ]
  },
+ "e908c9174a2ec0c1": {
+  "answer": {
+   "reply": "01693653ee0e96de",
+   "sheet": "6d1d759062eb5518"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_of_a_sources_value_keeps_its_own_parameters_on_a_sheet"
+  ]
+ },
  "e9f96d301c87cc8c": {
   "answer": {
    "reply": "456509db119a28e8",
@@ -3445,16 +3554,6 @@
    "tests/test_edit_schematic.py::test_an_echoed_cursor_returns_its_view_without_a_return_views_entry"
   ]
  },
- "ef6a28782447d34c": {
-  "answer": {
-   "reply": "c05a17e1a107d570",
-   "sheet": "4f700298c191ce88"
-  },
-  "platform": "posix",
-  "tests": [
-   "tests/test_edit_schematic.py::test_asc_reference_is_exported_like_the_committed_sheet[equivalence]"
-  ]
- },
  "ef9f7d9a29e38f3b": {
   "answer": {
    "reply": "5d493a30cdf94a4a",
@@ -3462,6 +3561,15 @@
   },
   "tests": [
    "tests/test_circuit_asc.py::TestJudgedOnTheFinishedSheet::test_a_part_moved_onto_a_crossing_is_said_whichever_op_moved_it"
+  ]
+ },
+ "f15f26e5915d467b": {
+  "answer": {
+   "reply": "ff7a0981212bf877",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_refuses_a_value_for_a_source_that_plays_a_file_on_a_sheet"
   ]
  },
  "f1bea3b6d0f2ab59": {
