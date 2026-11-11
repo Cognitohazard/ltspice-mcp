@@ -23,7 +23,7 @@ from ltspice_mcp.api._session import acquire_session_lease, release_session_leas
 from ltspice_mcp.config import ServerConfig, generate_default_config
 from ltspice_mcp.engine import bootstrap_server_engine
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError
-from ltspice_mcp.lib import CIRCUIT_EXTENSIONS
+from ltspice_mcp.lib import CIRCUIT_EXTENSIONS, progress
 from ltspice_mcp.lib.families import DISPLAY
 from ltspice_mcp.lib.observability import configure_stderr_logging, emit_tool_event
 from ltspice_mcp.lib.simulator import no_simulator_message
@@ -430,8 +430,10 @@ async def _answer_tool_call(
     # the index write runs as a background task so it never gates dispatch.
     await _notice_circuit(arguments, state)
 
-    result = _with_guide_reminder(await _invoke(registered, name, arguments, state), state)
-    return _with_serialized_text(result)
+    # A wait that holds the call open reports its progress (``lib/progress``).
+    with progress.reporting_to(ctx.session.report_progress):
+        answer = await _invoke(registered, name, arguments, state)
+    return _with_serialized_text(_with_guide_reminder(answer, state))
 
 
 def _with_serialized_text(result: types.CallToolResult) -> types.CallToolResult:

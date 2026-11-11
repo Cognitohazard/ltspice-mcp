@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ltspice_mcp.lib import progress
 from ltspice_mcp.lib.background import BackgroundTasks
 from ltspice_mcp.lib.experiment_types import OWNER_STOPPED, ExperimentJob
 from ltspice_mcp.lib.job_lifecycle import LiveJob, WaitFor, finished
@@ -27,6 +28,17 @@ from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATU
 from ltspice_mcp.lib.observability import emit_job_event
 
 logger = logging.getLogger(__name__)
+
+
+def _cases_finished(job: ExperimentJob) -> tuple[int, int, str]:
+    """How many of a job's cases have finished, of how many, as a wait reports it."""
+    counts = job.completeness
+    return (
+        counts.terminal,
+        counts.expanded,
+        f"Job {job.job_id}: {counts.terminal} of {counts.expanded} cases finished",
+    )
+
 
 # Maximum finished jobs to retain.
 _MAX_FINISHED_JOBS = 200
@@ -376,17 +388,27 @@ class JobRegistry:
         answers at once. A job whose record already says it is done
         (``finished``) answers at once, live or not, so this wait and every
         reader of the record agree on when the runs are done.
+
+        A caller who asked for progress is told how many of the job's cases
+        have finished as that count grows (``progress.watch``), read from the
+        registry's own view of the job: the live job, or the record last re-read.
         """
+
+        def cases_finished() -> tuple[int, int, str]:
+            return _cases_finished(self.jobs.get(job.job_id, job))
+
         live = self.live.get(job.job_id)
         if live is not None:
             if finished(live.job, wait_for):
                 return live.job, False
-            done = await live.wait(timeout_s, wait_for=wait_for)
+            done = await progress.watch(live.wait(timeout_s, wait_for=wait_for), cases_finished)
             return live.job, not done
         if finished(job, wait_for):
             return job, False
         if self.persist_enabled:
-            return await self._wait_for_foreign(job, timeout_s, wait_for)
+            return await progress.watch(
+                self._wait_for_foreign(job, timeout_s, wait_for), cases_finished
+            )
         return job, True
 
     def refreshed_jobs(self) -> list[ExperimentJob]:
