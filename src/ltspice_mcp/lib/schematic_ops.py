@@ -77,7 +77,7 @@ except (ImportError, AttributeError):  # spicelib < 1.6 (the currently pinned ra
     _SchematicComponentClass = SchematicComponent
 
 from ltspice_mcp.errors import NetlistError, SymbolResolutionError
-from ltspice_mcp.lib.asc_document import is_asc, parse_asc
+from ltspice_mcp.lib.asc_document import is_asc, parse_asc, window_read_past
 from ltspice_mcp.lib.component_value import POSITIONAL_KINDS
 from ltspice_mcp.lib.connectivity import (
     NamedNets,
@@ -1060,6 +1060,54 @@ def _unrecognised_sheet(path: Path, exc: EncodingDetectError) -> NetlistError:
     )
 
 
+def _short_window(path: Path, exc: ValueError) -> NetlistError | None:
+    """The refusal for a sheet, or a symbol it places, holding a WINDOW line
+    LTspice reads past; ``None`` for any other ``ValueError``.
+
+    Both LTspice builds read past a WINDOW line short of its justification or
+    size (``asc_document.window_read_past``), and spicelib's sheet and symbol
+    readers raise ``ValueError`` unpacking one (docs/spicelib_bugs.md, Bug 41),
+    with no word of the file or the line. The frame that raised has the line;
+    a symbol's file is the one ``_PlacedSymbol`` was reading.
+    """
+    symbol: Path | None = None
+    for frame, _ in traceback.walk_tb(exc.__traceback__):
+        line, owner = frame.f_locals.get("line"), frame.f_locals.get("self")
+        if frame.f_code is _PlacedSymbol.__init__.__code__:
+            symbol = frame.f_locals.get("path")
+        if not (isinstance(line, str) and window_read_past(line)):
+            continue
+        if frame.f_code is AscEditor.reset_netlist.__code__ and isinstance(owner, AscEditor):
+            where, encoding = Path(owner.asc_file_path), owner.encoding
+        elif frame.f_code is AsyReader.__init__.__code__ and isinstance(symbol, Path):
+            where, encoding = symbol, getattr(owner, "encoding", "utf-8")
+        else:
+            continue
+        number = None
+        try:
+            with open(where, encoding=encoding) as text:
+                number = next((n for n, read in enumerate(text, 1) if read == line), None)
+        except (OSError, UnicodeError, LookupError):
+            pass
+        shown = line.strip()
+        # The line with the justification and size it lacks, at the values a
+        # symbol's text most often has: its four or five words, then the rest.
+        words = shown.split()
+        whole = " ".join([*words, *("Left", "2")[len(words) - 4 :]])
+        at = f"line {number}" if number is not None else "a line"
+        if where != path:
+            at = f"{where}, a file it loads: {at}"
+        return NetlistError(
+            f"Cannot open {path}: {at} ({shown!r}) is a WINDOW line short of its "
+            "justification or size. LTspice reads past such a line, and the schematic "
+            "editor cannot read it. Delete the line, which changes nothing LTspice "
+            f"reads or draws, or write it whole, such as {whole!r}, then open the "
+            "sheet here.",
+            show_hint=False,
+        )
+    return None
+
+
 class _PlacedSymbol(AsyReader):
     """A part's symbol as the editor read it, with the name the sheet gives it."""
 
@@ -1234,6 +1282,11 @@ def make_editor(path: Path, symbols: SymbolResolver | None = None) -> Editor:
             raise _unreadable_record(path, e) from e
         except EncodingDetectError as e:
             raise _unrecognised_sheet(path, e) from e
+        except ValueError as e:
+            refusal = _short_window(path, e)
+            if refusal is None:
+                raise
+            raise refusal from e
         _refuse_lost_records(path, editor)
         return editor
     except FileNotFoundError as e:
@@ -1304,16 +1357,18 @@ collisions move — no font-metric guesswork, so no false shifts."""
 
 
 def _text_record_body(text: str) -> str:
-    """``text`` as a TEXT record holds it: each line break as a ``\\n`` escape.
+    """``text``, as it reads, written as a TEXT record holds it: each backslash
+    doubled, then each line break as a ``\\n`` escape.
 
-    LTspice's on-disk TEXT record is one physical line; embedded newlines are
-    stored as literal "\\n" escapes (LTspice's own multi-line text convention).
-    A raw newline would split the record and corrupt the file — the downstream
-    symptom is an unrelated-looking "Primitive not supported" parse error. Text
-    already in that form is returned unchanged, so a removal matches whether the
-    caller gives the line breaks or the escapes the file holds.
+    The inverse of ``decode_text_lines``, which is how both LTspice builds read
+    the record: they draw ``\\\\`` as one backslash and break the line at
+    ``\\n``, even inside a path such as ``C:\\new``, and keep any other
+    backslash as it is (``text-backslash``). The example sheets both builds
+    install write a backslash doubled too (``.\\\\ring.wav``). The record is
+    one line of the file, so a raw line break would split it.
     """
-    return text.replace("\r\n", "\n").replace("\r", "\n").replace("\n", "\\n")
+    lines = text.replace("\r\n", "\n").replace("\r", "\n")
+    return lines.replace("\\", "\\\\").replace("\n", "\\n")
 
 
 def _append_asc_text(
@@ -1376,14 +1431,14 @@ def _no_text_matched(instruction: str) -> NetlistError:
         return NetlistError(
             f"No directive or comment matched regex {instruction[6:]!r}. It is searched "
             "for in each TEXT line's text, in the case it is given, where a line break "
-            "is a \\n escape."
+            "is a \\n escape and a backslash is doubled."
         )
     return NetlistError(
         f"No directive or comment matched {instruction!r} exactly. "
         "Match is literal by default — pass 'regex:<pattern>' for regex "
         "matching, or copy the text of the sheet's TEXT line, after its '!' "
-        "(directive) or ';' (comment); a line break may be given as a newline "
-        "or as the \\n escape the file holds."
+        "(directive) or ';' (comment), as it reads or as the file spells it, "
+        "with a line break as the \\n escape and a backslash doubled."
     )
 
 
@@ -1430,14 +1485,16 @@ def _text_matcher(instruction: str) -> Callable[[Text], bool]:
     ``remove_directive`` and ``move`` select texts by, for both kinds of text.
 
     A literal names every text whose words equal it, space around either
-    ignored, a line break given as a newline or as the ``\\n`` escape a TEXT
-    record holds. ``regex:<pattern>`` names every text the pattern is found in
-    (``re.search``), in the case it is given: ``(?i)`` ignores case and ``^``
-    anchors it at the start of the text.
+    ignored: the text as it reads (``_shown_text``), or as its TEXT record
+    spells it, a line break as the ``\\n`` escape and a backslash doubled.
+    ``regex:<pattern>`` names every text the pattern is found in
+    (``re.search``) as the record spells it, in the case it is given:
+    ``(?i)`` ignores case and ``^`` anchors it at the start of the text.
     """
     if not instruction.startswith("regex:"):
-        body = _text_record_body(instruction.strip())
-        return lambda text: text.text.strip() == body
+        spelled = instruction.strip()
+        reads = spelled.replace("\r\n", "\n").replace("\r", "\n")
+        return lambda text: text.text.strip() == spelled or _shown_text(text.text).strip() == reads
     pattern = instruction[6:]
     if not pattern.strip():
         raise NetlistError(

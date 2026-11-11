@@ -46,6 +46,7 @@ from ltspice_mcp.lib.spice_validator import (
     meas_functions_refused,
     meas_name_refused,
     meas_unclosed_paren_refused,
+    step_refused,
     validate_netlist_arity,
     validate_netlist_duplicate_params,
 )
@@ -53,7 +54,7 @@ from ltspice_mcp.lib.spice_validator import (
 Disposition = Literal["blocking", "warning", "observation"]
 LintFinding = dict[str, Any]
 
-linter_version = "12"
+linter_version = "13"
 
 # A capital M straight after a number is milli unless the letters after it
 # make it Meg or mil. Other letters do not: LTspice reads 1MHz as a millihertz.
@@ -465,6 +466,27 @@ def _meas_name_ltspice(
         )
         for card in context.cards
         if card.kind == "meas" and (error := meas_name_refused(card, "LTspice")) is not None
+    ]
+
+
+def _step_without_values_ltspice(
+    context: _LintContext,
+    rule: LintRule,
+) -> list[LintFinding]:
+    """A ``.step`` with nothing to step, which both builds refuse before the
+    run (``spice_validator.step_refused``)."""
+    return [
+        _finding(
+            context,
+            rule,
+            line=card.line_start,
+            subject=".step",
+            evidence={"directive": card.body, "reason": f"{error.message} {error.suggestion}"},
+        )
+        for card in context.cards
+        if card.kind == "directive"
+        and directive_head(card) == ".step"
+        and (error := step_refused(card.body, "LTspice")) is not None
     ]
 
 
@@ -1072,6 +1094,9 @@ RULES: tuple[LintRule, ...] = (
     LintRule("meas-name-ltspice", "blocking", _meas_name_ltspice, family="ltspice"),
     LintRule("meas-unclosed-paren-ltspice", "blocking", _unreadable_card, family="ltspice"),
     LintRule("lib-section-ltspice", "blocking", _lib_section_ltspice, family="ltspice"),
+    LintRule(
+        "step-without-values-ltspice", "blocking", _step_without_values_ltspice, family="ltspice"
+    ),
     # A warning, not blocking: LTspice 24 and later run another circuit than
     # the one the server reads, XVII the same one, and which build will run
     # the deck is not always known here.

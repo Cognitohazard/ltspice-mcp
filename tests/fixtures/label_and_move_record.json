@@ -1047,6 +1047,127 @@
     }
    }
   },
+  "fixtures/ltspice_recorded/inputs/blocks/blk.asc": {
+   "labels": {
+    "proposals": 40,
+    "sha256": "d27c3bd34aed51209a1c9f821750f0d53761cbab5a9317b36592172bbfb99211",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 10,
+     "placed [a name already here; 1 at the point, 1 named]": 4,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 5,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 5,
+     "placed [ground; 1 at the point, 1 named]": 4,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 4,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 4
+    }
+   },
+   "moves": {
+    "proposals": 34,
+    "sha256": "d601dd1a7e7dc95c2d25dc8e10f7a6c163dc5d5ef73b249bf3973c77165ecf4b",
+    "shapes": {
+     "moved": 34
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/blocks/lib/blk.asc": {
+   "labels": {
+    "proposals": 40,
+    "sha256": "d27c3bd34aed51209a1c9f821750f0d53761cbab5a9317b36592172bbfb99211",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 10,
+     "placed [a name already here; 1 at the point, 1 named]": 4,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 5,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 5,
+     "placed [ground; 1 at the point, 1 named]": 4,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 4,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 4
+    }
+   },
+   "moves": {
+    "proposals": 34,
+    "sha256": "d601dd1a7e7dc95c2d25dc8e10f7a6c163dc5d5ef73b249bf3973c77165ecf4b",
+    "shapes": {
+     "moved": 34
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/blocks/lib/outer.asc": {
+   "labels": {
+    "proposals": 20,
+    "sha256": "bd68c957d52f9b94988f051ebb62c9f4afa4a154c2769b0802376133da591fac",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed [a name already here; 1 at the point, 1 named]": 4,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 1 named]": 4,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 4,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 4
+    }
+   },
+   "moves": {
+    "proposals": 7,
+    "sha256": "819c9be808e29f8b54b6777acc47b399defd8055e16d3bae8b7603a373178d1f",
+    "shapes": {
+     "moved": 7
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/blocks/lib/sub/blk.asc": {
+   "labels": {
+    "proposals": 40,
+    "sha256": "d27c3bd34aed51209a1c9f821750f0d53761cbab5a9317b36592172bbfb99211",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 10,
+     "placed [a name already here; 1 at the point, 1 named]": 4,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 5,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 5,
+     "placed [ground; 1 at the point, 1 named]": 4,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 4,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 4
+    }
+   },
+   "moves": {
+    "proposals": 34,
+    "sha256": "d601dd1a7e7dc95c2d25dc8e10f7a6c163dc5d5ef73b249bf3973c77165ecf4b",
+    "shapes": {
+     "moved": 34
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/blocks/top.asc": {
+   "labels": {
+    "proposals": 39,
+    "sha256": "46ecc3ec44b32e21af41551f87c73a1658d92b1b249867f16ece67a5a64deb2b",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 10,
+     "placed [a name already here; 1 at the point, 1 named]": 2,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 10,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 10,
+     "placed [ground; 1 at the point, 1 named]": 2,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 2
+    }
+   },
+   "moves": {
+    "proposals": 65,
+    "sha256": "9efb85fc351f7061482898b56a56c895d40892d083d72a682949d2bfc1e6b813",
+    "shapes": {
+     "moved": 65
+    }
+   }
+  },
   "fixtures/ltspice_recorded/inputs/connectivity/bus_label.asc": {
    "labels": {
     "proposals": 95,
@@ -2125,6 +2246,25 @@
     }
    }
   },
+  "fixtures/ltspice_recorded/inputs/export/elements.asc": {
+   "labels": {
+    "proposals": 34,
+    "sha256": "cb9f96b8209bc3077e04e4a448814543b6a1fabd3fdc769bb3be28d51fe61c6c",
+    "shapes": {
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 16,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 16
+    }
+   },
+   "moves": {
+    "proposals": 223,
+    "sha256": "a05f0dc99171aa08d8f7e7e98933181ca7282ac24f24b1a9c98581024bc656ce",
+    "shapes": {
+     "moved": 223
+    }
+   }
+  },
   "fixtures/ltspice_recorded/inputs/export/greek_mu_utf8.asc": {
    "labels": {
     "proposals": 15,
@@ -2577,6 +2717,49 @@
     "sha256": "785009a9528047738c8b1ffd8a591db27ed3b54866d823a44aa4fd6f55fd6cea",
     "shapes": {
      "moved": 127
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/export/text_backslash.asc": {
+   "labels": {
+    "proposals": 27,
+    "sha256": "bcefc89e0a7b74e1a2340b1eea0f819405663d5349542278e7c223a0324bc160",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 4,
+     "placed [a name already here; 1 at the point, 1 named]": 4,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 4,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 4,
+     "placed [ground; 1 at the point, 1 named]": 4,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 4
+    }
+   },
+   "moves": {
+    "proposals": 30,
+    "sha256": "a913b31fd283841e048ca17d8e4afe93150d2cebe7818f14736fe92c2edd9434",
+    "shapes": {
+     "moved": 30
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/export/value_spaces.asc": {
+   "labels": {
+    "proposals": 22,
+    "sha256": "0885188e118585e8591f46f9999402f3f72db9d0d30027faf468f671bb88de7e",
+    "shapes": {
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 10,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 10
+    }
+   },
+   "moves": {
+    "proposals": 95,
+    "sha256": "89088eec97d8fe8a16f242d700f390559a56c2b122bbfad87d28af95fe14d758",
+    "shapes": {
+     "moved": 95
     }
    }
   },

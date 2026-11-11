@@ -853,6 +853,99 @@
         ".net"
       ]
     },
+    "blocks/nested_sheet_beside_both": {
+      "behaviour": "block-sheet-search",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/nested_sheet_beside_both.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "blocks/blk.asc": "635b688273b65d61cec97068246d15bd6d6ccf96165a71b38dcb32f179cb6141",
+        "blocks/blk.asy": "538ebae904e7d20d31f8c0330f3ced836e911f69b3b8f6c6c5d04adb01dfd096",
+        "blocks/lib/blk.asc": "6c145f3ed4eab9a31ff0caa401109f0ae4563a8462ed68288e27e66af71ff230",
+        "blocks/lib/outer.asc": "24da2dad34c898a299ac9c4f518df18977f81f4af696ee2a926ad994d195e91f",
+        "blocks/lib/outer.asy": "7855dd30dd9afb46bff5b5b5e1628e63f555ebef475e36764979da54af01d082",
+        "blocks/nest_top.asc": "d24cf4952c67d7d8e1fd202261433f1ebaed4b5674940a638586edab11c48f64"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "blocks/nested_sheet_beside_both.net": {
+          "bytes": 286,
+          "sha256": "549e1eb9bf52eb0670bbc7828c8f18b36fad7494d7af9020bd174ae1ffdaabd2"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": {
+        "SymbolSearchPath": "<dir>\\lib"
+      },
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "blocks/nested_sheet_beside_its_placer": {
+      "behaviour": "block-sheet-search",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/nested_sheet_beside_its_placer.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 4294967295,
+      "inputs": {
+        "blocks/blk.asy": "538ebae904e7d20d31f8c0330f3ced836e911f69b3b8f6c6c5d04adb01dfd096",
+        "blocks/lib/blk.asc": "6c145f3ed4eab9a31ff0caa401109f0ae4563a8462ed68288e27e66af71ff230",
+        "blocks/lib/outer.asc": "24da2dad34c898a299ac9c4f518df18977f81f4af696ee2a926ad994d195e91f",
+        "blocks/lib/outer.asy": "7855dd30dd9afb46bff5b5b5e1628e63f555ebef475e36764979da54af01d082",
+        "blocks/nest_top.asc": "d24cf4952c67d7d8e1fd202261433f1ebaed4b5674940a638586edab11c48f64"
+      },
+      "kind": "netlist",
+      "outputs": {},
+      "reported_build": null,
+      "settings": {
+        "SymbolSearchPath": "<dir>\\lib"
+      },
+      "stopped": false,
+      "written": []
+    },
+    "blocks/nested_sheet_beside_its_symbol": {
+      "behaviour": "block-sheet-search",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/nested_sheet_beside_its_symbol.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "blocks/blk.asc": "635b688273b65d61cec97068246d15bd6d6ccf96165a71b38dcb32f179cb6141",
+        "blocks/blk.asy": "538ebae904e7d20d31f8c0330f3ced836e911f69b3b8f6c6c5d04adb01dfd096",
+        "blocks/lib/outer.asc": "24da2dad34c898a299ac9c4f518df18977f81f4af696ee2a926ad994d195e91f",
+        "blocks/lib/outer.asy": "7855dd30dd9afb46bff5b5b5e1628e63f555ebef475e36764979da54af01d082",
+        "blocks/nest_top.asc": "d24cf4952c67d7d8e1fd202261433f1ebaed4b5674940a638586edab11c48f64"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "blocks/nested_sheet_beside_its_symbol.net": {
+          "bytes": 292,
+          "sha256": "37594f71ddc12270f4545c67f24dbe8409e0c8b68b0d1e83b00a1de68f26362f"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "settings": {
+        "SymbolSearchPath": "<dir>\\lib"
+      },
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "blocks/no_sheet": {
       "behaviour": "block-sheet-search",
       "command": [
@@ -1007,6 +1100,30 @@
       "inputs": {
         "blocks/blk.asy": "538ebae904e7d20d31f8c0330f3ced836e911f69b3b8f6c6c5d04adb01dfd096",
         "blocks/lib/sub/blk.asc": "e537297fd14ac132be7d6b634c94832efc548dbd5b4c0c6f4ddc3580cbe4359b",
+        "blocks/top.asc": "99034d8e3528202587375d3e52356ab8e60f0df43fb63947d28910e8f4e21edc"
+      },
+      "kind": "netlist",
+      "outputs": {},
+      "reported_build": null,
+      "settings": {
+        "SymbolSearchPath": "<dir>\\lib"
+      },
+      "stopped": false,
+      "written": []
+    },
+    "blocks/symbol_under_search_path": {
+      "behaviour": "block-sheet-search",
+      "command": [
+        "LTspice.exe",
+        "-netlist",
+        "<dir>/symbol_under_search_path.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 4294967295,
+      "inputs": {
+        "blocks/blk.asc": "635b688273b65d61cec97068246d15bd6d6ccf96165a71b38dcb32f179cb6141",
+        "blocks/lib/sub/blk.asy": "538ebae904e7d20d31f8c0330f3ced836e911f69b3b8f6c6c5d04adb01dfd096",
         "blocks/top.asc": "99034d8e3528202587375d3e52356ab8e60f0df43fb63947d28910e8f4e21edc"
       },
       "kind": "netlist",

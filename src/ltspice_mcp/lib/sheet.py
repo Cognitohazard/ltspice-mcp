@@ -18,7 +18,14 @@ from functools import cached_property
 from pathlib import Path
 
 from ltspice_mcp.errors import NetlistError
-from ltspice_mcp.lib.asc_document import AscDocument, Opaque, Record, Symbol, parse_asc_text
+from ltspice_mcp.lib.asc_document import (
+    AscDocument,
+    Opaque,
+    Record,
+    Symbol,
+    parse_asc_text,
+    window_read_past,
+)
 from ltspice_mcp.lib.connectivity import fold_case, nets_by_ltspice
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.geometry import BBox
@@ -235,8 +242,9 @@ class Sheet:
 
         A line no record type reads, and a line under a part that does not read
         as a window or an attribute. ``NOTHING_TO_READ`` and blank lines are left
-        out. What reads the sheet does not see what such a line holds, so it
-        reports it.
+        out, and so is a WINDOW line LTspice reads past (``window_read_past``),
+        which holds nothing the sheet's reading leaves out. What reads the sheet
+        does not see what any other such line holds, so it reports it.
         """
         unread: dict[str, list[int]] = {}
         for line, record in _numbered(self.document):
@@ -247,8 +255,9 @@ class Sheet:
                 pending = list(record.unread)
                 for offset, text in enumerate((record.source or ())[1:], 1):
                     if pending and text.rstrip("\r\n") == pending[0]:
-                        keyword = pending.pop(0).split(None, 1)[0]
-                        unread.setdefault(keyword, []).append(line + offset)
+                        body = pending.pop(0)
+                        if not window_read_past(body):
+                            unread.setdefault(body.split(None, 1)[0], []).append(line + offset)
         return unread
 
     def unread_notes(self, reader: str, one: str, many: str) -> list[str]:

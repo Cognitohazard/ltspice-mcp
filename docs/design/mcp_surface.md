@@ -2102,6 +2102,7 @@ Suppression is per call, and `linter_version` is reported in provenance.
 | `meas-name-ltspice` | blocking | refused by LTspice 26 and XVII: a `.meas` named `e`, `k`, `pi` or `q`, constants of the expression evaluator |
 | `meas-unclosed-paren-ltspice` | blocking | a `.meas` with a parenthesis left open. LTspice 26 refused the recorded one before the run and ran nothing, and XVII ran that deck without the measurement; any such `.meas` is refused, since LTspice 26's error names the parenthesis, not the form. `verify_circuit`'s `syntax` check reports the same as a `directive_syntax` error, and `edit_schematic` refuses to write it |
 | `lib-section-ltspice` | blocking | refused by LTspice 26 and XVII: `.lib file section`, which LTspice reads as one file name |
+| `step-without-values-ltspice` | blocking | refused by LTspice 26 and XVII: a `.step` with nothing after it, or `.step param <name>` with no values. `edit_schematic` refuses to write it and `verify_circuit`'s `syntax` check reports it |
 | `byte-85-ltspice` | warning | LTspice: a byte 0x85 in an 8-bit deck or include with a card after it on the line, which LTspice 24 and later read as a line break and XVII does not; not reported when the session's LTspice is known to be XVII |
 | `node-control-byte-ltspice` | warning | LTspice: a node name in an 8-bit file containing a byte from 0x80 to 0x9F, a control character to LTspice, which LTspice 26 refuses and XVII saves under a name the server spells differently |
 | `model-missing` | blocking at staging | a missing model; the model token is read after a BJT/JFET/MOSFET area factor or `off`, and before a subckt call's `params:` |
@@ -2382,10 +2383,10 @@ symbol back; the wires it drew stay, for `remove_wire`.
 `add_directive` takes `kind`, `directive` (simulated) or `comment` (ignored by
 LTspice). `remove_directive` and `move`'s `texts` name directives and comments
 by one rule. A literal names every text equal to it, space around either
-ignored, and a line break may be given as a newline or as the `\n` escape the
-file holds. A `regex:` prefix names every text the pattern is found in
-(`re.search`), case-sensitive: `(?i)` ignores case and `^` anchors the pattern
-at the start of the text. `remove_directive` removes every text it names and
+ignored, as the text reads or as the file spells it, with a line break as the
+`\n` escape and a backslash doubled. A `regex:` prefix names every text the
+pattern is found in (`re.search`) as the file spells it, case-sensitive:
+`(?i)` ignores case and `^` anchors the pattern at the start of the text. `remove_directive` removes every text it names and
 lists each in `removed_texts`. `replace_directive` gives one text new words
 (`text`) and keeps its record: its place, size, justification and kind. Its
 `instruction` names the text by the same rule and must name exactly one, or
@@ -2396,15 +2397,15 @@ on one anchor cannot be told apart, so one of them is moved first. A
 directive's new text is checked as `add_directive`'s is, and a refused op
 changes nothing. Applied again with its result's `x` and `y`, `now` as
 `instruction` and `was` as `text`, it puts the text back, unless `now` begins
-with `regex:`, which names a pattern, or a text holds a backslash (below).
+with `regex:`, which names a pattern.
 
-A text is read, in a reply, as the drawing and the sheet findings read it: a
-`\n` in the TEXT record is a line break and `\\` a backslash, so a Windows
-path keeps its `\new_models`. Writing a text escapes only line breaks, and
-naming one compares it with the text as the record holds it, so a text with
-a backslash is named by the record's spelling, and the text a reply gives is
-not written back as the record held it. How LTspice writes and reads a
-backslash in a TEXT record is not recorded, so neither side is changed yet.
+A text is read as both LTspice builds read a TEXT record, which they draw and
+export alike (recorded as `text-backslash`): `\n` is a line break, even inside
+a Windows path such as `C:\new`, `\\` is one backslash, and any other
+backslash is itself. A reply gives a text as it reads. A text is written so
+that it reads as given: each backslash doubled and each line break as `\n`,
+as LTspice writes a TEXT record. So a line break is given as a line break;
+the two characters `\n` are written as a backslash and an `n`.
 
 `set_component_value` splits a trailing `KEY=VALUE` off the value it is given
 and sets it wherever the part already gives that key (`Value`, `Value2`,

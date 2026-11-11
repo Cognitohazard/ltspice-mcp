@@ -395,6 +395,22 @@ ELEMENT_SPECS: dict[str, ElementSpec] = {
     "Q": ElementSpec(default_kind="model", min_nodes=3),
     "J": ElementSpec(default_kind="model", min_nodes=3),
     "X": ElementSpec(default_kind="model", min_nodes=1),
+    # The node counts of these are what both LTspice builds ran
+    # (element-terminals): a MESFET's drain, gate and source, then its model
+    # and an area factor (deck/element_z); a lossy line's two ports and an RC
+    # line's two ends and the node its capacitance goes to, each before its
+    # model (deck/element_o, deck/element_u); a current-controlled switch's two
+    # nodes, then the source whose current sets it, then its model
+    # (deck/element_w, _CONTROL_NODES).
+    "Z": ElementSpec(default_kind="model", min_nodes=3),
+    "O": ElementSpec(default_kind="model", min_nodes=4),
+    "U": ElementSpec(default_kind="model", min_nodes=3),
+    "W": ElementSpec(default_kind="model", min_nodes=2),
+    # A lossless line's two ports, and LTspice 26's frequency response analyzer
+    # between two nodes: nodes, then parameters only (deck/element_t,
+    # deck/element_fra; LTspice XVII has no analyzer).
+    "T": ElementSpec(default_kind="params_only", min_nodes=4),
+    "@": ElementSpec(default_kind="params_only", min_nodes=2),
     # Passives and independent sources: positional value, never params-only.
     "R": ElementSpec(default_kind="value", min_nodes=2),
     "C": ElementSpec(default_kind="value", min_nodes=2),
@@ -436,9 +452,23 @@ _EXACT_NODE_COUNT: dict[str, int] = {
     "H": 2,
 }
 
-# The keyword that defines a capacitor by its charge, or an inductor by its
-# flux, in place of a value: ``C1 b 0 Q=100n*x``, ``L1 c 0 Flux=1m*x``.
-_DEFINING_KEYS: dict[str, str] = {"C": "q", "L": "flux"}
+# The keywords that carry a two-terminal element's value in place of its
+# positional value, so every positional word is a node: a capacitor defined by
+# its charge or an inductor by its flux (``C1 b 0 Q=100n*x``,
+# ``L1 c 0 Flux=1m*x``), and a source that plays a .wav file
+# (``V1 a b wavefile="in.wav"``), whose second node both LTspice builds wire
+# as written, quoted or not (wavefile-source-nodes).
+_DEFINING_KEYS: dict[str, frozenset[str]] = {
+    "C": frozenset({"q"}),
+    "L": frozenset({"flux"}),
+    "V": frozenset({"wavefile"}),
+    "I": frozenset({"wavefile"}),
+}
+
+# Elements whose nodes are followed by the name of the source whose current
+# controls them, and then by their model: ``W1 a 0 Vsense sw``. The count is
+# their nodes; the words between those and the model name the source.
+_CONTROL_NODES: dict[str, int] = {"W": 2}
 
 # A switch (S/W) carries an optional ON/OFF state token AFTER its model name.
 # It is never a model name, so it is peeled into the value tail before model
@@ -446,10 +476,11 @@ _DEFINING_KEYS: dict[str, str] = {"C": "q", "L": "flux"}
 # state for the model and clobber the real model on a set_model edit.
 _SWITCH_STATES = frozenset({"on", "off"})
 
-# Variable-arity devices whose model may be followed by an area factor and an
-# OFF (initial-condition) keyword: ``Q2 c b e QN 8``, ``J1 d g s JN 2 off``,
-# ``M1 d g s b NCH off``.
-_DEVICE_TAIL_PREFIXES = frozenset({"Q", "J", "M"})
+# Devices whose model may be followed by an area factor and an OFF
+# (initial-condition) keyword: ``Q2 c b e QN 8``, ``J1 d g s JN 2 off``,
+# ``M1 d g s b NCH off``, ``Z2 d g s NMF 2`` (a MESFET of twice the area,
+# deck/element_z).
+_DEVICE_TAIL_PREFIXES = frozenset({"Q", "J", "M", "Z"})
 
 
 def _is_device_tail_value(token: Token) -> bool:
@@ -501,15 +532,23 @@ class InstanceLine:
 
     Field semantics by element kind:
 
-    - ``M`` / ``Q`` / ``J`` / ``X``: ``model`` carries the model or
+    - ``M`` / ``Q`` / ``J`` / ``Z`` / ``X``: ``model`` carries the model or
       subckt name; ``value`` carries a trailing area factor or OFF
       (``Q2 c b e QN 8``), else None.
+    - ``O`` / ``U`` / ``D`` / ``S``: ``model`` carries the model name.
+    - ``W``: ``model`` carries the switch model; the source whose current
+      sets the switch, written between its two nodes and its model, is
+      neither a node nor the model.
     - ``R`` / ``C`` / ``L`` / ``V`` / ``I``: ``value`` carries the
       passive value or source magnitude (e.g. ``"1k"``), ``model`` is
-      None.
+      None. A value carried by a keyword (``R=``, a capacitor's ``Q=``, an
+      inductor's ``Flux=``, a source's ``wavefile=``) leaves every
+      positional a node.
     - ``B`` / ``E`` / ``G``: both are None — the value lives in
       ``params["V"]`` or ``params["I"]``.
-    - ``F`` / ``H``: ``model`` carries the controlling source name.
+    - ``T`` / ``@``: both are None — every positional is a node and the
+      rest are parameters.
+    - ``F`` / ``H``: ``value`` carries the controlling source name and gain.
     - ``K``: ``model`` carries the inductor pair or coupling
       coefficient — depends on syntax.
 
@@ -522,6 +561,10 @@ class InstanceLine:
     nodes: list[str]
     model: str | None
     value: str | None
+    # The words between a ``W`` switch's nodes and its model, which name the
+    # source whose current sets it; written back there when the card is
+    # re-rendered. None for every other element.
+    control: str | None = None
     _model_token: Token | None = None
     _value_param_key: str | None = None
     # A subckt call's ``params:`` keyword as written, put back in front of the
@@ -563,6 +606,7 @@ class InstanceLine:
         value: str | None = None
         model_token: Token | None = None
         params_marker: str | None = None
+        control: str | None = None
         nodes_tokens: list[Token]
 
         if not positional:
@@ -618,7 +662,14 @@ class InstanceLine:
                 while len(pos) > spec.min_nodes + 1 and _is_device_tail_value(pos[-1]):
                     tail.insert(0, pos[-1])
                     pos = pos[:-1]
-            if pos:
+            lead = _CONTROL_NODES.get(prefix)
+            if lead is not None and len(pos) > lead + 1:
+                # A W switch: its nodes, the source that sets it, its model.
+                nodes_tokens = pos[:lead]
+                control = _value_from_span(card, pos[lead:-1])
+                model_token = pos[-1]
+                model = model_token.text.strip('"')
+            elif pos:
                 # Fixed-arity (a diode) splits nodes | model | trailing area at the
                 # known node count; everything else takes the last positional as
                 # the model. (``pos`` can be empty only for a malformed bare
@@ -646,20 +697,23 @@ class InstanceLine:
                 (key for key in params if key.upper() == prefix),
                 None,
             )
-            if value_param_key is not None:
-                # Keyed primary-value form: ``R1 a b R=1k``. All
-                # positionals are nodes; the value lives in the matching
-                # KEY_VALUE token and must be edited through set_param.
-                nodes = [t.text for t in positional]
-                value = params[value_param_key]
-            elif any(key.casefold() == _DEFINING_KEYS.get(prefix) for key in params):
-                # A capacitor defined by its charge, an inductor by its flux
-                # (``C1 b 0 Q=100n*x``): both builds run each as a part
-                # between its two nodes (deck/keyword_values). Every
-                # positional is a node and the card has no value.
-                nodes = [t.text for t in positional]
-                value = None
-                model_token = None
+        if value_param_key is not None:
+            # Keyed primary-value form: ``R1 a b R=1k``. All
+            # positionals are nodes; the value lives in the matching
+            # KEY_VALUE token and must be edited through set_param.
+            nodes = [t.text for t in positional]
+            value = params[value_param_key]
+        elif kind == "value" and any(
+            key.casefold() in _DEFINING_KEYS.get(prefix, frozenset()) for key in params
+        ):
+            # A capacitor defined by its charge, an inductor by its flux
+            # (``C1 b 0 Q=100n*x``), a source that plays a .wav file: both
+            # builds run each as a part between its two nodes
+            # (deck/keyword_values, deck/wavefile_nodes). Every positional is
+            # a node and the card has no value.
+            nodes = [t.text for t in positional]
+            value = None
+            model_token = None
 
         # Node-edit span (set_nodes): the first N positional tokens for a
         # fixed-arity element. Computed from the exact count, not the per-kind
@@ -676,6 +730,7 @@ class InstanceLine:
             _model_token=model_token,
             _value_param_key=value_param_key,
             _params_marker=params_marker,
+            control=control,
             _node_span=node_span,
             _params=kv,
         )
@@ -817,6 +872,8 @@ class InstanceLine:
 
     def _canonical_rerender(self) -> None:
         parts = [self.ref, *self.nodes]
+        if self.control is not None:
+            parts.append(self.control)
         if self.model is not None:
             parts.append(self.model)
             # A model-kind element may carry a trailing value (diode area, switch
@@ -835,10 +892,11 @@ class InstanceLine:
 
     def display_value(self) -> str:
         """Single-string projection for display: model name for M/Q/J/X,
-        value field for R/C/L/V/I/E/F/G/H, KV pair for B-sources, empty
-        for malformed bodies."""
+        the controlling source and model for a W switch, value field for
+        R/C/L/V/I/E/F/G/H, KV pair for B-sources, empty for malformed
+        bodies."""
         if self.model is not None:
-            return self.model
+            return self.model if self.control is None else f"{self.control} {self.model}"
         if self.value is not None:
             return self.value
         for key in ("V", "I", "v", "i"):

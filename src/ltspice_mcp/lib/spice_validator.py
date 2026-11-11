@@ -30,7 +30,6 @@ from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
     SpiceLexErrorCategory,
-    TokenKind,
     directive_head,
     lex,
     tokenize_body,
@@ -263,14 +262,44 @@ def _validate_backanno(simulator: str) -> ValidationError | None:
     )
 
 
+def step_refused(directive: str, simulator: str = "LTspice") -> ValidationError | None:
+    """Refuse a ``.step`` with nothing to step: the line alone, or a parameter
+    named with no values after it.
+
+    LTspice 26 reads neither as a directive and XVII ends the run ("Empty .step
+    command", "Missing step range in .STEP command"), recorded as
+    ``deck/step_bare`` and ``deck/step_param_bare`` (``step-without-values``).
+    What a build does with another short form is not recorded. ngspice ignores
+    every ``.step`` (the ``step-ngspice`` lint rule), so this is LTspice's.
+    """
+    words = directive.split()
+    if simulator != "LTspice" or not words or words[0].casefold() != ".step":
+        return None
+    if len(words) == 1:
+        what = "a .step with nothing after it"
+    elif len(words) == 3 and words[1].casefold() == "param":
+        what = f"a .step of the parameter {words[2]} with no values"
+    else:
+        return None
+    return ValidationError(
+        rule_name="step_without_values",
+        message=f"LTspice refuses {what}: both builds stop before the run.",
+        suggestion=(
+            "Give the values to step: '.step param r list 1k 2k' or "
+            "'.step param r 1k 10k 1k', or remove the line."
+        ),
+    )
+
+
 def validate_directive(directive: str, simulator: str = "LTspice") -> ValidationError | None:
     """Check a directive against the pre-flight rules for the given simulator.
 
     Returns the first matched rule's error, or None if no rule fires.
     Empty / whitespace-only input is a no-op. Covers ``.MEAS`` function
     blocklists, reserved names and a parenthesis left open, the ``.tran`` zero-step ngspice
-    incompatibility, and the ``.backanno`` ngspice incompatibility; other
-    directives pass through unchecked.
+    incompatibility, the ``.backanno`` ngspice incompatibility, and a ``.step``
+    with nothing to step (``step_refused``); other directives pass through
+    unchecked.
     """
     if not directive:
         return None
@@ -280,8 +309,22 @@ def validate_directive(directive: str, simulator: str = "LTspice") -> Validation
     lower = stripped.lower()
     if lower.startswith(".tran"):
         return _validate_tran_tstep(stripped, simulator)
-    if lower.split(None, 1)[0] == ".backanno":
+    head = lower.split(None, 1)[0]
+    if head == ".backanno":
         return _validate_backanno(simulator)
+    if head == ".step":
+        # A sheet's text may hold a ; comment and line breaks, at which an
+        # export splits it into cards: each .step card is checked as read.
+        steps = lex(directive if directive.endswith("\n") else directive + "\n").cards
+        return next(
+            (
+                error
+                for card in steps
+                if card.kind == "directive" and directive_head(card) == ".step"
+                if (error := step_refused(card.body, simulator)) is not None
+            ),
+            None,
+        )
     if not lower.startswith(".meas"):
         return None
 
@@ -316,6 +359,9 @@ def validate_directive_card(card: SpiceCard, simulator: str = "LTspice") -> Vali
         return refused[0][1] if refused else None
     if card.kind != "directive":
         return None
+    if directive_head(card) == ".step":
+        # One card, its comment already left out.
+        return step_refused(card.body, simulator)
     return validate_directive(card.body, simulator)
 
 
@@ -346,17 +392,6 @@ ARITY_CHECKS: dict[str, Literal["error", "warning"]] = {
     "bsource-value-prefix": "error",
     "value-keyword-ltspice": "error",
     "value-expression-remnant": "warning",
-}
-
-# Keywords that carry a two-terminal element's value, so every positional
-# token on the card is a node: a source playing a .wav file
-# (``V1 a b wavefile="in.wav"``). The primary-value keys (``R1 a b R=1k``) and
-# the charge and flux of ``C1 a b Q=...`` and ``L1 a b Flux=...`` are not
-# here: ``InstanceLine`` already reads every positional of those forms as a
-# node.
-_VALUE_KEYWORDS: dict[str, frozenset[str]] = {
-    "V": frozenset({"wavefile"}),
-    "I": frozenset({"wavefile"}),
 }
 
 
@@ -406,30 +441,16 @@ def validate_netlist_arity(
         if spec is None:
             continue
 
-        # E/G/F/H carry two body shapes:
-        #   - positional gain (``E1 out 0 in 0 10``) — needs spec.min_nodes
-        #     positional tokens (4 for E/G, 2 for F/H).
-        #   - keyed behavioral (``E1 out 0 VALUE={...}`` / ``POLY(...)`` /
-        #     ``TABLE(...)``) — the keyed form moves the value into params
-        #     and only the two output nodes remain positional.
-        # spec.kind_for(has_kv) distinguishes the forms via the
-        # kv_means_params_only flag, so the threshold collapses to "2
-        # output nodes" whenever KV is present on a keyed-capable prefix.
-        has_kv = bool(inst.params)
-        required = 2 if spec.kind_for(has_kv=has_kv) == "params_only" else spec.min_nodes
-
-        # A value carried by a keyword the view does not read as the value
-        # (``V1 a b wavefile=...``) leaves every positional token after the
-        # ref a node. Re-count from the raw token stream so the last node is
-        # not read as a positional value.
+        # E/G/F/H carry two body shapes: positional gain (``E1 out 0 in 0 10``),
+        # which needs spec.min_nodes positional tokens (4 for E/G, 2 for F/H),
+        # and keyed behavioural (``E1 out 0 VALUE={...}``, ``POLY(...)``,
+        # ``TABLE(...)``), which guarantees only the two output nodes. Every
+        # other element needs its spec's nodes whatever carries its value:
+        # ``InstanceLine`` reads every positional of a keyed value
+        # (``V1 a b wavefile=...``) as a node.
+        keyed = bool(inst.params) and spec.kv_means_params_only
+        required = 2 if keyed else spec.min_nodes
         node_count = len(inst.nodes)
-        value_keys = _VALUE_KEYWORDS.get(prefix, frozenset())
-        if any(key.casefold() in value_keys for key in inst.params):
-            node_count = sum(
-                1
-                for tok in tokenize_body(card.body)[1:]
-                if tok.kind not in (TokenKind.KEY_VALUE, TokenKind.COMMENT_TRAIL)
-            )
         # Real LTspice 26 accepts R=<value>, but rejects C=<value> and
         # L=<value> as unknown parameters. ngspice accepts all three, so this
         # rejection only applies to the LTspice target.
@@ -533,6 +554,7 @@ _TERMINAL_COUNTS: dict[str, int] = {
     "F": 2,  # out+ out- (then controlling-source ref, gain)
     "H": 2,
     "W": 2,  # n+ n- (then controlling-source ref, model)
+    "@": 2,  # LTspice 26's frequency response analyzer, in series
     "Q": 3,  # c b e (optional substrate suppressed, not counted)
     "J": 3,
     "Z": 3,
@@ -544,21 +566,17 @@ _TERMINAL_COUNTS: dict[str, int] = {
     "K": 0,  # positionals are inductor refs, not nodes
 }
 
-# Prefixes whose final positional token is a model name, stripped before
-# the terminal slice so a short form (e.g. a 3-node MOSFET) cannot count
-# its model name as a terminal.
-_TRAILING_MODEL_PREFIXES = frozenset({"D", "J", "M", "O", "Q", "S", "U", "W", "Z"})
-
 
 def _instance_terminals(inst: InstanceLine) -> tuple[list[str], list[str]]:
     """Split an instance view into ``(terminal tokens, other positionals)``.
 
-    Terminals are the leading token positions known to carry circuit nodes
-    for the element's prefix. Every other positional — model names, area
-    factors, controlling-source refs, POLY tails, the X subckt name, all
-    tokens of an unknown prefix (XSPICE A-cards) — lands in the second slot:
-    those feed the suppressor set, so a card shape this table mis-models
-    can only ever hide a warning, never invent one.
+    Terminals are the nodes ``InstanceLine`` reads, up to the count this table
+    gives the element's prefix: an optional node the warning does not count (a
+    transistor's substrate) and every other positional (model names, area
+    factors, a W switch's controlling source, POLY tails, the X subckt name,
+    all tokens of an unknown prefix such as an XSPICE A-card) land in the
+    second slot. Those feed the suppressor set, so a card shape this table
+    mis-models can only ever hide a warning, never invent one.
     """
     prefix = inst.ref[:1].upper()
 
@@ -567,20 +585,14 @@ def _instance_terminals(inst: InstanceLine) -> tuple[list[str], list[str]]:
         return list(inst.nodes), [inst.model] if inst.model else []
 
     candidates = list(inst.nodes)
-    tail: list[str] = []
-    if inst.model is not None:
-        if prefix in _TRAILING_MODEL_PREFIXES:
-            tail.append(inst.model)
-        else:
-            # Prefixes outside ELEMENT_SPECS parse with the default spec,
-            # which reads the last positional as a model name even when it
-            # is really a node (the T-line's 4th port) — keep it positional
-            # so the terminal slice can count it.
-            candidates.append(inst.model)
-    elif inst.value is not None:
-        # The keyed primary-value form (``R1 a b R=1k``) reads its value
-        # from the KEY=VALUE token, not a positional slot — only a
-        # positional value rejoins the candidates.
+    # A W switch's controlling source is no node, and stays a word of the card.
+    tail = [word for word in (inst.control, inst.model) if word is not None]
+    if inst.model is None and inst.value is not None:
+        # A positional value rejoins the candidates behind the nodes: the view
+        # reads the second of only two positionals as the value (``V1 a b``),
+        # and the slice then counts it as a node. The keyed primary-value form
+        # (``R1 a b R=1k``) reads its value from the KEY=VALUE token, not a
+        # positional slot, so it does not rejoin.
         keyed = prefix in ("R", "C", "L") and any(k.upper() == prefix for k in inst.params)
         if not keyed:
             candidates.append(inst.value)

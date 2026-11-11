@@ -244,6 +244,15 @@
    "tests/test_edit_schematic.py::TestRecordTheEditorCannotRead::test_an_edit_names_the_record_and_its_line[-empty]"
   ]
  },
+ "13c2e21dc0562fc2": {
+  "answer": {
+   "reply": "b43af1e20f0e499a",
+   "sheet": "852d81e67e545ce9"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_writes_a_text_that_reads_as_it_was_given"
+  ]
+ },
  "13e37f29f7e017a4": {
   "answer": {
    "reply": "50e1e2816c583d83",
@@ -841,6 +850,15 @@
    "tests/test_edit_schematic.py::test_empty_ops_without_views_is_rejected"
   ]
  },
+ "3e8d65f9cc293ddf": {
+  "answer": {
+   "reply": "cdfc1ddf84cf14e1",
+   "sheet": "4fcc2dfe8d1b0bdd"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_writes_a_text_that_reads_as_it_was_given"
+  ]
+ },
  "3ebd2bdf3546a9a8": {
   "answer": {
    "reply": "5475f0dc34081b3e",
@@ -1324,6 +1342,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_an_edit_says_of_a_sheet_what_a_check_of_it_says"
+  ]
+ },
+ "610f135d0a62a114": {
+  "answer": {
+   "reply": "cc19f58efefa11d1",
+   "sheet": "3c8790aeafdd3295"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_writes_a_text_that_reads_as_it_was_given"
   ]
  },
  "612a5873becde290": {
@@ -3171,6 +3198,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::TestRecordTheEditorCannotRead::test_a_record_in_a_sheet_the_target_loads_names_that_sheet"
+  ]
+ },
+ "e2a92b73197a9159": {
+  "answer": {
+   "reply": "dfe3ecd4c6ad6cf7",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_refuses_a_step_with_nothing_to_step"
   ]
  },
  "e300422d689d4883": {

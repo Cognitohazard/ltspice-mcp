@@ -192,9 +192,10 @@ class Component:
     canonicalized net names (ground folded to ``0``, lowercased; in a
     subcircuit body, a port named like ground keeps its name). ``type_letter``
     is the uppercased element prefix. ``model`` is the model / subcircuit name
-    for M/Q/J/X (and controlling-source name for F/H); ``value`` is the passive
-    value or source spec for R/C/L/V/I. ``params`` are the ``key=value`` tokens
-    in card order, a key the card gives twice listed twice.
+    for M/Q/J/X; ``value`` is the passive value or source spec for R/C/L/V/I,
+    the controlling source and gain for F/H, and for a W switch the source
+    whose current sets it, then any state. ``params`` are the ``key=value``
+    tokens in card order, a key the card gives twice listed twice.
     """
 
     ref: str
@@ -950,7 +951,11 @@ def _component_from_card(card: object, ports: Sequence[str] = ()) -> Component:
         type_letter=ref[:1].upper(),
         nodes=tuple(canon_net(n, ports) for n in line.nodes),
         model=line.model,
-        value=line.value,
+        value=(
+            line.value
+            if line.control is None
+            else " ".join(part for part in (line.control, line.value) if part)
+        ),
         params=tuple(line.param_pairs()),
         line=getattr(card, "line_start", 0),
     )

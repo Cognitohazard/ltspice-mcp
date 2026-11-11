@@ -4293,3 +4293,104 @@ what the whole file holds, the recorded LTspice transient stored a point at a
 time is refused, naming the Fast Access layout, and the same run converted to
 it is read. Once upstream reads only the traces asked for, `numbers_held`
 counts the kept traces for every layout, and the refusal and its test go.
+
+---
+
+## Bug 41 — A WINDOW line short of its justification or size stops the sheet and symbol readers
+
+**Status:** draft for an upstream spicelib pull request. Observed 2026-11-11.
+**Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
+`AscEditor.reset_netlist`; `spicelib/editor/asy_reader.py`,
+`AsyReader.__init__`).
+**Our workaround:** `_short_window` in `lib/schematic_ops.py` turns the
+`ValueError` into a refusal that names the file, the line and the fix.
+`asc_document.read_window`, the server's own reader of a WINDOW line, reads
+past such a line, as LTspice does.
+
+### Summary
+
+Both readers unpack every `WINDOW` line into exactly six words:
+
+```python
+tag, num_ref, posX, posY, alignment, size = line.split()
+```
+
+A line that stops short of its justification or its size (`WINDOW 0 48 -16
+Left`, `WINDOW 0 48 -16`) raises `ValueError: not enough values to unpack`,
+naming neither the file nor the line, and the sheet does not open. LTspice 26
+and LTspice XVII both read past such a line: each exports a sheet holding one
+under a part, and a sheet placing a symbol that holds one, and draws the text
+of the part as if the line were not there.
+
+### Affected code
+
+```python
+# asc_editor.py, AscEditor.reset_netlist
+elif line.startswith("WINDOW"):
+    assert component is not None, "Syntax Error: WINDOW clause without SYMBOL"
+    tag, num_ref, posX, posY, alignment, size = line.split()
+
+# asy_reader.py, AsyReader.__init__
+if line.startswith("WINDOW"):
+    tag, num_ref, posX, posY, alignment, size = line.split()
+```
+
+### Reproduction
+
+```python
+from pathlib import Path
+from spicelib import AscEditor
+
+Path("res.asy").write_text(
+    "Version 4\nSymbolType CELL\nWINDOW 0 32 -32 Left 2\nSYMATTR Prefix R\n"
+    "PIN 0 -48 NONE 0\nPINATTR PinName 1\nPINATTR SpiceOrder 1\n"
+    "PIN 0 48 NONE 0\nPINATTR PinName 2\nPINATTR SpiceOrder 2\n"
+)
+Path("top.asc").write_text(
+    "Version 4\nSHEET 1 880 680\nSYMBOL res 96 160 R0\nWINDOW 0 48 -16 Left\n"
+    "SYMATTR InstName R1\nSYMATTR Value 1k\n"
+)
+AscEditor("top.asc")
+# ValueError: not enough values to unpack (expected 6, got 5)
+```
+
+The same symbol with its `WINDOW` line cut to `WINDOW 0 32 -32` raises the
+same error from `AsyReader` when a sheet places it.
+
+### Impact
+
+`edit_schematic` could not open such a sheet, and the error said nothing of
+where the line was. The recordings `export/window_no_size`,
+`export/window_no_justification` and `export/window_short_symbol` show that
+both LTspice builds export these sheets, and `draw/window_short` that both
+draw the part's name at the symbol's own window for a short line on the
+sheet, and draw no name or value for a symbol whose lines are short.
+
+### Proposed fix
+
+Read past a `WINDOW` line that does not have six words, as LTspice does, and
+keep its text so that a save writes it back:
+
+```python
+words = line.split()
+if len(words) == 6:
+    tag, num_ref, posX, posY, alignment, size = words
+    ...
+```
+
+### Suggested upstream test
+
+```python
+def test_a_short_window_line_is_read_past(tmp_path):
+    (tmp_path / "res.asy").write_text(RES_ASY)
+    (tmp_path / "top.asc").write_text(SHEET_WITH_WINDOW_0_48_m16_LEFT)
+    editor = AscEditor(tmp_path / "top.asc")
+    assert editor.get_component("R1").attributes["Value"] == "1k"
+```
+
+### Cross-reference
+
+`tests/test_recorded_ltspice_schematics.py::TestShortWindowLines::test_the_editor_names_the_line_it_cannot_read`
+opens each recorded sheet with the editor and asserts the refusal names the
+line. Once upstream reads past the line, `_short_window` goes and the test
+asserts the sheet opens.

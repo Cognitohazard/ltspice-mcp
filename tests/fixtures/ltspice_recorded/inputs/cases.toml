@@ -217,14 +217,18 @@ inputs = ["export/hier_top.asc", "export/hier_plain_top.asc"]
 extra = ["export/hier_amp.asc", "export/hier_amp.asy", "export/hier_plain.asc", "export/hier_plain.asy"]
 
 [behaviour.block-sheet-search]
-summary = "Where a build finds a hierarchical block's own sheet when it is not beside the block's symbol: beside the sheet that places the block, in a folder of the symbol search path, or in a folder under one; which it takes when one is beside the placing sheet and another beside the symbol; and what it exports when there is none."
-model = ["lib/symbol_library.py", "lib/schematic_ops.py"]
-# Each case exports blocks/top.asc, which places the block blk, with blk.asy
-# and blk.asc in other places. The symbol search path is the case's own lib
-# folder. Each copy of the block's sheet holds other resistor values (3k and
-# 1k beside the placing sheet, 1k and 1k in lib, 2k and 2k in lib/sub), so the
-# subcircuit an export writes says which sheet the build took. See the
-# [[case]] tables at the end.
+summary = "Where a build finds a hierarchical block's own sheet when it is not beside the block's symbol: beside the sheet exported, beside a block's sheet that places it, in a folder of the symbol search path, or in a folder under one; which it takes when one is beside the sheet exported and another beside the symbol; what it exports when there is none; and whether it finds a symbol in a folder under the search path."
+model = ["lib/symbol_library.py", "lib/schematic_ops.py", "lib/deck_prep.py"]
+# Each case exports blocks/top.asc, which places the block blk, or
+# blocks/nest_top.asc, whose block outer places blk on its own sheet, with
+# blk.asy and blk.asc in other places. The symbol search path is the case's
+# own lib folder. Each copy of blk's sheet holds other resistor values (3k
+# and 1k beside the sheet exported, 1k and 1k in lib, 2k and 2k in lib/sub),
+# so the subcircuit an export writes says which sheet the build took. See the
+# [[case]] tables at the end. A block in the build's own sym folder is not
+# recorded: no stock block symbol leaves its sheet unnamed, and a case would
+# have to write files into the build's library. The search-path cases stand
+# for it, as another folder a build searches for symbols.
 
 [behaviour.sheet-part-trace-names]
 summary = "What a run of a sheet names the device inside a part whose symbol is given a Prefix of X and a reference that does not start with X, beside the same subcircuit called with X from a directive on the sheet, and the net the sheet leaves unlabelled."
@@ -1527,3 +1531,40 @@ behaviour = "window-short"
 kind = "draw"
 source = "draw/window_short.asc"
 extra = ["export/res.asy", "export/window_short.asy"]
+
+# A block placed by another block's sheet. outer's symbol and sheet are in the
+# search path (lib), and outer's sheet places blk, whose symbol is beside
+# top.asc. A sheet of blk's name in lib is beside the sheet placing it, and
+# one beside top.asc is beside blk's symbol. symbol_under_search_path shows
+# that a build does not find a symbol in a folder under the search path.
+[[case]]
+id = "blocks/symbol_under_search_path"
+behaviour = "block-sheet-search"
+source = "blocks/top.asc"
+extra = ["blocks/lib/sub/blk.asy", "blocks/blk.asc"]
+ini = { SymbolSearchPath = '<dir>\lib' }
+note = "The symbol in a folder under the search path, the sheet beside the placing sheet."
+
+[[case]]
+id = "blocks/nested_sheet_beside_its_placer"
+behaviour = "block-sheet-search"
+source = "blocks/nest_top.asc"
+extra = ["blocks/lib/outer.asy", "blocks/lib/outer.asc", "blocks/blk.asy", "blocks/lib/blk.asc"]
+ini = { SymbolSearchPath = '<dir>\lib' }
+note = "The inner block's sheet beside the block sheet that places it, its symbol beside the sheet exported."
+
+[[case]]
+id = "blocks/nested_sheet_beside_its_symbol"
+behaviour = "block-sheet-search"
+source = "blocks/nest_top.asc"
+extra = ["blocks/lib/outer.asy", "blocks/lib/outer.asc", "blocks/blk.asy", "blocks/blk.asc"]
+ini = { SymbolSearchPath = '<dir>\lib' }
+note = "The inner block's sheet beside its symbol, beside the sheet exported."
+
+[[case]]
+id = "blocks/nested_sheet_beside_both"
+behaviour = "block-sheet-search"
+source = "blocks/nest_top.asc"
+extra = ["blocks/lib/outer.asy", "blocks/lib/outer.asc", "blocks/blk.asy", "blocks/lib/blk.asc", "blocks/blk.asc"]
+ini = { SymbolSearchPath = '<dir>\lib' }
+note = "One sheet beside the inner block's symbol and another beside the sheet placing it."

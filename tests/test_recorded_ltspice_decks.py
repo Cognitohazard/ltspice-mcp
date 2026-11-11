@@ -38,9 +38,9 @@ from ltspice_mcp.lib.netlist_graph import (
 from ltspice_mcp.lib.result_observations import parse_requested_outputs, parse_source_amplitudes
 from ltspice_mcp.lib.runner_base import deck_requirements
 from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build, is_cp1252_ltspice_executable
-from ltspice_mcp.lib.spice_lex import emit, lex, lex_deck, lex_for_edit
+from ltspice_mcp.lib.spice_lex import directive_head, emit, lex, lex_deck, lex_for_edit
 from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
-from ltspice_mcp.lib.spice_lex_views import ModelCard, read_instance
+from ltspice_mcp.lib.spice_lex_views import InstanceLine, ModelCard, read_instance
 from ltspice_mcp.lib.spice_validator import (
     _instance_terminals,
     validate_directive,
@@ -1518,3 +1518,211 @@ def test_a_vdmos_card_runs_the_same_with_three_nodes_or_its_bulk_at_its_source(
     assert not ran(build, "deck/vdmos_bulk_elsewhere")
     log = read_spice_text(rec.recorded(build, "deck/vdmos_bulk_elsewhere.log"))
     assert "requires the source and bulk to be the same node" in log
+
+
+# --------------------------------------------------------------------------
+# Which words of a card are its nodes
+# --------------------------------------------------------------------------
+
+WAVEFILE_DECKS = rec.cases_of("wavefile-source-nodes")
+#: The nodes of each source that plays level.wav, which holds half of full
+#: scale, and what each build ran: V1 between a and b over two 1k resistors,
+#: V2 and I1 with their second node at ground.
+WAVEFILE_NODES = {"V1": ["a", "b"], "V2": ["c", "0"], "I1": ["d", "0"]}
+WAVEFILE_VOLTAGES = {"v(a)": 0.25, "v(b)": -0.25, "v(c)": 0.5, "v(d)": -500.0}
+
+
+def instance_lines(text: str) -> dict[str, InstanceLine]:
+    return {line.ref: line for line in map(read_instance, lex_deck(text).cards) if line}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+@pytest.mark.parametrize("case_id", WAVEFILE_DECKS)
+def test_both_words_of_a_source_that_plays_a_file_were_run_as_its_nodes(
+    build: str, case_id: str, tmp_path: Path
+):
+    """Quoted or not, both builds wire V1 between a and b: v(a) is 0.25 and
+    v(b) -0.25, which no reading of b as a value gives."""
+    raw = rec.decode(build, case_id, tmp_path).raw
+    traces = {name.lower(): name for name in raw.get_trace_names()}
+    for name, volts in WAVEFILE_VOLTAGES.items():
+        if name in traces:
+            wave = raw.get_wave(traces[name], 0)
+            assert (wave.min(), wave.max()) == (pytest.approx(volts), pytest.approx(volts)), name
+    assert {"v(a)", "v(b)", "v(c)"} <= set(traces)
+
+
+@pytest.mark.parametrize("case_id", WAVEFILE_DECKS)
+async def test_every_reader_takes_both_words_of_a_source_that_plays_a_file_as_nodes(
+    case_id: str, state_no_sim, work_dir: Path
+):
+    """The card view, the arity and node checks, the comparison and the
+    components listing all read V1's b as its node, as the run did; and the
+    drive-level reading, which cannot know how loud the file is, disarms."""
+    text = deck_text(case_id)
+    cards = lex_deck(text).cards
+    lines = instance_lines(text)
+    for ref, nodes in WAVEFILE_NODES.items():
+        if ref in lines:
+            assert (lines[ref].nodes, lines[ref].value) == (nodes, None), ref
+            assert _instance_terminals(lines[ref])[0] == nodes, ref
+    assert validate_netlist_arity(cards) == []
+    assert validate_netlist_dangling_nodes(cards) == []
+    assert validate_netlist_bias_topology(cards) == []
+    graph = {c.ref: c.nodes for c in flatten_graph(parse_netlist_graph(text)).components}
+    assert graph["V1"] == ("a", "b")
+    assert not compare_graphs(text, text.replace("V1 a b ", "V1 a 0 ")).structurally_equivalent
+    assert parse_source_amplitudes(text) == {}
+    path = work_dir / Path(case_id).with_suffix(".cir").name
+    path.write_text(text, encoding="utf-8")
+    (result,) = await _run(
+        state_no_sim, [{"kind": "components", "path": str(path), "detail": "full"}]
+    )
+    assert result["ok"], result
+    rows = {row["reference"]: row for row in result["data"]["components"]}
+    assert rows["V1"]["nodes"] == ["a", "b"]
+
+
+#: What each build ran with each element (element-terminals), from its nodes:
+#: the voltages of an operating point that only that reading gives.
+ELEMENT_RUNS = {
+    # 1 A through the lossy line's 10 ohms into 1k.
+    "deck/element_o": {"v(a)": 1010.0, "v(b)": 1000.0},
+    # 1 A through the RC line's 1k into 1k, its capacitance to ground.
+    "deck/element_u": {"v(a)": 2000.0, "v(b)": 1000.0},
+    # 1 A through the lossless line into 1k.
+    "deck/element_t": {"v(a)": 1000.0, "v(b)": 1000.0},
+    # 1 mA through the switch, which 1 A in Vsense turns on to its 1 ohm.
+    "deck/element_w": {"v(a)": 1e-3},
+}
+#: Each element's card as the server reads it: nodes, model, and what follows
+#: the model.
+ELEMENT_READINGS = {
+    "deck/element_z": {
+        "Z1": (["d", "g", "s1"], "nmf", None),
+        "Z2": (["d", "g", "s2"], "nmf", "2"),
+    },
+    "deck/element_o": {"O1": (["a", "0", "b", "0"], "lossy", None)},
+    "deck/element_u": {"U1": (["a", "b", "0"], "rcline", None)},
+    "deck/element_t": {"T1": (["a", "0", "b", "0"], None, None)},
+    "deck/element_w": {"W1": (["a", "0"], "sw", None)},
+    "deck/element_fra": {"@1": (["a", "b"], None, None)},
+}
+
+
+def test_every_element_deck_is_listed():
+    assert sorted(ELEMENT_READINGS) == sorted(rec.cases_of("element-terminals", kind="run"))
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_each_element_ran_on_the_nodes_the_server_reads(build: str, tmp_path: Path):
+    """Z2 is Z1 with an area of 2 after its model, and draws twice its
+    current. LTspice 26 runs the frequency response analyzer in series between
+    a and b; XVII has no such element."""
+    for case_id, voltages in ELEMENT_RUNS.items():
+        read = rec.operating_point(build, case_id, tmp_path / Path(case_id).name)
+        assert {name: read[name] for name in voltages} == pytest.approx(voltages), case_id
+    z = rec.operating_point(build, "deck/element_z", tmp_path / "z")
+    assert z["v(s2)"] / z["v(s1)"] == pytest.approx(2, rel=0.01)
+    if rec.generation(build) == "xvii":
+        assert not ran(build, "deck/element_fra")
+        log = read_spice_text(rec.recorded(build, "deck/element_fra.log"))
+        assert 'Unknown SPICE device type "@"' in log
+    else:
+        fra = rec.operating_point(build, "deck/element_fra", tmp_path / "fra")
+        assert (fra["v(a)"], fra["v(b)"], fra["i(@1)"]) == pytest.approx((1, 1, 1e-3), rel=1e-4)
+
+
+@pytest.mark.parametrize("case_id", sorted(ELEMENT_READINGS))
+def test_every_reader_takes_an_elements_nodes_as_ltspice_ran_them(case_id: str):
+    """The card view, the node and arity checks and the comparison read each
+    element's nodes as the run did: a T line and the analyzer have no model,
+    a W switch's controlling source is no node, and a MESFET's word after
+    its model is its area. Moving a node elsewhere, or a W switch onto
+    another source, makes another circuit."""
+    text = deck_text(case_id)
+    cards = lex_deck(text).cards
+    lines = instance_lines(text)
+    wanted = ELEMENT_READINGS[case_id]
+    assert {
+        ref: (lines[ref].nodes, lines[ref].model, lines[ref].value) for ref in wanted
+    } == wanted
+    for ref, (nodes, _model, _value) in wanted.items():
+        assert _instance_terminals(lines[ref])[0] == nodes, ref
+    assert validate_netlist_arity(cards) == []
+    assert validate_netlist_dangling_nodes(cards) == []
+    graph = {c.ref: c.nodes for c in flatten_graph(parse_netlist_graph(text)).components}
+    for ref, (nodes, _model, _value) in wanted.items():
+        assert graph[ref] == tuple(nodes), ref
+        card = card_of(text, ref)
+        # The card's last node, by its place: the reference, then the nodes.
+        words = card.split()
+        assert words[len(nodes)] == nodes[-1], card
+        moved = " ".join([*words[: len(nodes)], "elsewhere", *words[len(nodes) + 1 :]])
+        assert not compare_graphs(text, with_card(text, card, moved)).structurally_equivalent
+    if case_id == "deck/element_w":
+        assert lines["W1"].control == "Vsense"
+        other = text.replace("W1 a 0 Vsense sw", "W1 a 0 Vother sw")
+        assert not compare_graphs(text, other).equivalent
+
+
+# --------------------------------------------------------------------------
+# A .step with nothing to step
+# --------------------------------------------------------------------------
+
+#: What each build says of each deck: LTspice 26 reads neither line as a
+#: directive, and XVII names what is missing.
+STEP_REFUSED = {
+    "current": {
+        "deck/step_bare": "Expected device instantiation or directive here.",
+        "deck/step_param_bare": "Expected number here.",
+    },
+    "xvii": {
+        "deck/step_bare": "Empty .step command",
+        "deck/step_param_bare": "Missing step range in .STEP command.",
+    },
+}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+@pytest.mark.parametrize("case_id", rec.cases_of("step-without-values"))
+def test_a_step_with_nothing_to_step_stops_ltspice_and_is_refused_before_the_run(
+    build: str, case_id: str
+):
+    assert not ran(build, case_id)
+    log = read_spice_text(rec.recorded(build, f"{case_id}.log"))
+    assert STEP_REFUSED[rec.generation(build)][case_id] in log
+    blocking = [f["rule_id"] for f in lint_input(case_id) if f["severity"] == "error"]
+    assert blocking == ["step-without-values-ltspice"]
+    (step,) = [
+        card for card in lex_deck(deck_text(case_id)).cards if directive_head(card) == ".step"
+    ]
+    assert validate_directive(step.body) is not None
+    # As a sheet's text holds it: with a comment, and with another card after
+    # a line break, which an export writes as a card of its own.
+    assert validate_directive(f"{step.body} ; sweep it") is not None
+    assert validate_directive(f"{step.body}\n.op") is not None
+
+
+def test_a_step_with_values_and_a_comment_passes():
+    assert validate_directive(".step param r list 1k 2k ; sweep it") is None
+    assert validate_directive(".step param r list 1k 2k\n.op") is None
+
+
+def test_no_recorded_step_that_ran_is_refused():
+    """Every ``.step`` line of every recorded deck both builds ran passes the
+    check: it refuses only what LTspice refuses."""
+    checked = 0
+    for case in rec.CASES.cases:
+        if case.kind != "run" or not case.source.endswith(".cir"):
+            continue
+        if not all(
+            rec.has(build, f"{case.case_id}.log") and ran(build, case.case_id)
+            for build in rec.BUILDS
+        ):
+            continue
+        for card in lex_deck(deck_text(case.case_id)).cards:
+            if card.kind == "directive" and directive_head(card) == ".step":
+                assert validate_directive(card.body) is None, (case.case_id, card.body)
+                checked += 1
+    assert checked > 10

@@ -23,7 +23,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from functools import cached_property
 
-from ltspice_mcp.lib.asc_document import Window
+from ltspice_mcp.lib.asc_document import Window, read_window
 from ltspice_mcp.lib.geometry import BBox
 
 Box = tuple[int, int, int, int]
@@ -197,25 +197,6 @@ def value_of(line: str) -> str:
     return parts[2].strip() if len(parts) > 2 else ""
 
 
-def read_window(words: Sequence[str]) -> Window | None:
-    """A ``WINDOW n x y [align [size]]`` line, given as its words.
-
-    A line that stops short reads as left-aligned at the normal size, in a
-    symbol file and under a symbol on a sheet alike.
-    """
-    numbers = leading_ints(words[1:], 3)
-    if numbers is None:
-        return None
-    size = leading_ints(words[5:], 1)
-    return Window(
-        numbers[0],
-        numbers[1],
-        numbers[2],
-        words[4] if len(words) > 4 else "Left",
-        size[0] if size is not None else 2,
-    )
-
-
 def read_symbol(text: str) -> SymbolFile:
     """Read a symbol file's text. Never raises: a line that does not read is left out."""
     source = [line.strip() for line in text.splitlines()]
@@ -245,7 +226,9 @@ def read_symbol(text: str) -> SymbolFile:
             if numbers is not None:
                 arcs.append(SymbolArc(*numbers))
         elif keyword == "WINDOW":
-            window = read_window(words)
+            # A line short of its justification or size is read past, as both
+            # LTspice builds do, and the attribute then has no window.
+            window = read_window(line)
             if window is not None:
                 windows.append(window)
         elif keyword == "SYMATTR" and len(words) > 1:

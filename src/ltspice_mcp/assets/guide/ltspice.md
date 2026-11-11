@@ -274,9 +274,12 @@ C1 out 0 {C}
   LTspice prints at the end of the log. LTspice XVII 17.0 has no FRA and
   refuses the analyzer.
 - **Text of more than one line**: a sheet holds a line break in a TEXT as
-  `\n`. On export, both builds write a comment of several lines as one netlist
-  comment with the `\n` kept as it is, and split a directive at each `\n` into
-  cards of its own.
+  `\n` and a backslash as `\\`; a `\n` inside a path such as `C:\new` is a
+  line break too. On export, both builds split a directive at each line break
+  into cards of its own, and write a comment as one netlist comment, its line
+  breaks as `\n` and its backslashes doubled. `edit_schematic` takes a text
+  as it is to read, a line break as a line break, and writes its backslashes
+  doubled, so a path in a directive stays whole.
 - **A-devices** (mixed-signal primitives such as `SRflop`, `Counter`, `OTA`)
   are LTspice's own, netlisted with prefix `A`. An A-device's description and
   the parameters it takes are attributes of its symbol, which
