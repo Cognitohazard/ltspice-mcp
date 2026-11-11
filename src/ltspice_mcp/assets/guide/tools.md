@@ -81,8 +81,11 @@ calls one of the random functions `rand`, `random`, `gauss`, `agauss`, `unif`,
 file and a function the server does not know are refused the same way. Every
 card of every included library is checked, and a vendor library often fails a
 check. One refusal names the constructs it found, up to twelve, each with its
-file, line and card; fixing those and submitting again lists the rest. On ngspice, `simulator_seed` allows `agauss`, `gauss`, `aunif`,
-`unif` and `limit` (guide section 'ngspice').
+file, line and card; fixing those and submitting again lists the rest. On
+ngspice, `simulator_seed`, or a deck that fixes its own seed with
+`.options seed=<positive integer>` (a `random` entry with `simulator_draws`
+writes one), allows `agauss`, `gauss`, `aunif`, `unif` and `limit` (guide
+section 'ngspice').
 
 For LTspice, use `execution={"simulator":"ltspice","recoverable":true}`.
 Each case starts LTspice with its own copy of an LTspice settings file, so the
