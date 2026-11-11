@@ -39,6 +39,7 @@ from ltspice_mcp.lib.hierarchy_expr import (
     references_sibling,
     scaled_geometry,
 )
+from ltspice_mcp.lib.ngspice_compat import drops_lib_sections
 from ltspice_mcp.lib.pathutil import resolve_safe_path, with_roots
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
@@ -435,7 +436,7 @@ def walk_active(
                 if (
                     ref.section
                     and profile.simulator == "ngspice"
-                    and any(mode in (profile.ngbehavior or "").casefold() for mode in ("lt", "ps"))
+                    and drops_lib_sections(profile.ngbehavior)
                 ):
                     raise NetlistError(
                         "sectioned libraries require ngbehavior without lt/ps reinterpretation"

@@ -49,15 +49,16 @@ V2 g 0 1
 .op
 .end
 """
-"""Ten values ngspice reports: M1's W and L; XC.M0's W, L and copies; XC.R1's
-resistance; XP.R2's resistance and copies, which XP's m rewrites; Rtop's
-resistance and copies. No m is written for M1 or XC.R1, and C1, V1 and V2
-have no ngspice name in the reader."""
+"""Twelve values ngspice reports: M1's W, L and copies; XC.M0's W, L and
+copies; XC.R1's resistance and copies; XP.R2's resistance and copies, which
+XP's m rewrites; Rtop's resistance and copies. M1 and XC.R1 write no m and no
+call rewrites theirs, so ngspice prints 0, one copy. C1, V1 and V2 have no
+ngspice name in the reader."""
 
 AGREES = {
     "status": "agrees",
-    "compared": 10,
-    "not_compared": {"m_not_written": 2, "no_ngspice_name": 3},
+    "compared": 12,
+    "not_compared": {"no_ngspice_name": 3},
 }
 
 
@@ -99,26 +100,47 @@ async def test_ngspice_confirms_the_readers_values(
     assert result["data"]["ngspice_check"] == AGREES
 
 
+REWRITTEN = """* rewritten m
+.subckt leaf p
+R1 p 0 1k m=3
+R2 p 0 2k
+.ends
+.subckt mid p
+Xl p leaf m=2
+R3 p 0 1k
+.ends
+XA a mid m=4
+XE b leaf
+XM c mid
+R0 a 0 0
+V1 a 0 1
+.op
+.end
+"""
+"""XA's m rewrites mid, and Xl's m, inside mid, rewrites leaf, so every call of
+either is rewritten, XE and XM included, though neither sets m. A mode that
+multiplies (``hs`` set) gives XA.Xl.R1 24 copies, one that replaces 8."""
+
+
 @needs_ngspice
-@pytest.mark.parametrize("mode", ["", "hsa", "kiltpsa"])
+@pytest.mark.parametrize(
+    "mode",
+    ["", "hsa", "kiltpsa", "hs", "ps", "lt", "kia", "HSA", "Hsa", "hsps", "spehs", "spelt"],
+)
 async def test_the_copies_ngspice_builds_under_a_rewrite_are_the_readers(
     mode: str, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """Once XA calls leaf with m, ngspice rewrites leaf: XA.R1 gets 4 copies
-    (12 in hsa), and XE.R1, though XE sets no m, 1 (3 in hsa); the reader's
-    copies (``card_copies``) must be ngspice's. A 0 ohm resistor, read as 1
-    milliohm, is not compared."""
+    """The reader's copies (``card_copies``) for every card, direct and nested
+    rewrites alike, are the ones ngspice builds, in each way a mode's letters
+    can read (``ngspice_compat``). A 0 ohm resistor, read as 1 milliohm, has
+    only its copies compared."""
     state = _session(work_dir, "hsa", monkeypatch)
-    deck = _deck(
-        work_dir,
-        "* rewritten m\n.subckt leaf p\nR1 p 0 1k m=3\n.ends\nXA a leaf m=4\nXE b leaf\n"
-        "R0 a 0 0\nV1 a 0 1\n.op\n.end\n",
-    )
-    result = await _hierarchy(state, deck, ngbehavior=mode)
+    result = await _hierarchy(state, _deck(work_dir, REWRITTEN), ngbehavior=mode)
+    assert result["ok"], result
     assert result["data"]["ngspice_check"] == {
         "status": "agrees",
-        "compared": 4,
-        "not_compared": {"m_not_written": 1, "no_ngspice_name": 1, "zero_resistance": 1},
+        "compared": 17,
+        "not_compared": {"no_ngspice_name": 1, "zero_resistance": 1},
     }
 
 
@@ -200,12 +222,43 @@ def test_a_value_ngspice_reads_differently_is_a_difference(tmp_path: Path):
 
     check = compare(planned, printed_values(log), skipped)
     assert check.status == "differs"
-    assert check.compared == 10
+    assert check.compared == 12
     payload = check.payload()
     assert payload["differences"] == [
         {"instance": ["Rtop"], "field": "value", "reader": 200.0, "ngspice": 300.0}
     ]
     assert "Rtop value: reader 200, ngspice 300" in check.explanation()
+
+
+@needs_ngspice
+@pytest.mark.parametrize(("mode", "copies"), [("hsa", 8.0), ("kiltpsa", 4.0)])
+def test_a_copy_count_ngspice_builds_differently_is_a_difference(
+    tmp_path: Path, mode: str, copies: float
+):
+    """The reader's copies for the deck against what ngspice printed for a
+    variant whose XC call writes m=4, both real. The rewrite reaches XC.R1,
+    which writes no m, as well as XC.M0, which writes m=2."""
+    path = _deck(tmp_path)
+    hierarchy = load_hierarchy(str(path), [tmp_path], SemanticProfile("ngspice", mode))
+    planned, skipped = plan(hierarchy)
+    variant = tmp_path / "variant.cir"
+    variant.write_text(DECK.replace("XC d g cell w=6 r=7", "XC d g cell w=6 r=7 m=4"), "utf-8")
+    prints = "".join(f"print @{item.row.device}[{item.parameter}]\n" for item in planned)
+    driver = f"* variant\n.control\nsource '{variant.as_posix()}'\n{prints}quit\n.endc\n.end\n"
+    log = run_batch(
+        tuple(NGspiceSimulator.spice_exe),
+        mode,
+        driver.encode(),
+        cwd=tmp_path,
+        clean_startup=False,
+        timeout=60,
+    )
+
+    check = compare(planned, printed_values(log), skipped)
+    assert check.payload()["differences"] == [
+        {"instance": ["XC", "M0"], "field": "multiplier", "reader": 2.0, "ngspice": copies},
+        {"instance": ["XC", "R1"], "field": "multiplier", "reader": 1.0, "ngspice": 4.0},
+    ]
 
 
 @needs_ngspice

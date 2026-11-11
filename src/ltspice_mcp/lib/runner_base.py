@@ -38,6 +38,7 @@ from ltspice_mcp.lib.log_parser import (
     is_op_stepping_failure,
     op_ladder_exhausted,
 )
+from ltspice_mcp.lib.ngspice_compat import drops_lib_sections
 from ltspice_mcp.lib.ngspice_driver import control_path
 from ltspice_mcp.lib.ngspice_mode import ModeCheck, check_run
 from ltspice_mcp.lib.pdk_native import LAUNCH_POLICY, NativeLaunchPolicy
@@ -321,15 +322,15 @@ def _is_ngspice_lib_section_failure(
 
     ngspice's LTspice/PSPICE compatibility modes read ``.lib <file> <section>``
     as two plain includes and drop the section, so the corner select comes back
-    as a missing include file. Fires only when the run used ngspice, the mode
-    still contains ``lt`` or ``ps`` (a mode with neither parses the section
-    correctly), and the deck really does select a section. The deck read is
-    last, so the two cheap checks gate it.
+    as a missing include file. Fires only when the run used ngspice, ngspice
+    reads the mode with ``lt`` or ``ps`` set (``ngspice_compat``), and the
+    deck really does select a section. The deck read is last, so the two
+    cheap checks gate it.
     """
     if netlist is None or not is_ngspice(simulator):
         return None
-    mode = (ngbehavior if ngbehavior is not None else current_ngbehavior() or "").lower()
-    if "lt" not in mode and "ps" not in mode:
+    mode = ngbehavior if ngbehavior is not None else current_ngbehavior() or ""
+    if not drops_lib_sections(mode):
         return None
     if not _deck_has_sectioned_lib(netlist):
         return None

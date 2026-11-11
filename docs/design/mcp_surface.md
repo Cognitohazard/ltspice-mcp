@@ -2107,7 +2107,7 @@ Suppression is per call, and `linter_version` is reported in provenance.
 | `save-meas-coverage` | blocking | the deck has a `.save` that is not `all` or `*`, and a `.meas` reads a signal no `.save` names. A voltage between two nodes, `V(a,b)`, is its two nodes in both (both builds measure it from a saved `V(a)` and `V(b)`, and `.save V(a,b)` saves both); a voltage against ground, `V(a,0)`, stands as written, since neither build measures it with only `V(a)` saved |
 | `meas-ngspice-batch` | warning | ngspice: the deck runs and only the top-level `.meas` is skipped, which the run reports when it is read |
 | `meas-trig-degrees` | blocking | LTspice: a `.meas` that calls `sin`, `cos`, `tan`, `asin`, `acos`, `atan` or `atan2`, whose angle LTspice 26 and XVII read in degrees on their default settings where a B source reads radians; `verify_circuit`'s `syntax` check reports the same as `meas_trig_degrees` |
-| `lib-section-ngspice` | blocking | ngspice in `kiltpsa` mode |
+| `lib-section-ngspice` | blocking | ngspice in a mode it reads with its `lt` or `ps` flag set, `kiltpsa` (the default) among them |
 | `analysis-count-ltspice` | blocking | refused by LTspice 26 and XVII: two of `.tran`/`.ac`/`.dc`/`.noise` (`.op` may appear with one) |
 | `meas-function-ltspice` | blocking | refused by LTspice 26 and XVII: `vdb()`, `phase()` or `group_delay()` in a `.meas` |
 | `meas-name-ltspice` | blocking | refused by LTspice 26 and XVII: a `.meas` named `e`, `k`, `pi` or `q`, constants of the expression evaluator |
@@ -2587,8 +2587,10 @@ read it), `deck_not_read` (ngspice printed no value), `mode_unchecked`, or
 `mode_differs` (a startup file ngspice reads set another mode). `compared`
 counts the values compared when the check ran. `not_compared` counts the rest
 by reason: `no_ngspice_name` (an element the reader gives no ngspice device
-name), `unresolved`, `m_not_written`, `zero_resistance` and
-`no_ngspice_value`. Nodes, models and sources are not compared. A result,
+name), `unresolved`, `zero_resistance` and `no_ngspice_value`. The copies
+the reader counts for each resistor and MOSFET (`multiplier`, which is not a
+reply field) are compared with ngspice's `m` on every card, so the check also
+tests which subcircuits ngspice rewrites for an `X` line's `m`. Nodes, models and sources are not compared. A result,
 a failure to run ngspice included, is kept per deck content, mode and
 executable, so later pages do not ask again. The check covers the whole deck,
 not only the selected instances.
@@ -2601,9 +2603,13 @@ as in `kiltpsa`, and a `.param` declared twice. A run in such a mode needs no
 hierarchy reading and is not affected. An instance edit is refused, and a
 recoverable run is refused before the job is recorded
 (`recovery_ngbehavior_unsupported`), because both read the deck by these
-rules. A `.lib file section` line needs a mode without
-`lt` or `ps` in its name (`hsa` or native mode), because those modes read it
-as two plain includes. The deck's first line is its title and is skipped; an
+rules. A `.lib file section` line needs a mode ngspice reads without its `lt`
+or `ps` flag (`hsa` or native mode), because those flags read it as two plain
+includes. The server reads a mode's flags as ngspice does
+(`lib/ngspice_compat.py`): letters match case-sensitively, `spe` clears `ps`,
+`lt`, `ki` and `eg`, then `ps` clears `hs`, and `mc` turns the others off, so
+`spelt` reads a section and `hsps` replaces a card's `m` instead of
+multiplying it. The deck's first line is its title and is skipped; an
 included file has no title line, so its first line is read as a card. In
 ngspice native and `hsa` modes, `gnd` is ground like `0` everywhere, even
 where a subcircuit has a port named `gnd`; on LTspice such a port is that

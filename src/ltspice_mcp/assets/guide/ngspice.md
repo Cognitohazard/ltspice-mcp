@@ -163,7 +163,7 @@ X1 input output myfilter rval=1k cval=1n
   - **This server's default `kiltpsa`** (a mixed LTspice/PSPICE-compatibility
     mode) inverts this. A bare `.lib <file>` loads an unsectioned file, but a
     sectioned `.lib <file> <section>` (the PDK corner idiom) is split by the
-    `lt`/`ps` tokens into two plain includes that drop the section.
+    `lt`/`ps` flags into two plain includes that drop the section.
     `run_experiments` refuses such a deck (lint `lib-section-ngspice`); run
     elsewhere, it fails with "could not find include file". Set
     `[simulator] ngbehavior = "hsa"` in `ltspice-mcp.toml` (or

@@ -18,6 +18,7 @@ from ltspice_mcp.lib.deck_staging import (
 )
 from ltspice_mcp.lib.encoding import latin1_reading, read_spice_text
 from ltspice_mcp.lib.families import DISPLAY
+from ltspice_mcp.lib.ngspice_compat import drops_lib_sections
 from ltspice_mcp.lib.simulator import DEFAULT_FAMILY, current_ngbehavior, family_for
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
@@ -356,10 +357,8 @@ def _lib_section_ngspice(
     context: _LintContext,
     rule: LintRule,
 ) -> list[LintFinding]:
-    mode = (
-        context.ngbehavior if context.ngbehavior is not None else current_ngbehavior() or ""
-    ).casefold()
-    if "lt" not in mode and "ps" not in mode:
+    mode = context.ngbehavior if context.ngbehavior is not None else current_ngbehavior() or ""
+    if not drops_lib_sections(mode):
         return []
     findings = []
     for card, section in _sectioned_libs(context):

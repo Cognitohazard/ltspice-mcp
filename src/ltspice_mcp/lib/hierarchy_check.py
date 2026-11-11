@@ -17,22 +17,22 @@ Element            Reader                      ngspice
 ``M``              ``geometry.w``/``.l``       ``w``/``l``, both scaled by
                                                ``.options scale``, as the
                                                reader's geometry is
-``R``, ``M``       ``multiplier``, the copies  ``m``, where the card
-                   the reader counts for the   writes ``m`` or its
-                   card (``card_copies``)      subcircuit is rewritten for
-                                               ``m`` (``m_rewritten``)
+``R``, ``M``       ``multiplier``, the copies  ``m``; 0 is one copy
+                   the reader counts for the   where the card writes no
+                   card (``card_copies``)      ``m``
 =================  ==========================  ===========================
 
 ``multiplier`` is not a reply field; instance mismatch counts copies by it.
-Comparing it with ngspice's ``m`` checks the reader's model of how ngspice
-rewrites subcircuits for ``m``, which differs by mode. Where neither the card
-nor a rewrite sets ``m``, ngspice prints 0 for it, meaning one copy, so that
-is not compared. A 0 ohm resistor is read as 1 milliohm; any other value is
-kept as written (ngspice-42), so a 0 ohm value is not compared either.
+Comparing it with ngspice's ``m`` on every card checks the reader's model of
+which subcircuits ngspice rewrites for ``m`` and how, which differs by mode.
+The driver does not run an analysis, and until one runs ngspice prints 0 for
+an ``m`` that neither the card nor a rewrite set; a device's setup makes it
+one copy. A 0 ohm resistor is read as 1 milliohm; any other value is kept as
+written (ngspice-42), so a 0 ohm value is not compared.
 
 Nothing else is compared, and the result counts what was not: elements the
 reader names no ngspice device for (``address.device``), values it left
-unresolved, the two above, and values ngspice printed none for. Nodes, models
+unresolved, 0 ohm values, and values ngspice printed none for. Nodes, models
 and sources are not compared at all.
 
 ngspice runs a deck's ``.control`` block when it reads the deck. The reader
@@ -191,12 +191,7 @@ def plan(hierarchy: Hierarchy) -> tuple[list[Planned], Counter[str]]:
                 ("geometry.w", "w", geometry.get("w")),
                 ("geometry.l", "l", geometry.get("l")),
             ]
-        written = any(key.casefold() == "m" for key, _ in row.parameters)
-        body = row.source.definition
-        if written or (body is not None and body.casefold() in hierarchy.m_rewritten):
-            facts.append(("multiplier", "m", row.multiplier))
-        else:
-            skipped["m_not_written"] += 1
+        facts.append(("multiplier", "m", row.multiplier))
         for field, quantity, fact in facts:
             if fact is None or fact.status != "resolved" or fact.value is None:
                 skipped["unresolved"] += 1
@@ -318,6 +313,10 @@ def printed_values(log: str) -> dict[tuple[str, str], float]:
     return printed
 
 
+def _writes_m(row: ResolvedInstance) -> bool:
+    return any(key.casefold() == "m" for key, _ in row.parameters)
+
+
 def compare(
     planned: list[Planned], printed: dict[tuple[str, str], float], skipped: Counter[str]
 ) -> HierarchyCheck:
@@ -335,6 +334,8 @@ def compare(
             skipped["no_ngspice_value"] += 1
             continue
         compared += 1
+        if item.parameter == "m" and value == 0 and not _writes_m(item.row):
+            value = 1.0  # unset until a device's setup, which no analysis ran
         if not math.isclose(item.value, value, rel_tol=_REL_TOL, abs_tol=0.0):
             differences.append(Difference(item.row.instance, item.field, item.value, value))
     not_compared = tuple(sorted(skipped.items()))
