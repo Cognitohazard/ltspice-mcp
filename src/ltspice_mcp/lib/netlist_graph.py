@@ -145,6 +145,11 @@ _SYMMETRIC_TWO_TERMINAL: frozenset[str] = frozenset({"R", "C", "L"})
 # section declaration as an include of a file named ``tt``.
 _MAX_INCLUDE_DEPTH = 3
 
+#: The cards a scope holds as its directives: what a subcircuit's body or the
+#: deck's top level says beside its components. A ``.subckt``/``.ends`` pair is a
+#: definition of its own, and ``.end`` closes the deck.
+DIRECTIVE_CARD_KINDS = frozenset({"model", "param", "meas", "directive", "control"})
+
 
 class NetlistGraphError(ValueError):
     """A netlist could not be turned into a connectivity graph.
@@ -220,6 +225,10 @@ class SubcktDef:
     ports: tuple[str, ...]
     components: tuple[Component, ...]
     param_defaults: tuple[tuple[str, str], ...] = ()
+    #: The directive cards one level inside the body (``.param``, ``.model``,
+    #: ``.meas`` and the rest): what the comparison reads as the subcircuit's
+    #: own directives. A nested definition's are its own entry's.
+    directives: tuple[SpiceCard, ...] = field(default=(), compare=False)
 
 
 @dataclass(frozen=True)
@@ -306,6 +315,13 @@ class NetlistGraph:
     #: The node names the deck's ``.global`` cards list, lowercased: one net
     #: in every subcircuit body.
     global_nets: frozenset[str] = frozenset()
+    #: The deck's directive cards outside every subcircuit definition and
+    #: before its ``.end``.
+    directives: tuple[SpiceCard, ...] = ()
+    #: The ``.include`` and ``.lib`` cards among ``directives`` and the
+    #: definitions' whose file (or section) defines subcircuits and nothing
+    #: else, so what each brings is those definitions.
+    definition_includes: tuple[SpiceCard, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -326,6 +342,19 @@ class FlatComponent:
 
 
 @dataclass(frozen=True)
+class FlatCall:
+    """A subcircuit instance flattening expanded: its path as written
+    (``X1.XI``), the key of the definition it calls, and the parameters it
+    runs that definition with: each it gives (an ``X`` card's ``params:``,
+    with or without the keyword), else the definition's header default
+    (``_passed``)."""
+
+    ref: str
+    definition: str
+    params: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
 class FlatNetlist:
     """A fully flattened netlist: leaf components and the set of nets.
 
@@ -336,6 +365,8 @@ class FlatNetlist:
     components: tuple[FlatComponent, ...]
     nets: frozenset[str]
     unresolved_subckts: tuple[str, ...] = ()
+    #: Every subcircuit instance expanded, in the order it was reached.
+    calls: tuple[FlatCall, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -493,6 +524,10 @@ class GraphComparison:
     unresolved_subckts: list[UnresolvedSubckt] = field(default_factory=list)
     duplicate_subckts: list[DuplicateSubckt] = field(default_factory=list)
     duplicate_params: list[DuplicateParam] = field(default_factory=list)
+    #: The subcircuit instances both sides expanded, paired (``paired_calls``):
+    #: which definition stands for which, for the directive comparison to read.
+    #: Not part of the reply.
+    calls: list[tuple[FlatCall, FlatCall]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, object]:
         """Project to a plain-dict payload (JSON-friendly)."""
@@ -713,6 +748,17 @@ def parse_netlist_graph(
     )
 
     components = [_component_from_card(card) for card in iter_by_kind(cards, "instance", scope=())]
+    directives = tuple(
+        card
+        for card in cards
+        if not card.scope and not card.trailing and card.kind in DIRECTIVE_CARD_KINDS
+    )
+    # Cards are told apart by identity: every card compared here is alive,
+    # held by the deck or a definition, and so is every card the registry
+    # marked, so no two share an id.
+    held = {id(card) for card in directives} | {
+        id(card) for definition in registry.subckts.values() for card in definition.directives
+    }
     return NetlistGraph(
         components=components,
         subckts=registry.subckts,
@@ -720,6 +766,8 @@ def parse_netlist_graph(
         missing_includes=tuple(registry.missing),
         duplicate_subckts=registry.duplicate_records(),
         global_nets=frozenset(registry.global_nets),
+        directives=directives,
+        definition_includes=tuple(card for card in registry.definitions_only if id(card) in held),
     )
 
 
@@ -732,6 +780,11 @@ class _SubcktRegistry:
     ignored: dict[str, list[str]] = field(default_factory=dict)
     missing: list[MissingInclude] = field(default_factory=list)
     global_nets: set[str] = field(default_factory=set)
+    #: Each include card whose file defines subcircuits and nothing else
+    #: (held, so its identity is its own), and whether each file (and
+    #: section) read so far does.
+    definitions_only: list[SpiceCard] = field(default_factory=list)
+    files: dict[tuple[Path, str | None], bool] = field(default_factory=dict)
 
     def register(self, definition: SubcktDef, source: str) -> None:
         key = definition.name.lower()
@@ -760,16 +813,14 @@ def _subckt_def_from(cards: list[SpiceCard], opener_index: int) -> SubcktDef:
     of this one.
     """
     view = SubcktCard.from_card(cards[opener_index])
-    body = [
-        _component_from_card(card, view.ports)
-        for _, card in subckt_children(cards, opener_index)
-        if card.kind == "instance"
-    ]
+    children = [card for _, card in subckt_children(cards, opener_index)]
+    body = [_component_from_card(card, view.ports) for card in children if card.kind == "instance"]
     return SubcktDef(
         name=view.name,
         ports=tuple(view.ports),
         components=tuple(body),
         param_defaults=tuple(view.param_defaults.items()),
+        directives=tuple(card for card in children if card.kind in DIRECTIVE_CARD_KINDS),
     )
 
 
@@ -785,8 +836,9 @@ def _collect_subckts(
     strict: bool,
     include_resolver: IncludeResolver | None = None,
     section: str | None = None,
-) -> None:
-    """Walk ``cards`` in textual order, registering definitions and following includes.
+) -> bool:
+    """Walk ``cards`` in textual order, registering definitions and following
+    includes; return whether they define subcircuits and nothing else.
 
     Order is what makes first-wins precedence correct: an include contributes its
     definitions at the position its directive appears, exactly as textual
@@ -796,6 +848,11 @@ def _collect_subckts(
     ``strict`` the caller's own malformed card raises; for an included file
     it is downgraded to a :class:`MissingInclude` record so a third-party library
     cannot break the comparison.
+
+    Outside every definition, a card that is no section marker (``.lib
+    <name>``, ``.endl``) and no ``.end``, and an include whose file does more
+    than define subcircuits, is something else; one that cannot be read is
+    taken as something else too, since what it holds is not known.
     """
     try:
         # Every directive that cannot be split into parts is a malformed card
@@ -817,8 +874,12 @@ def _collect_subckts(
         registry.missing.append(
             MissingInclude(target=source, reason=f"malformed directive: {exc}")
         )
-        return
+        return False
     wanted = section.casefold() if section is not None else None
+    # A section the file does not declare: what the line brings is not known.
+    only_definitions = wanted is None or wanted in {
+        name.casefold() for name in sections if name is not None
+    }
     for index, (card, card_section) in enumerate(zip(cards, sections, strict=True)):
         if wanted is not None and card_section is not None and card_section.casefold() != wanted:
             continue
@@ -842,11 +903,14 @@ def _collect_subckts(
                         source=source,
                     )
                 )
+                only_definitions = False
             continue
         reference = references.get(id(card))
         if reference is None:
+            if not card.scope and not _definition_neutral(card):
+                only_definitions = False
             continue
-        _follow_include(
+        defines_only = _follow_include(
             reference.raw_path,
             section=reference.section,
             base_dir=base_dir,
@@ -858,6 +922,21 @@ def _collect_subckts(
             # The deck's own directives are at depth 0; an included file names itself.
             source=None if depth == 0 else source,
         )
+        if defines_only:
+            registry.definitions_only.append(card)
+        elif not card.scope:
+            only_definitions = False
+    return only_definitions
+
+
+def _definition_neutral(card: SpiceCard) -> bool:
+    """Whether a card outside every definition, and no include, says nothing
+    about the circuit: a blank, a comment, ``.end``, or a library's section
+    marker (``.lib <name>`` declaring one, ``.endl`` closing it)."""
+    if card.kind in ("blank", "comment", "end", "subckt", "ends"):
+        return True
+    head = card.body.split(None, 1)[0].casefold() if card.body.strip() else ""
+    return head in (".lib", ".endl")
 
 
 def _follow_include(
@@ -871,24 +950,24 @@ def _follow_include(
     include_resolver: IncludeResolver | None = None,
     line: int,
     source: str | None,
-) -> None:
+) -> bool:
     """Load one include target's definitions (only ``section``'s, when the
-    reference selects one), or record why it contributed none.
+    reference selects one), or record why it contributed none; return whether
+    it defines subcircuits and nothing else (False for one not read).
 
     ``line`` is the line of the directive that names it, and ``source`` the
     included file holding that directive (None for the deck itself), which a
     record of why it contributed nothing carries.
     """
 
-    def missing(reason: str) -> None:
+    def missing(reason: str) -> bool:
         registry.missing.append(MissingInclude(target, reason, line=line, source=source))
+        return False
 
     if base_dir is None:
-        missing("no base directory (netlist parsed from text)")
-        return
+        return missing("no base directory (netlist parsed from text)")
     if depth >= _MAX_INCLUDE_DEPTH:
-        missing(f"include depth limit ({_MAX_INCLUDE_DEPTH}) reached")
-        return
+        return missing(f"include depth limit ({_MAX_INCLUDE_DEPTH}) reached")
     # One resolver for the whole product: staging's answer to "which file does
     # this reference name?" is the answer here too. A local join would read
     # `C:\...\standard.mos` — the spelling LTspice's own netlister writes — as a
@@ -901,24 +980,23 @@ def _follow_include(
         # relies on. The resolver may also redirect to a canonical safe path.
         approved = include_resolver(path)
         if approved is None:
-            missing("path denied by include resolver")
-            return
+            return missing("path denied by include resolver")
         path = approved
     try:
         key = path.resolve()
     except OSError:
-        missing("unresolvable path")
-        return
+        return missing("unresolvable path")
     selected = (key, section.casefold() if section is not None else None)
     if selected in seen:
-        return  # already contributed; revisiting is how an include cycle stops
+        # Already contributed; revisiting is how an include cycle stops. One
+        # still being read is taken as doing more, since that is not known yet.
+        return registry.files.get(selected, False)
     seen.add(selected)
     try:
         included = lex_deck(read_spice_text(path), title=False)
     except (OSError, UnicodeDecodeError, ValueError) as exc:
-        missing(f"unreadable: {exc}")
-        return
-    _collect_subckts(
+        return missing(f"unreadable: {exc}")
+    registry.files[selected] = _collect_subckts(
         included.cards,
         origin=path,
         section=section,
@@ -930,6 +1008,7 @@ def _follow_include(
         strict=False,
         include_resolver=include_resolver,
     )
+    return registry.files[selected]
 
 
 def _component_from_card(card: object, ports: Sequence[str] = ()) -> Component:
@@ -987,6 +1066,7 @@ def _flatten(
     ``compare_graphs`` falls back to, which records each port-arity mismatch
     there and keeps that instance as a black box (see ``_expand``)."""
     leaves: list[FlatComponent] = []
+    calls: list[FlatCall] = []
     unresolved: set[str] = set()
     for comp in graph.components:
         _expand(
@@ -996,6 +1076,7 @@ def _flatten(
             net_map=None,
             global_nets=graph.global_nets,
             out=leaves,
+            calls=calls,
             stack=(),
             unresolved=unresolved,
             arity=arity,
@@ -1005,6 +1086,7 @@ def _flatten(
         components=tuple(leaves),
         nets=nets,
         unresolved_subckts=tuple(sorted(unresolved)),
+        calls=tuple(calls),
     )
     return flat, [] if arity is None else arity
 
@@ -1017,6 +1099,7 @@ def _expand(
     net_map: dict[str, str] | None,
     global_nets: frozenset[str],
     out: list[FlatComponent],
+    calls: list[FlatCall],
     stack: tuple[str, ...],
     unresolved: set[str],
     arity: list[ArityError] | None = None,
@@ -1091,6 +1174,7 @@ def _expand(
     assert model_key is not None
     sub = subckts[model_key]
     child_path = (*path, comp.ref)
+    calls.append(FlatCall(".".join(child_path), model_key, _passed(sub, comp.params)))
     child_map = _build_child_net_map(sub, flat_nodes, ".".join(child_path), global_nets)
     for child in sub.components:
         _expand(
@@ -1100,6 +1184,7 @@ def _expand(
             net_map=child_map,
             global_nets=global_nets,
             out=out,
+            calls=calls,
             stack=(*stack, model_key),
             unresolved=unresolved,
             arity=arity,
@@ -1198,6 +1283,11 @@ def compare_graphs(
     for key in ref_by_ref.keys() & cand_by_ref.keys():
         rc, cc = ref_by_ref[key], cand_by_ref[key]
         _diff_matched_pair(rc, cc, rtol, result)
+    # A subcircuit instance is no leaf, but its own parameters set what its
+    # body's values read, so an instance both sides have compares them too.
+    result.calls = paired_calls(ref_flat, cand_flat)
+    for ref_call, cand_call in result.calls:
+        _diff_params(ref_call.ref, ref_call.params, cand_call.params, rtol, result)
 
     # --- named node-partition mismatches, via reference-keyed propagation -----
     result.node_partition_mismatches.extend(
@@ -1431,15 +1521,52 @@ def _diff_matched_pair(
         result.value_mismatches.append(
             ValueDiff(ref=rc.ref, reference_value=rc.value, candidate_value=cc.value)
         )
-    rparams, cparams = copies_by_name(rc.params), copies_by_name(cc.params)
+    _diff_params(rc.ref, rc.params, cc.params, rtol, result)
+
+
+def _passed(
+    definition: SubcktDef, given: tuple[tuple[str, str], ...]
+) -> tuple[tuple[str, str], ...]:
+    """The parameters an instance runs ``definition`` with, as LTspice reads
+    an instance: each it gives, every copy kept, else the definition's header
+    default (recorded: ``deck/params_keyword``, ``deck/subckt_param_precedence``;
+    ``hierarchy`` reads the same precedence). An instance that gives the
+    default's value and one that leaves it out run alike."""
+    named = {key.casefold() for key, _ in given}
+    defaults = tuple(
+        (key, value) for key, value in definition.param_defaults if key.casefold() not in named
+    )
+    return (*defaults, *given)
+
+
+def _diff_params(
+    ref: str,
+    reference: tuple[tuple[str, str], ...],
+    candidate: tuple[tuple[str, str], ...],
+    rtol: float,
+    result: GraphComparison,
+) -> None:
+    """A ``param_mismatches`` row for each parameter of ``ref`` the two sides
+    give otherwise (``_disagreement``)."""
+    rparams, cparams = copies_by_name(reference), copies_by_name(candidate)
     for pkey in sorted(rparams.keys() | cparams.keys()):
         differ = _disagreement(rparams.get(pkey, []), cparams.get(pkey, []), rtol)
         if differ is not None:
             result.param_mismatches.append(
-                ParamDiff(
-                    ref=rc.ref, key=pkey, reference_value=differ[0], candidate_value=differ[1]
-                )
+                ParamDiff(ref=ref, key=pkey, reference_value=differ[0], candidate_value=differ[1])
             )
+
+
+def paired_calls(
+    reference: FlatNetlist, candidate: FlatNetlist
+) -> list[tuple[FlatCall, FlatCall]]:
+    """The subcircuit instances both sides expand, paired by path as the
+    leaves are (``canon_ref``, across the ``X`` LTspice adds), in path order:
+    what tells which definition on one side stands for which on the other,
+    whatever each is named."""
+    ref = {canon_ref(call.ref): call for call in reference.calls}
+    cand, _ = rekey_across_added_x(ref, {canon_ref(call.ref): call for call in candidate.calls})
+    return [(ref[key], cand[key]) for key in sorted(ref.keys() & cand.keys())]
 
 
 def _disagreement(

@@ -1,0 +1,1 @@
+The route-planner and label-and-move records keep each proposal's answer shape, so a test held to them names the proposals whose answers moved, and their harnesses read and edit a sheet through one driver.

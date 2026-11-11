@@ -102,6 +102,10 @@
 # it off when the server is reachable by more than one trusted client, for
 # example through a proxy.
 # run_code = true
+# The most memory, in MiB, the run_code worker may hold while a snippet
+# runs; past it the worker is stopped and the call answers an error.
+# Default: half the machine's physical memory.
+# run_code_memory_mb = 4096
 
 [schematic]
 # Custom paths to LTspice symbol (.asy) files for .asc schematic support
