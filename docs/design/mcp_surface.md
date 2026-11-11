@@ -585,7 +585,10 @@ it includes is checked, and one refusal names the constructs refused, how many
 there are, and up to twelve of them. Each is listed with its code and its first
 place (the file it came from as the caller wrote it, the line and the card),
 then up to five more places and a count of the rest. The error's `code` is that
-of the first construct listed. An include read in place is named with the
+of the first construct listed. On ngspice, where a seed would admit a refused
+random function, the refusal names the two ways to set one, and lists any seed
+option of the deck's own that leaves the draws unfixed, since that option
+blocks both. An include read in place is named with the
 reason it was not copied. ngspice runs with `-n` (no user `.spiceinit`) and
 with `SPICE_SCRIPTS`, set only for that subprocess, pointing at a system
 startup file in the job's folder that contains only a comment, so the

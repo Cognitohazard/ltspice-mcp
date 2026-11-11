@@ -125,7 +125,7 @@ def test_only_source_verified_static_random_functions_are_admitted(tmp_path, exp
     )
     verify_case_inputs(captured, seeded=True)
     with pytest.raises(RecoveryError) as error:
-        verify_case_inputs(captured)
+        verify_case_inputs(captured, dialect="ngspice")
     assert error.value.code == "recovery_random_unsupported"
     assert f"function `{expression.split('(')[0]}`" in str(error.value)
     # A seed admits this function, so the refusal offers both ways to set one.
@@ -634,3 +634,36 @@ def test_a_seed_that_overrides_the_explicit_one_is_listed_with_the_other_constru
     assert "line 5: .options seed=5" in message
     assert "(recovery_random_unsupported)" in message
     assert "line 6: V2 m 0 trnoise(1 1n)" in message
+
+
+def test_a_seed_is_offered_only_where_one_admits_the_draws(tmp_path):
+    """The refusal of an unseeded random function offers ngspice's two seed
+    routes on ngspice only: neither exists on LTspice, whose deck seed is not
+    counted."""
+    body = b".param draw=gauss(10,.1,1)\nV1 n 0 {draw}\nR1 n 0 1k"
+    with pytest.raises(RecoveryError) as on_ngspice:
+        _capture(tmp_path / "ngspice", body, seeded=False)
+    with pytest.raises(RecoveryError) as on_ltspice:
+        _capture(tmp_path / "ltspice", body, seeded=False, dialect="ltspice")
+
+    assert "execution.simulator_seed" in str(on_ngspice.value)
+    assert on_ltspice.value.code == "recovery_random_unsupported"
+    assert "simulator_seed" not in str(on_ltspice.value)
+    assert "options seed" not in str(on_ltspice.value)
+
+
+def test_a_deck_seed_that_leaves_the_draws_unfixed_is_listed(tmp_path):
+    """A deck whose own seed options leave the draws unfixed blocks both seed
+    routes (simulator_seed is overridden, and a deck seed must be the only
+    kind), so the refusal lists each such option beside the random function,
+    rather than offer a seed that would be refused too."""
+    with pytest.raises(RecoveryError) as refused:
+        _capture(
+            tmp_path,
+            b".param draw=agauss(10,1,1)\nV1 n 0 {draw}\nR1 n 0 1k\n.options seed=random",
+            seeded=False,
+        )
+    message = str(refused.value)
+    assert refused.value.code == "recovery_random_unsupported"
+    assert "leaves ngspice's draws unfixed" in message
+    assert "line 5: .options seed=random" in message

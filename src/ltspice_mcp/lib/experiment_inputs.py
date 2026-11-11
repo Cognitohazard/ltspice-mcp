@@ -501,13 +501,17 @@ def _validate_cards(
     return refused
 
 
-def _refusal(refused: list[_Refused], origins: Mapping[Path, str]) -> RecoveryError:
+def _refusal(
+    refused: list[_Refused], origins: Mapping[Path, str], *, offer_seed: bool
+) -> RecoveryError:
     """One refusal naming every construct refused, grouped by construct.
 
     The code is the first construct's: a card the lexer cannot classify, then
     a seeded deck's analyses, then a seeded deck's own seed options, then each
-    file's cards in turn, the deck's first. The message lists each construct with its code, so a deck is fixed
-    in one pass rather than one submission per construct.
+    file's cards in turn, the deck's first, then an unseeded deck's own seed
+    options. The message lists each construct with its code, so a deck is
+    fixed in one pass rather than one submission per construct. With
+    ``offer_seed`` it names the two ways to seed ngspice.
     """
     groups: dict[tuple[str, str], dict[str, _Refused]] = {}
     for item in refused:
@@ -533,7 +537,6 @@ def _refusal(refused: list[_Refused], origins: Mapping[Path, str]) -> RecoveryEr
             "these are fixed and the request is sent again"
         )
     count = len(groups)
-    seedable = any(item.seedable for item in refused)
     message = (
         f"Recoverable execution refuses {count} construct{'s' if count != 1 else ''} "
         "in this deck and the files it includes, because a resumed case could not "
@@ -543,7 +546,7 @@ def _refusal(refused: list[_Refused], origins: Mapping[Path, str]) -> RecoveryEr
         + (
             "; on ngspice, execution.simulator_seed, or a seed the deck fixes itself with "
             "`.options seed=<n>` at its top level, admits agauss, gauss, aunif, unif and limit"
-            if seedable
+            if offer_seed
             else ""
         )
         + "."
@@ -704,8 +707,26 @@ def _verify_inputs(
                 )
             )
             validated.add(key)
+    # A seed is offered only on ngspice, where one admits the five functions.
+    # A deck whose own seed options leave the draws unfixed blocks both
+    # routes (simulator_seed is overridden by them, and a deck seed must be
+    # the only kind), so where a random function is refused for want of a
+    # seed, each of its seed options is listed too.
+    offer_seed = dialect == "ngspice" and any(item.seedable for item in refused)
+    if offer_seed:
+        refused.extend(
+            _Refused(
+                "recovery_random_unsupported",
+                "a seed option that leaves ngspice's draws unfixed (each must be a "
+                "positive integer, with one at the top level of the deck file)",
+                first_path[keys[index]],
+                card.line_start,
+                _card_text(card),
+            )
+            for index, card, _ in seed_cards
+        )
     if refused:
-        raise _refusal(refused, origins)
+        raise _refusal(refused, origins, offer_seed=offer_seed)
     for path, key in file_keys.items():
         parsed = cards_by_content[key]
         try:

@@ -306,8 +306,9 @@ above are refused too, unless the deck fixes the seed itself with
 `.options seed=<positive integer>` at its top level, as a `random` entry with
 `simulator_draws` writes into each case. ngspice reads a deck's own seed
 option after the driver's `setseed`, so it would override `simulator_seed`; a
-seeded deck that sets one is refused (`recovery_seed_unsupported`). `limit` takes the form that the configured
-compatibility mode defines (see Monte Carlo above).
+seeded deck that sets one is refused (`recovery_seed_unsupported`). `limit`
+takes the form that the configured compatibility mode defines (see Monte Carlo
+above).
 
 This seed is separate from the `seed` of a `random` variation and from the
 `seed` of a `pdk_native` variation (guide section 'sky130'). It does not turn on
