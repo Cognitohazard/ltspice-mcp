@@ -359,11 +359,12 @@ async def _complete_run_receipt(
 def _note_process_owned_job(receipt: dict[str, Any]) -> dict[str, Any]:
     """Say, on the receipt itself, that this job dies with the interpreter.
 
-    ``Api.close()`` shuts the session down, which cancels every job this process
-    owns. A ``wait=False`` receipt otherwise looks exactly like a durable
-    submission, and the loss is silent — the caller learns of it only when a
-    later status read reports a cancellation nobody asked for. The contract
-    states the rule; this is the same rule at the point of use.
+    ``Api.close()`` shuts the session down, which stops every job this process
+    runs, and each then reads ``interrupted``. A ``wait=False`` receipt
+    otherwise looks exactly like a durable submission, and the loss is silent —
+    the caller learns of it only when a later status read reports the job
+    interrupted. The contract states the rule; this is the same rule at the
+    point of use.
     """
     if receipt.get("status") in TERMINAL_STATUSES:
         return receipt
@@ -374,11 +375,11 @@ def _note_process_owned_job(receipt: dict[str, Any]) -> dict[str, Any]:
                 "code": "process_owned_job",
                 "kind": "lifecycle",
                 "detail": (
-                    "This job is owned by the current process and is cancelled when "
-                    "the Api closes (including at the end of a 'with' block or when "
-                    "the interpreter exits). Wait for it in this process, or submit "
-                    "work that must outlive the interpreter through a long-lived "
-                    "server."
+                    "This job is run by this Api's session and is interrupted "
+                    "when the Api closes (including at the end of a 'with' block or "
+                    "when the interpreter exits). Wait for it in this process, or "
+                    "submit work that must outlive the interpreter through a "
+                    "long-lived server."
                 ),
             }
         )
@@ -395,7 +396,7 @@ def _note_detached_owner(
 
     The receipt was rendered by the detached owner, so it carries that
     process's ``process_owned_job`` note — true there and misleading here,
-    where "the current process" is the caller's and does not own the job. One
+    where "this Api's session" is the caller's and does not run the job. One
     fact replaces the other rather than sitting beside it.
 
     A detached call carrying a ``request_id`` that already ran to completion
@@ -420,9 +421,9 @@ def _note_detached_owner(
     else:
         detail = (
             f"This job is owned by a detached process (pid {owner_pid}) that "
-            "supervises it until it is terminal. The current process does not "
-            "own it, so closing the Api or exiting the interpreter will not "
-            "cancel it. Read it back with jobs(action='status'|'wait') by "
+            "supervises it until it is terminal. This Api's session does not "
+            "run it, so closing the Api or exiting the interpreter does not "
+            "stop it. Read it back with jobs(action='status'|'wait') by "
             "job_id, and stop it with jobs(action='cancel') and this receipt's "
             f"control_token. The owner's console output is at {log_file}."
         )

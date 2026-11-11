@@ -112,9 +112,15 @@ class RunnerManager:
         return [task for runner in self._runners.values() for task in runner.background_pending()]
 
     def get_experiment_runner_for(self, job: Any) -> ExperimentRunner | None:
-        """Return the live coordinator that owns an experiment job."""
+        """The runner holding a live execution of ``job`` in this session, if
+        any (``ExperimentRunner.holds_execution``): the one to ask to stop it.
+
+        Not whether this process runs the job, which is the registry's answer
+        (``JobRegistry.owns``): a job this session runs has no runner here once
+        its coordinator has returned.
+        """
         for (kind, _cls, _folder), runner in self._runners.items():
-            if kind == "experiment" and runner.owns_experiment_job(job.job_id):
+            if kind == "experiment" and runner.holds_execution(job.job_id):
                 return runner
         return None
 

@@ -141,9 +141,10 @@ _SUMMARIES: dict[tuple[str, str], str] = {
     ),
     ("analyze_results", "measurements"): (
         "The .meas results the simulator computed, per run: a run with one value per "
-        ".meas reads as 'measured' {name: value}, with 'at' points and "
-        "'failed_measurements'; a stepped run gives per-name stats, optionally with "
-        "a histogram over a Monte Carlo spread."
+        ".meas reads as 'measured' {name: value}, with 'at' points, and a null named "
+        "under 'failed_measurements' (LTspice printed it failed), 'unreadable' or "
+        "'not_finite'; a stepped run gives per-name stats, optionally with a "
+        "histogram over a Monte Carlo spread."
     ),
     ("analyze_results", "value"): (
         "One trace, or a node-pair voltage V(a,b), read at the sample nearest 'at' "

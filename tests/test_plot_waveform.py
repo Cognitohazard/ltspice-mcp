@@ -951,10 +951,10 @@ class TestTraceSummary:
         self, state_no_sim: SessionState, work_dir: Path
     ):
         # The run steps r over 1, 22 and 680 (its log lists them). The selector
-        # analyze_results takes picks the step whose r is nearest the value.
+        # analyze_results takes picks the step whose r is the value.
         raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
         data = await _plot(
-            state_no_sim, path=str(raw), signals=["V(out)"], step={"axis": "r", "value": "25"}
+            state_no_sim, path=str(raw), signals=["V(out)"], step={"axis": "r", "value": "22"}
         )
         (trace,) = data["traces"]
         assert trace["step"] == 1
@@ -1091,16 +1091,16 @@ class TestTraceSummary:
         raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
         signals = ["V(out)", "V(in)"]
         by_value = await _plot(
-            state_no_sim, path=str(raw), signals=signals, step={"axis": "r", "value": "25"}
+            state_no_sim, path=str(raw), signals=signals, step={"axis": "r", "value": "22"}
         )
         assert by_value["traces_truncated"] == 2
-        assert 'step={"axis": "r", "value": "25"}' in by_value["hint"]
+        assert 'step={"axis": "r", "value": "22"}' in by_value["hint"]
         assert "all_steps" not in by_value["hint"]
         stats = await _analyze(
             state_no_sim,
             {"path": str(raw)},
             {"metric": "signal_stats", "signal": "V(in)"},
-            step={"axis": "r", "value": "25"},
+            step={"axis": "r", "value": "22"},
         )
         (row,) = stats["results"]["r"]["values"]
         _, left_out = await _raw_series(state_no_sim, raw, "V(in)", step=1)

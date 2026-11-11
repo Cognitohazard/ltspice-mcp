@@ -238,15 +238,14 @@ class NamedNets:
 
     def __init__(self, nets: Nets) -> None:
         self.nets = nets
-        self._texts: dict[int, set[str]] = defaultdict(set)
+        #: Each net's label texts, by its folded net, as ``texts`` first reads them.
+        self._texts: dict[int, frozenset[str]] = {}
         #: The one net each name is on, by its key: labels of one key are one net.
         self._net_named: dict[str, int] = {}
         #: The names each net carries on its own wiring, before folding.
         self._own: dict[int, set[str]] = defaultdict(set)
         for label in nets.labels:
-            net = self.of_label(label)
-            self._texts[net].add(label.text)
-            self._net_named[nets.name_key(label.text)] = net
+            self._net_named[nets.name_key(label.text)] = self.of_label(label)
             if not is_ground(label.text):
                 self._own[nets.of_label(label)].add(label.text)
 
@@ -295,12 +294,25 @@ class NamedNets:
         )
 
     def texts(self, net: int) -> frozenset[str]:
-        """The text of every label on ``net``, ground flags among them."""
-        return frozenset(self._texts.get(net, ()))
+        """The text of every label on ``net``, wherever on the net it sits,
+        ground flags among them.
+
+        Each spelling of a name is one of them. Labels whose names differ only
+        in case are one node (the ``node-name-case`` recording), and an export
+        writes each label's own spelling (``label_case_separate_wires``), so no
+        one spelling is the net's. The pin legend, the label-only pins and the
+        net trace all name a net by these. A sheet finding that names a name
+        (``sheet_findings._net_name``) gives each name once instead, since it
+        counts names and two spellings of one are one name.
+        """
+        root = self.nets.folded(net)
+        if root not in self._texts:
+            self._texts[root] = frozenset(label.text for label in self.nets.labels_on(root))
+        return self._texts[root]
 
     def names(self, net: int) -> frozenset[str]:
         """The names ``net`` carries: its labels' texts, ground left out."""
-        return frozenset(named_labels(self._texts.get(net, ())))
+        return frozenset(named_labels(self.texts(net)))
 
     def net_named(self, name: str) -> int | None:
         """The net a label of ``name`` is on, in any case; None if no label carries it."""
