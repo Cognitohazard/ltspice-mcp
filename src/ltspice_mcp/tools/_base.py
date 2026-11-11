@@ -13,12 +13,13 @@ from pathlib import Path
 from typing import Any, Literal, NamedTuple, TypedDict, TypeVar, get_args, get_origin
 
 from mcp import types
-from pydantic import Field, PrivateAttr
+from pydantic import Field, PrivateAttr, model_validator
 
 from ltspice_mcp.config import SIM_EXECUTABLES_KEY as _SIM_EXECUTABLES_KEY
 from ltspice_mcp.config import SIM_SECTION as _SIM_SECTION
-from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError, SimulationError
+from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError, SimulationError, error_hint
 from ltspice_mcp.lib import atomic_write_bytes, response_budget
+from ltspice_mcp.lib.format import held_to_cap
 
 # Re-exported façade names: the strict Pydantic base lives in ``lib`` (models
 # below the tool layer declare models too), and the tool modules reach it here.
@@ -315,6 +316,37 @@ def difference_in_full(sheet: str = "this path", window: str = "the window's pro
     return (
         f"inspect(kind='open_in_ltspice') with path set to {sheet} and pid to {window} "
         "reads every entry where the window's copy differs from the file, paged."
+    )
+
+
+def sha256_from_open_in_ltspice(sheet: str) -> str:
+    """Where a reply that carries no sha256 of a sheet tells its reader to find
+    it: ``inspect``'s ``open_in_ltspice`` query given the sheet as ``path``,
+    whose reply gives the file's ``sha256``. ``sheet`` says where the reply
+    gives the sheet."""
+    return f"the sha256 that inspect(kind='open_in_ltspice') with path set to {sheet} gives"
+
+
+def open_window_call(
+    sheet: str, sha256: str, choice: str, *, window_pid: str | None = None
+) -> str:
+    """The ``edit_schematic`` call that saves or drops an LTspice window's copy
+    of a sheet once the user has chosen, as every reply that sends its reader
+    there writes it.
+
+    The call acts on an existing file, so like every write to one it is
+    refused without the file's sha256 as ``expected_sha256``
+    (``expected_sha256_required``): each argument it needs is written out,
+    ``sheet`` saying where the reply gives the sheet's path and ``sha256``
+    where its reader finds that sha256. ``choice`` is the ``open_window``
+    value as the call is to be written (``'save'``, ``'discard'``, or
+    ``'save'|'discard'``); ``window_pid`` says which window's process, for a
+    save where several windows hold different copies.
+    """
+    pid = f", window_pid=<{window_pid}>" if window_pid is not None else ""
+    return (
+        f"edit_schematic(path=<{sheet}>, ops=[], expected_sha256=<{sha256}>, "
+        f"open_window={choice}{pid})"
     )
 
 
@@ -689,28 +721,6 @@ def replying_as(tool: str) -> Iterator[None]:
         yield
 
 
-_Number = TypeVar("_Number", int, float)
-
-
-def held_to_cap(
-    name: str, requested: _Number, cap: _Number, unit: str = ""
-) -> tuple[_Number, str | None]:
-    """The value to use for an argument with a cap, and the warning when it was held.
-
-    A cap bounds what one call costs, so a larger value is served at the cap
-    and said so, not refused: the caller asked for more of the same thing.
-    """
-    if requested <= cap:
-        return requested, None
-
-    def spelled(value: _Number) -> str:
-        # An integer is written out whole: 3000000, not 3e+06.
-        return f"{value:d}" if isinstance(value, int) else f"{value:g}"
-
-    asked, held = spelled(requested), spelled(cap)
-    return cap, f"{name}={asked}{unit} is above its cap of {held}{unit}; {held}{unit} was used."
-
-
 def first_seen(values: list[Any]) -> tuple[list[Any], list[Any]]:
     """``values`` without repeats, in first-seen order, and the repeats dropped."""
     seen: set[Any] = set()
@@ -745,7 +755,7 @@ class NotedModel(StrictModel):
     def hold_to_cap(self, name: str, cap: float, unit: str = "") -> None:
         """Hold numeric field ``name`` at ``cap`` rather than refuse it, and note it.
 
-        The rule of :func:`held_to_cap`: a cap bounds one call's cost, so a
+        The rule of :func:`held_to_cap` (``lib/format.py``): a cap bounds one call's cost, so a
         larger value is served at the cap and said so. The model carries the
         held value, so whatever reads it serves what the note says. An unset
         (``None``) field is left alone.
@@ -939,24 +949,26 @@ def page_schema(
 # ---------------------------------------------------------------------------
 
 
-class RenderPolicy(StrictModel):
+#: The largest render scale drawn; a larger scale is drawn at it, not refused.
+RENDER_SCALE_CAP = 4.0
+
+
+class RenderPolicy(NotedModel):
     """How to draw a schematic: the choices any renderer here can honour."""
 
     format: Literal["png", "svg"] = Field(
         default="png",
         description=(
-            "PNG (lossless, what a model looks at) needs the 'raster' extra, as "
-            "inspect capabilities reports; without it the render degrades to "
-            "SVG and says why."
+            "PNG (lossless, what a model looks at); where no rasterizer loads, as "
+            "inspect capabilities reports, the render degrades to SVG and says why."
         ),
     )
     scale: float = Field(
         default=DEFAULT_SCALE,
         ge=0.5,
-        le=4.0,
         description=(
-            "Render scale. Image token cost tracks pixel area, so halving the "
-            "scale costs about a quarter as much."
+            f"Render scale, held to {RENDER_SCALE_CAP:g}. Image token cost tracks "
+            "pixel area, so halving the scale costs about a quarter as much."
         ),
     )
     max_pixels: int | None = Field(
@@ -967,6 +979,11 @@ class RenderPolicy(StrictModel):
             "a reduced scale that fits, and 'downscaled' is set. Bounds inline cost."
         ),
     )
+
+    @model_validator(mode="after")
+    def _hold_scale(self) -> "RenderPolicy":
+        self.hold_to_cap("scale", RENDER_SCALE_CAP)
+        return self
 
 
 class CompareSpec(StrictModel):
@@ -1341,7 +1358,7 @@ _AUTOMATIC_DOOR: contextvars.ContextVar[bool] = contextvars.ContextVar(
 def automatic_door() -> Iterator[None]:
     """Mark the handler calls inside as arriving through the API's automatic mode.
 
-    Entered from inside the coroutine the engine loop runs, so the flag lives in
+    Entered from inside the coroutine the API's event loop runs, so the flag lives in
     that one task's context: a co-resident MCP server sharing the process (and
     the same :class:`ServerConfig`) cannot see it, which a config field or a
     session attribute could not promise.
@@ -1467,7 +1484,35 @@ def path_denied_text(exc: PathSecurityError, state: SessionState) -> str:
     what to do about it; a surface that carries the message in a field of its
     own puts ``state.sandbox_guidance()`` alone in its ``hint``.
     """
-    return f"{exc}\n\n{state.sandbox_guidance()}"
+    return failure_text(exc, state)
+
+
+def recovery_hint(exc: BaseException, state: SessionState | None) -> str | None:
+    """The recovery step every surface gives a failure of ``exc``'s kind.
+
+    A refused path's is the session's sandbox guidance, which reads the
+    sandbox as it stands (none without a session to read); any other's is its
+    type's entry in ``errors.ERROR_HINTS`` (``errors.error_hint``). None for a
+    failure with no step, or one whose message says its own.
+    """
+    if isinstance(exc, PathSecurityError):
+        return state.sandbox_guidance() if state is not None else None
+    return error_hint(exc)
+
+
+def failure_text(
+    exc: BaseException, state: SessionState | None, message: str | None = None
+) -> str:
+    """A failure as one text: its message (``message``, else the exception's),
+    then its recovery step (:func:`recovery_hint`) when it has one.
+
+    For a surface with one text to carry both: a tool's text channel, a failed
+    resource read, and the ``hint`` of a receipt-shaped refusal (run_experiments,
+    jobs), which says the message again ahead of the step.
+    """
+    said = str(exc) if message is None else message
+    hint = recovery_hint(exc, state)
+    return f"{said}\n\n{hint}" if hint else said
 
 
 def resolve_reference(reference: str, state: SessionState) -> str | Path:
@@ -1573,7 +1618,7 @@ def make_include_resolver(state: SessionState) -> IncludeResolver:
     """An include resolver that routes every include/lib open through
     ``safe_library_path``.
 
-    The graph engine calls this before opening any include, so with a sandbox
+    The netlist graph calls this before opening any include, so with a sandbox
     set an in-deck include that escapes it and the simulator's own library is
     denied and never read. The library roots are worked out once per resolver
     rather than per include.

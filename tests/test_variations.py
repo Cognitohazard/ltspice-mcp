@@ -18,6 +18,7 @@ from ltspice_mcp.lib.variations import (
     CircuitDeck,
     DeckFile,
     MismatchRule,
+    PdkNativeVariation,
     RandomVariation,
     Variation,
     VariationError,
@@ -31,6 +32,7 @@ from tests._mismatch_fixtures import MINI_FET, instance_params
 
 def _deck(path: Path, circuit_id: str = "dut") -> CircuitDeck:
     text = (
+        "* dut\n"
         "R1 in out 1k\n"
         "C1 out 0 1n\n"
         "V1 in 0 1\n"
@@ -162,7 +164,7 @@ class TestAssignExpansion:
 
     def test_b_source_assignment_preserves_source_kind_and_nodes(self, tmp_path: Path):
         path = tmp_path / "behavioral.cir"
-        text = "V1 in 0 1\nB1 out 0 V=V(in)\nR1 out 0 1k\n.op\n.end\n"
+        text = "* behavioral\nV1 in 0 1\nB1 out 0 V=V(in)\nR1 out 0 1k\n.op\n.end\n"
         circuit = CircuitDeck("behavioral", path, text)
         variation = AssignVariation(
             kind="assign",
@@ -179,7 +181,7 @@ class TestAssignExpansion:
 
     def test_pulse_source_assignment_preserves_complete_source_card(self, tmp_path: Path):
         path = tmp_path / "pulse.cir"
-        text = "V1 in 0 PULSE(0 1 1n 1n 1n 5n 10n)\nR1 in 0 1k\n.tran 1n 20n\n.end\n"
+        text = "* pulse\nV1 in 0 PULSE(0 1 1n 1n 1n 5n 10n)\nR1 in 0 1k\n.tran 1n 20n\n.end\n"
         circuit = CircuitDeck("pulse", path, text)
         pulse = "PULSE(0 5 2n 1n 1n 4n 10n)"
         variation = AssignVariation(kind="assign", assign={"V1": [pulse]})
@@ -194,7 +196,7 @@ class TestAssignExpansion:
 
     def test_param_wins_over_same_named_component(self, tmp_path: Path):
         path = tmp_path / "collision.cir"
-        text = "R1 in out 1k\n.param R1=7\n.op\n.end\n"
+        text = "* collision\nR1 in out 1k\n.param R1=7\n.op\n.end\n"
         circuit = CircuitDeck("collision", path, text)
         variation = AssignVariation(kind="assign", assign={"R1": [9]})
 
@@ -209,7 +211,7 @@ class TestAssignExpansion:
 
     def test_nonfirst_param_on_shared_card_is_resolved_and_rewritten(self, tmp_path: Path):
         path = tmp_path / "multi-param.cir"
-        text = "R1 in out 1k\n.param first=1 target=2 last=3\n.op\n.end\n"
+        text = "* multi\nR1 in out 1k\n.param first=1 target=2 last=3\n.op\n.end\n"
         circuit = CircuitDeck("multi", path, text)
         variation = AssignVariation(kind="assign", assign={"target": ["4.7k"]})
 
@@ -223,7 +225,7 @@ class TestAssignExpansion:
 
     def test_a_component_value_given_twice_is_set_in_both_copies(self, tmp_path: Path):
         path = tmp_path / "twice.cir"
-        text = "V1 in 0 1\nR1 in out R=1k R=1k\n.op\n.end\n"
+        text = "* twice\nV1 in 0 1\nR1 in out R=1k R=1k\n.op\n.end\n"
         circuit = CircuitDeck("twice", path, text)
         variation = AssignVariation(kind="assign", assign={"R1": ["2k"]})
 
@@ -241,7 +243,7 @@ class TestAssignExpansion:
 
         path = tmp_path / "model_twice.cir"
         text = (
-            "V1 d 0 1\nM1 d d 0 0 NM W=10u L=1u\n"
+            "* model twice\nV1 d 0 1\nM1 d d 0 0 NM W=10u L=1u\n"
             ".model NM NMOS(VTO=0.7 KP=100u VTO=0.7)\n.op\n.end\n"
         )
         circuit = CircuitDeck("model-twice", path, text)
@@ -555,9 +557,27 @@ class TestRandomExpansion:
 
         assert case.assignments["_random_run"] == 2
         assert (
-            case.assignments["random:component:R1"]
-            == full[2].assignments["random:component:R1"]
+            case.assignments["random:component:R1"] == full[2].assignments["random:component:R1"]
         )
+
+    @pytest.mark.parametrize("value", [-1, 1.5, 2.0, True, "3"])
+    def test_a_sample_index_is_a_nonnegative_integer_not_a_coerced_one(self, value):
+        """A random entry's sample_start takes what a pdk_native entry's does:
+        a boolean or a numeric string is refused, not read as an index."""
+        with pytest.raises(ValidationError):
+            RandomVariation.model_validate({**_random().model_dump(), "sample_start": value})
+        with pytest.raises(ValidationError):
+            PdkNativeVariation.model_validate(
+                {
+                    "kind": "pdk_native",
+                    "id": "mc",
+                    "runs": 1,
+                    "seed": 1,
+                    "profile": "sky130-e6f9c887-ngspice-v1",
+                    "mode": "mismatch",
+                    "sample_start": value,
+                }
+            )
 
     def test_every_case_records_the_seed_it_was_drawn_from(self, tmp_path: Path):
         """The job record keeps each case's assignments and not the request, so
@@ -666,7 +686,7 @@ def _closure(
         path.write_text(text)
         files.append(DeckFile(path, text))
         references += f'{reference} "{path}"\n'
-    root_text = f"{references}{root_body}.op\n.end\n"
+    root_text = f"* dut\n{references}{root_body}.op\n.end\n"
     root = staged / "dut.cir"
     root.write_text(root_text)
     return CircuitDeck("dut", root, root_text, tuple(files))
@@ -1146,7 +1166,9 @@ class TestOneFileDeclaringOneNameTwice:
         models = staged / "models"
         model_text = ".model NM NMOS(VTO=0.7)\n"
         models.write_text(model_text)
-        root_text = ".lib models\n.subckt buf in out\nR1 in out 9k\n.ends\nR1 a b 1k\n.op\n.end\n"
+        root_text = (
+            "* dut\n.lib models\n.subckt buf in out\nR1 in out 9k\n.ends\nR1 a b 1k\n.op\n.end\n"
+        )
         root = staged / "dut.cir"
         root.write_text(root_text)
         circuit = CircuitDeck("dut", root, root_text, (DeckFile(models, model_text),))
@@ -1411,7 +1433,7 @@ class TestSeedStability:
         position in a match list or among the rules, so widening a pattern or
         adding a rule can only add draws: the ones already drawn stay put."""
         text = (
-            "R1 in out 1k\nR2 out 0 2k\nV1 in 0 1\n.param gain=2\n"
+            "* seed stability\nR1 in out 1k\nR2 out 0 2k\nV1 in 0 1\n.param gain=2\n"
             ".model NM NMOS(VTO=0.7 KP=100u)\n"
             "M1 out in 0 0 NM W=10u L=1u\nM2 out in 0 0 NM W=10u L=1u\n.op\n.end\n"
         )
@@ -1427,7 +1449,11 @@ class TestSeedStability:
                 circuit, expand_variations([circuit], [variation]), tmp_path / name
             )
             return [
-                {key: value for key, value in case.assignments.items() if key.startswith("random:")}
+                {
+                    key: value
+                    for key, value in case.assignments.items()
+                    if key.startswith("random:")
+                }
                 for case in cases
             ]
 
@@ -2033,3 +2059,143 @@ def test_a_random_rule_has_no_nominal_on_a_part_number(tmp_path: Path, card: str
         materialize_variants(circuit, expand_variations([circuit], [variation]), tmp_path / "out")
 
     assert excinfo.value.code == "random_nominal_unavailable"
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        {"rule": "mismatch", "prefix": "M", "AVT": 3e-3, "AK": 0.02},
+        {"rule": "mismatch", "prefix": "XN", "AVT": 3e-3},
+    ],
+    ids=["variant-model-card", "patched-subcircuit-copy"],
+)
+def test_a_card_added_before_end_takes_the_decks_line_breaks(tmp_path: Path, rule: dict):
+    """A mismatch rule adds cards before the deck's ``.end`` through the same
+    splice as the ``.options logopinfo`` an operating-point run is given: a
+    variant ``.model`` for a top-level transistor, a patched copy of a
+    subcircuit for a device inside one. Each line added ends with the deck's
+    own line break, so a CRLF deck has no bare LF line afterwards."""
+    text = (
+        "* crlf deck\n"
+        ".model nch nmos(vto=0.7 kp=100u)\n"
+        "M1 a g 0 0 nch W=1u L=1u\n"
+        f"{MINI_FET}"
+        "XN0 a g 0 0 minifet W=1 L=0.15\n"
+        "Vg g 0 1\n"
+        ".op\n"
+        ".end\n"
+    ).replace("\n", "\r\n")
+    path = tmp_path / "crlf.cir"
+    path.write_bytes(text.encode("ascii"))
+    circuit = CircuitDeck("dut", path, text)
+    variation = RandomVariation.model_validate(
+        {"kind": "random", "runs": 1, "seed": 1, "rules": [rule]}
+    )
+
+    (case,) = materialize_variants(
+        circuit, expand_variations([circuit], [variation]), tmp_path / "out"
+    )
+
+    assert case.text.count("\r\n") > text.count("\r\n")
+    assert "\n" not in case.text.replace("\r\n", "")
+
+
+# A card with a brace left open cannot be split into its parts, so what it
+# declares is not known. A variation of a name it may declare was made on
+# another copy, or a set left it out, and reported a whole edit.
+_PARAM = AssignVariation(kind="assign", assign={"r": ["5k"]})
+_PART = AssignVariation(kind="assign", assign={"R1": ["5k"]})
+_SUBCKT_R1 = "X1 in S\n.subckt S a\nR1 a 0 1k\n.ends S\n"
+_UNREAD_TARGETS = {
+    # (deck, variation, what the refusal names, the card's text)
+    "param beside a copy that can be read": (
+        "* t\nV1 in 0 1\nR1 in 0 {r}\n.param r=1k\n.param r={2k\n.op\n.end\n",
+        _PARAM,
+        ".param",
+        ".param r={2k",
+    ),
+    "param alone": (
+        "* t\nV1 in 0 1\nR1 in 0 {r}\n.param r={2k\n.op\n.end\n",
+        _PARAM,
+        ".param",
+        ".param r={2k",
+    ),
+    "random param": (
+        "* t\nV1 in 0 1\nR1 in 0 {r}\n.param r={2k\n.op\n.end\n",
+        _random_rule({"rule": "param", "target": "r", "tolerance": 0.1}),
+        ".param",
+        ".param r={2k",
+    ),
+    # The top-level R1 cannot be read; the readable R1 inside S was edited.
+    "part beside a copy in a subcircuit": (
+        f"* t\nV1 in 0 1\nR1 in 0 {{1k\n{_SUBCKT_R1}.op\n.end\n",
+        _PART,
+        "part",
+        "R1 in 0 {1k",
+    ),
+    "part alone": ("* t\nV1 in 0 1\nR1 in 0 {1k\n.op\n.end\n", _PART, "part", "R1 in 0 {1k"),
+    # A glob left out the R1 it could not read.
+    "part in a random glob": (
+        "* t\nV1 in 0 1\nR1 in 0 {1k\nR2 in 0 1k\n.op\n.end\n",
+        _random_rule({"rule": "component", "target": "R*", "tolerance": 0.1}),
+        "part",
+        "R1 in 0 {1k",
+    ),
+    # The lexer's error escaped the edit of the .model.
+    "random model": (
+        "* t\nV1 in 0 1\nD1 in 0 DX\n.model DX D(Is=1e-14\n.op\n.end\n",
+        _random_rule({"rule": "model", "target": "DX", "param": "Is", "tolerance": 0.1}),
+        ".model",
+        ".model DX D(Is=1e-14",
+    ),
+}
+
+
+@pytest.mark.parametrize("case", list(_UNREAD_TARGETS))
+def test_a_target_a_card_that_cannot_be_read_may_declare_is_refused_by_its_line(
+    tmp_path: Path, case: str
+):
+    deck_text, variation, what, card = _UNREAD_TARGETS[case]
+    path = tmp_path / "d.cir"
+    path.write_text(deck_text)
+    deck = CircuitDeck("dut", path, deck_text)
+
+    with pytest.raises(VariationError) as excinfo:
+        materialize_variants(deck, expand_variations([deck], [variation]), tmp_path / "out")
+
+    assert excinfo.value.code == "ambiguous_target"
+    line = deck_text.splitlines().index(card) + 1
+    message = str(excinfo.value)
+    assert f"may name the {what} " in message, message
+    assert f"on line {line} of d.cir, which could not be read" in message, message
+    assert "Check for a missing" in message, message
+
+
+def test_a_param_that_cannot_be_read_leaves_the_other_targets_alone(tmp_path: Path):
+    text = "* t\nV1 in 0 1\nR1 in 0 {r}\n.param r=1k\n.param q={2k\n.op\n.end\n"
+    path = tmp_path / "d.cir"
+    path.write_text(text)
+    deck = CircuitDeck("dut", path, text)
+    variation = AssignVariation(kind="assign", assign={"r": ["5k"]})
+
+    (variant,) = materialize_variants(deck, expand_variations([deck], [variation]), tmp_path / "o")
+
+    assert ".param r=5k" in variant.text
+    assert ".param q={2k" in variant.text
+
+
+def test_source_lineage_reads_past_a_directive_that_cannot_be_read(tmp_path: Path):
+    # A recoverable run records each case's source lineage through the
+    # hierarchy walk, which split every card and raised on this one.
+    text = "* t\nV1 in 0 1\nR1 in 0 1k\n.tran 0 1m )\n.end\n"
+    path = tmp_path / "d.cir"
+    path.write_text(text)
+    deck = CircuitDeck(
+        "dut", path, text, semantic_profile=SemanticProfile("ltspice"), record_source_lineage=True
+    )
+
+    (variant,) = materialize_variants(
+        deck, expand_variations([deck], [], validate_applies_to=False), tmp_path / "out"
+    )
+
+    assert ".tran 0 1m )" in variant.text

@@ -9,7 +9,7 @@ and the circuits it can reach. Each query names one supported kind:
   (``allowed_paths``, null when none is set), the active
   profile and which of the two tool listings this session was served, the
   configured limits, the linter version, and ``diagnostics``: the startup
-  notes (bad configured simulator path, a requested engine that fell back, WSL
+  notes (bad configured simulator path, a requested simulator that fell back, WSL
   auto-detection) that say whether this server started degraded. Pulled from
   ``state``/``config``/``lint_rules``; nothing is probed.
 * ``symbols`` — the legal ``.asy`` symbol names and the resolution-order
@@ -107,6 +107,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import difflib
 import hashlib
 import sys
 from bisect import bisect_right
@@ -131,9 +132,7 @@ from ltspice_mcp.errors import (
     InvalidCursorError,
     LTSpiceMCPError,
     NetlistError,
-    PathSecurityError,
     compact_validation_error,
-    error_hint,
 )
 from ltspice_mcp.lib import (
     NETLIST_SUFFIX_TEXT,
@@ -156,8 +155,10 @@ from ltspice_mcp.lib.connectivity import (
     named_labels,
 )
 from ltspice_mcp.lib.cursor_codec import canonical_hash
+from ltspice_mcp.lib.deck_nodes import global_names, node_kind
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, TraceDescriptor
 from ltspice_mcp.lib.encoding import read_spice_text
+from ltspice_mcp.lib.format import cap_note
 from ltspice_mcp.lib.hierarchy import SUPPORTED_FAMILIES, SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.library_manager import (
     LibraryManager,
@@ -183,7 +184,7 @@ from ltspice_mcp.lib.schematic_ops import (
     netlist_card_value,
     require_asc,
 )
-from ltspice_mcp.lib.sheet import Sheet, SheetPart, read_sheet_file
+from ltspice_mcp.lib.sheet import Sheet, SheetPart, missing_part, read_sheet_file
 from ltspice_mcp.lib.simulator import (
     SIMULATORS,
     current_ngbehavior,
@@ -198,10 +199,17 @@ from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
     executable_identity,
 )
-from ltspice_mcp.lib.spice_lex import LexResult, SpiceLexError, lex, lex_deck
-from ltspice_mcp.lib.spice_lex_views import InstanceLine, instances_by_ref
+from ltspice_mcp.lib.spice_lex import (
+    INCLUDE_HEADS,
+    LexResult,
+    SpiceCard,
+    SpiceLexError,
+    directive_head,
+    lex_deck,
+)
+from ltspice_mcp.lib.spice_lex_views import InstanceLine, SubcktCard, instances_by_ref
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, symbol_info_of
-from ltspice_mcp.lib.symbol_library import SymbolResolver, symbol_files
+from ltspice_mcp.lib.symbol_library import SymbolResolver
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     HINT_SCHEMA,
@@ -217,8 +225,10 @@ from ltspice_mcp.tools._base import (
     ToolInput,
     declare_output_schema,
     format_response,
+    open_window_call,
     outcome_of,
     outcome_schema,
+    recovery_hint,
     registry,
     resolve_response_budget,
     safe_library_path,
@@ -349,16 +359,27 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
             default=None,
         )
         if first is None:
-            raise NetlistError(
+            # The net query's refusal of a name on no net, as a netlist's is
+            # (_deck_node): the file is sound, the name names nothing in it.
+            raise _QueryError(
+                "not_found",
                 f"Net label '{net_name}' not found in schematic. Add it with the "
                 "add_net_label op of edit_schematic first, or trace a "
-                "component pin / coordinate."
+                "component pin / coordinate.",
             )
         x, y = first.point
         net = nets.of_label(first)
     elif args.pin is not None:
         # A pin answers its own net, which one of a part's pins stacked on a
-        # point may hold alone.
+        # point may hold alone. A part the sheet does not hold is refused as
+        # not_found, as a netlist refuses a card it does not hold: the file
+        # is sound.
+        reference = args.pin.rsplit(".", 1)[0]
+        if "." in args.pin and not sheet.parts_named(reference):
+            raise _QueryError(
+                "not_found",
+                str(missing_part(reference, (part.reference for part in sheet.parts))),
+            )
         pin = sheet.net_pin(args.pin)
         x, y = pin.point
         net = nets.of_pin(pin)
@@ -795,9 +816,11 @@ class ResultsQuery(OptionalRawSelectionFields, OtherRawFields, NotedModel):
         if (self.path is None) == (self.job_id is None):
             raise ValueError("provide exactly one of path or job_id")
         if self.path is not None and (
-            self.case_id is not None or self.run_index != 0 or self.other_raw is not None
+            refusal := services.run_selectors_beside_path(
+                run_index=self.run_index, case_id=self.case_id, other_raw=self.other_raw
+            )
         ):
-            raise ValueError("run_index, case_id and other_raw require job_id")
+            raise ValueError(refusal)
         if self.view == "plots" and self.prefix is not None:
             raise ValueError("prefix does not apply to plot inventory")
         if self.view in ("measurements", "native_tables") and (
@@ -1002,9 +1025,12 @@ def _file_stamp(path: Path) -> list[int] | None:
         return None
 
 
-def _invalid_cursor(exc: PageCursorError) -> _QueryError:
-    """A tampered, stale, or cross-query cursor, isolated to the one query."""
-    return _QueryError(InvalidCursorError.code, f"cursor is invalid or stale: {exc}")
+def _invalid_cursor(exc: PageCursorError) -> InvalidCursorError:
+    """A tampered, stale, or cross-query cursor, isolated to the one query.
+
+    The typed error every tool raises for one, so the item carries that
+    kind's code and recovery step as every other tool's refusal does."""
+    return InvalidCursorError(f"cursor is invalid or stale: {exc}")
 
 
 def _paginate(
@@ -1137,7 +1163,7 @@ def _gated_tool_report(name: str, state: SessionState) -> dict[str, Any]:
 
 
 def _python_runtime_facts() -> dict[str, Any]:
-    """The interpreter this engine runs in, and whether it will still exist.
+    """The interpreter this server runs in, and whether it will still exist.
 
     An agent that wants the Python API (``from ltspice_mcp.api import
     Api``) must pick an interpreter that has the package — this one. The
@@ -1273,7 +1299,7 @@ def _do_capabilities(
             simulator_mod.platform_key(), state.available_simulators
         ),
         # What went wrong at startup, verbatim: a configured simulator path
-        # that does not exist, a requested engine that fell back to another,
+        # that does not exist, a requested simulator that fell back to another,
         # a WSL auto-detection. Otherwise these live only in the server's own
         # stderr log, which no client reads — so a session running degraded
         # looks identical to a healthy one from the outside.
@@ -1295,7 +1321,7 @@ def _do_capabilities(
                 "api.reference('run_experiments') lists an op's arguments; "
                 "help(Api.<op>) and inspect.signature(Api.<op>) answer too"
             ),
-            # The same engine behind a tool call, when the operator turned it
+            # The same code behind a tool call, when the operator turned it
             # on; the key and the restart are what an agent relays to them.
             "run_code": _gated_tool_report("run_code", state),
         },
@@ -1326,47 +1352,24 @@ def _do_capabilities(
 # ---------------------------------------------------------------------------
 
 
-def _symbol_precedence(asc_path: Path | None, state: SessionState) -> list[tuple[Path, str]]:
-    """The ordered (dir, tier) search precedence of the session's library for
-    the sheet at ``asc_path`` (``SymbolResolver.precedence``), the order every
-    lookup searches in.
-
-    A schematic-local dir (when a ``path`` is given) leads, then configured
-    project libraries, then the LTspice build's own. Duplicates — including a
-    symlink pointing at an already-listed directory — collapse to their
-    highest-precedence occurrence (keyed by resolved real path).
-    """
-    ordered = state.symbols.for_sheet(asc_path).precedence
-
-    seen: set[str] = set()
-    deduped: list[tuple[Path, str]] = []
-    for path, tier in ordered:
-        try:
-            key = str(path.resolve())
-        except OSError:
-            key = str(path)
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append((path, tier))
-    return deduped
-
-
 def _symbols_payload(
-    precedence: list[tuple[Path, str]], name_filter: str | None
+    resolver: SymbolResolver, name_filter: str | None
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Walk the precedence dirs, collecting the ``.asy`` names they resolve
-    (``symbol_library.symbol_files``; immutable I/O)."""
+    """The folders the sheet's lookups search, in their order, and the names
+    each offers (``SymbolResolver.listing``), the first folder's file of a name
+    standing for it; immutable I/O.
+
+    The sheet's own folder (when a ``path`` is given) leads, then configured
+    project libraries, then the LTspice build's own, each folder once however
+    it is spelled.
+    """
     prec_report: list[dict[str, Any]] = []
     names: list[str] = []
     seen_names: set[str] = set()
     filt = name_filter.lower() if name_filter else None
-    for path, tier in precedence:
-        exists = path.is_dir()
-        prec_report.append({"dir": str(path), "tier": tier, "exists": exists})
-        if not exists:
-            continue
-        for asy in symbol_files(path, beside_sheet=tier == "schematic-local"):
+    for path, tier, files in resolver.listing():
+        prec_report.append({"dir": str(path), "tier": tier, "exists": path.is_dir()})
+        for asy in files:
             stem = asy.stem
             if stem in seen_names:
                 continue
@@ -1380,8 +1383,8 @@ def _symbols_payload(
 
 async def _do_symbols(q: SymbolsQuery, state: SessionState, view: _View) -> dict[str, Any]:
     asc_path = safe_path(q.path, state) if q.path is not None else None
-    precedence = _symbol_precedence(asc_path, state)
-    prec_report, names = await asyncio.to_thread(_symbols_payload, precedence, q.filter)
+    resolver = state.symbols.for_sheet(asc_path)
+    prec_report, names = await asyncio.to_thread(_symbols_payload, resolver, q.filter)
 
     # No sources: the rows are directory listings, not the content of named
     # files, so there is nothing here a stamp could bind (see _CURSOR_DESCRIPTION).
@@ -1460,20 +1463,39 @@ async def _do_symbol(q: SymbolQuery, state: SessionState) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _netlist_node_from_at(at: str | list[int], nodes_of: dict[str, list[str]]) -> str:
-    """Resolve a netlist ``at`` to a node name. Netlists carry no geometry, so a
-    coordinate is rejected; ``REF.<terminal>`` maps to the node at that 1-based
-    terminal; ``net:NAME`` and a bare name are node names directly. A card has
-    no pin names, so ``REF.NAME`` for one of the deck's cards is refused, unless
-    a node is called that: answered as a node, it would be an empty net."""
+#: How many of a deck's node names a refusal of a name that is none of them lists.
+_NODES_LISTED = 8
+
+
+def _netlist_node_from_at(
+    at: str | list[int],
+    nodes_of: dict[str, list[str]],
+    *,
+    cards: Sequence[SpiceCard],
+    unread: int,
+) -> str:
+    """Resolve a netlist ``at`` to a node of the deck's own cards.
+
+    Netlists carry no geometry, so a coordinate is rejected; ``REF.<terminal>``
+    maps to the node at that 1-based terminal; ``net:NAME`` and a bare name
+    are node names directly. A card has no pin names, so ``REF.NAME`` for one
+    of the deck's cards is refused, unless a node is called that.
+
+    ``nodes_of`` holds the nodes of each of the deck's own cards that read
+    (``unread`` did not), and ``cards`` all of the deck's cards. A name none of
+    them is on is refused, as a sheet refuses a name none of its labels
+    carries (:func:`handle_trace_net`): answered, it would be an empty net,
+    which reads as a node with nothing on it. Ground is always a node.
+    """
     if isinstance(at, list):
         raise _QueryError(
             "invalid_at",
             "coordinates address geometry; a netlist net is addressed by node name "
             "(at='net:NAME' or at='REF.<terminal>')",
         )
+    spellings = _node_spellings(nodes_of)
     if at.startswith("net:"):
-        return at[4:]
+        return _deck_node(at[4:], spellings, cards=cards, unread=unread)
     if "." in at:
         ref, _, term = at.rpartition(".")
         if term.isdigit():
@@ -1488,17 +1510,137 @@ def _netlist_node_from_at(at: str | list[int], nodes_of: dict[str, list[str]]) -
                 )
             return nodes[index - 1]
         nodes = nodes_of.get(ref.lower())
-        named = {name_key(node) for card_nodes in nodes_of.values() for node in card_nodes}
-        if nodes is not None and name_key(at) not in named:
+        if nodes is not None and name_key(at) not in spellings:
             raise _QueryError(
                 "invalid_at",
                 f"'{ref}' is a card of this netlist, and a netlist addresses its pins by "
                 f"terminal number, not by name: use at='{ref}.<terminal>' (1 to "
                 f"{len(nodes)}), or at='net:NAME' for a node",
             )
-        # A dotted name whose tail is not a terminal index is a hierarchical node.
-        return at
-    return at
+    # A dotted name whose tail is not a terminal index is a node of that name.
+    return _deck_node(at, spellings, cards=cards, unread=unread)
+
+
+def _node_spellings(nodes_of: dict[str, list[str]]) -> dict[str, str]:
+    """The nodes of the deck's own cards by name key, each as the deck first
+    spells it, in the order the cards give them."""
+    spellings: dict[str, str] = {}
+    for card_nodes in nodes_of.values():
+        for node in card_nodes:
+            spellings.setdefault(name_key(node), node)
+    return spellings
+
+
+def _deck_node(
+    name: str, spellings: Mapping[str, str], *, cards: Sequence[SpiceCard], unread: int
+) -> str:
+    """``name``, when it is ground or one of the deck's own nodes
+    (``spellings``, by :func:`_node_spellings`); else the refusal, which names
+    the deck's nodes, says what the query did not read (a file the deck
+    includes, a card that could not be read), and for a name a subcircuit's
+    body or a ``.global`` card gives, the query that reads it."""
+    key = name_key(name)
+    if key == GROUND or key in spellings:
+        return name
+    message = f"Node '{name}' not found in netlist: no card of the deck's own is on it."
+    globals_listed = {fold_case(text) for card in cards for text in _readable_global_names(card)}
+    inside = _subcircuits_using(key, cards)
+    if key in globals_listed:
+        # A body whose port has the name reads it as that port, as LTspice
+        # does (``deck_nodes``), so only the other bodies are on the global.
+        ports = _subcircuit_ports(cards)
+        inside = [
+            name
+            for name in inside
+            if node_kind(
+                key,
+                ports=ports.get(fold_case(name), ()),
+                global_names=globals_listed,
+                simulator="ltspice",
+            )
+            == "global"
+        ]
+        message += (
+            " It is a .global net, one node across the deck, but the net query lists "
+            "only the deck's own cards"
+            + (f", and only .subckt {', '.join(inside)} uses it" if inside else "")
+            + ". inspect(kind='hierarchy') lists the nodes of each subcircuit instance."
+        )
+    elif inside:
+        message += (
+            f" It is a node inside .subckt {', '.join(inside)}, which the net query "
+            "does not read: it lists the deck's own cards. inspect(kind='hierarchy') "
+            "lists the nodes of each subcircuit instance."
+        )
+    included = sum(
+        1 for card in cards if not card.scope and directive_head(card) in INCLUDE_HEADS
+    )
+    if included:
+        message += (
+            f" The deck reads {included} more file{'s' if included > 1 else ''} through "
+            ".include or .lib, which the net query does not read, so it may be on a "
+            "card there."
+        )
+    if unread:
+        message += (
+            f" {unread} of the deck's own cards could not be read, so it may be on one of them."
+        )
+    # Compared as the deck spells each node, so ground spelled gnd is offered as gnd.
+    written = {fold_case(spelling): spelling for spelling in spellings.values()}
+    close = difflib.get_close_matches(fold_case(name), list(written), n=1)
+    if close:
+        message += f" Did you mean '{written[close[0]]}'?"
+    known = list(spellings.values())
+    route = "inspect(kind='components', detail='full') lists each card's nodes"
+    if len(known) > _NODES_LISTED:
+        shown = ", ".join(known[:_NODES_LISTED])
+        message += (
+            f" Its nodes include {shown}: {cap_note(_NODES_LISTED, len(known), 'nodes', route)}."
+        )
+    elif known:
+        message += f" Its nodes are {', '.join(known)}; {route}."
+    raise _QueryError("not_found", message)
+
+
+def _readable_global_names(card: SpiceCard) -> tuple[str, ...]:
+    """The node names a ``.global`` card lists (``deck_nodes``), none for a
+    card that cannot be split into parts."""
+    try:
+        return global_names(card)
+    except SpiceLexError:
+        return ()
+
+
+def _subcircuit_ports(cards: Sequence[SpiceCard]) -> dict[str, tuple[str, ...]]:
+    """The ports each subcircuit's header names, by its case-folded name;
+    none for a header that cannot be split into parts."""
+    ports: dict[str, tuple[str, ...]] = {}
+    for card in cards:
+        if card.kind != "subckt":
+            continue
+        try:
+            sub = SubcktCard.from_card(card)
+        except SpiceLexError:
+            continue
+        ports.setdefault(fold_case(sub.name), tuple(sub.ports))
+    return ports
+
+
+def _subcircuits_using(key: str, cards: Sequence[SpiceCard]) -> list[str]:
+    """The subcircuits one of whose own body cards is on a node of name key
+    ``key``, in the order the deck first gives one; a card of a nested
+    subcircuit is its innermost subcircuit's."""
+    found: dict[str, None] = {}
+    for card in cards:
+        if card.kind != "instance" or not card.scope or card.scope[-1] in found:
+            continue
+        try:
+            nodes = InstanceLine.from_card(card).nodes
+        except SpiceLexError:
+            continue
+        if any(name_key(node) == key for node in nodes):
+            found[card.scope[-1]] = None
+    return list(found)
 
 
 def _route_circuit_kind(path: Path, query: str) -> Literal["asc", "netlist"]:
@@ -1568,7 +1710,7 @@ def _net_netlist_payload(text: str, at: str | list[int]) -> dict[str, Any]:
         parsed[ref_lower] = line
         nodes_of[ref_lower] = line.nodes
 
-    node = _netlist_node_from_at(at, nodes_of)
+    node = _netlist_node_from_at(at, nodes_of, cards=lexed.cards, unread=unparseable)
     node_key = name_key(node)
     members: list[dict[str, Any]] = []
     spellings = {node}
@@ -1712,11 +1854,13 @@ def _components_netlist_payload(
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """The component rows, plus the lexer's notes about how the deck read.
 
-    ``prefix`` is the upper-cased prefix :func:`_check_prefix` returns.
+    ``prefix`` is the upper-cased prefix :func:`_check_prefix` returns. The
+    rows are the cards the simulator reads (``spice_lex.lex_deck``), as the
+    net query's members are: neither the title line nor a card after ``.END``.
     """
     from ltspice_mcp.lib.spice_lex_views import body_has_stray_kv_remnant
 
-    lexed = lex(text)
+    lexed = lex_deck(text)
     cards = lexed.cards
     by_ref = instances_by_ref(cards)
     rows: list[dict[str, Any]] = []
@@ -2110,6 +2254,18 @@ def _windows_error(exc: BridgeError) -> _QueryError:
     )
 
 
+#: Said of a listing in which a sheet's window differs from its file. Each
+#: row carries the file's sha256, which the call that settles it quotes.
+_DIFFERING_ROW_HINT = (
+    "A sheet whose window differs from its file is refused by edit_schematic until "
+    "the user chooses which to keep; then "
+    + open_window_call("its row's path", "its row's sha256", "'save'|'discard'")
+    + " saves or drops the window's copy, a save with window_pid set to its row's pid "
+    "where other windows hold other copies. A run or a check reads the file, not the "
+    "window. only_in_window and only_in_file list where the two differ."
+)
+
+
 async def _do_open_in_ltspice(
     q: OpenInLtspiceQuery, state: SessionState, view: _View
 ) -> dict[str, Any]:
@@ -2147,12 +2303,7 @@ async def _do_open_in_ltspice(
     data: dict[str, Any] = {"windows": count, "designs": rows, "total": page["total"]}
     hints: list[str] = []
     if any(row.get("differs_from_file") for row in rows):
-        hints.append(
-            "A sheet whose window differs from its file is refused by edit_schematic until "
-            "the user chooses which to keep and edit_schematic's open_window saves or drops "
-            "the window's copy; a run or a check reads the file, not the window. "
-            "only_in_window and only_in_file list where the two differ."
-        )
+        hints.append(_DIFFERING_ROW_HINT)
     if any(not row["in_sandbox"] for row in rows):
         hints.append(
             "A document outside the sandbox is listed and not read. " + state.sandbox_guidance()
@@ -2969,13 +3120,6 @@ async def _run_queries(
         try:
             query = _validate_query(raw)
             outcome = await _dispatch(query, state, view)
-        except PathSecurityError as exc:
-            # Every kind's refusal lands here, whichever resolver raised it (the
-            # hierarchy loader checks each file it opens), so all report one code
-            # and one remedy.
-            error = {"code": exc.code, "message": str(exc), "hint": state.sandbox_guidance()}
-            results.append(_failure_item(index, raw, error))
-            continue
         except _QueryError as exc:
             error = {"code": exc.code, "message": exc.message}
             if exc.supported is not None:
@@ -2992,10 +3136,12 @@ async def _run_queries(
             )
             continue
         except LTSpiceMCPError as exc:
-            # The error's own code (errors.py) and its type's recovery step, as
-            # every other tool reports it.
+            # The error's own code (errors.py) and its kind's recovery step, as
+            # every other tool reports it: a refused path's, whichever resolver
+            # raised it (the hierarchy loader checks each file it opens), is the
+            # sandbox guidance; an invalid cursor's sends it back to its own.
             error = {"code": exc.code, "message": str(exc)}
-            if (hint := error_hint(exc)) is not None:
+            if (hint := recovery_hint(exc, state)) is not None:
                 error["hint"] = hint
             results.append(_failure_item(index, raw, error))
             continue

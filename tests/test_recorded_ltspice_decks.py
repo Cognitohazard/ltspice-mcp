@@ -29,17 +29,24 @@ from ltspice_mcp.lib.lint_rules import lint_deck
 from ltspice_mcp.lib.log_parser import parse_measurements
 from ltspice_mcp.lib.log_types import MeasurementsOutput
 from ltspice_mcp.lib.netlist_diff import read_deck, structural_delta
-from ltspice_mcp.lib.netlist_graph import compare_graphs, parse_netlist_graph, values_equal
+from ltspice_mcp.lib.netlist_graph import (
+    compare_graphs,
+    flatten_graph,
+    parse_netlist_graph,
+    values_equal,
+)
 from ltspice_mcp.lib.result_observations import parse_requested_outputs, parse_source_amplitudes
 from ltspice_mcp.lib.runner_base import deck_requirements
 from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build, is_cp1252_ltspice_executable
-from ltspice_mcp.lib.spice_lex import emit, lex, lex_deck
+from ltspice_mcp.lib.spice_lex import emit, lex, lex_deck, lex_for_edit
 from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
 from ltspice_mcp.lib.spice_lex_views import ModelCard, read_instance
 from ltspice_mcp.lib.spice_validator import (
     _instance_terminals,
     validate_directive,
     validate_netlist_arity,
+    validate_netlist_bias_topology,
+    validate_netlist_dangling_nodes,
 )
 from ltspice_mcp.lib.variations import (
     AssignVariation,
@@ -390,6 +397,32 @@ def test_a_part_exported_with_a_section_sign_is_a_target_by_its_names(
         assert drawn_for(text, export, target, tmp_path / f"random{index}") == [load], target
 
 
+def test_a_name_holding_two_section_signs_is_one_name_without_them(tmp_path: Path):
+    """Every route that names an instance without its marker drops each ``§``:
+    the ngspice copy of the deck, a variation's target on LTspice's copy, and
+    the netlist comparison. Where LTspice itself puts a second ``§`` is not
+    recorded; these are the server's own names, which must agree."""
+    text = "* two signs\nV1 a 0 1\nR§a§b a 0 1k\n.op\n.end\n"
+    export = tmp_path / "two.net"
+    export.write_text(text, encoding="utf-8")
+    _stem, data = deck_prep._read_export(export, for_ngspice=True)
+    ngspice = decode_spice_bytes_with_encoding(data)[0]
+    (ngspice_name,) = [
+        line.ref for line in map(read_instance, lex(ngspice).cards) if line and line.ref != "V1"
+    ]
+    assert ngspice_name == "Rab"
+    # The name the ngspice copy gives the part is a target on LTspice's copy.
+    assert variant_values(text, export, ngspice_name, tmp_path / "assign") == {
+        "V1": "1",
+        "R§a§b": "2k",
+    }
+    assert drawn_for(text, export, ngspice_name, tmp_path / "random") == ["R§a§b"]
+    # And the comparison pairs the two copies' parts by that name.
+    comparison = compare_graphs(text, ngspice)
+    assert comparison.equivalent, comparison
+    assert not comparison.renamed, comparison
+
+
 def test_a_name_two_parts_answer_to_is_refused(tmp_path: Path):
     """``RLoad`` is both a part and the other name of ``R§Load``, which an
     ngspice copy would also call ``RLoad``: no target can mean one of them."""
@@ -623,6 +656,161 @@ class TestDeckStructure:
         port = rows[("X2", "R1")]["nodes"][1]
         assert (port.get("scope", []), port["name"]) == ([], "mid")
 
+    async def test_every_reader_of_a_deck_reads_a_port_named_gnd_as_the_port(
+        self, build: str, tmp_path: Path, state_no_sim, work_dir: Path
+    ):
+        """Inside ``.subckt ported top gnd``, ``R1 top gnd`` goes to the port:
+        the run puts v(c) at 2000, not 1000. So the comparison flattens the
+        resistor onto the node the port is wired to; it matches the same deck
+        with the port renamed, and not the deck with the resistor to node 0;
+        and the floating- and dangling-node checks read the port as they read
+        the renamed one."""
+        voltages = rec.operating_point(build, "deck/gnd_alias", tmp_path)
+        assert voltages["v(c)"] == pytest.approx(2000.0)
+        text = deck_text("deck/gnd_alias")
+
+        def body(header: str, card: str, deck: str = text) -> str:
+            changed = deck.replace(".subckt ported top gnd\nR1 top gnd 1k", f"{header}\n{card}")
+            assert changed != deck
+            return changed
+
+        renamed = body(".subckt ported top p", "R1 top p 1k")
+        to_ground = body(".subckt ported top gnd", "R1 top 0 1k")
+
+        nodes = {
+            c.ref.lower(): c.nodes for c in flatten_graph(parse_netlist_graph(text)).components
+        }
+        assert nodes["x2.r1"] == ("c", "mid")
+        assert nodes["x1.r1"] == ("b", "0")
+        assert nodes["r1"] == ("a", "0")
+        assert compare_graphs(text, renamed).equivalent
+        assert not compare_graphs(text, to_ground).equivalent
+        path = work_dir / "gnd_alias.cir"
+        path.write_text(text, encoding="utf-8")
+        for reference, equivalent in ((renamed, True), (to_ground, False)):
+            verified = await handle_verify_circuit(
+                VerifyCircuitInput.model_validate(
+                    {"path": str(path), "checks": ["compare"], "compare": {"reference": reference}}
+                ),
+                state_no_sim,
+            )
+            assert verified.structured_content is not None
+            assert verified.structured_content["comparison"]["equivalent"] is equivalent
+
+        # With its only path to ground a capacitor, the node the port is wired
+        # to floats, whatever the port is called.
+        floating = text.replace("R3 mid 0 1k", "C3 mid 0 1n")
+        floating_renamed = body(".subckt ported top p", "R1 top p 1k", floating)
+        found = validate_netlist_bias_topology(lex_deck(floating).cards)
+        assert found
+        assert [i["message"] for i in found] == [
+            i["message"] for i in validate_netlist_bias_topology(lex_deck(floating_renamed).cards)
+        ]
+        # A port wired to nothing in its body is reported whatever it is called.
+        unused = body(".subckt ported top gnd", "R1 top 0 1k")
+        unused_renamed = body(".subckt ported top p", "R1 top 0 1k")
+        dangling = [
+            str(i["message"]).replace("'gnd'", "'p'")
+            for i in validate_netlist_dangling_nodes(lex_deck(unused).cards)
+        ]
+        assert dangling
+        assert dangling == [
+            i["message"] for i in validate_netlist_dangling_nodes(lex_deck(unused_renamed).cards)
+        ]
+
+    async def test_every_reader_of_a_deck_reads_a_port_named_like_a_global_as_the_port(
+        self, build: str, tmp_path: Path, state_no_sim, work_dir: Path
+    ):
+        """With ``.global vdd``, inside ``.subckt leg top vdd`` the card
+        ``R1 top vdd`` goes to the port, not to the global 5 V rail: the
+        milliampere crosses R1 and then R3 to ground, so v(c) is 2 and v(mid)
+        1, and the rail carries none of it. ngspice 42 wires the resistor to
+        the rail instead (``tests/test_deck_nodes.py``). So the comparison
+        flattens the resistor onto the node the port is wired to, hierarchy
+        discovery for LTspice reads it so, and the floating- and dangling-node
+        checks read the port as they read the same port renamed."""
+        voltages = rec.operating_point(build, "deck/global_port", tmp_path)
+        assert (voltages["v(c)"], voltages["v(mid)"]) == (pytest.approx(2.0), pytest.approx(1.0))
+        assert voltages["i(v1)"] == pytest.approx(0.0)
+        text = deck_text("deck/global_port")
+
+        def body(header: str, card: str, deck: str = text) -> str:
+            changed = deck.replace(".subckt leg top vdd\nR1 top vdd 1k", f"{header}\n{card}")
+            assert changed != deck
+            return changed
+
+        renamed = body(".subckt leg top p", "R1 top p 1k")
+        to_rail = body(".subckt leg top p", "R1 top vdd 1k")
+
+        nodes = {
+            c.ref.lower(): c.nodes for c in flatten_graph(parse_netlist_graph(text)).components
+        }
+        assert nodes["x2.r1"] == ("c", "mid")
+        assert compare_graphs(text, renamed).equivalent
+        assert not compare_graphs(text, to_rail).equivalent
+        path = work_dir / "global_port.cir"
+        path.write_text(text, encoding="utf-8")
+        for reference, equivalent in ((renamed, True), (to_rail, False)):
+            verified = await handle_verify_circuit(
+                VerifyCircuitInput.model_validate(
+                    {"path": str(path), "checks": ["compare"], "compare": {"reference": reference}}
+                ),
+                state_no_sim,
+            )
+            assert verified.structured_content is not None
+            assert verified.structured_content["comparison"]["equivalent"] is equivalent
+
+        rows = await hierarchy_rows(state_no_sim, work_dir, "deck/global_port")
+        port = rows[("X2", "R1")]["nodes"][1]
+        assert (port.get("scope", []), port["name"]) == ([], "mid")
+
+        # With its only path to ground a capacitor, the node the port is wired
+        # to floats, whatever the port is called.
+        floating = text.replace("R3 mid 0 1k", "C3 mid 0 1n")
+        floating_renamed = body(".subckt leg top p", "R1 top p 1k", floating)
+        found = validate_netlist_bias_topology(lex_deck(floating).cards)
+        assert found
+        assert [i["message"] for i in found] == [
+            i["message"] for i in validate_netlist_bias_topology(lex_deck(floating_renamed).cards)
+        ]
+        # A port wired to nothing in its body is reported whatever it is called.
+        unused = body(".subckt leg top vdd", "R1 top 0 1k")
+        unused_renamed = body(".subckt leg top p", "R1 top 0 1k")
+        dangling = [
+            str(i["message"]).replace("'vdd'", "'p'")
+            for i in validate_netlist_dangling_nodes(lex_deck(unused).cards)
+        ]
+        assert dangling
+        assert dangling == [
+            i["message"] for i in validate_netlist_dangling_nodes(lex_deck(unused_renamed).cards)
+        ]
+
+    async def test_every_reader_of_a_deck_reads_gnd_bang_as_a_node_of_its_own(
+        self, build: str, tmp_path: Path, state_no_sim, work_dir: Path
+    ):
+        """``R1 a gnd! 1k`` and ``R2 gnd! 0 1k``: the ampere crosses both, so
+        v(a) is 2000 and ``gnd!`` sits at 1000, as ngspice 42 reads it too. So
+        the comparison keeps ``gnd!`` apart from ground, hierarchy discovery
+        names it, and with a capacitor in place of R2 the floating-node check
+        reports it."""
+        voltages = rec.operating_point(build, "deck/gnd_bang", tmp_path)
+        assert voltages["v(a)"] == pytest.approx(2000.0)
+        assert voltages["v(gnd!)"] == pytest.approx(1000.0)
+        text = deck_text("deck/gnd_bang")
+        nodes = {
+            c.ref.lower(): c.nodes for c in flatten_graph(parse_netlist_graph(text)).components
+        }
+        assert nodes["r1"] == ("a", "gnd!")
+        to_ground = text.replace("R1 a gnd! 1k\nR2 gnd! 0 1k", "R1 a 0 1k")
+        assert to_ground != text
+        assert not compare_graphs(text, to_ground).structurally_equivalent
+        rows = await hierarchy_rows(state_no_sim, work_dir, "deck/gnd_bang")
+        bang = rows[("R1",)]["nodes"][1]
+        assert (bang.get("scope", []), bang["name"]) == ([], "gnd!")
+        floating = text.replace("R2 gnd! 0 1k", "C2 gnd! 0 1n")
+        assert floating != text
+        assert validate_netlist_bias_topology(lex_deck(floating).cards)
+
     @pytest.mark.parametrize("at", ["0", "gnd", "GND"])
     async def test_the_net_query_reads_gnd_as_node_0(
         self, build: str, at: str, tmp_path: Path, state_no_sim, work_dir: Path
@@ -724,6 +912,20 @@ def as_ltspice_reads(text: str) -> str:
 
 def no_structural_change(delta: dict[str, list]) -> bool:
     return not any(changes for key, changes in delta.items() if key != "components_renamed")
+
+
+@pytest.mark.parametrize("case_id", UNREAD_CARD_DECKS)
+def test_an_edit_may_change_only_the_cards_the_deck_reading_reads(case_id: str):
+    """``lex_for_edit`` keeps every line of the deck for ``emit``, and offers
+    an edit the cards ``lex_deck`` reads, as the same objects, so a change made
+    through them is written. ``test_recorded_ltspice_unread_cards.py`` holds
+    each edit to it."""
+    text = deck_text(case_id)
+    lexed = lex_for_edit(text, deck=True)
+    assert emit(lexed.cards) == text
+    assert [card.body for card in lexed.read] == [card.body for card in lex_deck(text).cards]
+    assert all(lexed.reads(card) for card in lexed.read)
+    assert {id(card) for card in lexed.read} <= {id(card) for card in lexed.cards}
 
 
 @pytest.mark.parametrize("case_id", UNREAD_CARD_DECKS)

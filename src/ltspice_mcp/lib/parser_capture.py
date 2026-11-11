@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import stat
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 
@@ -25,6 +26,23 @@ PARSER_REVISION = "artifacts-materialize-3"
 
 class CaptureError(ValueError):
     """The requested files could not form a complete, bounded snapshot."""
+
+
+def unavailable_inputs(found: Mapping[str, bool | None], *, require_raw: bool) -> str | None:
+    """Why the requested files cannot be captured, or None when they can.
+
+    ``found`` maps each role to whether its file exists, or None for a role
+    not requested. A required RAW must exist; otherwise any one requested file
+    is enough, a missing companion being a fact of the capture. The capture
+    below asks it in the worker; the parent asks it first for a path a caller
+    named (``parser_service``), from the stamps it takes anyway, so a missing
+    file is reported as one without starting a parse.
+    """
+    if require_raw and found.get("raw") is False:
+        return "Requested RAW file is unavailable"
+    if not any(found.values()):
+        return "No parser input files are available"
+    return None
 
 
 @dataclass(frozen=True)
@@ -68,12 +86,23 @@ def parser_cache_key(
     dialect: str | None,
     producing_dialect: str | None,
     limits: dict,
+    chosen: dict | None = None,
 ) -> str:
-    """One identity for raw and log facts captured under the same parser policy."""
+    """One identity for raw and log facts captured under the same parser policy.
+
+    A selective read (``chosen``: its signals, its window of a plot's axis,
+    that plot and its decode budget) keeps other arrays than a whole-file read
+    of the same capture, and is refused for what its plot does not hold, so
+    the choice is part of its identity; a whole-file read's identity is as it
+    was before reads could choose.
+    """
+    policy: dict = {"decoder": PARSER_REVISION, "limits": limits}
+    if chosen is not None:
+        policy["chosen"] = chosen
     return captured.cache_key(
         dialect=dialect,
         producing_dialect=producing_dialect,
-        revision=json.dumps({"decoder": PARSER_REVISION, "limits": limits}, sort_keys=True),
+        revision=json.dumps(policy, sort_keys=True),
     )
 
 
@@ -136,10 +165,16 @@ def capture_inputs(
         raise ValueError("Capture limits must be finite positive integers")
     paths = {field.name: getattr(sources, field.name) for field in fields(sources)}
     initial = {role: _source_stat(path) for role, path in paths.items()}
-    if require_raw and sources.raw is not None and initial["raw"] is None:
-        raise FileNotFoundError("Requested RAW file is unavailable")
-    if not any(initial.values()):
-        raise FileNotFoundError("No parser input files are available")
+    # Asked again here, after the parent asked: a file can go in between.
+    unavailable = unavailable_inputs(
+        {
+            role: None if path is None else initial[role] is not None
+            for role, path in paths.items()
+        },
+        require_raw=require_raw,
+    )
+    if unavailable is not None:
+        raise FileNotFoundError(unavailable)
     if sum(info.st_size for info in initial.values() if info is not None) > input_bytes:
         raise CaptureError("Parser input byte limit exceeded")
     if sum(info.st_size for role, info in initial.items() if role != "raw" and info) > log_bytes:

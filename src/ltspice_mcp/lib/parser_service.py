@@ -19,15 +19,17 @@ import json
 import shutil
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from ltspice_mcp.errors import AnalysisDeadlineExceeded, ResultError
+from ltspice_mcp.errors import AnalysisDeadlineExceeded, ResultError, ResultFileNotFoundError
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedRaw
-from ltspice_mcp.lib.file_stamp import file_stamp
+from ltspice_mcp.lib.file_stamp import ABSENT, file_stamp
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
+from ltspice_mcp.lib.parser_capture import unavailable_inputs
 from ltspice_mcp.lib.parser_process import (
     JsonValue,
     ParserProcessError,
@@ -54,6 +56,14 @@ PROCESS_LIMITS = ParserProcessLimits(
     error_bytes=16 * 1024,
     cleanup_grace_s=3.0,
 )
+SIGNALS_BYTES = 20 * 1024
+"""The most a read's chosen signals may take of the parser request, as JSON:
+64 names of 256 plain characters, within the request's limit beside its paths.
+A character outside ASCII takes up to six bytes there."""
+DECODE_BYTES = PROCESS_LIMITS.memory_bytes // 2
+"""The most numbers a read of chosen signals may have the parser hold while it
+decodes them (``raw_decode.numbers_held``): half its memory, the rest left to
+the interpreter and the arithmetic on the axis."""
 _DIALECTS = {"ltspice", "ngspice", "qspice", "xyce"}
 _ROLES = ("raw", "log", "console")
 _SETTLE_NS = 100_000_000
@@ -165,6 +175,17 @@ def load_artifacts_sync(
     if type(source.plot_index) is not int or source.plot_index < 0:
         raise ResultError("RAW plot_index must be a nonnegative integer")
     limits = raw_limits(state.config.max_raw_mb)
+    chosen: dict[str, JsonValue] | None = (
+        {
+            # In one order, so a read of the same names is one parse.
+            "signals": None if source.signals is None else [*sorted(source.signals)],
+            "window": None if source.window is None else [*source.window],
+            "plot_index": source.plot_index,
+            "decode_bytes": DECODE_BYTES,
+        }
+        if require_raw and (source.signals is not None or source.window is not None)
+        else None
+    )
     policy: dict[str, JsonValue] = {
         "dialect": _dialect(source.explicit_dialect),
         "producing_dialect": _dialect(source.dialect),
@@ -174,12 +195,15 @@ def load_artifacts_sync(
             "step_rows": STEP_ROWS,
             "metadata_bytes": METADATA_BYTES,
         },
+        "chosen": chosen,
     }
     try:
         _check_active(deadline, cancel)
         admitted = _admit(source, state)
         stamped_at = _now_ns()
         stamps = _source_stamps(admitted)
+        if not source.trusted_job_artifact:
+            _refuse_missing(admitted, stamps, require_raw=require_raw)
         stamp_key = (
             None if stamps is None else json.dumps([admitted, stamps, policy], sort_keys=True)
         )
@@ -218,6 +242,31 @@ def _admit(source: AnalysisSource, state: SessionState) -> dict[str, JsonValue]:
         else:
             admitted[role] = str(state.resolve_path(str(path)))
     return admitted
+
+
+def _refuse_missing(
+    admitted: dict[str, JsonValue], stamps: tuple[object, ...] | None, *, require_raw: bool
+) -> None:
+    """Refuse a path a caller named when the files a capture needs are not there.
+
+    The capture's own rule (``parser_capture.unavailable_inputs``), asked of the
+    stamps just taken, so the failure is the caller's missing file, with that
+    kind's recovery, rather than a parse that failed. A role whose file could
+    not be stamped is left to the capture, as present. A job's own artifacts
+    are not asked here: a run whose file is gone is a fact about the run, and
+    the capture reports it as one.
+    """
+    found: dict[str, bool | None] = {}
+    for index, role in enumerate(_ROLES):
+        path = admitted[role]
+        if path is None:
+            found[role] = None
+            continue
+        stamp = stamps[index] if stamps is not None else file_stamp(str(path))
+        found[role] = stamp != ABSENT
+    if unavailable_inputs(found, require_raw=require_raw) is not None:
+        named = next(admitted[role] for role in _ROLES if admitted[role] is not None)
+        raise ResultFileNotFoundError(f"No result file at {named}")
 
 
 def _source_stamps(admitted: dict[str, JsonValue]) -> tuple[object, ...] | None:
@@ -327,6 +376,18 @@ def _load(
             raise failure from exc
         if exc.code == "deadline":
             raise AnalysisDeadlineExceeded("Artifact parsing exceeded its deadline") from exc
+        if exc.code in ("signals_not_found", "window_refused"):
+            raise ResultError(f"{label}: {exc}", show_hint=False) from exc
+        if exc.code == "too_large":
+            chosen = policy.get("chosen")
+            raise ResultError(
+                _too_large(label, str(exc), chosen=chosen if isinstance(chosen, dict) else None),
+                show_hint=False,
+                # A whole read's refusal ends in the Python read that keeps less.
+                python_route=chosen is None,
+            ) from exc
+        if exc.code == "too_large_to_decode":
+            raise ResultError(_too_large_to_decode(label, str(exc)), show_hint=False) from exc
         raise ResultError(f"Failed to parse result file {label}: {exc}") from exc
     except (ValueError, OSError) as exc:
         if not reaped:
@@ -340,3 +401,33 @@ def _load(
                 shutil.rmtree(directory)
             except OSError as exc:
                 raise ParserCleanupError(directory) from exc
+
+
+def _too_large(label: object, reason: str, *, chosen: Mapping[str, JsonValue] | None) -> str:
+    """Why a result was not read, as the worker counted it, and what reads less."""
+    if chosen is not None:
+        fewer = (
+            "Choose a shorter window, or keep only the traces you need with signals=[...]"
+            if chosen.get("signals") is None
+            else "Choose fewer signals or a shorter window (window=(start, end) keeps "
+            "the points of the axis between them), or read them in more than one load"
+        )
+        return f"{label} was not read: {reason}. {fewer}."
+    return (
+        f"{label} was not read: {reason}. Make the run write fewer numbers: .save only "
+        "the nodes you need, shorten the .tran, or measure with .meas instead of keeping "
+        "the waveform. Or read only the traces you need, the stretch of the axis you "
+        "need, or both, with the axis and any step parameters, from a file holding up "
+        f"to {DECODE_BYTES // 2**30} GiB of numbers or a larger one in LTspice's Fast "
+        "Access layout: r = api.load_raw(..., signals=['V(out)', 'I(R1)'], "
+        "window=('1m', '2m'))"
+    )
+
+
+def _too_large_to_decode(label: object, reason: str) -> str:
+    """Why a selective read was not made: the worker's reason names what reads less."""
+    return (
+        f"{label} was not read: {reason}. Or make the run write fewer numbers: .save only "
+        "the nodes you need, shorten the .tran, or measure with .meas instead of keeping "
+        "the waveform."
+    )

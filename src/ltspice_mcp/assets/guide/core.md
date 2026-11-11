@@ -40,7 +40,7 @@ Read one with `inspect(queries=[{"kind": "guide", "section": "<name>"}])`, or
 
 ## Python or tools
 
-Both run the same engine on the same job records, so either one can read a
+Both run the same code on the same job records, so either one can read a
 job the other started, by its `job_id`. Among the tools, `run_experiments`
 runs decks, sweeps and corners; `jobs` follows, waits on and cancels them;
 `analyze_results` measures finished runs; `inspect` reads circuits, symbols,
@@ -54,7 +54,7 @@ libraries and this guide; `edit_schematic` edits `.asc` sheets;
 | Results | complete (every row, numpy arrays, no cursors) | structured replies, paged and budgeted |
 | Authority | `run_code` has the server's own file and process authority | a path outside `[security] allowed_paths` is refused when that is set |
 | Long jobs | owned by the worker, and stopped by a worker restart unless submitted with `detach=True` | owned by the server |
-| Limits | 60 s per snippet by default (600 at most), one snippet at a time | per-tool caps |
+| Limits | 60 s per snippet by default (`timeout_s`, held to its cap), one snippet at a time | per-tool caps |
 | Charts | HTML chart files from the `plot` recipe | `plot_waveform`: interactive, or an inline PNG |
 | Failures | exceptions with tracebacks | error replies with a recovery hint |
 

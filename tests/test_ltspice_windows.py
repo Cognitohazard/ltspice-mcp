@@ -145,7 +145,7 @@ class TestTheClassAServerLaunches:
 @windows_only
 class TestTheSetting:
     """``[simulator] hidden_desktop`` reaches the launch through detection,
-    which every way of starting the engine runs."""
+    which every way of starting the server runs."""
 
     @pytest.mark.parametrize("wanted", [True, False])
     def test_detection_applies_it(

@@ -18,6 +18,7 @@ import asyncio
 import json
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -629,9 +630,10 @@ class TestScopedKill:
         lt24 = _FakeProc(12, "LTspice.exe", [str(builds["lt24"]), "-Run", "-b", f"{lt24_job}.net"])
         monkeypatch.setattr(proc_kill, "_running_processes", lambda attrs: iter([xvii, lt24]))
 
-        assert simulator_executable_names(runners["ltspice:xvii"].simulator_class) == {
-            "xviix64.exe"
-        }
+        # spicelib names the process after the executable's file, and on macOS
+        # also after its stem (``Simulator.guess_process_name``).
+        expected = {"xviix64.exe", "xviix64"} if sys.platform == "darwin" else {"xviix64.exe"}
+        assert simulator_executable_names(runners["ltspice:xvii"].simulator_class) == expected
         # The other build's runner, handed this job's token, does not know the
         # program by name: the gate is each runner's own executable.
         runners["ltspice:lt24"]._kill_by_token(xvii_job)

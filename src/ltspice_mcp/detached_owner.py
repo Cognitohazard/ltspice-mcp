@@ -102,7 +102,7 @@ def run(request: dict[str, Any], handshake: _Handshake) -> int:
         **request.get("overrides", {}),
     )
     # Now that a config is loaded, the owner reads [logging] level like every
-    # other process here — off the engine rather than loaded again, so a
+    # other process here — off the session rather than loaded again, so a
     # constructor override the caller passed applies to the log too. With one
     # floor: never quieter than INFO. This process's log is the ONLY
     # diagnostic channel a detached submission has, a failure hands the caller
@@ -151,7 +151,7 @@ def run(request: dict[str, Any], handshake: _Handshake) -> int:
             # with nobody watching them would be the worse end.
             api.close()
         except Exception:
-            logger.exception("the detached owner's engine did not close cleanly")
+            logger.exception("the detached owner's session did not close cleanly")
 
 
 def main(argv: list[str]) -> int:

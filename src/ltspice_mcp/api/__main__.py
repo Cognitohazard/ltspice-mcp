@@ -1,7 +1,7 @@
 """Zero-boot reading: ``python -m ltspice_mcp.api reference [OP]`` and ``guide [SECTION]``.
 
 Prints the same catalogue ``Api.reference()`` serves and the same guide
-``Api.guide()`` serves, without booting the engine — the catalogue module is
+``Api.guide()`` serves, without starting a session — the catalogue module is
 stdlib+pydantic only, the guide module stdlib only, and the package's lazy
 ``__init__`` keeps scipy/mcp out of the interpreter entirely.
 """

@@ -24,6 +24,7 @@ from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.models import StrictModel
 from ltspice_mcp.lib.raw_header import STEPPED_TEMPERATURE
+from ltspice_mcp.lib.signal_analysis import THD_HARMONICS_CAP
 
 ReduceStat = Literal["min", "max", "mean", "stddev", "p50", "p90", "count"]
 
@@ -640,7 +641,11 @@ class ThdRecipe(ScalarRecipe):
     metric: Literal["thd"]
     signal: str
     fundamental_hz: float | str | None = None
-    harmonics: int = Field(default=7, ge=1, le=50)
+    harmonics: int = Field(
+        default=7,
+        ge=1,
+        description=f"Highest harmonic summed; held to {THD_HARMONICS_CAP}.",
+    )
     window: Window | None = None
 
 
@@ -685,10 +690,23 @@ class BodeCrossingRecipe(VariableRecipe):
         ),
     )
 
+    ref_hz: float | str | None = Field(
+        default=None,
+        description=(
+            "Measure level_db from the gain at this frequency: -3.0103 with ref_hz=1k "
+            "is 1/sqrt(2) below the gain at 1 kHz."
+        ),
+    )
+
     @model_validator(mode="after")
     def _one_crossing_level(self) -> BodeCrossingRecipe:
         if (self.level_db is None) == (self.level_deg is None):
             raise ValueError("provide exactly one of 'level_db' or 'level_deg'")
+        if self.ref_hz is not None and self.level_db is None:
+            raise ValueError(
+                "'ref_hz' measures 'level_db' from the gain at that frequency; a phase "
+                "level is not relative to it"
+            )
         return self
 
 

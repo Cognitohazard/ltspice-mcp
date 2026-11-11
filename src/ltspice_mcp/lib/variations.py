@@ -23,7 +23,7 @@ from pydantic import (
     model_validator,
 )
 
-from ltspice_mcp.errors import NetlistError
+from ltspice_mcp.errors import MultiplierRewriteStop, NetlistError
 from ltspice_mcp.lib import RUN_DECK_SUFFIXES, atomic_write_bytes, component_value
 from ltspice_mcp.lib.deck_staging import (
     card_sections,
@@ -34,7 +34,7 @@ from ltspice_mcp.lib.deck_staging import (
 from ltspice_mcp.lib.encoding import encode_spice_text
 from ltspice_mcp.lib.format import parse_plain_value, parse_spice_value, unique_name  # noqa: TID251 - a written assignment must be a plain or SI value
 from ltspice_mcp.lib.hierarchy import Hierarchy, ResolvedInstance, SemanticProfile, Source
-from ltspice_mcp.lib.hierarchy_expr import multiplier_product
+from ltspice_mcp.lib.hierarchy_expr import NumericFact, ngspice_multiplies_m
 from ltspice_mcp.lib.instance_targeting import (
     InstanceEdit,
     SourceLineage,
@@ -62,7 +62,17 @@ from ltspice_mcp.lib.montecarlo import (
     variant_model_name,
 )
 from ltspice_mcp.lib.montecarlo import MismatchRule as EngineMismatchRule
-from ltspice_mcp.lib.spice_lex import SpiceCard, Token, TokenKind, emit, lex, tokenize_body
+from ltspice_mcp.lib.spice_lex import (
+    EditCards,
+    SpiceCard,
+    SpiceLexError,
+    Token,
+    TokenKind,
+    emit,
+    lex,
+    lex_for_edit,
+    tokenize_body,
+)
 from ltspice_mcp.lib.spice_lex_ops import fold_micro_suffix_cards, section_sign_names
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, ModelCard
 from ltspice_mcp.lib.subckt_mismatch import (
@@ -312,10 +322,10 @@ class RandomVariation(VariationModel):
         default=None,
         description="Omitted, the server picks one and records it as '_random_seed'.",
     )
-    sample_start: int = Field(
+    sample_start: StrictInt = Field(
         default=0,
         ge=0,
-        description="First sample index; sample k draws the same values in any run.",
+        description="First sample index; sample k draws the same deviations in any run.",
     )
     applies_to: list[str] | None = Field(default=None, description=_APPLIES_TO_DESCRIPTION)
     rules: list[RandomRule] = Field(
@@ -347,6 +357,8 @@ class PdkNativeVariation(VariationModel):
     )
     profile: str = Field(description="Supported profile: sky130-e6f9c887-ngspice-v1 for ngspice.")
     mode: Literal["nominal", "mismatch", "process", "combined"]
+    # Unlike a random entry's, this sample_start stays in the request
+    # fingerprint at 0: native requests were recorded with it.
     sample_start: StrictInt = Field(
         default=0, ge=0, description="Nonnegative logical index for replaying a subset."
     )
@@ -387,7 +399,7 @@ class DeckFile:
 
 @dataclass(frozen=True)
 class CircuitDeck:
-    """One uniquely named circuit deck supplied to the expansion engine."""
+    """One uniquely named circuit deck supplied to the variation expansion."""
 
     circuit_id: str
     path: Path
@@ -484,6 +496,11 @@ class _DeckTargets:
     #: The other names of each component LTspice exported with its section
     #: sign (``spice_lex_ops.section_sign_names``), by case-folded name.
     aliases: dict[str, list[_Site]] = field(default_factory=dict)
+    #: Each name a card that cannot be split into parts may declare, by
+    #: case-folded name: a part's reference, a ``.model``'s name, or a name a
+    #: ``.param`` may set (a word before ``=``). With each, the card's line,
+    #: what it is and the reason it cannot be read.
+    unread: dict[str, list[_UnreadDeclaration]] = field(default_factory=dict)
 
     def component_sites(self, folded: str) -> list[_Site]:
         """The components an exact target names: a reference as written, or
@@ -508,6 +525,28 @@ class _ClosureFile:
     @property
     def depth(self) -> int:
         return closure_depth(self.index)
+
+    @property
+    def is_deck(self) -> bool:
+        """Is this the deck itself, whose first line is its title, rather than
+        a file it pulls in?"""
+        return self.depth == 0
+
+    def lexed(self, text: str) -> EditCards:
+        """``text``, this file's text in a case, lexed for an edit
+        (``_lexed_file``)."""
+        return _lexed_file(text, self.depth)
+
+
+def _lexed_file(text: str, depth: int) -> EditCards:
+    """One closure file's text lexed for an edit: every card to write back, and
+    the cards a target may name among them: the cards LTspice reads
+    (``spice_lex.lex_for_edit``), so a target named only by the deck's
+    (``depth`` 0) title or after a file's ``.END`` is refused rather than
+    written where the simulator never reads it. Target resolution and every
+    writer read the same cards, so a site resolution chose is the site
+    written."""
+    return lex_for_edit(text, deck=depth == 0)
 
 
 @dataclass(frozen=True)
@@ -908,6 +947,7 @@ def materialize_variants(
                 _closure_files(closure, closure.texts()), inputs, closure.semantic_profile
             )
             editor = TargetEditor(inputs, closure.semantic_profile, origins=origins)
+            as_written = editor.hierarchy
             structured.extend(_legacy_instance_edits(editor.hierarchy, aliases))
             _validate_write_sets(closure, ordinary, structured, editor.hierarchy, rules, origins)
             editor.apply(structured)
@@ -925,7 +965,7 @@ def materialize_variants(
                 editor = final_editor
             else:
                 draws = {}
-            lineage = editor.lineage()
+            lineage = editor.lineage(_refuse_a_changed_m_rewrite(as_written, final_files))
             assignments.update(draws)
             base_files = [
                 ClosureFile(
@@ -1014,20 +1054,103 @@ def _applies(
     }
 
 
+#: A name a ``.param`` card sets: a word, then ``=``.
+_PARAM_NAME_RE = re.compile(r"([A-Za-z_][\w.$]*)\s*=")
+#: What ends a word of a card that cannot be split into parts.
+_UNREAD_WORD_END = re.compile(r"[\s(){}=,\"';]+")
+
+
+@dataclass(frozen=True)
+class _UnreadDeclaration:
+    """A card that cannot be split into parts and may declare a target."""
+
+    line: int
+    what: str  # "part", ".model" or ".param"
+    reason: str
+    name: str = ""  # as the card writes it
+
+
+def _unread_declarations(card: SpiceCard) -> tuple[set[str], _UnreadDeclaration] | None:
+    """The names a card that cannot be split into parts may declare, as it
+    writes them, and what the card is; None for a card that can be read or
+    declares no target. Every candidate counts, so a name is never missed,
+    and a variation of it is refused rather than made on another copy."""
+    if card.kind not in ("param", "instance", "model"):
+        return None
+    try:
+        tokenize_body(card.body)
+    except SpiceLexError as exc:
+        words = [word for word in _UNREAD_WORD_END.split(card.body) if word]
+        if card.kind == "param":
+            names, what = set(_PARAM_NAME_RE.findall(card.body)), ".param"
+        elif card.kind == "instance":
+            names, what = ({card.name or words[0]} if words else set()), "part"
+        else:
+            names, what = ({card.name or words[1]} if len(words) > 1 else set()), ".model"
+        fix = f" {exc.suggestion[:1].upper()}{exc.suggestion[1:]}." if exc.suggestion else ""
+        reason = f"({exc.message}), so the variation cannot tell which declaration it edits.{fix}"
+        return names, _UnreadDeclaration(card.line_start, what, reason)
+    return None
+
+
+def _refuse_unread(
+    closure: _DeckClosure, pattern: str, *, kinds: tuple[str, ...], what: str, target: str
+) -> None:
+    """Refuse a target that a card that cannot be split into parts may name
+    (``_DeckTargets.unread``): the copy that can be read is not known to be
+    the one the circuit runs with, and a glob would leave the card out of a
+    set it reports whole. ``pattern`` is case-folded; ``kinds`` are the
+    cards that can answer to it."""
+    for file in closure.files:
+        for name, declarations in file.targets.unread.items():
+            names = (name, *section_sign_names(name))
+            if pattern not in names and not (
+                _is_glob(pattern) and any(fnmatch.fnmatchcase(n, pattern) for n in names)
+            ):
+                continue
+            for declared in declarations:
+                if declared.what in kinds:
+                    raise VariationError(
+                        "ambiguous_target",
+                        f"Circuit {closure.circuit_id!r}: {what} {target!r} may name the "
+                        f"{declared.what} {declared.name!r} on line {declared.line} of "
+                        f"{file.path.name}, which could not be read {declared.reason}",
+                    )
+
+
+def _param_assignments(card: SpiceCard) -> list[tuple[str, Token]]:
+    """The ``name=value`` parts of a ``.param`` card with their names, or none
+    for a card that cannot be split into parts (``spice_lex.unreadable_cards``):
+    the names it sets are not known, so no variation targets or edits it, and
+    the linter reports it."""
+    try:
+        tokens = tokenize_body(card.body)
+    except SpiceLexError:
+        return []
+    return [
+        (token.key, token)
+        for token in tokens[1:]
+        if token.kind == TokenKind.KEY_VALUE and token.key
+    ]
+
+
 def _deck_targets(text: str, source: Path, depth: int) -> _DeckTargets:
     params: dict[str, list[_Site]] = {}
     components: dict[str, list[_Site]] = {}
     models_by_ref: dict[str, str] = {}
     model_names: dict[str, list[_Site]] = {}
     aliases: dict[str, list[_Site]] = {}
-    cards = lex(text).cards
+    unread: dict[str, list[_UnreadDeclaration]] = {}
+    cards = _lexed_file(text, depth).read
     for card, section in zip(cards, card_sections(cards, source, depth), strict=True):
+        if (unread_card := _unread_declarations(card)) is not None:
+            names, declared = unread_card
+            for name in names:
+                unread.setdefault(name.casefold(), []).append(replace(declared, name=name))
+            continue
         if card.kind == "param":
-            for token in tokenize_body(card.body)[1:]:
-                if token.kind == TokenKind.KEY_VALUE and token.key:
-                    params.setdefault(token.key.casefold(), []).append(
-                        _Site(token.key, card.scope, section)
-                    )
+            for key, _token in _param_assignments(card):
+                params.setdefault(key.casefold(), []).append(_Site(key, card.scope, section))
         elif card.kind == "model" and card.name:
             model_names.setdefault(card.name.casefold(), []).append(
                 _Site(card.name, card.scope, section)
@@ -1049,6 +1172,7 @@ def _deck_targets(text: str, source: Path, depth: int) -> _DeckTargets:
         models_by_ref=models_by_ref,
         model_names=model_names,
         aliases=aliases,
+        unread=unread,
     )
 
 
@@ -1217,6 +1341,7 @@ def _resolve_assignment(
         return _resolve_instance_param(closure, target, value)
     if target.casefold().endswith("@model"):
         pattern = target[:-6].casefold()
+        _refuse_unread(closure, pattern, kinds=("part",), what="model-swap target", target=target)
         edits: list[ResolvedAssignment] = []
         for file in closure.files:
             refs = tuple(
@@ -1243,6 +1368,7 @@ def _resolve_assignment(
         return tuple(edits)
 
     folded = target.casefold()
+    _refuse_unread(closure, folded, kinds=(".param", "part"), what="target", target=target)
     # File precedence is the outer test and kind precedence the inner one: a
     # .param still beats a same-named component, but only within the one file
     # that owns the target, so an include can never shadow the root deck.
@@ -1302,7 +1428,7 @@ def _resolve_instance_param(
 
     ``X1:delvto`` names the single MOS device inside ``X1``; ``X1.M0:delvto``
     names one device in a body that holds several, and is required there.
-    Only the two parameters the mismatch engine owns are addressable this way —
+    Only the two parameters the mismatch draw owns are addressable this way —
     anything else would be a general hierarchical-parameter feature, which this
     is not.
 
@@ -1329,6 +1455,7 @@ def _resolve_instance_param(
             "(a mobility multiplier) can be set per instance",
         )
     folded = target.casefold()
+    _refuse_unread(closure, folded, kinds=(".param", "part"), what="target", target=target)
     clashes = sorted(
         {
             file.path.name
@@ -1356,7 +1483,7 @@ def _resolve_instance_param(
 
 
 def _closure_files(closure: _DeckClosure, texts: dict[int, str]) -> list[ClosureFile]:
-    """Project the closure into the mismatch engine's view of it."""
+    """Project the closure into the mismatch draw's view of it."""
     return [
         ClosureFile(index=file.index, path=file.path, text=texts[file.index])
         for file in closure.files
@@ -1501,6 +1628,9 @@ def _resolve_random_rule_targets(
     """
     if isinstance(rule, ComponentRule):
         pattern = rule.target.casefold()
+        _refuse_unread(
+            closure, pattern, kinds=("part",), what="random component target", target=rule.target
+        )
         by_ref: dict[str, list[tuple[_ClosureFile, _Site]]] = {}
         for file in closure.files:
             for folded, sites in file.targets.components.items():
@@ -1541,6 +1671,8 @@ def _resolve_random_rule_targets(
         what, miss = "random model target", "has no .model card"
         sites_by_file = {file.index: file.targets.model_names for file in closure.files}
     folded = rule.target.casefold()
+    kinds = (".param",) if isinstance(rule, ParamRule) else (".model",)
+    _refuse_unread(closure, folded, kinds=kinds, what=what, target=rule.target)
     matches = [index for index, sites in sites_by_file.items() if folded in sites]
     if not matches:
         raise VariationError(
@@ -1604,7 +1736,8 @@ def _apply_assignments(
     _apply_instance_params(closure, texts, instance_params)
     for index, file_edits in by_file.items():
         file = closure.files[index]
-        cards = lex(texts[index]).cards
+        lexed = file.lexed(texts[index])
+        cards = lexed.read
         for edit in file_edits:
             if edit.kind == "model":
                 for ref in edit.refs:
@@ -1615,7 +1748,7 @@ def _apply_assignments(
                 _set_param_value_on_cards(cards, edit.site, edit.value, file=file)
             else:
                 _set_component_value(cards, edit.site, edit.value, file=file)
-        texts[index] = emit(cards)
+        texts[index] = emit(lexed.cards)
 
 
 def _card_at_site(
@@ -1657,8 +1790,8 @@ def _param_tokens(cards: list[SpiceCard], name: str) -> list[tuple[int, Token]]:
     for index, card in enumerate(cards):
         if card.kind != "param":
             continue
-        for token in tokenize_body(card.body)[1:]:
-            if token.kind == TokenKind.KEY_VALUE and token.key and token.key.casefold() == target:
+        for key, token in _param_assignments(card):
+            if key.casefold() == target:
                 tokens.append((index, token))
     return tokens
 
@@ -1819,7 +1952,9 @@ def _apply_random_rules(
             text = texts[index]
             site = target.site
             if isinstance(rule, ComponentRule):
-                text, sampled = _apply_component_rule(text, rule, sampler, target.refs)
+                text, sampled = _apply_component_rule(
+                    text, rule, sampler, target.refs, file=target.file
+                )
             elif isinstance(rule, ParamRule):
                 assert site is not None
                 text, sampled = _apply_param_rule(text, rule, sampler, site=site, file=target.file)
@@ -1879,7 +2014,7 @@ def _closure_model_card(closure: _DeckClosure, texts: dict[int, str], name: str)
     target = name.casefold()
     found: list[tuple[_ClosureFile, list[SpiceCard], int]] = []
     for file in closure.files:
-        cards = lex(texts[file.index]).cards
+        cards = file.lexed(texts[file.index]).read
         found.extend(
             (file, cards, index)
             for index, card in enumerate(cards)
@@ -1968,10 +2103,14 @@ def _write_case_includes(
     written: dict[Path, tuple[Path, str]] = {}
     for index in sorted(copies):
         file = closure.files[index]
-        cards = lex(texts[index]).cards
-        rewritten = rewrite_staged_reference_cards(cards, file.path, renames, depth=file.depth)
-        if fold_micro_suffix_cards(cards) or rewritten:
-            texts[index] = emit(cards)
+        lexed = file.lexed(texts[index])
+        # A card the simulator never reads is neither repointed nor folded, as
+        # staging left it.
+        rewritten = rewrite_staged_reference_cards(
+            lexed.read, file.path, renames, depth=file.depth
+        )
+        if fold_micro_suffix_cards(lexed.read) or rewritten:
+            texts[index] = emit(lexed.cards)
         if index == 0:
             continue
         source = file.path.resolve()
@@ -2008,16 +2147,20 @@ def _apply_component_rule(
     rule: ComponentRule,
     sampler: MCSampler,
     refs: frozenset[str],
+    *,
+    file: _ClosureFile,
 ) -> tuple[str, dict[str, float]]:
     """Perturb the references resolution matched in this file, one draw each.
 
     ``refs`` rather than the pattern: resolution already evaluated the glob,
     and evaluating it a second time here is what would let the set that gets
-    perturbed differ from the set that gets reported.
+    perturbed differ from the set that gets reported. They are looked up
+    among the cards resolution read (``_lexed_file``), so a part of the same
+    name the simulator never reads is neither drawn for nor reported.
     """
-    result = lex(text)
+    lexed = file.lexed(text)
     matched: list[tuple[str, float]] = []
-    for card in result.cards:
+    for card in lexed.read:
         if card.kind != "instance" or not card.name or card.name.casefold() not in refs:
             continue
         view = _instance_view(card, card.name, "Random component target")
@@ -2041,7 +2184,7 @@ def _apply_component_rule(
             "ambiguous_target",
             f"Random component target {rule.target!r} matches no component",
         )
-    return emit(result.cards), {f"random:component:{ref}": value for ref, value in matched}
+    return emit(lexed.cards), {f"random:component:{ref}": value for ref, value in matched}
 
 
 def _apply_param_rule(
@@ -2052,7 +2195,8 @@ def _apply_param_rule(
     site: _Site,
     file: _ClosureFile,
 ) -> tuple[str, dict[str, float]]:
-    cards = lex(text).cards
+    lexed = file.lexed(text)
+    cards = lexed.read
     chosen = _chosen_param_token(cards, site, file=file)
     nominal = None if chosen is None else parse_value(chosen[1].value or "")
     if nominal is None:
@@ -2067,7 +2211,7 @@ def _apply_param_rule(
         stream=f"param:{rule.target}",
     )
     _set_param_value_on_cards(cards, site, sampled, file=file)
-    return emit(cards), {f"random:param:{rule.target}": sampled}
+    return emit(lexed.cards), {f"random:param:{rule.target}": sampled}
 
 
 def _render_scalar(value: ScalarValue) -> str:
@@ -2084,7 +2228,8 @@ def _apply_model_rule(
     site: _Site,
     file: _ClosureFile,
 ) -> tuple[str, dict[str, float]]:
-    cards = lex(text).cards
+    lexed = file.lexed(text)
+    cards = lexed.read
     matches = [
         index
         for index, card in enumerate(cards)
@@ -2118,7 +2263,7 @@ def _apply_model_rule(
     view = ModelCard.from_card(cards[chosen])
     for param, new_value in perturbations.items():
         view.set_param(param, new_value)
-    return emit(cards), {f"random:model:{rule.target}.{rule.param}": sampled}
+    return emit(lexed.cards), {f"random:model:{rule.target}.{rule.param}": sampled}
 
 
 def _engine_rule(rule: MismatchRule) -> EngineMismatchRule:
@@ -2153,7 +2298,10 @@ def _flat_mismatch_files(
     for file in closure.files:
         if not any(ref.startswith(prefixes) for ref in file.targets.components):
             continue
-        refs = [instance.ref for instance in extract_mosfet_instances(texts[file.index])]
+        refs = [
+            instance.ref
+            for instance in extract_mosfet_instances(texts[file.index], deck=file.is_deck)
+        ]
         for position, rule in enumerate(rules):
             if any(matches_prefix(ref, rule.prefix) for ref in refs):
                 hits[position].append(file.index)
@@ -2251,7 +2399,11 @@ def _apply_mismatch_rules(
     for rule, indexes in zip(mismatch_rules, flat, strict=True):
         for index in indexes:
             text, sampled = _apply_mismatch_rule(
-                texts[index], rule, sampler, model_card=model_card
+                texts[index],
+                rule,
+                sampler,
+                model_card=model_card,
+                deck=closure.files[index].is_deck,
             )
             texts[index] = text
             draws.update(sampled)
@@ -2350,11 +2502,17 @@ def _apply_mismatch_rule(
     sampler: MCSampler,
     *,
     model_card: Callable[[str], str | None],
+    deck: bool,
 ) -> tuple[str, dict[str, float]]:
+    """Draw for each top-level device the rule's prefix claims in one file.
+
+    ``deck`` says the file is the deck itself, whose title and cards after
+    ``.END`` hold no device the simulator reads (``_ClosureFile.is_deck``).
+    """
     engine_rule = _engine_rule(rule)
     instances = [
         instance
-        for instance in extract_mosfet_instances(text)
+        for instance in extract_mosfet_instances(text, deck=deck)
         if matches_prefix(instance.ref, rule.prefix)
     ]
     if not instances:
@@ -2399,8 +2557,9 @@ def _apply_mismatch_rule(
         text = inject_card_before_end(
             text,
             render_variant_model_card(base_card, variant, overrides),
+            deck=deck,
         )
-        text = rewrite_instance_model(text, instance.ref, variant)
+        text = rewrite_instance_model(text, instance.ref, variant, deck=deck)
     return text, draws
 
 
@@ -2463,7 +2622,7 @@ def _validate_write_sets(
     origins: dict[tuple[str, int], Source] | None = None,
 ) -> None:
     claims: list[_WriteClaim] = []
-    cards = {file.index: lex(file.text).cards for file in closure.files}
+    cards = {file.index: file.lexed(file.text).read for file in closure.files}
     for edit in edits:
         if edit.kind in {"structured", "instance_param"}:
             continue
@@ -2581,40 +2740,122 @@ def _validate_write_sets(
                         )
 
 
-def _path_multiplier(
+def _refuse_a_changed_m_rewrite(
+    as_written: Hierarchy, final_files: Sequence[ClosureFile]
+) -> Hierarchy | None:
+    """Refuse a case whose edits change what ngspice builds where nothing asked.
+
+    ngspice rewrites a subcircuit for ``m`` according to which of its callers
+    write ``m`` and where they sit in the deck (``hierarchy_expr.card_copies``).
+    An edit that writes ``m`` on one call, or a private subcircuit copy that
+    only the X lines on its path call, can move that rewrite, so a card the
+    case does not edit builds another number of copies than the deck as
+    written, or ngspice stops. Every card whose own ``m`` and whose ancestors'
+    ``m`` no edit wrote must build what it did; a card whose count is unknown
+    on either side (an element letter not measured) is not compared. Returns
+    the edited deck's hierarchy when it resolved one, for the lineage to reuse.
+    """
+    profile = as_written.profile
+    if profile.simulator != "ngspice":
+        return None
+    from ltspice_mcp.lib.instance_targeting import captured_hierarchy
+
+    try:
+        edited = captured_hierarchy(final_files, profile)
+    except MultiplierRewriteStop as exc:
+        raise VariationError(
+            "multiplier_rewrite_changed",
+            f"the edits this case needs, private subcircuit copies included, would leave "
+            f"a deck ngspice cannot run. {exc}",
+        ) from exc
+    if not as_written.m_rewritten and not edited.m_rewritten:
+        return edited
+    rows = {row.instance: row for row in edited.instances}
+    written = {row.instance: dict(row.parameters).get("m") for row in as_written.instances}
+    now = {path: dict(row.parameters).get("m") for path, row in rows.items()}
+    for row in as_written.instances:
+        other = rows.get(row.instance)
+        if other is None or row.multiplier is None or other.multiplier is None:
+            continue
+        before, after = row.multiplier.value, other.multiplier.value
+        if before is None or after is None or before == after:
+            continue
+        lineage = [row.instance[:depth] for depth in range(1, len(row.instance) + 1)]
+        if any(written.get(path) != now.get(path) for path in lineage):
+            continue
+        raise VariationError(
+            "multiplier_rewrite_changed",
+            _rewrite_change_message(row, other, as_written, edited, written),
+        )
+    return edited
+
+
+def _rewrite_change_message(
     row: ResolvedInstance,
-    by_path: Mapping[tuple[str, ...], ResolvedInstance],
-    x_line_m: bool,
-) -> float:
+    other: ResolvedInstance,
+    as_written: Hierarchy,
+    edited: Hierarchy,
+    written: Mapping[tuple[str, ...], NumericFact | None],
+) -> str:
+    """Why a card no edit writes would build another count, and a fix that keeps it."""
+    card = ".".join(row.instance)
+    body = row.source.definition or "the top level"
+    change = (
+        f"{card}, which no edit writes, would build {_copies_text(other.multiplier)} "
+        f"where the deck as written builds {_copies_text(row.multiplier)}"
+    )
+    was = (row.source.definition or "").casefold() in as_written.m_rewritten
+    now = (other.source.definition or "").casefold() in edited.m_rewritten
+    calls = [
+        ".".join(row.instance[:depth])
+        for depth in range(1, len(row.instance))
+        if written.get(row.instance[:depth]) is None
+    ]
+    if was and not now:
+        return (
+            f"ngspice rewrites {body} for m because one of its callers writes m, but the "
+            f"private copy this case gives {'.'.join(row.instance[:-1])} has no caller "
+            f"that does, so {change}. Write m=1 on {', '.join(calls) or 'its X line'}: "
+            "each card then builds what it does as written, and the copy is rewritten too"
+        )
+    hint = (
+        "In ngspice's HSPICE modes (ngbehavior hsa) the appended m multiplies a card's own "
+        "m instead, so a caller that writes no m keeps its cards' own m; every other count "
+        "then follows that mode too"
+        if not ngspice_multiplies_m(as_written.profile.ngbehavior)
+        else f"Write on {card} the m it should build"
+    )
+    return (
+        f"the edits this case needs change whether ngspice rewrites {body} for m, which "
+        f"replaces the m of every card in it for every caller, so {change}. {hint}"
+    )
+
+
+def _copies_text(fact: NumericFact | None) -> str:
+    if fact is None or fact.value is None:
+        return "an unknown number of copies"
+    return f"{fact.value:g} cop{'y' if fact.value == 1 else 'ies'}"
+
+
+def _path_multiplier(row: ResolvedInstance) -> float:
     """How many parallel copies of ``row`` the simulator builds from its one card.
 
-    The device's own ``m``, times, when ``x_line_m``, the ``m`` of every
-    subcircuit instance above it. ngspice multiplies those in; LTspice ignores
-    ``m`` on an X line at any depth (recorded: ``raw/subckt_multiplier``,
-    ``deck/subckt_multiplier_nested``). Each ``m`` is read as hierarchy
-    discovery resolved it in its own scope, so an inner ``m={mult}`` takes the
-    value its X line gives, which both simulators honour. A deck with no
-    semantic profile is drawn by ``subckt_mismatch``, whose
-    ``_device_multiplier`` counts the X line's ``m`` as ngspice does. All the
-    copies share one mismatch draw, so the area the draw stands for is this
-    many times W·L. An ``m`` written but not resolvable to a positive number
+    Hierarchy discovery reads it with the simulator's rule
+    (``hierarchy_expr.card_copies``): LTspice ignores ``m`` on an X line at any
+    depth, and ngspice passes an X line's ``m`` down to the cards of a
+    subcircuit that does not declare ``m``, replacing each card's own ``m`` or,
+    in its HSPICE modes, multiplying it. A deck with no semantic profile is
+    drawn by ``subckt_mismatch``, which reads the same rule. All the copies
+    share one mismatch draw, so the area the draw stands for is this many
+    times W·L. An ``m`` written but not resolvable to a positive number
     refuses the rule: drawn as one copy, the sigma would be too large.
     """
-    holders = (
-        [by_path.get(row.instance[:depth]) for depth in range(1, len(row.instance) + 1)]
-        if x_line_m
-        else [row]
-    )
-    multiplier = multiplier_product(
-        (".".join(holder.instance), dict(holder.parameters).get("m"))
-        for holder in holders
-        if holder is not None
-    )
-    if multiplier.value is None:
+    multiplier = row.multiplier
+    if multiplier is None or multiplier.value is None:
+        why = "is unknown" if multiplier is None else multiplier.reason
         raise VariationError(
             "mismatch_geometry_unresolved",
-            f"multiplier {multiplier.reason}, so the mismatch area of "
-            f"{'.'.join(row.instance)} is unknown",
+            f"multiplier {why}, so the mismatch area of {'.'.join(row.instance)} is unknown",
         )
     return multiplier.value
 
@@ -2652,7 +2893,6 @@ def _nested_mismatch_edits(
     edits: list[InstanceEdit] = []
     draws: dict[str, float] = {}
     claimed: set[tuple[str, ...]] = set()
-    by_path = {row.instance: row for row in hierarchy.instances}
     simulator = hierarchy.profile.simulator
     nominals_by_model: dict[tuple[str, int], dict[str, float]] = {}
     for rule in rules:
@@ -2707,7 +2947,7 @@ def _nested_mismatch_edits(
                     row.model_name or "",
                     width,
                     length,
-                    _path_multiplier(row, by_path, x_line_m=simulator == "ngspice"),
+                    _path_multiplier(row),
                 ),
                 _engine_rule(rule),
             )
@@ -2779,8 +3019,8 @@ def _claim_card(
                 parameter
                 and card.kind == "param"
                 and any(
-                    t.key and t.key.casefold() == site.name.casefold()
-                    for t in tokenize_body(card.body)
+                    key.casefold() == site.name.casefold()
+                    for key, _token in _param_assignments(card)
                 )
             )
         )

@@ -22,7 +22,7 @@ Checks by file kind:
   made on a text deck: it carries no geometry and no symbol library.
 
 ``compare`` runs in one of two modes: ``equivalence`` graph-compares through the
-connectivity engine (every include/lib open gated by ``safe_path``, so with a
+netlist graph (every include/lib open gated by ``safe_path``, so with a
 sandbox set an in-deck include that escapes it is denied and never read), and
 compares the directives outside subcircuit definitions with ``structural_diff``'s
 reader; ``structural_diff`` lexes both decks and reports an added/removed/changed
@@ -41,7 +41,8 @@ for its result to exist: today, a deck in a comparison that could not be parsed 
 was therefore diffed as an empty circuit, which makes the other side's whole content
 read as added or removed. Those warnings have one home, the top-level channel:
 nested inside ``comparison`` they were invisible to the schema, so a structured-only
-client read the bogus delta as fact.
+client read the bogus delta as fact. A render ``scale`` above its cap is drawn at
+the cap and said there too, as every tool says an argument it held.
 
 An unparsed deck sits in ``warnings`` rather than ``observations`` deliberately. The
 rules in ``lib/result_observations.py`` route a *run-level solve failure* to
@@ -89,6 +90,7 @@ from ltspice_mcp.lib import (
     atomic_write_bytes,
     capabilities,
 )
+from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.cursor_codec import CursorError, decode_cursor, encode_cursor
 from ltspice_mcp.lib.deck_prep import asc_export_lock, stage_sheet_copy
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding, refused_sheet_mark_note
@@ -100,7 +102,7 @@ from ltspice_mcp.lib.lint_rules import (
     export_writer,
     meas_angle_sites,
     rule_severity,
-    unreadable_card_detail,
+    unreadable_card_sites,
     value_suffix_evidence,
 )
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
@@ -120,7 +122,6 @@ from ltspice_mcp.lib.netlist_graph import (
     parse_netlist_graph,
 )
 from ltspice_mcp.lib.raster import RenderedImage
-from ltspice_mcp.lib.schematic_ops import is_asc
 from ltspice_mcp.lib.schematic_scene import Scene, build_scene, sheet_view
 from ltspice_mcp.lib.services import cp1252_ltspice
 from ltspice_mcp.lib.sheet_findings import (
@@ -132,7 +133,7 @@ from ltspice_mcp.lib.sheet_findings import (
 )
 from ltspice_mcp.lib.simulator import DEFAULT_FAMILY, family_for
 from ltspice_mcp.lib.simulator_build import executable_identity, is_cp1252_ltspice_build
-from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, lex_deck, unreadable_cards
+from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, lex_deck
 from ltspice_mcp.lib.spice_lex_ops import (
     MICRO_SIGN_READERS,
     ValueSuffixSite,
@@ -165,6 +166,7 @@ from ltspice_mcp.tools._base import (
     format_response,
     image_content,
     make_include_resolver,
+    open_window_call,
     outcome_of,
     outcome_schema,
     path_denied_text,
@@ -173,6 +175,7 @@ from ltspice_mcp.tools._base import (
     resolve_reference,
     safe_path,
     sandboxed,
+    sha256_from_open_in_ltspice,
     shown_in_window,
     window_difference,
 )
@@ -845,9 +848,10 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
             **WARNINGS_SCHEMA,
             "description": (
                 "Assumptions a check had to make for its result to exist at all — "
-                "today, a deck in a comparison that could not be parsed and was "
-                "diffed as an empty circuit. Each names one thing to fix, so read "
-                "these before trusting 'comparison' or 'export.diff_vs_prior'."
+                "a deck in a comparison that could not be parsed and was diffed as "
+                "an empty circuit — and a render scale held at its cap. Each names "
+                "one thing to fix, so read these before trusting 'comparison' or "
+                "'export.diff_vs_prior'."
             ),
         },
         "failures": failures_schema(_STAGE_FAILURE_SCHEMA),
@@ -1343,7 +1347,7 @@ def _syntax_findings(
     encoding: str,
     *,
     cp1252_reader: str | None,
-    simulator: str,
+    family: str,
 ) -> list[dict[str, Any]]:
     """Directive, unreadable-card, element-arity, value-suffix and .meas angle
     findings in a netlist.
@@ -1354,11 +1358,12 @@ def _syntax_findings(
     element-arity issue carries the severity its validator check declares, and
     a suffix finding is an error only for a mis-decoded file (see
     ``_value_suffix_findings``).
-    ``simulator`` is the one the session runs decks on, ``"LTspice"`` or
-    ``"ngspice"``: some directive and element forms are a fault for one and
+    ``family`` is the simulator family the session runs decks on, ``ltspice``
+    or ``ngspice``: some directive and element forms are a fault for one and
     valid for the other. The facts that are legal-but-notable live in the
     quality check.
     """
+    simulator = DISPLAY[family]
     findings: list[dict[str, Any]] = []
     # The deck's cards, as the linter reads them: a directive continued on a
     # ``+`` line is checked whole, and the title and the cards after ``.END``
@@ -1379,18 +1384,20 @@ def _syntax_findings(
             )
         )
 
-    # A card no rule could read is left out by every rule below and by the
-    # quality check, so the reply says which, as the linter's
-    # ``unreadable-card`` rule does.
+    # A card no rule could split into its parts is left out by every rule
+    # below and by the quality check, so the reply says which, as the
+    # linter's unreadable-card rule does. A .meas LTspice refuses for a
+    # parenthesis left open is the directive_syntax error above instead.
     findings.extend(
         _finding(
             rule_id="unreadable_card",
-            severity="warning",
-            at={"file": str(path), "line": card.line_start},
-            subject=" ".join(card.body.split()),
-            evidence={"detail": unreadable_card_detail(error)},
+            severity=rule_severity("unreadable-card"),
+            at={"file": str(path), "line": site.card.line_start},
+            subject=" ".join(site.card.body.split()),
+            evidence={"detail": site.detail},
         )
-        for card, error in unreadable_cards(deck.cards)
+        for site in unreadable_card_sites(deck.cards, family)
+        if site.rule_id == "unreadable-card"
     )
     findings.extend(
         _rule_finding(issue, path, rule_id="element_arity", severity=str(issue["severity"]))
@@ -2326,6 +2333,14 @@ def _open_in_ltspice(state: SessionState, path: Path) -> dict[str, Any]:
     return report
 
 
+#: The call that settles the window's copy of the checked sheet, once the
+#: user has chosen. The reply names the sheet and not its sha256, which the
+#: open_in_ltspice query gives.
+_SETTLE_THIS_PATH = open_window_call(
+    "this path", sha256_from_open_in_ltspice("this path"), "'save'|'discard'"
+)
+
+
 def _ltspice_hint(shown: Mapping[str, Any] | None) -> str | None:
     """What the caller should know about the LTspice window, if it was asked for."""
     if shown is None:
@@ -2336,9 +2351,9 @@ def _ltspice_hint(shown: Mapping[str, Any] | None) -> str | None:
         return (
             "LTspice already had the sheet open and shows a different one from the file "
             f"that was checked ({shown['difference']}). {difference_in_full()} "
-            "Ask the user whether to keep the "
-            "window's copy, then call edit_schematic with ops=[] and open_window='save' "
-            "to write it to the file or open_window='discard' to open the file there."
+            "Ask the user whether to keep the window's copy, then call "
+            f"{_SETTLE_THIS_PATH}: 'save' writes it to the file and 'discard' opens the "
+            "file there."
         )
     if shown.get("started"):
         return "LTspice was started, with it in front."
@@ -2620,7 +2635,6 @@ async def evaluate_verify_circuit(
                 "syntax: no simulator is detected; the deck was checked as "
                 f"{DISPLAY[family]} reads it."
             )
-        simulator = DISPLAY[family]
         gap = capabilities.gap_reason(family, "validator_rules")
         if gap is not None:
             observations.append(f"syntax: {gap}")
@@ -2632,7 +2646,7 @@ async def evaluate_verify_circuit(
                 deck,
                 encoding,
                 cp1252_reader=cp1252_reader,
-                simulator=simulator,
+                family=family,
             )
         )
         checks_run.append("syntax")
@@ -2698,8 +2712,11 @@ async def evaluate_verify_circuit(
     # `compare` consumes the export's output, so the picture is drawn in
     # parallel and costs no wall time of its own.
     render_task: asyncio.Task[_RenderResult] | None = None
+    # A scale held at its cap, said once the drawing made at it is returned.
+    render_notes: list[str] = []
     if render is not None:
         render_task = asyncio.create_task(_do_render(scene, kind, render, path, state))
+        render_notes = [f"render.{note}" for note in render.argument_notes()]
 
     try:
         # --- export ---------------------------------------------------------
@@ -2798,6 +2815,7 @@ async def evaluate_verify_circuit(
         render_payload, inline_image, render_failures, render_obs = await render_task
         if render_payload is not None:
             data["render"] = render_payload
+            warnings.extend(render_notes)
         failures.extend(render_failures)
         observations.extend(render_obs)
 

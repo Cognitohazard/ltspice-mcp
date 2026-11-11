@@ -3747,3 +3747,59 @@ class TestSignalStatsQuantiles:
             if failure["code"] == "recipe_failed"
         )
         assert "transient" in message
+
+
+@pytest.mark.asyncio
+async def test_a_summary_that_caps_its_signal_list_names_the_call_that_lists_them(
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """The summary recipe lists the first 100 signal names and counts them all
+    in signals_truncated, which came with no way to read the rest. Its hint
+    names the results query, which pages every name, and that query lists
+    them all."""
+    names = ["time", *(f"v(n{i})" for i in range(120))]
+    variables = "".join(
+        f"\t{i}\t{name}\t{'time' if i == 0 else 'voltage'}\n" for i, name in enumerate(names)
+    )
+    values = "".join(
+        f"{point}\t{point * 1e-3:.15e}\n" + "".join(f"\t{0.5 * point:.15e}\n" for _ in names[1:])
+        for point in range(2)
+    )
+    raw = work_dir / "many_nodes.raw"
+    # Bytes, so the file holds exactly these newlines on every platform.
+    raw.write_bytes(
+        (
+            "Title: * many nodes\nDate: x\nPlotname: Transient Analysis\nFlags: real\n"
+            f"No. Variables: {len(names)}\nNo. Points: 2\nCommand: ngspice-44\n"
+            f"Variables:\n{variables}Values:\n{values}"
+        ).encode("ascii")
+    )
+
+    data = await _analyze(state_no_sim, raw, [{"key": "s", "metric": "summary"}])
+    (row,) = data["results"]["s"]["values"]
+    summary = row["value"]
+    assert summary["signals_truncated"] == len(names)
+    assert "inspect(kind='results', view='signals')" in summary["hint"]
+
+    listed: list[str] = []
+    cursor = None
+    while True:
+        reply = await inspect_tools.handle_inspect(
+            inspect_tools.InspectInput.model_validate(
+                {
+                    "queries": [
+                        {"kind": "results", "view": "signals", "path": str(raw), "cursor": cursor}
+                    ]
+                }
+            ),
+            state_no_sim,
+        )
+        assert reply.structured_content is not None
+        (result,) = reply.structured_content["results"]
+        assert result["ok"], result
+        listed.extend(signal["name"] for signal in result["data"]["signals"])
+        cursor = result.get("next_cursor")
+        if cursor is None:
+            break
+    assert listed == names

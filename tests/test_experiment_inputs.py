@@ -22,7 +22,7 @@ from ltspice_mcp.lib.pdk_native import ArtifactDigest, NativePaths, prepare_laun
 from ltspice_mcp.lib.recovery_records import RecoveryError
 from ltspice_mcp.lib.store import Store, StoreError
 from ltspice_mcp.lib.variations import MaterializedCase
-from tests.conftest import symlink_or_skip
+from tests.conftest import needs_controlled_startup, symlink_or_skip
 from tests.test_recovery_records import recovery_job
 
 
@@ -148,10 +148,7 @@ def test_refuses_missing_file_and_symlink_escape(tmp_path):
     assert error.value.code == "recovery_path_escape"
 
 
-@pytest.mark.skipif(
-    sys.platform not in {"linux", "win32"},
-    reason="controlled ngspice startup is verified on Linux and Windows",
-)
+@needs_controlled_startup
 def test_startup_is_an_inert_frozen_file_in_initial_run_root(tmp_path):
     store = Store(tmp_path)
     policy = prepare_startup(store, "exp_startup")

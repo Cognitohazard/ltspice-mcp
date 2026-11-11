@@ -1,4 +1,4 @@
-"""Process-owned engine session and synchronous event-loop bridge."""
+"""Process-owned API session and synchronous event-loop bridge."""
 
 from __future__ import annotations
 
@@ -51,12 +51,12 @@ if hasattr(os, "register_at_fork"):
 
 
 def acquire_session_lease(owner: object) -> int:
-    """Atomically reserve this PID's single engine-session slot for ``owner``."""
+    """Atomically reserve this PID's single session slot for ``owner``."""
     global _lease_record
     pid = os.getpid()
     with _lease_lock:
         if _lease_record is not None and _lease_record.pid == pid:
-            raise ApiSessionError("An engine session is already active in this process")
+            raise ApiSessionError("An API session is already active in this process")
         _lease_record = _LeaseRecord(owner=owner, pid=pid)
     return pid
 
@@ -92,7 +92,7 @@ async def _cancel_residual_tasks(timeout_s: float) -> None:
 
 
 class Api(ApiMethodsMixin):
-    """Synchronous owner of one engine state on a private persistent event loop."""
+    """Synchronous owner of one session state on a private persistent event loop."""
 
     def __init__(
         self,
@@ -272,7 +272,7 @@ class Api(ApiMethodsMixin):
             raise shutdown_error
 
     def close(self) -> None:
-        """Close the engine session and release its process lease."""
+        """Close the session and release its process lease."""
         self._check_process_and_thread()
         with self._lifecycle_lock:
             if self._status == "closed":

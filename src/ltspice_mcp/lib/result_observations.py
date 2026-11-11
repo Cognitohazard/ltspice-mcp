@@ -53,7 +53,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
@@ -63,9 +63,11 @@ from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import parse_spice_value
+from ltspice_mcp.lib.log_types import measurement_named
 from ltspice_mcp.lib.spice_lex import lex_deck
 from ltspice_mcp.lib.spice_lex_views import read_instance
 from ltspice_mcp.lib.spice_validator import leading_numeric_tokens
+from ltspice_mcp.lib.trace_names import is_node_voltage
 
 if TYPE_CHECKING:
     from ltspice_mcp.lib.decoded_raw import DecodedRaw
@@ -373,6 +375,19 @@ def deck_tran_max_step(netlist: Path) -> float | None:
     return _TRAN_MAX_STEPS.get(netlist, lambda path: _read_deck(path, tran_max_step))
 
 
+def compressed_transient(raw: DecodedRaw) -> bool:
+    """Whether ``raw`` is an LTspice transient saved with waveform compression
+    on, the plot ``coarse_compressed_waveform`` judges. LTspice adds
+    ``nocompression`` to a transient's flags when compression is off
+    (``raw/compress_*``)."""
+    descriptor = raw.descriptor
+    return (
+        descriptor.dialect == "ltspice"
+        and descriptor.analysis == "transient"
+        and not any(flag.lower() == "nocompression" for flag in raw.header.flags)
+    )
+
+
 def coarse_compressed_waveform(
     raw: DecodedRaw, *, max_step: float | None = None
 ) -> dict[str, float] | None:
@@ -382,15 +397,8 @@ def coarse_compressed_waveform(
     step, its points and span, and where the gap lies. None for any other
     plot. A gap no wider than the deck's own maximum step is what it asked for.
 
-    LTspice adds ``nocompression`` to a transient's flags when waveform
-    compression is off (``raw/compress_*``).
     """
-    descriptor = raw.descriptor
-    if (
-        descriptor.dialect != "ltspice"
-        or descriptor.analysis != "transient"
-        or any(flag.lower() == "nocompression" for flag in raw.header.flags)
-    ):
+    if not compressed_transient(raw):
         return None
     try:
         for step in raw.get_steps():
@@ -533,22 +541,25 @@ def reconciliation_observations(
     """
     obs: list[Observation] = []
 
-    # Names compared as ``log_types.measurement_named`` compares them, in any
-    # case; a membership test needs no preference for the exact spelling.
-    failed = {name.casefold() for name in summary.get("failed_measurements") or []}
+    # Which measurement a requested name refers to is measurement_named's answer.
+    failed = list(summary.get("failed_measurements") or [])
     # A FAILED .meas still appears as a null-valued key in ``measurements`` (and
     # in ``failed_measurements``). Without removing it here, the produced-check
     # below would treat it as produced and skip it — shadowing the "failed"
     # classification, so a failed measurement never surfaced as an observation.
-    produced_meas = {name.casefold() for name in summary.get("measurements") or {}} - failed
+    produced_meas = [
+        name
+        for name in summary.get("measurements") or {}
+        if measurement_named(name, failed) is None
+    ]
     warns = " ".join(summary.get("warnings") or []).lower()
     meas_batch_skipped = "batch mode" in warns and "meas" in warns
     four_batch_skipped = ".fourier line ignored" in warns or "skips .four" in warns
 
     for name in requested.get("meas", []):
-        if name.casefold() in produced_meas:
+        if measurement_named(name, produced_meas) is not None:
             continue
-        if name.casefold() in failed:
+        if measurement_named(name, failed) is not None:
             reason = "failed"
         elif meas_batch_skipped:
             reason = "skipped_in_batch_mode"
@@ -584,6 +595,7 @@ def value_observations(
     value_traces: dict[str, np.ndarray],
     *,
     source_reference: tuple[str, float] | None = None,
+    node_voltages: Collection[str] | None = None,
 ) -> list[Observation]:
     """Surface salient numbers in the trace data: non-finite samples and
     extreme magnitudes.
@@ -595,10 +607,16 @@ def value_observations(
 
     ``source_reference`` — ``(name, amplitude)`` of the deck's largest
     independent voltage source — arms a third ``extreme_value`` trigger: a
-    voltage trace whose peak dwarfs every source in the deck (see
+    node voltage whose peak dwarfs every source in the deck (see
     ``_SOURCE_RELATIVE_RATIO``). Passed only for real-valued analyses
     (.tran/.op) where "node voltage vs. drive level" is meaningful.
+    ``node_voltages`` names the traces that hold one, as the plot's declared
+    types say (``raw_parser.node_voltages``); without it a trace is read by
+    its name alone, as ``trace_names.trace_quantity`` reads an untyped trace.
     """
+    if node_voltages is None:
+        node_voltages = [name for name in value_traces if is_node_voltage(name, None)]
+    voltages = frozenset(node_voltages)
     obs: list[Observation] = []
     for name, arr in value_traces.items():
         if arr.size == 0:
@@ -665,13 +683,10 @@ def value_observations(
                     )
             # Source-relative trigger — only when the absolute/self-relative
             # gates stayed quiet (one extreme_value per trace is enough) and
-            # only for voltage traces, whose scale the V-source reference
-            # actually bounds.
-            if (
-                len(obs) == flagged_before
-                and source_reference is not None
-                and name.lower().startswith("v(")
-            ):
+            # only for node voltages, whose scale the V-source reference
+            # actually bounds: not a current, nor a device's parameter such
+            # as ngspice's v(@m1[vth]).
+            if len(obs) == flagged_before and source_reference is not None and name in voltages:
                 src_name, src_amp = source_reference
                 if peak >= src_amp * _SOURCE_RELATIVE_RATIO:
                     obs.append(
@@ -746,6 +761,7 @@ def surface_observations(
     requested: dict[str, list[str]] | None = None,
     value_traces: dict[str, np.ndarray] | None = None,
     source_amplitudes: dict[str, float] | None = None,
+    node_voltages: Collection[str] | None = None,
 ) -> list[Observation]:
     """Assemble the full observation list for a result summary.
 
@@ -754,7 +770,8 @@ def surface_observations(
 
     ``source_amplitudes`` (from ``parse_source_amplitudes``) arms the
     source-relative ``extreme_value`` trigger for the selected plot's decoded
-    ``analysis`` when that is a transient or an operating point.
+    ``analysis`` when that is a transient or an operating point, for the
+    traces ``node_voltages`` names (``value_observations``).
     """
     obs: list[Observation] = []
     obs.extend(relay_observations(summary))
@@ -771,5 +788,9 @@ def surface_observations(
         # the V-card this parser read.
         if source_amplitudes and analysis in ("transient", "op"):
             source_reference = max(source_amplitudes.items(), key=lambda kv: kv[1])
-        obs.extend(value_observations(value_traces, source_reference=source_reference))
+        obs.extend(
+            value_observations(
+                value_traces, source_reference=source_reference, node_voltages=node_voltages
+            )
+        )
     return obs

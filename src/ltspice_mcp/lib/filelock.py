@@ -128,8 +128,8 @@ def file_lock(
 # Per-circuit locking: the in-process lock and the cross-process one, layered
 # ---------------------------------------------------------------------------
 #
-# These live here rather than in the tool layer because the schematic edit
-# engine (a lib module) takes them, and a core module must not import the layer
+# These live here rather than in the tool layer because the schematic
+# editor (a lib module) takes them, and a core module must not import the layer
 # that imports it. ``tools/_base`` re-exports them.
 #
 # Where a circuit's lock file lives is lib/store.py's decision

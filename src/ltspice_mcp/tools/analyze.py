@@ -29,7 +29,7 @@ from ltspice_mcp.errors import (
     OtherRawNotWritten,
     PathSecurityError,
     ResultError,
-    error_hint,
+    ResultFileNotFoundError,
     python_route_text,
 )
 from ltspice_mcp.lib import (
@@ -46,7 +46,7 @@ from ltspice_mcp.lib import (
 )
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, PlotDescriptor
-from ltspice_mcp.lib.format import cap_note, format_spice_value, unique_name
+from ltspice_mcp.lib.format import cap_note, format_spice_value, held_to_cap, unique_name
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
 from ltspice_mcp.lib.log_types import measurement_named
 from ltspice_mcp.lib.pagination import retotal_page
@@ -54,6 +54,7 @@ from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.projection import (
     absent_path_warnings,
     keep_plan,
+    key_outline,
     project_row,
     resolve_field_paths,
 )
@@ -75,7 +76,7 @@ from ltspice_mcp.lib.recipes import (
     StepSelector,
     WaveformRecipe,
     step_axis_key,
-    validate_recipe,
+    validate_recipe,  # noqa: TID251 - recipe_of_request, its owner, is in this module
 )
 from ltspice_mcp.lib.result_kinds import AC_SHAPED
 from ltspice_mcp.lib.result_observations import (
@@ -92,9 +93,9 @@ from ltspice_mcp.tools._base import (
     StrictModel,
     ToolInput,
     format_response,
-    held_to_cap,
     outcome_of,
     page_schema,
+    recovery_hint,
     registry,
     resolve_response_budget,
     sanitize_payload,
@@ -212,10 +213,15 @@ class AnalyzeSourceInput(OptionalRawSelectionFields, OtherRawFields, NotedModel)
             if any(index < 0 for index in self.runs):
                 raise ValueError("run indices must be non-negative integers")
             self.keep_first("runs")
-        if isinstance(self.runs, CaseSelection) and self.job_id is None:
-            raise ValueError("case_ids selection is available only for experiment jobs")
-        if self.other_raw is not None and self.job_id is None:
-            raise ValueError("other_raw selects a raw of an experiment job's cases")
+        # Beside a path, other_raw and a case selection are refused as every
+        # reader of a path refuses them. A list of runs is not: a run the file
+        # does not hold is reported missing, as for a job.
+        if self.job_id is None and (
+            refusal := services.run_selectors_beside_path(
+                other_raw=self.other_raw, case_ids=isinstance(self.runs, CaseSelection)
+            )
+        ):
+            raise ValueError(refusal)
         if "label" not in self.model_fields_set:
             # One source, or several that name themselves: the label only has
             # to tell this source's rows apart, and its job or file does that.
@@ -325,9 +331,41 @@ runs, is not known yet. A row then keeps its plain message and marks itself
 under ``_ROUTE_KEY``, and the render that shows it adds the route."""
 
 _ROUTE_KEY = "python_route"
-"""Marks a stored failure row whose message ends in an ``api`` snippet."""
+"""Marks a stored failure row whose message ends in an ``api`` snippet, and a
+stored ``failures_truncated`` note, which names ``api.analyze_results``."""
 
 _DIGIT_RUN = re.compile(r"(\d+)")
+
+
+def _failures_truncated_detail(counts: Mapping[str, int], served: Collection[str] | None) -> str:
+    """The ``failures_truncated`` note for a page that lists ``_FAILURE_CAP`` of
+    ``counts["rows"]`` failure rows, which stand for ``counts["records"]``
+    records. ``served`` says where the ``api`` call it names runs, as
+    :func:`python_route_text` does; None leaves that out (the Python API).
+
+    The one text of the note: a page builds it here, and the render of a
+    stored analysis builds it again here once it knows which session shows it.
+    """
+    rows, records = counts["rows"], counts["records"]
+    standing_for = f", which stand for {records} failures" if records != rows else ""
+    rest = "api.analyze_results returns every record."
+    if served is not None:
+        rest = f"{rest} {python_route_text(served)}"
+    return (
+        "failures: "
+        + cap_note(_FAILURE_CAP, rows, f"failure records{standing_for}", rest)
+        + " Coverage and recipe result presence still reflect the full call."
+    )
+
+
+def _marked_for_route(
+    observation: dict[str, Any], failure_counts: dict[str, int] | None
+) -> dict[str, Any]:
+    """A stored analysis's ``failures_truncated`` note, marked under
+    ``_ROUTE_KEY`` with the counts its render rebuilds the note from."""
+    if observation.get("code") == "failures_truncated" and failure_counts is not None:
+        return {**observation, _ROUTE_KEY: failure_counts}
+    return observation
 
 
 def _place_order(where: str) -> tuple[Any, ...]:
@@ -572,8 +610,8 @@ class AnalyzeInclude(NotedModel):
 def include_flag_coercer(model: type[StrictModel]) -> Callable[[Any], Any]:
     """Build the ``include=['outliers', 'per_run']`` -> ``{name: True}`` reader.
 
-    The list is what a caller writes first; the dict is the shape the engine
-    wants, and rejecting the list bought nothing. The accepted names are read
+    The list is what a caller writes first; the dict is the shape the recipes
+    want, and rejecting the list bought nothing. The accepted names are read
     off the model, so a flag added later is spellable both ways without a
     second list to keep in step — minus ``fields``, which takes row paths
     rather than a boolean and cannot mean anything inside a list. An unknown
@@ -896,24 +934,6 @@ def _projection_warnings(records: list[dict[str, Any]], fields: list[str]) -> li
     )
 
 
-def _projection_presence(records: list[dict[str, Any]]) -> dict[str, Any]:
-    """Bounded record-shaped union used for warnings after persistence."""
-    root: dict[str, Any] = {}
-
-    def add(node: dict[str, Any], value: Any) -> None:
-        if not isinstance(value, dict):
-            return
-        for key, child_value in value.items():
-            if str(key).startswith("_"):
-                continue
-            child = node.setdefault(str(key), {})
-            add(child, child_value)
-
-    for record in records:
-        add(root, record)
-    return root
-
-
 def _identity(
     source: services.AnalysisSource,
     step: int | None,
@@ -986,9 +1006,9 @@ def _unresolved_source(
     """The coverage row of a source that names nothing this call can read.
 
     Coded and hinted as every other surface reports the same failure: the
-    error's own code (``job_not_found``, ``result_unreadable``, ``path_denied``)
-    and its type's recovery step (``errors.error_hint``; a refused path's is
-    the sandbox guidance, since the file may be perfectly readable).
+    error's own code (``job_not_found``, ``result_file_not_found``,
+    ``path_denied``) and its kind's recovery step (``recovery_hint``; a refused
+    path's is the sandbox guidance, since the file may be perfectly readable).
     """
     error = exc if isinstance(exc, LTSpiceMCPError) else ResultError(str(exc))
     row: dict[str, Any] = {
@@ -998,7 +1018,7 @@ def _unresolved_source(
         "code": error.code,
         "detail": str(exc),
     }
-    hint = state.sandbox_guidance() if isinstance(error, PathSecurityError) else error_hint(error)
+    hint = recovery_hint(error, state)
     if hint is not None:
         row["hint"] = hint
     return row
@@ -1038,13 +1058,15 @@ async def _resolve_sources(
             except (LTSpiceMCPError, OSError) as exc:
                 missing.append(_unresolved_source(source_input.label, 0, exc, state))
                 continue
+            # The file the source names, not only one read with it: a .raw path
+            # whose .log is there still names nothing to read signals from.
             named = resolved.raw if resolved.raw is not None else resolved.log
             if named is not None and not await asyncio.to_thread(os.path.isfile, named):
                 missing.append(
                     _unresolved_source(
                         source_input.label,
                         0,
-                        ResultError(f"No result file at {named}"),
+                        ResultFileNotFoundError(f"No result file at {named}"),
                         state,
                     )
                 )
@@ -3302,26 +3324,17 @@ def _assemble(
             ),
         }
     failure_rows = _collapse_failures(failures, a.served)
+    # Rows and records left out, for a note the render of a stored analysis
+    # rebuilds once it knows where the api snippet runs.
+    failure_counts: dict[str, int] | None = None
     if len(failure_rows) > _FAILURE_CAP:
-        standing_for = (
-            f", which stand for {len(failures)} failures"
-            if len(failures) != len(failure_rows)
-            else ""
-        )
-        rest = "api.analyze_results returns every record."
-        if a.served is not None and a.served is not _DEFERRED_ROUTE:
-            rest = f"{rest} {python_route_text(a.served)}"
+        failure_counts = {"rows": len(failure_rows), "records": len(failures)}
+        deferred = a.served is _DEFERRED_ROUTE
         observations.append(
             Observation(
                 code="failures_truncated",
                 kind="coverage",
-                detail=(
-                    "failures: "
-                    + cap_note(
-                        _FAILURE_CAP, len(failure_rows), f"failure records{standing_for}", rest
-                    )
-                    + " Coverage and recipe result presence still reflect the full call."
-                ),
+                detail=_failures_truncated_detail(failure_counts, None if deferred else a.served),
             )
         )
         failure_rows = failure_rows[:_FAILURE_CAP]
@@ -3354,7 +3367,12 @@ def _assemble(
         "outcome": outcome,
         "coverage": coverage,
         "results": results,
-        "observations": [observation.wire() for observation in observations],
+        "observations": [
+            _marked_for_route(observation.wire(), failure_counts)
+            if a.served is _DEFERRED_ROUTE
+            else observation.wire()
+            for observation in observations
+        ],
         "failures": failure_rows,
         "source_hashes": _source_hashes(item, provenance=provenance),
         "result_set_id": item.result_set_id,
@@ -3438,7 +3456,7 @@ def _snapshot_from_assembly(a: AnalysisEvaluation) -> dict[str, Any]:
             "answer_rows": answer_rows,
             "answer_total": len(rows),
             "surface": ("per_run" if per_run is not None else "values" if had_values else "none"),
-            "projection_presence": _projection_presence(rows),
+            "projection_presence": key_outline(rows),
         }
         if per_run is not None:
             block["per_run"] = per_run
@@ -3537,6 +3555,10 @@ def render_attached_analysis(
     for row in data.get("failures") or []:
         if row.pop(_ROUTE_KEY, False) and served is not None:
             row["message"] = f"{row['message']} {python_route_text(served)}"
+    for observation in data.get("observations") or []:
+        counts = observation.pop(_ROUTE_KEY, None)
+        if isinstance(counts, dict) and served is not None:
+            observation["detail"] = _failures_truncated_detail(counts, served)
     _rebind_snapshot_cursors(data, fields)
     natural_cursor_base = stored.get("natural_cursor_base")
     if answer_channel:
@@ -4369,6 +4391,30 @@ async def _resolve_drive_start(
     return _DriveStart(item, position, intra_item, missing_offset, include, resumed)
 
 
+def recipe_of_request(raw_recipe: Any, labels: Collection[str]) -> Recipe:
+    """``raw_recipe`` as a recipe of a request whose sources carry ``labels``.
+
+    The one answer to whether a recipe can run in a request: its own fields
+    validate, and every label its ``sources`` names is a source's. Both
+    analyze_results, which fails that one recipe, and run_experiments, which
+    refuses an attached block at submission, ask here, so a block accepted at
+    submission is one the analysis after the runs can read. Raises
+    ``ValueError`` (a ``ValidationError`` for the recipe's own fields) or
+    ``TypeError``.
+    """
+    recipe = validate_recipe(raw_recipe)
+    unknown = set(recipe.sources or ()) - set(labels)
+    if unknown:
+        raise ValueError(
+            "recipe sources name unknown labels: "
+            + ", ".join(sorted(unknown))
+            + ". This request's sources are labelled "
+            + ", ".join(sorted(labels))
+            + "; leave sources out to read every source."
+        )
+    return recipe
+
+
 async def _evaluate_analysis_drive(
     args: AnalyzeResultsInput,
     state: SessionState,
@@ -4438,7 +4484,7 @@ async def _evaluate_analysis_drive(
         raw_recipe = work_item["recipe"]
         key = str(raw_recipe.get("key") or f"recipe_{work_item['index']}")
         try:
-            recipe = validate_recipe(raw_recipe)
+            recipe = recipe_of_request(raw_recipe, declared_labels)
         except (ValueError, TypeError) as exc:
             _skip(
                 Failure(
@@ -4446,20 +4492,6 @@ async def _evaluate_analysis_drive(
                     stage="validate",
                     where=f"recipes[{work_item['index']}]",
                     message=validation_error_detail("analyze_results", exc),
-                )
-            )
-            continue
-
-        unknown_labels = set(recipe.sources or ()) - declared_labels
-        if unknown_labels:
-            _skip(
-                Failure(
-                    code="recipe_invalid",
-                    stage="validate",
-                    where=f"recipes[{work_item['index']}]",
-                    message=(
-                        "recipe sources name unknown labels: " + ", ".join(sorted(unknown_labels))
-                    ),
                 )
             )
             continue

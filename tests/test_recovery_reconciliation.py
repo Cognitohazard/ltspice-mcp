@@ -10,9 +10,11 @@ import pytest
 
 from ltspice_mcp.lib import experiment_store
 from ltspice_mcp.lib.experiment_resume import admit_initial
+from ltspice_mcp.lib.experiment_types import Completeness, ExperimentJob
 from ltspice_mcp.lib.job_registry import JobRegistry
 from ltspice_mcp.lib.recovery_journal import new_root_journal, save_journal
 from ltspice_mcp.lib.recovery_records import ProcessIdentity
+from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from tests.conftest import LIVENESS_S, coordinator_returned
 from tests.test_recovery_launch import RecordedNGspice, _process
@@ -119,3 +121,64 @@ async def test_dead_owner_reconciliation_is_saved(committed, caplog):
     assert loaded is not None and loaded.restart_reconciled
     assert json.loads(root.store_path.read_text(encoding="utf-8"))["status"] == "interrupted"
     assert "Failed to persist job" not in caplog.text
+
+
+@pytest.mark.parametrize("route", ["get_or_load", "refresh_foreign_job"])
+async def test_a_read_finishing_after_the_job_is_reserved_answers_with_the_live_job(
+    work_dir, monkeypatch, route
+):
+    """A store read that started before this process reserved the job, and
+    returns after it, hands back the live job and leaves it registered: the
+    copy it read is a record nothing here updates. Both routes that adopt a
+    read off the loop are run."""
+    # A dead owner's record, which the read reconciles, or a live peer's,
+    # which a refresh re-reads.
+    job = ExperimentJob(
+        job_id="exp_reserved_0001",
+        request_id="request-1",
+        fingerprint="f" * 64,
+        canonicalizer_version=1,
+        control_token="token",
+        store_path=Store(work_dir).job_record("exp_reserved_0001"),
+        cases=[],
+        sources=[],
+        simulator="ngspice",
+        completeness=Completeness(declared=0, expanded=0),
+        status="queued",
+        owner_pid=999_999_999 if route == "get_or_load" else os.getppid(),
+    )
+    experiment_store.save_job(job)
+    registry = JobRegistry(persist_enabled=True, working_dir=work_dir)
+    entered, release = threading.Event(), threading.Event()
+    if route == "get_or_load":
+        load = registry._load_from_store
+        monkeypatch.setattr(
+            registry,
+            "_load_from_store",
+            lambda job_id: (entered.set(), release.wait(LIVENESS_S), load(job_id))[2],
+        )
+        read = registry.get_or_load_async(job.job_id)
+    else:
+        foreign = experiment_store.load_job(job.job_id, work_dir)
+        assert foreign is not None
+        load_foreign = registry._load_foreign_job_sync
+        monkeypatch.setattr(
+            registry,
+            "_load_foreign_job_sync",
+            lambda held: (entered.set(), release.wait(LIVENESS_S), load_foreign(held))[2],
+        )
+        read = registry.refresh_foreign_job_async(foreign)
+
+    async def reserve_while_reading() -> None:
+        assert await asyncio.to_thread(entered.wait, LIVENESS_S)
+        registry.add_experiment_job(job, already_persisted=True)
+        registry.reserve(job)
+        release.set()
+
+    try:
+        answered, _ = await asyncio.gather(read, reserve_while_reading())
+    finally:
+        release.set()
+    assert answered is job
+    assert registry.jobs[job.job_id] is job
+    await registry.drain_pending()

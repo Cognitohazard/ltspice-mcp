@@ -89,6 +89,7 @@ The parser has three layers.
 ```python
 def lex(netlist_text: str, *, title: bool = False) -> LexResult: ...
 def lex_deck(netlist_text: str, *, title: bool = True) -> LexResult: ...
+def lex_for_edit(netlist_text: str, *, deck: bool) -> EditCards: ...
 ```
 
 `lex` walks the lines once, classifies each line by its first
@@ -100,12 +101,29 @@ whatever it says, so it cannot open a scope, end the deck or take a `+` line.
 `lex`'s warnings. Line 1 is the title and is left out (both LTspice builds
 ran `deck/title_card`, whose title is an `I1` card, with one `I1`, and
 failed `deck/title_directive`, whose title is the `.param` it needs), and so
-is every card after a top-level `.END` (`deck/after_end`). `title=False`
-reads an included file, which begins with a card. Every reader of what a
-deck holds (the linter, `verify_circuit`'s checks and both compare modes,
-the `inspect` net query, the hierarchy, the run's requirements and the
-result observations) goes through it; an edit uses `lex`, which keeps every
-line for `emit`. Each `SpiceCard` has these fields:
+is every card after a top-level `.END` (`deck/after_end`), a second `.END`
+among them. `title=False` reads an included file, which begins with a card,
+and leaves out a card after its top-level `.END` the same way; no recorded
+input shows what LTspice does past an included file's `.END`, so that rule
+follows the reading the server already took and is not recorded.
+Every reader of what a deck holds (the linter, `verify_circuit`'s checks and
+both compare modes, the `inspect` net and components queries, the hierarchy,
+the run's requirements, the result observations, the measurement kinds and
+noise unit read off the run's deck, the export's pin nodes) goes through it.
+
+`lex_for_edit` is the same reading for a caller that writes every card back:
+`EditCards.cards` holds every line for `emit`, and `EditCards.read` holds the
+cards among them that are read, the same objects, so a change made through
+`read` is in what `emit` writes. An edit chooses what to read or change from
+`read` alone, so it cannot write a change the simulator never reads and
+report it. `read` is what `lex_deck` reads with `title=deck`, both taken by
+one function (`_read_cards`), so the two readings cannot differ: for a deck
+(`deck=True`) the title is not read, an included file (`deck=False`) begins
+with a card, and in either a card after a top-level `.END` is not read.
+Variation targets and their writers, the per-instance mismatch plan, Monte
+Carlo's transistor extraction, staging's include walk and value fold, the
+recovery check of a staged closure and the `.options logopinfo` injection
+use it. Each `SpiceCard` has these fields:
 
 ```python
 class SpiceCard:
@@ -203,11 +221,12 @@ token is a function call.
 `probe_refs(card)` is the one reading of the `V(...)`/`I(...)` probes a
 card names, in a directive or in an instance's expression; `MeasCard`'s
 `signal_refs` and `SaveCard`'s `probes` are its answer. A reader that
-compares probes as signals compares `text`, as the linter's
-`save-meas-coverage` rule does: whether LTspice measures `V(a,b)` from a
-saved `V(a)` and `V(b)` is not recorded. A reader that asks which nodes a
-card reaches reads `names`, as the validator's dangling-node and
-undefined-reference checks do.
+compares probes as signals reads a pair as LTspice does, as the linter's
+`save-meas-coverage` rule does: both builds measure `V(a,b)` from a saved
+`V(a)` and `V(b)`, and `.save V(a,b)` saves `V(a)` and `V(b)`, while `V(a,0)`
+is not measured with only `V(a)` saved (the `save-meas-node-pair`
+recordings). A reader that asks which nodes a card reaches reads `names`, as
+the validator's dangling-node and undefined-reference checks do.
 
 `ELEMENT_SPECS` has one entry for each of M/Q/J/X/F/H/R/C/L/V/I/B/E/G/K.
 Each entry gives the minimum node count and says how to read the last
@@ -424,8 +443,9 @@ recovery rules:
   the unclosed scope, plus a warning. `emit()` still round-trips
   byte-faithful.
 - Cards after a top-level `.END`: they keep their position and scope but
-  have `trailing=True`. LTspice ignores them, but the parser keeps them
-  rather than dropping them; `lex_deck` leaves them out.
+  have `trailing=True`, a second `.END` among them. LTspice ignores them, but
+  the parser keeps them rather than dropping them; `lex_deck` leaves them
+  out, and `lex_for_edit` keeps them out of `read`.
 - `.control` without a matching `.endc`: the region runs to EOF, plus a
   warning. Every remaining line stays an opaque `kind="control"` card.
 
@@ -438,7 +458,9 @@ would lex as the element sharing its first letter (`let` → L, `dc` → D,
 `meas` → M, `foreach` → F, `alter` → A, `set` → S) and a valid ngspice
 deck would produce many spurious arity errors. Both delimiters are part
 of the region; a stray `.endc` with no opener stays an ordinary
-directive.
+directive. `control_blocks` lists each closed region among the cards it is
+given, as the lexer found it; given the cards that are read, it finds none
+in a deck's title or after its `.END`.
 
 Each view caches its tokens' offsets into the card's body, and one view
 does not see another's edits. Holding two typed views over the same card
@@ -455,7 +477,10 @@ next edit re-renders too.
 # lib/spice_lex.py
 def lex(netlist_text: str, *, title: bool = False) -> LexResult: ...
 def lex_deck(netlist_text: str, *, title: bool = True) -> LexResult: ...  # the cards a simulator reads
+def lex_for_edit(netlist_text: str, *, deck: bool) -> EditCards: ...  # every card, and those read
 def emit(cards: Sequence[SpiceCard]) -> str: ...
+def line_break(cards: Sequence[SpiceCard]) -> str: ...  # the line break an added line ends with
+def control_blocks(cards) -> list[list[SpiceCard]]: ...  # each .control ... .endc region
 def tokenize_body(body: str) -> list[Token]: ...
 def find_matching_ends(cards: Sequence[SpiceCard], opener_idx: int) -> int | None: ...
 def subckt_children(cards, opener_idx) -> Iterator[tuple[int, SpiceCard]]: ...  # one body, by span
@@ -477,6 +502,11 @@ class SpiceCard:                 # canonical store
     def subckt_name(self) -> str | None: ...
     @property
     def meas_label(self) -> str | None: ...
+
+class EditCards:                 # lex_for_edit's answer
+    cards: list[SpiceCard]       # every card, for emit
+    read: list[SpiceCard]        # the cards among them that are read
+    def reads(self, card) -> bool: ...
 
 class Token: ...                 # body_offset / body_length / kind / text
 class TokenKind(Enum): ...       # BARE / QUOTED / BRACED / PARENED / KEY_VALUE / EQUALS / COMMENT_TRAIL

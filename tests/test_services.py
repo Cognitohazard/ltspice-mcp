@@ -2,21 +2,23 @@
 
 import asyncio
 import contextlib
+import re
 import threading
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
-from ltspice_mcp.errors import AnalysisDeadlineExceeded, ResultError
+from ltspice_mcp.errors import AnalysisDeadlineExceeded, ResultError, ResultFileNotFoundError
 from ltspice_mcp.lib import parser_service, services
+from ltspice_mcp.lib.decoded_raw import DecodedRaw
 from ltspice_mcp.lib.store import parser_file_in
 from ltspice_mcp.state import SessionState
 from tests.conftest import (
     FIXTURES_DIR,
     LIVENESS_S,
     await_until,
+    make_raw_mock,
     stage_recorded_fixture,
 )
 from tests.test_parser_process import _FIXTURE, _assert_gone, _started
@@ -24,10 +26,29 @@ from tests.test_parser_process import _FIXTURE, _assert_gone, _started
 
 class TestLoadRaw:
     async def test_missing_file(self, state_no_sim: SessionState, tmp_path: Path):
-        with pytest.raises(ResultError, match="RAW file is unavailable"):
+        missing = tmp_path / "nope.raw"
+        with pytest.raises(ResultFileNotFoundError, match=re.escape(str(missing))):
             await services.load_raw(
-                services.source_for_raw_path(tmp_path / "nope.raw", state_no_sim), state_no_sim
+                services.source_for_raw_path(missing, state_no_sim), state_no_sim
             )
+
+    async def test_a_jobs_missing_artifact_is_not_a_callers_missing_file(
+        self, state_no_sim: SessionState, tmp_path: Path
+    ):
+        """A run whose raw is gone is a fact about that run, refused by the
+        capture as a result read, with the family's recovery (check the job);
+        only a path a caller named is told to check its path."""
+        source = services.AnalysisSource(
+            raw=tmp_path / "case.raw",
+            log=tmp_path / "case.log",
+            netlist=None,
+            dialect=None,
+            identity=None,
+            trusted_job_artifact=True,
+        )
+        with pytest.raises(ResultError, match="RAW file is unavailable") as failed:
+            await services.load_raw(source, state_no_sim)
+        assert not isinstance(failed.value, ResultFileNotFoundError)
 
     async def test_caches_results(self, state_no_sim: SessionState, tmp_path: Path):
         path = stage_recorded_fixture(tmp_path, "ltspice_tran_rc")
@@ -92,10 +113,9 @@ class TestValidateSignal:
     don't want to reject a user's ``V(onoise)`` just because the raw used a
     different case."""
 
-    def _raw(self, names: list[str]) -> MagicMock:
-        raw = MagicMock()
-        raw.get_trace_names.return_value = names
-        return raw
+    def _raw(self, names: list[str]) -> DecodedRaw:
+        """A decoded transient holding traces ``names``, after its time axis."""
+        return make_raw_mock(names, waves={})
 
     def test_exact_match_returns_same_string(self):
         raw = self._raw(["V(out)", "I(R1)"])
@@ -214,7 +234,7 @@ async def _runaway_tree(calls, task: asyncio.Task):
         directories = await await_until(
             lambda: calls["directories"], what="the parse to reach its parser call"
         )
-        return await _started(directories[0])
+        return await _started(directories[0], task)
     except BaseException:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
