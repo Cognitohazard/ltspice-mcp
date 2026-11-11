@@ -317,6 +317,8 @@ _CODE_FIRST_CONSTRUCTORS = frozenset(
         "MismatchPlanError",
         "NotPlaced",
         "RecoveryError",
+        "_Construct",
+        "_Refused",
     }
 )
 

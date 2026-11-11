@@ -78,9 +78,11 @@ names the reason, when a deck reads an include in place at run time
 calls one of the random functions `rand`, `random`, `gauss`, `agauss`, `unif`,
 `aunif`, `flat`, `sgauss`, `limit`, `mc`, `poisson`, `white`, `flicker`,
 `trnoise` or `trrandom` (`recovery_random_unsupported`). A source that reads a
-file and a function the server does not know are refused the same way. On
-ngspice, `simulator_seed` allows `agauss`, `gauss`, `aunif`, `unif` and
-`limit` (guide section 'ngspice').
+file and a function the server does not know are refused the same way. Every
+card of every included library is checked, and a vendor library often fails a
+check. One refusal lists every construct it found, each with its file, line
+and card. On ngspice, `simulator_seed` allows `agauss`, `gauss`, `aunif`,
+`unif` and `limit` (guide section 'ngspice').
 
 For LTspice, use `execution={"simulator":"ltspice","recoverable":true}`.
 Each case starts LTspice with its own copy of an LTspice settings file, so the

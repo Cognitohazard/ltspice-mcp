@@ -390,3 +390,42 @@ async def test_unsupported_recoverable_inputs_refuse_before_claim(
     assert submissions == [] and state.all_jobs == {}
     assert not Store(work_dir).request_index("no-claim").exists()
     assert not Store(work_dir).recovery_journal("no-claim").exists()
+
+
+@_LIVE
+@pytest.mark.asyncio
+async def test_a_recoverable_refusal_names_each_construct_in_the_callers_files(
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The reply names the library the caller wrote, each construct in it and
+    its line, not the copy the server saved, so one submission finds them all."""
+    library = work_dir / "lib" / "vendor.lib"
+    library.parent.mkdir()
+    library.write_text("* vendor\nB1 out 0 V=vendor_fn(1)\n.hdl model.va\n")
+    (work_dir / "divider.cir").write_text(_DECK.replace(".op", ".include lib/vendor.lib\n.op"))
+    state = _state(work_dir)
+    submissions = _fail_second_case(monkeypatch)
+    result = await handle_run_experiments(
+        RunExperimentsInput.model_validate(
+            {
+                "request_id": "named",
+                "circuits": [{"path": str(work_dir / "divider.cir")}],
+                "execution": {"recoverable": True, "wait_s": 0},
+                "lint": "off",
+            }
+        ),
+        state,
+    )
+    data = result.structured_content
+    assert result.is_error and data is not None
+    assert data["error"]["code"] == "recovery_expression_unsupported"
+    message = data["error"]["message"]
+    # Staging records each file it copies by its resolved path.
+    library = library.resolve()
+    assert f"{library} line 2: B1 out 0 V=vendor_fn(1)" in message
+    assert (
+        f"`.hdl`, which loads an external module (recovery_external_module): {library} line 3"
+        in (message)
+    )
+    assert submissions == [] and state.all_jobs == {}

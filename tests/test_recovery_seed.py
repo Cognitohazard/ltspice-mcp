@@ -123,8 +123,10 @@ def test_only_source_verified_static_random_functions_are_admitted(tmp_path, exp
         tmp_path, f".param draw={expression}\nV1 n 0 {{draw}}".encode(), seeded=True
     )
     verify_case_inputs(captured, seeded=True)
-    with pytest.raises(RecoveryError, match="randomness"):
+    with pytest.raises(RecoveryError) as error:
         verify_case_inputs(captured)
+    assert error.value.code == "recovery_random_unsupported"
+    assert f"function `{expression.split('(')[0]}`" in str(error.value)
 
 
 @pytest.mark.parametrize(
