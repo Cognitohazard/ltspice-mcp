@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 import struct
 from pathlib import Path
 from types import SimpleNamespace
@@ -1395,3 +1397,61 @@ class TestResultDigest:
         path = tmp_path / "cut.raw"
         path.write_bytes(data[: len(data) - 7])
         assert result_digest(path) is None
+
+    @pytest.mark.parametrize(
+        "fixture",
+        ["ltspice_tran_rc.raw", "ltspice_recorded/ltspice26/raw/tran_fastaccess.raw"],
+    )
+    def test_a_point_count_past_the_end_of_the_file_has_no_digest(
+        self, tmp_path: Path, fixture: str
+    ):
+        """A header that declares more points than the file can hold is read
+        as a file cut short, not by reading what it declares."""
+        import re
+
+        from ltspice_mcp.lib.raw_parser import result_digest
+
+        data = (FIXTURES_DIR / fixture).read_bytes()
+        count = re.compile(
+            re.escape("No. Points:".encode("utf-16-le")) + rb"(?: \x00|\t\x00)*(?:\d\x00)+"
+        )
+        inflated = count.sub("No. Points: 9999999999999".encode("utf-16-le"), data, count=1)
+        assert inflated != data
+        path = tmp_path / "inflated.raw"
+        path.write_bytes(inflated)
+        assert result_digest(path) is None
+
+    @pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH")
+    def test_a_pole_keeps_its_imaginary_part(self, tmp_path: Path):
+        """A .pz plot's first variable is a pole, not an axis its points are
+        sampled on, so a change in its imaginary part is a change in what the
+        run computed."""
+        import subprocess
+
+        from ltspice_mcp.lib.raw_parser import result_digest
+        from tests.conftest import LIVENESS_S
+
+        deck = tmp_path / "pz.cir"
+        deck.write_text(
+            "* rlc poles\nV1 in 0 ac 1\nR1 in out 10\nL1 out x 1m\nC1 x 0 1u\n"
+            ".pz in 0 x 0 vol pz\n.end\n",
+            encoding="ascii",
+        )
+        raw = tmp_path / "pz.raw"
+        subprocess.run(
+            ["ngspice", "-b", "-r", str(raw), str(deck)],
+            capture_output=True,
+            timeout=LIVENESS_S,
+            check=False,
+            cwd=tmp_path,
+            env={**os.environ, "SPICE_USERINIT_DIR": str(tmp_path), "HOME": str(tmp_path)},
+        )
+        data = raw.read_bytes()
+        start = data.index(b"Binary:\n") + len(b"Binary:\n")
+        changed = bytearray(data)
+        changed[start + 12] ^= 0x01  # inside the first pole's imaginary part
+        (tmp_path / "changed.raw").write_bytes(bytes(changed))
+
+        digest = result_digest(raw, "ngspice")
+        assert digest is not None
+        assert result_digest(tmp_path / "changed.raw", "ngspice") != digest

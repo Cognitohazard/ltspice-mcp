@@ -1,0 +1,7 @@
+* rc ac rerun
+.options filetype=ascii
+V1 in 0 ac 1
+R1 in out 1k
+C1 out 0 1n
+.ac dec 5 1k 1meg
+.end

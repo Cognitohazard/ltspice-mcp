@@ -151,4 +151,71 @@ def test_all_samples_is_said_only_of_samples_that_all_ran(
     (observation,) = [o for o in observations if o["code"] == "identical_samples"]
     assert not observation["detail"].startswith("All samples")
     assert ("so far" in observation["detail"]) is (status == "running")
-    assert observation["evidence"]["groups"] == [{"circuit": "dut", "samples": 2, "results": 1}]
+    assert observation["evidence"]["groups"] == [{"circuit": "dut", "samples": 2}]
+
+
+def test_a_long_list_of_alike_points_is_cut_with_its_total(state_no_sim: SessionState):
+    """Twelve assign points where both samples computed one result and one
+    where they differ: the observation names ten points and counts twelve,
+    since a receipt carries it on every status and wait."""
+    job = make_experiment_job(state_no_sim, job_id="exp_many_points", count=26)
+    for index, case in enumerate(job.cases):
+        point, sample = divmod(index, 2)
+        case.assignments = {"vin": point, "_random_run": sample}
+        case.assigned = {"vin": point}
+        case.result_digest = f"point-{point}" if point < 12 else f"differs-{sample}"
+
+    (observation,) = [
+        o
+        for o in snapshot_receipt(job, state_no_sim).observations
+        if o["code"] == "identical_samples"
+    ]
+
+    assert len(observation["evidence"]["groups"]) == 10
+    assert observation["evidence"]["points_truncated"] == 12
+    assert observation["detail"].startswith("At the assign points listed")
+
+
+def test_points_that_all_match_collapse_into_one_group(state_no_sim: SessionState):
+    """Every point whose samples ran computed one result, though one sample
+    failed: one group counts the points, and the detail says some samples did
+    not run rather than "All samples"."""
+    job = make_experiment_job(state_no_sim, job_id="exp_one_failed", count=6)
+    for index, case in enumerate(job.cases):
+        point, sample = divmod(index, 2)
+        case.assignments = {"vin": point, "_random_run": sample}
+        case.assigned = {"vin": point}
+        case.result_digest = f"point-{point}"
+    job.cases[5].status = "failed"  # point 2 keeps one produced sample: nothing to compare
+    job.cases[5].result_digest = None
+
+    (observation,) = [
+        o
+        for o in snapshot_receipt(job, state_no_sim).observations
+        if o["code"] == "identical_samples"
+    ]
+
+    assert observation["evidence"]["groups"] == [{"circuit": "dut", "points": 2}]
+    assert observation["detail"].startswith("Every sample of dut that ran")
+
+
+def test_a_case_recorded_before_it_kept_its_assign_values_is_compared_at_its_point(
+    state_no_sim: SessionState,
+):
+    """A case recorded before ExperimentCase.assigned has its assign values
+    only among its draws. Read from there, vin = 0 and vin = 1 stay apart, so
+    two points whose samples each differ are not merged into one point."""
+    job = make_experiment_job(state_no_sim, job_id="exp_legacy_points", count=6)
+    for index, case in enumerate(job.cases):
+        point, sample = divmod(index, 3)
+        case.assignments = {
+            "vin": point,
+            "random:component:R2": 1000 + sample,
+            "_random_run": sample,
+            "_random_seed": 4,
+        }
+        case.result_digest = f"sample-{sample}"
+
+    observations = snapshot_receipt(job, state_no_sim).observations
+
+    assert not any(o["code"] == "identical_samples" for o in observations)

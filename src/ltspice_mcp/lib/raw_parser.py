@@ -1187,10 +1187,15 @@ def result_digest(path: Path, dialect: str | None = None) -> str | None:
     and the deck's path. A complex axis keeps its real part only: ngspice-42
     writes the imaginary part of an AC frequency from memory it never set, so
     two runs of one deck differ there (recorded:
-    ``tests/fixtures/ngspice_ac_rerun``). None when the file is not a raw
+    ``tests/fixtures/ngspice_ac_rerun``); a ``.pz`` plot's first variable is
+    a pole, not an axis, and keeps both parts. None when the file is not a raw
     this reader can walk to its end: a plot whose point count was never
-    written (ngspice writes it when the plot ends), one cut short, bytes after
-    the last plot that start no plot, or an ASCII plot in a UTF-16 file.
+    written (ngspice writes it when the plot ends), a plot cut short, bytes
+    after the last plot that start no plot, or an ASCII plot in a UTF-16 file.
+    A file that lost whole plots off its end, or whose count kept pace with
+    the points written before a kill, reads as finished: only the run's
+    outcome tells those apart, and the runner digests only runs that ended
+    without an error.
     """
     digest = hashlib.sha256()
     try:
@@ -1219,7 +1224,9 @@ def result_digest(path: Path, dialect: str | None = None) -> str | None:
                 if header.data_kind == "values":
                     end = _digest_ascii_points(handle, header, width, points, n_vars, digest)
                 else:
-                    end = _digest_binary_points(handle, header, width, dialect, points, digest)
+                    end = _digest_binary_points(
+                        handle, header, width, dialect, points, digest, size
+                    )
                 if end is None:
                     return None
                 end = _next_plot(handle, end, size, width)
@@ -1232,6 +1239,14 @@ def result_digest(path: Path, dialect: str | None = None) -> str | None:
         return None
 
 
+def _has_sampled_axis(header: _PlotHeader) -> bool:
+    """Whether a plot's first variable is the axis its points are sampled on,
+    as a full read reads it (``result_kinds.sampled_axis``); a ``.pz`` plot's
+    first variable is a pole."""
+    analysis = plot_analysis(header.fields.get("plotname") or "", header.first_type)
+    return bool(header.variables) and sampled_axis(analysis, header.first_type) is not None
+
+
 def _digest_binary_points(
     handle: Any,
     header: _PlotHeader,
@@ -1239,12 +1254,15 @@ def _digest_binary_points(
     dialect: str | None,
     points: int,
     digest: Any,
+    size: int,
 ) -> int | None:
     """Feed a ``Binary:`` plot's points to ``digest``; where its data ends, or
     None when the file holds fewer than the header declares."""
     assert header.data_start is not None
     record, axis_size, complex_values = _binary_layout(header, width, dialect)
-    imaginary_axis = complex_values and axis_size == 16
+    if header.data_start + points * record > size:
+        return None
+    imaginary_axis = complex_values and axis_size == 16 and _has_sampled_axis(header)
     fast = "fastaccess" in header.fields.get("flags", "").lower().split()
     handle.seek(header.data_start)
     if fast:
@@ -1284,13 +1302,14 @@ def _digest_ascii_points(
     real part; where its data ends, or None when it ends early."""
     if width != 1 or header.data_start is None:
         return None
+    axis_only = _has_sampled_axis(header)
     handle.seek(header.data_start)
     for _ in range(points):
         line = handle.readline()
         index, tab, axis = line.partition(b"\t")
         if not tab or not index.strip() or not line.endswith(b"\n"):
             return None
-        digest.update(axis.split(b",", 1)[0].strip() + b"\n")
+        digest.update((axis.split(b",", 1)[0] if axis_only else axis).strip() + b"\n")
         for _ in range(n_vars - 1):
             line = handle.readline()
             if not line.strip() or not line.endswith(b"\n"):

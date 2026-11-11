@@ -1053,7 +1053,7 @@ async def test_samples_are_compared_by_what_ngspice_computed(
 
     assert not any(o["code"] in {"identical_samples", "samples_not_compared"} for o in differing)
     (observation,) = [o for o in unmoved if o["code"] == "identical_samples"]
-    assert observation["evidence"]["groups"] == [{"circuit": "dut", "samples": 3, "results": 1}]
+    assert observation["evidence"]["groups"] == [{"circuit": "dut", "samples": 3}]
 
 
 async def test_samples_are_compared_one_assign_point_at_a_time(
@@ -1089,5 +1089,39 @@ async def test_samples_are_compared_one_assign_point_at_a_time(
     (observation,) = [o for o in receipt["observations"] if o["code"] == "identical_samples"]
     assert not observation["detail"].startswith("All samples")
     (group,) = observation["evidence"]["groups"]
-    assert group["samples"] == 3 and group["results"] == 1
-    assert group["assigned"] == {"vin": "0"}
+    assert group == {"circuit": "dut", "assigned": {"vin": "0"}, "samples": 3}
+
+
+async def test_samples_with_a_few_distinct_results_are_not_reported(
+    ngspice_state: SessionState, work_dir: Path
+):
+    """A comparator saves 1 where R2 lifts the divider above 0.5 V and 0 where
+    it does not, so eight samples save two distinct results: the draws did
+    change what was saved, and the receipt reports nothing."""
+    netlist = _write(
+        work_dir,
+        "comparator.cir",
+        "* comparator\nV1 in 0 1\nR1 in b 1k\nR2 b 0 1k\n"
+        "B1 out 0 V = V(b) > 0.5 ? 1 : 0\nR3 out 0 1k\n.save v(out)\n.op\n.end\n",
+    )
+    receipt = await terminal_experiment(
+        ngspice_state,
+        {
+            "request_id": "comparator",
+            "circuits": [{"path": netlist, "id": "dut"}],
+            "variations": [
+                {
+                    "kind": "random",
+                    "runs": 8,
+                    "seed": 3,
+                    "rules": [{"rule": "component", "target": "R2", "tolerance": 0.1}],
+                }
+            ],
+            "execution": {"wait_s": 90, "simulator": "ngspice"},
+        },
+    )
+    assert receipt["status"] == "completed", receipt
+
+    draws = [run["assignments"]["random:component:R2"] for run in receipt["runs"]["items"]]
+    assert min(draws) < 1000 < max(draws), draws
+    assert not any(o["code"] == "identical_samples" for o in receipt.get("observations", []))

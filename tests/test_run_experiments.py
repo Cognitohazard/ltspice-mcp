@@ -3740,7 +3740,7 @@ class TestMonteCarloSampleIdentity:
         (observation,) = [o for o in data["observations"] if o["code"] == "identical_samples"]
         assert observation["detail"].startswith("All samples of dut computed the same results")
         (group,) = observation["evidence"]["groups"]
-        assert group == {"circuit": "dut", "samples": 3, "results": 1}
+        assert group == {"circuit": "dut", "samples": 3}
         assert not any(o["code"] == "samples_not_compared" for o in data["observations"])
 
     async def test_a_sample_that_never_ran_still_records_how_to_replay_it(
