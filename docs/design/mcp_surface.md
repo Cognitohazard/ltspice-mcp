@@ -1511,11 +1511,11 @@ the crossing, so the nets stay separate, and the finished sheet reports it
 Ops do not repeat sheet findings. A route through a part, a part placed or
 moved over another, a part's text drawn across a wire, a part or other text, a
 label on nothing, a crossing left unjoined, a pin or label that joins wires
-where they cross, a wire left diagonal, and a net given a second name are each
-reported once, by the sheet finding (`wire_through_symbol`, `symbol_overlap`,
-`attribute_text_overlap`, `dangling_label`, `unjoined_crossing`,
-`joined_at_crossing`, `diagonal_wire`, `net_with_two_names`), whichever op
-made it. Findings are computed on the sheet the batch leaves, so a state the
+where they cross, a pin placed or moved inside a wire, a wire left diagonal,
+and a net given a second name are each reported once, by the sheet finding
+(`wire_through_symbol`, `symbol_overlap`, `attribute_text_overlap`,
+`dangling_label`, `unjoined_crossing`, `joined_at_crossing`, `pin_inside_wire`,
+`diagonal_wire`, `net_with_two_names`), whichever op made it. Findings are computed on the sheet the batch leaves, so a state the
 batch only passes through is not reported. A label placed before the wire
 that reaches it is not dangling, and a net relabelled in remove-and-add pairs
 has one name at the end. A repeated route that is already drawn through a
@@ -2347,15 +2347,22 @@ the parts there are.
 parts by `references`, net labels and grounds by point (`labels`), wires by
 their two ends (`wires`), and directives and comments by exact text or
 `regex:` (`texts`). A `region` also selects what lies inside it, edges
-included, testing a part by its box, a wire by its two ends, a label by its
-point and a text by its anchor. With `drag`, an end of any other wire that
+included, testing a part by its whole box, a wire by its two ends, a label by
+its point and a text by its anchor. With `drag`, an end of any other wire that
 lies on what moves (a moved pin, label or wire end, a point along a wire that
 moves whole, or with `region` any end inside it) moves too, so the wire stays
-attached, and so does a label or ground on any of those points; a wire
-dragged off its axis is reported as diagonal. A part's attribute text moves
-with it. Something named that is not there is refused, and so is a move that
-would join two nets that each have a name (names compared as LTspice compares
-them, in any case), before anything changes. The result's `moved` counts what
+attached, and so does a label or ground on any of those points. A wire both
+of whose ends move moves whole, taking what lies along it. A wire dragged off
+its axis is reported as diagonal. A part's attribute text moves with it.
+Something named that is not there is refused, and so is a move that would
+join two nets that each have a name (names compared as LTspice compares them,
+in any case), before anything changes. With `drag`, a move that would cut
+anything that stays off from what moves is refused as well, with what would
+part, what stays and how to take it along: a part whose pin touches a moved
+pin with no wire, lies inside a wire that moves, or is held by a region only
+in part; a label or a wire's end along a wire that stretches rather than
+moving whole. Naming every part of the net that stays in `references` moves
+the whole net. The result's `moved` counts what
 moved and lists the parts. Applying the opposite offset to what it moved puts
 everything back. `move_component` places one part at a position and can turn
 it.
@@ -2377,8 +2384,13 @@ is left there joined to nothing of the part, and `unpaired_pins` names the
 new pins left unconnected. Applied again with `was` as the symbol it puts the
 symbol back; the wires it drew stay, for `remove_wire`.
 
-`remove_wire` removes an exact segment. `remove_component` takes
-`cleanup_wires` to also delete the wires its removal leaves dangling.
+`remove_wire` removes an exact segment; a segment drawn more than once goes
+whole, and is refused when that would cut its net in two, since asking to
+remove a duplicate is not asking to cut a connection. `remove_component` takes
+`cleanup_wires` to also delete the wires its removal leaves dangling: a wire
+with an end on one of its pins goes when taking it away parts nothing it
+joins by wire, so a wire that still joins two or more pins or labels (another
+wire's, at the pin, or ones along it) stays.
 `add_directive` takes `kind`, `directive` (simulated) or `comment` (ignored by
 LTspice). `remove_directive` and `move`'s `texts` name directives and comments
 by one rule. A literal names every text equal to it, space around either
