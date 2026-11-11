@@ -510,6 +510,12 @@ summary = "Stepped runs: the stepped flag, where one step ends and the next begi
 model = ["lib/raw_decode.py", "lib/raw_parser.py", "lib/log_parser.py", "lib/trace_names.py", "lib/metrics.py", "lib/step_values.py"]
 inputs = ["raw/step_tran.cir", "raw/step_ac.cir", "raw/step_op.cir", "raw/step_dc.cir", "raw/step_temp.cir", "raw/step_temp_op.cir", "raw/step_ac_one_freq.cir", "raw/step_noise.cir", "raw/step_noise_list_one_freq.cir"]
 
+[behaviour.step-value-digits]
+summary = "How many significant digits a log's .step lines print a stepped value with: values the deck writes to seventeen digits, and two that differ only in the sixth."
+model = ["lib/step_values.py", "lib/log_parser.py"]
+inputs = ["raw/step_digits.cir"]
+pending = "Written where no LTspice runs. Record it on Windows with uv run python scripts/record_ltspice_fixtures.py --only 'raw/step_digits', then remove this key."
+
 [behaviour.raw-transfer-function]
 summary = "A .tf run: the Transfer Function plot and what the log says; and a stepped .tf, how its one point a step is stored."
 model = ["lib/raw_header.py", "lib/decoded_raw.py", "lib/raw_parser.py"]

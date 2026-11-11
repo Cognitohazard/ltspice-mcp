@@ -983,9 +983,10 @@ def unverified_input_noise_warning(unit: str | None) -> str:
 
 #: How far the sample the ``value`` recipe reads may stand from its ``at``,
 #: relative to the larger, and still be reported as an ``exact_match``. Wider
-#: than ``format.SAME_VALUE_RTOL``, which a ``.step`` value is selected by,
-#: because the two answer different questions: a step value names one of the
-#: run's own values, whereas ``at`` is read at the nearest of the samples the
+#: than ``format.SAME_VALUE_RTOL``, and than the six printed digits a
+#: ``.step`` value is selected to (``step_values.STEP_VALUE_DIGITS``), because
+#: they answer different questions: a step value names one of the run's own
+#: values, whereas ``at`` is read at the nearest of the samples the
 #: simulator chose, which seldom falls on the point itself. The flag is for a
 #: read that moved far enough to matter, such as a request outside the axis,
 #: clamped to its end, or a coarse ``.dc temp`` sweep snapping 27 to 25.

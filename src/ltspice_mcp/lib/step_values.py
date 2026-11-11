@@ -14,8 +14,45 @@ import math
 from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
-from ltspice_mcp.lib.format import format_spice_value, parse_spice_value, same_value
+from ltspice_mcp.lib.format import format_spice_value, parse_spice_value
 from ltspice_mcp.lib.raw_header import STEPPED_TEMPERATURE
+
+#: How many significant digits a step value is matched to. A stepped .tran,
+#: .ac, .dc, .noise or .fra keeps its step values only in its log's ``.step``
+#: lines (``result_kinds``). Both builds write an exponent there as C's ``%g``
+#: does (``c=1e-007`` on XVII, ``c=1e-07`` on LTspice 26,
+#: ``log/step_two_params``), and ``%g`` keeps six significant digits, so
+#: ``.step param r list 2.1544346900318838k`` would be read back as 2154.43,
+#: two parts in a million from the deck's value. No recording yet has a step
+#: value that needs more than six digits: ``raw/step_digits`` is the deck that
+#: records how many each build prints. A raw that stores one point a step
+#: holds its step values to seven digits or more (its first variable in eight
+#: bytes, any other in four).
+#:
+#: Six digits are coarser than ``format.SAME_VALUE_RTOL``, by a share of the
+#: value that depends on its leading digit (five parts in a million for
+#: ``1.00000``, half a part in a million for ``9.99999``), so a step value is
+#: matched to its digits (:func:`same_step_value`) rather than within any one
+#: share. Matching to six refuses no value a source holds to six or more, and
+#: joins two values that differ only past the sixth digit, as a raw can hold
+#: them; a selector then reads the first of their steps.
+STEP_VALUE_DIGITS = 6
+
+#: A value written halfway between two printed ones, as the deck's value to
+#: seven digits can be (``2154.435``), lands a hair either side of the
+#: midpoint once read in binary. It names the step on either side.
+_MIDPOINT_SLACK = 1 + 1e-6
+
+
+def printed_half_unit(number: float) -> float:
+    """How far a step value read as ``number`` can be from the value it was
+    printed for: half a unit in the last of its :data:`STEP_VALUE_DIGITS`
+    significant digits (0.005 for ``2154.43``). Zero for zero, which ``%g``
+    prints for nothing else."""
+    if number == 0:
+        return 0.0
+    exponent = int(f"{number:.{STEP_VALUE_DIGITS - 1}e}".rpartition("e")[2])
+    return 0.5 * 10.0 ** (exponent - STEP_VALUE_DIGITS + 1)
 
 
 def step_axis_key(axis: str, values: Collection[str]) -> str:
@@ -75,14 +112,26 @@ def step_number(value: Any) -> float | None:
 def same_step_value(a: Any, b: Any) -> bool:
     """Whether two step values, or a step's and a requested one, are one value.
 
-    Two numbers are when ``format.same_value`` says so, however each is
-    written (``'1k'``, ``1e3`` and ``1000.0`` are one value; ``'6.8k'`` and
-    4000 are not). A value that is not a number is only the same text.
+    Two numbers are when they are no further apart than the printing of the
+    smaller in magnitude moves a value (:func:`printed_half_unit`), however
+    each is written: ``'1k'``, ``1e3`` and ``1000.0`` are one value, and
+    ``'6.8k'`` and 4000 are not. So the deck's 2154.4346900318838 is the
+    ``2154.43`` its log printed for it, and two values a log prints apart,
+    ``100.001`` and ``100.002``, are two. Taking the smaller's digits makes
+    ``9.999996`` the ``10`` it is printed as, and ``9.99999`` not. A value
+    that is not a number is only the same text.
+
+    Not ``format.same_value``, whose part in a million is finer than six
+    printed digits keep, and which joins values a log prints apart at any
+    share wide enough for those digits (:data:`STEP_VALUE_DIGITS`).
     """
     number_a, number_b = step_number(a), step_number(b)
     if number_a is None and number_b is None:
         return str(a) == str(b)
-    return number_a is not None and number_b is not None and same_value(number_a, number_b)
+    if number_a is None or number_b is None:
+        return False
+    smaller = min(abs(number_a), abs(number_b))
+    return abs(number_a - number_b) <= printed_half_unit(smaller) * _MIDPOINT_SLACK
 
 
 def steps_with(step_values: Sequence[Mapping[str, Any]], wanted: Mapping[str, Any]) -> list[int]:

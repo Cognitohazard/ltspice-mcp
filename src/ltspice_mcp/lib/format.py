@@ -204,7 +204,10 @@ def parse_spice_value(s: str) -> float:
 #: less than a part in ten million, so a value read back from a run is still
 #: the number its deck wrote. ``verify_circuit``'s ``rtol`` defaults to it. The
 #: ``value`` recipe's ``exact_match`` asks with a wider one, and
-#: ``metrics.AT_SNAP_RTOL`` says why.
+#: ``metrics.AT_SNAP_RTOL`` says why. A ``.step`` value is not held to it: a
+#: log prints a step value to six significant digits, which move it by up to
+#: five parts in a million, so a step value is matched to those digits, as
+#: ``step_values.STEP_VALUE_DIGITS`` says.
 SAME_VALUE_RTOL = 1e-6
 
 
@@ -212,9 +215,11 @@ def same_value(a: float, b: float, rtol: float = SAME_VALUE_RTOL) -> bool:
     """Whether ``a`` and ``b`` are one value: within ``rtol`` of the larger
     magnitude, so ``1k``, ``1e3`` and ``1000.0`` are, once read as numbers.
 
-    The one answer to that question: a step selector, the equivalence check's
-    value comparison and the ``value`` recipe's ``exact_match`` all ask it. An
-    infinity is only itself, and NaN is no value.
+    The one answer to that question for values a raw or a deck holds: the
+    equivalence check's value comparison and the ``value`` recipe's
+    ``exact_match`` ask it. A step value, which a log prints to six digits, is
+    matched by ``step_values.same_step_value`` instead. An infinity is only
+    itself, and NaN is no value.
     """
     if a == b:
         return True

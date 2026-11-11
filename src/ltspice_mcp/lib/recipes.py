@@ -228,8 +228,9 @@ class StepSelector(StrictModel):
 
         A string is read as SPICE reads a value (``'2k'`` is 2000), as every
         other value of a recipe is, and a number selects only a step whose
-        value is the same number (``step_values.same_step_value``): ``'6.8k'``
-        on a run stepping 1k, 2k and 4k selects none. One that is not a number
+        value is the same number, to the six digits a log prints a step value
+        with (``step_values.same_step_value``): ``'6.8k'`` on a run stepping
+        1k, 2k and 4k selects none. One that is not a number
         selects a step whose value is the same text. A value no step has is
         refused with the values the run has, as is an axis it does not step.
         """
