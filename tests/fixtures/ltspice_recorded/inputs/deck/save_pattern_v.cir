@@ -6,5 +6,4 @@ C1 out 0 100n
 .save V(*)
 .tran 0 1m 0 20u
 .meas tran vout FIND V(out) AT 0.9m
-.meas tran ir1 FIND I(R1) AT 0.9m
 .end

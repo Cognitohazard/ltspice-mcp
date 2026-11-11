@@ -54,7 +54,7 @@ from ltspice_mcp.lib.spice_validator import (
 Disposition = Literal["blocking", "warning", "observation"]
 LintFinding = dict[str, Any]
 
-linter_version = "12"
+linter_version = "13"
 
 # A capital M straight after a number is milli unless the letters after it
 # make it Meg or mil. Other letters do not: LTspice reads 1MHz as a millihertz.
@@ -276,8 +276,8 @@ def _save_pattern_unrecorded(
                 "directive": unsaved.card.body,
                 "reason": (
                     "A .save names signals by a pattern, and which signals a pattern "
-                    "saves is not recorded for LTspice, so these were not checked. "
-                    "Name them in the .save to have them checked."
+                    "saves is not recorded, so these were not checked. Name them in "
+                    "the .save to have them checked."
                 ),
             },
         )
