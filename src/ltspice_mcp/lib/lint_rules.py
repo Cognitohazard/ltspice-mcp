@@ -484,9 +484,7 @@ def _step_without_values_ltspice(
             evidence={"directive": card.body, "reason": f"{error.message} {error.suggestion}"},
         )
         for card in context.cards
-        if card.kind == "directive"
-        and directive_head(card) == ".step"
-        and (error := step_refused(card.body, "LTspice")) is not None
+        if card.kind == "directive" and (error := step_refused(card.body, "LTspice")) is not None
     ]
 
 

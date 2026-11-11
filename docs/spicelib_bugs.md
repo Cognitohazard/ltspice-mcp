@@ -4302,8 +4302,11 @@ counts the kept traces for every layout, and the refusal and its test go.
 **Affected version:** spicelib 1.5.1 (`spicelib/editor/asc_editor.py`,
 `AscEditor.reset_netlist`; `spicelib/editor/asy_reader.py`,
 `AsyReader.__init__`).
-**Our workaround:** `_short_window` in `lib/schematic_ops.py` turns the
-`ValueError` into a refusal that names the file, the line and the fix.
+**Our workaround:** the server's subclasses of the two readers in
+`lib/schematic_ops.py` (`_AscEditor.reset_netlist`, `_PlacedSymbol`) look
+for such a line in their file when spicelib raises the `ValueError`, and
+`make_editor` refuses the sheet naming the file, the line and the fix
+(`_short_window_refusal`).
 `asc_document.read_window`, the server's own reader of a WINDOW line, reads
 past such a line, as LTspice does.
 
@@ -4392,5 +4395,5 @@ def test_a_short_window_line_is_read_past(tmp_path):
 
 `tests/test_recorded_ltspice_schematics.py::TestShortWindowLines::test_the_editor_names_the_line_it_cannot_read`
 opens each recorded sheet with the editor and asserts the refusal names the
-line. Once upstream reads past the line, `_short_window` goes and the test
-asserts the sheet opens.
+line. Once upstream reads past the line, `_ShortWindowLine` and its
+catches go and the test asserts the sheet opens.

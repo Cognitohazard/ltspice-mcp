@@ -82,6 +82,7 @@ from ltspice_mcp.lib.component_value import (
     POSITIONAL_KINDS,
     edited_source,
     read_source_text,
+    text_without,
 )
 from ltspice_mcp.lib.connectivity import (
     NamedNets,
@@ -94,7 +95,7 @@ from ltspice_mcp.lib.connectivity import (
     point_on_segment,
     same_instance_dropped_segments,
 )
-from ltspice_mcp.lib.encoding import refused_sheet_mark, refused_sheet_mark_note
+from ltspice_mcp.lib.encoding import read_spice_text, refused_sheet_mark, refused_sheet_mark_note
 from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
 from ltspice_mcp.lib.format import is_scaled_number, parse_spice_value
 from ltspice_mcp.lib.geometry import BBox
@@ -694,24 +695,13 @@ def _apply_component_value(editor, reference: str, value: str) -> None:
         tokens = tokenize_body(value)
     except SpiceLexError as e:
         raise NetlistError(f"Component '{reference}' value {value!r} failed to parse: {e}") from e
-    params: dict[str, str] = {}
-    head_parts: list[str] = []
     # The head is the value with its KEY=VALUE spans cut out, each remaining
     # run kept as written: a source spec's ``PULSE(0 1 0 1n 1n 5n 10n)`` is a
     # BARE name and a PARENED group that must stay joined.
-    cursor, end = 0, len(value)
-    for tok in tokens:
-        if tok.kind == TokenKind.COMMENT_TRAIL:
-            end = tok.body_offset
-            break
-        if tok.kind == TokenKind.KEY_VALUE:
-            assert tok.key is not None
-            assert tok.value is not None
-            params[tok.key] = tok.value
-            head_parts.append(value[cursor : tok.body_offset].strip())
-            cursor = tok.body_end
-    head_parts.append(value[cursor:end].strip())
-    head = " ".join(part for part in head_parts if part)
+    end = next((t.body_offset for t in tokens if t.kind == TokenKind.COMMENT_TRAIL), len(value))
+    keyed = [t for t in tokens if t.kind == TokenKind.KEY_VALUE and t.body_offset < end]
+    params = {t.key: t.value for t in keyed if t.key is not None and t.value is not None}
+    head = text_without(value, [(t.body_offset, t.body_end) for t in keyed], end)
     if head:
         _set_or_create_value(editor, reference, head)
     if params:
@@ -736,10 +726,13 @@ def _set_source_value(editor, reference: str, element: str, value: str) -> None:
     except SpiceLexError as e:
         raise NetlistError(f"Component '{reference}' value {value!r} failed to parse: {e}") from e
     edited = edited_source(reference, old, new, add_keyed=False)
-    text = " ".join(word for word in (edited.value, *edited.own) if word)
-    if text and text != held.strip():
-        _set_or_create_value(editor, reference, text)
-    params = dict(word.split("=", 1) for word in new.own if "=" in word)
+    if edited.text and edited.text != held.strip():
+        _set_or_create_value(editor, reference, edited.text)
+    params = {
+        tok.key: tok.value
+        for tok in key_value_tokens(" ".join(new.own))
+        if tok.key is not None and tok.value is not None
+    }
     if params:
         _set_instance_params(editor, reference, params)
 
@@ -1097,59 +1090,63 @@ def _unrecognised_sheet(path: Path, exc: EncodingDetectError) -> NetlistError:
     )
 
 
-def _short_window(path: Path, exc: ValueError) -> NetlistError | None:
-    """The refusal for a sheet, or a symbol it places, holding a WINDOW line
-    LTspice reads past; ``None`` for any other ``ValueError``.
+class _ShortWindowLine(Exception):
+    """A WINDOW line LTspice reads past (``asc_document.window_read_past``),
+    found in a sheet or symbol file spicelib's readers stopped on.
 
     Both LTspice builds read past a WINDOW line short of its justification or
-    size (``asc_document.window_read_past``), and spicelib's sheet and symbol
-    readers raise ``ValueError`` unpacking one (docs/spicelib_bugs.md, Bug 41),
-    with no word of the file or the line. The frame that raised has the line;
-    a symbol's file is the one ``_PlacedSymbol`` was reading.
+    size, and spicelib's readers raise ``ValueError`` unpacking one
+    (docs/spicelib_bugs.md, Bug 41), naming neither the file nor the line.
+    The reader that was opening the file raises this instead, and
+    ``make_editor`` refuses the sheet with it (``_short_window_refusal``).
     """
-    symbol: Path | None = None
-    for frame, _ in traceback.walk_tb(exc.__traceback__):
-        line, owner = frame.f_locals.get("line"), frame.f_locals.get("self")
-        if frame.f_code is _PlacedSymbol.__init__.__code__:
-            symbol = frame.f_locals.get("path")
-        if not (isinstance(line, str) and window_read_past(line)):
-            continue
-        if frame.f_code is AscEditor.reset_netlist.__code__ and isinstance(owner, AscEditor):
-            where, encoding = Path(owner.asc_file_path), owner.encoding
-        elif frame.f_code is AsyReader.__init__.__code__ and isinstance(symbol, Path):
-            where, encoding = symbol, getattr(owner, "encoding", "utf-8")
-        else:
-            continue
-        number = None
-        try:
-            with open(where, encoding=encoding) as text:
-                number = next((n for n, read in enumerate(text, 1) if read == line), None)
-        except (OSError, UnicodeError, LookupError):
-            pass
-        shown = line.strip()
-        # The line with the justification and size it lacks, at the values a
-        # symbol's text most often has: its four or five words, then the rest.
-        words = shown.split()
-        whole = " ".join([*words, *("Left", "2")[len(words) - 4 :]])
-        at = f"line {number}" if number is not None else "a line"
-        if where != path:
-            at = f"{where}, a file it loads: {at}"
-        return NetlistError(
-            f"Cannot open {path}: {at} ({shown!r}) is a WINDOW line short of its "
-            "justification or size. LTspice reads past such a line, and the schematic "
-            "editor cannot read it. Delete the line, which changes nothing LTspice "
-            f"reads or draws, or write it whole, such as {whole!r}, then open the "
-            "sheet here.",
-            show_hint=False,
-        )
+
+    def __init__(self, file: Path, number: int, line: str) -> None:
+        super().__init__(f"{file}: line {number}: {line}")
+        self.file, self.number, self.line = file, number, line
+
+
+def _short_window_in(file: Path) -> _ShortWindowLine | None:
+    """The first WINDOW line in ``file`` LTspice reads past, or ``None``."""
+    try:
+        text = read_spice_text(file)
+    except (OSError, UnicodeError):
+        return None
+    for number, line in enumerate(text.split("\n"), 1):
+        if window_read_past(line):
+            return _ShortWindowLine(file, number, line.strip())
     return None
+
+
+def _short_window_refusal(path: Path, short: _ShortWindowLine) -> NetlistError:
+    """The refusal of the sheet at ``path`` for a WINDOW line it or a file it
+    loads holds, offering the line written whole."""
+    # Its justification and size, at the values a symbol's text most often has.
+    whole = short.line + (" 2" if len(short.line.split()) == 5 else " Left 2")
+    at = f"line {short.number}"
+    if short.file != path:
+        at = f"{short.file}, a file it loads: {at}"
+    return NetlistError(
+        f"Cannot open {path}: {at} ({short.line!r}) is a WINDOW line short of its "
+        "justification or size. LTspice reads past such a line, and the schematic "
+        "editor cannot read it. Delete the line, which changes nothing LTspice "
+        f"reads or draws, or write it whole, such as {whole!r}, then open the "
+        "sheet here.",
+        show_hint=False,
+    )
 
 
 class _PlacedSymbol(AsyReader):
     """A part's symbol as the editor read it, with the name the sheet gives it."""
 
     def __init__(self, path: Path, placed_as: str) -> None:
-        super().__init__(path)
+        try:
+            super().__init__(path)
+        except ValueError as exc:
+            short = _short_window_in(path)
+            if short is None:
+                raise
+            raise short from exc
         self.placed_as = placed_as
 
 
@@ -1201,7 +1198,13 @@ class _AscEditor(AscEditor):
         return _PlacedSymbol(found, symbol)
 
     def reset_netlist(self, create_blank: bool = False) -> None:
-        super().reset_netlist(create_blank)
+        try:
+            super().reset_netlist(create_blank)
+        except ValueError as exc:
+            short = _short_window_in(Path(self.asc_file_path))
+            if short is None:
+                raise
+            raise short from exc
         # spicelib keeps a text for each TEXT line its pattern matches, in
         # order, but its pattern leaves the V of VLeft, VRight and the rest out
         # of the justification it reads, so every one is read upright. Each is
@@ -1319,11 +1322,8 @@ def make_editor(path: Path, symbols: SymbolResolver | None = None) -> Editor:
             raise _unreadable_record(path, e) from e
         except EncodingDetectError as e:
             raise _unrecognised_sheet(path, e) from e
-        except ValueError as e:
-            refusal = _short_window(path, e)
-            if refusal is None:
-                raise
-            raise refusal from e
+        except _ShortWindowLine as e:
+            raise _short_window_refusal(path, e) from e
         _refuse_lost_records(path, editor)
         return editor
     except FileNotFoundError as e:

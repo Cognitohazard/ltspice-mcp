@@ -306,7 +306,8 @@ def stage_sheet(asc_path: Path, dest: Path, data: bytes | None = None) -> tuple[
                 sheets.append((folder, stem.casefold(), name))
     paired = [Path(folder, name) for folder, stem, name in sheets if (folder, stem) in blocks]
     found += paired
-    found += _sheets_beside_the_export(asc_path, data, paired)
+    beside = {stem: Path(folder, name) for folder, stem, name in sheets if folder == str(origin)}
+    found += _sheets_beside_the_export(asc_path, data, paired, beside)
     found = sorted(path for path in found if path.is_file())
     for src in found[:_STAGE_FILE_CAP]:
         target = dest / src.relative_to(origin)
@@ -320,11 +321,14 @@ def stage_sheet(asc_path: Path, dest: Path, data: bytes | None = None) -> tuple[
     )
 
 
-def _sheets_beside_the_export(sheet: Path, data: bytes | None, paired: list[Path]) -> list[Path]:
+def _sheets_beside_the_export(
+    sheet: Path, data: bytes | None, paired: list[Path], beside: dict[str, Path]
+) -> list[Path]:
     """The sheets beside the sheet being exported that LTspice may read as a
     block's own sheet: one named for any part the exported sheet (``data``,
     else its file), a block's sheet beside its symbol (``paired``), or a sheet
-    found here places.
+    found here places, among ``beside``, the sheets in the exported sheet's
+    folder by their casefolded names.
 
     Beside the block's symbol, then beside the sheet exported, is where both
     builds look (``symbol_library.find_block_sheet``). ``stage_sheet`` stages
@@ -344,11 +348,11 @@ def _sheets_beside_the_export(sheet: Path, data: bytes | None, paired: list[Path
         except (OSError, NetlistError):
             continue
         for symbol in placed:
-            beside = sheet.parent / f"{spellings(symbol.symbol)[1]}.asc"
-            if beside not in seen and beside.is_file():
-                seen.add(beside)
-                found.append(beside)
-                pending.append((beside, None))
+            named = beside.get(spellings(symbol.symbol)[1].casefold())
+            if named is not None and named not in seen:
+                seen.add(named)
+                found.append(named)
+                pending.append((named, None))
     return found
 
 

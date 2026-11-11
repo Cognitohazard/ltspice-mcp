@@ -294,61 +294,35 @@ def step_refused(directive: str, simulator: str = "LTspice") -> ValidationError 
 def validate_directive(directive: str, simulator: str = "LTspice") -> ValidationError | None:
     """Check a directive against the pre-flight rules for the given simulator.
 
-    Returns the first matched rule's error, or None if no rule fires.
-    Empty / whitespace-only input is a no-op. Covers ``.MEAS`` function
-    blocklists, reserved names and a parenthesis left open, the ``.tran`` zero-step ngspice
-    incompatibility, the ``.backanno`` ngspice incompatibility, and a ``.step``
-    with nothing to step (``step_refused``); other directives pass through
-    unchecked.
+    Returns the first matched rule's error, or None if no rule fires. The text
+    is read as the cards it holds (``validate_directive_card``): a sheet's
+    text may hold a ``;`` comment and line breaks, at which an export splits
+    it into cards, and each card is checked as it is read. Empty or
+    whitespace-only input is a no-op, and so is text the lexer cannot split:
+    its faults are not a validator's to report, and a broken directive is
+    not approved by a substring check either.
     """
-    if not directive:
+    if not directive or not directive.strip():
         return None
-    stripped = directive.lstrip()
-    if not stripped:
-        return None
-    lower = stripped.lower()
-    if lower.startswith(".tran"):
-        return _validate_tran_tstep(stripped, simulator)
-    head = lower.split(None, 1)[0]
-    if head == ".backanno":
-        return _validate_backanno(simulator)
-    if head == ".step":
-        # A sheet's text may hold a ; comment and line breaks, at which an
-        # export splits it into cards: each .step card is checked as read.
-        steps = lex(directive if directive.endswith("\n") else directive + "\n").cards
-        return next(
-            (
-                error
-                for card in steps
-                if card.kind == "directive" and directive_head(card) == ".step"
-                if (error := step_refused(card.body, simulator)) is not None
-            ),
-            None,
-        )
-    if not lower.startswith(".meas"):
-        return None
-
-    # Parse via spice_lex to get classified tokens.
-    text = directive if directive.endswith("\n") else directive + "\n"
     try:
-        cards = lex(text).cards
+        cards = lex(directive if directive.endswith("\n") else directive + "\n").cards
     except SpiceLexError:
-        # Tokenizer faults aren't a validator concern; let downstream
-        # catch them. Substring-fallback is intentionally not done — a
-        # broken directive shouldn't be silently approved.
         return None
-    meas_cards = [c for c in cards if c.kind == "meas"]
-    if not meas_cards:
-        return None
-    return validate_directive_card(meas_cards[0], simulator)
+    return next(
+        (error for card in cards if (error := validate_directive_card(card, simulator))),
+        None,
+    )
 
 
 def validate_directive_card(card: SpiceCard, simulator: str = "LTspice") -> ValidationError | None:
-    """``validate_directive`` for one lexed card of a deck.
+    """The pre-flight rules for one lexed card of a deck.
 
     The card is read as the simulator reads it: its ``+`` lines joined and
     its comments left out, so a ``.meas`` whose function sits on a
-    continuation line is checked whole. A card that is no directive passes.
+    continuation line is checked whole. Covers ``.MEAS`` function blocklists,
+    reserved names and a parenthesis left open, the ``.tran`` zero-step
+    ngspice incompatibility, the ``.backanno`` ngspice incompatibility, and a
+    ``.step`` with nothing to step (``step_refused``). Any other card passes.
     """
     if card.kind == "meas":
         if (error := meas_unclosed_paren_refused(card, simulator)) is not None:
@@ -359,10 +333,14 @@ def validate_directive_card(card: SpiceCard, simulator: str = "LTspice") -> Vali
         return refused[0][1] if refused else None
     if card.kind != "directive":
         return None
-    if directive_head(card) == ".step":
-        # One card, its comment already left out.
+    head = directive_head(card)
+    if head.startswith(".tran"):
+        return _validate_tran_tstep(card.body.strip(), simulator)
+    if head == ".backanno":
+        return _validate_backanno(simulator)
+    if head == ".step":
         return step_refused(card.body, simulator)
-    return validate_directive(card.body, simulator)
+    return None
 
 
 def meas_functions_refused(
@@ -539,10 +517,12 @@ def is_ground_node(name: str) -> bool:
 _NON_NODE_CHARS = frozenset("(){}=\"'")
 
 # How many leading positional tokens of an instance card are element
-# terminals, per prefix. Deliberately lint-local: ELEMENT_SPECS drives the
-# arity *errors* and stays narrow, while the dangling *warning* must know
-# every standard prefix — a prefix absent here would zero out its nodes'
-# counts and fabricate warnings on neighbouring elements.
+# terminals, per prefix. Kept apart from ELEMENT_SPECS, whose ``min_nodes``
+# drives the arity *errors* and lists only the elements it checks: the
+# dangling *warning* must know every standard prefix (a diode's, a switch's),
+# since a prefix absent here would zero out its nodes' counts and fabricate
+# warnings on neighbouring elements, and counts the most nodes a card has
+# (a MOSFET's 4, where the arity minimum is 3).
 _TERMINAL_COUNTS: dict[str, int] = {
     "R": 2,
     "C": 2,

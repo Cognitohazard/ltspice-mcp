@@ -2333,11 +2333,11 @@ def test_each_element_is_exported_with_a_node_for_each_pin_and_read_so(build: st
     """Both builds write each part's pins as its nodes and then its Value: a
     T line's parameters and a W switch's controlling source and model. The
     server reads every node back, and each part's pins onto them."""
-    cards = rec.export_instances(build, "export/elements")
-    read = {
-        reference: (cards[canon_ref(reference)].nodes, cards[canon_ref(reference)].model)
+    cards = {
+        reference: exported_card(build, "export/elements", reference)
         for reference, _letter, _pins in ELEMENT_PARTS
     }
+    read = {reference: (card.nodes, card.model) for reference, card in cards.items()}
     assert read == {
         "Z1": (["NC_01", "NC_02", "NC_03"], "nmf"),
         "O1": (["NC_04", "NC_05", "NC_06", "NC_07"], "lossy"),
@@ -2345,6 +2345,6 @@ def test_each_element_is_exported_with_a_node_for_each_pin_and_read_so(build: st
         "T1": (["NC_11", "NC_12", "NC_13", "NC_14"], None),
         "W1": (["NC_15", "NC_16"], "sw"),
     }
-    assert cards[canon_ref("W1")].control == "Vsense"
+    assert cards["W1"].control == "Vsense"
     pins = exported_pin_nodes(rec.export_text(build, "export/elements"), ELEMENT_PARTS)
     assert len(pins) == sum(len(part_pins) for _ref, _letter, part_pins in ELEMENT_PARTS)

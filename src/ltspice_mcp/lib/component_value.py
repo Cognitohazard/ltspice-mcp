@@ -88,17 +88,18 @@ def apply_value_to_instance(card: SpiceCard, raw_value: str) -> ApplyResult:
         )
     # A source's value may go on past a KEY=VALUE word (a PWL's
     # ``TIME_SCALE_FACTOR=2 (0 4 1 4)``), which read_source_text reads.
-    seen_kv = False
-    for tok in user_tokens:
-        if tok.kind == TokenKind.KEY_VALUE:
-            seen_kv = prefix not in SOURCE_PARAMETERS
-        elif seen_kv and tok.kind in POSITIONAL_KINDS:
-            raise NetlistError(
-                f"Component {ref!r} value {raw_value!r} contains trailing tokens "
-                "after a KEY=VALUE assignment. Wrap expressions in braces or "
-                "write function-call values without separating the function name "
-                "from its parentheses."
-            )
+    if prefix not in SOURCE_PARAMETERS:
+        seen_kv = False
+        for tok in user_tokens:
+            if tok.kind == TokenKind.KEY_VALUE:
+                seen_kv = True
+            elif seen_kv and tok.kind in POSITIONAL_KINDS:
+                raise NetlistError(
+                    f"Component {ref!r} value {raw_value!r} contains trailing tokens "
+                    "after a KEY=VALUE assignment. Wrap expressions in braces or "
+                    "write function-call values without separating the function name "
+                    "from its parentheses."
+                )
 
     handler = _DISPATCH.get(prefix)
     if handler is None:
@@ -198,6 +199,23 @@ class SourceText:
     own: tuple[str, ...]
     played: str | None = None
 
+    @property
+    def text(self) -> str:
+        """The value then the own parameters, one space apart."""
+        return " ".join(word for word in (self.value, *self.own) if word)
+
+
+def text_without(text: str, spans: list[tuple[int, int]], end: int | None = None) -> str:
+    """``text`` up to ``end`` with each of ``spans`` (start, stop) cut out, in
+    order, the runs left kept as written and joined one space apart: a
+    value with some of its words taken out."""
+    parts, cursor = [], 0
+    for start, stop in spans:
+        parts.append(text[cursor:start].strip())
+        cursor = stop
+    parts.append(text[cursor : len(text) if end is None else end].strip())
+    return " ".join(part for part in parts if part)
+
 
 def source_word_key(word: str) -> str:
     """The name a source's own parameter goes by: its key (``AC=2`` and
@@ -255,13 +273,8 @@ def read_source_text(text: str, prefix: str) -> SourceText:
         elif key == WAVEFILE:
             played = text[tok.body_offset : tok.body_end]
         index += 1
-    parts, cursor = [], 0
-    for start, stop in own:
-        parts.append(text[cursor:start].strip())
-        cursor = stop
-    parts.append(text[cursor:end].strip())
     return SourceText(
-        value=" ".join(part for part in parts if part),
+        value=text_without(text, own, end),
         own=tuple(" ".join(text[start:stop].split()) for start, stop in own),
         played=played,
     )
@@ -310,19 +323,10 @@ def _apply_indep_source(ctx: _ApplyCtx) -> ApplyResult:
     n1, n2 = pos[0].text, pos[1].text
     letter = ctx.ref[:1]
     old = read_source_text(ctx.card.body[pos[1].body_end :], letter)
-    try:
-        new = read_source_text(ctx.raw_value, letter)
-    except SpiceLexError as e:
-        raise NetlistError(
-            f"Component {ctx.ref!r} value {ctx.raw_value!r} failed to parse: {e}"
-        ) from e
-    edited = edited_source(ctx.ref, old, new)
-    ctx.card.replace_body(" ".join(w for w in (ctx.ref, n1, n2, edited.value, *edited.own) if w))
-    return ApplyResult(
-        ctx.ref,
-        " ".join(w for w in (old.value, *old.own) if w),
-        " ".join(w for w in (edited.value, *edited.own) if w),
-    )
+    # The value was split into words above, so this reading of it cannot fail.
+    edited = edited_source(ctx.ref, old, read_source_text(ctx.raw_value, letter))
+    ctx.card.replace_body(" ".join(w for w in (ctx.ref, n1, n2, edited.text) if w))
+    return ApplyResult(ctx.ref, old.text, edited.text)
 
 
 # ---------------------------------------------------------------------------

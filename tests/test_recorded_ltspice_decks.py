@@ -1564,13 +1564,12 @@ def test_both_words_of_a_source_that_plays_a_file_were_run_as_its_nodes(
 ):
     """Quoted or not, both builds wire V1 between a and b: v(a) is 0.25 and
     v(b) -0.25, which no reading of b as a value gives."""
-    raw = rec.decode(build, case_id, tmp_path).raw
-    traces = {name.lower(): name for name in raw.get_trace_names()}
+    read = waves(build, case_id, tmp_path)
     for name, volts in WAVEFILE_VOLTAGES.items():
-        if name in traces:
-            wave = raw.get_wave(traces[name], 0)
+        if name in read:
+            wave = read[name]
             assert (wave.min(), wave.max()) == (pytest.approx(volts), pytest.approx(volts)), name
-    assert {"v(a)", "v(b)", "v(c)"} <= set(traces)
+    assert {"v(a)", "v(b)", "v(c)"} <= set(read)
 
 
 @pytest.mark.parametrize("case_id", WAVEFILE_DECKS)
@@ -1734,21 +1733,25 @@ def source_cards(case_id: str) -> dict[str, SpiceCard]:
     return source_cards_of(deck_text(case_id))
 
 
+def fresh_card(case_id: str, ref: str) -> SpiceCard:
+    """A card of a recorded deck, lexed afresh for an edit to change."""
+    (card,) = lex_deck(f"* t\n{source_cards(case_id)[ref].body}\n").cards
+    return card
+
+
 def after_nodes(card: SpiceCard) -> str:
     return card.body.split(None, 3)[3]
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
 def test_a_sources_own_parameters_follow_its_value_whatever_its_form(build: str, tmp_path: Path):
-    raw = rec.decode(build, "deck/source_parameters", tmp_path / "tran").raw
+    tran = waves(build, "deck/source_parameters", tmp_path / "tran")
     for name, volts in SOURCE_VOLTAGES.items():
-        (trace,) = [t for t in raw.get_trace_names() if t.lower() == name]
-        wave = raw.get_wave(trace, 0)
+        wave = tran[name]
         assert (wave.min(), wave.max()) == (pytest.approx(volts), pytest.approx(volts)), name
-    raw = rec.decode(build, "deck/source_ac", tmp_path / "ac").raw
+    ac = waves(build, "deck/source_ac", tmp_path / "ac")
     for name, volts in SOURCE_AC.items():
-        (trace,) = [t for t in raw.get_trace_names() if t.lower() == name]
-        assert abs(complex(raw.get_wave(trace, 0)[0])) == pytest.approx(volts, rel=1e-3), name
+        assert abs(ac[name][0]) == pytest.approx(volts, rel=1e-3), name
 
 
 @pytest.mark.parametrize("case_id", sorted(SOURCE_TEXTS))
@@ -1768,13 +1771,12 @@ async def test_every_edit_of_a_sources_value_keeps_its_own_parameters(
     (``instance_targeting.apply_edit``) write a card with. A PWL's scale
     keyword is its value's and goes with it."""
     text = deck_text(case_id)
-    cards = source_cards(case_id)
     for ref, value in NEW_SOURCE_VALUES.items():
         own = SOURCE_TEXTS[case_id][ref].own
-        (card,) = lex_deck(f"* t\n{cards[ref].body}\n").cards
+        card = fresh_card(case_id, ref)
         apply_value_to_instance(card, value)
         assert after_nodes(card) == " ".join([value, *own]), ref
-        (card,) = lex_deck(f"* t\n{cards[ref].body}\n").cards
+        card = fresh_card(case_id, ref)
         apply_edit(card, InstanceEdit(instance=(ref,), attribute="value", value=value))
         assert after_nodes(card) == " ".join([value, *own]), ref
     path = work_dir / Path(case_id).with_suffix(".cir").name
@@ -1797,14 +1799,14 @@ def test_an_edit_that_gives_a_parameter_sets_it_and_keeps_the_rest():
     """A new value may give a parameter of its own, which replaces the one
     the card has, and a comment after it is left out, so a kept parameter
     never lands in it."""
-    (card,) = lex_deck(f"* t\n{source_cards('deck/source_ac')['V4'].body}\n").cards
+    card = fresh_card("deck/source_ac", "V4")
     apply_value_to_instance(card, "2 rser=2k AC 3 ; a note")
     assert after_nodes(card) == "2 AC 3 rser=2k Cpar=1u"
-    (card,) = lex_deck(f"* t\n{source_cards('deck/source_parameters')['V4'].body}\n").cards
+    card = fresh_card("deck/source_parameters", "V4")
     apply_value_to_instance(card, "PWL TIME_SCALE_FACTOR=3 (0 4 1 4)")
     assert after_nodes(card) == "PWL TIME_SCALE_FACTOR=3 (0 4 1 4) Rser=1k"
     # Keyed parameters alone edit those; any other word is the whole value.
-    (card,) = lex_deck(f"* t\n{source_cards('deck/source_parameters')['V1'].body}\n").cards
+    card = fresh_card("deck/source_parameters", "V1")
     apply_value_to_instance(card, "Rser=2k")
     assert after_nodes(card) == "5 Rser=2k"
     apply_value_to_instance(card, "AC 1")
@@ -1871,6 +1873,7 @@ def test_a_step_with_nothing_to_step_stops_ltspice_and_is_refused_before_the_run
     # a line break, which an export writes as a card of its own.
     assert validate_directive(f"{step.body} ; sweep it") is not None
     assert validate_directive(f"{step.body}\n.op") is not None
+    assert validate_directive(f".op\n{step.body}") is not None
 
 
 def test_a_step_with_values_and_a_comment_passes():

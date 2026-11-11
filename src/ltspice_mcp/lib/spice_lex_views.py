@@ -382,6 +382,9 @@ class ElementSpec:
     default_kind: ElementKind
     min_nodes: int
     kv_means_params_only: bool = False
+    # The words between the element's ``min_nodes`` nodes and its model name
+    # the source whose current controls it (``W1 a 0 Vsense sw``).
+    controlled: bool = False
 
     def kind_for(self, has_kv: bool) -> ElementKind:
         if has_kv and self.kv_means_params_only:
@@ -401,11 +404,11 @@ ELEMENT_SPECS: dict[str, ElementSpec] = {
     # line's two ends and the node its capacitance goes to, each before its
     # model (deck/element_o, deck/element_u); a current-controlled switch's two
     # nodes, then the source whose current sets it, then its model
-    # (deck/element_w, _CONTROL_NODES).
+    # (deck/element_w).
     "Z": ElementSpec(default_kind="model", min_nodes=3),
     "O": ElementSpec(default_kind="model", min_nodes=4),
     "U": ElementSpec(default_kind="model", min_nodes=3),
-    "W": ElementSpec(default_kind="model", min_nodes=2),
+    "W": ElementSpec(default_kind="model", min_nodes=2, controlled=True),
     # A lossless line's two ports, and LTspice 26's frequency response analyzer
     # between two nodes: nodes, then parameters only (deck/element_t,
     # deck/element_fra; LTspice XVII has no analyzer).
@@ -464,11 +467,6 @@ _DEFINING_KEYS: dict[str, frozenset[str]] = {
     "V": frozenset({"wavefile"}),
     "I": frozenset({"wavefile"}),
 }
-
-# Elements whose nodes are followed by the name of the source whose current
-# controls them, and then by their model: ``W1 a 0 Vsense sw``. The count is
-# their nodes; the words between those and the model name the source.
-_CONTROL_NODES: dict[str, int] = {"W": 2}
 
 # A switch (S/W) carries an optional ON/OFF state token AFTER its model name.
 # It is never a model name, so it is peeled into the value tail before model
@@ -662,8 +660,8 @@ class InstanceLine:
                 while len(pos) > spec.min_nodes + 1 and _is_device_tail_value(pos[-1]):
                     tail.insert(0, pos[-1])
                     pos = pos[:-1]
-            lead = _CONTROL_NODES.get(prefix)
-            if lead is not None and len(pos) > lead + 1:
+            lead = spec.min_nodes
+            if spec.controlled and len(pos) > lead + 1:
                 # A W switch: its nodes, the source that sets it, its model.
                 nodes_tokens = pos[:lead]
                 control = _value_from_span(card, pos[lead:-1])
@@ -703,9 +701,7 @@ class InstanceLine:
             # KEY_VALUE token and must be edited through set_param.
             nodes = [t.text for t in positional]
             value = params[value_param_key]
-        elif kind == "value" and any(
-            key.casefold() in _DEFINING_KEYS.get(prefix, frozenset()) for key in params
-        ):
+        elif any(key.casefold() in _DEFINING_KEYS.get(prefix, frozenset()) for key in params):
             # A capacitor defined by its charge, an inductor by its flux
             # (``C1 b 0 Q=100n*x``), a source that plays a .wav file: both
             # builds run each as a part between its two nodes
