@@ -49,15 +49,15 @@ V2 g 0 1
 .op
 .end
 """
-"""Eight values ngspice reports: M1's W and L; XC.M0's W and L; XC.R1's and
-XP.R2's resistance; Rtop's resistance and m. XP sets m, so ngspice rewrites
-the m of XC.M0 and XP.R2, and C1, V1 and V2 have no ngspice name in the
-reader."""
+"""Ten values ngspice reports: M1's W and L; XC.M0's W, L and copies; XC.R1's
+resistance; XP.R2's resistance and copies, which XP's m rewrites; Rtop's
+resistance and copies. No m is written for M1 or XC.R1, and C1, V1 and V2
+have no ngspice name in the reader."""
 
 AGREES = {
     "status": "agrees",
-    "compared": 8,
-    "not_compared": {"m_rewritten_by_calls": 2, "no_ngspice_name": 3},
+    "compared": 10,
+    "not_compared": {"m_not_written": 2, "no_ngspice_name": 3},
 }
 
 
@@ -101,11 +101,13 @@ async def test_ngspice_confirms_the_readers_values(
 
 @needs_ngspice
 @pytest.mark.parametrize("mode", ["", "hsa", "kiltpsa"])
-async def test_m_that_ngspice_rewrites_and_a_0_ohm_resistor_are_not_compared(
+async def test_the_copies_ngspice_builds_under_a_rewrite_are_the_readers(
     mode: str, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """Once XA calls leaf with m, ngspice changes XE.R1's m too (to 1 outside
-    hsa, measured), though XE sets none; and it reads 0 ohm as 1 milliohm."""
+    """Once XA calls leaf with m, ngspice rewrites leaf: XA.R1 gets 4 copies
+    (12 in hsa), and XE.R1, though XE sets no m, 1 (3 in hsa); the reader's
+    copies (``card_copies``) must be ngspice's. A 0 ohm resistor, read as 1
+    milliohm, is not compared."""
     state = _session(work_dir, "hsa", monkeypatch)
     deck = _deck(
         work_dir,
@@ -115,8 +117,8 @@ async def test_m_that_ngspice_rewrites_and_a_0_ohm_resistor_are_not_compared(
     result = await _hierarchy(state, deck, ngbehavior=mode)
     assert result["data"]["ngspice_check"] == {
         "status": "agrees",
-        "compared": 2,
-        "not_compared": {"m_rewritten_by_calls": 2, "no_ngspice_name": 1, "zero_resistance": 1},
+        "compared": 4,
+        "not_compared": {"m_not_written": 1, "no_ngspice_name": 1, "zero_resistance": 1},
     }
 
 
@@ -198,7 +200,7 @@ def test_a_value_ngspice_reads_differently_is_a_difference(tmp_path: Path):
 
     check = compare(planned, printed_values(log), skipped)
     assert check.status == "differs"
-    assert check.compared == 8
+    assert check.compared == 10
     payload = check.payload()
     assert payload["differences"] == [
         {"instance": ["Rtop"], "field": "value", "reader": 200.0, "ngspice": 300.0}

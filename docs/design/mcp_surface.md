@@ -2571,13 +2571,14 @@ values discovery resolved compare with the ones ngspice reads
 (`lib/hierarchy_check.py`). ngspice reads the deck through a driver that
 `source`s it in the query's mode, as a run would, and prints each value: a
 resistor's `value` (ngspice's `resistance`), a MOSFET's `geometry` W and L
-(`w`, `l`, both scaled) and an `m` on either card. Two kinds of value are left
-out because ngspice changes them by design. Once any subcircuit call in the
-deck sets `m`, ngspice rewrites the `m` of devices inside subcircuits (in
-`hsa` it multiplies the calls' `m` in; in other modes it changes `m` on every
-instance of the called subcircuit). And it reads a 0 ohm resistor as 1
-milliohm. `status` is `agrees`, `differs` (with `differences`, each the
-`instance`, the reply `field`, and the `reader` and `ngspice` values) or
+(`w`, `l`, both scaled), and the copies discovery counts for either card,
+which instance mismatch uses (`multiplier`, not a reply field), against
+ngspice's `m`. The copies are compared where the card writes `m` or its
+subcircuit is rewritten for `m`, so the check measures discovery's model of
+that rewrite, which differs by mode. Elsewhere ngspice prints 0 for `m`,
+meaning one copy, and it reads a 0 ohm resistor as 1 milliohm; neither is
+compared. `status` is `agrees`, `differs` (with `differences`, each the
+`instance`, the `field` it is about, and the `reader` and `ngspice` values) or
 `not_run`. A `not_run` result has a `reason` and a `detail` that explains it:
 `no_ngspice`, `nothing_to_compare`, `path_unsupported` (a quote, `$`, `` ` ``,
 a backslash, a brace, a tab or a line break in the path, or a non-ASCII path
@@ -2586,7 +2587,7 @@ read it), `deck_not_read` (ngspice printed no value), `mode_unchecked`, or
 `mode_differs` (a startup file ngspice reads set another mode). `compared`
 counts the values compared when the check ran. `not_compared` counts the rest
 by reason: `no_ngspice_name` (an element the reader gives no ngspice device
-name), `unresolved`, `m_rewritten_by_calls`, `zero_resistance` and
+name), `unresolved`, `m_not_written`, `zero_resistance` and
 `no_ngspice_value`. Nodes, models and sources are not compared. A result,
 a failure to run ngspice included, is kept per deck content, mode and
 executable, so later pages do not ask again. The check covers the whole deck,

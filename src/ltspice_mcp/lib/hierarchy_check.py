@@ -17,17 +17,18 @@ Element            Reader                      ngspice
 ``M``              ``geometry.w``/``.l``       ``w``/``l``, both scaled by
                                                ``.options scale``, as the
                                                reader's geometry is
-``R``, ``M``       ``parameters.m``            ``m``, except inside a
-                                               subcircuit when any X line
-                                               in the deck sets ``m``
+``R``, ``M``       ``multiplier``, the copies  ``m``, where the card
+                   the reader counts for the   writes ``m`` or its
+                   card (``card_copies``)      subcircuit is rewritten for
+                                               ``m`` (``m_rewritten``)
 =================  ==========================  ===========================
 
-Two of the reader's values are left out because ngspice changes them by
-design. Once any subcircuit call sets ``m``, ngspice rewrites the ``m`` of
-devices inside subcircuits: in ``hsa`` mode it multiplies the calls' ``m``
-into the card's, and in other modes it changes ``m`` on every instance of the
-called subcircuit, ones called without ``m`` included. A 0 ohm resistor is
-read as 1 milliohm; any other value is kept as written (ngspice-42).
+``multiplier`` is not a reply field; instance mismatch counts copies by it.
+Comparing it with ngspice's ``m`` checks the reader's model of how ngspice
+rewrites subcircuits for ``m``, which differs by mode. Where neither the card
+nor a rewrite sets ``m``, ngspice prints 0 for it, meaning one copy, so that
+is not compared. A 0 ohm resistor is read as 1 milliohm; any other value is
+kept as written (ngspice-42), so a 0 ohm value is not compared either.
 
 Nothing else is compared, and the result counts what was not: elements the
 reader names no ngspice device for (``address.device``), values it left
@@ -170,10 +171,6 @@ class Planned:
 
 def plan(hierarchy: Hierarchy) -> tuple[list[Planned], Counter[str]]:
     """The reader's values ngspice can be asked for, and a count of the rest."""
-    calls_set_m = any(
-        row.element == "X" and any(key.casefold() == "m" for key, _ in row.parameters)
-        for row in hierarchy.instances
-    )
     skipped: Counter[str] = Counter()
     planned: list[Planned] = []
     for row in hierarchy.instances:
@@ -194,12 +191,12 @@ def plan(hierarchy: Hierarchy) -> tuple[list[Planned], Counter[str]]:
                 ("geometry.w", "w", geometry.get("w")),
                 ("geometry.l", "l", geometry.get("l")),
             ]
-        parameters = {key.casefold(): fact for key, fact in row.parameters}
-        if "m" in parameters:
-            if calls_set_m and len(row.instance) > 1:
-                skipped["m_rewritten_by_calls"] += 1
-            else:
-                facts.append(("parameters.m", "m", parameters["m"]))
+        written = any(key.casefold() == "m" for key, _ in row.parameters)
+        body = row.source.definition
+        if written or (body is not None and body.casefold() in hierarchy.m_rewritten):
+            facts.append(("multiplier", "m", row.multiplier))
+        else:
+            skipped["m_not_written"] += 1
         for field, quantity, fact in facts:
             if fact is None or fact.status != "resolved" or fact.value is None:
                 skipped["unresolved"] += 1

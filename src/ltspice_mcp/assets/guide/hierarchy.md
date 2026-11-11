@@ -64,11 +64,12 @@ defaults to the configured mode. A deck with a sectioned
 as `hsa` (guide section 'ngspice' explains why); a mode set in this query does
 not change later runs. With ngspice installed, the reply's `ngspice_check`
 compares the values discovery resolved (a resistor's value, a MOSFET's W and
-L, and an `m` on either card) with the ones ngspice reads, and lists any that
-differ. The reader's rules were established for `hsa`, `kiltpsa` and `""`
-(native SPICE), spelled in lower case as ngspice reads them. In another mode
-the query answers only when ngspice confirms every value, and refuses `gnd`;
-an instance edit or a recoverable run is refused in such a mode. A cursor
+L, and the copies ngspice builds of either) with the ones ngspice reads, and
+lists any that differ. The reader's rules were established for `hsa`,
+`kiltpsa` and `""` (native SPICE), spelled in lower case as ngspice reads
+them. In another mode the query answers only when ngspice confirms every
+value, and refuses `gnd`; an instance edit or a recoverable run is refused in
+such a mode. A cursor
 works only with the same files, unchanged, and the same mode and filters as
 the query that returned it; otherwise the query fails with `invalid_cursor`.
 After an edit, start a new query.
