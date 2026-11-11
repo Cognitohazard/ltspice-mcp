@@ -75,7 +75,6 @@ from ltspice_mcp.lib.recipes import (
     StepSelectionFields,
     StepSelector,
     WaveformRecipe,
-    step_axis_key,
     validate_recipe,  # noqa: TID251 - recipe_of_request, its owner, is in this module
 )
 from ltspice_mcp.lib.result_kinds import AC_SHAPED
@@ -83,6 +82,7 @@ from ltspice_mcp.lib.result_observations import (
     coarse_waveform_observation,
 )
 from ltspice_mcp.lib.signal_analysis import downsample_minmax_traces
+from ltspice_mcp.lib.step_values import step_axis_key
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     HINT_SCHEMA,

@@ -80,7 +80,9 @@ _ALLOWED: dict[str, str] = {
     "errors.py:compact_validation_error": (
         "a refusal's sample of validation errors, ending in 'and N more'"
     ),
-    "lib/recipes.py:_listed": "a refusal's sample of step values, ending in '(N in all)'",
+    "lib/step_values.py:listed": (
+        "a refusal's sample of steps, step values or axes, ending in '(N in all)'"
+    ),
     "lib/signal_analysis.py:window_span": (
         "reads an axis a block of _WINDOW_CHUNK points at a time, every block; cuts nothing"
     ),

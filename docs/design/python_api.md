@@ -533,9 +533,11 @@ ops.observations               # a log reader's dict (LogResult) says the same o
   node or device inside subcircuits is matched by its path, however each
   build spells it (LTspice 26's `V(xa:xin:mid)` is XVII's `V(a:in:mid)`).
   `other_step` defaults to the step of `other` whose parameters match this
-  step's (step 0 of a result that is not stepped); a step with no match is
-  refused. On a sampled axis, each signal is compared at this result's points
-  within the span both axes cover. When `other`'s axis differs, `other` is
+  step's, each value matched as a step selector matches it
+  (`step_values.step_with`; step 0 of a result that is not stepped); a step
+  with no match is refused with the steps `other` has. On a sampled axis,
+  each signal is compared at this result's points within the span both axes
+  cover. When `other`'s axis differs, `other` is
   read at those points by linear interpolation, which on a frequency axis is
   in log frequency, dB and unwrapped phase, as `log_interp_complex` does it. A
   plot with no axis is compared point by point and must have the same number

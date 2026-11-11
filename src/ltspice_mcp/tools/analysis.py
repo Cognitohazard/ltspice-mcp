@@ -1036,7 +1036,7 @@ class PlotWaveformInput(OptionalRawSelectionFields, OtherRawFields, ToolInput, N
         default=None,
         description=(
             "For a .step run: omit to overlay every step, or plot one by its 0-based "
-            "index or its axis value ({axis:'temp', value:27}, nearest wins)."
+            "index or its axis value ({axis:'temp', value:27}), which a step must have."
         ),
     )
     t_start: str | None = Field(

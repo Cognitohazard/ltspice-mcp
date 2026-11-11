@@ -19,7 +19,7 @@ from ltspice_mcp.config import SIM_EXECUTABLES_KEY as _SIM_EXECUTABLES_KEY
 from ltspice_mcp.config import SIM_SECTION as _SIM_SECTION
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError, SimulationError, error_hint
 from ltspice_mcp.lib import atomic_write_bytes, response_budget
-from ltspice_mcp.lib.format import held_to_cap
+from ltspice_mcp.lib.format import SAME_VALUE_RTOL, held_to_cap
 
 # Re-exported façade names: the strict Pydantic base lives in ``lib`` (models
 # below the tool layer declare models too), and the tool modules reach it here.
@@ -1024,7 +1024,7 @@ class CompareSpec(StrictModel):
         ),
     )
     rtol: float = Field(
-        default=1e-6,
+        default=SAME_VALUE_RTOL,
         description="Relative tolerance when comparing numeric values and parameters.",
     )
 

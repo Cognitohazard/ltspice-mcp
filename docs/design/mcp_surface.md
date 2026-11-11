@@ -1016,10 +1016,13 @@ group_by   list[assignment param | "circuit" | step-axis name]
 step       {axis, value} | null   for a deck carrying `.step`: read the one
                                   iteration at that axis value. Default is the
                                   first. A number, or a string in SPICE
-                                  notation ('2k'), picks the nearest step; any
-                                  other string must equal a step's value as
-                                  text. An axis or text value the run does
-                                  not have is refused with the ones it has
+                                  notation ('2k'), picks the first step whose
+                                  value is that number within the shared
+                                  relative tolerance (1e-6,
+                                  format.same_value); any other string must
+                                  equal a step's value as text. An axis or a
+                                  value the run does not have is refused with
+                                  the ones it has
 all_steps  bool (default false)   evaluate at every `.step` iteration; mutually
                                   exclusive with `step`
 include    {per_run?: {limit? (capped at 100), cursor?} | bool, outliers?, signals_available?,

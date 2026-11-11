@@ -61,7 +61,12 @@ from ltspice_mcp.lib.device_names import (
     path_text,
     writes_xvii_names,
 )
-from ltspice_mcp.lib.format import format_spice_value, held_to_cap, parse_spice_value
+from ltspice_mcp.lib.format import (
+    format_spice_value,
+    held_to_cap,
+    parse_spice_value,
+    same_value,
+)
 from ltspice_mcp.lib.log_parser import DEVICE_OP_TABLE_DIGITS, device_key
 from ltspice_mcp.lib.log_types import MeasurementsOutput, measurement_named
 from ltspice_mcp.lib.raw_parser import (
@@ -968,18 +973,26 @@ def unverified_input_noise_warning(unit: str | None) -> str:
     )
 
 
-def snap_match(requested: float, actual: float, *, rtol: float = 1e-3) -> bool:
-    """True iff ``actual`` is within ``rtol`` (relative) of ``requested``.
+#: How far the sample the ``value`` recipe reads may stand from its ``at``,
+#: relative to the larger, and still be reported as an ``exact_match``. Wider
+#: than ``format.SAME_VALUE_RTOL``, which a ``.step`` value is selected by,
+#: because the two answer different questions: a step value names one of the
+#: run's own values, whereas ``at`` is read at the nearest of the samples the
+#: simulator chose, which seldom falls on the point itself. The flag is for a
+#: read that moved far enough to matter, such as a request outside the axis,
+#: clamped to its end, or a coarse ``.dc temp`` sweep snapping 27 to 25.
+#: ``test_an_at_read_is_exact_over_a_wider_gap_than_a_step_value_selects``
+#: pins the difference.
+AT_SNAP_RTOL = 1e-3
 
-    A query snaps to the nearest available sample (a discrete step value or the
-    nearest point on a sweep axis); a legitimate lookup lands on (or extremely
-    near) one. A large gap means the request fell outside the range and was
-    silently clamped to the nearest endpoint — worth flagging rather than
-    presenting the clamp as an exact answer. Shared by the step-axis lookup and
-    the ``value`` recipe's direct ``at`` path so their snap flags can't drift.
-    """
-    scale = max(abs(actual), abs(requested), 1e-30)
-    return abs(requested - actual) <= rtol * scale
+
+def snap_match(requested: float, actual: float) -> bool:
+    """Whether the sample read for an ``at`` query (``actual``) is the point
+    asked for (``requested``), to :data:`AT_SNAP_RTOL` (``format.same_value``).
+    A large gap means the request fell between coarse samples, or outside the
+    range and was clamped to its nearest end: flagged rather than presented
+    as an exact answer."""
+    return same_value(requested, actual, AT_SNAP_RTOL)
 
 
 # ---------------------------------------------------------------------------

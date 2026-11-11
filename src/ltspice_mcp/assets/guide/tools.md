@@ -222,7 +222,7 @@ To read a log that has no RAW, use the `measurements` recipe:
 The recipe reads every measurement in the log in one pass. Without `step` or
 `all_steps`, a source's one row gives each measurement's statistics over every
 step and names no plot or step. With `all_steps` the recipe returns one row
-per step, and with `step` the row of the step whose value is nearest, each
+per step, and with `step` the row of the step that has the value, each
 with that step's `step_values`. Row n of a stepped `.meas` table belongs to
 the step on the log's n-th `.step` line, and a log whose `.step` lines do not
 number its rows (LTspice writes none for a stepped `.op`) is refused. In a

@@ -129,7 +129,9 @@ another run's traces are from these. For each signal it reports the largest
 difference, that difference as a share of this run's peak, and where it
 occurs, and it lists the signals that only one run has. Signals are paired by
 name, ignoring case, and by their path inside subcircuits, so an LTspice 26
-run can be compared with an XVII run. Steps are paired by their parameters.
+run can be compared with an XVII run. Steps are paired by their parameters,
+each value matched as a `step` selector matches it; when the other run has no
+step with this one's, the refusal lists the steps it has.
 The other run is read at this run's points over the span both cover,
 interpolated where its axis differs (as in a compressed LTspice raw, guide
 section 'ltspice'). You choose the tolerance.
