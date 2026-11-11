@@ -31,6 +31,7 @@ from ltspice_mcp.lib.step_values import (
     printed_half_unit,
     same_step_value,
     step_with,
+    steps_with,
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analysis import PlotWaveformInput, handle_plot_waveform
@@ -742,3 +743,23 @@ def test_the_python_api_reads_a_step_value_as_the_tools_do(
         ),
     ):
         stepped.compare(dc, step=1)
+
+
+def test_a_step_held_exactly_wins_over_a_neighbour_within_the_printed_digits():
+    """A raw holds a stepped operating point's values to full precision, so two
+    steps can lie closer than the six digits a log prints. A value one of them
+    holds exactly selects that one, by every route that names a step by value;
+    a value the printed digits join to both names neither, and is refused with
+    the run's values rather than read from the first."""
+    steps = [{"x": 1.0}, {"x": 1.000003}]
+    assert steps_with(steps, {"x": 1.000003}) == [1]
+    assert step_with(steps, {"x": 1.000003}) == 1
+    assert StepSelector(axis="x", value=1.000003).pick(steps) == 1
+    assert StepSelector(axis="x", value="1.000003").pick(steps) == 1
+    assert steps_with(steps, {"x": 1.0000015}) == []
+    with pytest.raises(ResultError, match=r"1\.000003"):
+        StepSelector(axis="x", value=1.0000015).pick(steps)
+    # Two steps holding one value, as a sweep over two parameters does, are
+    # both that value's.
+    swept = [{"x": 1.0, "y": 1.0}, {"x": 1.0, "y": 2.0}]
+    assert steps_with(swept, {"x": 1.0}) == [0, 1]

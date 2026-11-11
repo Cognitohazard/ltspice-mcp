@@ -14,7 +14,7 @@ import math
 from collections.abc import Collection, Mapping, Sequence
 from typing import Any
 
-from ltspice_mcp.lib.format import format_spice_value, parse_spice_value
+from ltspice_mcp.lib.format import format_spice_value, parse_spice_value, same_value
 from ltspice_mcp.lib.raw_header import STEPPED_TEMPERATURE
 
 #: How many significant digits a step value is matched to. A stepped .tran,
@@ -134,18 +134,49 @@ def same_step_value(a: Any, b: Any) -> bool:
     return abs(number_a - number_b) <= printed_half_unit(smaller) * _MIDPOINT_SLACK
 
 
+def _same_held_value(a: Any, b: Any) -> bool:
+    """Whether a step holds a requested value itself: the same number to the
+    shared tolerance (``format.same_value``), or the same text."""
+    number_a, number_b = step_number(a), step_number(b)
+    if number_a is None and number_b is None:
+        return str(a) == str(b)
+    if number_a is None or number_b is None:
+        return False
+    return same_value(number_a, number_b)
+
+
 def steps_with(step_values: Sequence[Mapping[str, Any]], wanted: Mapping[str, Any]) -> list[int]:
-    """The indices of the steps that have every value of ``wanted``: each
-    name found as :func:`step_axis_key` finds it, each value the same as
-    :func:`same_step_value` has it. Every step when ``wanted`` is empty."""
-    return [
-        index
-        for index, values in enumerate(step_values)
-        if all(
-            (key := step_axis_key(axis, values)) in values and same_step_value(values[key], value)
-            for axis, value in wanted.items()
-        )
-    ]
+    """The indices of the steps that have every value of ``wanted``, each
+    name found as :func:`step_axis_key` finds it. Every step when ``wanted``
+    is empty.
+
+    A step that holds a value itself (``format.same_value``) is the one it
+    names: a raw holds a stepped operating point's values to full precision,
+    so two steps can lie closer than the digits a log prints. Only when no
+    step holds it is a value read to those digits (:func:`same_step_value`),
+    and then only if the steps it reaches hold one value: a value the printed
+    digits join to two values the run holds apart names neither.
+    """
+
+    def having(same: Any) -> list[int]:
+        return [
+            index
+            for index, values in enumerate(step_values)
+            if all(
+                (key := step_axis_key(axis, values)) in values and same(values[key], value)
+                for axis, value in wanted.items()
+            )
+        ]
+
+    held = having(_same_held_value)
+    if held:
+        return held
+    near = having(same_step_value)
+    for axis in wanted:
+        reached = [step_values[i][step_axis_key(axis, step_values[i])] for i in near]
+        if any(not _same_held_value(reached[0], other) for other in reached[1:]):
+            return []
+    return near
 
 
 def step_with(
