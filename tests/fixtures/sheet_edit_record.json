@@ -2951,6 +2951,15 @@
    "tests/test_edit_schematic.py::test_render_failure_leaves_the_target_and_evicts_the_edited_editor"
   ]
  },
+ "c77db94b400b78d7": {
+  "answer": {
+   "reply": "421d80f6201c6374",
+   "sheet": "2f66633286ed1ad2"
+  },
+  "tests": [
+   "tests/test_one_call_per_task.py::test_an_edit_s_reference_comparison_reads_a_subcircuit_s_own_parameters"
+  ]
+ },
  "c7cb57328fad5346": {
   "answer": {
    "reply": "53e402acb176f0e5",

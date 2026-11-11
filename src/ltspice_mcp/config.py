@@ -569,6 +569,13 @@ _SETTINGS: tuple[_Setting, ...] = (
         from_env=_env_bool("LTSPICE_MCP_RUN_CODE"),
     ),
     _Setting(
+        field="run_code_memory_mb",
+        section="tools",
+        key="run_code_memory_mb",
+        env="LTSPICE_MCP_RUN_CODE_MEMORY_MB",
+        bounds=_Bounds(int, 1, 10_000_000),
+    ),
+    _Setting(
         field="persist_jobs",
         section="state",
         key="persist_jobs",
@@ -800,6 +807,15 @@ class ServerConfig:
     ``allowed_paths``, so an operator who exposes the server more widely (a
     proxy in front of it, more than one client) sets this false. Takes effect
     at the next start."""
+
+    run_code_memory_mb: int | None = None
+    """The most memory, in MiB, the ``run_code`` worker may hold while a
+    snippet runs; past it the worker is stopped, the call answers an error of
+    type ``MemoryLimit``, and the next call starts a fresh worker; a worker
+    already over it when a snippet arrives is replaced first. It counts the
+    worker process alone, not a simulator it starts: resident memory, or on
+    Windows the memory it has committed. None (the default) is half the
+    machine's physical memory. ``[tools] run_code_memory_mb``."""
 
     persist_jobs: bool = True
     """Persist experiment job records to the working directory's
@@ -1070,6 +1086,10 @@ def generate_default_config(path: Path) -> None:
     )
     tools_tbl.add(comment("example through a proxy."))
     _shown_default(tools_tbl, "run_code")
+    tools_tbl.add(comment("The most memory, in MiB, the run_code worker may hold while a snippet"))
+    tools_tbl.add(comment("runs; past it the worker is stopped and the call answers an error."))
+    tools_tbl.add(comment("Default: half the machine's physical memory."))
+    _shown_default(tools_tbl, "run_code_memory_mb", example=4096)
     doc.add("tools", tools_tbl)
     doc.add(nl())
 

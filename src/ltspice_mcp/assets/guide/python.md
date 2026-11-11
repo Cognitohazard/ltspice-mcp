@@ -29,7 +29,10 @@ snippet is bounded by `timeout_s` (60 s by default, held to the cap the
 (`run_experiments` with `wait=True`, or `api.wait`) ends just before
 `timeout_s` and raises `ApiInterrupted` naming its job. The job keeps
 running, so read it with `api.wait(job_id)` in a later snippet, or submit a
-long run with `wait=False` from the start. The snippet
+long run with `wait=False` from the start. A snippet that holds more memory
+than `[tools] run_code_memory_mb` (default half the machine's) is stopped
+with its worker and answers a `MemoryLimit` error, so work on one step's
+traces or a window of samples at a time. The snippet
 runs with the server process's own file and process authority. A sandbox
 (`[security] allowed_paths`) applies only to the paths passed to `api` calls
 and does not restrict the snippet's own code.
