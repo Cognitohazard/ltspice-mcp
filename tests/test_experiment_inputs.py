@@ -88,6 +88,83 @@ def test_unsupported_constructs_refuse_in_nested_include(tmp_path, body, code):
     assert error.value.code == code
 
 
+def test_one_refusal_names_every_construct_with_its_file_and_line(tmp_path):
+    """A deck and its library fail several checks: one refusal lists each
+    construct, in the file the caller wrote and on its line, so the deck is
+    fixed in one pass rather than one submission per construct."""
+    job = recovery_job(tmp_path)
+    assert job.output_folder is not None
+    case, source = job.cases[0], job.sources[0]
+    case.recovery = None
+    frozen = job.output_folder / "vendor.lib"
+    frozen.write_bytes(
+        b"* vendor models\n"
+        b"B1 in 0 V=vendor_fn(1)\n"
+        b"A1 in 0 external_module\n"
+        b"R1 in 0 1k\n"
+        b"B2 in 0 V=vendor_fn(2)\n"
+    )
+    case.staged_deck.write_bytes(b"* case\n.include vendor.lib\n.op\n.control\nrun\n.endc\n.end\n")
+    case.deck_sha256 = sha256_file(case.staged_deck)
+    library = tmp_path / "models" / "vendor.lib"
+    source.manifest.append(ManifestEntry(library, sha256_file(frozen), True, False, frozen))
+    # The deck the caller wrote, not the copy the server saved and checks.
+    source.path = tmp_path / "authoring" / "deck.cir"
+    with pytest.raises(RecoveryError) as error:
+        capture_case_inputs(case, source, lineage_root=job.output_folder)
+    # The code is the first construct's: the deck's cards come before its library's.
+    assert error.value.code == "recovery_control_unsupported"
+    message = str(error.value)
+    assert "refuses 3 constructs" in message
+    # A .control block is named once, at the line that opens it.
+    assert (
+        f"- a `.control` block (recovery_control_unsupported): {source.path} line 4: .control\n"
+    ) in message
+    assert (
+        "function `vendor_fn`, not known to the server (recovery_expression_unsupported): "
+        f"{library} line 2: B1 in 0 V=vendor_fn(1); also {library} line 5"
+    ) in message
+    assert f"`A1`, an XSPICE device (recovery_external_module): {library} line 3" in message
+    # The frozen copies' paths are the server's, not the caller's.
+    assert str(frozen) not in message
+    assert str(case.staged_deck) not in message
+
+
+def test_an_unreadable_card_is_listed_among_the_others(tmp_path):
+    """A card the lexer cannot read is one more construct in its place: it
+    hides none of the others, and the code stays the first construct's."""
+    job = recovery_job(tmp_path)
+    assert job.output_folder is not None
+    case, source = job.cases[0], job.sources[0]
+    case.recovery = None
+    frozen = job.output_folder / "vendor.lib"
+    frozen.write_bytes(b"* vendor\n.model DX D(Is=1e-14\n")
+    case.staged_deck.write_bytes(b"* case\n.include vendor.lib\n.control\nrun\n.endc\n.end\n")
+    case.deck_sha256 = sha256_file(case.staged_deck)
+    library = tmp_path / "models" / "vendor.lib"
+    source.manifest.append(ManifestEntry(library, sha256_file(frozen), True, False, frozen))
+    with pytest.raises(RecoveryError) as error:
+        capture_case_inputs(case, source, lineage_root=job.output_folder)
+    assert error.value.code == "recovery_control_unsupported"
+    message = str(error.value)
+    assert "refuses 2 constructs" in message
+    assert "a card the server cannot read (" in message
+    assert f"(recovery_syntax_unsupported): {library} line 2: .model DX D(Is=1e-14" in message
+
+
+def test_a_schematics_deck_is_named_as_the_netlist_exported_from_it(tmp_path):
+    job = recovery_job(tmp_path)
+    assert job.output_folder is not None
+    case, source = job.cases[0], job.sources[0]
+    case.recovery = None
+    case.staged_deck.write_bytes(b"* case\nR1 in 0 1k\n.op\n.control\nrun\n.endc\n.end\n")
+    case.deck_sha256 = sha256_file(case.staged_deck)
+    source.path = tmp_path / "sheet.asc"
+    with pytest.raises(RecoveryError) as error:
+        capture_case_inputs(case, source, lineage_root=job.output_folder)
+    assert f"the netlist exported from {source.path} line 4: .control" in str(error.value)
+
+
 @pytest.mark.parametrize(
     ("deck", "seeded"),
     [
@@ -126,10 +203,16 @@ def test_refuses_unrecorded_include_and_live_manifest(tmp_path):
     with pytest.raises(RecoveryError) as error:
         capture_case_inputs(case, source, lineage_root=job.output_folder)
     assert error.value.code == "recovery_closure_incomplete"
-    source.manifest.append(ManifestEntry(tmp_path / "live.inc", "a" * 64, False, True))
+    source.manifest.append(
+        ManifestEntry(
+            tmp_path / "live.inc", "a" * 64, False, True, reason="outside the allowed roots"
+        )
+    )
     with pytest.raises(RecoveryError) as error:
         capture_case_inputs(case, source, lineage_root=job.output_folder)
     assert error.value.code == "recovery_live_dependency"
+    # The refusal names the file read in place, and why it was not copied.
+    assert f"{tmp_path / 'live.inc'} (outside the allowed roots)" in str(error.value)
 
 
 def test_refuses_missing_file_and_symlink_escape(tmp_path):

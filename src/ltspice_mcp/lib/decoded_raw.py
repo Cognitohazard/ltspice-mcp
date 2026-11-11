@@ -30,6 +30,7 @@ from ltspice_mcp.lib.result_kinds import (
     step_variables,
     stepped_kind,
 )
+from ltspice_mcp.lib.step_values import steps_with
 
 if TYPE_CHECKING:
     from ltspice_mcp.lib.decoded_log import DecodedLog
@@ -536,16 +537,14 @@ class DecodedPlot:
         return self.get_wave(self.descriptor.axis.trace_index, step)
 
     def get_steps(self, **kwargs: StepValue) -> list[int]:
+        """Every step's index, or with ``kwargs`` those of the steps that have
+        each of its values, matched as a step selector matches a value
+        (``step_values.steps_with``)."""
         if not self.descriptor.steps:
             raise ResultError(unresolved_steps_reason(self.descriptor.stepped_kind))
-        indices = []
-        for step in self.descriptor.steps:
-            parameters = dict(step.parameters)
-            if all(
-                key in parameters and parameters[key] == value for key, value in kwargs.items()
-            ):
-                indices.append(step.index)
-        return indices
+        steps = self.descriptor.steps
+        found = steps_with([dict(step.parameters) for step in steps], kwargs)
+        return [steps[position].index for position in found]
 
 
 @dataclass(frozen=True, init=False)

@@ -10,10 +10,10 @@ Read one with `inspect(queries=[{"kind": "guide", "section": "<name>"}])`, or
 
 ## How to work
 
-- Write `.cir`, `.net` and `.sp` decks with your own file tools. Change an
-  `.asc` schematic only through `edit_schematic`, which checks geometry and
-  writes a whole batch of ops at once, or nothing if one fails. Iterate on a
-  netlist; build the `.asc` last.
+- Write `.cir`, `.net` and `.sp` decks with your own file tools, or with
+  `run_code` when you have none. Change an `.asc` schematic only through
+  `edit_schematic`, which checks geometry and writes a whole batch of ops at
+  once, or nothing if one fails. Iterate on a netlist; build the `.asc` last.
 - Simulate instead of reasoning it out, because runs are cheap and a sweep's
   cases run in parallel.
 - Use `run_experiments` for LTspice, for sweeps, corners and Monte Carlo, and
@@ -61,6 +61,10 @@ libraries and this guide; `edit_schematic` edits `.asc` sheets;
 Use Python for anything past a single call. Use a tool for one call whose
 reply you will read as it is, for a chart you want to see, and for a job that
 must outlive the `run_code` worker.
+
+`plot_waveform` shows its chart in the chat where the client can, and
+otherwise opens it on this machine's desktop. When the person is not at this
+machine, on a phone for example, send them the file it returns as `path`.
 
 ## The API on one page
 

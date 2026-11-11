@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Collection, Iterable
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, fields
 from typing import Any, Literal, get_args
 
@@ -201,6 +201,7 @@ class _MeasurementMetadata(TypedDict, total=False):
     range_to: float | list[float | None] | None
     at: float | list[float | None] | None
     unreadable: UnreadableValue
+    failed_steps: list[int]
 
 
 class MeasurementEntry(_MeasurementMetadata):
@@ -214,7 +215,9 @@ class MeasurementEntry(_MeasurementMetadata):
     ``values`` rather than a single scalar. ``unreadable`` is set when the log
     printed something other than a number for the value, such as a WHEN's
     threshold written as a parameter or an expression: the value is null, and
-    only this entry fails.
+    only this entry fails. ``failed_steps`` lists the steps, from 0, whose row
+    of a stepped table LTspice printed ``failed``; their values are null
+    (:func:`measurement_failed`).
     """
 
     values: list[float | None]
@@ -246,6 +249,12 @@ class MeasurementsOutput(TypedDict):
     :class:`MeasurementEntry` with ``values`` plus folded-in ``range_from``,
     ``range_to``, and ``at`` metadata. The flat ``name_from`` / ``name_to`` /
     ``name_at`` keys that spicelib emits are not surfaced separately.
+
+    ``failed_measurements`` names, in the order the log printed them, the
+    measurements LTspice printed as failed: ``Measurement "name" FAIL'ed``, or
+    ``failed`` in a row of the measurement's stepped table. It means that and
+    nothing else; a value that is null for another reason (``unreadable``, or a
+    number that is not finite) is not listed.
     """
 
     measurements: dict[str, MeasurementEntry]
@@ -253,3 +262,24 @@ class MeasurementsOutput(TypedDict):
     errors: list[str] | None
     warnings: list[str] | None
     failed_measurements: list[str]
+
+
+def measurement_failed(table: Mapping[str, Any], name: str, step: int | None = None) -> bool:
+    """Whether LTspice printed the measurement ``name`` of a log's measurement
+    ``table`` (:class:`MeasurementsOutput`) as failed: at ``step`` (from 0),
+    or with no step at every step it was taken.
+
+    The one reading of the log decoder's answer. A name ``failed_measurements``
+    lists failed at the steps its entry's ``failed_steps`` gives, where its
+    stepped table printed ``failed``; without them, LTspice printed it
+    ``FAIL'ed`` as a whole and it failed at every step.
+    """
+    if name not in (table.get("failed_measurements") or ()):
+        return False
+    entry = (table.get("measurements") or {}).get(name)
+    if not isinstance(entry, Mapping) or entry.get("failed_steps") is None:
+        return True
+    steps = entry["failed_steps"]
+    if step is not None:
+        return step in steps
+    return set(range(len(entry.get("values") or ()))) <= set(steps)

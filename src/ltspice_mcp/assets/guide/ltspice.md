@@ -255,8 +255,9 @@ C1 out 0 {C}
   26 and saved under a control character by XVII. The linter warns of both
   (`byte-85-ltspice`, `node-control-byte-ltspice`); save decks as UTF-8.
 - **A failed step on XVII**: in a stepped measurement table XVII prints `0`
-  where LTspice 24 and later print `failed`. The `measurements` recipe names
-  every such zero on a run XVII wrote (`measurement_zero_or_failed`).
+  where LTspice 24 and later print `failed`, which replies name in
+  `failed_measurements`. The `measurements` recipe names every such zero on a
+  run XVII wrote (`measurement_zero_or_failed`).
 - **`startup`** on `.tran` (`.tran 0 5m 0 10u startup`) ramps the sources up
   from zero. ngspice has no equivalent keyword.
 - **Frequency response analysis** (`.fra` with an analyzer `@N`): the run

@@ -61,9 +61,14 @@ from ltspice_mcp.lib.device_names import (
     path_text,
     writes_xvii_names,
 )
-from ltspice_mcp.lib.format import format_spice_value, held_to_cap, parse_spice_value
+from ltspice_mcp.lib.format import (
+    format_spice_value,
+    held_to_cap,
+    parse_spice_value,
+    same_value,
+)
 from ltspice_mcp.lib.log_parser import DEVICE_OP_TABLE_DIGITS, device_key
-from ltspice_mcp.lib.log_types import MeasurementsOutput, measurement_named
+from ltspice_mcp.lib.log_types import MeasurementsOutput, measurement_failed, measurement_named
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
     compute_ac_bandwidth_metrics,
@@ -838,7 +843,8 @@ def measurements_at_step(meas_data: MeasurementsOutput, step: int) -> Measuremen
     ``AT`` at that step where they vary by step. Row ``n`` of a stepped table
     is the step the log's ``n``-th ``.step`` line names, on both LTspice
     builds (recorded: ``log/meas_step``, ``log/step_two_params``,
-    ``log/step_temp``).
+    ``log/step_temp``). ``failed_measurements`` names those LTspice printed
+    as failed at that step (:func:`measurement_failed`).
     """
     count = max(meas_data.get("step_count") or 0, 1)
     if not 0 <= step < count:
@@ -853,10 +859,17 @@ def measurements_at_step(meas_data: MeasurementsOutput, step: int) -> Measuremen
 
     one: dict[str, Any] = {}
     for name, entry in meas_data.get("measurements", {}).items():
-        row = {key: at_step(field) for key, field in entry.items()}
+        # failed_steps names steps rather than holding a field per step; the
+        # step's own failed_measurements says it of the one step kept.
+        row = {key: at_step(field) for key, field in entry.items() if key != "failed_steps"}
         row["values"] = [row["values"]]
         one[name] = row
-    return {**meas_data, "measurements": one, "step_count": 1}
+    failed = [
+        name
+        for name in meas_data.get("failed_measurements") or []
+        if measurement_failed(meas_data, name, step)
+    ]
+    return {**meas_data, "measurements": one, "step_count": 1, "failed_measurements": failed}
 
 
 def measurement_step_values(
@@ -968,18 +981,27 @@ def unverified_input_noise_warning(unit: str | None) -> str:
     )
 
 
-def snap_match(requested: float, actual: float, *, rtol: float = 1e-3) -> bool:
-    """True iff ``actual`` is within ``rtol`` (relative) of ``requested``.
+#: How far the sample the ``value`` recipe reads may stand from its ``at``,
+#: relative to the larger, and still be reported as an ``exact_match``. Wider
+#: than ``format.SAME_VALUE_RTOL``, and than the six printed digits a
+#: ``.step`` value is selected to (``step_values.STEP_VALUE_DIGITS``), because
+#: they answer different questions: a step value names one of the run's own
+#: values, whereas ``at`` is read at the nearest of the samples the
+#: simulator chose, which seldom falls on the point itself. The flag is for a
+#: read that moved far enough to matter, such as a request outside the axis,
+#: clamped to its end, or a coarse ``.dc temp`` sweep snapping 27 to 25.
+#: ``test_an_at_read_is_exact_over_a_wider_gap_than_a_step_value_selects``
+#: pins the difference.
+AT_SNAP_RTOL = 1e-3
 
-    A query snaps to the nearest available sample (a discrete step value or the
-    nearest point on a sweep axis); a legitimate lookup lands on (or extremely
-    near) one. A large gap means the request fell outside the range and was
-    silently clamped to the nearest endpoint — worth flagging rather than
-    presenting the clamp as an exact answer. Shared by the step-axis lookup and
-    the ``value`` recipe's direct ``at`` path so their snap flags can't drift.
-    """
-    scale = max(abs(actual), abs(requested), 1e-30)
-    return abs(requested - actual) <= rtol * scale
+
+def snap_match(requested: float, actual: float) -> bool:
+    """Whether the sample read for an ``at`` query (``actual``) is the point
+    asked for (``requested``), to :data:`AT_SNAP_RTOL` (``format.same_value``).
+    A large gap means the request fell between coarse samples, or outside the
+    range and was clamped to its nearest end: flagged rather than presented
+    as an exact answer."""
+    return same_value(requested, actual, AT_SNAP_RTOL)
 
 
 # ---------------------------------------------------------------------------
@@ -1106,8 +1128,10 @@ async def measurement_rows(
 ) -> list[MetricValue]:
     """The measurements recipe's value at each of ``steps``, from one read of
     the run's log: ``None`` aggregates every step, an index reads that step's
-    row (:func:`measurements_at_step`). The deck and the build that wrote the
-    run are read once for all of them."""
+    row (:func:`measurements_at_step`). Each names the measurements LTspice
+    printed as failed at its steps in ``failed_measurements``, and those it
+    printed as other than a number in ``unreadable``. The deck and the build
+    that wrote the run are read once for all of them."""
     logs = await services.load_logs(source, state)
     whole = logs.value("measurements")
     if whole is None or source.log is None:
@@ -1133,7 +1157,7 @@ async def measurement_rows(
 
     aggregated = await services.bounded_parse(source.log, aggregate_each)
     values: list[MetricValue] = []
-    for stats, axis_map, at_map in aggregated:
+    for table, (stats, axis_map, at_map) in zip(tables, aggregated, strict=True):
         # Surface which field each stat block was computed from so a downstream
         # consumer can tell "this is the level (constant)" from "this is the
         # WHEN-clause crossing frequency".
@@ -1153,6 +1177,16 @@ async def measurement_rows(
             chosen = {require_measurement(name, stats) for name in recipe.names}
             stats = {name: entry for name, entry in stats.items() if name in chosen}
         row: dict[str, Any] = {"stats": stats}
+        # What LTspice printed as failed, at the steps this row reads: the
+        # log decoder's answer, never a null's (a null may be unreadable or
+        # not finite instead). A row read at one step names only that step's.
+        # The run summary beside it shows the whole run's measurements at any
+        # step, and so names what failed at any step
+        # (raw_parser.build_simulation_summary). Pinned by
+        # test_a_summary_names_failures_at_any_step_and_a_step_row_its_own.
+        failed = [name for name in table["failed_measurements"] if name in stats]
+        if failed:
+            row["failed_measurements"] = failed
         unreadable = {
             name: entry["unreadable"]
             for name, entry in whole["measurements"].items()

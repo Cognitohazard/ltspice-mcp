@@ -220,7 +220,7 @@ class JobsCancelInput(_AddressedJobsInput):
         min_length=1,
         description=(
             "The token from the original run_experiments receipt. Needed only "
-            "when this process did not submit the job; status and list never "
+            "when this session did not submit the job; status and list never "
             "disclose it."
         ),
     )
@@ -263,7 +263,7 @@ class JobsResumeInput(JobsInput):
         default=None,
         min_length=1,
         strict=True,
-        description="Parent receipt's token; required when this process does not own the parent.",
+        description="Parent receipt's token; required unless this session submitted or resumed the parent.",
     )
     case_ids: list[Annotated[str, Field(strict=True, min_length=1)]] | None = Field(
         default=None,
@@ -1045,10 +1045,10 @@ async def _cancel_jobs_target(
     if job.status in TERMINAL_STATUSES:
         return []
 
-    # Whether this process runs the job is the registry's answer, never the
+    # Whether this session runs the job is the registry's answer, never the
     # record's pid: a dead server's record can carry this process's pid.
     owned = state.job_registry.owns(job)
-    if not experiment_store.cancel_authorized(job, args.control_token, owned=owned):
+    if not experiment_store.control_authorized(job, args.control_token, owned=owned):
         raise _JobsActionError(
             "cancel_not_authorized",
             (
@@ -1063,7 +1063,7 @@ async def _cancel_jobs_target(
             raise _JobsActionError(
                 "cancel_unavailable",
                 (
-                    f"Experiment job {job.job_id} belongs to this process, but its "
+                    f"Experiment job {job.job_id} belongs to this session, but its "
                     "coordinator is no longer live; cancellation was not acknowledged"
                 ),
                 stage="cancellation",

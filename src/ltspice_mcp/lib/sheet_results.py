@@ -24,7 +24,7 @@ from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import atomic_write
 from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.deck_staging import sha256_file
-from ltspice_mcp.lib.experiment_types import ExperimentCase, ExperimentJob
+from ltspice_mcp.lib.experiment_types import OWNER_STOPPED, ExperimentCase, ExperimentJob
 from ltspice_mcp.lib.filelock import circuit_file_lock
 from ltspice_mcp.lib.ltspice_window import results_beside
 from ltspice_mcp.lib.raw_parser import other_raw_path
@@ -202,12 +202,36 @@ async def place_job_beside_sheets(job: ExperimentJob) -> list[dict[str, Any]]:
     return observations
 
 
+def not_placed_for_owner_stop(job: ExperimentJob) -> list[dict[str, Any]]:
+    """One ``results_not_placed`` per produced case, for a job whose process
+    began to stop before the copy ``execution.results_beside_sheet`` asked for.
+
+    The copy is not made then: it waits on each sheet's lock and copies whole
+    raws, which can outlast the bound a stopping process gives its jobs
+    (``JobRegistry.cancel_running``), and the results stay in the job folder,
+    where the jobs action copies them from at any time.
+    """
+    return [
+        _not_placed(
+            job,
+            case,
+            "The process running the job stopped before it copied them; "
+            f"{_place_call(job, case)} copies them.",
+            code=OWNER_STOPPED,
+        )
+        for case in job.cases
+        if case.status == "produced"
+    ]
+
+
+def _place_call(job: ExperimentJob, case: ExperimentCase) -> str:
+    """The call that copies ``case``'s results beside its sheet."""
+    return f"jobs(action='place_beside_sheet', job_id='{job.job_id}', case_id='{case.case_id}')"
+
+
 def _place_later(job: ExperimentJob, case: ExperimentCase) -> str:
     """The call that copies ``case``'s results once what stopped it is fixed."""
-    return (
-        f"jobs(action='place_beside_sheet', job_id='{job.job_id}', "
-        f"case_id='{case.case_id}') copies them once that is fixed."
-    )
+    return f"{_place_call(job, case)} copies them once that is fixed."
 
 
 def sheets_reported(observations: Sequence[Mapping[str, Any]]) -> set[str]:
