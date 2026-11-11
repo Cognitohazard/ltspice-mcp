@@ -83,6 +83,16 @@
    "tests/test_edit_open_window.py::test_a_call_that_leaves_the_sheet_as_it_is_asks_no_window[plot panes only]"
   ]
  },
+ "0a0920044ddbe2a6": {
+  "answer": {
+   "reply": "09ad7ea1f774182d",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_extends_a_stub_into_a_run_ltspice_drops[ltspice17-to_second_pin-labelled]",
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_extends_a_stub_into_a_run_ltspice_drops[ltspice26-to_second_pin-labelled]"
+  ]
+ },
  "0b3ad8c69693fe94": {
   "answer": {
    "reply": "22103d94e8cf9e94",
@@ -1544,6 +1554,16 @@
    "tests/test_recorded_ltspice_schematics.py::test_the_python_api_names_a_pins_net_by_every_spelling_of_its_labels[ltspice26]"
   ]
  },
+ "659b1330b6ac8581": {
+  "answer": {
+   "reply": "e5ca922965534592",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_extends_a_stub_into_a_run_ltspice_drops[ltspice17-to_first_pin-bare]",
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_extends_a_stub_into_a_run_ltspice_drops[ltspice26-to_first_pin-bare]"
+  ]
+ },
  "65b88a7751c1f73d": {
   "answer": {
    "message": "Cannot open spaced.asc for editing: line 3 ('TEXT  16 16 Left 2 !.tran 1m') is a TEXT record the schematic editor skips, and saving any edit would delete it. Write it as LTspice saves one, with one space between its fields, then edit the sheet here.",
@@ -2111,6 +2131,16 @@
   "tests": [
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/same_instance_t_junction]",
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_t_junction]"
+  ]
+ },
+ "896f0871c053b93f": {
+  "answer": {
+   "reply": "09ad7ea1f774182d",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_extends_a_stub_into_a_run_ltspice_drops[ltspice17-to_second_pin-bare]",
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_extends_a_stub_into_a_run_ltspice_drops[ltspice26-to_second_pin-bare]"
   ]
  },
  "898e765d10ff9823": {
@@ -2943,6 +2973,16 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_default_view_covers_only_the_refs_the_batch_touched"
+  ]
+ },
+ "be070eb036bd8e02": {
+  "answer": {
+   "reply": "e5ca922965534592",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_extends_a_stub_into_a_run_ltspice_drops[ltspice17-to_first_pin-labelled]",
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_extends_a_stub_into_a_run_ltspice_drops[ltspice26-to_first_pin-labelled]"
   ]
  },
  "be6f36ed708b0e9a": {

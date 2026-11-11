@@ -8,6 +8,7 @@ LTspice drops a route by the sheet with the route drawn on it, not by the
 route alone. It refuses a route that merges with a wire already on the sheet
 into a dropped run, and no longer calls a route dropped when a wire already on
 the sheet keeps it; such a route that would join another net is refused for
-that instead. A route laid along a dropped run and ending inside it is no
-longer refused for joining the nets of the run's two pins, which LTspice
-leaves apart: it is refused as a same-instance wire.
+that instead. A route laid along a dropped run and ending inside it, or one
+that extends a wire on the sheet into such a run, is no longer refused for
+joining the nets of the run's two pins, which LTspice leaves apart: it is
+refused as a same-instance wire.
