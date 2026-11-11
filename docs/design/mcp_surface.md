@@ -2602,7 +2602,7 @@ by reason: `no_ngspice_name` (an element the reader gives no ngspice device
 name), `unresolved`, `zero_resistance`, `no_ngspice_m` (one copy of a
 device ngspice has but gives no `m` parameter, such as B3SOIDD, which builds
 one) and `no_ngspice_value` (ngspice printed none, or 0 for a W its device
-sets only in an analysis, as MOS levels 5 and 6 do). Nodes, models and
+sets only in an analysis, as MOS levels 4, 5 and 6 do). Nodes, models and
 sources are not compared. A result,
 a failure to run ngspice included, is kept per deck content, mode and
 executable, so later pages do not ask again. The check covers the whole deck,

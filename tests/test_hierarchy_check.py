@@ -385,6 +385,7 @@ async def test_a_recoverable_run_in_another_mode_is_refused(
     ("level", "not_compared"),
     [
         # W is set up only in an analysis, so ngspice prints 0 for it.
+        (4, {"no_ngspice_name": 2, "no_ngspice_value": 1}),
         (5, {"no_ngspice_name": 2, "no_ngspice_value": 1}),
         (6, {"no_ngspice_name": 2, "no_ngspice_value": 1}),
         # B3SOIDD has no m parameter, and builds the one copy the reader counts.
@@ -417,3 +418,16 @@ def test_a_card_ngspice_has_no_device_for_is_not_confirmed(tmp_path: Path):
     assert check.payload()["not_compared"]["no_ngspice_value"] == 1
     assert "no_ngspice_m" not in check.payload()["not_compared"]
     assert not check.confirms_all
+
+
+def test_an_l_ngspice_prints_as_0_is_a_difference(tmp_path: Path):
+    """Only a W printed as 0 is taken for one ngspice sets up in an analysis;
+    the L of those devices prints as written, so an L of 0 is ngspice's
+    reading and is compared."""
+    path = _deck(tmp_path, "* l\n.model n nmos level=1\nM1 d g 0 0 n w=2u l=1u\n.op\n.end\n")
+    hierarchy = load_hierarchy(str(path), [tmp_path], SemanticProfile("ngspice", "hsa"))
+    planned, skipped = plan(hierarchy)
+    check = compare(planned, {("m1", "w"): 2e-6, ("m1", "l"): 0.0, ("m1", "m"): 1.0}, skipped)
+    assert check.payload()["differences"] == [
+        {"instance": ["M1"], "field": "geometry.l", "reader": 1e-06, "ngspice": 0.0}
+    ]

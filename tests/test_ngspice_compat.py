@@ -132,8 +132,9 @@ def test_every_reader_of_a_mode_reads_a_lib_section_as_ngspice_does(tmp_path: Pa
     assert reads_lib_as_includes(mode) is as_includes
     findings = lint_deck(SECTIONED, deck, "ngspice", "NGspiceSimulator", ngbehavior=mode)
     assert ("lib-section-ngspice" in {row["rule_id"] for row in findings}) is drops
-    # The classifier names the mode only for the failure it causes: a missing
-    # include, which an s3 run never reports.
+    # The classifier names the mode only for the failure it causes: the
+    # section's name as a missing include, which s3 without lt or ps never
+    # reports.
     classified = _is_ngspice_lib_section_failure(deck, NGspiceSimulator, mode)
     assert (classified is not None) is as_includes
     if drops:

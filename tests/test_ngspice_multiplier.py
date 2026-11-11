@@ -12,6 +12,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -188,8 +189,33 @@ def _ngspice_name(instance: tuple[str, ...]) -> str:
     return ".".join((reference[0], *(part.lower() for part in instance[:-1]), reference))
 
 
+#: The deck with an XSPICE code model, which only the installation's spinit
+#: loads.
+_CODE_MODEL_DECK = "every element kind"
+
+
+def _deck_params() -> list[object]:
+    return [
+        pytest.param(
+            name,
+            marks=pytest.mark.xfail(
+                sys.platform == "win32",
+                strict=True,
+                reason=(
+                    "ngspice-47 started by this test on Windows reports that it cannot find "
+                    "its spinit, so the gain code model is unknown and the deck is not read; "
+                    "the server's own runs and the CI install probe read the same spinit"
+                ),
+            ),
+        )
+        if name == _CODE_MODEL_DECK
+        else name
+        for name in DECKS
+    ]
+
+
 @pytest.mark.parametrize("mode", MODES)
-@pytest.mark.parametrize("name", list(DECKS))
+@pytest.mark.parametrize("name", _deck_params())
 def test_each_card_builds_the_copies_ngspice_builds(tmp_path: Path, name: str, mode: str):
     if ".lib" in DECKS[name][0] and ("lt" in mode or "ps" in mode):
         pytest.skip(

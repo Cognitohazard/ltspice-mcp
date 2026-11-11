@@ -518,17 +518,35 @@ async def test_a_bias_point_source_stepping_finds_is_no_failure(
     assert relayed == [], relayed
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason=(
-        "the official Windows ngspice-47 writes an ASCII raw file for this AC run whose third "
-        "variable the raw reader refuses (invalid numeric text payload at point 0, variable "
-        "2); its text is not yet known"
+def _raw_formats(reason: str) -> list[Any]:
+    """The raw format ngspice writes as installed, and its ASCII format, with an
+    ASCII file an expected failure for ``reason``. The official Windows
+    build's spinit makes raw files ASCII, so there the installed one is too."""
+    ascii_fails = pytest.mark.xfail(strict=True, reason=reason)
+    return [
+        pytest.param("installed", marks=ascii_fails if sys.platform == "win32" else ()),
+        pytest.param("ascii", marks=ascii_fails),
+    ]
+
+
+def _write_raw_as(raw_format: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    if raw_format == "ascii":
+        # ngspice writes its raw files as ASCII while this is set.
+        monkeypatch.setenv("SPICE_ASCIIRAWFILE", "1")
+
+
+@pytest.mark.parametrize(
+    "raw_format",
+    _raw_formats(
+        "ngspice writes the real device parameter of this complex AC plot as one number in "
+        "an ASCII raw file, which the raw reader, like spicelib's (docs/spicelib_bugs.md, "
+        "Bug 42), refuses as not complex"
     ),
 )
 async def test_an_ac_summary_defaults_to_no_device_parameter(
-    ngspice_state: SessionState, work_dir: Path
+    ngspice_state: SessionState, work_dir: Path, raw_format: str, monkeypatch: pytest.MonkeyPatch
 ):
+    _write_raw_as(raw_format, monkeypatch)
     # With no signal named, an AC summary computes its bandwidth on the first
     # node voltage. The deck saves a branch current and @m1[vth], which
     # ngspice writes after it as v(@m1[vth]), typed voltage: a parameter of
@@ -874,20 +892,20 @@ async def test_run_timeout_reports_the_killed_runs_diagnostics_and_progress(
     assert not leftovers, "the killed run's raw was left on disk"
 
 
-@pytest.mark.skipif(
-    sys.platform == "win32",
-    reason=(
-        "on Windows, ngspice-47 stopped at its run timeout keeps an ASCII raw file of which the "
-        "server keeps no partial raw (no partial_raw in the run_timeout failure); not yet "
-        "known why"
+@pytest.mark.parametrize(
+    "raw_format",
+    _raw_formats(
+        "the server keeps no partial raw of a stopped run whose raw file is ASCII: the "
+        "run_timeout failure carries no partial_raw"
     ),
 )
 async def test_a_kept_partial_raw_is_read_to_where_the_run_was_stopped(
-    ngspice_state: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ngspice_state: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch, raw_format: str
 ):
     """With keep_partial_raw, a real ngspice run killed at its run timeout
     keeps its raw, cut to its whole points, and analyze_results and inspect
     read it, each saying that its values end where the run was stopped."""
+    _write_raw_as(raw_format, monkeypatch)
 
     async def progressing(_runner: ExperimentRunner, execution: Any, _future: Any) -> bool:
         live = await live_run_progress(execution.job)

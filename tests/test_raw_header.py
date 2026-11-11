@@ -466,7 +466,8 @@ def test_later_text_plot_is_fully_checked(tmp_path: Path, encoding: str):
     header = synthetic_header(kind="Values")
     good = header + "0\t\t0\n\t1\n1\t\t1\n\t2\n"
     bad = header + "0\t\t0\n\t1\n1\t\t1\n\tCommand: LTspice\n"
-    with pytest.raises(RawHeaderError, match=r"plot 1.*numeric text payload"):
+    # The refusal quotes the text it could not read.
+    with pytest.raises(RawHeaderError, match=r"plot 1.*numeric text payload.*'Command: LTspice'"):
         preflight_raw(write_raw(tmp_path, (good + bad).encode(encoding)), limits=LIMITS)
 
 

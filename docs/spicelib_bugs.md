@@ -4425,3 +4425,102 @@ and `::test_a_sectioned_lib_read_in_another_mode_fails_on_the_mode` point
 `SPICE_SCRIPTS` at a `spinit` that sets `hsa`;
 `::test_a_recoverable_run_does_not_read_the_spinit_that_sets_another_mode`
 pins that a recoverable run is not affected.
+
+## Bug 42 — `PlotData._read_ascii_vector` refuses a real vector in a complex ASCII plot (bug)
+
+**Status:** open; draft for an upstream issue. Measured 2026-11-11 with
+ngspice-42 on Linux and the official ngspice-47 Windows build.
+**Affected version:** spicelib 1.5.1
+(`spicelib/raw/plot_data.py`, `PlotData._read_ascii_vector`).
+**Our workaround:** none yet. The server's own preflight read
+(`raw_header.py`, `text_payload`) refuses the same file first, with the
+same rule.
+
+### Summary
+
+In an AC (complex) plot, ngspice's batch-mode ASCII raw writer writes a
+vector that holds real values, such as a device parameter saved with
+`.save @m1[vth]`, as one number per point, with no imaginary part. The
+header gives no sign of it: `Flags: complex`, and the variable's line names
+only its type. `_read_ascii_vector` requires `re,im` for every trace of a
+complex plot and raises, so the whole file cannot be read. ngspice writes
+ASCII raw files when `filetype=ascii` is set, which the official Windows
+build's `spinit` does, or when `SPICE_ASCIIRAWFILE` is set, so on Windows
+every AC run that saves a device parameter is unreadable.
+
+### Affected code
+
+```python
+# plot_data.py, PlotData._read_ascii_vector
+var = self._trace_info[var_index]
+if var.dtype == 'complex':
+    v = value.split(',')
+    if len(v) != 2:
+        raise SpiceReadException(
+            f"Invalid RAW file. ... {value} is not a complex value")
+```
+
+### Reproduction
+
+```text
+$ cat ac.cir
+* common-source stage
+Vd vdd 0 1.8
+Vg g 0 0.9 AC 1
+Rd vdd out 10k
+M1 out g 0 0 NM L=1u W=10u AD=10p AS=10p PD=22u PS=22u
+.model NM NMOS (LEVEL=49 VERSION=3.3)
+.save @m1[vth] i(vd)
+.ac dec 10 1k 1G
+.end
+$ SPICE_ASCIIRAWFILE=1 ngspice -n -b -r ac.raw ac.cir
+$ sed -n 8,14p ac.raw
+	0	frequency	frequency	grid=3
+	1	i(vd)	current
+	2	v(@m1[vth])	voltage
+Values:
+0		1.000000000000000e+03,4.657388940848079e-310
+	-6.846492106890288e-15,1.760408054298856e-11
+	1.815172031040211e+00
+```
+
+`RawRead("ac.raw", dialect="ngspice")` raises `SpiceReadException: Invalid
+RAW file. Plot nr. 1: Invalid data for trace v(@m1[vth]):
+1.815172031040211e+00 is not a complex value`. The same deck written with
+ngspice's binary format reads.
+
+### Impact
+
+Every AC run whose ASCII raw file holds a real vector cannot be read, on any
+platform where ngspice writes ASCII: on Windows with the official build, by
+default.
+
+### Proposed fix
+
+In a complex plot, read a value with no comma as a real number with a zero
+imaginary part:
+
+```python
+if var.dtype == 'complex':
+    v = value.split(',')
+    if len(v) == 1:
+        self._read_traces[var.name].data[point] = complex(float(v[0]), 0.0)
+    elif len(v) == 2:
+        self._read_traces[var.name].data[point] = complex(float(v[0]), float(v[1]))
+    else:
+        raise SpiceReadException(...)
+```
+
+### Suggested upstream test
+
+Read an ASCII raw file whose complex plot has a line with one number for a
+trace, and assert that the trace holds that number with a zero imaginary
+part at that point.
+
+### Cross-reference
+
+`tests/test_ngspice_e2e.py::test_an_ac_summary_defaults_to_no_device_parameter`
+runs the deck above with ngspice's ASCII format (`SPICE_ASCIIRAWFILE=1`)
+and as the installed ngspice writes it. It is marked as an expected failure
+(`xfail`, strict) where the file is ASCII, so it fails again once a
+workaround makes it pass.

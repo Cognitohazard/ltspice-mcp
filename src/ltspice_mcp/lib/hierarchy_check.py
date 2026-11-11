@@ -34,8 +34,8 @@ Nothing else is compared, and the result counts what was not: elements the
 reader names no ngspice device for (``address.device``), values it left
 unresolved, 0 ohm values, one copy of a device ngspice has but gives no ``m``
 (``no_ngspice_m``, B3SOIDD), and values ngspice printed none for, or 0 for a
-W its device sets only in an analysis (MOS levels 5 and 6). Nodes, models
-and sources are not compared at all.
+W its device sets only in an analysis (MOS levels 4, 5 and 6). Nodes,
+models and sources are not compared at all.
 
 ngspice runs a deck's ``.control`` block when it reads the deck. The reader
 refuses a deck that has one, so no hierarchy this module is given has one.
@@ -340,8 +340,9 @@ def compare(
             skipped["no_ngspice_m"] += 1
             continue
         if value is None or (value == 0 and item.parameter == "w"):
-            # MOS levels 5 and 6 set W up only when an analysis runs, which
-            # the driver does not, and print 0 for it until then.
+            # MOS levels 4, 5 and 6 set W up only when an analysis runs, which
+            # the driver does not, and print 0 for it until then; their L
+            # prints as written, so it is compared.
             skipped["no_ngspice_value"] += 1
             continue
         compared += 1

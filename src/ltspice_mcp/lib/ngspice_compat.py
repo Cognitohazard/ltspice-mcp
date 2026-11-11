@@ -61,8 +61,9 @@ def reads_lib_as_includes(mode: str | None) -> bool:
     """Whether ngspice in ``mode`` reads ``.lib <file> <section>`` as two plain
     includes, as it does with ``lt`` or ``ps`` set, so the section's name comes
     back as a missing include file. The failure classifier asks this, not
-    ``drops_lib_sections``: an ``s3`` run never fails on a missing include,
-    so a missing include there has another cause."""
+    ``drops_lib_sections``: with ``s3`` set and neither ``lt`` nor ``ps``,
+    ngspice never reports a section's name as a missing include, so a
+    missing include there has another cause."""
     return bool(compat_flags(mode) & {"lt", "ps"})
 
 
