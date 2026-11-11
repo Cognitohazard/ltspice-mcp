@@ -1,0 +1,17 @@
+Version 4
+SymbolType CELL
+RECTANGLE Normal -32 -32 32 96
+SYMATTR Value lossy
+SYMATTR Prefix O
+PIN 0 -32 NONE 0
+PINATTR PinName I1
+PINATTR SpiceOrder 1
+PIN 0 0 NONE 0
+PINATTR PinName R1
+PINATTR SpiceOrder 2
+PIN 0 32 NONE 0
+PINATTR PinName I2
+PINATTR SpiceOrder 3
+PIN 0 64 NONE 0
+PINATTR PinName R2
+PINATTR SpiceOrder 4

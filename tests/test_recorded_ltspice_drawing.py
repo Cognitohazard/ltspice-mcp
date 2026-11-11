@@ -206,7 +206,50 @@ def test_the_scene_holds_every_part_text_a_build_draws_but_a_value2(build: str, 
     assert laid_out - drawn == set()
 
 
-@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(rec.cases_of("sheet-drawing"))))
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_text_is_drawn_in_the_lines_the_scene_decodes(build: str, tmp_path: Path):
+    """Both builds draw a TEXT record's ``\\\\`` as one backslash and break its
+    line at ``\\n``, even inside ``C:\\new``, and keep any other backslash as it
+    is, in a comment and a directive alike (``text-backslash``): the lines
+    ``decode_text_lines`` reads, which the scene lays out."""
+    case_id = "draw/text_backslash"
+    drawn = sorted(text["text"] for text in rec.drawing(build, case_id)["texts"])
+    assert "one\\two" in drawn
+    assert {"C:", "ew\\temp", "tail\\nhead", "end\\"} <= set(drawn)
+    scene = _scene(build, case_id, tmp_path)
+    assert sorted(line for text in scene.directives for line in text.lines) == drawn
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_window_line_short_of_its_justification_or_size_is_read_past(build: str, tmp_path: Path):
+    """R2's name has a WINDOW line without its size and R3's one without its
+    justification and size: both builds draw each name where R4's lands, at
+    the symbol's own window, 160 and 320 to the right of it. R5's symbol has
+    both its WINDOW lines cut short, and neither build draws its name or value
+    (``window-short``). The scene lays the texts out the same way."""
+    case_id = "draw/window_short"
+    drawn = rec.drawing(build, case_id)
+    scale = _scale(case_id, drawn)
+    cells = {text["text"]: _cell(text, scale) for text in drawn["texts"]}
+    assert set(cells) == {"R1", "1k", "R2", "2k", "R3", "3k", "R4", "4k"}
+    r4 = cells["R4"]
+    for name, shift in (("R2", 320), ("R3", 160)):
+        x1, y1, x2, y2 = cells[name]
+        assert (x1 + shift, y1, x2 + shift, y2) == pytest.approx(r4, abs=NEAR), name
+    laid_out = dict(_laid_out(build, case_id, tmp_path))
+    assert set(laid_out) == set(cells)
+    for name in ("R2", "R3", "R4"):
+        x1, _y1, x2, y2 = cells[name]
+        box = laid_out[name]
+        assert (box.x1, box.x2, box.y2) == pytest.approx((x1, x2, y2), abs=2), name
+
+
+@pytest.mark.parametrize(
+    ("build", "case_id"),
+    list(
+        rec.per_build([*rec.cases_of("sheet-drawing"), "draw/text_backslash", "draw/window_short"])
+    ),
+)
 def test_nothing_on_these_sheets_is_drawn_in_a_way_the_reader_does_not_read(
     build: str, case_id: str
 ):

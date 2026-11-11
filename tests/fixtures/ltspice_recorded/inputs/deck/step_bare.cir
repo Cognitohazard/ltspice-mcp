@@ -1,0 +1,6 @@
+* a .step line with nothing after it
+I1 0 a 1
+R1 a 0 1k
+.step
+.op
+.end

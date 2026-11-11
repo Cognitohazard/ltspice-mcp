@@ -299,8 +299,9 @@ def parse_source_amplitudes(netlist_text: str) -> dict[str, float]:
         if card.kind != "instance" or not card.name or card.name[0] not in "Vv":
             continue
         line = read_instance(card)
-        if line is None or len(line.nodes) < 2:
-            # Unreadable, or no positional value (``V1 a 0 value={x}``): it
+        if line is None or len(line.nodes) < 2 or line.value is None:
+            # Unreadable, or no positional value (``V1 a 0 value={x}``, or a
+            # source that plays a .wav file, whose second word is a node): it
             # might be the largest source.
             return {}
         # The value is the positional source spec (``DC 5``, ``SIN(0 1 1k)``);

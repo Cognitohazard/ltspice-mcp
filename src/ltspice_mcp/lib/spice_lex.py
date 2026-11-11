@@ -1190,7 +1190,10 @@ def lex_deck(netlist_text: str, *, title: bool = True) -> LexResult:
     with one ``I1``, and failed ``deck/title_directive``, whose title is the
     ``.param`` its resistor needs. Nor is a card after a top-level ``.END``
     (``deck/after_end``). ``title=False`` reads an included file, which
-    begins with a card. Every reader of what a deck holds goes through here,
+    begins with a card, and whose own ``.END`` ends that file alone: both
+    builds read the file's first line as a card, left out the card after its
+    ``.END``, and read on in the deck past the ``.include``
+    (``deck/include_end``). Every reader of what a deck holds goes through here,
     so none of them can count a card the simulator never sees; an edit uses
     ``lex_for_edit``, which also holds every line for a byte-faithful
     ``emit``.
@@ -1230,10 +1233,8 @@ def lex_for_edit(netlist_text: str, *, deck: bool) -> EditCards:
     The cards read are the ones ``lex_deck`` reads, with ``title=deck``, both
     taken by ``_read_cards``: for a deck (``deck``) the title is a comment card
     of its own and is not read; an included file (``deck=False``) begins with
-    a card. In either a card after a top-level ``.END`` is kept but not read.
-    For an included file that follows the reading every other reader of one
-    already takes (``lex_deck(title=False)``); what LTspice does past an
-    included file's ``.END`` is not recorded.
+    a card. In either a card after a top-level ``.END`` is kept but not read,
+    as LTspice reads them (``lex_deck``).
     """
     result = lex(netlist_text, title=deck)
     read = _read_cards(result.cards, title=deck)

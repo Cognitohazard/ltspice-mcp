@@ -1,0 +1,6 @@
+* the frequency response analyzer from a to b, at the operating point
+V1 a 0 1
+@1 a b fstart=1k fend=2k oct=1 tsettle=10u
+R1 b 0 1k
+.op
+.end
