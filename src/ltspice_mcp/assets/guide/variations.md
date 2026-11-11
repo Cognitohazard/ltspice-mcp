@@ -74,10 +74,25 @@ The receipt compares what each sample computed at each `assign` point. An
 same numbers: their draws changed nothing the deck saves there, so a spread
 read from them is not a spread.
 
-The variation's `seed` controls these draws from your assumed coefficients. It
-does not affect random functions written in the deck (`agauss`, `gauss`,
-`aunif`, `unif`, `limit`); in a recoverable ngspice run,
-`execution.simulator_seed` sets those (guide section 'ngspice'). A `pdk_native`
+The variation's `seed` controls these draws from your assumed coefficients.
+Random functions written in the deck (`agauss`, `gauss`, `aunif`, `unif`), such
+as a PDK's statistical models, draw from ngspice's own generator. Add
+`simulator_draws: true` to have ngspice draw them anew for each sample: every
+case's deck gets its own `.options seed`, recorded as `_random_simulator_seed`,
+and replaying sample k with `sample_start` replays those draws too. `rules` may
+then be empty, or add your own draws to the PDK's:
+
+```json
+{"kind": "random", "runs": 200, "seed": 4, "simulator_draws": true, "rules": []}
+```
+
+Select the PDK's statistical corner yourself (its Monte Carlo `.lib` section,
+or the switch parameters it documents, set with an `assign` entry). It works on
+ngspice only, not with `execution.simulator_seed`, and not on a deck that sets
+`.options seed` itself. Without it, those functions draw from a seed ngspice
+picks at startup, so they differ on every run and no sample can be replayed; in
+a recoverable ngspice run, `execution.simulator_seed` fixes one seed for every
+case (guide section 'ngspice'). A `pdk_native`
 variation has its own `seed` (guide section 'sky130'). `simulator_seed` does
 not turn on the PDK's statistical models, and a request that combines it with
 a `pdk_native` variation is refused.

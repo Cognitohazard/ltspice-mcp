@@ -594,7 +594,15 @@ deck. It requires recoverable ngspice and an integer (not a float or boolean)
 in `1..2147483646`; every case and retry starts from that seed. It cannot be
 combined with a `pdk_native` variation, which sets its own seeds; a request
 using both is refused. Without it, no seed is set, and a recoverable deck may
-not call random functions.
+not call random functions, unless the deck fixes ngspice's seed itself: an
+`.option`/`.options` card at the top level of the deck file, outside a
+subcircuit and a `.lib` section, that sets `seed=` to a positive integer, with
+every other seed option the deck reads fixed too. ngspice reads that card when
+it loads the deck, before it evaluates a parameter, and reseeds as `setseed`
+does (`inp.c:eval_opt` calls `com_sseed`), so the draws repeat on every run
+and retry. That is how a `random` entry's `simulator_draws` cases run under
+`recoverable`. Such a deck admits the same five random functions, and, since
+it runs as an ordinary batch run, any number of analyses.
 
 A seeded deck may use only the random functions `agauss`, `gauss`, `aunif`,
 `unif` and `limit`; `.control` blocks, functions the server does not know,
@@ -2184,8 +2192,9 @@ each tool's `inputSchema`.
   supported profile and the deck it needs.
 
 {kind: "random", id?, runs: int >= 1, seed?: int, sample_start?: int >= 0,
- applies_to?: [circuit id], rules: [RandomRule]}
+ applies_to?: [circuit id], rules?: [RandomRule], simulator_draws?: bool}
                                at most ONE random entry per circuit
+                               rules may be empty only with simulator_draws
 
 RandomRule:
   {rule: "component", target: ref | glob, tolerance, scale:
@@ -2258,11 +2267,31 @@ with the same seed and circuit id `runs: 1` and `sample_start: k` replay
 sample k alone. An entry without `seed` gets one the server chooses after it
 has looked the request up for a replay, so a retry under the same
 `request_id` returns the job it made. Every case the entry expands to records
-its sample index as `_random_run`, its seed as `_random_seed` and, when the
-entry has one, its `id` as `_random_id`, in its assignments, a case skipped
+its sample index as `_random_run`, its seed as `_random_seed`, when the
+entry has one, its `id` as `_random_id` and, with `simulator_draws`, its
+ngspice seed as `_random_simulator_seed`, in its assignments, a case skipped
 before it ran included. A circuit whose deck fails before its variations
 expand (an include that cannot be staged) records no assignments on its
 cases; their failure says why.
+
+`simulator_draws: true` (default false) also makes ngspice draw the random
+functions written in the deck (`agauss`, `gauss`, `aunif`, `unif`), a PDK's
+statistical models among them, anew for each sample. Each case's deck gets
+`.options seed=<n>` before its `.END`, which ngspice reads before it evaluates
+the deck's parameters (since ngspice-30, `inp.c`). The seed is derived from the
+entry's `seed`, the circuit id and the sample index, in `1..2147483646`, so
+every case of one sample runs with the same seed and `runs: 1` with
+`sample_start: k` replays sample k's draws too. Same seed, same deck and same
+ngspice build give the same draws; a corner that changes which random
+functions the deck evaluates, or their order, changes what that seed draws.
+The entry's `rules` then may be empty, or add the server's own draws to
+ngspice's. A run on another simulator, or with `execution.simulator_seed`,
+which seeds every case alike, is refused with `simulator_draws_unsupported`
+before any job is recorded. A deck whose own option cards set `seed=` fails
+its cases with `deck_sets_simulator_seed`, naming each card: ngspice reads
+every seed option and the first in the deck wins (measured on ngspice-42), so
+the deck's seed would fix every sample's draws or be overridden, depending on
+where it sits.
 
 The receipt compares the samples of a `random` or `pdk_native` entry by what
 they computed, one `assign` point at a time. Each produced sample keeps a

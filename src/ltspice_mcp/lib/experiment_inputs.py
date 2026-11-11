@@ -15,9 +15,14 @@ from typing import TYPE_CHECKING
 
 from ltspice_mcp.lib import atomic_write_bytes, capabilities, now
 from ltspice_mcp.lib.asc_document import is_asc
-from ltspice_mcp.lib.deck_staging import sha256_file, staged_card_reference_targets
+from ltspice_mcp.lib.deck_staging import (
+    card_sections,
+    sha256_file,
+    staged_card_reference_targets,
+)
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.experiment_types import ExperimentCase, SourceRecord
+from ltspice_mcp.lib.ngspice_driver import fixed_seed, seed_option
 from ltspice_mcp.lib.pdk_native import ArtifactDigest, NativePaths, driver_bytes
 from ltspice_mcp.lib.recovery_records import (
     ExecutionRecord,
@@ -64,7 +69,8 @@ _RANDOM = frozenset(
     }
 )
 # ngspice's electrical parser evaluates these through gauss1/drand, both
-# backed by the generator reset by setseed. Transient noise uses other state.
+# backed by the generator setseed resets, as a seed option does. Transient
+# noise uses other state.
 _SEEDED_RANDOM = frozenset({"agauss", "gauss", "aunif", "unif", "limit"})
 _PURE_FUNCTIONS = frozenset(
     {
@@ -471,11 +477,14 @@ def _verify_inputs(inputs: FrozenInputs, *, native: bool, seeded: bool) -> None:
                 "recovery_seed_analysis_unsupported",
                 "Seeded ngspice requires exactly one .op, .ac, .dc or .tran analysis",
             )
+    # A deck that seeds ngspice itself draws its static random functions alike
+    # on every run, as the driver's setseed does (ngspice_driver.seed_option).
+    seeded_itself = _deck_seeds_itself(inputs.electrical.path, file_keys, cards_by_content)
     validated: set[tuple[str, bool]] = set()
     for path, key in file_keys.items():
         parsed = cards_by_content[key]
         if key not in validated:
-            _validate_cards(parsed.cards, functions, native=native, seeded=seeded)
+            _validate_cards(parsed.cards, functions, native=native, seeded=seeded or seeded_itself)
             validated.add(key)
         try:
             # The includes staging followed (deck_staging.stage_deck): none in
@@ -492,6 +501,37 @@ def _verify_inputs(inputs: FrozenInputs, *, native: bool, seeded: bool) -> None:
                 "recovery_closure_incomplete",
                 "Referenced input is absent from the frozen manifest",
             )
+
+
+def _deck_seeds_itself(
+    root: Path,
+    file_keys: dict[Path, tuple[str, bool]],
+    cards_by_content: dict[tuple[str, bool], EditCards],
+) -> bool:
+    """Whether the frozen deck fixes ngspice's seed with an option card of its own.
+
+    ngspice reads the first seed option in the deck, so every one the closure
+    reads must be fixed, and one at the top level of the root deck, outside a
+    subcircuit and a ``.lib`` section, makes sure ngspice reads one at all: it
+    drops a subcircuit no instance calls, seed and all (measured on
+    ngspice-42), and skips a ``.lib`` section the deck does not select.
+    """
+    values = [
+        value
+        for key in set(file_keys.values())
+        for card in cards_by_content[key].read
+        if (value := seed_option(card)) is not None
+    ]
+    if not values or not all(fixed_seed(value) for value in values):
+        return False
+    key = file_keys.get(root)
+    if key is None:
+        return False
+    parsed = cards_by_content[key]
+    return any(
+        parsed.reads(card) and card.scope == () and section is None and seed_option(card)
+        for card, section in zip(parsed.cards, card_sections(parsed.cards, root), strict=True)
+    )
 
 
 def verify_case_inputs(

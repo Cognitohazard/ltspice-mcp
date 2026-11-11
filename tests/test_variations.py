@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 
 import pytest
@@ -2199,3 +2200,126 @@ def test_source_lineage_reads_past_a_directive_that_cannot_be_read(tmp_path: Pat
     )
 
     assert ".tran 0 1m )" in variant.text
+
+
+_SEED_CARD = re.compile(r"^\.options seed=(\d+)$", re.MULTILINE)
+
+
+def _drawn(*, runs: int = 3, sample_start: int = 0, seed: int = 9, rules=()) -> RandomVariation:
+    return RandomVariation.model_validate(
+        {
+            "kind": "random",
+            "runs": runs,
+            "seed": seed,
+            "sample_start": sample_start,
+            "simulator_draws": True,
+            "rules": list(rules),
+        }
+    )
+
+
+class TestSimulatorDraws:
+    def test_an_entry_that_has_ngspice_draw_needs_no_rules(self):
+        """With simulator_draws the deck's own random functions vary, so an
+        entry need not name anything for the server to draw; without it an
+        entry that draws nothing is still refused, and says what would do."""
+        entry = RandomVariation.model_validate(
+            {"kind": "random", "runs": 2, "seed": 1, "simulator_draws": True}
+        )
+        assert entry.rules == []
+
+        with pytest.raises(ValidationError, match="simulator_draws"):
+            RandomVariation.model_validate({"kind": "random", "runs": 2, "seed": 1})
+
+    def test_each_sample_seeds_ngspice_alike_at_every_corner(self, tmp_path: Path):
+        """Every case's deck carries one seed option, the one its assignments
+        record. The seed follows the sample, not the case: each corner of one
+        sample runs with the same seed, as the server's own draws do, and
+        three samples run with three seeds."""
+        circuit = _deck(tmp_path / "dut.cir")
+        corners = AssignVariation.model_validate({"kind": "assign", "assign": {"gain": [1, 2]}})
+
+        cases = materialize_variants(
+            circuit, expand_variations([circuit], [corners, _drawn()]), tmp_path / "out"
+        )
+
+        seeds: dict[int, set[int]] = {}
+        for case in cases:
+            (written,) = _SEED_CARD.findall(case.path.read_text())
+            assert int(written) == case.assignments["_random_simulator_seed"]
+            assert case.path.read_text().rstrip().endswith(".end")
+            seeds.setdefault(case.assignments["_random_run"], set()).add(int(written))
+        assert all(len(at_corners) == 1 for at_corners in seeds.values()), seeds
+        assert len({seed for (seed,) in seeds.values()}) == 3
+
+    def test_a_sample_replayed_alone_gets_its_seed_again(self, tmp_path: Path):
+        circuit = _deck(tmp_path / "dut.cir")
+        every = materialize_variants(
+            circuit, expand_variations([circuit], [_drawn()]), tmp_path / "every"
+        )
+        (alone,) = materialize_variants(
+            circuit,
+            expand_variations([circuit], [_drawn(runs=1, sample_start=2)]),
+            tmp_path / "alone",
+        )
+
+        assert alone.assignments["_random_run"] == 2
+        assert (
+            alone.assignments["_random_simulator_seed"]
+            == every[2].assignments["_random_simulator_seed"]
+        )
+
+    def test_the_servers_draws_are_unchanged_by_it(self, tmp_path: Path):
+        """simulator_draws adds ngspice's draws; the values the server draws
+        for the entry's own rules are the ones it drew without them."""
+        circuit = _deck(tmp_path / "dut.cir")
+        rule = {"rule": "component", "target": "R1", "tolerance": 0.1}
+        plain = materialize_variants(
+            circuit, expand_variations([circuit], [_random()]), tmp_path / "plain"
+        )
+        drawn = materialize_variants(
+            circuit,
+            expand_variations([circuit], [_drawn(runs=2, seed=7, rules=[rule])]),
+            tmp_path / "drawn",
+        )
+
+        assert [case.assignments["random:component:R1"] for case in drawn] == [
+            case.assignments["random:component:R1"] for case in plain
+        ]
+
+    def test_without_it_no_seed_is_written(self, tmp_path: Path):
+        circuit = _deck(tmp_path / "dut.cir")
+
+        cases = materialize_variants(
+            circuit, expand_variations([circuit], [_random()]), tmp_path / "out"
+        )
+
+        assert not any(_SEED_CARD.search(case.path.read_text()) for case in cases)
+        assert not any("_random_simulator_seed" in case.assignments for case in cases)
+
+    def test_a_deck_that_seeds_ngspice_itself_is_refused(self, tmp_path: Path):
+        """ngspice reads every seed option and keeps the first, so a seed the
+        deck sets would fix every sample's draws or be overridden, depending on
+        where it sits. Such a deck is refused, naming the card, and runs as
+        before without simulator_draws."""
+        circuit = _factored(
+            tmp_path,
+            includes={"core.inc": ".subckt core a b\nR1 a b 1k\n.ends\n.OPTIONS SEED = 5\n"},
+            root_body=".param g=1\n",
+        )
+
+        with pytest.raises(VariationError, match=r"core\.inc:4") as refused:
+            materialize_variants(
+                circuit, expand_variations([circuit], [_drawn()]), tmp_path / "out"
+            )
+        assert refused.value.code == "deck_sets_simulator_seed"
+
+        plain = _random_rule({"rule": "param", "target": "g", "tolerance": 0.1}, runs=2)
+        assert (
+            len(
+                materialize_variants(
+                    circuit, expand_variations([circuit], [plain]), tmp_path / "plain"
+                )
+            )
+            == 2
+        )

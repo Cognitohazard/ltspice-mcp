@@ -415,7 +415,8 @@ ENTRIES: tuple[Entry, ...] = (
         ("test:tests/test_ngspice_e2e.py", "test:tests/test_ngspice_multiplier.py"),
         mechanism=(
             "The random variation writes each draw into the deck; a mismatch draw inside a "
-            "subcircuit is the device's delvto and mulu0."
+            "subcircuit is the device's delvto and mulu0. With simulator_draws each case's "
+            "deck also seeds ngspice's own random functions."
         ),
     ),
     *_each(

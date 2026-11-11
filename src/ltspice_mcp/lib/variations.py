@@ -17,6 +17,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    StrictBool,
     StrictFloat,
     StrictInt,
     field_validator,
@@ -62,6 +63,7 @@ from ltspice_mcp.lib.montecarlo import (
     variant_model_name,
 )
 from ltspice_mcp.lib.montecarlo import MismatchRule as EngineMismatchRule
+from ltspice_mcp.lib.ngspice_driver import SEED_MAX, seed_option
 from ltspice_mcp.lib.spice_lex import (
     EditCards,
     SpiceCard,
@@ -329,21 +331,30 @@ class RandomVariation(VariationModel):
     )
     applies_to: list[str] | None = Field(default=None, description=_APPLIES_TO_DESCRIPTION)
     rules: list[RandomRule] = Field(
+        default_factory=list,
         description=(
             "What varies — one entry per thing that varies, each naming its "
             "kind in 'rule': 'component' perturbs a part's value (resistor "
             "tolerance), 'param' a declared .param, 'model' one model "
             "parameter (process spread), 'mismatch' the Pelgrom "
             "device-to-device spread of matched transistors."
-        )
+        ),
+    )
+    simulator_draws: StrictBool = Field(
+        default=False,
+        description=(
+            "Seed ngspice per sample, so the deck's own agauss/gauss/aunif/unif vary "
+            "too; rules may then be empty."
+        ),
     )
 
-    @field_validator("rules")
-    @classmethod
-    def _rules_not_empty(cls, value: list[RandomRule]) -> list[RandomRule]:
-        if not value:
-            raise ValueError("random variation rules cannot be empty")
-        return value
+    @model_validator(mode="after")
+    def _something_varies(self) -> RandomVariation:
+        if not self.rules and not self.simulator_draws:
+            raise ValueError(
+                "random variation rules cannot be empty unless simulator_draws is true"
+            )
+        return self
 
 
 class PdkNativeVariation(VariationModel):
@@ -708,6 +719,37 @@ def check_random_families(circuit_ids: Sequence[str], variations: Sequence[Varia
             )
 
 
+def check_simulator_draws(
+    variations: Sequence[Variation], dialect: str | None, simulator_seed: int | None
+) -> None:
+    """Refuse ``simulator_draws`` where it cannot give each sample its own draws.
+
+    It writes ngspice's ``.options seed`` into each case's deck, which ngspice
+    reads before it evaluates the deck's random functions; what other
+    simulators make of that card is not recorded. ``execution.simulator_seed``
+    seeds every case alike, which is the opposite request.
+    """
+    entries = [
+        item for item in variations if isinstance(item, RandomVariation) and item.simulator_draws
+    ]
+    if not entries:
+        return
+    name = repr(entries[0].id) if entries[0].id else "a random entry"
+    if dialect != "ngspice":
+        raise VariationError(
+            "simulator_draws_unsupported",
+            f"simulator_draws on {name} seeds ngspice's own random functions, and "
+            f"this run uses {dialect or 'another simulator'}; set execution.simulator "
+            "to ngspice, or drop simulator_draws.",
+        )
+    if simulator_seed is not None:
+        raise VariationError(
+            "simulator_draws_unsupported",
+            f"simulator_draws on {name} gives each sample its own ngspice seed, and "
+            "execution.simulator_seed gives every case the same one; drop one of them.",
+        )
+
+
 def assignment_family_size(variation: AssignVariation) -> int:
     """Return one assign entry's expansion size without reading a deck."""
     sizes = [len(values) for values in variation.assign.values()] + [
@@ -869,17 +911,86 @@ def expand_variations(
     return expanded
 
 
-def random_identity(variation: RandomVariation, sample_index: int) -> dict[str, Any]:
-    """The assignments that name a random case's sample: its index, its seed
-    and its entry's id. The job record keeps a case's assignments, not the
-    request, so these are what a later reader replays a sample from.
+def random_identity(
+    variation: RandomVariation, sample_index: int, circuit_id: str
+) -> dict[str, Any]:
+    """The assignments that name a random case's sample: its index, its seed,
+    its entry's id and, with ``simulator_draws``, the seed ngspice draws the
+    sample's own random functions from. The job record keeps a case's
+    assignments, not the request, so these are what a later reader replays a
+    sample from.
     """
     identity: dict[str, Any] = {"_random_run": sample_index}
     if variation.seed is not None:
         identity["_random_seed"] = variation.seed
     if variation.id is not None:
         identity["_random_id"] = variation.id
+    if variation.simulator_draws:
+        identity["_random_simulator_seed"] = simulator_seed_for(
+            variation, circuit_id, sample_index
+        )
     return identity
+
+
+def simulator_seed_for(variation: RandomVariation, circuit_id: str, sample_index: int) -> int:
+    """The seed ngspice draws a sample's ``agauss``, ``gauss``, ``aunif`` and
+    ``unif`` from, for an entry with ``simulator_draws``.
+
+    Derived from the entry's seed and the sample's stream
+    (``random_sample_key``), like the values the server draws, so each corner
+    of one sample runs with the same seed and sample k of any run gets k's
+    seed again. In ``1..SEED_MAX``: ngspice skips a seed that is not a
+    positive ``int``.
+    """
+    # run_experiments gives every random entry a seed before it expands one.
+    assert variation.seed is not None, "a random entry is seeded before expansion"
+    key = f"{variation.seed}:{random_sample_key(circuit_id, sample_index)}:simulator"
+    digest = hashlib.sha256(key.encode()).digest()
+    return int.from_bytes(digest[:8], "big") % SEED_MAX + 1
+
+
+def _deck_seed_sites(closure: _DeckClosure) -> list[str]:
+    """Each option card in the closure that sets ngspice's seed, as ``file:line``."""
+    return [
+        f"{file.path.name}:{card.line_start}"
+        for file in closure.files
+        for card in file.lexed(file.text).read
+        if seed_option(card) is not None
+    ]
+
+
+def _check_deck_seed(closure: _DeckClosure, cases: Sequence[ExpandedCase]) -> None:
+    """Refuse a deck that sets ngspice's seed itself when one of its cases
+    draws with ``simulator_draws``.
+
+    ngspice reads every seed option and the first in the deck wins (it collects
+    them in reverse, ``options.c:inp_getopts``, measured on ngspice-42), so a
+    seed the deck sets itself would fix every sample's draws, or be overridden,
+    depending on where each sits (``ngspice_driver.seed_option``).
+    """
+    if not any(
+        case.random is not None and case.random.simulator_draws
+        for case in cases
+        if case.circuit_id == closure.circuit_id
+    ):
+        return
+    sites = _deck_seed_sites(closure)
+    if sites:
+        raise VariationError(
+            "deck_sets_simulator_seed",
+            f"Circuit {closure.circuit_id!r} sets ngspice's random seed itself "
+            f"({', '.join(sites)}), so simulator_draws cannot give each sample its "
+            "own; remove that seed option, or drop simulator_draws.",
+        )
+
+
+def _seed_card(case: ExpandedCase) -> str | None:
+    """The ``.options seed`` card a case of an entry with ``simulator_draws``
+    adds to its deck, or None."""
+    if case.random is None or not case.random.simulator_draws:
+        return None
+    seed = simulator_seed_for(case.random, case.circuit_id, case.random_index or 0)
+    return f".options seed={seed}\n"
 
 
 def random_sample_key(circuit_id: str, sample_index: int) -> str:
@@ -901,6 +1012,7 @@ def materialize_variants(
     output_dir.mkdir(parents=True, exist_ok=True)
     suffix = circuit.path.suffix if circuit.path.suffix.lower() in RUN_DECK_SUFFIXES else ".cir"
     closure = _build_closure(circuit)
+    _check_deck_seed(closure, cases)
     captured_digests = {
         file.path.resolve(): file.sha256
         or hashlib.sha256(encode_spice_text(file.text, file.codec)).hexdigest()
@@ -1005,8 +1117,12 @@ def materialize_variants(
                     if unchanged_case:
                         zero_edit_lineage = lineage
         if case.random is not None and case.random_index is not None:
-            assignments.update(random_identity(case.random, case.random_index))
+            assignments.update(random_identity(case.random, case.random_index, case.circuit_id))
         text, written = _write_case_includes(case_closure, texts, case.case_index)
+        seed_card = _seed_card(case)
+        if seed_card is not None:
+            # Before .END, so no card the lineage above names moves.
+            text = inject_card_before_end(text, seed_card, deck=True)
         path = output_dir / f"case-{case.case_index:04d}{suffix}"
         data = encode_spice_text(text, case_closure.files[0].codec)
         written[circuit.path.resolve()] = (path.resolve(), hashlib.sha256(data).hexdigest())

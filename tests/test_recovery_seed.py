@@ -127,6 +127,43 @@ def test_only_source_verified_static_random_functions_are_admitted(tmp_path, exp
         verify_case_inputs(captured)
 
 
+@pytest.mark.parametrize("option", [b".options seed=17", b".OPTION reltol=1e-3 SEED = 17"])
+def test_a_deck_that_fixes_its_own_seed_admits_static_random_functions(tmp_path, option):
+    """ngspice runs setseed's routine for a seed option when it loads the deck,
+    before it evaluates a parameter, so a deck that fixes its own seed draws
+    alike on every run, and needs no driver; nor does it need one analysis."""
+    captured = _capture(
+        tmp_path,
+        b".param draw=agauss(10,1,1)\nV1 n 0 {draw}\nR1 n 0 1k\n" + option,
+        seeded=False,
+        analysis=b".op\n.ac dec 3 1 10",
+    )
+    verify_case_inputs(captured)
+
+
+@pytest.mark.parametrize(
+    "option",
+    [
+        b".options seed=random",
+        b".options seed={17}",
+        b"* .options seed=17",
+        b".subckt holder a\n.options seed=17\nR1 a 0 1k\n.ends",
+        b".options seed=17\n.options seed=random",
+    ],
+)
+def test_a_seed_that_does_not_fix_the_draws_admits_nothing(tmp_path, option):
+    """A seed from the clock, one ngspice cannot read, a comment, one only in
+    a subcircuit nothing calls (ngspice drops it unread, measured on
+    ngspice-42), or a fixed seed beside one from the clock does not make the
+    deck's draws repeatable."""
+    with pytest.raises(RecoveryError, match="randomness"):
+        _capture(
+            tmp_path,
+            b".param draw=agauss(10,1,1)\nV1 n 0 {draw}\nR1 n 0 1k\n" + option,
+            seeded=False,
+        )
+
+
 @pytest.mark.parametrize(
     "body",
     [
@@ -447,3 +484,71 @@ async def test_seeded_driver_changes_refuse_before_spawn(committed, monkeypatch,
     assert case.status == "failed"
     if change == "outputs":
         assert (job.output_folder / (case.run_token + ".raw")).read_bytes() == b"retained raw"
+
+
+async def _submit_drawn(state, request_id):
+    args = RunExperimentsInput.model_validate(
+        {
+            "request_id": request_id,
+            "circuits": [{"path": str(state.working_dir / "draw.cir")}],
+            "execution": {
+                "recoverable": True,
+                "wait_s": LIVENESS_S,
+                "run_timeout_s": LIVENESS_S,
+                "max_parallel": 1,
+            },
+            "variations": [{"kind": "random", "runs": 2, "seed": 8, "simulator_draws": True}],
+            "lint": "off",
+        }
+    )
+    result = await asyncio.wait_for(handle_run_experiments(args, state), LIVENESS_S)
+    assert not result.is_error, result.structured_content
+    job = state.all_jobs[result.structured_content["job_id"]]
+    await coordinator_returned(state, job)
+    await state.job_registry.drain_pending()
+    return job
+
+
+@needs_controlled_startup
+@pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH")
+@pytest.mark.asyncio
+async def test_a_retried_sample_draws_what_it_drew_from_its_own_seed(work_dir, monkeypatch):
+    """With simulator_draws each case's deck carries its own seed, so a
+    recoverable job admits the deck's agauss with no driver, and a sample that
+    failed and is retried draws what that sample draws in a job where it never
+    failed."""
+    _write_draw(work_dir)
+    state = _state(work_dir)
+    reference = await _submit_drawn(state, "drawn-reference")
+    assert reference.status == "completed", reference.failures
+    expected = [_voltage(case) for case in reference.cases]
+    assert expected[0] != expected[1]
+
+    original = ExperimentRunner.submit_netlist
+    failed = False
+
+    def fail_once(self, netlist, run_filename, callback, **kwargs):
+        nonlocal failed
+        if not failed and Path(run_filename).stem.endswith("_case_1"):
+            failed = True
+            self.loop.call_soon_threadsafe(
+                callback,
+                RunOutcome("", "", 0, "Simulator failed", failure_code="simulation_failed"),
+            )
+            return object()
+        return original(self, netlist, run_filename, callback, **kwargs)
+
+    monkeypatch.setattr(ExperimentRunner, "submit_netlist", fail_once)
+    parent = await _submit_drawn(state, "drawn-parent")
+    assert parent.status == "completed_with_failures", parent.failures
+    receipt = await resume_experiment(
+        state, job_id=parent.job_id, resume_request_id="drawn-retry", retry_failed=True
+    )
+    child = receipt.job
+    await coordinator_returned(state, child)
+    await state.job_registry.drain_pending()
+
+    assert child.status == "completed", child.failures
+    assert [_voltage(case) for case in child.cases] == expected
+    recoveries = [case.recovery for case in child.cases]
+    assert all(item is not None and item.attempt.seeded_driver is None for item in recoveries)
