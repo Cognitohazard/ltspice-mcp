@@ -473,7 +473,10 @@ _SCENE_SCHEMA: dict[str, Any] = {
 # lib.netlist_graph dataclasses (see GraphComparison.as_dict).
 _REF: dict[str, Any] = {
     "type": "string",
-    "description": "Component reference, hierarchical for a subcircuit leaf ('X1.M2').",
+    "description": (
+        "Component reference, hierarchical inside a subcircuit ('X1.M2'); a "
+        "subcircuit instance itself in param_mismatches ('X1')."
+    ),
 }
 
 # The delta's lists that are differences; ``components_renamed`` is a fact.
@@ -761,7 +764,11 @@ COMPARISON_SCHEMA: dict[str, Any] = {
         "param_mismatches": {
             "type": "array",
             "items": _PARAM_DIFF_SCHEMA,
-            "description": "equivalence: matched components whose key=value parameter differs.",
+            "description": (
+                "equivalence: matched components, subcircuit instances among them, "
+                "whose key=value parameter differs; an instance's as it runs, its "
+                "own value else its definition's default."
+            ),
         },
         "node_partition_mismatches": {
             "type": "array",
@@ -2005,7 +2012,7 @@ def compare_equivalence(
     findings.extend(_denied_include_findings(ref_graph, ref_source, denied_hint))
     findings.extend(_denied_include_findings(cand_graph, cand_source, denied_hint))
     comparison = compare_graphs(ref_graph, cand_graph, anchors=anchors, rtol=rtol)
-    added, removed = circuit_directive_delta(ref_graph, cand_graph)
+    added, removed = circuit_directive_delta(ref_graph, cand_graph, comparison.calls)
     directives_equivalent = not added and not removed
     payload: dict[str, Any] = {
         "mode": "equivalence",

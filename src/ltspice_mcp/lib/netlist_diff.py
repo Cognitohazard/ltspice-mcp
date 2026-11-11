@@ -48,11 +48,9 @@ from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import fold_micro_sign
 from ltspice_mcp.lib.netlist_graph import (
     DIRECTIVE_CARD_KINDS,
+    FlatCall,
     NetlistGraph,
-    SubcktDef,
     canon_ref,
-    flatten_for_comparison,
-    paired_calls,
     rekey_across_added_x,
 )
 from ltspice_mcp.lib.spice_lex import (
@@ -243,22 +241,28 @@ def read_deck(source: str | Path) -> Deck:
 
 
 def circuit_directive_delta(
-    baseline: NetlistGraph, compared: NetlistGraph
+    baseline: NetlistGraph,
+    compared: NetlistGraph,
+    calls: Iterable[tuple[FlatCall, FlatCall]],
 ) -> tuple[list[str], list[str]]:
     """``(added, removed)``: the directives two circuits differ by, scope by
     scope, each as :func:`directive_delta` reads one scope's.
 
     The scopes are the deck's top level and each subcircuit definition an
     instance both circuits have calls, wherever it is defined (inline or in an
-    included file), paired by that instance (``netlist_graph.paired_calls``)
-    whatever each side names the definition. A definition's directives are
-    its own: a ``.param`` in its body against one at the top level is a
-    difference, and its ``PARAMS:`` defaults count among them. Its entries
-    carry ``(in .subckt NAME)``, the name each side gives it. An instance only
-    one side has is the wiring comparison's to report. An include whose file
-    only defines subcircuits is not compared by its line
-    (``NetlistGraph.definition_includes``): its definitions are compared
-    themselves.
+    included file), paired by that instance as the wiring comparison paired
+    them (``calls``, ``GraphComparison.calls``) whatever each side names the
+    definition. A definition's directives are its body's: a ``.param`` in its
+    body against one at the top level is a difference. Its ``PARAMS:``
+    defaults are not among them: they reach the circuit only through the
+    instances, whose parameters the wiring comparison compares as each runs
+    them. Entries carry ``(in .subckt NAME)``, the name each side gives it, and
+    the instance that paired them where the names differ. An instance only one
+    side has, or one the wiring comparison keeps as a black box (its port
+    count does not match its definition), is the wiring comparison's to
+    report. An include whose file only defines subcircuits is not compared by
+    its line (``NetlistGraph.definition_includes``): its definitions are
+    compared themselves.
     """
     top = _scope(baseline.directives, baseline)
     added, removed = directive_delta(top, _scope(compared.directives, compared))
@@ -266,15 +270,20 @@ def circuit_directive_delta(
     # definitions, so a default model one of the compared definitions declares
     # stands in for it there: a difference, not export boilerplate.
     visible = {d.model for d in top if d.model is not None}
-    pairs = paired_calls(flatten_for_comparison(baseline), flatten_for_comparison(compared))
-    for key_before, key_after in dict.fromkeys((a.definition, b.definition) for a, b in pairs):
+    pairs: dict[tuple[str, str], str] = {}
+    for a, b in calls:
+        pairs.setdefault((a.definition, b.definition), a.ref)
+    for (key_before, key_after), instance in pairs.items():
         before, after = baseline.subckts[key_before], compared.subckts[key_after]
         more, fewer = directive_delta(
-            _definition(before, baseline), _definition(after, compared), visible=visible
+            _scope(before.directives, baseline),
+            _scope(after.directives, compared),
+            visible=visible,
         )
-        added += [f"{text} (in .subckt {after.name})" for text in more]
-        removed += [f"{text} (in .subckt {before.name})" for text in fewer]
-    return added, removed
+        renamed = "" if before.name.casefold() == after.name.casefold() else f" of {instance}"
+        added += [f"{text} (in .subckt {after.name}{renamed})" for text in more]
+        removed += [f"{text} (in .subckt {before.name}{renamed})" for text in fewer]
+    return list(dict.fromkeys(added)), list(dict.fromkeys(removed))
 
 
 def _scope(cards: Iterable[SpiceCard], graph: NetlistGraph) -> list[Directive]:
@@ -286,20 +295,6 @@ def _scope(cards: Iterable[SpiceCard], graph: NetlistGraph) -> list[Directive]:
         for card in cards
         if id(card) not in bringing and (directive := _directive_of(card)) is not None
     ]
-
-
-def _definition(definition: SubcktDef, graph: NetlistGraph) -> list[Directive]:
-    """A subcircuit's own directives: its body's, and its ``PARAMS:`` defaults
-    read as one assignment card, in any order."""
-    directives = _scope(definition.directives, graph)
-    if definition.param_defaults:
-        pairs = sorted(
-            (f"{key}={_canonical_value(value)}" for key, value in definition.param_defaults),
-            key=str.casefold,
-        )
-        text = "PARAMS: " + " ".join(f"{key}={value}" for key, value in definition.param_defaults)
-        directives.append(Directive(comparable(" ".join(["params:", *pairs])), text))
-    return directives
 
 
 def _by_key(directives: list[Directive]) -> dict[str, list[str]]:

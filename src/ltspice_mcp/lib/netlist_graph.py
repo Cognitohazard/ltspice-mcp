@@ -344,8 +344,10 @@ class FlatComponent:
 @dataclass(frozen=True)
 class FlatCall:
     """A subcircuit instance flattening expanded: its path as written
-    (``X1.XI``), the key of the definition it calls, and its own parameters
-    (an ``X`` card's ``params:``), which override that definition's defaults."""
+    (``X1.XI``), the key of the definition it calls, and the parameters it
+    runs that definition with: each it gives (an ``X`` card's ``params:``,
+    with or without the keyword), else the definition's header default
+    (``_passed``)."""
 
     ref: str
     definition: str
@@ -522,6 +524,10 @@ class GraphComparison:
     unresolved_subckts: list[UnresolvedSubckt] = field(default_factory=list)
     duplicate_subckts: list[DuplicateSubckt] = field(default_factory=list)
     duplicate_params: list[DuplicateParam] = field(default_factory=list)
+    #: The subcircuit instances both sides expanded, paired (``paired_calls``):
+    #: which definition stands for which, for the directive comparison to read.
+    #: Not part of the reply.
+    calls: list[tuple[FlatCall, FlatCall]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, object]:
         """Project to a plain-dict payload (JSON-friendly)."""
@@ -1168,7 +1174,7 @@ def _expand(
     assert model_key is not None
     sub = subckts[model_key]
     child_path = (*path, comp.ref)
-    calls.append(FlatCall(".".join(child_path), model_key, comp.params))
+    calls.append(FlatCall(".".join(child_path), model_key, _passed(sub, comp.params)))
     child_map = _build_child_net_map(sub, flat_nodes, ".".join(child_path), global_nets)
     for child in sub.components:
         _expand(
@@ -1279,7 +1285,8 @@ def compare_graphs(
         _diff_matched_pair(rc, cc, rtol, result)
     # A subcircuit instance is no leaf, but its own parameters set what its
     # body's values read, so an instance both sides have compares them too.
-    for ref_call, cand_call in paired_calls(ref_flat, cand_flat):
+    result.calls = paired_calls(ref_flat, cand_flat)
+    for ref_call, cand_call in result.calls:
         _diff_params(ref_call.ref, ref_call.params, cand_call.params, rtol, result)
 
     # --- named node-partition mismatches, via reference-keyed propagation -----
@@ -1517,6 +1524,21 @@ def _diff_matched_pair(
     _diff_params(rc.ref, rc.params, cc.params, rtol, result)
 
 
+def _passed(
+    definition: SubcktDef, given: tuple[tuple[str, str], ...]
+) -> tuple[tuple[str, str], ...]:
+    """The parameters an instance runs ``definition`` with, as LTspice reads
+    an instance: each it gives, every copy kept, else the definition's header
+    default (recorded: ``deck/params_keyword``, ``deck/subckt_param_precedence``;
+    ``hierarchy`` reads the same precedence). An instance that gives the
+    default's value and one that leaves it out run alike."""
+    named = {key.casefold() for key, _ in given}
+    defaults = tuple(
+        (key, value) for key, value in definition.param_defaults if key.casefold() not in named
+    )
+    return (*defaults, *given)
+
+
 def _diff_params(
     ref: str,
     reference: tuple[tuple[str, str], ...],
@@ -1545,13 +1567,6 @@ def paired_calls(
     ref = {canon_ref(call.ref): call for call in reference.calls}
     cand, _ = rekey_across_added_x(ref, {canon_ref(call.ref): call for call in candidate.calls})
     return [(ref[key], cand[key]) for key in sorted(ref.keys() & cand.keys())]
-
-
-def flatten_for_comparison(graph: NetlistGraph) -> FlatNetlist:
-    """``graph`` flattened as ``compare_graphs`` flattens it: an instance whose
-    port count does not match its definition is kept as a black box rather
-    than refused."""
-    return _flatten(graph, arity=[])[0]
 
 
 def _disagreement(

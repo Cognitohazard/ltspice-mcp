@@ -1670,13 +1670,16 @@ component set, values, normalized parameters, which pins share a node
 (matched by the wiring, not by node names), the number of terminals, and
 `anchors`, the named nets (ports, rails, outputs) that must also match by
 name; ground always must. A subcircuit instance both circuits have is
-compared by its own parameters (an `X` card's `params:`) as a part is, in
-`param_mismatches`. It also compares the directives, each read as
-`structural_diff` reads it (below), scope by scope: the top level's, and those
-of each definition an instance both circuits have calls, wherever it is
-defined, inline or in an included file, and whatever each side names it. A
-definition's own directives are its body's and its `PARAMS:` defaults, and
-each is listed with `(in .subckt NAME)` after it. An `.include` or `.lib` line
+compared by the parameters it runs with, as a part is, in `param_mismatches`:
+each it gives (an `X` card's `params:`, with or without the keyword), else its
+definition's `PARAMS:` default, as LTspice reads an instance. So a default
+reaches the comparison only where an instance leaves the parameter out. It
+also compares the directives, each read as `structural_diff` reads it (below),
+scope by scope: the top level's, and those of each definition an instance both
+circuits have calls, wherever it is defined, inline or in an included file,
+and whatever each side names it. A definition's own directives are its body's,
+each listed with `(in .subckt NAME)` after it, and the instance that paired
+two definitions of different names. An `.include` or `.lib` line
 is a directive, but one whose file (or section) defines subcircuits and nothing
 else is compared by those definitions instead. So the modes differ: a `.param`
 moved from a body to the top level is a difference here and not in

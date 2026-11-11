@@ -1281,13 +1281,8 @@ def _amp(body: str = ".param g=2\n", top: str = "", params: str = "") -> str:
             [".meas op vb FIND V(out) (in .subckt AMP)"],
             [],
         ),
-        (
-            _amp("", params=" params: g=3"),
-            ["PARAMS: g=3 (in .subckt AMP)"],
-            [".param g=2 (in .subckt AMP)"],
-        ),
     ],
-    ids=["param_value", "param_moved_to_the_top", "meas_added", "params_default"],
+    ids=["param_value", "param_moved_to_the_top", "meas_added"],
 )
 async def test_equivalence_compares_each_subcircuit_s_own_directives(
     state_no_sim, work_dir, candidate: str, added: list[str], removed: list[str]
@@ -1364,8 +1359,8 @@ async def test_a_definition_each_side_names_otherwise_is_compared_through_its_in
     deck = _write(work_dir, "cand.cir", _amp(".param g=3\n").replace("AMP", "AMP2"))
     comparison = (await _run(state_no_sim, path=str(deck), reference=str(ref)))["comparison"]
     assert comparison["equivalent"] is False
-    assert comparison["directives_added"] == [".param g=3 (in .subckt AMP2)"]
-    assert comparison["directives_removed"] == [".param g=2 (in .subckt AMP)"]
+    assert comparison["directives_added"] == [".param g=3 (in .subckt AMP2 of X1)"]
+    assert comparison["directives_removed"] == [".param g=2 (in .subckt AMP of X1)"]
 
 
 async def test_an_instance_s_own_parameters_are_compared(state_no_sim, work_dir):
@@ -1377,6 +1372,41 @@ async def test_an_instance_s_own_parameters_are_compared(state_no_sim, work_dir)
     assert comparison["param_mismatches"] == [
         {"ref": "X1", "key": "g", "reference_value": "2", "candidate_value": "3"}
     ]
+
+
+@pytest.mark.parametrize(
+    ("reference", "candidate", "mismatch"),
+    [
+        (("2", ""), ("2", " g=2"), None),
+        (("2", ""), ("3", ""), ("2", "3")),
+        (("2", " g=5"), ("3", " g=5"), None),
+    ],
+    ids=["a_default_given_or_left_out", "a_default_the_instance_runs", "a_default_both_override"],
+)
+async def test_a_header_default_is_compared_through_the_instances_that_run_it(
+    state_no_sim,
+    work_dir,
+    reference: tuple[str, str],
+    candidate: tuple[str, str],
+    mismatch: tuple[str, str] | None,
+):
+    """An instance runs its definition with each parameter it gives, else the
+    header default (recorded: deck/params_keyword), so a default reaches the
+    circuit only where an instance leaves the parameter out."""
+
+    def deck(default: str, given: str) -> str:
+        return _amp("", params=f" params: g={default}").replace("X1 a b AMP", f"X1 a b AMP{given}")
+
+    ref = _write(work_dir, "ref.cir", deck(*reference))
+    cand = _write(work_dir, "cand.cir", deck(*candidate))
+    comparison = (await _run(state_no_sim, path=str(cand), reference=str(ref)))["comparison"]
+    rows = [
+        (row["reference_value"], row["candidate_value"])
+        for row in comparison.get("param_mismatches", [])
+    ]
+    assert rows == ([] if mismatch is None else [mismatch])
+    assert comparison["equivalent"] is (mismatch is None)
+    assert "directives_added" not in comparison and "directives_removed" not in comparison
 
 
 async def test_a_default_model_in_a_body_is_compared_against_the_top_level_s(
