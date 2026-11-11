@@ -85421,6 +85421,411 @@
    }
   ]
  },
+ "fixtures/ltspice_recorded/inputs/connectivity/same_instance_overlap_from_first_pin.asc": {
+  "components": {
+   "rows": [
+    {
+     "bounding_box": {
+      "height": 96,
+      "width": 32,
+      "x": 80,
+      "y": 96
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "1",
+       "order": 1,
+       "x": 96,
+       "y": 96
+      },
+      {
+       "dir": "down",
+       "name": "2",
+       "order": 2,
+       "x": 96,
+       "y": 192
+      }
+     ],
+     "position": {
+      "x": 96,
+      "y": 144
+     },
+     "reference": "R1",
+     "rotation": "R0",
+     "symbol": "res",
+     "value": "1k"
+    }
+   ],
+   "total": 1
+  },
+  "nets": [
+   {
+    "at": "R1.1",
+    "coordinates_sha256": "48be8974b1c49ada",
+    "labels": [
+     "a"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 96,
+      "y": 96
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1,
+    "warnings": [
+     "R1.1 and R1.2 are joined by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so it joins nothing. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
+    ]
+   },
+   {
+    "at": "R1.2",
+    "coordinates_sha256": "e2a95af05202176d",
+    "labels": [
+     "b"
+    ],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 96,
+      "y": 192
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1,
+    "warnings": [
+     "R1.1 and R1.2 are joined by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so it joins nothing. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
+    ]
+   },
+   {
+    "at": "net:a",
+    "coordinates_sha256": "48be8974b1c49ada",
+    "labels": [
+     "a"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 96,
+      "y": 96
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1,
+    "warnings": [
+     "R1.1 and R1.2 are joined by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so it joins nothing. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
+    ]
+   },
+   {
+    "at": "net:b",
+    "coordinates_sha256": "e2a95af05202176d",
+    "labels": [
+     "b"
+    ],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 96,
+      "y": 192
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1,
+    "warnings": [
+     "R1.1 and R1.2 are joined by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so it joins nothing. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
+    ]
+   },
+   {
+    "at": [
+     96,
+     144
+    ],
+    "error": "netlist_invalid"
+   },
+   {
+    "at": [
+     96,
+     112
+    ],
+    "error": "netlist_invalid"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/connectivity/same_instance_overlap_from_second_pin.asc": {
+  "components": {
+   "rows": [
+    {
+     "bounding_box": {
+      "height": 96,
+      "width": 32,
+      "x": 80,
+      "y": 96
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "1",
+       "order": 1,
+       "x": 96,
+       "y": 96
+      },
+      {
+       "dir": "down",
+       "name": "2",
+       "order": 2,
+       "x": 96,
+       "y": 192
+      }
+     ],
+     "position": {
+      "x": 96,
+      "y": 144
+     },
+     "reference": "R1",
+     "rotation": "R0",
+     "symbol": "res",
+     "value": "1k"
+    }
+   ],
+   "total": 1
+  },
+  "nets": [
+   {
+    "at": "R1.1",
+    "coordinates_sha256": "48be8974b1c49ada",
+    "labels": [
+     "a"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 96,
+      "y": 96
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1,
+    "warnings": [
+     "R1.1 and R1.2 are joined by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so it joins nothing. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
+    ]
+   },
+   {
+    "at": "R1.2",
+    "coordinates_sha256": "e2a95af05202176d",
+    "labels": [
+     "b"
+    ],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 96,
+      "y": 192
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1,
+    "warnings": [
+     "R1.1 and R1.2 are joined by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so it joins nothing. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
+    ]
+   },
+   {
+    "at": "net:a",
+    "coordinates_sha256": "48be8974b1c49ada",
+    "labels": [
+     "a"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 96,
+      "y": 96
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1,
+    "warnings": [
+     "R1.1 and R1.2 are joined by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so it joins nothing. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
+    ]
+   },
+   {
+    "at": "net:b",
+    "coordinates_sha256": "e2a95af05202176d",
+    "labels": [
+     "b"
+    ],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 96,
+      "y": 192
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1,
+    "warnings": [
+     "R1.1 and R1.2 are joined by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so it joins nothing. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
+    ]
+   },
+   {
+    "at": [
+     96,
+     144
+    ],
+    "error": "netlist_invalid"
+   },
+   {
+    "at": [
+     96,
+     160
+    ],
+    "error": "netlist_invalid"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/connectivity/same_instance_overlap_within.asc": {
+  "components": {
+   "rows": [
+    {
+     "bounding_box": {
+      "height": 96,
+      "width": 32,
+      "x": 80,
+      "y": 96
+     },
+     "pins": [
+      {
+       "dir": "up",
+       "name": "1",
+       "order": 1,
+       "x": 96,
+       "y": 96
+      },
+      {
+       "dir": "down",
+       "name": "2",
+       "order": 2,
+       "x": 96,
+       "y": 192
+      }
+     ],
+     "position": {
+      "x": 96,
+      "y": 144
+     },
+     "reference": "R1",
+     "rotation": "R0",
+     "symbol": "res",
+     "value": "1k"
+    }
+   ],
+   "total": 1
+  },
+  "nets": [
+   {
+    "at": "R1.1",
+    "coordinates_sha256": "48be8974b1c49ada",
+    "labels": [
+     "a"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 96,
+      "y": 96
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1,
+    "warnings": [
+     "R1.1 and R1.2 are joined by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so it joins nothing. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
+    ]
+   },
+   {
+    "at": "R1.2",
+    "coordinates_sha256": "e2a95af05202176d",
+    "labels": [
+     "b"
+    ],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 96,
+      "y": 192
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1,
+    "warnings": [
+     "R1.1 and R1.2 are joined by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so it joins nothing. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
+    ]
+   },
+   {
+    "at": "net:a",
+    "coordinates_sha256": "48be8974b1c49ada",
+    "labels": [
+     "a"
+    ],
+    "pins": [
+     {
+      "pin": "1",
+      "reference": "R1",
+      "x": 96,
+      "y": 96
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1,
+    "warnings": [
+     "R1.1 and R1.2 are joined by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so it joins nothing. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
+    ]
+   },
+   {
+    "at": "net:b",
+    "coordinates_sha256": "e2a95af05202176d",
+    "labels": [
+     "b"
+    ],
+    "pins": [
+     {
+      "pin": "2",
+      "reference": "R1",
+      "x": 96,
+      "y": 192
+     }
+    ],
+    "total_coordinates": 1,
+    "total_pins": 1,
+    "warnings": [
+     "R1.1 and R1.2 are joined by a wire straight between two pins of the same component; LTspice drops that wire from the netlist, so it joins nothing. Reroute the wire to bend out of line with the two pins, or label both pins with the same net name."
+    ]
+   },
+   {
+    "at": [
+     96,
+     144
+    ],
+    "error": "netlist_invalid"
+   },
+   {
+    "at": [
+     96,
+     144
+    ],
+    "error": "netlist_invalid"
+   }
+  ]
+ },
  "fixtures/ltspice_recorded/inputs/connectivity/same_instance_pin_inside.asc": {
   "components": {
    "rows": [

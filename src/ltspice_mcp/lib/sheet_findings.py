@@ -1219,8 +1219,7 @@ def findings(view: SheetView, rules: Collection[str] | None = None) -> list[Find
     - ``shared_reference``: two or more parts under one reference, compared
       without case. Neither LTspice build netlists such a sheet.
     - ``dropped_wire``: a wire LTspice leaves out of the netlist because its
-      two ends land on pins of one part
-      (``connectivity.same_instance_dropped_segments``).
+      two ends land on pins of one part (``Nets.dropped``).
     - ``duplicate_parameter``: a part giving one parameter, in any case, more
       than once across the attributes LTspice writes onto its line.
     - ``subcircuit_value_slot``: a Value on a part that netlists as a

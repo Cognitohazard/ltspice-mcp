@@ -83,6 +83,16 @@
    "tests/test_edit_open_window.py::test_a_call_that_leaves_the_sheet_as_it_is_asks_no_window[plot panes only]"
   ]
  },
+ "0a0920044ddbe2a6": {
+  "answer": {
+   "reply": "09ad7ea1f774182d",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_extends_a_stub_into_a_run_ltspice_drops[ltspice17-to_second_pin-labelled]",
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_extends_a_stub_into_a_run_ltspice_drops[ltspice26-to_second_pin-labelled]"
+  ]
+ },
  "0b3ad8c69693fe94": {
   "answer": {
    "reply": "22103d94e8cf9e94",
@@ -696,6 +706,16 @@
    "tests/test_recorded_ltspice_schematics.py::test_a_blocks_sheet_is_found_alike_whatever_the_working_directory[holding a sheet of the block's name-gone]"
   ]
  },
+ "2e1957892a2cf06e": {
+  "answer": {
+   "reply": "f2f8e9a1a70f8180",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops[ltspice17-connectivity/same_instance_overlap_within-same_instance_wire]",
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops[ltspice26-connectivity/same_instance_overlap_within-same_instance_wire]"
+  ]
+ },
  "2e5570504b8617b7": {
   "answer": {
    "reply": "859035ecb3b3e377",
@@ -1205,6 +1225,16 @@
   ],
   "varies": true
  },
+ "518fbf103b56049b": {
+  "answer": {
+   "reply": "8b99e53f6b78040a",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops[ltspice17-connectivity/same_instance_overlap_from_second_pin-same_instance_bare]",
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops[ltspice26-connectivity/same_instance_overlap_from_second_pin-same_instance_bare]"
+  ]
+ },
  "523fa0e60ad78bc2": {
   "answer": {
    "reply": "02aeabfe9edfe427",
@@ -1381,6 +1411,16 @@
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/gnd_label]"
   ]
  },
+ "5f9c2196b955c163": {
+  "answer": {
+   "reply": "b62ee44d877e825e",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/same_instance_overlap_within]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_overlap_within]"
+  ]
+ },
  "60607b0d59849e20": {
   "answer": {
    "reply": "134675b808230e61",
@@ -1416,6 +1456,16 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_a_library_symbol_redrawn_between_edits_is_read_again"
+  ]
+ },
+ "6238091d44cca299": {
+  "answer": {
+   "reply": "715aaf0684b228a5",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops[ltspice17-connectivity/same_instance_overlap_from_second_pin-same_instance_wire]",
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops[ltspice26-connectivity/same_instance_overlap_from_second_pin-same_instance_wire]"
   ]
  },
  "62fdc94bc2f78ab8": {
@@ -1502,6 +1552,16 @@
    "tests/test_recorded_ltspice_schematics.py::test_every_route_names_a_pins_net_by_every_spelling_of_its_labels[ltspice26]",
    "tests/test_recorded_ltspice_schematics.py::test_the_python_api_names_a_pins_net_by_every_spelling_of_its_labels[ltspice17]",
    "tests/test_recorded_ltspice_schematics.py::test_the_python_api_names_a_pins_net_by_every_spelling_of_its_labels[ltspice26]"
+  ]
+ },
+ "659b1330b6ac8581": {
+  "answer": {
+   "reply": "e5ca922965534592",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_extends_a_stub_into_a_run_ltspice_drops[ltspice17-to_first_pin-bare]",
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_extends_a_stub_into_a_run_ltspice_drops[ltspice26-to_first_pin-bare]"
   ]
  },
  "65b88a7751c1f73d": {
@@ -2073,6 +2133,16 @@
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_t_junction]"
   ]
  },
+ "896f0871c053b93f": {
+  "answer": {
+   "reply": "09ad7ea1f774182d",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_extends_a_stub_into_a_run_ltspice_drops[ltspice17-to_second_pin-bare]",
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_extends_a_stub_into_a_run_ltspice_drops[ltspice26-to_second_pin-bare]"
+  ]
+ },
  "898e765d10ff9823": {
   "answer": {
    "reply": "bed99c246a2fa0c3",
@@ -2182,6 +2252,16 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_the_preexisting_cursor_pages_every_withheld_row"
+  ]
+ },
+ "8eca45636033aca2": {
+  "answer": {
+   "reply": "f84540c2acc735fb",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops[ltspice17-connectivity/same_instance_overlap_within-same_instance_bare]",
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops[ltspice26-connectivity/same_instance_overlap_within-same_instance_bare]"
   ]
  },
  "8f1a81aef836e336": {
@@ -2605,6 +2685,16 @@
    "tests/test_edit_schematic.py::test_a_value_is_checked_for_the_class_the_parts_own_prefix_gives[resistor-symbol-as-source-add_component value]"
   ]
  },
+ "a87fe321057fbe0f": {
+  "answer": {
+   "reply": "bbf6a3a451e47f55",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/same_instance_overlap_from_second_pin]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_overlap_from_second_pin]"
+  ]
+ },
  "a8858bc369732461": {
   "answer": {
    "reply": "795b47cff57d07f9",
@@ -2837,6 +2927,16 @@
    "tests/test_set_plot_panes.py::test_the_replaced_panes_put_back_undo_the_op[ltspice17-plot/math_grid.plt]"
   ]
  },
+ "bc323e68f1775378": {
+  "answer": {
+   "reply": "62bdcc19ba8a4be9",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops[ltspice17-connectivity/same_instance_overlap_from_first_pin-same_instance_wire]",
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops[ltspice26-connectivity/same_instance_overlap_from_first_pin-same_instance_wire]"
+  ]
+ },
  "bceca38024b302a1": {
   "answer": {
    "reply": "4c8f092a5981872e",
@@ -2873,6 +2973,16 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_default_view_covers_only_the_refs_the_batch_touched"
+  ]
+ },
+ "be070eb036bd8e02": {
+  "answer": {
+   "reply": "e5ca922965534592",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_extends_a_stub_into_a_run_ltspice_drops[ltspice17-to_first_pin-labelled]",
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_extends_a_stub_into_a_run_ltspice_drops[ltspice26-to_first_pin-labelled]"
   ]
  },
  "be6f36ed708b0e9a": {
@@ -3425,6 +3535,26 @@
   "tests": [
    "tests/test_edit_schematic.py::test_stale_sha_returns_revision_conflict[other_session]",
    "tests/test_edit_schematic.py::test_stale_sha_returns_revision_conflict[same_session]"
+  ]
+ },
+ "e617cb0195cc6359": {
+  "answer": {
+   "reply": "ffdee03adfa89693",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops[ltspice17-connectivity/same_instance_overlap_from_first_pin-same_instance_bare]",
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops[ltspice26-connectivity/same_instance_overlap_from_first_pin-same_instance_bare]"
+  ]
+ },
+ "e6dcb7a389160953": {
+  "answer": {
+   "reply": "01199acc073b26ca",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/same_instance_overlap_from_first_pin]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_overlap_from_first_pin]"
   ]
  },
  "e7854c7b2f7551f4": {

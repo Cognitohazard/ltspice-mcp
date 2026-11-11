@@ -85,10 +85,13 @@ model = ["lib/symbol_library.py"]
 inputs = ["search/library_folder_bare.asc", "search/library_folder_named.asc", "search/library_folder_wrong.asc"]
 
 [behaviour.same-instance-wire]
-summary = "A wire between two pins of one component: dropped from the netlist when it runs straight from pin to pin, kept when it leaves that line, and kept when a label, a ground flag, another part's pin or another wire's end is on it."
+summary = "A wire between two pins of one component: dropped from the netlist when it runs straight from pin to pin, also when a second wire on that line overlaps it, kept when it leaves that line, and kept when a label, a ground flag, another part's pin or the end of a wire leaving the line is on it."
 model = ["lib/connectivity.py"]
 # same_instance_bare is same_instance_wire without its labels: with the wire
-# dropped, each pin is exported as unconnected.
+# dropped, each pin is exported as unconnected. The same_instance_overlap
+# sheets add a second wire on the pin-to-pin line, from R1's first pin, from
+# its second pin, or between the pins with neither end on one, and ask whether
+# the end of that wire inside the run keeps it.
 inputs = [
     "connectivity/same_instance_wire.asc",
     "connectivity/same_instance_bare.asc",
@@ -100,6 +103,9 @@ inputs = [
     "connectivity/same_instance_ground_inside.asc",
     "connectivity/same_instance_pin_inside.asc",
     "connectivity/same_instance_t_junction.asc",
+    "connectivity/same_instance_overlap_from_first_pin.asc",
+    "connectivity/same_instance_overlap_from_second_pin.asc",
+    "connectivity/same_instance_overlap_within.asc",
 ]
 extra = ["connectivity/res.asy"]
 

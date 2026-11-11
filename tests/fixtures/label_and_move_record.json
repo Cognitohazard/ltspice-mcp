@@ -2020,6 +2020,95 @@
     }
    }
   },
+  "fixtures/ltspice_recorded/inputs/connectivity/same_instance_overlap_from_first_pin.asc": {
+   "labels": {
+    "asked_sha256": "6bbca0da2fed61e1bc4fa003aeb4b335ad93beb158651e7e785581cfdba78c63",
+    "order": "1 7 4 5 7 1 4 5 0 0 3 2 8 8 6 9 8 8 6 9 8 8 6 9 1 7 4 5 7 1 4 5",
+    "proposals": 32,
+    "sha256": "d9926d17a7858aaeb824680afc9c628f8514a00f5b5927299b78901cd1390085",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed [a name already here; 1 at the point, 1 named]": 4,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 1 named]": 4,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 4,
+     "refused: Refused to add ground at (#,#): the flag would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together and to ground. Put the flag on a point of the one net it is meant for. [ground; 1 at the point, 2 named]": 3,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 4,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already here; 1 at the point, 2 named]": 6,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a new name; 1 at the point, 2 named]": 3
+    }
+   },
+   "moves": {
+    "asked_sha256": "38e6a3b02041195edd71213185996d9c52b68cae1bcc755a4ef7a83ed2f7c3f8",
+    "order": "0 0 0 1 0 0 0 0 0 0 0 0 0",
+    "proposals": 13,
+    "sha256": "dbb4a2f639bc2f062a48418ef829e55148e144ae4572d8121f551db62a86d8e2",
+    "shapes": {
+     "moved": 12,
+     "moved | sheet: net_with_two_names": 1
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/connectivity/same_instance_overlap_from_second_pin.asc": {
+   "labels": {
+    "asked_sha256": "d62e2d436b5e556d034261b6b3566e68239f4abfa636f3c4923d996a770bc20b",
+    "order": "1 7 4 5 7 1 4 5 0 0 3 2 8 8 6 9 8 8 6 9 8 8 6 9 1 7 4 5 7 1 4 5",
+    "proposals": 32,
+    "sha256": "b976ebdacad53f35c4ea4d3bab0ed1a2f6a36cd16a30bd1836c7ec2bb72f13ae",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed [a name already here; 1 at the point, 1 named]": 4,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 1 named]": 4,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 4,
+     "refused: Refused to add ground at (#,#): the flag would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together and to ground. Put the flag on a point of the one net it is meant for. [ground; 1 at the point, 2 named]": 3,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 4,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already here; 1 at the point, 2 named]": 6,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a new name; 1 at the point, 2 named]": 3
+    }
+   },
+   "moves": {
+    "asked_sha256": "e81ae62589df5b277ab0ef58e4210e32f4e079d343ab838deb7ebc8ce71f9ce1",
+    "order": "0 1 0 0 0 0 0 0 0 0 0 0 0",
+    "proposals": 13,
+    "sha256": "dbb4a2f639bc2f062a48418ef829e55148e144ae4572d8121f551db62a86d8e2",
+    "shapes": {
+     "moved": 12,
+     "moved | sheet: net_with_two_names": 1
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/connectivity/same_instance_overlap_within.asc": {
+   "labels": {
+    "asked_sha256": "94f98766b4aeca6a52fed8782efb1d6cdfe2857430d1bfbe98fcb51bb8581bd1",
+    "order": "1 7 4 5 7 1 4 5 0 0 3 2 8 8 6 9 8 8 6 9 8 8 6 9 1 7 4 5 7 1 4 5",
+    "proposals": 32,
+    "sha256": "2c8ee3abefad180932e4e3ab36ea4b429a49d598b331503ec0b6e989e133c44a",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed [a name already here; 1 at the point, 1 named]": 4,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 1 named]": 4,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 4,
+     "refused: Refused to add ground at (#,#): the flag would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together and to ground. Put the flag on a point of the one net it is meant for. [ground; 1 at the point, 2 named]": 3,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 4,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already here; 1 at the point, 2 named]": 6,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a new name; 1 at the point, 2 named]": 3
+    }
+   },
+   "moves": {
+    "asked_sha256": "324808b1863085a90221c13a0b79e226bf52c853c49ad3166824b50ad7085296",
+    "order": "0 0 0 0 0 0 0 0 0 0 0 0 0",
+    "proposals": 13,
+    "sha256": "dbb4a2f639bc2f062a48418ef829e55148e144ae4572d8121f551db62a86d8e2",
+    "shapes": {
+     "moved": 13
+    }
+   }
+  },
   "fixtures/ltspice_recorded/inputs/connectivity/same_instance_pin_inside.asc": {
    "labels": {
     "asked_sha256": "ea297728c1ee34023925b454cd0d8641e67196c563026b489c6f0bb05a4f7e25",

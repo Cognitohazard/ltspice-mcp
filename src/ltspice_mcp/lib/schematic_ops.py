@@ -93,14 +93,13 @@ from ltspice_mcp.lib.connectivity import (
     named_labels,
     named_nets,
     point_on_segment,
-    same_instance_dropped_segments,
 )
 from ltspice_mcp.lib.encoding import read_spice_text, refused_sheet_mark, refused_sheet_mark_note
 from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
 from ltspice_mcp.lib.format import is_scaled_number, parse_spice_value
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.models import StrictModel
-from ltspice_mcp.lib.nets import LabelAt, Member, PinAt, net_change
+from ltspice_mcp.lib.nets import LabelAt, Member, PinAt, Segment, net_change
 from ltspice_mcp.lib.pin_legend import pin_ties
 from ltspice_mcp.lib.plot_settings import (
     SECTION_NAMES,
@@ -119,6 +118,7 @@ from ltspice_mcp.lib.plot_settings import (
 )
 from ltspice_mcp.lib.routing import (
     Route,
+    collinear_overlap,
     judge,
     segment_json,
     segment_text,
@@ -2168,6 +2168,16 @@ def _resolve_route_endpoint(
     return coord
 
 
+def _lies_along(segment: tuple[int, int, int, int], run: Segment) -> bool:
+    """Whether a stretch of the route ``segment`` is drawn along ``run``: they
+    share a length of one line, or a diagonal run lies on the segment whole."""
+    (ax, ay), (bx, by) = run
+    if collinear_overlap(segment, (ax, ay, bx, by)):
+        return True
+    ends = (segment[0], segment[1]), (segment[2], segment[3])
+    return point_on_segment(run[0], *ends) and point_on_segment(run[1], *ends)
+
+
 def _plan_connect_route(
     editor: AscEditor,
     from_pin: "str | GridPoint",
@@ -2237,8 +2247,20 @@ def _plan_connect_route(
     # (name_key): a net named VOUT and one named Vout, or two names a wire
     # already joins, are one node already. An end's nets are known by the
     # names they carry themselves (NamedNets.named_at), so a wire grounded on
-    # its own joins no name: it grounds what it is routed to.
-    from_nets, to_nets = before.named_at((x1, y1)), before.named_at((x2, y2))
+    # its own joins no name: it grounds what it is routed to. Where the sheet
+    # with the route on it drops a run through an end, that sheet decides what
+    # the end joins: a route laid along the run merges into it, with any wire
+    # it extends there, and joins only what is drawn on the point (``drawn``).
+    # The names are read back as the nets they are on before the route.
+    after = sheet_nets(editor, extra_segments=segments, geometry=component_geo)
+
+    def end_nets(end: tuple[int, int]) -> frozenset[int]:
+        if not after.nets.dropped_at(end):
+            return before.named_at(end)
+        names = after.own_names(end, drawn=True)
+        return frozenset(net for name in names if (net := before.net_named(name)) is not None)
+
+    from_nets, to_nets = end_nets((x1, y1)), end_nets((x2, y2))
     from_labels_before = set().union(*(before.names(net) for net in from_nets))
     to_labels_before = set().union(*(before.names(net) for net in to_nets))
     named = sorted(from_nets | to_nets)
@@ -2262,8 +2284,9 @@ def _plan_connect_route(
             f"and label it with the other's name; no wire is needed."
         )
     from_keys, to_keys = name_keys(from_labels_before), name_keys(to_labels_before)
-    after = sheet_nets(editor, extra_segments=segments, geometry=component_geo)
-    unioned = after.own_names((x1, y1)) | after.own_names((x2, y2))
+    # The route is drawn on ``after``, so each end is on what is drawn there: a
+    # run still dropped through it is one the route did not keep.
+    unioned = after.own_names((x1, y1), drawn=True) | after.own_names((x2, y2), drawn=True)
     if len(name_keys(unioned)) >= 2:
         # Some labels seen post-route weren't there pre-route on
         # either endpoint — that's the mid-segment case.
@@ -2283,18 +2306,22 @@ def _plan_connect_route(
     # conflict above, it's a "wrong intent" error: a wire tying two pins of one
     # component (directly, or through a collinear waypoint that merges back into
     # a straight wire) with nothing on it is dropped by LTspice at netlist time
-    # (see same_instance_dropped_segments), so reporting the tie as connected
-    # would be a lie. The fix is a route change, so surface it before route
-    # geometry.
-    pin_owners: dict[tuple[int, int], list[tuple[str, str]]] = {}
-    for pin in before.pins:
-        pin_owners.setdefault(pin.point, []).append((pin.reference, pin.name))
-    dropped = same_instance_dropped_segments(
-        pin_owners, segments, [label.point for label in before.labels]
+    # (``Nets.dropped``), so reporting the tie as connected would be a lie. The
+    # drops are read off the sheet with the route on it, as the export makes
+    # them: a wire already on the sheet can merge with the route into one
+    # dropped run, or keep it by ending on its interior. The fix is a route
+    # change, so surface it before route geometry.
+    dropped = sorted(
+        (
+            run
+            for run in after.nets.dropped
+            if any(_lies_along(segment, run.segment) for segment in segments)
+        ),
+        key=lambda run: (run.ends[0].reference, run.segment),
     )
     if dropped:
-        ref = dropped[0]["ref"]
-        pin_a, pin_b = dropped[0]["pins"]
+        ref = dropped[0].ends[0].reference
+        pin_a, pin_b = (end.name for end in dropped[0].ends)
         raise NetlistError(
             f"Refused to connect {from_name} to {to_name}: this is a same-instance "
             f"wire — it ties two pins of the same component {ref} ({ref}.{pin_a} "

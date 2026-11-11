@@ -613,6 +613,105 @@ async def test_verify_reports_a_dropped_wire_exactly_where_the_export_drops_one(
     assert bool(dropped) == (first != second), dropped
 
 
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(SAME_INSTANCE)))
+def test_a_dropped_run_is_the_whole_line_between_the_pins_whatever_wires_draw_it(
+    build: str, case_id: str, tmp_path: Path
+):
+    """A second wire on the line between R1's pins, from a pin or between them,
+    is merged into the run, and LTspice drops the run whole (the
+    ``same_instance_overlap`` sheets). The sheet's nets put each pin where the
+    export does, and both readers of the ``dropped_wire`` rule report one run
+    from pin to pin exactly when the export keeps R1's nodes apart."""
+    sheet = rec.stage_sheet(build, case_id, tmp_path)
+    assert modelled_groups(sheet) == exported_groups(build, case_id)
+
+    first, second = exported_card(build, case_id, "R1").nodes
+    pins = placed_pins(sheet)["R1"]
+    expected = [{pins[1], pins[2]}] if first != second else []
+    edited = [
+        set(one.points) for one in sheet_findings(_editor(sheet)) if one.rule == "dropped_wire"
+    ]
+    assert edited == expected
+    scene = build_scene(sheet, SymbolResolver(local_dir=sheet.parent))
+    checked = [set(one.points) for one in findings(sheet_view(scene), ["dropped_wire"])]
+    assert checked == expected
+
+
+OVERLAPS = [case for case in SAME_INSTANCE if "/same_instance_overlap_" in case]
+
+
+@pytest.mark.parametrize("base", ["same_instance_wire", "same_instance_bare"])
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(OVERLAPS)))
+async def test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops(
+    build: str, case_id: str, base: str, state_no_sim: SessionState, work_dir: Path
+):
+    """Each ``same_instance_overlap`` sheet is ``same_instance_wire`` with a
+    second wire on R1's line, and ``same_instance_bare`` is that sheet without
+    its labels. Routed onto either, the second wire is refused as a
+    same-instance wire exactly when the export drops the run the two make,
+    though the route alone runs from no pin to the other. Its end inside the
+    dropped run joins nothing there, so it joins neither label's net to the
+    other: the refusal is no net-label conflict."""
+    lines = (INPUTS / f"{case_id}.asc").read_text().splitlines()
+    wire = [line for line in lines if line.startswith("WIRE ")][-1]
+    base_lines = (INPUTS / f"connectivity/{base}.asc").read_text().splitlines()
+    extra = set(lines) - set(base_lines)
+    assert set(base_lines) <= set(lines)
+    assert {line for line in extra if not line.startswith("FLAG ")} == {wire}
+    x1, y1, x2, y2 = (int(n) for n in wire.split()[1:])
+    staged = rec.stage_sheet(build, f"connectivity/{base}", work_dir)
+    data = await apply_ops(
+        state_no_sim,
+        staged.name,
+        [{"op": "wire_pins", "from_pin": {"x": x1, "y": y1}, "to_pin": {"x": x2, "y": y2}}],
+    )
+    first, second = exported_card(build, case_id, "R1").nodes
+    refused = data["commit_state"] == "not_committed"
+    assert refused == (first != second), data
+    if refused:
+        assert "same-instance wire" in data["failures"][0]["error"]
+
+
+@pytest.mark.parametrize("labelled", [True, False], ids=["labelled", "bare"])
+@pytest.mark.parametrize("routed", [0, 1], ids=["to_second_pin", "to_first_pin"])
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_wire_pins_refuses_a_route_that_extends_a_stub_into_a_run_ltspice_drops(
+    build: str, routed: int, labelled: bool, state_no_sim: SessionState, work_dir: Path
+):
+    """``same_instance_inline_vertex`` is two wires meeting end to end on the
+    line between R1's pins, and the export drops the run they make. Without
+    one of them the other is a stub from a pin; routing the missing wire from
+    the stub's end to its pin draws that sheet again. The stub merges into the
+    dropped run with the route, so the route's end on it joins neither
+    label's net: the refusal is that the wire is dropped, not that two named
+    nets would short. Without the labels the answer is the same."""
+    case_id = "connectivity/same_instance_inline_vertex"
+    staged = rec.stage_sheet(build, case_id, work_dir)
+    lines = staged.read_bytes().split(b"\n")
+    wires = [line for line in lines if line.startswith(b"WIRE ")]
+    assert len(wires) == 2
+    wire = wires[routed]
+    kept = [line for line in lines if line != wire and (labelled or not line.startswith(b"FLAG "))]
+    staged.write_bytes(b"\n".join(kept))
+
+    def ends(line: bytes) -> tuple[tuple[int, int], tuple[int, int]]:
+        x1, y1, x2, y2 = (int(n) for n in line.split()[1:])
+        return (x1, y1), (x2, y2)
+
+    (stub_end,) = set(ends(wire)) & set(ends(wires[1 - routed]))
+    pin_end = next(point for point in ends(wire) if point != stub_end)
+    pin = next(f"R1.{order}" for order, at in placed_pins(staged)["R1"].items() if at == pin_end)
+    data = await apply_ops(
+        state_no_sim,
+        staged.name,
+        [{"op": "wire_pins", "from_pin": {"x": stub_end[0], "y": stub_end[1]}, "to_pin": pin}],
+    )
+    first, second = exported_card(build, case_id, "R1").nodes
+    assert first != second
+    assert data["commit_state"] == "not_committed", data
+    assert "same-instance wire" in data["failures"][0]["error"], data["failures"]
+
+
 def netlisted_groups(sheet: Path) -> set[frozenset[str]]:
     """The pins on each net of the sheet's signature, as ``REF.order`` sets."""
     editor = _editor(sheet)
