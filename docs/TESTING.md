@@ -115,10 +115,11 @@ that tries to break away from the parser's process tree.
 CI runs the suite on a native Windows runner (`check-windows` in
 `.github/workflows/checks.yml`): Python 3.12, one xdist worker per core, no
 coverage gate, and the official Windows build of ngspice, the one users
-install, pinned by version and SHA-256. Its console program,
-`ngspice_con.exe`, is put on PATH as `ngspice.exe`, as above. That build's
-`spinit` sets `filetype=ascii`, so on Windows ngspice writes ASCII raw files,
-as it does for its users. The runner's code page is cp1252 and its paths have
+install, pinned by version and SHA-256, unpacked to `C:\Spice64` as its
+install notes say. Its console program, `ngspice_con.exe`, is put on PATH as
+`ngspice.exe`, as above. That build's `spinit` loads the code models and sets
+`filetype=ascii`, so on Windows ngspice writes ASCII raw files, as it does for
+its users; the job fails before the suite runs unless ngspice reads it. The runner's code page is cp1252 and its paths have
 no spaces, so a run on a user's machine still covers what this job cannot.
 
 CI also runs the suite on a native macOS runner (`check-macos` in

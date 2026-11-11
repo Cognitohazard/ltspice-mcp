@@ -114,7 +114,7 @@ async def _signals(state: SessionState, job_id: str) -> list[str]:
         [{"key": "sum", "metric": "summary"}],
         include={"signals_available": True},
     )
-    available = data["signals_available"]
+    available = data.get("signals_available")
     assert available, data
     return [name for names in available.values() for name in names]
 
@@ -902,6 +902,7 @@ async def test_a_kept_partial_raw_is_read_to_where_the_run_was_stopped(
 
     [failure] = receipt["failures"]
     assert failure["code"] == "run_timeout"
+    assert "partial_raw" in failure["evidence"], receipt
     held = failure["evidence"]["partial_raw"]
     [row] = receipt["runs"]["items"]
     assert row["status"] == "failed"
