@@ -78,7 +78,11 @@ except (ImportError, AttributeError):  # spicelib < 1.6 (the currently pinned ra
 
 from ltspice_mcp.errors import NetlistError, SymbolResolutionError
 from ltspice_mcp.lib.asc_document import is_asc, parse_asc, window_read_past
-from ltspice_mcp.lib.component_value import POSITIONAL_KINDS
+from ltspice_mcp.lib.component_value import (
+    POSITIONAL_KINDS,
+    edited_source,
+    read_source_text,
+)
 from ltspice_mcp.lib.connectivity import (
     NamedNets,
     build_on_wire_predicate,
@@ -674,6 +678,9 @@ def _apply_component_value(editor, reference: str, value: str) -> None:
     """
     _attribute_texts(editor, editor.get_component(reference), {"Value": value})
     element = element_class(editor, reference)
+    if element in ("V", "I"):
+        _set_source_value(editor, reference, element, value)
+        return
     # Behavioral sources: the whole value IS an equation whose first token is
     # V=/I=/R=... — not a model name with trailing parameters. The KEY=VALUE
     # split below would route it to set_component_parameters, which the .asc
@@ -707,6 +714,32 @@ def _apply_component_value(editor, reference: str, value: str) -> None:
     head = " ".join(part for part in head_parts if part)
     if head:
         _set_or_create_value(editor, reference, head)
+    if params:
+        _set_instance_params(editor, reference, params)
+
+
+def _set_source_value(editor, reference: str, element: str, value: str) -> None:
+    """A V or I source's value set to ``value``, by the rule a card's is
+    (``component_value.edited_source``): its own parameters stay, and a
+    ``KEY=VALUE`` of its value, such as a PWL's ``TIME_SCALE_FACTOR=``, stays
+    in it.
+
+    A part may give a keyed parameter in any of its attributes, so one
+    ``value`` gives is set in every copy found and added to SpiceLine where
+    there is none (``_set_instance_params``), where a card's goes on the card.
+    An ``AC 2`` or a ``load`` with no ``=`` goes in Value. A Value that would be
+    empty is not written. A source that plays a .wav file has no value to set.
+    """
+    held = editor.get_component(reference).attributes.get("Value", "")
+    try:
+        old, new = read_source_text(held, element), read_source_text(value, element)
+    except SpiceLexError as e:
+        raise NetlistError(f"Component '{reference}' value {value!r} failed to parse: {e}") from e
+    edited = edited_source(reference, old, new, add_keyed=False)
+    text = " ".join(word for word in (edited.value, *edited.own) if word)
+    if text and text != held.strip():
+        _set_or_create_value(editor, reference, text)
+    params = dict(word.split("=", 1) for word in new.own if "=" in word)
     if params:
         _set_instance_params(editor, reference, params)
 

@@ -447,6 +447,20 @@ model = [
 inputs = ["deck/wavefile_nodes.cir", "deck/wavefile_unquoted.cir"]
 extra = ["deck/level.wav"]
 
+[behaviour.source-parameters]
+summary = "That a source's own parameters follow its value whatever form the value takes, a number, PULSE(), PWL() and SINE() among them: a voltage source's Rser= and Cpar=, either source's AC magnitude written AC=6 or AC 2, read in an AC analysis, and a current source's load flag; and that a PWL's scale keyword before its points is part of its value."
+model = ["lib/component_value.py", "lib/schematic_ops.py", "lib/spice_lex_views.py", "lib/variations.py", "lib/instance_targeting.py"]
+# Each source drives a 1k load. Through Rser=1k, V1's 5 V gives v(a) 2.5,
+# V2's PWL at 2 V gives v(b) 1, V3's SINE of offset 3 and no amplitude gives
+# v(c) 1.5, and V4's PWL at 4 V gives v(d) 2 whatever its time scale. I1
+# would drive 1 mA into e and give it 1 V; as a load it only takes current,
+# so with its load flag read it gives none and v(e) is 0.
+# source_ac runs an AC analysis at 1 kHz: an AC magnitude written AC 2
+# after a PULSE, AC 4 after a number and before Rser=1k into 1k, AC=6 after a
+# number, AC 1 after a SINE with Rser=1k and Cpar=1u into 1k, and a current
+# source's AC 2m into 1k. Each node's magnitude says whether the word was read.
+inputs = ["deck/source_parameters.cir", "deck/source_ac.cir"]
+
 [behaviour.element-terminals]
 summary = "Which words of a Z (MESFET), O (lossy line), U (RC line), T (lossless line), W (current-controlled switch) and @ (frequency response analyzer) card are its nodes, what a MESFET's word after its model is, and how each build writes such a part on export."
 model = [

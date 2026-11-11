@@ -4720,6 +4720,72 @@
         ".raw"
       ]
     },
+    "deck/source_ac": {
+      "behaviour": "source-parameters",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/source_ac.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/source_ac.cir": "434eea995e7c93e40fcf541da2ef5689cc58bb8de9b155289c30401470d071db"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/source_ac.log": {
+          "bytes": 334,
+          "sha256": "be86057919f260c6ae4f4895290a32183aab67a4382bad82f90013f6700e4a1c"
+        },
+        "deck/source_ac.raw": {
+          "bytes": 1474,
+          "sha256": "a4bb13edb0d896b0254a217b4b2d5faeca7b262dd27a4d504e757203b5160b22"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
+    "deck/source_parameters": {
+      "behaviour": "source-parameters",
+      "command": [
+        "LTspice.exe",
+        "-Run",
+        "-b",
+        "<dir>/source_parameters.cir",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "deck/source_parameters.cir": "9d790fd1a00c9a5a28e375966449a580169042908a11d7df9b3bb3b8e92cdc8f"
+      },
+      "kind": "run",
+      "outputs": {
+        "deck/source_parameters.log": {
+          "bytes": 353,
+          "sha256": "3e780a4dc8eddedc3ca9410c137428705a34b823cbe19a8266f757a10b90e8bd"
+        },
+        "deck/source_parameters.raw": {
+          "bytes": 72064,
+          "sha256": "c19c8706a9a4db0cd6374af58fe5b410844c9f3c5867fa6893ef1e70e3175172"
+        }
+      },
+      "reported_build": "LTspice 26.1.1 for Windows",
+      "stopped": false,
+      "written": [
+        ".log",
+        ".op.raw",
+        ".raw"
+      ]
+    },
     "deck/step_bare": {
       "behaviour": "step-without-values",
       "command": [

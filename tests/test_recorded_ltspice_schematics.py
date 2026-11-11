@@ -2013,7 +2013,9 @@ def test_the_server_reads_the_block_sheet_ltspice_takes(case_id: str, tmp_path: 
         assert outer.block_sheet("blk") == expected
     else:
         assert resolver.block_sheet("blk") == expected
-    block = _blk(make_editor(sheet, resolver), case_id)
+    editor = make_editor(sheet, resolver)
+    assert isinstance(editor, AscEditor)
+    block = _blk(editor, case_id)
     if taken is None:
         assert block is None
     else:
@@ -2065,6 +2067,7 @@ def test_staging_copies_a_sheet_named_for_any_part_where_the_editor_reads_one_on
     assert (staged.parent / "res.asc").is_file()
     resolver = SymbolLibrary([sheet.parent / "lib"]).for_sheet(sheet)
     editor = make_editor(sheet, resolver)
+    assert isinstance(editor, AscEditor)
     assert editor.get_component_value("R3") == "10k"
     assert "_SUBCKT" not in editor.get_component("R3").attributes
 
@@ -2181,6 +2184,69 @@ def test_a_value_is_exported_with_its_words_one_space_apart(build: str, tmp_path
         assert value is not None
         assert exported[reference] == " ".join(value.split()), reference
         assert faked[reference] == exported[reference], reference
+
+
+async def test_an_edit_of_a_sources_value_keeps_its_own_parameters_on_a_sheet(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """A source's Value is exported word for word, so V2's ``1 Rser=1`` is
+    its value and its series resistance, which both builds read after any form
+    of value (``deck/source_parameters``). An edit of the value keeps Rser
+    where it is, one that gives Rser sets it there, and a PWL's scale keyword
+    stays in the value it belongs to."""
+    sheet = rec.stage_sheet(rec.BUILDS[0], "export/value_spaces", work_dir / "sheet")
+    # Two parts the recorded sheet lacks: a current source that is a load, and
+    # a voltage source with no Value and its series resistance in SpiceLine.
+    sheet.write_text(
+        sheet.read_text(encoding="utf-8")
+        + "SYMBOL current 896 160 R0\nSYMATTR InstName I1\nSYMATTR Value 1m load\n"
+        + "SYMBOL voltage 1056 160 R0\nSYMATTR InstName V3\nSYMATTR SpiceLine Rser=5\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    relative = sheet.relative_to(work_dir).as_posix()
+
+    async def after(reference: str, value: str) -> tuple[str | None, str | None]:
+        data = await apply_ops(
+            state_no_sim,
+            relative,
+            [{"op": "set_component_value", "reference": reference, "value": value}],
+        )
+        assert data["commit_state"] == "committed", data
+        (part,) = [s for s in parse_asc(sheet.read_bytes()).symbols if s.reference == reference]
+        return part.attr("Value"), part.attr("SpiceLine")
+
+    assert await after("V2", "2") == ("2 Rser=1", None)
+    assert await after("V2", "3 Rser=2 AC 4") == ("3 Rser=2 AC 4", None)
+    assert await after("V2", "5") == ("5 Rser=2 AC 4", None)
+    assert await after("V1", "PWL TIME_SCALE_FACTOR=2 (0 1 1 1)") == (
+        "PWL TIME_SCALE_FACTOR=2 (0 1 1 1)",
+        None,
+    )
+    assert await after("I1", "2m") == ("2m load", None)
+    # A part with no value and a parameter elsewhere: no empty Value is written,
+    # and the parameter is set where the part gives it.
+    assert await after("V3", "Rser=9") == (None, "Rser=9")
+    assert await after("V3", "7") == ("7", "Rser=9")
+
+
+async def test_an_edit_refuses_a_value_for_a_source_that_plays_a_file_on_a_sheet(
+    state_no_sim: SessionState, work_dir: Path
+):
+    sheet = rec.stage_sheet(rec.BUILDS[0], "export/value_spaces", work_dir / "sheet")
+    text = sheet.read_text(encoding="utf-8").replace(
+        "SYMATTR Value 1 Rser=1", 'SYMATTR Value wavefile="level.wav"'
+    )
+    sheet.write_text(text, encoding="utf-8", newline="\n")
+    before = sheet.read_bytes()
+    data = await apply_ops(
+        state_no_sim,
+        sheet.relative_to(work_dir).as_posix(),
+        [{"op": "set_component_value", "reference": "V2", "value": "5"}],
+    )
+    assert data.get("commit_state") != "committed", data
+    assert "plays a .wav file" in str(data), data
+    assert sheet.read_bytes() == before
 
 
 # ---------------------------------------------------------------------------

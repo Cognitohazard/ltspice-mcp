@@ -2457,7 +2457,16 @@ and sets it wherever the part already gives that key (`Value`, `Value2`,
 A key the part does not give is added to `SpiceLine`. A part that gives a key
 more than once gets the sheet's `duplicate_parameter` finding, which the reply
 lists because the op names the part. A behavioural source's value is one
-expression and replaces `Value` entirely.
+expression and replaces `Value` entirely. A voltage or current source's value
+replaces only its value: its own parameters stay (a voltage source's `Rser=`
+and `Cpar=`, either source's AC magnitude, written `AC=2` or `AC 2`, and a
+current source's `load`), which both LTspice builds read after the forms of
+value recorded as `source-parameters`. A parameter the new value gives is set
+in every copy the part has, and a `KEY=VALUE` that is part of the value, such
+as a PWL's `TIME_SCALE_FACTOR=`, stays in it. The card an `assign` variation
+or a value edit of an instance inside a subcircuit writes keeps them by the
+same rule (`component_value.edited_source`). A source that plays a .wav file
+has no value to set, and the op is refused.
 
 Every op that writes a part's `Value` holds it to one rule: `add_component`,
 by `value` or among its `attributes`, `set_component_value` and

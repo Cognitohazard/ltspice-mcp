@@ -1,0 +1,13 @@
+* a source's own parameters after each form of its value
+V1 a 0 5 Rser=1k
+R1 a 0 1k
+V2 b 0 PWL(0 2 1 2) Rser=1k
+R2 b 0 1k
+V3 c 0 SINE(3 0 1k) AC=1 Rser=1k Cpar=1p
+R3 c 0 1k
+V4 d 0 PWL TIME_SCALE_FACTOR=2 (0 4 1 4) Rser=1k
+R4 d 0 1k
+I1 0 e 1m load
+R5 e 0 1k
+.tran 1m
+.end

@@ -16,7 +16,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import deck_prep, montecarlo
+from ltspice_mcp.lib.component_value import SourceText, apply_value_to_instance, read_source_text
 from ltspice_mcp.lib.encoding import (
     decode_spice_bytes_with_encoding,
     read_spice_text,
@@ -25,6 +27,7 @@ from ltspice_mcp.lib.encoding import (
 )
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.hierarchy_expr import evaluate
+from ltspice_mcp.lib.instance_targeting import InstanceEdit, apply_edit
 from ltspice_mcp.lib.lint_rules import lint_deck
 from ltspice_mcp.lib.log_parser import parse_measurements
 from ltspice_mcp.lib.log_types import MeasurementsOutput
@@ -38,7 +41,7 @@ from ltspice_mcp.lib.netlist_graph import (
 from ltspice_mcp.lib.result_observations import parse_requested_outputs, parse_source_amplitudes
 from ltspice_mcp.lib.runner_base import deck_requirements
 from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build, is_cp1252_ltspice_executable
-from ltspice_mcp.lib.spice_lex import directive_head, emit, lex, lex_deck, lex_for_edit
+from ltspice_mcp.lib.spice_lex import SpiceCard, directive_head, emit, lex, lex_deck, lex_for_edit
 from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, ModelCard, read_instance
 from ltspice_mcp.lib.spice_validator import (
@@ -1682,6 +1685,154 @@ def test_every_reader_takes_an_elements_nodes_as_ltspice_ran_them(case_id: str):
         assert lines["W1"].control == "Vsense"
         other = text.replace("W1 a 0 Vsense sw", "W1 a 0 Vother sw")
         assert not compare_graphs(text, other).equivalent
+
+
+# --------------------------------------------------------------------------
+# A source's own parameters after its value
+# --------------------------------------------------------------------------
+
+#: What both builds ran in deck/source_parameters (a transient): each source
+#: into 1k through Rser=1k, whatever form its value takes, and I1 as a load,
+#: which gives e none of its current.
+SOURCE_VOLTAGES = {"v(a)": 2.5, "v(b)": 1.0, "v(c)": 1.5, "v(d)": 2.0, "v(e)": 0.0}
+#: And in deck/source_ac (at 1 kHz): AC 2 after a PULSE, AC 4 into 1k through
+#: Rser=1k, AC=6, AC 1 through Rser=1k into 1k with Cpar=1u across it, and a
+#: current source's AC 2m into 1k.
+SOURCE_AC = {
+    "v(a)": 2.0,
+    "v(b)": 2.0,
+    "v(c)": 6.0,
+    "v(d)": abs(1 / (1 + 1000 / (1 / (1 / 1000 + 2j * math.pi * 1000 * 1e-6)))),
+    "v(e)": 2.0,
+}
+#: Each source's words after its nodes, as its value and its own parameters.
+SOURCE_TEXTS = {
+    "deck/source_parameters": {
+        "V1": SourceText("5", ("Rser=1k",)),
+        "V2": SourceText("PWL(0 2 1 2)", ("Rser=1k",)),
+        "V3": SourceText("SINE(3 0 1k)", ("AC=1", "Rser=1k", "Cpar=1p")),
+        "V4": SourceText("PWL TIME_SCALE_FACTOR=2 (0 4 1 4)", ("Rser=1k",)),
+        "I1": SourceText("1m", ("load",)),
+    },
+    "deck/source_ac": {
+        "V1": SourceText("PULSE(0 1 0 1n 1n 1u 2u)", ("AC 2",)),
+        "V2": SourceText("3", ("AC 4", "Rser=1k")),
+        "V3": SourceText("1", ("AC=6",)),
+        "V4": SourceText("SINE(0 1 1k)", ("AC 1", "Rser=1k", "Cpar=1u")),
+        "I1": SourceText("1m", ("AC 2m",)),
+    },
+}
+#: A new value for each source, which keeps its own parameters.
+NEW_SOURCE_VALUES = {"V1": "4", "V2": "7", "V3": "SINE(0 1 1k)", "V4": "3", "I1": "2m"}
+
+
+def source_cards_of(text: str) -> dict[str, SpiceCard]:
+    return {card.name: card for card in lex_deck(text).cards if card.name}
+
+
+def source_cards(case_id: str) -> dict[str, SpiceCard]:
+    return source_cards_of(deck_text(case_id))
+
+
+def after_nodes(card: SpiceCard) -> str:
+    return card.body.split(None, 3)[3]
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_sources_own_parameters_follow_its_value_whatever_its_form(build: str, tmp_path: Path):
+    raw = rec.decode(build, "deck/source_parameters", tmp_path / "tran").raw
+    for name, volts in SOURCE_VOLTAGES.items():
+        (trace,) = [t for t in raw.get_trace_names() if t.lower() == name]
+        wave = raw.get_wave(trace, 0)
+        assert (wave.min(), wave.max()) == (pytest.approx(volts), pytest.approx(volts)), name
+    raw = rec.decode(build, "deck/source_ac", tmp_path / "ac").raw
+    for name, volts in SOURCE_AC.items():
+        (trace,) = [t for t in raw.get_trace_names() if t.lower() == name]
+        assert abs(complex(raw.get_wave(trace, 0)[0])) == pytest.approx(volts, rel=1e-3), name
+
+
+@pytest.mark.parametrize("case_id", sorted(SOURCE_TEXTS))
+def test_a_sources_text_reads_as_its_value_and_its_own_parameters(case_id: str):
+    cards = source_cards(case_id)
+    for ref, wanted in SOURCE_TEXTS[case_id].items():
+        assert read_source_text(after_nodes(cards[ref]), ref[:1]) == wanted, ref
+
+
+@pytest.mark.parametrize("case_id", sorted(SOURCE_TEXTS))
+async def test_every_edit_of_a_sources_value_keeps_its_own_parameters(
+    case_id: str, work_dir: Path
+):
+    """The value is what an edit replaces, and the source's own parameters
+    stay, every one: through ``apply_value_to_instance``, which an assign
+    variation and the edit of an instance's value in a subcircuit
+    (``instance_targeting.apply_edit``) write a card with. A PWL's scale
+    keyword is its value's and goes with it."""
+    text = deck_text(case_id)
+    cards = source_cards(case_id)
+    for ref, value in NEW_SOURCE_VALUES.items():
+        own = SOURCE_TEXTS[case_id][ref].own
+        (card,) = lex_deck(f"* t\n{cards[ref].body}\n").cards
+        apply_value_to_instance(card, value)
+        assert after_nodes(card) == " ".join([value, *own]), ref
+        (card,) = lex_deck(f"* t\n{cards[ref].body}\n").cards
+        apply_edit(card, InstanceEdit(instance=(ref,), attribute="value", value=value))
+        assert after_nodes(card) == " ".join([value, *own]), ref
+    path = work_dir / Path(case_id).with_suffix(".cir").name
+    path.write_text(text, encoding="utf-8")
+    circuit = CircuitDeck("dut", path, text)
+    (case,) = materialize_variants(
+        circuit,
+        expand_variations(
+            [circuit],
+            [AssignVariation(kind="assign", assign={"V1": ["PULSE(0 2 0 1u 1u 1 2)"], "I1": [3]})],
+        ),
+        work_dir / "case",
+    )
+    edited = source_cards_of(case.text)
+    for ref, value in (("V1", "PULSE(0 2 0 1u 1u 1 2)"), ("I1", "3")):
+        assert after_nodes(edited[ref]) == " ".join([value, *SOURCE_TEXTS[case_id][ref].own])
+
+
+def test_an_edit_that_gives_a_parameter_sets_it_and_keeps_the_rest():
+    """A new value may give a parameter of its own, which replaces the one
+    the card has, and a comment after it is left out, so a kept parameter
+    never lands in it."""
+    (card,) = lex_deck(f"* t\n{source_cards('deck/source_ac')['V4'].body}\n").cards
+    apply_value_to_instance(card, "2 rser=2k AC 3 ; a note")
+    assert after_nodes(card) == "2 AC 3 rser=2k Cpar=1u"
+    (card,) = lex_deck(f"* t\n{source_cards('deck/source_parameters')['V4'].body}\n").cards
+    apply_value_to_instance(card, "PWL TIME_SCALE_FACTOR=3 (0 4 1 4)")
+    assert after_nodes(card) == "PWL TIME_SCALE_FACTOR=3 (0 4 1 4) Rser=1k"
+    # Keyed parameters alone edit those; any other word is the whole value.
+    (card,) = lex_deck(f"* t\n{source_cards('deck/source_parameters')['V1'].body}\n").cards
+    apply_value_to_instance(card, "Rser=2k")
+    assert after_nodes(card) == "5 Rser=2k"
+    apply_value_to_instance(card, "AC 1")
+    assert after_nodes(card) == "Rser=2k AC 1"
+
+
+def test_a_source_card_reads_otherwise_in_the_card_view_only():
+    """Both builds run V4's ``PWL TIME_SCALE_FACTOR=2 (0 4 1 4)`` and read
+    I1's ``load`` as a flag (v(d) 2 and v(e) 0 above). An edit reads them so
+    (``read_source_text``). The card view, which display, comparison and
+    nested-instance edits read a card through, cannot split V4, and the lint
+    warns of it as a value it could not parse; and it takes ``load`` as part
+    of I1's value."""
+    cards = source_cards("deck/source_parameters")
+    assert read_instance(cards["V4"]) is None
+    warned = [f["rule_id"] for f in lint_input("deck/source_parameters")]
+    assert warned == ["value-expression-remnant"]
+    view = read_instance(cards["I1"])
+    assert view is not None
+    assert (view.value, SOURCE_TEXTS["deck/source_parameters"]["I1"].value) == ("1m load", "1m")
+
+
+def test_a_source_that_plays_a_file_has_no_value_to_edit():
+    """``V1 a b wavefile=...`` has its level from the file (wavefile-source-
+    nodes), so an edit of its value is refused, naming what to change."""
+    (card,) = [c for c in lex_deck(deck_text("deck/wavefile_nodes")).cards if c.name == "V1"]
+    with pytest.raises(NetlistError, match=r"plays a \.wav file \(wavefile=\"level\.wav\"\)"):
+        apply_value_to_instance(card, "5")
 
 
 # --------------------------------------------------------------------------
