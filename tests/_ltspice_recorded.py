@@ -215,12 +215,13 @@ def decode(build: str, case_id: str, scratch: Path) -> DecodedRun:
     return DecodedRun(raw=parsed.raw, logs=parsed.logs)
 
 
-def decode_file(raw_path: Path, scratch: Path, *, producing: str = "ltspice") -> DecodedRun:
-    """Decode a results file a test made, with no log, with the decoder the
-    server runs, as written by the simulator ``producing`` names."""
-    parsed = _decode_paths(
-        raw_path, None, scratch / f"decode-{raw_path.stem}", producing=producing
-    )
+def decode_file(
+    raw_path: Path, scratch: Path, *, producing: str = "ltspice", log: Path | None = None
+) -> DecodedRun:
+    """Decode a results file a test made, with the decoder the server runs, as
+    written by the simulator ``producing`` names: with ``log`` as its log, or
+    with none."""
+    parsed = _decode_paths(raw_path, log, scratch / f"decode-{raw_path.stem}", producing=producing)
     assert parsed.raw is not None
     return DecodedRun(raw=parsed.raw, logs=parsed.logs)
 

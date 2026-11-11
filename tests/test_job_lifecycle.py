@@ -49,15 +49,12 @@ class TestStateMachineStructure:
     def test_every_transition_target_has_event_mapping(self) -> None:
         """Every status reachable as a transition target must map to an event.
 
-        'interrupted' is special — it is reached only when a record is loaded
-        back from disk and its owner is gone (experiment_store._reconcile_restart),
-        never through ``transition()``, so it needs no STATUS_TO_EVENT entry.
+        'interrupted' among them: a shutdown moves a job it runs there through
+        ``transition()``, as a reader of a dead owner's record reconciles one
+        (``reconcile_experiment_restart``).
         """
-        special = {"interrupted"}
         for source, targets in VALID_EXPERIMENT_TRANSITIONS.items():
             for target in targets:
-                if target in special:
-                    continue
                 assert target in STATUS_TO_EVENT, (
                     f"experiment transition {source} → {target} lands on a "
                     "status with no event mapping"
@@ -125,8 +122,8 @@ class TestTransitionEvents:
 
     @pytest.mark.parametrize(
         ("source", "target"),
-        [("completed", "running"), ("running", "running"), ("running", "interrupted")],
-        ids=["out-of-table", "same-status", "restart-only"],
+        [("completed", "running"), ("running", "running"), ("interrupted", "cancelled")],
+        ids=["out-of-table", "same-status", "from-interrupted"],
     )
     def test_a_refused_transition_emits_nothing(
         self, events_caplog: pytest.LogCaptureFixture, source: str, target: str

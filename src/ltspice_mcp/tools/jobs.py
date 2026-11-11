@@ -85,7 +85,6 @@ from ltspice_mcp.tools.receipts import (
     RUN_RECORD_SCHEMA,
     RUNS_PAGE_SCHEMA,
     ReceiptBuild,
-    ReceiptBuilt,
     ReceiptSnapshot,
     finalize_receipt,
     negotiate_receipt,
@@ -221,7 +220,7 @@ class JobsCancelInput(_AddressedJobsInput):
         min_length=1,
         description=(
             "The token from the original run_experiments receipt. Needed only "
-            "when this process did not submit the job; status and list never "
+            "when this session did not submit the job; status and list never "
             "disclose it."
         ),
     )
@@ -264,7 +263,7 @@ class JobsResumeInput(JobsInput):
         default=None,
         min_length=1,
         strict=True,
-        description="Parent receipt's token; required when this process does not own the parent.",
+        description="Parent receipt's token; required unless this session submitted or resumed the parent.",
     )
     case_ids: list[Annotated[str, Field(strict=True, min_length=1)]] | None = Field(
         default=None,
@@ -742,11 +741,6 @@ def _decode_jobs_cursor(cursor: str | None) -> int:
     return offset
 
 
-# One jobs response, rendered at some page limit: the payload and its text line.
-_JobsBuilt = ReceiptBuilt
-_JobsBuild = ReceiptBuild
-
-
 #: This tool's budget epilogue. No hint mirror: a jobs envelope's ``hint`` is the
 #: control-plane's next step, and the ladder's own note reaches the caller on
 #: ``observations`` without displacing it.
@@ -761,9 +755,9 @@ _BUDGET_NOTES = response_budget.Notes(
 
 async def _negotiate_jobs(
     budget: ResponseBudget,
-    build: _JobsBuild,
+    build: ReceiptBuild,
     page_limit: int,
-) -> _JobsBuilt:
+) -> dict[str, Any]:
     """Render this jobs response at the mildest ladder rung that fits ``budget``."""
     return await negotiate_receipt(budget, build, page_limit, notes=_BUDGET_NOTES)
 
@@ -1051,10 +1045,10 @@ async def _cancel_jobs_target(
     if job.status in TERMINAL_STATUSES:
         return []
 
-    # Whether this process runs the job is the registry's answer, never the
+    # Whether this session runs the job is the registry's answer, never the
     # record's pid: a dead server's record can carry this process's pid.
     owned = state.job_registry.owns(job)
-    if not experiment_store.cancel_authorized(job, args.control_token, owned=owned):
+    if not experiment_store.control_authorized(job, args.control_token, owned=owned):
         raise _JobsActionError(
             "cancel_not_authorized",
             (
@@ -1069,7 +1063,7 @@ async def _cancel_jobs_target(
             raise _JobsActionError(
                 "cancel_unavailable",
                 (
-                    f"Experiment job {job.job_id} belongs to this process, but its "
+                    f"Experiment job {job.job_id} belongs to this session, but its "
                     "coordinator is no longer live; cancellation was not acknowledged"
                 ),
                 stage="cancellation",
@@ -1465,8 +1459,8 @@ def render_jobs_data(
     limit: int | None = None,
     rung: response_budget.Rung | None = None,
     served: Collection[str] | None = None,
-) -> _JobsBuilt:
-    """Present one evaluation as a response payload and its text line.
+) -> dict[str, Any]:
+    """Present one evaluation as a response payload.
 
     ``limit`` is the presentation argument MCP and the Python API differ by: an integer
     is one MCP page of that size (the budget ladder re-renders at smaller ones),
@@ -1480,7 +1474,7 @@ def render_jobs_data(
         data = _jobs_error_payload(evaluation)
         if not isinstance(args, JobsResumeInput):
             data = _without_control_tokens(data)
-        return data, evaluation.error.hint
+        return data
 
     if isinstance(args, JobsListInput):
         groups = list(evaluation.groups)
@@ -1510,8 +1504,7 @@ def render_jobs_data(
                 "many were left out."
             ),
         }
-        text = f"Listed {data['returned']} of {data['total']} circuit group(s)"
-        return _without_control_tokens(data), text
+        return _without_control_tokens(data)
 
     if isinstance(args, JobsCancelInput):
         receipts = list(evaluation.kill_receipts)
@@ -1537,9 +1530,7 @@ def render_jobs_data(
                 )
             ),
         }
-        return _without_control_tokens(data), (
-            f"Cancellation acknowledged for job {evaluation.job_id}"
-        )
+        return _without_control_tokens(data)
 
     if isinstance(args, JobsPlaceBesideSheetInput):
         assert evaluation.placed is not None
@@ -1557,7 +1548,7 @@ def render_jobs_data(
             "failures": place_failures,
             "hint": _placed_hint(placed),
         }
-        return data, f"Placed case {placed['case_id']}'s results beside {placed['sheet']}"
+        return data
 
     snapshot = evaluation.snapshot
     assert snapshot is not None  # every remaining action snapshots its job
@@ -1569,8 +1560,7 @@ def render_jobs_data(
             limit=limit,
             run_fields=args.run_fields,
         )
-        text = f"Returned {data['returned']} of {data['total']} run record(s)"
-        return _without_control_tokens(data), text
+        return _without_control_tokens(data)
 
     action: Literal["status", "wait"] = "wait" if isinstance(args, JobsWaitInput) else "status"
     data = render_jobs_receipt_snapshot(
@@ -1602,22 +1592,14 @@ def render_jobs_data(
                 "No eligible cases remain; use analyze_results over this job_id "
                 "to retry or change analysis. " + data["hint"]
             )
-        return data, f"Resume {args.resume_request_id}: job {snapshot.job_id} ({snapshot.status})"
-
-    if action == "status":
-        text = f"Job {snapshot.job_id}: {snapshot.status}"
-    elif evaluation.timed_out:
-        text = f"Wait for job {snapshot.job_id} timed out at status {snapshot.status}"
-    else:
-        assert isinstance(args, JobsWaitInput)
-        text = f"Job {snapshot.job_id} reached {args.wait_for} terminality"
-    return _without_control_tokens(data), text
+        return data
+    return _without_control_tokens(data)
 
 
 def complete_jobs_data(evaluation: JobsEvaluation) -> dict[str, Any]:
     """The whole result of one evaluation: every run, group and receipt."""
     try:
-        return render_jobs_data(evaluation)[0]
+        return render_jobs_data(evaluation)
     except Exception as exc:
         if not isinstance(evaluation.args, JobsResumeInput) or evaluation.error is not None:
             raise
@@ -1627,7 +1609,7 @@ def complete_jobs_data(evaluation: JobsEvaluation) -> dict[str, Any]:
             None,
             prior=evaluation,
         )
-        return render_jobs_data(failed)[0]
+        return render_jobs_data(failed)
 
 
 @registry.tool(
@@ -1653,7 +1635,7 @@ def complete_jobs_data(evaluation: JobsEvaluation) -> dict[str, Any]:
 async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolResult:
     """Execute one jobs control-plane action with an action-discriminated response."""
     evaluation = await evaluate_jobs(args, state)
-    built: _JobsBuilt | None = None
+    built: dict[str, Any] | None = None
     if evaluation.error is None:
         page_limit = JOBS_PAGE_LIMIT
         if isinstance(args, JobsListInput):
@@ -1696,7 +1678,6 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
         # the empty fact channels the output schema requires.
         built = render_jobs_data(evaluation)
 
-    data, text = built
-    result = format_response(text, data)
+    result = format_response(built)
     result.is_error = evaluation.is_error
     return result

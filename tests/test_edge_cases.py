@@ -118,6 +118,17 @@ class TestAValueOrAName:
         assert parse_value("4.7u") == pytest.approx(4.7e-6)
         assert parse_value("{rd}") is None
 
+    def test_an_infinite_value_equals_only_itself(self):
+        """The comparison asks ``format.same_value``, whose tolerance is a
+        share of the larger magnitude: of an infinity, that share is infinite,
+        and every finite value used to fall inside it."""
+        from ltspice_mcp.lib.netlist_graph import values_equal
+
+        assert values_equal("inf", "inf", 1e-6)
+        assert not values_equal("inf", "1k", 1e-6)
+        assert not values_equal("-inf", "inf", 1e-6)
+        assert not values_equal("nan", "nan", 1e-6)
+
 
 class TestParseSpiceCaseSensitivity:
     """SPICE/LTspice scale suffixes are case-insensitive."""
@@ -718,7 +729,7 @@ class TestSanitizePayloadNonFinite:
     def test_format_response_applies_scrub(self):
         from ltspice_mcp.tools._base import format_response
 
-        res = format_response("Value: nan", {"value": float("nan")})
+        res = format_response({"value": float("nan")})
         assert res.structured_content is not None
         assert res.structured_content["value"] is None
         assert "warnings" in res.structured_content

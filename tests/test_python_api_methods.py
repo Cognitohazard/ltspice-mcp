@@ -252,6 +252,19 @@ def test_jobs_error_from_the_in_process_door_carries_the_wire_envelope(
     assert raised.value.payload["outcome"] == "failed"
 
 
+def test_a_verify_refusal_raises_with_the_hint_that_says_what_to_change(
+    state_no_sim: SessionState, work_dir: Path
+) -> None:
+    """A failed verify_circuit reply has no error block: its refusal is its
+    hint, so the API raises with that hint, which names where a path may be."""
+    api = SyncApi(state_no_sim)
+    with pytest.raises(ApiCallError) as raised:
+        api.verify_circuit(path=str(work_dir.parent / "outside.cir"))
+    assert "error" not in raised.value.payload
+    assert str(raised.value) == raised.value.payload["hint"]
+    assert str(work_dir) in str(raised.value)
+
+
 def test_run_receipt_assembles_more_than_fifty_runs_with_original_projection(
     state_no_sim: SessionState,
     monkeypatch: pytest.MonkeyPatch,
@@ -925,7 +938,6 @@ def test_verify_and_edit_return_uncapped_neutral_data(
     async def evaluate_edit(_request: object, _state: SessionState):
         return schematic_edit.EditSchematicEvaluation(
             data={"outcome": "complete", "sha256": "a" * 64},
-            text="complete",
             views=views,
         )
 
@@ -1139,10 +1151,10 @@ def test_fire_and_forget_receipt_says_the_job_dies_with_this_process(
     state_no_sim: SessionState,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """close() cancels every job this process owns, so wait=False is not durable.
+    """close() stops every job its session runs, so wait=False is not durable.
 
     The receipt is indistinguishable from a durable submission otherwise, and
-    the loss shows up only as a cancellation the caller never requested.
+    the loss shows up only as an interruption the caller never asked for.
     """
     api = SyncApi(state_no_sim)
     running = make_experiment_job(state_no_sim, job_id="exp-detached", status="running")

@@ -341,7 +341,7 @@ async def terminal_experiment(state, payload: dict, *, wait_timeout_s: int = 120
 
     result = await handle_run_experiments(RunExperimentsInput.model_validate(payload), state)
     data = result.structured_content
-    assert data is not None, result.content[0].text
+    assert data is not None, result.content
     if data["outcome"] == "in_progress":
         waited = await handle_jobs(
             JobsInput.model_validate(
@@ -374,7 +374,7 @@ async def submit_experiment(
 
     result = await handle_run_experiments(RunExperimentsInput.model_validate(payload), state)
     data = result.structured_content
-    assert data is not None, result.content[0].text
+    assert data is not None, result.content
     jsonschema.Draft202012Validator(RUN_EXPERIMENTS_OUTPUT_SCHEMA).validate(data)
     return bool(result.is_error), data
 
@@ -582,14 +582,24 @@ def recorded_fixture_simulator(
     simulator artifacts rather than a mock byte string. Name a different
     *fixture* to run a job over stepped artifacts. Returns the list each
     launch's run filename is appended to."""
+    return replaying_simulator(
+        monkeypatch, FIXTURES_DIR / f"{fixture}.raw", FIXTURES_DIR / f"{fixture}.log"
+    )
+
+
+def replaying_simulator(monkeypatch: pytest.MonkeyPatch, raw: Path, log: Path) -> list[str]:
+    """Instant stand-in simulator behind ``ExperimentRunner.submit_netlist``
+    whose every run leaves a copy of ``raw`` and ``log``, files a simulator
+    wrote (a recording under ``tests/fixtures/ltspice_recorded``, say).
+    Returns the list each launch's run filename is appended to."""
     launched: list[str] = []
 
     def submit(self, _netlist: Path, run_filename: str, callback, **_kwargs):
         launched.append(run_filename)
-        raw, log = fake_artifact_paths(self.output_folder, run_filename)
-        shutil.copy(FIXTURES_DIR / f"{fixture}.raw", raw)
-        shutil.copy(FIXTURES_DIR / f"{fixture}.log", log)
-        outcome = RunOutcome(str(raw), str(log), raw.stat().st_size, None)
+        raw_out, log_out = fake_artifact_paths(self.output_folder, run_filename)
+        shutil.copy(raw, raw_out)
+        shutil.copy(log, log_out)
+        outcome = RunOutcome(str(raw_out), str(log_out), raw_out.stat().st_size, None)
         self.loop.call_soon_threadsafe(callback, outcome)
         return object()
 
@@ -1173,17 +1183,14 @@ def property_names(schema: typing.Any) -> set[str]:
 
 def tool_text(result) -> str:
     """The message a tool result carries: a failed call's ``error``, or any
-    other reply's text block as it is."""
+    other reply's one text block, which follows any image."""
     from mcp import types
 
     structured = result.structured_content or {}
     if result.is_error and isinstance(structured.get("error"), str):
         return structured["error"]
-    first = result.content[0]
-    assert isinstance(first, types.TextContent), (
-        f"expected a text content block, got {type(first).__name__}"
-    )
-    return first.text
+    (block,) = [block for block in result.content if isinstance(block, types.TextContent)]
+    return block.text
 
 
 def text_json(result) -> dict:
@@ -1997,8 +2004,8 @@ def _enforce_output_schema_conformance():
 
     original_format = base_mod.format_response
 
-    def checked_format_response(text, data):
-        result = original_format(text, data)
+    def checked_format_response(data):
+        result = original_format(data)
         _validate(result, data)
         return result
 

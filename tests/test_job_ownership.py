@@ -4,13 +4,16 @@ A record names its owning process by pid and, since pids are reused (quickly on
 Windows), by that process's start marker. A dead server's record that names a
 pid this process now holds is a dead server's record: reconciled when read,
 not waited on, not cancellable as this process's own. Whether this process
-runs a job is answered by its registry, never by comparing pids.
+runs a job is answered by its registry, for a cancel and a resume alike, never
+by comparing the identity a record names with this process's.
 """
 
 from __future__ import annotations
 
 import ast
+import asyncio
 import json
+import threading
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
@@ -19,14 +22,17 @@ import pytest
 
 from ltspice_mcp.lib import experiment_store
 from ltspice_mcp.lib.experiment_resume import authorize_resume
+from ltspice_mcp.lib.experiment_runner import AdmissionResult, ExperimentRunner
 from ltspice_mcp.lib.proc_kill import process_start_marker
 from ltspice_mcp.lib.recovery_records import ProcessIdentity, RecoveryError
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.jobs import handle_jobs
 from tests._source_scan import PACKAGE, parsed
-from tests.conftest import exited_pid
+from tests.conftest import LIVENESS_S, coordinator_returned, exited_pid
 from tests.test_jobs_tool import _args, _assert_jobs_schema, _circuit, _experiment
+from tests.test_recovery_launch import RecordedNGspice, _process
+from tests.test_recovery_launch import committed as committed
 from tests.test_recovery_records import recovery_job
 
 #: A start marker no process running now has: the process that held a pid
@@ -128,13 +134,13 @@ async def test_the_job_this_process_runs_is_its_own_whatever_its_record_says(
     assert cancel["error"]["code"] == "cancel_unavailable"
 
 
-@pytest.mark.parametrize(
-    ("owner", "authorized_without_token"),
-    [("this_process", True), ("this_pid_earlier_process", False), ("live_peer", False)],
-)
-def test_resume_authority_follows_the_owning_process_not_its_pid(
-    owner: str, authorized_without_token: bool, work_dir: Path, live_peer_pid: int
+@pytest.mark.parametrize("owner", ["this_process", "this_pid_earlier_process", "live_peer"])
+def test_no_identity_a_record_names_authorizes_a_resume(
+    owner: str, work_dir: Path, live_peer_pid: int
 ):
+    """Not even this process's own: the session that runs the job resumes it
+    without the token, and every other caller needs it, whatever process the
+    record names."""
     import os
 
     identity = {
@@ -147,13 +153,71 @@ def test_resume_authority_follows_the_owning_process_not_its_pid(
     job.recovery = replace(job.recovery, owner=identity)
     job.owner_pid = identity.pid
 
-    assert authorize_resume(job, job.control_token) == job.control_token
-    if authorized_without_token:
-        assert authorize_resume(job, None) == job.control_token
-    else:
-        with pytest.raises(RecoveryError) as refused:
-            authorize_resume(job, None)
-        assert refused.value.code == "resume_not_authorized"
+    for owned in (True, False):
+        assert authorize_resume(job, job.control_token, owned=owned) == job.control_token
+    assert authorize_resume(job, None, owned=True) == job.control_token
+    with pytest.raises(RecoveryError) as refused:
+        authorize_resume(job, None, owned=False)
+    assert refused.value.code == "resume_not_authorized"
+
+
+#: The refusals a caller gets for want of authority over a job.
+_NOT_AUTHORIZED = frozenset({"cancel_not_authorized", "resume_not_authorized"})
+
+
+async def test_cancel_and_resume_ask_the_session_that_runs_the_job(
+    committed, monkeypatch: pytest.MonkeyPatch
+):
+    """Whether a caller may act on a job without its token is one answer: does
+    the caller's session run the job (``JobRegistry.owns``)? A second session
+    in the same process does not, though the job's record names this process
+    by pid and start marker, so it needs the token to cancel and to resume
+    alike; the session that runs the job needs it for neither."""
+    _fixture_runner, request, job, store = committed
+    owner = request.state
+    other = SessionState.create(owner.config, available={})
+    runner = owner.runners.get_experiment_runner(
+        asyncio.get_running_loop(), RecordedNGspice, store.runs_root(), 1
+    )
+    launched, release = threading.Event(), threading.Event()
+
+    def held_launch(_argv, _kwargs) -> None:
+        launched.set()
+        assert release.wait(LIVENESS_S)
+
+    async def kill_releases(_runner, _token: str) -> None:
+        release.set()
+
+    _process(monkeypatch, inspect=held_launch)
+    monkeypatch.setattr(ExperimentRunner, "_kill_case", kill_releases)
+    ready = asyncio.get_running_loop().create_future()
+    await runner.start_committed(request, AdmissionResult(job, False, True), ready)
+    try:
+        assert await asyncio.to_thread(launched.wait, LIVENESS_S)
+
+        async def authorized(session: SessionState, action: str) -> bool:
+            extra = {"resume_request_id": f"resume-{id(session)}"} if action == "resume" else {}
+            data = _assert_jobs_schema(
+                await handle_jobs(_args(action, job_id=job.job_id, **extra), session)
+            )
+            return data.get("error", {}).get("code") not in _NOT_AUTHORIZED
+
+        # Resume first: the owner's cancel stops the job.
+        answers = {
+            (name, action): await authorized(session, action)
+            for name, session in (("other", other), ("owner", owner))
+            for action in ("resume", "cancel")
+        }
+        assert answers == {
+            ("other", "resume"): False,
+            ("other", "cancel"): False,
+            ("owner", "resume"): True,
+            ("owner", "cancel"): True,
+        }
+    finally:
+        release.set()
+        await coordinator_returned(owner, job)
+        await owner.job_registry.drain_pending()
 
 
 def test_a_record_this_process_writes_names_it_by_pid_and_start_marker(work_dir: Path):
@@ -191,11 +255,45 @@ def _is_owner_pid(node: ast.AST) -> bool:
     )
 
 
-def _is_getpid(node: ast.AST) -> bool:
-    return isinstance(node, ast.Call) and (
-        (isinstance(node.func, ast.Attribute) and node.func.attr == "getpid")
-        or (isinstance(node.func, ast.Name) and node.func.id == "getpid")
+def _names_owner(node: ast.AST) -> bool:
+    """``owner`` or ``x.owner``."""
+    return (isinstance(node, ast.Name) and node.id == "owner") or (
+        isinstance(node, ast.Attribute) and node.attr == "owner"
     )
+
+
+def _is_owner_marker(node: ast.AST) -> bool:
+    """``x.owner_start``, ``owner_start``, or ``x.owner.start_marker``."""
+    if isinstance(node, ast.Attribute) and node.attr == "owner_start":
+        return True
+    if isinstance(node, ast.Name) and node.id == "owner_start":
+        return True
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "start_marker"
+        and _names_owner(node.value)
+    )
+
+
+def _is_owner_identity(node: ast.AST) -> bool:
+    """The pid or the start marker a record names its owning process by."""
+    return _is_owner_pid(node) or _is_owner_marker(node)
+
+
+def _calls(node: ast.AST, *names: str) -> bool:
+    return isinstance(node, ast.Call) and (
+        (isinstance(node.func, ast.Attribute) and node.func.attr in names)
+        or (isinstance(node.func, ast.Name) and node.func.id in names)
+    )
+
+
+def _is_getpid(node: ast.AST) -> bool:
+    return _calls(node, "getpid")
+
+
+def _is_this_identity(node: ast.AST) -> bool:
+    """This process's pid or start marker, read where it is read."""
+    return _calls(node, "getpid", "this_process_start_marker", "process_start_marker")
 
 
 def _holder(node: ast.AST) -> str | None:
@@ -237,17 +335,18 @@ def _holders_of(tree: ast.AST, kind: Callable[[ast.AST], bool]) -> set[str]:
         holders = grown
 
 
-def _pid_comparisons_in(tree: ast.AST) -> list[int]:
-    """The lines of ``tree`` that compare a job's owner pid with this process's
-    pid, each read directly or through a variable or attribute bound to it."""
-    owners = _holders_of(tree, _is_owner_pid)
-    ours = _holders_of(tree, _is_getpid)
+def _identity_comparisons_in(tree: ast.AST) -> list[int]:
+    """The lines of ``tree`` that compare the identity a job's record names its
+    owner by (pid or start marker) with this process's, each side read
+    directly or through a variable or attribute bound to it."""
+    owners = _holders_of(tree, _is_owner_identity)
+    ours = _holders_of(tree, _is_this_identity)
     return sorted(
         node.lineno
         for node in ast.walk(tree)
         if isinstance(node, ast.Compare)
         and any(
-            _holds(one, _is_owner_pid, owners) and _holds(other, _is_getpid, ours)
+            _holds(one, _is_owner_identity, owners) and _holds(other, _is_this_identity, ours)
             for one in (node.left, *node.comparators)
             for other in (node.left, *node.comparators)
             if one is not other
@@ -255,21 +354,24 @@ def _pid_comparisons_in(tree: ast.AST) -> list[int]:
     )
 
 
-def test_no_module_but_the_owner_compares_a_job_s_owner_pid_with_its_own() -> None:
-    """``owner_pid == os.getpid()`` and ``owner_pid in (0, os.getpid())``, each
-    side read directly or through a variable, read a reused pid as this
-    process; the registry (``JobRegistry.owns``) and the store's identity
-    checks (``owner_liveness``, ``is_this_process``) answer instead."""
+def test_no_module_but_the_owner_compares_a_job_s_owner_identity_with_its_own() -> None:
+    """``owner_pid == os.getpid()``, ``owner_pid in (0, os.getpid())`` and
+    ``owner.start_marker == this_process_start_marker()``, each side read
+    directly or through a variable, answer "does this process run the job?"
+    from the record: a reused pid reads as this process, and so does a job
+    another session of this process runs. The registry (``JobRegistry.owns``)
+    answers that; a record's identity answers only whether the process it
+    names is alive (``store.owner_liveness``)."""
     found = [
         f"{path.relative_to(PACKAGE).as_posix()}:{line}"
         for path in sorted(PACKAGE.rglob("*.py"))
         if path.relative_to(PACKAGE).as_posix() != _OWNER
-        for line in _pid_comparisons_in(parsed(path))
+        for line in _identity_comparisons_in(parsed(path))
     ]
-    assert not found, f"a job's owner decided by pid outside {_OWNER}: {found}"
+    assert not found, f"a job's owner decided by its identity outside {_OWNER}: {found}"
 
 
-def test_the_owner_pid_rule_catches_what_it_names() -> None:
+def test_the_owner_identity_rule_catches_what_it_names() -> None:
     tree = ast.parse(
         "def direct(job):\n"
         "    return job.owner_pid == os.getpid()\n"  # 2
@@ -294,5 +396,14 @@ def test_the_owner_pid_rule_catches_what_it_names() -> None:
         "def unrelated(other_pid, job, recorded):\n"
         "    pid = os.getpid()\n"
         "    return pid == other_pid, job.owner_pid == recorded\n"
+        "def marked(job):\n"
+        "    owner = job.recovery.owner\n"
+        "    return owner.start_marker == this_process_start_marker()\n"  # 26
+        "def marked_on_the_record(record):\n"
+        "    mine = process_start_marker(os.getpid())\n"
+        "    return record.owner_start != (os.getpid(), mine)\n"  # 29
+        "def two_records(fresh, stale):\n"
+        "    marker = this_process_start_marker()\n"
+        "    return fresh.owner != stale.owner, marker is None\n"
     )
-    assert _pid_comparisons_in(tree) == [2, 4, 6, 9, 13, 15, 20]
+    assert _identity_comparisons_in(tree) == [2, 4, 6, 9, 13, 15, 20, 26, 29]

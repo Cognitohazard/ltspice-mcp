@@ -75,7 +75,6 @@ from ltspice_mcp.lib.recipes import (
     StepSelectionFields,
     StepSelector,
     WaveformRecipe,
-    step_axis_key,
     validate_recipe,  # noqa: TID251 - recipe_of_request, its owner, is in this module
 )
 from ltspice_mcp.lib.result_kinds import AC_SHAPED
@@ -83,6 +82,7 @@ from ltspice_mcp.lib.result_observations import (
     coarse_waveform_observation,
 )
 from ltspice_mcp.lib.signal_analysis import downsample_minmax_traces
+from ltspice_mcp.lib.step_values import step_axis_key
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     HINT_SCHEMA,
@@ -2076,11 +2076,15 @@ def _measurements_compact(value: dict[str, Any]) -> dict[str, Any]:
     one number. Here the number is keyed by name under ``measured``, read by the
     reducer's own extractor so a row and a reduction over it cannot disagree;
     the point a crossing or ``AT`` reported with it goes under ``at``. A name
-    the log holds no number for (FAIL'ed, or a value the log decoder nulled as
-    not finite) keeps its key with null and is listed in
-    ``failed_measurements``, so a failure reads as a failure rather than as a
-    missing name. A stepped run's per-name spread is its answer, so it gets
-    none of this, and neither does an empty selection.
+    the log holds no number for keeps its key with null, so it never reads as
+    a missing name, and the value beside says why, each null in one place:
+    ``failed_measurements`` (LTspice printed it failed) and ``unreadable``
+    (LTspice printed something other than a number) come with the metric's
+    value (``metrics.measurement_rows``), and ``not_finite`` names the rest,
+    each a number the log decoder holds as null because it is not finite
+    (LTspice 26 prints a stepped FRA's gain margin ``infdB``, recorded as
+    ``raw/fra_step``). A stepped run's per-name spread is its answer, so it
+    gets none of this, and neither does an empty selection.
     """
     stats = value.get("stats")
     if not isinstance(stats, dict) or not stats:
@@ -2094,11 +2098,12 @@ def _measurements_compact(value: dict[str, Any]) -> dict[str, Any]:
     at = {name: entry["at"] for name, entry in stats.items() if "at" in entry}
     if at:
         compact["at"] = at
-    failed = [name for name, number in measured.items() if number is None]
-    if failed:
-        compact["failed_measurements"] = failed
-    if value.get("unreadable"):
-        compact["unreadable"] = value["unreadable"]
+    explained = {*value.get("failed_measurements", ()), *value.get("unreadable", {})}
+    not_finite = [
+        name for name, number in measured.items() if number is None and name not in explained
+    ]
+    if not_finite:
+        compact["not_finite"] = not_finite
     return compact
 
 
@@ -2306,8 +2311,8 @@ def _reduce(recipe: Recipe, tallies: dict[str, _FieldTally]) -> list[dict[str, A
     reduced: list[dict[str, Any]] = []
     for field_name, tally in tallies.items():
         values = [value for _, value in tally.samples]
-        # Present only when some row had no number, as failed_measurements is:
-        # absent, every row the reduction covers carried one.
+        # Present only when some row had no number: absent, every row the
+        # reduction covers carried one.
         no_value = {"no_value_count": tally.no_value} if tally.no_value else {}
         for stat in stats:
             reduced.append(
@@ -2819,13 +2824,14 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
             "type": "object",
             "description": (
                 "The recipe's value. A measurements row whose run holds one value "
-                "per .meas carries 'measured' {name: value}, 'at' {name: reported "
-                "crossing/AT point} and 'failed_measurements', the names whose "
-                "'measured' is null because the log holds no number for them, and "
-                "'unreadable' {name: {line, reason}} for one whose printed value is "
-                "not a number; its "
+                "per .meas carries 'measured' {name: value} and 'at' {name: reported "
+                "crossing/AT point}. A null in 'measured' is named once by why: "
+                "'failed_measurements' (LTspice printed it failed), 'unreadable' "
+                "{name: {line, reason}} (it printed something other than a number) "
+                "or 'not_finite' (it printed a number that is not finite). Its "
                 "'stats' block is left off the default row and returned by "
-                "include.fields=['value']. A stepped run's row is 'stats' alone."
+                "include.fields=['value']. A stepped run's row is 'stats', with "
+                "'failed_measurements' and 'unreadable' over all its steps."
             ),
             "properties": {
                 "measured": {
@@ -2836,7 +2842,25 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
                     "type": "object",
                     "additionalProperties": {"type": ["number", "null"]},
                 },
-                "failed_measurements": {"type": "array", "items": {"type": "string"}},
+                "failed_measurements": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "The measurements LTspice printed as failed at the step(s) "
+                        "the row reads: FAIL'ed, or 'failed' in a stepped table. A "
+                        "summary's measurements are the whole run's at any step, so "
+                        "its list names those that failed at any step."
+                    ),
+                },
+                "not_finite": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "The measurements whose 'measured' is null because LTspice "
+                        "printed a number that is not finite, such as a gain margin "
+                        "of infdB."
+                    ),
+                },
                 "unreadable": {
                     "type": "object",
                     "additionalProperties": {
@@ -3188,7 +3212,7 @@ def _assemble(
     a: AnalysisEvaluation,
     rung: response_budget.Rung | None,
     limits: _Limits,
-) -> tuple[dict[str, Any], str]:
+) -> dict[str, Any]:
     """Build the response from finished work, at ``limits`` and ``rung``.
 
     ``rung`` is None when the caller set no budget, which is the only path that
@@ -3402,13 +3426,7 @@ def _assemble(
     hints.extend(a.argument_notes)
     if hints:
         data["hint"] = " ".join(hints)
-    # The summary line follows the reply's rule: a count of nothing is not said.
-    text = (
-        f"analyze_results: {outcome}; {len(delivered)} recipe result(s), "
-        + (f"{len(failures)} failure(s), " if failures else "")
-        + f"{coverage['runs_analyzed']}/{runs_requested} run(s) analyzed"
-    )
-    return data, text
+    return data
 
 
 def _snapshot_from_assembly(a: AnalysisEvaluation) -> dict[str, Any]:
@@ -3417,8 +3435,7 @@ def _snapshot_from_assembly(a: AnalysisEvaluation) -> dict[str, Any]:
     # Shown later, by a session not known yet: each failure row keeps whether
     # its message ends in an api snippet, for the render to say where it runs.
     wide = replace(a, include=wide_include, served=_DEFERRED_ROUTE)
-    requested, _ = _assemble(wide, None, _Limits.of(wide_include))
-    top = requested
+    top = _assemble(wide, None, _Limits.of(wide_include))
     requested_results = top.pop("results")
 
     def coverage_cursor_base(view: dict[str, Any]) -> str:
@@ -4025,16 +4042,13 @@ _BUDGET_NOTES = response_budget.Notes(
 )
 
 
-async def _negotiate_analysis(
-    budget: ResponseBudget, a: AnalysisEvaluation
-) -> tuple[dict[str, Any], str]:
+async def _negotiate_analysis(budget: ResponseBudget, a: AnalysisEvaluation) -> dict[str, Any]:
     """Assemble this analysis at the mildest ladder rung that fits ``budget``.
 
     Assembly re-renders finished work, so the shrink rung checks the page its
     estimate priced and searches below it when that page is still over.
     """
     base = _Limits.of(a.include)
-    text = ""
     rendered: dict[str, Any] = {}
     degrade = functools.partial(
         _degrade_analysis,
@@ -4048,13 +4062,13 @@ async def _negotiate_analysis(
     )
 
     def candidate(limits: _Limits, rung: response_budget.Rung) -> response_budget.Rendered:
-        data, line = _assemble(a, rung, limits)
-        return data, line, degrade(data, rung)
+        data = _assemble(a, rung, limits)
+        return data, degrade(data, rung)
 
     async def render(rung: response_budget.Rung) -> dict[str, Any]:
-        nonlocal text, rendered
+        nonlocal rendered
         if rung.shrink:
-            rendered, text, cut = response_budget.shrink_to_fit(
+            rendered, cut = response_budget.shrink_to_fit(
                 response_budget.RowMeasure.of(analysis_surfaces(rendered), page=rung.measured),
                 lambda limit: candidate(base.capped(limit), rung),
                 rung,
@@ -4065,14 +4079,14 @@ async def _negotiate_analysis(
             # The undegraded rung assembled this same page; degrade it in place.
             cut = degrade(rendered, rung)
         else:
-            rendered, text, cut = candidate(base, rung)
+            rendered, cut = candidate(base, rung)
         rung.cut.extend(cut)
         return rendered
 
     assert budget.tokens is not None  # the undegraded path never reaches here
     result = await response_budget.negotiate(budget.tokens, render, max_rung=budget.max_rung)
     response_budget.attach_notes(result, _BUDGET_NOTES)
-    return result.data, text
+    return result.data
 
 
 async def _evaluate_unit(
@@ -4690,7 +4704,7 @@ def complete_analysis_evaluations(drives: list[AnalysisEvaluation]) -> dict[str,
         fail_cases=max_rows,
         groups=None,
     )
-    data, _text = _assemble(combined, None, limits)
+    data = _assemble(combined, None, limits)
     # Every record, one per place: the page's collapse and cap are how a wire
     # response stays bounded, and a complete result has no bound to keep.
     data["failures"] = [failure.wire() for failure in combined.failure_inventory]
@@ -4769,9 +4783,9 @@ async def handle_analyze_results(
     )
     budget = resolve_response_budget(args.budget, state)
     if budget.tokens is None:
-        data, text = _assemble(assembly, None, _Limits.of(assembly.include))
+        data = _assemble(assembly, None, _Limits.of(assembly.include))
     else:
-        data, text = await _negotiate_analysis(budget, assembly)
+        data = await _negotiate_analysis(budget, assembly)
     # Sources are identified by their stamps within a call; a set handed to the
     # caller to resume gets content digests, which the resuming call compares.
-    return format_response(text, data)
+    return format_response(data)

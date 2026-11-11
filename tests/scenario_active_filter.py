@@ -80,7 +80,8 @@ def _params() -> StdioServerParameters:
 
 
 def text(result) -> str:
-    return result.content[0].text
+    """The reply's one text block, which follows any image."""
+    return next(block.text for block in result.content if block.type == "text")
 
 
 def structured(result) -> dict:

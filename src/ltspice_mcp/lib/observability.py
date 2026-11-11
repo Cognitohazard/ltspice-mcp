@@ -1,16 +1,16 @@
 """Structured events for experiment jobs and tool calls.
 
 Emits machine-parseable log records on job state transitions — submit,
-start, completion, failure, cancellation, interrupted recovery — and one
-record per tool call (:func:`emit_tool_event`). Logs go through a dedicated
-``ltspice_mcp.events`` logger so operators can route them to a different
-sink from the usual debug/info stream.
+start, completion, failure, cancellation, interruption, interrupted recovery —
+and one record per tool call (:func:`emit_tool_event`). Logs go through a
+dedicated ``ltspice_mcp.events`` logger so operators can route them to a
+different sink from the usual debug/info stream.
 
 Each job event carries:
     ts            ISO-8601 timestamp (UTC)
     event         lifecycle state: submitted | started | analyzing
                   | completed | completed_with_failures | failed
-                  | cancelled | interrupted_recovered
+                  | cancelled | interrupted | interrupted_recovered
     kind          'experiment' — the one job kind that runs here
     job_id        job identifier
     sources       circuit paths the job runs over
@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from ltspice_mcp.lib import now
 from ltspice_mcp.lib.experiment_types import ExperimentJob
+from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 
 if TYPE_CHECKING:
     from mcp import types
@@ -83,6 +84,7 @@ JobEvent = Literal[
     "completed_with_failures",
     "failed",
     "cancelled",
+    "interrupted",
     "interrupted_recovered",
 ]
 
@@ -121,12 +123,7 @@ def emit_job_event(
 
     # Human-readable summary in the message, structured dict in extra.
     suffix = ""
-    if payload.get("duration_s") is not None and event in (
-        "completed",
-        "completed_with_failures",
-        "failed",
-        "cancelled",
-    ):
+    if payload.get("duration_s") is not None and event in TERMINAL_STATUSES:
         suffix = f" after {payload['duration_s']:.2f}s"
     logger.info(
         "experiment.%s job=%s%s",

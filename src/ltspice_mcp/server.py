@@ -358,11 +358,7 @@ def _tool_error(
         structured["suggestions"] = suggestions
     if hint:
         structured["hint"] = hint
-    return types.CallToolResult(
-        content=[types.TextContent(type="text", text=error)],
-        structured_content=structured,
-        is_error=True,
-    )
+    return types.CallToolResult(content=[], structured_content=structured, is_error=True)
 
 
 async def list_tools(
@@ -448,10 +444,12 @@ def _with_serialized_text(result: types.CallToolResult) -> types.CallToolResult:
     TextContent block." A client that shows the model only the text, or only
     the text of a failed call (Claude Code does the latter), then reads the
     same data, error codes and recovery hints included, as one that reads
-    ``structuredContent``. The text blocks are replaced by the one, compact
-    to spend as few tokens as the data allows; other blocks, such as an
-    image, stay. A reply with no ``structuredContent`` keeps its text. Runs
-    after the guide reminder, so the text carries the reminder's ``hint``.
+    ``structuredContent``. It is the reply's one text block, compact to spend
+    as few tokens as the data allows, and it follows the other blocks: an
+    image comes first, as Anthropic's vision guidance places images ahead of
+    the text about them. A reply with no ``structuredContent`` keeps its
+    text. Runs after the guide reminder, so the text carries the reminder's
+    ``hint``.
     """
     if result.structured_content is None:
         return result
@@ -461,19 +459,8 @@ def _with_serialized_text(result: types.CallToolResult) -> types.CallToolResult:
     serialized = types.TextContent(
         type="text", text=to_json(result.structured_content, fallback=str).decode()
     )
-    # The text takes the first text block's place, so a handler's block order
-    # holds (verify_circuit puts its picture first).
-    content: list[Any] = []
-    placed = False
-    for block in result.content:
-        if not isinstance(block, types.TextContent):
-            content.append(block)
-        elif not placed:
-            content.append(serialized)
-            placed = True
-    if not placed:
-        content.append(serialized)
-    return result.model_copy(update={"content": content})
+    others = [block for block in result.content if not isinstance(block, types.TextContent)]
+    return result.model_copy(update={"content": [*others, serialized]})
 
 
 def _with_guide_reminder(

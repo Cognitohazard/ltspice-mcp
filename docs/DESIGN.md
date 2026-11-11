@@ -58,12 +58,26 @@ set `[simulator] ngbehavior` (for example `hsa`) when a deck uses one.
 
 ### Why an MCP server instead of spicelib scripts
 
-An LLM with code execution could write spicelib scripts itself. The server
+The server is for an AI agent working on circuits on the machine that has the
+simulator and the circuit files. Its audiences, in order:
+
+- **Coding agents**, such as Claude Code, Cursor and Codex. They have file
+  tools and a shell, and work on that machine directly, through Claude Code's
+  Remote Control, or in a cloud container that runs ngspice. This is the main
+  audience.
+- **People chatting in Claude Desktop.** They see charts in the chat. The
+  assistant there has no file tools unless the person installs one, so it
+  writes a netlist through `run_code`.
+
+Scripts and notebooks use the same code through the Python API.
+
+An agent that can run code could write spicelib scripts itself. The server
 helps in these cases:
 
-- **Clients without code execution.** Claude Desktop, ChatGPT and web chat
-  clients have no shell or Python, so MCP tools are their only access to
-  simulation. This is the primary audience.
+- **The simulator and the files where they live.** The server finds and runs
+  LTspice or ngspice on that machine (natively, under Wine or across WSL),
+  reads their result files and writes the files LTspice opens, so the agent
+  handles no detection, interop or file formats itself.
 - **Reliability.** A tool call runs a tested code path. LLM-written spicelib
   code has import errors and wrong method names, and it forgets to save the
   netlist.
@@ -77,9 +91,11 @@ helps in these cases:
 - **No user setup.** Install the server once. The project's environment
   needs no spicelib, and the user needs no Python.
 
-A fixed tool set is less flexible than arbitrary Python. For loops and
-complete results, `run_code` runs a Python snippet against the same code,
-and a script can use it directly as `Api(working_dir=...)`, which
+Tools and Python split the work. A tool does what the server must own: a job
+that outlives a call, a transactional schematic edit, a verification, a single
+read whose reply is used as it is, and a chart for a person. Python does
+loops, combining runs and math on traces: `run_code` runs a snippet against
+the same code, and a script uses it directly as `Api(working_dir=...)`, which
 reads and writes the same job records as the server.
 
 ## Design principles
@@ -198,8 +214,8 @@ chart panel, so volts and amps never share a y-axis. The chart plots every
 sample of a trace up to 100,000 points (the `max_points` argument); above that
 it keeps the minimum and maximum of each interval and reports that it
 downsampled. The PNG is off by default (`[analysis] attach_plot`), costs
-about 1,000 tokens for two panels, and needs the optional `raster` extra. The
-core install adds no plotting dependency; the chart library is bundled.
+about 1,000 tokens for two panels, and is drawn by `resvg-py`, a dependency.
+The chart needs no plotting dependency; its library is bundled.
 
 ### One call per intent
 

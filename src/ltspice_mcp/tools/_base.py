@@ -19,7 +19,7 @@ from ltspice_mcp.config import SIM_EXECUTABLES_KEY as _SIM_EXECUTABLES_KEY
 from ltspice_mcp.config import SIM_SECTION as _SIM_SECTION
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError, SimulationError, error_hint
 from ltspice_mcp.lib import atomic_write_bytes, response_budget
-from ltspice_mcp.lib.format import held_to_cap
+from ltspice_mcp.lib.format import SAME_VALUE_RTOL, held_to_cap
 
 # Re-exported façade names: the strict Pydantic base lives in ``lib`` (models
 # below the tool layer declare models too), and the tool modules reach it here.
@@ -182,16 +182,16 @@ def reply_payload(data: dict[str, Any]) -> dict[str, Any]:
     return sanitize_payload(omit_silent(data, active_kept()))
 
 
-def format_response(text: str, data: Mapping[str, Any]) -> types.CallToolResult:
+def format_response(data: Mapping[str, Any]) -> types.CallToolResult:
     """Return a CallToolResult with ``data`` as its structuredContent.
 
     Accepts any mapping so TypedDict return values from lib functions pass
-    through without cast/copy. ``text`` is the reply's text block as the
-    handler leaves it; the server replaces it with ``data`` serialized, as the
-    MCP specification recommends, so ``data`` must carry everything the caller
-    needs to act on: any caller guidance (hints, referrals, recovery steps,
-    caveats) belongs in it, conventionally as an optional ``hint`` key
-    declared in the tool's output_schema.
+    through without cast/copy. The reply's text block is ``data`` serialized,
+    which the server adds (``server._with_serialized_text``), so ``data`` must
+    carry everything the caller needs to act on: any caller guidance (hints,
+    referrals, recovery steps, caveats) belongs in it, conventionally as an
+    optional ``hint`` key declared in the tool's output_schema. A handler adds
+    only the blocks that are not text, such as an image.
 
     The fields that say nothing are left out of ``data`` here
     (:func:`reply_payload`).
@@ -200,11 +200,7 @@ def format_response(text: str, data: Mapping[str, Any]) -> types.CallToolResult:
     # TypedDicts ARE plain dicts at runtime, but wrap defensively so
     # non-dict mappings (rare, but cheap to support) also work.
     payload: dict[str, Any] = dict(data) if not isinstance(data, dict) else data
-    payload = reply_payload(payload)
-    return types.CallToolResult(
-        content=[types.TextContent(type="text", text=text)],
-        structured_content=payload,
-    )
+    return types.CallToolResult(content=[], structured_content=reply_payload(payload))
 
 
 def image_content(image: RenderedImage) -> types.ImageContent:
@@ -530,22 +526,6 @@ MEASUREMENTS_SCHEMA: dict[str, Any] = {
         "required": ["values"],
     },
 }
-
-
-def format_observations(observations: list[dict[str, Any]]) -> list[str]:
-    """Render surfaced result observations for a text-format response.
-
-    Relay observations are omitted — they already print in the Errors section —
-    so this shows the new facts (reconciliation/value/coverage). Returns the
-    lines (no trailing blank); empty / all-relay input returns ``[]``. The full
-    list (including relay) always rides in structuredContent.
-    """
-    surfaced = [o for o in observations if o.get("kind") != "relay"]
-    if not surfaced:
-        return []
-    lines = ["Observations (facts to weigh, not a verdict):"]
-    lines.extend(f"  [{o.get('kind')}] {o.get('detail')}" for o in surfaced)
-    return lines
 
 
 # ---------------------------------------------------------------------------
@@ -1024,7 +1004,7 @@ class CompareSpec(StrictModel):
         ),
     )
     rtol: float = Field(
-        default=1e-6,
+        default=SAME_VALUE_RTOL,
         description="Relative tolerance when comparing numeric values and parameters.",
     )
 

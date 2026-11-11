@@ -102,6 +102,10 @@ def test_root_title_normalization_retains_lexer_warnings(tmp_path):
         capture_case_inputs(case, job.sources[0], lineage_root=job.output_folder)
 
     assert error.value.code == "recovery_syntax_unsupported"
+    # The refusal names the deck and the line the lexer warned about, once.
+    message = str(error.value)
+    assert f"(recovery_syntax_unsupported): {job.sources[0].path} line 2: " in message
+    assert "line 2: line 2" not in message
 
 
 def test_root_title_normalization_retains_trailing_lexer_warnings(tmp_path):

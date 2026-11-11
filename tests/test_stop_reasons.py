@@ -68,7 +68,8 @@ def test_a_crash_leaves_a_case_a_default_resume_retries(work_dir: Path):
 async def test_a_shutdown_with_no_coordinator_leaves_a_case_a_default_resume_retries(
     work_dir: Path,
 ):
-    """Shutdown settles a job it runs but holds no coordinator for itself."""
+    """Shutdown settles a job it runs but holds no coordinator for itself, as a
+    crash would leave it: interrupted, its case retried by a default resume."""
     job = _running_recoverable(work_dir)
     registry = JobRegistry(persist_enabled=False, working_dir=work_dir)
     registry.reserve(job)
@@ -79,7 +80,7 @@ async def test_a_shutdown_with_no_coordinator_leaves_a_case_a_default_resume_ret
     )
 
     [case] = job.cases
-    assert job.status == "cancelled"
+    assert job.status == "interrupted"
     assert (case.status, case.failure_code) == ("failed", _OWNER_STOPPED)
     assert job.failures[-1]["code"] == _OWNER_STOPPED
     assert _default_retry(case)

@@ -1079,10 +1079,20 @@ def probe_refs(card: SpiceCard) -> list[ProbeRef]:
 _SAVES_ALL_RE = re.compile(r"(?i)(?:^|\s)\.save\s+(?:all\b|\*)")
 
 
+def probe_is_pattern(probe: ProbeRef) -> bool:
+    """Whether a probe names its signals by a pattern (``V(*)``, ``I(R*)``,
+    ``V(x?)``) rather than one by one. Which signals such a ``.save`` saves is
+    not recorded for either LTspice build (``inputs/cases.toml``, behaviour
+    ``save-pattern``), so a reader of a ``.save`` that cannot tell says so
+    rather than read the pattern as a name."""
+    return any(mark in name for name in probe.names for mark in "*?")
+
+
 @dataclass
 class SaveCard:
     """Typed view over a ``.SAVE`` directive: the probes it saves, or that it
-    saves every signal (``.save all``). Read-only."""
+    saves every signal (``.save all``). A probe may name its signals by a
+    pattern (``probe_is_pattern``). Read-only."""
 
     card: SpiceCard
     probes: list[ProbeRef]
