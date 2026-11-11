@@ -31,9 +31,10 @@ from typing import get_args
 from ltspice_mcp.lib.experiment_types import LiveExperimentStatus, TerminalExperimentStatus
 
 # Terminal statuses — eligible for eviction, represent finished work.
-# 'interrupted' is terminal because the owning runner is gone; metadata
-# and any partial outputs are preserved but the job cannot resume
-# in-process (recovery promotes it via lib.job_lifecycle.recover).
+# 'interrupted' is terminal because the process running the job stopped before
+# its runs finished (it was killed, or shut down); its records and any partial
+# outputs are kept, and a recoverable job resumes from it as from any other
+# terminal status.
 TERMINAL_STATUSES: frozenset[str] = frozenset(get_args(TerminalExperimentStatus))
 
 # Statuses that only make sense while a runner owns the job. Seeing one

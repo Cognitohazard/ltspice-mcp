@@ -480,6 +480,10 @@ class MaterializedCase:
     assignments: dict[str, Any]
     source_lineage: tuple[SourceLineage, ...] = ()
     file_digests: tuple[tuple[Path, str], ...] = ()
+    #: Each file this case wrote its own copy of (the deck itself included),
+    #: as ``(copy, staged file it was copied from)``, so a report on the copy
+    #: can name the file the caller wrote.
+    copied_from: tuple[tuple[Path, Path], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1157,6 +1161,9 @@ def materialize_variants(
                 assignments=assignments,
                 source_lineage=lineage,
                 file_digests=tuple(file_digests),
+                copied_from=tuple(
+                    (destination, source) for source, (destination, _) in written.items()
+                ),
             )
         )
     return materialized

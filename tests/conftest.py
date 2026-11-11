@@ -582,14 +582,24 @@ def recorded_fixture_simulator(
     simulator artifacts rather than a mock byte string. Name a different
     *fixture* to run a job over stepped artifacts. Returns the list each
     launch's run filename is appended to."""
+    return replaying_simulator(
+        monkeypatch, FIXTURES_DIR / f"{fixture}.raw", FIXTURES_DIR / f"{fixture}.log"
+    )
+
+
+def replaying_simulator(monkeypatch: pytest.MonkeyPatch, raw: Path, log: Path) -> list[str]:
+    """Instant stand-in simulator behind ``ExperimentRunner.submit_netlist``
+    whose every run leaves a copy of ``raw`` and ``log``, files a simulator
+    wrote (a recording under ``tests/fixtures/ltspice_recorded``, say).
+    Returns the list each launch's run filename is appended to."""
     launched: list[str] = []
 
     def submit(self, _netlist: Path, run_filename: str, callback, **_kwargs):
         launched.append(run_filename)
-        raw, log = fake_artifact_paths(self.output_folder, run_filename)
-        shutil.copy(FIXTURES_DIR / f"{fixture}.raw", raw)
-        shutil.copy(FIXTURES_DIR / f"{fixture}.log", log)
-        outcome = RunOutcome(str(raw), str(log), raw.stat().st_size, None)
+        raw_out, log_out = fake_artifact_paths(self.output_folder, run_filename)
+        shutil.copy(raw, raw_out)
+        shutil.copy(log, log_out)
+        outcome = RunOutcome(str(raw_out), str(log_out), raw_out.stat().st_size, None)
         self.loop.call_soon_threadsafe(callback, outcome)
         return object()
 

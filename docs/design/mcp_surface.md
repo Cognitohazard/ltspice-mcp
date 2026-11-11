@@ -123,7 +123,7 @@ Codes by kind of failure:
 | `cancel_failed` | cancellation was authorized but could not be carried out |
 | `library_error` | a component library failed to load, parse, or resolve |
 | `batch_job_error` | a sweep or Monte Carlo config could not be used |
-| `raster_unavailable` | a PNG was requested without a usable rasterizer, because the optional `raster` extra is not installed, or only `cairosvg` is installed without the native Cairo library it loads |
+| `raster_unavailable` | a PNG was requested without a usable rasterizer: `resvg-py`, a dependency, cannot be imported (an install that lost it), and `cairosvg` is not installed or is installed without the native Cairo library it loads |
 | `internal_error` | an unclassified server failure |
 
 Codes named after the stage, used where the stage is the more useful fact:
@@ -580,10 +580,16 @@ Recoverable execution refuses includes read in place
 readers (`file=`, `sfile=`, `pwlfile=`, a PWL that names a file), directives
 outside the supported set, functions the server does not know, and random
 functions with no seed the server records, because a resumed case could not
-be relied on to run them the same way. ngspice runs with `-n` (no user
-`.spiceinit`) and with `SPICE_SCRIPTS`, set only for that subprocess, pointing
-at a system startup file in the job's folder that contains only a comment, so
-the machine's startup files do not affect the run. A `pdk_native` sample
+be relied on to run them the same way. Every card of the deck and of each file
+it includes is checked, and one refusal names the constructs refused, how many
+there are, and up to twelve of them. Each is listed with its code and its first
+place (the file it came from as the caller wrote it, the line and the card),
+then up to five more places and a count of the rest. The error's `code` is that
+of the first construct listed. An include read in place is named with the
+reason it was not copied. ngspice runs with `-n` (no user `.spiceinit`) and
+with `SPICE_SCRIPTS`, set only for that subprocess, pointing at a system
+startup file in the job's folder that contains only a comment, so the
+machine's startup files do not affect the run. A `pdk_native` sample
 (Appendix A.1) keeps its recorded sample index and seed. A resume or a later
 launch is refused with `recovery_execution_changed` if the executable, its
 command line or the platform has changed since submission. A job without
@@ -660,8 +666,9 @@ the latest job of the chain. An empty selection returns the parent with
 `resumed=false`, no child token, and a hint to analyze the job with
 `analyze_results`. Reusing a `resume_request_id` with the same normalized
 selection and retry flags returns the same child or no-op; a changed payload
-is a conflict. A replay is authorized as the original call is, by the job's
-owning process or its `control_token` (otherwise `resume_not_authorized`).
+is a conflict. A resume, and a replay of one, is authorized as a cancel is: by
+the server process that runs the job or by its `control_token` (otherwise
+`resume_not_authorized`).
 `wait_s` sets only how long the call waits and is not compared on replay.
 
 **Job model.** An experiment job coordinates cases across one or more
@@ -683,23 +690,28 @@ result sets that read them. A recoverable job is never deleted.
 
 **Attached analysis is a job stage.** A job is terminal when all its runs and
 its analysis are terminal; the status sequence is
-`queued -> running -> analyzing -> completed | completed_with_failures | failed | cancelled`,
-and a job whose server exited before its runs finished is `interrupted`. A
-server that shuts down cancels the jobs it runs, and their unfinished cases
-fail with `server_restarted`, as they do after a crash. A job's status is read
-from its record; whether this server process runs a job is never decided from
-the process id the record names, which another process may have taken since.
+`queued -> running -> analyzing -> completed | completed_with_failures | failed | cancelled | interrupted`.
+`cancelled` means a caller cancelled the job. `interrupted` means the process
+running the job stopped before its runs finished: it crashed or was killed, the
+server shut down, or a script closed its `Api`. A job reads the same whichever
+way the process stopped: its unfinished cases fail with `server_restarted`, an
+attached analysis left pending or running fails, and the job and the analysis
+each carry a `server_restarted` lifecycle observation. A process that stops
+once every run has finished leaves only the analysis unfinished, so the job
+ends `completed_with_failures` (or `completed` when it had no analysis left
+and every run produced). A job's status is read from its record; whether this
+server process runs a job is never decided from the process identity the
+record names, which another process may have taken since.
 The dwell and `jobs(wait)` wait for full terminality by default;
 `jobs(wait, wait_for: "runs")` returns once the runs are terminal: once every
 case's status is terminal, which can be just before the job's status changes.
 From then on every read of the job's runs accepts it. Cancelling
 during analysis cancels the stage and keeps the run artifacts. An analysis
 failure puts the job in `completed_with_failures` with an `analysis_error`; a
-new `analyze_results` call can still analyze the runs. After a server restart,
-a pending or running analysis stage is marked failed with a restart
-observation and is not re-run. The analysis result is stored in the job
-record as one rendered page, and its summary is included in every terminal
-receipt.
+new `analyze_results` call can still analyze the runs. An analysis stage the
+process running the job left unfinished is not re-run. The analysis result is
+stored in the job record as one rendered page, and its summary is included in
+every terminal receipt.
 
 **Input snapshot and provenance.** At submission the server stages the
 primary deck (content-addressed) and every include and lib it reaches (with a
@@ -835,7 +847,16 @@ action would refuse with (`sheet_changed` when the sheet was edited during
 the run), `sheet_locked` when another server process held the sheet, or
 `copy_failed`; the last two name the action that copies the results once that
 is fixed. Neither observation costs the job its status. A cancelled job
-copies nothing, and a case that produced nothing leaves its sheet alone.
+copies nothing, and a case that produced nothing leaves its sheet alone. Nor
+does a job whose process stops before the copy, even once every run has
+finished: the copy waits on each sheet's lock and copies whole raws, which can
+outlast the bound a stopping process gives its jobs. When the job's own
+coordinator stops it after its runs, each sheet whose case produced then has a
+`results_not_placed` with `reason_code` `server_restarted`, naming the action
+that copies its results. A job settled without its coordinator (one whose
+process crashed, or whose stop outlasted that bound) keeps no record that a
+copy was asked for, so its receipt carries only the general
+`results_not_beside_sheet` note, which names the same action.
 The request is refused before it runs (`commit_state: "not_started"`) when a
 circuit is a netlist (`not_a_sheet`), when the job does not run on LTspice
 (`not_ltspice`), and when a sheet would run more than one case, by a
@@ -1034,10 +1055,13 @@ group_by   list[assignment param | "circuit" | step-axis name]
 step       {axis, value} | null   for a deck carrying `.step`: read the one
                                   iteration at that axis value. Default is the
                                   first. A number, or a string in SPICE
-                                  notation ('2k'), picks the nearest step; any
-                                  other string must equal a step's value as
-                                  text. An axis or text value the run does
-                                  not have is refused with the ones it has
+                                  notation ('2k'), picks the first step whose
+                                  value is that number to the six significant
+                                  digits a log prints a step value with
+                                  (step_values.same_step_value); any other
+                                  string must equal a step's value as text.
+                                  An axis or a value the run does not have
+                                  is refused with the ones it has
 all_steps  bool (default false)   evaluate at every `.step` iteration; mutually
                                   exclusive with `step`
 include    {per_run?: {limit? (capped at 100), cursor?} | bool, outliers?, signals_available?,
@@ -1102,24 +1126,43 @@ changed RAW.
 
 When a run has one value per `.meas` (each case of a sweep with no `.step`
 does), its `measurements` row contains `measured: {name: value}`, the number a
-reduction or spec reads for that name; `at: {name: point}` where the log
-printed a crossing or `AT` point with it; and `failed_measurements: [name]`,
-each name the log has no number for (LTspice printed it as FAIL'ed, or
-printed a non-finite value, or printed something other than a number). A
-failed name's `measured` entry is null, not absent, and a null there is always
-listed in `failed_measurements`. A value printed as something other than a
-number, such as a WHEN threshold written as a parameter, an expression or (on
-LTspice 26) a braced expression, fails only its own entry:
-`unreadable: {name: {line, reason}}` gives the log line and what it printed,
-and every other measurement of the log reads. Every measurement the log
-printed has an entry; a log whose measurements cannot all be given one fails
-the measurements read, naming the ones it lacks. The
-same `unreadable {line, reason}` is on the entry in the summary's
-`measurements`, in `inspect(kind="results", view="measurements")` rows and in
-the Python API's `measurements`. The
-default row omits the per-name `stats` block; `include.fields=["value"]`
-returns it, and reductions and specs read it either way. A stepped run's row
-has only `stats`.
+reduction or spec reads for that name, and `at: {name: point}` where the log
+printed a crossing or `AT` point with it. A name the log holds no number for
+has a null `measured` entry, not an absent one, and the row names it in one
+of three places, by why:
+
+- `failed_measurements: [name]`: LTspice printed it as failed at the step the
+  row reads, as `Measurement "name" FAIL'ed` or as `failed` in that step's row
+  of a stepped table (LTspice 24 and later; XVII prints 0 there, which the
+  `measurement_zero_or_failed` observation names).
+- `unreadable: {name: {line, reason}}`: LTspice printed something other than
+  a number, such as a WHEN threshold written as a parameter, an expression or
+  (on LTspice 26) a braced expression. The entry gives the log line and what
+  it printed; only that entry fails, and every other measurement of the log
+  reads.
+- `not_finite: [name]`: LTspice printed a number that is not finite, such as
+  a stepped FRA's gain margin of `infdB`, which the log decoder holds as null.
+
+`failed_measurements` means "LTspice printed it as failed" in every reply
+that carries it. The summary, `inspect(kind="results", view="measurements")`
+and the Python API's `measurements` name each measurement LTspice printed as
+failed at any step, and an entry whose stepped table printed `failed` lists
+those steps, from 0, in `failed_steps`. The summary does so at whichever
+`step` it reads: its `measurements` are the whole run's, every step's value,
+and the step selects what it reads from the RAW (range, `point_count`, AC
+bandwidth) and its `temp_c`. A `measurements` row read at one step names only
+what failed at that step, so at a step where a measurement was taken the row
+does not name it and the summary beside it does. `inspect` marks each value
+LTspice printed as failed with `failed: true` on its row, so a failed value
+reads apart from one that is null for another reason. Every measurement the
+log printed has an entry; a log whose measurements cannot all be given one
+fails the measurements read, naming the ones it lacks. The same `unreadable {line,
+reason}` is on the entry in the summary's `measurements`, in
+`inspect(kind="results", view="measurements")` rows and in the Python API's
+`measurements`. The default row omits the per-name `stats` block;
+`include.fields=["value"]` returns it, and reductions and specs read it either
+way. A stepped run's row has `stats`, with `failed_measurements` and
+`unreadable` over all its steps.
 
 `step` and `all_steps` apply to the whole call, so every recipe reads the same
 iteration. `run_experiments`' attached `analyze` block takes
@@ -1323,8 +1366,13 @@ whose value or attributes alone changed keeps its pins where they were and
 joined as they were, so a batch of value changes lists no pins, in `touched`
 or in `wiring.label_only_pins`; its label-only pins are counted under
 `preexisting`. A pin's `net` is the names the labels of its net carry, absent
-when none does. Nets are the ones LTspice netlists: labels of one name, in any
-case, are one net, a wire straight between two pins of one part joins
+when none does: the text of every label anywhere on the net, each spelling of
+a name among them, joined with `/` (`OUT/out`). A label-only pin's row in
+`wiring.label_only_pins` and in `preexisting` names its net the same way, not
+by the labels on its own point, and `inspect(kind: "net")` lists the same
+`labels`. Nets are the ones LTspice netlists: labels of one name, in any
+case, are one net (the `node-name-case` recording; an export keeps each
+label's own spelling), a wire straight between two pins of one part joins
 nothing, and of one part's pins alone on a point only the last in SpiceOrder
 touches another part's. LTspice names such a net only when it exports the sheet (`N001`,
 `NC_01` for a pin on nothing), so the name comes from an export and is never
@@ -1355,7 +1403,10 @@ given a new value keeps the findings it had, and a finding the batch left as
 it was is not the batch's, whichever part it names. For any other rule the
 subject is the finding's points and facts, and any change makes it new. All
 other findings are listed in the `preexisting` block, with the label-only pins
-of the parts the batch did not rewire or name:
+the batch neither changed nor named. A label-only pin is the batch's when its
+row is new (the pin was not label-only before, moved, or its net's names
+changed), when an op that may rewire it names its part, or when an op names
+its point:
 
 ```
 preexisting {count, findings, label_only_pins, cursor?}
@@ -1864,8 +1915,8 @@ cursors where listed:
     (`tool_listing`); limits; linter_version; the startup diagnostics
     (`diagnostics`), which show whether the server started degraded; and
     `render: {png, missing, reason, remedy}` (whether verify_circuit can
-    make the PNG it inlines and, if not, whether the `raster` extra is
-    missing or only cairosvg is, without native Cairo). `fields` (e.g.
+    make the PNG it inlines and, if not, whether `resvg-py` cannot be
+    imported or only cairosvg is installed, without native Cairo). `fields` (e.g.
     ["allowed_paths", "config_path"], to check after a config edit) returns
     only those top-level keys; without it the whole report is returned
 {kind: "symbols", path?, filter?, cursor?}
@@ -1937,7 +1988,10 @@ cursors where listed:
     only for the same file contents (snapshot_id), view and selection. For
     measurements and native_tables, path is a log path, the RAW is
     optional, and plot_index must be omitted. measurements pages the
-    recorded values, range and AT points by value_index (not by step).
+    recorded values, range and AT points by value_index (not by step), and
+    marks a value LTspice printed as failed `failed: true` (a FAIL'ed
+    `.meas`, or `failed` in that row of its stepped table); the page's
+    `failed_measurements` names each measurement with such a value.
     native_tables pages the value blocks ngspice prints in the log, as
     `name = value` entries and `Index frequency` rows, each with its
     block's first and last line (`line_start`, `line_end`), what ended the
@@ -2107,8 +2161,10 @@ a named target, or return unbounded collections. They do not validate
 testbench physics. The linter checks SPICE and does not check the measurement
 setup.
 
-Circuits are passed as file paths; netlist text cannot be pasted into a tool
-call. The surface assumes an agent on the same machine as the server.
+A circuit to run or check is passed as a file path; only a comparison's
+`reference` also takes netlist text. A client without file tools writes the
+netlist with `run_code`. The surface assumes an agent on the same machine as
+the server.
 
 ---
 
@@ -2121,7 +2177,8 @@ Suppression is per call, and `linter_version` is reported in provenance.
 
 | rule | disposition | condition |
 |-|-|-|
-| `save-meas-coverage` | blocking | the deck has a `.save` that is not `all` or `*`, and a `.meas` reads a signal no `.save` names. A voltage between two nodes, `V(a,b)`, is its two nodes in both (both builds measure it from a saved `V(a)` and `V(b)`, and `.save V(a,b)` saves both); a voltage against ground, `V(a,0)`, stands as written, since neither build measures it with only `V(a)` saved |
+| `save-meas-coverage` | blocking | the deck has a `.save`, no `.save` saves all (`all`, `*`), names a signal by a pattern or cannot be read, and a `.meas` reads a signal no `.save` names. A voltage between two nodes, `V(a,b)`, is its two nodes in both (both builds measure it from a saved `V(a)` and `V(b)`, and `.save V(a,b)` saves both); a voltage against ground, `V(a,0)`, stands as written, since neither build measures it with only `V(a)` saved |
+| `save-pattern-unrecorded` | warning | any `.save` of the deck names signals by a pattern (`V(*)`, `I(R*)`), no `.save` saves all or cannot be read, and a `.meas` reads a signal no `.save` names: which signals a pattern saves is not recorded, so the signal is reported as not checked rather than refused, whichever kind of signal the pattern names |
 | `meas-ngspice-batch` | warning | ngspice: the deck runs and only the top-level `.meas` is skipped, which the run reports when it is read |
 | `meas-trig-degrees` | blocking | LTspice: a `.meas` that calls `sin`, `cos`, `tan`, `asin`, `acos`, `atan` or `atan2`, whose angle LTspice 26 and XVII read in degrees on their default settings where a B source reads radians; `verify_circuit`'s `syntax` check reports the same as `meas_trig_degrees` |
 | `lib-section-ngspice` | blocking | ngspice in `kiltpsa` mode |
@@ -2364,10 +2421,10 @@ it, and reported when the caller names it.
 
 | discriminant | run type | own required fields | notes |
 |-|-|-|-|
-| `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics. Fourier is each `.four` table as the build printed it, phase included; LTspice 26 and XVII print phase in different conventions |
-| `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); per run, `stats` for each `.meas` name, keyed lower-cased as the log reader holds it. A name in `names` or `field` is matched in any case, and one the log does not hold fails the run with the names it holds. A run with one value per name also has `measured` {name: value}, `at` and `failed_measurements`, and its default row shows only those (§3.3) |
+| `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics. Fourier is each `.four` table as the build printed it, phase included; LTspice 26 and XVII print phase in different conventions. What the log says (measurements, `failed_measurements`, Fourier, diagnostics) is the whole run's at any `step`; the step selects the range, `point_count`, `temp_c` and AC bandwidth |
+| `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); per run, `stats` for each `.meas` name, keyed lower-cased as the log reader holds it. A name in `names` or `field` is matched in any case, and one the log does not hold fails the run with the names it holds. A run with one value per name also has `measured` {name: value} and `at`, and a null there is named under `failed_measurements` (LTspice printed it failed), `unreadable` or `not_finite`; its default row shows only those (§3.3) |
 | `value` | any | `expr` — one trace or node pair, not arithmetic | `at`, required when the axis has more than one sample; reads the nearest sample, no interpolation; a bias-point run is read by name; step-aware |
-| `signal_stats` | tran | `signal` | `window?`, `quantiles?` — levels in [0, 1], weighted by time, not by sample; each adds `q<percent>` (0.99 is `q99`, 0.999 is `q99_9`) and two or more add `quantile_peak_to_peak`, all reducible. `min`/`max`/`peak_to_peak` stay the sample extremes |
+| `signal_stats` | tran, dc, ac, noise | `signal` | `window?`, on tran and dc only; `quantiles?`, tran only — levels in [0, 1], weighted by time, not by sample; each adds `q<percent>` (0.99 is `q99`, 0.999 is `q99_9`) and two or more add `quantile_peak_to_peak`, all reducible. `min`/`max`/`peak_to_peak` stay the sample extremes. An AC or FRA run gives the magnitude in dB and the phase; a noise run has no `mean`. `metrics.signal_stats_defined` decides which runs it reads, over a window or whole |
 | `edges` | tran | `signal` | `levels?`, `edge?`, `window?` |
 | `timing` | tran | `from{signal, edge, level}`, `to{...}` | `nth?`, `window?` |
 | `periodic` | tran | `signal` | `window?`; period, frequency, duty cycle |
@@ -2525,8 +2582,8 @@ splits is refused the same way.
   supported.
 - No correlated Monte Carlo draws across two decks.
 - No loop-gain probe templates.
-- An attached analysis stage interrupted by a server restart is not re-run;
-  run `analyze_results` over the job instead.
+- An attached analysis stage left unfinished when the process running its job
+  stopped is not re-run; run `analyze_results` over the job instead.
 - Request-index records are deleted only with their job ("Job model",
   §3.1), so the index can grow with every submission.
 - Ops cannot define a new hierarchical block (its symbol and child sheet);

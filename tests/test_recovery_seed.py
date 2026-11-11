@@ -124,8 +124,13 @@ def test_only_source_verified_static_random_functions_are_admitted(tmp_path, exp
         tmp_path, f".param draw={expression}\nV1 n 0 {{draw}}".encode(), seeded=True
     )
     verify_case_inputs(captured, seeded=True)
-    with pytest.raises(RecoveryError, match="randomness"):
+    with pytest.raises(RecoveryError) as error:
         verify_case_inputs(captured)
+    assert error.value.code == "recovery_random_unsupported"
+    assert f"function `{expression.split('(')[0]}`" in str(error.value)
+    # A seed admits this function, so the refusal offers both ways to set one.
+    assert "execution.simulator_seed" in str(error.value)
+    assert "`.options seed=<n>`" in str(error.value)
 
 
 @pytest.mark.parametrize("option", [b".options seed=17", b".OPTION reltol=1e-3 SEED = 17"])
@@ -142,8 +147,9 @@ def test_a_deck_that_fixes_its_own_seed_admits_static_random_functions(tmp_path,
     verify_case_inputs(captured, dialect="ngspice")
     # A caller that does not say which simulator runs the deck gets the
     # stricter answer.
-    with pytest.raises(RecoveryError, match="randomness"):
+    with pytest.raises(RecoveryError) as unsaid:
         verify_case_inputs(captured)
+    assert unsaid.value.code == "recovery_random_unsupported"
 
 
 @pytest.mark.parametrize("dialect", ["ltspice", "qspice", "xyce", None])
@@ -151,13 +157,14 @@ def test_a_deck_seed_counts_only_where_ngspice_runs_the_deck(tmp_path, dialect):
     """What LTspice, QSPICE or Xyce make of an .options seed card is not
     recorded (LTspice can reseed its Monte Carlo from the clock), so their
     static random functions stay refused whatever seed the deck writes."""
-    with pytest.raises(RecoveryError, match="randomness"):
+    with pytest.raises(RecoveryError) as refused:
         _capture(
             tmp_path,
             b".param draw=agauss(10,1,1)\nV1 n 0 {draw}\nR1 n 0 1k\n.options seed=17",
             seeded=False,
             dialect=dialect,
         )
+    assert refused.value.code == "recovery_random_unsupported"
 
 
 @pytest.mark.parametrize("option", [b".options seed=5", b".options seed=random"])
@@ -190,12 +197,13 @@ def test_a_seed_that_does_not_fix_the_draws_admits_nothing(tmp_path, option):
     a subcircuit nothing calls (ngspice drops it unread, measured on
     ngspice-42), or a fixed seed beside one from the clock does not make the
     deck's draws repeatable."""
-    with pytest.raises(RecoveryError, match="randomness"):
+    with pytest.raises(RecoveryError) as refused:
         _capture(
             tmp_path,
             b".param draw=agauss(10,1,1)\nV1 n 0 {draw}\nR1 n 0 1k\n" + option,
             seeded=False,
         )
+    assert refused.value.code == "recovery_random_unsupported"
 
 
 @pytest.mark.parametrize(
@@ -212,8 +220,10 @@ def test_a_seed_that_does_not_fix_the_draws_admits_nothing(tmp_path, option):
     ],
 )
 def test_seeded_admission_keeps_other_recovery_guards(tmp_path, body):
-    with pytest.raises(RecoveryError):
+    with pytest.raises(RecoveryError) as error:
         _capture(tmp_path, body, seeded=True)
+    # The deck already has a seed, so the refusal does not offer one.
+    assert "simulator_seed" not in str(error.value)
 
 
 @pytest.mark.parametrize(
@@ -603,3 +613,24 @@ def test_a_seeded_run_counts_a_subcircuit_seed_only_where_it_is_called(tmp_path,
             _capture(tmp_path, body, seeded=True)
     else:
         verify_case_inputs(_capture(tmp_path, body, seeded=True), seeded=True, dialect="ngspice")
+
+
+def test_a_seed_that_overrides_the_explicit_one_is_listed_with_the_other_constructs(
+    tmp_path,
+):
+    """A seeded deck that also sets its own seed is refused once, with the
+    seed card listed by line and card beside every other construct at fault,
+    so the deck is fixed in one pass."""
+    with pytest.raises(RecoveryError) as refused:
+        _capture(
+            tmp_path,
+            b".param draw=agauss(10,1,1)\nV1 n 0 {draw}\nR1 n 0 1k\n.options seed=5\n"
+            b"V2 m 0 trnoise(1 1n)",
+            seeded=True,
+        )
+    message = str(refused.value)
+    assert refused.value.code == "recovery_seed_unsupported"
+    assert "(recovery_seed_unsupported)" in message
+    assert "line 5: .options seed=5" in message
+    assert "(recovery_random_unsupported)" in message
+    assert "line 6: V2 m 0 trnoise(1 1n)" in message

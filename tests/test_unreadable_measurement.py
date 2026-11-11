@@ -114,9 +114,12 @@ def test_the_measurements_recipe_fails_each_entry_alone(state_no_sim: SessionSta
     value = row["value"]
     printed, unreadable = _printed(log), _unreadable(log)
     assert set(printed) <= set(value["measured"])
+    # LTspice printed each of them, so none is named failed: unreadable says why
+    # it has no number.
+    assert "failed_measurements" not in value
+    assert "not_finite" not in value
     for name in unreadable:
         assert value["measured"][name] is None, name
-        assert name in value["failed_measurements"]
         assert value["unreadable"][name]["line"] == printed[name]
         assert value["at"][name] == _crossing(printed[name])
     for name in set(value["measured"]) - set(unreadable):

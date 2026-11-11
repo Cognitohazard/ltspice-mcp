@@ -244,7 +244,6 @@ class Nets:
             for run in self.dropped_at(point)
         ]
         return found
-        return tuple(sorted(found))
 
     def dropped_at(self, point: Point) -> tuple[DroppedRun, ...]:
         """Every dropped run ``point`` lies inside, its two ends left out."""

@@ -48,7 +48,7 @@ class TestOwnerLifecycleDocumentation:
         # fall anywhere inside the asserted phrase.
         text = " ".join(_reference.reference("run_experiments").split())
         assert "wait=False" in text
-        assert "cancelled when" in text and "process" in text
+        assert "interrupted when" in text and "process" in text
 
     def test_method_doc_carries_the_same_note(self):
         # The ``help(api.run_experiments)`` surface must not say less than

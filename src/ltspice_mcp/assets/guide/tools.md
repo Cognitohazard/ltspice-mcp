@@ -78,7 +78,10 @@ names the reason, when a deck reads an include in place at run time
 calls one of the random functions `rand`, `random`, `gauss`, `agauss`, `unif`,
 `aunif`, `flat`, `sgauss`, `limit`, `mc`, `poisson`, `white`, `flicker`,
 `trnoise` or `trrandom` (`recovery_random_unsupported`). A source that reads a
-file and a function the server does not know are refused the same way. On
+file and a function the server does not know are refused the same way. Every
+card of every included library is checked, and a vendor library often fails a
+check. One refusal names the constructs it found, up to twelve, each with its
+file, line and card; fixing those and submitting again lists the rest. On
 ngspice, `simulator_seed`, or a deck that fixes its own seed with
 `.options seed=<positive integer>` (a `random` entry with `simulator_draws`
 writes one), allows `agauss`, `gauss`, `aunif`, `unif` and `limit` (guide
@@ -140,8 +143,10 @@ attach the recipe that reads it back:
 
 The simulator computes the scalar and the `measurements` recipe reads it back
 from the log, parsed and with SI units. Each case's row contains it as
-`value.measured.vout_dc`. If that case's `.meas` failed, the value is null and
-`value.failed_measurements` lists it. On ngspice, measure the trace with a
+`value.measured.vout_dc`. A null there is named by why:
+`value.failed_measurements` if LTspice printed the `.meas` failed,
+`value.unreadable` if it printed something other than a number, and
+`value.not_finite` if it printed a number that is not finite. On ngspice, measure the trace with a
 recipe instead (guide section 'ngspice'). An `assign` target must exist in the
 deck. If the deck restricts what it saves, `.save` every signal a `.meas` uses;
 lint blocks a mismatch. A case that produced nothing is counted in
@@ -159,9 +164,11 @@ lint blocks a mismatch. A case that produced nothing is counted in
 - `jobs`: `{"action": "status", "request_id": "ldo-load-1"}` finds a job whose
   id you lost. A `wait` that returns `timed_out` ended only the wait; the job
   is still running. A receipt's `status` describes the job (`completed`,
-  `completed_with_failures`, `failed`, ...). Each run row's `status` describes
-  its case (`produced` when it ran; `failed`, `cancelled` or `skipped` when it
-  did not).
+  `completed_with_failures`, `failed`, ...): `cancelled` when a caller
+  cancelled it, `interrupted` when the process running it stopped (a crash, a
+  server shutdown or a closed `Api`) before its runs finished. Each run row's
+  `status` describes its case (`produced` when it ran; `failed`, `cancelled`
+  or `skipped` when it did not).
 - `analyze_results`: the default reply contains `results`, `coverage`,
   `observations` and `failures`; ask for more under `include` (`fields`,
   `per_run`, `outliers`, `signals_available`). Each failure row is one reason.
@@ -224,7 +231,7 @@ To read a log that has no RAW, use the `measurements` recipe:
 The recipe reads every measurement in the log in one pass. Without `step` or
 `all_steps`, a source's one row gives each measurement's statistics over every
 step and names no plot or step. With `all_steps` the recipe returns one row
-per step, and with `step` the row of the step whose value is nearest, each
+per step, and with `step` the row of the step that has the value, each
 with that step's `step_values`. Row n of a stepped `.meas` table belongs to
 the step on the log's n-th `.step` line, and a log whose `.step` lines do not
 number its rows (LTspice writes none for a stepped `.op`) is refused. In a
