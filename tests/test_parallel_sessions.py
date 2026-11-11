@@ -483,6 +483,31 @@ class _FakeProc:
         self.killed = True
 
 
+def _why_the_kill_missed(
+    killed: int, grandchild: psutil.Process, launcher: subprocess.Popen[str]
+) -> str:
+    """Why a kill found something other than a launcher's one grandchild: it
+    still runs and was not matched, or it had already exited, as the launcher,
+    which waits on it, then prints."""
+    with contextlib.suppress(psutil.Error):
+        if grandchild.is_running() and grandchild.status() != psutil.STATUS_ZOMBIE:
+            descendants = {child.pid for child in psutil.Process().children(recursive=True)}
+            return (
+                f"the kill found {killed} processes while the grandchild ran: its command "
+                f"line is {grandchild.cmdline()}, and it is "
+                f"{'' if grandchild.pid in descendants else 'not '}among this process's "
+                "descendants"
+            )
+    launcher.wait(timeout=LIVENESS_S)
+    assert launcher.stdout is not None
+    status = launcher.stdout.readline().strip()
+    return (
+        f"the kill found {killed} processes: the grandchild had already exited with status "
+        f"{status} (a negative status is the signal that ended it), so something else "
+        "ended it first"
+    )
+
+
 class TestScopedKill:
     def _iter(self, monkeypatch, procs):
         monkeypatch.setattr(proc_kill_mod, "_running_processes", lambda attrs: iter(procs))
@@ -611,7 +636,12 @@ class TestScopedKill:
         The simulator is this process's grandchild and is the only process that
         names the run deck, so the deck-path route has to look past direct
         children. The launcher exits once its child does, which is what shows
-        the grandchild died.
+        the grandchild died, and prints how it exited.
+
+        The grandchild is held as a ``psutil.Process`` taken while the launcher
+        still waits on it, so the cleanup's kill is refused once its pid is
+        free: after the launcher reaps it the number can name another worker's
+        process, which a kill by number would hit.
         """
         token = "exp_launched_1790000000_ab12cd34_case_0"
         executable, env = python_launch()
@@ -620,7 +650,7 @@ class TestScopedKill:
             "child = subprocess.Popen([sys.argv[1], '-c', 'import time; time.sleep(60)',"
             " os.environ['CASE_DECK']])\n"
             "print(child.pid, flush=True)\n"
-            "child.wait()\n"
+            "print(child.wait(), flush=True)\n"
         )
         launcher = subprocess.Popen(
             [executable, "-c", launcher_code, executable],
@@ -629,13 +659,18 @@ class TestScopedKill:
             text=True,
         )
         assert launcher.stdout is not None
-        grandchild = int(launcher.stdout.readline())
+        grandchild: psutil.Process | None = None
         try:
-            assert kill_simulator_by_token(token, {"ngspice"}) == 1
+            grandchild = psutil.Process(int(launcher.stdout.readline()))
+            assert grandchild.ppid() == launcher.pid
+            killed = kill_simulator_by_token(token, {"ngspice"})
+            if killed != 1:
+                pytest.fail(_why_the_kill_missed(killed, grandchild, launcher))
             assert launcher.wait(timeout=LIVENESS_S) is not None
         finally:
-            with contextlib.suppress(psutil.Error):
-                psutil.Process(grandchild).kill()
+            if grandchild is not None:
+                with contextlib.suppress(psutil.Error):
+                    grandchild.kill()
             if launcher.poll() is None:
                 launcher.kill()
             launcher.wait()
