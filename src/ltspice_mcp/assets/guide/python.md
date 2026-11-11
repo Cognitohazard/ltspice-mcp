@@ -78,9 +78,9 @@ starting a session.
   `timed_out: true`; the job keeps running.
 - Ctrl-C during a wait raises `ApiInterrupted` with the receipt and job id;
   the job keeps running.
-- A job belongs to the process that submitted it and stops when that process
-  exits. In `run_code` that process is the worker, so a worker restart
-  interrupts the jobs it owned. `api.run_experiments(wait=False, detach=True)`
+- A job belongs to the `Api` that submitted it and stops when that `Api`
+  closes or its process exits. In `run_code` that process is the worker, so a
+  worker restart interrupts the jobs it owned. `api.run_experiments(wait=False, detach=True)`
   hands the job to an owner process of its own, so it outlives yours;
   `api.wait(job_id)` or `jobs(action="wait")` reads it from anywhere.
 - To open a sheet's run in LTspice, pass
@@ -103,7 +103,8 @@ functions repeatable on ngspice.
 `api.jobs(detach=True, action="resume", ...)` gives the child its own supervising
 process. Detach applies only to resume and cannot be combined with
 `raw_page=True`. As with any resume, pass the parent's `control_token` unless
-this process submitted or resumed the parent. The token is checked before the
+this `Api` submitted or resumed the parent; a new `Api` opened after `close()`
+needs it too. The token is checked before the
 owner process starts. The resume's `wait_s` is honored, defaults to zero and
 is held to `limits.dwell.run_experiments_wait_max_s` in
 `inspect(kind="capabilities")`. For a full wait, call `api.wait` on the child

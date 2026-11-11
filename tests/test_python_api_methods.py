@@ -1139,10 +1139,10 @@ def test_fire_and_forget_receipt_says_the_job_dies_with_this_process(
     state_no_sim: SessionState,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """close() cancels every job this process owns, so wait=False is not durable.
+    """close() stops every job its session runs, so wait=False is not durable.
 
     The receipt is indistinguishable from a durable submission otherwise, and
-    the loss shows up only as a cancellation the caller never requested.
+    the loss shows up only as an interruption the caller never asked for.
     """
     api = SyncApi(state_no_sim)
     running = make_experiment_job(state_no_sim, job_id="exp-detached", status="running")

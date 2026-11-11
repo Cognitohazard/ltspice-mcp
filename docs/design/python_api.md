@@ -86,7 +86,7 @@ blocked waiting on it.
 `ApiSessionError` when called from the `Api`'s own loop thread, where it would
 deadlock.
 
-**`close()`** stops the jobs this process runs, as server shutdown does, and
+**`close()`** stops the jobs its session runs, as server shutdown does, and
 each reads as it would after a crash: `interrupted` while runs were left
 (`completed_with_failures` when only the attached analysis was), its
 unfinished cases failed with code `server_restarted`, which
@@ -99,7 +99,7 @@ raises `ApiClosedError`, except a submission, `jobs(cancel)`, `jobs(resume)` or
 `edit_schematic`, which `close()` lets finish first. After it returns, the
 process can open a new `Api`.
 
-**Live jobs this process owns do not survive `close()` or process exit.**
+**Live jobs an `Api`'s session runs do not survive `close()` or process exit.**
 Persisted records and results survive. To keep work running after the
 interpreter exits, submit it through a long-lived server process or a per-job
 detached owner (`run_experiments(wait=False, detach=True)`, §11), which is a
@@ -110,7 +110,7 @@ The API states this rule in three places:
 - `reference()` and `reference('run_experiments')` state that `wait=False`
   returns a receipt *and* that the submitting process must outlive the run
   unless `detach=True` hands the job to its own owner, because a job is
-  interrupted when its owning process exits.
+  interrupted when the `Api` that submitted it closes or its process exits.
 - The receipt includes a `process_owned_job` observation.
 - When the process running a job stops before a case finished or wrote its
   results, whether it exited, crashed or closed its `Api`, the case fails. Its
@@ -216,7 +216,8 @@ successive `jobs(wait)` calls:
 - `wait=False, detach=True` is the only combination that does not submit
   in-process. A spawned per-job owner submits the job, so the job survives
   this process (§11).
-- Leaving the `Api` context still cancels the live jobs this process owns (§4).
+- Leaving the `Api` context still stops the live jobs its session runs, which
+  then read `interrupted` (§4).
 
 **Recovery through `Api.jobs`.** Opt in at initial submission with
 `execution={"recoverable": True}`. `api.jobs(action="resume", job_id=parent_id,
@@ -786,9 +787,9 @@ started are stopped and the call raises `ApiCallError` with code
 own session, so the signal does not reach it. In both cases, calling again
 with the same `request_id` replays whatever the owner submitted.
 
-**Ownership.** The calling process never owns a detached job. `close()`,
-leaving a `with` block and interpreter exit stop only the jobs this process
-runs, so they do not stop a detached job. Read it as you would
+**Ownership.** No session of the calling process runs a detached job.
+`close()`, leaving a `with` block and interpreter exit stop only the jobs the
+`Api`'s session runs, so they do not stop a detached job. Read it as you would
 any job another process owns, with `jobs(action="status"|"wait"|"runs")` by
 `job_id` or `request_id`, from this process, a later one, or a running MCP
 server. Cancel it the same way. `jobs(action="cancel")` with the receipt's
@@ -811,8 +812,8 @@ with:
 ```
 code:     "detached_owner"
 kind:     "lifecycle"
-detail:   names the owning pid, says this process does not own the job and
-          that closing the Api will not cancel it, and gives the log path
+detail:   names the owning pid, says this Api's session does not run the job,
+          so closing the Api does not stop it, and gives the log path
 evidence: {"owner_pid": <int>, "log_file": "<path>"}
 ```
 
@@ -834,8 +835,9 @@ Ownership, records and cancellation work the same on both platforms.
 
 The API and an MCP server on the same working directory share the job records
 and the store, and each process holds one session (§4). A job submitted
-through the API with `run_experiments(wait=False)` is owned by the submitting
-process and is cancelled when that process exits; adding `detach=True` hands it
+through the API with `run_experiments(wait=False)` is run by the submitting
+`Api`'s session and ends `interrupted` when that `Api` closes or its process
+exits; adding `detach=True` hands it
 to a detached owner started for that job, which outlives the script (§11).
 Either way, the other interface reads the same record by `job_id`.
 
