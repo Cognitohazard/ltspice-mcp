@@ -24,6 +24,7 @@ from ltspice_mcp.lib.experiment_types import (
     ExperimentJob,
     ManifestEntry,
     SourceRecord,
+    sample_index,
 )
 from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.job_lifecycle import (
@@ -33,9 +34,9 @@ from ltspice_mcp.lib.job_lifecycle import (
 )
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.native_records import NativeCaseRecord
-from ltspice_mcp.lib.raw_parser import has_valid_raw_header, other_raws
+from ltspice_mcp.lib.raw_parser import has_valid_raw_header, other_raws, result_digest
 from ltspice_mcp.lib.recovery_records import CaseRecovery, JobRecovery, RecoveryError
-from ltspice_mcp.lib.simulator import raw_extension_for
+from ltspice_mcp.lib.simulator import dialect_for_simulator_name, raw_extension_for
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable, reported_build
 from ltspice_mcp.lib.store import (
     KIND_CANCELLATION,
@@ -204,6 +205,10 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
                     case.native_statistics.to_record() if case.native_statistics else None
                 ),
                 "simulator_version": case.simulator_version,
+                # Left out when empty, so a record written before they existed
+                # reads back to the bytes it was written as.
+                **({"result_digest": case.result_digest} if case.result_digest else {}),
+                **({"assigned": case.assigned} if case.assigned else {}),
                 "recovery": case.recovery.to_record() if case.recovery is not None else None,
             }
         )
@@ -417,6 +422,8 @@ def _case_record(data: dict[str, Any]) -> ExperimentCase:
             else None
         ),
         simulator_version=_optional_str(data.get("simulator_version")),
+        result_digest=_optional_str(data.get("result_digest")),
+        assigned=dict(data.get("assigned") or {}),
         recovery=(
             CaseRecovery.from_record(data["recovery"])
             if data.get("recovery") is not None
@@ -525,6 +532,12 @@ def _reconcile_restart(job: ExperimentJob, *, liveness: OwnerLiveness) -> None:
             other_raws=other_raws(raw),
             completed_at=case.completed_at or now(),
             simulator_version=case.simulator_version or reported_build(log, raw),
+            result_digest=case.result_digest
+            or (
+                result_digest(raw, dialect_for_simulator_name(job.simulator))
+                if sample_index(case) is not None
+                else None
+            ),
         )
         recovered.append(job.cases[index])
     status = stop_for_owner(job, runs_were_finished=runs_were_finished)

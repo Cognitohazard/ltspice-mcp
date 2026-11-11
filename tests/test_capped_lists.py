@@ -89,6 +89,11 @@ _ALLOWED: dict[str, str] = {
     "tools/analyze.py:_snapshot_from_assembly": (
         "an internal snapshot; answer_total keeps the total and the cursor bases the route"
     ),
+    "tools/receipts.py:_sample_observations": (
+        "names ten assign points where every sample computed one result and gives "
+        "their total in points_truncated; no reply carries a sample's digest, so no "
+        "call reads the rest"
+    ),
     "tools/reference_index.py:_field_entries": (
         "known exception: cuts a reference entry's fields at _MAX_FIELDS with no "
         "total or route; no branch is near the cap today"
