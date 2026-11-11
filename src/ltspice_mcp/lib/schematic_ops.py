@@ -677,10 +677,11 @@ def _apply_component_value(editor, reference: str, value: str) -> None:
     cases like ``M1 d g s b "NMOS_lvt" W=10u`` and
     ``R1 n1 n2 {1/(2*pi*RC)}`` route correctly.
     """
-    _attribute_texts(editor, editor.get_component(reference), {"Value": value})
+    part = editor.get_component(reference)
+    _attribute_texts(editor, part, {"Value": value})
     element = element_class(editor, reference)
     if element in ("V", "I"):
-        _set_source_value(editor, reference, element, value)
+        _set_source_value(editor, part, reference, element, value)
         return
     # Behavioral sources: the whole value IS an equation whose first token is
     # V=/I=/R=... — not a model name with trailing parameters. The KEY=VALUE
@@ -708,11 +709,14 @@ def _apply_component_value(editor, reference: str, value: str) -> None:
         _set_instance_params(editor, reference, params)
 
 
-def _set_source_value(editor, reference: str, element: str, value: str) -> None:
+def _set_source_value(
+    editor, part: SchematicComponent, reference: str, element: str, value: str
+) -> None:
     """A V or I source's value set to ``value``, by the rule a card's is
     (``component_value.edited_source``): its own parameters stay, and a
     ``KEY=VALUE`` of its value, such as a PWL's ``TIME_SCALE_FACTOR=``, stays
-    in it.
+    in it. ``part`` is the source, which ``_apply_component_value`` looked up
+    by ``reference``.
 
     A part may give a keyed parameter in any of its attributes, so one
     ``value`` gives is set in every copy found and added to SpiceLine where
@@ -720,7 +724,7 @@ def _set_source_value(editor, reference: str, element: str, value: str) -> None:
     An ``AC 2`` or a ``load`` with no ``=`` goes in Value. A Value that would be
     empty is not written. A source that plays a .wav file has no value to set.
     """
-    held = editor.get_component(reference).attributes.get("Value", "")
+    held = part.attributes.get("Value", "")
     try:
         old, new = read_source_text(held, element), read_source_text(value, element)
     except SpiceLexError as e:
