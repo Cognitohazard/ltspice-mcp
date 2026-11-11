@@ -39,31 +39,22 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from spicelib import AscEditor
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.connectivity import crossing_points
 from ltspice_mcp.lib.routing import wires_through
-from ltspice_mcp.lib.schematic_ops import (
-    OpAddNetLabel,
-    OpMoveComponent,
-    apply_op_inplace,
-    collect_component_geometry,
-    placed_geometry,
-    resolve_pin,
-    wire_segments_of,
-)
 from tests._proposal_record import (
     Asked,
+    Driver,
+    differences,
     entry_of,
     every_nth,
     open_staged,
-    sheet_says,
     what_is_there,
     without_particulars,
     write_record,
 )
-from tests._schematic_fixtures import SUITE_SHEETS, TESTS, suite_name, suite_resolver
+from tests._schematic_fixtures import SUITE_SHEETS, TESTS, suite_name
 
 _RECORD = TESTS / "fixtures" / "label_and_move_record.json"
 _RECORDING = os.environ.get("LTSPICE_MCP_RECORD_LABELS_AND_MOVES") == "1"
@@ -92,13 +83,13 @@ def _in_order(points: list[Point]) -> list[Point]:
     return list(dict.fromkeys(points))
 
 
-def _places(editor: AscEditor) -> tuple[list[Point], list[Point], list[tuple[str, int, int]]]:
+def _places(driver: Driver) -> tuple[list[Point], list[Point], list[tuple[str, int, int]]]:
     """The points of a sheet few sheets have, the rest of its wiring, and its pins by name."""
-    wires = wire_segments_of(editor)
-    labels = [(int(label.coord.X), int(label.coord.Y)) for label in editor.labels]
+    wires = driver.wires()
+    labels = [point for point, _text in driver.labels()]
     pins = [
         (f"{part['ref']}.{pin['name']}", pin["x"], pin["y"])
-        for part in collect_component_geometry(editor)
+        for part in driver.parts()
         for pin in part["pins"]
     ]
     every = [point for x1, y1, x2, y2 in wires for point in ((x1, y1), (x2, y2))]
@@ -115,26 +106,25 @@ def _places(editor: AscEditor) -> tuple[list[Point], list[Point], list[tuple[str
     return rare, wiring, pins
 
 
-def _label_proposals(editor: AscEditor) -> list[dict[str, Any]]:
+def _label_proposals(driver: Driver) -> list[dict[str, Any]]:
     """The labels asked of a sheet, in an order that depends on the sheet alone."""
-    rare, wiring, pins = _places(editor)
-    names = list(dict.fromkeys([*(label.text for label in editor.labels), "0", _FRESH]))
+    rare, wiring, pins = _places(driver)
+    names = list(dict.fromkeys([*(text for _point, text in driver.labels()), "0", _FRESH]))
     at_rare = [{"net": name, "x": x, "y": y} for x, y in rare for name in names]
     elsewhere = [{"net": name, "x": x, "y": y} for x, y in wiring for name in names]
     elsewhere += [{"net": name, "pin": pin} for pin, _x, _y in pins for name in names]
     return every_nth(at_rare, _MOST_AT_RARE_POINTS) + every_nth(elsewhere, _MOST_ELSEWHERE)
 
 
-def _move_proposals(editor: AscEditor) -> list[dict[str, Any]]:
+def _move_proposals(driver: Driver) -> list[dict[str, Any]]:
     """The moves asked of a sheet: each pin of each part onto each place, and
     each part to where it is."""
-    rare, wiring, pins = _places(editor)
+    rare, wiring, pins = _places(driver)
     onto_rare: list[dict[str, Any]] = []
     elsewhere: list[dict[str, Any]] = []
-    for part in collect_component_geometry(editor):
+    for part in driver.parts():
         ref = part["ref"]
-        at, _rotation = editor.get_component_position(ref)
-        here = (int(at.X), int(at.Y))
+        here = driver.position(ref)
         elsewhere.append({"reference": ref, "x": here[0], "y": here[1]})
         others = [(x, y) for name, x, y in pins if name.rsplit(".", 1)[0] != ref]
         for pin in part["pins"]:
@@ -150,65 +140,55 @@ def _move_proposals(editor: AscEditor) -> list[dict[str, Any]]:
     return every_nth(onto_rare, _MOST_AT_RARE_POINTS) + every_nth(elsewhere, _MOST_ELSEWHERE)
 
 
-def _labels_asked(editor: AscEditor) -> list[Asked]:
-    sheet = Path(editor.asc_file_path)
-    resolver = suite_resolver(sheet)
-    there = what_is_there(editor)
+def _labels_asked(driver: Driver) -> list[Asked]:
+    there = what_is_there(driver.nets())
     asked: list[Asked] = []
-    for proposal in _label_proposals(editor):
-        had = len(editor.labels)
+    for proposal in _label_proposals(driver):
         at = (
-            resolve_pin(proposal["pin"], editor)
+            driver.pin_point(proposal["pin"])
             if "pin" in proposal
             else (proposal["x"], proposal["y"])
         )
         said, met, named = there(proposal["net"], at)
+        answer: dict[str, Any] = {}
         try:
-            apply_op_inplace(editor, OpAddNetLabel(op="add_net_label", **proposal), sheet)
+            # Taken back on leaving, so each proposal is put to the same sheet.
+            with driver.label_placed(proposal):
+                text = "placed"
+                # The sheet can say something only where nets met or a named net
+                # took another name; it is read only there, which keeps the run short.
+                if met > 1 or (named and proposal["net"] != "0"):
+                    text += driver.findings_at({at})
         except NetlistError as refused:
-            answer: dict[str, Any] = {"refused": str(refused)}
+            answer["refused"] = str(refused)
             text = "refused: " + answer["refused"]
-        else:
-            answer = {}
-            text = "placed"
-            # The sheet can say something only where nets met or a named net
-            # took another name; it is read only there, which keeps the run short.
-            if met > 1 or (named and proposal["net"] != "0"):
-                text += sheet_says(editor, {at}, resolver)
-        # The sheet is put back as it was, so each proposal is put to the same sheet.
-        del editor.labels[had:]
         answer["there"] = said
         # Its numbers are kept: how many nets met there is what the shape is for.
         asked.append(Asked(proposal, answer, f"{without_particulars(text)} [{answer['there']}]"))
     return asked
 
 
-def _moves_asked(editor: AscEditor) -> list[Asked]:
-    sheet = Path(editor.asc_file_path)
-    resolver = suite_resolver(sheet)
+def _moves_asked(driver: Driver) -> list[Asked]:
     asked: list[Asked] = []
-    for proposal in _move_proposals(editor):
-        at, rotation = editor.get_component_position(proposal["reference"])
+    for proposal in _move_proposals(driver):
+        answer: dict[str, Any] = {}
         try:
-            apply_op_inplace(editor, OpMoveComponent(op="move_component", **proposal), sheet)
+            # Taken back on leaving, so each proposal is put to the same sheet.
+            with driver.part_moved(proposal):
+                text = "moved"
+                # A pin on two or more wires is where a join can be made; the
+                # sheet is read only then.
+                wires = driver.wires()
+                crossed = {
+                    point
+                    for point in driver.pins_of(proposal["reference"])
+                    if len(wires_through(point, wires)) > 1
+                }
+                if crossed:
+                    text += driver.findings_at(crossed)
         except NetlistError as refused:
-            answer: dict[str, Any] = {"refused": str(refused)}
+            answer["refused"] = str(refused)
             text = "refused: " + answer["refused"]
-        else:
-            answer = {}
-            text = "moved"
-            # A pin on two or more wires is where a join can be made; the sheet
-            # is read only then.
-            geometry = placed_geometry(editor, proposal["reference"])
-            wires = wire_segments_of(editor)
-            crossed = {
-                (pin["x"], pin["y"])
-                for pin in (geometry or {}).get("pins", ())
-                if len(wires_through((pin["x"], pin["y"]), wires)) > 1
-            }
-            if crossed:
-                text += sheet_says(editor, crossed, resolver)
-        editor.set_component_position(proposal["reference"], at, rotation)
         asked.append(Asked(proposal, answer, without_particulars(text)))
     return asked
 
@@ -216,19 +196,13 @@ def _moves_asked(editor: AscEditor) -> list[Asked]:
 _OPS = {"labels": _labels_asked, "moves": _moves_asked}
 
 
-def answers_of(
-    sheet: Path, sandbox: Path
-) -> tuple[dict[str, Any], dict[str, dict[str, dict[str, Any]]]] | None:
-    """What the record holds of ``sheet`` for each op and an example of each
-    shape, or ``None`` for a sheet the editor cannot open."""
-    editor = open_staged(sheet, sandbox)
-    if editor is None:
+def asked_of(sheet: Path, sandbox: Path) -> dict[str, list[Asked]] | None:
+    """Each proposal put to each op on ``sheet`` with what it answered, or
+    ``None`` for a sheet the editor cannot open."""
+    driver = open_staged(sheet, sandbox)
+    if driver is None:
         return None
-    entry: dict[str, Any] = {}
-    examples: dict[str, dict[str, dict[str, Any]]] = {}
-    for op, asked_of in _OPS.items():
-        entry[op], examples[op] = entry_of(asked_of(editor))
-    return entry, examples
+    return {op: ask(driver) for op, ask in _OPS.items()}
 
 
 def _recorded() -> dict[str, Any]:
@@ -242,12 +216,13 @@ def test_record_what_the_ops_answer(tmp_path: Path):
     for number, sheet in enumerate(SUITE_SHEETS):
         sandbox = tmp_path / f"sheet{number}"
         sandbox.mkdir()
-        answered = answers_of(sheet, sandbox)
-        if answered is None:
+        asked = asked_of(sheet, sandbox)
+        if asked is None:
             continue
-        sheets[suite_name(sheet)], seen = answered
-        for op, by_shape in seen.items():
-            for shape, example in by_shape.items():
+        sheets[suite_name(sheet)] = {}
+        for op, answered in asked.items():
+            sheets[suite_name(sheet)][op], seen = entry_of(answered)
+            for shape, example in seen.items():
                 examples[op].setdefault(shape, {"sheet": suite_name(sheet), **example})
     write_record(
         _RECORD,
@@ -312,17 +287,13 @@ def test_the_record_has_an_example_of_every_shape():
 
 @pytest.mark.parametrize("sheet", SUITE_SHEETS, ids=suite_name)
 def test_the_ops_answer_as_the_record_says(sheet: Path, tmp_path: Path):
-    answered = answers_of(sheet, tmp_path)
+    asked = asked_of(sheet, tmp_path)
     recorded = _recorded()["sheets"].get(suite_name(sheet))
-    if answered is None:
+    if asked is None:
         assert recorded is None, "the editor opened this sheet when the record was made"
         pytest.skip("the editor cannot open this sheet")
-    entry, _examples = answered
     assert recorded is not None, (
         "a sheet with no record; run this file with LTSPICE_MCP_RECORD_LABELS_AND_MOVES=1"
     )
-    for op in _OPS:
-        # The shapes first: they say what kind of answer changed, where the
-        # digest only says that one did.
-        assert entry[op]["shapes"] == recorded[op]["shapes"], op
-    assert entry == recorded
+    said = [f"{op}: {line}" for op in _OPS for line in differences(asked[op], recorded[op])]
+    assert not said, "\n".join(said)

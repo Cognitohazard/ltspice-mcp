@@ -9,13 +9,13 @@ an end given by the name of its net, and an end given by a label's point) is
 put to the planner, and what it answers, refusal or route with the junctions
 it makes onto its own net, is as it was when the record was made.
 
-The record is ``fixtures/route_planner_record.json``. It keeps, for each sheet,
-how many proposals there were, a digest of every answer in order, and how many
-answers had each *shape*: the answer with its numbers and quoted names taken
-out, so that one refusal worded for different pins is one shape. One whole
-answer is kept for each shape as an example. A digest that differs says an
-answer changed; the shapes and examples say what kind. To make the record
-again, run this file with ``LTSPICE_MCP_RECORD_ROUTE_PLANNER=1``.
+The record is ``fixtures/route_planner_record.json``, in the form
+``tests/_proposal_record.py`` describes: for each sheet, the *shape* of each
+answer in order (the answer with its numbers and quoted names taken out, so
+that one refusal worded for different pins is one shape) and a digest of the
+answers whole. One whole answer is kept for each shape as an example. A test
+that fails names each proposal whose answer moved to another shape. To make
+the record again, run this file with ``LTSPICE_MCP_RECORD_ROUTE_PLANNER=1``.
 
 Like the record of sheet findings, it is the same on every machine: a symbol
 is looked for beside its sheet and in the suite's stand-in library only.
@@ -29,17 +29,13 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from spicelib import AscEditor
 
 from ltspice_mcp.errors import NetlistError
-from ltspice_mcp.lib.schematic_ops import (
-    GridPoint,
-    _plan_connect_route,  # pyright: ignore[reportPrivateUsage]  # the planner behind wire_pins
-    collect_component_geometry,
-    wire_segments_of,
-)
+from ltspice_mcp.lib.schematic_ops import GridPoint
 from tests._proposal_record import (
     Asked,
+    Driver,
+    differences,
     entry_of,
     every_nth,
     open_staged,
@@ -64,15 +60,15 @@ Proposal = tuple[Any, Any, list[GridPoint]]
 pytestmark = pytest.mark.usefixtures("suite_symbols_only")
 
 
-def _proposals(editor: AscEditor) -> list[Proposal]:
+def _proposals(driver: Driver) -> list[Proposal]:
     """The routes asked of a sheet, in an order that depends on the sheet alone."""
-    parts = collect_component_geometry(editor)
+    parts = driver.parts()
     pins = [
         (f"{part['ref']}.{pin['name']}", pin["x"], pin["y"])
         for part in parts
         for pin in part["pins"]
     ]
-    wires = wire_segments_of(editor)
+    wires = driver.wires()
     asked: list[Proposal] = []
     for name_a, ax, ay in pins:
         for name_b, bx, by in pins:
@@ -103,22 +99,21 @@ def _proposals(editor: AscEditor) -> list[Proposal]:
     # each pin straight and round a corner, and from each pin round the other.
     by_name: list[Proposal] = []
     names: set[str] = set()
-    for label in editor.labels:
-        if label.text in names:
+    for (lx, ly), text in driver.labels():
+        if text in names:
             continue
-        names.add(label.text)
-        lx, ly = int(label.coord.X), int(label.coord.Y)
+        names.add(text)
         for pin, px, py in pins:
-            by_name.append((f"net:{label.text}", pin, []))
-            by_name.append((f"net:{label.text}", pin, [GridPoint(x=lx, y=py)]))
-            by_name.append((pin, f"net:{label.text}", [GridPoint(x=px, y=ly)]))
+            by_name.append((f"net:{text}", pin, []))
+            by_name.append((f"net:{text}", pin, [GridPoint(x=lx, y=py)]))
+            by_name.append((pin, f"net:{text}", [GridPoint(x=px, y=ly)]))
     if len(by_name) > _MOST_BY_NAME:
         by_name = every_nth(by_name, _MOST_BY_NAME)
     # An end given by a label's point, for every label: what reaches one of
     # several labels of a name, a ground, or a label that stands on nothing.
     by_point: list[Proposal] = []
-    for label in editor.labels:
-        point = GridPoint(x=int(label.coord.X), y=int(label.coord.Y))
+    for (lx, ly), _text in driver.labels():
+        point = GridPoint(x=lx, y=ly)
         for pin, px, _py in pins:
             by_point.append((pin, point, []))
             by_point.append((pin, point, [GridPoint(x=px, y=point.y)]))
@@ -127,10 +122,10 @@ def _proposals(editor: AscEditor) -> list[Proposal]:
     return asked + by_name + by_point
 
 
-def _answer(editor: AscEditor, proposal: Proposal) -> dict[str, Any]:
+def _answer(driver: Driver, proposal: Proposal) -> dict[str, Any]:
     from_pin, to_pin, waypoints = proposal
     try:
-        plan = _plan_connect_route(editor, from_pin, to_pin, waypoints)
+        plan = driver.propose_route(from_pin, to_pin, waypoints)
     except NetlistError as refused:
         return {"refused": str(refused)}
     return {
@@ -149,18 +144,16 @@ def _shape(answer: dict[str, Any]) -> str:
     return without_particulars(text)
 
 
-def answers_of(
-    sheet: Path, sandbox: Path
-) -> tuple[dict[str, Any], dict[str, dict[str, Any]]] | None:
-    """What the record holds of ``sheet`` and an example of each shape, or
+def asked_of(sheet: Path, sandbox: Path) -> list[Asked] | None:
+    """Each route proposed on ``sheet`` with what the planner answered, or
     ``None`` for a sheet the editor cannot open."""
-    editor = open_staged(sheet, sandbox)
-    if editor is None:
+    driver = open_staged(sheet, sandbox)
+    if driver is None:
         return None
     asked: list[Asked] = []
-    for proposal in _proposals(editor):
+    for proposal in _proposals(driver):
         from_pin, to_pin, waypoints = proposal
-        answer = _answer(editor, proposal)
+        answer = _answer(driver, proposal)
         asked.append(
             Asked(
                 {
@@ -172,7 +165,7 @@ def answers_of(
                 _shape(answer),
             )
         )
-    return entry_of(asked)
+    return asked
 
 
 def _recorded() -> dict[str, Any]:
@@ -186,10 +179,10 @@ def test_record_the_planners_answers(tmp_path: Path):
     for number, sheet in enumerate(SUITE_SHEETS):
         sandbox = tmp_path / f"sheet{number}"
         sandbox.mkdir()
-        answered = answers_of(sheet, sandbox)
-        if answered is None:
+        asked = asked_of(sheet, sandbox)
+        if asked is None:
             continue
-        entry, seen = answered
+        entry, seen = entry_of(asked)
         sheets[suite_name(sheet)] = entry
         for shape, example in seen.items():
             examples.setdefault(shape, {"sheet": suite_name(sheet), **example})
@@ -227,16 +220,13 @@ def test_the_record_asks_enough_to_hold_every_check():
 
 @pytest.mark.parametrize("sheet", SUITE_SHEETS, ids=suite_name)
 def test_the_planner_answers_as_the_record_says(sheet: Path, tmp_path: Path):
-    answered = answers_of(sheet, tmp_path)
+    asked = asked_of(sheet, tmp_path)
     recorded = _recorded()["sheets"].get(suite_name(sheet))
-    if answered is None:
+    if asked is None:
         assert recorded is None, "the editor opened this sheet when the record was made"
         pytest.skip("the editor cannot open this sheet")
-    entry, _examples = answered
     assert recorded is not None, (
         "a sheet with no record; run this file with LTSPICE_MCP_RECORD_ROUTE_PLANNER=1"
     )
-    # The shapes first: they say what kind of answer changed, where the digest
-    # only says that one did.
-    assert entry["shapes"] == recorded["shapes"]
-    assert entry == recorded
+    said = differences(asked, recorded)
+    assert not said, "\n".join(said)
