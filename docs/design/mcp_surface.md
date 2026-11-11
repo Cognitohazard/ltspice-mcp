@@ -2620,8 +2620,7 @@ recoverable run is refused before the job is recorded
 rules. A `.lib file section` line needs a mode ngspice reads without its
 `lt`, `ps` or `s3` flag (`hsa` or native mode): `lt` and `ps` read it as two
 plain includes, and `s3` skips it. The server reads a mode's flags as ngspice
-does (`lib/ngspice_compat.py`): from its first 80 characters, letters match
-case-sensitively, `spe` clears `ps`, `lt`, `ki` and `eg`, then `ps` clears
+does (`lib/ngspice_compat.py`): letters match case-sensitively, `spe` clears `ps`, `lt`, `ki` and `eg`, then `ps` clears
 `hs`, and `mc` turns off every flag but `s3`. So `spelt` and `ltmc` read a
 section, `hsps` replaces a card's `m` instead of multiplying it, and `s3mc`
 skips a section. The deck's first line is its title and is skipped; an

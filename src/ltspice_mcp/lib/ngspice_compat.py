@@ -5,8 +5,8 @@ behaviour a mode changes follows the flags, not the string. Every question the
 server asks about a mode's reading of a deck goes through ``compat_flags``.
 Measured on ngspice-42:
 
-- ngspice reads the first 80 characters of the string;
-- a flag is set when its letters occur anywhere in them, case sensitively:
+- a flag is set when its letters occur anywhere in the string, case
+  sensitively:
   ``hsa`` sets ``hs`` and ``a``, ``Hsa`` only ``a``, ``HSA`` none;
 - ``spe`` clears ``ps``, ``lt``, ``ki`` and ``eg``: ``spelt`` reads as ``spe``;
 - then ``ps`` clears ``hs``: ``hsps`` reads as ``ps``, ``spehsps`` as
@@ -25,9 +25,6 @@ from __future__ import annotations
 FLAGS = ("hs", "ps", "lt", "ki", "a", "ll", "s3", "eg", "spe", "mc", "xs")
 """Every flag ngspice-42 reads from a mode string."""
 
-_READ = 80
-"""How many characters of a mode string ngspice-42 reads."""
-
 
 def mode_as_given(text: str) -> str:
     """A mode as the server takes it from a person, in ``[simulator]
@@ -40,7 +37,7 @@ def mode_as_given(text: str) -> str:
 
 def compat_flags(mode: str | None) -> frozenset[str]:
     """The flags ngspice sets for ``mode``; empty for no mode."""
-    text = (mode or "")[:_READ]
+    text = mode or ""
     flags = {flag for flag in FLAGS if flag in text}
     if "mc" in flags:
         return frozenset({"mc"} | (flags & {"s3"}))

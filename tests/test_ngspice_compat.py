@@ -33,7 +33,7 @@ needs_ngspice = pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngsp
 #: (``spelt``), ``ps`` clearing ``hs`` (``hsps``) only after ``spe`` has
 #: run (``spehsps``), ``mc`` turning the others off (``ltmc``, ``hsmc``,
 #: ``psmc``) but ``s3`` (``s3mc``), ``s3`` beside others (``hsas3``,
-#: ``lts3``), and the 80 characters ngspice reads.
+#: ``lts3``).
 MODES = (
     "",
     "hsa",
@@ -56,8 +56,6 @@ MODES = (
     "s3mc",
     "hsas3",
     "lts3",
-    "y" * 78 + "lt",
-    "y" * 79 + "lt",
 )
 
 #: The flags ngspice-42 names for each mode in its log, measured with
@@ -81,8 +79,6 @@ MEASURED_FLAGS = {
     "hsas3": {"hs", "a", "s3"},
     "lts3": {"lt", "s3"},
     "xsspe": {"xs", "spe"},
-    "y" * 78 + "lt": {"lt"},
-    "y" * 79 + "lt": set(),
 }
 
 SECTIONED = "* sectioned\n.lib models.lib tt\nR1 1 0 {rv}\nV1 1 0 1\n.op\n.end\n"

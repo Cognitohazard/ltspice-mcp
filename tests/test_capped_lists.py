@@ -97,9 +97,6 @@ _ALLOWED: dict[str, str] = {
         "total or route; no branch is near the cap today"
     ),
     "lib/deck_prep.py:stage_sheet": "bounds the files staged for an export, not a reply list",
-    "lib/ngspice_compat.py:compat_flags": (
-        "reads a mode string as ngspice does, its first 80 characters; not a reply list"
-    ),
     "lib/log_parser.py:_render_file_line_family": (
         "line numbers inside one diagnostic, ending in a '(+N more)' tail"
     ),
