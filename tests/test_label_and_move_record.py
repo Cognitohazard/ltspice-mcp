@@ -40,7 +40,6 @@ from typing import Any
 
 import pytest
 
-from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.connectivity import crossing_points
 from ltspice_mcp.lib.routing import wires_through
 from tests._proposal_record import (
@@ -151,17 +150,17 @@ def _labels_asked(driver: Driver) -> list[Asked]:
         )
         said, met, named = there(proposal["net"], at)
         answer: dict[str, Any] = {}
-        try:
-            # Taken back on leaving, so each proposal is put to the same sheet.
-            with driver.label_placed(proposal):
+        # Taken back on leaving, so each proposal is put to the same sheet.
+        with driver.label_placed(proposal) as refused:
+            if refused is not None:
+                answer["refused"] = refused
+                text = "refused: " + refused
+            else:
                 text = "placed"
                 # The sheet can say something only where nets met or a named net
                 # took another name; it is read only there, which keeps the run short.
                 if met > 1 or (named and proposal["net"] != "0"):
                     text += driver.findings_at({at})
-        except NetlistError as refused:
-            answer["refused"] = str(refused)
-            text = "refused: " + answer["refused"]
         answer["there"] = said
         # Its numbers are kept: how many nets met there is what the shape is for.
         asked.append(Asked(proposal, answer, f"{without_particulars(text)} [{answer['there']}]"))
@@ -172,9 +171,12 @@ def _moves_asked(driver: Driver) -> list[Asked]:
     asked: list[Asked] = []
     for proposal in _move_proposals(driver):
         answer: dict[str, Any] = {}
-        try:
-            # Taken back on leaving, so each proposal is put to the same sheet.
-            with driver.part_moved(proposal):
+        # Taken back on leaving, so each proposal is put to the same sheet.
+        with driver.part_moved(proposal) as refused:
+            if refused is not None:
+                answer["refused"] = refused
+                text = "refused: " + refused
+            else:
                 text = "moved"
                 # A pin on two or more wires is where a join can be made; the
                 # sheet is read only then.
@@ -186,9 +188,6 @@ def _moves_asked(driver: Driver) -> list[Asked]:
                 }
                 if crossed:
                     text += driver.findings_at(crossed)
-        except NetlistError as refused:
-            answer["refused"] = str(refused)
-            text = "refused: " + answer["refused"]
         asked.append(Asked(proposal, answer, without_particulars(text)))
     return asked
 

@@ -32,6 +32,7 @@ from typing import Any, TypeVar
 
 from spicelib import AscEditor
 
+from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.connectivity import NamedNets
 from ltspice_mcp.lib.schematic_ops import (
     GridPoint,
@@ -147,9 +148,20 @@ def differences(asked: Sequence[Asked], recorded: dict[str, Any]) -> list[str]:
     if entry == recorded:
         return []
     if entry["asked_sha256"] != recorded.get("asked_sha256"):
+        # The proposals come from the sheet as the harness reads it (its parts,
+        # wires and labels), so a change in them can be a regression in that
+        # reading as much as in the harness: what each shape now counts says which.
+        then, now = recorded["shapes"], entry["shapes"]
         return [
             f"the proposals are not those recorded ({recorded['proposals']} then, "
-            f"{len(asked)} now), so no answer can be held to its own; record again"
+            f"{len(asked)} now), so no answer can be held to its own. They come from "
+            "the sheet as read: check that its parts, wires and labels read as before, "
+            "then record again. Shapes whose count changed, then and now:",
+            *(
+                f"  {then.get(shape, 0)} -> {now.get(shape, 0)}: {shape}"
+                for shape in sorted(set(then) | set(now))
+                if then.get(shape, 0) != now.get(shape, 0)
+            ),
         ]
     moved = [
         (one, was)
@@ -168,8 +180,9 @@ def moved_lines(moved: Sequence[tuple[Asked, str]]) -> list[str]:
     """The lines that say which proposals' answers moved to another shape, and
     from which: each of ``moved`` is a proposal as answered now, with the shape
     it was recorded with."""
-    # One line for each move from a shape to a shape, the most proposals first,
-    # naming the first few: a change moves many answers the same way.
+    # Each move from a shape to a shape, the most proposals first, naming the
+    # first few: a change moves many answers the same way. The shapes are
+    # given whole, since two can differ only at their end.
     by_move: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for one, was in moved:
         by_move.setdefault((was, one.shape), []).append(one.proposal)
@@ -177,14 +190,12 @@ def moved_lines(moved: Sequence[tuple[Asked, str]]) -> list[str]:
     for (was, now), proposals in sorted(by_move.items(), key=lambda item: -len(item[1])):
         shown = "; ".join(json.dumps(proposal, sort_keys=True) for proposal in proposals[:3])
         more = f" and {len(proposals) - 3} more" if len(proposals) > 3 else ""
-        lines.append(
-            f"{len(proposals)} from {_shortened(was)!r} to {_shortened(now)!r}: {shown}{more}"
-        )
+        lines += [
+            f"{len(proposals)} moved, as {shown}{more}",
+            f"  from: {was}",
+            f"  to:   {now}",
+        ]
     return lines
-
-
-def _shortened(shape: str, most: int = 160) -> str:
-    return shape if len(shape) <= most else shape[: most - 1] + "…"
 
 
 def write_record(path: Path, record: dict[str, Any]) -> None:
@@ -244,30 +255,34 @@ class Driver:
         return _plan_connect_route(self._editor, from_pin, to_pin, waypoints)
 
     @contextmanager
-    def label_placed(self, proposal: dict[str, Any]) -> Iterator[None]:
-        """``add_net_label`` with ``proposal``, taken back on leaving; raises
-        ``NetlistError`` where the op refuses it."""
+    def label_placed(self, proposal: dict[str, Any]) -> Iterator[str | None]:
+        """``add_net_label`` with ``proposal``, taken back on leaving. Gives the
+        op's refusal, or ``None`` where it placed the label; an error raised
+        while the block reads the sheet is no refusal and is not caught."""
         had = len(self._editor.labels)
         try:
-            apply_op_inplace(
-                self._editor, OpAddNetLabel(op="add_net_label", **proposal), self._sheet
-            )
-            yield
+            yield self._refusal(OpAddNetLabel(op="add_net_label", **proposal))
         finally:
             del self._editor.labels[had:]
 
     @contextmanager
-    def part_moved(self, proposal: dict[str, Any]) -> Iterator[None]:
-        """``move_component`` with ``proposal``, taken back on leaving; raises
-        ``NetlistError`` where the op refuses it."""
+    def part_moved(self, proposal: dict[str, Any]) -> Iterator[str | None]:
+        """``move_component`` with ``proposal``, taken back on leaving. Gives the
+        op's refusal, or ``None`` where it moved the part; an error raised while
+        the block reads the sheet is no refusal and is not caught."""
         at, rotation = self._editor.get_component_position(proposal["reference"])
         try:
-            apply_op_inplace(
-                self._editor, OpMoveComponent(op="move_component", **proposal), self._sheet
-            )
-            yield
+            yield self._refusal(OpMoveComponent(op="move_component", **proposal))
         finally:
             self._editor.set_component_position(proposal["reference"], at, rotation)
+
+    def _refusal(self, op: OpAddNetLabel | OpMoveComponent) -> str | None:
+        """Apply ``op``: its refusal, or ``None`` where it applied."""
+        try:
+            apply_op_inplace(self._editor, op, self._sheet)
+        except NetlistError as refused:
+            return str(refused)
+        return None
 
     def findings_at(self, points: set[Point]) -> str:
         """The join rules the sheet reports at ``points``: the word an edit's

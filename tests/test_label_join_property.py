@@ -17,7 +17,6 @@ from pathlib import Path
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
-from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.connectivity import crossing_points
 from tests._proposal_record import driver_of, what_is_there
 
@@ -66,8 +65,6 @@ def test_a_label_where_nets_cross_is_refused_or_said(
             _said, met, _named = there(name, (x, y))
             if met < 2:
                 continue
-            try:
-                with driver.label_placed({"net": name, "x": x, "y": y}):
+            with driver.label_placed({"net": name, "x": x, "y": y}) as refused:
+                if refused is None:
                     assert driver.findings_at({(x, y)}), (text, name, (x, y))
-            except NetlistError:
-                continue
