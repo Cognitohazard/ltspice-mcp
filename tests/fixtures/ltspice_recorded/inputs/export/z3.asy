@@ -1,0 +1,14 @@
+Version 4
+SymbolType CELL
+RECTANGLE Normal -32 -32 32 96
+SYMATTR Value nmf
+SYMATTR Prefix Z
+PIN 0 -32 NONE 0
+PINATTR PinName D
+PINATTR SpiceOrder 1
+PIN 0 0 NONE 0
+PINATTR PinName G
+PINATTR SpiceOrder 2
+PIN 0 32 NONE 0
+PINATTR PinName S
+PINATTR SpiceOrder 3

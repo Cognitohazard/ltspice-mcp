@@ -17,9 +17,14 @@ from typing import TYPE_CHECKING
 
 from ltspice_mcp.lib import atomic_write_bytes, capabilities, now
 from ltspice_mcp.lib.asc_document import is_asc
-from ltspice_mcp.lib.deck_staging import sha256_file, staged_card_reference_targets
+from ltspice_mcp.lib.deck_staging import (
+    card_sections,
+    sha256_file,
+    staged_card_reference_targets,
+)
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.experiment_types import ExperimentCase, SourceRecord
+from ltspice_mcp.lib.ngspice_driver import deck_seeds, fixed_seed, seed_option
 from ltspice_mcp.lib.pdk_native import ArtifactDigest, NativePaths, driver_bytes
 from ltspice_mcp.lib.recovery_records import (
     ExecutionRecord,
@@ -67,7 +72,8 @@ _RANDOM = frozenset(
     }
 )
 # ngspice's electrical parser evaluates these through gauss1/drand, both
-# backed by the generator reset by setseed. Transient noise uses other state.
+# backed by the generator setseed resets, as a seed option does. Transient
+# noise uses other state.
 _SEEDED_RANDOM = frozenset({"agauss", "gauss", "aunif", "unif", "limit"})
 _PURE_FUNCTIONS = frozenset(
     {
@@ -337,7 +343,13 @@ def capture_case_inputs(
     )
     # Typed native preparation has its own control/seed contract. The electrical
     # closure is still checked below; only its generated setup is excluded.
-    verify_case_inputs(result, native=native is not None, seeded=seeded, origins=origins)
+    verify_case_inputs(
+        result,
+        native=native is not None,
+        seeded=seeded,
+        dialect=source.dialect,
+        origins=origins,
+    )
     return result
 
 
@@ -369,8 +381,9 @@ def _quoted_passive_value(card: SpiceCard, tokens: list[Token]) -> bool:
 class _Construct:
     """A check a card fails: its refusal code and the construct it names.
 
-    ``seedable`` marks random functions an ngspice ``simulator_seed`` admits,
-    on a deck that has none, so the refusal offers the seed only where it helps.
+    ``seedable`` marks random functions an ngspice seed admits (``simulator_seed``
+    or the deck's own), on a deck that has none, so the refusal offers a seed
+    only where it helps.
     """
 
     code: str
@@ -488,13 +501,17 @@ def _validate_cards(
     return refused
 
 
-def _refusal(refused: list[_Refused], origins: Mapping[Path, str]) -> RecoveryError:
+def _refusal(
+    refused: list[_Refused], origins: Mapping[Path, str], *, offer_seed: bool
+) -> RecoveryError:
     """One refusal naming every construct refused, grouped by construct.
 
     The code is the first construct's: a card the lexer cannot classify, then
-    a seeded deck's analyses, then each file's cards in turn, the deck's
-    first. The message lists each construct with its code, so a deck is fixed
-    in one pass rather than one submission per construct.
+    a seeded deck's analyses, then a seeded deck's own seed options, then each
+    file's cards in turn, the deck's first, then an unseeded deck's own seed
+    options. The message lists each construct with its code, so a deck is
+    fixed in one pass rather than one submission per construct. With
+    ``offer_seed`` it names the two ways to seed ngspice.
     """
     groups: dict[tuple[str, str], dict[str, _Refused]] = {}
     for item in refused:
@@ -520,7 +537,6 @@ def _refusal(refused: list[_Refused], origins: Mapping[Path, str]) -> RecoveryEr
             "these are fixed and the request is sent again"
         )
     count = len(groups)
-    seedable = any(item.seedable for item in refused)
     message = (
         f"Recoverable execution refuses {count} construct{'s' if count != 1 else ''} "
         "in this deck and the files it includes, because a resumed case could not "
@@ -528,8 +544,9 @@ def _refusal(refused: list[_Refused], origins: Mapping[Path, str]) -> RecoveryEr
         + "\n".join(lines)
         + "\nChange or remove each, or submit without execution.recoverable"
         + (
-            "; on ngspice, execution.simulator_seed admits agauss, gauss, aunif, unif and limit"
-            if seedable
+            "; on ngspice, execution.simulator_seed, or a seed the deck fixes itself with "
+            "`.options seed=<n>` at its top level, admits agauss, gauss, aunif, unif and limit"
+            if offer_seed
             else ""
         )
         + "."
@@ -561,7 +578,12 @@ def _native_setup(inputs: FrozenInputs, artifact: ArtifactDigest, content: bytes
 
 
 def _verify_inputs(
-    inputs: FrozenInputs, *, native: bool, seeded: bool, origins: Mapping[Path, str]
+    inputs: FrozenInputs,
+    *,
+    native: bool,
+    seeded: bool,
+    dialect: str | None,
+    origins: Mapping[Path, str],
 ) -> None:
     inventory = {item.path.resolve(): item for item in inputs.files}
     contents: dict[str, bytes] = {}
@@ -641,6 +663,35 @@ def _verify_inputs(
                     f"it has {', '.join(analyses) or 'none'}",
                 )
             )
+    # Which seed ngspice draws the deck's static random functions from
+    # (ngspice_driver.seed_option). ngspice reads a seed option when it loads
+    # the deck, after the driver's setseed, so the deck's own seed wins and a
+    # seeded run of it would record a seed ngspice never drew from (measured
+    # on ngspice-42).
+    first_path: dict[tuple[str, bool], Path] = {}
+    for path, key in file_keys.items():
+        first_path.setdefault(key, path)
+    keys = list(first_path)
+    seed_cards = deck_seeds([cards_by_content[key] for key in keys])
+    seeds = [value for _, _, value in seed_cards]
+    if seeded:
+        refused.extend(
+            _Refused(
+                "recovery_seed_unsupported",
+                "a seed option, which ngspice reads after execution.simulator_seed "
+                "and so overrides it",
+                first_path[keys[index]],
+                card.line_start,
+                _card_text(card),
+            )
+            for index, card, _ in seed_cards
+        )
+    # A deck that fixes ngspice's seed itself draws alike on every run, as the
+    # driver's setseed does. What another simulator makes of the card is not
+    # recorded, so only an ngspice deck counts.
+    seeded_itself = dialect == "ngspice" and _deck_seeds_itself(
+        inputs.electrical.path, seeds, file_keys, cards_by_content
+    )
     validated: set[tuple[str, bool]] = set()
     for path, key in file_keys.items():
         if key not in validated:
@@ -649,12 +700,33 @@ def _verify_inputs(
                     found.code, found.what, path, card.line_start, _card_text(card), found.seedable
                 )
                 for card, found in _validate_cards(
-                    cards_by_content[key].cards, functions, native=native, seeded=seeded
+                    cards_by_content[key].cards,
+                    functions,
+                    native=native,
+                    seeded=seeded or seeded_itself,
                 )
             )
             validated.add(key)
+    # A seed is offered only on ngspice, where one admits the five functions.
+    # A deck whose own seed options leave the draws unfixed blocks both
+    # routes (simulator_seed is overridden by them, and a deck seed must be
+    # the only kind), so where a random function is refused for want of a
+    # seed, each of its seed options is listed too.
+    offer_seed = dialect == "ngspice" and any(item.seedable for item in refused)
+    if offer_seed:
+        refused.extend(
+            _Refused(
+                "recovery_random_unsupported",
+                "a seed option that leaves ngspice's draws unfixed (each must be a "
+                "positive integer, with one at the top level of the deck file)",
+                first_path[keys[index]],
+                card.line_start,
+                _card_text(card),
+            )
+            for index, card, _ in seed_cards
+        )
     if refused:
-        raise _refusal(refused, origins)
+        raise _refusal(refused, origins, offer_seed=offer_seed)
     for path, key in file_keys.items():
         parsed = cards_by_content[key]
         try:
@@ -674,15 +746,46 @@ def _verify_inputs(
             )
 
 
+def _deck_seeds_itself(
+    root: Path,
+    seeds: list[str],
+    file_keys: dict[Path, tuple[str, bool]],
+    cards_by_content: dict[tuple[str, bool], EditCards],
+) -> bool:
+    """Whether the frozen deck fixes ngspice's seed with an option card of its
+    own, given every seed value (``seeds``) its closure reads.
+
+    ngspice reads the first seed option in the deck, so every one the closure
+    reads must be fixed, and one at the top level of the root deck, outside a
+    subcircuit and a ``.lib`` section, makes sure ngspice reads one at all: it
+    drops a subcircuit no instance calls, seed and all (measured on
+    ngspice-42), and skips a ``.lib`` section the deck does not select.
+    """
+    if not seeds or not all(fixed_seed(value) for value in seeds):
+        return False
+    key = file_keys.get(root)
+    if key is None:
+        return False
+    parsed = cards_by_content[key]
+    return any(
+        parsed.reads(card) and card.scope == () and section is None and seed_option(card)
+        for card, section in zip(parsed.cards, card_sections(parsed.cards, root), strict=True)
+    )
+
+
 def verify_case_inputs(
     inputs: FrozenInputs,
     *,
     native: bool = False,
     seeded: bool = False,
+    dialect: str | None = None,
     origins: Mapping[Path, str] | None = None,
 ) -> None:
     """Refuse byte drift, escapes and any uncaptured staged include edge.
 
+    ``dialect`` is the simulator family that runs the deck. Only an ngspice
+    deck that fixes its own seed may use static random functions without the
+    seeded driver, so a caller that leaves it out gets the stricter answer.
     ``origins`` names a frozen file as the caller knows it (the file it was
     copied from) in a refusal; a file it leaves out is named by its frozen path.
     """
@@ -691,7 +794,9 @@ def verify_case_inputs(
             "recovery_seed_unsupported", "Seeded and native contracts are distinct"
         )
     try:
-        _verify_inputs(inputs, native=native, seeded=seeded, origins=origins or {})
+        _verify_inputs(
+            inputs, native=native, seeded=seeded, dialect=dialect, origins=origins or {}
+        )
     except OSError as exc:
         raise RecoveryError("recovery_artifact_missing", "Frozen input is unreadable") from exc
     except ValueError as exc:

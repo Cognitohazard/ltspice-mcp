@@ -66,11 +66,12 @@ class TestWhatIsRead:
         assert symbol.attr("Value") == "NMOS"
         assert symbol.attr("SpiceModel") == ""
 
-    def test_a_window_that_stops_short_is_left_aligned_at_normal_size(self) -> None:
-        assert read_symbol("WINDOW 0 8 16\nWINDOW 3 8 32 Right big\n").windows == (
-            Window(0, 8, 16, "Left", 2),
-            Window(3, 8, 32, "Right", 2),
-        )
+    def test_a_window_line_short_of_its_justification_or_size_is_no_window(self) -> None:
+        """Both LTspice builds draw no text for an attribute whose WINDOW line
+        stops short of its justification or size (``draw/window_short``, held
+        in ``test_recorded_ltspice_drawing.py``)."""
+        assert read_symbol("WINDOW 0 8 16\nWINDOW 3 8 32 Right\n").windows == ()
+        assert read_symbol("WINDOW 3 8 32 Right 2\n").windows == (Window(3, 8, 32, "Right", 2),)
 
     def test_the_last_of_a_repeated_attribute_is_the_one(self) -> None:
         assert read_symbol("SYMATTR Prefix R\nSYMATTR Prefix X\n").prefix == "X"

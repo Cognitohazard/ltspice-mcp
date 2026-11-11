@@ -298,7 +298,8 @@
       "variations[].rules[].vth_param",
       "variations[].runs",
       "variations[].sample_start",
-      "variations[].seed"
+      "variations[].seed",
+      "variations[].simulator_draws"
     ],
     "verify_circuit": [
       "checks",

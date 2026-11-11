@@ -1,0 +1,14 @@
+* C:\recording\text_backslash.asc
+V1 a 0 1
+R1 a 0 1k
+* one\\two
+* C:\new\\temp
+* tail\\nhead
+* end\\
+.param p1=1 ; one\two
+.param p2=2 ; C:
+ew\temp
+.param p3=3 ; tail\nhead
+.param p4=4 ; end\
+.backanno
+.end

@@ -1,0 +1,10 @@
+* sources playing a .wav file, named in quotes
+V1 a b wavefile="level.wav"
+R1 a 0 1k
+R2 b 0 1k
+V2 c 0 wavefile="level.wav"
+R3 c 0 1k
+I1 d 0 wavefile="level.wav"
+R4 d 0 1k
+.tran 10m
+.end

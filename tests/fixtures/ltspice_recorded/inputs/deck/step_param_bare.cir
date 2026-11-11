@@ -1,0 +1,7 @@
+* a .step of a parameter with no values
+.param r=1k
+I1 0 a 1
+R1 a 0 {r}
+.step param r
+.op
+.end

@@ -415,7 +415,8 @@ ENTRIES: tuple[Entry, ...] = (
         ("test:tests/test_ngspice_e2e.py", "test:tests/test_ngspice_multiplier.py"),
         mechanism=(
             "The random variation writes each draw into the deck; a mismatch draw inside a "
-            "subcircuit is the device's delvto and mulu0."
+            "subcircuit is the device's delvto and mulu0. With simulator_draws each case's "
+            "deck also seeds ngspice's own random functions."
         ),
     ),
     *_each(
@@ -510,8 +511,12 @@ ENTRIES: tuple[Entry, ...] = (
         "ngspice",
         "pdk_statistics",
         "supported",
-        ("test:tests/test_native_experiments.py",),
-        mechanism="The pdk_native variation, run by ngspice's own statistical blocks.",
+        ("test:tests/test_ngspice_e2e.py", "test:tests/test_native_experiments.py"),
+        mechanism=(
+            "A random variation with simulator_draws gives each sample its own ngspice "
+            "seed, so the deck's own statistical functions draw anew; the pdk_native "
+            "variation runs one profiled PDK's statistical blocks."
+        ),
     ),
     Entry(
         "ltspice",

@@ -18,8 +18,9 @@ from typing import Any
 import pytest
 from spicelib.editor.asc_editor import AscEditor
 
+from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import symbol_library
-from ltspice_mcp.lib.asc_document import parse_asc
+from ltspice_mcp.lib.asc_document import parse_asc, read_window
 from ltspice_mcp.lib.connectivity import NamedNets, name_keys, named_labels, signature
 from ltspice_mcp.lib.deck_prep import stage_sheet
 from ltspice_mcp.lib.deck_staging import scan_include_references
@@ -29,6 +30,7 @@ from ltspice_mcp.lib.lint_rules import UNNAMED_EXPORT_WRITER, deck_generator, ex
 from ltspice_mcp.lib.netlist_diff import parse_directive, read_deck, structural_delta
 from ltspice_mcp.lib.netlist_graph import canon_ref, compare_graphs, parse_netlist_graph
 from ltspice_mcp.lib.schematic_ops import (
+    _text_record_body,
     collect_component_geometry,
     element_class,
     export_parts,
@@ -36,15 +38,17 @@ from ltspice_mcp.lib.schematic_ops import (
     sheet_nets,
     wire_segments_of,
 )
-from ltspice_mcp.lib.schematic_scene import build_scene, sheet_view
+from ltspice_mcp.lib.schematic_scene import build_scene, decode_text_lines, sheet_view
 from ltspice_mcp.lib.sheet_findings import findings
 from ltspice_mcp.lib.simulator import _in_generation
 from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build
 from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
+from ltspice_mcp.lib.symbol_file import read_symbol
 from ltspice_mcp.lib.symbol_geometry import parse_asy_file
 from ltspice_mcp.lib.symbol_library import SymbolLibrary, SymbolResolver, find_symbol
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import verify as verify_tool
+from tests import _fake_netlister as fake_netlister
 from tests import _ltspice_recorded as rec
 from tests._asc_ops import _inspect_item as inspect_item
 from tests._asc_ops import apply_ops, inspect_one, inspect_refusal, sha_of, sheet_findings
@@ -1899,28 +1903,26 @@ class TestExportedNames:
         # spicelib's own editor still refuses it: drop the workaround once it opens.
         with pytest.raises(FileNotFoundError, match=r"probe4\.asc not found"):
             AscEditor(str(sheet))
-        searched: list[str] = []
-        find_file = symbol_library.find_file
+        searched: list[Path] = []
+        find_block_sheet = symbol_library.find_block_sheet
 
-        def search(name: str, sheet_folder: Path | None, libraries, suffix: str) -> Path | None:
-            if suffix == ".asc":
-                searched.append(name)
-            return find_file(name, sheet_folder, libraries, suffix)
+        def search(symbol: Path, sheet_folder: Path | None) -> Path | None:
+            searched.append(symbol)
+            return find_block_sheet(symbol, sheet_folder)
 
-        monkeypatch.setattr(symbol_library, "find_file", search)
+        monkeypatch.setattr(symbol_library, "find_block_sheet", search)
         editor = _editor(sheet)
         assert sorted(editor.get_components()) == ["U1", "X2", "x3"]
         # Its symbol gives Prefix X, for which LTspice reads no sheet.
         assert searched == []
-        # A block that gives none is looked for. A search walks every folder of
-        # a library, so the block the sheet places three times is searched for
-        # once.
+        # A block that gives none is looked for beside its symbol and beside
+        # the sheet (block-sheet-search), once for the three parts placing it.
         symbol = sheet.parent / "probe4.asy"
         symbol.write_text(
             "".join(line for line in symbol.read_text().splitlines(True) if "Prefix" not in line)
         )
         _editor(sheet)
-        assert searched == ["probe4"]
+        assert searched == [symbol]
 
     async def test_a_sheet_with_a_block_symbol_of_no_sheet_can_be_edited(
         self, build: str, state_no_sim, work_dir: Path
@@ -2175,3 +2177,419 @@ async def test_a_blocks_sheet_is_found_alike_whatever_the_working_directory(
     assert "X1" in {row["reference"] for row in components["components"]}
     checked = await run_verify_circuit(state_no_sim, path=str(sheet), checks=["symbols"])
     assert checked["rules_run"]["unresolved_symbol"] == 0, checked
+
+
+# ---------------------------------------------------------------------------
+# Where a block's own sheet is found when it is not beside its symbol
+# ---------------------------------------------------------------------------
+
+#: The sheet each build took as blk's in each case, by its place beside the
+#: sheet exported, or None where both builds' exports failed for want of one.
+#: The symbol search path is the case's lib folder. In the nested cases blk is
+#: placed by outer's own sheet, which is in lib.
+BLOCK_SHEETS = {
+    "blocks/sheet_beside_placer": "blk.asc",
+    "blocks/sheet_beside_symbol_in_search_path": "lib/blk.asc",
+    "blocks/sheet_beside_placer_and_symbol": "lib/blk.asc",
+    "blocks/sheet_in_search_path": None,
+    "blocks/sheet_under_search_path": None,
+    "blocks/no_sheet": None,
+    "blocks/nested_sheet_beside_its_placer": None,
+    "blocks/nested_sheet_beside_its_symbol": "blk.asc",
+    "blocks/nested_sheet_beside_both": "blk.asc",
+}
+#: R1's value in each copy of the block's sheet, which says which one a build read.
+BLOCK_SHEET_R1 = {"blk.asc": "3k", "lib/blk.asc": "1k", "lib/sub/blk.asc": "2k"}
+#: A symbol in a folder under the symbol search path: neither build finds it,
+#: and the server, which also reads a configured folder as a copy of a build's
+#: library, searched through every folder of one, does.
+FOUND_UNDER_A_CONFIGURED_FOLDER_BY_THE_SERVER_ONLY = "blocks/symbol_under_search_path"
+
+
+def test_every_block_sheet_case_is_listed():
+    assert sorted([*BLOCK_SHEETS, FOUND_UNDER_A_CONFIGURED_FOLDER_BY_THE_SERVER_ONLY]) == sorted(
+        rec.cases_of("block-sheet-search")
+    )
+
+
+def _blk(editor: AscEditor, case_id: str) -> AscEditor | None:
+    """blk as the editor reads it: placed on the sheet, or on outer's sheet."""
+    block = editor.get_subcircuit("X1")
+    if block is not None and case_id.startswith("blocks/nested_"):
+        block = block.get_subcircuit("X1")
+    return block
+
+
+@pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(sorted(BLOCK_SHEETS))))
+def test_each_build_takes_the_block_sheet_the_table_says(build: str, case_id: str):
+    """Beside the block's symbol, else beside the sheet exported; a sheet
+    anywhere else in the search path, under it, or beside a block's sheet
+    that places the block, is not found. LTspice 26 then writes no netlist,
+    and XVII one that says so."""
+    taken = BLOCK_SHEETS[case_id]
+    entry = rec.entry(build, case_id)
+    if taken is None:
+        assert entry["exit_code"] != 0
+        if rec.has(build, f"{case_id}.net"):
+            assert "Couldn't find schematic for symbol: blk" in rec.export_text(build, case_id)
+        return
+    assert entry["exit_code"] == 0
+    assert f"R1 IN OUT {BLOCK_SHEET_R1[taken]}" in rec.export_text(build, case_id).splitlines()
+
+
+@pytest.mark.parametrize("case_id", sorted(BLOCK_SHEETS))
+def test_the_server_reads_the_block_sheet_ltspice_takes(case_id: str, tmp_path: Path):
+    """The session's library with the case's lib folder configured, as the
+    builds had it in their symbol search path, finds the sheet both builds
+    took, and the editor reads blk from it; where neither found one, blk is
+    left unresolved. A block's sheet in lib finds the resistor and blk's
+    symbol beside the sheet exported, as both builds found blk's."""
+    sheet = rec.stage_sheet(rec.BUILDS[0], case_id, tmp_path)
+    resolver = SymbolLibrary([sheet.parent / "lib"]).for_sheet(sheet)
+    taken = BLOCK_SHEETS[case_id]
+    expected = None if taken is None else sheet.parent / taken
+    if case_id.startswith("blocks/nested_"):
+        outer = resolver.for_sheet(sheet.parent / "lib" / "outer.asc")
+        assert resolver.block_sheet("outer") == sheet.parent / "lib" / "outer.asc"
+        assert outer.block_sheet("blk") == expected
+    else:
+        assert resolver.block_sheet("blk") == expected
+    editor = make_editor(sheet, resolver)
+    assert isinstance(editor, AscEditor)
+    block = _blk(editor, case_id)
+    if taken is None:
+        assert block is None
+    else:
+        assert block is not None
+        assert block.get_component_value("R1") == BLOCK_SHEET_R1[taken]
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_symbol_under_a_configured_folder_is_found_by_the_server_only(
+    build: str, tmp_path: Path
+):
+    """Neither build finds a symbol in a folder under its symbol search path:
+    LTspice 26 exports nothing and XVII stops on a box naming the symbol. The
+    server reads a configured folder as it reads a build's own library, where
+    both builds find a bare name in any folder (``symbol-in-library-folder``),
+    because a configured folder may hold a copy of one."""
+    case_id = FOUND_UNDER_A_CONFIGURED_FOLDER_BY_THE_SERVER_ONLY
+    entry = rec.entry(build, case_id)
+    assert not entry["outputs"]
+    if rec.generation(build) == "xvii":
+        assert "Couldn't find symbol(s):\n   blk" in entry["dialog"]
+    else:
+        assert entry["exit_code"] != 0
+    sheet = rec.stage_sheet(build, case_id, tmp_path)
+    resolver = SymbolLibrary([sheet.parent / "lib"]).for_sheet(sheet)
+    assert resolver.resolve("blk") == sheet.parent / "lib" / "sub" / "blk.asy"
+
+
+def test_a_staged_copy_carries_a_block_sheet_beside_the_sheet_exported(tmp_path: Path):
+    """A run exports a copy of the sheet staged away from its folder, so the
+    block's sheet LTspice reads beside the sheet exported, its symbol in a
+    library, goes with the copy (``blocks/sheet_beside_placer``)."""
+    sheet = rec.stage_sheet(rec.BUILDS[0], "blocks/sheet_beside_placer", tmp_path / "project")
+    staged, note = stage_sheet(sheet, tmp_path / "staged")
+    assert note is None
+    assert (staged.parent / "blk.asc").read_bytes() == (sheet.parent / "blk.asc").read_bytes()
+
+
+def test_staging_copies_a_sheet_named_for_any_part_where_the_editor_reads_one_only_for_a_block(
+    tmp_path: Path,
+):
+    """Staging reads no symbol, so beside the sheet exported it copies a sheet
+    named for every part the sheets place, which costs only a copy where the
+    part is no block. The editor reads a sheet for a block alone: ``res`` is a
+    cell, so ``res.asc`` beside the sheet is no sheet of its."""
+    sheet = rec.stage_sheet(rec.BUILDS[0], "blocks/sheet_beside_placer", tmp_path / "project")
+    (sheet.parent / "res.asc").write_bytes((sheet.parent / "blk.asc").read_bytes())
+    staged, _note = stage_sheet(sheet, tmp_path / "staged")
+    assert (staged.parent / "res.asc").is_file()
+    resolver = SymbolLibrary([sheet.parent / "lib"]).for_sheet(sheet)
+    editor = make_editor(sheet, resolver)
+    assert isinstance(editor, AscEditor)
+    assert editor.get_component_value("R3") == "10k"
+    assert "_SUBCKT" not in editor.get_component("R3").attributes
+
+
+# ---------------------------------------------------------------------------
+# A backslash in a TEXT record
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_text_is_exported_as_the_server_reads_and_writes_it(build: str):
+    """Both builds export a directive in the lines ``decode_text_lines``
+    reads from its record, ``\\\\`` one backslash and ``\\n`` a line break even
+    inside ``C:\\new``, and a comment on one line, escaped again as the server
+    writes a record: its line breaks as ``\\n`` and its backslashes doubled."""
+    exported = rec.export_text(build, "export/text_backslash").splitlines()
+    texts = parse_asc((INPUTS / "export/text_backslash.asc").read_bytes()).texts
+    assert len(texts) == 8
+    for text in texts:
+        lines = decode_text_lines(text.body)
+        if text.is_directive:
+            at = exported.index(lines[0])
+            assert exported[at : at + len(lines)] == lines, text.body
+        else:
+            assert f"* {_text_record_body(chr(10).join(lines))}" in exported, text.body
+
+
+async def test_an_edit_writes_a_text_that_reads_as_it_was_given(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """A Windows path in a directive and in a comment, written by
+    ``edit_schematic``, holds its backslashes doubled, so both builds read it
+    as one line with the path whole. Named as it reads, it is replaced, and
+    its reply's ``was`` and ``now`` are the texts as they read."""
+    sheet = rec.stage_sheet(rec.BUILDS[0], "export/text_backslash", work_dir / "sheet")
+    relative = sheet.relative_to(work_dir).as_posix()
+    directive = ".param p5=5 ; C:\\new\\temp"
+    comment = "C:\\new\\models\\nmos.lib"
+    data = await apply_ops(
+        state_no_sim,
+        relative,
+        [
+            {"op": "add_directive", "instruction": directive, "x": 0, "y": 640},
+            {"op": "add_directive", "kind": "comment", "instruction": comment, "x": 0, "y": 680},
+        ],
+    )
+    assert data["commit_state"] == "committed", data
+    written = {(t.x, t.y): t for t in parse_asc(sheet.read_bytes()).texts}
+    assert written[(0, 640)].body == ".param p5=5 ; C:\\\\new\\\\temp"
+    assert decode_text_lines(written[(0, 640)].body) == [directive]
+    assert decode_text_lines(written[(0, 680)].body) == [comment]
+    replaced = await apply_ops(
+        state_no_sim,
+        relative,
+        [{"op": "replace_directive", "instruction": directive, "text": ".param p5=6"}],
+    )
+    assert replaced["commit_state"] == "committed", replaced
+    (result,) = replaced["results"]
+    assert (result["text"]["was"], result["text"]["now"]) == (directive, ".param p5=6")
+    removed = await apply_ops(
+        state_no_sim, relative, [{"op": "remove_directive", "instruction": comment}]
+    )
+    assert removed["commit_state"] == "committed", removed
+
+
+async def test_an_edit_refuses_a_step_with_nothing_to_step(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """Both builds stop on ``.step param r`` with no values
+    (``deck/step_param_bare``), so the editor does not write one, as it does
+    not write any directive the checks before a run refuse."""
+    sheet = rec.stage_sheet(rec.BUILDS[0], "export/text_backslash", work_dir / "sheet")
+    before = sheet.read_bytes()
+    data = await apply_ops(
+        state_no_sim,
+        sheet.relative_to(work_dir).as_posix(),
+        [{"op": "add_directive", "instruction": ".step param r", "x": 0, "y": 640}],
+    )
+    assert data.get("commit_state") != "committed", data
+    assert "LTspice refuses a .step of the parameter r with no values" in str(data)
+    assert sheet.read_bytes() == before
+
+
+# ---------------------------------------------------------------------------
+# A part's Value holding spaces
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_value_is_exported_with_its_words_one_space_apart(build: str, tmp_path: Path):
+    """Both builds write a Value's words onto the card one space apart: two
+    spaces become one, and a space before the value goes. The server reads
+    the value's words as they are, and the stand-in exporter the suite uses
+    writes the same card tail as LTspice did."""
+    values = {
+        symbol.reference: symbol.attr("Value")
+        for symbol in parse_asc((INPUTS / "export/value_spaces.asc").read_bytes()).symbols
+    }
+    assert values["R2"] == "1k  tc=0.002"
+    assert values["R3"] == "2k"
+
+    def tails(text: str) -> dict[str, str]:
+        return {
+            line.split()[0]: line.split(None, 3)[3]
+            for line in text.splitlines()
+            if line[:1] in ("R", "V")
+        }
+
+    exported = tails(rec.export_text(build, "export/value_spaces"))
+    faked = tails(
+        fake_netlister.netlist_text(rec.stage_sheet(build, "export/value_spaces", tmp_path))
+    )
+    for reference, value in values.items():
+        assert value is not None
+        assert exported[reference] == " ".join(value.split()), reference
+        assert faked[reference] == exported[reference], reference
+
+
+async def test_an_edit_of_a_sources_value_keeps_its_own_parameters_on_a_sheet(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """A source's Value is exported word for word, so V2's ``1 Rser=1`` is
+    its value and its series resistance, which both builds read after any form
+    of value (``deck/source_parameters``). An edit of the value keeps Rser
+    where it is, one that gives Rser sets it there, and a PWL's scale keyword
+    stays in the value it belongs to."""
+    sheet = rec.stage_sheet(rec.BUILDS[0], "export/value_spaces", work_dir / "sheet")
+    # Two parts the recorded sheet lacks: a current source that is a load, and
+    # a voltage source with no Value and its series resistance in SpiceLine.
+    sheet.write_text(
+        sheet.read_text(encoding="utf-8")
+        + "SYMBOL current 896 160 R0\nSYMATTR InstName I1\nSYMATTR Value 1m load\n"
+        + "SYMBOL voltage 1056 160 R0\nSYMATTR InstName V3\nSYMATTR SpiceLine Rser=5\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    relative = sheet.relative_to(work_dir).as_posix()
+
+    async def after(reference: str, value: str) -> tuple[str | None, str | None]:
+        data = await apply_ops(
+            state_no_sim,
+            relative,
+            [{"op": "set_component_value", "reference": reference, "value": value}],
+        )
+        assert data["commit_state"] == "committed", data
+        (part,) = [s for s in parse_asc(sheet.read_bytes()).symbols if s.reference == reference]
+        return part.attr("Value"), part.attr("SpiceLine")
+
+    assert await after("V2", "2") == ("2 Rser=1", None)
+    assert await after("V2", "3 Rser=2 AC 4") == ("3 Rser=2 AC 4", None)
+    assert await after("V2", "5") == ("5 Rser=2 AC 4", None)
+    assert await after("V1", "PWL TIME_SCALE_FACTOR=2 (0 1 1 1)") == (
+        "PWL TIME_SCALE_FACTOR=2 (0 1 1 1)",
+        None,
+    )
+    assert await after("I1", "2m") == ("2m load", None)
+    # A part with no value and a parameter elsewhere: no empty Value is written,
+    # and the parameter is set where the part gives it.
+    assert await after("V3", "Rser=9") == (None, "Rser=9")
+    assert await after("V3", "7") == ("7", "Rser=9")
+
+
+async def test_an_edit_refuses_a_value_for_a_source_that_plays_a_file_on_a_sheet(
+    state_no_sim: SessionState, work_dir: Path
+):
+    sheet = rec.stage_sheet(rec.BUILDS[0], "export/value_spaces", work_dir / "sheet")
+    text = sheet.read_text(encoding="utf-8").replace(
+        "SYMATTR Value 1 Rser=1", 'SYMATTR Value wavefile="level.wav"'
+    )
+    sheet.write_text(text, encoding="utf-8", newline="\n")
+    before = sheet.read_bytes()
+    data = await apply_ops(
+        state_no_sim,
+        sheet.relative_to(work_dir).as_posix(),
+        [{"op": "set_component_value", "reference": "V2", "value": "5"}],
+    )
+    assert data.get("commit_state") != "committed", data
+    assert "plays a .wav file" in str(data), data
+    assert sheet.read_bytes() == before
+
+
+# ---------------------------------------------------------------------------
+# A WINDOW line short of its justification or size
+# ---------------------------------------------------------------------------
+
+SHORT_WINDOWS = {
+    "export/window_no_size": "WINDOW 0 48 -16 Left",
+    "export/window_no_justification": "WINDOW 0 48 -16",
+    "export/window_short_symbol": "WINDOW 0 32 -32 Left",
+}
+
+
+class TestShortWindowLines:
+    """Both builds export each sheet: a WINDOW line short of its justification
+    or size is read past, on a sheet and in a symbol (``draw/window_short``
+    shows where each build then draws the text)."""
+
+    def test_every_case_is_listed(self):
+        assert sorted(SHORT_WINDOWS) == sorted(rec.cases_of("window-short", kind="netlist"))
+
+    @pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(sorted(SHORT_WINDOWS))))
+    def test_each_build_exports_the_sheet(self, build: str, case_id: str):
+        assert rec.entry(build, case_id)["exit_code"] == 0
+        cards = rec.export_instances(build, case_id).values()
+        assert [(card.ref, card.nodes, card.value) for card in cards] == [
+            ("R1", ["NC_01", "NC_02"], "1k")
+        ]
+
+    @pytest.mark.parametrize("case_id", sorted(SHORT_WINDOWS))
+    async def test_the_sheets_reading_reports_nothing_unread(
+        self, case_id: str, state_no_sim: SessionState, work_dir: Path
+    ):
+        """The line holds nothing LTspice reads, so none of the readers that
+        report a line left unread says so: the drawing, the listing and a
+        net's trace (``Sheet.unread_notes``)."""
+        sheet = rec.stage_sheet(rec.BUILDS[0], case_id, work_dir / "sheet")
+        scene = build_scene(sheet, SymbolResolver(local_dir=sheet.parent))
+        assert not [note for note in scene.diagnostics if "WINDOW" in note]
+        listed = await inspect_one(state_no_sim, {"kind": "components", "path": str(sheet)})
+        assert [row["reference"] for row in listed["components"]] == ["R1"]
+        assert not [note for note in listed.get("warnings", []) if "WINDOW" in note]
+        traced = await inspect_one(state_no_sim, {"kind": "net", "path": str(sheet), "at": "R1.1"})
+        assert [pin["reference"] for pin in traced["pins"]] == ["R1"]
+        assert not [note for note in traced.get("warnings", []) if "WINDOW" in note]
+
+    @pytest.mark.parametrize("case_id", sorted(SHORT_WINDOWS))
+    def test_the_editor_names_the_line_it_cannot_read(self, case_id: str, tmp_path: Path):
+        """spicelib's readers stop on the line (``docs/spicelib_bugs.md``, Bug
+        41), so the editor refuses the sheet, naming the line and the fix."""
+        sheet = rec.stage_sheet(rec.BUILDS[0], case_id, tmp_path)
+        with pytest.raises(NetlistError) as refused:
+            make_editor(sheet, SymbolResolver(local_dir=sheet.parent))
+        message = str(refused.value)
+        assert repr(SHORT_WINDOWS[case_id]) in message
+        assert "LTspice reads past such a line" in message
+        # The line it offers instead reads whole, and is the short one completed.
+        offered = re.search(r"such as '([^']*)'", message)
+        assert offered is not None, message
+        assert offered[1].startswith(SHORT_WINDOWS[case_id] + " ")
+        assert read_window(offered[1]) is not None, offered[1]
+        if case_id == "export/window_short_symbol":
+            assert "window_short.asy, a file it loads: line 6 " in message
+        else:
+            assert ": line 4 " in message
+
+    def test_a_symbols_short_window_lines_are_no_windows(self):
+        symbol = read_symbol((INPUTS / "export/window_short.asy").read_text(encoding="utf-8"))
+        assert symbol.windows == ()
+
+
+# ---------------------------------------------------------------------------
+# Z, O, U, T and W parts on a sheet
+# ---------------------------------------------------------------------------
+
+#: The parts of export/elements, each with its letter and its pins in SpiceOrder.
+ELEMENT_PARTS = [
+    ("Z1", "Z", ("D", "G", "S")),
+    ("O1", "O", ("I1", "R1", "I2", "R2")),
+    ("U1", "U", ("A", "B", "C")),
+    ("T1", "T", ("I1", "R1", "I2", "R2")),
+    ("W1", "W", ("P", "N")),
+]
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_each_element_is_exported_with_a_node_for_each_pin_and_read_so(build: str):
+    """Both builds write each part's pins as its nodes and then its Value: a
+    T line's parameters and a W switch's controlling source and model. The
+    server reads every node back, and each part's pins onto them."""
+    cards = {
+        reference: exported_card(build, "export/elements", reference)
+        for reference, _letter, _pins in ELEMENT_PARTS
+    }
+    read = {reference: (card.nodes, card.model) for reference, card in cards.items()}
+    assert read == {
+        "Z1": (["NC_01", "NC_02", "NC_03"], "nmf"),
+        "O1": (["NC_04", "NC_05", "NC_06", "NC_07"], "lossy"),
+        "U1": (["NC_08", "NC_09", "NC_10"], "rcline"),
+        "T1": (["NC_11", "NC_12", "NC_13", "NC_14"], None),
+        "W1": (["NC_15", "NC_16"], "sw"),
+    }
+    assert cards["W1"].control == "Vsense"
+    pins = exported_pin_nodes(rec.export_text(build, "export/elements"), ELEMENT_PARTS)
+    assert len(pins) == sum(len(part_pins) for _ref, _letter, part_pins in ELEMENT_PARTS)

@@ -1,0 +1,6 @@
+C:\recording\step_param_bare.cir(5): Expected number here.
+.step param r
+             ^
+C:\recording\step_param_bare.cir(5): Expected device instantiation or directive here.
+.step param r
+^^^^^^^^^^^^^

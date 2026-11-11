@@ -1106,11 +1106,14 @@ def job_that_ran(state: SessionState, sheet: Path, work_dir: Path, **job: typing
 
 
 class _FakeSession:
-    """Stub MCP session — progress calls are no-ops."""
+    """Stub MCP session for a request that asked for no progress: a report
+    is dropped, as the real session drops it."""
 
     client_capabilities = None
 
-    async def send_progress_notification(self, **kwargs):
+    async def report_progress(
+        self, progress: float, total: float | None = None, message: str | None = None
+    ) -> None:
         pass
 
 

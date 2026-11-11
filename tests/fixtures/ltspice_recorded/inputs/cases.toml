@@ -224,6 +224,20 @@ model = ["lib/deck_prep.py", "lib/schematic_ops.py", "lib/symbol_library.py", "l
 inputs = ["export/hier_top.asc", "export/hier_plain_top.asc"]
 extra = ["export/hier_amp.asc", "export/hier_amp.asy", "export/hier_plain.asc", "export/hier_plain.asy"]
 
+[behaviour.block-sheet-search]
+summary = "Where a build finds a hierarchical block's own sheet when it is not beside the block's symbol: beside the sheet exported, beside a block's sheet that places it, in a folder of the symbol search path, or in a folder under one; which it takes when one is beside the sheet exported and another beside the symbol; what it exports when there is none; and whether it finds a symbol in a folder under the search path."
+model = ["lib/symbol_library.py", "lib/schematic_ops.py", "lib/deck_prep.py"]
+# Each case exports blocks/top.asc, which places the block blk, or
+# blocks/nest_top.asc, whose block outer places blk on its own sheet, with
+# blk.asy and blk.asc in other places. The symbol search path is the case's
+# own lib folder. Each copy of blk's sheet holds other resistor values (3k
+# and 1k beside the sheet exported, 1k and 1k in lib, 2k and 2k in lib/sub),
+# so the subcircuit an export writes says which sheet the build took. See the
+# [[case]] tables at the end. A block in the build's own sym folder is not
+# recorded: no stock block symbol leaves its sheet unnamed, and a case would
+# have to write files into the build's library. The search-path cases stand
+# for it, as another folder a build searches for symbols.
+
 [behaviour.sheet-part-trace-names]
 summary = "What a run of a sheet names the device inside a part whose symbol is given a Prefix of X and a reference that does not start with X, beside the same subcircuit called with X from a directive on the sheet, and the net the sheet leaves unlabelled."
 model = ["lib/trace_names.py"]
@@ -274,6 +288,35 @@ inputs = [
     "export/unknown_record.asc",
 ]
 extra = ["export/res.asy"]
+
+[behaviour.text-backslash]
+summary = "A backslash in a sheet's TEXT record other than a line break's \\n: a doubled backslash, one before another letter, a doubled one before n, and one at the end, in a comment and in a directive, as each build exports them and draws them."
+model = ["lib/schematic_scene.py", "lib/schematic_ops.py", "lib/schematic_renderer.py", "lib/asc_document.py"]
+# The comments and directives hold the same four texts. The directives are
+# .param cards whose text after ; is a comment, so the export shows how the
+# build split and spelled each line. draw/text_backslash draws the same texts
+# (a [[case]] table at the end).
+inputs = ["export/text_backslash.asc"]
+extra = ["export/res.asy", "benchmark/voltage.asy"]
+
+[behaviour.value-spaces]
+summary = "How each build writes a part's Value holding spaces onto its card: a resistance followed by a parameter, the same with two spaces between them, a value after two spaces, a source's PULSE() and a value followed by Rser=."
+model = ["lib/sheet.py", "lib/schematic_ops.py", "lib/sheet_findings.py", "lib/component_value.py"]
+inputs = ["export/value_spaces.asc"]
+extra = ["export/res.asy", "benchmark/voltage.asy"]
+
+[behaviour.window-short]
+summary = "A WINDOW line with fewer than its five numbers and words: on a part placed on a sheet, without its size and without its justification and size, and in a symbol, as each build exports the sheet."
+model = ["lib/asc_document.py", "lib/symbol_file.py", "lib/sheet.py", "lib/schematic_scene.py", "lib/schematic_ops.py"]
+# window_short.asy is export/res.asy with its two WINDOW lines cut short the
+# same two ways. A line a build cannot read stops the export, as an unknown
+# keyword does (sheet-records).
+inputs = [
+    "export/window_no_size.asc",
+    "export/window_no_justification.asc",
+    "export/window_short_symbol.asc",
+]
+extra = ["export/res.asy", "export/window_short.asy"]
 
 [behaviour.bus-labels]
 summary = "The node of a pin on a wire labelled as a bus (D[0:3]): the bus's first member, D[0], which is the node of a wire labelled D[0] and not that of one labelled D[1]."
@@ -390,6 +433,81 @@ inputs = [
     "deck/save_omits_meas.cir",
 ]
 
+[behaviour.wavefile-source-nodes]
+summary = "Which words of a source that plays a .wav file (V1 a b wavefile=...) are its nodes, with the file named in quotes and without, on a voltage and a current source."
+model = [
+    "lib/spice_lex_views.py",
+    "lib/spice_validator.py",
+    "lib/component_value.py",
+    "lib/netlist_graph.py",
+    "lib/export_nets.py",
+    "tools/inspect_tools.py",
+    "lib/lint_rules.py",
+    "lib/result_observations.py",
+    "lib/netlist_diff.py",
+    "lib/services.py",
+    "lib/hierarchy.py",
+]
+# level.wav holds 100 samples at half of full scale, which a build plays as
+# 0.5 V or 0.5 A. V1 sits between a and b over two 1k resistors, so v(a) is
+# 0.25 and v(b) -0.25 if both are its nodes; V2 and I1 have their second node
+# at ground.
+inputs = ["deck/wavefile_nodes.cir", "deck/wavefile_unquoted.cir"]
+extra = ["deck/level.wav"]
+
+[behaviour.source-parameters]
+summary = "That a source's own parameters follow its value whatever form the value takes, a number, PULSE(), PWL() and SINE() among them: a voltage source's Rser= and Cpar=, either source's AC magnitude written AC=6 or AC 2, read in an AC analysis, and a current source's load flag; and that a PWL's scale keyword before its points is part of its value."
+model = ["lib/component_value.py", "lib/schematic_ops.py", "lib/spice_lex_views.py", "lib/variations.py", "lib/instance_targeting.py"]
+# Each source drives a 1k load. Through Rser=1k, V1's 5 V gives v(a) 2.5,
+# V2's PWL at 2 V gives v(b) 1, V3's SINE of offset 3 and no amplitude gives
+# v(c) 1.5, and V4's PWL at 4 V gives v(d) 2 whatever its time scale. I1
+# would drive 1 mA into e and give it 1 V; as a load it only takes current,
+# so with its load flag read it gives none and v(e) is 0.
+# source_ac runs an AC analysis at 1 kHz: an AC magnitude written AC 2
+# after a PULSE, AC 4 after a number and before Rser=1k into 1k, AC=6 after a
+# number, AC 1 after a SINE with Rser=1k and Cpar=1u into 1k, and a current
+# source's AC 2m into 1k. Each node's magnitude says whether the word was read.
+inputs = ["deck/source_parameters.cir", "deck/source_ac.cir"]
+
+[behaviour.element-terminals]
+summary = "Which words of a Z (MESFET), O (lossy line), U (RC line), T (lossless line), W (current-controlled switch) and @ (frequency response analyzer) card are its nodes, what a MESFET's word after its model is, and how each build writes such a part on export."
+model = [
+    "lib/spice_lex_views.py",
+    "lib/spice_validator.py",
+    "lib/netlist_graph.py",
+    "lib/export_nets.py",
+    "tools/inspect_tools.py",
+    "lib/variations.py",
+    "lib/component_value.py",
+    "lib/hierarchy.py",
+    "lib/lint_rules.py",
+]
+# Each deck runs .op with the element between a and b, or wired so that its
+# nodes set the voltages: 1 A through the lossy line's 10 ohms and the RC
+# line's 1k into 1k, through the lossless line into 1k, and 1 mA through the
+# switch, which 1 A in Vsense turns on. Z2 is Z1 with an area of 2. The export
+# places a part of each letter but @ from the suite's own symbols (a [[case]]
+# table at the end).
+inputs = [
+    "deck/element_z.cir",
+    "deck/element_o.cir",
+    "deck/element_u.cir",
+    "deck/element_t.cir",
+    "deck/element_w.cir",
+    "deck/element_fra.cir",
+]
+
+[behaviour.step-without-values]
+summary = "What a .step line with nothing to step does: .step alone, and .step param naming a parameter and no values."
+model = [
+    "lib/lint_rules.py",
+    "lib/hierarchy.py",
+    "lib/log_parser.py",
+    "lib/experiment_inputs.py",
+    "lib/pdk_native.py",
+]
+inputs = ["deck/step_bare.cir", "deck/step_param_bare.cir"]
+
 [behaviour.save-meas-node-pair]
 summary = "Whether a .meas of a node pair is taken when .save names both nodes but not the pair, whether .save accepts the pair itself and what the raw then holds, and whether a node measured against ground needs more than the node saved."
 model = ["lib/lint_rules.py", "lib/spice_validator.py"]
@@ -436,6 +554,27 @@ summary = "How .include and .lib are resolved: a file beside the deck, and a .li
 model = ["lib/deck_staging.py", "lib/lint_rules.py", "lib/runner_base.py"]
 inputs = ["deck/lib_section.cir", "deck/include_relative.cir"]
 extra = ["deck/corners.lib", "deck/models.inc"]
+
+[behaviour.include-end]
+summary = "What an included file's .end ends: whether a card after it in the file is read, whether the deck's own cards after the .include line are, and whether the file's first line is a card or a title."
+model = [
+    "lib/spice_lex.py",
+    "lib/netlist_graph.py",
+    "lib/hierarchy.py",
+    "lib/runner_base.py",
+    "lib/deck_staging.py",
+    "lib/experiment_inputs.py",
+    "lib/variations.py",
+    "lib/subckt_mismatch.py",
+    "lib/montecarlo.py",
+]
+# The included file's first line is R1 (1k) and R2 (3k) follows its .end, so
+# 1 A into a gives 1000 V with R1 alone, 750 with both and 3000 with R2 alone.
+# I2 into R3 follows the .include line: v(b) is 1000 if the deck is read on
+# past the included .end, and missing if it is not. The .op comes first so the
+# deck runs either way.
+inputs = ["deck/include_end.cir"]
+extra = ["deck/ends_early.inc"]
 
 [behaviour.three-node-transistors]
 summary = "How a transistor card with three nodes is read, against the four nodes an export writes for a three-pin symbol: an M card's bulk (level 1 and VDMOS) and a Q card's substrate."
@@ -1352,3 +1491,118 @@ kind = "run"
 source = "export/load_name_op.asc"
 extra = ["export/res.asy", "benchmark/voltage.asy"]
 keep = ["net", "raw"]
+
+# Where a block's own sheet is found when it is not beside the block's symbol.
+# Each case exports blocks/top.asc with the symbol search path set to the
+# case's own lib folder, and the block's files where its id says.
+[[case]]
+id = "blocks/sheet_beside_placer"
+behaviour = "block-sheet-search"
+source = "blocks/top.asc"
+extra = ["blocks/lib/blk.asy", "blocks/blk.asc"]
+ini = { SymbolSearchPath = '<dir>\lib' }
+note = "The symbol in the search path, the sheet beside the placing sheet."
+
+[[case]]
+id = "blocks/sheet_in_search_path"
+behaviour = "block-sheet-search"
+source = "blocks/top.asc"
+extra = ["blocks/blk.asy", "blocks/lib/blk.asc"]
+ini = { SymbolSearchPath = '<dir>\lib' }
+note = "The symbol beside the placing sheet, the sheet in the search path."
+
+[[case]]
+id = "blocks/sheet_under_search_path"
+behaviour = "block-sheet-search"
+source = "blocks/top.asc"
+extra = ["blocks/blk.asy", "blocks/lib/sub/blk.asc"]
+ini = { SymbolSearchPath = '<dir>\lib' }
+note = "The symbol beside the placing sheet, the sheet in a folder under the search path."
+
+[[case]]
+id = "blocks/sheet_beside_symbol_in_search_path"
+behaviour = "block-sheet-search"
+source = "blocks/top.asc"
+extra = ["blocks/lib/blk.asy", "blocks/lib/blk.asc"]
+ini = { SymbolSearchPath = '<dir>\lib' }
+note = "The symbol and the sheet together in the search path."
+
+[[case]]
+id = "blocks/sheet_beside_placer_and_symbol"
+behaviour = "block-sheet-search"
+source = "blocks/top.asc"
+extra = ["blocks/lib/blk.asy", "blocks/lib/blk.asc", "blocks/blk.asc"]
+ini = { SymbolSearchPath = '<dir>\lib' }
+note = "One sheet beside the symbol in the search path and another beside the placing sheet."
+
+[[case]]
+id = "blocks/no_sheet"
+behaviour = "block-sheet-search"
+source = "blocks/top.asc"
+extra = ["blocks/lib/blk.asy"]
+ini = { SymbolSearchPath = '<dir>\lib' }
+note = "The symbol in the search path and no sheet anywhere."
+
+# A part of each element letter whose card a deck of element-terminals runs,
+# placed from the suite's own symbols with its pins in SpiceOrder: the export
+# says how a build writes the card.
+[[case]]
+id = "export/elements"
+behaviour = "element-terminals"
+source = "export/elements.asc"
+extra = ["export/z3.asy", "export/o4.asy", "export/u3.asy", "export/t4.asy", "export/w2.asy"]
+
+# The texts of export/text_backslash as the sheet window draws them.
+[[case]]
+id = "draw/text_backslash"
+behaviour = "text-backslash"
+kind = "draw"
+source = "draw/text_backslash.asc"
+
+# Short WINDOW lines as the sheet window draws them. R1 has its name's WINDOW
+# line whole; R2 the same line without its size and R3 without its
+# justification and size. R4 is the stand-in resistor as it is, and R5 the
+# same symbol with both its WINDOW lines cut short (window_short.asy).
+[[case]]
+id = "draw/window_short"
+behaviour = "window-short"
+kind = "draw"
+source = "draw/window_short.asc"
+extra = ["export/res.asy", "export/window_short.asy"]
+
+# A block placed by another block's sheet. outer's symbol and sheet are in the
+# search path (lib), and outer's sheet places blk, whose symbol is beside
+# top.asc. A sheet of blk's name in lib is beside the sheet placing it, and
+# one beside top.asc is beside blk's symbol. symbol_under_search_path shows
+# that a build does not find a symbol in a folder under the search path.
+[[case]]
+id = "blocks/symbol_under_search_path"
+behaviour = "block-sheet-search"
+source = "blocks/top.asc"
+extra = ["blocks/lib/sub/blk.asy", "blocks/blk.asc"]
+ini = { SymbolSearchPath = '<dir>\lib' }
+note = "The symbol in a folder under the search path, the sheet beside the placing sheet."
+
+[[case]]
+id = "blocks/nested_sheet_beside_its_placer"
+behaviour = "block-sheet-search"
+source = "blocks/nest_top.asc"
+extra = ["blocks/lib/outer.asy", "blocks/lib/outer.asc", "blocks/blk.asy", "blocks/lib/blk.asc"]
+ini = { SymbolSearchPath = '<dir>\lib' }
+note = "The inner block's sheet beside the block sheet that places it, its symbol beside the sheet exported."
+
+[[case]]
+id = "blocks/nested_sheet_beside_its_symbol"
+behaviour = "block-sheet-search"
+source = "blocks/nest_top.asc"
+extra = ["blocks/lib/outer.asy", "blocks/lib/outer.asc", "blocks/blk.asy", "blocks/blk.asc"]
+ini = { SymbolSearchPath = '<dir>\lib' }
+note = "The inner block's sheet beside its symbol, beside the sheet exported."
+
+[[case]]
+id = "blocks/nested_sheet_beside_both"
+behaviour = "block-sheet-search"
+source = "blocks/nest_top.asc"
+extra = ["blocks/lib/outer.asy", "blocks/lib/outer.asc", "blocks/blk.asy", "blocks/lib/blk.asc", "blocks/blk.asc"]
+ini = { SymbolSearchPath = '<dir>\lib' }
+note = "One sheet beside the inner block's symbol and another beside the sheet placing it."

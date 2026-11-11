@@ -1,0 +1,7 @@
+* a lossy transmission line from a to b
+I1 0 a 1
+O1 a 0 b 0 lossy
+R1 b 0 1k
+.model lossy LTRA(len=1 R=10 L=1u C=1p)
+.op
+.end

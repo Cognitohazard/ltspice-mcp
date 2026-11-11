@@ -1,0 +1,13 @@
+* a source's AC magnitude and parasitics after each form of its value, read in an AC analysis
+V1 a 0 PULSE(0 1 0 1n 1n 1u 2u) AC 2
+R1 a 0 1k
+V2 b 0 3 AC 4 Rser=1k
+R2 b 0 1k
+V3 c 0 1 AC=6
+R3 c 0 1k
+V4 d 0 SINE(0 1 1k) AC 1 Rser=1k Cpar=1u
+R4 d 0 1k
+I1 0 e 1m AC 2m
+R5 e 0 1k
+.ac lin 1 1k 1k
+.end

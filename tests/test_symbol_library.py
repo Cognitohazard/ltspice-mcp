@@ -152,11 +152,11 @@ def _resolver(sheet_folder: Path, *libraries: Path) -> SymbolResolver:
 
 
 class TestABlocksSheet:
-    """Where a hierarchical block's own sheet is found. Both builds read it
-    beside the block's symbol (``export-hierarchical-block``). Anywhere else is
-    not recorded, so it is then found as a symbol of the block's name is, with
-    ``.asc`` for ``.asy``: beside the sheet that places it, then in each
-    library. Never in the server's working directory."""
+    """Where a hierarchical block's own sheet is found: beside the block's
+    symbol, else beside the sheet being exported, and nowhere else, as both
+    builds find it (``export-hierarchical-block``, ``block-sheet-search``,
+    held in ``test_recorded_ltspice_schematics.py``). Never in the server's
+    working directory."""
 
     def test_beside_its_symbol(self, tmp_path: Path) -> None:
         keep(tmp_path / "library", "blocks/blk.asy", "blocks/blk.asc")
@@ -164,11 +164,30 @@ class TestABlocksSheet:
         found = _resolver(tmp_path / "sheet", tmp_path / "library").block_sheet("blk")
         assert found == tmp_path / "library" / "blocks" / "blk.asc"
 
-    def test_beside_the_sheet_that_places_it(self, tmp_path: Path) -> None:
+    def test_beside_the_sheet_exported(self, tmp_path: Path) -> None:
         keep(tmp_path / "library", "blk.asy")
         keep(tmp_path / "sheet", "blk.asc")
         found = _resolver(tmp_path / "sheet", tmp_path / "library").block_sheet("blk")
         assert found == tmp_path / "sheet" / "blk.asc"
+
+    def test_not_elsewhere_in_a_library(self, tmp_path: Path) -> None:
+        keep(tmp_path / "sheet", "blk.asy")
+        keep(tmp_path / "library", "blk.asc", "below/blk.asc")
+        assert _resolver(tmp_path / "sheet", tmp_path / "library").block_sheet("blk") is None
+
+    def test_not_beside_a_blocks_sheet_that_places_it(self, tmp_path: Path) -> None:
+        """A block placed on another block's sheet in a library: its sheet
+        beside that one is not found, and one beside the sheet exported is,
+        as is its symbol there."""
+        keep(tmp_path / "sheet", "blk.asy")
+        keep(tmp_path / "library", "outer.asy", "outer.asc", "blk.asc")
+        top = _resolver(tmp_path / "sheet", tmp_path / "library")
+        nested = top.for_sheet(tmp_path / "library" / "outer.asc")
+        assert nested.resolve("blk") == tmp_path / "sheet" / "blk.asy"
+        assert nested.block_sheet("blk") is None
+        keep(tmp_path / "sheet", "blk.asc")
+        fresh = top.for_sheet(tmp_path / "library" / "outer.asc")
+        assert fresh.block_sheet("blk") == tmp_path / "sheet" / "blk.asc"
 
     def test_not_in_a_folder_below_the_sheets(self, tmp_path: Path) -> None:
         keep(tmp_path / "sheet", "blk.asy", "blocks/blk.asc")

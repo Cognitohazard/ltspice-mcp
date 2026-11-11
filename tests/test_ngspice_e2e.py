@@ -1125,3 +1125,62 @@ async def test_samples_with_a_few_distinct_results_are_not_reported(
     draws = [run["assignments"]["random:component:R2"] for run in receipt["runs"]["items"]]
     assert min(draws) < 1000 < max(draws), draws
     assert not any(o["code"] == "identical_samples" for o in receipt.get("observations", []))
+
+
+async def test_simulator_draws_give_each_sample_ngspice_draws_of_its_own(
+    ngspice_state: SessionState, work_dir: Path
+):
+    """R1 is agauss(1k, 100, 1), which ngspice draws, and the entry draws
+    nothing itself. With simulator_draws each sample runs with its own seed:
+    three samples compute three voltages, both corners of one sample draw the
+    same R1 (the voltage doubles with the current), and sample 1 replayed
+    alone computes sample 1's voltage again."""
+    netlist = _write(
+        work_dir,
+        "drawn.cir",
+        "* drawn\n.param rv=agauss(1k, 100, 1)\n.param i=1m\nI1 0 n1 {i}\nR1 n1 0 {rv}\n"
+        ".op\n.end\n",
+    )
+
+    async def voltages(name: str, corners: list[str], **sampled: int) -> dict:
+        receipt = await terminal_experiment(
+            ngspice_state,
+            {
+                "request_id": name,
+                "circuits": [{"path": netlist, "id": "dut"}],
+                "variations": [
+                    {"kind": "assign", "assign": {"i": corners}},
+                    {"kind": "random", "seed": 5, "simulator_draws": True, **sampled},
+                ],
+                "execution": {"wait_s": 90, "simulator": "ngspice"},
+            },
+        )
+        assert receipt["status"] == "completed", receipt
+        assert not any(o["code"] == "identical_samples" for o in receipt.get("observations", []))
+        data = await _analyze(
+            ngspice_state,
+            receipt["job_id"],
+            [{"key": "v", "metric": "value", "expr": "v(n1)"}],
+            include={"per_run": True},
+        )
+        page = data["results"]["v"]["per_run"]
+        assert page["returned"] == page["total"], page
+        return {
+            (item["assignments"]["i"], item["assignments"]["_random_run"]): (
+                item["value"]["value"],
+                item["assignments"]["_random_simulator_seed"],
+            )
+            for item in page["items"]
+        }
+
+    every = await voltages("drawn-every", ["1m", "2m"], runs=3)
+    alone = await voltages("drawn-alone", ["1m"], runs=1, sample_start=1)
+
+    # 1 mA through R1 drawn around 1k with sigma 100.
+    at_1m = [every["1m", sample][0] for sample in range(3)]
+    assert len(set(at_1m)) == 3, at_1m
+    assert all(0.5 < value < 1.5 for value in at_1m), at_1m
+    for sample in range(3):
+        assert every["2m", sample][0] == pytest.approx(2 * every["1m", sample][0], rel=1e-9)
+        assert every["2m", sample][1] == every["1m", sample][1]
+    assert alone == {("1m", 1): every["1m", 1]}
