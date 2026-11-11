@@ -1266,6 +1266,37 @@ def test_a_node_against_ground_is_not_measured_with_only_the_node_saved(
     assert refusals("deck/save_pair_to_ground") == {"save-meas-coverage"}
 
 
+#: What each pattern case is expected to save, and the measurements it then takes:
+#: the reading the lint would make once the recording confirms it.
+_PATTERN_CASES = {
+    "deck/save_pattern_v": (["time", "V(in)", "V(mid)", "V(out)"], {"vout"}),
+    "deck/save_pattern_i": (["time", "I(C1)", "I(R1)", "I(R2)", "I(V1)"], {"ir1"}),
+    "deck/save_pattern_prefix": (["time", "V(out)"], {"vout"}),
+}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+@pytest.mark.parametrize("case_id", sorted(_PATTERN_CASES))
+def test_a_save_pattern_saves_what_its_pattern_names(build: str, case_id: str, tmp_path: Path):
+    """Which signals ``.save V(*)``, ``.save I(*)`` and ``.save V(o*)`` save,
+    and whether a ``.meas`` reads one the pattern names. Each deck has one
+    ``.meas``, because LTspice 26 prints no measurement at all when one of a
+    deck's fails (recorded: ``deck/meas_function_vdb``). The lint does not
+    refuse such a deck on a guess (``save-pattern-unrecorded`` says what it did
+    not check); once this is recorded, the reading here is what the lint may
+    rely on."""
+    assert refusals(case_id) == set()
+    # Skipped only while the case is pending: once it is recorded, a build that
+    # writes no raw for a pattern fails here rather than skipping unseen.
+    pending = rec.CASES.behaviours["save-pattern"].pending
+    if pending:
+        pytest.skip(pending)
+    traces, data = pair_run(build, case_id, tmp_path)
+    saved, measured = _PATTERN_CASES[case_id]
+    assert sorted(traces) == sorted(saved)
+    assert set(data["measurements"]) == measured
+
+
 # --------------------------------------------------------------------------
 # A mismatch draw on a MOSFET inside a subcircuit
 # --------------------------------------------------------------------------
