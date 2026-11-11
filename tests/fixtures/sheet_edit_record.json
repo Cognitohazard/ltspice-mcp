@@ -1410,6 +1410,18 @@
    "tests/test_edit_schematic.py::test_crash_after_rename_stays_committed"
   ]
  },
+ "64f539e7e5e61cd2": {
+  "answer": {
+   "reply": "e18104507c3230df",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_every_route_names_a_pins_net_by_every_spelling_of_its_labels[ltspice17]",
+   "tests/test_recorded_ltspice_schematics.py::test_every_route_names_a_pins_net_by_every_spelling_of_its_labels[ltspice26]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_python_api_names_a_pins_net_by_every_spelling_of_its_labels[ltspice17]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_python_api_names_a_pins_net_by_every_spelling_of_its_labels[ltspice26]"
+  ]
+ },
  "65b88a7751c1f73d": {
   "answer": {
    "message": "Cannot open spaced.asc for editing: line 3 ('TEXT  16 16 Left 2 !.tran 1m') is a TEXT record the schematic editor skips, and saving any edit would delete it. Write it as LTspice saves one, with one space between its fields, then edit the sheet here.",
@@ -1647,6 +1659,16 @@
   "tests": [
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/collinear_overlap]",
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/collinear_overlap]"
+  ]
+ },
+ "73aa8cdaaa1c956b": {
+  "answer": {
+   "reply": "d51581beb8ca1cba",
+   "sheet": "3e35e1b8961535f6"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_that_changes_a_label_only_pins_net_names_lists_the_pin[ltspice17]",
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_that_changes_a_label_only_pins_net_names_lists_the_pin[ltspice26]"
   ]
  },
  "73e5782b31b157b8": {
@@ -2754,6 +2776,18 @@
    "tests/test_edit_schematic.py::test_default_view_covers_only_the_refs_the_batch_touched"
   ]
  },
+ "be6f36ed708b0e9a": {
+  "answer": {
+   "reply": "4d5d254ed3b52fba",
+   "sheet": "bec10ad5c19d0a32"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_every_route_names_a_pins_net_by_every_spelling_of_its_labels[ltspice17]",
+   "tests/test_recorded_ltspice_schematics.py::test_every_route_names_a_pins_net_by_every_spelling_of_its_labels[ltspice26]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_python_api_names_a_pins_net_by_every_spelling_of_its_labels[ltspice17]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_python_api_names_a_pins_net_by_every_spelling_of_its_labels[ltspice26]"
+  ]
+ },
  "bec0e67ca59f4455": {
   "answer": {
    "reply": "98ea889562f8f47b",
@@ -3273,6 +3307,16 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::TestDataFlagPreservation::test_a_data_flag_is_written_back_in_the_sheets_codec"
+  ]
+ },
+ "e7cb9ce8a10513d7": {
+  "answer": {
+   "reply": "9da6c5385d190c69",
+   "sheet": "bec10ad5c19d0a32"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_that_changes_a_label_only_pins_net_names_lists_the_pin[ltspice17]",
+   "tests/test_recorded_ltspice_schematics.py::test_an_edit_that_changes_a_label_only_pins_net_names_lists_the_pin[ltspice26]"
   ]
  },
  "e9f96d301c87cc8c": {

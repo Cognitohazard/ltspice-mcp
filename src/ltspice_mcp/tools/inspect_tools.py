@@ -343,7 +343,7 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
     # trace answers "what's on net X" on label-wired sheets too. They are kept
     # on the sheet for the call's other queries; grouping a large sheet is
     # slow, so it runs off the event loop.
-    await asyncio.to_thread(lambda: sheet.net_points)
+    await asyncio.to_thread(lambda: (sheet.net_points, sheet.named_nets))
     nets = sheet.nets
 
     if args.pin is not None and args.pin.startswith("net:"):
@@ -402,7 +402,9 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
             if wire[:2] in on_net or wire[2:] in on_net
         )
 
-    labels = {label.text for label in nets.labels_on(net)}
+    # The net's names as every view of a pin's net gives them: each label's
+    # text, every spelling of a name among them (NamedNets.texts).
+    labels = sheet.named_nets.texts(root)
     pins = sorted(
         (
             {"reference": pin.reference, "pin": pin.name, "x": pin.point[0], "y": pin.point[1]}
@@ -1588,9 +1590,7 @@ def _deck_node(
             "does not read: it lists the deck's own cards. inspect(kind='hierarchy') "
             "lists the nodes of each subcircuit instance."
         )
-    included = sum(
-        1 for card in cards if not card.scope and directive_head(card) in INCLUDE_HEADS
-    )
+    included = sum(1 for card in cards if not card.scope and directive_head(card) in INCLUDE_HEADS)
     if included:
         message += (
             f" The deck reads {included} more file{'s' if included > 1 else ''} through "

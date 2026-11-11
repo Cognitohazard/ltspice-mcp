@@ -132,7 +132,9 @@ extra = ["connectivity/res.asy"]
 
 [behaviour.node-name-case]
 summary = "Whether two node names that differ only in case are one node when a deck runs. An export keeps each label's spelling (net-naming), so the run is what shows they join: V1 drives OUT, R1 sits on out, and I(R1) is 1 mA only if they are one node."
-model = ["lib/connectivity.py"]
+# Every view of a pin's or a net's names lists each spelling on the node:
+# the pin legend and label-only pins of an edit, and the net query.
+model = ["lib/connectivity.py", "lib/pin_legend.py", "tools/schematic_edit.py", "tools/inspect_tools.py"]
 inputs = ["connectivity/node_name_case.cir"]
 
 [behaviour.build-benchmark-export]

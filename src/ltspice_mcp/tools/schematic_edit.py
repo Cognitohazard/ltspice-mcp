@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import codecs
 import contextlib
+import functools
 import hashlib
 import io
 import os
@@ -691,35 +692,39 @@ async def _export_asc_to_netlist(asc_copy: Path, state: SessionState) -> str:
 def _pin_tables(editor, *, include_legend: bool) -> tuple[list[dict], list[dict]]:
     """The pin legend (only when ``include_legend``) and the label-only pins of a placed editor.
 
-    A label-only pin has no wire through it, so its net name is the labels at
-    its own coordinate, read without working out the sheet's nets. The nets
-    LTspice makes of the whole sheet (``sheet_nets``) are worked out only for
-    the legend, which names the net of every pin with the labels of that net,
-    nets that share a name being one. The plain results go to the pure
-    ``lib/pin_legend`` builders.
+    Both name a pin's net with one answer: the text of every label on the net
+    LTspice makes of the sheet (``sheet_nets``, ``NamedNets.texts``), wherever
+    on the net it sits, each spelling of a name among them. Names that differ
+    only in case are one node (the ``node-name-case`` recording) and an export
+    keeps each label's own spelling (``label_case_separate_wires``), so no one
+    spelling is the net's. A label-only pin is named so too, not by the labels
+    on its own point. The nets are worked out once, and only when a pin is to
+    be named. The plain results go to the pure ``lib/pin_legend`` builders.
     """
     geometry = collect_component_geometry(editor)
     segments = [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in wire_segments_of(editor)]
-    labels_at: dict[tuple[int, int], set[str]] = {}
-    for lbl in editor.labels:
-        labels_at.setdefault((int(lbl.coord.X), int(lbl.coord.Y)), set()).add(lbl.text)
+    labelled = {(int(lbl.coord.X), int(lbl.coord.Y)) for lbl in editor.labels}
 
-    def net_name(labels: Iterable[str]) -> str | None:
-        return "/".join(sorted(labels)) or None
+    @functools.cache
+    def names() -> dict[tuple[str, int], str | None]:
+        nets = sheet_nets(editor, geometry=geometry)
+        return {
+            (pin.reference, pin.order): "/".join(sorted(nets.texts(nets.of_pin(pin)))) or None
+            for pin in nets.pins
+        }
+
+    def net_name_of(reference: str, index: int) -> str | None:
+        return names()[reference, index]
 
     label_only = find_label_only_pins(
         geometry,
         is_wired=build_on_wire_predicate(segments),
-        is_labeled=lambda c: c in labels_at,
-        net_name_of=lambda _ref, _index, c: net_name(labels_at.get(c, ())),
+        is_labeled=labelled.__contains__,
+        net_name_of=net_name_of,
     )
     if not include_legend:
         return [], label_only
-    nets = sheet_nets(editor, geometry=geometry)
-    names = {
-        (pin.reference, pin.order): net_name(nets.texts(nets.of_pin(pin))) for pin in nets.pins
-    }
-    return build_pin_legend(geometry, lambda ref, index, _c: names[ref, index]), label_only
+    return build_pin_legend(geometry, net_name_of), label_only
 
 
 async def _name_nets_as_exported(legend: list[dict], editor: AscEditor, netlist: str) -> None:

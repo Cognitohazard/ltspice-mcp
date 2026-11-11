@@ -441,7 +441,13 @@ def label_connects(pins: Iterable[Point], wires: Iterable[Segment]) -> Callable[
 def _net_name(labels: list[tuple[Point, str]]) -> str:
     """Of labels whose names differ only in case, the spelling LTspice gives
     the node: the label lowest on the sheet, and of those the one furthest
-    right (the net-naming recordings)."""
+    right (the net-naming recordings).
+
+    A finding gives each name once, in this spelling, because it counts names
+    (``net_with_two_names``) or reports one (``label_island``), and two
+    spellings of one name are one name. A pin's net is named otherwise, by
+    every spelling its labels carry (``NamedNets.texts``), since those say
+    which labels are on it."""
     return max(labels, key=lambda label: (label[0][1], label[0][0], label[1]))[1]
 
 

@@ -278,7 +278,9 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
   text crosses.
 - **On an existing sheet, the reply lists only your edit's findings.**
   `warnings` lists only the findings your ops made or changed, and
-  `wiring.label_only_pins` only the pins of parts they rewired or named. A
+  `wiring.label_only_pins` only the pins of parts they rewired or named, and
+  pins whose net's names they changed. A pin's `net` lists every label
+  spelling on its net (`OUT/out`), since LTspice reads them as one. A
   part that is moved or given a new value keeps the findings it had. Older
   findings are only counted, in `preexisting`. A batch that only sets values
   or attributes lists no pins at all, since it leaves every pin joined as it

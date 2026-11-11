@@ -1308,8 +1308,13 @@ whose value or attributes alone changed keeps its pins where they were and
 joined as they were, so a batch of value changes lists no pins, in `touched`
 or in `wiring.label_only_pins`; its label-only pins are counted under
 `preexisting`. A pin's `net` is the names the labels of its net carry, absent
-when none does. Nets are the ones LTspice netlists: labels of one name, in any
-case, are one net, a wire straight between two pins of one part joins
+when none does: the text of every label anywhere on the net, each spelling of
+a name among them, joined with `/` (`OUT/out`). A label-only pin's row in
+`wiring.label_only_pins` and in `preexisting` names its net the same way, not
+by the labels on its own point, and `inspect(kind: "net")` lists the same
+`labels`. Nets are the ones LTspice netlists: labels of one name, in any
+case, are one net (the `node-name-case` recording; an export keeps each
+label's own spelling), a wire straight between two pins of one part joins
 nothing, and of one part's pins alone on a point only the last in SpiceOrder
 touches another part's. LTspice names such a net only when it exports the sheet (`N001`,
 `NC_01` for a pin on nothing), so the name comes from an export and is never
@@ -1340,7 +1345,10 @@ given a new value keeps the findings it had, and a finding the batch left as
 it was is not the batch's, whichever part it names. For any other rule the
 subject is the finding's points and facts, and any change makes it new. All
 other findings are listed in the `preexisting` block, with the label-only pins
-of the parts the batch did not rewire or name:
+the batch neither changed nor named. A label-only pin is the batch's when its
+row is new (the pin was not label-only before, moved, or its net's names
+changed), when an op that may rewire it names its part, or when an op names
+its point:
 
 ```
 preexisting {count, findings, label_only_pins, cursor?}

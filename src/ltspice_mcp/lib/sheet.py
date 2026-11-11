@@ -19,7 +19,7 @@ from pathlib import Path
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.asc_document import AscDocument, Opaque, Record, Symbol, parse_asc_text
-from ltspice_mcp.lib.connectivity import fold_case, nets_by_ltspice
+from ltspice_mcp.lib.connectivity import NamedNets, fold_case, nets_by_ltspice
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.nets import LabelAt, Nets, PinAt
@@ -331,6 +331,11 @@ class Sheet:
         """The sheet's nets as LTspice netlists them (``connectivity.nets_by_ltspice``)."""
         wires = [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in self.wires]
         return nets_by_ltspice(self.net_pins, self.net_labels, wires)
+
+    @cached_property
+    def named_nets(self) -> NamedNets:
+        """:attr:`nets` folded, with the names each carries (``connectivity.NamedNets``)."""
+        return NamedNets(self.nets)
 
     @cached_property
     def drawn_points(self) -> frozenset[Point]:
