@@ -312,8 +312,26 @@ async def test_a_shutdown_whose_bound_ends_in_the_final_checkpoint_settles_the_j
     coordinator = server.job_registry.live[job_id].task
     assert job.recovery is not None and coordinator is not None
 
-    # timing: the bound under test; the coordinator reaches its final checkpoint well inside it
-    monkeypatch.setattr(job_registry, "_SHUTDOWN_CANCEL_TIMEOUT_S", 1.0)
+    # The bound under test runs out the moment the coordinator holds its final
+    # checkpoint, not after a time: the first stage's cancels are then asked
+    # to stop, as the bound's expiry asks them, and the shutdown's own
+    # bookkeeping runs next. Later stages keep their real bound.
+    issue = job_registry._issue_cancels
+    stages: list[int] = []
+
+    async def first_stage_ends_at_the_checkpoint(cancels: list[Any]) -> None:
+        stages.append(len(cancels))
+        if len(stages) > 1:
+            await issue(cancels)
+            return
+        tasks = [asyncio.ensure_future(cancel) for cancel in cancels]
+        for task in tasks:
+            task.add_done_callback(job_registry._discard_outcome)
+        await asyncio.wait_for(held.wait(), LIVENESS_S)
+        for task in tasks:
+            task.cancel()
+
+    monkeypatch.setattr(job_registry, "_issue_cancels", first_stage_ends_at_the_checkpoint)
     shutdown = asyncio.create_task(server.shutdown())
     await asyncio.wait_for(held.wait(), LIVENESS_S)
     # The coordinator, not the shutdown, reached the write: it settled the job

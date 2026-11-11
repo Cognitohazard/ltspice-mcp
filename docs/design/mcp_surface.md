@@ -826,9 +826,13 @@ is fixed. Neither observation costs the job its status. A cancelled job
 copies nothing, and a case that produced nothing leaves its sheet alone. Nor
 does a job whose process stops before the copy, even once every run has
 finished: the copy waits on each sheet's lock and copies whole raws, which can
-outlast the bound a stopping process gives its jobs. Each sheet whose case
-produced then has a `results_not_placed` with `reason_code`
-`server_restarted`, naming the action that copies its results.
+outlast the bound a stopping process gives its jobs. When the job's own
+coordinator stops it after its runs, each sheet whose case produced then has a
+`results_not_placed` with `reason_code` `server_restarted`, naming the action
+that copies its results. A job settled without its coordinator (one whose
+process crashed, or whose stop outlasted that bound) keeps no record that a
+copy was asked for, so its receipt carries only the general
+`results_not_beside_sheet` note, which names the same action.
 The request is refused before it runs (`commit_state: "not_started"`) when a
 circuit is a netlist (`not_a_sheet`), when the job does not run on LTspice
 (`not_ltspice`), and when a sheet would run more than one case, by a
