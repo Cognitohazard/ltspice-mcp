@@ -1,0 +1,10 @@
+* a MESFET card with three nodes, and the same card with an area factor
+V1 d 0 5
+V2 g 0 0
+Z1 d g s1 nmf
+R1 s1 0 1
+Z2 d g s2 nmf 2
+R2 s2 0 1
+.model nmf NMF(Vto=-2 Beta=1m B=0 Alpha=10 Lambda=0)
+.op
+.end

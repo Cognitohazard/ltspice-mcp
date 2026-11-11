@@ -97,6 +97,9 @@ MANIFEST_SCHEMA = 1
 #: recording user's home directory. Both pass the repository's privacy scan.
 NEUTRAL_DIR = "C:\\recording"
 NEUTRAL_HOME = "C:\\Users\\user"
+#: What a case's ``ini`` value writes for the folder the case runs in, as a
+#: command line in the manifest shows that folder.
+CASE_DIR = "<dir>"
 #: The date every recorded ``Date:`` / ``Start Time:`` line carries. A two-digit
 #: day, so the builds' different padding of a one-digit day does not arise.
 NEUTRAL_DATE = "Thu Jan 15 00:00:00 2026"
@@ -398,6 +401,12 @@ class Case:
 
     def applies_to(self, build: Build) -> bool:
         return not self.builds or build.generation in self.builds or build.label in self.builds
+
+    def settings_in(self, work: Path) -> dict[str, str]:
+        """The case's settings for a run in ``work``: ``<dir>`` in a value is
+        that folder, so a setting can name a folder of the case's own
+        (``SymbolSearchPath``). The manifest keeps the values as written."""
+        return {key: value.replace(CASE_DIR, str(work)) for key, value in self.ini.items()}
 
 
 @dataclass(frozen=True)
@@ -1507,7 +1516,7 @@ def _neutral_command(command: Sequence[str], build: Build, work: Path, ini: Path
         elif token == str(ini):
             shown.append("<settings>")
         else:
-            shown.append(token.replace(work.as_posix(), "<dir>").replace(str(work), "<dir>"))
+            shown.append(token.replace(work.as_posix(), CASE_DIR).replace(str(work), CASE_DIR))
     return shown
 
 
@@ -1646,7 +1655,7 @@ def run_case(
         digests[name] = sha256_bytes(data)
     # Outside the case directory, so nothing the build writes can pick it up.
     ini = work.parent / f"{work.name}.ini"
-    ini.write_bytes(neutral_settings(settings.read_bytes(), case.ini))
+    ini.write_bytes(neutral_settings(settings.read_bytes(), case.settings_in(work)))
     deck = work / case.work_name
     command = _command(build, case, deck, ini)
     ended = _launch(desktop, command, work, case, deck, timeout, build)

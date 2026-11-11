@@ -1,0 +1,6 @@
+* a lossless transmission line from a to b
+I1 0 a 1
+T1 a 0 b 0 Td=1n Z0=50
+R1 b 0 1k
+.op
+.end

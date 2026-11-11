@@ -112,6 +112,7 @@ from ltspice_mcp.lib.variations import (
     VariationError,
     check_case_cap,
     check_random_families,
+    check_simulator_draws,
     derive_circuit_ids,
     expand_variations,
     format_case_id,
@@ -509,9 +510,12 @@ class RunExperimentsInput(ToolInput):
         # recorded; at its default it starts the samples where they always did.
         # A pdk_native entry keeps its sample_start: it had the field from its
         # first release, so its recorded bytes carry it.
+        # simulator_draws came later still, and false is how they always ran.
         for variation, rendered in zip(self.variations, payload["variations"], strict=True):
             if isinstance(variation, RandomVariation) and variation.sample_start == 0:
                 rendered.pop("sample_start", None)
+            if isinstance(variation, RandomVariation) and not variation.simulator_draws:
+                rendered.pop("simulator_draws", None)
 
         def collapse_optional_models(
             model: StrictModel,
@@ -720,6 +724,9 @@ async def handle_run_experiments(
                 "recovery_seed_unsupported",
                 "Explicit seed requires recoverable ngspice without native statistics",
             )
+        check_simulator_draws(
+            args.variations, simulator_dialect(simulator), args.execution.simulator_seed
+        )
         circuit_inputs, id_notes = await asyncio.to_thread(
             _circuit_decks_for_validation, args.circuits, state
         )
@@ -1583,7 +1590,9 @@ def _append_terminal_cases(
             and expanded.random is not None
             and expanded.random_index is not None
         ):
-            assignments.update(random_identity(expanded.random, expanded.random_index))
+            assignments.update(
+                random_identity(expanded.random, expanded.random_index, expanded.circuit_id)
+            )
         cases.append(
             ExperimentCase(
                 case_id=(

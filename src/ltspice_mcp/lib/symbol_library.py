@@ -25,10 +25,9 @@ behaviour"):
 - **Nowhere else**: not in the folder the server happens to run in, which is
   no part of the sheet.
 
-A hierarchical block's own sheet is found beside the block's symbol, where
-both builds read it (``export-hierarchical-block``). Where else LTspice looks
-for one is not recorded, so it is then found by the rule above, as a file of
-the block's name with ``.asc`` for ``.asy`` (``SymbolResolver.block_sheet``).
+A hierarchical block's own sheet is found beside the block's symbol, else
+beside the sheet being exported, and nowhere else, as both builds find it
+(``export-hierarchical-block``, ``block-sheet-search``; ``find_block_sheet``).
 No reader of a sheet here needs the model library a part's symbol names (a
 deck reads its libraries when it runs), so none looks for one.
 
@@ -42,7 +41,7 @@ from __future__ import annotations
 import functools
 import glob
 import os
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -64,8 +63,7 @@ def find_beside(folder: Path, symbol: str, suffix: str = ".asy") -> Path | None:
     """``symbol``'s file in ``folder``: where its name says, else under its bare name there.
 
     Never anywhere deeper. This is the whole rule beside a sheet, and the first
-    half of the rule in a library. ``suffix`` is the file's: a symbol's, or a
-    block's sheet's (``.asc``).
+    half of the rule in a library. ``suffix`` is the file's.
     """
     for name in dict.fromkeys(spellings(symbol)):
         candidate = folder / f"{name}{suffix}"
@@ -122,6 +120,27 @@ def find_symbol(symbol: str, sheet_folder: Path | None, libraries: Sequence[Path
     return find_file(symbol, sheet_folder, libraries, ".asy")
 
 
+def find_block_sheet(symbol: Path, exported_folder: Path | None) -> Path | None:
+    """A hierarchical block's own sheet, given its symbol file and the folder
+    of the sheet being exported: beside the symbol, else in that folder, as a
+    file of the symbol's name with ``.asc`` for ``.asy``.
+
+    Both LTspice builds look there and nowhere else (``block-sheet-search``).
+    A sheet beside the exported sheet is read for a block whose symbol is in a
+    library, and the one beside the symbol wins when both are there. A sheet
+    elsewhere in a library, or in a folder of one, is not found, and nor is
+    one beside a block's own sheet that places another block, where that
+    sheet is not the one exported; the export then fails. Those cases used the
+    symbol search path; a block in the build's own ``sym`` folder is not
+    recorded, and is read the same way. The recorder exports with the working
+    directory in the exported sheet's folder, so the two are not told apart.
+    """
+    candidates = [symbol.with_suffix(".asc")]
+    if exported_folder is not None:
+        candidates.append(exported_folder / f"{symbol.stem}.asc")
+    return next((candidate for candidate in candidates if candidate.is_file()), None)
+
+
 def _folder_key(path: Path) -> str:
     """One spelling for every spelling of a folder: its real path, in the case
     the platform compares paths in. A link to a folder, a ``..`` in its path,
@@ -161,16 +180,11 @@ class FoundSymbol:
 #: of one ``SymbolLibrary``.
 ParseCache = FileCache[tuple[SymbolFile, str]]
 
-#: Where each name resolved in an LTspice build's own library, misses
-#: included, by the suffix of the file looked for (``.asy``, or ``.asc`` for a
-#: block's sheet) and the name. Shared by every resolver of one
+#: Where each symbol name resolved in an LTspice build's own library, misses
+#: included. Shared by every resolver of one
 #: ``SymbolLibrary``: that library is the LTspice install, which does not
 #: change while the server runs.
-StockLookups = dict[tuple[str, str], Path | None]
-
-#: A rule that finds a name's file beside a sheet and in libraries, as
-#: ``find_symbol`` does.
-_Finder = Callable[[str, Path | None, Sequence[Path]], Path | None]
+StockLookups = dict[str, Path | None]
 
 
 def _read(path: Path) -> tuple[SymbolFile, str]:
@@ -189,7 +203,10 @@ class SymbolResolver:
 
     Precedence, highest first:
 
-    1. the schematic's own directory (``local_dir``),
+    1. the schematic's own directory (``local_dir``), and for a block's own
+       sheet the directory of the sheet being exported (``exported_dir``),
+       where both builds found a symbol that sheet places
+       (``block-sheet-search``, ``blocks/nested_sheet_beside_its_symbol``),
     2. configured project symbol paths (``project_paths``),
     3. stock LTspice library paths (``stock_paths``).
 
@@ -216,8 +233,14 @@ class SymbolResolver:
         *,
         parse_cache: ParseCache | None = None,
         stock_lookups: StockLookups | None = None,
+        exported_dir: Path | None = None,
     ) -> None:
         self._local_dir = local_dir
+        # The folder of the sheet being exported, where a block's own sheet is
+        # looked for after beside its symbol (``find_block_sheet``): the
+        # sheet's own folder, unless this resolver reads a block's sheet that
+        # sheet loads (``for_sheet``).
+        self._exported_dir = local_dir if exported_dir is None else exported_dir
         self._given = (tuple(project_paths), tuple(stock_paths))
         self._resolved: dict[tuple[str, str], Path | None] = {}
         self._found: dict[str, FoundSymbol | None] = {}
@@ -229,7 +252,12 @@ class SymbolResolver:
         """The folders searched, in order, each with its tier:
         ``schematic-local``, ``configured`` or ``stock``."""
         project, stock = self._given
-        tiers = [(self._local_dir, "schematic-local")] if self._local_dir is not None else []
+        tiers = [
+            (folder, "schematic-local")
+            # The same folder given twice is one tier, and resolved once.
+            for folder in dict.fromkeys((self._local_dir, self._exported_dir))
+            if folder is not None
+        ]
         tiers += [(path, "configured") for path in project]
         tiers += [(path, "stock") for path in stock]
         seen: set[str] = set()
@@ -240,6 +268,10 @@ class SymbolResolver:
                 seen.add(key)
                 precedence.append((path, tier))
         return tuple(precedence)
+
+    @functools.cached_property
+    def _beside(self) -> list[Path]:
+        return [path for path, tier in self.precedence if tier == "schematic-local"]
 
     @functools.cached_property
     def _project(self) -> list[Path]:
@@ -254,8 +286,8 @@ class SymbolResolver:
         # A stock folder that is also the sheet's own is searched as the sheet's,
         # so what this resolver finds in the stock library is not the library's.
         stock = {_folder_key(path) for path in self._given[1]}
-        if self._session_lookups is None or (
-            self._local_dir is not None and _folder_key(self._local_dir) in stock
+        if self._session_lookups is None or any(
+            _folder_key(folder) in stock for folder in self._beside
         ):
             return {}
         return self._session_lookups
@@ -266,26 +298,38 @@ class SymbolResolver:
         return tuple(path for path, _tier in self.precedence)
 
     def for_sheet(self, path: Path) -> SymbolResolver:
-        """A resolver for the sheet at ``path``, with this one's libraries and
-        caches: what a sheet another loads, such as a block's own, is read with."""
+        """A resolver for the sheet at ``path``, with this one's libraries,
+        caches and exported sheet: what a sheet another loads, such as a
+        block's own, is read with."""
         return SymbolResolver(
             local_dir=path.parent,
+            exported_dir=self._exported_dir,
             project_paths=self._given[0],
             stock_paths=self._given[1],
             parse_cache=self._parse_cache,
             stock_lookups=self._session_lookups,
         )
 
-    def _lookup(self, suffix: str, name: str, find: _Finder) -> Path | None:
-        """``find`` for ``name`` beside the sheet and in the configured libraries,
-        then in the stock library, each answer kept as the class says."""
-        key = (suffix, name)
+    def _lookup(self, name: str) -> Path | None:
+        """``find_symbol`` for ``name`` beside the sheet, then beside the sheet
+        being exported, then in the configured libraries, then in the stock
+        library, each answer kept as the class says."""
+        key = (".asy", name)
         if key not in self._resolved:
-            found = find(name, self._local_dir, self._project)
+            # A block's own sheet searches its own folder first, alone; then one
+            # search of the last folder beside a sheet and the libraries, which
+            # is the whole search for a sheet that is not a block's.
+            *first, last = self._beside or [None]
+            found = next(
+                (path for folder in first if (path := find_symbol(name, folder, ())) is not None),
+                None,
+            )
+            if found is None:
+                found = find_symbol(name, last, self._project)
             if found is None and self._stock:
-                if key not in self._stock_lookups:
-                    self._stock_lookups[key] = find(name, None, self._stock)
-                found = self._stock_lookups[key]
+                if name not in self._stock_lookups:
+                    self._stock_lookups[name] = find_symbol(name, None, self._stock)
+                found = self._stock_lookups[name]
             self._resolved[key] = found
         return self._resolved[key]
 
@@ -296,29 +340,18 @@ class SymbolResolver:
         first and every other root a library: the rule the schematic editor's
         pin geometry follows too.
         """
-        return self._lookup(".asy", symbol, find_symbol)
+        return self._lookup(symbol)
 
     def block_sheet(self, symbol: str) -> Path | None:
-        """The own sheet of the block whose symbol the sheet names ``symbol``.
-
-        Beside the block's symbol, where both builds read it
-        (``export-hierarchical-block``). Where else LTspice looks is not
-        recorded, so the sheet is then found as the symbol is, as a file of the
-        block's name with ``.asc`` for ``.asy`` (``find_file``). ``None`` for a
-        name no symbol is found for, and for a block with no sheet.
-        """
+        """The own sheet of the block whose symbol the sheet names ``symbol``
+        (``find_block_sheet``). ``None`` for a name no symbol is found for, and
+        for a block with no sheet."""
         key = ("block", symbol)
         if key not in self._resolved:
             placed = self.resolve(symbol)
-            found = None
-            if placed is not None:
-                beside = placed.with_suffix(".asc")
-                found = (
-                    beside
-                    if beside.is_file()
-                    else self._lookup(".asc", symbol, functools.partial(find_file, suffix=".asc"))
-                )
-            self._resolved[key] = found
+            self._resolved[key] = (
+                None if placed is None else find_block_sheet(placed, self._exported_dir)
+            )
         return self._resolved[key]
 
     def listing(self) -> Iterator[tuple[Path, str, Iterator[Path]]]:

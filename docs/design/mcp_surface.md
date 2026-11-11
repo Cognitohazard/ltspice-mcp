@@ -585,7 +585,10 @@ it includes is checked, and one refusal names the constructs refused, how many
 there are, and up to twelve of them. Each is listed with its code and its first
 place (the file it came from as the caller wrote it, the line and the card),
 then up to five more places and a count of the rest. The error's `code` is that
-of the first construct listed. An include read in place is named with the
+of the first construct listed. On ngspice, where a seed would admit a refused
+random function, the refusal names the two ways to set one, and lists any seed
+option of the deck's own that leaves the draws unfixed, since that option
+blocks both. An include read in place is named with the
 reason it was not copied. ngspice runs with `-n` (no user `.spiceinit`) and
 with `SPICE_SCRIPTS`, set only for that subprocess, pointing at a system
 startup file in the job's folder that contains only a comment, so the
@@ -612,7 +615,24 @@ deck. It requires recoverable ngspice and an integer (not a float or boolean)
 in `1..2147483646`; every case and retry starts from that seed. It cannot be
 combined with a `pdk_native` variation, which sets its own seeds; a request
 using both is refused. Without it, no seed is set, and a recoverable deck may
-not call random functions.
+not call random functions, unless the deck fixes ngspice's seed itself: an
+`.option`/`.options` card at the top level of the deck file, outside a
+subcircuit and a `.lib` section, that sets `seed=` to a positive integer, with
+every other seed option the deck reads fixed too. ngspice reads that card when
+it loads the deck, before it evaluates a parameter, and reseeds as `setseed`
+does (`inp.c:eval_opt` calls `com_sseed`), so the draws repeat on every run
+and retry. That is how a `random` entry's `simulator_draws` cases run under
+`recoverable`. Such a deck admits the same five random functions, and, since
+it runs as an ordinary batch run, any number of analyses.
+
+A seeded deck that sets ngspice's seed itself, with `seed=` on an option card
+ngspice may read, is refused at submission, and a job recorded with one is
+refused at resume and launch (`recovery_seed_unsupported`): ngspice reads that
+card when it loads the deck, after the driver's `setseed`, so the deck's seed
+wins and the run would record a seed it never drew from, or, with
+`seed=random`, draw anew on a retry (measured on ngspice-42). A card in a
+subcircuit no X line calls does not count, as ngspice drops that subcircuit
+unread; one in a `.lib` section counts whichever section the deck selects.
 
 A seeded deck may use only the random functions `agauss`, `gauss`, `aunif`,
 `unif` and `limit`; `.control` blocks, functions the server does not know,
@@ -2127,6 +2147,19 @@ An unrecognized flag name fails with the list of valid flags, noting that
 neither a policy nor a boolean is refused, and the error lists the accepted
 forms and the `mode` values.
 
+**Progress.** A call that asks for progress (a `_meta.progressToken`) and
+waits on a job, `jobs` wait or resume or `run_experiments` holding the call
+open, gets a `notifications/progress` when the wait begins, then at most once
+a second while more of the job's cases have finished, and as the wait ends if
+more have: `progress` is the number of cases finished, `total` the cases the
+job expanded to (left out until it is known), and `message` says both with
+the job id. A client may restart its timeout on each one; none is sent while
+no case finishes, as during one long case or the job's attached analysis.
+A call's reports only rise, however many waits it makes, and none is sent
+once the call is answered, even by a task it started, such as the job's
+coordinator. No other call reports
+progress, and a call that did not ask is sent none.
+
 **Server logging.** The server logs only to stderr, at `WARNING` by default;
 `[logging] level = "INFO"` or `LTSPICE_MCP_LOG_LEVEL` sets another level. It
 neither advertises nor serves the MCP logging capability
@@ -2181,6 +2214,7 @@ Suppression is per call, and `linter_version` is reported in provenance.
 | `meas-name-ltspice` | blocking | refused by LTspice 26 and XVII: a `.meas` named `e`, `k`, `pi` or `q`, constants of the expression evaluator |
 | `meas-unclosed-paren-ltspice` | blocking | a `.meas` with a parenthesis left open. LTspice 26 refused the recorded one before the run and ran nothing, and XVII ran that deck without the measurement; any such `.meas` is refused, since LTspice 26's error names the parenthesis, not the form. `verify_circuit`'s `syntax` check reports the same as a `directive_syntax` error, and `edit_schematic` refuses to write it |
 | `lib-section-ltspice` | blocking | refused by LTspice 26 and XVII: `.lib file section`, which LTspice reads as one file name |
+| `step-without-values-ltspice` | blocking | refused by LTspice 26 and XVII: a `.step` with nothing after it, or `.step param <name>` with no values. `edit_schematic` refuses to write it and `verify_circuit`'s `syntax` check reports it |
 | `byte-85-ltspice` | warning | LTspice: a byte 0x85 in an 8-bit deck or include with a card after it on the line, which LTspice 24 and later read as a line break and XVII does not; not reported when the session's LTspice is known to be XVII |
 | `node-control-byte-ltspice` | warning | LTspice: a node name in an 8-bit file containing a byte from 0x80 to 0x9F, a control character to LTspice, which LTspice 26 refuses and XVII saves under a name the server spells differently |
 | `model-missing` | blocking at staging | a missing model; the model token is read after a BJT/JFET/MOSFET area factor or `off`, and before a subckt call's `params:` |
@@ -2263,8 +2297,9 @@ each tool's `inputSchema`.
   supported profile and the deck it needs.
 
 {kind: "random", id?, runs: int >= 1, seed?: int, sample_start?: int >= 0,
- applies_to?: [circuit id], rules: [RandomRule]}
+ applies_to?: [circuit id], rules?: [RandomRule], simulator_draws?: bool}
                                at most ONE random entry per circuit
+                               rules may be empty only with simulator_draws
 
 RandomRule:
   {rule: "component", target: ref | glob, tolerance, scale:
@@ -2337,11 +2372,32 @@ with the same seed and circuit id `runs: 1` and `sample_start: k` replay
 sample k alone. An entry without `seed` gets one the server chooses after it
 has looked the request up for a replay, so a retry under the same
 `request_id` returns the job it made. Every case the entry expands to records
-its sample index as `_random_run`, its seed as `_random_seed` and, when the
-entry has one, its `id` as `_random_id`, in its assignments, a case skipped
+its sample index as `_random_run`, its seed as `_random_seed`, when the
+entry has one, its `id` as `_random_id` and, with `simulator_draws`, its
+ngspice seed as `_random_simulator_seed`, in its assignments, a case skipped
 before it ran included. A circuit whose deck fails before its variations
 expand (an include that cannot be staged) records no assignments on its
 cases; their failure says why.
+
+`simulator_draws: true` (default false) also makes ngspice draw the random
+functions written in the deck (`agauss`, `gauss`, `aunif`, `unif`), a PDK's
+statistical models among them, anew for each sample. Each case's deck gets
+`.options seed=<n>` before its `.END`, which ngspice reads before it evaluates
+the deck's parameters (since ngspice-30, `inp.c`). The seed is derived from the
+entry's `seed`, the circuit id and the sample index, in `1..2147483646`, so
+every case of one sample runs with the same seed and `runs: 1` with
+`sample_start: k` replays sample k's draws too. Same seed, same deck and same
+ngspice build give the same draws; a corner that changes which random
+functions the deck evaluates, or their order, changes what that seed draws.
+The entry's `rules` then may be empty, or add the server's own draws to
+ngspice's. A run on another simulator, or with `execution.simulator_seed`,
+which seeds every case alike, is refused with `simulator_draws_unsupported`
+before any job is recorded. A deck whose own option cards set `seed=` (outside
+a subcircuit no X line calls) fails its cases with `deck_sets_simulator_seed`,
+naming each card: ngspice reads
+every seed option and the first in the deck wins (measured on ngspice-42), so
+the deck's seed would fix every sample's draws or be overridden, depending on
+where it sits.
 
 The receipt compares the samples of a `random` or `pdk_native` entry by what
 they computed, one `assign` point at a time. Each produced sample keeps a
@@ -2495,10 +2551,10 @@ wire's, at the pin, or ones along it) stays.
 `add_directive` takes `kind`, `directive` (simulated) or `comment` (ignored by
 LTspice). `remove_directive` and `move`'s `texts` name directives and comments
 by one rule. A literal names every text equal to it, space around either
-ignored, and a line break may be given as a newline or as the `\n` escape the
-file holds. A `regex:` prefix names every text the pattern is found in
-(`re.search`), case-sensitive: `(?i)` ignores case and `^` anchors the pattern
-at the start of the text. `remove_directive` removes every text it names and
+ignored, as the text reads or as the file spells it, with a line break as the
+`\n` escape and a backslash doubled. A `regex:` prefix names every text the
+pattern is found in (`re.search`) as the file spells it, case-sensitive:
+`(?i)` ignores case and `^` anchors the pattern at the start of the text. `remove_directive` removes every text it names and
 lists each in `removed_texts`. `replace_directive` gives one text new words
 (`text`) and keeps its record: its place, size, justification and kind. Its
 `instruction` names the text by the same rule and must name exactly one, or
@@ -2509,15 +2565,15 @@ on one anchor cannot be told apart, so one of them is moved first. A
 directive's new text is checked as `add_directive`'s is, and a refused op
 changes nothing. Applied again with its result's `x` and `y`, `now` as
 `instruction` and `was` as `text`, it puts the text back, unless `now` begins
-with `regex:`, which names a pattern, or a text holds a backslash (below).
+with `regex:`, which names a pattern.
 
-A text is read, in a reply, as the drawing and the sheet findings read it: a
-`\n` in the TEXT record is a line break and `\\` a backslash, so a Windows
-path keeps its `\new_models`. Writing a text escapes only line breaks, and
-naming one compares it with the text as the record holds it, so a text with
-a backslash is named by the record's spelling, and the text a reply gives is
-not written back as the record held it. How LTspice writes and reads a
-backslash in a TEXT record is not recorded, so neither side is changed yet.
+A text is read as both LTspice builds read a TEXT record, which they draw and
+export alike (recorded as `text-backslash`): `\n` is a line break, even inside
+a Windows path such as `C:\new`, `\\` is one backslash, and any other
+backslash is itself. A reply gives a text as it reads. A text is written so
+that it reads as given: each backslash doubled and each line break as `\n`,
+as LTspice writes a TEXT record. So a line break is given as a line break;
+the two characters `\n` are written as a backslash and an `n`.
 
 `set_component_value` splits a trailing `KEY=VALUE` off the value it is given
 and sets it wherever the part already gives that key (`Value`, `Value2`,
@@ -2525,7 +2581,16 @@ and sets it wherever the part already gives that key (`Value`, `Value2`,
 A key the part does not give is added to `SpiceLine`. A part that gives a key
 more than once gets the sheet's `duplicate_parameter` finding, which the reply
 lists because the op names the part. A behavioural source's value is one
-expression and replaces `Value` entirely.
+expression and replaces `Value` entirely. A voltage or current source's value
+replaces only its value: its own parameters stay (a voltage source's `Rser=`
+and `Cpar=`, either source's AC magnitude, written `AC=2` or `AC 2`, and a
+current source's `load`), which both LTspice builds read after the forms of
+value recorded as `source-parameters`. A parameter the new value gives is set
+in every copy the part has, and a `KEY=VALUE` that is part of the value, such
+as a PWL's `TIME_SCALE_FACTOR=`, stays in it. The card an `assign` variation
+or a value edit of an instance inside a subcircuit writes keeps them by the
+same rule (`component_value.edited_source`). A source that plays a .wav file
+has no value to set, and the op is refused.
 
 Every op that writes a part's `Value` holds it to one rule: `add_component`,
 by `value` or among its `attributes`, `set_component_value` and

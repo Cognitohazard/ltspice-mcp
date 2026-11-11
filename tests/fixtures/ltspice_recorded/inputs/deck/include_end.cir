@@ -1,0 +1,7 @@
+* cards after the .end of an included file
+.op
+I1 0 a 1
+.include ends_early.inc
+I2 0 b 1
+R3 b 0 1k
+.end

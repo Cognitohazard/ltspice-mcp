@@ -1,0 +1,8 @@
+* C:\recording\value_spaces.asc
+R1 NC_01 NC_02 1k tc=0.001
+R2 NC_03 NC_04 1k tc=0.002
+R3 NC_05 NC_06 2k
+V1 NC_07 NC_08 PULSE(0 1 0 1n 1n 5u 10u)
+V2 NC_09 NC_10 1 Rser=1
+.backanno
+.end

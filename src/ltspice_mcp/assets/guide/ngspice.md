@@ -265,7 +265,8 @@ C1 c 0 '{unif(1n, 0.1)}'          $ 1n, ±10% relative, uniform
 These functions are built into the numparam frontend (no build flag) and are
 not available in the nutmeg/`.control` interpreter. For a distribution, re-run
 the deck N times (set `.options seed=<value>`); a `run_experiments` random
-`variations` entry automates the N runs and the aggregation.
+`variations` entry with `simulator_draws: true` automates the N runs, giving
+each its own seed, and the aggregation (guide section 'variations').
 
 **(2) `.control` loop with `alter`** — vary within one ngspice invocation.
 Inside `.control`, only `sgauss(0)` (Gaussian, mean 0, σ 1) and `sunif(0)`
@@ -312,8 +313,13 @@ a function that is neither a recognized built-in nor defined by `.func`
 or `.pre_osdi` directive or an XSPICE `A` device (`recovery_external_module`).
 Any other random function, such as `trnoise`, `trrandom` or `sgauss`, is
 refused (`recovery_random_unsupported`), and without a seed the five functions
-above are refused too. `limit` takes the form that the configured
-compatibility mode defines (see Monte Carlo above).
+above are refused too, unless the deck fixes the seed itself with
+`.options seed=<positive integer>` at its top level, as a `random` entry with
+`simulator_draws` writes into each case. ngspice reads a deck's own seed
+option after the driver's `setseed`, so it would override `simulator_seed`; a
+seeded deck that sets one is refused (`recovery_seed_unsupported`). `limit`
+takes the form that the configured compatibility mode defines (see Monte Carlo
+above).
 
 This seed is separate from the `seed` of a `random` variation and from the
 `seed` of a `pdk_native` variation (guide section 'sky130'). It does not turn on

@@ -1635,6 +1635,19 @@ class TestOptionalRequestId:
             later = RunExperimentsInput.model_validate(moved)
             assert canonical_fingerprint(later) != canonical_fingerprint(args)
 
+    def test_simulator_draws_is_left_out_when_false_and_hashed_when_true(self):
+        """A stored random request hashes as it did whether or not it spells
+        simulator_draws at its default; asking ngspice to draw is a different
+        experiment."""
+        from ltspice_mcp.lib.experiment_runner import canonical_fingerprint
+
+        payload, recorded = _STORED["random component rule"]
+        for draws, same in ((False, True), (True, False)):
+            spelled = copy.deepcopy(payload)
+            spelled["variations"][0]["simulator_draws"] = draws
+            fingerprint = canonical_fingerprint(RunExperimentsInput.model_validate(spelled))
+            assert (fingerprint == recorded) is same
+
     def test_serializing_an_attached_block_raises_no_pydantic_warning(self):
         """Every submission dumps this block twice — for the fingerprint and
         for the persisted request. The declared union would make pydantic warn
@@ -4035,6 +4048,53 @@ class TestVariationsReachIntoIncludes:
         assert refused["error"]["code"] == "multiple_random_variations"
         assert "'a'" in refused["error"]["message"]
         assert len(submitted) == 5
+
+    @pytest.mark.parametrize(
+        ("available", "execution", "fix"),
+        [
+            pytest.param({"fake": FakeSim}, {}, "set execution.simulator", id="not-ngspice"),
+            pytest.param(
+                {"ngspice": type("NGspiceSimulator", (FakeSim,), {})},
+                {"simulator": "ngspice", "recoverable": True, "simulator_seed": 17},
+                "drop one of them",
+                id="one-seed-for-every-case",
+            ),
+        ],
+    )
+    async def test_simulator_draws_refuse_before_any_job_where_they_cannot_draw(
+        self,
+        config: ServerConfig,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        available: dict[str, type],
+        execution: dict[str, Any],
+        fix: str,
+    ):
+        """simulator_draws seeds ngspice's own random functions, so a run on
+        another simulator, or one that seeds every case alike, is refused
+        before a job is recorded, naming the fix."""
+        submitted: list[Path] = []
+        _recording_simulator(monkeypatch, submitted)
+        state = SessionState.create(config, available=available)
+        deck = _deck(work_dir / "a.cir")
+
+        refused = _assert_schema(
+            await handle_run_experiments(
+                _args(
+                    deck,
+                    "simulator-draws-refused",
+                    lint="off",
+                    execution={"wait_s": LIVENESS_S, **execution},
+                    variations=[{"kind": "random", "runs": 2, "seed": 3, "simulator_draws": True}],
+                ),
+                state,
+            )
+        )
+
+        assert refused["error"]["code"] == "simulator_draws_unsupported"
+        assert fix in refused["error"]["message"]
+        assert not state.all_jobs
+        assert not submitted
 
     async def test_two_level_include_chain_resolves_and_is_rewired(
         self,

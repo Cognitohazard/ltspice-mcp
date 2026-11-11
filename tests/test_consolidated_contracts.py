@@ -669,7 +669,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 230 characters for execution.results_beside_sheet, which
     # leaves a sheet's results where LTspice opens them as the run finishes,
     # in the call that runs it. Measured 17,357.
-    "run_experiments": 17370,
+    # Raised by about 160 characters for random's simulator_draws, which seeds
+    # ngspice per sample so the deck's own random functions, a PDK's
+    # statistical models among them, vary from sample to sample, and lets an
+    # entry's rules be empty. Measured 17,527.
+    "run_experiments": 17540,
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.

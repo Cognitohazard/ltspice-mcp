@@ -371,7 +371,15 @@ def _read_shape(body: str) -> Shape | None:
     return Shape(cast(ShapeKind, kind), words[1], numbers[:count], style)
 
 
-def _read_window(body: str) -> Window | None:
+def read_window(body: str) -> Window | None:
+    """A ``WINDOW n x y align size`` line, or ``None`` for one that does not read.
+
+    The one reading of a WINDOW line, under a part on a sheet and in a symbol
+    file. A line short of its justification or its size does not read: both
+    LTspice builds read past one (``window_read_past``). Nor does a line with
+    a word that is not a number or a justification, or with more words, which
+    no recording shows a build reading.
+    """
     words = body.split()
     if len(words) != 6 or not _alignment(words[4]):
         return None
@@ -379,6 +387,25 @@ def _read_window(body: str) -> Window | None:
     if numbers is None:
         return None
     return Window(numbers[0], numbers[1], numbers[2], words[4], numbers[3])
+
+
+def window_read_past(body: str) -> bool:
+    """Whether ``body`` is a WINDOW line LTspice reads past: its number and
+    place with no size, or with neither justification nor size.
+
+    Both builds export a sheet holding such a line under a part, or placing a
+    symbol that holds one, and draw as if it were not there: on a sheet the
+    symbol's own window places the text, and in a symbol the attribute is not
+    drawn (``window-short``). What a build does with another WINDOW line that
+    does not read is not recorded.
+    """
+    words = body.split()
+    return (
+        words[:1] == ["WINDOW"]
+        and len(words) in (4, 5)
+        and _ints(words[1:4]) is not None
+        and (len(words) == 4 or _alignment(words[4]))
+    )
 
 
 def _read_flag(lines: Sequence[str]) -> Flag | None:
@@ -415,7 +442,7 @@ def _read_symbol(lines: Sequence[str]) -> Symbol | None:
     for line in lines[1:]:
         body = _body(line)
         if _keyword(body) == "WINDOW":
-            window = _read_window(body)
+            window = read_window(body)
             if window is None:
                 unread.append(body)
             else:

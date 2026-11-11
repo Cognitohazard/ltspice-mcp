@@ -1,0 +1,8 @@
+* a current-controlled switch: two nodes, then the source whose current sets it
+I1 0 a 1m
+W1 a 0 Vsense sw
+I2 0 c 1
+Vsense c 0 0
+.model sw CSW(It=0.5 Ih=0 Ron=1 Roff=1Meg)
+.op
+.end

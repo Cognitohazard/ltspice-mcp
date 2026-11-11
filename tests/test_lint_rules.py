@@ -92,6 +92,12 @@ _SEED_CASES = [
         "LTspice",
     ),
     (
+        "step-without-values-ltspice",
+        "* t\n.param r=1k\nI1 0 a 1\nR1 a 0 {r}\n.step param r\n.op\n.end\n",
+        None,
+        "LTspice",
+    ),
+    (
         "analysis-count-ltspice",
         "V1 in 0 AC 1\nR1 in 0 1k\n.ac dec 10 1 1k\n.tran 1m\n.end\n",
         None,

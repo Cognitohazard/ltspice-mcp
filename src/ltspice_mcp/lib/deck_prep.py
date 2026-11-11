@@ -42,8 +42,8 @@ from ltspice_mcp.config import (
 from ltspice_mcp.config import (
     SIM_SECTION as _SIM_SECTION,
 )
-from ltspice_mcp.errors import SimulationError
-from ltspice_mcp.lib.asc_document import is_asc
+from ltspice_mcp.errors import NetlistError, SimulationError
+from ltspice_mcp.lib.asc_document import is_asc, parse_asc
 from ltspice_mcp.lib.encoding import (
     decode_spice_bytes,
     decode_spice_bytes_with_encoding,
@@ -55,6 +55,7 @@ from ltspice_mcp.lib.spice_lex import emit, lex
 from ltspice_mcp.lib.spice_lex_ops import strip_instance_section_signs
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.lib.sweep_utils import sanitize_stem
+from ltspice_mcp.lib.symbol_library import spellings
 from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
@@ -255,7 +256,7 @@ async def resolve_runnable_netlist(
 #: symbols it finds beside the sheet, in its folder or in a folder within it
 #: that the symbol's name says (the ``symbol-beside-sheet`` recordings), and
 #: the model files they name. ``stage_sheet`` also stages each hierarchical
-#: block's own sheet (``export-hierarchical-block``).
+#: block's own sheet (``export-hierarchical-block``, ``block-sheet-search``).
 _STAGED_SUFFIXES = frozenset({".asy", ".lib", ".sub", ".inc", ".mod"})
 #: The most of those files staged for one export.
 _STAGE_FILE_CAP = 200
@@ -270,7 +271,8 @@ def stage_sheet(asc_path: Path, dest: Path, data: bytes | None = None) -> tuple[
     LTspice looks for a symbol beside the sheet before its libraries, so what
     the sheet's folder holds for its export is copied too: the folders within
     it keep their places, and dot-folders are passed over. A block's own
-    sheet, the ``.asc`` beside the ``.asy`` of its name, goes with its symbol;
+    sheet goes where LTspice reads it: the ``.asc`` beside the ``.asy`` of its
+    name, and one beside the sheet exported (``_sheets_beside_the_export``);
     the sheet itself is only ever the copy made here. Returns the copy and,
     when :data:`_STAGE_FILE_CAP` left files out, a note saying so. Blocking;
     the caller takes any lock the sheet needs.
@@ -302,7 +304,10 @@ def stage_sheet(asc_path: Path, dest: Path, data: bytes | None = None) -> tuple[
                     blocks.add((folder, stem.casefold()))
             elif is_asc(Path(name)) and Path(folder, name) != asc_path:
                 sheets.append((folder, stem.casefold(), name))
-    found += (Path(folder, name) for folder, stem, name in sheets if (folder, stem) in blocks)
+    paired = [Path(folder, name) for folder, stem, name in sheets if (folder, stem) in blocks]
+    found += paired
+    beside = {stem: Path(folder, name) for folder, stem, name in sheets if folder == str(origin)}
+    found += _sheets_beside_the_export(asc_path, data, paired, beside)
     found = sorted(path for path in found if path.is_file())
     for src in found[:_STAGE_FILE_CAP]:
         target = dest / src.relative_to(origin)
@@ -314,6 +319,41 @@ def stage_sheet(asc_path: Path, dest: Path, data: bytes | None = None) -> tuple[
         f"only the first {_STAGE_FILE_CAP} project-local symbol/library files were staged "
         f"for the export of {asc_path.name}, so a symbol beyond that may not resolve"
     )
+
+
+def _sheets_beside_the_export(
+    sheet: Path, data: bytes | None, paired: list[Path], beside: dict[str, Path]
+) -> list[Path]:
+    """The sheets beside the sheet being exported that LTspice may read as a
+    block's own sheet: one named for any part the exported sheet (``data``,
+    else its file), a block's sheet beside its symbol (``paired``), or a sheet
+    found here places, among ``beside``, the sheets in the exported sheet's
+    folder by their casefolded names.
+
+    Beside the block's symbol, then beside the sheet exported, is where both
+    builds look (``symbol_library.find_block_sheet``). ``stage_sheet`` stages
+    the first through ``paired``; this is the second, which a block whose
+    symbol is in a library needs. It stages a sheet for every name a sheet
+    places, as the sheet spells it, where ``find_block_sheet`` takes one only
+    for a block, named as its symbol file is: staging reads no symbol, and a
+    sheet LTspice will not read costs only its copy. Blocking.
+    """
+    found: list[Path] = []
+    seen = {sheet, *paired}
+    pending = [(sheet, data), *((path, None) for path in paired)]
+    while pending:
+        placing, content = pending.pop()
+        try:
+            placed = parse_asc(content if content is not None else placing.read_bytes()).symbols
+        except (OSError, NetlistError):
+            continue
+        for symbol in placed:
+            named = beside.get(spellings(symbol.symbol)[1].casefold())
+            if named is not None and named not in seen:
+                seen.add(named)
+                found.append(named)
+                pending.append((named, None))
+    return found
 
 
 async def export_netlist_text(asc_path: Path, state: SessionState) -> str:

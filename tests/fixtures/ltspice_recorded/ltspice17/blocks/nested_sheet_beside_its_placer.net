@@ -1,0 +1,13 @@
+* C:\recording\nested_sheet_beside_its_placer.asc
+V1 N001 0 1
+XX1 N001 out outer
+R3 out 0 10k
+
+* block symbol definitions
+.subckt outer IN OUT
+XX1 IN OUT blk
+.ends outer
+
+
+>>> ERROR: Couldn't find schematic for symbol: blk
+

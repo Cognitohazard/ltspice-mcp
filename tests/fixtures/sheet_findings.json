@@ -13995,6 +13995,1085 @@
    }
   ]
  },
+ "fixtures/ltspice_recorded/inputs/blocks/blk.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.1 at (-16,-48)",
+     "pin": "1",
+     "ref": "R1",
+     "x": -16,
+     "y": -48
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R2.2 at (-16,144)",
+     "pin": "2",
+     "ref": "R2",
+     "x": -16,
+     "y": 144
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (0,112) meets no pin, net label, or other wire",
+     "x": 0,
+     "y": 112
+    },
+    {
+     "kind": "dangling_label",
+     "label": "IN",
+     "message": "Dangling label 'IN' at (0,16)",
+     "x": 0,
+     "y": 16
+    },
+    {
+     "kind": "dangling_label",
+     "label": "0",
+     "message": "Dangling label '0' at (0,192)",
+     "x": 0,
+     "y": 192
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 0,
+    "pins_total": 4,
+    "pins_wired": 0,
+    "wire_segments": 1
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "blk.asc",
+     "x": -16,
+     "y": -48
+    },
+    "evidence": {
+     "coords": [
+      [
+       -16,
+       -48
+      ]
+     ],
+     "detail": "Floating pin: R1.1 at (-16,-48)",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "blk.asc",
+     "x": -16,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       -16,
+       144
+      ]
+     ],
+     "detail": "Floating pin: R2.2 at (-16,144)",
+     "refs": [
+      "R2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R2"
+   },
+   {
+    "at": {
+     "file": "blk.asc",
+     "x": 0,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       112
+      ]
+     ],
+     "detail": "Wire end at (0,112) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(0,112)"
+   },
+   {
+    "at": {
+     "file": "blk.asc",
+     "x": 0,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       16
+      ]
+     ],
+     "detail": "Dangling label 'IN' at (0,16)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(0,16)"
+   },
+   {
+    "at": {
+     "file": "blk.asc",
+     "x": 0,
+     "y": 192
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       192
+      ]
+     ],
+     "detail": "Dangling label '0' at (0,192)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(0,192)"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/blocks/lib/blk.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.1 at (-16,-48)",
+     "pin": "1",
+     "ref": "R1",
+     "x": -16,
+     "y": -48
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R2.2 at (-16,144)",
+     "pin": "2",
+     "ref": "R2",
+     "x": -16,
+     "y": 144
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (0,112) meets no pin, net label, or other wire",
+     "x": 0,
+     "y": 112
+    },
+    {
+     "kind": "dangling_label",
+     "label": "IN",
+     "message": "Dangling label 'IN' at (0,16)",
+     "x": 0,
+     "y": 16
+    },
+    {
+     "kind": "dangling_label",
+     "label": "0",
+     "message": "Dangling label '0' at (0,192)",
+     "x": 0,
+     "y": 192
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 0,
+    "pins_total": 4,
+    "pins_wired": 0,
+    "wire_segments": 1
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "blk.asc",
+     "x": -16,
+     "y": -48
+    },
+    "evidence": {
+     "coords": [
+      [
+       -16,
+       -48
+      ]
+     ],
+     "detail": "Floating pin: R1.1 at (-16,-48)",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "blk.asc",
+     "x": -16,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       -16,
+       144
+      ]
+     ],
+     "detail": "Floating pin: R2.2 at (-16,144)",
+     "refs": [
+      "R2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R2"
+   },
+   {
+    "at": {
+     "file": "blk.asc",
+     "x": 0,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       112
+      ]
+     ],
+     "detail": "Wire end at (0,112) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(0,112)"
+   },
+   {
+    "at": {
+     "file": "blk.asc",
+     "x": 0,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       16
+      ]
+     ],
+     "detail": "Dangling label 'IN' at (0,16)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(0,16)"
+   },
+   {
+    "at": {
+     "file": "blk.asc",
+     "x": 0,
+     "y": 192
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       192
+      ]
+     ],
+     "detail": "Dangling label '0' at (0,192)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(0,192)"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/blocks/lib/outer.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [],
+   "wiring": {
+    "pins_label_only": 2,
+    "pins_total": 2,
+    "pins_wired": 0,
+    "wire_segments": 0
+   }
+  },
+  "verify": []
+ },
+ "fixtures/ltspice_recorded/inputs/blocks/lib/sub/blk.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.1 at (-16,-48)",
+     "pin": "1",
+     "ref": "R1",
+     "x": -16,
+     "y": -48
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R2.2 at (-16,144)",
+     "pin": "2",
+     "ref": "R2",
+     "x": -16,
+     "y": 144
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (0,112) meets no pin, net label, or other wire",
+     "x": 0,
+     "y": 112
+    },
+    {
+     "kind": "dangling_label",
+     "label": "IN",
+     "message": "Dangling label 'IN' at (0,16)",
+     "x": 0,
+     "y": 16
+    },
+    {
+     "kind": "dangling_label",
+     "label": "0",
+     "message": "Dangling label '0' at (0,192)",
+     "x": 0,
+     "y": 192
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 0,
+    "pins_total": 4,
+    "pins_wired": 0,
+    "wire_segments": 1
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "blk.asc",
+     "x": -16,
+     "y": -48
+    },
+    "evidence": {
+     "coords": [
+      [
+       -16,
+       -48
+      ]
+     ],
+     "detail": "Floating pin: R1.1 at (-16,-48)",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "blk.asc",
+     "x": -16,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       -16,
+       144
+      ]
+     ],
+     "detail": "Floating pin: R2.2 at (-16,144)",
+     "refs": [
+      "R2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R2"
+   },
+   {
+    "at": {
+     "file": "blk.asc",
+     "x": 0,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       112
+      ]
+     ],
+     "detail": "Wire end at (0,112) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(0,112)"
+   },
+   {
+    "at": {
+     "file": "blk.asc",
+     "x": 0,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       16
+      ]
+     ],
+     "detail": "Dangling label 'IN' at (0,16)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(0,16)"
+   },
+   {
+    "at": {
+     "file": "blk.asc",
+     "x": 0,
+     "y": 192
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       192
+      ]
+     ],
+     "detail": "Dangling label '0' at (0,192)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(0,192)"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/blocks/nest_top.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "unopenable": true
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "nest_top.asc"
+    },
+    "evidence": {
+     "detail": "drawn as a placeholder box; searched the schematic directory, the configured symbol paths, and the stock library",
+     "instances": [
+      "X1"
+     ],
+     "symbol": "outer"
+    },
+    "ok": false,
+    "rule_id": "unresolved_symbol",
+    "severity": "error",
+    "subject": "outer"
+   },
+   {
+    "at": {
+     "file": "nest_top.asc",
+     "x": 0,
+     "y": -32
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       -32
+      ]
+     ],
+     "detail": "Floating pin: V1.+ at (0,-32)",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "nest_top.asc",
+     "x": 0,
+     "y": 32
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       32
+      ]
+     ],
+     "detail": "Floating pin: V1.- at (0,32)",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "nest_top.asc",
+     "x": 192,
+     "y": -48
+    },
+    "evidence": {
+     "coords": [
+      [
+       192,
+       -48
+      ]
+     ],
+     "detail": "Floating pin: R3.1 at (192,-48)",
+     "refs": [
+      "R3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R3"
+   },
+   {
+    "at": {
+     "file": "nest_top.asc",
+     "x": 192,
+     "y": 48
+    },
+    "evidence": {
+     "coords": [
+      [
+       192,
+       48
+      ]
+     ],
+     "detail": "Floating pin: R3.2 at (192,48)",
+     "refs": [
+      "R3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R3"
+   },
+   {
+    "at": {
+     "file": "nest_top.asc",
+     "x": 0,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       16
+      ]
+     ],
+     "detail": "Wire end at (0,16) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(0,16)"
+   },
+   {
+    "at": {
+     "file": "nest_top.asc",
+     "x": 112,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       112,
+       16
+      ]
+     ],
+     "detail": "Wire end at (112,16) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(112,16)"
+   },
+   {
+    "at": {
+     "file": "nest_top.asc",
+     "x": 0,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       96
+      ]
+     ],
+     "detail": "Dangling label '0' at (0,96)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(0,96)"
+   },
+   {
+    "at": {
+     "file": "nest_top.asc",
+     "x": 208,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       208,
+       16
+      ]
+     ],
+     "detail": "Dangling label 'out' at (208,16)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(208,16)"
+   },
+   {
+    "at": {
+     "file": "nest_top.asc",
+     "x": 208,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       208,
+       96
+      ]
+     ],
+     "detail": "Dangling label '0' at (208,96)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(208,96)"
+   },
+   {
+    "at": {
+     "file": "nest_top.asc",
+     "x": 0,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       16
+      ],
+      [
+       112,
+       16
+      ]
+     ],
+     "detail": "Wire (0,16)->(112,16) passes through V1's body",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "nest_top.asc",
+     "x": 192,
+     "y": 40
+    },
+    "evidence": {
+     "coords": [
+      [
+       192,
+       40
+      ]
+     ],
+     "detail": "Text 'X1' at (192,40) is anchored inside R3's body",
+     "refs": [
+      "R3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "text_in_symbol_body",
+    "severity": "observation",
+    "subject": "R3"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/blocks/top.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.+ at (0,-32)",
+     "pin": "+",
+     "ref": "V1",
+     "x": 0,
+     "y": -32
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.- at (0,32)",
+     "pin": "-",
+     "ref": "V1",
+     "x": 0,
+     "y": 32
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R3.1 at (192,-48)",
+     "pin": "1",
+     "ref": "R3",
+     "x": 192,
+     "y": -48
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R3.2 at (192,48)",
+     "pin": "2",
+     "ref": "R3",
+     "x": 192,
+     "y": 48
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (0,16) meets no pin, net label, or other wire",
+     "x": 0,
+     "y": 16
+    },
+    {
+     "kind": "dangling_label",
+     "label": "0",
+     "message": "Dangling label '0' at (0,96)",
+     "x": 0,
+     "y": 96
+    },
+    {
+     "kind": "dangling_label",
+     "label": "0",
+     "message": "Dangling label '0' at (208,96)",
+     "x": 208,
+     "y": 96
+    },
+    {
+     "kind": "symbol_overlap",
+     "message": "X1 and R3: bounding boxes share a 32x64 region at (176,-16)",
+     "points": [
+      {
+       "x": 176,
+       "y": -16
+      },
+      {
+       "x": 208,
+       "y": 48
+      }
+     ],
+     "ref": "X1",
+     "refs": [
+      "X1",
+      "R3"
+     ],
+     "x": 176,
+     "y": -16
+    },
+    {
+     "kind": "wire_through_symbol",
+     "message": "Wire (0,16)->(112,16) passes through V1's body",
+     "points": [
+      {
+       "x": 0,
+       "y": 16
+      },
+      {
+       "x": 112,
+       "y": 16
+      }
+     ],
+     "ref": "V1",
+     "x": 0,
+     "y": 16
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 1,
+    "pins_total": 6,
+    "pins_wired": 1,
+    "wire_segments": 1
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "top.asc",
+     "x": 0,
+     "y": -32
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       -32
+      ]
+     ],
+     "detail": "Floating pin: V1.+ at (0,-32)",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "top.asc",
+     "x": 0,
+     "y": 32
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       32
+      ]
+     ],
+     "detail": "Floating pin: V1.- at (0,32)",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "top.asc",
+     "x": 192,
+     "y": -48
+    },
+    "evidence": {
+     "coords": [
+      [
+       192,
+       -48
+      ]
+     ],
+     "detail": "Floating pin: R3.1 at (192,-48)",
+     "refs": [
+      "R3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R3"
+   },
+   {
+    "at": {
+     "file": "top.asc",
+     "x": 192,
+     "y": 48
+    },
+    "evidence": {
+     "coords": [
+      [
+       192,
+       48
+      ]
+     ],
+     "detail": "Floating pin: R3.2 at (192,48)",
+     "refs": [
+      "R3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R3"
+   },
+   {
+    "at": {
+     "file": "top.asc",
+     "x": 0,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       16
+      ]
+     ],
+     "detail": "Wire end at (0,16) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(0,16)"
+   },
+   {
+    "at": {
+     "file": "top.asc",
+     "x": 0,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       96
+      ]
+     ],
+     "detail": "Dangling label '0' at (0,96)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(0,96)"
+   },
+   {
+    "at": {
+     "file": "top.asc",
+     "x": 208,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       208,
+       96
+      ]
+     ],
+     "detail": "Dangling label '0' at (208,96)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(208,96)"
+   },
+   {
+    "at": {
+     "file": "top.asc",
+     "x": 176,
+     "y": -16
+    },
+    "evidence": {
+     "coords": [
+      [
+       176,
+       -16
+      ],
+      [
+       208,
+       48
+      ]
+     ],
+     "detail": "X1 and R3: bounding boxes share a 32x64 region at (176,-16)",
+     "refs": [
+      "X1",
+      "R3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "symbol_overlap",
+    "severity": "observation",
+    "subject": "X1 & R3"
+   },
+   {
+    "at": {
+     "file": "top.asc",
+     "x": 0,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       16
+      ],
+      [
+       112,
+       16
+      ]
+     ],
+     "detail": "Wire (0,16)->(112,16) passes through V1's body",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "V1"
+   }
+  ]
+ },
  "fixtures/ltspice_recorded/inputs/connectivity/bus_label.asc": {
   "dropped_wire": [],
   "edit": {
@@ -19117,6 +20196,517 @@
    }
   },
   "verify": []
+ },
+ "fixtures/ltspice_recorded/inputs/export/elements.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: Z1.D at (96,128)",
+     "pin": "D",
+     "ref": "Z1",
+     "x": 96,
+     "y": 128
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: Z1.G at (96,160)",
+     "pin": "G",
+     "ref": "Z1",
+     "x": 96,
+     "y": 160
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: Z1.S at (96,192)",
+     "pin": "S",
+     "ref": "Z1",
+     "x": 96,
+     "y": 192
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: O1.I1 at (256,128)",
+     "pin": "I1",
+     "ref": "O1",
+     "x": 256,
+     "y": 128
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: O1.R1 at (256,160)",
+     "pin": "R1",
+     "ref": "O1",
+     "x": 256,
+     "y": 160
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: O1.I2 at (256,192)",
+     "pin": "I2",
+     "ref": "O1",
+     "x": 256,
+     "y": 192
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: O1.R2 at (256,224)",
+     "pin": "R2",
+     "ref": "O1",
+     "x": 256,
+     "y": 224
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: U1.A at (416,128)",
+     "pin": "A",
+     "ref": "U1",
+     "x": 416,
+     "y": 128
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: U1.B at (416,160)",
+     "pin": "B",
+     "ref": "U1",
+     "x": 416,
+     "y": 160
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: U1.C at (416,192)",
+     "pin": "C",
+     "ref": "U1",
+     "x": 416,
+     "y": 192
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: T1.I1 at (576,128)",
+     "pin": "I1",
+     "ref": "T1",
+     "x": 576,
+     "y": 128
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: T1.R1 at (576,160)",
+     "pin": "R1",
+     "ref": "T1",
+     "x": 576,
+     "y": 160
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: T1.I2 at (576,192)",
+     "pin": "I2",
+     "ref": "T1",
+     "x": 576,
+     "y": 192
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: T1.R2 at (576,224)",
+     "pin": "R2",
+     "ref": "T1",
+     "x": 576,
+     "y": 224
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: W1.P at (736,128)",
+     "pin": "P",
+     "ref": "W1",
+     "x": 736,
+     "y": 128
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: W1.N at (736,160)",
+     "pin": "N",
+     "ref": "W1",
+     "x": 736,
+     "y": 160
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 0,
+    "pins_total": 16,
+    "pins_wired": 0,
+    "wire_segments": 0
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "elements.asc",
+     "x": 96,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       128
+      ]
+     ],
+     "detail": "Floating pin: Z1.D at (96,128)",
+     "refs": [
+      "Z1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "Z1"
+   },
+   {
+    "at": {
+     "file": "elements.asc",
+     "x": 96,
+     "y": 160
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       160
+      ]
+     ],
+     "detail": "Floating pin: Z1.G at (96,160)",
+     "refs": [
+      "Z1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "Z1"
+   },
+   {
+    "at": {
+     "file": "elements.asc",
+     "x": 96,
+     "y": 192
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       192
+      ]
+     ],
+     "detail": "Floating pin: Z1.S at (96,192)",
+     "refs": [
+      "Z1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "Z1"
+   },
+   {
+    "at": {
+     "file": "elements.asc",
+     "x": 256,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       256,
+       128
+      ]
+     ],
+     "detail": "Floating pin: O1.I1 at (256,128)",
+     "refs": [
+      "O1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "O1"
+   },
+   {
+    "at": {
+     "file": "elements.asc",
+     "x": 256,
+     "y": 160
+    },
+    "evidence": {
+     "coords": [
+      [
+       256,
+       160
+      ]
+     ],
+     "detail": "Floating pin: O1.R1 at (256,160)",
+     "refs": [
+      "O1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "O1"
+   },
+   {
+    "at": {
+     "file": "elements.asc",
+     "x": 256,
+     "y": 192
+    },
+    "evidence": {
+     "coords": [
+      [
+       256,
+       192
+      ]
+     ],
+     "detail": "Floating pin: O1.I2 at (256,192)",
+     "refs": [
+      "O1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "O1"
+   },
+   {
+    "at": {
+     "file": "elements.asc",
+     "x": 256,
+     "y": 224
+    },
+    "evidence": {
+     "coords": [
+      [
+       256,
+       224
+      ]
+     ],
+     "detail": "Floating pin: O1.R2 at (256,224)",
+     "refs": [
+      "O1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "O1"
+   },
+   {
+    "at": {
+     "file": "elements.asc",
+     "x": 416,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       416,
+       128
+      ]
+     ],
+     "detail": "Floating pin: U1.A at (416,128)",
+     "refs": [
+      "U1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "U1"
+   },
+   {
+    "at": {
+     "file": "elements.asc",
+     "x": 416,
+     "y": 160
+    },
+    "evidence": {
+     "coords": [
+      [
+       416,
+       160
+      ]
+     ],
+     "detail": "Floating pin: U1.B at (416,160)",
+     "refs": [
+      "U1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "U1"
+   },
+   {
+    "at": {
+     "file": "elements.asc",
+     "x": 416,
+     "y": 192
+    },
+    "evidence": {
+     "coords": [
+      [
+       416,
+       192
+      ]
+     ],
+     "detail": "Floating pin: U1.C at (416,192)",
+     "refs": [
+      "U1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "U1"
+   },
+   {
+    "at": {
+     "file": "elements.asc",
+     "x": 576,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       576,
+       128
+      ]
+     ],
+     "detail": "Floating pin: T1.I1 at (576,128)",
+     "refs": [
+      "T1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "T1"
+   },
+   {
+    "at": {
+     "file": "elements.asc",
+     "x": 576,
+     "y": 160
+    },
+    "evidence": {
+     "coords": [
+      [
+       576,
+       160
+      ]
+     ],
+     "detail": "Floating pin: T1.R1 at (576,160)",
+     "refs": [
+      "T1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "T1"
+   },
+   {
+    "at": {
+     "file": "elements.asc",
+     "x": 576,
+     "y": 192
+    },
+    "evidence": {
+     "coords": [
+      [
+       576,
+       192
+      ]
+     ],
+     "detail": "Floating pin: T1.I2 at (576,192)",
+     "refs": [
+      "T1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "T1"
+   },
+   {
+    "at": {
+     "file": "elements.asc",
+     "x": 576,
+     "y": 224
+    },
+    "evidence": {
+     "coords": [
+      [
+       576,
+       224
+      ]
+     ],
+     "detail": "Floating pin: T1.R2 at (576,224)",
+     "refs": [
+      "T1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "T1"
+   },
+   {
+    "at": {
+     "file": "elements.asc",
+     "x": 736,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       736,
+       128
+      ]
+     ],
+     "detail": "Floating pin: W1.P at (736,128)",
+     "refs": [
+      "W1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "W1"
+   },
+   {
+    "at": {
+     "file": "elements.asc",
+     "x": 736,
+     "y": 160
+    },
+    "evidence": {
+     "coords": [
+      [
+       736,
+       160
+      ]
+     ],
+     "detail": "Floating pin: W1.N at (736,160)",
+     "refs": [
+      "W1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "W1"
+   }
+  ]
  },
  "fixtures/ltspice_recorded/inputs/export/greek_mu_utf8.asc": {
   "dropped_wire": [],
@@ -72499,12 +74089,683 @@
    }
   ]
  },
+ "fixtures/ltspice_recorded/inputs/export/text_backslash.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "label_island",
+     "message": "Net 'a' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "a",
+     "points": [
+      {
+       "x": 0,
+       "y": 112
+      },
+      {
+       "x": 96,
+       "y": 96
+      }
+     ],
+     "x": 0,
+     "y": 112
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 4,
+    "pins_total": 4,
+    "pins_wired": 0,
+    "wire_segments": 0
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "text_backslash.asc",
+     "x": 0,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       112
+      ],
+      [
+       96,
+       96
+      ]
+     ],
+     "detail": "Net 'a' is connected by 2 net-label stubs and no drawn wire segment",
+     "net": "a",
+     "stub_count": 2
+    },
+    "ok": false,
+    "rule_id": "label_island",
+    "severity": "observation",
+    "subject": "a"
+   }
+  ]
+ },
  "fixtures/ltspice_recorded/inputs/export/unknown_record.asc": {
   "dropped_wire": [],
   "edit": {
    "unopenable": true
   },
   "verify": []
+ },
+ "fixtures/ltspice_recorded/inputs/export/value_spaces.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.1 at (96,112)",
+     "pin": "1",
+     "ref": "R1",
+     "x": 96,
+     "y": 112
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.2 at (96,208)",
+     "pin": "2",
+     "ref": "R1",
+     "x": 96,
+     "y": 208
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R2.1 at (256,112)",
+     "pin": "1",
+     "ref": "R2",
+     "x": 256,
+     "y": 112
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R2.2 at (256,208)",
+     "pin": "2",
+     "ref": "R2",
+     "x": 256,
+     "y": 208
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R3.1 at (416,112)",
+     "pin": "1",
+     "ref": "R3",
+     "x": 416,
+     "y": 112
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R3.2 at (416,208)",
+     "pin": "2",
+     "ref": "R3",
+     "x": 416,
+     "y": 208
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.+ at (576,128)",
+     "pin": "+",
+     "ref": "V1",
+     "x": 576,
+     "y": 128
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.- at (576,192)",
+     "pin": "-",
+     "ref": "V1",
+     "x": 576,
+     "y": 192
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V2.+ at (736,128)",
+     "pin": "+",
+     "ref": "V2",
+     "x": 736,
+     "y": 128
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V2.- at (736,192)",
+     "pin": "-",
+     "ref": "V2",
+     "x": 736,
+     "y": 192
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "R1's text '1k tc=0.001' at (128,192) is drawn across R2's body",
+     "ref": "R1",
+     "refs": [
+      "R1",
+      "R2"
+     ],
+     "text": "1k tc=0.001",
+     "x": 128,
+     "y": 192
+    },
+    {
+     "across": "body",
+     "kind": "attribute_text_overlap",
+     "message": "R2's text '1k  tc=0.002' at (288,192) is drawn across R3's body",
+     "ref": "R2",
+     "refs": [
+      "R2",
+      "R3"
+     ],
+     "text": "1k  tc=0.002",
+     "x": 288,
+     "y": 192
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "V1's text 'PULSE(0 1 0 1n 1n 5u 10u)' at (608,216) is drawn across V2's text '1 Rser=1' at (768,216)",
+     "other_text": "1 Rser=1",
+     "points": [
+      {
+       "x": 608,
+       "y": 216
+      },
+      {
+       "x": 768,
+       "y": 216
+      }
+     ],
+     "ref": "V1",
+     "refs": [
+      "V1",
+      "V2"
+     ],
+     "text": "PULSE(0 1 0 1n 1n 5u 10u)",
+     "x": 608,
+     "y": 216
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 0,
+    "pins_total": 10,
+    "pins_wired": 0,
+    "wire_segments": 0
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "value_spaces.asc",
+     "x": 96,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       112
+      ]
+     ],
+     "detail": "Floating pin: R1.1 at (96,112)",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "value_spaces.asc",
+     "x": 96,
+     "y": 208
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       208
+      ]
+     ],
+     "detail": "Floating pin: R1.2 at (96,208)",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "value_spaces.asc",
+     "x": 256,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       256,
+       112
+      ]
+     ],
+     "detail": "Floating pin: R2.1 at (256,112)",
+     "refs": [
+      "R2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R2"
+   },
+   {
+    "at": {
+     "file": "value_spaces.asc",
+     "x": 256,
+     "y": 208
+    },
+    "evidence": {
+     "coords": [
+      [
+       256,
+       208
+      ]
+     ],
+     "detail": "Floating pin: R2.2 at (256,208)",
+     "refs": [
+      "R2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R2"
+   },
+   {
+    "at": {
+     "file": "value_spaces.asc",
+     "x": 416,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       416,
+       112
+      ]
+     ],
+     "detail": "Floating pin: R3.1 at (416,112)",
+     "refs": [
+      "R3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R3"
+   },
+   {
+    "at": {
+     "file": "value_spaces.asc",
+     "x": 416,
+     "y": 208
+    },
+    "evidence": {
+     "coords": [
+      [
+       416,
+       208
+      ]
+     ],
+     "detail": "Floating pin: R3.2 at (416,208)",
+     "refs": [
+      "R3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R3"
+   },
+   {
+    "at": {
+     "file": "value_spaces.asc",
+     "x": 576,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       576,
+       128
+      ]
+     ],
+     "detail": "Floating pin: V1.+ at (576,128)",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "value_spaces.asc",
+     "x": 576,
+     "y": 192
+    },
+    "evidence": {
+     "coords": [
+      [
+       576,
+       192
+      ]
+     ],
+     "detail": "Floating pin: V1.- at (576,192)",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "value_spaces.asc",
+     "x": 736,
+     "y": 128
+    },
+    "evidence": {
+     "coords": [
+      [
+       736,
+       128
+      ]
+     ],
+     "detail": "Floating pin: V2.+ at (736,128)",
+     "refs": [
+      "V2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V2"
+   },
+   {
+    "at": {
+     "file": "value_spaces.asc",
+     "x": 736,
+     "y": 192
+    },
+    "evidence": {
+     "coords": [
+      [
+       736,
+       192
+      ]
+     ],
+     "detail": "Floating pin: V2.- at (736,192)",
+     "refs": [
+      "V2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V2"
+   },
+   {
+    "at": {
+     "file": "value_spaces.asc",
+     "x": 128,
+     "y": 192
+    },
+    "evidence": {
+     "coords": [
+      [
+       128,
+       192
+      ]
+     ],
+     "detail": "R1's text '1k tc=0.001' at (128,192) is drawn across R2's body",
+     "refs": [
+      "R1",
+      "R2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "R1 & R2"
+   },
+   {
+    "at": {
+     "file": "value_spaces.asc",
+     "x": 288,
+     "y": 192
+    },
+    "evidence": {
+     "coords": [
+      [
+       288,
+       192
+      ]
+     ],
+     "detail": "R2's text '1k  tc=0.002' at (288,192) is drawn across R3's body",
+     "refs": [
+      "R2",
+      "R3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "R2 & R3"
+   },
+   {
+    "at": {
+     "file": "value_spaces.asc",
+     "x": 608,
+     "y": 216
+    },
+    "evidence": {
+     "coords": [
+      [
+       608,
+       216
+      ],
+      [
+       768,
+       216
+      ]
+     ],
+     "detail": "V1's text 'PULSE(0 1 0 1n 1n 5u 10u)' at (608,216) is drawn across V2's text '1 Rser=1' at (768,216)",
+     "refs": [
+      "V1",
+      "V2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "V1 & V2"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/export/window_no_justification.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "unopenable": true
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "window_no_justification.asc",
+     "x": 96,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       112
+      ]
+     ],
+     "detail": "Floating pin: R1.1 at (96,112)",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "window_no_justification.asc",
+     "x": 96,
+     "y": 208
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       208
+      ]
+     ],
+     "detail": "Floating pin: R1.2 at (96,208)",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/export/window_no_size.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "unopenable": true
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "window_no_size.asc",
+     "x": 96,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       112
+      ]
+     ],
+     "detail": "Floating pin: R1.1 at (96,112)",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "window_no_size.asc",
+     "x": 96,
+     "y": 208
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       208
+      ]
+     ],
+     "detail": "Floating pin: R1.2 at (96,208)",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/export/window_short_symbol.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "unopenable": true
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "window_short_symbol.asc",
+     "x": 96,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       112
+      ]
+     ],
+     "detail": "Floating pin: R1.1 at (96,112)",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "window_short_symbol.asc",
+     "x": 96,
+     "y": 208
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       208
+      ]
+     ],
+     "detail": "Floating pin: R1.2 at (96,208)",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   }
+  ]
  },
  "fixtures/ltspice_recorded/inputs/plot/div_dc.asc": {
   "dropped_wire": [],

@@ -1,0 +1,11 @@
+Version 4
+SymbolType CELL
+RECTANGLE Normal -32 -32 32 96
+SYMATTR Value Vsense sw
+SYMATTR Prefix W
+PIN 0 -32 NONE 0
+PINATTR PinName P
+PINATTR SpiceOrder 1
+PIN 0 0 NONE 0
+PINATTR PinName N
+PINATTR SpiceOrder 2
