@@ -301,7 +301,7 @@ def capture_case_inputs(
     )
     # Typed native preparation has its own control/seed contract. The electrical
     # closure is still checked below; only its generated setup is excluded.
-    verify_case_inputs(result, native=native is not None, seeded=seeded)
+    verify_case_inputs(result, native=native is not None, seeded=seeded, dialect=source.dialect)
     return result
 
 
@@ -412,7 +412,9 @@ def _native_setup(inputs: FrozenInputs, artifact: ArtifactDigest, content: bytes
     return content == driver_bytes(int(seed.group(1)), paths, token)
 
 
-def _verify_inputs(inputs: FrozenInputs, *, native: bool, seeded: bool) -> None:
+def _verify_inputs(
+    inputs: FrozenInputs, *, native: bool, seeded: bool, dialect: str | None
+) -> None:
     inventory = {item.path.resolve(): item for item in inputs.files}
     contents: dict[str, bytes] = {}
     native_setups: set[Path] = set()
@@ -477,9 +479,29 @@ def _verify_inputs(inputs: FrozenInputs, *, native: bool, seeded: bool) -> None:
                 "recovery_seed_analysis_unsupported",
                 "Seeded ngspice requires exactly one .op, .ac, .dc or .tran analysis",
             )
-    # A deck that seeds ngspice itself draws its static random functions alike
-    # on every run, as the driver's setseed does (ngspice_driver.seed_option).
-    seeded_itself = _deck_seeds_itself(inputs.electrical.path, file_keys, cards_by_content)
+    # Which seed ngspice draws the deck's static random functions from
+    # (ngspice_driver.seed_option). ngspice reads a seed option when it loads
+    # the deck, after the driver's setseed, so the deck's own seed wins and a
+    # seeded run of it would record a seed ngspice never drew from (measured
+    # on ngspice-42).
+    seeds = [
+        value
+        for key in set(file_keys.values())
+        for card in cards_by_content[key].read
+        if (value := seed_option(card)) is not None
+    ]
+    if seeded and seeds:
+        raise RecoveryError(
+            "recovery_seed_unsupported",
+            "The deck sets ngspice's seed itself (.options seed), which overrides "
+            "execution.simulator_seed; remove one of them",
+        )
+    # A deck that fixes ngspice's seed itself draws alike on every run, as the
+    # driver's setseed does. What another simulator makes of the card is not
+    # recorded, so only an ngspice deck counts.
+    seeded_itself = dialect == "ngspice" and _deck_seeds_itself(
+        inputs.electrical.path, seeds, file_keys, cards_by_content
+    )
     validated: set[tuple[str, bool]] = set()
     for path, key in file_keys.items():
         parsed = cards_by_content[key]
@@ -505,10 +527,12 @@ def _verify_inputs(inputs: FrozenInputs, *, native: bool, seeded: bool) -> None:
 
 def _deck_seeds_itself(
     root: Path,
+    seeds: list[str],
     file_keys: dict[Path, tuple[str, bool]],
     cards_by_content: dict[tuple[str, bool], EditCards],
 ) -> bool:
-    """Whether the frozen deck fixes ngspice's seed with an option card of its own.
+    """Whether the frozen deck fixes ngspice's seed with an option card of its
+    own, given every seed value (``seeds``) its closure reads.
 
     ngspice reads the first seed option in the deck, so every one the closure
     reads must be fixed, and one at the top level of the root deck, outside a
@@ -516,13 +540,7 @@ def _deck_seeds_itself(
     drops a subcircuit no instance calls, seed and all (measured on
     ngspice-42), and skips a ``.lib`` section the deck does not select.
     """
-    values = [
-        value
-        for key in set(file_keys.values())
-        for card in cards_by_content[key].read
-        if (value := seed_option(card)) is not None
-    ]
-    if not values or not all(fixed_seed(value) for value in values):
+    if not seeds or not all(fixed_seed(value) for value in seeds):
         return False
     key = file_keys.get(root)
     if key is None:
@@ -535,15 +553,24 @@ def _deck_seeds_itself(
 
 
 def verify_case_inputs(
-    inputs: FrozenInputs, *, native: bool = False, seeded: bool = False
+    inputs: FrozenInputs,
+    *,
+    native: bool = False,
+    seeded: bool = False,
+    dialect: str | None = None,
 ) -> None:
-    """Refuse byte drift, escapes and any uncaptured staged include edge."""
+    """Refuse byte drift, escapes and any uncaptured staged include edge.
+
+    ``dialect`` is the simulator family that runs the deck. Only an ngspice
+    deck that fixes its own seed may use static random functions without the
+    seeded driver, so a caller that leaves it out gets the stricter answer.
+    """
     if type(seeded) is not bool or type(native) is not bool or (seeded and native):
         raise RecoveryError(
             "recovery_seed_unsupported", "Seeded and native contracts are distinct"
         )
     try:
-        _verify_inputs(inputs, native=native, seeded=seeded)
+        _verify_inputs(inputs, native=native, seeded=seeded, dialect=dialect)
     except OSError as exc:
         raise RecoveryError("recovery_artifact_missing", "Frozen input is unreadable") from exc
     except ValueError as exc:

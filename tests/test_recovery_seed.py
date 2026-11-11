@@ -105,14 +105,15 @@ def test_shared_sequence_preserves_the_audited_native_driver_bytes():
     )
 
 
-def _capture(tmp_path, body, *, seeded, analysis=b".op"):
+def _capture(tmp_path, body, *, seeded, analysis=b".op", dialect="ngspice"):
     job = recovery_job(tmp_path)
     assert job.output_folder is not None
     case = job.cases[0]
     case.recovery = None
     case.staged_deck.write_bytes(b"* seeded\n" + body + b"\n" + analysis + b"\n.end\n")
     case.deck_sha256 = sha256_file(case.staged_deck)
-    return capture_case_inputs(case, job.sources[0], lineage_root=job.output_folder, seeded=seeded)
+    source = replace(job.sources[0], dialect=dialect)
+    return capture_case_inputs(case, source, lineage_root=job.output_folder, seeded=seeded)
 
 
 @pytest.mark.parametrize(
@@ -138,7 +139,40 @@ def test_a_deck_that_fixes_its_own_seed_admits_static_random_functions(tmp_path,
         seeded=False,
         analysis=b".op\n.ac dec 3 1 10",
     )
-    verify_case_inputs(captured)
+    verify_case_inputs(captured, dialect="ngspice")
+    # A caller that does not say which simulator runs the deck gets the
+    # stricter answer.
+    with pytest.raises(RecoveryError, match="randomness"):
+        verify_case_inputs(captured)
+
+
+@pytest.mark.parametrize("dialect", ["ltspice", "qspice", "xyce", None])
+def test_a_deck_seed_counts_only_where_ngspice_runs_the_deck(tmp_path, dialect):
+    """What LTspice, QSPICE or Xyce make of an .options seed card is not
+    recorded (LTspice can reseed its Monte Carlo from the clock), so their
+    static random functions stay refused whatever seed the deck writes."""
+    with pytest.raises(RecoveryError, match="randomness"):
+        _capture(
+            tmp_path,
+            b".param draw=agauss(10,1,1)\nV1 n 0 {draw}\nR1 n 0 1k\n.options seed=17",
+            seeded=False,
+            dialect=dialect,
+        )
+
+
+@pytest.mark.parametrize("option", [b".options seed=5", b".options seed=random"])
+def test_a_seeded_run_refuses_a_deck_that_seeds_itself(tmp_path, option):
+    """ngspice reads a deck's seed option when it loads the deck, after the
+    driver's setseed, so the deck's seed wins: with seed=5 the run would record
+    the explicit seed while drawing from 5, and with seed=random a retry would
+    not draw again what it drew (measured on ngspice-42)."""
+    with pytest.raises(RecoveryError, match="overrides") as refused:
+        _capture(
+            tmp_path,
+            b".param draw=agauss(10,1,1)\nV1 n 0 {draw}\nR1 n 0 1k\n" + option,
+            seeded=True,
+        )
+    assert refused.value.code == "recovery_seed_unsupported"
 
 
 @pytest.mark.parametrize(

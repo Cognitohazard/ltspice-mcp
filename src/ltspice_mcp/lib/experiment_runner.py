@@ -1223,6 +1223,7 @@ class ExperimentRunner(RunnerBase):
             case.recovery.inputs,
             native=case.native_statistics is not None,
             seeded=recorded.simulator_seed is not None,
+            dialect=dialect_for_simulator_name(self.simulator_class.__name__),
         )
         verify_seeded_driver(case, recorded, root)
         verify_startup(recorded.startup, root)

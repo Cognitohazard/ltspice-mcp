@@ -604,6 +604,12 @@ and retry. That is how a `random` entry's `simulator_draws` cases run under
 `recoverable`. Such a deck admits the same five random functions, and, since
 it runs as an ordinary batch run, any number of analyses.
 
+A seeded deck that sets ngspice's seed itself, with any `seed=` on an option
+card it reads, is refused (`recovery_seed_unsupported`): ngspice reads that
+card when it loads the deck, after the driver's `setseed`, so the deck's seed
+wins and the run would record a seed it never drew from, or, with
+`seed=random`, draw anew on a retry (measured on ngspice-42).
+
 A seeded deck may use only the random functions `agauss`, `gauss`, `aunif`,
 `unif` and `limit`; `.control` blocks, functions the server does not know,
 external modules and transient noise (`trnoise`, `trrandom`) are refused as in

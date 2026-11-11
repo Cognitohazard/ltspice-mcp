@@ -99,8 +99,9 @@ control_token=parent_token)`. Save the child's token too, including when it
 finishes immediately. Guide section 'tools' describes selection, retry flags,
 reused successes and no-op receipts, and recovery on LTspice, which needs
 native Windows, one checked LTspice build and its `ltspice_ini` setting.
-Guide section 'ngspice' covers `simulator_seed`, which makes a deck's random
-functions repeatable on ngspice.
+Guide section 'ngspice' covers `simulator_seed` and a deck's own
+`.options seed`, either of which makes a deck's random functions repeatable on
+ngspice.
 
 `api.jobs(detach=True, action="resume", ...)` gives the child its own supervising
 process. Detach applies only to resume and cannot be combined with

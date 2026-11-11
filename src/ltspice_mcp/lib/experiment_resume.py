@@ -269,6 +269,7 @@ def _verify_execution(job: ExperimentJob, store: Store, simulator: type) -> None
             case.recovery.inputs,
             native=case.native_statistics is not None,
             seeded=execution.simulator_seed is not None,
+            dialect=dialect_for_simulator_name(simulator.__name__),
         )
         verify_seeded_driver(case, execution, root)
         if case.status == "produced":
