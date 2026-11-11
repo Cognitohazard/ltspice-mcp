@@ -10,6 +10,8 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -30,6 +32,7 @@ from ltspice_mcp.lib.spice_lex import (
     INCLUDE_HEADS,
     EditCards,
     SpiceCard,
+    SpiceLexError,
     Token,
     TokenKind,
     lex_for_edit,
@@ -171,6 +174,12 @@ _DIRECTIVES = frozenset(
     }
 )
 _MODULE_DIRECTIVES = frozenset({".load", ".hdl", ".verilog", ".osdi", ".pre_osdi"})
+# A refusal lists this many constructs, each with this many more places, and
+# quotes each card to this length, so a long vendor library stays readable.
+_GROUPS_SHOWN = 12
+_PLACES_SHOWN = 5
+_CARD_TEXT_CHARS = 100
+_WARNING_LINE = re.compile(r"line (\d+):")
 
 
 def _contained(path: Path, root: Path) -> Path:
@@ -234,12 +243,45 @@ def capture_case_inputs(
             bind_digest(path, digest)
     bind_digest(case.staged_deck, case.deck_sha256)
     paths = dict.fromkeys(expected)
-    for entry in source.manifest:
-        if entry.live or not entry.staged or entry.staged_path is None:
-            raise RecoveryError(
-                "recovery_live_dependency",
-                "Recoverable inputs cannot use live or unresolved dependencies",
+    live = [
+        entry
+        for entry in source.manifest
+        if entry.live or not entry.staged or entry.staged_path is None
+    ]
+    if live:
+        raise RecoveryError(
+            "recovery_live_dependency",
+            "Recoverable execution saves a copy of every file the deck reads, and "
+            + ("this one is" if len(live) == 1 else "these are")
+            + " read in place: "
+            + "; ".join(
+                f"{entry.path}" + (f" ({entry.reason})" if entry.reason else "") for entry in live
             )
+            + ". Make each a file the server can copy, or submit without "
+            "execution.recoverable.",
+        )
+    # Each frozen file as the caller knows it, for a refusal to name: a staged
+    # file by the file staging copied, and a case's own copy by its staged file.
+    deck = f"the netlist exported from {source.path}" if is_asc(source.path) else str(source.path)
+    origins: dict[Path, str] = {}
+
+    def name(path: Path, origin: str) -> None:
+        origins.setdefault(path, origin)
+        origins.setdefault(path.resolve(), origin)
+
+    name(case.staged_deck, deck)
+    name(source.staged_deck, deck)
+    for entry in source.manifest:
+        if entry.staged_path is not None:  # else refused above as live
+            name(entry.staged_path, str(entry.path))
+    if materialized is not None:
+        for copy, staged in materialized.copied_from:
+            origin = origins.get(staged) or origins.get(staged.resolve())
+            if origin is not None:
+                name(copy, origin)
+    for entry in source.manifest:
+        if entry.staged_path is None:
+            continue
         # An exported schematic's authoring snapshot is provenance, not an
         # electrical dependency. Any include edge to it still fails closure
         # admission unless it was explicitly materialized as an input file.
@@ -295,7 +337,7 @@ def capture_case_inputs(
     )
     # Typed native preparation has its own control/seed contract. The electrical
     # closure is still checked below; only its generated setup is excluded.
-    verify_case_inputs(result, native=native is not None, seeded=seeded)
+    verify_case_inputs(result, native=native is not None, seeded=seeded, origins=origins)
     return result
 
 
@@ -323,64 +365,176 @@ def _quoted_passive_value(card: SpiceCard, tokens: list[Token]) -> bool:
     )
 
 
-def _validate_cards(
-    cards: list[SpiceCard], functions: set[str], *, native: bool, seeded: bool
-) -> None:
-    for card in cards:
-        if card.kind in {"comment", "blank"}:
-            continue
-        if card.kind == "control":
-            raise RecoveryError(
-                "recovery_control_unsupported", "Caller control scripts are not recoverable inputs"
-            )
+@dataclass(frozen=True)
+class _Construct:
+    """A check a card fails: its refusal code and the construct it names.
+
+    ``seedable`` marks random functions an ngspice ``simulator_seed`` admits,
+    on a deck that has none, so the refusal offers the seed only where it helps.
+    """
+
+    code: str
+    what: str
+    seedable: bool = False
+
+
+@dataclass(frozen=True)
+class _Refused:
+    """One construct the frozen inputs cannot be recovered with, where it is."""
+
+    code: str
+    what: str
+    path: Path
+    line: int | None
+    text: str
+    seedable: bool = False
+
+
+def _card_text(card: SpiceCard) -> str:
+    text = " ".join(card.body.split()) or card.raw_lines[0].strip()
+    return text if len(text) <= _CARD_TEXT_CHARS else text[: _CARD_TEXT_CHARS - 1] + "…"
+
+
+def _refused_constructs(
+    card: SpiceCard, functions: set[str], *, native: bool, seeded: bool
+) -> _Construct | None:
+    """The first check ``card`` fails, or None."""
+    if card.kind == "control":
+        return _Construct("recovery_control_unsupported", "a `.control` block")
+    try:
         tokens = [
             token for token in tokenize_body(card.body) if token.kind != TokenKind.COMMENT_TRAIL
         ]
-        if not tokens:
-            continue
-        head = tokens[0].text.casefold()
-        if head in _MODULE_DIRECTIVES or (card.kind == "instance" and head.startswith("a")):
-            raise RecoveryError(
-                "recovery_external_module", "External simulator modules are not recoverable inputs"
-            )
-        if head.startswith(".") and head not in _DIRECTIVES:
-            raise RecoveryError(
-                "recovery_directive_unsupported", "Directive has no frozen-input contract"
-            )
-        if head in INCLUDE_HEADS:
-            continue
-        text = " ".join(token.text for token in tokens)
-        if re.search(r"(?i)\b(file|sfile|pwlfile)\s*=|\bpwl\s*\([^)]*[\"']", text):
-            raise RecoveryError(
-                "recovery_external_reader", "External waveform/file readers are not captured"
-            )
-        if (
-            card.kind == "instance"
-            and any(token.kind == TokenKind.QUOTED for token in tokens)
-            and not _quoted_passive_value(card, tokens)
-        ):
-            raise RecoveryError(
-                "recovery_external_reader", "Quoted instance inputs lack a captured file contract"
-            )
-        calls = {match.casefold() for match in _FUNCTION.findall(text)}
-        stochastic = calls.intersection(_RANDOM) or set(
-            re.findall(r"(?i)\b(trnoise|trrandom)\b", text)
+    except SpiceLexError as exc:
+        # Listed in its place among the others, as the first card that failed
+        # was refused before: an unreadable card hides no other construct.
+        return _Construct(
+            "recovery_syntax_unsupported", f"a card the server cannot read ({exc.message})"
         )
-        admitted = _SEEDED_RANDOM if seeded else set()
-        if stochastic - admitted and not native:
-            raise RecoveryError(
-                "recovery_random_unsupported",
-                "Simulator randomness has no persisted seed contract",
-            )
-        unknown = calls - _PURE_FUNCTIONS - functions - (_RANDOM if native else admitted)
-        # A .model name precedes its parenthesized parameter block.
-        if card.kind == "model" and len(tokens) >= 3:
-            unknown.discard(tokens[2].text.casefold().split("(")[0])
-        if unknown and not native:
-            raise RecoveryError(
-                "recovery_expression_unsupported",
-                "Expression function has no deterministic recovery contract",
-            )
+    if not tokens:
+        return None
+    first = tokens[0].text
+    head = first.casefold()
+    if head in _MODULE_DIRECTIVES:
+        return _Construct("recovery_external_module", f"`{first}`, which loads an external module")
+    if card.kind == "instance" and head.startswith("a"):
+        return _Construct("recovery_external_module", f"`{first}`, an XSPICE device")
+    if head.startswith(".") and head not in _DIRECTIVES:
+        return _Construct(
+            "recovery_directive_unsupported",
+            f"`{first}`, a directive outside the supported set",
+        )
+    if head in INCLUDE_HEADS:
+        return None
+    text = " ".join(token.text for token in tokens)
+    reader = re.search(r"(?i)\b(file|sfile|pwlfile)\s*=|\bpwl\s*\([^)]*[\"']", text)
+    if reader:
+        return _Construct("recovery_external_reader", f"`{reader.group(0)}`, which reads a file")
+    if (
+        card.kind == "instance"
+        and any(token.kind == TokenKind.QUOTED for token in tokens)
+        and not _quoted_passive_value(card, tokens)
+    ):
+        return _Construct(
+            "recovery_external_reader",
+            "a quoted value on an instance, which may name a file the server does not save",
+        )
+    calls = {match.casefold() for match in _FUNCTION.findall(text)}
+    stochastic = calls.intersection(_RANDOM) or set(
+        name.casefold() for name in re.findall(r"(?i)\b(trnoise|trrandom)\b", text)
+    )
+    admitted = _SEEDED_RANDOM if seeded else set()
+    if stochastic - admitted and not native:
+        return _Construct(
+            "recovery_random_unsupported",
+            f"{_names(stochastic - admitted)}, random"
+            + (
+                " in a way the seed does not set" if seeded else " with no seed the server records"
+            ),
+            seedable=not seeded and bool(stochastic & _SEEDED_RANDOM),
+        )
+    unknown = calls - _PURE_FUNCTIONS - functions - (_RANDOM if native else admitted)
+    # A .model name precedes its parenthesized parameter block.
+    if card.kind == "model" and len(tokens) >= 3:
+        unknown.discard(tokens[2].text.casefold().split("(")[0])
+    if unknown and not native:
+        return _Construct(
+            "recovery_expression_unsupported", f"{_names(unknown)}, not known to the server"
+        )
+    return None
+
+
+def _names(names: set[str]) -> str:
+    listed = ", ".join(f"`{name}`" for name in sorted(names))
+    return f"function {listed}" if len(names) == 1 else f"functions {listed}"
+
+
+def _validate_cards(
+    cards: list[SpiceCard], functions: set[str], *, native: bool, seeded: bool
+) -> list[tuple[SpiceCard, _Construct]]:
+    """Every card that fails a check, with the first check it fails."""
+    refused: list[tuple[SpiceCard, _Construct]] = []
+    previous: SpiceCard | None = None
+    for card in cards:
+        if card.kind in {"comment", "blank"}:
+            continue
+        # Each line of a .control block is its own card: the block is named
+        # once, at the line that opens it.
+        opens = card.kind != "control" or previous is None or previous.kind != "control"
+        previous = card
+        found = _refused_constructs(card, functions, native=native, seeded=seeded)
+        if found is not None and opens:
+            refused.append((card, found))
+    return refused
+
+
+def _refusal(refused: list[_Refused], origins: Mapping[Path, str]) -> RecoveryError:
+    """One refusal naming every construct refused, grouped by construct.
+
+    The code is the first construct's: a card the lexer cannot classify, then
+    a seeded deck's analyses, then each file's cards in turn, the deck's
+    first. The message lists each construct with its code, so a deck is fixed
+    in one pass rather than one submission per construct.
+    """
+    groups: dict[tuple[str, str], dict[str, _Refused]] = {}
+    for item in refused:
+        where = origins.get(item.path, str(item.path))
+        at = f"{where} line {item.line}" if item.line is not None else where
+        # One place once: a library frozen both as shared and as a case's
+        # own copy names the same line of the same file twice.
+        groups.setdefault((item.code, item.what), {}).setdefault(at, item)
+    lines: list[str] = []
+    for (code, what), places in list(groups.items())[:_GROUPS_SHOWN]:
+        at, first = next(iter(places.items()))
+        line = f"- {what} ({code}): {at}: {first.text}"
+        others = list(places)[1:]
+        if others:
+            shown = others[:_PLACES_SHOWN]
+            more = len(others) - len(shown)
+            line += "; also " + ", ".join(shown) + (f" and {more} more" if more else "")
+        lines.append(line)
+    hidden = len(groups) - _GROUPS_SHOWN
+    if hidden > 0:
+        lines.append(
+            f"- and {hidden} more construct{'s' if hidden != 1 else ''}, listed when "
+            "these are fixed and the request is sent again"
+        )
+    count = len(groups)
+    seedable = any(item.seedable for item in refused)
+    message = (
+        f"Recoverable execution refuses {count} construct{'s' if count != 1 else ''} "
+        "in this deck and the files it includes, because a resumed case could not "
+        "be relied on to run them the same way:\n"
+        + "\n".join(lines)
+        + "\nChange or remove each, or submit without execution.recoverable"
+        + (
+            "; on ngspice, execution.simulator_seed admits agauss, gauss, aunif, unif and limit"
+            if seedable
+            else ""
+        )
+        + "."
+    )
+    return RecoveryError(refused[0].code, message)
 
 
 def _native_setup(inputs: FrozenInputs, artifact: ArtifactDigest, content: bytes) -> bool:
@@ -406,7 +560,9 @@ def _native_setup(inputs: FrozenInputs, artifact: ArtifactDigest, content: bytes
     return content == driver_bytes(int(seed.group(1)), paths, token)
 
 
-def _verify_inputs(inputs: FrozenInputs, *, native: bool, seeded: bool) -> None:
+def _verify_inputs(
+    inputs: FrozenInputs, *, native: bool, seeded: bool, origins: Mapping[Path, str]
+) -> None:
     inventory = {item.path.resolve(): item for item in inputs.files}
     contents: dict[str, bytes] = {}
     native_setups: set[Path] = set()
@@ -427,6 +583,9 @@ def _verify_inputs(inputs: FrozenInputs, *, native: bool, seeded: bool) -> None:
     # still proves its bytes, and every include below resolves from its own path.
     file_keys: dict[Path, tuple[str, bool]] = {}
     cards_by_content: dict[tuple[str, bool], EditCards] = {}
+    # Every construct the inputs cannot be recovered with, so one refusal names
+    # them all (``_refusal`` says in which order).
+    refused: list[_Refused] = []
     for artifact in inputs.files:
         path = artifact.path
         if path in native_setups:
@@ -440,10 +599,16 @@ def _verify_inputs(inputs: FrozenInputs, *, native: bool, seeded: bool) -> None:
         # line 1, its title (lex_for_edit). Every card is still classified, so
         # the warnings and the constructs of an unread card refuse as well.
         parsed = lex_for_edit(decode_spice_bytes(content), deck=path in roots)
-        if parsed.warnings:
-            raise RecoveryError(
-                "recovery_syntax_unsupported",
-                "Frozen input cannot be classified without lexer warnings",
+        for warning in parsed.warnings:
+            found = _WARNING_LINE.match(warning)
+            refused.append(
+                _Refused(
+                    "recovery_syntax_unsupported",
+                    "a card the server cannot classify",
+                    path,
+                    int(found.group(1)) if found else None,
+                    warning[found.end() :].strip() if found else warning,
+                )
             )
         cards_by_content[key] = parsed
     functions = {
@@ -467,16 +632,31 @@ def _verify_inputs(inputs: FrozenInputs, *, native: bool, seeded: bool) -> None:
             in {".op", ".ac", ".dc", ".tran", ".noise", ".step"}
         ]
         if len(analyses) != 1 or analyses[0] not in {".op", ".ac", ".dc", ".tran"}:
-            raise RecoveryError(
-                "recovery_seed_analysis_unsupported",
-                "Seeded ngspice requires exactly one .op, .ac, .dc or .tran analysis",
+            refused.append(
+                _Refused(
+                    "recovery_seed_analysis_unsupported",
+                    "a seeded ngspice deck needs exactly one .op, .ac, .dc or .tran analysis",
+                    inputs.electrical.path,
+                    None,
+                    f"it has {', '.join(analyses) or 'none'}",
+                )
             )
     validated: set[tuple[str, bool]] = set()
     for path, key in file_keys.items():
-        parsed = cards_by_content[key]
         if key not in validated:
-            _validate_cards(parsed.cards, functions, native=native, seeded=seeded)
+            refused.extend(
+                _Refused(
+                    found.code, found.what, path, card.line_start, _card_text(card), found.seedable
+                )
+                for card, found in _validate_cards(
+                    cards_by_content[key].cards, functions, native=native, seeded=seeded
+                )
+            )
             validated.add(key)
+    if refused:
+        raise _refusal(refused, origins)
+    for path, key in file_keys.items():
+        parsed = cards_by_content[key]
         try:
             # The includes staging followed (deck_staging.stage_deck): none in
             # a root deck's title or after a file's end marker.
@@ -495,15 +675,23 @@ def _verify_inputs(inputs: FrozenInputs, *, native: bool, seeded: bool) -> None:
 
 
 def verify_case_inputs(
-    inputs: FrozenInputs, *, native: bool = False, seeded: bool = False
+    inputs: FrozenInputs,
+    *,
+    native: bool = False,
+    seeded: bool = False,
+    origins: Mapping[Path, str] | None = None,
 ) -> None:
-    """Refuse byte drift, escapes and any uncaptured staged include edge."""
+    """Refuse byte drift, escapes and any uncaptured staged include edge.
+
+    ``origins`` names a frozen file as the caller knows it (the file it was
+    copied from) in a refusal; a file it leaves out is named by its frozen path.
+    """
     if type(seeded) is not bool or type(native) is not bool or (seeded and native):
         raise RecoveryError(
             "recovery_seed_unsupported", "Seeded and native contracts are distinct"
         )
     try:
-        _verify_inputs(inputs, native=native, seeded=seeded)
+        _verify_inputs(inputs, native=native, seeded=seeded, origins=origins or {})
     except OSError as exc:
         raise RecoveryError("recovery_artifact_missing", "Frozen input is unreadable") from exc
     except ValueError as exc:

@@ -2,9 +2,25 @@ name: Checks
 
 # Reusable checks shared by CI (every push/PR) and the publish workflow's
 # release gate. Both call this file, so the two gates cannot drift.
+#
+# The `tier` input chooses which jobs run; ci.yml picks it per run.
+#   full: every job. The default, so the release gate and every push to master
+#         run all of them.
+#   pr:   static, changelog, audit, the Linux suite on Python 3.12, Windows.
+#   docs: static, changelog, the Linux suite on Python 3.12.
+# A job a tier leaves out is skipped by its own `if`, so it still reports, as
+# skipped, under the name it has in the full tier, and a required check of
+# that name passes. For that reason each interpreter of the Linux suite is its
+# own job with a fixed name rather than a leg of a matrix: a matrix job skipped
+# by `if` reports once, under an unexpanded name, instead of once per leg.
 
 on:
   workflow_call:
+    inputs:
+      tier:
+        description: "Which jobs run: full, pr or docs."
+        type: string
+        default: full
 
 permissions:
   contents: read
@@ -34,17 +50,21 @@ jobs:
         run: uv run pyright
 
   check:
+    # The Linux suite on the matrix's middle interpreter, in every tier.
+    name: check (3.12)
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    strategy:
-      fail-fast: false
-      matrix:
-        # Prove every supported interpreter, floor to ceiling. The async
-        # deadline test is version-sensitive (asyncio internals shifted in
-        # 3.12), so a floor-only runtime failure must not reach PyPI under
-        # Requires-Python >= 3.11.
-        python: ["3.11", "3.12", "3.13"]
-    steps:
+    env:
+      PYTHON: "3.12"
+    steps: &linux-suite
+      - name: Refuse an unknown tier
+        if: inputs.tier != 'full' && inputs.tier != 'pr' && inputs.tier != 'docs'
+        env:
+          TIER: ${{ inputs.tier }}
+        run: |
+          echo "::error::unknown checks tier '$TIER' (expected full, pr or docs)"
+          exit 1
+
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
@@ -54,8 +74,8 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Pin Python ${{ matrix.python }}
-        run: uv python pin "${{ matrix.python }}"
+      - name: Pin Python ${{ env.PYTHON }}
+        run: uv python pin "${{ env.PYTHON }}"
 
       - name: Install ngspice and cairo (the real-ngspice e2e tier and the raster tier)
         run: sudo apt-get update && sudo apt-get install -y ngspice libcairo2
@@ -69,12 +89,36 @@ jobs:
       - name: Test
         run: uv run pytest tests/ -v -n auto --cov=ltspice_mcp --cov-fail-under=80
 
+  check-py311:
+    # Prove every supported interpreter, floor to ceiling. The async deadline
+    # test is version-sensitive (asyncio internals shifted in 3.12), so a
+    # floor-only runtime failure must not reach PyPI under
+    # Requires-Python >= 3.11. Full tier only.
+    name: check (3.11)
+    if: inputs.tier == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHON: "3.11"
+    steps: *linux-suite
+
+  check-py313:
+    # The ceiling interpreter. Full tier only.
+    name: check (3.13)
+    if: inputs.tier == 'full'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHON: "3.13"
+    steps: *linux-suite
+
   check-windows:
     # Windows native is a supported platform with win32-only code (the msvcrt
     # advisory-lock branch in lib/filelock.py) and Windows-aware tests that the
     # Linux matrix above never exercises. One runner on the matrix's middle
     # interpreter guards those paths — this proves platform correctness, not
     # every interpreter version.
+    if: inputs.tier != 'docs'
     runs-on: windows-latest
     # The real-ngspice tests run here too, which the job's runtime has to cover.
     timeout-minutes: 30
@@ -159,7 +203,8 @@ jobs:
     # skipped with the refusal as its reason (tests/parser_refusal.py). It also
     # refuses a recoverable ngspice run there, and a test of one skips
     # (needs_controlled_startup in tests/conftest.py). Everything else must
-    # pass here.
+    # pass here. Full tier only.
+    if: inputs.tier == 'full'
     runs-on: macos-latest
     timeout-minutes: 30
     steps:
@@ -193,6 +238,7 @@ jobs:
           uv run pytest tests/ -v -n auto -ra
 
   audit:
+    if: inputs.tier != 'docs'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

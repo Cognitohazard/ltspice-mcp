@@ -39,7 +39,6 @@ from ltspice_mcp.lib.pdk_native import LAUNCH_POLICY
 from ltspice_mcp.lib.proc_kill import (
     ProcessPresence,
     process_identity_presence,
-    process_start_marker,
     simulator_executable_names,
     simulator_presence,
 )
@@ -64,7 +63,7 @@ from ltspice_mcp.lib.recovery_records import (
 )
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name, is_ngspice, run_ngbehavior
 from ltspice_mcp.lib.simulator_build import executable_identity, same_executable
-from ltspice_mcp.lib.store import OwnerLiveness, Store, is_this_process, path_digest
+from ltspice_mcp.lib.store import OwnerLiveness, Store, path_digest, this_process_start_marker
 from ltspice_mcp.lib.sweep_utils import generate_id
 
 if TYPE_CHECKING:
@@ -111,14 +110,13 @@ def refuse_reserved_request(request: ExperimentRunRequest) -> None:
     raise payload_conflict(request.request_id, journal.head_job_id)
 
 
-def authorize_resume(job: ExperimentJob, control_token: str | None) -> str:
-    """Return authority only to the actual owner or a holder of its capability."""
-    recovery = job.recovery
-    if recovery is None:
+def authorize_resume(job: ExperimentJob, control_token: str | None, *, owned: bool) -> str:
+    """The job's control token, for a caller that may resume it: the session
+    that runs it (``owned``, ``JobRegistry.owns``) or a holder of its token,
+    as for a cancel (``experiment_store.control_authorized``)."""
+    if job.recovery is None:
         raise RecoveryError("not_recoverable", "This experiment was not submitted as recoverable")
-    owner = recovery.owner
-    own = is_this_process(owner.pid, owner.start_marker)
-    if not own and not experiment_store.holds_control_token(job, control_token):
+    if not experiment_store.control_authorized(job, control_token, owned=owned):
         raise RecoveryError("resume_not_authorized", "The experiment control token is required")
     return job.control_token
 
@@ -128,11 +126,21 @@ async def resume_control_token(state: SessionState, job_id: str, control_token: 
     job = await asyncio.to_thread(experiment_store.load_job, job_id, state.working_dir)  # noqa: TID251 - resume authorizes from a fresh record
     if job is None:
         raise JobNotFoundError(f"Experiment job {job_id} was not found")
-    return authorize_resume(job, control_token)
+    return authorize_resume(job, control_token, owned=state.job_registry.owns(job))
 
 
 def _current_owner() -> ProcessIdentity:
-    return ProcessIdentity(os.getpid(), process_start_marker(os.getpid()))
+    """This process, as an attempt it takes on records its owner: its pid and
+    the start marker every record this process writes carries
+    (``store.this_process_start_marker``)."""
+    marker = this_process_start_marker()
+    if marker is None:
+        raise RecoveryError(
+            "recovery_owner_unknown",
+            "This process's start identity could not be read, so a recoverable "
+            "attempt cannot record which process owns it",
+        )
+    return ProcessIdentity(os.getpid(), marker)
 
 
 def _required_recovery(job: ExperimentJob) -> JobRecovery:
@@ -352,12 +360,13 @@ async def _replay_attempt(
         # Another admission may be between its durable barrier and scheduler.
         # Only a proven-dead owner licenses reconstructing and starting it.
         return AdmissionResult(job, replayed=True, start=False)
-    if state.runners.get_experiment_runner_for(job) is not None:
-        raise RecoveryError("recovery_owner_active", "A coordinator still owns this attempt")
+    if state.job_registry.owns(job):
+        raise RecoveryError("recovery_owner_active", "This session already runs this attempt")
     await asyncio.to_thread(_verify_absence, job, simulator)
     await asyncio.to_thread(_verify_execution, candidate, store, simulator)
-    candidate.owner_pid = os.getpid()
-    candidate.recovery = replace(recovery, owner=_current_owner())
+    owner = _current_owner()
+    candidate.owner_pid = owner.pid
+    candidate.recovery = replace(recovery, owner=owner)
     replacement = await asyncio.to_thread(prepared_entry, candidate)
     updated = (
         replace(journal, root=replacement)
@@ -543,12 +552,13 @@ def _make_child(
     child.request_id, child.fingerprint = request_id, fingerprint
     child.control_token = secrets.token_urlsafe(32)
     child.store_path = store.job_record(child.job_id)
-    child.owner_pid = os.getpid()
+    owner = _current_owner()
+    child.owner_pid = owner.pid
     child.recovery = replace(
         recovery,
         parent_job_id=parent.job_id,
         attempt_index=recovery.attempt_index + 1,
-        owner=_current_owner(),
+        owner=owner,
     )
     child.status, child.started_at, child.completed_at = "queued", now(), None
     child.error, child.restart_reconciled = None, False
@@ -685,7 +695,7 @@ async def resume_experiment(
         parent = await asyncio.to_thread(
             _load_attempt, journal, _entry_for(journal, job_id), store
         )
-        authorize_resume(parent, control_token)
+        authorize_resume(parent, control_token, owned=state.job_registry.owns(parent))
         entry = journal.resumes.get(path_digest(resume_request_id))
         if entry is not None:
             if entry.fingerprint != fingerprint:

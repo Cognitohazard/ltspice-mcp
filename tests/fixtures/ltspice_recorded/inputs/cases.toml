@@ -132,7 +132,9 @@ extra = ["connectivity/res.asy"]
 
 [behaviour.node-name-case]
 summary = "Whether two node names that differ only in case are one node when a deck runs. An export keeps each label's spelling (net-naming), so the run is what shows they join: V1 drives OUT, R1 sits on out, and I(R1) is 1 mA only if they are one node."
-model = ["lib/connectivity.py"]
+# Every view of a pin's or a net's names lists each spelling on the node:
+# the pin legend and label-only pins of an edit, and the net query.
+model = ["lib/connectivity.py", "lib/pin_legend.py", "tools/schematic_edit.py", "tools/inspect_tools.py"]
 inputs = ["connectivity/node_name_case.cir"]
 
 [behaviour.build-benchmark-export]
@@ -391,6 +393,16 @@ inputs = [
     "deck/save_pair_to_ground.cir",
 ]
 
+[behaviour.save-pattern]
+summary = "Which signals a .save that names them by a pattern saves: V(*), I(*), and a prefix V(o*), and whether a .meas reads a signal the pattern names."
+model = ["lib/lint_rules.py", "lib/spice_lex_views.py"]
+inputs = [
+    "deck/save_pattern_v.cir",
+    "deck/save_pattern_i.cir",
+    "deck/save_pattern_prefix.cir",
+]
+pending = "Written where no LTspice runs. Record it on Windows with uv run python scripts/record_ltspice_fixtures.py --only 'deck/save_pattern_v' --only 'deck/save_pattern_i' --only 'deck/save_pattern_prefix', then remove this key."
+
 [behaviour.deck-semantics]
 summary = "What a deck means where the simulators differ: a parameter named temp, the caret operator, a subcircuit's header default against a .param in its body."
 model = ["lib/hierarchy.py", "lib/hierarchy_expr.py", "lib/lint_rules.py"]
@@ -505,8 +517,14 @@ inputs = ["raw/mos_multiplier.cir", "raw/subckt_multiplier.cir", "deck/subckt_mu
 
 [behaviour.raw-stepped]
 summary = "Stepped runs: the stepped flag, where one step ends and the next begins, the .step lines of the log (a temperature among them), what a stepped .op (over a parameter and over temperature) and a stepped .dc store, the .op.raw a stepped .tran and a stepped .ac leave, a stepped .noise sweep, a stepped .ac at one frequency, which stores no frequency and one point a step, and a stepped .noise at one frequency named by a list, which does the same."
-model = ["lib/raw_decode.py", "lib/raw_parser.py", "lib/log_parser.py", "lib/trace_names.py", "lib/metrics.py"]
+model = ["lib/raw_decode.py", "lib/raw_parser.py", "lib/log_parser.py", "lib/trace_names.py", "lib/metrics.py", "lib/step_values.py"]
 inputs = ["raw/step_tran.cir", "raw/step_ac.cir", "raw/step_op.cir", "raw/step_dc.cir", "raw/step_temp.cir", "raw/step_temp_op.cir", "raw/step_ac_one_freq.cir", "raw/step_noise.cir", "raw/step_noise_list_one_freq.cir"]
+
+[behaviour.step-value-digits]
+summary = "How many significant digits a log's .step lines print a stepped value with: values the deck writes to seventeen digits, and two that differ only in the sixth."
+model = ["lib/step_values.py", "lib/log_parser.py"]
+inputs = ["raw/step_digits.cir"]
+pending = "Written where no LTspice runs. Record it on Windows with uv run python scripts/record_ltspice_fixtures.py --only 'raw/step_digits', then remove this key."
 
 [behaviour.raw-transfer-function]
 summary = "A .tf run: the Transfer Function plot and what the log says; and a stepped .tf, how its one point a step is stored."
@@ -514,8 +532,8 @@ model = ["lib/raw_header.py", "lib/decoded_raw.py", "lib/raw_parser.py"]
 inputs = ["raw/tf.cir", "raw/tf_step.cir"]
 
 [behaviour.raw-fra]
-summary = "A frequency response analysis (.fra): the results file a build writes beside the transient raw, its name, header and layout, plain, stepped and under .options numdgt=7."
-model = ["lib/raw_header.py", "lib/raw_parser.py"]
+summary = "A frequency response analysis (.fra): the results file a build writes beside the transient raw, its name, header and layout, plain, stepped and under .options numdgt=7, and the loop margins a stepped run prints as measurements in its log, an infinite one as infdB."
+model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/log_parser.py", "tools/analyze.py"]
 # One loop: an amplifier of gain 100 (an E source), a single RC pole, and the
 # analyzer @1 in series between the amplifier's output and the pole. Four
 # frequencies an octave apart and a short settling time keep the run, and the
@@ -551,13 +569,13 @@ evidence = "every recorded log; a stepped temperature writes the one non-ASCII c
 
 [behaviour.log-meas]
 summary = "How each .meas form is printed: MAX/MIN/PP/AVG/RMS/INTEG with FROM and TO, FIND AT, WHEN, TRIG/TARG, PARAM, complex AC results, the tables of a stepped run, and a stepped .op, whose log has no .step lines and which neither build prints a table for."
-model = ["lib/log_parser.py", "lib/metrics.py", "lib/log_decode.py", "tools/analyze.py"]
+model = ["lib/log_parser.py", "lib/log_types.py", "lib/metrics.py", "lib/log_decode.py", "lib/result_observations.py", "lib/raw_parser.py", "tools/analyze.py", "tools/inspect_tools.py"]
 inputs = ["log/meas_forms.cir", "log/meas_ac.cir", "log/meas_step.cir", "log/meas_step_op.cir"]
 keep = ["log"]
 
 [behaviour.log-meas-failed]
 summary = "What the log says of a measurement that cannot be taken or does not parse, and what happens to the measurements around it."
-model = ["lib/log_parser.py", "lib/result_observations.py", "lib/lint_rules.py", "lib/spice_validator.py"]
+model = ["lib/log_parser.py", "lib/log_types.py", "lib/metrics.py", "lib/result_observations.py", "lib/raw_parser.py", "lib/lint_rules.py", "lib/spice_validator.py", "tools/analyze.py", "tools/inspect_tools.py"]
 inputs = ["log/meas_failed.cir", "log/meas_bad_syntax.cir"]
 keep = ["log"]
 
@@ -577,7 +595,7 @@ keep = ["log"]
 
 [behaviour.log-meas-when-threshold]
 summary = "How a WHEN is printed when its threshold is not a plain number: a parameter, an expression, a braced expression and another measurement, in a transient and an AC analysis, alone and in the tables of a stepped run. The stepped decks step a parameter written Rv, whose name both builds write in lower case in the log (.step rv=1000)."
-model = ["lib/log_parser.py", "lib/log_decode.py", "lib/metrics.py", "lib/recipes.py", "tools/analyze.py", "tools/inspect_tools.py", "api/_primitives.py"]
+model = ["lib/log_parser.py", "lib/log_decode.py", "lib/metrics.py", "lib/step_values.py", "tools/analyze.py", "tools/inspect_tools.py", "api/_primitives.py"]
 inputs = [
     "log/meas_when_threshold_tran.cir",
     "log/meas_when_threshold_ac.cir",

@@ -258,11 +258,21 @@ def _check_sections(facts: dict[str, Any], captured: CapturedInputs) -> None:
                 raise ValueError("Measurement status contradicts measurement entries")
             if value["step_count"] < 0:
                 raise ValueError("Measurement step_count must be nonnegative")
-            for entry in value["measurements"].values():
+            for name, entry in value["measurements"].items():
                 for key in ("range_from", "range_to", "at"):
                     field = entry.get(key)
                     if isinstance(field, list) and len(field) != len(entry["values"]):
                         raise ValueError("Measurement metadata must align with values")
+                failed_steps = entry.get("failed_steps")
+                if failed_steps is not None and (
+                    name not in value["failed_measurements"]
+                    or not failed_steps
+                    or any(
+                        not 0 <= step < len(entry["values"]) or entry["values"][step] is not None
+                        for step in failed_steps
+                    )
+                ):
+                    raise ValueError("A failed step must be a null value of a failed measurement")
         elif name in ("device_op", "steps"):
             if value is None or (status == "parsed") != bool(value):
                 raise ValueError(f"{name} status contradicts section entries")

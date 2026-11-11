@@ -1117,7 +1117,8 @@ def _terminal_outcome(snapshot: ReceiptSnapshot) -> CallOutcome:
     landing after every run but before the analysis leaves them fully
     reconciled, and one landing before expansion leaves them all at zero. An
     interrupted one is read off its counters: the cases whose runs wrote their
-    results before the server stopped count as produced, and are read by job.
+    results before the process running the job stopped count as produced, and
+    are read by job.
     """
     return outcome_of(
         snapshot.status == "failed",
@@ -1130,7 +1131,7 @@ def _terminal_outcome(snapshot: ReceiptSnapshot) -> CallOutcome:
 def _terminal_hint(snapshot: ReceiptSnapshot, runs: Mapping[str, Any]) -> str:
     """Every recovery route this receipt has, not the first one that matched.
 
-    A server restart mid-run sets BOTH conditions: the abandoned cases become
+    A process that stops mid-run sets BOTH conditions: the abandoned cases become
     failures AND the attached analysis is marked failed. Under an exclusive
     ladder the failures branch won and the caller was never told that the runs
     that DID produce data are still analyzable by job_id — so the obvious move

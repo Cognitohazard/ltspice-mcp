@@ -76,9 +76,10 @@ The native Windows integration tier also needs:
   settings file. A missing build is skipped, and the skip reason names it.
 - The console build of ngspice on PATH as `ngspice.exe`, with its DLLs. The GUI
   executable does not write the console output these tests read.
-- The `raster` extra. The tests of the `cairosvg` path also need native Cairo
-  DLLs with their dependencies, and skip without them. For a portable
-  installation, set `CAIROCFFI_DLL_DIRECTORIES` to the DLL directory.
+- Native Cairo DLLs with their dependencies, for the tests of the `cairosvg`
+  path, which skip without them (`cairosvg` itself is a dev dependency). For
+  a portable installation, set `CAIROCFFI_DLL_DIRECTORIES` to the DLL
+  directory.
 
 With those set in the test shell, run
 
@@ -104,27 +105,29 @@ for the parser or starts a process, and the parser's entry module
 its first request or imports any decoding code; `test_parser_process.py`
 checks both. Its checks that set `sys.platform` to another value run anywhere
 and test only the refusal. The `test_native_macos_bootstrap_*` checks need a
-native macOS interpreter, run in CI's macOS job and skip elsewhere; a pass
-there also shows only the refusal and does not show a working macOS parser.
+native macOS interpreter, run in CI's macOS job (full tier only) and skip
+elsewhere; a pass there also shows only the refusal and does not show a working macOS parser.
 Supporting macOS needs
 native tests there of the hard memory limit, applied before any decoding code
 is imported, and of the parser's cleanup after a deadline, after repeated
 cancellation and after the server process dies, including a child process
 that tries to break away from the parser's process tree.
 
-CI runs the suite on a native Windows runner (`check-windows` in
-`.github/workflows/checks.yml`): Python 3.12, one xdist worker per core, no
-coverage gate, and the official Windows build of ngspice, the one users
-install, pinned by version and SHA-256, unpacked to `C:\Spice64` as its
-install notes say. Its console program, `ngspice_con.exe`, is put on PATH as
-`ngspice.exe`, as above. That build's `spinit` loads the code models and sets
-`filetype=ascii`, so on Windows ngspice writes ASCII raw files, as it does for
-its users; the job fails before the suite runs unless ngspice reads it. The runner's code page is cp1252 and its paths have
-no spaces, so a run on a user's machine still covers what this job cannot.
+Both CI tiers (*CI tiers* below) run the suite on a native Windows runner
+(`check-windows` in `.github/workflows/checks.yml`): Python 3.12, one xdist
+worker per core, no coverage gate, and the official Windows build of ngspice,
+the one users install, pinned by version and SHA-256, unpacked to
+`C:\Spice64` as its install notes say. Its console program,
+`ngspice_con.exe`, is put on PATH as `ngspice.exe`, as above. That build's
+`spinit` loads the code models and sets `filetype=ascii`, so on Windows ngspice
+writes ASCII raw files, as it does for its users; the job fails before the
+suite runs unless ngspice reads it. The runner's code page is cp1252 and its
+paths have no spaces, so a run on a user's machine still covers what this job
+cannot.
 
-CI also runs the suite on a native macOS runner (`check-macos` in
-`.github/workflows/checks.yml`): Python 3.12, ngspice and Cairo from
-Homebrew, one xdist worker per core, and no coverage gate. Because the server
+CI's full tier also runs the suite on a native macOS
+runner (`check-macos` in `.github/workflows/checks.yml`): Python 3.12,
+ngspice and Cairo from Homebrew, one xdist worker per core, and no coverage gate. Because the server
 refuses to parse there, a test that reads a result fails there for that reason
 alone, and `tests/parser_refusal.py` reports it as skipped, with the refusal as
 its reason. On a host whose parser refuses, that plugin records each refusal
@@ -191,6 +194,40 @@ a checkout has the committed bytes on every platform.
 The upload step has no local check. To test trusted publishing and the
 metadata check without a release tag, dispatch the publish workflow by hand
 against TestPyPI with an explicit version.
+
+### CI tiers
+
+CI (`.github/workflows/ci.yml`) calls the reusable `checks.yml`, which the
+publish workflow's release gate also calls, with a tier that decides which of
+its jobs run:
+
+| trigger | tier | jobs that run |
+|-|-|-|
+| push to `master`; the release gate in `publish.yml`; a pull request whose title starts with `Rollup` or that carries the `full-ci` label | full | `static`, `changelog` (pull requests only), `audit`, `check (3.11)`, `check (3.12)`, `check (3.13)`, `check-windows`, `check-macos` |
+| a pull request that changes only documentation | docs | `static`, `changelog`, `check (3.12)` |
+| any other pull request | pr | `static`, `changelog`, `audit`, `check (3.12)`, `check-windows` |
+
+A pull request changes only documentation when every file it adds, changes,
+deletes or renames (both names count) is under `docs/` or `changelog.d/`, is
+a top-level `*.md`, or is a `README.md` under `packaging/`. The agent guide
+under `src/ltspice_mcp/assets/guide/` is shipped code, with size and delivery
+tests and line endings that matter on Windows, so a change there runs the pr
+tier. Adding the `full-ci` label to a pull request starts a full run; a later
+push to it runs full again while the label stays. Adding any other label
+starts a run that skips every check and cancels nothing. A pull request retitled to `Rollup…` after it was opened runs
+full from its next push, or at once if it is labelled `full-ci`.
+
+A job a tier leaves out is skipped by its own condition, so it reports as
+skipped under the same name it has in a full run, and a required check of
+that name still passes. That is why the Linux suite is three jobs with fixed
+names, `check (3.11)`, `check (3.12)` and `check (3.13)`, which share one list
+of steps, instead of a matrix: a matrix job skipped by its condition reports
+once, under a name that is not any leg's.
+
+A pull request therefore proves Windows and Linux on 3.12 only. A failure
+only on 3.11, 3.13 or macOS first shows on the push to `master`, or on a
+rollup; label a pull request `full-ci` when it touches code whose behaviour
+depends on the interpreter version or on macOS.
 
 ## Code paths that answer one question
 
