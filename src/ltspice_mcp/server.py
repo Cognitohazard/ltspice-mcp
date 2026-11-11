@@ -434,9 +434,7 @@ async def _answer_tool_call(
     # the index write runs as a background task so it never gates dispatch.
     await _notice_circuit(arguments, state)
 
-    # A wait that holds the call open reports its progress (``lib/progress``);
-    # the session sends it only to a caller that asked for it, as each
-    # transport carries that request in its own way.
+    # A wait that holds the call open reports its progress (``lib/progress``).
     with progress.reporting_to(ctx.session.report_progress):
         answer = await _invoke(registered, name, arguments, state)
     return _with_serialized_text(_with_guide_reminder(answer, state))

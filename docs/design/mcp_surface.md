@@ -1994,8 +1994,9 @@ more have: `progress` is the number of cases finished, `total` the cases the
 job expanded to (left out until it is known), and `message` says both with
 the job id. A client may restart its timeout on each one; none is sent while
 no case finishes, as during one long case or the job's attached analysis.
-Only the call's own task reports, so a task it starts, such as the job's
-coordinator, sends nothing after the call is answered. No other call reports
+A call's reports only rise, however many waits it makes, and none is sent
+once the call is answered, even by a task it started, such as the job's
+coordinator. No other call reports
 progress, and a call that did not ask is sent none.
 
 **Server logging.** The server logs only to stderr, at `WARNING` by default;

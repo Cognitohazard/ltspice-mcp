@@ -137,23 +137,57 @@ async def test_a_wait_on_another_processs_job_reports_what_its_record_says(
     assert result.structured_content["status"] == "completed"
 
 
-async def test_a_task_started_during_the_call_does_not_report():
-    """A task the call starts inherits its binding, and can outlive it, as a
-    job's coordinator does: only the call's own task reports, so nothing is
-    sent for a call already answered."""
+async def _done() -> str:
+    return "done"
+
+
+async def test_a_call_reports_only_values_above_the_last_however_many_waits():
+    """MCP requires each report for a request to be above the last one. A call
+    that waits twice, or on two jobs, reports the second wait's counts only as
+    they rise above what the first sent."""
     reports: list[float] = []
 
     async def record(done: float, _total: float | None, _message: str | None) -> None:
         reports.append(done)
 
-    async def work() -> str:
-        return "done"
+    with progress.reporting_to(record):
+        await progress.watch(_done(), lambda: (2, 3, "2 of 3"))
+        await progress.watch(_done(), lambda: (0, 3, "0 of 3"))
+        await progress.watch(_done(), lambda: (3, 3, "3 of 3"))
+    assert reports == [2, 3]
+
+
+async def test_work_the_call_awaits_in_its_own_task_reports():
+    """A wait the call runs in a task of its own, as asyncio.wait_for does on
+    Python 3.11, reports like one it awaits directly."""
+    reports: list[float] = []
+
+    async def record(done: float, _total: float | None, _message: str | None) -> None:
+        reports.append(done)
 
     with progress.reporting_to(record):
-        started = asyncio.create_task(progress.watch(work(), lambda: (0, 1, "0 of 1")))
-        assert await started == "done"
-        assert await progress.watch(work(), lambda: (0, 1, "0 of 1")) == "done"
+        assert await asyncio.create_task(progress.watch(_done(), lambda: (0, 1, ""))) == "done"
     assert reports == [0]
+
+
+async def test_nothing_is_reported_once_the_call_is_answered():
+    """A task the call started inherits its binding and can outlive it, as a
+    job's coordinator does: once the call is answered, it reports nothing."""
+    reports: list[float] = []
+    answered = asyncio.Event()
+
+    async def record(done: float, _total: float | None, _message: str | None) -> None:
+        reports.append(done)
+
+    async def outlives_the_call() -> str:
+        await answered.wait()
+        return await progress.watch(_done(), lambda: (1, 1, "1 of 1"))
+
+    with progress.reporting_to(record):
+        started = asyncio.create_task(outlives_the_call())
+    answered.set()
+    assert await started == "done"
+    assert reports == []
 
 
 async def test_a_cancelled_wait_stops_the_work_it_watched():

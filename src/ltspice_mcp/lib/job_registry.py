@@ -342,18 +342,13 @@ class JobRegistry:
         return self._adopt(fresh)
 
     async def _wait_for_foreign(
-        self,
-        job: ExperimentJob,
-        timeout_s: float,
-        wait_for: WaitFor,
-        seen: Callable[[ExperimentJob], None],
+        self, job: ExperimentJob, timeout_s: float, wait_for: WaitFor
     ) -> tuple[ExperimentJob, bool]:
         """Re-read another process's job until it is finished or time runs out.
 
         Nothing in this process is told when another process's job moves, so
-        the record is re-read every ``FOREIGN_RECORD_POLL_S``, and each view
-        read is handed to ``seen``. Returns the latest view and whether the
-        wait ran out first.
+        the record is re-read every ``FOREIGN_RECORD_POLL_S``. Returns the
+        latest view and whether the wait ran out first.
         """
         from ltspice_mcp.lib import experiment_store
 
@@ -362,7 +357,6 @@ class JobRegistry:
         current = job
         while True:
             current = await self.refresh_foreign_job_async(current)
-            seen(current)
             if finished(current, wait_for):
                 return current, False
             remaining = deadline - loop.time()
@@ -384,28 +378,24 @@ class JobRegistry:
         reader of the record agree on when the runs are done.
 
         A caller who asked for progress is told how many of the job's cases
-        have finished each time that count grows (``progress.watch``).
+        have finished as that count grows (``progress.watch``), read from the
+        registry's own view of the job: the live job, or the record last re-read.
         """
+
+        def cases_finished() -> tuple[int, int, str]:
+            return _cases_finished(self.jobs.get(job.job_id, job))
+
         live = self.live.get(job.job_id)
         if live is not None:
             if finished(live.job, wait_for):
                 return live.job, False
-            done = await progress.watch(
-                live.wait(timeout_s, wait_for=wait_for), lambda: _cases_finished(live.job)
-            )
+            done = await progress.watch(live.wait(timeout_s, wait_for=wait_for), cases_finished)
             return live.job, not done
         if finished(job, wait_for):
             return job, False
         if self.persist_enabled:
-            latest = job
-
-            def seen(view: ExperimentJob) -> None:
-                nonlocal latest
-                latest = view
-
             return await progress.watch(
-                self._wait_for_foreign(job, timeout_s, wait_for, seen),
-                lambda: _cases_finished(latest),
+                self._wait_for_foreign(job, timeout_s, wait_for), cases_finished
             )
         return job, True
 
