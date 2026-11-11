@@ -658,6 +658,16 @@
    "tests/test_recorded_ltspice_schematics.py::test_a_blocks_sheet_is_found_alike_whatever_the_working_directory[holding a sheet of the block's name-gone]"
   ]
  },
+ "2e1957892a2cf06e": {
+  "answer": {
+   "reply": "f2f8e9a1a70f8180",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops[ltspice17-connectivity/same_instance_overlap_within-same_instance_wire]",
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops[ltspice26-connectivity/same_instance_overlap_within-same_instance_wire]"
+  ]
+ },
  "2e5570504b8617b7": {
   "answer": {
    "reply": "859035ecb3b3e377",
@@ -1140,6 +1150,16 @@
   ],
   "varies": true
  },
+ "518fbf103b56049b": {
+  "answer": {
+   "reply": "8b99e53f6b78040a",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops[ltspice17-connectivity/same_instance_overlap_from_second_pin-same_instance_bare]",
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops[ltspice26-connectivity/same_instance_overlap_from_second_pin-same_instance_bare]"
+  ]
+ },
  "523fa0e60ad78bc2": {
   "answer": {
    "reply": "02aeabfe9edfe427",
@@ -1326,6 +1346,16 @@
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/gnd_label]"
   ]
  },
+ "5f9c2196b955c163": {
+  "answer": {
+   "reply": "b62ee44d877e825e",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/same_instance_overlap_within]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_overlap_within]"
+  ]
+ },
  "60607b0d59849e20": {
   "answer": {
    "reply": "134675b808230e61",
@@ -1352,6 +1382,16 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_a_library_symbol_redrawn_between_edits_is_read_again"
+  ]
+ },
+ "6238091d44cca299": {
+  "answer": {
+   "reply": "715aaf0684b228a5",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops[ltspice17-connectivity/same_instance_overlap_from_second_pin-same_instance_wire]",
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops[ltspice26-connectivity/same_instance_overlap_from_second_pin-same_instance_wire]"
   ]
  },
  "62fdc94bc2f78ab8": {
@@ -2070,6 +2110,16 @@
    "tests/test_edit_schematic.py::test_the_preexisting_cursor_pages_every_withheld_row"
   ]
  },
+ "8eca45636033aca2": {
+  "answer": {
+   "reply": "f84540c2acc735fb",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops[ltspice17-connectivity/same_instance_overlap_within-same_instance_bare]",
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops[ltspice26-connectivity/same_instance_overlap_within-same_instance_bare]"
+  ]
+ },
  "8f1a81aef836e336": {
   "answer": {
    "message": "open_window takes only path and expected_sha256, with ops=[]: settle the window, read the sheet again, then edit it in another call.",
@@ -2492,6 +2542,16 @@
    "tests/test_edit_schematic.py::test_a_value_is_checked_for_the_class_the_parts_own_prefix_gives[resistor-symbol-as-source-add_component value]"
   ]
  },
+ "a87fe321057fbe0f": {
+  "answer": {
+   "reply": "bbf6a3a451e47f55",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/same_instance_overlap_from_second_pin]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_overlap_from_second_pin]"
+  ]
+ },
  "a8858bc369732461": {
   "answer": {
    "reply": "795b47cff57d07f9",
@@ -2732,6 +2792,16 @@
   },
   "tests": [
    "tests/test_set_plot_panes.py::test_the_replaced_panes_put_back_undo_the_op[ltspice17-plot/math_grid.plt]"
+  ]
+ },
+ "bc323e68f1775378": {
+  "answer": {
+   "reply": "62bdcc19ba8a4be9",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops[ltspice17-connectivity/same_instance_overlap_from_first_pin-same_instance_wire]",
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops[ltspice26-connectivity/same_instance_overlap_from_first_pin-same_instance_wire]"
   ]
  },
  "bceca38024b302a1": {
@@ -3291,6 +3361,26 @@
   "tests": [
    "tests/test_edit_schematic.py::test_stale_sha_returns_revision_conflict[other_session]",
    "tests/test_edit_schematic.py::test_stale_sha_returns_revision_conflict[same_session]"
+  ]
+ },
+ "e617cb0195cc6359": {
+  "answer": {
+   "reply": "ffdee03adfa89693",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops[ltspice17-connectivity/same_instance_overlap_from_first_pin-same_instance_bare]",
+   "tests/test_recorded_ltspice_schematics.py::test_wire_pins_refuses_a_route_that_merges_into_a_run_ltspice_drops[ltspice26-connectivity/same_instance_overlap_from_first_pin-same_instance_bare]"
+  ]
+ },
+ "e6dcb7a389160953": {
+  "answer": {
+   "reply": "01199acc073b26ca",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/same_instance_overlap_from_first_pin]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_overlap_from_first_pin]"
   ]
  },
  "e7854c7b2f7551f4": {

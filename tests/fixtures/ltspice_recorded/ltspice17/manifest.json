@@ -1562,6 +1562,87 @@
         ".net"
       ]
     },
+    "connectivity/same_instance_overlap_from_first_pin": {
+      "behaviour": "same-instance-wire",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/same_instance_overlap_from_first_pin.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/same_instance_overlap_from_first_pin.asc": "cd2468a8c1ac49b134e074d3eba0bf6ebf81fc15ef7668dbca15f7d46f6ae3da"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/same_instance_overlap_from_first_pin.net": {
+          "bytes": 85,
+          "sha256": "7f79f4c3ab4b1bddaefd69ea4922df25f61ed158109de8be61a7ba259fff25ba"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "connectivity/same_instance_overlap_from_second_pin": {
+      "behaviour": "same-instance-wire",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/same_instance_overlap_from_second_pin.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/same_instance_overlap_from_second_pin.asc": "b08c51e0125c6bd4ca75b85bdd70ae3f16ac8e7b75367001654591c300880e35"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/same_instance_overlap_from_second_pin.net": {
+          "bytes": 86,
+          "sha256": "c6420031b122f2a714a30d8b62db4f7fd9577e5079283d4f794f5f98ca6eaf51"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
+    "connectivity/same_instance_overlap_within": {
+      "behaviour": "same-instance-wire",
+      "command": [
+        "XVIIx64.exe",
+        "-netlist",
+        "<dir>/same_instance_overlap_within.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": 0,
+      "inputs": {
+        "connectivity/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b",
+        "connectivity/same_instance_overlap_within.asc": "3230c3072cbe73353b94c722b464d32a0f44cf9f7d8ed567baa495fe19033c8a"
+      },
+      "kind": "netlist",
+      "outputs": {
+        "connectivity/same_instance_overlap_within.net": {
+          "bytes": 77,
+          "sha256": "fdbe398391c4ac7cd7121aad687f7546d8e011da677a7804c6c380acae5d8a8c"
+        }
+      },
+      "reported_build": null,
+      "stopped": false,
+      "written": [
+        ".net"
+      ]
+    },
     "connectivity/same_instance_pin_inside": {
       "behaviour": "same-instance-wire",
       "command": [
