@@ -71,6 +71,7 @@ _NOT_REPLY_LISTS: dict[str, str] = {
     "_REPORTED_CHARS": "cuts one text, not a list",
     "_STEM_MAX_LEN": "cuts one file name, not a list",
     "_REFERENCE_DESCRIPTION_CHARS": "cuts one text, not a list",
+    "_CARD_TEXT_CHARS": "cuts one card's text, not a list",
 }
 
 #: Functions that slice or bound by a cap without the shared note, and why
@@ -97,6 +98,11 @@ _ALLOWED: dict[str, str] = {
         "total or route; no branch is near the cap today"
     ),
     "lib/deck_prep.py:stage_sheet": "bounds the files staged for an export, not a reply list",
+    "lib/experiment_inputs.py:_refusal": (
+        "a refusal's sample of constructs, after their total, ending in 'and N more' "
+        "with the route (fix these and submit again), and of each one's places, "
+        "ending in 'and N more'"
+    ),
     "lib/log_parser.py:_render_file_line_family": (
         "line numbers inside one diagnostic, ending in a '(+N more)' tail"
     ),

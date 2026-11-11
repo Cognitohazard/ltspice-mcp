@@ -480,7 +480,10 @@ def _refusal(refused: list[_Refused], origins: Mapping[Path, str]) -> RecoveryEr
         lines.append(line)
     hidden = len(groups) - _GROUPS_SHOWN
     if hidden > 0:
-        lines.append(f"- and {hidden} more construct(s)")
+        lines.append(
+            f"- and {hidden} more construct{'s' if hidden != 1 else ''}, listed when "
+            "these are fixed and the request is sent again"
+        )
     count = len(groups)
     random = any(code == "recovery_random_unsupported" for code, _ in groups)
     message = (
