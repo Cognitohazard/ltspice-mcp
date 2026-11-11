@@ -1669,14 +1669,24 @@ because the caller asked for nothing the server could not do.
 component set, values, normalized parameters, which pins share a node
 (matched by the wiring, not by node names), the number of terminals, and
 `anchors`, the named nets (ports, rails, outputs) that must also match by
-name; ground always must. It also compares the directives outside subcircuit
-definitions, read as `structural_diff` reads them (below), so the two modes
-agree about every directive. A subcircuit definition is compared as wiring
-wherever it is defined, inline or in an included file, so its `.subckt` line,
-its `PARAMS:` defaults and the directives in its body are not compared. An
-`.include` or `.lib` line is a directive, so moving a definition into an
-included file shows as that line added. `equivalent` is true only when the wiring, the parts and values
-and the directives all match. Beside a false one, `structurally_equivalent`
+name; ground always must. A subcircuit instance both circuits have is
+compared by the parameters it runs with, as a part is, in `param_mismatches`:
+each it gives (an `X` card's `params:`, with or without the keyword), else its
+definition's `PARAMS:` default, as LTspice reads an instance. So a default
+reaches the comparison only where an instance leaves the parameter out. It
+also compares the directives, each read as `structural_diff` reads it (below),
+scope by scope: the top level's, and those of each definition an instance both
+circuits have calls, wherever it is defined, inline or in an included file,
+and whatever each side names it. A definition's own directives are its body's,
+each listed with `(in .subckt NAME)` after it, and the instance that paired
+two definitions of different names. An `.include` or `.lib` line
+is a directive, but one whose file (or section) defines subcircuits and nothing
+else is compared by those definitions instead. So the modes differ: a `.param`
+moved from a body to the top level is a difference here and not in
+`structural_diff`, a definition moved into such an include is one there and not
+here, and a subcircuit the circuit does not call is compared there only.
+`equivalent` is true only when the wiring, the parts and values and the
+directives all match. Beside a false one, `structurally_equivalent`
 says whether the wiring matched and `directives_equivalent` whether the
 directives did, and `directives_added` and `directives_removed` list the
 directives only this circuit has and those only the reference has.
@@ -2276,6 +2286,28 @@ entry has one, its `id` as `_random_id`, in its assignments, a case skipped
 before it ran included. A circuit whose deck fails before its variations
 expand (an include that cannot be staged) records no assignments on its
 cases; their failure says why.
+
+The receipt compares the samples of a `random` or `pdk_native` entry by what
+they computed, one `assign` point at a time. Each produced sample keeps a
+digest of its raw: every plot's variables and points, a complex frequency or
+other sampled axis by its real part, and nothing else of its headers. Where every sample
+compared at a point computed one result, an `identical_samples` observation
+(`kind: "sampling"`) lists the point in its `evidence.groups` as `circuit`,
+`assigned` (that point's `assign` values, left out when the entry has none)
+and `samples` (how many were compared): their draws changed nothing the
+simulator saved there. A point whose samples give two results or more is not
+listed, since some draw changed what was saved. A circuit whose every
+compared point computed one result is one group with its `points`. The
+detail speaks for each circuit: "All samples of …" when every sample of every
+point ran and was compared, "Every sample of … that was compared" when some
+were not, and "Samples of … computed the same results at the assign points
+listed for them" when other points differ; on a job with runs still to finish
+it says "so far". At most ten points are listed, in the order the cases ran,
+with `points_truncated` giving how many there are. A produced sample with no
+digest (recorded before samples were compared, or a raw the reader cannot
+walk to its end) at a point with another produced sample is counted in a
+`samples_not_compared` observation. Neither observation appears when every
+sample was compared and no point computed one result.
 
 ### A.2 Recipe
 
