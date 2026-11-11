@@ -391,6 +391,16 @@ inputs = [
     "deck/save_pair_to_ground.cir",
 ]
 
+[behaviour.save-pattern]
+summary = "Which signals a .save that names them by a pattern saves: V(*), I(*), and a prefix V(o*), and whether a .meas reads a signal the pattern names."
+model = ["lib/lint_rules.py", "lib/spice_lex_views.py"]
+inputs = [
+    "deck/save_pattern_v.cir",
+    "deck/save_pattern_i.cir",
+    "deck/save_pattern_prefix.cir",
+]
+pending = "Written where no LTspice runs. Record it on Windows with uv run python scripts/record_ltspice_fixtures.py --only 'deck/save_pattern_v' --only 'deck/save_pattern_i' --only 'deck/save_pattern_prefix', then remove this key."
+
 [behaviour.deck-semantics]
 summary = "What a deck means where the simulators differ: a parameter named temp, the caret operator, a subcircuit's header default against a .param in its body."
 model = ["lib/hierarchy.py", "lib/hierarchy_expr.py", "lib/lint_rules.py"]
