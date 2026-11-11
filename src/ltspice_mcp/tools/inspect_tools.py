@@ -195,9 +195,10 @@ from ltspice_mcp.lib.schematic_ops import (
 from ltspice_mcp.lib.sheet import Sheet, SheetPart, missing_part, read_sheet_file
 from ltspice_mcp.lib.simulator import (
     SIMULATORS,
-    current_ngbehavior,
+    current_ngbehavior,  # noqa: TID251 - shows the session's configured mode
     dialect_for_simulator_name,
     family_refusal,
+    run_ngbehavior,
     selector_pattern,
     simulator_family,
     simulator_library_roots,
@@ -2459,9 +2460,7 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
     simulator = _hierarchy_simulator(q.simulator, state)
     profile = SemanticProfile(
         family,
-        (q.ngbehavior if q.ngbehavior is not None else current_ngbehavior())
-        if family == "ngspice"
-        else None,
+        run_ngbehavior(simulator, q.ngbehavior) if family == "ngspice" else None,
         xvii_names=family == "ltspice" and services.simulator_before_24(state, simulator),
     )
     sandbox = state.allowed_paths()

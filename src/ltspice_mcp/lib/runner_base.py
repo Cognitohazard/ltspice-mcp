@@ -44,7 +44,7 @@ from ltspice_mcp.lib.ngspice_mode import ModeCheck, check_run
 from ltspice_mcp.lib.pdk_native import LAUNCH_POLICY, NativeLaunchPolicy
 from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
 from ltspice_mcp.lib.raw_parser import other_raws
-from ltspice_mcp.lib.simulator import NGSPICE_NO_USER_INIT, current_ngbehavior, is_ngspice
+from ltspice_mcp.lib.simulator import NGSPICE_NO_USER_INIT, is_ngspice, run_ngbehavior
 from ltspice_mcp.lib.simulator_build import executable_path, ltspice_before_24, reported_build
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
@@ -329,7 +329,7 @@ def _is_ngspice_lib_section_failure(
     """
     if netlist is None or not is_ngspice(simulator):
         return None
-    mode = ngbehavior if ngbehavior is not None else current_ngbehavior() or ""
+    mode = run_ngbehavior(simulator, ngbehavior)
     if not drops_lib_sections(mode):
         return None
     if not _deck_has_sectioned_lib(netlist):
@@ -1015,11 +1015,7 @@ class RunnerBase:
         # The mode ngspice is handed and the server reads the deck in: a native
         # setup's driver sets its own, every other run gets the class's -D.
         # The failure classifier and the mode check both read this one.
-        passed_mode = (
-            native.policy.ngbehavior
-            if native
-            else getattr(simulator, "_compatibility_mode", None) or ""
-        )
+        passed_mode = run_ngbehavior(simulator, native.policy.ngbehavior if native else None)
 
         def verify_copied(copied: Path) -> None:
             if native is not None and native.verify_execution is not None:

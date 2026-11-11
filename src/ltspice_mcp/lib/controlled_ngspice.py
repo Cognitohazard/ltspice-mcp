@@ -167,6 +167,9 @@ def controlled_ngspice(
     if environment != {"SPICE_SCRIPTS": str(startup.spinit.path.parent)}:
         raise RecoveryError("startup_policy", "Controlled ngspice startup directory disagrees")
     command = tuple(execution.simulator_argv)
+    # A replay passes the mode its record captured at admission
+    # (simulator.run_ngbehavior then), not the session's current one; the
+    # class carries it, so the launch's run_ngbehavior reads it back.
     mode = execution.native_policy.ngbehavior if execution.native_policy else execution.ngbehavior
 
     class ControlledNGspice(NGspiceSimulator):

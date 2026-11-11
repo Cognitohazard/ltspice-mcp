@@ -94,7 +94,7 @@ from ltspice_mcp.lib.services import cp1252_ltspice
 from ltspice_mcp.lib.sheet_results import NotPlaced, check_request
 from ltspice_mcp.lib.simulator import (
     SIMULATOR_SELECTOR_PATTERN,
-    current_ngbehavior,
+    run_ngbehavior,
     simulator_dialect,
     simulator_library_roots,
 )
@@ -1033,6 +1033,8 @@ async def _prepare_circuit(
     circuit_id = circuit_input.circuit_id
     source_path = circuit_input.path
     native = _native_family(circuit_id, args.variations)
+    # The mode the run passes ngspice, and the lint and the hierarchy read it in.
+    mode = run_ngbehavior(simulator, NGBEHAVIOR if native is not None else None)
     expected_count = projected_case_count(circuit_id, args.variations)
     runnable: Path | None = None
     expanded: list[ExpandedCase] | None = None
@@ -1102,7 +1104,7 @@ async def _prepare_circuit(
                     (included.staged_path, included.text, included.codec)
                     for included in staged.includes
                 ],
-                ngbehavior=NGBEHAVIOR if native is not None else None,
+                ngbehavior=mode,
                 codec=staged.codec,
                 cp1252_reader=cp1252_reader,
             )
@@ -1142,9 +1144,7 @@ async def _prepare_circuit(
             semantic_profile=(
                 SemanticProfile(
                     "ngspice" if dialect == "ngspice" else "ltspice",
-                    (NGBEHAVIOR if native is not None else current_ngbehavior() or "")
-                    if dialect == "ngspice"
-                    else None,
+                    mode if dialect == "ngspice" else None,
                 )
                 if dialect in SUPPORTED_FAMILIES
                 else None

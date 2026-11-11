@@ -6,8 +6,8 @@ import dataclasses
 from pathlib import Path
 
 import pytest
+from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
-from ltspice_mcp.lib import lint_rules
 from ltspice_mcp.lib.lint_rules import RULES, RULES_BY_ID, LintRule, lint_deck, linter_version
 from ltspice_mcp.lib.spice_lex import lex_deck
 from ltspice_mcp.lib.spice_lex_views import MeasCard
@@ -206,7 +206,7 @@ def test_each_seed_rule_fires(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(lint_rules, "current_ngbehavior", lambda: "kiltpsa")
+    monkeypatch.setattr(NGspiceSimulator, "_compatibility_mode", "kiltpsa")
 
     assert rule_id in _ids(
         deck,
@@ -230,7 +230,7 @@ def test_each_seed_rule_stays_quiet_on_clean_deck(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(lint_rules, "current_ngbehavior", lambda: "kiltpsa")
+    monkeypatch.setattr(NGspiceSimulator, "_compatibility_mode", "kiltpsa")
 
     assert rule_id not in _ids(_CLEAN, tmp_path, dialect=dialect, simulator=simulator)
 
@@ -243,7 +243,7 @@ def test_save_meas_coverage_accepts_saved_signal(tmp_path: Path):
 
 @pytest.mark.parametrize("mode", ["hsa", ""])
 def test_explicit_launch_mode_overrides_session_lint_mode(tmp_path, monkeypatch, mode):
-    monkeypatch.setattr(lint_rules, "current_ngbehavior", lambda: "kiltpsa")
+    monkeypatch.setattr(NGspiceSimulator, "_compatibility_mode", "kiltpsa")
     text = '* t\n.lib "models.lib" tt\n.op\n.end\n'
     findings = lint_deck(
         text, tmp_path / "deck.cir", "ngspice", "NGspiceSimulator", ngbehavior=mode
@@ -257,7 +257,7 @@ def test_lib_section_ngspice_names_the_setting_that_fixes_it(tmp_path, monkeypat
     so no simulator error follows it. A finding that says only what is wrong
     leaves the caller rewriting a correct PDK deck, so it has to name the
     setting that makes ngspice load the section."""
-    monkeypatch.setattr(lint_rules, "current_ngbehavior", lambda: "kiltpsa")
+    monkeypatch.setattr(NGspiceSimulator, "_compatibility_mode", "kiltpsa")
     findings = lint_deck(
         '* t\n.lib "models.lib" tt\n.op\n.end\n',
         tmp_path / "deck.cir",

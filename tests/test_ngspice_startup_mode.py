@@ -1,7 +1,7 @@
 """Which compatibility mode ngspice reads a deck in.
 
-The server reads a deck in the mode it configures (``[simulator] ngbehavior``,
-read back by ``simulator.current_ngbehavior``). Hierarchy discovery, the
+The server reads a deck in the mode a run passes (``[simulator] ngbehavior``,
+read back by ``simulator.run_ngbehavior``). Hierarchy discovery, the
 ``lib-section-ngspice`` lint rule and the failure classifier all answer from
 it, and the server hands it to ngspice as ``-D ngbehavior=<mode>``. ngspice
 applies that define before it runs its startup files, so a
@@ -195,6 +195,45 @@ async def test_a_sectioned_lib_fails_where_the_server_says_it_will(
     # the setting that does and does not offer a .spiceinit as another way.
     assert '[simulator] ngbehavior = "hsa"' in failure["hint"]
     assert "to a .spiceinit" not in failure["hint"]
+
+
+async def test_admission_and_launch_read_the_mode_the_runs_own_ngspice_class_passes(
+    work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The lint, the hierarchy profile and the launch take a run's mode from
+    one place (``simulator.run_ngbehavior``): the mode the run's own ngspice
+    class passes. Here that class passes ``hsa``, which reads a ``.lib``
+    section, while spicelib's base class still holds ``kiltpsa``, which would
+    drop it."""
+    state = _kiltpsa_session(work_dir, monkeypatch)
+    base = state.available_simulators["ngspice"]
+    own = type(base.__name__, (base,), {"_compatibility_mode": "hsa"})
+    monkeypatch.setitem(state.available_simulators, "ngspice", own)
+    (work_dir / "models.lib").write_text(
+        ".lib tt\n.model dmod d is=1e-14\n.endl tt\n", encoding="utf-8"
+    )
+    deck = work_dir / "corner.cir"
+    deck.write_text(
+        "* corner select\n.lib models.lib tt\nV1 a 0 1\nR1 a b 1k\nD1 b 0 dmod\n.op\n.end\n",
+        encoding="utf-8",
+    )
+
+    (discovered,) = await _run(
+        state, [{"kind": "hierarchy", "path": str(deck), "simulator": "ngspice"}]
+    )
+    assert discovered["ok"], discovered
+    assert discovered["data"]["profile"]["ngbehavior"] == "hsa"
+
+    receipt = await terminal_experiment(
+        state,
+        {
+            "request_id": "own-class-mode",
+            "circuits": [{"path": str(deck)}],
+            "execution": {"simulator": "ngspice", "wait_s": 90},
+        },
+    )
+    assert receipt["status"] == "completed", receipt
+    assert mode_notes(_log(state, receipt["job_id"]))[0] == ("hs", "a")
 
 
 def _spinit_sets(mode: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

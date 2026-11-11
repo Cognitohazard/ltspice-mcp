@@ -463,7 +463,7 @@ ENTRIES: tuple[Entry, ...] = (
         "supported",
         ("test:tests/test_controlled_ngspice.py",),
         hosts=frozenset({"linux", "wsl", "windows"}),
-        mechanism="An immutable spinit, selected through SPICE_SCRIPTS.",
+        mechanism="An immutable spinit, selected through SPICE_SCRIPTS, and -n, so no .spiceinit is read.",
     ),
     *_each(
         _UNMODELLED,

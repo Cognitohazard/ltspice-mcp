@@ -388,8 +388,30 @@ def current_ngbehavior() -> str | None:
     ``getattr`` (not attribute access) is deliberate: it reads the protected
     ``_compatibility_mode`` without tripping pyright's reportPrivateUsage, and
     spicelib exposes no public getter.
+
+    This is the session's configured mode. The mode a run passes is
+    ``run_ngbehavior``'s.
     """
     return getattr(NGspiceSimulator, "_compatibility_mode", None)
+
+
+def run_ngbehavior(simulator: type | None = None, mode: str | None = None) -> str:
+    """The compatibility mode a run passes ngspice, which the server reads its
+    deck in.
+
+    ``mode`` when the run sets its own: a native setup's policy, a query's
+    ``ngbehavior``, or a caller that already holds the run's mode. Otherwise
+    the mode the run's ngspice class passes as ``-D ngbehavior=``: the
+    session's ``[simulator] ngbehavior`` (``current_ngbehavior``), or for a
+    recoverable run's controlled class the mode its record holds. Admission
+    (the lint, the hierarchy profile, the recovery record), the launch, the
+    failure classifier and the per-run mode check all take the mode from here,
+    so none can read a deck in a mode the run does not pass.
+    """
+    if mode is not None:
+        return mode
+    owner = simulator if simulator is not None else NGspiceSimulator
+    return getattr(owner, "_compatibility_mode", None) or ""
 
 
 NGSPICE_NO_USER_INIT = "-n"

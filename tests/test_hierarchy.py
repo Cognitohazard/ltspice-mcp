@@ -214,9 +214,9 @@ async def test_step_invalidates_geometry_and_values(state_no_sim, hierarchy_deck
 async def test_profile_section_interpretation_and_offline_default(
     state_no_sim, hierarchy_deck, monkeypatch
 ):
-    from ltspice_mcp.tools import inspect_tools
+    from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
-    monkeypatch.setattr(inspect_tools, "current_ngbehavior", lambda: "kiltpsa")
+    monkeypatch.setattr(NGspiceSimulator, "_compatibility_mode", "kiltpsa")
     result = await _inspect(state_no_sim, hierarchy_deck, simulator="ngspice")
     assert not result["ok"]
     assert "lt/ps" in result["error"]["message"]

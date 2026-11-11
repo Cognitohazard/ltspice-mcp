@@ -62,7 +62,7 @@ from ltspice_mcp.lib.recovery_records import (
     ProcessIdentity,
     RecoveryError,
 )
-from ltspice_mcp.lib.simulator import dialect_for_simulator_name
+from ltspice_mcp.lib.simulator import dialect_for_simulator_name, run_ngbehavior
 from ltspice_mcp.lib.simulator_build import executable_identity, same_executable
 from ltspice_mcp.lib.store import OwnerLiveness, Store, is_this_process, path_digest
 from ltspice_mcp.lib.sweep_utils import generate_id
@@ -412,7 +412,7 @@ def _capture_execution(
             request.kill_grace_s,
             simulator_command(simulator, executable),
             executable,
-            getattr(simulator, "_compatibility_mode", None),
+            run_ngbehavior(simulator),
             sys.platform,
             startup,
             LAUNCH_POLICY if any(case.native_statistics for case in job.cases) else None,

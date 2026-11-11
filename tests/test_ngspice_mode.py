@@ -7,6 +7,7 @@ The end-to-end check, a run read in another mode failing, is in
 
 from __future__ import annotations
 
+import ast
 import shutil
 from pathlib import Path
 from typing import ClassVar
@@ -16,6 +17,7 @@ from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
 from ltspice_mcp.lib import ngspice_mode
 from ltspice_mcp.lib.ngspice_mode import check_run, deck_flags, flags_for
+from tests._source_scan import modules
 
 needs_ngspice = pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH")
 
@@ -208,3 +210,22 @@ async def test_a_driver_run_is_checked_on_its_decks_note(
     else:
         (unchecked,) = [o for o in outcome.observations if o["code"] == "ngspice_mode_unverified"]
         assert unchecked["evidence"]["reason"] == "deck_note_missing"
+
+
+def test_only_simulator_reads_the_mode_a_class_passes():
+    """``run_ngbehavior`` is the one reader of the mode an ngspice class passes,
+    so no other code can read a run's deck in another mode."""
+    readers = sorted(
+        name
+        for name, tree in modules().items()
+        if name != "lib/simulator.py"
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "getattr"
+        and any(
+            isinstance(arg, ast.Constant) and arg.value == "_compatibility_mode"
+            for arg in node.args
+        )
+    )
+    assert readers == []

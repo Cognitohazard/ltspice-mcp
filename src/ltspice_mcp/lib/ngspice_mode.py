@@ -1,7 +1,7 @@
 """Which compatibility mode ngspice read a deck in, read off the run's log.
 
 The server reads every ngspice deck in the mode it passes ngspice: the
-configured ``[simulator] ngbehavior`` (``simulator.current_ngbehavior``), a
+configured ``[simulator] ngbehavior`` (``simulator.run_ngbehavior``), a
 recoverable job's recorded mode, or a native setup's policy. Each run starts
 with ``-n``, so no user ``.spiceinit`` can replace that mode, but an ordinary
 run still reads the installation's ``spinit`` for ngspice's code models, and a
