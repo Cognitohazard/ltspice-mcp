@@ -711,7 +711,7 @@ def driver_bytes(seed: int, paths: NativePaths, token: str) -> bytes:
     return (
         f"Native PDK initialization\n.control\nset ngbehavior={LAUNCH_POLICY.ngbehavior}\n"
         + ("set ng_nomodcheck\n" if LAUNCH_POLICY.ng_nomodcheck else "")
-        + seeded_commands(seed, paths.electrical_input.name, paths.raw.name)
+        + seeded_commands(seed, paths.electrical_input.name, paths.raw.name, "ascii")
         + ".endc\n.end\n"
     ).encode("ascii")
 

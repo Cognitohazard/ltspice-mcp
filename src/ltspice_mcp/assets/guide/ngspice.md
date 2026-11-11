@@ -210,9 +210,11 @@ wrdata output.txt V(out)          $ save as CSV-like text
 .endc
 ```
 
-**Scripts without `write`/`wrdata`.** A `.control` block replaces ngspice's
-default raw output, so a script that never calls `write`/`wrdata` produces no
-rawfile even though the run completes cleanly. When the deck has exactly one
+**Scripts without `write`/`wrdata`.** A `.control` block takes over ngspice's
+default raw output: a script that only `run`s the deck's analyses still gets
+one, but a script that ends with `quit`, or issues an analysis as a command
+(`tran`, `op`), produces no rawfile even though the run completes cleanly
+(ngspice-42). When the deck has exactly one
 `.control` block and no `write`/`wrdata` of its own, `run_experiments` adds a
 `write <the run's raw path>` before `.endc` and reports this in the receipt's
 `observations`. Your own `write` (or `wrdata`) anywhere in the deck turns this

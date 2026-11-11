@@ -43,7 +43,6 @@ from __future__ import annotations
 import logging
 import math
 import re
-import sys
 import threading
 from collections import Counter, OrderedDict
 from dataclasses import dataclass
@@ -82,9 +81,9 @@ Reason = Literal[
 _REASONS: dict[str, str] = {
     "no_ngspice": "no ngspice executable is available to this session",
     "path_unsupported": (
-        "the deck's path holds a character ngspice's control language would read "
-        "(a quote, $, `, a backslash, a brace, a tab or a line break), or is not "
-        "ASCII on Windows"
+        "the deck's path holds a character ngspice's control language would change "
+        "(a quote, $, `, a backslash, a brace, a control character or a leading ~), "
+        "or is not ASCII on Windows"
     ),
     "nothing_to_compare": "the reader resolved no value that ngspice reports",
     "ngspice_failed": "ngspice could not be run, or wrote no log",
@@ -210,12 +209,8 @@ def plan(hierarchy: Hierarchy) -> tuple[list[Planned], Counter[str]]:
 
 
 def _driver(root: Path, planned: list[Planned]) -> bytes | None:
-    path = root.as_posix()
-    # The driver is UTF-8; on Windows ngspice reads it in the ANSI code page.
-    if sys.platform == "win32" and not path.isascii():
-        return None
     try:
-        source = control_path(path)
+        source = control_path(root.as_posix(), "utf-8")
     except ValueError:
         return None
     prints = dict.fromkeys(f"print @{item.row.device}[{item.parameter}]" for item in planned)

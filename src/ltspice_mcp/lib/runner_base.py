@@ -664,8 +664,9 @@ def inject_ngspice_control_write(
     unless it calls ``write``/``wrdata`` itself, ngspice may write no raw
     file. ngspice-42 still writes the ``-r`` raw after a script that only
     ``run``s the deck's analyses, but not after one that ends with ``quit``
-    or issues the analysis as a command (``tran``, ``op``). ``collect_run_outcome`` already classifies that as a clean
-    log-only completion (not a failure), but nothing then exists for
+    or issues the analysis as a command (``tran``, ``op``).
+    ``collect_run_outcome`` already classifies that as a clean log-only
+    completion (not a failure), but nothing then exists for
     get_waveform/signal_stats/etc. to read. Injecting a canonical ``write
     <rawpath>`` gives the deck a raw at the exact path the runner expects for
     this job, so the existing raw>0 code path (raw_parser + every analysis
@@ -750,10 +751,11 @@ def inject_ngspice_control_write(
     body = blocks[0][1:-1]
 
     try:
-        raw_path = control_path((output_folder / f"{job_id}.raw").as_posix())
+        raw_path = control_path((output_folder / f"{job_id}.raw").as_posix(), codec)
     except ValueError:
         # A folder name the control language would change (a brace, a
-        # quote): the run stays log-only rather than write elsewhere.
+        # quote), or a non-ASCII one the deck's codec would make invalid
+        # UTF-8, which stops ngspice: the run stays log-only instead.
         return netlist_path
 
     # Insert before .endc, UNLESS the block's last statement is an
