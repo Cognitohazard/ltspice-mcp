@@ -20,7 +20,7 @@ uv run pytest -n0 tests/test_pathutil.py::TestName::test_case -v   # one test, r
 python -m ltspice_mcp            # run the server without the console script
 ```
 
-There is no Makefile. CI: `.github/workflows/ci.yml` runs `checks.yml` (ruff, pyright, the suite with coverage on Linux, the suite on Windows, the suite on macOS with the tests that read a result skipped, and a dependency audit) on pushes and pull requests to `master`; `publish.yml` runs the same checks and publishes to PyPI on version tags.
+There is no Makefile. CI: `.github/workflows/ci.yml` runs `checks.yml` (ruff, pyright, the suite with coverage on Linux on Python 3.11, 3.12 and 3.13, the suite on Windows, the suite on macOS with the tests that read a result skipped, a dependency audit, and the changelog check) on pushes and pull requests to `master`, at a tier chosen by the trigger: a push to `master`, a pull request titled `Rollup…` or labelled `full-ci` runs every job; any other pull request runs Linux on 3.12 only and Windows, without macOS; a pull request that changes only documentation (`docs/`, `changelog.d/`, top-level `*.md`, a `README.md` under `packaging/`) runs only ruff, pyright, the changelog check and Linux on 3.12. A job a tier leaves out reports as skipped. `publish.yml` runs every job and publishes to PyPI on version tags. `docs/TESTING.md`, "CI tiers", has the details.
 
 ### Working practice
 
