@@ -1,0 +1,8 @@
+* two-port sp rerun
+V1 in 0 dc 0 ac 1 portnum 1 z0 50
+R1 in mid 25
+C1 mid 0 10p
+V2 out 0 dc 0 ac 0 portnum 2 z0 50
+R2 mid out 25
+.sp dec 5 1meg 100meg
+.end

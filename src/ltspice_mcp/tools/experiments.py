@@ -1202,6 +1202,7 @@ async def _prepare_circuit(
                     deck_sha256=variant.sha256,
                     assignments=variant.assignments,
                     observations=list(observations),
+                    assigned=dict(descriptor.assignments),
                 )
                 if native is not None:
                     request = _native_request(native, circuit_id, descriptor.native_index)
@@ -1596,6 +1597,7 @@ def _append_terminal_cases(
                 staged_deck=staged_deck or Path(circuit_id),
                 deck_sha256="",
                 assignments=assignments,
+                assigned=dict(expanded.assignments) if expanded is not None else {},
                 status=status,
                 error=message,
                 failure_code=code,

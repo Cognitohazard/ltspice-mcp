@@ -1511,11 +1511,11 @@ the crossing, so the nets stay separate, and the finished sheet reports it
 Ops do not repeat sheet findings. A route through a part, a part placed or
 moved over another, a part's text drawn across a wire, a part or other text, a
 label on nothing, a crossing left unjoined, a pin or label that joins wires
-where they cross, a wire left diagonal, and a net given a second name are each
-reported once, by the sheet finding (`wire_through_symbol`, `symbol_overlap`,
-`attribute_text_overlap`, `dangling_label`, `unjoined_crossing`,
-`joined_at_crossing`, `diagonal_wire`, `net_with_two_names`), whichever op
-made it. Findings are computed on the sheet the batch leaves, so a state the
+where they cross, a pin placed or moved inside a wire, a wire left diagonal,
+and a net given a second name are each reported once, by the sheet finding
+(`wire_through_symbol`, `symbol_overlap`, `attribute_text_overlap`,
+`dangling_label`, `unjoined_crossing`, `joined_at_crossing`, `pin_inside_wire`,
+`diagonal_wire`, `net_with_two_names`), whichever op made it. Findings are computed on the sheet the batch leaves, so a state the
 batch only passes through is not reported. A label placed before the wire
 that reaches it is not dangling, and a net relabelled in remove-and-add pairs
 has one name at the end. A repeated route that is already drawn through a
@@ -1669,14 +1669,24 @@ because the caller asked for nothing the server could not do.
 component set, values, normalized parameters, which pins share a node
 (matched by the wiring, not by node names), the number of terminals, and
 `anchors`, the named nets (ports, rails, outputs) that must also match by
-name; ground always must. It also compares the directives outside subcircuit
-definitions, read as `structural_diff` reads them (below), so the two modes
-agree about every directive. A subcircuit definition is compared as wiring
-wherever it is defined, inline or in an included file, so its `.subckt` line,
-its `PARAMS:` defaults and the directives in its body are not compared. An
-`.include` or `.lib` line is a directive, so moving a definition into an
-included file shows as that line added. `equivalent` is true only when the wiring, the parts and values
-and the directives all match. Beside a false one, `structurally_equivalent`
+name; ground always must. A subcircuit instance both circuits have is
+compared by the parameters it runs with, as a part is, in `param_mismatches`:
+each it gives (an `X` card's `params:`, with or without the keyword), else its
+definition's `PARAMS:` default, as LTspice reads an instance. So a default
+reaches the comparison only where an instance leaves the parameter out. It
+also compares the directives, each read as `structural_diff` reads it (below),
+scope by scope: the top level's, and those of each definition an instance both
+circuits have calls, wherever it is defined, inline or in an included file,
+and whatever each side names it. A definition's own directives are its body's,
+each listed with `(in .subckt NAME)` after it, and the instance that paired
+two definitions of different names. An `.include` or `.lib` line
+is a directive, but one whose file (or section) defines subcircuits and nothing
+else is compared by those definitions instead. So the modes differ: a `.param`
+moved from a body to the top level is a difference here and not in
+`structural_diff`, a definition moved into such an include is one there and not
+here, and a subcircuit the circuit does not call is compared there only.
+`equivalent` is true only when the wiring, the parts and values and the
+directives all match. Beside a false one, `structurally_equivalent`
 says whether the wiring matched and `directives_equivalent` whether the
 directives did, and `directives_added` and `directives_removed` list the
 directives only this circuit has and those only the reference has.
@@ -2265,6 +2275,28 @@ before it ran included. A circuit whose deck fails before its variations
 expand (an include that cannot be staged) records no assignments on its
 cases; their failure says why.
 
+The receipt compares the samples of a `random` or `pdk_native` entry by what
+they computed, one `assign` point at a time. Each produced sample keeps a
+digest of its raw: every plot's variables and points, a complex frequency or
+other sampled axis by its real part, and nothing else of its headers. Where every sample
+compared at a point computed one result, an `identical_samples` observation
+(`kind: "sampling"`) lists the point in its `evidence.groups` as `circuit`,
+`assigned` (that point's `assign` values, left out when the entry has none)
+and `samples` (how many were compared): their draws changed nothing the
+simulator saved there. A point whose samples give two results or more is not
+listed, since some draw changed what was saved. A circuit whose every
+compared point computed one result is one group with its `points`. The
+detail speaks for each circuit: "All samples of …" when every sample of every
+point ran and was compared, "Every sample of … that was compared" when some
+were not, and "Samples of … computed the same results at the assign points
+listed for them" when other points differ; on a job with runs still to finish
+it says "so far". At most ten points are listed, in the order the cases ran,
+with `points_truncated` giving how many there are. A produced sample with no
+digest (recorded before samples were compared, or a raw the reader cannot
+walk to its end) at a point with another produced sample is counted in a
+`samples_not_compared` observation. Neither observation appears when every
+sample was compared and no point computed one result.
+
 ### A.2 Recipe
 
 There are 22 recipes (discriminant values). The shared fields `key` (required
@@ -2348,15 +2380,22 @@ the parts there are.
 parts by `references`, net labels and grounds by point (`labels`), wires by
 their two ends (`wires`), and directives and comments by exact text or
 `regex:` (`texts`). A `region` also selects what lies inside it, edges
-included, testing a part by its box, a wire by its two ends, a label by its
-point and a text by its anchor. With `drag`, an end of any other wire that
+included, testing a part by its whole box, a wire by its two ends, a label by
+its point and a text by its anchor. With `drag`, an end of any other wire that
 lies on what moves (a moved pin, label or wire end, a point along a wire that
 moves whole, or with `region` any end inside it) moves too, so the wire stays
-attached, and so does a label or ground on any of those points; a wire
-dragged off its axis is reported as diagonal. A part's attribute text moves
-with it. Something named that is not there is refused, and so is a move that
-would join two nets that each have a name (names compared as LTspice compares
-them, in any case), before anything changes. The result's `moved` counts what
+attached, and so does a label or ground on any of those points. A wire both
+of whose ends move moves whole, taking what lies along it. A wire dragged off
+its axis is reported as diagonal. A part's attribute text moves with it.
+Something named that is not there is refused, and so is a move that would
+join two nets that each have a name (names compared as LTspice compares them,
+in any case), before anything changes. With `drag`, a move that would cut
+anything that stays off from what moves is refused as well, with what would
+part, what stays and how to take it along: a part whose pin touches a moved
+pin with no wire, lies inside a wire that moves, or is held by a region only
+in part; a label or a wire's end along a wire that stretches rather than
+moving whole. Naming every part of the net that stays in `references` moves
+the whole net. The result's `moved` counts what
 moved and lists the parts. Applying the opposite offset to what it moved puts
 everything back. `move_component` places one part at a position and can turn
 it.
@@ -2378,8 +2417,13 @@ is left there joined to nothing of the part, and `unpaired_pins` names the
 new pins left unconnected. Applied again with `was` as the symbol it puts the
 symbol back; the wires it drew stay, for `remove_wire`.
 
-`remove_wire` removes an exact segment. `remove_component` takes
-`cleanup_wires` to also delete the wires its removal leaves dangling.
+`remove_wire` removes an exact segment; a segment drawn more than once goes
+whole, and is refused when that would cut its net in two, since asking to
+remove a duplicate is not asking to cut a connection. `remove_component` takes
+`cleanup_wires` to also delete the wires its removal leaves dangling: a wire
+with an end on one of its pins goes when taking it away parts nothing it
+joins by wire, so a wire that still joins two or more pins or labels (another
+wire's, at the pin, or ones along it) stays.
 `add_directive` takes `kind`, `directive` (simulated) or `comment` (ignored by
 LTspice). `remove_directive` and `move`'s `texts` name directives and comments
 by one rule. A literal names every text equal to it, space around either

@@ -1049,6 +1049,7 @@ async def test_a_reply_lists_every_rule_that_ran_with_what_it_found(asc_state):
         "subcircuit_value_slot": 0,
         "net_with_two_names": 0,
         "joined_at_crossing": 0,
+        "pin_inside_wire": 0,
         "unjoined_crossing": 0,
         "diagonal_wire": 0,
         "floating_pin": 6,

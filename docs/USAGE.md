@@ -145,6 +145,7 @@ start_ltspice = true     # start LTspice when asked to show something in it and 
 [tools]
 listing = "compact"      # "full" sends every argument description, about 45% more to load
 run_code = true          # false removes run_code
+# run_code_memory_mb = 4096  # the most memory run_code's worker may hold; default: half the machine's
 
 [state]
 persist_jobs = true
@@ -164,7 +165,12 @@ does not confine. Approve `mcp__spice__run_code` in your client as you would a
 shell, and don't allow it as part of a blanket `mcp__spice__*` rule. Set
 `run_code = false` if more than one client can reach the server, for example
 through a proxy. The change takes effect at the next start;
-`inspect(kind="capabilities")` reports whether the tool is on.
+`inspect(kind="capabilities")` reports whether the tool is on. While a
+snippet runs, the server stops the worker if it holds more memory than
+`run_code_memory_mb` MiB (default half the machine's physical memory); the
+call answers a `MemoryLimit` error and the next call starts a fresh worker.
+A worker already over the limit when a snippet arrives is replaced before the
+snippet runs. The limit counts the worker alone, not a simulator it starts.
 
 **Plots.** `plot_waveform` opens its chart in a browser when the client can't
 show it in the chat; `[analysis] open_plot = false` returns only the file

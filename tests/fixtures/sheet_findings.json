@@ -15090,7 +15090,15 @@
  "fixtures/ltspice_recorded/inputs/connectivity/collinear_overlap.asc": {
   "dropped_wire": [],
   "edit": {
-   "warnings": [],
+   "warnings": [
+    {
+     "kind": "pin_inside_wire",
+     "message": "R3.1 at (96,96) lies inside the wire (0,96)->(128,96), so it is joined to that wire's net, though no wire ends on it",
+     "ref": "R3",
+     "x": 96,
+     "y": 96
+    }
+   ],
    "wiring": {
     "pins_label_only": 3,
     "pins_total": 6,
@@ -15098,7 +15106,31 @@
     "wire_segments": 2
    }
   },
-  "verify": []
+  "verify": [
+   {
+    "at": {
+     "file": "collinear_overlap.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ]
+     ],
+     "detail": "R3.1 at (96,96) lies inside the wire (0,96)->(128,96), so it is joined to that wire's net, though no wire ends on it",
+     "refs": [
+      "R3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "pin_inside_wire",
+    "severity": "observation",
+    "subject": "R3"
+   }
+  ]
  },
  "fixtures/ltspice_recorded/inputs/connectivity/crossing_wires.asc": {
   "dropped_wire": [],
@@ -15199,6 +15231,13 @@
   "edit": {
    "warnings": [
     {
+     "kind": "pin_inside_wire",
+     "message": "R1.1 at (96,96) lies inside the wire (0,0)->(192,192), so it is joined to that wire's net, though no wire ends on it",
+     "ref": "R1",
+     "x": 96,
+     "y": 96
+    },
+    {
      "from": {
       "x": 0,
       "y": 0
@@ -15242,6 +15281,29 @@
    }
   },
   "verify": [
+   {
+    "at": {
+     "file": "diagonal_wire_interior.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ]
+     ],
+     "detail": "R1.1 at (96,96) lies inside the wire (0,0)->(192,192), so it is joined to that wire's net, though no wire ends on it",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "pin_inside_wire",
+    "severity": "observation",
+    "subject": "R1"
+   },
    {
     "at": {
      "file": "diagonal_wire_interior.asc",
@@ -15389,7 +15451,15 @@
  "fixtures/ltspice_recorded/inputs/connectivity/label_and_ground.asc": {
   "dropped_wire": [],
   "edit": {
-   "warnings": [],
+   "warnings": [
+    {
+     "kind": "pin_inside_wire",
+     "message": "R1.1 at (96,96) lies inside the wire (0,96)->(192,96), so it is joined to that wire's net, though no wire ends on it",
+     "ref": "R1",
+     "x": 96,
+     "y": 96
+    }
+   ],
    "wiring": {
     "pins_label_only": 1,
     "pins_total": 2,
@@ -15397,7 +15467,31 @@
     "wire_segments": 1
    }
   },
-  "verify": []
+  "verify": [
+   {
+    "at": {
+     "file": "label_and_ground.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ]
+     ],
+     "detail": "R1.1 at (96,96) lies inside the wire (0,96)->(192,96), so it is joined to that wire's net, though no wire ends on it",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "pin_inside_wire",
+    "severity": "observation",
+    "subject": "R1"
+   }
+  ]
  },
  "fixtures/ltspice_recorded/inputs/connectivity/label_at_crossing.asc": {
   "dropped_wire": [
@@ -15752,7 +15846,15 @@
  "fixtures/ltspice_recorded/inputs/connectivity/pin_on_wire_interior.asc": {
   "dropped_wire": [],
   "edit": {
-   "warnings": [],
+   "warnings": [
+    {
+     "kind": "pin_inside_wire",
+     "message": "R3.1 at (192,96) lies inside the wire (96,96)->(288,96), so it is joined to that wire's net, though no wire ends on it",
+     "ref": "R3",
+     "x": 192,
+     "y": 96
+    }
+   ],
    "wiring": {
     "pins_label_only": 3,
     "pins_total": 6,
@@ -15760,7 +15862,31 @@
     "wire_segments": 1
    }
   },
-  "verify": []
+  "verify": [
+   {
+    "at": {
+     "file": "pin_on_wire_interior.asc",
+     "x": 192,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       192,
+       96
+      ]
+     ],
+     "detail": "R3.1 at (192,96) lies inside the wire (96,96)->(288,96), so it is joined to that wire's net, though no wire ends on it",
+     "refs": [
+      "R3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "pin_inside_wire",
+    "severity": "observation",
+    "subject": "R3"
+   }
+  ]
  },
  "fixtures/ltspice_recorded/inputs/connectivity/pins_of_one_part_on_one_point.asc": {
   "dropped_wire": [],
@@ -16856,6 +16982,13 @@
   "edit": {
    "warnings": [
     {
+     "kind": "pin_inside_wire",
+     "message": "R3.2 at (96,144) lies inside the wire (96,96)->(96,192), so it is joined to that wire's net, though no wire ends on it",
+     "ref": "R3",
+     "x": 96,
+     "y": 144
+    },
+    {
      "kind": "symbol_overlap",
      "message": "R1 and R3: bounding boxes share a 16x32 region at (96,128)",
      "points": [
@@ -16902,6 +17035,29 @@
    }
   },
   "verify": [
+   {
+    "at": {
+     "file": "same_instance_pin_inside.asc",
+     "x": 96,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       144
+      ]
+     ],
+     "detail": "R3.2 at (96,144) lies inside the wire (96,96)->(96,192), so it is joined to that wire's net, though no wire ends on it",
+     "refs": [
+      "R3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "pin_inside_wire",
+    "severity": "observation",
+    "subject": "R3"
+   },
    {
     "at": {
      "file": "same_instance_pin_inside.asc",
@@ -17583,6 +17739,13 @@
      ],
      "x": 0,
      "y": 96
+    },
+    {
+     "kind": "pin_inside_wire",
+     "message": "R1.1 at (96,96) lies inside the wire (0,96)->(192,96), so it is joined to that wire's net, though no wire ends on it",
+     "ref": "R1",
+     "x": 96,
+     "y": 96
     }
    ],
    "wiring": {
@@ -17592,7 +17755,31 @@
     "wire_segments": 1
    }
   },
-  "verify": []
+  "verify": [
+   {
+    "at": {
+     "file": "two_labels_alpha_first.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ]
+     ],
+     "detail": "R1.1 at (96,96) lies inside the wire (0,96)->(192,96), so it is joined to that wire's net, though no wire ends on it",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "pin_inside_wire",
+    "severity": "observation",
+    "subject": "R1"
+   }
+  ]
  },
  "fixtures/ltspice_recorded/inputs/connectivity/two_labels_corner.asc": {
   "dropped_wire": [
@@ -17643,6 +17830,13 @@
      ],
      "x": 0,
      "y": 192
+    },
+    {
+     "kind": "pin_inside_wire",
+     "message": "R1.1 at (96,0) lies inside the wire (0,0)->(192,0), so it is joined to that wire's net, though no wire ends on it",
+     "ref": "R1",
+     "x": 96,
+     "y": 0
     }
    ],
    "wiring": {
@@ -17652,7 +17846,31 @@
     "wire_segments": 2
    }
   },
-  "verify": []
+  "verify": [
+   {
+    "at": {
+     "file": "two_labels_corner.asc",
+     "x": 96,
+     "y": 0
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       0
+      ]
+     ],
+     "detail": "R1.1 at (96,0) lies inside the wire (0,0)->(192,0), so it is joined to that wire's net, though no wire ends on it",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "pin_inside_wire",
+    "severity": "observation",
+    "subject": "R1"
+   }
+  ]
  },
  "fixtures/ltspice_recorded/inputs/connectivity/two_labels_later_on_left.asc": {
   "dropped_wire": [
@@ -17703,6 +17921,13 @@
      ],
      "x": 0,
      "y": 96
+    },
+    {
+     "kind": "pin_inside_wire",
+     "message": "R1.1 at (96,96) lies inside the wire (0,96)->(192,96), so it is joined to that wire's net, though no wire ends on it",
+     "ref": "R1",
+     "x": 96,
+     "y": 96
     }
    ],
    "wiring": {
@@ -17712,7 +17937,31 @@
     "wire_segments": 1
    }
   },
-  "verify": []
+  "verify": [
+   {
+    "at": {
+     "file": "two_labels_later_on_left.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ]
+     ],
+     "detail": "R1.1 at (96,96) lies inside the wire (0,96)->(192,96), so it is joined to that wire's net, though no wire ends on it",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "pin_inside_wire",
+    "severity": "observation",
+    "subject": "R1"
+   }
+  ]
  },
  "fixtures/ltspice_recorded/inputs/connectivity/two_labels_zeta_first.asc": {
   "dropped_wire": [
@@ -17763,6 +18012,13 @@
      ],
      "x": 0,
      "y": 96
+    },
+    {
+     "kind": "pin_inside_wire",
+     "message": "R1.1 at (96,96) lies inside the wire (0,96)->(192,96), so it is joined to that wire's net, though no wire ends on it",
+     "ref": "R1",
+     "x": 96,
+     "y": 96
     }
    ],
    "wiring": {
@@ -17772,7 +18028,31 @@
     "wire_segments": 1
    }
   },
-  "verify": []
+  "verify": [
+   {
+    "at": {
+     "file": "two_labels_zeta_first.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ]
+     ],
+     "detail": "R1.1 at (96,96) lies inside the wire (0,96)->(192,96), so it is joined to that wire's net, though no wire ends on it",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "pin_inside_wire",
+    "severity": "observation",
+    "subject": "R1"
+   }
+  ]
  },
  "fixtures/ltspice_recorded/inputs/connectivity/unconnected_pins.asc": {
   "dropped_wire": [],
@@ -77517,7 +77797,15 @@
  "fixtures/t_junctions/pin_on_wire_interior.asc": {
   "dropped_wire": [],
   "edit": {
-   "warnings": [],
+   "warnings": [
+    {
+     "kind": "pin_inside_wire",
+     "message": "R3.1 at (192,96) lies inside the wire (96,96)->(288,96), so it is joined to that wire's net, though no wire ends on it",
+     "ref": "R3",
+     "x": 192,
+     "y": 96
+    }
+   ],
    "wiring": {
     "pins_label_only": 3,
     "pins_total": 6,
@@ -77525,7 +77813,31 @@
     "wire_segments": 1
    }
   },
-  "verify": []
+  "verify": [
+   {
+    "at": {
+     "file": "pin_on_wire_interior.asc",
+     "x": 192,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       192,
+       96
+      ]
+     ],
+     "detail": "R3.1 at (192,96) lies inside the wire (96,96)->(288,96), so it is joined to that wire's net, though no wire ends on it",
+     "refs": [
+      "R3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "pin_inside_wire",
+    "severity": "observation",
+    "subject": "R3"
+   }
+  ]
  },
  "fixtures/t_junctions/wire_end_on_vertical_wire_interior.asc": {
   "dropped_wire": [],

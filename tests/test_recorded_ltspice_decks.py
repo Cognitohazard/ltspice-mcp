@@ -1127,6 +1127,24 @@ class TestRecordedValuesOfTheForms:
         assert voltages["v(mid2)"] == pytest.approx(1.0)
         assert voltages["v(mid3)"] == pytest.approx(1.5)
 
+    def test_the_comparison_reads_an_instance_as_it_runs(self, build: str, tmp_path: Path):
+        """X1 gives r with the keyword and X2 without, and run alike; X3 runs
+        the 1k default. So the comparison holds X1's card and one without the
+        keyword as one, X3 and a call that gives r=1k as one, and X3 and one
+        that gives r=2k apart."""
+        voltages = rec.operating_point(build, "deck/params_keyword", tmp_path)
+        assert voltages["v(mid)"] == pytest.approx(voltages["v(mid2)"])
+        deck = (rec.INPUTS / "deck/params_keyword.cir").read_text(encoding="utf-8")
+        same = deck.replace("X1 in mid div params: r=2k", "X1 in mid div r=2k").replace(
+            "X3 in mid3 div\n", "X3 in mid3 div r=1k\n"
+        )
+        assert compare_graphs(deck, same).equivalent
+        other = compare_graphs(deck, deck.replace("X3 in mid3 div\n", "X3 in mid3 div r=2k\n"))
+        rows = [
+            (d.ref, d.key, d.reference_value, d.candidate_value) for d in other.param_mismatches
+        ]
+        assert rows == [("X3", "r", "1k", "2k")]
+
 
 @pytest.mark.parametrize("build", rec.BUILDS)
 async def test_a_charge_or_flux_defined_part_has_two_terminals(
