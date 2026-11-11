@@ -1,0 +1,33 @@
+Circuit: * a MESFET card with three nodes, and the same card with an area factor
+
+Direct Newton iteration for .op point succeeded.
+Semiconductor Device Operating Points:
+                        --- MESFETS ---
+Name:      z2          z1
+Model:     nmf         nmf
+Id:      7.94e-03    3.98e-03
+Vgs:    -7.94e-03   -3.98e-03
+Vds:     4.99e+00    5.00e+00
+Gm:      7.97e-03    3.99e-03
+Gds:     0.00e+00    0.00e+00
+Cgs:     0.00e+00    0.00e+00
+Cgd:     0.00e+00    0.00e+00
+
+
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = trap
+totiter = 5
+traniter = 0
+tranpoints = 0
+accept = 0
+rejected = 0
+matrix size = 6
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)
