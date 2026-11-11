@@ -108,11 +108,10 @@ class TestSurface:
         # Its arguments do not claim ownership of any wire field either.
         assert "code" not in silent.field_owners
 
-    def test_the_memory_limit_is_the_setting_or_half_the_machine(self, code_dir: Path):
+    def test_the_memory_limit_is_the_setting_or_half_the_machine(self, config: ServerConfig):
         assert run_code_memory_limit(512) == 512 * 1024 * 1024
         assert run_code_memory_limit(None) == psutil.virtual_memory().total // 2
-        config = ServerConfig(working_dir=code_dir, run_code=True, run_code_memory_mb=300)
-        configured = SessionState.create(config, available={})
+        configured = SessionState.create(replace(config, run_code_memory_mb=300), available={})
         assert worker_for(configured).memory_limit_bytes == 300 * 1024 * 1024
 
     def test_on_puts_it_last_on_the_surface(self, state: SessionState):
