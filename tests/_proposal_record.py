@@ -3,14 +3,17 @@
 A check made before an edit is written (may this route be drawn, may this label
 be placed) is held by putting a broad, fixed set of proposals to it on every
 sheet of the suite and keeping what it answered. This is the part those tests
-share: a sheet staged where it can be opened, the *shape* of an answer, and an
+share: a sheet staged where it can be opened, a :class:`Driver` through which
+they read it and put each proposal to it, the *shape* of an answer, and an
 entry of the record with an example of each shape.
 
-An entry keeps how many proposals there were, a digest of every answer in
-order, and how many answers had each shape: the answer with its numbers and
-quoted names taken out, so that one refusal worded for different pins is one
-shape. A digest that differs says an answer changed; the shapes and examples
-say what kind.
+An entry keeps how many proposals there were, a digest of them and of every
+answer in order, how many answers had each shape (the answer with its numbers
+and quoted names taken out, so that one refusal worded for different pins is
+one shape), and each proposal's shape in order, as its place among the
+sheet's shapes. So a test held to the record names each proposal whose answer
+moved to another shape, and from which (:func:`differences`); a digest that
+differs with no shape moved says an answer changed in its particulars only.
 
 A non-test helper module (leading underscore), so pytest does not collect it.
 """
@@ -21,21 +24,35 @@ import hashlib
 import json
 import re
 import shutil
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
 
 from spicelib import AscEditor
 
-from ltspice_mcp.lib.schematic_ops import sheet_nets
+from ltspice_mcp.errors import NetlistError
+from ltspice_mcp.lib.connectivity import NamedNets
+from ltspice_mcp.lib.schematic_ops import (
+    GridPoint,
+    OpAddNetLabel,
+    OpMoveComponent,
+    _plan_connect_route,  # pyright: ignore[reportPrivateUsage]  # the planner behind wire_pins
+    apply_op_inplace,
+    collect_component_geometry,
+    placed_geometry,
+    resolve_pin,
+    sheet_nets,
+    wire_segments_of,
+)
 from ltspice_mcp.lib.schematic_scene import scene_of_text, sheet_view
 from ltspice_mcp.lib.sheet_findings import findings
 from ltspice_mcp.lib.symbol_library import SymbolResolver
 from ltspice_mcp.tools.schematic_edit import (
     _render_editor_text,  # pyright: ignore[reportPrivateUsage]
 )
-from tests._schematic_fixtures import open_editor
+from tests._schematic_fixtures import open_editor, suite_resolver
 
 Point = tuple[int, int]
 
@@ -79,10 +96,11 @@ def every_nth(items: list[_T], most: int) -> list[_T]:
     return items[:: -(-len(items) // most)] if len(items) > most else items
 
 
-def open_staged(sheet: Path, sandbox: Path) -> AscEditor | None:
-    """The editor of ``sheet`` staged afresh in ``sandbox``, or ``None`` if it cannot open it."""
+def open_staged(sheet: Path, sandbox: Path) -> Driver | None:
+    """A :class:`Driver` of ``sheet`` staged afresh in ``sandbox``, or ``None``
+    if it cannot be opened."""
     try:
-        return open_editor(stage_afresh(sheet, sandbox))
+        return driver_of(stage_afresh(sheet, sandbox))
     except Exception:
         return None
 
@@ -95,6 +113,10 @@ def without_particulars(text: str) -> str:
     return re.sub(r"-?\d+", "#", text)
 
 
+def _digest(value: Any) -> str:
+    return hashlib.sha256(json.dumps(value, sort_keys=True).encode("utf-8")).hexdigest()
+
+
 def entry_of(asked: Sequence[Asked]) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     """What the record holds of one sheet's answers, and an example of each shape."""
     shapes: dict[str, int] = {}
@@ -102,10 +124,78 @@ def entry_of(asked: Sequence[Asked]) -> tuple[dict[str, Any], dict[str, dict[str
     for one in asked:
         shapes[one.shape] = shapes.get(one.shape, 0) + 1
         examples.setdefault(one.shape, {**one.proposal, **one.answer})
-    answers = [one.answer for one in asked]
-    digest = hashlib.sha256(json.dumps(answers, sort_keys=True).encode("utf-8")).hexdigest()
-    entry = {"proposals": len(asked), "sha256": digest, "shapes": dict(sorted(shapes.items()))}
+    place = {shape: index for index, shape in enumerate(sorted(shapes))}
+    entry = {
+        "proposals": len(asked),
+        "asked_sha256": _digest([one.proposal for one in asked]),
+        "sha256": _digest([one.answer for one in asked]),
+        "shapes": dict(sorted(shapes.items())),
+        "order": " ".join(str(place[one.shape]) for one in asked),
+    }
     return entry, examples
+
+
+def recorded_shapes(recorded: dict[str, Any]) -> list[str]:
+    """Each recorded proposal's shape, in order, from an entry :func:`entry_of` made."""
+    shapes = sorted(recorded["shapes"])
+    return [shapes[int(index)] for index in recorded["order"].split()]
+
+
+def differences(asked: Sequence[Asked], recorded: dict[str, Any]) -> list[str]:
+    """How ``asked`` answers otherwise than the ``recorded`` entry, a line each;
+    none where it answers as recorded."""
+    entry, _examples = entry_of(asked)
+    if entry == recorded:
+        return []
+    if entry["asked_sha256"] != recorded.get("asked_sha256"):
+        # The proposals come from the sheet as the harness reads it (its parts,
+        # wires and labels), so a change in them can be a regression in that
+        # reading as much as in the harness: what each shape now counts says which.
+        then, now = recorded["shapes"], entry["shapes"]
+        return [
+            f"the proposals are not those recorded ({recorded['proposals']} then, "
+            f"{len(asked)} now), so no answer can be held to its own. They come from "
+            "the sheet as read: check that its parts, wires and labels read as before, "
+            "then record again. Shapes whose count changed, then and now:",
+            *(
+                f"  {then.get(shape, 0)} -> {now.get(shape, 0)}: {shape}"
+                for shape in sorted(set(then) | set(now))
+                if then.get(shape, 0) != now.get(shape, 0)
+            ),
+        ]
+    moved = [
+        (one, was)
+        for one, was in zip(asked, recorded_shapes(recorded), strict=True)
+        if one.shape != was
+    ]
+    if not moved:
+        return [
+            "no answer moved to another shape, but one changed in its particulars "
+            "(a name, a number, an order); record again and compare the examples"
+        ]
+    return moved_lines(moved)
+
+
+def moved_lines(moved: Sequence[tuple[Asked, str]]) -> list[str]:
+    """The lines that say which proposals' answers moved to another shape, and
+    from which: each of ``moved`` is a proposal as answered now, with the shape
+    it was recorded with."""
+    # Each move from a shape to a shape, the most proposals first, naming the
+    # first few: a change moves many answers the same way. The shapes are
+    # given whole, since two can differ only at their end.
+    by_move: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for one, was in moved:
+        by_move.setdefault((was, one.shape), []).append(one.proposal)
+    lines = []
+    for (was, now), proposals in sorted(by_move.items(), key=lambda item: -len(item[1])):
+        shown = "; ".join(json.dumps(proposal, sort_keys=True) for proposal in proposals[:3])
+        more = f" and {len(proposals) - 3} more" if len(proposals) > 3 else ""
+        lines += [
+            f"{len(proposals)} moved, as {shown}{more}",
+            f"  from: {was}",
+            f"  to:   {now}",
+        ]
+    return lines
 
 
 def write_record(path: Path, record: dict[str, Any]) -> None:
@@ -116,20 +206,105 @@ def write_record(path: Path, record: dict[str, Any]) -> None:
     )
 
 
-def sheet_says(editor: AscEditor, points: set[Point], resolver: SymbolResolver) -> str:
-    """The join rules the sheet as the editor holds it reports at ``points``:
-    the word an edit's reply carries of them. Read as ``edit_schematic`` reads
-    it (``sheet_findings_of``), with one resolver for every reading of a sheet."""
-    view = sheet_view(
-        scene_of_text(_render_editor_text(editor), Path(editor.asc_file_path), resolver)
-    )
-    said = sorted(
-        {found.rule for found in findings(view, _JOIN_RULES) if points & set(found.points)}
-    )
-    return f" | sheet: {', '.join(said)}" if said else ""
+class Driver:
+    """What the record harnesses read of a sheet and do to it, in one place.
+
+    Each proposal is put to the same sheet: an edit made to answer one is
+    taken back when its ``with`` block ends, refused or not. Implemented on
+    the schematic editor the ops edit today, so the harnesses do not change
+    when the ops stop using it; only this class does.
+    """
+
+    def __init__(self, editor: AscEditor, resolver: SymbolResolver) -> None:
+        self._editor = editor
+        self._sheet = Path(editor.asc_file_path)
+        self._resolver = resolver
+
+    def parts(self) -> list[dict[str, Any]]:
+        """Each part's ``ref``, place (``x``, ``y``, ``width``, ``height``) and
+        ``pins``, each pin's ``name``, ``x`` and ``y``."""
+        return collect_component_geometry(self._editor)
+
+    def wires(self) -> list[tuple[int, int, int, int]]:
+        return wire_segments_of(self._editor)
+
+    def labels(self) -> list[tuple[Point, str]]:
+        """Each label and ground flag, as its point and its text."""
+        return [((int(lbl.coord.X), int(lbl.coord.Y)), lbl.text) for lbl in self._editor.labels]
+
+    def position(self, reference: str) -> Point:
+        at, _rotation = self._editor.get_component_position(reference)
+        return int(at.X), int(at.Y)
+
+    def pin_point(self, spec: str) -> Point:
+        """Where the pin ``spec`` (``'R1.A'``) is, as the ops resolve it."""
+        return resolve_pin(spec, self._editor)
+
+    def pins_of(self, reference: str) -> list[Point]:
+        geometry = placed_geometry(self._editor, reference)
+        return [(pin["x"], pin["y"]) for pin in (geometry or {}).get("pins", ())]
+
+    def nets(self) -> NamedNets:
+        return sheet_nets(self._editor)
+
+    def propose_route(
+        self, from_pin: str | GridPoint, to_pin: str | GridPoint, waypoints: list[GridPoint]
+    ) -> Any:
+        """The route ``wire_pins`` would draw, its ``segments`` and ``junctions``;
+        raises ``NetlistError`` where it refuses it."""
+        return _plan_connect_route(self._editor, from_pin, to_pin, waypoints)
+
+    @contextmanager
+    def label_placed(self, proposal: dict[str, Any]) -> Iterator[str | None]:
+        """``add_net_label`` with ``proposal``, taken back on leaving. Gives the
+        op's refusal, or ``None`` where it placed the label; an error raised
+        while the block reads the sheet is no refusal and is not caught."""
+        had = len(self._editor.labels)
+        try:
+            yield self._refusal(OpAddNetLabel(op="add_net_label", **proposal))
+        finally:
+            del self._editor.labels[had:]
+
+    @contextmanager
+    def part_moved(self, proposal: dict[str, Any]) -> Iterator[str | None]:
+        """``move_component`` with ``proposal``, taken back on leaving. Gives the
+        op's refusal, or ``None`` where it moved the part; an error raised while
+        the block reads the sheet is no refusal and is not caught."""
+        at, rotation = self._editor.get_component_position(proposal["reference"])
+        try:
+            yield self._refusal(OpMoveComponent(op="move_component", **proposal))
+        finally:
+            self._editor.set_component_position(proposal["reference"], at, rotation)
+
+    def _refusal(self, op: OpAddNetLabel | OpMoveComponent) -> str | None:
+        """Apply ``op``: its refusal, or ``None`` where it applied."""
+        try:
+            apply_op_inplace(self._editor, op, self._sheet)
+        except NetlistError as refused:
+            return str(refused)
+        return None
+
+    def findings_at(self, points: set[Point]) -> str:
+        """The join rules the sheet reports at ``points``: the word an edit's
+        reply carries of them. Read as ``edit_schematic`` reads it
+        (``sheet_findings_of``), with one resolver for every reading of a sheet."""
+        view = sheet_view(
+            scene_of_text(_render_editor_text(self._editor), self._sheet, self._resolver)
+        )
+        said = sorted(
+            {found.rule for found in findings(view, _JOIN_RULES) if points & set(found.points)}
+        )
+        return f" | sheet: {', '.join(said)}" if said else ""
 
 
-def what_is_there(editor: AscEditor) -> Any:
+def driver_of(sheet: Path, resolver: SymbolResolver | None = None) -> Driver:
+    """A :class:`Driver` of ``sheet``, its symbols found with ``resolver``,
+    the suite's own beside the sheet when none is given."""
+    resolver = resolver or suite_resolver(sheet)
+    return Driver(open_editor(sheet, resolver), resolver)
+
+
+def what_is_there(nets: NamedNets) -> Any:
     """For a point and a name: whether the name is already on the sheet, how
     many nets meet at the point, and how many of the nets there carry a name,
     as a sentence and as the two counts.
@@ -137,10 +312,9 @@ def what_is_there(editor: AscEditor) -> Any:
     The nets that meet are those of the wires through the point, a wire LTspice
     drops between two pins of one part counting as one; with no wire there,
     what sits on the point is one place, and a bare point is none. Worked out
-    here from the sheet's nets, apart from the op's own reading of them: it is
-    what tells apart answers the op words alike.
+    here from the sheet's ``nets``, apart from the op's own reading of them: it
+    is what tells apart answers the op words alike.
     """
-    nets = sheet_nets(editor)
     on_the_sheet = {label.text for label in nets.labels}
 
     def there(net: str, at: Point) -> tuple[str, int, int]:

@@ -24,7 +24,8 @@ Checks by file kind:
 ``compare`` runs in one of two modes: ``equivalence`` graph-compares through the
 netlist graph (every include/lib open gated by ``safe_path``, so with a
 sandbox set an in-deck include that escapes it is denied and never read), and
-compares the directives outside subcircuit definitions with ``structural_diff``'s
+compares each scope's directives (the top level's, and those of each subcircuit
+definition an instance both circuits have calls) with ``structural_diff``'s
 reader; ``structural_diff`` lexes both decks and reports an added/removed/changed
 delta over the parsed cards, leaving out the boilerplate LTspice's netlister adds
 to every export. Both modes compare netlists: an ``.asc`` under test is compared
@@ -108,9 +109,7 @@ from ltspice_mcp.lib.lint_rules import (
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
 from ltspice_mcp.lib.netlist_diff import (
     Deck,
-    Directive,
-    circuit_directives,
-    directive_delta,
+    circuit_directive_delta,
     read_deck,
     structural_delta,
 )
@@ -237,7 +236,8 @@ STRUCTURAL_DELTA_PROPS: dict[str, Any] = {
         "items": {"type": "string"},
         "description": (
             "SPICE directives in the compared deck and not the baseline, each "
-            "with its continuation lines joined."
+            "with its continuation lines joined. In equivalence mode, one in a "
+            "subcircuit's definition is followed by '(in .subckt NAME)'."
         ),
     },
     "directives_removed": {
@@ -473,7 +473,10 @@ _SCENE_SCHEMA: dict[str, Any] = {
 # lib.netlist_graph dataclasses (see GraphComparison.as_dict).
 _REF: dict[str, Any] = {
     "type": "string",
-    "description": "Component reference, hierarchical for a subcircuit leaf ('X1.M2').",
+    "description": (
+        "Component reference, hierarchical inside a subcircuit ('X1.M2'); a "
+        "subcircuit instance itself in param_mismatches ('X1')."
+    ),
 }
 
 # The delta's lists that are differences; ``components_renamed`` is a fact.
@@ -723,10 +726,10 @@ COMPARISON_SCHEMA: dict[str, Any] = {
         "directives_equivalent": {
             "type": "boolean",
             "description": (
-                "equivalence mode only: whether the directives outside subcircuit "
-                "definitions match, compared as structural_diff compares them; "
-                "directives_added/removed list the difference. Can be true while "
-                "'equivalent' is false."
+                "equivalence mode only: whether the directives match, the top "
+                "level's and each called subcircuit's own, each read as "
+                "structural_diff reads it; directives_added/removed list the "
+                "difference. Can be true while 'equivalent' is false."
             ),
         },
         "added": {
@@ -761,7 +764,11 @@ COMPARISON_SCHEMA: dict[str, Any] = {
         "param_mismatches": {
             "type": "array",
             "items": _PARAM_DIFF_SCHEMA,
-            "description": "equivalence: matched components whose key=value parameter differs.",
+            "description": (
+                "equivalence: matched components, subcircuit instances among them, "
+                "whose key=value parameter differs; an instance's as it runs, its "
+                "own value else its definition's default."
+            ),
         },
         "node_partition_mismatches": {
             "type": "array",
@@ -1942,22 +1949,20 @@ def _parse_side_or_fail(
     resolver: IncludeResolver,
     *,
     base_dir: Path | None = None,
-) -> tuple[tuple[NetlistGraph, list[Directive]] | None, dict[str, Any] | None]:
+) -> tuple[NetlistGraph | None, dict[str, Any] | None]:
     """Parse one side of an equivalence compare, or produce a ``compare`` failure.
 
-    Returns ``((graph, directives), None)`` on success and ``(None, failure)`` on
-    a parse error, naming ``label`` (e.g. "reference netlist") and locating it at
-    ``where``. The directives are those outside subcircuit definitions, read as
-    a structural diff reads them.
+    Returns ``(graph, None)`` on success and ``(None, failure)`` on a parse
+    error, naming ``label`` (e.g. "reference netlist") and locating it at
+    ``where``. The graph holds each scope's directives beside its wiring.
     """
     try:
         graph = parse_netlist_graph(source, base_dir=base_dir, include_resolver=resolver)
-        directives = circuit_directives(source)
     except (NetlistGraphError, SpiceLexError, OSError) as exc:
         return None, _failure(
             "compare", f"the {label} could not be parsed: {exc}", where=str(where)
         )
-    return (graph, directives), None
+    return graph, None
 
 
 # Both compare modes return this, in this order, so the call site destructures
@@ -1983,7 +1988,7 @@ def compare_equivalence(
     ref_base_dir: Path | None,
 ) -> CompareResult:
     """Graph-compare candidate against reference through the safe_path resolver,
-    and compare their directives outside subcircuit definitions.
+    and compare their directives scope by scope (``circuit_directive_delta``).
 
     ``candidate`` may be the already-read netlist text or a path. ``cand_source``
     is the file the caller named: findings and failures point at it, and the
@@ -1993,22 +1998,21 @@ def compare_equivalence(
     each refused include's finding carries.
     """
     findings: list[dict[str, Any]] = []
-    ref_side, failure = _parse_side_or_fail(
+    ref_graph, failure = _parse_side_or_fail(
         reference, "reference netlist", ref_source, resolver, base_dir=ref_base_dir
     )
     if failure is not None:
         return None, findings, failure, []
-    cand_side, failure = _parse_side_or_fail(
+    cand_graph, failure = _parse_side_or_fail(
         candidate, "netlist under test", cand_source, resolver, base_dir=cand_source.parent
     )
     if failure is not None:
         return None, findings, failure, []
-    assert ref_side is not None and cand_side is not None  # failure is None ⇒ both parsed
-    (ref_graph, ref_directives), (cand_graph, cand_directives) = ref_side, cand_side
+    assert ref_graph is not None and cand_graph is not None  # failure is None ⇒ both parsed
     findings.extend(_denied_include_findings(ref_graph, ref_source, denied_hint))
     findings.extend(_denied_include_findings(cand_graph, cand_source, denied_hint))
     comparison = compare_graphs(ref_graph, cand_graph, anchors=anchors, rtol=rtol)
-    added, removed = directive_delta(ref_directives, cand_directives)
+    added, removed = circuit_directive_delta(ref_graph, cand_graph, comparison.calls)
     directives_equivalent = not added and not removed
     payload: dict[str, Any] = {
         "mode": "equivalence",

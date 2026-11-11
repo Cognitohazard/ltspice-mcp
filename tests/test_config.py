@@ -665,6 +665,7 @@ ENV_OVERRIDES: dict[str, str] = {
     "LTSPICE_MCP_TOOL_LISTING": "full",
     "LTSPICE_MCP_PERSIST_JOBS": "on",
     "LTSPICE_MCP_RUN_CODE": "off",
+    "LTSPICE_MCP_RUN_CODE_MEMORY_MB": "2048",
     "LTSPICE_MCP_PRELOAD_RECENT_COUNT": "7",
     "LTSPICE_MCP_WRITE_CONFIG": "off",
 }
@@ -718,6 +719,7 @@ start_ltspice = false
 [tools]
 listing = "compact"
 run_code = true
+run_code_memory_mb = 1024
 
 [state]
 persist_jobs = false
@@ -782,6 +784,7 @@ class TestLoadCoversEveryKey:
             "start_ltspice": False,
             "tool_listing": "compact",
             "run_code": True,
+            "run_code_memory_mb": 1024,
             "persist_jobs": False,
             "preload_recent_count": 3,
             "write_config": True,
@@ -827,6 +830,7 @@ class TestLoadCoversEveryKey:
             "start_ltspice": True,
             "tool_listing": "full",
             "run_code": False,
+            "run_code_memory_mb": 2048,
             "persist_jobs": True,
             "preload_recent_count": 7,
             "write_config": False,
@@ -877,6 +881,7 @@ class TestLoadCoversEveryKey:
             "LTSPICE_MCP_OPEN_PLOT": "sometimes",
             "LTSPICE_MCP_ATTACH_PLOT": "2",
             "LTSPICE_MCP_PRELOAD_RECENT_COUNT": "-2",
+            "LTSPICE_MCP_RUN_CODE_MEMORY_MB": "0",
         }
         for name, value in rejected.items():
             monkeypatch.setenv(name, value)
@@ -900,6 +905,7 @@ class TestLoadCoversEveryKey:
         assert snapshot["open_plot"] is False
         assert snapshot["attach_plot"] is True
         assert snapshot["preload_recent_count"] == 3
+        assert snapshot["run_code_memory_mb"] == 1024
         message = "\n".join(record.getMessage() for record in caplog.records)
         for named in (
             "LTSPICE_MCP_MAX_PARALLEL",
@@ -917,6 +923,7 @@ class TestLoadCoversEveryKey:
             "LTSPICE_MCP_OPEN_PLOT",
             "LTSPICE_MCP_ATTACH_PLOT",
             "LTSPICE_MCP_PRELOAD_RECENT_COUNT",
+            "LTSPICE_MCP_RUN_CODE_MEMORY_MB",
         ):
             assert named in message, f"no warning named {named}: {message!r}"
 
@@ -950,6 +957,8 @@ class TestLoadCoversEveryKey:
             'level = "LOUD"\n'
             "[schematic]\n"
             'symbol_paths = "/tmp/scalar-sym"\n'
+            "[tools]\n"
+            "run_code_memory_mb = 0\n"
             "[state]\n"
             'persist_jobs = "yes"\n'
             "preload_recent_count = -1\n"
@@ -977,6 +986,7 @@ class TestLoadCoversEveryKey:
         assert config.log_level == defaults.log_level
         assert config.persist_jobs is True
         assert config.preload_recent_count == defaults.preload_recent_count
+        assert config.run_code_memory_mb is None
 
     def test_explicit_overrides_win_over_environment(
         self, work_dir: Path, no_ltspice_env: None, monkeypatch: pytest.MonkeyPatch
