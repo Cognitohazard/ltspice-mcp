@@ -88,7 +88,5 @@ class TestTerminalStatusCompleteness:
         )
         data = result.structured_content
         assert data is not None
-        text = result.content[0].text  # type: ignore[union-attr]
-        assert "unexpected status" not in text.lower()
         # The status is surfaced to the caller, not swallowed.
         assert data["status"] == status

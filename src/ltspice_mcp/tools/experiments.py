@@ -146,7 +146,6 @@ from ltspice_mcp.tools.analyze import (
 )
 from ltspice_mcp.tools.receipts import (
     RUN_EXPERIMENTS_OUTPUT_SCHEMA,
-    ReceiptBuilt,
     finalize_receipt,
     render_receipt_snapshot,
     render_run_receipt,
@@ -1008,15 +1007,12 @@ async def handle_run_experiments(
 
 async def _render_static_run_receipt(
     data: dict[str, Any],
-    text: str,
     budget: ResponseBudget,
     *,
     is_error: bool = False,
 ) -> types.CallToolResult:
     return await render_run_receipt(
-        budget,
-        lambda _limit, _rung: (copy.deepcopy(data), text),
-        is_error=is_error,
+        budget, lambda _limit, _rung: copy.deepcopy(data), is_error=is_error
     )
 
 
@@ -1538,12 +1534,8 @@ async def _dwell_and_respond(
         control_token=receipt.control_token,
         lint_by_circuit=lint_by_circuit,
     )
-    text = (
-        f"Experiment {snapshot.job_id}: {snapshot.status} "
-        f"({snapshot.completeness.terminal}/{snapshot.completeness.expanded} terminal cases)"
-    )
 
-    def build(limit: int, rung: response_budget.Rung | None) -> ReceiptBuilt:
+    def build(limit: int, rung: response_budget.Rung | None) -> dict[str, Any]:
         data = render_receipt_snapshot(
             snapshot,
             control_token=receipt.control_token,
@@ -1558,7 +1550,7 @@ async def _dwell_and_respond(
         data["replayed"] = receipt.replayed
         if warnings:
             data["warnings"] = [*warnings, *data.get("warnings", [])]
-        return finalize_receipt(data), text
+        return finalize_receipt(data)
 
     return await render_run_receipt(budget, build)
 
@@ -1676,12 +1668,12 @@ async def _routing_failure_response(
     )
     finalize_receipt(data)
 
-    def build(limit: int, _rung: response_budget.Rung | None) -> ReceiptBuilt:
+    def build(limit: int, _rung: response_budget.Rung | None) -> dict[str, Any]:
         rendered = copy.deepcopy(data)
         rendered["runs"] = runs_page(
             cases, args.run_fields, cap=limit, warnings=rendered["warnings"]
         )
-        return rendered, str(exc)
+        return rendered
 
     return await render_run_receipt(budget, build)
 
@@ -1743,12 +1735,7 @@ async def _error_response(
         commit_state=commit_state,
         hint=failure_text(failure, state),
     )
-    return await _render_static_run_receipt(
-        data,
-        data["hint"],
-        budget,
-        is_error=True,
-    )
+    return await _render_static_run_receipt(data, budget, is_error=True)
 
 
 async def _post_submit_error_response(
@@ -1825,14 +1812,8 @@ async def _post_submit_error_response(
         "commit_state": "committed",
     }
     finalize_receipt(data)
-    text = f"Experiment {job.job_id} was committed, but completing the call failed: {exc}."
     try:
-        return await _render_static_run_receipt(
-            data,
-            text,
-            budget,
-            is_error=True,
-        )
+        return await _render_static_run_receipt(data, budget, is_error=True)
     except Exception as render_exc:
         # Non-recursive rescue boundary: no renderer or full payload builder is
         # called again after it fails. The minimum durable handles survive.
@@ -1848,7 +1829,7 @@ async def _post_submit_error_response(
             }
         )
         finalize_receipt(minimal)
-        result = format_response(text, minimal)
+        result = format_response(minimal)
         result.is_error = True
         return result
 

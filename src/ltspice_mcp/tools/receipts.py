@@ -414,8 +414,8 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
     ],
 }
 
-ReceiptBuilt = tuple[dict[str, Any], str]
-ReceiptBuild = Callable[[int, response_budget.Rung | None], ReceiptBuilt]
+#: Renders a receipt at a page limit and, under a budget, a ladder rung.
+ReceiptBuild = Callable[[int, response_budget.Rung | None], dict[str, Any]]
 
 # The receipt itself has no rung-0 allowlist: run_experiments and jobs
 # status/wait render the same receipt envelope, whose empty blocks every reply
@@ -508,7 +508,7 @@ async def negotiate_receipt(
     page_limit: int,
     *,
     notes: response_budget.Notes,
-) -> ReceiptBuilt:
+) -> dict[str, Any]:
     """Render a receipt at the mildest shared budget rung that fits.
 
     The shrink rung measures the page its estimate priced and searches below it
@@ -519,17 +519,16 @@ async def negotiate_receipt(
     cases the job ran. A page whose cursor continues itself floors its own
     limit at one row.
     """
-    text = ""
     rendered: dict[str, Any] = {}
 
     def candidate(limit: int, rung: response_budget.Rung) -> response_budget.Rendered:
-        data, line = build(limit, rung)
-        return data, line, _degrade_receipt(data, rung)
+        data = build(limit, rung)
+        return data, _degrade_receipt(data, rung)
 
     async def render(rung: response_budget.Rung) -> dict[str, Any]:
-        nonlocal text, rendered
+        nonlocal rendered
         if rung.shrink:
-            rendered, text, cut = response_budget.shrink_to_fit(
+            rendered, cut = response_budget.shrink_to_fit(
                 response_budget.RowMeasure.of(_receipt_surfaces(rendered), page=rung.measured),
                 lambda limit: candidate(limit, rung),
                 rung,
@@ -540,14 +539,14 @@ async def negotiate_receipt(
             # The undegraded rung built this same page; degrade it in place.
             cut = _degrade_receipt(rendered, rung)
         else:
-            rendered, text, cut = candidate(page_limit, rung)
+            rendered, cut = candidate(page_limit, rung)
         rung.cut.extend(cut)
         return rendered
 
     assert budget.tokens is not None  # the undegraded path never reaches here
     result = await response_budget.negotiate(budget.tokens, render, max_rung=budget.max_rung)
     response_budget.attach_notes(result, notes)
-    return result.data, text
+    return result.data
 
 
 async def render_run_receipt(
@@ -557,12 +556,10 @@ async def render_run_receipt(
     is_error: bool = False,
 ) -> types.CallToolResult:
     if budget.tokens is None:
-        data, text = build(_RUN_PAGE_LIMIT, None)
+        data = build(_RUN_PAGE_LIMIT, None)
     else:
-        data, text = await negotiate_receipt(
-            budget, build, _RUN_PAGE_LIMIT, notes=_RUN_BUDGET_NOTES
-        )
-    result = format_response(text, data)
+        data = await negotiate_receipt(budget, build, _RUN_PAGE_LIMIT, notes=_RUN_BUDGET_NOTES)
+    result = format_response(data)
     result.is_error = is_error
     return result
 
