@@ -203,3 +203,14 @@ def stepped_kind(header: RawPlotHeader) -> SteppedKind | None:
     if analysis in STEPPED_RUN_OP.analyses and header.point_count == 1:
         return STEPPED_RUN_OP
     return None
+
+
+def step_variables(header: RawPlotHeader) -> tuple[str, ...]:
+    """The names of the variables that hold each step's stepped value rather
+    than a signal: a plot's leading parameters, where its kind keeps its step
+    values in the raw. A decoded result reads them as its steps, and no signal
+    name reads them."""
+    kind = stepped_kind(header)
+    if kind is None or kind.step_values != "raw":
+        return ()
+    return tuple(header.variables[index].name for index in leading_parameters(header))

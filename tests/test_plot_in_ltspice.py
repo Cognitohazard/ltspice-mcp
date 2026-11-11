@@ -51,8 +51,10 @@ from tests._ltspice_window import (
     a_window,
     as_ltspice_reads,
     fake_command,
+    follow_open_window_referral,
     put_windows,
     read_world,
+    sha256_ltspice_shows,
     write_world,
 )
 from tests.conftest import (
@@ -476,8 +478,10 @@ SHEET_REOPENED = (
 ALONE = (
     "The plot is not tied to the sheet, so clicking a net there does not plot it, "
     "because LTspice opened the sheet before it had results and has unsaved changes "
-    "to it. Ask the user whether to keep those changes, then call edit_schematic with "
-    "ops=[] and open_window='save' or 'discard'. After 'discard', showing this run "
+    "to it. Ask the user whether to keep those changes, then call "
+    "edit_schematic(path=<this sheet>, ops=[], expected_sha256=<the sha256 that "
+    "inspect(kind='open_in_ltspice') with path set to this sheet gives>, "
+    "open_window='save'|'discard'). After 'discard', showing this run "
     "again ties the plot; after 'save', the sheet holds their changes, so run it "
     "again and show that run."
 )
@@ -849,6 +853,35 @@ async def test_a_sheet_with_changes_nobody_saved_is_left_open_and_the_plot_stand
     window = read_world(world)["windows"][0]
     assert window["closed"] == [str(beside), str(sheet)]
     assert window["panes"] == window["tied"] == [str(beside)]
+
+
+@pytest.mark.usefixtures("quick_to_tell")
+async def test_the_call_the_note_of_a_plot_standing_alone_names_is_taken(
+    state_no_sim: SessionState, work_dir: Path, tmp_path: Path
+):
+    """The note sends the caller to edit_schematic's open_window once the user
+    chooses. Sent as the note writes it, with the sha256 from where it says,
+    the call drops the window's changes, and the run shown again is tied to
+    the sheet. The note named no expected_sha256, and the call it named was
+    refused for want of one."""
+    sheet = a_sheet(work_dir)
+    a_job_of(state_no_sim, sheet, work_dir)
+    held = as_ltspice_reads(sheet).replace("SYMATTR Value 1k", "SYMATTR Value 5k")
+    world = tmp_path / "world.json"
+    put_windows(state_no_sim, world, [a_window({str(sheet): held}, unsaved=[str(sheet)])])
+    on_disk = read(sheet)
+
+    shown = (await plot_the_job(state_no_sim))["ltspice"]
+    assert shown["tied"] is False
+    sha256 = await sha256_ltspice_shows(state_no_sim, sheet)
+    settled = await follow_open_window_referral(
+        state_no_sim, shown["note"], sheet, "discard", sha256=sha256
+    )
+
+    assert settled["outcome"] == "complete", settled
+    assert read_world(world)["windows"][0]["designs"][str(sheet)] == as_ltspice_reads(sheet)
+    assert read(sheet) == on_disk
+    assert (await plot_the_job(state_no_sim))["ltspice"]["tied"] is True
 
 
 @pytest.mark.usefixtures("quick_to_tell")

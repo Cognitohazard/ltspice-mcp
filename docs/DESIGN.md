@@ -80,8 +80,8 @@ helps in these cases:
   needs no spicelib, and the user needs no Python.
 
 A fixed tool set is less flexible than arbitrary Python. For loops and
-complete results, `run_code` runs a Python snippet against the same engine,
-and a script can use the engine directly as `Api(working_dir=...)`, which
+complete results, `run_code` runs a Python snippet against the same code,
+and a script can use it directly as `Api(working_dir=...)`, which
 reads and writes the same job records as the server.
 
 ## Design principles
@@ -288,7 +288,7 @@ The server has 8 registered tools. Six of them form three pairs by purpose:
 
 The other two are `plot_waveform`, the interactive waveform chart, and
 `run_code`, which runs a Python snippet in a separate Python process that the
-server starts on first use and keeps for the session, with the engine already
+server starts on first use and keeps for the session, with the Python API already
 loaded (`[tools] run_code = false` removes it). Releases before 0.6.0 offered
 other tool sets with one tool per operation; a deployment that needs those
 pins `ltspice-mcp==0.5.*`. `inspect(kind="capabilities")` reports

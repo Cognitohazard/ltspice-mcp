@@ -577,7 +577,7 @@ def rc_transient_deck(directory: Path) -> Path:
 def recorded_fixture_simulator(
     monkeypatch: pytest.MonkeyPatch, fixture: str = "ltspice_tran_rc"
 ) -> list[str]:
-    """Instant engine behind ``ExperimentRunner.submit_netlist`` that hands back
+    """Instant stand-in simulator behind ``ExperimentRunner.submit_netlist`` that hands back
     a recorded real-LTspice raw+log pair, so analysis stages parse genuine
     simulator artifacts rather than a mock byte string. Name a different
     *fixture* to run a job over stepped artifacts. Returns the list each
@@ -1485,7 +1485,7 @@ def asc_symbols(_asc_symbol_cache: Path) -> Iterator[Path]:
     The server's own lookups read the session's library, which the ``config``
     fixture already makes the suite's. spicelib's editor, which still opens
     sheets, keeps its search paths as class attributes, so they are set here.
-    Re-asserted per test rather than once per session: booting the engine (any
+    Re-asserted per test rather than once per session: starting a session (any
     Api or server test) sets them process-wide to the host's real LTspice
     symbol library and never puts them back, so a session-scoped assignment
     would lose to whichever test ran first in the worker.
@@ -1802,24 +1802,46 @@ def declared_output_schemas() -> Iterator[tuple[ModuleType, Callable, dict]]:
 CONTINUATIONS = frozenset({"next_cursor", "cursor", "continue", "next"})
 
 
+def counts_what_was_left_out(name: str) -> bool:
+    """Whether a field by this name counts the items a list left out:
+    ``omitted``, ``*_omitted`` or ``*_truncated``. The reply checker below and
+    the schema walk in ``tests/test_capped_lists_say_how_to_continue.py`` both
+    read the names here, each on an integer field only."""
+    return name == "omitted" or name.endswith(("_omitted", "_truncated"))
+
+
 def cut_without_continuation(
     value: typing.Any, path: tuple = (), around: tuple[dict, ...] = ()
 ) -> Iterator[tuple]:
-    """Every list a reply says it cut short (``truncated: true``) that gives no
-    way on: no cursor in it or around it within its reply item, and no hint
-    beside the flag.
+    """Every list a reply says it cut short that gives no way on: no cursor in
+    it or around it within its reply item, and no hint, empty or absent,
+    beside what says it was cut.
+
+    A list says it was cut by a ``truncated: true`` flag, reported at the
+    object that holds the flag, or by a count of what it left out above zero
+    (an integer field :func:`counts_what_was_left_out` names), reported at the
+    count.
 
     Design principle "Safe edits" (``docs/DESIGN.md``): a list cut short says
     how to read the rest. ``tests/test_capped_lists_say_how_to_continue.py``
     holds the declared schemas to the same rule.
     """
     if isinstance(value, dict):
+        cut = [
+            (*path, key)
+            for key, item in value.items()
+            if counts_what_was_left_out(key)
+            and isinstance(item, int)
+            and not isinstance(item, bool)
+            and item > 0
+        ]
         if value.get("truncated") is True:
-            scope = (*around, value)
-            if not (
-                "hint" in value or any(outer.get(key) for outer in scope for key in CONTINUATIONS)
-            ):
-                yield path
+            cut.insert(0, path)
+        if cut and not (
+            value.get("hint")
+            or any(outer.get(key) for outer in (*around, value) for key in CONTINUATIONS)
+        ):
+            yield from cut
         for key, item in value.items():
             if isinstance(item, (dict, list)):
                 yield from cut_without_continuation(item, (*path, key), (*around, value))
@@ -1941,9 +1963,9 @@ def _enforce_output_schema_conformance():
         stranded = next(cut_without_continuation(sc), None)
         if stranded is not None:
             raise AssertionError(
-                f"{_replying_tool(frame) or 'a reply'}: the list at {_dotted(stranded)} was cut short "
-                "and the reply gives no way to read the rest: a next_cursor, or a hint "
-                "beside the flag."
+                f"{_replying_tool(frame) or 'a reply'}: {_dotted(stranded)} says a list was cut "
+                "short and the reply gives no way to read the rest: a next_cursor in its "
+                "reply item, or a hint beside the flag or the count."
             )
 
     def _validate(result, data=None) -> None:

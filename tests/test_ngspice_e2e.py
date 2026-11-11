@@ -30,7 +30,7 @@ from ltspice_mcp.tools.jobs import (
     JobsInput,
     handle_jobs,
 )
-from tests.conftest import await_until, start_when, terminal_experiment
+from tests.conftest import FIXTURES_DIR, await_until, start_when, terminal_experiment
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -477,6 +477,77 @@ async def test_mosfet_op_surfaces_device_op_points(ngspice_state: SessionState, 
     assert idd > 0, internals
     # vth is a parameter, never a node voltage — it must NOT be in voltages.
     assert not any("@" in k for k in op["voltages"]), op["voltages"]
+
+
+async def test_a_device_parameter_does_not_vouch_for_a_transient_op_bias_point(
+    ngspice_state: SessionState, work_dir: Path
+):
+    # A floating gate: ngspice's gmin and source stepping fail and it takes
+    # its transient op's last point for the bias point, saying "Transient op
+    # finished successfully", which it says of a circuit with no DC solution
+    # too, so the stepping failures stand as errors unless the raw holds a
+    # finite node voltage. The deck saves device parameters and no node:
+    # ngspice writes @m1[vth] as v(@m1[vth]), typed voltage, which is the
+    # device's parameter and vouches for no bias point.
+    deck = FIXTURES_DIR / "ngspice_runs" / "op_device_params.cir"
+    shutil.copy(deck, work_dir / deck.name)
+    receipt = await _run_one(ngspice_state, "ng-device-params-op", deck.name)
+    data = await _analyze(ngspice_state, receipt["job_id"], [{"key": "sum", "metric": "summary"}])
+    warnings = data["results"]["sum"].get("warnings", [])
+    assert not any("finite node data" in w for w in warnings), warnings
+    relayed = [o["evidence"]["log"] for o in data["observations"] if o["code"] == "solve_failure"]
+    assert "Warning: Dynamic gmin stepping failed" in relayed, data["observations"]
+    op = await _op(ngspice_state, receipt["job_id"])
+    assert not op.get("voltages"), op
+    assert set(op["device_op_points"]) == {"v(@m1[vth])", "@m1[gm]", "i(@m1[id])"}
+
+
+async def test_a_bias_point_source_stepping_finds_is_no_failure(
+    ngspice_state: SessionState, work_dir: Path
+):
+    # A high-gain latch: ngspice's gmin stepping fails, and its source stepping
+    # finds the bias point, saying "Source stepping completed". The failed
+    # rungs are no failure of the run, though the deck saves no node voltage
+    # to vouch for it.
+    deck = FIXTURES_DIR / "ngspice_runs" / "op_source_stepping.cir"
+    shutil.copy(deck, work_dir / deck.name)
+    receipt = await _run_one(ngspice_state, "ng-source-stepping-op", deck.name)
+    data = await _analyze(ngspice_state, receipt["job_id"], [{"key": "sum", "metric": "summary"}])
+    relayed = [o for o in data.get("observations", []) if o["code"] == "solve_failure"]
+    assert relayed == [], relayed
+
+
+async def test_an_ac_summary_defaults_to_no_device_parameter(
+    ngspice_state: SessionState, work_dir: Path
+):
+    # With no signal named, an AC summary computes its bandwidth on the first
+    # node voltage. The deck saves a branch current and @m1[vth], which
+    # ngspice writes after it as v(@m1[vth]), typed voltage: a parameter of
+    # the device, so there is no node voltage to default to, and no
+    # bandwidth of a device parameter; the summary says why it has none.
+    net = _write(
+        work_dir,
+        "acvth.cir",
+        "* common-source stage\n"
+        "Vd vdd 0 1.8\n"
+        "Vg g 0 0.9 AC 1\n"
+        "Rd vdd out 10k\n"
+        "M1 out g 0 0 NM L=1u W=10u AD=10p AS=10p PD=22u PS=22u\n"
+        ".model NM NMOS (LEVEL=49 VERSION=3.3)\n"
+        ".save @m1[vth] i(vd)\n"
+        ".ac dec 10 1k 1G\n"
+        ".end\n",
+    )
+    receipt = await _run_one(ngspice_state, "ng-ac-device-param", net)
+    signals = await _signals(ngspice_state, receipt["job_id"])
+    assert signals == ["frequency", "i(vd)", "v(@m1[vth])"]
+    summary = await _summary(ngspice_state, receipt["job_id"])
+    assert "ac_signal_used" not in summary, summary
+    assert "ac_bandwidth_metrics" not in summary, summary
+    # Said, not left out unexplained.
+    data = await _analyze(ngspice_state, receipt["job_id"], [{"key": "sum", "metric": "summary"}])
+    warnings = data["results"]["sum"].get("warnings", [])
+    assert any("holds no node voltage to default to" in w for w in warnings), data
 
 
 async def test_mosfet_dc_sweep_internal_reachable_by_shorthand(
@@ -944,3 +1015,113 @@ async def test_an_unbounded_case_reports_progress_while_it_runs(
     assert "run_progress" not in codes
     [stopped] = [item for item in final["observations"] if item["code"] == "partial_progress"]
     assert stopped["evidence"]["points"] >= reached["points"]
+
+
+async def test_samples_are_compared_by_what_ngspice_computed(
+    ngspice_state: SessionState, work_dir: Path
+):
+    """A random tolerance on R2 moves V(out), so each sample of a deck that
+    saves it computes its own numbers and the receipt reports nothing. Saving
+    only V(in), which R2 cannot move, makes every sample compute the same
+    numbers, and the receipt says the draws changed nothing it saved."""
+    body = "* divider\nV1 in 0 1\nR1 in out 1k\nR2 out 0 1k\n{save}.op\n.end\n"
+    variations = [
+        {
+            "kind": "random",
+            "runs": 3,
+            "seed": 4,
+            "rules": [{"rule": "component", "target": "R2", "tolerance": 0.1}],
+        }
+    ]
+
+    async def observations(name: str, save: str) -> list[dict]:
+        netlist = _write(work_dir, f"{name}.cir", body.format(save=save))
+        receipt = await terminal_experiment(
+            ngspice_state,
+            {
+                "request_id": name,
+                "circuits": [{"path": netlist, "id": "dut"}],
+                "variations": variations,
+                "execution": {"wait_s": 90, "simulator": "ngspice"},
+            },
+        )
+        assert receipt["status"] == "completed", receipt
+        return receipt.get("observations", [])
+
+    differing = await observations("saves-out", "")
+    unmoved = await observations("saves-in", ".save v(in)\n")
+
+    assert not any(o["code"] in {"identical_samples", "samples_not_compared"} for o in differing)
+    (observation,) = [o for o in unmoved if o["code"] == "identical_samples"]
+    assert observation["evidence"]["groups"] == [{"circuit": "dut", "samples": 3}]
+
+
+async def test_samples_are_compared_one_assign_point_at_a_time(
+    ngspice_state: SessionState, work_dir: Path
+):
+    """At vin = 0 no resistor draw moves the divider's output, so the three
+    samples there compute the same numbers, while at vin = 1 they differ. The
+    receipt names that point and does not say the draws changed nothing."""
+    netlist = _write(
+        work_dir,
+        "corners.cir",
+        "* divider\nV1 in 0 {vin}\n.param vin=1\nR1 in out 1k\nR2 out 0 1k\n.op\n.end\n",
+    )
+    receipt = await terminal_experiment(
+        ngspice_state,
+        {
+            "request_id": "corners",
+            "circuits": [{"path": netlist, "id": "dut"}],
+            "variations": [
+                {"kind": "assign", "assign": {"vin": ["0", "1"]}},
+                {
+                    "kind": "random",
+                    "runs": 3,
+                    "seed": 4,
+                    "rules": [{"rule": "component", "target": "R2", "tolerance": 0.1}],
+                },
+            ],
+            "execution": {"wait_s": 90, "simulator": "ngspice"},
+        },
+    )
+    assert receipt["status"] == "completed", receipt
+
+    (observation,) = [o for o in receipt["observations"] if o["code"] == "identical_samples"]
+    assert not observation["detail"].startswith("All samples")
+    (group,) = observation["evidence"]["groups"]
+    assert group == {"circuit": "dut", "assigned": {"vin": "0"}, "samples": 3}
+
+
+async def test_samples_with_a_few_distinct_results_are_not_reported(
+    ngspice_state: SessionState, work_dir: Path
+):
+    """A comparator saves 1 where R2 lifts the divider above 0.5 V and 0 where
+    it does not, so eight samples save two distinct results: the draws did
+    change what was saved, and the receipt reports nothing."""
+    netlist = _write(
+        work_dir,
+        "comparator.cir",
+        "* comparator\nV1 in 0 1\nR1 in b 1k\nR2 b 0 1k\n"
+        "B1 out 0 V = V(b) > 0.5 ? 1 : 0\nR3 out 0 1k\n.save v(out)\n.op\n.end\n",
+    )
+    receipt = await terminal_experiment(
+        ngspice_state,
+        {
+            "request_id": "comparator",
+            "circuits": [{"path": netlist, "id": "dut"}],
+            "variations": [
+                {
+                    "kind": "random",
+                    "runs": 8,
+                    "seed": 3,
+                    "rules": [{"rule": "component", "target": "R2", "tolerance": 0.1}],
+                }
+            ],
+            "execution": {"wait_s": 90, "simulator": "ngspice"},
+        },
+    )
+    assert receipt["status"] == "completed", receipt
+
+    draws = [run["assignments"]["random:component:R2"] for run in receipt["runs"]["items"]]
+    assert min(draws) < 1000 < max(draws), draws
+    assert not any(o["code"] == "identical_samples" for o in receipt.get("observations", []))

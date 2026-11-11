@@ -6,18 +6,19 @@ import re
 import threading
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import pytest
 
 from ltspice_mcp.errors import AnalysisDeadlineExceeded, ResultError, ResultFileNotFoundError
 from ltspice_mcp.lib import parser_service, services
+from ltspice_mcp.lib.decoded_raw import DecodedRaw
 from ltspice_mcp.lib.store import parser_file_in
 from ltspice_mcp.state import SessionState
 from tests.conftest import (
     FIXTURES_DIR,
     LIVENESS_S,
     await_until,
+    make_raw_mock,
     stage_recorded_fixture,
 )
 from tests.test_parser_process import _FIXTURE, _assert_gone, _started
@@ -112,10 +113,9 @@ class TestValidateSignal:
     don't want to reject a user's ``V(onoise)`` just because the raw used a
     different case."""
 
-    def _raw(self, names: list[str]) -> MagicMock:
-        raw = MagicMock()
-        raw.get_trace_names.return_value = names
-        return raw
+    def _raw(self, names: list[str]) -> DecodedRaw:
+        """A decoded transient holding traces ``names``, after its time axis."""
+        return make_raw_mock(names, waves={})
 
     def test_exact_match_returns_same_string(self):
         raw = self._raw(["V(out)", "I(R1)"])

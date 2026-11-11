@@ -23,8 +23,10 @@ document needs fixing.
 A seventh tool, `plot_waveform`, is the interactive MCP Apps waveform widget
 and does not use the envelope. Its reply summarizes each plotted trace:
 minimum and maximum with their positions, first and final value, and on a
-transient the time-weighted mean. `attach_plot` adds a PNG of the chart for a
-vision model. Traces are split into panels by declared
+transient the time-weighted mean. Past 32 traces it summarizes the first 32,
+counts every plotted trace in `traces_truncated`, and names in `hint` the
+`analyze_results` call that reads the rest. `attach_plot` adds a PNG of the
+chart for a vision model. Traces are split into panels by declared
 unit, or by the caller's `panels`. A plot with no sampled axis (an operating
 point, a `.tf`, or a stepped `.op` or one-frequency `.ac`, which hold one point
 a step) has no chart: it is refused with `no_axis`, which says what the plot
@@ -34,7 +36,7 @@ observation.
 
 An eighth tool, `run_code`, is always registered and is served unless the
 operator sets `[tools] run_code = false`. It runs a Python snippet in a warm
-worker process that holds the engine as `api` (the six operations as methods
+worker process that holds the Python API as `api` (the six operations as methods
 returning complete results), for loops over runs and numpy on samples. It does
 not use the envelope either. It returns `status` (ok, error, timeout, busy,
 reset) and the captured output, and its tool description is its contract. The
@@ -107,7 +109,7 @@ Codes by kind of failure:
 | `path_denied` | a sandbox (`allowed_paths`) is set and the path resolves outside it, or the path cannot be resolved; a `hint` describes the change to make (for a sandbox, the config file and key that widen it), returned as an item's `error.hint`, a finding's `evidence.hint`, a failure or coverage row's `hint`, or the envelope's `hint` for a call-level refusal |
 | `invalid_arguments` | the call's arguments failed validation before the tool ran |
 | `netlist_invalid` | the netlist, or a component reference in it, could not be read |
-| `symbol_unresolved` | the schematic opened, but a symbol or library it refers to was not found |
+| `symbol_unresolved` | the schematic opened, but a symbol it, or a hierarchical block's own sheet, places was not found |
 | `simulation_failed` | the simulator could not be started, or the run failed |
 | `result_unreadable` | a `.raw` or `.log` could not be read |
 | `result_file_not_found` | no file is at a `.raw` or `.log` path the caller named; the `hint` says to check the path, or to read a run of this server's by its `job_id` |
@@ -320,13 +322,15 @@ An explicit `request_id` is the durability key. At submission the server
 persists `{request_id -> job_id, fingerprint}`, where the fingerprint is the
 sha256 of the canonical (sorted-key) input payload. The same id with the same
 fingerprint returns the existing receipt with `replayed: true`; that field
-describes this call, and the replay does not change the job's record. The same
-id with a different fingerprint is an `idempotency_conflict` that names the job
-created under that id, which `jobs` and `analyze_results` read by its
-`job_id`. Ids are scoped to the server working directory's job store, and an
-id is deleted with its job ("Job model" below says when). If the client
-cancels a `run_experiments` request while the call waits for results
-("Receipt, then dwell" below), only the wait ends; the job keeps running.
+describes this call, and the replay adds nothing to the job's record. A record
+whose owner has exited is read as `interrupted` and written back, as any read
+of the job leaves it. The same id with a different fingerprint is an
+`idempotency_conflict` that names the job created under that id, which `jobs`
+and `analyze_results` read by its `job_id`. Ids are scoped to the server
+working directory's job store, and an id is deleted with its job ("Job model"
+below says when). If the client cancels a `run_experiments` request while the
+call waits for results ("Receipt, then dwell" below), only the wait ends; the
+job keeps running.
 
 **Circuit paths are resolved at submission.** Each circuit's path is resolved
 before a job exists. A path a sandbox refuses fails the call with `path_denied`
@@ -974,9 +978,10 @@ has no top-level `warnings`. The other tools hold their caps the same way: an
 `inspect` results `limit` above 100 or reference `limit` above 20 (in the
 item's `data.warnings`), a `plot_waveform` `max_points` above 2000000 (in
 `warnings`), a `run_code` `timeout_s` above 600 (in `warnings` and the
-`hint`), and a `waveform` recipe's `max_points` above the server's
-`[analysis] max_points` (in the recipe's `warnings`). The schema declares no
-`maximum` for these fields.
+`hint`), a `waveform` recipe's `max_points` above the server's
+`[analysis] max_points` and a `thd` recipe's `harmonics` above 50 (each in the
+recipe's `warnings`), and a `verify_circuit` `render.scale` above 4 (in
+`warnings` and the `hint`). The schema declares no `maximum` for these fields.
 
 Only the owning process or a caller with a valid control token can cancel;
 any other caller gets `cancel_not_authorized`. Once a cancel is acknowledged,
@@ -994,7 +999,14 @@ iteration of the deck's own `.step`, and a sampled axis (time, frequency or
 the swept source) lies within a step. A table plot, one whose first trace is
 not a sweep axis (such as an `.op`, `.tf` or `.pz` result), has no sampled
 axis. `snapshot_id` identifies the contents of a source's RAW, log and
-console files as they were read.
+console files as they were read. A path names one results file, so
+`plot_waveform`, `inspect(kind="results")` and the Python API's `load_raw`
+refuse a `run_index` other than 0, a `case_id` or an `other_raw` beside it,
+and the API's `measurements` and `device_op_points` a `run_index` or a
+`case_id`, in the same words, rather than read the file as though they had
+not been sent. `analyze_results` refuses an `other_raw` beside a path in
+those words too, and reports a run other than 0 of a path source as a
+missing case.
 
 Input:
 
@@ -1410,7 +1422,12 @@ a window's copy and does not check. For one that replaces the sheet:
   its `hint` names `inspect(kind="open_in_ltspice")` with this path and the
   window's process as `pid` as the call that reads every entry. A dry run
   reports the same difference in a note, with the same call.
-  A call with no ops and `open_window` set to the user's choice settles it.
+  A call with no ops and `open_window` set to the user's choice settles it;
+  like any write to an existing sheet it quotes the file's sha256 as
+  `expected_sha256`. Every reply that sends the caller to this call writes it
+  out with each argument it needs (`_base.open_window_call`), naming where
+  that sha256 is: the refused call's own, a commit's reply, or
+  `inspect(kind="open_in_ltspice")` for a reply that carries none.
   With `"save"`, LTspice saves the sheet from that window, as Ctrl+S does,
   and the reply gives the file's new `sha256`. Where more than one window
   holds a different copy, `window_pid` names the process whose copy the user
@@ -1505,11 +1522,11 @@ the crossing, so the nets stay separate, and the finished sheet reports it
 Ops do not repeat sheet findings. A route through a part, a part placed or
 moved over another, a part's text drawn across a wire, a part or other text, a
 label on nothing, a crossing left unjoined, a pin or label that joins wires
-where they cross, a wire left diagonal, and a net given a second name are each
-reported once, by the sheet finding (`wire_through_symbol`, `symbol_overlap`,
-`attribute_text_overlap`, `dangling_label`, `unjoined_crossing`,
-`joined_at_crossing`, `diagonal_wire`, `net_with_two_names`), whichever op
-made it. Findings are computed on the sheet the batch leaves, so a state the
+where they cross, a pin placed or moved inside a wire, a wire left diagonal,
+and a net given a second name are each reported once, by the sheet finding
+(`wire_through_symbol`, `symbol_overlap`, `attribute_text_overlap`,
+`dangling_label`, `unjoined_crossing`, `joined_at_crossing`, `pin_inside_wire`,
+`diagonal_wire`, `net_with_two_names`), whichever op made it. Findings are computed on the sheet the batch leaves, so a state the
 batch only passes through is not reported. A label placed before the wire
 that reaches it is not dangling, and a net relabelled in remove-and-add pairs
 has one name at the end. A repeated route that is already drawn through a
@@ -1851,7 +1868,12 @@ cursors where listed:
     and a name after one of the deck's references (`M1.D`) is refused as
     `invalid_at` unless a node is called that.
     A bare NAME is read as net:NAME on both: a net label on a .asc, a node
-    name on a netlist
+    name on a netlist. A name no label of the sheet carries, or no card of
+    the deck's own is on, is refused on both as `not_found` rather
+    than answered as an empty net, as is a pin of a part neither holds; ground is a node of every deck, and the
+    netlist's refusal lists its nodes and says what the query does not
+    read: a subcircuit body that uses the name, a `.global` net only such
+    a body uses, a file the deck includes, a card it could not read
 {kind: "components", path, prefix?, detail: "list"|"full", cursor?}
     `prefix` keeps references that start with it, case-insensitively, on
     both a .asc and a netlist: `"M"` for every MOSFET, `"LX"` for LX1, LX2
@@ -2088,7 +2110,7 @@ Suppression is per call, and `linter_version` is reported in provenance.
 | `lib-section-ngspice` | blocking | ngspice in `kiltpsa` mode |
 | `analysis-count-ltspice` | blocking | refused by LTspice 26 and XVII: two of `.tran`/`.ac`/`.dc`/`.noise` (`.op` may appear with one) |
 | `meas-function-ltspice` | blocking | refused by LTspice 26 and XVII: `vdb()`, `phase()` or `group_delay()` in a `.meas` |
-| `meas-name-ltspice` | blocking | refused by LTspice 26 and XVII: a `.meas` named `e`, `k`, `pi` or `q`, constants of the expression engine |
+| `meas-name-ltspice` | blocking | refused by LTspice 26 and XVII: a `.meas` named `e`, `k`, `pi` or `q`, constants of the expression evaluator |
 | `meas-unclosed-paren-ltspice` | blocking | a `.meas` with a parenthesis left open. LTspice 26 refused the recorded one before the run and ran nothing, and XVII ran that deck without the measurement; any such `.meas` is refused, since LTspice 26's error names the parenthesis, not the form. `verify_circuit`'s `syntax` check reports the same as a `directive_syntax` error, and `edit_schematic` refuses to write it |
 | `lib-section-ltspice` | blocking | refused by LTspice 26 and XVII: `.lib file section`, which LTspice reads as one file name |
 | `byte-85-ltspice` | warning | LTspice: a byte 0x85 in an 8-bit deck or include with a card after it on the line, which LTspice 24 and later read as a line break and XVII does not; not reported when the session's LTspice is known to be XVII |
@@ -2209,12 +2231,31 @@ top-level device does, which needs a model with one definition; a binned
 model is refused with `model_missing`. The draw uses the device's W and L
 after `assign` variations are applied. The area a draw stands for is `m·W·L`,
 because the simulator builds m parallel copies from one card and they share
-the draw. On ngspice m is the product of the device's own `m` and the `m` of
-every subcircuit instance above it; LTspice ignores `m` on an X line, so
-there m is the device's own. An inner `m={mult}` resolves in the scope its X
-line sets. An `m` that does not resolve to a positive number refuses the
-request with `mismatch_geometry_unresolved`. Draws across circuits are
-independent; correlated Monte Carlo across decks is not supported.
+the draw. LTspice ignores `m` on an X line, so there m is the device's own.
+ngspice, as measured on ngspice-42, drops the subcircuits no instance reaches
+and then reads the deck once in order, includes and `.lib` sections in
+place. An X line that carries `m` makes it rewrite the subcircuit called,
+unless that one declares `m` (on its `.subckt` line or in a body `.param`):
+the subcircuit gets an `m` parameter, default 1, and `m={m}` is appended to
+each C, D, F, G, I, J, L, M, Q, R, X and Z card of its body; an A, B, E, H,
+K, S, T, V or W card is left as written, and a card of another letter there
+has an unknown count. An X line so given
+`m` rewrites its own callee in turn only if it sits later in the deck than
+the line that rewrote its body. The appended `m` replaces a card's own
+outside the HSPICE modes (the `kiltpsa` spicelib runs by default) and
+multiplies it in them (`ngbehavior` `hsa`); an X line's `m` on a subcircuit
+that declares `m` is an ordinary parameter. So m is the device's `m` after
+that rewrite, read in the scope its X lines set. A deck where the rewrite
+gives `m` to an X line calling a subcircuit that takes no parameters is
+refused with `multiplier_rewrite_stops`, as ngspice stops on it. An inner `m={mult}` resolves in the scope
+its X line sets. An `m` that does not resolve to a positive number refuses
+the request with `mismatch_geometry_unresolved`. On ngspice, a case whose
+edits, the private subcircuit copies a nested target needs among them, would
+change what a card no edit writes builds is refused with
+`multiplier_rewrite_changed`, naming a fix where one keeps the circuit. A deck with no semantic profile (QSPICE, Xyce)
+counts the product of the X line's `m` and the device's own; neither
+simulator's rule is measured. Draws across circuits are independent;
+correlated Monte Carlo across decks is not supported.
 
 A random case's draws follow from the seed, its circuit id and its sample
 index, never from the case's position among the request's cases. Every case
@@ -2233,6 +2274,28 @@ entry has one, its `id` as `_random_id`, in its assignments, a case skipped
 before it ran included. A circuit whose deck fails before its variations
 expand (an include that cannot be staged) records no assignments on its
 cases; their failure says why.
+
+The receipt compares the samples of a `random` or `pdk_native` entry by what
+they computed, one `assign` point at a time. Each produced sample keeps a
+digest of its raw: every plot's variables and points, a complex frequency or
+other sampled axis by its real part, and nothing else of its headers. Where every sample
+compared at a point computed one result, an `identical_samples` observation
+(`kind: "sampling"`) lists the point in its `evidence.groups` as `circuit`,
+`assigned` (that point's `assign` values, left out when the entry has none)
+and `samples` (how many were compared): their draws changed nothing the
+simulator saved there. A point whose samples give two results or more is not
+listed, since some draw changed what was saved. A circuit whose every
+compared point computed one result is one group with its `points`. The
+detail speaks for each circuit: "All samples of …" when every sample of every
+point ran and was compared, "Every sample of … that was compared" when some
+were not, and "Samples of … computed the same results at the assign points
+listed for them" when other points differ; on a job with runs still to finish
+it says "so far". At most ten points are listed, in the order the cases ran,
+with `points_truncated` giving how many there are. A produced sample with no
+digest (recorded before samples were compared, or a raw the reader cannot
+walk to its end) at a point with another produced sample is counted in a
+`samples_not_compared` observation. Neither observation appears when every
+sample was compared and no point computed one result.
 
 ### A.2 Recipe
 
@@ -2270,7 +2333,7 @@ it, and reported when the caller names it.
 | `timing` | tran | `from{signal, edge, level}`, `to{...}` | `nth?`, `window?` |
 | `periodic` | tran | `signal` | `window?`; period, frequency, duty cycle |
 | `transient_response` | tran | `signal`, `mode: "step"\|"disturbance"` | `input` is required for `disturbance` and rejected for `step`; `window?` |
-| `thd` | tran | `signal` | `fundamental_hz?`, `harmonics?` (default 7), `window?` |
+| `thd` | tran | `signal` | `fundamental_hz?`, `harmonics?` (default 7, held to 50), `window?` |
 | `tone` | tran | `signal`, `frequency_hz` | `window?`; cut to the whole periods of `frequency_hz` that fit from the window's first sample and resampled by linear interpolation onto evenly spaced times, as `thd` does by default, so samples weigh by time. `amplitude` (peak, signal unit), `phase_deg` in (-180, 180] for `dc + amplitude*sin(2*pi*f*t + phase_deg)` with `t` the run's own time from zero, `sin_component`, `cos_component`, `dc`, plus `t_start`, `t_end`, `n_cycles`. Reducible leaves: `amplitude`, `phase_deg`, `dc`, `sin_component`, `cos_component`; a spread of `phase_deg` that straddles 180 degrees reduces the wrapped value, the components do not wrap |
 | `bode_filter` | ac | `signal` | filter characteristics: fc, bw, Q, type; a cutoff is read at the half-power level (-3.0103 dB) below the passband |
 | `bode_point` | ac | `signal`, `at_hz` | gain and phase at a frequency |
@@ -2298,8 +2361,8 @@ library otherwise.
 
 ### A.3 Edit ops
 
-The fourteen op kinds, discriminated on `op`, are `add_component`,
-`move_component`, `move`, `remove_component`, `set_component_value`,
+The fifteen op kinds, discriminated on `op`, are `add_component`,
+`move_component`, `replace_component`, `move`, `remove_component`, `set_component_value`,
 `set_component_attribute`, `add_net_label`, `remove_net_label`, `wire_pins`,
 `remove_wire`, `add_directive`, `remove_directive`, `replace_directive`,
 `set_plot_panes`. The batch
@@ -2317,21 +2380,50 @@ the parts there are.
 parts by `references`, net labels and grounds by point (`labels`), wires by
 their two ends (`wires`), and directives and comments by exact text or
 `regex:` (`texts`). A `region` also selects what lies inside it, edges
-included, testing a part by its box, a wire by its two ends, a label by its
-point and a text by its anchor. With `drag`, an end of any other wire that
+included, testing a part by its whole box, a wire by its two ends, a label by
+its point and a text by its anchor. With `drag`, an end of any other wire that
 lies on what moves (a moved pin, label or wire end, a point along a wire that
 moves whole, or with `region` any end inside it) moves too, so the wire stays
-attached, and so does a label or ground on any of those points; a wire
-dragged off its axis is reported as diagonal. A part's attribute text moves
-with it. Something named that is not there is refused, and so is a move that
-would join two nets that each have a name (names compared as LTspice compares
-them, in any case), before anything changes. The result's `moved` counts what
+attached, and so does a label or ground on any of those points. A wire both
+of whose ends move moves whole, taking what lies along it. A wire dragged off
+its axis is reported as diagonal. A part's attribute text moves with it.
+Something named that is not there is refused, and so is a move that would
+join two nets that each have a name (names compared as LTspice compares them,
+in any case), before anything changes. With `drag`, a move that would cut
+anything that stays off from what moves is refused as well, with what would
+part, what stays and how to take it along: a part whose pin touches a moved
+pin with no wire, lies inside a wire that moves, or is held by a region only
+in part; a label or a wire's end along a wire that stretches rather than
+moving whole. Naming every part of the net that stays in `references` moves
+the whole net. The result's `moved` counts what
 moved and lists the parts. Applying the opposite offset to what it moved puts
 everything back. `move_component` places one part at a position and can turn
 it.
 
-`remove_wire` removes an exact segment. `remove_component` takes
-`cleanup_wires` to also delete the wires its removal leaves dangling.
+`replace_component` gives a part a new `symbol` where it stands. The part
+keeps its reference, place, turn and attributes, and its value unless `value`
+gives one; the old symbol's attribute text placements are dropped, so the new
+symbol places its own. Each old pin is paired with the new pin of the same
+name, in any case, or as `pins` pairs them (old pin to new pin, each by name
+or SpiceOrder). A paired pin that moved is wired back to where its old
+wiring ends, by a route the `wire_pins` planner accepts: straight, round one
+corner, or across halfway with two; the result's `wires` lists what was
+drawn. The swap must then leave each paired pin joined to what its old pin
+was joined to, each unpaired new pin joined to nothing, and every other net
+as it was; otherwise it is refused with what the pin would join, and the
+sheet is left as it was. The result's `was` is the old symbol, `left_at`
+gives the place of each old pin that had wiring and no partner, whose wiring
+is left there joined to nothing of the part, and `unpaired_pins` names the
+new pins left unconnected. Applied again with `was` as the symbol it puts the
+symbol back; the wires it drew stay, for `remove_wire`.
+
+`remove_wire` removes an exact segment; a segment drawn more than once goes
+whole, and is refused when that would cut its net in two, since asking to
+remove a duplicate is not asking to cut a connection. `remove_component` takes
+`cleanup_wires` to also delete the wires its removal leaves dangling: a wire
+with an end on one of its pins goes when taking it away parts nothing it
+joins by wire, so a wire that still joins two or more pins or labels (another
+wire's, at the pin, or ones along it) stays.
 `add_directive` takes `kind`, `directive` (simulated) or `comment` (ignored by
 LTspice). `remove_directive` and `move`'s `texts` name directives and comments
 by one rule. A literal names every text equal to it, space around either

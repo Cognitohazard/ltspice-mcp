@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 import struct
 from pathlib import Path
 from types import SimpleNamespace
@@ -1297,3 +1299,164 @@ class TestBuildSimulationSummary:
         assert type(summary["step_count"]) is int
         assert type(summary["range"]["time_start"]) is float
         assert type(summary["range"]["time_end"]) is float
+
+
+class TestResultDigest:
+    """``result_digest`` says whether two runs computed the same numbers: it
+    reads every plot's name, variables and data, and none of a header's other
+    lines, which carry the date the file was written."""
+
+    @staticmethod
+    def _redated(data: bytes, codec: str) -> bytes:
+        """``data`` with every header's date changed, as a later run writes it."""
+        marker = "Date:".encode(codec)
+        assert data.count(marker) >= 1
+        changed = bytearray(data)
+        start = 0
+        while (at := changed.find(marker, start)) >= 0:
+            end = at + len(marker)
+            changed[end : end + len("XX".encode(codec))] = "XX".encode(codec)
+            start = end
+        return bytes(changed)
+
+    @pytest.mark.parametrize(
+        ("fixture", "codec", "dialect"),
+        [
+            ("ltspice_tran_rc.raw", "utf-16-le", "ltspice"),
+            ("ltspice_step_tran.raw", "utf-16-le", "ltspice"),
+            # Two plots, each with its own dated header.
+            ("ngspice_noise_2plot.raw", "ascii", "ngspice"),
+        ],
+    )
+    def test_the_same_numbers_digest_the_same_whatever_the_date(
+        self, tmp_path: Path, fixture: str, codec: str, dialect: str
+    ):
+        from ltspice_mcp.lib.raw_parser import result_digest
+
+        data = (FIXTURES_DIR / fixture).read_bytes()
+        original, redated, changed = (tmp_path / name for name in ("a.raw", "b.raw", "c.raw"))
+        original.write_bytes(data)
+        redated.write_bytes(self._redated(data, codec))
+        flipped = bytearray(data)
+        flipped[-3] ^= 0xFF
+        changed.write_bytes(bytes(flipped))
+
+        digest = result_digest(original, dialect)
+        assert digest is not None
+        assert result_digest(redated, dialect) == digest
+        assert result_digest(changed, dialect) != digest
+
+    def test_a_file_that_is_no_raw_has_no_digest(self, tmp_path: Path):
+        from ltspice_mcp.lib.raw_parser import result_digest
+
+        path = tmp_path / "not.raw"
+        path.write_bytes(b"not a raw file\n")
+        assert result_digest(path) is None
+
+    @pytest.mark.parametrize(
+        "variant", ["", "_ascii", "sp_"], ids=["ac-binary", "ac-ascii", "sp-binary"]
+    )
+    def test_two_ngspice_ac_runs_of_one_deck_digest_the_same(self, variant: str):
+        """ngspice-42 writes the imaginary part of an AC frequency from memory
+        it never set, so two runs of one deck differ there (recorded pair); the
+        digest reads a complex axis by its real part."""
+        from ltspice_mcp.lib.raw_parser import result_digest
+
+        first, second = (
+            FIXTURES_DIR
+            / "ngspice_ac_rerun"
+            / (f"{variant}{run}.raw" if variant == "sp_" else f"{run}{variant}.raw")
+            for run in ("a", "b")
+        )
+        assert first.read_bytes() != second.read_bytes()
+        digest = result_digest(first, "ngspice")
+        assert digest is not None
+        assert result_digest(second, "ngspice") == digest
+
+    def test_a_deck_path_in_the_title_is_not_digested(self, tmp_path: Path):
+        """LTspice titles a raw with the path of the deck it ran, which is each
+        case's own."""
+        from ltspice_mcp.lib.raw_parser import result_digest
+
+        data = (FIXTURES_DIR / "ltspice_tran_rc.raw").read_bytes()
+        line_end = data.index("\n".encode("utf-16-le"))
+        retitled = "\ufeffTitle: * C:\\runs\\case-0042.net".encode("utf-16-le")[2:]
+        assert data.startswith(b"\xff\xfe") or data.startswith(retitled[:10])
+        start = 2 if data.startswith(b"\xff\xfe") else 0
+        (tmp_path / "a.raw").write_bytes(data)
+        (tmp_path / "b.raw").write_bytes(data[:start] + retitled + data[line_end:])
+
+        assert result_digest(tmp_path / "a.raw", "ltspice") == result_digest(
+            tmp_path / "b.raw", "ltspice"
+        )
+
+    @pytest.mark.parametrize(
+        "fixture", ["ltspice_tran_rc.raw", "ngspice_noise_2plot.raw", "ngspice_ac_rerun/a.raw"]
+    )
+    def test_a_raw_cut_short_has_no_digest(self, tmp_path: Path, fixture: str):
+        """A file holding fewer points than its header declares, as a run
+        stopped mid-write leaves, computed nothing to compare."""
+        from ltspice_mcp.lib.raw_parser import result_digest
+
+        data = (FIXTURES_DIR / fixture).read_bytes()
+        path = tmp_path / "cut.raw"
+        path.write_bytes(data[: len(data) - 7])
+        assert result_digest(path) is None
+
+    @pytest.mark.parametrize(
+        "fixture",
+        ["ltspice_tran_rc.raw", "ltspice_recorded/ltspice26/raw/tran_fastaccess.raw"],
+    )
+    def test_a_point_count_past_the_end_of_the_file_has_no_digest(
+        self, tmp_path: Path, fixture: str
+    ):
+        """A header that declares more points than the file can hold is read
+        as a file cut short, not by reading what it declares."""
+        import re
+
+        from ltspice_mcp.lib.raw_parser import result_digest
+
+        data = (FIXTURES_DIR / fixture).read_bytes()
+        count = re.compile(
+            re.escape("No. Points:".encode("utf-16-le")) + rb"(?: \x00|\t\x00)*(?:\d\x00)+"
+        )
+        inflated = count.sub("No. Points: 9999999999999".encode("utf-16-le"), data, count=1)
+        assert inflated != data
+        path = tmp_path / "inflated.raw"
+        path.write_bytes(inflated)
+        assert result_digest(path) is None
+
+    @pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH")
+    def test_a_pole_keeps_its_imaginary_part(self, tmp_path: Path):
+        """A .pz plot's first variable is a pole, not an axis its points are
+        sampled on, so a change in its imaginary part is a change in what the
+        run computed."""
+        import subprocess
+
+        from ltspice_mcp.lib.raw_parser import result_digest
+        from tests.conftest import LIVENESS_S
+
+        deck = tmp_path / "pz.cir"
+        deck.write_text(
+            "* rlc poles\nV1 in 0 ac 1\nR1 in out 10\nL1 out x 1m\nC1 x 0 1u\n"
+            ".pz in 0 x 0 vol pz\n.end\n",
+            encoding="ascii",
+        )
+        raw = tmp_path / "pz.raw"
+        subprocess.run(
+            ["ngspice", "-b", "-r", str(raw), str(deck)],
+            capture_output=True,
+            timeout=LIVENESS_S,
+            check=False,
+            cwd=tmp_path,
+            env={**os.environ, "SPICE_USERINIT_DIR": str(tmp_path), "HOME": str(tmp_path)},
+        )
+        data = raw.read_bytes()
+        start = data.index(b"Binary:\n") + len(b"Binary:\n")
+        changed = bytearray(data)
+        changed[start + 12] ^= 0x01  # inside the first pole's imaginary part
+        (tmp_path / "changed.raw").write_bytes(bytes(changed))
+
+        digest = result_digest(raw, "ngspice")
+        assert digest is not None
+        assert result_digest(tmp_path / "changed.raw", "ngspice") != digest

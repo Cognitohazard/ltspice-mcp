@@ -797,7 +797,7 @@ def test_windows_spelled_include_reaches_the_resolver_as_a_real_path(
 
 
 def test_a_schematic_is_refused_rather_than_lexed_as_spice(tmp_path: Path) -> None:
-    """An ``.asc`` handed to the graph engine is a comparison of the wrong thing.
+    """An ``.asc`` handed to the netlist graph is a comparison of the wrong thing.
 
     Lexed as SPICE, ``SYMBOL``/``SYMATTR`` lines parse as element cards, so a
     comparison against a schematic reported its drawing records as components.

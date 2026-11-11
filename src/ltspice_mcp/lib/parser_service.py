@@ -19,6 +19,7 @@ import json
 import shutil
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import asdict
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -55,6 +56,14 @@ PROCESS_LIMITS = ParserProcessLimits(
     error_bytes=16 * 1024,
     cleanup_grace_s=3.0,
 )
+SIGNALS_BYTES = 20 * 1024
+"""The most a read's chosen signals may take of the parser request, as JSON:
+64 names of 256 plain characters, within the request's limit beside its paths.
+A character outside ASCII takes up to six bytes there."""
+DECODE_BYTES = PROCESS_LIMITS.memory_bytes // 2
+"""The most numbers a read of chosen signals may have the parser hold while it
+decodes them (``raw_decode.numbers_held``): half its memory, the rest left to
+the interpreter and the arithmetic on the axis."""
 _DIALECTS = {"ltspice", "ngspice", "qspice", "xyce"}
 _ROLES = ("raw", "log", "console")
 _SETTLE_NS = 100_000_000
@@ -166,6 +175,17 @@ def load_artifacts_sync(
     if type(source.plot_index) is not int or source.plot_index < 0:
         raise ResultError("RAW plot_index must be a nonnegative integer")
     limits = raw_limits(state.config.max_raw_mb)
+    chosen: dict[str, JsonValue] | None = (
+        {
+            # In one order, so a read of the same names is one parse.
+            "signals": None if source.signals is None else [*sorted(source.signals)],
+            "window": None if source.window is None else [*source.window],
+            "plot_index": source.plot_index,
+            "decode_bytes": DECODE_BYTES,
+        }
+        if require_raw and (source.signals is not None or source.window is not None)
+        else None
+    )
     policy: dict[str, JsonValue] = {
         "dialect": _dialect(source.explicit_dialect),
         "producing_dialect": _dialect(source.dialect),
@@ -175,6 +195,7 @@ def load_artifacts_sync(
             "step_rows": STEP_ROWS,
             "metadata_bytes": METADATA_BYTES,
         },
+        "chosen": chosen,
     }
     try:
         _check_active(deadline, cancel)
@@ -355,6 +376,18 @@ def _load(
             raise failure from exc
         if exc.code == "deadline":
             raise AnalysisDeadlineExceeded("Artifact parsing exceeded its deadline") from exc
+        if exc.code in ("signals_not_found", "window_refused"):
+            raise ResultError(f"{label}: {exc}", show_hint=False) from exc
+        if exc.code == "too_large":
+            chosen = policy.get("chosen")
+            raise ResultError(
+                _too_large(label, str(exc), chosen=chosen if isinstance(chosen, dict) else None),
+                show_hint=False,
+                # A whole read's refusal ends in the Python read that keeps less.
+                python_route=chosen is None,
+            ) from exc
+        if exc.code == "too_large_to_decode":
+            raise ResultError(_too_large_to_decode(label, str(exc)), show_hint=False) from exc
         raise ResultError(f"Failed to parse result file {label}: {exc}") from exc
     except (ValueError, OSError) as exc:
         if not reaped:
@@ -368,3 +401,33 @@ def _load(
                 shutil.rmtree(directory)
             except OSError as exc:
                 raise ParserCleanupError(directory) from exc
+
+
+def _too_large(label: object, reason: str, *, chosen: Mapping[str, JsonValue] | None) -> str:
+    """Why a result was not read, as the worker counted it, and what reads less."""
+    if chosen is not None:
+        fewer = (
+            "Choose a shorter window, or keep only the traces you need with signals=[...]"
+            if chosen.get("signals") is None
+            else "Choose fewer signals or a shorter window (window=(start, end) keeps "
+            "the points of the axis between them), or read them in more than one load"
+        )
+        return f"{label} was not read: {reason}. {fewer}."
+    return (
+        f"{label} was not read: {reason}. Make the run write fewer numbers: .save only "
+        "the nodes you need, shorten the .tran, or measure with .meas instead of keeping "
+        "the waveform. Or read only the traces you need, the stretch of the axis you "
+        "need, or both, with the axis and any step parameters, from a file holding up "
+        f"to {DECODE_BYTES // 2**30} GiB of numbers or a larger one in LTspice's Fast "
+        "Access layout: r = api.load_raw(..., signals=['V(out)', 'I(R1)'], "
+        "window=('1m', '2m'))"
+    )
+
+
+def _too_large_to_decode(label: object, reason: str) -> str:
+    """Why a selective read was not made: the worker's reason names what reads less."""
+    return (
+        f"{label} was not read: {reason}. Or make the run write fewer numbers: .save only "
+        "the nodes you need, shorten the .tran, or measure with .meas instead of keeping "
+        "the waveform."
+    )

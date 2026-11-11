@@ -49,9 +49,7 @@ def test_raw_result_reports_native_table_without_inventing_axis_or_units():
         [np.array([2 / 3]), np.array([1500.0])],
         snapshot_id="table-example",
     )
-    result = RawResult(
-        DecodedRaw([plot]), source=Path("table.raw"), dialect="ngspice", step_count=1, steps=[{}]
-    )
+    result = RawResult(DecodedRaw([plot]), source=Path("table.raw"), dialect="ngspice")
     assert result.analysis_type == "tf"
     assert result.plot_index == 0
     assert result.descriptor["axis"] is None
@@ -149,7 +147,7 @@ def test_a_case_selection_beside_a_path_needs_a_job(state_no_sim, work_dir, sele
     path and failed a case selection with an internal error."""
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     for job_id in ({"job_id": ""}, {}):
-        with pytest.raises(ApiValidationError, match="job_id" if job_id else "experiment job"):
+        with pytest.raises(ApiValidationError, match="job_id"):
             SyncApi(state_no_sim).analyze_results(
                 sources=[{"path": str(raw), "label": "a", **job_id, **selection}],
                 recipes=[{"metric": "summary", "key": "s"}],
@@ -324,9 +322,7 @@ def test_native_table_wrapper_detaches_inventory_and_keeps_complex_values():
         [np.array([-2 + 3j])],
         snapshot_id="pz-example",
     )
-    result = RawResult(
-        DecodedRaw([plot]), source=Path("pz.raw"), dialect="ngspice", step_count=1, steps=[{}]
-    )
+    result = RawResult(DecodedRaw([plot]), source=Path("pz.raw"), dialect="ngspice")
     result.descriptor["traces"][0]["name"] = "changed"
     assert result.plots[0]["traces"][0]["name"] == "pole(1)"
     assert result.table()[0]["value"] == {"real": -2.0, "imag": 3.0}

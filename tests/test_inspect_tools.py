@@ -250,7 +250,7 @@ async def test_capabilities_reports_what_is_missing(
 
 async def test_capabilities_carries_startup_diagnostics(config: ServerConfig):
     """A server that started degraded — a configured simulator path that does
-    not exist, a requested engine that fell back to another — says so only in
+    not exist, a requested simulator that fell back to another — says so only in
     its own stderr log, which no client reads. The capabilities query is where
     a client can see it, so the notes have to ride there."""
     state = SessionState.create(
@@ -270,7 +270,7 @@ async def test_capabilities_names_the_keys_that_turn_a_simulator_on(cap_state: S
     """Every known-but-undetected simulator carries remediation naming the
     SAME config keys the loader reads — the config self-diagnosis surface.
     The fixture state detects only LTspice and ngspice, so the other two
-    engines are the specimens."""
+    simulators are the specimens."""
     from ltspice_mcp.config import SIM_PATH_ENV
 
     (res,) = await _run(cap_state, [{"kind": "capabilities"}])
@@ -425,6 +425,112 @@ async def test_net_netlist_lists_the_decks_own_cards_only(
     }
     # Node 0 with no gnd spelling on it needs no note.
     assert "warnings" not in by_pin["data"]
+
+
+async def test_net_netlist_refuses_a_name_that_is_no_node_of_the_decks_own_cards(
+    work_dir: Path, state_no_sim: SessionState
+):
+    """``b`` is on cards of ``cell``'s body only, ``X9.b`` and ``ot`` on no
+    card at all: each was answered as a net with nothing on it. Each is now
+    refused, as a sheet refuses a name none of its labels carries, naming the
+    deck's nodes, the subcircuit that uses ``b``, and the node ``ot`` misspells.
+    Ground is a node of every deck."""
+    deck = work_dir / "scoped.cir"
+    deck.write_text(
+        "* scoped\nR1 a out 1k\n.subckt cell a b\nR1 a b 1k\n.ends\nX1 a out cell\n.end\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    inner, dotted, typo, ground = await _run(
+        state_no_sim,
+        [
+            {"kind": "net", "path": str(deck), "at": "net:b"},
+            {"kind": "net", "path": str(deck), "at": "X9.b"},
+            {"kind": "net", "path": str(deck), "at": "ot"},
+            {"kind": "net", "path": str(deck), "at": "gnd"},
+        ],
+    )
+    for item in (inner, dotted, typo):
+        assert item["ok"] is False, item
+        assert item["error"]["code"] == "not_found"
+        assert "Its nodes are a, out;" in item["error"]["message"]
+    assert ".subckt cell" in inner["error"]["message"]
+    assert "inspect(kind='hierarchy')" in inner["error"]["message"]
+    assert ".subckt" not in dotted["error"]["message"]
+    assert "Did you mean 'out'?" in typo["error"]["message"]
+    assert ground["ok"] is True, ground
+    assert ground["data"]["total_members"] == 0
+
+
+async def test_net_netlist_refusal_says_what_the_query_did_not_read(
+    work_dir: Path, state_no_sim: SessionState
+):
+    """A name on a card of a file the deck includes, or a ``.global`` name only
+    a subcircuit's body uses, is not said to be missing from the deck: the
+    refusal says the query reads neither. A near miss of ground spelled
+    ``gnd`` is offered as the deck spells it, and a name close to nothing is
+    refused, not a crash."""
+    (work_dir / "part.cir").write_text("R7 q a 1k\n", encoding="utf-8", newline="\n")
+    deck = work_dir / "rail.cir"
+    deck.write_text(
+        "* rail\n.include part.cir\n.global vdd\n.subckt load out\nR1 vdd out 1k\n.ends\n"
+        "V1 a gnd 1\nR2 a gnd 1k\nX1 a load\n.end\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    included, rail, near_ground, far = await _run(
+        state_no_sim,
+        [{"kind": "net", "path": str(deck), "at": at} for at in ("q", "vdd", "gn", "00")],
+    )
+    for item in (included, rail, near_ground, far):
+        assert item["ok"] is False, item
+        assert item["error"]["code"] == "not_found", item
+        assert (
+            "through .include or .lib, which the net query does not read"
+            in (item["error"]["message"])
+        )
+    assert "It is a .global net" in rail["error"]["message"]
+    assert "only .subckt load uses it" in rail["error"]["message"]
+    assert "Did you mean 'gnd'?" in near_ground["error"]["message"]
+    assert "Did you mean" not in far["error"]["message"]
+
+
+async def test_net_netlist_refusal_counts_no_body_whose_port_has_the_global_name(
+    work_dir: Path, state_no_sim: SessionState
+):
+    """Inside a subcircuit whose port is named like a ``.global`` net, the
+    name is that port, as both LTspice builds record (``deck/global_port``),
+    so the refusal of the global's name does not say that body uses it."""
+    deck = work_dir / "rail.cir"
+    deck.write_text(
+        "* rail\n.global vdd\n.subckt load out vdd\nR1 vdd out 1k\n.ends\n"
+        "V1 a 0 1\nX1 a b load\nR2 b 0 1k\n.end\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    (rail,) = await _run(state_no_sim, [{"kind": "net", "path": str(deck), "at": "vdd"}])
+    assert rail["ok"] is False, rail
+    assert rail["error"]["code"] == "not_found", rail
+    assert "It is a .global net" in rail["error"]["message"]
+    assert ".subckt load" not in rail["error"]["message"]
+
+
+async def test_net_netlist_refusal_lists_a_few_nodes_and_counts_them_all(
+    work_dir: Path, state_no_sim: SessionState
+):
+    """The refusal of a name that is no node lists the deck's first few nodes,
+    the total, and the query that lists every one."""
+    deck = work_dir / "ladder.cir"
+    cards = "".join(f"R{i} n{i} n{i + 1} 1k\n" for i in range(1, 11))
+    deck.write_text(f"* ladder\n{cards}.end\n", encoding="utf-8", newline="\n")
+
+    (res,) = await _run(state_no_sim, [{"kind": "net", "path": str(deck), "at": "nosuch"}])
+
+    assert res["error"]["code"] == "not_found"
+    assert res["error"]["message"].endswith(
+        "Its nodes include n1, n2, n3, n4, n5, n6, n7, n8: showing 8 of 11 nodes; "
+        "inspect(kind='components', detail='full') lists each card's nodes."
+    )
 
 
 async def test_net_netlist_carries_the_lexers_warnings(work_dir: Path, state_no_sim: SessionState):

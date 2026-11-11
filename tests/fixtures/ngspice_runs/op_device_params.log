@@ -1,0 +1,48 @@
+
+Note: Compatibility modes selected: ps lt ki a
+
+
+Circuit: * floating gate: node x reaches the supplies only through c1
+
+binary raw file "op_device_params.raw"
+Doing analysis at TEMP = 27.000000 and TNOM = 27.000000
+
+Using SPARSE 1.3 as Direct Linear Solver
+No. of Data Columns : 3  
+Warning: singular matrix:  check node x
+
+Note: Starting dynamic gmin stepping
+Warning: singular matrix:  check node x
+
+Warning: Dynamic gmin stepping failed
+Note: Starting true gmin stepping
+Warning: singular matrix:  check node x
+
+Warning: singular matrix:  check node x
+
+Warning: singular matrix:  check node x
+
+Warning: singular matrix:  check node x
+
+Warning: True gmin stepping failed
+Note: Starting source stepping
+Warning: source stepping failed
+Note: Transient op started
+Note: Transient op finished successfully
+
+No. of Data Rows : 1
+
+Total analysis time (seconds) = 0.001
+
+Total elapsed time (seconds) = 0.003 
+
+Total DRAM available = 16086.023 MB.
+DRAM currently available = 13521.035 MB.
+Maximum ngspice program size =   29.434 MB.
+Current ngspice program size =   13.156 MB.
+
+Shared ngspice pages =   11.082 MB.
+Text (code) pages =    6.156 MB.
+Stack = 0 bytes.
+Library pages =   10.172 MB.
+

@@ -29,6 +29,7 @@ from ltspice_mcp.lib.experiment_runner import CancelNotAuthorized, ExperimentCan
 from ltspice_mcp.lib.netlist_graph import PortArityMismatch, flatten_graph, parse_netlist_graph
 from ltspice_mcp.lib.raw_parser import query_point_value
 from ltspice_mcp.lib.schematic_ops import make_editor
+from ltspice_mcp.lib.symbol_library import SymbolLibrary
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
@@ -251,24 +252,29 @@ class TestSchematicDependencyIsTyped:
         assert not isinstance(exc.value, SymbolResolutionError)
         assert "File not found" in str(exc.value)
 
-    def test_missing_model_library_is_a_dependency_failure(
+    def test_missing_symbol_of_a_blocks_sheet_is_a_dependency_failure(
         self, work_dir: Path, asc_symbols: Path
     ):
-        # A subcircuit symbol whose model library is gone: the editor names the
-        # missing .lib, so a ".asy" match would blame the schematic that opened.
-        (work_dir / "myamp.asy").write_text(
-            "Version 4\nSymbolType CELL\nSYMATTR Prefix X\nSYMATTR ModelFile nosuch.lib\n"
-            "SYMATTR Value myamp\nPIN 0 0 LEFT 8\nPINATTR PinName A\n",
+        # A block whose own sheet places a symbol that is gone: the schematic
+        # opened, so the failure is its dependency's, named in the message. A
+        # missing model library is none: no reader of a sheet needs one, and
+        # the sheet opens (test_symbol_library.py).
+        (work_dir / "myblock.asy").write_text(
+            "Version 4\nSymbolType BLOCK\nPIN 0 0 LEFT 8\nPINATTR PinName A\n",
+            encoding="utf-8",
+        )
+        (work_dir / "myblock.asc").write_text(
+            "Version 4\nSHEET 1 880 680\nSYMBOL nosuch 0 0 R0\nSYMATTR InstName X1\n",
             encoding="utf-8",
         )
         sheet = work_dir / "top.asc"
         sheet.write_text(
-            "Version 4\nSHEET 1 880 680\nSYMBOL myamp 0 0 R0\nSYMATTR InstName X1\n",
+            "Version 4\nSHEET 1 880 680\nSYMBOL myblock 0 0 R0\nSYMATTR InstName X1\n",
             encoding="utf-8",
         )
         with pytest.raises(SymbolResolutionError) as exc:
-            make_editor(sheet)
-        assert "nosuch.lib" in str(exc.value)
+            make_editor(sheet, SymbolLibrary().for_sheet(sheet))
+        assert "'nosuch'" in str(exc.value)
 
 
 class TestNoAxisIsTyped:
@@ -416,13 +422,14 @@ def _error_classes() -> list[type[LTSpiceMCPError]]:
 # codes built into the failure and observation records anywhere in the package.
 # The scan follows the whole tree rather than a list of directories, so a code's
 # membership follows where it is emitted — the tools, the analysis metrics, the
-# experiment coordinator, the variation and staging engines, and the Python
+# experiment coordinator, the variation and staging code, and the Python
 # API's detached hand-off all reach a client through one of these.
 #
 # ADDING a code is fine — add it here in the same commit and the test passes.
 # RENAMING or REMOVING one is a public, client-visible change: a caller that
 # branches on `error.code` or reads an observation code has no way to notice,
-# so it needs a CHANGELOG entry saying which code changed and what replaced it.
+# so it needs a changelog fragment (changelog.d/) saying which code changed and
+# what replaced it.
 FROZEN_ERROR_CODES = (
     "ambiguous_inner_device",
     "ambiguous_instance_ref",
@@ -475,6 +482,7 @@ FROZEN_ERROR_CODES = (
     "geometry_not_literal",
     "hierarchy_write_conflict",
     "idempotency_conflict",
+    "identical_samples",
     "image_unavailable",
     "include_unstaged",
     "inner_device_not_found",
@@ -520,6 +528,8 @@ FROZEN_ERROR_CODES = (
     "model_missing",
     "multiple_random_variations",
     "multiple_stochastic_families",
+    "multiplier_rewrite_changed",
+    "multiplier_rewrite_stops",
     "native_log_output",
     "nested_fet_unsupported",
     "netlist_invalid",
@@ -623,6 +633,7 @@ FROZEN_ERROR_CODES = (
     "revision_conflict",
     "run_not_found",
     "run_progress",
+    "samples_not_compared",
     "search_error",
     "selector_conflict",
     "semantic_profile_required",
@@ -632,6 +643,8 @@ FROZEN_ERROR_CODES = (
     "sheet_locked",
     "sheet_missing",
     "sheet_not_open",
+    "signals_chosen",
+    "signals_not_found",
     "simulation_failed",
     "simulator_docs_unavailable",
     "solve_failure",
@@ -649,7 +662,8 @@ FROZEN_ERROR_CODES = (
     "submission_failed",
     "symbol_not_found",
     "symbol_unresolved",
-    "trace_summary_truncated",
+    "too_large",
+    "too_large_to_decode",
     "trace_unit_unknown",
     "transport_delay",
     "unencodable_device_ref",
@@ -663,10 +677,12 @@ FROZEN_ERROR_CODES = (
     "unsupported_variant",
     "unwrap_warning",
     "widget_unavailable",
+    "window_chosen",
     "window_empty_steps",
     "window_not_chosen",
     "window_not_discarded",
     "window_not_saved",
+    "window_refused",
     "windows_native_storage_unavailable",
     "worker_crashed",
 )
@@ -699,8 +715,9 @@ class TestErrorCodeVocabulary:
         )
         assert not gone, (
             f"These error codes are no longer emitted: {gone}. Renaming or removing "
-            "a code is a client-visible change: give it a CHANGELOG entry naming the "
-            "old code and its replacement, then update FROZEN_ERROR_CODES."
+            "a code is a client-visible change: add a changelog fragment under "
+            "changelog.d/ naming the old code and its replacement, then update "
+            "FROZEN_ERROR_CODES."
         )
 
     def test_frozen_list_is_sorted_and_unique(self):

@@ -122,15 +122,9 @@ def _coverage(hierarchy: Hierarchy, sources: _Sources) -> tuple[MosCoverage, ...
         mult = environment.get("mult")
         nf = parameters.get("nf", environment.get("nf"))
 
-        # SPICE defaults an omitted device/call multiplier to one. An unrelated
-        # parameter named m is not a multiplier unless the instance uses it.
-        multipliers = [
-            dict(rows[tuple(p.casefold() for p in row.instance[:depth])].parameters).get("m")
-            for depth in range(1, len(row.instance) + 1)
-        ]
-        multiplicity = (
-            1.0 if all(fact is None or fact.value == 1 for fact in multipliers) else None
-        )
+        # The copies the simulator builds from the device's card, read with its
+        # rule for an X line's m (hierarchy_expr.card_copies); None if unknown.
+        multiplicity = row.multiplier.value if row.multiplier is not None else None
         coverage.append(
             MosCoverage(
                 row.instance,

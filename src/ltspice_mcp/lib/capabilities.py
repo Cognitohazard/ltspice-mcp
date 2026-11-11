@@ -169,6 +169,13 @@ CAPABILITIES: tuple[Capability, ...] = (
         "ltspice_mcp.lib.metrics",
     ),
     Capability(
+        "statistical_sampling",
+        "baseline",
+        "Draw reproducible samples of a deck's values for a Monte Carlo run, replay any "
+        "one of them, and say where the samples computed the same results.",
+        "ltspice_mcp.lib.variations",
+    ),
+    Capability(
         "progress_in_point",
         "refinement",
         "Report how far a running point has got, from its partial results.",
@@ -390,6 +397,39 @@ ENTRIES: tuple[Entry, ...] = (
         "measurements",
         "unverified",
         "The server's recipes read the results, which are unverified for {display}.",
+    ),
+    # --- statistical_sampling ---------------------------------------------
+    Entry(
+        "ltspice",
+        "statistical_sampling",
+        "supported",
+        (
+            "recorded:value-suffixes",
+            "recorded:mos-instance-mismatch",
+            "recorded:mos-multiplier",
+        ),
+        mechanism=(
+            "The random variation writes each draw into the deck; a mismatch draw inside a "
+            "subcircuit goes into a copy of the device's model."
+        ),
+    ),
+    Entry(
+        "ngspice",
+        "statistical_sampling",
+        "supported",
+        ("test:tests/test_ngspice_e2e.py", "test:tests/test_ngspice_multiplier.py"),
+        mechanism=(
+            "The random variation writes each draw into the deck; a mismatch draw inside a "
+            "subcircuit is the device's delvto and mulu0."
+        ),
+    ),
+    *_each(
+        _UNMODELLED,
+        "statistical_sampling",
+        "unverified",
+        "The random variation writes its draws into the deck as values, but no recording "
+        "or live test of a {display} run exists, and a mismatch draw inside a subcircuit "
+        "needs the hierarchy reader, which does not model {display}.",
     ),
     # --- refinements -------------------------------------------------------
     Entry("ltspice", "progress_in_point", "supported", ("recorded:raw-partial",)),

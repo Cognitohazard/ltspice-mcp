@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import copy
 import functools
-from collections.abc import Callable, Collection, Mapping
+import json
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any, Literal, get_args
 
@@ -34,6 +35,7 @@ from ltspice_mcp.lib.experiment_types import (
     ExperimentStatus,
     ManifestEntry,
     SourceRecord,
+    sample_index,
 )
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
@@ -565,6 +567,159 @@ async def render_run_receipt(
     return result
 
 
+#: How many assign points an ``identical_samples`` observation names; the
+#: rest are counted.
+_SAMPLE_POINT_CAP = 10
+
+#: Where a draw is recorded in a case's assignments, for a case recorded
+#: before it kept its assign values apart (``ExperimentCase.assigned``).
+_DRAWN_PREFIXES = ("random:", "_random_")
+_DRAWN_INSTANCE_FIELDS = frozenset(
+    {("mismatch", None), ("parameter", "delvto"), ("parameter", "mulu0")}
+)
+
+
+def _assign_point(case: ExperimentCase) -> dict[str, Any]:
+    """The ``assign`` values ``case`` ran at: what it recorded, or, for a case
+    recorded before it kept them, its assignments without the draws. A draw
+    this misses keeps each sample at its own point, so it is compared with
+    none rather than with another point's samples."""
+    if case.assigned:
+        return case.assigned
+    point = {}
+    for key, value in case.assignments.items():
+        if key.startswith(_DRAWN_PREFIXES):
+            continue
+        if key.startswith("instance:"):
+            try:
+                *_path, attribute, parameter = json.loads(key[len("instance:") :])
+            except (ValueError, TypeError):
+                continue
+            if attribute == "model_parameter" or (attribute, parameter) in _DRAWN_INSTANCE_FIELDS:
+                continue
+        point[key] = value
+    return point
+
+
+def _sample_observations(cases: Sequence[ExperimentCase]) -> list[dict[str, Any]]:
+    """Where a job's samples all computed the same numbers.
+
+    Each produced sample's raw carries a digest of what it computed
+    (``raw_parser.result_digest``). Samples are compared one ``assign`` point
+    at a time: at a point the draws cannot move (a supply of 0 V) every
+    sample computes the same numbers while other points differ. A point is
+    reported only where every sample compared there computed one result:
+    two results among many still say some draw changed what was saved.
+    "All samples" means every sample of every point ran and each point
+    computed one result. A produced sample with no digest, at a point with
+    another produced sample, is counted as not compared.
+    """
+    points: dict[tuple[str, str], tuple[dict[str, Any], list[ExperimentCase]]] = {}
+    for case in cases:
+        if sample_index(case) is None:
+            continue
+        point = _assign_point(case)
+        key = (case.circuit, json.dumps(point, sort_keys=True, default=str))
+        points.setdefault(key, (point, []))[1].append(case)
+    running = any(case.status in ("queued", *ACTIVE_CASE_STATUSES) for case in cases)
+    alike: dict[str, list[dict[str, Any]]] = {}
+    compared_points: dict[str, int] = {}
+    whole: dict[str, bool] = {}
+    unread = 0
+    # In the order the cases ran, so a capped list names the first points.
+    for (circuit, _), (point, members) in points.items():
+        produced = [case for case in members if case.status == "produced"]
+        digests = [case.result_digest for case in produced if case.result_digest is not None]
+        if len(produced) > 1:
+            unread += len(produced) - len(digests)
+        one_result = len(digests) > 1 and len(set(digests)) == 1
+        whole[circuit] = whole.get(circuit, True) and one_result and len(digests) == len(members)
+        if len(digests) > 1:
+            compared_points[circuit] = compared_points.get(circuit, 0) + 1
+        if one_result:
+            alike.setdefault(circuit, []).append(
+                {
+                    "circuit": circuit,
+                    **({"assigned": point} if point else {}),
+                    "samples": len(digests),
+                }
+            )
+    observations: list[dict[str, Any]] = []
+    if alike:
+        # Each circuit is one of three kinds, and the detail says which.
+        every = [c for c in alike if whole[c]]
+        everywhere = [
+            c for c, rows in alike.items() if len(rows) == compared_points[c] and not whole[c]
+        ]
+        partly = [c for c, rows in alike.items() if len(rows) < compared_points[c]]
+        groups: list[dict[str, Any]] = []
+        named = 0
+        listed = 0
+        for circuit, rows in alike.items():
+            if circuit not in partly and len(rows) > 1:
+                groups.append({"circuit": circuit, "points": len(rows)})
+                continue
+            for row in rows:
+                named += 1
+                if listed < _SAMPLE_POINT_CAP:
+                    groups.append(row)
+                    listed += 1
+        evidence: dict[str, Any] = {"groups": groups}
+        if named > listed:
+            evidence["points_truncated"] = named
+        so_far = " so far" if running else ""
+        sentences = []
+        if every:
+            sentences.append(
+                f"All samples of {', '.join(every)} computed the same results{so_far}."
+            )
+        if everywhere:
+            sentences.append(
+                f"Every sample of {', '.join(everywhere)} that was compared computed the "
+                f"same results{so_far}, though not every sample was compared."
+            )
+        if partly:
+            sentences.append(
+                f"Samples of {', '.join(partly)} computed the same results{so_far} at the "
+                "assign points listed for them and differ at the others."
+            )
+        sentences.append(
+            "Where samples computed the same results, their draws changed nothing the "
+            "simulator saved"
+            + (
+                ": check that the rules reach a part the deck saves, or that the PDK's "
+                "statistical models are switched on."
+                if every or everywhere
+                else "."
+            )
+        )
+        observations.append(
+            {
+                "code": "identical_samples",
+                "kind": "sampling",
+                "detail": " ".join(sentences),
+                "evidence": evidence,
+            }
+        )
+    if unread:
+        plural = unread != 1
+        observations.append(
+            {
+                "code": "samples_not_compared",
+                "kind": "sampling",
+                "detail": (
+                    f"{unread} produced sample{'s carry' if plural else ' carries'} no digest "
+                    f"of what {'they' if plural else 'it'} computed (a job recorded before "
+                    "samples were compared, or a raw the reader cannot walk to its end), so "
+                    f"whether {'they differ' if plural else 'it differs'} from the other "
+                    "samples at the same assign point was not checked."
+                ),
+                "evidence": {"count": unread},
+            }
+        )
+    return observations
+
+
 def _results_in_the_job_folder(job_id: str, sheets: list[str]) -> dict[str, Any]:
     """Say that a sheet's run left its results in the job folder, not beside
     the sheet, where LTspice's own window opens a sheet's results."""
@@ -894,7 +1049,13 @@ def runs_page(
     run_fields: list[str] | None = None,
     *,
     cap: int = _RUN_PAGE_LIMIT,
+    warnings: list[str] | None = None,
 ) -> dict[str, Any]:
+    """The first page of ``cases``' run rows, projected by ``run_fields``.
+
+    A ``run_fields`` path no row on the page reaches is said in ``warnings``,
+    as :func:`project_receipt_runs` says it for a receipt read from a job.
+    """
     # Paged first, projected second: the projection is one row in, one row out,
     # so it only has to run over the rows this page actually carries. The cap is
     # floored at one row for the same reason ``page`` floors its limit — a page
@@ -910,6 +1071,7 @@ def runs_page(
         [_run_item(case) for case in selected],
         run_fields,
         native_by_key=native_by_key,
+        warnings=warnings,
     )
     return page_of(rows, offset=0, total=len(cases))
 
@@ -1075,6 +1237,7 @@ def snapshot_receipt(
     )
     if sheets and run_by_ltspice(job.simulator):
         observations.append(_results_in_the_job_folder(job.job_id, sheets))
+    observations.extend(_sample_observations(job.cases))
 
     analysis = job.analysis
     return ReceiptSnapshot(

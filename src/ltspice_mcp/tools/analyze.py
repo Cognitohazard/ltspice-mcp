@@ -46,7 +46,7 @@ from ltspice_mcp.lib import (
 )
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, PlotDescriptor
-from ltspice_mcp.lib.format import cap_note, format_spice_value, unique_name
+from ltspice_mcp.lib.format import cap_note, format_spice_value, held_to_cap, unique_name
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
 from ltspice_mcp.lib.log_types import measurement_named
 from ltspice_mcp.lib.pagination import retotal_page
@@ -93,7 +93,6 @@ from ltspice_mcp.tools._base import (
     StrictModel,
     ToolInput,
     format_response,
-    held_to_cap,
     outcome_of,
     page_schema,
     recovery_hint,
@@ -214,10 +213,15 @@ class AnalyzeSourceInput(OptionalRawSelectionFields, OtherRawFields, NotedModel)
             if any(index < 0 for index in self.runs):
                 raise ValueError("run indices must be non-negative integers")
             self.keep_first("runs")
-        if isinstance(self.runs, CaseSelection) and self.job_id is None:
-            raise ValueError("case_ids selection is available only for experiment jobs")
-        if self.other_raw is not None and self.job_id is None:
-            raise ValueError("other_raw selects a raw of an experiment job's cases")
+        # Beside a path, other_raw and a case selection are refused as every
+        # reader of a path refuses them. A list of runs is not: a run the file
+        # does not hold is reported missing, as for a job.
+        if self.job_id is None and (
+            refusal := services.run_selectors_beside_path(
+                other_raw=self.other_raw, case_ids=isinstance(self.runs, CaseSelection)
+            )
+        ):
+            raise ValueError(refusal)
         if "label" not in self.model_fields_set:
             # One source, or several that name themselves: the label only has
             # to tell this source's rows apart, and its job or file does that.
@@ -327,9 +331,41 @@ runs, is not known yet. A row then keeps its plain message and marks itself
 under ``_ROUTE_KEY``, and the render that shows it adds the route."""
 
 _ROUTE_KEY = "python_route"
-"""Marks a stored failure row whose message ends in an ``api`` snippet."""
+"""Marks a stored failure row whose message ends in an ``api`` snippet, and a
+stored ``failures_truncated`` note, which names ``api.analyze_results``."""
 
 _DIGIT_RUN = re.compile(r"(\d+)")
+
+
+def _failures_truncated_detail(counts: Mapping[str, int], served: Collection[str] | None) -> str:
+    """The ``failures_truncated`` note for a page that lists ``_FAILURE_CAP`` of
+    ``counts["rows"]`` failure rows, which stand for ``counts["records"]``
+    records. ``served`` says where the ``api`` call it names runs, as
+    :func:`python_route_text` does; None leaves that out (the Python API).
+
+    The one text of the note: a page builds it here, and the render of a
+    stored analysis builds it again here once it knows which session shows it.
+    """
+    rows, records = counts["rows"], counts["records"]
+    standing_for = f", which stand for {records} failures" if records != rows else ""
+    rest = "api.analyze_results returns every record."
+    if served is not None:
+        rest = f"{rest} {python_route_text(served)}"
+    return (
+        "failures: "
+        + cap_note(_FAILURE_CAP, rows, f"failure records{standing_for}", rest)
+        + " Coverage and recipe result presence still reflect the full call."
+    )
+
+
+def _marked_for_route(
+    observation: dict[str, Any], failure_counts: dict[str, int] | None
+) -> dict[str, Any]:
+    """A stored analysis's ``failures_truncated`` note, marked under
+    ``_ROUTE_KEY`` with the counts its render rebuilds the note from."""
+    if observation.get("code") == "failures_truncated" and failure_counts is not None:
+        return {**observation, _ROUTE_KEY: failure_counts}
+    return observation
 
 
 def _place_order(where: str) -> tuple[Any, ...]:
@@ -574,8 +610,8 @@ class AnalyzeInclude(NotedModel):
 def include_flag_coercer(model: type[StrictModel]) -> Callable[[Any], Any]:
     """Build the ``include=['outliers', 'per_run']`` -> ``{name: True}`` reader.
 
-    The list is what a caller writes first; the dict is the shape the engine
-    wants, and rejecting the list bought nothing. The accepted names are read
+    The list is what a caller writes first; the dict is the shape the recipes
+    want, and rejecting the list bought nothing. The accepted names are read
     off the model, so a flag added later is spellable both ways without a
     second list to keep in step — minus ``fields``, which takes row paths
     rather than a boolean and cannot mean anything inside a list. An unknown
@@ -3288,26 +3324,17 @@ def _assemble(
             ),
         }
     failure_rows = _collapse_failures(failures, a.served)
+    # Rows and records left out, for a note the render of a stored analysis
+    # rebuilds once it knows where the api snippet runs.
+    failure_counts: dict[str, int] | None = None
     if len(failure_rows) > _FAILURE_CAP:
-        standing_for = (
-            f", which stand for {len(failures)} failures"
-            if len(failures) != len(failure_rows)
-            else ""
-        )
-        rest = "api.analyze_results returns every record."
-        if a.served is not None and a.served is not _DEFERRED_ROUTE:
-            rest = f"{rest} {python_route_text(a.served)}"
+        failure_counts = {"rows": len(failure_rows), "records": len(failures)}
+        deferred = a.served is _DEFERRED_ROUTE
         observations.append(
             Observation(
                 code="failures_truncated",
                 kind="coverage",
-                detail=(
-                    "failures: "
-                    + cap_note(
-                        _FAILURE_CAP, len(failure_rows), f"failure records{standing_for}", rest
-                    )
-                    + " Coverage and recipe result presence still reflect the full call."
-                ),
+                detail=_failures_truncated_detail(failure_counts, None if deferred else a.served),
             )
         )
         failure_rows = failure_rows[:_FAILURE_CAP]
@@ -3340,7 +3367,12 @@ def _assemble(
         "outcome": outcome,
         "coverage": coverage,
         "results": results,
-        "observations": [observation.wire() for observation in observations],
+        "observations": [
+            _marked_for_route(observation.wire(), failure_counts)
+            if a.served is _DEFERRED_ROUTE
+            else observation.wire()
+            for observation in observations
+        ],
         "failures": failure_rows,
         "source_hashes": _source_hashes(item, provenance=provenance),
         "result_set_id": item.result_set_id,
@@ -3530,6 +3562,10 @@ def render_attached_analysis(
     for row in data.get("failures") or []:
         if row.pop(_ROUTE_KEY, False) and served is not None:
             row["message"] = f"{row['message']} {python_route_text(served)}"
+    for observation in data.get("observations") or []:
+        counts = observation.pop(_ROUTE_KEY, None)
+        if isinstance(counts, dict) and served is not None:
+            observation["detail"] = _failures_truncated_detail(counts, served)
     _rebind_snapshot_cursors(data, fields)
     natural_cursor_base = stored.get("natural_cursor_base")
     if answer_channel:

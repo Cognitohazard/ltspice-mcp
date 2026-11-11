@@ -414,6 +414,13 @@ class TestSourceRelativeTrigger:
         wave = np.full(100, 850.0)
         assert value_observations({"I(L1)": wave}, source_reference=("V1", 0.1)) == []
 
+    @pytest.mark.parametrize("name", ["v(@m1[vth])", "@m1[vdsat]"])
+    def test_device_parameters_not_compared(self, name: str):
+        # ngspice writes a saved device parameter typed voltage as v(@m1[vth]):
+        # a parameter of the device, not a node the deck's sources drive.
+        wave = np.full(100, 850.0)
+        assert value_observations({name: wave}, source_reference=("V1", 0.1)) == []
+
     def test_not_doubled_when_absolute_gate_fired(self):
         # One extreme_value per trace: the absolute gate already surfaced it.
         obs = value_observations({"V(n)": np.array([1e30])}, source_reference=("V1", 0.1))
@@ -569,6 +576,7 @@ class TestBuildSummaryWiring:
         assert len(summary["signals"]) == 100
         assert summary["signals"] == names[:100]
         assert summary["signals_truncated"] == 150
+        assert "inspect(kind='results', view='signals')" in summary["hint"]
 
     def test_small_signals_list_not_truncated(self):
         raw = make_raw_mock(
@@ -577,6 +585,7 @@ class TestBuildSummaryWiring:
         summary = build_simulation_summary(raw, None)
         assert summary["signals"] == ["time", "V(out)"]
         assert "signals_truncated" not in summary
+        assert "hint" not in summary
 
     def test_source_amplitudes_kwarg_arms_the_trigger(self):
         # Pins the build_simulation_summary -> surface_observations hand-off:

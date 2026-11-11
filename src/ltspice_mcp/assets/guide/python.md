@@ -9,7 +9,7 @@ description: >
 
 # Working in Python
 
-`api` provides the six tool operations as methods. They run on the same engine
+`api` provides the six tool operations as methods. They run the same code
 as the tools and read and write the same job records and result files. The
 core has an example that reads a sweep back in one loop.
 
@@ -22,13 +22,14 @@ open on the server's working directory. The snippet also has
 `compute_signal_stats` and `time_weighted_quantiles` in scope. `print()`
 output and the repr of a trailing expression are returned, so print the result
 you need, such as the crossing or the worst corner, rather than the whole
-table. Each call gets a fresh namespace around the same engine, so keep state
+table. Each call gets a fresh namespace around the same `api`, so keep state
 on disk, in a file or in a job you can find again by its `request_id`. A
-snippet is bounded by `timeout_s` (60 s by default, 600 at most), and one runs
-at a time. A blocking wait in it (`run_experiments` with `wait=True`, or
-`api.wait`) ends just before `timeout_s` and raises `ApiInterrupted` naming
-its job. The job keeps running, so read it with `api.wait(job_id)` in a later
-snippet, or submit a long run with `wait=False` from the start. The snippet
+snippet is bounded by `timeout_s` (60 s by default, held to the cap the
+`run_code` tool states), and one runs at a time. A blocking wait in it
+(`run_experiments` with `wait=True`, or `api.wait`) ends just before
+`timeout_s` and raises `ApiInterrupted` naming its job. The job keeps
+running, so read it with `api.wait(job_id)` in a later snippet, or submit a
+long run with `wait=False` from the start. The snippet
 runs with the server process's own file and process authority. A sandbox
 (`[security] allowed_paths`) applies only to the paths passed to `api` calls
 and does not restrict the snippet's own code.
@@ -58,7 +59,7 @@ operation's whole argument tree, with every field's type, default and allowed
 values, and a worked example; `help(api.analyze_results)` prints the same.
 Read it before guessing an argument. From a shell,
 `python -m ltspice_mcp.api reference analyze_results` prints it without
-starting the engine.
+starting a session.
 
 ## Running and waiting
 
@@ -103,8 +104,9 @@ process. Detach applies only to resume and cannot be combined with
 `raw_page=True`. As with any resume, pass the parent's `control_token` unless
 this process submitted or resumed the parent. The token is checked before the
 owner process starts. The resume's `wait_s` is honored, defaults to zero and
-is capped at 120 s. For a full wait, call `api.wait` on the child receipt's
-job id.
+is held to `limits.dwell.run_experiments_wait_max_s` in
+`inspect(kind="capabilities")`. For a full wait, call `api.wait` on the child
+receipt's job id.
 
 ## Reading results
 
@@ -131,6 +133,18 @@ run can be compared with an XVII run. Steps are paired by their parameters.
 The other run is read at this run's points over the span both cover,
 interpolated where its axis differs (as in a compressed LTspice raw, guide
 section 'ltspice'). You choose the tolerance.
+
+A file too large to read whole (one read keeps 512 MiB of numbers) can still
+be read for the signals you need: `api.load_raw(..., signals=["V(out)",
+"I(R1)"])` keeps only those traces, the axis and any step parameters. A node
+pair `V(a,b)` keeps both nodes. Its `observations` say which signals were
+chosen. A run with too many points for one read is read a stretch of the
+axis at a time: `api.load_raw(..., window=("1m", "2m"))` keeps the points from
+1 ms to 2 ms of each step, with or without `signals`. Decoding holds at most
+1 GiB of numbers, whatever a read keeps: LTspice stores a run a point at a
+time, which is decoded whole, and a file in its Fast Access layout is decoded
+for the traces kept, each along its whole axis. For a larger file, convert it
+with `LTspice -FastAccess <file>.raw` and choose signals.
 
 `api.load_raw(..., plot_index=1, dialect=None)` selects a plot by its
 zero-based position in the file, separately from the case (or run) and the

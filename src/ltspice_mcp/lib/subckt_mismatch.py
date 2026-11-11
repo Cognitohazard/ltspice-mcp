@@ -48,7 +48,7 @@ from ltspice_mcp.lib.deck_staging import (
 )
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.hierarchy import ResolvedInstance, param_assignments
-from ltspice_mcp.lib.hierarchy_expr import Environment, NumericFact, multiplier_product
+from ltspice_mcp.lib.hierarchy_expr import Environment, NumericFact, card_copies
 from ltspice_mcp.lib.montecarlo import (
     InstanceGeometry,
     MCSampler,
@@ -75,7 +75,7 @@ from ltspice_mcp.lib.spice_lex_views import InstanceLine, ModelCard, SubcktCard
 
 logger = logging.getLogger(__name__)
 
-# The two ngspice instance parameters this engine writes. ``delvto`` adds to
+# The two ngspice instance parameters this module writes. ``delvto`` adds to
 # the signed vth0, so a pFET (negative vth0) shifted by +30 mV shows a SMALLER
 # threshold magnitude; callers and receipts stay in the signed domain.
 VTH_PARAM = "delvto"
@@ -118,7 +118,7 @@ class MismatchPlanError(ValueError):
 
 @dataclass(frozen=True)
 class ClosureFile:
-    """One file of a deck's include closure, as this engine reads it.
+    """One file of a deck's include closure, as this module reads it.
 
     ``index`` is both the file's identity and its position in the closure a
     caller passes: every producer numbers its files in list order, and a plan
@@ -177,8 +177,8 @@ class XFetTarget:
     model_name: str
     width: float | None
     length: float | None
-    #: The X line's ``m`` times the inner device's ``m``, as ngspice multiplies
-    #: them; unresolved, with the reason, when either is written but cannot be read.
+    #: The X line's ``m`` times the inner device's ``m`` (``_device_multiplier``);
+    #: unresolved, with the reason, when either is written but cannot be read.
     multiplier: NumericFact = _ONE_COPY
 
     @property
@@ -522,26 +522,24 @@ def _body_environment(
 def _device_multiplier(
     x_view: InstanceLine, inner: InstanceLine, body: Callable[[], Environment]
 ) -> NumericFact:
-    """How many parallel copies of ``inner`` ngspice builds under ``x_view``.
+    """How many parallel copies of ``inner`` the simulator builds under ``x_view``.
 
-    ngspice multiplies an X line's ``m`` into every device of the body, and an
-    inner device's own ``m`` (often ``m={mult}``, a parameter the X line sets)
-    on top of it, so the copies are the product. This plan serves a deck with
-    no semantic profile, so it applies ngspice's rule to QSPICE and Xyce too,
-    as it does ``delvto`` and ``mulu0``; LTspice ignores an X line's ``m``,
-    which ``variations._path_multiplier`` applies to a profiled deck. ``body``
-    builds the scope the inner ``m`` is read in, so a device that writes none
-    never builds it.
+    This plan serves a deck with no semantic profile, which a run gives only
+    a simulator other than LTspice and ngspice (QSPICE, Xyce), and neither's
+    rule for an ``X`` line's ``m`` is measured. It counts the product of the
+    ``X`` line's ``m`` and the inner device's own, ``m={mult}`` read from what
+    the ``X`` line sets, as ngspice's HSPICE modes do for a subcircuit that
+    declares no ``m`` (``hierarchy_expr.card_copies``). ``body`` builds the
+    scope the inner ``m`` is read in, so a device that writes none never
+    builds it.
     """
     x_m, inner_m = x_view.get_param("M"), inner.get_param("M")
-    return multiplier_product(
-        [
-            (
-                f"the X line {x_view.ref}",
-                None if x_m is None else Environment({}, simulator="ngspice").fact(x_m),
-            ),
-            (f"the inner device {inner.ref}", None if inner_m is None else body().fact(inner_m)),
-        ]
+    return card_copies(
+        None if inner_m is None else body().fact(inner_m),
+        None if x_m is None else Environment({}, simulator="ngspice").fact(x_m),
+        multiply=True,
+        where=f"the inner device {inner.ref}",
+        passed_from=f"the X line {x_view.ref}",
     )
 
 
@@ -882,7 +880,7 @@ def _refuse_or_skip_without_mos(
             raise MismatchPlanError(
                 "nested_fet_unsupported",
                 f"Instance {x_ref!r} reaches its MOS device through two subcircuit "
-                f"levels ({subckt} -> {inner_view.model}); this engine patches exactly "
+                f"levels ({subckt} -> {inner_view.model}); mismatch patches exactly "
                 "one level, so instantiate the inner device wrapper directly",
             )
     skips.append(
@@ -939,7 +937,7 @@ def _refuse_preexisting(
                 "preexisting_mismatch_param",
                 f"The {where} of {x_ref!r} already sets {param!r}; applying a mismatch "
                 "value on top of it would silently double-apply the shift, so this deck "
-                f"is refused — remove the existing {param} to let the engine own it",
+                f"is refused — remove the existing {param} to let the mismatch draw set it",
             )
 
 
@@ -1029,7 +1027,7 @@ def _render_clone(
                 raise MismatchPlanError(
                     "param_namespace_collision",
                     f"Subcircuit {original!r} already declares a parameter named "
-                    f"{name!r}, which is the reserved name this engine forwards "
+                    f"{name!r}, which is the reserved name the mismatch draw forwards "
                     f"{param} through; rename the library parameter",
                 )
             forwarded[name] = "0" if param == VTH_PARAM else "1"

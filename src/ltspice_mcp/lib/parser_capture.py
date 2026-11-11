@@ -86,12 +86,23 @@ def parser_cache_key(
     dialect: str | None,
     producing_dialect: str | None,
     limits: dict,
+    chosen: dict | None = None,
 ) -> str:
-    """One identity for raw and log facts captured under the same parser policy."""
+    """One identity for raw and log facts captured under the same parser policy.
+
+    A selective read (``chosen``: its signals, its window of a plot's axis,
+    that plot and its decode budget) keeps other arrays than a whole-file read
+    of the same capture, and is refused for what its plot does not hold, so
+    the choice is part of its identity; a whole-file read's identity is as it
+    was before reads could choose.
+    """
+    policy: dict = {"decoder": PARSER_REVISION, "limits": limits}
+    if chosen is not None:
+        policy["chosen"] = chosen
     return captured.cache_key(
         dialect=dialect,
         producing_dialect=producing_dialect,
-        revision=json.dumps({"decoder": PARSER_REVISION, "limits": limits}, sort_keys=True),
+        revision=json.dumps(policy, sort_keys=True),
     )
 
 

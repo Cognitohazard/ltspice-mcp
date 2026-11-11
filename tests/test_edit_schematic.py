@@ -1049,6 +1049,7 @@ async def test_a_reply_lists_every_rule_that_ran_with_what_it_found(asc_state):
         "subcircuit_value_slot": 0,
         "net_with_two_names": 0,
         "joined_at_crossing": 0,
+        "pin_inside_wire": 0,
         "unjoined_crossing": 0,
         "diagonal_wire": 0,
         "floating_pin": 6,
@@ -1849,6 +1850,48 @@ async def test_replace_directive_reports_what_it_changed(asc_state, work_dir):
     assert "TEXT 64 96 Left 2 !.tran 0 5m" in target.read_text(encoding="utf-8")
 
 
+async def test_replace_component_reports_what_it_did(asc_state, work_dir):
+    """One call swaps a resistor for a capacitor whose pins sit nearer its
+    middle: the reply names the old symbol and the wires that reach each pin's
+    label where it moved, and the part keeps its name and value."""
+    await _build_blank(
+        asc_state,
+        "swap",
+        [
+            {
+                "op": "add_component",
+                "reference": "R1",
+                "symbol": "res",
+                "x": 0,
+                "y": 0,
+                "value": "1k",
+            },
+            {"op": "add_net_label", "net": "in", "pin": "R1.1"},
+            {"op": "add_net_label", "net": "0", "pin": "R1.2"},
+        ],
+    )
+    target = work_dir / "swap.asc"
+    data = _assert_schema(
+        await handle_edit_schematic(
+            _edit_input(
+                path="swap.asc",
+                expected_sha256=_sha(target),
+                ops=[{"op": "replace_component", "reference": "R1", "symbol": "cap"}],
+            ),
+            asc_state,
+        )
+    )
+    assert data["commit_state"] == "committed"
+    (result,) = data["results"]
+    assert result["was"] == "res"
+    assert sorted((w["from"]["y"], w["to"]["y"]) for w in result["wires"]) == [
+        (-32, -48),
+        (32, 48),
+    ]
+    text = target.read_text(encoding="utf-8")
+    assert "SYMBOL cap 0 0 R0" in text and "SYMATTR Value 1k" in text
+
+
 async def test_a_dry_run_compares_the_sheet_it_would_write(asc_state, work_dir, monkeypatch):
     """A dry run with a reference returns the verdict on the sheet the batch
     would write, exported from a staged copy of it, and writes nothing."""
@@ -2072,8 +2115,9 @@ _ADD_R2 = [{"op": "add_component", "reference": "R2", "symbol": "res", "x": 400,
 
 
 @pytest.mark.edit_reply_per_platform(
-    "the export's .lib line names a Windows install path, which only Windows "
-    "reads as absolute, so the equivalence check's include warnings differ"
+    "the export's .lib line names a Windows install path, which Windows reads as "
+    "absolute, WSL through its /mnt mount and other Linux as a relative name, so the "
+    "equivalence check's include warnings differ"
 )
 @pytest.mark.parametrize("mode", ["equivalence", "structural_diff"])
 async def test_asc_reference_is_exported_like_the_committed_sheet(
@@ -2085,7 +2129,7 @@ async def test_asc_reference_is_exported_like_the_committed_sheet(
     The committed sheet reaches the comparison as its LTspice export, so the
     reference .asc has to as well: read through the schematic editor instead,
     every SpiceLine read as a changed component and the exporter's boilerplate
-    as added directives, and the graph engine lexed the schematic as SPICE.
+    as added directives, and the netlist graph lexed the schematic as SPICE.
     """
     monkeypatch.setattr(se, "_export_asc_to_netlist", fake_netlister.export_asc_to_netlist)
     sheet = work_dir / "amp.asc"
@@ -2130,8 +2174,9 @@ _LOCAL_SYMBOL = INPUTS / "search" / "lib" / "part.asy"
 
 
 @pytest.mark.edit_reply_per_platform(
-    "the export's .lib line names a Windows install path, which only Windows "
-    "reads as absolute, so the comparison's include warnings differ"
+    "the export's .lib line names a Windows install path, which Windows reads as "
+    "absolute, WSL through its /mnt mount and other Linux as a relative name, so the "
+    "comparison's include warnings differ"
 )
 @pytest.mark.parametrize(
     ("folder", "symbol"),
@@ -2623,7 +2668,7 @@ class TestRenderAndCompareArguments:
         spec = self._edit(compare={"reference": "golden.cir"}).compare
         assert spec is not None
         assert spec.reference == "golden.cir"
-        # The tolerance and anchors keep the graph engine's own defaults.
+        # The tolerance and anchors keep the netlist graph's own defaults.
         assert spec.rtol == 1e-6
         assert spec.anchors is None
 

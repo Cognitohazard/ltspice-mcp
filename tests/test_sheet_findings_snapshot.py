@@ -22,17 +22,21 @@ from __future__ import annotations
 import json
 import os
 import shutil
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
 import pytest
 from spicelib import AscEditor
 
-from ltspice_mcp.lib.schematic_ops import wiring_profile
-from ltspice_mcp.lib.schematic_scene import build_scene, sheet_view
+from ltspice_mcp.lib.schematic_ops import symbols_of, wiring_profile
+from ltspice_mcp.lib.schematic_scene import Scene, build_scene, scene_of_text, sheet_view
 from ltspice_mcp.lib.sheet_findings import Finding, findings
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools.schematic_edit import finding_row
+from ltspice_mcp.tools.schematic_edit import (
+    _render_editor_text,  # pyright: ignore[reportPrivateUsage]  # the text an edit writes
+    finding_row,
+)
 from ltspice_mcp.tools.verify import (
     VerifyCircuitInput,
     _check_findings,  # pyright: ignore[reportPrivateUsage]  # a dropped wire is reported only beside an export
@@ -182,3 +186,57 @@ def test_an_edit_and_a_check_find_the_same_of_a_sheet(sheet: Path, asc_state: Se
     from_the_edit = sorted(found.identity for found in sheet_findings(editor))
     from_the_file = sorted(found.identity for found in _from_the_file(staged, asc_state))
     assert from_the_edit == from_the_file
+
+
+# ---------------------------------------------------------------------------
+# A label on nothing: the drawing's marker and the dangling_label finding
+# ---------------------------------------------------------------------------
+
+Label = tuple[int, int, str]
+
+
+def _marked(scene: Scene) -> set[Label]:
+    """The labels a drawing of ``scene`` marks as on nothing."""
+    return {(flag.x, flag.y, flag.text) for flag in scene.flags if flag.unconnected}
+
+
+def _dangling(found: Iterable[Finding]) -> set[Label]:
+    """The labels ``dangling_label`` names among ``found``."""
+    return {
+        (*finding.points[0], finding.facts["label"])
+        for finding in found
+        if finding.rule == "dangling_label"
+    }
+
+
+@pytest.mark.parametrize("sheet", SUITE_SHEETS, ids=_name)
+def test_the_drawing_marks_the_labels_the_sheet_rules_call_dangling(
+    sheet: Path, asc_state: SessionState
+):
+    """The drawing ``verify_circuit`` renders of a file marks the labels its
+    ``dangling_label`` finding names, and the drawing ``edit_schematic``
+    renders of its editor's sheet marks the labels the edit's finding names:
+    the same labels, at the same points."""
+    staged = _staged_afresh(sheet, asc_state)
+    resolver = asc_state.symbols.for_sheet(staged)
+    drawn = build_scene(staged, resolver=resolver)
+    marked = _marked(drawn)
+    assert _dangling(findings(sheet_view(drawn))) == marked
+    assert marked <= set(sheet_view(drawn).labels)
+    try:
+        editor = open_editor(staged, resolver)
+    except Exception:
+        return  # The editor cannot open this sheet; the file's two answers agree.
+    edited = scene_of_text(_render_editor_text(editor), staged, symbols_of(editor))
+    assert _marked(edited) == _dangling(sheet_findings(editor)) == marked
+
+
+def test_the_suite_has_labels_on_nothing_and_on_something(asc_state: SessionState):
+    """The comparison above meets both answers: labels marked and labels not."""
+    marked = unmarked = 0
+    for sheet in SUITE_SHEETS:
+        staged = _staged_afresh(sheet, asc_state)
+        flags = build_scene(staged, resolver=asc_state.symbols.for_sheet(staged)).flags
+        marked += sum(flag.unconnected for flag in flags)
+        unmarked += sum(not flag.unconnected for flag in flags)
+    assert marked >= 3 and unmarked >= 3, (marked, unmarked)

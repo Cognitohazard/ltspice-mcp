@@ -338,8 +338,9 @@ async def _replay_attempt(
 
     job = await asyncio.to_thread(_load_attempt, journal, entry, store)
     if entry.phase == "launched":
-        if job.restart_reconciled:
-            await asyncio.to_thread(experiment_store.save_job, job)
+        # Answered from the record (``ExperimentRunner.start_committed``), which
+        # resolves the job through the registry and so writes back what the
+        # store reconciled when the attempt's owner exited.
         return AdmissionResult(job, replayed=True, start=False)
     # The prepared journal owns admission. A delayed derived record can still
     # name the previous owner after an adoption's journal write succeeds.
@@ -465,7 +466,7 @@ async def admit_initial(
             return await _replay_attempt(
                 request.state, store, journal, journal.root, runner.simulator_class
             )
-        lookup = await asyncio.to_thread(runner.read_request_index, request)
+        lookup = await runner.read_request_index(request)
         if lookup.existing is not None or lookup.dangling:
             raise IdempotencyConflictError("Recoverable request has no authoritative journal")
         try:
@@ -569,6 +570,7 @@ def _make_child(
         case.failure_evidence = None
         case.submitted_at = case.completed_at = None
         case.simulator_version = None
+        case.result_digest = None
         case.observations = []
         prepare_seeded_driver(case, recovery.execution, store, recovery.root_job_id, simulator)
         prepare_case_startup(case, recovery.execution, store, recovery.root_job_id, simulator)

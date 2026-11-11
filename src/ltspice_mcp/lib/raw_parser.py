@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import codecs
 import contextlib
+import hashlib
 import math
 import os
 import re
@@ -37,13 +38,13 @@ from ltspice_mcp.lib.decoded_raw import (
     deck_time,
     time_offset,
 )
-from ltspice_mcp.lib.device_names import parse_device_param
 from ltspice_mcp.lib.format import cap_list
 from ltspice_mcp.lib.log_parser import is_op_stepping_failure
 from ltspice_mcp.lib.log_types import LogSectionName
 from ltspice_mcp.lib.raw_header import STEPPED_TEMPERATURE, RawDialectError, command_writer
 from ltspice_mcp.lib.result_kinds import AC_SHAPED, plot_analysis, sampled_axis
 from ltspice_mcp.lib.result_observations import surface_observations
+from ltspice_mcp.lib.trace_names import TraceQuantity, is_node_voltage, trace_quantity
 
 # What a raw accessor raises when the thing being asked for is not there: a
 # missing property (ValueError), a missing trace (IndexError from spicelib,
@@ -502,20 +503,12 @@ def query_point_value(
     }
 
 
-# Branch-current trace names carry an optional terminal letter between ``I`` and
-# ``(`` for multi-terminal devices: e.g. ``Ic(Q1)``/``Ib(Q1)`` (BJT),
-# ``Id(M1)``/``Ig(M1)`` (MOSFET/JFET). A bare ``I(...)`` covers two-terminal
-# element currents like ``I(RC)``/``I(VCC)``. A plain ``startswith("I(")`` test
-# drops the terminal-letter forms, so match the optional letter explicitly.
-_OP_CURRENT_RE = re.compile(r"^I[A-Z]?\(", re.IGNORECASE)
-
-#: Declared trace types that place a trace in a bias-point bucket. A type
-#: outside this map belongs in ``other``. Only an absent type falls back to
-#: the name, so a declared impedance cannot become a voltage from its spelling.
-_OP_BUCKET_BY_TYPE = {
-    "voltage": "voltages",
+#: The bias-point bucket of each quantity a trace holds (``trace_quantity``).
+_OP_BUCKET: dict[TraceQuantity, Literal["voltages", "currents", "device_op_points", "other"]] = {
+    "node_voltage": "voltages",
     "current": "currents",
-    "device_current": "currents",
+    "device_parameter": "device_op_points",
+    "other": "other",
 }
 
 
@@ -534,9 +527,13 @@ def extract_operating_point(
 
     Returns:
         Dictionary with 'voltages', 'currents', 'device_op_points' and 'other' dicts
-        mapping trace names to values. All values are Python float.
+        mapping trace names to values, each placed by ``trace_names.trace_quantity``:
+        a .dc sweep's own variable is in 'other', and ngspice's device parameters
+        (``@m1[gm]``, ``v(@m1[vth])``, ``i(@m1[id])``) in 'device_op_points'. All
+        values are Python float.
     """
     trace_names = raw.get_trace_names()
+    axis = _axis_name(raw)
 
     buckets: OperatingPointOutput = {
         "voltages": {},
@@ -552,28 +549,18 @@ def extract_operating_point(
         # point_index selects a sweep point for a .dc raw (all traces share the
         # axis); clamp so a stray index can't IndexError. Default 0 = .op bias.
         value = float(wave[min(point_index, len(wave) - 1)])
-
-        # ngspice writes device small-signal / model parameters as @dev[param]
-        # — bare (@m1[gm]), or wrapped as v(@m1[vth]) / i(@m1[id]) depending on
-        # the quantity. These are model state, not a node voltage or branch
-        # current, so the '@' marker takes precedence over the V(/I( wrapping:
-        # otherwise v(@m1[vth]) is mislabeled a node voltage and bare @m1[gm]
-        # falls through both buckets and is dropped entirely.
-        if parse_device_param(trace) is not None:
-            buckets["device_op_points"][trace] = value
-            continue
-
-        whattype = declared_type(raw, trace)
-        bucket = _OP_BUCKET_BY_TYPE.get(whattype or "")
-        if not whattype:
-            # SPICE node names are case-insensitive; spicelib may return either.
-            if trace.upper().startswith("V("):
-                bucket = "voltages"
-            elif _OP_CURRENT_RE.match(trace):
-                bucket = "currents"
-        buckets[bucket or "other"][trace] = value
+        quantity = trace_quantity(trace, declared_type(raw, trace), axis=trace == axis)
+        buckets[_OP_BUCKET[quantity]][trace] = value
 
     return buckets
+
+
+def _axis_name(raw: RawData) -> str | None:
+    """The name of the selected plot's sampled axis: None for a plot with
+    none, and for a reader with no descriptor to say (a test's stand-in)."""
+    if isinstance(raw, (DecodedRaw, DecodedPlot)) and raw.descriptor.axis is not None:
+        return raw.descriptor.axis.name
+    return None
 
 
 def compute_ac_bandwidth_metrics(raw: RawData, trace_name: str, step: int = 0) -> dict:
@@ -652,24 +639,38 @@ def compute_ac_bandwidth_metrics(raw: RawData, trace_name: str, step: int = 0) -
     return metrics
 
 
-def _raw_node_data_is_finite(raw: RawData, trace_names: list[str], step: int) -> bool:
+def node_voltages(raw: DecodedRaw | DecodedPlot) -> list[str]:
+    """The selected plot's signals that hold a node voltage, in its order: by
+    each one's name and declared type, its axis apart
+    (``trace_names.trace_quantity``). A noise plot holds none: its traces are
+    spectral densities, though typed as voltages."""
+    if raw.descriptor.analysis == "noise":
+        return []
+    axis = _axis_name(raw)
+    return [
+        trace.name
+        for trace in raw.descriptor.signals()
+        if is_node_voltage(trace.name, trace.declared_type, axis=trace.name == axis)
+    ]
+
+
+def _raw_node_data_is_finite(raw: DecodedRaw | DecodedPlot, step: int) -> bool:
     """Whether the raw holds a real, finite NODE VOLTAGE (a solved bias point).
 
     ngspice can print an OP ``<method> stepping failed`` line, recover via a
     later method it does not announce in wording this parser recognizes, and
     still write a valid raw — but it ALSO writes a rail-pinned/NaN raw on a
     genuine floating-node failure and exits 0. The log alone can't tell recovery
-    from failure; the data can. Only node-voltage traces (``V(...)``) count: a
-    failing ``.op`` can still write a finite branch current or device-parameter
-    trace (``.save i(V1)``, ``@m1[gm]``) while the node voltage sits at NaN/rail,
-    so a non-voltage trace must not vouch for a bias point that didn't converge.
+    from failure; the data can. Only the traces :func:`node_voltages` names
+    count: a failing ``.op`` can still write a finite branch current or device
+    parameter (``.save i(V1)``, ``@m1[gm]``, ngspice's ``v(@m1[vth])``) while
+    the node voltage sits at NaN/rail, so no other trace may vouch for a bias
+    point that didn't converge.
     Returns True only when at least one voltage trace was checked and every
     checked voltage is finite and off the ~1e30 rail.
     """
     checked = 0
-    for name in trace_names:
-        if not name.lower().startswith("v("):
-            continue
+    for name in node_voltages(raw):
         try:
             arr = np.asarray(raw.get_wave(name, step=step))
         except _RAW_ACCESS_ERRORS:
@@ -807,11 +808,16 @@ def build_simulation_summary(
         "step_count": step_count,
     }
     # Cap the structured signal list: a device-heavy raw (.save all @m*[*],
-    # PDK-level node dumps) can carry hundreds-to-thousands of trace names,
-    # and this summary is re-sent on every run_simulation completion and
-    # check_job poll. The full list stays addressable via the
-    # spice://results/{job_id}/signals resource.
-    cap_list(summary, "signals", trace_names, _SIGNALS_STRUCTURED_CAP)
+    # PDK-level node dumps) can carry hundreds-to-thousands of trace names.
+    # The results query reads every name, paged, for a job or a path alike.
+    cap_list(
+        summary,
+        "signals",
+        trace_names,
+        _SIGNALS_STRUCTURED_CAP,
+        "inspect(kind='results', view='signals') with this run's path, or its job_id "
+        "and run_index, lists every signal, paged.",
+    )
 
     if logs is not None:
 
@@ -893,7 +899,7 @@ def build_simulation_summary(
                 and step_count <= 1
                 and op_coverage_known
                 and op_solve_count <= 1
-                and _raw_node_data_is_finite(raw, trace_names, step)
+                and _raw_node_data_is_finite(raw, step)
             ):
                 kept = [e for e in errs if e not in demoted]
                 if kept:
@@ -976,6 +982,7 @@ def build_simulation_summary(
         requested=requested,
         value_traces=value_traces,
         source_amplitudes=source_amplitudes,
+        node_voltages=None if value_traces is None else node_voltages(raw),
     )
 
     return summary
@@ -1171,6 +1178,166 @@ def read_partial_raw_progress(path: Path, dialect: str | None = None) -> Partial
         return None
 
 
+def result_digest(path: Path, dialect: str | None = None) -> str | None:
+    """A digest of what a finished raw file computed: each plot's name,
+    variables and points, and nothing else of its headers.
+
+    Two runs whose results are the same numbers digest the same, though each
+    header carries the date it was written (one per plot in an ngspice file)
+    and the deck's path. A complex axis keeps its real part only: ngspice-42
+    writes the imaginary part of an AC frequency from memory it never set, so
+    two runs of one deck differ there (recorded:
+    ``tests/fixtures/ngspice_ac_rerun``, ``.ac`` and ``.sp``); a ``.pz`` plot's first variable is
+    a pole, not an axis, and keeps both parts. None when the file is not a raw
+    this reader can walk to its end: a plot whose point count was never
+    written (ngspice writes it when the plot ends), a plot cut short, bytes
+    after the last plot that start no plot, or an ASCII plot in a UTF-16 file.
+    A file that lost whole plots off its end, or whose count kept pace with
+    the points written before a kill, reads as finished: only the run's
+    outcome tells those apart, and the runner digests only runs that ended
+    without an error.
+    """
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            size = handle.seek(0, os.SEEK_END)
+            handle.seek(0)
+            magic = handle.read(len(_RAW_HEADER_UTF16[0]))
+            if magic.startswith(_RAW_HEADER_UTF16):
+                width = 2
+            elif magic.startswith(_RAW_HEADER_ASCII):
+                width = 1
+            else:
+                return None
+            offset = 0
+            while True:
+                header = _read_plot_header(handle, offset, width)
+                points = _int_field(header.fields, "no. points")
+                n_vars = _int_field(header.fields, "no. variables") or len(header.variables)
+                if header.data_start is None or points < 1 or n_vars < 1:
+                    return None
+                digest.update(
+                    "\0".join((header.fields.get("plotname", ""), *header.variables, "")).encode(
+                        "utf-8", errors="surrogatepass"
+                    )
+                )
+                if header.data_kind == "values":
+                    end = _digest_ascii_points(handle, header, width, points, n_vars, digest)
+                else:
+                    end = _digest_binary_points(
+                        handle, header, width, dialect, points, digest, size
+                    )
+                if end is None:
+                    return None
+                end = _next_plot(handle, end, size, width)
+                if end is None:
+                    return None
+                if end >= size:
+                    return digest.hexdigest()
+                offset = end
+    except OSError:
+        return None
+
+
+def _has_sampled_axis(header: _PlotHeader) -> bool:
+    """Whether a plot's first variable is the axis its points are sampled on:
+    one it declares a ``frequency`` (an ngspice ``.sp`` plot's included, which
+    ``plot_analysis`` does not name), or one a full read takes as its axis
+    (``result_kinds.sampled_axis``). A ``.pz`` plot's first variable is a pole."""
+    if not header.variables:
+        return False
+    if header.first_type.lower() == "frequency":
+        return True
+    analysis = plot_analysis(header.fields.get("plotname") or "", header.first_type)
+    return sampled_axis(analysis, header.first_type) is not None
+
+
+def _digest_binary_points(
+    handle: Any,
+    header: _PlotHeader,
+    width: int,
+    dialect: str | None,
+    points: int,
+    digest: Any,
+    size: int,
+) -> int | None:
+    """Feed a ``Binary:`` plot's points to ``digest``; where its data ends, or
+    None when the file holds fewer than the header declares."""
+    assert header.data_start is not None
+    record, axis_size, complex_values = _binary_layout(header, width, dialect)
+    if header.data_start + points * record > size:
+        return None
+    imaginary_axis = complex_values and axis_size == 16 and _has_sampled_axis(header)
+    fast = "fastaccess" in header.fields.get("flags", "").lower().split()
+    handle.seek(header.data_start)
+    if fast:
+        axis = handle.read(points * axis_size)
+        if len(axis) != points * axis_size:
+            return None
+        if imaginary_axis:
+            axis = np.frombuffer(axis, dtype=np.uint8).reshape(points, 16)[:, :8].tobytes()
+        digest.update(axis)
+        remaining = points * (record - axis_size)
+        while remaining > 0:
+            chunk = handle.read(min(remaining, 1 << 20))
+            if not chunk:
+                return None
+            digest.update(chunk)
+            remaining -= len(chunk)
+        return header.data_start + points * record
+    per_chunk = max(1, (1 << 20) // record)
+    left = points
+    while left > 0:
+        count = min(left, per_chunk)
+        chunk = handle.read(count * record)
+        if len(chunk) != count * record:
+            return None
+        if imaginary_axis:
+            rows = np.frombuffer(chunk, dtype=np.uint8).reshape(count, record)
+            chunk = np.concatenate((rows[:, :8], rows[:, 16:]), axis=1).tobytes()
+        digest.update(chunk)
+        left -= count
+    return header.data_start + points * record
+
+
+def _digest_ascii_points(
+    handle: Any, header: _PlotHeader, width: int, points: int, n_vars: int, digest: Any
+) -> int | None:
+    """Feed a ``Values:`` plot's points to ``digest``, a complex axis by its
+    real part; where its data ends, or None when it ends early."""
+    if width != 1 or header.data_start is None:
+        return None
+    axis_only = _has_sampled_axis(header)
+    handle.seek(header.data_start)
+    for _ in range(points):
+        line = handle.readline()
+        index, tab, axis = line.partition(b"\t")
+        if not tab or not index.strip() or not line.endswith(b"\n"):
+            return None
+        digest.update((axis.split(b",", 1)[0] if axis_only else axis).strip() + b"\n")
+        for _ in range(n_vars - 1):
+            line = handle.readline()
+            if not line.strip() or not line.endswith(b"\n"):
+                return None
+            digest.update(line.strip() + b"\n")
+    return handle.tell()
+
+
+def _next_plot(handle: Any, end: int, size: int, width: int) -> int | None:
+    """Where the plot after one ending at ``end`` starts, past blank lines, or
+    ``size`` at the end of the file; None for bytes that start no plot."""
+    handle.seek(end)
+    while end < size:
+        if _plot_starts_at(handle, end, width):
+            return end
+        handle.seek(end)
+        unit = handle.read(width)
+        if unit not in (b"\n", b"\r", b"\n\x00", b"\r\x00", b" ", b" \x00", b"\x00"):
+            return None
+        end += width
+    return size
+
+
 def points_reached(points: int | None, axis: str | None, last_axis_value: float | None) -> str:
     """How far a raw's points reach, as a phrase for a detail:
     ``40 points, the last at time = 0.039``."""
@@ -1262,6 +1429,28 @@ def _raw_writer(fields: dict[str, str], width: int, dialect: str | None) -> str:
     return dialect or "ngspice"
 
 
+def _binary_layout(header: _PlotHeader, width: int, dialect: str | None) -> tuple[int, int, bool]:
+    """A ``Binary:`` plot's record size, its axis's size and whether its values
+    are complex, as spicelib's ``PlotData`` lays a record out: every value a
+    double except LTspice, which stores 4-byte floats unless the header flags
+    ``double`` and keeps the axis a double, and writes the whole AC record,
+    axis included, as complex."""
+    fields = header.fields
+    flags = fields.get("flags", "").lower().split()
+    analysis = plot_analysis(fields.get("plotname") or "", header.first_type)
+    writer = _raw_writer(fields, width, dialect)
+    complex_values = "complex" in flags or analysis == "ac"
+    if complex_values:
+        value_size = 16
+    elif writer != "ltspice" or "double" in flags:
+        value_size = 8
+    else:
+        value_size = 4
+    axis_size = 8 if value_size == 4 or (complex_values and writer == "qspice") else value_size
+    n_vars = _int_field(fields, "no. variables") or len(header.variables)
+    return axis_size + (n_vars - 1) * value_size, axis_size, complex_values
+
+
 def _progress_of_plot(
     handle: Any,
     header: _PlotHeader,
@@ -1314,15 +1503,7 @@ def _progress_of_plot(
         return progress(*_ascii_last_point(handle, header.data_start, size, width, n_vars))
 
     writer = _raw_writer(fields, width, dialect)
-    complex_values = "complex" in flags or analysis == "ac"
-    if complex_values:
-        value_size = 16
-    elif writer != "ltspice" or "double" in flags:
-        value_size = 8
-    else:
-        value_size = 4
-    axis_size = 8 if value_size == 4 or (complex_values and writer == "qspice") else value_size
-    record = axis_size + (n_vars - 1) * value_size
+    record, axis_size, _complex = _binary_layout(header, width, dialect)
     on_disk = (size - header.data_start) // record
     if 0 < declared < on_disk:
         following = header.data_start + declared * record

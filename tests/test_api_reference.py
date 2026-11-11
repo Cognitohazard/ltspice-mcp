@@ -259,7 +259,7 @@ class TestMethodSignatures:
 
 class TestCatalogueDelivery:
     """`python -m ltspice_mcp.api reference` is the same renderer behind a print,
-    and reading it must stay a documentation read: no engine, no heavy imports."""
+    and reading it must stay a documentation read: no session, no heavy imports."""
 
     @staticmethod
     def _probe(body: str, tmp_path) -> subprocess.CompletedProcess[str]:
@@ -273,7 +273,7 @@ class TestCatalogueDelivery:
 
     def test_module_entry_point_prints_the_catalogue(self, tmp_path):
         """`python -m ltspice_mcp.api reference [OP]` prints the catalogue and
-        exits 0. It is documentation, not a server start: starting the engine
+        exits 0. It is documentation, not a server start: starting a session
         writes an ltspice-mcp.toml into the working directory, so the read must
         leave the directory exactly as it found it."""
         proc = self._probe(
@@ -325,7 +325,7 @@ class TestCatalogueDelivery:
         """Neither ``import ltspice_mcp.api`` nor ``Api()`` itself may load
         the forbidden modules: the lazy package __init__ (PEP 562), the
         lazily built tool surface on SessionState, and the deferred tool
-        imports in _methods together keep the engine boot at config +
+        imports in _methods together keep a session's start at config +
         detection + registry preload. A cold subprocess is the only honest
         measurement — an in-process check would see whatever the suite
         already imported. (A catalogue CALL still derives from the live tool
@@ -445,7 +445,7 @@ class TestCatalogueMatchesTheRegistry:
         # by design: it renders an interactive client-side widget (an iframe
         # resource), which has no meaning in-process — the Python API's
         # plotting path is load_raw + the caller's own tooling. run_code is
-        # MCP-only too: it hands a tool caller the engine as code, which is
+        # MCP-only too: it hands a tool caller the Python API as code, which is
         # what a Python caller already holds.
         assert set(_reference.op_names()) == set(ENVELOPE_TOOLS)
         assert {tool.name for tool in tool_defs} - set(_reference.op_names()) == {

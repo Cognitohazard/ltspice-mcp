@@ -61,7 +61,7 @@ from ltspice_mcp.lib.device_names import (
     path_text,
     writes_xvii_names,
 )
-from ltspice_mcp.lib.format import format_spice_value, parse_spice_value
+from ltspice_mcp.lib.format import format_spice_value, held_to_cap, parse_spice_value
 from ltspice_mcp.lib.log_parser import DEVICE_OP_TABLE_DIGITS, device_key
 from ltspice_mcp.lib.log_types import MeasurementsOutput, measurement_named
 from ltspice_mcp.lib.raw_parser import (
@@ -77,6 +77,7 @@ from ltspice_mcp.lib.raw_parser import (
     is_operating_point,
     is_transient_analysis,
     nearest_index,
+    node_voltages,
     query_point_value,
     real_axis,
     safe_magnitude_db,
@@ -118,6 +119,8 @@ from ltspice_mcp.lib.result_observations import (
     relay_observations,
 )
 from ltspice_mcp.lib.signal_analysis import (
+    THD_HARMONICS_CAP,
+    UnorderedAxisError,
     analyze_disturbance_response,
     analyze_edge,
     analyze_periodic,
@@ -129,8 +132,13 @@ from ltspice_mcp.lib.signal_analysis import (
     compute_signal_stats,
     time_weighted_quantiles,
     window_and_clean,
+    window_span,
 )
 from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build, reported_build
+from ltspice_mcp.lib.trace_names import (
+    find_trace,  # noqa: TID251 - an op-point value's name, read against the .log's names
+    naming_note,
+)
 from ltspice_mcp.state import SessionState
 
 #: One metric's answer. See the module docstring for why this is not a
@@ -288,29 +296,21 @@ def guarded_axis(raw: DecodedRaw | DecodedPlot, step: int) -> np.ndarray:
 
 
 def window_indices(axis: np.ndarray, ts: float | None, te: float | None) -> tuple[int, int]:
-    """``[lo, hi)`` sample indices for the ``[ts, te]`` window on a real axis.
+    """``[lo, hi)`` sample indices for the ``[ts, te]`` window on a real axis
+    (``signal_analysis.window_span``).
 
     Unlike ``window_and_clean`` this keeps non-finite samples (full-fidelity
-    egress) and imposes no minimum sample count. It DOES reproduce the
-    monotonicity requirement: ``searchsorted`` returns silently-wrong indices on
-    a descending sweep, so refuse one rather than write a corrupt window.
-
-    An empty selection (``lo >= hi``) is returned, not raised: a stepped export
-    may legitimately have one step whose axis does not reach the window, and the
-    caller decides whether to skip that step or fail the whole export.
+    egress) and imposes no minimum sample count. An empty selection
+    (``lo >= hi``) is returned, not raised: a stepped export may legitimately
+    have one step whose axis does not reach the window, and the caller decides
+    whether to skip that step or fail the whole export.
     """
-    if ts is None and te is None:
-        return 0, int(axis.size)
-    if axis.size > 1 and not bool(np.all(np.diff(axis) >= 0)):
-        raise ResultError(
-            "Cannot apply a [t_start, t_end] window to a non-monotonic axis "
-            "(e.g. a descending sweep); omit the window to export the full axis."
-        )
-    if ts is not None and te is not None and ts >= te:
-        raise ResultError(f"t_start ({ts:g}) must be < t_end ({te:g}).")
-    lo = 0 if ts is None else int(np.searchsorted(axis, ts, side="left"))
-    hi = int(axis.size) if te is None else int(np.searchsorted(axis, te, side="right"))
-    return lo, hi
+    try:
+        return window_span(axis, ts, te)
+    except UnorderedAxisError as exc:
+        raise ResultError(f"{exc}; omit the window to export the full axis.") from exc
+    except ValueError as exc:
+        raise ResultError(str(exc)) from exc
 
 
 def apply_window(
@@ -591,6 +591,21 @@ def has_active_device(currents: dict[str, float]) -> bool:
 
 #: The analyses whose plots signal_stats defines statistics for.
 _STATS_ANALYSES = frozenset({"transient", "dc", "noise"}) | AC_SHAPED
+#: Of those, the ones it reads over a window: their axis is time or a swept
+#: value. A plot over frequency (AC-shaped, noise) is read whole.
+_WINDOWED_STATS_ANALYSES = frozenset({"transient", "dc"})
+
+
+def signal_stats_defined(analysis: str, *, windowed: bool = False) -> bool:
+    """Whether the signal_stats recipe defines statistics for a plot of this
+    analysis, over a window when ``windowed``. signal_stats refuses any other
+    request, and a reply that names a call to read a plot's statistics asks
+    here which call that is; the waveform recipe reads the samples of the
+    rest."""
+    if analysis not in _STATS_ANALYSES:
+        return False
+    return not windowed or analysis in _WINDOWED_STATS_ANALYSES
+
 
 #: Every bucket that filtering, unit reporting and scalar reads must visit.
 OP_BUCKETS = ("voltages", "currents", "device_op_points", "other")
@@ -1025,22 +1040,26 @@ async def summary(
         raise ResultError(f"Failed to build summary: {e}", show_hint=False) from e
 
     # Compute AC bandwidth metrics on AC raws. When ``signal`` is omitted,
-    # auto-pick the first V(...) trace and warn — silently dropping
+    # auto-pick the first node voltage and warn — silently dropping
     # ac_bandwidth_metrics leaves the caller wondering why their AC summary had
-    # no metrics.
+    # no metrics. A device parameter (ngspice's v(@m1[vth])) is none.
     ac_metrics = None
     ac_signal_used: str | None = None
     if is_ac_analysis(raw):
         ac_signal_used = signal
         if ac_signal_used is None:
-            ac_signal_used = next(
-                (t for t in facts["signals"] if t.upper().startswith("V(")), None
-            )
+            ac_signal_used = next(iter(node_voltages(raw)), None)
             if ac_signal_used is not None:
                 facts.setdefault("warnings", []).append(
                     f"AC summary built without an explicit ``signal``; "
                     f"defaulted to {ac_signal_used!r} for ac_bandwidth_metrics. "
                     "Pass ``signal=`` to choose a different trace."
+                )
+            else:
+                facts.setdefault("warnings", []).append(
+                    "AC summary built without an explicit ``signal``, and the plot "
+                    "holds no node voltage to default to, so it has no "
+                    "ac_bandwidth_metrics. Pass ``signal=`` to compute them on a trace."
                 )
         if ac_signal_used:
             with contextlib.suppress(Exception):
@@ -1275,7 +1294,7 @@ async def _value_from_operating_point(
     # read through this path is the one case where the params come from the
     # .log and never appear as a trace, so refusing the documented spelling
     # here refuses it everywhere it is the only route.
-    found = services.find_trace(list(flat), recipe.expr, xvii=writes_xvii_names(raw))  # noqa: TID251 - an op-point value is named in the .log, never as a trace
+    found = find_trace(list(flat), recipe.expr, xvii=writes_xvii_names(raw))
     match = (found, flat[found]) if found is not None else None
     if match is None and services.is_node_pair(recipe.expr):
         # The pair resolves like it does on any raw; both node voltages are
@@ -1297,7 +1316,7 @@ async def _value_from_operating_point(
             present += f", ... ({len(flat)} total)"
         raise ResultError(
             f"{recipe.expr!r} is not present in this operating-point "
-            f"result.{services.pin_hint(raw, recipe.expr)} Address a value by the name it "
+            f"result.{naming_note(raw.header, recipe.expr)} Address a value by the name it "
             "carries (e.g. "
             "'@m1[gm]', 'V(out)') or a device parameter by the device's path "
             "and the parameter ('m1.gm', 'x1.m1.gm' for M1 inside X1). "
@@ -1415,11 +1434,19 @@ async def signal_stats(
         # Nothing to take statistics along; the refusal names what reads it,
         # the value recipe for a point a step.
         raise _no_axis_error(raw)
-    if analysis not in _STATS_ANALYSES:
+    if not signal_stats_defined(analysis):
         raise ResultError(
-            f"signal_stats does not define statistics for {analysis!r}. "
-            "Read this plot's quantities through inspect(kind='results') or "
-            "api.load_raw(...).trace(signal) and choose the appropriate calculation.",
+            f"signal_stats does not define statistics for {analysis!r}. The waveform "
+            "recipe returns this plot's samples, as api.load_raw(...).trace(signal) "
+            "does; choose the calculation from those.",
+            show_hint=False,
+        )
+    if not signal_stats_defined(analysis, windowed=t_start is not None or t_end is not None):
+        lookup = "the bode_point recipe" if analysis in AC_SHAPED else "the value recipe"
+        raise ResultError(
+            f"signal_stats reads a {analysis!r} plot whole: its axis is frequency, so it "
+            f"takes no window. Drop 'window', look up one frequency with {lookup}, or "
+            "read the window's samples with the waveform recipe and the same window.",
             show_hint=False,
         )
     if recipe.quantiles and not is_transient_analysis(raw):
@@ -1447,10 +1474,14 @@ async def signal_stats(
         )
 
     if np.iscomplexobj(wave):
+        # Complex samples are read whole, as an AC sweep's are. The analyses
+        # signal_stats_defined reads over a window write real samples, so this
+        # stops only a raw whose samples its analysis does not account for.
         if t_start is not None or t_end is not None:
             raise ResultError(
-                "t_start/t_end windowing is not supported for AC analysis. "
-                "Use the bode_point recipe to look up a specific frequency.",
+                f"Signal {signal!r} holds complex samples, which signal_stats reads "
+                "whole; drop 'window', or read the window's samples with the waveform "
+                "recipe and the same window.",
                 show_hint=False,
             )
         magnitude_db = safe_magnitude_db(wave)
@@ -1479,14 +1510,6 @@ async def signal_stats(
     # too since the units aren't seconds.
     is_dc_sweep = is_dc_analysis(raw)
     is_noise = is_noise_analysis(raw)
-
-    if is_noise and (t_start is not None or t_end is not None):
-        raise ResultError(
-            "t_start/t_end windowing is not supported for Noise analysis (axis is "
-            "frequency, not time). Use the value recipe to look up a specific "
-            "frequency.",
-            show_hint=False,
-        )
 
     ts = parse_time(t_start, "t_start")
     te = parse_time(t_end, "t_end")
@@ -1808,6 +1831,8 @@ async def thd(
     axis, wave = await load_real_signal(source, recipe.signal, step, state)
     t, y, _ = apply_window(axis, wave, t_start, t_end)
     f0 = parse_time(spice_text(recipe.fundamental_hz), "fundamental")
+    # Held here as well as in analyze_thd, so the note names the recipe's argument.
+    harmonics, held = held_to_cap("harmonics", recipe.harmonics, THD_HARMONICS_CAP)
     data = await run_metric(
         source,
         state,
@@ -1815,9 +1840,12 @@ async def thd(
         t,
         y,
         fundamental=f0,
-        n_harmonics=recipe.harmonics,
+        n_harmonics=harmonics,
         window=window,
     )
+    if held is not None:
+        # A record's warnings become its recipe's, as the waveform recipe's cap does.
+        data["warnings"] = [held, *data.get("warnings", [])]
     data["signal"] = recipe.signal
     await _label_unit(source, recipe.signal, data, state)
     return await relay_solve_failures(source, data, state)

@@ -15,11 +15,12 @@ from __future__ import annotations
 
 import cmath
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Literal, NotRequired, TypedDict
 
 import numpy as np
 
+from ltspice_mcp.lib.format import held_to_cap
 from ltspice_mcp.lib.log_types import measurement_named
 
 _LEVEL_EPSILON = 1e-12
@@ -234,6 +235,68 @@ class MeasurementStatsEntry(TypedDict):
     histogram: list[HistogramBin]
 
 
+#: Points of an axis :func:`window_span` reads at a time, so a window over a
+#: long axis holds no copy of it.
+_WINDOW_CHUNK = 1 << 20
+
+
+class UnorderedAxisError(ValueError):
+    """An axis whose values decrease somewhere, which no window can be read from."""
+
+
+def window_span(
+    axis: np.ndarray,
+    start: float | None,
+    end: float | None,
+    *,
+    coordinate: Callable[[np.ndarray], np.ndarray] | None = None,
+) -> tuple[int, int]:
+    """``[lo, hi)``, the points of ``axis`` whose value lies in ``[start, end]``.
+
+    The one rule for which points a window of an axis keeps: every point at or
+    after ``start`` and at or before ``end``, an open end keeping all on its
+    side, and nothing interpolated at a bound. The values must not decrease
+    (``searchsorted`` reads a decreasing axis wrongly), and ``start`` must be
+    less than ``end``: a decrease raises :class:`UnorderedAxisError`, the
+    bounds ``ValueError``. An empty span is returned, not raised.
+    ``coordinate`` maps stored values to the ones the window is in (a
+    transient's deck time), a block at a time.
+
+    A read's or an export's window keeps the stored points, in their order,
+    and only selects them. A measurement's window is :func:`window_and_clean`,
+    which differs on purpose: it reads a downward sweep reversed, moves a
+    bound a few ulps past an axis end onto it, refuses one beyond the axis,
+    and needs three points to measure (``tests/test_axis_window.py`` pins the
+    difference).
+    """
+    if start is None and end is None:
+        return 0, int(axis.size)
+    if start is not None and end is not None and start >= end:
+        raise ValueError(f"t_start ({start:g}) must be < t_end ({end:g}).")
+    lo = hi = 0
+    previous: float | None = None
+    for offset in range(0, int(axis.size), _WINDOW_CHUNK):
+        block = axis[offset : offset + _WINDOW_CHUNK]
+        values = np.real(block) if coordinate is None else coordinate(block)
+        # Across blocks as within one: a difference, so two infinities do not
+        # pass; their difference is not a number, which is the refusal.
+        with np.errstate(invalid="ignore"):
+            unordered = not bool(np.all(np.diff(values) >= 0)) or (
+                previous is not None and not values[0] - previous >= 0
+            )
+        if unordered:
+            raise UnorderedAxisError(
+                "Cannot apply a [t_start, t_end] window to a non-monotonic axis "
+                "(e.g. a descending sweep)"
+            )
+        previous = float(values[-1])
+        # The axis does not decrease, so each block's count below a bound adds up.
+        if start is not None:
+            lo += int(np.searchsorted(values, start, "left"))
+        hi += values.size if end is None else int(np.searchsorted(values, end, "right"))
+    return lo, hi
+
+
 def window_and_clean(
     t: np.ndarray,
     y: np.ndarray,
@@ -252,6 +315,12 @@ def window_and_clean(
     corruption: the axis and wave are flipped to ascending together so the
     windowing below stays correct. It stays off for time/frequency axes, where
     a non-monotonic axis means a corrupt result and must be refused.
+
+    A measurement's window, not :func:`window_span`, the window a read or an
+    export keeps stored points by, in their order: a measurement reads a
+    downward sweep reversed, needs three points, and takes a bound a few ulps
+    past an axis end as the end, where a read only selects
+    (``tests/test_axis_window.py`` pins the difference).
     """
     if len(t) != len(y):
         raise ValueError(f"Axis and wave have different lengths: {len(t)} vs {len(y)}")
@@ -1340,6 +1409,11 @@ def _resample_uniform(
     return np.interp(tu, t, y), warnings
 
 
+#: The highest harmonic a THD sums, the fundamental counted as the first. A
+#: larger count is summed to it, and the warnings say so.
+THD_HARMONICS_CAP = 50
+
+
 def analyze_thd(
     t: np.ndarray,
     y: np.ndarray,
@@ -1369,12 +1443,15 @@ def analyze_thd(
         raise ValueError(f"t/y length mismatch: {t.size} vs {y.size}")
     if t.size < 8:
         raise ValueError(f"Need at least 8 samples for an FFT; got {t.size}")
-    if not 1 <= n_harmonics <= 50:
-        raise ValueError(f"n_harmonics must be 1..50; got {n_harmonics}")
+    if n_harmonics < 1:
+        raise ValueError(f"n_harmonics must be at least 1; got {n_harmonics}")
     if window not in ("coherent", "hann"):
         raise ValueError(f"window must be 'coherent' or 'hann'; got {window!r}")
 
     warnings: list[str] = []
+    n_harmonics, held = held_to_cap("n_harmonics", n_harmonics, THD_HARMONICS_CAP)
+    if held is not None:
+        warnings.append(held)
     span = float(t[-1]) - float(t[0])
     if span <= 0:
         raise ValueError("Time window has zero span.")

@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock
 import jsonschema
 import pytest
 from pydantic import ValidationError
+from spicelib.simulators.ltspice_simulator import LTspice
 from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
 from ltspice_mcp.api import ApiCallError
@@ -113,7 +114,7 @@ def test_attached_per_run_limit_shares_the_analyze_page_cap():
     """One cap, both surfaces, held rather than refused.
 
     The attached block is handed straight to analyze_results, so its limit is
-    that engine's own model: an over-cap request is held to the cap at
+    that tool's own model: an over-cap request is held to the cap at
     submission, and the request the job records names the page it will serve.
     """
     assert issubclass(AnalysisPerRun, analyze_mod.CappedPerRunLimit)
@@ -1105,6 +1106,77 @@ class TestLeanReceipt:
         (row,) = data["runs"]["items"]
         assert row["raw"] and row["log"]
 
+    #: A path into a run row that no row on the page reaches.
+    _ABSENT_RUN_FIELDS: ClassVar[list[str]] = ["case_id", "assignments.not_assigned"]
+
+    @staticmethod
+    def _absent_run_field_warnings(data: dict) -> list[str]:
+        return [
+            warning
+            for warning in data.get("warnings", [])
+            if warning.startswith("run_fields path 'assignments.not_assigned' is absent")
+        ]
+
+    async def test_a_run_field_no_row_reaches_is_said_by_the_receipt_and_its_runs_page(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        fake_simulator(monkeypatch)
+        deck = _deck(work_dir / "absent_field.cir")
+
+        receipt = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "absent-field", run_fields=self._ABSENT_RUN_FIELDS), state_with_sim
+            )
+        )
+        runs = (
+            await handle_jobs(
+                JobsInput.model_validate(
+                    {
+                        "action": "runs",
+                        "job_id": receipt["job_id"],
+                        "run_fields": self._ABSENT_RUN_FIELDS,
+                    }
+                ),
+                state_with_sim,
+            )
+        ).structured_content
+        assert runs is not None
+
+        assert len(self._absent_run_field_warnings(receipt)) == 1, receipt
+        assert len(self._absent_run_field_warnings(runs)) == 1, runs
+
+    async def test_a_run_field_no_row_reaches_is_said_when_no_run_has_somewhere_to_write(
+        self,
+        config: ServerConfig,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """LTspice under WSL with no Windows-native directory fails every case
+        before staging; that receipt pages its run rows like any other."""
+
+        class WslLTspice(LTspice):
+            spice_exe: ClassVar[list[str]] = ["/mnt/c/Program Files/ADI/LTspice/LTspice.exe"]
+
+        state = SessionState.create(config, available={"ltspice": WslLTspice})
+        monkeypatch.setattr(wsl, "is_wsl", lambda: True)
+        monkeypatch.setattr(wsl, "get_windows_output_dir", lambda: None)
+        deck = _deck(work_dir / "nowhere.cir")
+
+        receipt = _assert_schema(
+            await handle_run_experiments(
+                _args(deck, "nowhere-to-write", run_fields=self._ABSENT_RUN_FIELDS), state
+            )
+        )
+
+        assert [failure["code"] for failure in receipt["failures"]] == [
+            "windows_native_storage_unavailable"
+        ], receipt
+        assert receipt["runs"]["items"] == [{"case_id": receipt["failures"][0]["case_id"]}]
+        assert len(self._absent_run_field_warnings(receipt)) == 1, receipt
+
     @pytest.mark.parametrize(
         ("request_id", "run_fields"),
         [
@@ -1832,9 +1904,11 @@ class TestReplayRejectsChangedSources:
             source["sha256"] = ""
             source["manifest"] = []
         record.write_text(json.dumps(stored))
-        del state_with_sim.all_jobs[first["job_id"]]
+        # Read by a session that never held the job, as a record an older
+        # release left is: this session's own job answers for itself.
+        other = SessionState.create(state_with_sim.config, available={"fake": FakeSim})
 
-        data = _assert_schema(await handle_run_experiments(args, state_with_sim))
+        data = _assert_schema(await handle_run_experiments(args, other))
 
         message = data["error"]["message"]
         assert data["error"]["code"] == "idempotency_conflict"
@@ -2968,7 +3042,7 @@ class TestFailureChannel:
 
 @pytest.mark.asyncio
 class TestAttachedAnalysis:
-    """The analyze block runs on the real recipe engine, not a stub."""
+    """The analyze block runs on the real recipes, not a stub."""
 
     async def test_recipes_and_group_by_run_end_to_end(
         self,
@@ -3458,14 +3532,14 @@ class TestAttachedAnalysis:
         recorded_fixture_simulator(monkeypatch)
         deck = _deck(work_dir / "attached-bad.cir")
         # A malformed block is refused before submission now, so a STAGE-time
-        # failure needs the engine itself to fail — patched through
+        # failure needs the analysis itself to fail — patched through
         # tools.analyze, the seam the callback deliberately resolves late.
         analyze = {
             "recipes": [{"key": "vout", "metric": "value", "expr": "V(out)", "at": "900u"}],
         }
 
         async def exploding_engine(args, state):
-            raise ValueError("analysis engine failure injected by test")
+            raise ValueError("analysis failure injected by test")
 
         monkeypatch.setattr(analyze_mod, "capture_attached_analysis", exploding_engine)
         data = _assert_schema(
@@ -3481,7 +3555,7 @@ class TestAttachedAnalysis:
         assert data["completeness"]["produced"] == 1
         assert data["completeness"]["failed"] == 0
         assert data["analysis"]["status"] == "failed"
-        assert "analysis engine failure injected by test" in data["analysis"]["error"]
+        assert "analysis failure injected by test" in data["analysis"]["error"]
         assert [item["code"] for item in data["analysis"]["observations"]] == ["analysis_failed"]
         assert "attached analysis failed" in data["hint"]
         # The coordinator still records the stage failure on the job status.
@@ -3496,11 +3570,11 @@ class TestAttachedAnalysis:
         recorded_fixture_simulator(monkeypatch)
         deck = _deck(work_dir / "attached-wait.cir")
         released = asyncio.Event()
-        engine = analyze_mod.capture_attached_analysis
+        real_capture = analyze_mod.capture_attached_analysis
 
         async def gated(args, state):
             await released.wait()
-            return await engine(args, state)
+            return await real_capture(args, state)
 
         monkeypatch.setattr(analyze_mod, "capture_attached_analysis", gated)
 
@@ -3638,6 +3712,36 @@ class TestMonteCarloSampleIdentity:
 
         assert retry["job_id"] == first["job_id"]
         assert self._draws(retry) == self._draws(first)
+
+    async def test_samples_that_computed_the_same_numbers_are_reported(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The stand-in simulator writes one recorded raw for every case, as a
+        deck whose draws reach nothing it saves would: each sample's raw
+        computed the same numbers, so the receipt says so, naming the samples,
+        rather than presenting three runs as a distribution."""
+        recorded_fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "same.cir")
+
+        data = _assert_schema(
+            await _completed_analysis_receipt(
+                _args(
+                    deck,
+                    "mc-same",
+                    variations=[{"kind": "random", "runs": 3, "seed": 2, "rules": [self._RULE]}],
+                ),
+                state_with_sim,
+            )
+        )
+
+        (observation,) = [o for o in data["observations"] if o["code"] == "identical_samples"]
+        assert observation["detail"].startswith("All samples of dut computed the same results")
+        (group,) = observation["evidence"]["groups"]
+        assert group == {"circuit": "dut", "samples": 3}
+        assert not any(o["code"] == "samples_not_compared" for o in data["observations"])
 
     async def test_a_sample_that_never_ran_still_records_how_to_replay_it(
         self,

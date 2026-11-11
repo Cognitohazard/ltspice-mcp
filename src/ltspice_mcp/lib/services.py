@@ -12,7 +12,6 @@ import asyncio
 import contextlib
 import contextvars
 import logging
-import re
 import threading
 import time
 from collections.abc import Callable, Sequence
@@ -31,12 +30,6 @@ from ltspice_mcp.errors import (
 from ltspice_mcp.lib import recent
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, RawData
-from ltspice_mcp.lib.device_names import (
-    device_param_name,
-    find_trace_by_path,
-    parse_shorthand,
-    writes_xvii_names,
-)
 from ltspice_mcp.lib.experiment_types import (
     ExperimentCase,
     ExperimentJob,
@@ -44,8 +37,7 @@ from ltspice_mcp.lib.experiment_types import (
     partial_raw,
 )
 from ltspice_mcp.lib.job_lifecycle import runs_done
-from ltspice_mcp.lib.log_parser import LogDiagnostics, device_key
-from ltspice_mcp.lib.netlist_graph import GROUND_ALIASES
+from ltspice_mcp.lib.log_parser import LogDiagnostics
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.parser_service import ParserCleanupError, select_raw
 from ltspice_mcp.lib.parser_service import load_artifacts_sync as _parse_artifacts_sync
@@ -54,13 +46,13 @@ from ltspice_mcp.lib.parser_service import load_raw_sync as _parse_raw_sync
 from ltspice_mcp.lib.raw_parser import (
     OtherRawKind,
     get_step_count,
-    is_noise_analysis,
     other_raw_path,
     points_reached,
 )
 from ltspice_mcp.lib.result_observations import (
     coarse_compressed_waveform,
     coarse_waveform_observation,
+    compressed_transient,
     deck_tran_max_step,
 )
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name
@@ -69,6 +61,12 @@ from ltspice_mcp.lib.simulator_build import (
     executable_identity,
     ltspice_before_24,
     same_executable,
+)
+from ltspice_mcp.lib.trace_names import (
+    NODE_PAIR_RE,
+    NameRead,
+    read_in_plot,
+    why_not,
 )
 from ltspice_mcp.state import SessionState
 
@@ -187,6 +185,12 @@ class AnalysisSource:
     #: What a read of these results says of them, from the case that made them
     #: (``RunContext.observations``); none for a bare path.
     observations: tuple[dict[str, Any], ...] = ()
+    #: The signals a read keeps the traces of (``trace_names.chosen_traces``),
+    #: with the axis and any step parameters; None reads every trace.
+    signals: tuple[str, ...] | None = None
+    #: The span ``(start, end)`` of the read plot's axis whose points a read
+    #: keeps (``raw_decode.AxisWindow``), an end None for open; None keeps all.
+    window: tuple[float | None, float | None] | None = None
     # Resident facts belong to one evaluation, between fresh drift checks.
     captured: ParsedArtifacts | None = field(default=None, repr=False, compare=False)
 
@@ -254,15 +258,52 @@ def coarse_waveform(source: AnalysisSource, raw: DecodedRaw) -> dict[str, float]
 
 def read_observations(source: AnalysisSource, raw: DecodedRaw) -> tuple[dict[str, Any], ...]:
     """What a read of ``raw`` from ``source`` says of the results it read: the
-    source's own (a stopped case's ``partial_raw``), and whether waveform
-    compression left a transient coarse (:func:`coarse_waveform`). Blocking:
-    it may read the deck."""
-    found = coarse_waveform(source, raw)
-    if found is None:
-        return source.observations
-    case_id = (source.identity or {}).get("case_id")
-    label = str(case_id) if case_id else (source.raw.name if source.raw else "this run")
-    return (*source.observations, dict(coarse_waveform_observation([(label, found)], run_cap=1)))
+    source's own (a stopped case's ``partial_raw``), whether waveform
+    compression left a transient coarse (:func:`coarse_waveform`), and which
+    signals and window a selective read kept. Blocking: it may read the deck.
+
+    Compression is judged over a run's every point, so a windowed read, which
+    holds some of them, does not judge it, and says so.
+    """
+    observations = list(source.observations)
+    found = None if source.window is not None else coarse_waveform(source, raw)
+    if found is not None:
+        case_id = (source.identity or {}).get("case_id")
+        label = str(case_id) if case_id else (source.raw.name if source.raw else "this run")
+        observations.append(dict(coarse_waveform_observation([(label, found)], run_cap=1)))
+    if source.signals is not None:
+        observations.append(
+            {
+                "code": "signals_chosen",
+                "kind": "provenance",
+                "detail": (
+                    f"Read with signals={list(source.signals)}: this result holds the "
+                    "traces they read, the plot's first variable (its axis, where it has "
+                    "one) and any step parameters, and no other trace."
+                ),
+            }
+        )
+    if source.window is not None:
+        start, end = ("None" if bound is None else f"{bound:g}" for bound in source.window)
+        unjudged = (
+            " Whether waveform compression left the run coarse "
+            "(coarse_compressed_waveform) is judged over all of a run's points, so it "
+            "was not judged here: read the run without window to see it."
+            if compressed_transient(raw)
+            else ""
+        )
+        observations.append(
+            {
+                "code": "window_chosen",
+                "kind": "provenance",
+                "detail": (
+                    f"Read with window=({start}, {end}): this result holds the points of "
+                    "its axis from the start to the end, in each step, and no other "
+                    f"point.{unjudged}"
+                ),
+            }
+        )
+    return tuple(observations)
 
 
 _analysis_deadline: contextvars.ContextVar[float | None] = contextvars.ContextVar(
@@ -287,6 +328,48 @@ def analysis_deadline(deadline: float | None):
         yield
     finally:
         _analysis_deadline.reset(token)
+
+
+def run_selectors_beside_path(
+    *,
+    run_index: int = 0,
+    case_id: str | None = None,
+    other_raw: str | None = None,
+    case_ids: bool = False,
+) -> str | None:
+    """Why a read of the results file at a path refuses these selectors, or
+    None when it takes them.
+
+    The one answer for every reader that takes a path or a job_id:
+    ``inspect(kind="results")``, ``plot_waveform``, ``analyze_results`` and
+    the Python API's ``load_raw``, ``measurements`` and ``device_op_points``.
+    A path names one file, while ``run_index``, ``case_id``, ``other_raw``
+    and ``analyze_results``' ``runs={case_ids}`` (``case_ids``) choose within
+    a job; beside a path the file would be read as though they had not been
+    sent. ``run_index`` 0 is its default and chooses nothing.
+    ``analyze_results``' list of runs is not refused: a run a path does not
+    hold is reported missing, as for a job.
+    """
+    sent = [
+        name
+        for name, chosen in (
+            ("run_index", run_index != 0),
+            ("case_id", case_id is not None),
+            ("other_raw", other_raw is not None),
+            ("runs={case_ids}", case_ids),
+        )
+        if chosen
+    ]
+    if not sent:
+        return None
+    one = len(sent) == 1
+    names = sent[0] if one else f"{', '.join(sent[:-1])} and {sent[-1]}"
+    return (
+        f"{names} {'chooses' if one else 'choose'} within a job and "
+        f"{'needs' if one else 'need'} its job_id, but path names one results file: "
+        f"leave {'it' if one else 'them'} out to read that file, or pass the job's "
+        "job_id instead of path."
+    )
 
 
 def resolve_experiment_run(
@@ -743,14 +826,6 @@ def load_logs_sync(source: AnalysisSource, state: SessionState) -> DecodedLog:
     return _parse_logs_sync(source, state, deadline=deadline)
 
 
-#: A node-pair voltage ``V(a,b)``. SPICE syntax names it, but no simulator
-#: writes it as a trace, so it is read as ``V(a) - V(b)``. A node name holds
-#: no comma, parenthesis or space, which keeps the split unambiguous.
-_NODE_PAIR_RE = re.compile(r"\s*v\(\s*([^\s(),]+)\s*,\s*([^\s(),]+)\s*\)\s*", re.IGNORECASE)
-
-_V_TRACE_RE = re.compile(r"v\((.+)\)", re.IGNORECASE)
-
-
 @dataclass(frozen=True)
 class Signal:
     """A requested signal resolved against one raw's trace list.
@@ -790,72 +865,6 @@ class Signal:
         return plus - minus
 
 
-def _find_trace(raw: RawData, signal: str) -> str | None:
-    """The raw's own name for one trace ``signal`` addresses, or None
-    (``find_trace`` over the raw's trace names)."""
-    return find_trace(raw.get_trace_names(), signal, xvii=writes_xvii_names(raw))
-
-
-def find_trace(names: Sequence[str], signal: str, *, xvii: bool) -> str | None:
-    """The name among ``names`` that ``signal`` addresses, or None.
-
-    Lookup is case-insensitive: SPICE node names are case-insensitive per
-    SPICE conventions, but spicelib preserves the case the simulator wrote.
-    LTspice writes ``V(out)`` for transient/AC/DC sweep raws but ``v(onoise)``
-    for ``.NOISE`` raws — case-sensitive match would reject the user's
-    ``V(onoise)`` even though the data exists. ``xvii`` is for names a build
-    wrote that names subcircuit members as XVII does. The one rule behind
-    every reader that finds a trace or an operating-point value by name.
-    """
-    if signal in names:
-        return signal
-    sig_lower = signal.lower()
-    by_lower = {name.lower(): name for name in names}
-    if sig_lower in by_lower:
-        return by_lower[sig_lower]
-
-    # Resolve cross-simulator / shorthand aliases transparently instead of
-    # forcing a guaranteed retry on a deterministic rename:
-    #   - noise: LTspice V(onoise)/V(inoise) <-> ngspice onoise_spectrum/
-    #     inoise_spectrum, plus bare onoise/inoise shorthand
-    #   - hierarchical separator: LTspice ':' (V(X1:mid)) <-> ngspice '.'
-    #   - a path through subcircuits, which XVII writes without each
-    #     instance's X (V(xa.xin.mid) is its V(a:in:mid))
-    candidates: list[str] = []
-    for kind in ("onoise", "inoise"):
-        if sig_lower in (kind, f"v({kind})", f"{kind}_spectrum"):
-            candidates += [f"v({kind})", f"{kind}_spectrum", kind]
-    if ":" in sig_lower:
-        candidates.append(sig_lower.replace(":", "."))
-    if "." in sig_lower:
-        candidates.append(sig_lower.replace(".", ":"))
-
-    for cand in candidates:
-        if cand in by_lower:
-            return by_lower[cand]
-    return find_trace_by_path(names, signal, xvii=xvii) or device_param_name(names, signal)
-
-
-def _looks_like_expression(signal: str) -> bool:
-    """Whether ``signal`` combines traces rather than naming one.
-
-    True for an operator outside every parenthesis (``V(a)-V(b)``,
-    ``2*V(out)``) or a reference nested in another (``abs(V(out))``). A sign
-    inside the parentheses is part of a node name — ``V(in-)`` is one trace.
-    """
-    depth = 0
-    for char in signal:
-        if char == "(":
-            depth += 1
-            if depth > 1:
-                return True
-        elif char == ")":
-            depth -= 1
-        elif depth == 0 and char in "+-*/^":
-            return True
-    return False
-
-
 def _available_signals(raw: RawData) -> str:
     """The first traces of ``raw``, for an error that names what is there."""
     trace_names = raw.get_trace_names()
@@ -865,141 +874,10 @@ def _available_signals(raw: RawData) -> str:
     return available
 
 
-def _not_found(raw: RawData, signal: str) -> ResultError:
-    """The error for a ``signal`` no trace answers to."""
-    trace_names = raw.get_trace_names()
-    available = _available_signals(raw)
-    if _looks_like_expression(signal):
-        return ResultError(
-            f"Signal '{signal}' not found: it reads as an expression, and a signal "
-            "names one trace or a node-pair voltage V(a,b). Available signals: "
-            f"{available}. For other trace math, combine the traces in Python: "
-            "r = api.load_raw(job_id=..., case_id=...); t = r.axis(step=0); "
-            "y = r.trace('V(out)', step=0) * r.trace('I(R1)', step=0); "
-            "compute_signal_stats(t, y) gives its time-weighted statistics.",
-            show_hint=False,
-            python_route=True,
-        )
-    hint = ""
-    sig_lo = signal.lower()
-    dev_param = parse_shorthand(sig_lo)
-    trace_lo = {t.lower() for t in trace_names}
-    descriptor = getattr(raw, "descriptor", None)
-    if sig_lo in {name.lower() for name in getattr(descriptor, "step_variables", ())}:
-        hint = (
-            f" '{signal}' holds each step's stepped value, not a signal: read it from "
-            "the steps (each row's step_values, or RawResult.steps)."
-        )
-    elif sig_lo in ("v(onoise)", "v(inoise)") and (
-        "onoise_spectrum" in trace_lo or "inoise_spectrum" in trace_lo
-    ):
-        hint = " (ngspice names noise signals 'onoise_spectrum'/'inoise_spectrum')"
-    elif sig_lo in ("onoise_spectrum", "inoise_spectrum") and (
-        "v(onoise)" in trace_lo or "v(inoise)" in trace_lo
-    ):
-        hint = " (LTspice names noise signals 'V(onoise)'/'V(inoise)')"
-    elif pin := pin_hint(raw, signal):
-        hint = pin
-    elif dev_param or "@" in sig_lo:
-        save_target = device_key(*dev_param) if dev_param else signal
-        hint = (
-            f" Per-device small-signal params (gm/gds/vth/...) come back from "
-            f"operating_point(device=...). As a raw trace (for a sweep/plot), ngspice "
-            f"needs '.save {save_target}' in the deck; LTspice writes them only to the "
-            f".log under '.options logopinfo' (operating_point reads that), not the raw."
-        )
-    return ResultError(f"Signal '{signal}' not found.{hint} Available signals: {available}")
-
-
-def pin_hint(raw: RawData, signal: str) -> str:
-    """Say, for ``V(<instance>:<pin>)``, that ``pin`` is a pin of a subcircuit
-    instance, which a result holds no voltage for; empty for any other name.
-
-    A raw names a node inside a subcircuit ``V(<instance>:<node>)``, but a pin
-    is the net it connects to in the circuit above, under that net's name. The
-    pin is known as one by the current into it (``Ix(<instance>:<pin>)``), or
-    by the ``Backannotation`` line LTspice writes for the instance, which lists
-    its pins in the order the instance line lists their nets (the
-    ``export-hierarchical-block`` recordings; XVII writes that line for a
-    sheet's block but not for a netlist's instance, ``raw/subckt_names_tran``).
-    """
-    match = _V_TRACE_RE.fullmatch(signal.strip())
-    if match is None or ":" not in match.group(1):
-        return ""
-    instance, _, pin = match.group(1).strip().rpartition(":")
-    pins = _instance_pins(raw, instance)
-    # Found as any trace is, so XVII's spelling (Ix(a:TOP) for xa's TOP) counts.
-    current = _find_trace(raw, f"Ix({instance}:{pin})")
-    if current is None and pin.lower() not in (p.lower() for p in pins):
-        return ""
-    hint = (
-        f" '{pin}' is a pin of subcircuit instance {instance}, and a result holds no "
-        "voltage under a pin's name: the pin's voltage is the net it connects to in the "
-        "circuit above, under that net's name."
-    )
-    if pins:
-        hint += (
-            f" {instance}'s pins are {', '.join(pins)}, in the order its instance line "
-            "lists their nets (inspect kind='components' with detail='full' shows them)."
-        )
-    if current is not None:
-        hint += f" {current} is the current into the pin."
-    return hint
-
-
-def _instance_pins(raw: RawData, instance: str) -> list[str]:
-    """The pins of ``instance`` as the raw's ``Backannotation`` line for it
-    lists them, or none when the raw has no such line."""
-    header = getattr(raw, "header", None)
-    for key, value in getattr(header, "fields", ()):
-        if key.casefold() != "backannotation":
-            continue
-        name, *pins = value.split()
-        if name.lower() == instance.lower():
-            return pins
-    return []
-
-
-def _node_pair(
-    raw: DecodedRaw | DecodedPlot, signal: str, plus_node: str, minus_node: str
-) -> Signal:
-    """``V(plus_node, minus_node)`` read from the two node voltages of ``raw``.
-
-    A ground alias (``0``, ``gnd``) that the raw carries no voltage for is
-    ground and contributes nothing, so ``V(a,0)`` is ``V(a)``.
-    """
-    traces = {node: _find_trace(raw, f"V({node})") for node in (plus_node, minus_node)}
-    grounded = {
-        node for node, trace in traces.items() if trace is None and node.lower() in GROUND_ALIASES
-    }
-    if minus_node not in grounded and is_noise_analysis(raw):
-        raise ResultError(
-            f"Signal '{signal}' is a node-pair difference, and a .noise result holds "
-            "spectral densities: the difference of two densities is not the noise "
-            "between the nodes. Put the pair in the .noise directive, "
-            "e.g. .noise V(a,b) <source> ..., and read V(onoise).",
-            show_hint=False,
-        )
-    for node, trace in traces.items():
-        if trace is None and node not in grounded:
-            raise ResultError(
-                f"Signal '{signal}' reads as a node-pair difference, but node voltage "
-                f"'V({node})' is not in this result.{pin_hint(raw, f'V({node})')} "
-                f"Available signals: {_available_signals(raw)}"
-            )
-    plus, minus = traces[plus_node], traces[minus_node]
-    if minus is None:
-        if plus is None:
-            raise ResultError(f"Signal '{signal}' names ground twice; it is zero by definition.")
-        return Signal(plus, plus)
-    name = f"V({_node_spelling(plus, plus_node)},{_node_spelling(minus, minus_node)})"
-    return Signal(name, plus, minus)
-
-
-def _node_spelling(trace: str | None, node: str) -> str:
-    """``node`` as the raw spells it inside its ``V(...)`` trace, else as asked."""
-    match = _V_TRACE_RE.fullmatch(trace or "")
-    return match.group(1) if match else node
+def read_signal(raw: DecodedRaw | DecodedPlot, signal: str) -> NameRead:
+    """What ``signal`` reads of ``raw``'s selected plot, or why it reads none
+    (``trace_names.read_in_plot``, which the parser worker asks too)."""
+    return read_in_plot(raw.header, signal)
 
 
 def resolve_signal(raw: DecodedRaw | DecodedPlot, signal: str) -> Signal:
@@ -1007,21 +885,33 @@ def resolve_signal(raw: DecodedRaw | DecodedPlot, signal: str) -> Signal:
 
     A trace the raw actually carries wins, including one literally named
     ``V(a,b)``; otherwise a node pair reads as ``V(a) - V(b)``, each side
-    resolved like any single trace. Read the data with :meth:`Signal.wave`:
-    a pair's ``name`` is not a trace of the raw.
+    resolved like any single trace (``read_signal``). Read the data with
+    :meth:`Signal.wave`: a pair's ``name`` is not a trace of the raw. A name
+    that reads nothing is refused with why (``trace_names.why_not``).
     """
-    trace = _find_trace(raw, signal)
-    if trace is not None:
-        return Signal(trace, trace)
-    pair = _NODE_PAIR_RE.fullmatch(signal)
-    if pair is not None:
-        return _node_pair(raw, signal, pair.group(1), pair.group(2))
-    raise _not_found(raw, signal)
+    read = read_signal(raw, signal)
+    if read.refused is None:
+        return Signal(read.name, read.plus, read.minus)
+    raise signal_refused(raw, signal, read)
+
+
+def signal_refused(raw: DecodedRaw | DecodedPlot, signal: str, read: NameRead) -> ResultError:
+    """The error for a ``signal`` that reads no trace of ``raw`` (``read``)."""
+    listed = (
+        ""
+        if read.refused in ("ground_twice", "noise_pair")
+        else f" Available signals: {_available_signals(raw)}."
+    )
+    return ResultError(
+        why_not(read, signal, raw.header, listed=listed),
+        show_hint=read.refused not in ("expression", "noise_pair"),
+        python_route=read.refused == "expression",
+    )
 
 
 def is_node_pair(signal: str) -> bool:
     """Whether ``signal`` is spelled as a node-pair voltage ``V(a,b)``."""
-    return _NODE_PAIR_RE.fullmatch(signal) is not None
+    return NODE_PAIR_RE.fullmatch(signal) is not None
 
 
 def validate_step(raw: RawData, step: int) -> None:

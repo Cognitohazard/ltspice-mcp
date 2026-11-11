@@ -155,8 +155,10 @@ def _barrier_process(
     """
     working = Path(working_dir)
     circuit = Path(circuit_path)
+    # With persistence on, as a submission requires: the gate finds the other
+    # process's job through this registry, which reads it from the store.
     state = SimpleNamespace(
-        working_dir=working, job_registry=JobRegistry(persist_enabled=False, working_dir=working)
+        working_dir=working, job_registry=JobRegistry(persist_enabled=True, working_dir=working)
     )
     request = ExperimentRunRequest(
         state=cast("SessionState", state),
@@ -557,6 +559,55 @@ class TestExperimentLifecycle:
         assert loaded.completeness.produced == 1
         assert loaded.failures == []
         assert any(item["code"] == "unpersisted_runs_recovered" for item in loaded.observations)
+
+    @pytest.mark.parametrize("sample", [True, False], ids=["sample", "not-a-sample"])
+    def test_a_sample_promoted_after_a_restart_keeps_a_digest_of_its_results(
+        self, work_dir: Path, sample: bool
+    ):
+        """A sample whose raw outlived its checkpoint is compared like any
+        other, so the promotion reads what its raw computed; a case that is no
+        sample is never compared and keeps none."""
+        from ltspice_mcp.lib.raw_parser import result_digest
+
+        circuit = work_dir / "deck.cir"
+        circuit.write_text(".op\n.end\n")
+        runs = work_dir / "runs"
+        runs.mkdir()
+        job = _job(work_dir, circuit, status="running")
+        job.owner_pid = 999_999_999
+        job.output_folder = runs
+        job.cases[0].run_token = f"{job.job_id}_case_0"
+        job.cases[0].status = "running"
+        if sample:
+            job.cases[0].assignments = {"_random_run": 0}
+        raw = runs / f"{job.cases[0].run_token}.raw"
+        raw.write_bytes((FIXTURES_DIR / "ltspice_tran_rc.raw").read_bytes())
+        (runs / f"{job.cases[0].run_token}.log").write_text("ok\n")
+        experiment_store.save_job(job)
+
+        loaded = experiment_store.load_job(job.job_id, work_dir)
+
+        assert loaded is not None and loaded.cases[0].status == "produced"
+        expected = result_digest(raw, "ltspice") if sample else None
+        assert loaded.cases[0].result_digest == expected
+        assert expected is None or len(expected) == 64
+
+    def test_a_case_record_from_before_samples_were_compared_reads_back_unchanged(
+        self, work_dir: Path
+    ):
+        """A recovery journal holds case records it requires to read back to
+        the bytes they were written as, so a case with no digest and no assign
+        values writes neither key, and one that has them writes both."""
+        circuit = work_dir / "deck.cir"
+        circuit.write_text(".op\n.end\n")
+        job = _job(work_dir, circuit, status="completed")
+        (written,) = experiment_store.serialize_job(job)["cases"]
+        assert "result_digest" not in written and "assigned" not in written
+
+        job.cases[0].result_digest = "d" * 64
+        job.cases[0].assigned = {"vin": "1"}
+        (written,) = experiment_store.serialize_job(job)["cases"]
+        assert written["result_digest"] == "d" * 64 and written["assigned"] == {"vin": "1"}
 
     def test_restart_does_not_promote_a_case_with_no_readable_raw(self, work_dir: Path):
         """The promotion is gated on the raw's header magic, not on a filename.
@@ -1090,9 +1141,9 @@ class TestRequestBarrier:
         circuit = work_dir / "deck.cir"
         circuit.write_text(".op\n.end\n")
 
-        def request(job_id: str) -> ExperimentRunRequest:
+        def request(state: SessionState, job_id: str) -> ExperimentRunRequest:
             return ExperimentRunRequest(
-                state=state_no_sim,
+                state=state,
                 request_id="shared-request",
                 fingerprint="a" * 64,
                 stage=staged_decks([_case(circuit)], [_source(circuit)]),
@@ -1100,7 +1151,7 @@ class TestRequestBarrier:
                 job_id=job_id,
             )
 
-        first = await _run_barrier(request("exp_first"))
+        first = await _run_barrier(request(state_no_sim, "exp_first"))
         record = Store(work_dir).job_record(first.job.job_id)
         real_open = Path.open
         denials = iter(range(2))
@@ -1112,7 +1163,11 @@ class TestRequestBarrier:
 
         monkeypatch.setattr(Path, "open", sharing_violation)
         monkeypatch.setattr("ltspice_mcp.lib.sys.platform", "win32")
-        second = await _run_barrier(request("exp_second"))
+        # Another session, so the gate has to read the record: this one would
+        # find the job it admitted in its own registry.
+        other = SessionState.create(state_no_sim.config, available={})
+        second = await _run_barrier(request(other, "exp_second"))
+        assert next(denials, None) is None, "the replay never read the record"
         assert second.replayed
         assert second.job.job_id == first.job.job_id
 

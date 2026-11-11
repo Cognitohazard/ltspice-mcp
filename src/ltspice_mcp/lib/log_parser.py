@@ -247,16 +247,24 @@ _RE_OP_ITERATION = re.compile(
     r"|for \.op point succeeded)",
     re.IGNORECASE,
 )
-# Terminal success line of LTspice's OP-solve escalation ladder. Any of these
-# means the bias point WAS found (possibly via a fallback method), so the
-# earlier "<method> stepping failed to find operating point" rungs are benign.
-# Covers Direct Newton / Gmin / Source stepping ("... succeeded in finding
-# operating point") and the pseudo-transient fallback ("Pseudo Transient
-# succeeded at <t>", which omits "operating point").
+# Terminal success line of an OP-solve escalation ladder. Any of these means
+# the bias point WAS found (possibly via a fallback method), so the earlier
+# "<method> stepping failed" rungs are benign. Covers LTspice's Direct Newton /
+# Gmin / Source stepping ("... succeeded in finding operating point") and its
+# pseudo-transient fallback ("Pseudo Transient succeeded at <t>", which omits
+# "operating point"), and ngspice's rungs, which ngspice 42 ends with "Note:
+# Source stepping completed" once one finds the bias point
+# (tests/fixtures/ngspice_runs/op_source_stepping.log).
+#
+# ngspice's last rung, "Note: Transient op finished successfully", is no such
+# line: ngspice 42 prints it for a circuit with no DC solution, such as a node
+# reached only through a capacitor (op_device_params.log there), and takes
+# the transient's last point for the bias point. Its stepping failures stay
+# errors, which the raw's node voltages may then clear (raw_parser).
 _RE_OP_SOLVE_SUCCEEDED = re.compile(
     r"succeeded in finding (?:the )?operating point"
     r"|pseudo[- ]?transient succeeded"
-    r"|stepping succeeded",
+    r"|stepping (?:succeeded|completed)",
     re.IGNORECASE,
 )
 # Start of an OP-solve block. LTspice prints one "Direct Newton iteration ..."
