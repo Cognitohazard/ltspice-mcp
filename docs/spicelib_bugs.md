@@ -4522,8 +4522,9 @@ installation's `spinit` for its code models. It is detected instead:
 `src/ltspice_mcp/lib/ngspice_mode.py::check_run` compares the mode each
 run's log names with the flags the same ngspice gives the passed mode, asked
 with no startup file, and a run that differs fails with
-`ngspice_mode_mismatch`. `::test_a_run_ngspice_read_in_another_mode_fails`
-and `::test_a_sectioned_lib_read_in_another_mode_fails_on_the_mode` point
+`ngspice_mode_mismatch`. In `tests/test_ngspice_startup_mode.py`,
+`::test_a_run_ngspice_read_in_another_mode_fails` and
+`::test_a_sectioned_lib_read_in_another_mode_fails_on_the_mode` point
 `SPICE_SCRIPTS` at a `spinit` that sets `hsa`;
 `::test_a_recoverable_run_does_not_read_the_spinit_that_sets_another_mode`
 pins that a recoverable run is not affected.
