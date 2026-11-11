@@ -127,6 +127,8 @@ def test_only_source_verified_static_random_functions_are_admitted(tmp_path, exp
         verify_case_inputs(captured)
     assert error.value.code == "recovery_random_unsupported"
     assert f"function `{expression.split('(')[0]}`" in str(error.value)
+    # A seed admits this function, so the refusal offers one.
+    assert "execution.simulator_seed admits" in str(error.value)
 
 
 @pytest.mark.parametrize(
@@ -143,8 +145,10 @@ def test_only_source_verified_static_random_functions_are_admitted(tmp_path, exp
     ],
 )
 def test_seeded_admission_keeps_other_recovery_guards(tmp_path, body):
-    with pytest.raises(RecoveryError):
+    with pytest.raises(RecoveryError) as error:
         _capture(tmp_path, body, seeded=True)
+    # The deck already has a seed, so the refusal does not offer one.
+    assert "simulator_seed" not in str(error.value)
 
 
 @pytest.mark.parametrize(

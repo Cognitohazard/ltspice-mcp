@@ -80,8 +80,8 @@ calls one of the random functions `rand`, `random`, `gauss`, `agauss`, `unif`,
 `trnoise` or `trrandom` (`recovery_random_unsupported`). A source that reads a
 file and a function the server does not know are refused the same way. Every
 card of every included library is checked, and a vendor library often fails a
-check. One refusal lists every construct it found, each with its file, line
-and card. On ngspice, `simulator_seed` allows `agauss`, `gauss`, `aunif`,
+check. One refusal names the constructs it found, up to twelve, each with its
+file, line and card; fixing those and submitting again lists the rest. On ngspice, `simulator_seed` allows `agauss`, `gauss`, `aunif`,
 `unif` and `limit` (guide section 'ngspice').
 
 For LTspice, use `execution={"simulator":"ltspice","recoverable":true}`.

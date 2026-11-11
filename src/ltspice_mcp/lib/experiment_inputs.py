@@ -32,6 +32,7 @@ from ltspice_mcp.lib.spice_lex import (
     INCLUDE_HEADS,
     EditCards,
     SpiceCard,
+    SpiceLexError,
     Token,
     TokenKind,
     lex_for_edit,
@@ -259,13 +260,28 @@ def capture_case_inputs(
             + ". Make each a file the server can copy, or submit without "
             "execution.recoverable.",
         )
-    # Each frozen file as the caller knows it, for a refusal to name.
+    # Each frozen file as the caller knows it, for a refusal to name: a staged
+    # file by the file staging copied, and a case's own copy by its staged file.
     deck = f"the netlist exported from {source.path}" if is_asc(source.path) else str(source.path)
-    origins: dict[Path, str] = {case.staged_deck: deck, source.staged_deck: deck}
+    origins: dict[Path, str] = {}
+
+    def name(path: Path, origin: str) -> None:
+        origins.setdefault(path, origin)
+        origins.setdefault(path.resolve(), origin)
+
+    name(case.staged_deck, deck)
+    name(source.staged_deck, deck)
     for entry in source.manifest:
-        if entry.staged_path is None:  # refused above as live
+        if entry.staged_path is not None:  # else refused above as live
+            name(entry.staged_path, str(entry.path))
+    if materialized is not None:
+        for copy, staged in materialized.copied_from:
+            origin = origins.get(staged) or origins.get(staged.resolve())
+            if origin is not None:
+                name(copy, origin)
+    for entry in source.manifest:
+        if entry.staged_path is None:
             continue
-        origins.setdefault(entry.staged_path, str(entry.path))
         # An exported schematic's authoring snapshot is provenance, not an
         # electrical dependency. Any include edge to it still fails closure
         # admission unless it was explicitly materialized as an input file.
@@ -351,10 +367,15 @@ def _quoted_passive_value(card: SpiceCard, tokens: list[Token]) -> bool:
 
 @dataclass(frozen=True)
 class _Construct:
-    """A check a card fails: its refusal code and the construct it names."""
+    """A check a card fails: its refusal code and the construct it names.
+
+    ``seedable`` marks random functions an ngspice ``simulator_seed`` admits,
+    on a deck that has none, so the refusal offers the seed only where it helps.
+    """
 
     code: str
     what: str
+    seedable: bool = False
 
 
 @dataclass(frozen=True)
@@ -366,6 +387,7 @@ class _Refused:
     path: Path
     line: int | None
     text: str
+    seedable: bool = False
 
 
 def _card_text(card: SpiceCard) -> str:
@@ -379,7 +401,16 @@ def _refused_constructs(
     """The first check ``card`` fails, or None."""
     if card.kind == "control":
         return _Construct("recovery_control_unsupported", "a `.control` block")
-    tokens = [token for token in tokenize_body(card.body) if token.kind != TokenKind.COMMENT_TRAIL]
+    try:
+        tokens = [
+            token for token in tokenize_body(card.body) if token.kind != TokenKind.COMMENT_TRAIL
+        ]
+    except SpiceLexError as exc:
+        # Listed in its place among the others, as the first card that failed
+        # was refused before: an unreadable card hides no other construct.
+        return _Construct(
+            "recovery_syntax_unsupported", f"a card the server cannot read ({exc.message})"
+        )
     if not tokens:
         return None
     first = tokens[0].text
@@ -420,6 +451,7 @@ def _refused_constructs(
             + (
                 " in a way the seed does not set" if seeded else " with no seed the server records"
             ),
+            seedable=not seeded and bool(stochastic & _SEEDED_RANDOM),
         )
     unknown = calls - _PURE_FUNCTIONS - functions - (_RANDOM if native else admitted)
     # A .model name precedes its parenthesized parameter block.
@@ -442,11 +474,16 @@ def _validate_cards(
 ) -> list[tuple[SpiceCard, _Construct]]:
     """Every card that fails a check, with the first check it fails."""
     refused: list[tuple[SpiceCard, _Construct]] = []
+    previous: SpiceCard | None = None
     for card in cards:
         if card.kind in {"comment", "blank"}:
             continue
+        # Each line of a .control block is its own card: the block is named
+        # once, at the line that opens it.
+        opens = card.kind != "control" or previous is None or previous.kind != "control"
+        previous = card
         found = _refused_constructs(card, functions, native=native, seeded=seeded)
-        if found is not None:
+        if found is not None and opens:
             refused.append((card, found))
     return refused
 
@@ -459,20 +496,18 @@ def _refusal(refused: list[_Refused], origins: Mapping[Path, str]) -> RecoveryEr
     first. The message lists each construct with its code, so a deck is fixed
     in one pass rather than one submission per construct.
     """
-    groups: dict[tuple[str, str], list[_Refused]] = {}
+    groups: dict[tuple[str, str], dict[str, _Refused]] = {}
     for item in refused:
-        groups.setdefault((item.code, item.what), []).append(item)
+        where = origins.get(item.path, str(item.path))
+        at = f"{where} line {item.line}" if item.line is not None else where
+        # One place once: a library frozen both as shared and as a case's
+        # own copy names the same line of the same file twice.
+        groups.setdefault((item.code, item.what), {}).setdefault(at, item)
     lines: list[str] = []
-    for (code, what), items in list(groups.items())[:_GROUPS_SHOWN]:
-        first = items[0]
-        where = origins.get(first.path, str(first.path))
-        at = f"{where} line {first.line}" if first.line is not None else where
+    for (code, what), places in list(groups.items())[:_GROUPS_SHOWN]:
+        at, first = next(iter(places.items()))
         line = f"- {what} ({code}): {at}: {first.text}"
-        others = [
-            f"{origins.get(item.path, str(item.path))} line {item.line}"
-            for item in items[1:]
-            if item.line is not None
-        ]
+        others = list(places)[1:]
         if others:
             shown = others[:_PLACES_SHOWN]
             more = len(others) - len(shown)
@@ -485,7 +520,7 @@ def _refusal(refused: list[_Refused], origins: Mapping[Path, str]) -> RecoveryEr
             "these are fixed and the request is sent again"
         )
     count = len(groups)
-    random = any(code == "recovery_random_unsupported" for code, _ in groups)
+    seedable = any(item.seedable for item in refused)
     message = (
         f"Recoverable execution refuses {count} construct{'s' if count != 1 else ''} "
         "in this deck and the files it includes, because a resumed case could not "
@@ -494,7 +529,7 @@ def _refusal(refused: list[_Refused], origins: Mapping[Path, str]) -> RecoveryEr
         + "\nChange or remove each, or submit without execution.recoverable"
         + (
             "; on ngspice, execution.simulator_seed admits agauss, gauss, aunif, unif and limit"
-            if random
+            if seedable
             else ""
         )
         + "."
@@ -610,7 +645,9 @@ def _verify_inputs(
     for path, key in file_keys.items():
         if key not in validated:
             refused.extend(
-                _Refused(found.code, found.what, path, card.line_start, _card_text(card))
+                _Refused(
+                    found.code, found.what, path, card.line_start, _card_text(card), found.seedable
+                )
                 for card, found in _validate_cards(
                     cards_by_content[key].cards, functions, native=native, seeded=seeded
                 )

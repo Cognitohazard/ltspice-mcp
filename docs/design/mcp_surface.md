@@ -580,13 +580,15 @@ readers (`file=`, `sfile=`, `pwlfile=`, a PWL that names a file), directives
 outside the supported set, functions the server does not know, and random
 functions with no seed the server records, because a resumed case could not
 be relied on to run them the same way. Every card of the deck and of each file
-it includes is checked, and one refusal lists every construct refused: each
-with its code, the file as the caller wrote it, the line and the card. The
-error's `code` is that of the first construct listed. An include
-read in place is named with the reason it was not copied. ngspice runs with
-`-n` (no user `.spiceinit`) and with `SPICE_SCRIPTS`, set only for that
-subprocess, pointing at a system startup file in the job's folder that
-contains only a comment, so the machine's startup files do not affect the run. A `pdk_native` sample
+it includes is checked, and one refusal names the constructs refused, how many
+there are, and up to twelve of them. Each is listed with its code and its first
+place (the file it came from as the caller wrote it, the line and the card),
+then up to five more places and a count of the rest. The error's `code` is that
+of the first construct listed. An include read in place is named with the
+reason it was not copied. ngspice runs with `-n` (no user `.spiceinit`) and
+with `SPICE_SCRIPTS`, set only for that subprocess, pointing at a system
+startup file in the job's folder that contains only a comment, so the
+machine's startup files do not affect the run. A `pdk_native` sample
 (Appendix A.1) keeps its recorded sample index and seed. A resume or a later
 launch is refused with `recovery_execution_changed` if the executable, its
 command line or the platform has changed since submission. A job without
