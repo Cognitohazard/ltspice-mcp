@@ -604,11 +604,14 @@ and retry. That is how a `random` entry's `simulator_draws` cases run under
 `recoverable`. Such a deck admits the same five random functions, and, since
 it runs as an ordinary batch run, any number of analyses.
 
-A seeded deck that sets ngspice's seed itself, with any `seed=` on an option
-card it reads, is refused (`recovery_seed_unsupported`): ngspice reads that
+A seeded deck that sets ngspice's seed itself, with `seed=` on an option card
+ngspice may read, is refused at submission, and a job recorded with one is
+refused at resume and launch (`recovery_seed_unsupported`): ngspice reads that
 card when it loads the deck, after the driver's `setseed`, so the deck's seed
 wins and the run would record a seed it never drew from, or, with
-`seed=random`, draw anew on a retry (measured on ngspice-42).
+`seed=random`, draw anew on a retry (measured on ngspice-42). A card in a
+subcircuit no X line calls does not count, as ngspice drops that subcircuit
+unread; one in a `.lib` section counts whichever section the deck selects.
 
 A seeded deck may use only the random functions `agauss`, `gauss`, `aunif`,
 `unif` and `limit`; `.control` blocks, functions the server does not know,
@@ -2303,8 +2306,9 @@ functions the deck evaluates, or their order, changes what that seed draws.
 The entry's `rules` then may be empty, or add the server's own draws to
 ngspice's. A run on another simulator, or with `execution.simulator_seed`,
 which seeds every case alike, is refused with `simulator_draws_unsupported`
-before any job is recorded. A deck whose own option cards set `seed=` fails
-its cases with `deck_sets_simulator_seed`, naming each card: ngspice reads
+before any job is recorded. A deck whose own option cards set `seed=` (outside
+a subcircuit no X line calls) fails its cases with `deck_sets_simulator_seed`,
+naming each card: ngspice reads
 every seed option and the first in the deck wins (measured on ngspice-42), so
 the deck's seed would fix every sample's draws or be overridden, depending on
 where it sits.

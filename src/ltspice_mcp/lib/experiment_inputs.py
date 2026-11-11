@@ -22,7 +22,7 @@ from ltspice_mcp.lib.deck_staging import (
 )
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.experiment_types import ExperimentCase, SourceRecord
-from ltspice_mcp.lib.ngspice_driver import fixed_seed, seed_option
+from ltspice_mcp.lib.ngspice_driver import deck_seeds, fixed_seed, seed_option
 from ltspice_mcp.lib.pdk_native import ArtifactDigest, NativePaths, driver_bytes
 from ltspice_mcp.lib.recovery_records import (
     ExecutionRecord,
@@ -486,9 +486,7 @@ def _verify_inputs(
     # on ngspice-42).
     seeds = [
         value
-        for key in set(file_keys.values())
-        for card in cards_by_content[key].read
-        if (value := seed_option(card)) is not None
+        for _, _, value in deck_seeds([cards_by_content[key] for key in set(file_keys.values())])
     ]
     if seeded and seeds:
         raise RecoveryError(

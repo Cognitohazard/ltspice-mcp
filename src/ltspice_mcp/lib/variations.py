@@ -63,7 +63,7 @@ from ltspice_mcp.lib.montecarlo import (
     variant_model_name,
 )
 from ltspice_mcp.lib.montecarlo import MismatchRule as EngineMismatchRule
-from ltspice_mcp.lib.ngspice_driver import SEED_MAX, seed_option
+from ltspice_mcp.lib.ngspice_driver import SEED_MAX, deck_seeds
 from ltspice_mcp.lib.spice_lex import (
     EditCards,
     SpiceCard,
@@ -950,12 +950,12 @@ def simulator_seed_for(variation: RandomVariation, circuit_id: str, sample_index
 
 
 def _deck_seed_sites(closure: _DeckClosure) -> list[str]:
-    """Each option card in the closure that sets ngspice's seed, as ``file:line``."""
+    """Each option card in the closure that may set ngspice's seed
+    (``ngspice_driver.deck_seeds``), as ``file:line``."""
+    lexed = [file.lexed(file.text) for file in closure.files]
     return [
-        f"{file.path.name}:{card.line_start}"
-        for file in closure.files
-        for card in file.lexed(file.text).read
-        if seed_option(card) is not None
+        f"{closure.files[index].path.name}:{card.line_start}"
+        for index, card, _ in deck_seeds(lexed)
     ]
 
 
@@ -966,7 +966,7 @@ def _check_deck_seed(closure: _DeckClosure, cases: Sequence[ExpandedCase]) -> No
     ngspice reads every seed option and the first in the deck wins (it collects
     them in reverse, ``options.c:inp_getopts``, measured on ngspice-42), so a
     seed the deck sets itself would fix every sample's draws, or be overridden,
-    depending on where each sits (``ngspice_driver.seed_option``).
+    depending on where each sits (``ngspice_driver.deck_seeds``).
     """
     if not any(
         case.random is not None and case.random.simulator_draws

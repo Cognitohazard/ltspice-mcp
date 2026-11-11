@@ -586,3 +586,20 @@ async def test_a_retried_sample_draws_what_it_drew_from_its_own_seed(work_dir, m
     assert [_voltage(case) for case in child.cases] == expected
     recoveries = [case.recovery for case in child.cases]
     assert all(item is not None and item.attempt.seeded_driver is None for item in recoveries)
+
+
+@pytest.mark.parametrize(("call", "overridden"), [(b"", False), (b"X1 n holder\n", True)])
+def test_a_seeded_run_counts_a_subcircuit_seed_only_where_it_is_called(tmp_path, call, overridden):
+    """ngspice drops a subcircuit no X line calls, seed and all, so the
+    driver's seed stands; a called one sets the seed and overrides it (both
+    measured on ngspice-42 under setseed 17 and 99)."""
+    body = (
+        b".param draw=agauss(10,1,1)\nV1 n 0 {draw}\nR1 n 0 1k\n"
+        + call
+        + b".subckt holder a\n.options seed=5\nR9 a 0 1meg\n.ends"
+    )
+    if overridden:
+        with pytest.raises(RecoveryError, match="overrides"):
+            _capture(tmp_path, body, seeded=True)
+    else:
+        verify_case_inputs(_capture(tmp_path, body, seeded=True), seeded=True, dialect="ngspice")

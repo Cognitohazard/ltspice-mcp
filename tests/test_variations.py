@@ -2323,3 +2323,24 @@ class TestSimulatorDraws:
             )
             == 2
         )
+
+    @pytest.mark.parametrize(("call", "refused"), [("", False), ("X2 out 0 holder\n", True)])
+    def test_a_seed_in_a_subcircuit_counts_only_where_it_is_called(
+        self, tmp_path: Path, call: str, refused: bool
+    ):
+        """ngspice drops a subcircuit no X line calls, seed and all, so its
+        seed sets nothing; a called one's seed would."""
+        holder = ".subckt holder a b\n.options seed=5\nR9 a b 1meg\n.ends\n"
+        circuit = _deck(tmp_path / "dut.cir")
+        text = circuit.text.replace(".op\n", call + holder + ".op\n")
+        circuit.path.write_text(text)
+        circuit = CircuitDeck("dut", circuit.path, text)
+        expanded = expand_variations([circuit], [_drawn(runs=1)])
+
+        if refused:
+            with pytest.raises(VariationError, match=r"dut\.cir:\d+") as error:
+                materialize_variants(circuit, expanded, tmp_path / "out")
+            assert error.value.code == "deck_sets_simulator_seed"
+        else:
+            (case,) = materialize_variants(circuit, expanded, tmp_path / "out")
+            assert _SEED_CARD.search(case.path.read_text())

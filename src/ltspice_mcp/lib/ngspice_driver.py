@@ -4,10 +4,13 @@ server's driver runs, and the seed option a deck can carry itself."""
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
+from ltspice_mcp.lib.spice_lex_views import read_instance
+
 if TYPE_CHECKING:
-    from ltspice_mcp.lib.spice_lex import SpiceCard
+    from ltspice_mcp.lib.spice_lex import EditCards, SpiceCard
 
 SEED_MAX = 2147483646
 
@@ -56,6 +59,34 @@ def seed_option(card: SpiceCard) -> str | None:
         return None
     match = _SEED_VALUE.search(card.body)
     return None if match is None else match.group(1)
+
+
+def deck_seeds(files: Sequence[EditCards]) -> list[tuple[int, SpiceCard, str]]:
+    """The seed options ngspice may read in a deck's files, as the index of
+    the file each is in, its card and the value it sets (``seed_option``).
+
+    A card in a subcircuit that no ``X`` line of the files calls is left out:
+    ngspice drops such a subcircuit unread, seed and all, while one called
+    sets the seed (measured on ngspice-42 under kiltpsa, hsa, ltpsa and
+    spice3). Calls are matched by name across every file, so a subcircuit
+    called only from an uncalled one still counts, and a card in a ``.lib``
+    section counts whichever section the deck selects (kiltpsa reads every
+    section): the answer errs towards a card being read.
+    """
+    called = {
+        view.model.casefold()
+        for lexed in files
+        for card in lexed.read
+        if card.kind == "instance" and (card.name or "")[:1] in {"x", "X"}
+        if (view := read_instance(card)) is not None and view.model
+    }
+    return [
+        (index, card, value)
+        for index, lexed in enumerate(files)
+        for card in lexed.read
+        if (value := seed_option(card)) is not None
+        if all(name.casefold() in called for name in card.scope)
+    ]
 
 
 def fixed_seed(value: str) -> bool:
