@@ -87,6 +87,7 @@ from ltspice_mcp.lib.connectivity import (
     name_keys,
     named_labels,
     named_nets,
+    point_on_segment,
     same_instance_dropped_segments,
 )
 from ltspice_mcp.lib.encoding import refused_sheet_mark, refused_sheet_mark_note
@@ -94,7 +95,7 @@ from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
 from ltspice_mcp.lib.format import is_scaled_number, parse_spice_value
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.models import StrictModel
-from ltspice_mcp.lib.nets import Member, PinAt, net_change
+from ltspice_mcp.lib.nets import LabelAt, Member, PinAt, net_change
 from ltspice_mcp.lib.pin_legend import pin_ties
 from ltspice_mcp.lib.plot_settings import (
     SECTION_NAMES,
@@ -1526,11 +1527,20 @@ def _plan_move(editor: AscEditor, op: "OpMove", geometry: dict[str, dict]) -> _M
         moving |= {_xy(editor.labels[i].coord) for i in labels}
         moving |= {end for i in wires for end in keys[i]}
         # LTspice joins a point anywhere along a wire, so what lies along one
-        # that moves whole is attached to it as what sits on its ends is.
-        along = build_on_wire_predicate([keys[i] for i in wires])
+        # that moves whole is attached to it as what sits on its ends is. A
+        # wire both of whose ends move moves whole too, so what lies along it
+        # goes with it, and that can take further wires whole in turn.
+        whole = {keys[i] for i in wires}
+        along = build_on_wire_predicate(list(whole))
 
         def moves(end: tuple[int, int]) -> bool:
             return end in moving or along(end) or (region is not None and region.holds(end))
+
+        while grown := {
+            key for key in keys if key not in whole and moves(key[0]) and moves(key[1])
+        }:
+            whole |= grown
+            along = build_on_wire_predicate(list(whole))
 
         # A label or ground on what moves goes with it rather than being left on nothing.
         labels.update(i for i, lbl in enumerate(editor.labels) if moves(_xy(lbl.coord)))
@@ -1542,8 +1552,10 @@ def _plan_move(editor: AscEditor, op: "OpMove", geometry: dict[str, dict]) -> _M
 
 
 def _apply_move(editor: AscEditor, op: "OpMove") -> dict[str, object]:
-    """Apply a ``move``: plan it, refuse a move that would short two named nets,
-    then shift every selected record and dragged wire end by ``(dx, dy)``.
+    """Apply a ``move``: plan it, refuse a move that would short two named nets
+    or, with ``drag``, cut something that stays off from what moves (both read
+    off ``nets.net_change``), then shift every selected record and dragged wire
+    end by ``(dx, dy)``.
 
     Nothing is changed before the check, so a refused move leaves the sheet as
     it was even in a batch that goes on past a failed op. What the moved sheet
@@ -1581,31 +1593,26 @@ def _apply_move(editor: AscEditor, op: "OpMove") -> dict[str, object]:
         ],
         ends,
     )
-    # A net of the moved sheet, by its wiring, with two names on it joins them;
-    # that is a short unless the sheet as it is already made them one node
-    # (names compared as LTspice compares them, nets that share a name or a
-    # ground already one).
-    names_on: dict[int, set[str]] = defaultdict(set)
-    for label in after.labels:
-        names_on[after.nets.of_label(label)].update(named_labels([label.text]))
-    before: NamedNets | None = None
-    for names in names_on.values():
-        if len(name_keys(names)) < 2:
-            continue
-        before = before or sheet_nets(editor, geometry=geometry.values())
-        if len({before.net_named(name) for name in names}) > 1:
+    # What the move does to the nets, against the sheet as it is: nets that
+    # share a name, in any case, or a ground are one in both.
+    change = net_change(sheet_nets(editor, geometry=geometry.values()).nets, after.nets)
+    # Nets it joins that each carry a name are shorted together; a net whose
+    # only label is a ground flag carries none, and joining it grounds the other.
+    for groups in change.joined:
+        names = [named_labels(m.text for m in group if isinstance(m, LabelAt)) for group in groups]
+        if sum(1 for carried in names if carried) > 1:
             raise NetlistError(
-                f"Refused to move: it would join nets that each carry a name {sorted(names)}, "
-                "shorting them together. Move it clear of the other net's wiring, or "
-                "rename one side if they are meant to be one net."
+                "Refused to move: it would join nets that each carry a name "
+                f"{sorted(set().union(*names))}, shorting them together. Move it clear of "
+                "the other net's wiring, or rename one side if they are meant to be one net."
             )
-    if op.drag:
+    if op.drag and change.split:
         # Dragging promises that what is joined to what moves stays joined.
         # A net the move would divide breaks it: something that stays was
         # joined to something that goes.
-        before = before or sheet_nets(editor, geometry=geometry.values())
-        if split := net_change(before.nets, after.nets).split:
-            raise NetlistError(_drag_split_refusal(split[0], plan, op, geometry))
+        raise NetlistError(
+            _drag_split_refusal(change.split[0], plan, op, geometry, wire_segments_of(editor))
+        )
 
     for ref in plan.parts:
         position, rotation = editor.get_component_position(ref)
@@ -1629,20 +1636,29 @@ def _apply_move(editor: AscEditor, op: "OpMove") -> dict[str, object]:
 
 
 def _drag_split_refusal(
-    pieces: Sequence[Sequence[Member]], plan: _MovePlan, op: "OpMove", geometry: dict[str, dict]
+    pieces: Sequence[Sequence[Member]],
+    plan: _MovePlan,
+    op: "OpMove",
+    geometry: dict[str, dict],
+    wires: Sequence[tuple[int, int, int, int]],
 ) -> str:
     """Why a move with ``drag`` that would divide one net into ``pieces`` is
-    refused, naming what would no longer be joined, the parts that stay, and
-    how to move them too."""
-    moved = set(plan.parts)
-    staying = sorted(
-        {m.reference for piece in pieces for m in piece if isinstance(m, PinAt)} - moved
-    )
-    divided = _divided_text(
-        pieces, stays=lambda member: isinstance(member, PinAt) and member.reference in staying
-    )
-    named = " and ".join(staying)
-    them = "it" if len(staying) == 1 else "them"
+    refused: what would no longer be joined, what stays, and how to take it
+    along. Naming every part of the net that stays moves the whole net, so
+    that is the way round where a part stays; a label stays only on a wire
+    that does not move whole, which moves whole once it is selected."""
+    members = [member for piece in pieces for member in piece]
+    staying = sorted({m.reference for m in members if isinstance(m, PinAt)} - set(plan.parts))
+    left = [m for m in members if isinstance(m, LabelAt) and m.index not in plan.labels]
+
+    def stays(member: Member) -> bool:
+        if isinstance(member, PinAt):
+            return member.reference in staying
+        return member.index not in plan.labels
+
+    divided = _divided_text(pieces, stays=stays)
+    one = len(staying) == 1
+    named, them = " and ".join(staying), "it" if one else "them"
     region = op.region
     crossing = [
         ref
@@ -1653,22 +1669,27 @@ def _drag_split_refusal(
         )
     ]
     if crossing:
-        listed = " and ".join(crossing)
+        listed, alone = " and ".join(crossing), len(crossing) == 1
         why = (
-            f" {listed} {'is' if len(crossing) == 1 else 'are'} not taken: part of "
-            f"{'its' if len(crossing) == 1 else 'their'} box lies outside the region, though "
-            "a pin lies inside it."
+            f" {listed} {'is' if alone else 'are'} not taken: part of "
+            f"{'its' if alone else 'their'} box lies outside the region, though a pin lies "
+            "inside it."
         )
-        fix = (
-            f"Widen the region to hold all of {listed}, or name "
-            f"{'it' if len(crossing) == 1 else 'them'} in references"
-        )
+        fix = f"Widen the region to hold all of {listed}, or name {'it' if alone else 'them'} in references"
     elif staying:
-        why = f" {named} {'stays' if len(staying) == 1 else 'stay'}, and a drag takes along only wires and labels."
+        why = f" {named} {'stays' if one else 'stay'}."
         fix = f"Name {them} in references to move {them} too"
+    elif left:
+        label = left[0]
+        on = next(
+            (w for w in wires if point_on_segment(label.point, (w[0], w[1]), (w[2], w[3]))), None
+        )
+        where = f"the wire {segment_text(on)}" if on else f"({label.point[0]},{label.point[1]})"
+        why = f" {_members_text([label])} stays on {where}, which does not move whole."
+        fix = "Name that wire in wires so it moves whole" if on else "Name it in labels"
     else:
         why = ""
-        fix = "Select what is joined to what moves as well"
+        fix = "Select the wires that join what moves as well"
     return (
         f"Refused to move: with drag, what is joined to what moves stays joined, but this "
         f"move would {divided}.{why} {fix}, or move without drag to leave the wiring "
@@ -1699,9 +1720,16 @@ def _drop_dangling_wires_at(editor: AscEditor, points: set[tuple[int, int]]) -> 
     away parts nothing from anything by wire (``nets.net_change``): its other
     end and what lies along it reach no pin or label that something else does
     not join them to. Two wires that met at the pin still meet each other
-    there, so they stay, as does a wire with pins along it. Called with the
-    part already removed, one wire at a time, so wires that were joined only
-    to each other go together.
+    there, so they stay, as does a wire that joins pins or labels along it.
+    Called with the part already removed, one wire at a time, so wires that
+    were joined only to each other go together. ``points`` leave out a pin
+    point another part's pin shares: a wire ending there is still on that pin,
+    so the removal did not leave it dangling.
+
+    Unlike every other edit's question, this one is asked of the wiring alone
+    (``folded=False``): a wire between two labels of one name still joins them
+    on the sheet, though the name joins them too, so it is not dangling.
+    Pinned by ``test_cleanup_keeps_a_wire_between_labels_of_one_name``.
     """
     geometry = collect_component_geometry(editor)
     kept = list(editor.wires)
@@ -1772,7 +1800,7 @@ def _pins_on_crossings(
     so those are the ways placing or moving a part makes one net of two. Two
     that each carry a name are a short, refused as a wire or a label that
     joined them is. Any other join is taken as meant, and the finished sheet
-    says it (the ``joined_at_crossing`` rule).
+    says it (the ``joined_at_crossing`` and ``pin_inside_wire`` rules).
 
     The sheet is read without the part itself, and ``already`` is where its
     pins are now: what a pin joins from where it already is, is not this
@@ -2745,8 +2773,9 @@ def _replace_component(editor: AscEditor, op: OpReplaceComponent) -> dict[str, o
     so the new symbol places its own. Each paired pin that moved gets a wire
     from where it is now to where the old one was, planned and checked as
     ``wire_pins`` plans one. Then the sheet must join each paired pin to what
-    its old pin joined, an unpaired new pin to nothing, and everything else as
-    before (``_joins``); otherwise the op is refused and the sheet put back.
+    its old pin joined, an unpaired new pin to nothing (``_joins``), and
+    everything else as before (``nets.net_change``); otherwise the op is
+    refused and the sheet put back.
     """
     reference = part_reference(editor, op.reference)
     component = editor.components[reference]
@@ -3117,8 +3146,9 @@ def apply_op_inplace(
                         f"({op.x1},{op.y1})->({op.x2},{op.y2}): they are one connection "
                         f"drawn {copies} times, and removing it would split the net, "
                         f"leaving {_members_text(second)} disconnected from "
-                        f"{_members_text(first)}. Remove the pin's other segments first "
-                        "if the disconnection is what you want."
+                        f"{_members_text(first)}. If cutting the connection is what you "
+                        "want, remove the wire by a point instead (the x and y of one end), "
+                        "which takes every wire ending there."
                     )
             editor.wires = kept
         elif op.pin is not None or (op.x is not None and op.y is not None):

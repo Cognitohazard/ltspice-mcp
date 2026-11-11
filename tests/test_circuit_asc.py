@@ -4115,8 +4115,6 @@ class TestMoveOp:
         assert sorted(_records(asc)) == sorted(before)
 
 
-#: R1 and R2 side by side, R1's pin 1 labelled ``a``, and a wire between their
-#: pins 2.
 #: R1 between R2 and R3, the wires from R2.1 and R3.1 meeting only at R1.1,
 #: and a stub from R1.2 to nothing.
 _BUS_AT_A_PIN = (
@@ -4193,6 +4191,21 @@ class TestNoEditSplitsANetItWasNotAskedTo:
         assert "R1.1" in said and "R2.1" in said
         assert "R1 is not taken" in said and "region" in said
         assert asc.read_bytes() == before
+        # The way round it names: R1 in references as well.
+        apply_one(
+            asc_state,
+            asc,
+            {
+                "op": "move",
+                "dx": 0,
+                "dy": -32,
+                "region": {"x1": 48, "y1": 150, "x2": 160, "y2": 220},
+                "references": ["R1"],
+                "drag": True,
+            },
+        )
+        assert "SYMBOL res 96 212 R0" in _records(asc)
+        assert await _net_pins(asc_state, asc, "R1.1") == {"R1.1", "R2.1"}
 
     async def test_a_drag_that_would_leave_a_pin_on_a_pin_behind_is_refused(
         self, asc_state: SessionState, work_dir: Path
@@ -4205,6 +4218,117 @@ class TestNoEditSplitsANetItWasNotAskedTo:
                 asc,
                 {"op": "move", "dx": -64, "dy": 0, "references": ["R1"], "drag": True},
             )
+
+    @pytest.mark.parametrize(
+        ("sheet", "moving", "stays", "named"),
+        [
+            # A label inside the wire R1 stretches would fall off it.
+            ((*_PAIR[:2], "WIRE 96 196 288 196", "FLAG 192 196 out"), {}, "R2 stays", ["R2"]),
+            # A wire ending inside that wire, R3's, would be left behind.
+            (
+                (*_PAIR[:2], "WIRE 96 196 288 196", _res("R3", 192, 340), "WIRE 192 196 192 292"),
+                {},
+                "R2 and R3 stay",
+                ["R2", "R3"],
+            ),
+            # R1's top pin lies inside a wire whose ends stay.
+            (
+                (
+                    _res("R1", 192, 244),
+                    _res("R2", 96, 244),
+                    _res("R3", 288, 244),
+                    "WIRE 96 196 288 196",
+                ),
+                {},
+                "R2 and R3 stay",
+                ["R2", "R3"],
+            ),
+            # The wire alone moves off both pins it joins.
+            (
+                _PAIR,
+                {"references": [], "wires": [{"x1": 96, "y1": 196, "x2": 288, "y2": 196}]},
+                "R1 and R2 stay",
+                ["R1", "R2"],
+            ),
+        ],
+        ids=[
+            "label_on_a_stretched_wire",
+            "wire_end_on_a_stretched_wire",
+            "pin_inside_a_wire",
+            "wire_alone",
+        ],
+    )
+    async def test_a_drag_that_cuts_off_what_stays_is_refused_with_a_way_round_that_works(
+        self,
+        asc_state: SessionState,
+        work_dir: Path,
+        sheet: tuple[str, ...],
+        moving: dict[str, Any],
+        stays: str,
+        named: list[str],
+    ):
+        asc = _write_sheet(work_dir / "mv_cut.asc", *sheet)
+        before = asc.read_bytes()
+        nets_before = await _net_pins(asc_state, asc, "R2.1")
+        op = {"op": "move", "dx": 0, "dy": -32, "references": ["R1"], "drag": True, **moving}
+        with pytest.raises(NetlistError) as refusal:
+            apply_one(asc_state, asc, op)
+        assert f"{stays}. Name" in str(refusal.value)
+        assert asc.read_bytes() == before
+        apply_one(asc_state, asc, {**op, "references": [*op["references"], *named]})
+        assert await _net_pins(asc_state, asc, "R2.1") == nets_before
+        assert _found(asc_state, asc, "dangling_label") == []
+
+    async def test_cleanup_keeps_a_wire_from_a_label_on_the_removed_pin(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        """The ground flag on R1.1 grounds R2.1 through the wire, part or no part."""
+        asc = _write_sheet(
+            work_dir / "rm_flag.asc", *_PAIR[:2], "WIRE 96 196 288 196", "FLAG 96 196 0"
+        )
+        result = apply_one(
+            asc_state, asc, {"op": "remove_component", "reference": "R1", "cleanup_wires": True}
+        )
+        assert result["deleted_wires"] == 0
+        assert "WIRE 96 196 288 196" in _records(asc)
+
+    async def test_cleanup_keeps_a_wire_between_labels_of_one_name(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        """Wiring alone decides what is dangling: the two wires still join R2.1
+        and R3.1 on the sheet, though their labels' name joins them as well."""
+        asc = _write_sheet(
+            work_dir / "rm_named.asc",
+            *_BUS_AT_A_PIN[:5],
+            "FLAG 16 196 a",
+            "FLAG 176 196 a",
+        )
+        result = apply_one(
+            asc_state, asc, {"op": "remove_component", "reference": "R1", "cleanup_wires": True}
+        )
+        assert result["deleted_wires"] == 0
+        records = _records(asc)
+        assert "WIRE 16 196 96 196" in records and "WIRE 96 196 176 196" in records
+
+    async def test_a_route_over_a_pin_already_on_its_net_is_not_said_to_join_it(
+        self, asc_state: SessionState, work_dir: Path
+    ):
+        """``wire_pins`` reports the touch as a junction; the label on R2.1
+        already puts it on the net, so the sheet does not say it again."""
+        _write_sheet(
+            work_dir / "route_over.asc",
+            _res("R1", 96, 244),
+            _res("R2", 192, 244),
+            _res("R3", 288, 244),
+            "FLAG 192 196 a",
+            "FLAG 288 196 a",
+        )
+        data = await apply_ops(
+            asc_state,
+            "route_over.asc",
+            [{"op": "wire_pins", "from_pin": "R1.1", "to_pin": "R3.1"}],
+        )
+        assert not [w for w in data.get("warnings", []) if "lies inside the wire" in w]
 
     async def test_removing_a_duplicated_wire_that_holds_a_label_on_is_refused(
         self, asc_state: SessionState, work_dir: Path
@@ -4265,6 +4389,8 @@ class TestNoEditSplitsANetItWasNotAskedTo:
         ) in data["warnings"]
 
 
+#: R1 and R2 side by side, R1's pin 1 labelled ``a``, and a wire between their
+#: pins 2.
 _TWO_PARTS = (
     _res("R1", 96, 96),
     _res("R2", 288, 96),

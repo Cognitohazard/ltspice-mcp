@@ -1611,6 +1611,15 @@
    "tests/test_edit_schematic.py::test_a_value_is_checked_for_the_class_the_parts_own_prefix_gives[resistor-symbol-as-source-add_component attributes]"
   ]
  },
+ "71c4926c95dd6a64": {
+  "answer": {
+   "reply": "5ebbcee1c7019f6e",
+   "sheet": "62298e23c9aacc90"
+  },
+  "tests": [
+   "tests/test_circuit_asc.py::TestNoEditSplitsANetItWasNotAskedTo::test_a_route_over_a_pin_already_on_its_net_is_not_said_to_join_it"
+  ]
+ },
  "721e38944487c29c": {
   "answer": {
    "reply": "3940d4c02445b693",
@@ -1650,7 +1659,7 @@
  },
  "735a50064b630a31": {
   "answer": {
-   "reply": "71e10f41efc9388a",
+   "reply": "8e2ca84c743213fc",
    "sheet": null
   },
   "tests": [

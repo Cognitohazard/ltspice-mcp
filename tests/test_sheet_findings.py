@@ -410,6 +410,33 @@ class TestWhatJoinsAndWhatDoesNot:
 
     @pytest.mark.parametrize(
         "wires",
+        [
+            ((0, 0, 64, 0), (0, 0, 64, 0)),
+            ((0, 0, 48, 0), (16, 0, 64, 0)),
+            ((0, 0, 64, 0), (32, -32, 32, 32), (0, 0, 32, -32)),
+        ],
+        ids=["a_wire_drawn_twice", "overlapping_wires", "wires_of_one_net_crossing"],
+    )
+    def test_a_pin_inside_wires_of_one_net_is_said_once_for_the_pin(
+        self, wires: tuple[tuple[int, int, int, int], ...]
+    ) -> None:
+        view = SheetView(parts=(Part("R1", pins=(("A", 32, 0), ("B", 32, 96))),), wires=wires)
+        (found,) = only(view, "pin_inside_wire")
+        assert found.points == ((32, 0),)
+
+    def test_a_pin_whose_label_already_names_the_wire_s_net_is_not_said(self) -> None:
+        pin = Part("R1", pins=(("A", 32, 0), ("B", 32, 96)))
+        named = SheetView(
+            parts=(pin,), wires=((0, 0, 64, 0),), labels=((32, 0, "a"), (64, 0, "a"))
+        )
+        assert only(named, "pin_inside_wire") == []
+        other = SheetView(
+            parts=(pin,), wires=((0, 0, 64, 0),), labels=((32, 0, "b"), (64, 0, "a"))
+        )
+        assert len(only(other, "pin_inside_wire")) == 1
+
+    @pytest.mark.parametrize(
+        "wires",
         [((0, 0, 32, 0),), ((0, 0, 64, 0), (32, 0, 32, -64)), _CROSS_AT_32_0],
         ids=["wire_ends_on_it", "another_wire_ends_on_it", "wires_cross_on_it"],
     )

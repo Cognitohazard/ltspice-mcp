@@ -656,6 +656,13 @@ class TestNetChange:
         )
         assert change == NetChange()
 
+    def test_two_states_that_do_not_hold_the_same_parts_are_refused(self) -> None:
+        """A part added or taken away between the two shifts every later part's
+        place, so the comparison would pair the wrong pins."""
+        other = named_nets([("R1", [("1", (0, 0))]), ("R3", [("1", (96, 0))])], [], [])
+        with pytest.raises(ValueError, match="part R2 before and part R3 after"):
+            net_change(self._nets([]).nets, other.nets)
+
     def test_a_pin_that_moves_is_the_same_pin(self) -> None:
         """R2 moved along the wire it ends on stays on R1's net."""
         before = self._nets([((0, 0), (192, 0))]).nets

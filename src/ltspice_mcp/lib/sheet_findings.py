@@ -693,25 +693,35 @@ def _joined_at_crossings(ix: _Index) -> list[Finding]:
 @_finds("pin_inside_wire")
 def _pins_inside_wires(ix: _Index) -> list[Finding]:
     # A pin anywhere on a wire is joined to it, its interior included (the
-    # connectivity recordings). Where a wire ends on the pin, the drawing
-    # shows the join; inside a wire, with no wire ending there, nothing does.
-    # A pin where wires cross is joined_at_crossing's to say.
-    found: list[Finding] = []
+    # connectivity recordings). Said where a pin lies inside a wire, no wire
+    # ending on it, and that joins it to a net it is not on without the
+    # contact: no label on the point carries a name the net already has. Where
+    # wires of separate nets cross, the join is joined_at_crossing's to say.
+    inside: dict[Point, list[tuple[str, str]]] = {}
     for part in ix.view.parts:
         for name, x, y in part.pins:
-            point = (x, y)
-            if point in ix.wire_ends or ix.wires_through(point) != 1:
-                continue
-            a, b = next(wire for wire in ix.wires if point_on_segment(point, *wire))
-            found.append(
-                Finding(
-                    "pin_inside_wire",
-                    f"{part.name}.{name} at {_at(point)} lies inside the wire {_wire(a, b)}, "
-                    "so it is joined to that wire's net, though no wire ends on it",
-                    refs=(part.name,),
-                    points=(point,),
-                )
+            if (x, y) not in ix.wire_ends and ix.on_a_wire((x, y)):
+                inside.setdefault((x, y), []).append((part.name, name))
+    found: list[Finding] = []
+    for point, pins in sorted(inside.items()):
+        apart = ix.nets_without([point])
+        wired: set[int] = set().union(*apart.wired_at(point))
+        if len(wired) > 1 and ix.wires_through(point) > 1:
+            continue
+        here = [text for x, y, text in ix.view.labels if (x, y) == point]
+        if any(apart.net_named(text) in wired for text in here):
+            continue
+        a, b = next(wire for wire in ix.wires if point_on_segment(point, *wire))
+        found.extend(
+            Finding(
+                "pin_inside_wire",
+                f"{ref}.{pin} at {_at(point)} lies inside the wire {_wire(a, b)}, so it is "
+                "joined to that wire's net, though no wire ends on it",
+                refs=(ref,),
+                points=(point,),
             )
+            for ref, pin in pins
+        )
     return found
 
 
@@ -1216,8 +1226,10 @@ def findings(view: SheetView, rules: Collection[str] | None = None) -> list[Find
     - ``joined_at_crossing``: a pin or label on a point where two or more wires
       cross, none ending there, which joins nets that are apart without it,
       nets that share a name being one.
-    - ``pin_inside_wire``: a pin on a wire's interior, where no wire ends and
-      no other wire passes, which joins the part to that wire's net.
+    - ``pin_inside_wire``: a pin on a wire's interior, where no wire ends,
+      which joins it to that wire's net, where nothing on its point (a label
+      of a name the net carries) joins them already; a crossing of separate
+      nets is ``joined_at_crossing``'s.
     - ``unjoined_crossing``: a horizontal and a vertical wire through each
       other at a point no wire ends at and nothing sits on.
     - ``diagonal_wire``: a wire neither horizontal nor vertical.

@@ -274,14 +274,18 @@ def net_change(
     folded: bool = True,
     leaving: Callable[[Member], bool] = lambda _member: False,
 ) -> NetChange:
-    """Which nets an edit split and which it joined: the one answer every
-    edit of a sheet reads when it asks what it did to the nets.
+    """Which nets an edit split and which it joined: the comparison every edit
+    that changes wiring reads to ask what it did to the nets (a move, the wire
+    cleanup of a removed part, a duplicated wire's removal, a replaced part).
+    Placing a pin, a label or a route asks instead what the one point it lands
+    on would join, before anything is drawn.
 
     ``before`` and ``after`` are one sheet's nets before and after the edit,
     made over its parts and labels in the same order, so a pin is the same pin
     in both by its part's place and its SpiceOrder, and a label by its place
-    among the labels, wherever each now lies. Members only one state holds,
-    and those ``leaving`` picks out of ``after``, are left out. Nets are
+    among the labels, wherever each now lies; two states that disagree on
+    which part or label stands in a place are refused. Members only one state
+    holds, and those ``leaving`` picks out of ``after``, are left out. Nets are
     compared ``folded`` (nets that share a name are one) unless asked for
     wiring alone.
     """
@@ -296,6 +300,12 @@ def net_change(
         return found
 
     earlier, later = keyed(before), keyed(after)
+    for key, (member, _net) in later.items():
+        if key in earlier and _identity(earlier[key][0]) != _identity(member):
+            raise ValueError(
+                f"net_change compares one sheet's states, but {key} is "
+                f"{_identity(earlier[key][0])} before and {_identity(member)} after"
+            )
     shared = [
         key for key, (member, _net) in later.items() if key in earlier and not leaving(member)
     ]
@@ -315,6 +325,12 @@ def net_change(
         )
 
     return NetChange(split=regrouped(earlier, later), joined=regrouped(later, earlier))
+
+
+def _identity(member: Member) -> str:
+    """What stands in a member's place: a pin's part (whose symbol, and so its
+    pins' names, an edit may change), a label's text."""
+    return f"part {member.reference}" if isinstance(member, PinAt) else f"label {member.text!r}"
 
 
 def _grouped(members: dict[_T, int], root: Callable[[int], int]) -> dict[int, tuple[_T, ...]]:

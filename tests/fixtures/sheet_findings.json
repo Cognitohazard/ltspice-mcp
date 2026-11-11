@@ -14011,7 +14011,15 @@
  "fixtures/ltspice_recorded/inputs/connectivity/collinear_overlap.asc": {
   "dropped_wire": [],
   "edit": {
-   "warnings": [],
+   "warnings": [
+    {
+     "kind": "pin_inside_wire",
+     "message": "R3.1 at (96,96) lies inside the wire (0,96)->(128,96), so it is joined to that wire's net, though no wire ends on it",
+     "ref": "R3",
+     "x": 96,
+     "y": 96
+    }
+   ],
    "wiring": {
     "pins_label_only": 3,
     "pins_total": 6,
@@ -14019,7 +14027,31 @@
     "wire_segments": 2
    }
   },
-  "verify": []
+  "verify": [
+   {
+    "at": {
+     "file": "collinear_overlap.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ]
+     ],
+     "detail": "R3.1 at (96,96) lies inside the wire (0,96)->(128,96), so it is joined to that wire's net, though no wire ends on it",
+     "refs": [
+      "R3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "pin_inside_wire",
+    "severity": "observation",
+    "subject": "R3"
+   }
+  ]
  },
  "fixtures/ltspice_recorded/inputs/connectivity/crossing_wires.asc": {
   "dropped_wire": [],
