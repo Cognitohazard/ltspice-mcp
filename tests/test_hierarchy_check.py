@@ -404,3 +404,16 @@ def test_a_value_ngspice_sets_only_in_an_analysis_is_not_compared(
     assert check.payload()["not_compared"] == not_compared
     assert check.status == "agrees"
     assert check.confirms_all is (level == 56)
+
+
+@needs_ngspice
+def test_a_card_ngspice_has_no_device_for_is_not_confirmed(tmp_path: Path):
+    """ngspice turns a resistor whose value reads a node voltage into a B
+    source, so it has no device R1 to print an m for. That is no value, not
+    the one copy of a device that has no m parameter."""
+    path = _deck(tmp_path, "* behavioural r\nV1 a 0 1\nR1 a 0 r={1k+V(a)}\nR2 a 0 1k\n.op\n.end\n")
+    hierarchy = load_hierarchy(str(path), [tmp_path], SemanticProfile("ngspice", "kia"))
+    check = check_hierarchy(hierarchy, NGspiceSimulator)
+    assert check.payload()["not_compared"]["no_ngspice_value"] == 1
+    assert "no_ngspice_m" not in check.payload()["not_compared"]
+    assert not check.confirms_all

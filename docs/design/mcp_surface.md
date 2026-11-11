@@ -2118,7 +2118,7 @@ Suppression is per call, and `linter_version` is reported in provenance.
 | `save-meas-coverage` | blocking | the deck has a `.save` that is not `all` or `*`, and a `.meas` reads a signal no `.save` names. A voltage between two nodes, `V(a,b)`, is its two nodes in both (both builds measure it from a saved `V(a)` and `V(b)`, and `.save V(a,b)` saves both); a voltage against ground, `V(a,0)`, stands as written, since neither build measures it with only `V(a)` saved |
 | `meas-ngspice-batch` | warning | ngspice: the deck runs and only the top-level `.meas` is skipped, which the run reports when it is read |
 | `meas-trig-degrees` | blocking | LTspice: a `.meas` that calls `sin`, `cos`, `tan`, `asin`, `acos`, `atan` or `atan2`, whose angle LTspice 26 and XVII read in degrees on their default settings where a B source reads radians; `verify_circuit`'s `syntax` check reports the same as `meas_trig_degrees` |
-| `lib-section-ngspice` | blocking | ngspice in a mode it reads with its `lt` or `ps` flag set, `kiltpsa` (the default) among them |
+| `lib-section-ngspice` | blocking | ngspice in a mode it reads with its `lt`, `ps` or `s3` flag set, `kiltpsa` (the default) among them |
 | `analysis-count-ltspice` | blocking | refused by LTspice 26 and XVII: two of `.tran`/`.ac`/`.dc`/`.noise` (`.op` may appear with one) |
 | `meas-function-ltspice` | blocking | refused by LTspice 26 and XVII: `vdb()`, `phase()` or `group_delay()` in a `.meas` |
 | `meas-name-ltspice` | blocking | refused by LTspice 26 and XVII: a `.meas` named `e`, `k`, `pi` or `q`, constants of the expression evaluator |
@@ -2600,8 +2600,8 @@ read it), `deck_not_read` (ngspice printed no value), `mode_unchecked`, or
 counts the values compared when the check ran. `not_compared` counts the rest
 by reason: `no_ngspice_name` (an element the reader gives no ngspice device
 name), `unresolved`, `zero_resistance`, `no_ngspice_m` (one copy of a
-device ngspice gives no `m` parameter, such as B3SOIDD, which builds one)
-and `no_ngspice_value` (ngspice printed none, or 0 for a W or L its device
+device ngspice has but gives no `m` parameter, such as B3SOIDD, which builds
+one) and `no_ngspice_value` (ngspice printed none, or 0 for a W its device
 sets only in an analysis, as MOS levels 5 and 6 do). Nodes, models and
 sources are not compared. A result,
 a failure to run ngspice included, is kept per deck content, mode and
@@ -2619,7 +2619,7 @@ recoverable run is refused before the job is recorded
 (`recovery_ngbehavior_unsupported`), because both read the deck by these
 rules. A `.lib file section` line needs a mode ngspice reads without its
 `lt`, `ps` or `s3` flag (`hsa` or native mode): `lt` and `ps` read it as two
-plain includes, and `s3` skips it. The server reads a mode's flags as ngspice
+plain includes, and `s3` does not read `.lib` at all. The server reads a mode's flags as ngspice
 does (`lib/ngspice_compat.py`): letters match case-sensitively, `spe` clears `ps`, `lt`, `ki` and `eg`, then `ps` clears
 `hs`, and `mc` turns off every flag but `s3`. So `spelt` and `ltmc` read a
 section, `hsps` replaces a card's `m` instead of multiplying it, and `s3mc`

@@ -18,7 +18,7 @@ from ltspice_mcp.lib.deck_staging import (
 )
 from ltspice_mcp.lib.encoding import latin1_reading, read_spice_text
 from ltspice_mcp.lib.families import DISPLAY
-from ltspice_mcp.lib.ngspice_compat import drops_lib_sections
+from ltspice_mcp.lib.ngspice_compat import drops_lib_sections, reads_lib_as_includes
 from ltspice_mcp.lib.simulator import DEFAULT_FAMILY, family_for, run_ngbehavior
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
@@ -360,6 +360,12 @@ def _lib_section_ngspice(
     mode = run_ngbehavior(mode=context.ngbehavior)
     if not drops_lib_sections(mode):
         return []
+    cause = (
+        "treats a sectioned .lib as plain includes and drops the section, so ngspice "
+        "cannot find the file"
+        if reads_lib_as_includes(mode)
+        else "(s3) does not read .lib at all, so the section's names are undefined"
+    )
     findings = []
     for card, section in _sectioned_libs(context):
         findings.append(
@@ -372,11 +378,10 @@ def _lib_section_ngspice(
                     "directive": card.body,
                     "ngbehavior": mode,
                     "reason": (
-                        "this compatibility mode treats a sectioned .lib as plain "
-                        "includes and drops the section, so ngspice cannot find the "
-                        'file. Set [simulator] ngbehavior = "hsa" in the server '
-                        "config (or LTSPICE_MCP_NGBEHAVIOR=hsa) and restart the "
-                        "server; ngspice then loads the section."
+                        f"this compatibility mode {cause}. Set [simulator] "
+                        'ngbehavior = "hsa" in the server config (or '
+                        "LTSPICE_MCP_NGBEHAVIOR=hsa) and restart the server; ngspice "
+                        "then loads the section."
                     ),
                 },
             )

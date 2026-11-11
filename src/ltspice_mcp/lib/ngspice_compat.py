@@ -12,8 +12,8 @@ Measured on ngspice-42:
 - then ``ps`` clears ``hs``: ``hsps`` reads as ``ps``, ``spehsps`` as
   ``hs spe``;
 - ``mc`` turns off every flag but ``s3``: in ``ltmc`` a ``.lib`` section is
-  read and in ``hsmc`` an ``m`` is not multiplied, but ``s3mc`` still skips
-  the section. ngspice names no mode in its log then.
+  read and in ``hsmc`` an ``m`` is not multiplied, but ``s3mc`` still does
+  not read the section. ngspice names no mode in its log then.
 
 ``ngspice_mode.flags_for`` asks a running ngspice which flags it gives a mode,
 and ``tests/test_ngspice_compat.py`` holds this model to it and to the
@@ -50,11 +50,20 @@ def compat_flags(mode: str | None) -> frozenset[str]:
 
 def drops_lib_sections(mode: str | None) -> bool:
     """Whether ngspice in ``mode`` loads no section a ``.lib <file> <section>``
-    line selects. With ``lt`` or ``ps`` set it reads the line as two plain
-    includes, so the section's name comes back as a missing include file;
-    with ``s3`` set it skips the line, so the section's names come back
-    undefined."""
-    return bool(compat_flags(mode) & {"lt", "ps", "s3"})
+    line selects, which the lint and hierarchy discovery refuse: with ``lt``
+    or ``ps`` set it reads the line as two plain includes
+    (``reads_lib_as_includes``); with ``s3`` set it does not read the line
+    (spice3f5 has no ``.lib``), so the section's names come back undefined."""
+    return reads_lib_as_includes(mode) or "s3" in compat_flags(mode)
+
+
+def reads_lib_as_includes(mode: str | None) -> bool:
+    """Whether ngspice in ``mode`` reads ``.lib <file> <section>`` as two plain
+    includes, as it does with ``lt`` or ``ps`` set, so the section's name comes
+    back as a missing include file. The failure classifier asks this, not
+    ``drops_lib_sections``: an ``s3`` run never fails on a missing include,
+    so a missing include there has another cause."""
+    return bool(compat_flags(mode) & {"lt", "ps"})
 
 
 def multiplies_m(mode: str | None) -> bool:

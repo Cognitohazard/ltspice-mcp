@@ -668,8 +668,9 @@ class ServerConfig:
     """ngspice compatibility mode (``ngbehavior``). ``None`` leaves spicelib's
     default (``kiltpsa``), whose LTspice (``lt``) and PSPICE (``ps``) tokens each
     make ngspice read a sectioned ``.lib <file> <section>`` (the PDK corner idiom)
-    as two plain includes, dropping the section. Set a mode with neither token
-    (e.g. ``"hsa"`` or ``"kia"``) for standard-SPICE / PDK decks. Applied at
+    as two plain includes, dropping the section. Set a mode with neither token,
+    nor ``s3``, which reads no ``.lib`` (e.g. ``"hsa"`` or ``"kia"``), for
+    standard-SPICE / PDK decks. Applied at
     startup to ``NGspiceSimulator._compatibility_mode``; ngspice-only, ignored by
     other simulators. This is the only place the mode is set: ngspice runs with
     ``-n``, so a ``set ngbehavior`` in a ``.spiceinit`` is not read."""

@@ -20,7 +20,13 @@ from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.lint_rules import lint_deck
-from ltspice_mcp.lib.ngspice_compat import FLAGS, compat_flags, drops_lib_sections, multiplies_m
+from ltspice_mcp.lib.ngspice_compat import (
+    FLAGS,
+    compat_flags,
+    drops_lib_sections,
+    multiplies_m,
+    reads_lib_as_includes,
+)
 from ltspice_mcp.lib.ngspice_mode import flags_for, run_batch
 from ltspice_mcp.lib.runner_base import _is_ngspice_lib_section_failure
 from tests._source_scan import modules
@@ -56,6 +62,8 @@ MODES = (
     "s3mc",
     "hsas3",
     "lts3",
+    "xs",
+    "xsspe",
 )
 
 #: The flags ngspice-42 names for each mode in its log, measured with
@@ -113,15 +121,21 @@ def test_every_reader_of_a_mode_reads_a_lib_section_as_ngspice_does(tmp_path: Pa
         clean_startup=True,
         timeout=LIVENESS_S,
     )
-    # lt or ps read the line as two includes, s3 skips it; either way rv,
-    # which only the section defines, is never set.
-    drops = "Could not find include file tt" in log or "Undefined parameter [rv]" in log
+    # lt or ps read the line as two includes, so its section's name is a
+    # missing include; s3 does not read .lib. Either way rv, which only the
+    # section defines, is never set.
+    as_includes = "Could not find include file tt" in log
+    drops = as_includes or "Undefined parameter [rv]" in log
     assert drops or "error" not in log.casefold(), log
 
     assert drops_lib_sections(mode) is drops
+    assert reads_lib_as_includes(mode) is as_includes
     findings = lint_deck(SECTIONED, deck, "ngspice", "NGspiceSimulator", ngbehavior=mode)
     assert ("lib-section-ngspice" in {row["rule_id"] for row in findings}) is drops
-    assert (_is_ngspice_lib_section_failure(deck, NGspiceSimulator, mode) is not None) is drops
+    # The classifier names the mode only for the failure it causes: a missing
+    # include, which an s3 run never reports.
+    classified = _is_ngspice_lib_section_failure(deck, NGspiceSimulator, mode)
+    assert (classified is not None) is as_includes
     if drops:
         with pytest.raises(NetlistError, match="sectioned libraries"):
             load_hierarchy(str(deck), [tmp_path], SemanticProfile("ngspice", mode))

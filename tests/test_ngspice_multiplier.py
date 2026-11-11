@@ -2,14 +2,13 @@
 
 ngspice rewrites a subcircuit for an X line's ``m`` before it expands a deck
 (``hierarchy_expr.card_copies``). Each deck here runs through ngspice in both
-modes the server runs, isolated from any ``.spiceinit``, and ngspice reports
+modes the server runs, with ``-n`` as the server's runs, and ngspice reports
 each card's ``m`` (``@r.x1.r1[m]``); hierarchy discovery must give every card
 the same copies, or, where ngspice stops on the deck, refuse it.
 """
 
 from __future__ import annotations
 
-import os
 import re
 import shutil
 import subprocess
@@ -19,6 +18,7 @@ import pytest
 
 from ltspice_mcp.errors import MultiplierRewriteStop
 from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
+from ltspice_mcp.lib.simulator import NGSPICE_NO_USER_INIT
 from tests.conftest import LIVENESS_S
 
 pytestmark = pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH")
@@ -140,12 +140,6 @@ DECKS: dict[str, tuple[str, dict[str, str]]] = {
 }
 
 
-def _isolated_environment(home: Path) -> dict[str, str]:
-    """ngspice's environment with no user ``.spiceinit`` in reach, which can
-    set a compatibility mode over the ``-D ngbehavior`` the run passes."""
-    return {**os.environ, "SPICE_USERINIT_DIR": str(home), "HOME": str(home)}
-
-
 def _write(tmp_path: Path, name: str) -> Path:
     cards, includes = DECKS[name]
     for file, text in includes.items():
@@ -167,13 +161,21 @@ def _ngspice(path: Path, mode: str, names: list[str]) -> str:
     home = path.parent / "home"
     home.mkdir(exist_ok=True)
     run = subprocess.run(
-        ["ngspice", *(["-D", f"ngbehavior={mode}"] if mode else []), "-b", str(measured)],
+        # -n keeps a user's .spiceinit, which can set another mode, out of
+        # the run, as the server's runs do; the installation's spinit, which
+        # loads the code models, is still read.
+        [
+            "ngspice",
+            NGSPICE_NO_USER_INIT,
+            *(["-D", f"ngbehavior={mode}"] if mode else []),
+            "-b",
+            str(measured),
+        ],
         capture_output=True,
         text=True,
         timeout=LIVENESS_S,
         check=False,
         cwd=home,
-        env=_isolated_environment(home),
     )
     return run.stdout + run.stderr
 

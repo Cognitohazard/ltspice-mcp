@@ -438,7 +438,8 @@ def walk_active(
                     and drops_lib_sections(profile.ngbehavior)
                 ):
                     raise NetlistError(
-                        "sectioned libraries require ngbehavior without lt/ps reinterpretation"
+                        "sectioned libraries require an ngbehavior ngspice reads without "
+                        "lt, ps or s3, which drop the section"
                     )
                 target = targets.get(ref.raw_path)
                 if target is None:

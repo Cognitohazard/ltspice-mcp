@@ -219,7 +219,7 @@ async def test_profile_section_interpretation_and_offline_default(
     monkeypatch.setattr(NGspiceSimulator, "_compatibility_mode", "kiltpsa")
     result = await _inspect(state_no_sim, hierarchy_deck, simulator="ngspice")
     assert not result["ok"]
-    assert "lt/ps" in result["error"]["message"]
+    assert "lt, ps or s3" in result["error"]["message"]
     result = await _inspect(state_no_sim, hierarchy_deck, ngbehavior="hsa")
     assert not result["ok"]
     assert result["error"]["code"] == "invalid_query"
