@@ -98,6 +98,15 @@ class ExperimentCase:
     #: and for a run whose output named none.
     simulator_version: str | None = None
     recovery: CaseRecovery | None = None
+    #: What the case's raw computed (``raw_parser.result_digest``): two
+    #: samples with one digest computed the same numbers. None until the case
+    #: produced its raw, and for a raw that cannot be walked.
+    result_digest: str | None = None
+
+
+def case_dialect(job: ExperimentJob, case: ExperimentCase) -> str | None:
+    """The dialect of the simulator that ran ``case``: its circuit's source's."""
+    return next((source.dialect for source in job.sources if source.circuit == case.circuit), None)
 
 
 #: The key under which a stopped case's failure evidence says what the raw it

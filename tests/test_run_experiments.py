@@ -3713,6 +3713,36 @@ class TestMonteCarloSampleIdentity:
         assert retry["job_id"] == first["job_id"]
         assert self._draws(retry) == self._draws(first)
 
+    async def test_samples_that_computed_the_same_numbers_are_reported(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The stand-in simulator writes one recorded raw for every case, as a
+        deck whose draws reach nothing it saves would: each sample's raw
+        computed the same numbers, so the receipt says so, naming the samples,
+        rather than presenting three runs as a distribution."""
+        recorded_fixture_simulator(monkeypatch)
+        deck = _deck(work_dir / "same.cir")
+
+        data = _assert_schema(
+            await _completed_analysis_receipt(
+                _args(
+                    deck,
+                    "mc-same",
+                    variations=[{"kind": "random", "runs": 3, "seed": 2, "rules": [self._RULE]}],
+                ),
+                state_with_sim,
+            )
+        )
+
+        (observation,) = [o for o in data["observations"] if o["code"] == "identical_samples"]
+        assert observation["detail"].startswith("All samples of dut computed the same results")
+        (group,) = observation["evidence"]["groups"]
+        assert group["samples"] == [0, 1, 2] and group["count"] == 3
+        assert not any(o["code"] == "samples_not_compared" for o in data["observations"])
+
     async def test_a_sample_that_never_ran_still_records_how_to_replay_it(
         self,
         state_with_sim: SessionState,

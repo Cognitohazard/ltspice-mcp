@@ -1015,3 +1015,42 @@ async def test_an_unbounded_case_reports_progress_while_it_runs(
     assert "run_progress" not in codes
     [stopped] = [item for item in final["observations"] if item["code"] == "partial_progress"]
     assert stopped["evidence"]["points"] >= reached["points"]
+
+
+async def test_samples_are_compared_by_what_ngspice_computed(
+    ngspice_state: SessionState, work_dir: Path
+):
+    """A random tolerance on R2 moves V(out), so each sample of a deck that
+    saves it computes its own numbers and the receipt reports nothing. Saving
+    only V(in), which R2 cannot move, makes every sample compute the same
+    numbers, and the receipt says the draws changed nothing it saved."""
+    body = "* divider\nV1 in 0 1\nR1 in out 1k\nR2 out 0 1k\n{save}.op\n.end\n"
+    variations = [
+        {
+            "kind": "random",
+            "runs": 3,
+            "seed": 4,
+            "rules": [{"rule": "component", "target": "R2", "tolerance": 0.1}],
+        }
+    ]
+
+    async def observations(name: str, save: str) -> list[dict]:
+        netlist = _write(work_dir, f"{name}.cir", body.format(save=save))
+        receipt = await terminal_experiment(
+            ngspice_state,
+            {
+                "request_id": name,
+                "circuits": [{"path": netlist, "id": "dut"}],
+                "variations": variations,
+                "execution": {"wait_s": 90, "simulator": "ngspice"},
+            },
+        )
+        assert receipt["status"] == "completed", receipt
+        return receipt.get("observations", [])
+
+    differing = await observations("saves-out", "")
+    unmoved = await observations("saves-in", ".save v(in)\n")
+
+    assert not any(o["code"] in {"identical_samples", "samples_not_compared"} for o in differing)
+    (observation,) = [o for o in unmoved if o["code"] == "identical_samples"]
+    assert observation["evidence"]["groups"][0]["samples"] == [0, 1, 2]

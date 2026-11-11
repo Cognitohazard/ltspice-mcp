@@ -2264,6 +2264,20 @@ before it ran included. A circuit whose deck fails before its variations
 expand (an include that cannot be staged) records no assignments on its
 cases; their failure says why.
 
+The receipt compares the samples of a `random` or `pdk_native` entry by what
+they computed. Each produced case keeps a digest of its raw's plots, their
+variables and data and none of their headers' dates, and samples of one
+circuit, at any `assign` values, that share a digest are listed in an
+`identical_samples` observation (`kind: "sampling"`), with each group's
+`circuit`, `samples` (sample indices, which the runs page maps to cases) and
+`count` in its `evidence`; its detail
+leads with "All samples of …" where a group holds every sample of a circuit.
+Such samples drew different values that changed nothing the simulator saved.
+A produced sample with no digest (recorded before samples were compared, or a
+raw this reader cannot walk) is counted in a `samples_not_compared`
+observation. Neither observation appears when every sample was compared and
+none matched another.
+
 ### A.2 Recipe
 
 There are 22 recipes (discriminant values). The shared fields `key` (required

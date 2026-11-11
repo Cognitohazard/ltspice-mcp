@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import codecs
 import contextlib
+import hashlib
 import math
 import os
 import re
@@ -1173,6 +1174,55 @@ def read_partial_raw_progress(path: Path, dialect: str | None = None) -> Partial
                 return following
     except FileNotFoundError:
         raise
+    except OSError:
+        return None
+
+
+def result_digest(path: Path, dialect: str | None = None) -> str | None:
+    """A digest of what a raw file computed: each plot's name, variables and
+    data, and nothing of its headers' other lines.
+
+    Two runs whose results are the same numbers digest the same, though each
+    header carries the date it was written (one per plot in an ngspice file)
+    and LTspice's names the build. Plots are found as
+    ``read_partial_raw_progress`` finds them. None when the file is not a
+    complete raw this reader can walk.
+    """
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as handle:
+            size = handle.seek(0, os.SEEK_END)
+            handle.seek(0)
+            magic = handle.read(len(_RAW_HEADER_UTF16[0]))
+            if magic.startswith(_RAW_HEADER_UTF16):
+                width = 2
+            elif magic.startswith(_RAW_HEADER_ASCII):
+                width = 1
+            else:
+                return None
+            offset = 0
+            while True:
+                header = _read_plot_header(handle, offset, width)
+                if header.data_start is None:
+                    return None
+                digest.update(
+                    "\0".join((header.fields.get("plotname", ""), *header.variables, "")).encode(
+                        "utf-8", errors="surrogatepass"
+                    )
+                )
+                following = _progress_of_plot(handle, header, offset, size, width, dialect)
+                end = following if isinstance(following, int) else size
+                handle.seek(header.data_start)
+                remaining = end - header.data_start
+                while remaining > 0:
+                    chunk = handle.read(min(remaining, 1 << 20))
+                    if not chunk:
+                        return None
+                    digest.update(chunk)
+                    remaining -= len(chunk)
+                if not isinstance(following, int):
+                    return digest.hexdigest()
+                offset = following
     except OSError:
         return None
 

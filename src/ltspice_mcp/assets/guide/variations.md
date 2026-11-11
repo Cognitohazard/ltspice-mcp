@@ -69,6 +69,10 @@ compares the same die at each corner, and adding a corner leaves the other
 draws as they were. A relative tolerance still scales with an assigned
 nominal, and a mismatch draw as 1/sqrt(m·W·L) of an assigned geometry.
 
+The receipt compares what each sample computed. An `identical_samples`
+observation names samples whose results were the same numbers: their draws
+changed nothing the deck saves, so a spread read from them is not a spread.
+
 The variation's `seed` controls these draws from your assumed coefficients. It
 does not affect random functions written in the deck (`agauss`, `gauss`,
 `aunif`, `unif`, `limit`); in a recoverable ngspice run,

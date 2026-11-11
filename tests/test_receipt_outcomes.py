@@ -24,7 +24,7 @@ from ltspice_mcp.tools.receipts import (
     render_runs_envelope,
     snapshot_receipt,
 )
-from tests.conftest import FIXTURES_DIR, exited_pid
+from tests.conftest import FIXTURES_DIR, exited_pid, make_experiment_job
 from tests.test_jobs_tool import _args, _assert_jobs_schema, _circuit, _experiment
 
 _STATUSES: tuple[str, ...] = get_args(ExperimentStatus)
@@ -109,3 +109,19 @@ async def test_an_interrupted_job_whose_runs_were_written_reads_complete(
     await state_no_sim.job_registry.drain_pending()
     record = json.loads(job.store_path.read_text(encoding="utf-8"))
     assert record["status"] == "interrupted"
+
+
+def test_samples_recorded_without_a_digest_are_said_to_be_uncompared(state_no_sim: SessionState):
+    """A job recorded before samples were compared carries no digest of what
+    each sample computed, so its receipt says the samples were not compared
+    rather than leaving out the comparison as if it had found nothing."""
+    job = make_experiment_job(state_no_sim, job_id="exp_old_mc_0001", count=3)
+    for index, case in enumerate(job.cases):
+        case.assignments = {"_random_run": index, "_random_seed": 5}
+        assert case.status == "produced" and case.result_digest is None
+
+    observations = snapshot_receipt(job, state_no_sim).observations
+
+    (observation,) = [o for o in observations if o["code"] == "samples_not_compared"]
+    assert observation["evidence"]["count"] == 3
+    assert not any(o["code"] == "identical_samples" for o in observations)

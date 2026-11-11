@@ -1297,3 +1297,56 @@ class TestBuildSimulationSummary:
         assert type(summary["step_count"]) is int
         assert type(summary["range"]["time_start"]) is float
         assert type(summary["range"]["time_end"]) is float
+
+
+class TestResultDigest:
+    """``result_digest`` says whether two runs computed the same numbers: it
+    reads every plot's name, variables and data, and none of a header's other
+    lines, which carry the date the file was written."""
+
+    @staticmethod
+    def _redated(data: bytes, codec: str) -> bytes:
+        """``data`` with every header's date changed, as a later run writes it."""
+        marker = "Date:".encode(codec)
+        assert data.count(marker) >= 1
+        changed = bytearray(data)
+        start = 0
+        while (at := changed.find(marker, start)) >= 0:
+            end = at + len(marker)
+            changed[end : end + len("XX".encode(codec))] = "XX".encode(codec)
+            start = end
+        return bytes(changed)
+
+    @pytest.mark.parametrize(
+        ("fixture", "codec", "dialect"),
+        [
+            ("ltspice_tran_rc.raw", "utf-16-le", "ltspice"),
+            ("ltspice_step_tran.raw", "utf-16-le", "ltspice"),
+            # Two plots, each with its own dated header.
+            ("ngspice_noise_2plot.raw", "ascii", "ngspice"),
+        ],
+    )
+    def test_the_same_numbers_digest_the_same_whatever_the_date(
+        self, tmp_path: Path, fixture: str, codec: str, dialect: str
+    ):
+        from ltspice_mcp.lib.raw_parser import result_digest
+
+        data = (FIXTURES_DIR / fixture).read_bytes()
+        original, redated, changed = (tmp_path / name for name in ("a.raw", "b.raw", "c.raw"))
+        original.write_bytes(data)
+        redated.write_bytes(self._redated(data, codec))
+        flipped = bytearray(data)
+        flipped[-3] ^= 0xFF
+        changed.write_bytes(bytes(flipped))
+
+        digest = result_digest(original, dialect)
+        assert digest is not None
+        assert result_digest(redated, dialect) == digest
+        assert result_digest(changed, dialect) != digest
+
+    def test_a_file_that_is_no_raw_has_no_digest(self, tmp_path: Path):
+        from ltspice_mcp.lib.raw_parser import result_digest
+
+        path = tmp_path / "not.raw"
+        path.write_bytes(b"not a raw file\n")
+        assert result_digest(path) is None
