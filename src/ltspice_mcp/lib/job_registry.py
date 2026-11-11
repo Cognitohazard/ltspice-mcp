@@ -16,19 +16,13 @@ import contextlib
 import contextvars
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ltspice_mcp.lib import now
 from ltspice_mcp.lib.background import BackgroundTasks
-from ltspice_mcp.lib.experiment_types import (
-    OWNER_STOPPED,
-    TERMINAL_CASE_STATUSES,
-    ExperimentJob,
-    failure_row,
-)
-from ltspice_mcp.lib.job_lifecycle import LiveJob, WaitFor, finished
+from ltspice_mcp.lib.experiment_types import OWNER_STOPPED, ExperimentJob
+from ltspice_mcp.lib.job_lifecycle import LiveJob, WaitFor, finished, stop_for_owner
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.observability import emit_job_event
 
@@ -697,10 +691,12 @@ class JobRegistry:
     async def cancel_running(self, runners, session_state) -> None:
         """Stop the jobs this process runs (``owns``) that are still live.
 
-        Their stopped cases record ``OWNER_STOPPED``, the code a crash leaves
-        too: the case stopped because the process running it went away, not
-        because anyone cancelled it, so a resume retries it by default either
-        way. The jobs themselves end ``cancelled``.
+        The process running them is stopping, so each ends as it would had the
+        process been killed and its record read back afterwards: settled by
+        ``job_lifecycle.stop_for_owner``, ``interrupted`` while runs were
+        left, with its unfinished cases failed with ``OWNER_STOPPED``, which a
+        resume retries by default. Nobody asked to cancel them, so none ends
+        ``cancelled``.
 
         Runners' ``cancel`` APIs take a SessionState for historical reasons;
         the caller passes it through rather than the registry reaching back
@@ -715,6 +711,10 @@ class JobRegistry:
         # owner still alive) and must not be killed or relabeled by our
         # shutdown, whatever pid its record names.
         experiments = [job for job in self.jobs.values() if self.owns(job)]
+        # Whether each job's runs were done as the process began to stop, which
+        # decides the status the bookkeeping below gives a job its cancel left
+        # live, as it decides the coordinator's own.
+        runs_were_finished = {job.job_id: finished(job, "runs") for job in experiments}
         await _issue_cancels(
             [
                 runner.cancel(experiment, reason=OWNER_STOPPED)
@@ -733,31 +733,11 @@ class JobRegistry:
         for experiment in experiments:
             if experiment.status not in NON_TERMINAL_LIVE_STATUSES:
                 continue
-            stopped_at = now()
-            stopped = [
-                replace(
-                    case,
-                    status="failed",
-                    failure_code=OWNER_STOPPED,
-                    error="The server shut down before this case completed",
-                    completed_at=stopped_at,
-                )
-                for case in experiment.cases
-                if case.status not in TERMINAL_CASE_STATUSES
-            ]
-            replaced = {case.case_id: case for case in stopped}
-            experiment.cases = [replaced.get(case.case_id, case) for case in experiment.cases]
-            experiment.completeness.recount(experiment.cases, execution_job_id=experiment.job_id)
-            experiment.failures.extend(failure_row(case) for case in stopped)
-            if experiment.analysis.status in {"pending", "running"}:
-                experiment.analysis = replace(
-                    experiment.analysis,
-                    status="cancelled",
-                    error="Server shut down before attached analysis completed",
-                    completed_at=stopped_at,
-                )
+            status = stop_for_owner(
+                experiment, runs_were_finished=runs_were_finished[experiment.job_id]
+            )
             # Still live, so still here: eviction takes only finished jobs.
-            self.live[experiment.job_id].transition("cancelled")
+            self.live[experiment.job_id].transition(status)
             self.persist_job(experiment)
 
         # A job that finished during the cancels may have been evicted since.

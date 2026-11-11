@@ -71,8 +71,9 @@ with Api(working_dir="~/designs/ldo") as api:
 
 **One live session per process.** A second concurrent `Api`, or an
 `Api` inside a process already running the MCP server, raises
-`ApiSessionError`. Shutdown cancels the jobs a process owns, so two sessions in
-one process would cancel each other's jobs.
+`ApiSessionError`. Closing a session stops the jobs it runs and closes what
+the whole process shares, such as the hidden desktop LTspice runs on, so one
+session closing would stop work another depends on.
 
 Each `Api` runs its session on a private event-loop thread. Calls from several
 threads run concurrently there, so one thread can cancel a job while another is
@@ -85,9 +86,12 @@ blocked waiting on it.
 `ApiSessionError` when called from the `Api`'s own loop thread, where it would
 deadlock.
 
-**`close()`** cancels the jobs this process owns, as server shutdown does.
-Their unfinished cases fail with code `server_restarted`, as after a crash, so
-`jobs(action="resume")` retries them by default.
+**`close()`** stops the jobs this process runs, as server shutdown does, and
+each reads as it would after a crash: `interrupted` while runs were left
+(`completed_with_failures` when only the attached analysis was), its
+unfinished cases failed with code `server_restarted`, which
+`jobs(action="resume")` retries by default, and an unfinished attached
+analysis failed. Nobody cancelled them, so none reads `cancelled`.
 Calls made after it starts raise `ApiClosedError`. It is idempotent, and a
 second `close()` from another thread returns once the first has finished. A
 call already running in another thread when `close()` starts is cancelled and
@@ -106,12 +110,13 @@ The API states this rule in three places:
 - `reference()` and `reference('run_experiments')` state that `wait=False`
   returns a receipt *and* that the submitting process must outlive the run
   unless `detach=True` hands the job to its own owner, because a job is
-  cancelled when its owning process exits.
+  interrupted when its owning process exits.
 - The receipt includes a `process_owned_job` observation.
-- When a later read finds that a case's owning process exited before the case
-  finished or wrote its results, the case fails. Its `failures` row has code
-  `server_restarted` and a message that says the owning process exited and
-  that the submitting process must stay alive until the job finishes.
+- When the process running a job stops before a case finished or wrote its
+  results, whether it exited, crashed or closed its `Api`, the case fails. Its
+  `failures` row has code `server_restarted` and a message that says the
+  process running the job stopped and must stay running until the job
+  finishes.
 
 ## 5. The six operations
 
@@ -781,8 +786,8 @@ own session, so the signal does not reach it. In both cases, calling again
 with the same `request_id` replays whatever the owner submitted.
 
 **Ownership.** The calling process never owns a detached job. `close()`,
-leaving a `with` block and interpreter exit cancel only jobs whose `owner_pid`
-is this process, so they do not cancel a detached job. Read it as you would
+leaving a `with` block and interpreter exit stop only the jobs this process
+runs, so they do not stop a detached job. Read it as you would
 any job another process owns, with `jobs(action="status"|"wait"|"runs")` by
 `job_id` or `request_id`, from this process, a later one, or a running MCP
 server. Cancel it the same way. `jobs(action="cancel")` with the receipt's

@@ -17,7 +17,6 @@ from typing import Any
 
 from ltspice_mcp.lib import now, parse_iso_datetime, read_text_file
 from ltspice_mcp.lib.experiment_types import (
-    OWNER_STOPPED,
     TERMINAL_CASE_STATUSES,
     AnalysisStage,
     Completeness,
@@ -25,10 +24,13 @@ from ltspice_mcp.lib.experiment_types import (
     ExperimentJob,
     ManifestEntry,
     SourceRecord,
-    failure_row,
 )
 from ltspice_mcp.lib.filelock import file_lock
-from ltspice_mcp.lib.job_lifecycle import finished, reconcile_experiment_restart
+from ltspice_mcp.lib.job_lifecycle import (
+    finished,
+    reconcile_experiment_restart,
+    stop_for_owner,
+)
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.raw_parser import has_valid_raw_header, other_raws
@@ -499,69 +501,33 @@ def _reconcile_restart(job: ExperimentJob, *, liveness: OwnerLiveness) -> None:
         return
     if not liveness.is_dead:
         return
-    observation = {
-        "code": "server_restarted",
-        "kind": "lifecycle",
-        "detail": "The owning server stopped before the experiment reached terminality.",
-    }
-    job.observations.append(observation)
     # Say so on the job itself. Whoever loaded this record has to write the
     # reconciliation back, and that decision is this function's answer to give
     # rather than something each caller re-derives from the report channel.
     job.restart_reconciled = True
     runs_were_finished = finished(job, "runs")
-    analysis_interrupted = job.analysis.status in {"pending", "running"}
-    if analysis_interrupted:
-        job.analysis = replace(
-            job.analysis,
-            status="failed",
-            error="Server restarted before attached analysis completed",
-            completed_at=now(),
-            observations=[*job.analysis.observations, observation],
-        )
-    reconciled: list[ExperimentCase] = []
-    abandoned: list[ExperimentCase] = []
+    # What only a reader of the record can find: a case whose runs wrote their
+    # results before the process died but never recorded them. Every other
+    # word is the one any stopped owner leaves (``stop_for_owner``).
     recovered: list[ExperimentCase] = []
-    for case in job.cases:
+    for index, case in enumerate(job.cases):
         if case.status in TERMINAL_CASE_STATUSES:
-            reconciled.append(case)
             continue
         artifacts = _produced_artifacts(job, case)
-        if artifacts is not None:
-            raw, log = artifacts
-            promoted = replace(
-                case,
-                status="produced",
-                raw_file=raw,
-                log_file=log,
-                other_raws=other_raws(raw),
-                completed_at=case.completed_at or now(),
-                simulator_version=case.simulator_version or reported_build(log, raw),
-            )
-            recovered.append(promoted)
-            reconciled.append(promoted)
+        if artifacts is None:
             continue
-        failed = replace(
+        raw, log = artifacts
+        job.cases[index] = replace(
             case,
-            status="failed",
-            failure_code=OWNER_STOPPED,
-            # Name the mechanism the caller can act on — the owning process
-            # exited — never "the server": the store cannot see which interface
-            # owned the job, and for the in-process API the owner is the
-            # caller's own script (a wait=False submission from a process
-            # that exits leaves exactly this shape).
-            error=(
-                "The owning process exited before this case reached "
-                "terminality, leaving the run unsupervised; keep the "
-                "submitting process (or a long-lived server) alive until "
-                "the job finishes"
-            ),
-            completed_at=now(),
+            status="produced",
+            raw_file=raw,
+            log_file=log,
+            other_raws=other_raws(raw),
+            completed_at=case.completed_at or now(),
+            simulator_version=case.simulator_version or reported_build(log, raw),
         )
-        abandoned.append(failed)
-        reconciled.append(failed)
-    job.cases = reconciled
-    job.failures.extend(failure_row(case) for case in abandoned)
+        recovered.append(job.cases[index])
+    status = stop_for_owner(job, runs_were_finished=runs_were_finished)
     if recovered:
         job.observations.append(
             {
@@ -569,24 +535,13 @@ def _reconcile_restart(job: ExperimentJob, *, liveness: OwnerLiveness) -> None:
                 "kind": "reconciliation",
                 "detail": (
                     f"{len(recovered)} case(s) had written their results before the "
-                    "server stopped but never recorded them; the artifacts were "
-                    "verified on disk and the cases count as produced."
+                    "process running the job stopped but never recorded them; the "
+                    "artifacts were verified on disk and the cases count as produced."
                 ),
                 "evidence": {"case_ids": [case.case_id for case in recovered]},
             }
         )
-    job.completeness.recount(job.cases, execution_job_id=job.job_id)
-    if runs_were_finished:
-        has_failure = job.completeness.fell_short or job.analysis.status in {
-            "failed",
-            "cancelled",
-        }
-        reconcile_experiment_restart(
-            job,
-            "completed_with_failures" if has_failure else "completed",
-        )
-        return
-    reconcile_experiment_restart(job, "interrupted")
+    reconcile_experiment_restart(job, status)
 
 
 def deserialize_job(

@@ -356,7 +356,7 @@ same job records, so either can read a job the other started by its
 `job_id`.
 
 **Jobs a script starts.** `api.close()`, the end of a `with` block, or normal
-interpreter exit cancels the script's unfinished jobs.
+interpreter exit stops the script's unfinished jobs, which read `interrupted`.
 `run_experiments(wait=False, detach=True)` instead hands the job to a
 separate process that supervises it. The call returns once the job is
 recorded, the receipt names that process and its log, and the job keeps

@@ -1,9 +1,9 @@
 """Declarative state machine for simulation / batch-job lifecycle.
 
 Every status write in production code now goes through ``transition()``
-(or ``recover()`` for the interrupted-job special case). The transition
-tables below are the single source of truth for which status changes are
-legal and which lifecycle event fires on each one.
+(or ``reconcile_experiment_restart()`` for a record whose owner died). The
+transition tables below are the single source of truth for which status
+changes are legal and which lifecycle event fires on each one.
 
 Rationale: previously, 13 call sites directly mutated ``job.status`` and
 separately called ``emit_job_event`` — two concerns, scattered. That
@@ -25,11 +25,16 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Literal
 
 from ltspice_mcp.lib import now
-from ltspice_mcp.lib.experiment_types import TERMINAL_CASE_STATUSES, ExperimentJob
+from ltspice_mcp.lib.experiment_types import (
+    OWNER_STOPPED,
+    TERMINAL_CASE_STATUSES,
+    ExperimentJob,
+    failure_row,
+)
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.observability import JobEvent, emit_job_event
 
@@ -122,6 +127,89 @@ def finished(job: ExperimentJob, wait_for: WaitFor = "all") -> bool:
     return job.status in TERMINAL_STATUSES
 
 
+# ---------------------------------------------------------------------------
+# A job whose owning process stopped
+# ---------------------------------------------------------------------------
+#
+# The process running a job can stop before the job is done in three ways: it
+# is killed, and the next reader of the record finds it gone
+# (``experiment_store``); the server shuts down; or a script closes its ``Api``,
+# which shuts its session down the same way (``JobRegistry.cancel_running``,
+# and the coordinator it asks to stop, ``ExperimentRunner``). The job, its
+# cases and its attached analysis say the same thing whichever it was, so the
+# words are kept here once and say "the process", which is true of all three.
+
+#: The detail of the lifecycle observation a job, and its attached analysis,
+#: records when the process running it stopped before it finished.
+OWNER_STOPPED_DETAIL = "The process running the job stopped before the job finished."
+#: The message of a case that process left unfinished.
+OWNER_STOPPED_CASE_ERROR = (
+    "The process running the job stopped before this case finished; keep that "
+    "process running until the job finishes"
+)
+#: The error of an attached analysis that process left unfinished.
+OWNER_STOPPED_ANALYSIS_ERROR = (
+    "The process running the job stopped before the attached analysis finished"
+)
+
+
+def owner_stopped_observation() -> dict[str, str]:
+    """The lifecycle observation of a job whose owning process stopped."""
+    return {"code": OWNER_STOPPED, "kind": "lifecycle", "detail": OWNER_STOPPED_DETAIL}
+
+
+def stop_analysis_for_owner(job: ExperimentJob) -> None:
+    """Fail an attached analysis the stopped process left pending or running.
+
+    Failed, not cancelled: nobody asked for it to stop, and an analysis is
+    never re-run on its own, so the receipt routes the caller to
+    ``analyze_results`` over the runs, as for any failed analysis.
+    """
+    if job.analysis.status not in {"pending", "running"}:
+        return
+    job.analysis = replace(
+        job.analysis,
+        status="failed",
+        error=OWNER_STOPPED_ANALYSIS_ERROR,
+        completed_at=now(),
+        observations=[*job.analysis.observations, owner_stopped_observation()],
+    )
+
+
+def stop_for_owner(job: ExperimentJob, *, runs_were_finished: bool) -> str:
+    """Settle ``job``, whose owning process stopped, and return its terminal status.
+
+    The one answer to "what does a job whose process stopped before it
+    finished say?", for every way the process stops. The job records the
+    lifecycle observation; an attached analysis left pending or running fails
+    (``stop_analysis_for_owner``); every case not yet terminal fails with
+    ``OWNER_STOPPED``, the code a default resume retries. A case is changed in
+    place, so a coordinator still holding it sees it terminal and leaves it.
+
+    ``runs_were_finished`` is whether every run was done when the process
+    stopped (``finished(job, "runs")`` read then). With runs left the job is
+    ``interrupted``. With none, the runs earned a completed status and the
+    stop took only the analysis: ``completed_with_failures`` when a run fell
+    short or the analysis did not complete, else ``completed``.
+    """
+    job.observations.append(owner_stopped_observation())
+    stop_analysis_for_owner(job)
+    stopped = [case for case in job.cases if case.status not in TERMINAL_CASE_STATUSES]
+    stopped_at = now()
+    for case in stopped:
+        case.status = "failed"
+        case.failure_code = OWNER_STOPPED
+        case.error = OWNER_STOPPED_CASE_ERROR
+        case.completed_at = stopped_at
+    job.failures.extend(failure_row(case) for case in stopped)
+    job.completeness.recount(job.cases, execution_job_id=job.job_id)
+    if not runs_were_finished:
+        return "interrupted"
+    if job.completeness.fell_short or job.analysis.status in {"failed", "cancelled"}:
+        return "completed_with_failures"
+    return "completed"
+
+
 # Which event name fires when a job enters a given status. Every entry must be
 # a status some transition actually reaches — an unreachable one reads as a
 # supported outcome nothing can produce. ('timeout' left with the job type that
@@ -133,6 +221,7 @@ STATUS_TO_EVENT: dict[str, JobEvent] = {
     "completed_with_failures": "completed_with_failures",
     "failed": "failed",
     "cancelled": "cancelled",
+    "interrupted": "interrupted",
 }
 
 
@@ -187,9 +276,7 @@ def transition(
     valid = VALID_EXPERIMENT_TRANSITIONS
     event = STATUS_TO_EVENT.get(new_status)
     if event is None and new_status in valid.get(job.status, frozenset()):
-        raise InvalidTransitionError(
-            f"status {new_status!r} is restart-only and has no event mapping"
-        )
+        raise InvalidTransitionError(f"status {new_status!r} has no event mapping")
     _apply(job, new_status, valid)
     if state is not None:
         state.persist_job(job)

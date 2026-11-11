@@ -666,23 +666,28 @@ result sets that read them. A recoverable job is never deleted.
 
 **Attached analysis is a job stage.** A job is terminal when all its runs and
 its analysis are terminal; the status sequence is
-`queued -> running -> analyzing -> completed | completed_with_failures | failed | cancelled`,
-and a job whose server exited before its runs finished is `interrupted`. A
-server that shuts down cancels the jobs it runs, and their unfinished cases
-fail with `server_restarted`, as they do after a crash. A job's status is read
-from its record; whether this server process runs a job is never decided from
-the process id the record names, which another process may have taken since.
+`queued -> running -> analyzing -> completed | completed_with_failures | failed | cancelled | interrupted`.
+`cancelled` means a caller cancelled the job. `interrupted` means the process
+running the job stopped before its runs finished: it crashed or was killed, the
+server shut down, or a script closed its `Api`. A job reads the same whichever
+way the process stopped: its unfinished cases fail with `server_restarted`, an
+attached analysis left pending or running fails, and the job and the analysis
+each carry a `server_restarted` lifecycle observation. A process that stops
+once every run has finished leaves only the analysis unfinished, so the job
+ends `completed_with_failures` (or `completed` when it had no analysis left
+and every run produced). A job's status is read from its record; whether this
+server process runs a job is never decided from the process identity the
+record names, which another process may have taken since.
 The dwell and `jobs(wait)` wait for full terminality by default;
 `jobs(wait, wait_for: "runs")` returns once the runs are terminal: once every
 case's status is terminal, which can be just before the job's status changes.
 From then on every read of the job's runs accepts it. Cancelling
 during analysis cancels the stage and keeps the run artifacts. An analysis
 failure puts the job in `completed_with_failures` with an `analysis_error`; a
-new `analyze_results` call can still analyze the runs. After a server restart,
-a pending or running analysis stage is marked failed with a restart
-observation and is not re-run. The analysis result is stored in the job
-record as one rendered page, and its summary is included in every terminal
-receipt.
+new `analyze_results` call can still analyze the runs. An analysis stage the
+process running the job left unfinished is not re-run. The analysis result is
+stored in the job record as one rendered page, and its summary is included in
+every terminal receipt.
 
 **Input snapshot and provenance.** At submission the server stages the
 primary deck (content-addressed) and every include and lib it reaches (with a
@@ -2465,8 +2470,8 @@ splits is refused the same way.
   supported.
 - No correlated Monte Carlo draws across two decks.
 - No loop-gain probe templates.
-- An attached analysis stage interrupted by a server restart is not re-run;
-  run `analyze_results` over the job instead.
+- An attached analysis stage left unfinished when the process running its job
+  stopped is not re-run; run `analyze_results` over the job instead.
 - Request-index records are deleted only with their job ("Job model",
   §3.1), so the index can grow with every submission.
 - Ops cannot define a new hierarchical block (its symbol and child sheet);

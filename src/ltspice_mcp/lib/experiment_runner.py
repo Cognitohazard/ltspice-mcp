@@ -44,10 +44,13 @@ from ltspice_mcp.lib.experiment_types import (
 )
 from ltspice_mcp.lib.filelock import async_file_lock, file_lock
 from ltspice_mcp.lib.job_lifecycle import (
+    OWNER_STOPPED_CASE_ERROR,
     VALID_EXPERIMENT_TRANSITIONS,
     InvalidTransitionError,
     LiveJob,
     finished,
+    stop_analysis_for_owner,
+    stop_for_owner,
 )
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.native_execution import prepare_native_cases
@@ -559,6 +562,10 @@ class _Execution:
     # Held for two attribute writes at a time, never across a launch.
     launch_lock: threading.Lock = field(default_factory=threading.Lock)
     stop_reason: JobStopReason | None = None
+    #: With ``stop_reason`` ``OWNER_STOPPED``: whether every run was done when
+    #: the process began to stop, which decides the status the job ends with
+    #: (``job_lifecycle.stop_for_owner``).
+    runs_finished_at_stop: bool = False
     slots_held: set[str] = field(default_factory=set)
     retained_slots: set[str] = field(default_factory=set)
     futures: dict[str, asyncio.Future[RunOutcome]] = field(default_factory=dict)
@@ -1078,35 +1085,10 @@ class ExperimentRunner(RunnerBase):
             await self._persist_job(execution)
             execution.live.mark_runs_done()
 
-            if execution.stop_reason in ("cancelled", OWNER_STOPPED):
-                self._finish_unstarted_analysis(
-                    job,
-                    status="cancelled",
-                    error="Experiment cancelled before attached analysis started",
-                )
-                if job.status not in {"cancelled", "failed"}:
-                    await self._transition_job(execution, "cancelled")
-                return
-            if execution.stop_reason == "job_deadline":
-                self._finish_unstarted_analysis(
-                    job,
-                    status="cancelled",
-                    error="Experiment deadline elapsed before attached analysis started",
-                )
-                await self._transition_job(execution, "completed_with_failures")
-                return
-
-            analysis_failed = await self._run_analysis(execution)
-            if execution.stop_reason in ("cancelled", OWNER_STOPPED):
-                await self._transition_job(execution, "cancelled")
-            elif (
-                execution.stop_reason == "job_deadline"
-                or analysis_failed
-                or job.completeness.fell_short
-            ):
-                await self._transition_job(execution, "completed_with_failures")
-            else:
-                await self._transition_job(execution, "completed")
+            analysis_failed = False
+            if execution.stop_reason is None:
+                analysis_failed = await self._run_analysis(execution)
+            await self._finish_job(execution, analysis_failed=analysis_failed)
         except Exception as exc:
             logger.exception("Experiment job %s failed", job.job_id)
             job.error = str(exc)
@@ -1137,6 +1119,44 @@ class ExperimentRunner(RunnerBase):
                     await execution.external_cancel_task
             if not execution.retained_slots:
                 self._executions.pop(job.job_id, None)
+
+    async def _finish_job(self, execution: _Execution, *, analysis_failed: bool) -> None:
+        """Move the job to the terminal status its runs and its stop leave it in.
+
+        A job whose process is stopping ends as any stopped owner leaves one
+        (``job_lifecycle.stop_for_owner``); a cancel ends it ``cancelled``; the
+        deadline and a fallen-short run or analysis end it
+        ``completed_with_failures``.
+
+        A job already terminal is left as it is: shutdown's own bookkeeping
+        (``JobRegistry.cancel_running``) finishes a job whose stop outlasted
+        its bound, and this coordinator may get here after it has.
+        """
+        job = execution.job
+        if job.status in TERMINAL_STATUSES:
+            return
+        reason = execution.stop_reason
+        if reason == OWNER_STOPPED:
+            status = stop_for_owner(job, runs_were_finished=execution.runs_finished_at_stop)
+        elif reason == "cancelled":
+            self._finish_unstarted_analysis(
+                job,
+                status="cancelled",
+                error="Experiment cancelled before attached analysis started",
+            )
+            status = "cancelled"
+        elif reason == "job_deadline":
+            self._finish_unstarted_analysis(
+                job,
+                status="cancelled",
+                error="Experiment deadline elapsed before attached analysis started",
+            )
+            status = "completed_with_failures"
+        elif analysis_failed or job.completeness.fell_short:
+            status = "completed_with_failures"
+        else:
+            status = "completed"
+        await self._transition_job(execution, status)
 
     async def _external_cancel_watch(self, execution: _Execution) -> None:
         """Observe durable cancellation requests made by another server process."""
@@ -1690,7 +1710,13 @@ class ExperimentRunner(RunnerBase):
             case,
             terminal_status,
             code=reason,
-            error=f"Case stopped because {cause}",
+            # A case its stopping process killed says what one a crash left
+            # says; what the kill read off the run is its evidence.
+            error=(
+                OWNER_STOPPED_CASE_ERROR
+                if reason == OWNER_STOPPED
+                else f"Case stopped because {cause}"
+            ),
             evidence=_with_partial_raw(_stopped_run_evidence(limits, outcome), kept),
         )
         self._release_slot(execution, case.case_id)
@@ -1956,6 +1982,8 @@ class ExperimentRunner(RunnerBase):
     ) -> None:
         if execution.stop_reason is None:
             execution.stop_reason = reason
+            if reason == OWNER_STOPPED:
+                execution.runs_finished_at_stop = finished(execution.job, "runs")
         # A case mid-launch either stamped itself submitted before this point --
         # and is stopped through the kill path, which can actually reach its
         # simulator -- or sees the flag and never launches. Reading the statuses
@@ -1980,16 +2008,11 @@ class ExperimentRunner(RunnerBase):
         # can be false is how a completed run gets read as one that never ran.
         launched = case.submitted_at is not None
         if execution.stop_reason == OWNER_STOPPED:
+            # The words a reader of the record writes when the process died
+            # (``stop_for_owner``), which cannot tell a launched case from one
+            # whose launch the record never caught.
             self._mark_case(
-                execution,
-                case,
-                "failed",
-                code=OWNER_STOPPED,
-                error=(
-                    "The server shut down while this case was running"
-                    if launched
-                    else "The server shut down before this case was submitted"
-                ),
+                execution, case, "failed", code=OWNER_STOPPED, error=OWNER_STOPPED_CASE_ERROR
             )
         elif execution.stop_reason == "job_deadline":
             self._mark_case(
@@ -2081,8 +2104,11 @@ class ExperimentRunner(RunnerBase):
                 analysis_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await analysis_task
-                job.analysis.status = "cancelled"
-                job.analysis.error = "Attached analysis cancelled"
+                if execution.stop_reason == OWNER_STOPPED:
+                    stop_analysis_for_owner(job)
+                else:
+                    job.analysis.status = "cancelled"
+                    job.analysis.error = "Attached analysis cancelled"
                 return True
             stop_wait.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -2224,7 +2250,7 @@ def _stop_bound(execution: _Execution, reason: StopReason) -> tuple[str, dict[st
         deadline = execution.request.job_deadline_s
         return f"the job deadline of {deadline:g}s elapsed", {"job_deadline_s": deadline}
     if reason == OWNER_STOPPED:
-        return "the server shut down", {}
+        return "the process running the job stopped", {}
     return "the job was cancelled", {}
 
 

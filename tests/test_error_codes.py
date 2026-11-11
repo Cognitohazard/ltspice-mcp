@@ -8,6 +8,7 @@ import errno
 import importlib
 import os
 import pkgutil
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -321,15 +322,40 @@ _CODE_FIRST_CONSTRUCTORS = frozenset(
 )
 
 
-def _string_literals(node: ast.AST) -> set[str]:
-    """Every string a value expression can evaluate to, where that is decidable."""
+def _string_literals(node: ast.AST, constants: Mapping[str, set[str]]) -> set[str]:
+    """Every string a value expression can evaluate to, where that is decidable:
+    a literal, or a module constant that holds one (``OWNER_STOPPED``)."""
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return {node.value}
+    if isinstance(node, ast.Name) and node.id.isupper():
+        return set(constants.get(node.id, ()))
     if isinstance(node, ast.IfExp):
-        return _string_literals(node.body) | _string_literals(node.orelse)
+        return _string_literals(node.body, constants) | _string_literals(node.orelse, constants)
     if isinstance(node, ast.BoolOp):
-        return set().union(*(_string_literals(value) for value in node.values))
+        return set().union(*(_string_literals(value, constants) for value in node.values))
     return set()
+
+
+def _string_constants(trees: list[ast.Module]) -> dict[str, set[str]]:
+    """The package's module-level constants that hold a string, by name: what
+    a code written as a named constant (``code=OWNER_STOPPED``) emits."""
+    found: dict[str, set[str]] = {}
+    for tree in trees:
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and len(node.targets) == 1:
+                target, value = node.targets[0], node.value
+            elif isinstance(node, ast.AnnAssign) and node.value is not None:
+                target, value = node.target, node.value
+            else:
+                continue
+            if (
+                isinstance(target, ast.Name)
+                and target.id.isupper()
+                and isinstance(value, ast.Constant)
+                and isinstance(value.value, str)
+            ):
+                found.setdefault(target.id, set()).add(value.value)
+    return found
 
 
 def _classifier_returns(tree: ast.AST) -> set[ast.Return]:
@@ -361,8 +387,12 @@ def _codes_in_sources() -> dict[str, set[str]]:
     """
     found: dict[str, set[str]] = {}
     package_dir = Path(ltspice_mcp.__file__).parent
-    for path in sorted(package_dir.rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"))
+    trees = {
+        path: ast.parse(path.read_text(encoding="utf-8"))
+        for path in sorted(package_dir.rglob("*.py"))
+    }
+    constants = _string_constants(list(trees.values()))
+    for path, tree in trees.items():
         classifier_returns = _classifier_returns(tree)
         for node in ast.walk(tree):
             values: set[str] = set()
@@ -374,27 +404,27 @@ def _codes_in_sources() -> dict[str, set[str]]:
                     if isinstance(key, ast.Constant) and (
                         key.value == "code" or str(key.value).endswith("_code")
                     ):
-                        values |= _string_literals(value)
+                        values |= _string_literals(value, constants)
             elif isinstance(node, ast.keyword) and node.arg == "code":
-                values |= _string_literals(node.value)
+                values |= _string_literals(node.value, constants)
             elif isinstance(node, ast.Assign):
                 for target in node.targets:
                     if isinstance(target, ast.Name) and (
                         target.id == "code" or target.id.endswith("_code")
                     ):
-                        values |= _string_literals(node.value)
+                        values |= _string_literals(node.value, constants)
             elif isinstance(node, ast.Call):
                 func = node.func
                 name = func.id if isinstance(func, ast.Name) else getattr(func, "attr", "")
                 if name in _CODE_FIRST_CONSTRUCTORS and node.args:
-                    values |= _string_literals(node.args[0])
+                    values |= _string_literals(node.args[0], constants)
             elif (
                 isinstance(node, ast.Return)
                 and node in classifier_returns
                 and isinstance(node.value, ast.Tuple)
                 and node.value.elts
             ):
-                values |= _string_literals(node.value.elts[0])
+                values |= _string_literals(node.value.elts[0], constants)
             for value in values:
                 found.setdefault(value, set()).add(str(path.relative_to(package_dir)))
     return found

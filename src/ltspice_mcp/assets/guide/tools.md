@@ -159,9 +159,11 @@ lint blocks a mismatch. A case that produced nothing is counted in
 - `jobs`: `{"action": "status", "request_id": "ldo-load-1"}` finds a job whose
   id you lost. A `wait` that returns `timed_out` ended only the wait; the job
   is still running. A receipt's `status` describes the job (`completed`,
-  `completed_with_failures`, `failed`, ...). Each run row's `status` describes
-  its case (`produced` when it ran; `failed`, `cancelled` or `skipped` when it
-  did not).
+  `completed_with_failures`, `failed`, ...): `cancelled` when a caller
+  cancelled it, `interrupted` when the process running it stopped (a crash, a
+  server shutdown or a closed `Api`) before its runs finished. Each run row's
+  `status` describes its case (`produced` when it ran; `failed`, `cancelled`
+  or `skipped` when it did not).
 - `analyze_results`: the default reply contains `results`, `coverage`,
   `observations` and `failures`; ask for more under `include` (`fields`,
   `per_run`, `outliers`, `signals_available`). Each failure row is one reason.

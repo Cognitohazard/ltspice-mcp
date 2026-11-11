@@ -465,20 +465,23 @@ class TestLiveJobs:
 
 
 class TestExperimentLifecycle:
-    def test_runtime_transition_cannot_enter_restart_only_interrupted(
+    def test_a_live_job_whose_process_stops_moves_to_interrupted(
         self,
         work_dir: Path,
     ):
+        """A shutdown ends a job it runs ``interrupted`` through its live job,
+        which frees its waiters; nothing moves it on from there."""
         circuit = work_dir / "deck.cir"
         circuit.write_text(".op\n.end\n")
         job = _job(work_dir, circuit)
         live = LiveJob(job)
 
-        with pytest.raises(InvalidTransitionError, match="no event mapping"):
-            live.transition("interrupted")
+        live.transition("interrupted")
 
-        assert job.status == "queued"
-        assert not live.done
+        assert job.status == "interrupted"
+        assert live.done and live.runs_done
+        with pytest.raises(InvalidTransitionError):
+            live.transition("cancelled")
 
     def test_analysis_stage_transitions_and_terminal_event(self, work_dir: Path):
         circuit = work_dir / "deck.cir"
@@ -587,7 +590,8 @@ class TestExperimentLifecycle:
         assert loaded.cases[0].failure_code == "server_restarted"
         assert [row["code"] for row in loaded.failures] == ["server_restarted"]
         # The message names the mechanism the caller can act on, not a door.
-        assert "owning process exited" in (loaded.cases[0].error or "")
+        assert "process running the job stopped" in (loaded.cases[0].error or "")
+        assert "server" not in (loaded.cases[0].error or "").lower()
 
     def test_restart_recovers_completed_analysis_write_gap(self, work_dir: Path):
         circuit = work_dir / "deck.cir"
@@ -627,12 +631,12 @@ class TestExperimentLifecycle:
 
         await registry.cancel_running(runners, None)
 
-        assert job.status == "cancelled"
+        assert job.status == "interrupted"
         # Stopped because this process went away, as a crash would leave them.
         assert job.completeness.failed == 2
         assert [case.failure_code for case in job.cases] == [OWNER_STOPPED, OWNER_STOPPED]
         assert job.completeness.terminal == job.completeness.expanded
-        assert job.analysis.status == "cancelled"
+        assert job.analysis.status == "failed"
         assert live.runs_done
         assert live.done
 
@@ -688,13 +692,13 @@ class TestExperimentLifecycle:
         await asyncio.wait_for(registry.cancel_running(runners, None), timeout=LIVENESS_S)
 
         assert len(entered) == 3
-        assert following.status == "cancelled"
+        assert following.status == "interrupted"
         assert registry.live[following.job_id].done
         # The DELEGATED jobs — the wedged ones. A cancel that never returned
         # reconciled nothing, so shutdown's own bookkeeping owes them a terminal
         # status; without it they persist as "running" under a dying pid.
         for job in live:
-            assert job.status == "cancelled", f"{job.job_id} left non-terminal by a hung cancel"
+            assert job.status == "interrupted", f"{job.job_id} left non-terminal by a hung cancel"
             assert registry.live[job.job_id].runs_done
             assert registry.live[job.job_id].done
             assert [case.failure_code for case in job.cases] == [OWNER_STOPPED]
@@ -708,8 +712,9 @@ class TestExperimentLifecycle:
         """The sidecar a wedged cancel leaves behind must not read ``running``.
 
         This process is exiting; a record still claiming ``running`` under a pid
-        that is about to disappear reloads as an interrupted job, mislabelling a
-        deliberate shutdown as a crash.
+        that is about to disappear is one only a later reader can finish, and
+        until one does, every reader of it waits on a job nothing runs. The
+        shutdown writes the status that reader would.
         """
 
         class HungRunner:
@@ -734,7 +739,7 @@ class TestExperimentLifecycle:
 
         reloaded = experiment_store.load_job(job.job_id, work_dir)
         assert reloaded is not None
-        assert reloaded.status == "cancelled"
+        assert reloaded.status == "interrupted"
         assert reloaded.failures and reloaded.failures[0]["code"] == OWNER_STOPPED
 
     @pytest.mark.asyncio
@@ -768,7 +773,7 @@ class TestExperimentLifecycle:
         await asyncio.wait_for(registry.cancel_running(runners, None), timeout=LIVENESS_S)
 
         assert in_progress_at_return == [3, 3, 3]
-        assert following.status == "cancelled"
+        assert following.status == "interrupted"
 
     @pytest.mark.asyncio
     async def test_shutdown_bounds_a_task_that_swallows_its_cancellation(
@@ -819,7 +824,7 @@ class TestExperimentLifecycle:
         assert set(swallowed) == {"first", "second"}
         for job in (first, second):
             reloaded = experiment_store.load_job(job.job_id, work_dir)
-            assert reloaded is not None and reloaded.status == "cancelled", "the flush never ran"
+            assert reloaded is not None and reloaded.status == "interrupted", "the flush never ran"
 
         release.set()
         await asyncio.gather(*tasks)
@@ -836,13 +841,15 @@ class TestExperimentLifecycle:
 
         await registry.cancel_running(runners, None)
 
-        assert following.status == "cancelled"
+        assert following.status == "interrupted"
         assert registry.live[following.job_id].done
         # A refused cancel is a cancel that did not happen: the DELEGATED job it
         # refused still needs shutdown's bookkeeping, not an exemption for having
         # been asked.
         for job in live:
-            assert job.status == "cancelled", f"{job.job_id} left non-terminal by a refused cancel"
+            assert job.status == "interrupted", (
+                f"{job.job_id} left non-terminal by a refused cancel"
+            )
             assert registry.live[job.job_id].done
 
 

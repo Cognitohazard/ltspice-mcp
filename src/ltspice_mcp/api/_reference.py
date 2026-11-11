@@ -327,7 +327,7 @@ def _operations() -> tuple[_Operation, ...]:
             note=(
                 "wait=True (the default) blocks until the complete receipt. "
                 "wait=False returns the submission receipt immediately, but the "
-                "job is owned by this process and is cancelled when it exits — "
+                "job is owned by this process and is interrupted when it exits — "
                 "Api.close(), the end of a 'with' block, or the interpreter "
                 "exiting. Add detach=True (only with wait=False) to hand the job "
                 "to a process spawned for it, which supervises it to the end and "

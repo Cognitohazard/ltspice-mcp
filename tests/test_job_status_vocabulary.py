@@ -92,24 +92,12 @@ _STATUS_SETS: dict[str, str] = {
     "lib/experiment_runner.py:ExperimentRunner._finish_unstarted_analysis": (
         "analysis statuses: the type of an analysis that never started"
     ),
-    "lib/experiment_store.py:_reconcile_restart": "analysis statuses: an analysis that failed",
     "lib/native_execution.py:prepare_native_cases": (
         "case statuses: a case that ended with no output"
     ),
     "lib/observability.py:<module>": "job event names, a vocabulary of their own (JobEvent)",
     "tools/receipts.py:<module>": "the completeness counters a receipt's schema requires",
     "tools/receipts.py:_recovery_routes": "analysis statuses: an analysis that failed",
-    # Known exceptions: job statuses written out again, left for a source fix.
-    "lib/experiment_runner.py:ExperimentRunner._run_job": (
-        "known exception: whether a cancelled stop may still move the job to "
-        "'cancelled', written as {'cancelled', 'failed'}; the job's transitions "
-        "(lib/job_lifecycle.py) refuse a move from every terminal status, "
-        "'interrupted' and both completed ones included"
-    ),
-    "lib/observability.py:emit_job_event": (
-        "known exception: the events that end a job, written as four of the "
-        "terminal statuses rather than read from TERMINAL_STATUSES"
-    ),
 }
 
 
