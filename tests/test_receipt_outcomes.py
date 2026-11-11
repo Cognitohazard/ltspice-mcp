@@ -125,3 +125,30 @@ def test_samples_recorded_without_a_digest_are_said_to_be_uncompared(state_no_si
     (observation,) = [o for o in observations if o["code"] == "samples_not_compared"]
     assert observation["evidence"]["count"] == 3
     assert not any(o["code"] == "identical_samples" for o in observations)
+
+
+@pytest.mark.parametrize(
+    ("status", "third"),
+    [("running", "running"), ("completed", "failed")],
+    ids=["running", "failed"],
+)
+def test_all_samples_is_said_only_of_samples_that_all_ran(
+    state_no_sim: SessionState, status: str, third: str
+):
+    """Two samples that computed the same numbers are reported, but not as
+    "All samples" while a third is still running, or after it failed: nothing
+    says what it would have computed."""
+    job = make_experiment_job(state_no_sim, job_id=f"exp_partial_{third}", count=3, status=status)
+    for index, case in enumerate(job.cases):
+        case.assignments = {"_random_run": index}
+        case.status = "produced"
+        case.result_digest = "same"
+    job.cases[2].status = "running" if third == "running" else "failed"
+    job.cases[2].result_digest = None
+
+    observations = snapshot_receipt(job, state_no_sim).observations
+
+    (observation,) = [o for o in observations if o["code"] == "identical_samples"]
+    assert not observation["detail"].startswith("All samples")
+    assert ("so far" in observation["detail"]) is (status == "running")
+    assert observation["evidence"]["groups"] == [{"circuit": "dut", "samples": 2, "results": 1}]

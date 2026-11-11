@@ -1179,14 +1179,18 @@ def read_partial_raw_progress(path: Path, dialect: str | None = None) -> Partial
 
 
 def result_digest(path: Path, dialect: str | None = None) -> str | None:
-    """A digest of what a raw file computed: each plot's name, variables and
-    data, and nothing of its headers' other lines.
+    """A digest of what a finished raw file computed: each plot's name,
+    variables and points, and nothing else of its headers.
 
     Two runs whose results are the same numbers digest the same, though each
     header carries the date it was written (one per plot in an ngspice file)
-    and LTspice's names the build. Plots are found as
-    ``read_partial_raw_progress`` finds them. None when the file is not a
-    complete raw this reader can walk.
+    and the deck's path. A complex axis keeps its real part only: ngspice-42
+    writes the imaginary part of an AC frequency from memory it never set, so
+    two runs of one deck differ there (recorded:
+    ``tests/fixtures/ngspice_ac_rerun``). None when the file is not a raw
+    this reader can walk to its end: a plot whose point count was never
+    written (ngspice writes it when the plot ends), one cut short, bytes after
+    the last plot that start no plot, or an ASCII plot in a UTF-16 file.
     """
     digest = hashlib.sha256()
     try:
@@ -1203,28 +1207,111 @@ def result_digest(path: Path, dialect: str | None = None) -> str | None:
             offset = 0
             while True:
                 header = _read_plot_header(handle, offset, width)
-                if header.data_start is None:
+                points = _int_field(header.fields, "no. points")
+                n_vars = _int_field(header.fields, "no. variables") or len(header.variables)
+                if header.data_start is None or points < 1 or n_vars < 1:
                     return None
                 digest.update(
                     "\0".join((header.fields.get("plotname", ""), *header.variables, "")).encode(
                         "utf-8", errors="surrogatepass"
                     )
                 )
-                following = _progress_of_plot(handle, header, offset, size, width, dialect)
-                end = following if isinstance(following, int) else size
-                handle.seek(header.data_start)
-                remaining = end - header.data_start
-                while remaining > 0:
-                    chunk = handle.read(min(remaining, 1 << 20))
-                    if not chunk:
-                        return None
-                    digest.update(chunk)
-                    remaining -= len(chunk)
-                if not isinstance(following, int):
+                if header.data_kind == "values":
+                    end = _digest_ascii_points(handle, header, width, points, n_vars, digest)
+                else:
+                    end = _digest_binary_points(handle, header, width, dialect, points, digest)
+                if end is None:
+                    return None
+                end = _next_plot(handle, end, size, width)
+                if end is None:
+                    return None
+                if end >= size:
                     return digest.hexdigest()
-                offset = following
+                offset = end
     except OSError:
         return None
+
+
+def _digest_binary_points(
+    handle: Any,
+    header: _PlotHeader,
+    width: int,
+    dialect: str | None,
+    points: int,
+    digest: Any,
+) -> int | None:
+    """Feed a ``Binary:`` plot's points to ``digest``; where its data ends, or
+    None when the file holds fewer than the header declares."""
+    assert header.data_start is not None
+    record, axis_size, complex_values = _binary_layout(header, width, dialect)
+    imaginary_axis = complex_values and axis_size == 16
+    fast = "fastaccess" in header.fields.get("flags", "").lower().split()
+    handle.seek(header.data_start)
+    if fast:
+        axis = handle.read(points * axis_size)
+        if len(axis) != points * axis_size:
+            return None
+        if imaginary_axis:
+            axis = np.frombuffer(axis, dtype=np.uint8).reshape(points, 16)[:, :8].tobytes()
+        digest.update(axis)
+        remaining = points * (record - axis_size)
+        while remaining > 0:
+            chunk = handle.read(min(remaining, 1 << 20))
+            if not chunk:
+                return None
+            digest.update(chunk)
+            remaining -= len(chunk)
+        return header.data_start + points * record
+    per_chunk = max(1, (1 << 20) // record)
+    left = points
+    while left > 0:
+        count = min(left, per_chunk)
+        chunk = handle.read(count * record)
+        if len(chunk) != count * record:
+            return None
+        if imaginary_axis:
+            rows = np.frombuffer(chunk, dtype=np.uint8).reshape(count, record)
+            chunk = np.concatenate((rows[:, :8], rows[:, 16:]), axis=1).tobytes()
+        digest.update(chunk)
+        left -= count
+    return header.data_start + points * record
+
+
+def _digest_ascii_points(
+    handle: Any, header: _PlotHeader, width: int, points: int, n_vars: int, digest: Any
+) -> int | None:
+    """Feed a ``Values:`` plot's points to ``digest``, a complex axis by its
+    real part; where its data ends, or None when it ends early."""
+    if width != 1 or header.data_start is None:
+        return None
+    handle.seek(header.data_start)
+    for _ in range(points):
+        line = handle.readline()
+        index, tab, axis = line.partition(b"\t")
+        if not tab or not index.strip() or not line.endswith(b"\n"):
+            return None
+        digest.update(axis.split(b",", 1)[0].strip() + b"\n")
+        for _ in range(n_vars - 1):
+            line = handle.readline()
+            if not line.strip() or not line.endswith(b"\n"):
+                return None
+            digest.update(line.strip() + b"\n")
+    return handle.tell()
+
+
+def _next_plot(handle: Any, end: int, size: int, width: int) -> int | None:
+    """Where the plot after one ending at ``end`` starts, past blank lines, or
+    ``size`` at the end of the file; None for bytes that start no plot."""
+    handle.seek(end)
+    while end < size:
+        if _plot_starts_at(handle, end, width):
+            return end
+        handle.seek(end)
+        unit = handle.read(width)
+        if unit not in (b"\n", b"\r", b"\n\x00", b"\r\x00", b" ", b" \x00", b"\x00"):
+            return None
+        end += width
+    return size
 
 
 def points_reached(points: int | None, axis: str | None, last_axis_value: float | None) -> str:
@@ -1318,6 +1405,28 @@ def _raw_writer(fields: dict[str, str], width: int, dialect: str | None) -> str:
     return dialect or "ngspice"
 
 
+def _binary_layout(header: _PlotHeader, width: int, dialect: str | None) -> tuple[int, int, bool]:
+    """A ``Binary:`` plot's record size, its axis's size and whether its values
+    are complex, as spicelib's ``PlotData`` lays a record out: every value a
+    double except LTspice, which stores 4-byte floats unless the header flags
+    ``double`` and keeps the axis a double, and writes the whole AC record,
+    axis included, as complex."""
+    fields = header.fields
+    flags = fields.get("flags", "").lower().split()
+    analysis = plot_analysis(fields.get("plotname") or "", header.first_type)
+    writer = _raw_writer(fields, width, dialect)
+    complex_values = "complex" in flags or analysis == "ac"
+    if complex_values:
+        value_size = 16
+    elif writer != "ltspice" or "double" in flags:
+        value_size = 8
+    else:
+        value_size = 4
+    axis_size = 8 if value_size == 4 or (complex_values and writer == "qspice") else value_size
+    n_vars = _int_field(fields, "no. variables") or len(header.variables)
+    return axis_size + (n_vars - 1) * value_size, axis_size, complex_values
+
+
 def _progress_of_plot(
     handle: Any,
     header: _PlotHeader,
@@ -1370,15 +1479,7 @@ def _progress_of_plot(
         return progress(*_ascii_last_point(handle, header.data_start, size, width, n_vars))
 
     writer = _raw_writer(fields, width, dialect)
-    complex_values = "complex" in flags or analysis == "ac"
-    if complex_values:
-        value_size = 16
-    elif writer != "ltspice" or "double" in flags:
-        value_size = 8
-    else:
-        value_size = 4
-    axis_size = 8 if value_size == 4 or (complex_values and writer == "qspice") else value_size
-    record = axis_size + (n_vars - 1) * value_size
+    record, axis_size, _complex = _binary_layout(header, width, dialect)
     on_disk = (size - header.data_start) // record
     if 0 < declared < on_disk:
         following = header.data_start + declared * record

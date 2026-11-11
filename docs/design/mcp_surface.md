@@ -2265,18 +2265,21 @@ expand (an include that cannot be staged) records no assignments on its
 cases; their failure says why.
 
 The receipt compares the samples of a `random` or `pdk_native` entry by what
-they computed. Each produced case keeps a digest of its raw's plots, their
-variables and data and none of their headers' dates, and samples of one
-circuit, at any `assign` values, that share a digest are listed in an
-`identical_samples` observation (`kind: "sampling"`), with each group's
-`circuit`, `samples` (sample indices, which the runs page maps to cases) and
-`count` in its `evidence`; its detail
-leads with "All samples of …" where a group holds every sample of a circuit.
-Such samples drew different values that changed nothing the simulator saved.
-A produced sample with no digest (recorded before samples were compared, or a
-raw this reader cannot walk) is counted in a `samples_not_compared`
+they computed, one `assign` point at a time. Each produced sample keeps a
+digest of its raw: every plot's variables and points, a complex axis by its
+real part, and nothing else of its headers. At a point where samples share a
+digest, an `identical_samples` observation (`kind: "sampling"`) lists the
+point in its `evidence.groups` as `circuit`, `assigned` (that point's `assign`
+values, left out when the entry has none), `samples` (how many were compared)
+and `results` (how many of them differ). Such samples drew different values
+that changed nothing the simulator saved there. Where every sample of every
+point of a circuit ran and each point computed one result, the detail leads
+with "All samples of …" and the circuit is one group with its `points`; on a
+job still running the detail says "so far". A produced sample with no digest
+(recorded before samples were compared, or a raw the reader cannot walk to its
+end) at a point with other samples is counted in a `samples_not_compared`
 observation. Neither observation appears when every sample was compared and
-none matched another.
+none matched another at its point.
 
 ### A.2 Recipe
 

@@ -1053,4 +1053,41 @@ async def test_samples_are_compared_by_what_ngspice_computed(
 
     assert not any(o["code"] in {"identical_samples", "samples_not_compared"} for o in differing)
     (observation,) = [o for o in unmoved if o["code"] == "identical_samples"]
-    assert observation["evidence"]["groups"][0]["samples"] == [0, 1, 2]
+    assert observation["evidence"]["groups"] == [{"circuit": "dut", "samples": 3, "results": 1}]
+
+
+async def test_samples_are_compared_one_assign_point_at_a_time(
+    ngspice_state: SessionState, work_dir: Path
+):
+    """At vin = 0 no resistor draw moves the divider's output, so the three
+    samples there compute the same numbers, while at vin = 1 they differ. The
+    receipt names that point and does not say the draws changed nothing."""
+    netlist = _write(
+        work_dir,
+        "corners.cir",
+        "* divider\nV1 in 0 {vin}\n.param vin=1\nR1 in out 1k\nR2 out 0 1k\n.op\n.end\n",
+    )
+    receipt = await terminal_experiment(
+        ngspice_state,
+        {
+            "request_id": "corners",
+            "circuits": [{"path": netlist, "id": "dut"}],
+            "variations": [
+                {"kind": "assign", "assign": {"vin": ["0", "1"]}},
+                {
+                    "kind": "random",
+                    "runs": 3,
+                    "seed": 4,
+                    "rules": [{"rule": "component", "target": "R2", "tolerance": 0.1}],
+                },
+            ],
+            "execution": {"wait_s": 90, "simulator": "ngspice"},
+        },
+    )
+    assert receipt["status"] == "completed", receipt
+
+    (observation,) = [o for o in receipt["observations"] if o["code"] == "identical_samples"]
+    assert not observation["detail"].startswith("All samples")
+    (group,) = observation["evidence"]["groups"]
+    assert group["samples"] == 3 and group["results"] == 1
+    assert group["assigned"] == {"vin": "0"}

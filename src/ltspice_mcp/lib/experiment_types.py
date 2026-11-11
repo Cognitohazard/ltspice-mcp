@@ -98,15 +98,26 @@ class ExperimentCase:
     #: and for a run whose output named none.
     simulator_version: str | None = None
     recovery: CaseRecovery | None = None
-    #: What the case's raw computed (``raw_parser.result_digest``): two
-    #: samples with one digest computed the same numbers. None until the case
-    #: produced its raw, and for a raw that cannot be walked.
+    #: What a sample's raw computed (``raw_parser.result_digest``): two
+    #: samples with one digest computed the same numbers. None until a sample
+    #: produced its raw, for a raw that cannot be walked, and for a case that
+    #: is no sample (``sample_index``).
     result_digest: str | None = None
+    #: The values the case's ``assign`` entries gave it, without the draws a
+    #: ``random`` or ``pdk_native`` entry added to ``assignments``: the corner
+    #: a sample was drawn at.
+    assigned: dict[str, Any] = field(default_factory=dict)
 
 
-def case_dialect(job: ExperimentJob, case: ExperimentCase) -> str | None:
-    """The dialect of the simulator that ran ``case``: its circuit's source's."""
-    return next((source.dialect for source in job.sources if source.circuit == case.circuit), None)
+def sample_index(case: ExperimentCase) -> int | None:
+    """Which sample of a ``random`` or ``pdk_native`` entry ``case`` is, or
+    None for a case that is no sample."""
+    index = case.assignments.get("_random_run")
+    if isinstance(index, int) and not isinstance(index, bool):
+        return index
+    if case.native_statistics is not None:
+        return case.native_statistics.request.sample_index
+    return None
 
 
 #: The key under which a stopped case's failure evidence says what the raw it

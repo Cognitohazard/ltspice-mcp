@@ -1350,3 +1350,48 @@ class TestResultDigest:
         path = tmp_path / "not.raw"
         path.write_bytes(b"not a raw file\n")
         assert result_digest(path) is None
+
+    @pytest.mark.parametrize("variant", ["", "_ascii"], ids=["binary", "ascii"])
+    def test_two_ngspice_ac_runs_of_one_deck_digest_the_same(self, variant: str):
+        """ngspice-42 writes the imaginary part of an AC frequency from memory
+        it never set, so two runs of one deck differ there (recorded pair); the
+        digest reads a complex axis by its real part."""
+        from ltspice_mcp.lib.raw_parser import result_digest
+
+        first, second = (
+            FIXTURES_DIR / "ngspice_ac_rerun" / f"{run}{variant}.raw" for run in ("a", "b")
+        )
+        assert first.read_bytes() != second.read_bytes()
+        digest = result_digest(first, "ngspice")
+        assert digest is not None
+        assert result_digest(second, "ngspice") == digest
+
+    def test_a_deck_path_in_the_title_is_not_digested(self, tmp_path: Path):
+        """LTspice titles a raw with the path of the deck it ran, which is each
+        case's own."""
+        from ltspice_mcp.lib.raw_parser import result_digest
+
+        data = (FIXTURES_DIR / "ltspice_tran_rc.raw").read_bytes()
+        line_end = data.index("\n".encode("utf-16-le"))
+        retitled = "\ufeffTitle: * C:\\runs\\case-0042.net".encode("utf-16-le")[2:]
+        assert data.startswith(b"\xff\xfe") or data.startswith(retitled[:10])
+        start = 2 if data.startswith(b"\xff\xfe") else 0
+        (tmp_path / "a.raw").write_bytes(data)
+        (tmp_path / "b.raw").write_bytes(data[:start] + retitled + data[line_end:])
+
+        assert result_digest(tmp_path / "a.raw", "ltspice") == result_digest(
+            tmp_path / "b.raw", "ltspice"
+        )
+
+    @pytest.mark.parametrize(
+        "fixture", ["ltspice_tran_rc.raw", "ngspice_noise_2plot.raw", "ngspice_ac_rerun/a.raw"]
+    )
+    def test_a_raw_cut_short_has_no_digest(self, tmp_path: Path, fixture: str):
+        """A file holding fewer points than its header declares, as a run
+        stopped mid-write leaves, computed nothing to compare."""
+        from ltspice_mcp.lib.raw_parser import result_digest
+
+        data = (FIXTURES_DIR / fixture).read_bytes()
+        path = tmp_path / "cut.raw"
+        path.write_bytes(data[: len(data) - 7])
+        assert result_digest(path) is None

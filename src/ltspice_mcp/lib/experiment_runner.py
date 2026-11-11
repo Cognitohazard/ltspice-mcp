@@ -40,8 +40,8 @@ from ltspice_mcp.lib.experiment_types import (
     ExperimentJob,
     OwnerStopped,
     SourceRecord,
-    case_dialect,
     failure_row,
+    sample_index,
 )
 from ltspice_mcp.lib.filelock import async_file_lock, file_lock
 from ltspice_mcp.lib.job_lifecycle import (
@@ -1545,9 +1545,15 @@ class ExperimentRunner(RunnerBase):
                 await self._stop_active_case(execution, case, future, stop_reason)
             elif outcome is not None:
                 self._apply_outcome(case, outcome)
-                if outcome.error is None and case.raw_file is not None:
+                if (
+                    outcome.error is None
+                    and case.raw_file is not None
+                    and sample_index(case) is not None
+                ):
                     case.result_digest = await asyncio.to_thread(
-                        result_digest, case.raw_file, case_dialect(execution.job, case)
+                        result_digest,
+                        case.raw_file,
+                        dialect_for_simulator_name(execution.job.simulator),
                     )
                 if outcome.error is None:
                     if execution.job.recovery is not None:

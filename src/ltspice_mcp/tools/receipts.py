@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import copy
 import functools
+import json
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any, Literal, get_args
@@ -34,6 +35,7 @@ from ltspice_mcp.lib.experiment_types import (
     ExperimentStatus,
     ManifestEntry,
     SourceRecord,
+    sample_index,
 )
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
@@ -558,98 +560,95 @@ async def render_run_receipt(
     return result
 
 
-def _sample_index(case: ExperimentCase) -> int | None:
-    """Which sample of a random or native entry ``case`` is, or None for a
-    case that is no sample."""
-    index = case.assignments.get("_random_run")
-    if isinstance(index, int) and not isinstance(index, bool):
-        return index
-    if case.native_statistics is not None:
-        return case.native_statistics.request.sample_index
-    return None
-
-
-def _sample_observations(cases: Sequence[ExperimentCase]) -> list[dict[str, Any]]:
+def _sample_observations(
+    cases: Sequence[ExperimentCase], *, finished: bool
+) -> list[dict[str, Any]]:
     """Whether a job's samples computed different numbers, where they did not.
 
     Each produced sample's raw carries a digest of what it computed
-    (``raw_parser.result_digest``). Two samples of one circuit with one digest
-    computed the same saved results, so their draws changed nothing the
-    simulator wrote: a rule that reaches nothing the deck saves, or a PDK whose
-    statistical models never switched on. Samples are compared across every
-    case of their circuit, ``assign`` values included, since different draws
-    that compute identical numbers at different points say the same. A
-    produced sample with no digest is said to be uncompared.
+    (``raw_parser.result_digest``). Samples are compared at one ``assign``
+    corner at a time (``ExperimentCase.assigned``): at a corner where the
+    draws cannot move what the deck saves (a supply of 0 V) every sample
+    computes the same numbers while other corners differ. Samples of one
+    corner with one digest drew different values that changed nothing the
+    simulator saved. "All samples" means every sample of every corner was
+    produced and each corner computed one result. A produced sample with no
+    digest, at a corner with others to compare it with, is counted as not
+    compared.
     """
-    samples = [
-        (case, index)
-        for case in cases
-        if case.status == "produced" and (index := _sample_index(case)) is not None
-    ]
-    observations: list[dict[str, Any]] = []
-    by_result: dict[tuple[str, str], list[tuple[str, int]]] = {}
-    indices: dict[str, set[int]] = {}
-    for case, index in samples:
-        indices.setdefault(case.circuit, set()).add(index)
-        if case.result_digest is not None:
-            by_result.setdefault((case.circuit, case.result_digest), []).append(
-                (case.case_id, index)
-            )
-    groups = [
-        (circuit, sorted(members))
-        for (circuit, _digest), members in sorted(by_result.items())
-        if len({index for _, index in members}) > 1
-    ]
-    if groups:
-        whole = sorted(
-            {
-                circuit
-                for circuit, members in groups
-                if {index for _, index in members} == indices[circuit]
-            }
+    corners: dict[tuple[str, str], tuple[dict[str, Any], list[ExperimentCase]]] = {}
+    for case in cases:
+        if sample_index(case) is None:
+            continue
+        key = (case.circuit, json.dumps(case.assigned, sort_keys=True, default=str))
+        corners.setdefault(key, (case.assigned, []))[1].append(case)
+    rows: dict[str, list[dict[str, Any]]] = {}
+    whole: dict[str, bool] = {}
+    unread = 0
+    for (circuit, _), (assigned, members) in sorted(corners.items()):
+        produced = [case for case in members if case.status == "produced"]
+        digests = [case.result_digest for case in produced if case.result_digest is not None]
+        if len(members) > 1:
+            unread += len(produced) - len(digests)
+        results = len(set(digests))
+        whole[circuit] = whole.get(circuit, True) and (
+            len(digests) == len(members) > 1 and results == 1
         )
+        if results < len(digests):
+            rows.setdefault(circuit, []).append(
+                {
+                    "circuit": circuit,
+                    **({"assigned": assigned} if assigned else {}),
+                    "samples": len(digests),
+                    "results": results,
+                }
+            )
+    observations: list[dict[str, Any]] = []
+    if rows:
+        every = sorted(circuit for circuit in rows if whole[circuit])
+        groups = [
+            {
+                "circuit": circuit,
+                "points": len(found),
+                "samples": found[0]["samples"],
+                "results": 1,
+            }
+            if circuit in every and len(found) > 1
+            else row
+            for circuit, found in sorted(rows.items())
+            for row in (found[:1] if circuit in every else found)
+        ]
+        so_far = "" if finished else " so far"
         detail = (
-            f"All samples of {', '.join(whole)} computed the same results, so the draws "
-            "changed nothing the simulator saved: check that the rules reach a part the "
-            "deck saves, or that the PDK's statistical models are switched on."
-            if whole
-            else f"{len(groups)} group{'s' if len(groups) != 1 else ''} of samples computed "
-            "the same results as each other, so their draws changed nothing the simulator "
-            "saved there."
+            f"All samples of {', '.join(every)} computed the same results{so_far}, at every "
+            "assign point, so the draws changed nothing the simulator saved: check that "
+            "the rules reach a part the deck saves, or that the PDK's statistical models "
+            "are switched on."
+            if every
+            else "At the assign points listed, samples computed the same results as each "
+            f"other{so_far} ('results' of 'samples' differ), so their draws changed nothing "
+            "the simulator saved there."
         )
         observations.append(
             {
                 "code": "identical_samples",
                 "kind": "sampling",
                 "detail": detail,
-                # A group names its samples, not its cases: the runs page names
-                # each case's sample index, and a list of every case id would
-                # repeat that page, or cut it short with no route to the rest.
-                "evidence": {
-                    "groups": [
-                        {
-                            "circuit": circuit,
-                            "samples": sorted({index for _, index in members}),
-                            "count": len(members),
-                        }
-                        for circuit, members in groups
-                    ]
-                },
+                "evidence": {"groups": groups},
             }
         )
-    unread = [case.case_id for case, _ in samples if case.result_digest is None]
     if unread:
         observations.append(
             {
                 "code": "samples_not_compared",
                 "kind": "sampling",
                 "detail": (
-                    f"{len(unread)} produced sample{'s' if len(unread) != 1 else ''} carry no "
-                    "digest of what they computed (a job recorded before samples were "
-                    "compared, or a raw this reader cannot walk), so whether they differ "
-                    "from the others was not checked."
+                    f"{unread} produced sample{'s carry' if unread != 1 else ' carries'} no "
+                    "digest of what it computed (a job recorded before samples were "
+                    "compared, or a raw this reader cannot walk to its end), so whether it "
+                    "differs from the other samples at its assign point was not checked."
                 ),
-                "evidence": {"count": len(unread)},
+                "evidence": {"count": unread},
             }
         )
     return observations
@@ -1172,7 +1171,7 @@ def snapshot_receipt(
     )
     if sheets and run_by_ltspice(job.simulator):
         observations.append(_results_in_the_job_folder(job.job_id, sheets))
-    observations.extend(_sample_observations(job.cases))
+    observations.extend(_sample_observations(job.cases, finished=job.status in TERMINAL_STATUSES))
 
     analysis = job.analysis
     return ReceiptSnapshot(
