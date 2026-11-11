@@ -94,7 +94,7 @@ from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
 from ltspice_mcp.lib.format import is_scaled_number, parse_spice_value
 from ltspice_mcp.lib.geometry import BBox
 from ltspice_mcp.lib.models import StrictModel
-from ltspice_mcp.lib.nets import PinAt
+from ltspice_mcp.lib.nets import Member, PinAt, net_change
 from ltspice_mcp.lib.pin_legend import pin_ties
 from ltspice_mcp.lib.plot_settings import (
     SECTION_NAMES,
@@ -864,6 +864,7 @@ def sheet_nets(
     extra_segments: Sequence[tuple[int, int, int, int]] = (),
     without: str | None = None,
     geometry: Iterable[dict] | None = None,
+    wires: Sequence[tuple[int, int, int, int]] | None = None,
 ) -> NamedNets:
     """The sheet's nets as LTspice netlists them (``connectivity.named_nets``).
 
@@ -876,7 +877,9 @@ def sheet_nets(
     segments (e.g. the route ``wire_pins`` is about to add) so checks operate
     on the post-route net layout. ``without`` leaves one part's pins out: the
     sheet as it is apart from a part about to be placed or moved.
-    ``geometry`` is the parts' geometry when the caller already holds it.
+    ``geometry`` is the parts' geometry when the caller already holds it, and
+    ``wires`` the wires to read in place of the sheet's, for the sheet as an
+    op would leave it before the op changes it.
     """
     parts = [
         (entry["ref"], [(pin["name"], (pin["x"], pin["y"])) for pin in entry["pins"]])
@@ -884,7 +887,7 @@ def sheet_nets(
         if entry["ref"] != without
     ]
     labels = [((int(lbl.coord.X), int(lbl.coord.Y)), lbl.text) for lbl in editor.labels]
-    segments = [*wire_segments_of(editor), *extra_segments]
+    segments = [*(wire_segments_of(editor) if wires is None else wires), *extra_segments]
     return named_nets(parts, labels, [((x1, y1), (x2, y2)) for x1, y1, x2, y2 in segments])
 
 
@@ -1596,6 +1599,13 @@ def _apply_move(editor: AscEditor, op: "OpMove") -> dict[str, object]:
                 "shorting them together. Move it clear of the other net's wiring, or "
                 "rename one side if they are meant to be one net."
             )
+    if op.drag:
+        # Dragging promises that what is joined to what moves stays joined.
+        # A net the move would divide breaks it: something that stays was
+        # joined to something that goes.
+        before = before or sheet_nets(editor, geometry=geometry.values())
+        if split := net_change(before.nets, after.nets).split:
+            raise NetlistError(_drag_split_refusal(split[0], plan, op, geometry))
 
     for ref in plan.parts:
         position, rotation = editor.get_component_position(ref)
@@ -1618,9 +1628,57 @@ def _apply_move(editor: AscEditor, op: "OpMove") -> dict[str, object]:
     }
 
 
+def _drag_split_refusal(
+    pieces: Sequence[Sequence[Member]], plan: _MovePlan, op: "OpMove", geometry: dict[str, dict]
+) -> str:
+    """Why a move with ``drag`` that would divide one net into ``pieces`` is
+    refused, naming what would no longer be joined, the parts that stay, and
+    how to move them too."""
+    moved = set(plan.parts)
+    staying = sorted(
+        {m.reference for piece in pieces for m in piece if isinstance(m, PinAt)} - moved
+    )
+    divided = _divided_text(
+        pieces, stays=lambda member: isinstance(member, PinAt) and member.reference in staying
+    )
+    named = " and ".join(staying)
+    them = "it" if len(staying) == 1 else "them"
+    region = op.region
+    crossing = [
+        ref
+        for ref in staying
+        if region is not None
+        and any(
+            region.holds((pin["x"], pin["y"])) for pin in geometry.get(ref, {}).get("pins", ())
+        )
+    ]
+    if crossing:
+        listed = " and ".join(crossing)
+        why = (
+            f" {listed} {'is' if len(crossing) == 1 else 'are'} not taken: part of "
+            f"{'its' if len(crossing) == 1 else 'their'} box lies outside the region, though "
+            "a pin lies inside it."
+        )
+        fix = (
+            f"Widen the region to hold all of {listed}, or name "
+            f"{'it' if len(crossing) == 1 else 'them'} in references"
+        )
+    elif staying:
+        why = f" {named} {'stays' if len(staying) == 1 else 'stay'}, and a drag takes along only wires and labels."
+        fix = f"Name {them} in references to move {them} too"
+    else:
+        why = ""
+        fix = "Select what is joined to what moves as well"
+    return (
+        f"Refused to move: with drag, what is joined to what moves stays joined, but this "
+        f"move would {divided}.{why} {fix}, or move without drag to leave the wiring "
+        "where it is."
+    )
+
+
 def _drop_wires_at(editor: AscEditor, coords: set[tuple[int, int]]) -> int:
     """Remove every wire with an endpoint in ``coords``; return how many were
-    dropped. Shared by remove_component's wire cleanup and the remove_wire op."""
+    dropped: ``remove_wire``'s point form, which asks for exactly that."""
     if not coords:
         return 0
     kept = [
@@ -1631,6 +1689,70 @@ def _drop_wires_at(editor: AscEditor, coords: set[tuple[int, int]]) -> int:
     dropped = len(editor.wires) - len(kept)
     editor.wires = kept
     return dropped
+
+
+def _drop_dangling_wires_at(editor: AscEditor, points: set[tuple[int, int]]) -> int:
+    """Remove the wires a removed part left dangling at ``points``, its pins;
+    return how many went.
+
+    A wire with an end on one of the points is left dangling when taking it
+    away parts nothing from anything by wire (``nets.net_change``): its other
+    end and what lies along it reach no pin or label that something else does
+    not join them to. Two wires that met at the pin still meet each other
+    there, so they stay, as does a wire with pins along it. Called with the
+    part already removed, one wire at a time, so wires that were joined only
+    to each other go together.
+    """
+    geometry = collect_component_geometry(editor)
+    kept = list(editor.wires)
+    for wire in list(kept):
+        if _xy(wire.V1) not in points and _xy(wire.V2) not in points:
+            continue
+        without = [w for w in kept if w is not wire]
+        change = net_change(
+            sheet_nets(editor, geometry=geometry, wires=_segments(kept)).nets,
+            sheet_nets(editor, geometry=geometry, wires=_segments(without)).nets,
+            folded=False,
+        )
+        if not change.split:
+            kept = without
+    dropped = len(editor.wires) - len(kept)
+    editor.wires = kept
+    return dropped
+
+
+def _segments(wires: Iterable[Any]) -> list[tuple[int, int, int, int]]:
+    """``wires`` as flat ``(x1, y1, x2, y2)`` integer tuples."""
+    return [(int(w.V1.X), int(w.V1.Y), int(w.V2.X), int(w.V2.Y)) for w in wires]
+
+
+def _members_text(members: Iterable[Member], shown: int = 3) -> str:
+    """Pins and labels as a reader names them: ``REF.PIN`` and ``label 'x'``."""
+    names = [
+        member.qualified_name if isinstance(member, PinAt) else f"label '{member.text}'"
+        for member in members
+    ]
+    more = len(names) - shown
+    return ", ".join(names[:shown]) + (f" and {more} more" if more > 0 else "")
+
+
+def _divided_text(
+    pieces: Sequence[Sequence[Member]], stays: Callable[[Member], bool] = lambda _member: False
+) -> str:
+    """What dividing one net into ``pieces`` does, as a reader says it: the
+    piece that holds what ``stays`` picks out, else the smaller, is the one
+    cut off."""
+    if len(pieces) == 2:
+        apart, rest = sorted(pieces, key=lambda piece: (not any(map(stays, piece)), len(piece)))
+        return f"cut {_members_text(apart)} off from {_members_text(rest)}"
+    return f"divide one net into {len(pieces)}: " + "; ".join(
+        _members_text(piece) for piece in pieces
+    )
+
+
+def _joined_text_of(groups: Sequence[Sequence[Member]]) -> str:
+    """What joining the nets ``groups`` into one does, as a reader says it."""
+    return "join " + " with ".join(_members_text(group) for group in groups)
 
 
 def _pins_on_crossings(
@@ -1843,7 +1965,7 @@ class _ConnectPlan(NamedTuple):
 
 def wire_segments_of(editor: AscEditor) -> list[tuple[int, int, int, int]]:
     """Every wire as a flat ``(x1, y1, x2, y2)`` integer tuple."""
-    return [(int(w.V1.X), int(w.V1.Y), int(w.V2.X), int(w.V2.Y)) for w in editor.wires]
+    return _segments(editor.wires)
 
 
 def wires_of_one_net(
@@ -2184,8 +2306,8 @@ class OpRemoveComponent(StrictModel):
     cleanup_wires: bool = Field(
         default=False,
         description=(
-            "Also delete wires left dangling at the removed component's pins; a "
-            "later add_component does not restore them, and there is no undo."
+            "Also delete wires left dangling at the removed component's pins: those "
+            "joining nothing else once it is gone. There is no undo."
         ),
     )
 
@@ -2253,7 +2375,7 @@ class OpMove(StrictModel):
     )
     region: SheetRegion | None = Field(
         default=None,
-        description="Also what lies inside: a part's box, a wire's ends, a label, a text's anchor.",
+        description="Also what lies inside: a part's whole box, a wire's ends, a label, a text's anchor.",
     )
     drag: bool = Field(
         default=False,
@@ -2582,23 +2704,22 @@ def _pin_pairs(
     return pairs
 
 
-def _joins(nets: NamedNets, reference: str) -> tuple[dict[str, frozenset], frozenset]:
+def _joins(nets: NamedNets, reference: str) -> dict[str, frozenset]:
     """What each pin of ``reference`` is one net with apart from the part
-    itself (other parts' pins and labels), by pin, and how everything else on
-    the sheet is grouped into nets. The two are what ``replace_component``
-    must leave as they were."""
+    itself (other parts' pins and labels), by pin: what ``replace_component``
+    must leave as it was. How the rest of the sheet is grouped into nets,
+    which it must leave as well, is ``nets.net_change``'s to compare."""
     others: dict[int, set[tuple]] = defaultdict(set)
     for pin in nets.pins:
         if pin.reference != reference:
             others[nets.of_pin(pin)].add(("pin", pin.qualified_name, pin.point))
     for label in nets.labels:
         others[nets.of_label(label)].add(("label", label.text, label.point))
-    own = {
+    return {
         _pin_key(pin.name, pin.order): frozenset(others.get(nets.of_pin(pin), ()))
         for pin in nets.pins
         if pin.reference == reference
     }
-    return own, frozenset(frozenset(group) for group in others.values())
 
 
 def _pin_key(name: str, order: int) -> str:
@@ -2660,7 +2781,7 @@ def _replace_component(editor: AscEditor, op: OpReplaceComponent) -> dict[str, o
         already={(pin.x, pin.y) for pin in old_pins},
     )
     before = sheet_nets(editor)
-    joined_before, groups_before = _joins(before, reference)
+    joined_before = _joins(before, reference)
 
     kept_attributes = dict(component.attributes)
     wire_count = len(editor.wires)
@@ -2685,7 +2806,7 @@ def _replace_component(editor: AscEditor, op: OpReplaceComponent) -> dict[str, o
                 continue
             drawn += _bridge(editor, reference, old, new)
         after = sheet_nets(editor)
-        joined_after, groups_after = _joins(after, reference)
+        joined_after = _joins(after, reference)
         paired = {_pin_key(new.name, new.order): old for old, new in pairs}
         for new in new_pins:
             key = _pin_key(new.name, new.order)
@@ -2710,11 +2831,21 @@ def _replace_component(editor: AscEditor, op: OpReplaceComponent) -> dict[str, o
                     f"{', '.join(p.name or str(p.order) for p in new_pins)}), or move the "
                     "part first so the new pins land clear of other wiring."
                 )
-        if groups_after != groups_before:
+        change = net_change(
+            before.nets,
+            after.nets,
+            leaving=lambda member: isinstance(member, PinAt) and member.reference == reference,
+        )
+        if change.split or change.joined:
+            done = (
+                _joined_text_of(change.joined[0])
+                if change.joined
+                else _divided_text(change.split[0])
+            )
             raise NetlistError(
                 f"Refused to replace {reference} with {op.symbol}: the new symbol or the "
-                "wires that reconnect its pins would join or split other nets of the "
-                "sheet. Move the part first, or reconnect its pins with wire_pins."
+                f"wires that reconnect its pins would change other nets of the sheet: they "
+                f"would {done}. Move the part first, or reconnect its pins with wire_pins."
             )
     except (NetlistError, ValueError):
         put_back()
@@ -2904,7 +3035,7 @@ def apply_op_inplace(
         # (dangling_wire_end), so a later op of the batch that removes or
         # reconnects it leaves nothing said.
         if op.cleanup_wires and target_only:
-            rm_result["deleted_wires"] = _drop_wires_at(editor, target_only)
+            rm_result["deleted_wires"] = _drop_dangling_wires_at(editor, target_only)
         return rm_result
 
     if isinstance(op, OpMoveComponent):
@@ -2973,41 +3104,23 @@ def apply_op_inplace(
                 # fact, not a pin fact: cutting a duplicated bridge between two
                 # wired stubs splits the net while every pin still touches some
                 # wire, so a floating-pin scan blesses exactly the cut this
-                # guard exists to refuse. The oracle is the sheet's wired nets.
-                nets_before = sheet_nets(editor).nets
-                on_net: dict[int, list[PinAt]] = {}
-                for pin in nets_before.pins:
-                    on_net.setdefault(nets_before.of_pin(pin), []).append(pin)
-                original, editor.wires = editor.wires, kept
-                nets_after = sheet_nets(editor).nets
-                for pins in on_net.values():
-                    sides: dict[int, list[PinAt]] = {}
-                    for pin in pins:
-                        sides.setdefault(nets_after.of_pin(pin), []).append(pin)
-                    if len(sides) < 2:
-                        continue
-                    editor.wires = original
-
-                    def _side_names(side: list[PinAt]) -> str:
-                        names = [
-                            f"{pin.reference}.{pin.name}" if pin.name else pin.reference
-                            for pin in sorted(
-                                side, key=lambda pin: (pin.point, pin.part, pin.order)
-                            )
-                        ]
-                        return ", ".join(names[:3]) + (", ..." if len(names) > 3 else "")
-
-                    first, second, *_ = sorted(sides.values(), key=len, reverse=True)
+                # guard exists to refuse. The oracle is the sheet's nets.
+                geometry = collect_component_geometry(editor)
+                split = net_change(
+                    sheet_nets(editor, geometry=geometry).nets,
+                    sheet_nets(editor, geometry=geometry, wires=_segments(kept)).nets,
+                ).split
+                if split:
+                    first, second, *_ = sorted(split[0], key=len, reverse=True)
                     raise NetlistError(
                         f"Refusing to remove the {copies} copies of "
                         f"({op.x1},{op.y1})->({op.x2},{op.y2}): they are one connection "
                         f"drawn {copies} times, and removing it would split the net, "
-                        f"leaving {_side_names(second)} disconnected from "
-                        f"{_side_names(first)}. Remove the pin's other segments first "
+                        f"leaving {_members_text(second)} disconnected from "
+                        f"{_members_text(first)}. Remove the pin's other segments first "
                         "if the disconnection is what you want."
                     )
-            else:
-                editor.wires = kept
+            editor.wires = kept
         elif op.pin is not None or (op.x is not None and op.y is not None):
             # Incident-point form: drop every segment touching the coordinate.
             _drop_wires_at(editor, {_resolve_op_xy(op, editor)})

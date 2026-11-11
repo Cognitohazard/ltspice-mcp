@@ -148,6 +148,14 @@ _RULES = (
         provenance="wire-connectivity",
     ),
     Rule(
+        "pin_inside_wire",
+        "electrical",
+        "point",
+        "A pin inside a wire, where no wire ends, which joins the part to that wire's net.",
+        check="layout",
+        provenance="wire-connectivity",
+    ),
+    Rule(
         "unjoined_crossing",
         "electrical",
         "point",
@@ -682,6 +690,31 @@ def _joined_at_crossings(ix: _Index) -> list[Finding]:
     return found
 
 
+@_finds("pin_inside_wire")
+def _pins_inside_wires(ix: _Index) -> list[Finding]:
+    # A pin anywhere on a wire is joined to it, its interior included (the
+    # connectivity recordings). Where a wire ends on the pin, the drawing
+    # shows the join; inside a wire, with no wire ending there, nothing does.
+    # A pin where wires cross is joined_at_crossing's to say.
+    found: list[Finding] = []
+    for part in ix.view.parts:
+        for name, x, y in part.pins:
+            point = (x, y)
+            if point in ix.wire_ends or ix.wires_through(point) != 1:
+                continue
+            a, b = next(wire for wire in ix.wires if point_on_segment(point, *wire))
+            found.append(
+                Finding(
+                    "pin_inside_wire",
+                    f"{part.name}.{name} at {_at(point)} lies inside the wire {_wire(a, b)}, "
+                    "so it is joined to that wire's net, though no wire ends on it",
+                    refs=(part.name,),
+                    points=(point,),
+                )
+            )
+    return found
+
+
 @_finds("unjoined_crossing")
 def _unjoined_crossings(ix: _Index) -> list[Finding]:
     # Horizontal and vertical wires through each other, at a point that is no
@@ -1183,6 +1216,8 @@ def findings(view: SheetView, rules: Collection[str] | None = None) -> list[Find
     - ``joined_at_crossing``: a pin or label on a point where two or more wires
       cross, none ending there, which joins nets that are apart without it,
       nets that share a name being one.
+    - ``pin_inside_wire``: a pin on a wire's interior, where no wire ends and
+      no other wire passes, which joins the part to that wire's net.
     - ``unjoined_crossing``: a horizontal and a vertical wire through each
       other at a point no wire ends at and nothing sits on.
     - ``diagonal_wire``: a wire neither horizontal nor vertical.

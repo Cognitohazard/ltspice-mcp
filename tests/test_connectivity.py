@@ -30,7 +30,7 @@ from ltspice_mcp.lib.connectivity import (
     point_on_segment,
     signature,
 )
-from ltspice_mcp.lib.nets import LabelAt, PinAt
+from ltspice_mcp.lib.nets import LabelAt, NetChange, PinAt, net_change
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, parse_asy_file
 from ltspice_mcp.lib.symbol_library import find_symbol
 from tests._schematic_fixtures import SUITE_SHEETS, TESTS, suite_name
@@ -615,3 +615,51 @@ class TestNetsOverTerminals:
     def test_a_wire_on_a_pin_connects_it_wherever_the_wire_goes(self) -> None:
         nets = nets_by_ltspice([TIE_A], [], [((0, 0), (64, 0))])
         assert not nets.unconnected(TIE_A)
+
+
+class TestNetChange:
+    """What an edit did to the nets, by one comparison of the sheet before and
+    after it: a pin is the same pin by its part's place and its SpiceOrder,
+    and a label by its place among the labels, wherever each now lies."""
+
+    @staticmethod
+    def _nets(wires: list[Segment], labels: Labels | None = None) -> NamedNets:
+        """R1.1 at (0, 0) and R2.1 at (96, 0), with ``wires`` and ``labels``."""
+        return named_nets([("R1", [("1", (0, 0))]), ("R2", [("1", (96, 0))])], labels or [], wires)
+
+    def test_a_wire_taken_away_splits_the_net_it_held(self) -> None:
+        change = net_change(self._nets([((0, 0), (96, 0))]).nets, self._nets([]).nets)
+        (pieces,) = change.split
+        assert [[m.qualified_name for m in piece if isinstance(m, PinAt)] for piece in pieces] == [
+            ["R1.1"],
+            ["R2.1"],
+        ]
+        assert change.joined == ()
+
+    def test_a_wire_drawn_joins_the_nets_it_reaches(self) -> None:
+        change = net_change(self._nets([]).nets, self._nets([((0, 0), (96, 0))]).nets)
+        assert change.split == ()
+        assert len(change.joined) == 1 and len(change.joined[0]) == 2
+
+    def test_nets_that_share_a_name_stay_one_unless_wiring_alone_is_asked(self) -> None:
+        named: Labels = [((0, 0), "a"), ((96, 0), "a")]
+        before = self._nets([((0, 0), (96, 0))], named).nets
+        after = self._nets([], named).nets
+        assert net_change(before, after).split == ()
+        assert len(net_change(before, after, folded=False).split) == 1
+
+    def test_what_is_leaving_is_left_out(self) -> None:
+        change = net_change(
+            self._nets([((0, 0), (96, 0))]).nets,
+            self._nets([]).nets,
+            leaving=lambda member: isinstance(member, PinAt) and member.reference == "R2",
+        )
+        assert change == NetChange()
+
+    def test_a_pin_that_moves_is_the_same_pin(self) -> None:
+        """R2 moved along the wire it ends on stays on R1's net."""
+        before = self._nets([((0, 0), (192, 0))]).nets
+        after = named_nets(
+            [("R1", [("1", (0, 0))]), ("R2", [("1", (192, 0))])], [], [((0, 0), (192, 0))]
+        ).nets
+        assert net_change(before, after) == NetChange()

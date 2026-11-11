@@ -293,7 +293,10 @@ with it, so they stay attached. To move one part with the labels and grounds
 on its pins, name it in `references` with `drag: true`; there is no need to
 remove and add it again. A label at the far end of a wire from the pin is not
 on the pin, so it stays, and the wire stretches to it. A wire dragged off its
-axis turns diagonal, and the sheet findings report it (`diagonal_wire`).
+axis turns diagonal, and the sheet findings report it (`diagonal_wire`). A
+region takes a part only when its whole box is inside, so a dragged move
+whose region holds a pin of a part it does not take is refused rather than
+pulling the wire off that pin; widen the region or name the part.
 `move_component` places one part at a position or turns it, and moves the
 part alone: the wires and labels at its old pins stay where they were.
 To change a part's symbol (a gate for a buffer, `nmos4` for `nmos`), use

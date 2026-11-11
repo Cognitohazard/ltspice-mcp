@@ -251,6 +251,72 @@ class Nets:
         return tuple(run for run in self._dropped.at(point) if point not in run.segment)
 
 
+Member = PinAt | LabelAt
+#: The members of one net, as the later of two states places them.
+Group = tuple[Member, ...]
+
+
+@dataclass(frozen=True)
+class NetChange:
+    """How a later state of a sheet's nets differs from an earlier one, over
+    the pins and labels both hold (:func:`net_change`)."""
+
+    #: Each earlier net the later state divides, as its pieces.
+    split: tuple[tuple[Group, ...], ...] = ()
+    #: Each later net made of nets the earlier state kept apart, as those nets.
+    joined: tuple[tuple[Group, ...], ...] = ()
+
+
+def net_change(
+    before: Nets,
+    after: Nets,
+    *,
+    folded: bool = True,
+    leaving: Callable[[Member], bool] = lambda _member: False,
+) -> NetChange:
+    """Which nets an edit split and which it joined: the one answer every
+    edit of a sheet reads when it asks what it did to the nets.
+
+    ``before`` and ``after`` are one sheet's nets before and after the edit,
+    made over its parts and labels in the same order, so a pin is the same pin
+    in both by its part's place and its SpiceOrder, and a label by its place
+    among the labels, wherever each now lies. Members only one state holds,
+    and those ``leaving`` picks out of ``after``, are left out. Nets are
+    compared ``folded`` (nets that share a name are one) unless asked for
+    wiring alone.
+    """
+
+    def keyed(nets: Nets) -> dict[tuple[str, int, int], tuple[Member, int]]:
+        root = nets.folded if folded else (lambda net: net)
+        found: dict[tuple[str, int, int], tuple[Member, int]] = {}
+        for pin in nets.pins:
+            found["pin", pin.part, pin.order] = (pin, root(nets.of_pin(pin)))
+        for label in nets.labels:
+            found["label", label.index, 0] = (label, root(nets.of_label(label)))
+        return found
+
+    earlier, later = keyed(before), keyed(after)
+    shared = [
+        key for key, (member, _net) in later.items() if key in earlier and not leaving(member)
+    ]
+
+    def regrouped(
+        outer: dict[tuple[str, int, int], tuple[Member, int]],
+        inner: dict[tuple[str, int, int], tuple[Member, int]],
+    ) -> tuple[tuple[Group, ...], ...]:
+        nets: dict[int, dict[int, list[Member]]] = {}
+        for key in shared:
+            pieces = nets.setdefault(outer[key][1], {})
+            pieces.setdefault(inner[key][1], []).append(later[key][0])
+        return tuple(
+            tuple(tuple(piece) for piece in pieces.values())
+            for pieces in nets.values()
+            if len(pieces) > 1
+        )
+
+    return NetChange(split=regrouped(earlier, later), joined=regrouped(later, earlier))
+
+
 def _grouped(members: dict[_T, int], root: Callable[[int], int]) -> dict[int, tuple[_T, ...]]:
     """``members`` by the representative ``root`` gives each one's net."""
     grouped: dict[int, list[_T]] = {}

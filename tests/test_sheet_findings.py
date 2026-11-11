@@ -58,6 +58,7 @@ class TestTheRegistry:
                 "subcircuit_value_slot",
                 "net_with_two_names",
                 "joined_at_crossing",
+                "pin_inside_wire",
                 "unjoined_crossing",
                 "diagonal_wire",
                 "floating_pin",
@@ -89,6 +90,7 @@ class TestTheRegistry:
             "export": {"dropped_wire", "net_with_two_names"},
             "layout": {
                 "joined_at_crossing",
+                "pin_inside_wire",
                 "unjoined_crossing",
                 "diagonal_wire",
                 "floating_pin",
@@ -350,6 +352,8 @@ class TestWhatLtspiceLeavesOut:
 
 # Two wires through each other at (32,32), neither ending there.
 _CROSS = ((0, 32, 64, 32), (32, 0, 32, 64))
+#: Two wires crossing at (32, 0), neither ending there.
+_CROSS_AT_32_0 = ((0, 0, 64, 0), (32, -32, 32, 32))
 
 
 class TestWhatJoinsAndWhatDoesNot:
@@ -392,6 +396,28 @@ class TestWhatJoinsAndWhatDoesNot:
         (found,) = only(view, "joined_at_crossing")
         assert (found.points, found.facts) == (((32, 32),), {"wires": 2, "nets": 2})
         assert only(view, "unjoined_crossing") == []
+
+    def test_a_pin_inside_a_wire_is_said_to_join_it(self) -> None:
+        view = SheetView(
+            parts=(Part("R1", pins=(("A", 32, 0), ("B", 32, 96))),), wires=((0, 0, 64, 0),)
+        )
+        (found,) = only(view, "pin_inside_wire")
+        assert (found.refs, found.points) == (("R1",), ((32, 0),))
+        assert found.detail == (
+            "R1.A at (32,0) lies inside the wire (0,0)->(64,0), so it is joined to that "
+            "wire's net, though no wire ends on it"
+        )
+
+    @pytest.mark.parametrize(
+        "wires",
+        [((0, 0, 32, 0),), ((0, 0, 64, 0), (32, 0, 32, -64)), _CROSS_AT_32_0],
+        ids=["wire_ends_on_it", "another_wire_ends_on_it", "wires_cross_on_it"],
+    )
+    def test_a_pin_a_wire_ends_on_or_wires_cross_on_is_not_inside_one(
+        self, wires: tuple[tuple[int, int, int, int], ...]
+    ) -> None:
+        view = SheetView(parts=(Part("R1", pins=(("A", 32, 0), ("B", 32, 96))),), wires=wires)
+        assert only(view, "pin_inside_wire") == []
 
     def test_a_pin_on_a_crossing_names_its_part(self) -> None:
         view = SheetView(parts=(Part("R1", pins=(("A", 32, 32), ("B", 32, 128))),), wires=_CROSS)
