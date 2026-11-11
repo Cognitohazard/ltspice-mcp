@@ -54,7 +54,7 @@ from ltspice_mcp.lib.spice_validator import (
 Disposition = Literal["blocking", "warning", "observation"]
 LintFinding = dict[str, Any]
 
-linter_version = "13"
+linter_version = "14"
 
 # A capital M straight after a number is milli unless the letters after it
 # make it Meg or mil. Other letters do not: LTspice reads 1MHz as a millihertz.
