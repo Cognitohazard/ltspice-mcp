@@ -1353,7 +1353,9 @@ class TestResultDigest:
         path.write_bytes(b"not a raw file\n")
         assert result_digest(path) is None
 
-    @pytest.mark.parametrize("variant", ["", "_ascii"], ids=["binary", "ascii"])
+    @pytest.mark.parametrize(
+        "variant", ["", "_ascii", "sp_"], ids=["ac-binary", "ac-ascii", "sp-binary"]
+    )
     def test_two_ngspice_ac_runs_of_one_deck_digest_the_same(self, variant: str):
         """ngspice-42 writes the imaginary part of an AC frequency from memory
         it never set, so two runs of one deck differ there (recorded pair); the
@@ -1361,7 +1363,10 @@ class TestResultDigest:
         from ltspice_mcp.lib.raw_parser import result_digest
 
         first, second = (
-            FIXTURES_DIR / "ngspice_ac_rerun" / f"{run}{variant}.raw" for run in ("a", "b")
+            FIXTURES_DIR
+            / "ngspice_ac_rerun"
+            / (f"{variant}{run}.raw" if variant == "sp_" else f"{run}{variant}.raw")
+            for run in ("a", "b")
         )
         assert first.read_bytes() != second.read_bytes()
         digest = result_digest(first, "ngspice")

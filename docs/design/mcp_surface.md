@@ -2266,19 +2266,21 @@ cases; their failure says why.
 
 The receipt compares the samples of a `random` or `pdk_native` entry by what
 they computed, one `assign` point at a time. Each produced sample keeps a
-digest of its raw: every plot's variables and points, a sampled complex axis
-by its real part, and nothing else of its headers. Where every sample
+digest of its raw: every plot's variables and points, a complex frequency or
+other sampled axis by its real part, and nothing else of its headers. Where every sample
 compared at a point computed one result, an `identical_samples` observation
 (`kind: "sampling"`) lists the point in its `evidence.groups` as `circuit`,
 `assigned` (that point's `assign` values, left out when the entry has none)
 and `samples` (how many were compared): their draws changed nothing the
 simulator saved there. A point whose samples give two results or more is not
 listed, since some draw changed what was saved. A circuit whose every
-compared point computed one result is one group with its `points`, and the
-detail leads with "All samples of …" when every sample of every point ran, or
-"Every sample of … that ran" when some did not; on a job with runs still to
-finish it says "so far". At most ten points are listed, with
-`points_truncated` giving how many there are. A produced sample with no
+compared point computed one result is one group with its `points`. The
+detail speaks for each circuit: "All samples of …" when every sample of every
+point ran and was compared, "Every sample of … that was compared" when some
+were not, and "Samples of … computed the same results at the assign points
+listed for them" when other points differ; on a job with runs still to finish
+it says "so far". At most ten points are listed, in the order the cases ran,
+with `points_truncated` giving how many there are. A produced sample with no
 digest (recorded before samples were compared, or a raw the reader cannot
 walk to its end) at a point with another produced sample is counted in a
 `samples_not_compared` observation. Neither observation appears when every

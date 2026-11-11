@@ -1187,7 +1187,7 @@ def result_digest(path: Path, dialect: str | None = None) -> str | None:
     and the deck's path. A complex axis keeps its real part only: ngspice-42
     writes the imaginary part of an AC frequency from memory it never set, so
     two runs of one deck differ there (recorded:
-    ``tests/fixtures/ngspice_ac_rerun``); a ``.pz`` plot's first variable is
+    ``tests/fixtures/ngspice_ac_rerun``, ``.ac`` and ``.sp``); a ``.pz`` plot's first variable is
     a pole, not an axis, and keeps both parts. None when the file is not a raw
     this reader can walk to its end: a plot whose point count was never
     written (ngspice writes it when the plot ends), a plot cut short, bytes
@@ -1240,11 +1240,16 @@ def result_digest(path: Path, dialect: str | None = None) -> str | None:
 
 
 def _has_sampled_axis(header: _PlotHeader) -> bool:
-    """Whether a plot's first variable is the axis its points are sampled on,
-    as a full read reads it (``result_kinds.sampled_axis``); a ``.pz`` plot's
-    first variable is a pole."""
+    """Whether a plot's first variable is the axis its points are sampled on:
+    one it declares a ``frequency`` (an ngspice ``.sp`` plot's included, which
+    ``plot_analysis`` does not name), or one a full read takes as its axis
+    (``result_kinds.sampled_axis``). A ``.pz`` plot's first variable is a pole."""
+    if not header.variables:
+        return False
+    if header.first_type.lower() == "frequency":
+        return True
     analysis = plot_analysis(header.fields.get("plotname") or "", header.first_type)
-    return bool(header.variables) and sampled_axis(analysis, header.first_type) is not None
+    return sampled_axis(analysis, header.first_type) is not None
 
 
 def _digest_binary_points(

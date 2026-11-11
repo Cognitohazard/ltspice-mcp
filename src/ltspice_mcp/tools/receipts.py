@@ -618,14 +618,13 @@ def _sample_observations(cases: Sequence[ExperimentCase]) -> list[dict[str, Any]
     alike: dict[str, list[dict[str, Any]]] = {}
     compared_points: dict[str, int] = {}
     whole: dict[str, bool] = {}
-    assigned: dict[str, bool] = {}
     unread = 0
-    for (circuit, _), (point, members) in sorted(points.items()):
+    # In the order the cases ran, so a capped list names the first points.
+    for (circuit, _), (point, members) in points.items():
         produced = [case for case in members if case.status == "produced"]
         digests = [case.result_digest for case in produced if case.result_digest is not None]
         if len(produced) > 1:
             unread += len(produced) - len(digests)
-        assigned[circuit] = assigned.get(circuit, False) or bool(point)
         one_result = len(digests) > 1 and len(set(digests)) == 1
         whole[circuit] = whole.get(circuit, True) and one_result and len(digests) == len(members)
         if len(digests) > 1:
@@ -640,11 +639,17 @@ def _sample_observations(cases: Sequence[ExperimentCase]) -> list[dict[str, Any]
             )
     observations: list[dict[str, Any]] = []
     if alike:
+        # Each circuit is one of three kinds, and the detail says which.
+        every = [c for c in alike if whole[c]]
+        everywhere = [
+            c for c, rows in alike.items() if len(rows) == compared_points[c] and not whole[c]
+        ]
+        partly = [c for c, rows in alike.items() if len(rows) < compared_points[c]]
         groups: list[dict[str, Any]] = []
         named = 0
         listed = 0
-        for circuit, rows in sorted(alike.items()):
-            if len(rows) > 1 and len(rows) == compared_points[circuit]:
+        for circuit, rows in alike.items():
+            if circuit not in partly and len(rows) > 1:
                 groups.append({"circuit": circuit, "points": len(rows)})
                 continue
             for row in rows:
@@ -655,37 +660,37 @@ def _sample_observations(cases: Sequence[ExperimentCase]) -> list[dict[str, Any]
         evidence: dict[str, Any] = {"groups": groups}
         if named > listed:
             evidence["points_truncated"] = named
-        every = sorted(circuit for circuit in alike if whole[circuit])
-        everywhere = sorted(
-            circuit for circuit, rows in alike.items() if len(rows) == compared_points[circuit]
-        )
         so_far = " so far" if running else ""
-        at_points = " at every assign point" if any(assigned[c] for c in everywhere) else ""
+        sentences = []
         if every:
-            detail = (
-                f"All samples of {', '.join(every)} computed the same results{so_far}"
-                f"{at_points}, so the draws changed nothing the simulator saved: check that "
-                "the rules reach a part the deck saves, or that the PDK's statistical "
-                "models are switched on."
+            sentences.append(
+                f"All samples of {', '.join(every)} computed the same results{so_far}."
             )
-        elif everywhere:
-            detail = (
-                f"Every sample of {', '.join(everywhere)} that ran computed the same "
-                f"results{so_far}{at_points}, so the draws changed nothing the simulator "
-                "saved; some samples did not run. Check that the rules reach a part the "
-                "deck saves, or that the PDK's statistical models are switched on."
+        if everywhere:
+            sentences.append(
+                f"Every sample of {', '.join(everywhere)} that was compared computed the "
+                f"same results{so_far}, though not every sample was compared."
             )
-        else:
-            detail = (
-                "At the assign points listed, every sample computed the same results"
-                f"{so_far}, so the draws changed nothing the simulator saved there; at "
-                "other points they differ."
+        if partly:
+            sentences.append(
+                f"Samples of {', '.join(partly)} computed the same results{so_far} at the "
+                "assign points listed for them and differ at the others."
             )
+        sentences.append(
+            "Where samples computed the same results, their draws changed nothing the "
+            "simulator saved"
+            + (
+                ": check that the rules reach a part the deck saves, or that the PDK's "
+                "statistical models are switched on."
+                if every or everywhere
+                else "."
+            )
+        )
         observations.append(
             {
                 "code": "identical_samples",
                 "kind": "sampling",
-                "detail": detail,
+                "detail": " ".join(sentences),
                 "evidence": evidence,
             }
         )

@@ -171,9 +171,12 @@ def test_a_long_list_of_alike_points_is_cut_with_its_total(state_no_sim: Session
         if o["code"] == "identical_samples"
     ]
 
-    assert len(observation["evidence"]["groups"]) == 10
+    groups = observation["evidence"]["groups"]
+    assert [group["assigned"]["vin"] for group in groups] == list(range(10))
     assert observation["evidence"]["points_truncated"] == 12
-    assert observation["detail"].startswith("At the assign points listed")
+    assert observation["detail"].startswith(
+        "Samples of dut computed the same results at the assign points listed for them"
+    )
 
 
 def test_points_that_all_match_collapse_into_one_group(state_no_sim: SessionState):
@@ -196,7 +199,7 @@ def test_points_that_all_match_collapse_into_one_group(state_no_sim: SessionStat
     ]
 
     assert observation["evidence"]["groups"] == [{"circuit": "dut", "points": 2}]
-    assert observation["detail"].startswith("Every sample of dut that ran")
+    assert observation["detail"].startswith("Every sample of dut that was compared")
 
 
 def test_a_case_recorded_before_it_kept_its_assign_values_is_compared_at_its_point(
@@ -219,3 +222,34 @@ def test_a_case_recorded_before_it_kept_its_assign_values_is_compared_at_its_poi
     observations = snapshot_receipt(job, state_no_sim).observations
 
     assert not any(o["code"] == "identical_samples" for o in observations)
+
+
+def test_each_circuit_is_described_by_what_its_own_samples_did(state_no_sim: SessionState):
+    """Circuit a computed one result at both points; circuit b at one point of
+    two, and its third sample's raw could not be read. The detail says each,
+    so b's matching point is not read as part of "All samples of a"."""
+    job = make_experiment_job(state_no_sim, job_id="exp_two_circuits", count=12)
+    for index, case in enumerate(job.cases):
+        circuit, rest = divmod(index, 6)
+        point, sample = divmod(rest, 3)
+        case.circuit = "ab"[circuit]
+        case.assignments = {"v": point, "_random_run": sample}
+        case.assigned = {"v": point}
+        alike = circuit == 0 or point == 0
+        case.result_digest = f"{case.circuit}-{point}" if alike else f"b-1-{sample}"
+    job.cases[11].result_digest = None
+
+    observations = snapshot_receipt(job, state_no_sim).observations
+
+    (observation,) = [o for o in observations if o["code"] == "identical_samples"]
+    assert observation["detail"].startswith("All samples of a computed the same results.")
+    assert (
+        "Samples of b computed the same results at the assign points listed"
+        in (observation["detail"])
+    )
+    assert observation["evidence"]["groups"] == [
+        {"circuit": "a", "points": 2},
+        {"circuit": "b", "assigned": {"v": 0}, "samples": 3},
+    ]
+    (uncompared,) = [o for o in observations if o["code"] == "samples_not_compared"]
+    assert uncompared["evidence"]["count"] == 1
