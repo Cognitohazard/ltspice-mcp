@@ -62,7 +62,7 @@ from ltspice_mcp.lib.recovery_records import (
     ProcessIdentity,
     RecoveryError,
 )
-from ltspice_mcp.lib.simulator import dialect_for_simulator_name, run_ngbehavior
+from ltspice_mcp.lib.simulator import dialect_for_simulator_name, is_ngspice, run_ngbehavior
 from ltspice_mcp.lib.simulator_build import executable_identity, same_executable
 from ltspice_mcp.lib.store import OwnerLiveness, Store, is_this_process, path_digest
 from ltspice_mcp.lib.sweep_utils import generate_id
@@ -376,6 +376,13 @@ async def _replay_attempt(
     return AdmissionResult(candidate, replayed=True, start=True)
 
 
+def recorded_ngbehavior(simulator: type) -> str | None:
+    """The ngspice mode a recovery record holds for a run of ``simulator``: the
+    mode an ngspice run passes (``run_ngbehavior``), and none for another
+    simulator, whose controlled policy refuses a record that names one."""
+    return run_ngbehavior(simulator) if is_ngspice(simulator) else None
+
+
 def _capture_execution(
     runner: ExperimentRunner, request: ExperimentRunRequest, job: ExperimentJob
 ) -> None:
@@ -412,7 +419,7 @@ def _capture_execution(
             request.kill_grace_s,
             simulator_command(simulator, executable),
             executable,
-            run_ngbehavior(simulator),
+            recorded_ngbehavior(simulator),
             sys.platform,
             startup,
             LAUNCH_POLICY if any(case.native_statistics for case in job.cases) else None,

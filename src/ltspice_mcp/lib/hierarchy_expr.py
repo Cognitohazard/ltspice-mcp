@@ -10,7 +10,6 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 
 from ltspice_mcp.lib.format import parse_spice_value
-from ltspice_mcp.lib.ngspice_compat import multiplies_m
 
 MAX_EXPRESSION_LENGTH = 2048
 MAX_EXPRESSION_NODES = 128
@@ -201,18 +200,6 @@ def scaled_geometry(fact: NumericFact, scale: NumericFact) -> NumericFact:
 NGSPICE_M_TAKERS = frozenset("CDFGIJLMQRXZ")
 NGSPICE_M_EXEMPT = frozenset("ABEHKSTVW")
 
-
-def ngspice_multiplies_m(ngbehavior: str | None) -> bool:
-    """Whether ngspice in this compatibility mode multiplies a card's own ``m``
-    by the ``m`` its subcircuit passes down, rather than replacing it.
-
-    Only a mode ngspice reads with ``hs`` set multiplies (``hs``, ``hsa``,
-    not ``hsps`` or ``HSA``: ``ngspice_compat``); every other mode, the
-    ``kiltpsa`` spicelib runs by default included, replaces it. Measured on
-    ngspice-42: ``R1 p 0 1k m=3`` in a body called with ``m=4`` builds 12
-    copies under ``hsa`` and 4 under ``kiltpsa``.
-    """
-    return multiplies_m(ngbehavior)
 
 
 def card_copies(

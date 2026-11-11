@@ -125,7 +125,7 @@ multiplies (``hs`` set) gives XA.Xl.R1 24 copies, one that replaces 8."""
 @needs_ngspice
 @pytest.mark.parametrize(
     "mode",
-    ["", "hsa", "kiltpsa", "hs", "ps", "lt", "kia", "HSA", "Hsa", "hsps", "spehs", "spelt"],
+    ["", "hsa", "kiltpsa", "hs", "ps", "lt", "kia", "hsas3", "spehsps", "hsps", "spehs", "spelt"],
 )
 async def test_the_copies_ngspice_builds_under_a_rewrite_are_the_readers(
     mode: str, work_dir: Path, monkeypatch: pytest.MonkeyPatch
@@ -156,17 +156,15 @@ async def test_a_mode_the_rules_were_not_established_for_is_answered_when_ngspic
     assert result["data"]["ngspice_check"] == AGREES
 
 
-@pytest.mark.parametrize("mode", ["kia", "HSA"])
+@pytest.mark.parametrize("mode", ["kia", "LT"])
 async def test_without_ngspice_another_mode_is_refused_and_an_established_one_says_unchecked(
     mode: str, state_no_sim: SessionState, work_dir: Path
 ):
-    """``HSA`` is not ``hsa``: ngspice matches mode letters case-sensitively
-    and reads it as native mode."""
     path = _deck(work_dir)
     refused = await _hierarchy(state_no_sim, path, ngbehavior=mode)
     assert not refused["ok"]
     message = refused["error"]["message"]
-    assert f"unsupported hierarchy ngbehavior {mode!r}" in message
+    assert f"unsupported hierarchy ngbehavior {mode.lower()!r}" in message
     assert "no ngspice executable" in message
     assert "Query with one of those modes" in message
 
@@ -175,6 +173,16 @@ async def test_without_ngspice_another_mode_is_refused_and_an_established_one_sa
     check = answered["data"]["ngspice_check"]
     assert check["status"] == "not_run"
     assert check["reason"] == "no_ngspice"
+
+
+async def test_a_query_mode_is_lower_cased_as_the_configured_one_is(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """``HSA`` names ``hsa`` in a query as it does in ``[simulator]
+    ngbehavior``, so the server reads and passes ngspice one mode for it."""
+    answered = await _hierarchy(state_no_sim, _deck(work_dir), ngbehavior=" HSA ")
+    assert answered["ok"], answered
+    assert answered["data"]["profile"]["ngbehavior"] == "hsa"
 
 
 @needs_ngspice
@@ -370,3 +378,29 @@ async def test_a_recoverable_run_in_another_mode_is_refused(
     )
     assert receipt["error"]["code"] == "recovery_ngbehavior_unsupported", receipt
     assert "recording where the cards" in receipt["error"]["message"]
+
+
+@needs_ngspice
+@pytest.mark.parametrize(
+    ("level", "not_compared"),
+    [
+        # W is set up only in an analysis, so ngspice prints 0 for it.
+        (5, {"no_ngspice_name": 2, "no_ngspice_value": 1}),
+        (6, {"no_ngspice_name": 2, "no_ngspice_value": 1}),
+        # B3SOIDD has no m parameter, and builds the one copy the reader counts.
+        (56, {"no_ngspice_name": 2, "no_ngspice_m": 1}),
+    ],
+)
+def test_a_value_ngspice_sets_only_in_an_analysis_is_not_compared(
+    tmp_path: Path, level: int, not_compared: dict[str, int]
+):
+    path = _deck(
+        tmp_path,
+        f"* level {level}\n.model n nmos level={level}\nM1 d g 0 0 n w=2u l=1u\n"
+        "V1 d 0 1\nV2 g 0 1\n.op\n.end\n",
+    )
+    hierarchy = load_hierarchy(str(path), [tmp_path], SemanticProfile("ngspice", "hsa"))
+    check = check_hierarchy(hierarchy, NGspiceSimulator)
+    assert check.payload()["not_compared"] == not_compared
+    assert check.status == "agrees"
+    assert check.confirms_all is (level == 56)

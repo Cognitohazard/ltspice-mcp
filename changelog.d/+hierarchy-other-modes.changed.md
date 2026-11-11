@@ -6,5 +6,5 @@ such a mode discovery refuses `gnd`, whose reading there is not recorded.
 Editing a deck by instance is still refused in such a mode, and a
 recoverable run is refused before the job is recorded, with
 `recovery_ngbehavior_unsupported`; both messages name the supported modes.
-Modes are matched case-sensitively, as ngspice matches them: `HSA` is
-native mode to ngspice, so it is no longer read as `hsa`.
+A query's `ngbehavior` is lower-cased as `[simulator] ngbehavior` is, so
+`HSA` names `hsa` in both.

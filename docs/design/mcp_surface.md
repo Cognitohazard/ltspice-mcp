@@ -2584,11 +2584,12 @@ values discovery resolved compare with the ones ngspice reads
 resistor's `value` (ngspice's `resistance`), a MOSFET's `geometry` W and L
 (`w`, `l`, both scaled), and the copies discovery counts for either card,
 which instance mismatch uses (`multiplier`, not a reply field), against
-ngspice's `m`. The copies are compared where the card writes `m` or its
-subcircuit is rewritten for `m`, so the check measures discovery's model of
-that rewrite, which differs by mode. Elsewhere ngspice prints 0 for `m`,
-meaning one copy, and it reads a 0 ohm resistor as 1 milliohm; neither is
-compared. `status` is `agrees`, `differs` (with `differences`, each the
+ngspice's `m`. The copies are compared on every card, so the check also
+tests which subcircuits discovery says ngspice rewrites for an `X` line's
+`m`, and how, which differs by mode. The driver runs no analysis, so
+ngspice prints 0 for an `m` nothing set, which is read as one copy where the
+card writes no `m`. ngspice reads a 0 ohm resistor as 1 milliohm, so a 0 ohm
+value is not compared. `status` is `agrees`, `differs` (with `differences`, each the
 `instance`, the `field` it is about, and the `reader` and `ngspice` values) or
 `not_run`. A `not_run` result has a `reason` and a `detail` that explains it:
 `no_ngspice`, `nothing_to_compare`, `path_unsupported` (a quote, `$`, `` ` ``,
@@ -2598,29 +2599,32 @@ read it), `deck_not_read` (ngspice printed no value), `mode_unchecked`, or
 `mode_differs` (a startup file ngspice reads set another mode). `compared`
 counts the values compared when the check ran. `not_compared` counts the rest
 by reason: `no_ngspice_name` (an element the reader gives no ngspice device
-name), `unresolved`, `zero_resistance` and `no_ngspice_value`. The copies
-the reader counts for each resistor and MOSFET (`multiplier`, which is not a
-reply field) are compared with ngspice's `m` on every card, so the check also
-tests which subcircuits ngspice rewrites for an `X` line's `m`. Nodes, models and sources are not compared. A result,
+name), `unresolved`, `zero_resistance`, `no_ngspice_m` (one copy of a
+device ngspice gives no `m` parameter, such as B3SOIDD, which builds one)
+and `no_ngspice_value` (ngspice printed none, or 0 for a W or L its device
+sets only in an analysis, as MOS levels 5 and 6 do). Nodes, models and
+sources are not compared. A result,
 a failure to run ngspice included, is kept per deck content, mode and
 executable, so later pages do not ask again. The check covers the whole deck,
 not only the selected instances.
 
-ngspice matches mode letters case-sensitively, so a mode is established only as
-written above: `HSA` is native mode to ngspice. In any other mode, the query
+The server lower-cases a mode wherever it takes one, in this argument and in
+`[simulator] ngbehavior` alike, so `HSA` names `hsa`. In any other mode than
+those above, the query
 answers only when ngspice was asked for every value and gave the same ones, and
 is otherwise refused with what the check found. The reader then refuses `gnd`,
 as in `kiltpsa`, and a `.param` declared twice. A run in such a mode needs no
 hierarchy reading and is not affected. An instance edit is refused, and a
 recoverable run is refused before the job is recorded
 (`recovery_ngbehavior_unsupported`), because both read the deck by these
-rules. A `.lib file section` line needs a mode ngspice reads without its `lt`
-or `ps` flag (`hsa` or native mode), because those flags read it as two plain
-includes. The server reads a mode's flags as ngspice does
-(`lib/ngspice_compat.py`): letters match case-sensitively, `spe` clears `ps`,
-`lt`, `ki` and `eg`, then `ps` clears `hs`, and `mc` turns the others off, so
-`spelt` reads a section and `hsps` replaces a card's `m` instead of
-multiplying it. The deck's first line is its title and is skipped; an
+rules. A `.lib file section` line needs a mode ngspice reads without its
+`lt`, `ps` or `s3` flag (`hsa` or native mode): `lt` and `ps` read it as two
+plain includes, and `s3` skips it. The server reads a mode's flags as ngspice
+does (`lib/ngspice_compat.py`): from its first 80 characters, letters match
+case-sensitively, `spe` clears `ps`, `lt`, `ki` and `eg`, then `ps` clears
+`hs`, and `mc` turns off every flag but `s3`. So `spelt` and `ltmc` read a
+section, `hsps` replaces a card's `m` instead of multiplying it, and `s3mc`
+skips a section. The deck's first line is its title and is skipped; an
 included file has no title line, so its first line is read as a card. In
 ngspice native and `hsa` modes, `gnd` is ground like `0` everywhere, even
 where a subcircuit has a port named `gnd`; on LTspice such a port is that

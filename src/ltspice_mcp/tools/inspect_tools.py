@@ -127,6 +127,7 @@ from pydantic import (
     SkipValidation,
     TypeAdapter,
     ValidationError,
+    field_validator,
     model_validator,
 )
 
@@ -184,6 +185,7 @@ from ltspice_mcp.lib.ltspice_window import (
 )
 from ltspice_mcp.lib.model_fields import literal_values, model_union
 from ltspice_mcp.lib.montecarlo import matches_prefix
+from ltspice_mcp.lib.ngspice_compat import mode_as_given
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
 from ltspice_mcp.lib.raster import RasterSupport, raster_support
 from ltspice_mcp.lib.routing import segment_json, wires_through
@@ -745,6 +747,11 @@ class HierarchyQuery(StrictModel):
     @property
     def family(self) -> Literal["ltspice", "ngspice"]:
         return "ltspice" if self.simulator.partition(":")[0] == "ltspice" else "ngspice"
+
+    @field_validator("ngbehavior")
+    @classmethod
+    def _as_given(cls, value: str | None) -> str | None:
+        return None if value is None else mode_as_given(value)
 
     @model_validator(mode="after")
     def _profile(self) -> HierarchyQuery:

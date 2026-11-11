@@ -24,6 +24,7 @@ from ltspice_mcp.config import (
 )
 from ltspice_mcp.lib import capabilities, hidden_desktop
 from ltspice_mcp.lib.families import FAMILIES
+from ltspice_mcp.lib.ngspice_compat import mode_as_given
 from ltspice_mcp.lib.symbol_library import SymbolLibrary
 from ltspice_mcp.lib.wsl import is_wsl
 
@@ -366,7 +367,7 @@ def _apply_ngbehavior(config: ServerConfig | None) -> None:
     When unset it RESETS to spicelib's captured default rather than no-opping —
     otherwise a prior override would leak into a later re-entrant config load.
     """
-    override = config.ngbehavior.strip().lower() if config and config.ngbehavior else ""
+    override = mode_as_given(config.ngbehavior) if config and config.ngbehavior else ""
     mode = override or _SPICELIB_DEFAULT_NGBEHAVIOR
     # spicelib's public setter for the ``-D ngbehavior=`` it injects on every run.
     NGspiceSimulator.set_compatibility_mode(mode)

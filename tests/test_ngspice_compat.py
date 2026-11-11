@@ -31,7 +31,9 @@ needs_ngspice = pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngsp
 #: Modes whose letters ngspice reads in each way the model distinguishes:
 #: case (``LTPS``, ``HSA``, ``Hsa``), ``spe`` clearing ``ps`` and ``lt``
 #: (``spelt``), ``ps`` clearing ``hs`` (``hsps``) only after ``spe`` has
-#: run (``spehsps``), and ``mc`` turning the others off (``ltmc``, ``hsmc``).
+#: run (``spehsps``), ``mc`` turning the others off (``ltmc``, ``hsmc``,
+#: ``psmc``) but ``s3`` (``s3mc``), ``s3`` beside others (``hsas3``,
+#: ``lts3``), and the 80 characters ngspice reads.
 MODES = (
     "",
     "hsa",
@@ -49,6 +51,13 @@ MODES = (
     "spehsps",
     "ltmc",
     "hsmc",
+    "psmc",
+    "s3",
+    "s3mc",
+    "hsas3",
+    "lts3",
+    "y" * 78 + "lt",
+    "y" * 79 + "lt",
 )
 
 #: The flags ngspice-42 names for each mode in its log, measured with
@@ -68,6 +77,12 @@ MEASURED_FLAGS = {
     "spehs": {"hs", "spe"},
     "hsps": {"ps"},
     "spehsps": {"hs", "spe"},
+    "s3": {"s3"},
+    "hsas3": {"hs", "a", "s3"},
+    "lts3": {"lt", "s3"},
+    "xsspe": {"xs", "spe"},
+    "y" * 78 + "lt": {"lt"},
+    "y" * 79 + "lt": set(),
 }
 
 SECTIONED = "* sectioned\n.lib models.lib tt\nR1 1 0 {rv}\nV1 1 0 1\n.op\n.end\n"
@@ -102,7 +117,9 @@ def test_every_reader_of_a_mode_reads_a_lib_section_as_ngspice_does(tmp_path: Pa
         clean_startup=True,
         timeout=LIVENESS_S,
     )
-    drops = "Could not find include file tt" in log
+    # lt or ps read the line as two includes, s3 skips it; either way rv,
+    # which only the section defines, is never set.
+    drops = "Could not find include file tt" in log or "Undefined parameter [rv]" in log
     assert drops or "error" not in log.casefold(), log
 
     assert drops_lib_sections(mode) is drops

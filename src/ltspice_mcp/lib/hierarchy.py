@@ -35,11 +35,10 @@ from ltspice_mcp.lib.hierarchy_expr import (
     Environment,
     NumericFact,
     card_copies,
-    ngspice_multiplies_m,
     references_sibling,
     scaled_geometry,
 )
-from ltspice_mcp.lib.ngspice_compat import drops_lib_sections
+from ltspice_mcp.lib.ngspice_compat import drops_lib_sections, multiplies_m
 from ltspice_mcp.lib.pathutil import resolve_safe_path, with_roots
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
@@ -801,7 +800,7 @@ def resolve_hierarchy(
     )
     scale = global_env.fact(scale_expression)
     rewritten = _rewritten_for_m(occurrences, definitions, top, profile)
-    multiply_m = ngspice_multiplies_m(profile.ngbehavior)
+    multiply_m = multiplies_m(profile.ngbehavior)
     rows: list[ResolvedInstance] = []
     node_cache: dict[tuple[tuple[str, ...], str], Node] = {}
 
