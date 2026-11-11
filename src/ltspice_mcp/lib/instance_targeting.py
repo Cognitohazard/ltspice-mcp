@@ -26,6 +26,7 @@ from ltspice_mcp.lib.hierarchy import (
     SemanticProfile,
     Source,
     parse_hierarchy_cards,
+    require_established,
     resolve_hierarchy,
     walk_active,
 )
@@ -160,6 +161,7 @@ def _captured_inputs(files: Sequence[ClosureFile]) -> dict[Path, CapturedFile]:
 
 
 def captured_hierarchy(files: Sequence[ClosureFile], profile: SemanticProfile) -> Hierarchy:
+    require_established(profile, "editing a deck by instance")
     return resolve_hierarchy(files[0].path.resolve(), _captured_inputs(files), profile)
 
 
@@ -175,6 +177,9 @@ def source_lineage(
     before: Sequence[ClosureFile], after: Sequence[ClosureFile], profile: SemanticProfile
 ) -> tuple[SourceLineage, ...]:
     """Map active contexts through ordinary edits that preserve card population."""
+    require_established(
+        profile, "recording where the cards of an edited or recoverable run came from"
+    )
     captured = _captured_inputs(before)
     occurrences = walk_active(
         before[0].path.resolve(), lambda path, depth: captured[path], profile

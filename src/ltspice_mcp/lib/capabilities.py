@@ -319,7 +319,12 @@ ENTRIES: tuple[Entry, ...] = (
         "supported",
         ("recorded:subckt-device-names", "recorded:save-subckt-names", "recorded:deck-semantics"),
     ),
-    Entry("ngspice", "hierarchy", "supported", ("test:tests/test_hierarchy.py",)),
+    Entry(
+        "ngspice",
+        "hierarchy",
+        "supported",
+        ("test:tests/test_hierarchy.py", "test:tests/test_hierarchy_check.py"),
+    ),
     *_each(
         _UNMODELLED,
         "hierarchy",

@@ -32,6 +32,8 @@ and the circuits it can reach. Each query names one supported kind:
 * ``hierarchy`` — bounded netlist instance expansion, scoped ports, numeric
   facts and backend addresses from captured active dependencies. See
   ``lib/hierarchy.py`` for supported grammar and explicit refusal boundaries.
+  An ngspice query adds ``ngspice_check``, the resolved values compared with
+  ngspice's own reading of the deck (``lib/hierarchy_check.py``).
 * ``results`` — RAW plot inventory, selected signal descriptors and axisless
   quantities, or detached log measurements/native print rows. Pages bind the
   captured snapshot; RAW reads accept explicit plot/dialect selection.
@@ -157,6 +159,7 @@ from ltspice_mcp.lib.cursor_codec import canonical_hash
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, TraceDescriptor
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.hierarchy import SUPPORTED_FAMILIES, SemanticProfile, load_hierarchy
+from ltspice_mcp.lib.hierarchy_check import check_hierarchy
 from ltspice_mcp.lib.library_manager import (
     LibraryManager,
     model_row,
@@ -2318,6 +2321,15 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
         simulator_roots=(() if sandbox is None else simulator_library_roots(simulator)),
         relative_to=state.config.working_dir,
     )
+    check = check_hierarchy(hierarchy, simulator) if family == "ngspice" else None
+    if check is not None and not profile.established and check.status != "agrees":
+        # Outside the modes the reader's rules were checked for, an answer is
+        # given only where ngspice confirms it.
+        raise NetlistError(
+            f"unsupported hierarchy ngbehavior {profile.ngbehavior!r}: the reader's rules are "
+            "established for '', hsa and kiltpsa, and in another mode it answers only when "
+            f"ngspice confirms its values, but {check.explanation()}"
+        )
     selected = tuple(p.casefold() for p in q.instance) if q.instance else ()
     if selected and not any(
         tuple(p.casefold() for p in row.instance) == selected for row in hierarchy.instances
@@ -2341,6 +2353,7 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
             "instances": [row.row() for row in page["items"]],
             "profile": identity["profile"],
             "inputs": identity["inputs"],
+            "ngspice_check": check.payload() if check is not None else None,
             "total": page["total"],
             "returned": page["returned"],
         },

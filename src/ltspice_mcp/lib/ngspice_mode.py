@@ -120,37 +120,65 @@ def flags_for(command: tuple[str, ...], mode: str) -> tuple[str, ...] | None:
 
 
 def _ask(command: tuple[str, ...], mode: str) -> tuple[str, ...] | None:
-    environment = {
-        name: value for name, value in os.environ.items() if not name.upper().startswith("SPICE_")
-    }
     # Any failure: a check that cannot run must not fail the run it checks.
     try:
-        with tempfile.TemporaryDirectory(
-            prefix="ngspice-mode-", ignore_cleanup_errors=True
-        ) as folder:
-            deck = Path(folder) / "probe.cir"
-            deck.write_bytes(_PROBE_DECK)
-            log = deck.with_suffix(".log")
-            argv = [*command, NGSPICE_NO_USER_INIT]
-            if mode:
-                argv += ["-D", f"ngbehavior={mode}"]
-            argv += ["-b", "-o", log.as_posix(), deck.as_posix()]
-            environment["SPICE_SCRIPTS"] = folder
-            subprocess.run(
-                argv,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=_PROBE_TIMEOUT_S,
-                cwd=folder,
-                env=environment,
-                creationflags=_CREATE_NO_WINDOW if sys.platform == "win32" else 0,
-                check=False,
-            )
-            return deck_flags(decode_spice_bytes(log.read_bytes()), driver=False)
+        log = run_batch(command, mode, _PROBE_DECK, clean_startup=True, timeout=_PROBE_TIMEOUT_S)
+        return deck_flags(log, driver=False)
     except Exception as exc:
         logger.warning("Could not ask %s which flags it gives mode %r: %s", command, mode, exc)
         return None
+
+
+def run_batch(
+    command: tuple[str, ...],
+    mode: str,
+    deck: bytes,
+    *,
+    cwd: Path | None = None,
+    clean_startup: bool,
+    timeout: float,
+) -> str:
+    """Run ``deck`` through the ngspice ``command`` starts, in batch, and
+    return its ``-o`` log; for the server's own questions to ngspice, not
+    for runs.
+
+    ngspice starts as a run does: ``-n``, ``-D ngbehavior=<mode>`` when
+    ``mode`` is set, and a deck file and log in a folder of its own. With
+    ``clean_startup`` it reads no startup file at all: ``SPICE_SCRIPTS``
+    names that folder, which holds no ``spinit``, and no other ``SPICE_``
+    variable is passed. Otherwise it reads the installation's ``spinit``, for
+    its code models, as a run does. ``cwd`` is where it runs, the folder
+    when None. Raises when ngspice cannot be started or writes no log.
+    """
+    environment = dict(os.environ)
+    if clean_startup:
+        environment = {
+            name: value
+            for name, value in environment.items()
+            if not name.upper().startswith("SPICE_")
+        }
+    with tempfile.TemporaryDirectory(prefix="ngspice-ask-", ignore_cleanup_errors=True) as folder:
+        path = Path(folder) / "probe.cir"
+        path.write_bytes(deck)
+        log = path.with_suffix(".log")
+        argv = [*command, NGSPICE_NO_USER_INIT]
+        if mode:
+            argv += ["-D", f"ngbehavior={mode}"]
+        argv += ["-b", "-o", log.as_posix(), path.as_posix()]
+        if clean_startup:
+            environment["SPICE_SCRIPTS"] = folder
+        subprocess.run(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=timeout,
+            cwd=cwd if cwd is not None else folder,
+            env=environment,
+            creationflags=_CREATE_NO_WINDOW if sys.platform == "win32" else 0,
+            check=False,
+        )
+        return decode_spice_bytes(log.read_bytes())
 
 
 @dataclass(frozen=True)
