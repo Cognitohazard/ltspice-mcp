@@ -145,10 +145,10 @@ _SYMMETRIC_TWO_TERMINAL: frozenset[str] = frozenset({"R", "C", "L"})
 # section declaration as an include of a file named ``tt``.
 _MAX_INCLUDE_DEPTH = 3
 
-# The cards a scope holds as its directives: what a subcircuit's body or the
-# deck's top level says beside its components. A ``.subckt``/``.ends`` pair is a
-# definition of its own, and ``.end`` closes the deck.
-_DIRECTIVE_CARD_KINDS = frozenset({"model", "param", "meas", "directive", "control"})
+#: The cards a scope holds as its directives: what a subcircuit's body or the
+#: deck's top level says beside its components. A ``.subckt``/``.ends`` pair is a
+#: definition of its own, and ``.end`` closes the deck.
+DIRECTIVE_CARD_KINDS = frozenset({"model", "param", "meas", "directive", "control"})
 
 
 class NetlistGraphError(ValueError):
@@ -316,11 +316,12 @@ class NetlistGraph:
     #: in every subcircuit body.
     global_nets: frozenset[str] = frozenset()
     #: The deck's directive cards outside every subcircuit definition and
-    #: before its ``.end``. An ``.include`` or ``.lib`` whose file defines
-    #: subcircuits and nothing else is left out, here and in each
-    #: definition's ``directives``: what it brings is those definitions, which
-    #: are compared themselves.
+    #: before its ``.end``.
     directives: tuple[SpiceCard, ...] = ()
+    #: The ``.include`` and ``.lib`` cards among ``directives`` and the
+    #: definitions' whose file (or section) defines subcircuits and nothing
+    #: else, so what each brings is those definitions.
+    definition_includes: tuple[SpiceCard, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -341,6 +342,17 @@ class FlatComponent:
 
 
 @dataclass(frozen=True)
+class FlatCall:
+    """A subcircuit instance flattening expanded: its path as written
+    (``X1.XI``), the key of the definition it calls, and its own parameters
+    (an ``X`` card's ``params:``), which override that definition's defaults."""
+
+    ref: str
+    definition: str
+    params: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
 class FlatNetlist:
     """A fully flattened netlist: leaf components and the set of nets.
 
@@ -351,6 +363,8 @@ class FlatNetlist:
     components: tuple[FlatComponent, ...]
     nets: frozenset[str]
     unresolved_subckts: tuple[str, ...] = ()
+    #: Every subcircuit instance expanded, in the order it was reached.
+    calls: tuple[FlatCall, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -728,26 +742,26 @@ def parse_netlist_graph(
     )
 
     components = [_component_from_card(card) for card in iter_by_kind(cards, "instance", scope=())]
-    skipped = registry.definitions_only
-
-    def own(directives: Iterable[SpiceCard]) -> tuple[SpiceCard, ...]:
-        return tuple(card for card in directives if id(card) not in skipped)
-
+    directives = tuple(
+        card
+        for card in cards
+        if not card.scope and not card.trailing and card.kind in DIRECTIVE_CARD_KINDS
+    )
+    # Cards are told apart by identity: every card compared here is alive,
+    # held by the deck or a definition, and so is every card the registry
+    # marked, so no two share an id.
+    held = {id(card) for card in directives} | {
+        id(card) for definition in registry.subckts.values() for card in definition.directives
+    }
     return NetlistGraph(
         components=components,
-        subckts={
-            key: replace(definition, directives=own(definition.directives))
-            for key, definition in registry.subckts.items()
-        },
+        subckts=registry.subckts,
         warnings=list(result.warnings),
         missing_includes=tuple(registry.missing),
         duplicate_subckts=registry.duplicate_records(),
         global_nets=frozenset(registry.global_nets),
-        directives=own(
-            card
-            for card in cards
-            if not card.scope and not card.trailing and card.kind in _DIRECTIVE_CARD_KINDS
-        ),
+        directives=directives,
+        definition_includes=tuple(card for card in registry.definitions_only if id(card) in held),
     )
 
 
@@ -760,9 +774,10 @@ class _SubcktRegistry:
     ignored: dict[str, list[str]] = field(default_factory=dict)
     missing: list[MissingInclude] = field(default_factory=list)
     global_nets: set[str] = field(default_factory=set)
-    #: The ``id`` of each include card whose file defines subcircuits and
-    #: nothing else, and whether each file (and section) read so far does.
-    definitions_only: set[int] = field(default_factory=set)
+    #: Each include card whose file defines subcircuits and nothing else
+    #: (held, so its identity is its own), and whether each file (and
+    #: section) read so far does.
+    definitions_only: list[SpiceCard] = field(default_factory=list)
     files: dict[tuple[Path, str | None], bool] = field(default_factory=dict)
 
     def register(self, definition: SubcktDef, source: str) -> None:
@@ -799,7 +814,7 @@ def _subckt_def_from(cards: list[SpiceCard], opener_index: int) -> SubcktDef:
         ports=tuple(view.ports),
         components=tuple(body),
         param_defaults=tuple(view.param_defaults.items()),
-        directives=tuple(card for card in children if card.kind in _DIRECTIVE_CARD_KINDS),
+        directives=tuple(card for card in children if card.kind in DIRECTIVE_CARD_KINDS),
     )
 
 
@@ -855,7 +870,10 @@ def _collect_subckts(
         )
         return False
     wanted = section.casefold() if section is not None else None
-    only_definitions = True
+    # A section the file does not declare: what the line brings is not known.
+    only_definitions = wanted is None or wanted in {
+        name.casefold() for name in sections if name is not None
+    }
     for index, (card, card_section) in enumerate(zip(cards, sections, strict=True)):
         if wanted is not None and card_section is not None and card_section.casefold() != wanted:
             continue
@@ -879,6 +897,7 @@ def _collect_subckts(
                         source=source,
                     )
                 )
+                only_definitions = False
             continue
         reference = references.get(id(card))
         if reference is None:
@@ -898,7 +917,7 @@ def _collect_subckts(
             source=None if depth == 0 else source,
         )
         if defines_only:
-            registry.definitions_only.add(id(card))
+            registry.definitions_only.append(card)
         elif not card.scope:
             only_definitions = False
     return only_definitions
@@ -1041,6 +1060,7 @@ def _flatten(
     ``compare_graphs`` falls back to, which records each port-arity mismatch
     there and keeps that instance as a black box (see ``_expand``)."""
     leaves: list[FlatComponent] = []
+    calls: list[FlatCall] = []
     unresolved: set[str] = set()
     for comp in graph.components:
         _expand(
@@ -1050,6 +1070,7 @@ def _flatten(
             net_map=None,
             global_nets=graph.global_nets,
             out=leaves,
+            calls=calls,
             stack=(),
             unresolved=unresolved,
             arity=arity,
@@ -1059,6 +1080,7 @@ def _flatten(
         components=tuple(leaves),
         nets=nets,
         unresolved_subckts=tuple(sorted(unresolved)),
+        calls=tuple(calls),
     )
     return flat, [] if arity is None else arity
 
@@ -1071,6 +1093,7 @@ def _expand(
     net_map: dict[str, str] | None,
     global_nets: frozenset[str],
     out: list[FlatComponent],
+    calls: list[FlatCall],
     stack: tuple[str, ...],
     unresolved: set[str],
     arity: list[ArityError] | None = None,
@@ -1145,6 +1168,7 @@ def _expand(
     assert model_key is not None
     sub = subckts[model_key]
     child_path = (*path, comp.ref)
+    calls.append(FlatCall(".".join(child_path), model_key, comp.params))
     child_map = _build_child_net_map(sub, flat_nodes, ".".join(child_path), global_nets)
     for child in sub.components:
         _expand(
@@ -1154,6 +1178,7 @@ def _expand(
             net_map=child_map,
             global_nets=global_nets,
             out=out,
+            calls=calls,
             stack=(*stack, model_key),
             unresolved=unresolved,
             arity=arity,
@@ -1252,6 +1277,10 @@ def compare_graphs(
     for key in ref_by_ref.keys() & cand_by_ref.keys():
         rc, cc = ref_by_ref[key], cand_by_ref[key]
         _diff_matched_pair(rc, cc, rtol, result)
+    # A subcircuit instance is no leaf, but its own parameters set what its
+    # body's values read, so an instance both sides have compares them too.
+    for ref_call, cand_call in paired_calls(ref_flat, cand_flat):
+        _diff_params(ref_call.ref, ref_call.params, cand_call.params, rtol, result)
 
     # --- named node-partition mismatches, via reference-keyed propagation -----
     result.node_partition_mismatches.extend(
@@ -1485,15 +1514,44 @@ def _diff_matched_pair(
         result.value_mismatches.append(
             ValueDiff(ref=rc.ref, reference_value=rc.value, candidate_value=cc.value)
         )
-    rparams, cparams = copies_by_name(rc.params), copies_by_name(cc.params)
+    _diff_params(rc.ref, rc.params, cc.params, rtol, result)
+
+
+def _diff_params(
+    ref: str,
+    reference: tuple[tuple[str, str], ...],
+    candidate: tuple[tuple[str, str], ...],
+    rtol: float,
+    result: GraphComparison,
+) -> None:
+    """A ``param_mismatches`` row for each parameter of ``ref`` the two sides
+    give otherwise (``_disagreement``)."""
+    rparams, cparams = copies_by_name(reference), copies_by_name(candidate)
     for pkey in sorted(rparams.keys() | cparams.keys()):
         differ = _disagreement(rparams.get(pkey, []), cparams.get(pkey, []), rtol)
         if differ is not None:
             result.param_mismatches.append(
-                ParamDiff(
-                    ref=rc.ref, key=pkey, reference_value=differ[0], candidate_value=differ[1]
-                )
+                ParamDiff(ref=ref, key=pkey, reference_value=differ[0], candidate_value=differ[1])
             )
+
+
+def paired_calls(
+    reference: FlatNetlist, candidate: FlatNetlist
+) -> list[tuple[FlatCall, FlatCall]]:
+    """The subcircuit instances both sides expand, paired by path as the
+    leaves are (``canon_ref``, across the ``X`` LTspice adds), in path order:
+    what tells which definition on one side stands for which on the other,
+    whatever each is named."""
+    ref = {canon_ref(call.ref): call for call in reference.calls}
+    cand, _ = rekey_across_added_x(ref, {canon_ref(call.ref): call for call in candidate.calls})
+    return [(ref[key], cand[key]) for key in sorted(ref.keys() & cand.keys())]
+
+
+def flatten_for_comparison(graph: NetlistGraph) -> FlatNetlist:
+    """``graph`` flattened as ``compare_graphs`` flattens it: an instance whose
+    port count does not match its definition is kept as a black box rather
+    than refused."""
+    return _flatten(graph, arity=[])[0]
 
 
 def _disagreement(

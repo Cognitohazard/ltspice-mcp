@@ -24,8 +24,9 @@ Checks by file kind:
 ``compare`` runs in one of two modes: ``equivalence`` graph-compares through the
 netlist graph (every include/lib open gated by ``safe_path``, so with a
 sandbox set an in-deck include that escapes it is denied and never read), and
-compares each scope's directives (the top level's and those of each subcircuit
-the circuit calls) with ``structural_diff``'s reader; ``structural_diff`` lexes both decks and reports an added/removed/changed
+compares each scope's directives (the top level's, and those of each subcircuit
+definition an instance both circuits have calls) with ``structural_diff``'s
+reader; ``structural_diff`` lexes both decks and reports an added/removed/changed
 delta over the parsed cards, leaving out the boilerplate LTspice's netlister adds
 to every export. Both modes compare netlists: an ``.asc`` under test is compared
 as its export, so an ``.asc`` reference is exported the same way, and with no
@@ -235,8 +236,8 @@ STRUCTURAL_DELTA_PROPS: dict[str, Any] = {
         "items": {"type": "string"},
         "description": (
             "SPICE directives in the compared deck and not the baseline, each "
-            "with its continuation lines joined; in equivalence mode, a "
-            "subcircuit's own end with '(in .subckt NAME)'."
+            "with its continuation lines joined. In equivalence mode, one in a "
+            "subcircuit's definition is followed by '(in .subckt NAME)'."
         ),
     },
     "directives_removed": {
@@ -723,8 +724,8 @@ COMPARISON_SCHEMA: dict[str, Any] = {
             "type": "boolean",
             "description": (
                 "equivalence mode only: whether the directives match, the top "
-                "level's and each called subcircuit's own, compared as "
-                "structural_diff compares them; directives_added/removed list the "
+                "level's and each called subcircuit's own, each read as "
+                "structural_diff reads it; directives_added/removed list the "
                 "difference. Can be true while 'equivalent' is false."
             ),
         },
