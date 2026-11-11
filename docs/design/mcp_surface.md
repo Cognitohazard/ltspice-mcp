@@ -1087,24 +1087,36 @@ changed RAW.
 
 When a run has one value per `.meas` (each case of a sweep with no `.step`
 does), its `measurements` row contains `measured: {name: value}`, the number a
-reduction or spec reads for that name; `at: {name: point}` where the log
-printed a crossing or `AT` point with it; and `failed_measurements: [name]`,
-each name the log has no number for (LTspice printed it as FAIL'ed, or
-printed a non-finite value, or printed something other than a number). A
-failed name's `measured` entry is null, not absent, and a null there is always
-listed in `failed_measurements`. A value printed as something other than a
-number, such as a WHEN threshold written as a parameter, an expression or (on
-LTspice 26) a braced expression, fails only its own entry:
-`unreadable: {name: {line, reason}}` gives the log line and what it printed,
-and every other measurement of the log reads. Every measurement the log
-printed has an entry; a log whose measurements cannot all be given one fails
-the measurements read, naming the ones it lacks. The
-same `unreadable {line, reason}` is on the entry in the summary's
-`measurements`, in `inspect(kind="results", view="measurements")` rows and in
-the Python API's `measurements`. The
-default row omits the per-name `stats` block; `include.fields=["value"]`
-returns it, and reductions and specs read it either way. A stepped run's row
-has only `stats`.
+reduction or spec reads for that name, and `at: {name: point}` where the log
+printed a crossing or `AT` point with it. A name the log holds no number for
+has a null `measured` entry, not an absent one, and the row names it in one
+of three places, by why:
+
+- `failed_measurements: [name]`: LTspice printed it as failed at the step the
+  row reads, as `Measurement "name" FAIL'ed` or as `failed` in that step's row
+  of a stepped table (LTspice 24 and later; XVII prints 0 there, which the
+  `measurement_zero_or_failed` observation names).
+- `unreadable: {name: {line, reason}}`: LTspice printed something other than
+  a number, such as a WHEN threshold written as a parameter, an expression or
+  (on LTspice 26) a braced expression. The entry gives the log line and what
+  it printed; only that entry fails, and every other measurement of the log
+  reads.
+- `not_finite: [name]`: LTspice printed a number that is not finite, such as
+  a stepped FRA's gain margin of `infdB`, which the log decoder holds as null.
+
+`failed_measurements` means "LTspice printed it as failed" in every reply
+that carries it. The summary, `inspect(kind="results", view="measurements")`
+and the Python API's `measurements` name each measurement LTspice printed as
+failed at any step, and an entry whose stepped table printed `failed` lists
+those steps, from 0, in `failed_steps`. Every measurement the log printed has
+an entry; a log whose measurements cannot all be given one fails the
+measurements read, naming the ones it lacks. The same `unreadable {line,
+reason}` is on the entry in the summary's `measurements`, in
+`inspect(kind="results", view="measurements")` rows and in the Python API's
+`measurements`. The default row omits the per-name `stats` block;
+`include.fields=["value"]` returns it, and reductions and specs read it either
+way. A stepped run's row has `stats`, with `failed_measurements` and
+`unreadable` over all its steps.
 
 `step` and `all_steps` apply to the whole call, so every recipe reads the same
 iteration. `run_experiments`' attached `analyze` block takes
@@ -2304,7 +2316,7 @@ it, and reported when the caller names it.
 | discriminant | run type | own required fields | notes |
 |-|-|-|-|
 | `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics. Fourier is each `.four` table as the build printed it, phase included; LTspice 26 and XVII print phase in different conventions |
-| `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); per run, `stats` for each `.meas` name, keyed lower-cased as the log reader holds it. A name in `names` or `field` is matched in any case, and one the log does not hold fails the run with the names it holds. A run with one value per name also has `measured` {name: value}, `at` and `failed_measurements`, and its default row shows only those (§3.3) |
+| `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); per run, `stats` for each `.meas` name, keyed lower-cased as the log reader holds it. A name in `names` or `field` is matched in any case, and one the log does not hold fails the run with the names it holds. A run with one value per name also has `measured` {name: value} and `at`, and a null there is named under `failed_measurements` (LTspice printed it failed), `unreadable` or `not_finite`; its default row shows only those (§3.3) |
 | `value` | any | `expr` — one trace or node pair, not arithmetic | `at`, required when the axis has more than one sample; reads the nearest sample, no interpolation; a bias-point run is read by name; step-aware |
 | `signal_stats` | tran | `signal` | `window?`, `quantiles?` — levels in [0, 1], weighted by time, not by sample; each adds `q<percent>` (0.99 is `q99`, 0.999 is `q99_9`) and two or more add `quantile_peak_to_peak`, all reducible. `min`/`max`/`peak_to_peak` stay the sample extremes |
 | `edges` | tran | `signal` | `levels?`, `edge?`, `window?` |

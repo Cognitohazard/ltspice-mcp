@@ -1402,6 +1402,13 @@ def parse_measurements(
     line spicelib's reader does not match too (``docs/spicelib_bugs.md``,
     Bug 38).
 
+    This is where the question "which measurements did LTspice print as
+    failed" is answered: ``failed_measurements`` names each one printed
+    ``Measurement "name" FAIL'ed``, null at every step, and each whose stepped
+    table printed ``failed`` in a row, null at those steps, which its entry
+    lists in ``failed_steps`` (:func:`~ltspice_mcp.lib.log_types.measurement_failed`
+    reads it per step). A value null for another reason is not listed.
+
     Args:
         log_path: Path to .log file
         reader: Optional pre-built LTSpiceLogReader (avoids re-parsing)
@@ -1471,11 +1478,17 @@ def parse_measurements(
     # as a parameter, an expression or a braced expression) fails its own
     # entry, not the table: name (as the reader keys it) -> the text it printed.
     unreadable: dict[str, str] = {}
+    # The rows of a stepped table where LTspice 24 and later print 'failed'
+    # (recorded: log/meas_step): name -> the steps, from 0.
+    failed_rows: dict[str, list[int]] = {}
 
     def _coerce(values: list, name: str) -> list[float | None]:
         out: list[float | None] = []
-        for val in values:
-            if val is None or (isinstance(val, str) and val.upper() == "FAILED"):
+        for index, val in enumerate(values):
+            if isinstance(val, str) and val.upper() == "FAILED":
+                failed_rows.setdefault(name, []).append(index)
+                out.append(None)
+            elif val is None:
                 out.append(None)
             elif isinstance(val, complex):
                 out.append(_complex_measurement(val))
@@ -1572,6 +1585,8 @@ def parse_measurements(
                 "line": shown.line if shown is not None else None,
                 "reason": f"the log gives {printed!r} where a number belongs",
             }
+        if name in failed_rows:
+            entry["failed_steps"] = failed_rows[name]
         measurements[name] = entry
 
     step_count = len(next(iter(parents.values()))) if parents else 0
@@ -1585,12 +1600,19 @@ def parse_measurements(
             continue
         measurements[fname] = {"values": [None] * max(step_count, 1)}
 
+    # Every measurement LTspice printed as failed, FAIL'ed as a whole or in a
+    # row of its table, in the order the log printed them.
+    failed = [
+        *failed_names,
+        *(name for name in measurements if "failed_steps" in measurements[name]),
+    ]
+    failed = sorted(dict.fromkeys(failed), key=lambda name: order.get(name.lower(), len(order)))
     return {
         "measurements": measurements,
         "step_count": step_count,
         "errors": None,
         "warnings": None,
-        "failed_measurements": failed_names,
+        "failed_measurements": failed,
     }
 
 

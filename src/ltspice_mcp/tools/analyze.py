@@ -2076,11 +2076,15 @@ def _measurements_compact(value: dict[str, Any]) -> dict[str, Any]:
     one number. Here the number is keyed by name under ``measured``, read by the
     reducer's own extractor so a row and a reduction over it cannot disagree;
     the point a crossing or ``AT`` reported with it goes under ``at``. A name
-    the log holds no number for (FAIL'ed, or a value the log decoder nulled as
-    not finite) keeps its key with null and is listed in
-    ``failed_measurements``, so a failure reads as a failure rather than as a
-    missing name. A stepped run's per-name spread is its answer, so it gets
-    none of this, and neither does an empty selection.
+    the log holds no number for keeps its key with null, so it never reads as
+    a missing name, and the value beside says why, each null in one place:
+    ``failed_measurements`` (LTspice printed it failed) and ``unreadable``
+    (LTspice printed something other than a number) come with the metric's
+    value (``metrics.measurement_rows``), and ``not_finite`` names the rest,
+    each a number the log decoder holds as null because it is not finite
+    (LTspice 26 prints a stepped FRA's gain margin ``infdB``, recorded as
+    ``raw/fra_step``). A stepped run's per-name spread is its answer, so it
+    gets none of this, and neither does an empty selection.
     """
     stats = value.get("stats")
     if not isinstance(stats, dict) or not stats:
@@ -2094,11 +2098,12 @@ def _measurements_compact(value: dict[str, Any]) -> dict[str, Any]:
     at = {name: entry["at"] for name, entry in stats.items() if "at" in entry}
     if at:
         compact["at"] = at
-    failed = [name for name, number in measured.items() if number is None]
-    if failed:
-        compact["failed_measurements"] = failed
-    if value.get("unreadable"):
-        compact["unreadable"] = value["unreadable"]
+    explained = {*value.get("failed_measurements", ()), *value.get("unreadable", {})}
+    not_finite = [
+        name for name, number in measured.items() if number is None and name not in explained
+    ]
+    if not_finite:
+        compact["not_finite"] = not_finite
     return compact
 
 
@@ -2306,8 +2311,8 @@ def _reduce(recipe: Recipe, tallies: dict[str, _FieldTally]) -> list[dict[str, A
     reduced: list[dict[str, Any]] = []
     for field_name, tally in tallies.items():
         values = [value for _, value in tally.samples]
-        # Present only when some row had no number, as failed_measurements is:
-        # absent, every row the reduction covers carried one.
+        # Present only when some row had no number: absent, every row the
+        # reduction covers carried one.
         no_value = {"no_value_count": tally.no_value} if tally.no_value else {}
         for stat in stats:
             reduced.append(
@@ -2819,13 +2824,14 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
             "type": "object",
             "description": (
                 "The recipe's value. A measurements row whose run holds one value "
-                "per .meas carries 'measured' {name: value}, 'at' {name: reported "
-                "crossing/AT point} and 'failed_measurements', the names whose "
-                "'measured' is null because the log holds no number for them, and "
-                "'unreadable' {name: {line, reason}} for one whose printed value is "
-                "not a number; its "
+                "per .meas carries 'measured' {name: value} and 'at' {name: reported "
+                "crossing/AT point}. A null in 'measured' is named once by why: "
+                "'failed_measurements' (LTspice printed it failed), 'unreadable' "
+                "{name: {line, reason}} (it printed something other than a number) "
+                "or 'not_finite' (it printed a number that is not finite). Its "
                 "'stats' block is left off the default row and returned by "
-                "include.fields=['value']. A stepped run's row is 'stats' alone."
+                "include.fields=['value']. A stepped run's row is 'stats', with "
+                "'failed_measurements' and 'unreadable' over all its steps."
             ),
             "properties": {
                 "measured": {
@@ -2836,7 +2842,23 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
                     "type": "object",
                     "additionalProperties": {"type": ["number", "null"]},
                 },
-                "failed_measurements": {"type": "array", "items": {"type": "string"}},
+                "failed_measurements": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "The measurements LTspice printed as failed at the step(s) "
+                        "the row reads: FAIL'ed, or 'failed' in a stepped table."
+                    ),
+                },
+                "not_finite": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "The measurements whose 'measured' is null because LTspice "
+                        "printed a number that is not finite, such as a gain margin "
+                        "of infdB."
+                    ),
+                },
                 "unreadable": {
                     "type": "object",
                     "additionalProperties": {

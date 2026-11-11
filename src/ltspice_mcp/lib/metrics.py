@@ -68,7 +68,7 @@ from ltspice_mcp.lib.format import (
     same_value,
 )
 from ltspice_mcp.lib.log_parser import DEVICE_OP_TABLE_DIGITS, device_key
-from ltspice_mcp.lib.log_types import MeasurementsOutput, measurement_named
+from ltspice_mcp.lib.log_types import MeasurementsOutput, measurement_failed, measurement_named
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
     compute_ac_bandwidth_metrics,
@@ -843,7 +843,8 @@ def measurements_at_step(meas_data: MeasurementsOutput, step: int) -> Measuremen
     ``AT`` at that step where they vary by step. Row ``n`` of a stepped table
     is the step the log's ``n``-th ``.step`` line names, on both LTspice
     builds (recorded: ``log/meas_step``, ``log/step_two_params``,
-    ``log/step_temp``).
+    ``log/step_temp``). ``failed_measurements`` names those LTspice printed
+    as failed at that step (:func:`measurement_failed`).
     """
     count = max(meas_data.get("step_count") or 0, 1)
     if not 0 <= step < count:
@@ -858,10 +859,17 @@ def measurements_at_step(meas_data: MeasurementsOutput, step: int) -> Measuremen
 
     one: dict[str, Any] = {}
     for name, entry in meas_data.get("measurements", {}).items():
-        row = {key: at_step(field) for key, field in entry.items()}
+        # failed_steps names steps rather than holding a field per step; the
+        # step's own failed_measurements says it of the one step kept.
+        row = {key: at_step(field) for key, field in entry.items() if key != "failed_steps"}
         row["values"] = [row["values"]]
         one[name] = row
-    return {**meas_data, "measurements": one, "step_count": 1}
+    failed = [
+        name
+        for name in meas_data.get("failed_measurements") or []
+        if measurement_failed(meas_data, name, step)
+    ]
+    return {**meas_data, "measurements": one, "step_count": 1, "failed_measurements": failed}
 
 
 def measurement_step_values(
@@ -1119,8 +1127,10 @@ async def measurement_rows(
 ) -> list[MetricValue]:
     """The measurements recipe's value at each of ``steps``, from one read of
     the run's log: ``None`` aggregates every step, an index reads that step's
-    row (:func:`measurements_at_step`). The deck and the build that wrote the
-    run are read once for all of them."""
+    row (:func:`measurements_at_step`). Each names the measurements LTspice
+    printed as failed at its steps in ``failed_measurements``, and those it
+    printed as other than a number in ``unreadable``. The deck and the build
+    that wrote the run are read once for all of them."""
     logs = await services.load_logs(source, state)
     whole = logs.value("measurements")
     if whole is None or source.log is None:
@@ -1146,7 +1156,7 @@ async def measurement_rows(
 
     aggregated = await services.bounded_parse(source.log, aggregate_each)
     values: list[MetricValue] = []
-    for stats, axis_map, at_map in aggregated:
+    for table, (stats, axis_map, at_map) in zip(tables, aggregated, strict=True):
         # Surface which field each stat block was computed from so a downstream
         # consumer can tell "this is the level (constant)" from "this is the
         # WHEN-clause crossing frequency".
@@ -1166,6 +1176,12 @@ async def measurement_rows(
             chosen = {require_measurement(name, stats) for name in recipe.names}
             stats = {name: entry for name, entry in stats.items() if name in chosen}
         row: dict[str, Any] = {"stats": stats}
+        # What LTspice printed as failed, at the steps this row reads: the
+        # log decoder's answer, never a null's (a null may be unreadable or
+        # not finite instead).
+        failed = [name for name in table["failed_measurements"] if name in stats]
+        if failed:
+            row["failed_measurements"] = failed
         unreadable = {
             name: entry["unreadable"]
             for name, entry in whole["measurements"].items()

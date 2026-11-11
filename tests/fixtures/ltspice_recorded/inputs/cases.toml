@@ -516,8 +516,8 @@ model = ["lib/raw_header.py", "lib/decoded_raw.py", "lib/raw_parser.py"]
 inputs = ["raw/tf.cir", "raw/tf_step.cir"]
 
 [behaviour.raw-fra]
-summary = "A frequency response analysis (.fra): the results file a build writes beside the transient raw, its name, header and layout, plain, stepped and under .options numdgt=7."
-model = ["lib/raw_header.py", "lib/raw_parser.py"]
+summary = "A frequency response analysis (.fra): the results file a build writes beside the transient raw, its name, header and layout, plain, stepped and under .options numdgt=7, and the loop margins a stepped run prints as measurements in its log, an infinite one as infdB."
+model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/log_parser.py", "tools/analyze.py"]
 # One loop: an amplifier of gain 100 (an E source), a single RC pole, and the
 # analyzer @1 in series between the amplifier's output and the pole. Four
 # frequencies an octave apart and a short settling time keep the run, and the
@@ -553,13 +553,13 @@ evidence = "every recorded log; a stepped temperature writes the one non-ASCII c
 
 [behaviour.log-meas]
 summary = "How each .meas form is printed: MAX/MIN/PP/AVG/RMS/INTEG with FROM and TO, FIND AT, WHEN, TRIG/TARG, PARAM, complex AC results, the tables of a stepped run, and a stepped .op, whose log has no .step lines and which neither build prints a table for."
-model = ["lib/log_parser.py", "lib/metrics.py", "lib/log_decode.py", "tools/analyze.py"]
+model = ["lib/log_parser.py", "lib/log_types.py", "lib/metrics.py", "lib/log_decode.py", "lib/result_observations.py", "tools/analyze.py"]
 inputs = ["log/meas_forms.cir", "log/meas_ac.cir", "log/meas_step.cir", "log/meas_step_op.cir"]
 keep = ["log"]
 
 [behaviour.log-meas-failed]
 summary = "What the log says of a measurement that cannot be taken or does not parse, and what happens to the measurements around it."
-model = ["lib/log_parser.py", "lib/result_observations.py", "lib/lint_rules.py", "lib/spice_validator.py"]
+model = ["lib/log_parser.py", "lib/log_types.py", "lib/metrics.py", "lib/result_observations.py", "lib/lint_rules.py", "lib/spice_validator.py", "tools/analyze.py"]
 inputs = ["log/meas_failed.cir", "log/meas_bad_syntax.cir"]
 keep = ["log"]
 
