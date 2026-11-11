@@ -407,10 +407,18 @@ _START_MARKERS: dict[int, str | None] = {}
 def this_process_start_marker() -> str | None:
     """This process's start marker (``proc_kill.process_start_marker``): what
     tells it apart from any earlier process that had its pid. None when it
-    cannot be read."""
+    cannot be read.
+
+    The one reading of this process's identity: every record this process
+    writes, and every recovery attempt it takes on, carries this marker.
+    Whether this process runs a job is not answered by it, or by any identity
+    a record names: that is the registry's (``JobRegistry.owns``).
+    """
     pid = os.getpid()
     if pid not in _START_MARKERS:
-        from ltspice_mcp.lib.proc_kill import process_start_marker
+        from ltspice_mcp.lib.proc_kill import (
+            process_start_marker,  # noqa: TID251 - the store reads this process's identity
+        )
 
         try:
             _START_MARKERS[pid] = process_start_marker(pid)
@@ -418,15 +426,6 @@ def this_process_start_marker() -> str | None:
             logger.debug("Could not read this process's start marker: %s", exc)
             _START_MARKERS[pid] = None
     return _START_MARKERS[pid]
-
-
-def is_this_process(pid: int | None, start_marker: str | None) -> bool:
-    """Whether a recorded process identity names this process: its pid AND its
-    start marker. A pid alone never does — pids are reused, quickly on Windows,
-    so a record a dead server left can carry this process's pid."""
-    if pid != os.getpid() or not start_marker:
-        return False
-    return start_marker == this_process_start_marker()
 
 
 def owner_start_record(pid: int, recorded: tuple[int, str] | None) -> dict[str, Any] | None:

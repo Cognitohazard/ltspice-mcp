@@ -167,6 +167,7 @@ from ltspice_mcp.lib.library_manager import (
     rank_models,
 )
 from ltspice_mcp.lib.lint_rules import linter_version
+from ltspice_mcp.lib.log_types import measurement_failed
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
 from ltspice_mcp.lib.ltspice_window import (
     OpenDesign,
@@ -343,7 +344,7 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
     # trace answers "what's on net X" on label-wired sheets too. They are kept
     # on the sheet for the call's other queries; grouping a large sheet is
     # slow, so it runs off the event loop.
-    await asyncio.to_thread(lambda: sheet.net_points)
+    await asyncio.to_thread(lambda: (sheet.net_points, sheet.named_nets))
     nets = sheet.nets
 
     if args.pin is not None and args.pin.startswith("net:"):
@@ -402,7 +403,9 @@ async def handle_trace_net(args: TraceNetInput, state: SessionState) -> types.Ca
             if wire[:2] in on_net or wire[2:] in on_net
         )
 
-    labels = {label.text for label in nets.labels_on(net)}
+    # The net's names as every view of a pin's net gives them: each label's
+    # text, every spelling of a name among them (NamedNets.texts).
+    labels = sheet.named_nets.texts(root)
     pins = sorted(
         (
             {"reference": pin.reference, "pin": pin.name, "x": pin.point[0], "y": pin.point[1]}
@@ -1572,9 +1575,7 @@ def _deck_node(
             "does not read: it lists the deck's own cards. inspect(kind='hierarchy') "
             "lists the nodes of each subcircuit instance."
         )
-    included = sum(
-        1 for card in cards if not card.scope and directive_head(card) in INCLUDE_HEADS
-    )
+    included = sum(1 for card in cards if not card.scope and directive_head(card) in INCLUDE_HEADS)
     if included:
         message += (
             f" The deck reads {included} more file{'s' if included > 1 else ''} through "
@@ -2530,9 +2531,17 @@ class _TableRows(Sequence[dict[str, Any]]):
 
 
 class _LogRows(Sequence[dict[str, Any]]):
-    """Page detached measurements or physical native print blocks lazily."""
+    """Page detached measurements or physical native print blocks lazily.
+
+    A measurement row is one value the log printed for a ``.meas``, the
+    ``value_index``-th (a stepped table's row of that step), and is marked
+    ``failed`` where LTspice printed that value failed
+    (:func:`~ltspice_mcp.lib.log_types.measurement_failed`), so a failed value
+    reads apart from one null for another reason.
+    """
 
     def __init__(self, facts: Any, view: str, prefix: str | None) -> None:
+        self._facts = facts
         self._view = view
         self._blocks: list[tuple[dict[str, Any], list[Any]]] = []
         self._ends: list[int] = []
@@ -2592,6 +2601,7 @@ class _LogRows(Sequence[dict[str, Any]]):
                 row[key] = value[ordinal] if isinstance(value, list) else value
             if "unreadable" in metadata:
                 row["unreadable"] = metadata["unreadable"]
+            row["failed"] = measurement_failed(self._facts, metadata["measurement"], ordinal)
             return row
         key = "entry" if metadata["layout"] == "scalar_print" else "row"
         return {**metadata, key: rows[ordinal]}
@@ -2945,6 +2955,57 @@ _OPEN_DESIGNS_DATA_PROPERTIES: dict[str, Any] = {
     "only_in_file": LTSPICE_DIFFERENCE_ENTRIES["only_in_file"],
 }
 
+#: The ``results`` kind's ``measurements`` view: one row per value the log
+#: printed for a ``.meas`` (``_LogRows``), and what LTspice printed as failed.
+_MEASUREMENTS_DATA_PROPERTIES: dict[str, Any] = {
+    "measurements": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "measurement": {"type": "string"},
+                "value_index": {
+                    "type": "integer",
+                    "description": (
+                        "Which value the log printed for this .meas, from 0; in a "
+                        "stepped table, its row."
+                    ),
+                },
+                "value": {"type": ["number", "null"]},
+                "range_from": {"type": ["number", "null"]},
+                "range_to": {"type": ["number", "null"]},
+                "at": {"type": ["number", "null"]},
+                "unreadable": {
+                    "type": "object",
+                    "properties": {
+                        "line": {"type": ["string", "null"]},
+                        "reason": {"type": "string"},
+                    },
+                    "required": ["reason"],
+                },
+                "failed": {
+                    "type": "boolean",
+                    "description": (
+                        "True where LTspice printed this value failed: the .meas "
+                        "FAIL'ed, or 'failed' in this row of its stepped table. "
+                        "Absent where the value was taken, or is null for another "
+                        "reason (see unreadable)."
+                    ),
+                },
+            },
+            "required": ["measurement", "value_index"],
+        },
+    },
+    "failed_measurements": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": (
+            "The measurements LTspice printed as failed at any step; each failed "
+            "value's row is marked failed."
+        ),
+    },
+}
+
 _OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -2974,6 +3035,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                             **_GUIDE_DATA_PROPERTIES,
                             **_SIMULATOR_DOCS_DATA_PROPERTIES,
                             **_OPEN_DESIGNS_DATA_PROPERTIES,
+                            **_MEASUREMENTS_DATA_PROPERTIES,
                             "plot_index": {"type": "integer", "minimum": 0},
                             "snapshot_id": {"type": "string"},
                             "dialect": {"type": "string"},
@@ -2982,7 +3044,6 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                             "plots": {"type": "array", "items": {"type": "object"}},
                             "signals": {"type": "array", "items": {"type": "object"}},
                             "table": {"type": "array", "items": {"type": "object"}},
-                            "measurements": {"type": "array", "items": {"type": "object"}},
                             "native_tables": {"type": "array", "items": {"type": "object"}},
                             "capture_facts": {"type": "object"},
                             "scan": {"type": "object"},

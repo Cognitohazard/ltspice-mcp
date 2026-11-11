@@ -145,7 +145,7 @@ def run(request: dict[str, Any], handshake: _Handshake) -> int:
         return 0
     finally:
         try:
-            # Cancels whatever this process still owns, which after a completed
+            # Stops whatever this process still runs, which after a completed
             # wait is nothing. An owner exiting mid-job — because the wait
             # raised — is the crashed-owner case, and leaving its cases running
             # with nobody watching them would be the worse end.

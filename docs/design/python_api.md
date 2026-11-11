@@ -73,8 +73,9 @@ with Api(working_dir="~/designs/ldo") as api:
 
 **One live session per process.** A second concurrent `Api`, or an
 `Api` inside a process already running the MCP server, raises
-`ApiSessionError`. Shutdown cancels the jobs a process owns, so two sessions in
-one process would cancel each other's jobs.
+`ApiSessionError`. Closing a session stops the jobs it runs and closes what
+the whole process shares, such as the hidden desktop LTspice runs on, so one
+session closing would stop work another depends on.
 
 Each `Api` runs its session on a private event-loop thread. Calls from several
 threads run concurrently there, so one thread can cancel a job while another is
@@ -87,9 +88,12 @@ blocked waiting on it.
 `ApiSessionError` when called from the `Api`'s own loop thread, where it would
 deadlock.
 
-**`close()`** cancels the jobs this process owns, as server shutdown does.
-Their unfinished cases fail with code `server_restarted`, as after a crash, so
-`jobs(action="resume")` retries them by default.
+**`close()`** stops the jobs its session runs, as server shutdown does, and
+each reads as it would after a crash: `interrupted` while runs were left
+(`completed_with_failures` when only the attached analysis was), its
+unfinished cases failed with code `server_restarted`, which
+`jobs(action="resume")` retries by default, and an unfinished attached
+analysis failed. Nobody cancelled them, so none reads `cancelled`.
 Calls made after it starts raise `ApiClosedError`. It is idempotent, and a
 second `close()` from another thread returns once the first has finished. A
 call already running in another thread when `close()` starts is cancelled and
@@ -97,7 +101,7 @@ raises `ApiClosedError`, except a submission, `jobs(cancel)`, `jobs(resume)` or
 `edit_schematic`, which `close()` lets finish first. After it returns, the
 process can open a new `Api`.
 
-**Live jobs this process owns do not survive `close()` or process exit.**
+**Live jobs an `Api`'s session runs do not survive `close()` or process exit.**
 Persisted records and results survive. To keep work running after the
 interpreter exits, submit it through a long-lived server process or a per-job
 detached owner (`run_experiments(wait=False, detach=True)`, §11), which is a
@@ -108,12 +112,13 @@ The API states this rule in three places:
 - `reference()` and `reference('run_experiments')` state that `wait=False`
   returns a receipt *and* that the submitting process must outlive the run
   unless `detach=True` hands the job to its own owner, because a job is
-  cancelled when its owning process exits.
+  interrupted when the `Api` that submitted it closes or its process exits.
 - The receipt includes a `process_owned_job` observation.
-- When a later read finds that a case's owning process exited before the case
-  finished or wrote its results, the case fails. Its `failures` row has code
-  `server_restarted` and a message that says the owning process exited and
-  that the submitting process must stay alive until the job finishes.
+- When the process running a job stops before a case finished or wrote its
+  results, whether it exited, crashed or closed its `Api`, the case fails. Its
+  `failures` row has code `server_restarted` and a message that says the
+  process running the job stopped and must stay running until the job
+  finishes.
 
 ## 5. The six operations
 
@@ -213,7 +218,8 @@ successive `jobs(wait)` calls:
 - `wait=False, detach=True` is the only combination that does not submit
   in-process. A spawned per-job owner submits the job, so the job survives
   this process (§11).
-- Leaving the `Api` context still cancels the live jobs this process owns (§4).
+- Leaving the `Api` context still stops the live jobs its session runs, which
+  then read `interrupted` (§4).
 
 **Recovery through `Api.jobs`.** Opt in at initial submission with
 `execution={"recoverable": True}`. `api.jobs(action="resume", job_id=parent_id,
@@ -287,12 +293,13 @@ Of the `jobs` actions, only resume accepts `api.jobs(detach=True, ...)`, and
 not with `raw_page=True`. It starts a detached owner as `run_experiments` does
 (§11). Before starting the owner, the API re-reads the parent's job record
 from disk and checks that the caller may resume it; a refused caller gets
-`resume_not_authorized`. A caller without a token must be the parent's owning
-process, which the API checks against the calling process's own PID and
-creation time, never against a PID given in the request. Once the check
-passes, the API passes the parent token privately to the new owner, which
-checks the resume again with that token; being started by the caller gives
-the owner no authority of its own. Repeating a resume with the same
+`resume_not_authorized`. A caller without a token must be the session that
+runs the parent, which that session's job registry answers, as it does for a
+cancel; the PID and creation time the parent's record names are never
+compared with the calling process's, nor is a PID given in the request. Once
+the check passes, the API passes the parent token privately to the new owner,
+which checks the resume again with that token; being started by the caller
+gives the owner no authority of its own. Repeating a resume with the same
 `resume_request_id` returns the same result even when the control token,
 `detach` or `wait_s` differ, because only the parent, `case_ids` and the retry
 flags decide whether it is the same request. Save root and child tokens from
@@ -535,9 +542,11 @@ ops.observations               # a log reader's dict (LogResult) says the same o
   node or device inside subcircuits is matched by its path, however each
   build spells it (LTspice 26's `V(xa:xin:mid)` is XVII's `V(a:in:mid)`).
   `other_step` defaults to the step of `other` whose parameters match this
-  step's (step 0 of a result that is not stepped); a step with no match is
-  refused. On a sampled axis, each signal is compared at this result's points
-  within the span both axes cover. When `other`'s axis differs, `other` is
+  step's, each value matched as a step selector matches it
+  (`step_values.step_with`; step 0 of a result that is not stepped); a step
+  with no match is refused with the steps `other` has. On a sampled axis,
+  each signal is compared at this result's points within the span both axes
+  cover. When `other`'s axis differs, `other` is
   read at those points by linear interpolation, which on a frequency axis is
   in log frequency, dB and unwrapped phase, as `log_interp_complex` does it. A
   plot with no axis is compared point by point and must have the same number
@@ -599,7 +608,8 @@ measured = api.analyze_results(
 ```
 
 The `measurements` inspect view pages measured values with their recorded
-range and `AT` metadata. `native_tables` pages literal scalar entries or
+range and `AT` metadata, and marks a value LTspice printed as failed
+`failed: True`. `native_tables` pages literal scalar entries or
 printed frequency rows, keeping section boundaries, printed labels and
 real/imaginary components. A unit the log does not establish is left out, and a
 block's `analysis_extent`, whether its rows cover the whole analysis, is
@@ -612,16 +622,22 @@ class.
 The `measurements` recipe's rows are the MCP rows, rendered by the same code.
 For a run with one value per `.meas`, such as one case of a sweep, the value
 is `row["value"]["measured"][name]`. It is null where the log holds no number
-for that name, and the name is then listed in
-`row["value"]["failed_measurements"]`. Where the log printed something other
+for that name, and the name is then in one of three places, by why.
+`row["value"]["failed_measurements"]` lists it where LTspice printed it as
+failed at the step the row reads (`FAIL'ed`, or `failed` in a stepped
+table), which is what `failed_measurements` means wherever it appears,
+`measurements()` included. Where the log printed something other
 than a number for it (a WHEN threshold written as a parameter, an
 expression or, on LTspice 26, a braced expression),
 `row["value"]["unreadable"][name]` gives the log line and the
-reason, as `measurements()` does on the entry; only that name fails. Any
-crossing or `AT` point the log
+reason, as `measurements()` does on the entry; only that name fails. Where it
+printed a number that is not finite (a gain margin of `infdB`),
+`row["value"]["not_finite"]` lists it. Any crossing or `AT` point the log
 printed is under `row["value"]["at"][name]`. The per-name `stats` block is left
 off the default row; `include={"fields": ["value"]}` returns it. A stepped
-run's row contains only `stats`. Reductions read `stats` either way, so
+run's row contains `stats`, with `failed_measurements` and `unreadable` over
+all its steps; `measurements()` gives an entry whose stepped table printed
+`failed` the steps it did, from 0, in `failed_steps`. Reductions read `stats` either way, so
 `reduced` does not depend on how a row was rendered. A name the log holds no
 number for is counted rather than skipped. Its reduced rows include
 `no_value_count`, and a spec on it reports the same count beside `pass_count`
@@ -773,9 +789,9 @@ started are stopped and the call raises `ApiCallError` with code
 own session, so the signal does not reach it. In both cases, calling again
 with the same `request_id` replays whatever the owner submitted.
 
-**Ownership.** The calling process never owns a detached job. `close()`,
-leaving a `with` block and interpreter exit cancel only jobs whose `owner_pid`
-is this process, so they do not cancel a detached job. Read it as you would
+**Ownership.** No session of the calling process runs a detached job.
+`close()`, leaving a `with` block and interpreter exit stop only the jobs the
+`Api`'s session runs, so they do not stop a detached job. Read it as you would
 any job another process owns, with `jobs(action="status"|"wait"|"runs")` by
 `job_id` or `request_id`, from this process, a later one, or a running MCP
 server. Cancel it the same way. `jobs(action="cancel")` with the receipt's
@@ -798,8 +814,8 @@ with:
 ```
 code:     "detached_owner"
 kind:     "lifecycle"
-detail:   names the owning pid, says this process does not own the job and
-          that closing the Api will not cancel it, and gives the log path
+detail:   names the owning pid, says this Api's session does not run the job,
+          so closing the Api does not stop it, and gives the log path
 evidence: {"owner_pid": <int>, "log_file": "<path>"}
 ```
 
@@ -821,8 +837,9 @@ Ownership, records and cancellation work the same on both platforms.
 
 The API and an MCP server on the same working directory share the job records
 and the store, and each process holds one session (§4). A job submitted
-through the API with `run_experiments(wait=False)` is owned by the submitting
-process and is cancelled when that process exits; adding `detach=True` hands it
+through the API with `run_experiments(wait=False)` is run by the submitting
+`Api`'s session and ends `interrupted` when that `Api` closes or its process
+exits; adding `detach=True` hands it
 to a detached owner started for that job, which outlives the script (§11).
 Either way, the other interface reads the same record by `job_id`.
 

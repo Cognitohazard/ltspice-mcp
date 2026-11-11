@@ -45,10 +45,12 @@ from ltspice_mcp.lib.experiment_types import (
 )
 from ltspice_mcp.lib.filelock import async_file_lock, file_lock
 from ltspice_mcp.lib.job_lifecycle import (
+    OWNER_STOPPED_CASE_ERROR,
     VALID_EXPERIMENT_TRANSITIONS,
     InvalidTransitionError,
     LiveJob,
     finished,
+    stop_analysis_for_owner,
 )
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.native_execution import prepare_native_cases
@@ -79,7 +81,7 @@ from ltspice_mcp.lib.runner_base import (
     inject_logopinfo,
     inject_ngspice_control_write,
 )
-from ltspice_mcp.lib.sheet_results import place_job_beside_sheets
+from ltspice_mcp.lib.sheet_results import not_placed_for_owner_stop, place_job_beside_sheets
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name, is_ngspice, raw_extension_for
 from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
@@ -619,8 +621,14 @@ class ExperimentRunner(RunnerBase):
         """
         await self._background.settled(job.job_id)
 
-    def owns_experiment_job(self, job_id: str) -> bool:
-        """Whether this runner launched ``job_id`` in the current process."""
+    def holds_execution(self, job_id: str) -> bool:
+        """Whether this runner holds a live execution of ``job_id``: its
+        coordinator, or simulators its stop could not confirm gone.
+
+        Which runner to ask to stop a job, and whether a job is already being
+        run here. Whether this process runs a job at all is the registry's
+        answer (``JobRegistry.owns``), which this is never asked in place of.
+        """
         return job_id in self._executions
 
     def submit(
@@ -789,7 +797,7 @@ class ExperimentRunner(RunnerBase):
         running = registry.live.get(barrier.job.job_id)
         coordinating = running is not None and running.coordinator is not None
         if registered is not barrier.job and (
-            self.owns_experiment_job(barrier.job.job_id) or coordinating
+            self.holds_execution(barrier.job.job_id) or coordinating
         ):
             raise RecoveryError("recovery_owner_active", "A live coordinator owns this attempt")
         # Reserved by this admission, or an attempt taken over from an owner
@@ -797,7 +805,7 @@ class ExperimentRunner(RunnerBase):
         job = barrier.job
         request.state.add_experiment_job(job, already_persisted=True)
         execution = None
-        if not self.owns_experiment_job(job.job_id) and not coordinating:
+        if not self.holds_execution(job.job_id) and not coordinating:
             execution = self._new_execution(request, registry.reserve(job))
             self._executions[job.job_id] = execution
         receipt = ExperimentReceipt(
@@ -1063,10 +1071,12 @@ class ExperimentRunner(RunnerBase):
                 await asyncio.gather(*execution.case_tasks.values(), return_exceptions=True)
             self._reconcile_unfinished_cases(execution)
             job.completeness.validate_terminal()
-            if request.results_beside_sheet and execution.stop_reason not in (
-                "cancelled",
-                OWNER_STOPPED,
-            ):
+            if request.results_beside_sheet and execution.stop_reason == OWNER_STOPPED:
+                # Not copied while this process stops, even when every run had
+                # finished: the receipt says so per sheet, with the action that
+                # copies them (``not_placed_for_owner_stop``).
+                job.observations.extend(not_placed_for_owner_stop(job))
+            elif request.results_beside_sheet and execution.stop_reason != "cancelled":
                 # Before this process counts the runs done and before the job's
                 # final status, so a wait on either reads a receipt that says
                 # where the results are.
@@ -1074,36 +1084,21 @@ class ExperimentRunner(RunnerBase):
             await self._persist_job(execution)
             execution.live.mark_runs_done()
 
-            if execution.stop_reason in ("cancelled", OWNER_STOPPED):
-                self._finish_unstarted_analysis(
-                    job,
-                    status="cancelled",
-                    error="Experiment cancelled before attached analysis started",
-                )
-                if job.status not in {"cancelled", "failed"}:
-                    await self._transition_job(execution, "cancelled")
-                return
-            if execution.stop_reason == "job_deadline":
-                self._finish_unstarted_analysis(
-                    job,
-                    status="cancelled",
-                    error="Experiment deadline elapsed before attached analysis started",
-                )
-                await self._transition_job(execution, "completed_with_failures")
-                return
-
-            analysis_failed = await self._run_analysis(execution)
-            if execution.stop_reason in ("cancelled", OWNER_STOPPED):
-                await self._transition_job(execution, "cancelled")
-            elif (
-                execution.stop_reason == "job_deadline"
-                or analysis_failed
-                or job.completeness.fell_short
-            ):
-                await self._transition_job(execution, "completed_with_failures")
-            else:
-                await self._transition_job(execution, "completed")
+            analysis_failed = False
+            if execution.stop_reason is None:
+                analysis_failed = await self._run_analysis(execution)
+            await self._finish_job(execution, analysis_failed=analysis_failed)
         except Exception as exc:
+            if job.status in TERMINAL_STATUSES:
+                # The shutdown's bookkeeping finished the job while this
+                # coordinator was inside a write, after the coordinator had
+                # settled it (``JobRegistry.cancel_running``). That record is
+                # the job's; a write that then failed is not the job's error.
+                logger.exception(
+                    "Experiment job %s: its coordinator failed after shutdown finished it",
+                    job.job_id,
+                )
+                return
             logger.exception("Experiment job %s failed", job.job_id)
             job.error = str(exc)
             self._reconcile_unfinished_cases(execution)
@@ -1133,6 +1128,46 @@ class ExperimentRunner(RunnerBase):
                     await execution.external_cancel_task
             if not execution.retained_slots:
                 self._executions.pop(job.job_id, None)
+
+    async def _finish_job(self, execution: _Execution, *, analysis_failed: bool) -> None:
+        """Move the job to the terminal status its runs and its stop leave it in.
+
+        A job whose process is stopping ends as any stopped owner leaves one
+        (``LiveJob.stop_for_owner``); a cancel ends it ``cancelled``; the
+        deadline and a fallen-short run or analysis end it
+        ``completed_with_failures``.
+
+        A job already terminal is left as it is: shutdown's own bookkeeping
+        (``JobRegistry.cancel_running``) finishes a job whose stop outlasted
+        its bound, and this coordinator may get here after it has. It may also
+        finish one while this coordinator is inside the write below, having
+        settled it already; settling it again there changes nothing.
+        """
+        job = execution.job
+        if job.status in TERMINAL_STATUSES:
+            return
+        reason = execution.stop_reason
+        if reason == OWNER_STOPPED:
+            status = execution.live.stop_for_owner()
+        elif reason == "cancelled":
+            self._finish_unstarted_analysis(
+                job,
+                status="cancelled",
+                error="Experiment cancelled before attached analysis started",
+            )
+            status = "cancelled"
+        elif reason == "job_deadline":
+            self._finish_unstarted_analysis(
+                job,
+                status="cancelled",
+                error="Experiment deadline elapsed before attached analysis started",
+            )
+            status = "completed_with_failures"
+        elif analysis_failed or job.completeness.fell_short:
+            status = "completed_with_failures"
+        else:
+            status = "completed"
+        await self._transition_job(execution, status)
 
     async def _external_cancel_watch(self, execution: _Execution) -> None:
         """Observe durable cancellation requests made by another server process."""
@@ -1696,7 +1731,13 @@ class ExperimentRunner(RunnerBase):
             case,
             terminal_status,
             code=reason,
-            error=f"Case stopped because {cause}",
+            # A case its stopping process killed says what one a crash left
+            # says; what the kill read off the run is its evidence.
+            error=(
+                OWNER_STOPPED_CASE_ERROR
+                if reason == OWNER_STOPPED
+                else f"Case stopped because {cause}"
+            ),
             evidence=_with_partial_raw(_stopped_run_evidence(limits, outcome), kept),
         )
         self._release_slot(execution, case.case_id)
@@ -1962,6 +2003,10 @@ class ExperimentRunner(RunnerBase):
     ) -> None:
         if execution.stop_reason is None:
             execution.stop_reason = reason
+            if reason == OWNER_STOPPED:
+                # Before any run is stopped below: the one moment both this
+                # coordinator and the shutdown's bookkeeping read the runs at.
+                execution.live.runs_done_at_owner_stop()
         # A case mid-launch either stamped itself submitted before this point --
         # and is stopped through the kill path, which can actually reach its
         # simulator -- or sees the flag and never launches. Reading the statuses
@@ -1986,16 +2031,11 @@ class ExperimentRunner(RunnerBase):
         # can be false is how a completed run gets read as one that never ran.
         launched = case.submitted_at is not None
         if execution.stop_reason == OWNER_STOPPED:
+            # The words a reader of the record writes when the process died
+            # (``stop_for_owner``), which cannot tell a launched case from one
+            # whose launch the record never caught.
             self._mark_case(
-                execution,
-                case,
-                "failed",
-                code=OWNER_STOPPED,
-                error=(
-                    "The server shut down while this case was running"
-                    if launched
-                    else "The server shut down before this case was submitted"
-                ),
+                execution, case, "failed", code=OWNER_STOPPED, error=OWNER_STOPPED_CASE_ERROR
             )
         elif execution.stop_reason == "job_deadline":
             self._mark_case(
@@ -2087,8 +2127,11 @@ class ExperimentRunner(RunnerBase):
                 analysis_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await analysis_task
-                job.analysis.status = "cancelled"
-                job.analysis.error = "Attached analysis cancelled"
+                if execution.stop_reason == OWNER_STOPPED:
+                    stop_analysis_for_owner(job)
+                else:
+                    job.analysis.status = "cancelled"
+                    job.analysis.error = "Attached analysis cancelled"
                 return True
             stop_wait.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -2124,14 +2167,17 @@ class ExperimentRunner(RunnerBase):
         ``reason`` is what the stopped cases record: an explicit cancel, or
         ``OWNER_STOPPED`` when this process is shutting down, which a resume
         retries by default as it does a case a crash left.
+
+        Without the job's token, only the session that runs the job may stop
+        it, which its registry answers (``JobRegistry.owns``); the execution
+        this runner holds is what reaches that registry.
         """
-        if not experiment_store.cancel_authorized(
-            job, control_token, owned=self.owns_experiment_job(job.job_id)
-        ):
+        execution = self._executions.get(job.job_id)
+        owned = execution is not None and execution.request.state.job_registry.owns(job)
+        if not experiment_store.control_authorized(job, control_token, owned=owned):
             raise CancelNotAuthorized(
                 f"Cancellation is not authorized for experiment job {job.job_id}"
             )
-        execution = self._executions.get(job.job_id)
         if execution is None:
             if finished(job):
                 return []
@@ -2227,7 +2273,7 @@ def _stop_bound(execution: _Execution, reason: StopReason) -> tuple[str, dict[st
         deadline = execution.request.job_deadline_s
         return f"the job deadline of {deadline:g}s elapsed", {"job_deadline_s": deadline}
     if reason == OWNER_STOPPED:
-        return "the server shut down", {}
+        return "the process running the job stopped", {}
     return "the job was cancelled", {}
 
 

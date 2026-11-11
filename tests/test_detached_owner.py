@@ -250,8 +250,8 @@ def test_a_detached_job_outlives_the_session_that_submitted_it(work_dir: Path) -
     assert not list(detached_dir.glob("*.receipt.json"))
     assert not list(detached_dir.glob("*.request.json"))
 
-    # Closing the session that submitted it is what cancels a job this process
-    # owns. This one is not ours, so it has to survive the close.
+    # Closing the session that submitted it is what stops a job that session
+    # runs. This one is not ours, so it has to survive the close.
     api.close()
 
     with _api(work_dir) as fresh:

@@ -25,12 +25,14 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import filelock as filelock_mod
 from ltspice_mcp.lib import wsl as wsl_mod
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
+from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
 from ltspice_mcp.tools.jobs import JOBS_OUTPUT_SCHEMA, JobsInput, handle_jobs
 from tests.conftest import (
     FIXTURES_DIR,
+    await_until,
     copied_sheet,
     job_that_ran,
     recorded_fixture_simulator,
@@ -276,6 +278,54 @@ async def test_a_sheet_another_process_holds_is_left_alone(
     (note,) = _observed(receipt, "results_not_placed")
     assert note["evidence"]["reason_code"] == "sheet_locked"
     assert "jobs(action='place_beside_sheet'" in note["detail"]
+
+
+async def test_a_job_whose_process_stops_says_it_copied_nothing(
+    ltspice_state: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The process running the job stops with one sheet's run finished and the
+    other's still running. Nothing is copied beside either sheet, and the
+    receipt says so for the sheet whose run finished, with the reason and the
+    action that copies its results."""
+    first, second = copied_sheet(work_dir, "first"), copied_sheet(work_dir, "second")
+    run = ExperimentRunner.submit_netlist
+    running: dict[str, Any] = {}
+
+    def second_never_exits(self: ExperimentRunner, *args: Any, **kwargs: Any) -> Any:
+        _netlist, run_filename, callback = args
+        if Path(run_filename).stem.endswith("_case_1"):
+            running[Path(run_filename).stem] = callback
+            return object()
+        return run(self, *args, **kwargs)
+
+    async def confirmed_kill(_runner: ExperimentRunner, token: str) -> None:
+        if (callback := running.pop(token, None)) is not None:
+            callback(RunOutcome("", "", 0, "Stopped by test simulator"))
+
+    monkeypatch.setattr(ExperimentRunner, "submit_netlist", second_never_exits)
+    monkeypatch.setattr(ExperimentRunner, "_kill_case", confirmed_kill)
+    submitted = await handle_run_experiments(
+        RunExperimentsInput.model_validate(_run(first, second, wait_s=0, max_parallel=1)),
+        ltspice_state,
+    )
+    assert submitted.structured_content is not None, submitted.content
+    job_id = submitted.structured_content["job_id"]
+    await await_until(lambda: running, what="the second sheet's run to start")
+    await ltspice_state.shutdown()
+
+    receipt = await place(ltspice_state, action="status", job_id=job_id)
+    assert receipt["status"] == "interrupted", receipt
+    (note,) = _observed(receipt, "results_not_placed")
+    assert note["evidence"] == {
+        "sheet": str(first),
+        "case_id": ltspice_state.all_jobs[job_id].cases[0].case_id,
+        "reason_code": "server_restarted",
+    }
+    assert "The process running the job stopped" in note["detail"]
+    assert f"jobs(action='place_beside_sheet', job_id='{job_id}'" in note["detail"]
+    assert _observed(receipt, "results_not_beside_sheet") == []
+    assert not first.with_suffix(".raw").exists()
+    assert not second.with_suffix(".raw").exists()
 
 
 @pytest.mark.parametrize(

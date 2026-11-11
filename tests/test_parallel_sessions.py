@@ -7,7 +7,7 @@ mechanisms keep them out of each other's way:
   serialize, and the revision check runs inside the lock so a peer's committed
   write is seen instead of silently overwritten;
 - owner-pid liveness in job sidecars — a live sibling's running job isn't
-  mislabeled ``interrupted``, shutdown only cancels this process's own jobs,
+  mislabeled ``interrupted``, shutdown only stops this session's own jobs,
   and a foreign job's status refreshes from disk at resolution time;
 - the token-scoped simulator kill — cancel/timeout can only ever hit the
   job's own simulator process, never a sibling session's.
@@ -406,7 +406,7 @@ class TestOwnerPidLiveness:
         assert loaded.status == "interrupted"
 
     @pytest.mark.asyncio
-    async def test_shutdown_cancels_only_own_jobs(self, work_dir: Path, live_peer_pid: int):
+    async def test_shutdown_stops_only_own_jobs(self, work_dir: Path, live_peer_pid: int):
         registry = JobRegistry(persist_enabled=False, working_dir=work_dir)
         own = _running_experiment(work_dir, "exp_own", os.getpid())
         foreign = _running_experiment(work_dir, "exp_foreign", live_peer_pid)

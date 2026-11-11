@@ -63,7 +63,7 @@ from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import parse_spice_value
-from ltspice_mcp.lib.log_types import measurement_named
+from ltspice_mcp.lib.log_types import measurement_failed, measurement_named
 from ltspice_mcp.lib.spice_lex import lex_deck
 from ltspice_mcp.lib.spice_lex_views import read_instance
 from ltspice_mcp.lib.spice_validator import leading_numeric_tokens
@@ -533,16 +533,22 @@ def reconciliation_observations(
 ) -> list[Observation]:
     """Surface requested ``.meas``/``.four`` outputs that were not produced.
 
-    Classifies each miss as ``failed`` (ran but didn't trigger — already in
-    ``failed_measurements``), ``skipped_in_batch_mode`` (ngspice can't evaluate
-    in batch mode — a recoverable relay signal already in ``warnings``), or
-    ``missing`` (silently absent — the real trust gap). The fact, not a verdict:
-    the model decides whether a missing measurement matters.
+    Classifies each miss as ``failed`` (LTspice printed it failed at every
+    step — in ``failed_measurements``), ``skipped_in_batch_mode`` (ngspice
+    can't evaluate in batch mode — a recoverable relay signal already in
+    ``warnings``), or ``missing`` (silently absent — the real trust gap). A
+    measurement that failed at some steps of a stepped run and was taken at the
+    others was produced. The fact, not a verdict: the model decides whether a
+    missing measurement matters.
     """
     obs: list[Observation] = []
 
     # Which measurement a requested name refers to is measurement_named's answer.
-    failed = list(summary.get("failed_measurements") or [])
+    failed = [
+        name
+        for name in summary.get("failed_measurements") or []
+        if measurement_failed(summary, name)
+    ]
     # A FAILED .meas still appears as a null-valued key in ``measurements`` (and
     # in ``failed_measurements``). Without removing it here, the produced-check
     # below would treat it as produced and skip it — shadowing the "failed"

@@ -115,6 +115,12 @@ A `.step` directive puts several sweeps inside one `.raw`, and by default
 this, and both apply to every recipe in the call. `step`
 (`{"axis": "temp", "value": 27}`) reads the one iteration whose axis value you
 name, written as a number or in SPICE notation (`"2k"`), and `all_steps: true`
-evaluates every recipe at every iteration. They are
-mutually exclusive. `run_experiments`' attached `analyze` block takes the same
-two, so an attached measurement and a standalone one read the same steps.
+evaluates every recipe at every iteration. The two are mutually exclusive.
+`run_experiments`' attached `analyze` block takes the same two, so an attached
+measurement and a standalone one read the same steps. A number selects only a
+step with that value, to the six significant digits the log prints a step
+value with, so `"2k"` and `2000` both select a step of 2000, and the deck's
+2154.4346900318838 selects the step the log prints as 2154.43.
+`plot_waveform`'s `step` reads it the same way. A value no step has, such as
+`"6.8k"` on a run stepping 1k, 2k and 4k, is refused with the values the run
+has.
