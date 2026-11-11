@@ -1054,7 +1054,7 @@ async def _cancel_jobs_target(
     # Whether this process runs the job is the registry's answer, never the
     # record's pid: a dead server's record can carry this process's pid.
     owned = state.job_registry.owns(job)
-    if not experiment_store.cancel_authorized(job, args.control_token, owned=owned):
+    if not experiment_store.control_authorized(job, args.control_token, owned=owned):
         raise _JobsActionError(
             "cancel_not_authorized",
             (

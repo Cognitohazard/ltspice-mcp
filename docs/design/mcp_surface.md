@@ -642,8 +642,9 @@ the latest job of the chain. An empty selection returns the parent with
 `resumed=false`, no child token, and a hint to analyze the job with
 `analyze_results`. Reusing a `resume_request_id` with the same normalized
 selection and retry flags returns the same child or no-op; a changed payload
-is a conflict. A replay is authorized as the original call is, by the job's
-owning process or its `control_token` (otherwise `resume_not_authorized`).
+is a conflict. A resume, and a replay of one, is authorized as a cancel is: by
+the server process that runs the job or by its `control_token` (otherwise
+`resume_not_authorized`).
 `wait_s` sets only how long the call waits and is not compared on replay.
 
 **Job model.** An experiment job coordinates cases across one or more

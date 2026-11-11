@@ -120,10 +120,17 @@ def holds_control_token(job: ExperimentJob, control_token: str | None) -> bool:
     )
 
 
-def cancel_authorized(job: ExperimentJob, control_token: str | None, *, owned: bool) -> bool:
-    """Whether a caller may cancel ``job``: the process running it (``owned``,
-    which its registry answers, never a pid compared with this one) or a
-    holder of its control token."""
+def control_authorized(job: ExperimentJob, control_token: str | None, *, owned: bool) -> bool:
+    """Whether a caller may cancel or resume ``job``: the session that runs it
+    (``owned``, which its registry answers, ``JobRegistry.owns``) or a holder
+    of its control token.
+
+    The process identity a record names never answers it, this process's
+    included: another session in this process does not run the job, and a
+    dead server's record can name this process's pid once the pid is reused.
+    That identity only answers whether another process that owns the job is
+    still alive (``store.owner_liveness``).
+    """
     return owned or holds_control_token(job, control_token)
 
 
@@ -144,7 +151,7 @@ def request_cancellation(
         if job is None:
             return None
         # Only for a job this process does not run: the token is the authority.
-        if not cancel_authorized(job, control_token, owned=False):
+        if not control_authorized(job, control_token, owned=False):
             raise PermissionError(f"Cancellation is not authorized for experiment job {job_id}")
         store.ensure_root()
         atomic_write_json(

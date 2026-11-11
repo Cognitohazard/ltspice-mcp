@@ -21,13 +21,13 @@ class _StubRunner:
         self.output_folder = output_folder
         self.max_parallel = max_parallel
         self.busy = False
-        self.owned_jobs: set[str] = set()
+        self.executions: set[str] = set()
 
     def has_active_work(self) -> bool:
         return self.busy
 
-    def owns_experiment_job(self, job_id: str) -> bool:
-        return job_id in self.owned_jobs
+    def holds_execution(self, job_id: str) -> bool:
+        return job_id in self.executions
 
 
 @pytest.fixture(autouse=True)
@@ -274,20 +274,20 @@ class TestCapEviction:
 
 class TestExperimentRunnerRouting:
     """A job's cancel state lives on the coordinator that launched it; with
-    several runners cached, most-recent is not necessarily the owner."""
+    several runners cached, most-recent is not necessarily the one holding it."""
 
-    def test_owner_is_found_among_several(self, loop):
+    def test_the_runner_holding_the_execution_is_found_among_several(self, loop):
         mgr = RunnerManager()
         sim_cls = type("FakeSim", (), {})
         older = cast(_StubRunner, mgr.get_experiment_runner(loop, sim_cls, Path("/tmp/a")))
         newer = mgr.get_experiment_runner(loop, sim_cls, Path("/tmp/b"))
-        older.owned_jobs.add("exp_1")
+        older.executions.add("exp_1")
 
         job = _types.SimpleNamespace(job_id="exp_1")
         assert mgr.get_experiment_runner_for(job) is older
         assert mgr.get_experiment_runner_for(job) is not newer
 
-    def test_none_when_no_runner_owns_it(self, loop):
+    def test_none_when_no_runner_holds_it(self, loop):
         mgr = RunnerManager()
         sim_cls = type("FakeSim", (), {})
         mgr.get_experiment_runner(loop, sim_cls, Path("/tmp/a"))

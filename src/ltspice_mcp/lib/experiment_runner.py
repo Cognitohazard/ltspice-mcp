@@ -617,8 +617,14 @@ class ExperimentRunner(RunnerBase):
         """
         await self._background.settled(job.job_id)
 
-    def owns_experiment_job(self, job_id: str) -> bool:
-        """Whether this runner launched ``job_id`` in the current process."""
+    def holds_execution(self, job_id: str) -> bool:
+        """Whether this runner holds a live execution of ``job_id``: its
+        coordinator, or simulators its stop could not confirm gone.
+
+        Which runner to ask to stop a job, and whether a job is already being
+        run here. Whether this process runs a job at all is the registry's
+        answer (``JobRegistry.owns``), which this is never asked in place of.
+        """
         return job_id in self._executions
 
     def submit(
@@ -787,7 +793,7 @@ class ExperimentRunner(RunnerBase):
         running = registry.live.get(barrier.job.job_id)
         coordinating = running is not None and running.coordinator is not None
         if registered is not barrier.job and (
-            self.owns_experiment_job(barrier.job.job_id) or coordinating
+            self.holds_execution(barrier.job.job_id) or coordinating
         ):
             raise RecoveryError("recovery_owner_active", "A live coordinator owns this attempt")
         # Reserved by this admission, or an attempt taken over from an owner
@@ -795,7 +801,7 @@ class ExperimentRunner(RunnerBase):
         job = barrier.job
         request.state.add_experiment_job(job, already_persisted=True)
         execution = None
-        if not self.owns_experiment_job(job.job_id) and not coordinating:
+        if not self.holds_execution(job.job_id) and not coordinating:
             execution = self._new_execution(request, registry.reserve(job))
             self._executions[job.job_id] = execution
         receipt = ExperimentReceipt(
@@ -2112,14 +2118,17 @@ class ExperimentRunner(RunnerBase):
         ``reason`` is what the stopped cases record: an explicit cancel, or
         ``OWNER_STOPPED`` when this process is shutting down, which a resume
         retries by default as it does a case a crash left.
+
+        Without the job's token, only the session that runs the job may stop
+        it, which its registry answers (``JobRegistry.owns``); the execution
+        this runner holds is what reaches that registry.
         """
-        if not experiment_store.cancel_authorized(
-            job, control_token, owned=self.owns_experiment_job(job.job_id)
-        ):
+        execution = self._executions.get(job.job_id)
+        owned = execution is not None and execution.request.state.job_registry.owns(job)
+        if not experiment_store.control_authorized(job, control_token, owned=owned):
             raise CancelNotAuthorized(
                 f"Cancellation is not authorized for experiment job {job.job_id}"
             )
-        execution = self._executions.get(job.job_id)
         if execution is None:
             if finished(job):
                 return []

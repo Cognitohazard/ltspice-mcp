@@ -285,12 +285,13 @@ Of the `jobs` actions, only resume accepts `api.jobs(detach=True, ...)`, and
 not with `raw_page=True`. It starts a detached owner as `run_experiments` does
 (§11). Before starting the owner, the API re-reads the parent's job record
 from disk and checks that the caller may resume it; a refused caller gets
-`resume_not_authorized`. A caller without a token must be the parent's owning
-process, which the API checks against the calling process's own PID and
-creation time, never against a PID given in the request. Once the check
-passes, the API passes the parent token privately to the new owner, which
-checks the resume again with that token; being started by the caller gives
-the owner no authority of its own. Repeating a resume with the same
+`resume_not_authorized`. A caller without a token must be the session that
+runs the parent, which that session's job registry answers, as it does for a
+cancel; the PID and creation time the parent's record names are never
+compared with the calling process's, nor is a PID given in the request. Once
+the check passes, the API passes the parent token privately to the new owner,
+which checks the resume again with that token; being started by the caller
+gives the owner no authority of its own. Repeating a resume with the same
 `resume_request_id` returns the same result even when the control token,
 `detach` or `wait_s` differ, because only the parent, `case_ids` and the retry
 flags decide whether it is the same request. Save root and child tokens from
