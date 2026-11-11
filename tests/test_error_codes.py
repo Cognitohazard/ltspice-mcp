@@ -589,6 +589,7 @@ FROZEN_ERROR_CODES = (
     "recovery_live_dependency",
     "recovery_native_preparation",
     "recovery_native_unprepared",
+    "recovery_ngbehavior_unsupported",
     "recovery_output_drift",
     "recovery_owner_active",
     "recovery_owner_unknown",

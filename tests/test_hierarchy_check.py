@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from spicelib.simulators.ngspice_simulator import NGspiceSimulator
@@ -21,7 +22,7 @@ from ltspice_mcp.lib.hierarchy_check import check_hierarchy, compare, plan, prin
 from ltspice_mcp.lib.ngspice_mode import run_batch
 from ltspice_mcp.lib.simulator import detect_simulators
 from ltspice_mcp.state import SessionState
-from tests.conftest import terminal_experiment
+from tests.conftest import needs_controlled_startup, terminal_experiment
 from tests.test_inspect_tools import _run
 
 needs_ngspice = pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH")
@@ -48,14 +49,15 @@ V2 g 0 1
 .op
 .end
 """
-"""Nine values ngspice reports: M1's W and L; XC.M0's W, L and m; XC.R1's
-and XP.R2's resistance; Rtop's resistance and m. XP.R2's m is set by the call
-above it, and C1, V1 and V2 have no ngspice name in the reader."""
+"""Eight values ngspice reports: M1's W and L; XC.M0's W and L; XC.R1's and
+XP.R2's resistance; Rtop's resistance and m. XP sets m, so ngspice rewrites
+the m of XC.M0 and XP.R2, and C1, V1 and V2 have no ngspice name in the
+reader."""
 
 AGREES = {
     "status": "agrees",
-    "compared": 9,
-    "not_compared": {"m_set_by_subcircuit_call": 1, "no_ngspice_name": 3},
+    "compared": 8,
+    "not_compared": {"m_rewritten_by_calls": 2, "no_ngspice_name": 3},
 }
 
 
@@ -89,10 +91,33 @@ async def _hierarchy(state: SessionState, path: Path, **query) -> dict:
 async def test_ngspice_confirms_the_readers_values(
     mode: str, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    state = _session(work_dir, mode, monkeypatch)
-    result = await _hierarchy(state, _deck(work_dir))
+    # The query sets the mode: a configured "" means spicelib's default.
+    state = _session(work_dir, "hsa", monkeypatch)
+    result = await _hierarchy(state, _deck(work_dir), ngbehavior=mode)
     assert result["ok"], result
+    assert result["data"]["profile"]["ngbehavior"] == mode
     assert result["data"]["ngspice_check"] == AGREES
+
+
+@needs_ngspice
+@pytest.mark.parametrize("mode", ["", "hsa", "kiltpsa"])
+async def test_m_that_ngspice_rewrites_and_a_0_ohm_resistor_are_not_compared(
+    mode: str, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Once XA calls leaf with m, ngspice changes XE.R1's m too (to 1 outside
+    hsa, measured), though XE sets none; and it reads 0 ohm as 1 milliohm."""
+    state = _session(work_dir, "hsa", monkeypatch)
+    deck = _deck(
+        work_dir,
+        "* rewritten m\n.subckt leaf p\nR1 p 0 1k m=3\n.ends\nXA a leaf m=4\nXE b leaf\n"
+        "R0 a 0 0\nV1 a 0 1\n.op\n.end\n",
+    )
+    result = await _hierarchy(state, deck, ngbehavior=mode)
+    assert result["data"]["ngspice_check"] == {
+        "status": "agrees",
+        "compared": 2,
+        "not_compared": {"m_rewritten_by_calls": 2, "no_ngspice_name": 1, "zero_resistance": 1},
+    }
 
 
 @needs_ngspice
@@ -107,14 +132,19 @@ async def test_a_mode_the_rules_were_not_established_for_is_answered_when_ngspic
     assert result["data"]["ngspice_check"] == AGREES
 
 
+@pytest.mark.parametrize("mode", ["kia", "HSA"])
 async def test_without_ngspice_another_mode_is_refused_and_an_established_one_says_unchecked(
-    state_no_sim: SessionState, work_dir: Path
+    mode: str, state_no_sim: SessionState, work_dir: Path
 ):
+    """``HSA`` is not ``hsa``: ngspice matches mode letters case-sensitively
+    and reads it as native mode."""
     path = _deck(work_dir)
-    refused = await _hierarchy(state_no_sim, path, ngbehavior="kia")
+    refused = await _hierarchy(state_no_sim, path, ngbehavior=mode)
     assert not refused["ok"]
-    assert "unsupported hierarchy ngbehavior 'kia'" in refused["error"]["message"]
-    assert "no ngspice executable" in refused["error"]["message"]
+    message = refused["error"]["message"]
+    assert f"unsupported hierarchy ngbehavior {mode!r}" in message
+    assert "no ngspice executable" in message
+    assert "Query with one of those modes" in message
 
     answered = await _hierarchy(state_no_sim, path, ngbehavior="hsa")
     assert answered["ok"], answered
@@ -155,7 +185,7 @@ def test_a_value_ngspice_reads_differently_is_a_difference(tmp_path: Path):
     planned, skipped = plan(hierarchy)
     variant = tmp_path / "variant.cir"
     variant.write_text(DECK.replace("{a*100}", "{a*150}"), encoding="utf-8")
-    prints = "".join(f"print @{item.row.device}[{item.quantity}]\n" for item in planned)
+    prints = "".join(f"print @{item.row.device}[{item.parameter}]\n" for item in planned)
     driver = f"* variant\n.control\nsource '{variant.as_posix()}'\n{prints}quit\n.endc\n.end\n"
     log = run_batch(
         tuple(NGspiceSimulator.spice_exe),
@@ -168,10 +198,10 @@ def test_a_value_ngspice_reads_differently_is_a_difference(tmp_path: Path):
 
     check = compare(planned, printed_values(log), skipped)
     assert check.status == "differs"
-    assert check.compared == 9
+    assert check.compared == 8
     payload = check.payload()
     assert payload["differences"] == [
-        {"instance": ["Rtop"], "quantity": "value", "reader": 200.0, "ngspice": 300.0}
+        {"instance": ["Rtop"], "field": "value", "reader": 200.0, "ngspice": 300.0}
     ]
     assert "Rtop value: reader 200, ngspice 300" in check.explanation()
 
@@ -215,13 +245,73 @@ async def test_a_deck_runs_in_another_mode_but_is_not_edited_by_instance(
     assert "unsupported hierarchy ngbehavior 'kia'" in str(edited), edited
 
 
-@needs_ngspice
 async def test_ground_named_gnd_is_refused_in_a_mode_whose_reading_of_it_is_not_recorded(
-    work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    state_no_sim: SessionState, work_dir: Path
 ):
     """Values can be checked against ngspice; which node ``gnd`` is cannot,
     so outside native and hsa mode the reader refuses it, as in kiltpsa."""
-    state = _session(work_dir, "kia", monkeypatch)
-    result = await _hierarchy(state, _deck(work_dir, DECK.replace("C1 d 0 1p", "C1 d gnd 1p")))
+    path = _deck(work_dir, DECK.replace("C1 d 0 1p", "C1 d gnd 1p"))
+    result = await _hierarchy(state_no_sim, path, ngbehavior="kia")
     assert not result["ok"]
-    assert "ground alias 'gnd' in kia mode" in result["error"]["message"]
+    assert (
+        "unrecorded reading of the ground alias 'gnd' in kia mode" in (result["error"]["message"])
+    )
+
+
+@needs_ngspice
+async def test_a_deck_ngspice_cannot_load_is_not_read(
+    work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """ngspice names the deck's mode before it fails on the missing model, so
+    the deck is known unread by the values it never printed."""
+    state = _session(work_dir, "hsa", monkeypatch)
+    path = _deck(work_dir, DECK.replace("M1 d g 0 0 n ", "M1 d g 0 0 nosuch "))
+    result = await _hierarchy(state, path)
+    assert result["data"]["ngspice_check"]["reason"] == "deck_not_read"
+    refused = await _hierarchy(state, path, ngbehavior="kia")
+    assert "did not finish reading the deck" in refused["error"]["message"]
+
+
+@needs_ngspice
+async def test_a_path_the_control_language_would_change_is_not_checked(
+    work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """ngspice drops the braces from a sourced path, so it would read
+    another file."""
+    state = _session(work_dir, "hsa", monkeypatch)
+    folder = work_dir / "{guid}"
+    folder.mkdir()
+    result = await _hierarchy(state, _deck(folder))
+    assert result["data"]["ngspice_check"]["reason"] == "path_unsupported"
+
+
+def test_an_ngspice_that_cannot_start_is_tried_once(tmp_path: Path):
+    """A failure is kept, so later pages of the query do not wait on it."""
+
+    class Missing(NGspiceSimulator):
+        spice_exe: ClassVar[list[str]] = [str(tmp_path / "no-such-ngspice")]
+
+    hierarchy = load_hierarchy(str(_deck(tmp_path)), [tmp_path], SemanticProfile("ngspice", "hsa"))
+    first = check_hierarchy(hierarchy, Missing)
+    assert first.reason == "ngspice_failed"
+    assert check_hierarchy(hierarchy, Missing) is first
+
+
+@needs_ngspice
+@needs_controlled_startup
+async def test_a_recoverable_run_in_another_mode_is_refused(
+    work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A recoverable run records where its cards came from by the reader's
+    rules, which are not established for the mode."""
+    state = _session(work_dir, "kia", monkeypatch)
+    receipt = await terminal_experiment(
+        state,
+        {
+            "request_id": "recoverable-kia",
+            "circuits": [{"path": str(_deck(work_dir))}],
+            "execution": {"simulator": "ngspice", "recoverable": True, "wait_s": 90},
+        },
+    )
+    assert receipt["error"]["code"] == "recovery_ngbehavior_unsupported", receipt
+    assert "recording where the cards" in receipt["error"]["message"]

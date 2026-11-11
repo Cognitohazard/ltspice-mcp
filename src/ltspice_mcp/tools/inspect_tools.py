@@ -158,7 +158,12 @@ from ltspice_mcp.lib.connectivity import (
 from ltspice_mcp.lib.cursor_codec import canonical_hash
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, TraceDescriptor
 from ltspice_mcp.lib.encoding import read_spice_text
-from ltspice_mcp.lib.hierarchy import SUPPORTED_FAMILIES, SemanticProfile, load_hierarchy
+from ltspice_mcp.lib.hierarchy import (
+    SUPPORTED_FAMILIES,
+    SemanticProfile,
+    established_modes,
+    load_hierarchy,  # noqa: TID251 - another mode answers only when hierarchy_check confirms it
+)
 from ltspice_mcp.lib.hierarchy_check import check_hierarchy
 from ltspice_mcp.lib.library_manager import (
     LibraryManager,
@@ -2322,13 +2327,14 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
         relative_to=state.config.working_dir,
     )
     check = check_hierarchy(hierarchy, simulator) if family == "ngspice" else None
-    if check is not None and not profile.established and check.status != "agrees":
+    if check is not None and not profile.established and not check.confirms_all:
         # Outside the modes the reader's rules were checked for, an answer is
-        # given only where ngspice confirms it.
+        # given only where ngspice confirms every value it was asked for.
         raise NetlistError(
             f"unsupported hierarchy ngbehavior {profile.ngbehavior!r}: the reader's rules are "
-            "established for '', hsa and kiltpsa, and in another mode it answers only when "
-            f"ngspice confirms its values, but {check.explanation()}"
+            f"established for {established_modes()}, and in another mode it answers only "
+            f"when ngspice confirms its values, but {check.explanation()}. Query with one of "
+            "those modes, or with ngspice installed and the deck readable by it."
         )
     selected = tuple(p.casefold() for p in q.instance) if q.instance else ()
     if selected and not any(

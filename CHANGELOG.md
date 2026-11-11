@@ -113,11 +113,12 @@ tool-surface changes.
 - `inspect(kind="hierarchy")` checks the values discovery resolved against
   ngspice's own reading of the deck when ngspice is installed. ngspice reads
   the deck in the query's mode through a driver that prints each value: a
-  resistor's value, a MOSFET's W and L, and an `m` written on the card. The
-  reply's `ngspice_check` says whether they agree, lists any value that
+  resistor's value, a MOSFET's W and L, and an `m` written on either card.
+  The reply's `ngspice_check` says whether they agree, lists any value that
   differs with both readings, counts what was not compared and why, and says
-  why the check did not run when it did not. Nodes, models and sources are
-  not compared.
+  why the check did not run when it did not. An `m` inside a subcircuit once
+  any call sets `m`, and a 0 ohm resistor, are left out, because ngspice
+  changes them by design. Nodes, models and sources are not compared.
 - The `bode_crossing` recipe takes `ref_hz`, which measures `level_db` from
   the gain at that frequency: `level_db: -3.0103, ref_hz: "1k"` finds where
   the gain falls 1/sqrt(2) below its value at 1 kHz, in one call instead of a
@@ -222,11 +223,14 @@ tool-surface changes.
 
 - An ngspice mode other than `hsa`, `kiltpsa` and native (`""`) is no
   longer refused by `inspect(kind="hierarchy")` outright. The query answers
-  when ngspice is installed and confirms the values discovery resolved, and
-  is otherwise refused with what the check found. In such a mode discovery
-  refuses `gnd`, whose reading there is not recorded. Editing a deck by
-  instance, and a recoverable run, are still refused in such a mode, with a
-  message that names the supported modes.
+  when ngspice is installed and confirms every value discovery resolved, and
+  is otherwise refused with what the check found and the modes to use. In
+  such a mode discovery refuses `gnd`, whose reading there is not recorded.
+  Editing a deck by instance is still refused in such a mode, and a
+  recoverable run is refused before the job is recorded, with
+  `recovery_ngbehavior_unsupported`; both messages name the supported modes.
+  Modes are matched case-sensitively, as ngspice matches them: `HSA` is
+  native mode to ngspice, so it is no longer read as `hsa`.
 - Each ngspice run is checked against the compatibility mode the server
   passed it and read the deck in, so a run that used to complete can now
   fail. ngspice names the mode it read a circuit in at the top of its log

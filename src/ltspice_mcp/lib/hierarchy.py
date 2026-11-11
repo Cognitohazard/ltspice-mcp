@@ -65,10 +65,18 @@ SUPPORTED_FAMILIES: frozenset[str] = frozenset(get_args(Family))
 ESTABLISHED_NGBEHAVIOR: frozenset[str] = frozenset({"", "hsa", "kiltpsa"})
 """The ngspice modes whose reading rules this module follows were checked
 against ngspice for (``tests/test_hierarchy.py``,
-``test_discovery_to_real_device_operating_point``). In any other mode the
-rules that depend on the mode refuse instead of answering (``gnd``, a
-duplicate ``.param``), and an answer is given only where ngspice confirms
-it (``hierarchy_check``)."""
+``test_discovery_to_real_device_operating_point``), spelled as ngspice reads
+them: it matches mode letters case-sensitively, so ``HSA`` is native mode to
+it. In any other mode ``gnd`` is refused, as in ``kiltpsa``; a duplicate
+``.param`` is refused in every mode but ``hsa``; the sectioned ``.lib`` rule
+reads the mode's letters as in any mode. ``inspect`` answers in such a mode
+only where ngspice confirms the values (``hierarchy_check``), and code that
+edits a deck by these rules refuses (``require_established``)."""
+
+
+def established_modes() -> str:
+    """The established modes, for a message."""
+    return ", ".join(repr(mode) for mode in sorted(ESTABLISHED_NGBEHAVIOR))
 
 
 @dataclass(frozen=True)
@@ -96,10 +104,7 @@ class SemanticProfile:
     def established(self) -> bool:
         """Whether the reader's rules for this profile were checked against
         the simulator (``ESTABLISHED_NGBEHAVIOR``); always for LTspice."""
-        return (
-            self.simulator != "ngspice"
-            or (self.ngbehavior or "").casefold() in ESTABLISHED_NGBEHAVIOR
-        )
+        return self.simulator != "ngspice" or (self.ngbehavior or "") in ESTABLISHED_NGBEHAVIOR
 
 
 def require_established(profile: SemanticProfile, purpose: str) -> None:
@@ -108,14 +113,23 @@ def require_established(profile: SemanticProfile, purpose: str) -> None:
     Code that edits a deck by the reader's answers calls this: those answers
     are not confirmed against ngspice there, as ``inspect`` confirms them.
     """
-    if not profile.established:
-        raise NetlistError(
-            f"unsupported hierarchy ngbehavior {profile.ngbehavior!r} for {purpose}: the "
-            "hierarchy reader's rules are established for '', hsa and kiltpsa only; set "
-            "[simulator] ngbehavior to one of them and restart the server. "
-            "inspect(kind='hierarchy') still reads the deck in this mode where ngspice "
-            "confirms its values."
-        )
+    reason = unestablished_reason(profile, purpose)
+    if reason is not None:
+        raise NetlistError(reason)
+
+
+def unestablished_reason(profile: SemanticProfile, purpose: str) -> str | None:
+    """Why ``purpose`` is refused in ``profile``'s mode, or None when its
+    rules are established."""
+    if profile.established:
+        return None
+    return (
+        f"unsupported hierarchy ngbehavior {profile.ngbehavior!r} for {purpose}: the "
+        f"hierarchy reader's rules are established for {established_modes()} only; set "
+        "[simulator] ngbehavior to hsa or kiltpsa (unset, the server uses kiltpsa) and "
+        "restart the server. inspect(kind='hierarchy') still reads the deck in this "
+        "mode where ngspice confirms its values."
+    )
 
 
 @dataclass(frozen=True)
@@ -705,8 +719,13 @@ def resolve_hierarchy(
             and profile.simulator == "ngspice"
             and profile.ngbehavior not in ("", "hsa")
         ):
+            reading = (
+                "version-dependent"
+                if profile.ngbehavior == "kiltpsa"
+                else "unrecorded reading of the"
+            )
             raise NetlistError(
-                f"version-dependent ground alias 'gnd' in {profile.ngbehavior} mode; "
+                f"{reading} ground alias 'gnd' in {profile.ngbehavior} mode; "
                 "use explicit node 0 or inspect a supported native/hsa deck"
             )
         if folded == "gnd" and profile.simulator == "ltspice" and folded in ports:

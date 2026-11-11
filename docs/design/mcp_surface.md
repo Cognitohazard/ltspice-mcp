@@ -2479,25 +2479,36 @@ values discovery resolved compare with the ones ngspice reads
 (`lib/hierarchy_check.py`). ngspice reads the deck through a driver that
 `source`s it in the query's mode, as a run would, and prints each value: a
 resistor's `value` (ngspice's `resistance`), a MOSFET's `geometry` W and L
-(`w`, `l`, both scaled) and an `m` on the card, unless a subcircuit call above
-it sets `m`, which ngspice replaces or multiplies. `status` is `agrees`,
-`differs` (with `differences`, each the instance, the field, and both values)
-or `not_run` with a `reason`: `no_ngspice`, `nothing_to_compare`,
-`path_unsupported`, `ngspice_failed`, `inputs_changed` (a file changed before
-ngspice read it), `deck_not_read`, `mode_unchecked`, or `mode_differs` (a
-startup file ngspice reads set another mode). `compared` counts the values
-compared and `not_compared` counts the rest by reason: `no_ngspice_name` (an
-element the reader gives no ngspice device name), `unresolved`,
-`m_set_by_subcircuit_call` and `no_ngspice_value`. Nodes, models and sources
-are not compared. The result is kept per deck content, mode and executable,
-so later pages do not ask again. The check covers the whole deck, not only
-the selected instances.
+(`w`, `l`, both scaled) and an `m` on either card. Two kinds of value are left
+out because ngspice changes them by design. Once any subcircuit call in the
+deck sets `m`, ngspice rewrites the `m` of devices inside subcircuits (in
+`hsa` it multiplies the calls' `m` in; in other modes it changes `m` on every
+instance of the called subcircuit). And it reads a 0 ohm resistor as 1
+milliohm. `status` is `agrees`, `differs` (with `differences`, each the
+`instance`, the reply `field`, and the `reader` and `ngspice` values) or
+`not_run`. A `not_run` result has a `reason` and a `detail` that explains it:
+`no_ngspice`, `nothing_to_compare`, `path_unsupported` (a quote, `$`, `` ` ``,
+a backslash, a brace, a tab or a line break in the path, or a non-ASCII path
+on Windows), `ngspice_failed`, `inputs_changed` (a file changed before ngspice
+read it), `deck_not_read` (ngspice printed no value), `mode_unchecked`, or
+`mode_differs` (a startup file ngspice reads set another mode). `compared`
+counts the values compared when the check ran. `not_compared` counts the rest
+by reason: `no_ngspice_name` (an element the reader gives no ngspice device
+name), `unresolved`, `m_rewritten_by_calls`, `zero_resistance` and
+`no_ngspice_value`. Nodes, models and sources are not compared. A result,
+a failure to run ngspice included, is kept per deck content, mode and
+executable, so later pages do not ask again. The check covers the whole deck,
+not only the selected instances.
 
-In any other mode, the query answers only when that check `agrees`, and
-otherwise is refused with what the check found. The reader then refuses `gnd`,
+ngspice matches mode letters case-sensitively, so a mode is established only as
+written above: `HSA` is native mode to ngspice. In any other mode, the query
+answers only when ngspice was asked for every value and gave the same ones, and
+is otherwise refused with what the check found. The reader then refuses `gnd`,
 as in `kiltpsa`, and a `.param` declared twice. A run in such a mode needs no
-hierarchy reading and is not affected, but an instance edit or a recoverable
-run, which reads the deck by these rules, is refused. A `.lib file section` line needs a mode without
+hierarchy reading and is not affected. An instance edit is refused, and a
+recoverable run is refused before the job is recorded
+(`recovery_ngbehavior_unsupported`), because both read the deck by these
+rules. A `.lib file section` line needs a mode without
 `lt` or `ps` in its name (`hsa` or native mode), because those modes read it
 as two plain includes. The deck's first line is its title and is skipped; an
 included file has no title line, so its first line is read as a card. In

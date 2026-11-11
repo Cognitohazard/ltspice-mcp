@@ -65,7 +65,8 @@ from ltspice_mcp.lib.experiment_types import (
     ExperimentJob,
     SourceRecord,
 )
-from ltspice_mcp.lib.hierarchy import SUPPORTED_FAMILIES, SemanticProfile
+from ltspice_mcp.lib.hierarchy import SUPPORTED_FAMILIES, SemanticProfile, unestablished_reason
+from ltspice_mcp.lib.instance_targeting import RECORDING_LINEAGE
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.lint_rules import RULES_BY_ID, lint_deck, linter_version
 from ltspice_mcp.lib.native_inputs import NativeCaseValidator
@@ -1149,6 +1150,13 @@ async def _prepare_circuit(
             ),
             record_source_lineage=native is not None or args.execution.recoverable,
         )
+        # A recoverable run records its cards' sources by the hierarchy
+        # reader's rules; refuse before any case exists, as other recovery
+        # refusals do, rather than fail each case.
+        if deck.record_source_lineage and deck.semantic_profile is not None:
+            refusal = unestablished_reason(deck.semantic_profile, RECORDING_LINEAGE)
+            if refusal is not None:
+                raise RecoveryError("recovery_ngbehavior_unsupported", refusal)
         expanded = await asyncio.to_thread(
             expand_variations,
             [deck],
