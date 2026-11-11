@@ -252,6 +252,19 @@ def test_jobs_error_from_the_in_process_door_carries_the_wire_envelope(
     assert raised.value.payload["outcome"] == "failed"
 
 
+def test_a_verify_refusal_raises_with_the_hint_that_says_what_to_change(
+    state_no_sim: SessionState, work_dir: Path
+) -> None:
+    """A failed verify_circuit reply has no error block: its refusal is its
+    hint, so the API raises with that hint, which names where a path may be."""
+    api = SyncApi(state_no_sim)
+    with pytest.raises(ApiCallError) as raised:
+        api.verify_circuit(path=str(work_dir.parent / "outside.cir"))
+    assert "error" not in raised.value.payload
+    assert str(raised.value) == raised.value.payload["hint"]
+    assert str(work_dir) in str(raised.value)
+
+
 def test_run_receipt_assembles_more_than_fifty_runs_with_original_projection(
     state_no_sim: SessionState,
     monkeypatch: pytest.MonkeyPatch,
@@ -925,7 +938,6 @@ def test_verify_and_edit_return_uncapped_neutral_data(
     async def evaluate_edit(_request: object, _state: SessionState):
         return schematic_edit.EditSchematicEvaluation(
             data={"outcome": "complete", "sha256": "a" * 64},
-            text="complete",
             views=views,
         )
 

@@ -99,7 +99,6 @@ from ltspice_mcp.tools._base import (
     OtherRawFields,
     ToolInput,
     difference_in_full,
-    format_observations,
     format_response,
     image_content,
     open_window_call,
@@ -958,37 +957,6 @@ def build_plot_image(
     return image
 
 
-def _fmt(value: float | None) -> str:
-    return "n/a" if value is None else f"{value:.4g}"
-
-
-def _summary_lines(traces: list[TraceSummary], x_unit: str | None) -> list[str]:
-    """One text line per summarized trace (the text mirror of ``traces``)."""
-    at = f" {x_unit}" if x_unit else ""
-    lines = []
-    for t in traces:
-        name = t.get("label") or (
-            f"{t['signal']} [step {t['step']}]" if "step" in t else t["signal"]
-        )
-        unit = f" ({t['unit']})" if t.get("unit") else ""
-        parts = [
-            f"min {_fmt(t['min'])} at {_fmt(t['x_at_min'])}{at}",
-            f"max {_fmt(t['max'])} at {_fmt(t['x_at_max'])}{at}",
-            f"initial {_fmt(t['initial'])}",
-            f"final {_fmt(t['final'])}",
-        ]
-        if "mean" in t:
-            parts.append(f"mean {_fmt(t['mean'])}")
-        if "phase_initial_deg" in t and "phase_final_deg" in t:
-            parts.append(
-                f"phase {_fmt(t['phase_initial_deg'])} to {_fmt(t['phase_final_deg'])} deg"
-            )
-        if non_finite := t.get("non_finite"):
-            parts.append(f"{non_finite} non-finite samples left out")
-        lines.append(f"  {name}{unit}, panel {t['panel']}: " + ", ".join(parts))
-    return lines
-
-
 class PlotWaveformInput(OptionalRawSelectionFields, OtherRawFields, ToolInput, NotedModel):
     path: str | None = Field(
         default=None,
@@ -1396,16 +1364,7 @@ async def _show_without_chart(
         "ltspice": shown,
         "observations": observations,
     }
-    lines = [_ltspice_line(shown), *format_observations(observations)]
-    return format_response("\n".join(lines), data)
-
-
-def _ltspice_line(report: Mapping[str, Any]) -> str:
-    if report["shown"]:
-        how = "LTspice was started, and it is opened there" if report.get("started") else "Opened"
-        where = f"{how} in LTspice {report['version']} (process {report['pid']})."
-        return f"{where} {report['note']}" if "note" in report else where
-    return f"Not shown in LTspice: {report['reason']}. " + str(report.get("note", ""))
+    return format_response(data)
 
 
 def _rest_of_summary(
@@ -1961,26 +1920,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
         data["image_path"] = str(png_path)
     if shown_in_ltspice is not None:
         data["ltspice"] = shown_in_ltspice
-    if widget_spec_json is not None:
-        head = (
-            f"Rendered an interactive {analysis_type} plot widget in-chat (also wrote {out_path})"
-        )
-    else:
-        head = f"Wrote interactive {analysis_type} plot to {out_path}"
-        if opened:
-            head += f" (opened with {opener})"
-    lines = [head]
-    if shown_in_ltspice is not None:
-        lines.append(_ltspice_line(shown_in_ltspice))
-    if image is not None:
-        lines.append(f"Attached a PNG of the chart ({image.width}x{image.height}, {png_path}).")
-    lines.append(f"Traces ({len(traces)} of {traces_total}):")
-    lines.extend(_summary_lines(traces, plan.x_unit))
-    if rest is not None:
-        lines.append(rest)
-    lines.extend(format_observations(observations))
-    lines.extend(data.get("warnings", []))
-    result = format_response("\n".join(lines), data)
+    result = format_response(data)
 
     if image is not None:
         result.content.append(image_content(image))

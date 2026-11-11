@@ -284,25 +284,15 @@ async def _through_auto_door(coroutine: Coroutine[Any, Any, _T], tool: str) -> _
         return await coroutine
 
 
-def _payload_message(payload: Mapping[str, Any]) -> str | None:
-    """The message an error envelope carries, if it carries one."""
+def _error_message(payload: Mapping[str, Any]) -> str:
+    """What a failed call's payload says went wrong: the envelope's
+    ``error.message``, or else the ``hint`` a reply with no error block
+    (``verify_circuit``'s) carries its refusal in."""
     error = payload.get("error")
-    if isinstance(error, Mapping):
-        message = error.get("message")
-        if isinstance(message, str):
-            return message
-    return None
-
-
-def _message_for_error(payload: Mapping[str, Any], result: types.CallToolResult) -> str:
-    carried = _payload_message(payload)
-    if carried is not None:
-        return carried
-    from mcp import types as mcp_types  # already loaded: a result exists to unwrap
-
-    for content in result.content:
-        if isinstance(content, mcp_types.TextContent):
-            return content.text
+    message = error.get("message") if isinstance(error, Mapping) else None
+    for said in (message, payload.get("hint")):
+        if isinstance(said, str) and said:
+            return said
     return "The operation returned a call-level error"
 
 
@@ -312,7 +302,7 @@ def _unwrap(result: types.CallToolResult) -> dict[str, Any]:
         raise ApiInternalError("The operation's response did not contain structuredContent")
     payload = copy.deepcopy(dict(structured))
     if result.is_error:
-        raise ApiCallError(_message_for_error(payload, result), payload=payload)
+        raise ApiCallError(_error_message(payload), payload=payload)
     return payload
 
 
@@ -669,8 +659,7 @@ async def _collect_jobs(
     evaluation = await jobs.evaluate_jobs(request, state)
     data = jobs.complete_jobs_data(evaluation)
     if evaluation.is_error or "error" in data:
-        message = _payload_message(data) or "The operation returned a call-level error"
-        raise ApiCallError(message, payload=data)
+        raise ApiCallError(_error_message(data), payload=data)
     return data
 
 
@@ -689,8 +678,7 @@ async def _collect_verify_circuit(
     result = await verify.evaluate_verify_circuit(request, state)
     payload = copy.deepcopy(result.data)
     if result.is_error:
-        rendered = verify.render_verify_circuit(result)
-        raise ApiCallError(_message_for_error(payload, rendered), payload=payload)
+        raise ApiCallError(_error_message(payload), payload=payload)
     return payload
 
 
