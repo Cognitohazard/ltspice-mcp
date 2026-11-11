@@ -96,7 +96,7 @@ async def _analyze(state: SessionState, job_id: str, recipes: list[dict], **kw) 
         state,
     )
     data = result.structured_content
-    assert data is not None, result.content[0].text
+    assert data is not None, result.content
     return data
 
 

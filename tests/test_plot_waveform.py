@@ -700,25 +700,19 @@ class TestDeliveryAndSecurity:
 def _widget_spec(result) -> dict | None:
     """Parse the widget chart spec from the result's _meta (the hidden channel).
 
-    Also asserts the spec is NOT leaked into model-visible content (no content
-    block parses to a chart spec)."""
+    Also asserts the spec is NOT leaked into what the model reads: the
+    structured content, which the reply's text block serializes."""
     from ltspice_mcp.lib.plot_html import WIDGET_SPEC_META_KEY
 
-    for c in result.content:
-        text = getattr(c, "text", None)
-        if not text:
-            continue
-        try:
-            obj = json.loads(text)
-        except (ValueError, TypeError):
-            continue
-        assert not (isinstance(obj, dict) and isinstance(obj.get("panels"), list)), (
-            "chart spec must not appear in model-visible content"
-        )
     meta = result.meta
     if not meta or WIDGET_SPEC_META_KEY not in meta:
         return None
-    return json.loads(meta[WIDGET_SPEC_META_KEY])
+    spec = json.loads(meta[WIDGET_SPEC_META_KEY])
+    visible = json.dumps(result.structured_content)
+    assert json.dumps(spec["panels"]) not in visible, (
+        "chart spec must not appear in model-visible content"
+    )
+    return spec
 
 
 @pytest.mark.asyncio
@@ -945,18 +939,6 @@ class TestTraceSummary:
         assert trace["mean"] == pytest.approx(want["mean"])
         assert trace["max"] == pytest.approx(want["max"])
 
-    async def test_text_channel_carries_the_summary(
-        self, state_no_sim: SessionState, work_dir: Path
-    ):
-        raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-        result = await handle_plot_waveform(
-            PlotWaveformInput(path=str(raw), signals=["V(out)"], open=False), state_no_sim
-        )
-        text = result.content[0].text
-        final = result.structured_content["traces"][0]["final"]
-        assert "V(out)" in text
-        assert f"final {final:.4g}" in text
-
     async def test_each_step_is_its_own_trace(self, state_no_sim: SessionState, work_dir: Path):
         raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
         data = await _plot(state_no_sim, path=str(raw), signals=["V(out)"])
@@ -1001,7 +983,6 @@ class TestTraceSummary:
         assert "analyze_results" in data["hint"]
         assert "signal_stats" in data["hint"]
         assert "all_steps=true" in data["hint"]
-        assert data["hint"] in result.content[0].text
         # The hint and traces_truncated say it; an observation does not say it again.
         assert "trace_summary_truncated" not in {o["code"] for o in data.get("observations", [])}
 

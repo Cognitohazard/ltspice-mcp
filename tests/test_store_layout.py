@@ -85,7 +85,7 @@ async def _submit(state: SessionState, deck: Path, request_id: str) -> dict[str,
         state,
     )
     receipt = submitted.structured_content
-    assert receipt is not None, submitted.content[0].text
+    assert receipt is not None, submitted.content
     return receipt
 
 

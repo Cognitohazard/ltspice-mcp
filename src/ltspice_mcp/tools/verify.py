@@ -2910,11 +2910,11 @@ def render_verify_circuit(
             listing=listing,
         )
 
-    result = format_response(data["hint"], data)
+    result = format_response(data)
     if evaluation.is_error:
         result.is_error = True
     if evaluation.inline_image is not None:
-        result.content.insert(0, image_content(evaluation.inline_image))
+        result.content.append(image_content(evaluation.inline_image))
     return result
 
 
