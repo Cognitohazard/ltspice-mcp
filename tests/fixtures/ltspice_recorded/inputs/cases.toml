@@ -434,7 +434,7 @@ inputs = [
 ]
 
 [behaviour.wavefile-source-nodes]
-summary = "Which words of a source that plays a .wav file (V1 a b wavefile=...) are its nodes, with the file named in quotes and without, on a voltage and a current source."
+summary = "Which words of a source that plays a .wav file (V1 a b wavefile=...) are its nodes, with the file named in quotes and without, on a voltage and a current source; and that the source plays the file either way, so a run reads it."
 model = [
     "lib/spice_lex_views.py",
     "lib/spice_validator.py",
@@ -447,6 +447,7 @@ model = [
     "lib/netlist_diff.py",
     "lib/services.py",
     "lib/hierarchy.py",
+    "lib/experiment_inputs.py",
 ]
 # level.wav holds 100 samples at half of full scale, which a build plays as
 # 0.5 V or 0.5 A. V1 sits between a and b over two 1k resistors, so v(a) is

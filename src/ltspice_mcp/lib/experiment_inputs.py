@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING
 
 from ltspice_mcp.lib import atomic_write_bytes, capabilities, now
 from ltspice_mcp.lib.asc_document import is_asc
+from ltspice_mcp.lib.component_value import WAVEFILE
 from ltspice_mcp.lib.deck_staging import (
     card_sections,
     sha256_file,
@@ -180,6 +181,19 @@ _DIRECTIVES = frozenset(
     }
 )
 _MODULE_DIRECTIVES = frozenset({".load", ".hdl", ".verilog", ".osdi", ".pre_osdi"})
+#: The keywords whose value names a file a card reads when it runs, which
+#: staging does not copy (it follows include and library cards only): a PWL
+#: source's ``file=``, the ``sfile=`` and ``pwlfile=`` other dialects spell,
+#: and a V or I source's ``wavefile=``, whose file both LTspice builds play
+#: named in quotes or not (``deck/wavefile_nodes``, ``deck/wavefile_unquoted``).
+_FILE_KEYWORDS = frozenset({"file", "sfile", "pwlfile", WAVEFILE})
+# Each keyword as a whole word, so ``profile=`` names no file, then a PWL
+# whose parenthesized points hold a quoted name.
+_FILE_READER = re.compile(
+    r"(?i)\b(?:"
+    + "|".join(sorted(_FILE_KEYWORDS, key=len, reverse=True))
+    + r")\s*=|\bpwl\s*\([^)]*[\"']"
+)
 # A refusal lists this many constructs, each with this many more places, and
 # quotes each card to this length, so a long vendor library stays readable.
 _GROUPS_SHOWN = 12
@@ -440,7 +454,7 @@ def _refused_constructs(
     if head in INCLUDE_HEADS:
         return None
     text = " ".join(token.text for token in tokens)
-    reader = re.search(r"(?i)\b(file|sfile|pwlfile)\s*=|\bpwl\s*\([^)]*[\"']", text)
+    reader = _FILE_READER.search(text)
     if reader:
         return _Construct("recovery_external_reader", f"`{reader.group(0)}`, which reads a file")
     if (
