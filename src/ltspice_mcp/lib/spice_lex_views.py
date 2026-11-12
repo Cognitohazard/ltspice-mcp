@@ -15,10 +15,11 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Iterator, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from typing import Literal
 
-from ltspice_mcp.errors import NetlistError
+from ltspice_mcp.errors import NetlistError, UnreadableCardError
 from ltspice_mcp.lib.format import format_spice_value as _format_value
 from ltspice_mcp.lib.format import is_scaled_number, parse_spice_value
 from ltspice_mcp.lib.spice_lex import (
@@ -34,6 +35,69 @@ from ltspice_mcp.lib.spice_lex import (
     tokenize_body,
 )
 
+#: How much of a card a refusal quotes.
+_CARD_TEXT_CHARS = 160
+
+
+def card_as_written(card: SpiceCard) -> str:
+    """A card's text as its file writes it, its lines joined by a space, cut
+    to a length a message can carry."""
+    text = " ".join(line.strip() for line in card.raw_lines if line.strip()) or card.body
+    return text if len(text) <= _CARD_TEXT_CHARS else text[: _CARD_TEXT_CHARS - 1] + "…"
+
+
+def unreadable_card(
+    card: SpiceCard, error: SpiceLexError, source: object = None, *, why: str = ""
+) -> UnreadableCardError:
+    """The refusal of a card a reading needs but cannot split into its parts
+    (``spice_lex.unreadable_cards``): the file (``source``, when the reader
+    knows it), the line, the card as written, what is wrong, ``why`` the
+    reading needs the card when that is not plain, and the fix.
+
+    The one refusal for such a card, so a malformed card reads the same
+    whichever tool meets it."""
+    if isinstance(error, UnreadableCardError):
+        if error.source is not None or source is None:
+            return error
+        error = SpiceLexError(
+            error.category,
+            error.message,
+            position=error.position,
+            body=error.body,
+            suggestion=error.suggestion,
+        )
+    where = f"line {card.line_start}" + (f" of {source}" if source is not None else "")
+    fix = f" {error.suggestion[:1].upper()}{error.suggestion[1:]}." if error.suggestion else ""
+    return UnreadableCardError(
+        f"Cannot read the card on {where}, {card_as_written(card)!r}: "
+        f"{error.message}.{' ' + why if why else ''}{fix}",
+        error,
+        card=card,
+        source=None if source is None else str(source),
+    )
+
+
+@contextmanager
+def reading(source: object) -> Iterator[None]:
+    """Name ``source`` as the file in the refusal (``unreadable_card``) of a
+    card read inside, which a view raises knowing the card but not its file."""
+    try:
+        yield
+    except UnreadableCardError as exc:
+        if exc.source is not None:
+            raise
+        raise unreadable_card(exc.card, exc, source) from exc
+
+
+def card_tokens(card: SpiceCard, source: object = None) -> list[Token]:
+    """A card's parts, its comment left out, or its refusal
+    (``unreadable_card``) when it cannot be split into them."""
+    try:
+        tokens = tokenize_body(card.body)
+    except SpiceLexError as exc:
+        raise unreadable_card(card, exc, source) from exc
+    return [token for token in tokens if token.kind != TokenKind.COMMENT_TRAIL]
+
 
 def _require_kind(card: SpiceCard, expected: str) -> None:
     """Guard against from_card on the wrong card kind."""
@@ -43,14 +107,22 @@ def _require_kind(card: SpiceCard, expected: str) -> None:
         )
 
 
-def _malformed(card: SpiceCard, message: str, suggestion: str = "") -> SpiceLexError:
-    """Build a structured MALFORMED_CARD error for the given card."""
-    return SpiceLexError(
-        SpiceLexErrorCategory.MALFORMED_CARD,
-        f"{message} at line {card.line_start}",
-        body=card.body,
-        suggestion=suggestion,
+def _malformed(card: SpiceCard, message: str, suggestion: str = "") -> UnreadableCardError:
+    """The refusal (``unreadable_card``) of a card whose parts do not have
+    the shape its kind needs."""
+    return unreadable_card(
+        card,
+        SpiceLexError(SpiceLexErrorCategory.MALFORMED_CARD, message, suggestion=suggestion),
     )
+
+
+def _parts(card: SpiceCard) -> list[Token]:
+    """Every part of a card as the tokenizer reads it, or its refusal
+    (``unreadable_card``)."""
+    try:
+        return tokenize_body(card.body)
+    except SpiceLexError as exc:
+        raise unreadable_card(card, exc) from exc
 
 
 def _pair(tok: Token) -> tuple[str, str]:
@@ -198,7 +270,7 @@ class ModelCard:
     @classmethod
     def from_card(cls, card: SpiceCard) -> ModelCard:
         _require_kind(card, "model")
-        tokens = tokenize_body(card.body)
+        tokens = _parts(card)
         # Expected shape: BARE(.MODEL) BARE(name) (BARE|QUOTED)(type)
         # PARENED(params) | KEY_VALUE...
         if len(tokens) < 3:
@@ -216,7 +288,10 @@ class ModelCard:
         for tok in tokens[3:]:
             if tok.kind == TokenKind.PARENED:
                 in_parens = tok.body_offset + 1
-                inner = tokenize_body(tok.text[1:-1])
+                try:
+                    inner = tokenize_body(tok.text[1:-1])
+                except SpiceLexError as exc:
+                    raise unreadable_card(card, exc) from exc
                 own = [t for t in inner if t.kind == TokenKind.KEY_VALUE]
                 found.extend(_shift_tokens(own, 0, in_parens))
             elif tok.kind == TokenKind.KEY_VALUE:
@@ -249,6 +324,27 @@ class ModelCard:
     def param_pairs(self) -> list[tuple[str, str]]:
         """Every ``key=value`` on the card, in order, a key given twice listed twice."""
         return list(self._params.pairs)
+
+    def param_tokens(self) -> list[Token]:
+        """Every ``key=value`` part of the card, in order, inside its
+        parentheses or not. Read before any edit through this view: an edit
+        that renders the card again leaves no parts to point at."""
+        return list(self._params.tokens or [])
+
+    def numeric_params(self) -> dict[str, float]:
+        """Each parameter whose value is a plain number (``0.7``, ``100u``),
+        by its name upper-cased as SPICE folds it; an expression
+        (``{2*kp_n}``) is left out. A name given twice keeps its last value,
+        the one the simulator reads."""
+        out: dict[str, float] = {}
+        for key, value in self._params.pairs:
+            if not value.strip() or "{" in value or "(" in value:
+                continue
+            try:
+                out[key.upper()] = parse_spice_value(value)
+            except ValueError:
+                continue
+        return out
 
     def repeated_params(self) -> dict[str, list[str]]:
         """Each parameter the card gives more than once (``_Params.repeated``)."""
@@ -320,7 +416,7 @@ class ParamCard:
     @classmethod
     def from_card(cls, card: SpiceCard) -> ParamCard:
         _require_kind(card, "param")
-        tokens = tokenize_body(card.body)
+        tokens = _parts(card)
         # tokens[0] = ".PARAM", tokens[1] = KEY_VALUE.
         if len(tokens) < 2 or tokens[1].kind != TokenKind.KEY_VALUE:
             raise _malformed(card, "malformed .PARAM card")
@@ -759,7 +855,7 @@ class InstanceLine:
     @classmethod
     def from_card(cls, card: SpiceCard) -> InstanceLine:
         _require_kind(card, "instance")
-        tokens = tokenize_body(card.body)
+        tokens = _parts(card)
         if not tokens:
             raise _malformed(card, "empty instance card")
         if tokens[0].kind != TokenKind.BARE:
@@ -948,7 +1044,7 @@ class InstanceLine:
     def _source_reading(self) -> _SourceReading | None:
         """The source rule's reading of the card as it now stands, so an edit
         made through this view shows; None when the rule does not read it."""
-        tokens = tokenize_body(self.card.body)
+        tokens = _parts(self.card)
         start = _source_value_start(tokens)
         return None if start is None else _read_source(self.card.body[start:], self.ref)
 
@@ -957,7 +1053,7 @@ class InstanceLine:
         value, its own parameters and where each now is, so a value of several
         words the edit wrote (``5 AC 1``) is read by the rule and a later edit
         lands on the value alone."""
-        tokens = tokenize_body(self.card.body)
+        tokens = _parts(self.card)
         start = _source_value_start(tokens)
         if start is None:
             return
@@ -1275,7 +1371,7 @@ class SubcktCard:
     @classmethod
     def from_card(cls, card: SpiceCard) -> SubcktCard:
         _require_kind(card, "subckt")
-        tokens = tokenize_body(card.body)
+        tokens = _parts(card)
         if len(tokens) < 2:
             raise _malformed(card, "malformed .SUBCKT")
         name_token = tokens[1]
@@ -1505,7 +1601,7 @@ class MeasCard:
     @classmethod
     def from_card(cls, card: SpiceCard) -> MeasCard:
         _require_kind(card, "meas")
-        tokens = tokenize_body(card.body)
+        tokens = _parts(card)
         # tokens[0] = ".MEAS" (or ".MEASURE"). tokens[1] is either
         # analysis kind or measurement label.
         if len(tokens) < 2:
@@ -1535,6 +1631,53 @@ class MeasCard:
             function_calls=function_calls,
             signal_refs=probe_refs(card),
         )
+
+    @property
+    def bare_when(self) -> bool:
+        """Whether the measurement is a ``WHEN`` search with no ``FIND``: its
+        result is the crossing, and the value its log line prints is the
+        trigger level (log/meas_forms, ``m_when`` against ``m_findwhen``)."""
+        words = {tok.text.casefold() for tok in self.body_tokens if tok.kind == TokenKind.BARE}
+        return "when" in words and "find" not in words
+
+
+# ---------------------------------------------------------------------------
+# A directive's arguments and a .param card's assignments
+# ---------------------------------------------------------------------------
+
+
+def directive_args(card: SpiceCard) -> list[str]:
+    """The arguments of a directive card after its name, by position, as
+    written: ``.noise V(out) V1 dec 10 1 1Meg`` gives ``V(out)``, ``V1``,
+    ``dec`` and so on, and ``.four 1k V(out, ref)`` gives ``1k`` and
+    ``V(out, ref)``. Words written together are one argument, so a probe or
+    a function call is one, whatever spaces its parentheses hold. Its
+    comment is no argument. A card that cannot be split into its parts is
+    refused (``unreadable_card``)."""
+    args: list[str] = []
+    end = None
+    for tok in _parts(card)[1:]:
+        if tok.kind == TokenKind.COMMENT_TRAIL:
+            break
+        start = tok.body_offset if end is None else end
+        text = card.body[start : tok.body_end]
+        if end is not None and not any(c.isspace() for c in text[: tok.body_offset - start]):
+            args[-1] += text  # written together with the one before
+        else:
+            args.append(card.body[tok.body_offset : tok.body_end])
+        end = tok.body_end
+    return args
+
+
+def assigned_params(card: SpiceCard) -> list[tuple[str, Token]]:
+    """Every ``name=value`` a ``.param`` card sets, in order, with its name as
+    written: one card may set several (``.param a=1 b=2``), and each is a
+    parameter. A card that cannot be split into its parts is refused
+    (``unreadable_card``)."""
+    _require_kind(card, "param")
+    return [
+        (tok.key, tok) for tok in _parts(card)[1:] if tok.kind == TokenKind.KEY_VALUE and tok.key
+    ]
 
 
 # ---------------------------------------------------------------------------

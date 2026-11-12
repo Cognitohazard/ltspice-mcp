@@ -481,6 +481,7 @@ FROZEN_ERROR_CODES = (
     "cancel_not_authorized",
     "cancel_unavailable",
     "cancelled",
+    "card_unreadable",
     "case_cap",
     "case_cap_exceeded",
     "case_id_required",

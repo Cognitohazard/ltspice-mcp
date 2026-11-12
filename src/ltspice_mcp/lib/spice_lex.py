@@ -298,9 +298,13 @@ def _closing_quote(body: str, i: int, where: str = "") -> int:
 def _scan_balanced(body: str, start: int, opener: str, closer: str) -> int:
     """Return the index of the matching ``closer`` for ``body[start] == opener``.
 
-    ``{`` and ``(`` nest independently inside their own kind; quoted
-    strings inside them are skipped as opaque. Raises ``SpiceLexError``
-    on unbalanced input.
+    ``{`` and ``(`` nest inside their own kind; quoted strings inside them are
+    skipped as opaque. A brace's contents are one value, read as an
+    expression, so a parenthesis inside it is the expression's own. A
+    parenthesis group's contents are parts of the card, which a view splits
+    again (a ``.model`` card's parameters, a function's arguments), so a
+    brace opened inside one closes before it: ``(is={1e-14)`` is as
+    unreadable as ``is={1e-14``. Raises ``SpiceLexError`` on unbalanced input.
     """
     assert body[start] == opener
     depth = 1
@@ -311,6 +315,17 @@ def _scan_balanced(body: str, start: int, opener: str, closer: str) -> int:
         if c == '"' or c == "'":
             i = _closing_quote(body, i, f" inside {opener}...{closer}") + 1
             continue
+        if opener == "(" and c == "{":
+            i = _scan_balanced(body, i, "{", "}") + 1
+            continue
+        if opener == "(" and c == "}":
+            raise SpiceLexError(
+                SpiceLexErrorCategory.UNEXPECTED_CHAR,
+                "unexpected '}' (no matching opener)",
+                position=i,
+                body=body,
+                suggestion="check for a missing opening { earlier in the body",
+            )
         if c == opener:
             depth += 1
         elif c == closer:

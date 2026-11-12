@@ -42,11 +42,9 @@ from typing import Literal
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
-    TokenKind,
     emit,
     lex,
     lex_for_edit,
-    tokenize_body,
 )
 from ltspice_mcp.lib.spice_lex_ops import inject_card_before_end as _ops_inject
 from ltspice_mcp.lib.spice_lex_views import (
@@ -425,30 +423,19 @@ def render_variant_model_card(
 
 
 def parse_model_params(card_text: str) -> dict[str, float]:
-    """Parse all ``KEY=VALUE`` tokens from a ``.MODEL`` card into a float dict.
+    """The plain numeric parameters of the one ``.MODEL`` card ``card_text``
+    holds, by name upper-cased as SPICE folds it (``ModelCard.numeric_params``).
 
     The card is read as a deck is (``lex``): each line's comment ends at the
-    end of the line, and the ``+`` lines after it go on with the card. Walks
-    tokens via ``tokenize_body`` so quoted values and brace expressions
-    (``KP={2*kp_n}``) are handled correctly. Skips tokens whose value can't
-    be parsed via ``parse_spice_value`` (parametric expressions,
-    behavioural). Keys are upper-cased per SPICE convention.
+    end of the line, and the ``+`` lines after it go on with the card. A value
+    that is an expression (``KP={2*kp_n}``) is left out. A card that cannot
+    be read is refused (``spice_lex_views.unreadable_card``); a reader that
+    knows the card's file reads it there instead, so the refusal names it.
     """
-    out: dict[str, float] = {}
-
-    def _harvest(tokens: list) -> None:
-        for tok in tokens:
-            if tok.kind == TokenKind.KEY_VALUE:
-                parsed = parse_value(tok.value)
-                if parsed is not None:
-                    out[tok.key.upper()] = parsed
-            elif tok.kind == TokenKind.PARENED:
-                # Recurse into the .MODEL's parameter group.
-                _harvest(tokenize_body(tok.text[1:-1]))
-
-    for card in lex(card_text).cards:
-        _harvest(tokenize_body(card.body))
-    return out
+    cards = [card for card in lex(card_text).cards if card.kind == "model"]
+    if not cards:
+        return {}
+    return ModelCard.from_card(cards[0]).numeric_params()
 
 
 def inject_card_before_end(netlist_text: str, card: str, *, deck: bool) -> str:

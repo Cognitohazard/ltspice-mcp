@@ -372,6 +372,7 @@ inputs = [
 summary = "How a deck's lines are read: the title line, ; and $ comments, a $ inside a node name and at its start, + continuations, a ; comment on a line the card is continued past, inside a .model card's parentheses and outside them, cards after .end, a missing .end, CRLF line endings, case, and whether gnd is ground."
 model = [
     "lib/spice_lex.py",
+    "lib/spice_lex_views.py",
     "lib/spice_validator.py",
     "lib/lint_rules.py",
     "lib/hierarchy.py",
@@ -417,7 +418,7 @@ inputs = ["deck/gnd_bang.cir", "deck/global_port.cir"]
 
 [behaviour.deck-forms]
 summary = "Card forms the lint and arity rules accept or refuse: B-source R= and P=, a spaced B expression, comma-separated IC= values, Q= and Flux=, a value keyed as R=, C= or L=, params: on a subcircuit, trailing area factors, device type names as models, .tran shorthands, two analyses in one deck."
-model = ["lib/spice_validator.py", "lib/lint_rules.py", "lib/spice_lex_views.py", "lib/spice_lex.py", "lib/component_value.py", "lib/netlist_graph.py"]
+model = ["lib/spice_validator.py", "lib/lint_rules.py", "lib/spice_lex_views.py", "lib/spice_lex.py", "lib/component_value.py", "lib/netlist_graph.py", "lib/result_observations.py"]
 inputs = [
     "deck/bsource_r.cir",
     "deck/bsource_p.cir",

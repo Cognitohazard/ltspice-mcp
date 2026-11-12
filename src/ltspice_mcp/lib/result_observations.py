@@ -64,8 +64,8 @@ from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.log_types import measurement_failed, measurement_named
-from ltspice_mcp.lib.spice_lex import lex_deck
-from ltspice_mcp.lib.spice_lex_views import read_instance
+from ltspice_mcp.lib.spice_lex import SpiceLexError, directive_head, lex_deck
+from ltspice_mcp.lib.spice_lex_views import directive_args, read_instance
 from ltspice_mcp.lib.spice_validator import leading_numeric_tokens
 from ltspice_mcp.lib.trace_names import is_node_voltage
 
@@ -157,11 +157,14 @@ def parse_requested_outputs(netlist_text: str) -> dict[str, list[str]]:
             if card.name:
                 meas.append(card.name)
             continue
-        tokens = card.body.split() if card.kind == "directive" else []
-        if len(tokens) < 2:
+        if card.kind != "directive" or directive_head(card) not in (".four", ".fourier"):
             continue
-        if tokens[0].lower() in (".four", ".fourier"):
-            rest = tokens[2:]
+        try:
+            args = directive_args(card)
+        except SpiceLexError:
+            continue  # best effort: a card no rule reads names no output
+        if args:
+            rest = args[1:]
             counts = 0
             while counts < min(2, len(rest)) and _FOUR_COUNT_RE.fullmatch(rest[counts]):
                 counts += 1
@@ -319,12 +322,15 @@ def parse_source_amplitudes(netlist_text: str) -> dict[str, float]:
 
 
 def _first_directive(netlist_text: str, head: str) -> list[str] | None:
-    """The tokens of a deck's first ``head`` directive (``.tran``, ``.ac``)
-    that the simulator reads; None when it has none."""
+    """The words of a deck's first ``head`` directive (``.tran``, ``.ac``)
+    that the simulator reads, its name first (``directive_args``); None when
+    it has none, or when that card cannot be read."""
     for card in lex_deck(netlist_text).cards:
-        tokens = card.body.split() if card.kind == "directive" else []
-        if tokens and tokens[0].casefold() == head:
-            return tokens
+        if card.kind == "directive" and directive_head(card) == head:
+            try:
+                return [head, *directive_args(card)]
+            except SpiceLexError:
+                return None
     return None
 
 
