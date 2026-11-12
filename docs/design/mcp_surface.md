@@ -2210,13 +2210,19 @@ error's `code`. A URI or prompt name the server does not serve is null.
 A Python API operation (`run_experiments`, `jobs`, `analyze_results`,
 `inspect`, `edit_schematic`, `verify_circuit`, also what a `run_code` snippet
 calls) writes the same `tool_call` record with `door: "python_api"`, the
-request it validated, `reply_chars` null, and `controls`, the API's own
-options it set (`raw_page`, `wait`, `detach`). An API error that carries a
+names in the arguments as the caller wrote them (before the automatic mode
+drops a presentation control or submits with `execution.wait_s` of 0),
+`reply_chars` null, and `controls`, the API's own options it set (`raw_page`,
+`wait`, `detach`). An operation the API runs for its caller, such as the
+polls of `wait` or of `run_experiments` waiting for its job, writes none. An API error that carries a
 tool's error payload is `error` with that payload's `code`, a refused argument
 is `error` with `invalid_arguments`, and an interrupt is `cancelled`. The
 API's other methods (`wait`, `load_raw`, `measurements`, `device_op_points`,
 `reference`, `guide`) write none. A `run_code` snippet's records reach the
-server's stderr through its worker, which logs at the server's level.
+server's stderr through its worker, which logs at the server's level. A
+detached run (`detach=True`) is submitted again by the process spawned to own
+it, an ordinary API caller, so its log holds a second `run_experiments`
+record for the same job.
 The same logger writes a job's lifecycle events.
 
 ---

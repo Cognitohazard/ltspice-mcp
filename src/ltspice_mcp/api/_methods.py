@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import copy
 import functools
 import inspect
@@ -115,15 +116,59 @@ def _validate(
     arguments: Mapping[str, Any],
     state: SessionState,
 ) -> _ModelT:
-    from ltspice_mcp.lib.observability import note_request  # validating pays it anyway
-
     try:
-        request = model.model_validate(dict(arguments))
+        return model.model_validate(dict(arguments))
     except ValidationError as exc:
         raise _validation_error(operation, exc, state) from None
-    # The operation's event names the fields this request set.
+
+
+def _note_caller_request(model: type[BaseModel], arguments: Mapping[str, Any]) -> None:
+    """Give the operation's event the request as the caller wrote it.
+
+    Validated here, before the operation rewrites its arguments: the
+    automatic mode drops presentation controls the caller sent and submits
+    with ``execution.wait_s=0`` the caller did not, and the event names what
+    the caller set. Validated only when the event would be written; arguments
+    that do not validate leave the event's names null, as a refused tool call's
+    are, and the operation reports them itself.
+    """
+    from ltspice_mcp.lib.observability import events_enabled, note_request
+
+    if not events_enabled():
+        return
+    try:
+        request = model.model_validate(copy.deepcopy(dict(arguments)))
+    except Exception:
+        return
     note_request(request)
-    return request
+
+
+#: Set while an operation call runs, and while a method that is no operation
+#: of its own (``wait``) runs operations for its caller: an operation called
+#: inside it writes no event, so one call of the caller's is counted once.
+_INSIDE_OPERATION: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "ltspice_mcp_api_inside_operation", default=False
+)
+
+
+@contextlib.contextmanager
+def _inside_operation() -> Iterator[None]:
+    token = _INSIDE_OPERATION.set(True)
+    try:
+        yield
+    finally:
+        _INSIDE_OPERATION.reset(token)
+
+
+def _counted_by_caller(method: Callable[_P, _R]) -> Callable[_P, _R]:
+    """Run ``method`` with the operations it calls writing no event."""
+
+    @functools.wraps(method)
+    def counted(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        with _inside_operation():
+            return method(*args, **kwargs)
+
+    return counted
 
 
 def _walk_fields(
@@ -726,19 +771,37 @@ class _CataloguedMethod:
         from ltspice_mcp.lib.observability import capturing_request, emit_api_event
         from ltspice_mcp.tools._base import as_sent  # an operation call pays the import anyway
 
+        if _INSIDE_OPERATION.get():
+            return self._run(as_sent, args, kwargs)
+        with _inside_operation():
+            return self._counted(as_sent, emit_api_event, capturing_request, args, kwargs)
+
+    def _run(self, as_sent: Callable[..., Any], args: Any, kwargs: dict[str, Any]) -> Any:
+        if kwargs.get("raw_page"):
+            return self.__func__(*args, **kwargs)
+        try:
+            return as_sent(self.__func__(*args, **kwargs), self.__name__)
+        except ApiCallError as exc:
+            exc.payload = as_sent(exc.payload, self.__name__)
+            raise
+
+    def _counted(
+        self,
+        as_sent: Callable[..., Any],
+        emit_api_event: Callable[..., None],
+        capturing_request: Callable[[], contextlib.AbstractContextManager[list[BaseModel]]],
+        args: Any,
+        kwargs: dict[str, Any],
+    ) -> Any:
+        """Run the operation and write its one event (``lib/observability``)."""
         started = time.monotonic()
         outcome: Literal["ok", "error", "cancelled", "raised"] = "raised"
         code: str | None = None
         with capturing_request() as request:
             try:
-                if kwargs.get("raw_page"):
-                    result = self.__func__(*args, **kwargs)
-                else:
-                    result = as_sent(self.__func__(*args, **kwargs), self.__name__)
+                result = self._run(as_sent, args, kwargs)
             except ApiCallError as exc:
                 outcome, code = "error", exc.code
-                if not kwargs.get("raw_page"):
-                    exc.payload = as_sent(exc.payload, self.__name__)
                 raise
             except ApiValidationError:
                 # What a tool call answers ``invalid_arguments`` for.
@@ -760,7 +823,7 @@ class _CataloguedMethod:
                     (
                         name
                         for name, default in _API_CONTROLS.items()
-                        if name in kwargs and kwargs[name] != default
+                        if isinstance(kwargs.get(name), bool) and kwargs[name] is not default
                     ),
                 )
 
@@ -911,6 +974,7 @@ class ApiMethodsMixin(ABC):
         is also what admits the wire-only controls the automatic mode rejects.
         """
         self._check_process_and_thread()
+        _note_caller_request(model, arguments)
         dropped = [] if raw_page else _enforce_auto_door(arguments, model)
         request = _validate(name, model, arguments, self._state)
         coroutine = (
@@ -940,6 +1004,7 @@ class ApiMethodsMixin(ABC):
             raise ApiValidationError("wait must be a bool")
         if not isinstance(detach, bool):
             raise ApiValidationError("detach must be a bool")
+        _note_caller_request(experiments.RunExperimentsInput, arguments)
         if detach:
             if wait:
                 raise ApiValidationError(
@@ -1063,6 +1128,7 @@ class ApiMethodsMixin(ABC):
                 raise ApiValidationError("detach=True cannot be combined with raw_page=True.")
             if not self._state.config.persist_jobs:
                 raise ApiValidationError("detach=True needs persisted job records (persist_jobs).")
+            _note_caller_request(jobs.JobsInput, arguments)
             return self._resume_detached(arguments)
         return self._dispatch(
             "jobs",
@@ -1141,6 +1207,7 @@ class ApiMethodsMixin(ABC):
                 raise ApiCallError(data["error"]["message"], payload=data) from exc
         return _with_warnings(handoff.receipt, dropped)
 
+    @_counted_by_caller
     def wait(
         self,
         job_id: str,

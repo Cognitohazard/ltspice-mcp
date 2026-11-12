@@ -399,8 +399,14 @@ async def call_tool(
 
 def _event_tool_name(name: str, ctx: ServerRequestContext) -> str | None:
     """``name`` if this server serves a tool by it, else None: an unknown
-    name is the caller's text, which the event does not record."""
-    return name if name in _get_state(ctx).tool_dispatch else None
+    name is the caller's text, which the event does not record. A call that
+    failed before the session state could be read records None too, so the
+    lookup never replaces the call's own exception."""
+    try:
+        served = _get_state(ctx).tool_dispatch
+    except Exception:
+        return None
+    return name if name in served else None
 
 
 async def _answer_tool_call(

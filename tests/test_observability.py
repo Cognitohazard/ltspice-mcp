@@ -17,8 +17,9 @@ import pytest
 from mcp import types
 from mcp.shared.exceptions import MCPError
 
-from ltspice_mcp.api._exceptions import ApiValidationError
+from ltspice_mcp.api._exceptions import ApiCallError, ApiValidationError
 from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.lib import observability
 from ltspice_mcp.lib.experiment_types import (
     Completeness,
     ExperimentCase,
@@ -588,3 +589,46 @@ class TestPythonApiCallsEmitOne:
                 "controls": [],
             },
         ]
+
+    def test_the_event_names_what_the_caller_set_not_the_apis_rewrite(
+        self, state_no_sim: SessionState, events_caplog: pytest.LogCaptureFixture
+    ):
+        """The automatic mode submits with ``execution.wait_s=0`` and drops a
+        ``budget``: the event names the caller's ``budget`` and no ``wait_s``.
+        The submission fails for want of a simulator, as a tool's error."""
+        (state_no_sim.working_dir / "rc.cir").write_text("R1 a 0 1k\n.op\n.end\n")
+        api = SyncApi(state_no_sim)
+        with pytest.raises(ApiCallError) as caught:
+            api.run_experiments(circuits=[{"path": "rc.cir"}], budget=4000, wait=False)
+        (event,) = _events(events_caplog)
+        assert (event["outcome"], event["code"]) == ("error", caught.value.code)
+        assert event["code"]
+        assert _names(event) == (["budget", "circuits", "circuits.path"], [])
+        assert event["controls"] == ["wait"]
+
+    def test_wait_writes_no_event_of_its_own_operations(
+        self, state_no_sim: SessionState, events_caplog: pytest.LogCaptureFixture
+    ):
+        """``wait`` polls through ``jobs``; those inner calls are not the
+        caller's, so they write nothing, and neither does ``wait``."""
+        api = SyncApi(state_no_sim)
+        with pytest.raises(ApiCallError):
+            api.wait("exp_missing", timeout_s=0)
+        assert _events(events_caplog) == []
+        api.inspect(queries=[{"kind": "capabilities"}])
+        (event,) = _events(events_caplog)
+        assert event["tool"] == "inspect"
+
+    def test_a_failing_event_never_replaces_the_result(
+        self,
+        state_no_sim: SessionState,
+        events_caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        def breaks(request):
+            raise RuntimeError("event building failed")
+
+        monkeypatch.setattr(observability, "request_names", breaks)
+        result = SyncApi(state_no_sim).inspect(queries=[{"kind": "capabilities"}])
+        assert result["results"][0]["ok"] is True
+        assert _events(events_caplog) == []

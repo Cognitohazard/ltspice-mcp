@@ -41,12 +41,23 @@ import asyncio
 import contextlib
 import contextvars
 import enum
+import functools
 import logging
 import sys
 import types as pytypes
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Annotated, Any, Literal, Union, cast, get_args, get_origin
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Literal,
+    ParamSpec,
+    Union,
+    cast,
+    get_args,
+    get_origin,
+)
 
 from pydantic import BaseModel, SkipValidation, TypeAdapter
 
@@ -144,6 +155,24 @@ def emit_job_event(
     )
 
 
+_P = ParamSpec("_P")
+
+
+def _never_raises(emit: Callable[_P, None]) -> Callable[_P, None]:
+    """Run an emitter so that a failure building its record is logged and
+    swallowed: an event describes a call, and must never replace the call's
+    own result or its own exception."""
+
+    @functools.wraps(emit)
+    def guarded(*args: _P.args, **kwargs: _P.kwargs) -> None:
+        try:
+            emit(*args, **kwargs)
+        except Exception:
+            logger.debug("could not build the event of %s", emit.__name__, exc_info=True)
+
+    return guarded
+
+
 #: Which way a call reached the tool handlers: an MCP ``tools/call``, or an
 #: operation of the Python API (``ltspice_mcp.api``, which ``run_code`` uses).
 Door = Literal["mcp", "python_api"]
@@ -155,6 +184,12 @@ Door = Literal["mcp", "python_api"]
 _REQUEST: contextvars.ContextVar[list[BaseModel] | None] = contextvars.ContextVar(
     "ltspice_mcp_event_request", default=None
 )
+
+
+def events_enabled() -> bool:
+    """Whether a call's event would be written: what building one costs is
+    paid only then."""
+    return logger.isEnabledFor(logging.INFO)
 
 
 @contextlib.contextmanager
@@ -255,15 +290,29 @@ def _is_default(model: BaseModel, name: str, value: Any) -> bool:
         return False
 
 
-def _member_tag(model: type[BaseModel]) -> tuple[str, str] | None:
-    """The field and word that tag ``model`` as one member of a union: its
-    first field whose type is a ``Literal`` of a single string (an inspect
-    query's ``kind``, a recipe's ``metric``, an edit op's ``op``)."""
+def _declared_discriminator(annotation: Any) -> str | None:
+    """The field a union ``annotation`` declares as its discriminator
+    (``Field(discriminator="kind")``), read from its own metadata: the one
+    answer pydantic itself validates the union by."""
+    if get_origin(annotation) is not Annotated:
+        return None
+    for metadata in get_args(annotation)[1:]:
+        named = getattr(metadata, "discriminator", None)
+        if isinstance(named, str):
+            return named
+    return None
+
+
+def _member_tag(model: type[BaseModel], discriminator: str) -> tuple[str, str] | None:
+    """The wire name and word of ``model``'s ``discriminator`` field, which
+    tag it as one member of its union."""
     for name, field in model.model_fields.items():
-        if get_origin(field.annotation) is Literal:
-            words = get_args(field.annotation)
-            if len(words) == 1 and isinstance(words[0], str):
-                return field.alias or name, words[0]
+        if discriminator not in (name, field.alias):
+            continue
+        words = get_args(field.annotation) if get_origin(field.annotation) is Literal else ()
+        if len(words) == 1 and isinstance(words[0], str):
+            return field.alias or name, words[0]
+        return None
     return None
 
 
@@ -281,14 +330,19 @@ def _members(annotation: Any) -> list[type[BaseModel]]:
 
 
 def _refused_item(
-    value: Any, annotation: Any, path: str, fields: set[str], choices: set[str]
+    value: Any,
+    annotation: Any,
+    discriminator: str | None,
+    path: str,
+    fields: set[str],
+    choices: set[str],
 ) -> None:
     """Name what a refused item of a tagged union tried: its tag, when it is
     one a member declares, and those of its keys that member declares."""
-    if not isinstance(value, Mapping):
+    if discriminator is None or not isinstance(value, Mapping):
         return
     for member in _members(annotation):
-        tag = _member_tag(member)
+        tag = _member_tag(member, discriminator)
         if tag is None or value.get(tag[0]) != tag[1]:
             continue
         choices.add(f"{path}.{tag[0]}={tag[1]}")
@@ -298,7 +352,15 @@ def _refused_item(
         return
 
 
-def _walk(value: Any, annotation: Any, path: str, fields: set[str], choices: set[str]) -> None:
+def _walk(
+    value: Any,
+    annotation: Any,
+    path: str,
+    fields: set[str],
+    choices: set[str],
+    discriminator: str | None = None,
+) -> None:
+    discriminator = _declared_discriminator(annotation) or discriminator
     annotation, skipped = _unwrap(annotation)
     if skipped and not isinstance(value, BaseModel):
         try:
@@ -307,11 +369,11 @@ def _walk(value: Any, annotation: Any, path: str, fields: set[str], choices: set
             # The handler refuses this item and answers the others. What the
             # item tried is still a use: its tag and the names its member
             # declares, never a key the caller made up.
-            _refused_item(value, annotation, path, fields, choices)
+            _refused_item(value, annotation, discriminator, path, fields, choices)
             return
     if isinstance(value, BaseModel):
         model_fields = type(value).model_fields
-        tag = _member_tag(type(value)) if path else None
+        tag = _member_tag(type(value), discriminator) if path and discriminator else None
         prefix = path
         if tag is not None:
             # One item of a tagged union: its fields are named under its tag,
@@ -320,7 +382,7 @@ def _walk(value: Any, annotation: Any, path: str, fields: set[str], choices: set
             prefix = f"{path}[{tag[0]}={tag[1]}]"
         for name in value.model_fields_set:
             field = model_fields.get(name)
-            if field is None or (tag is not None and name == tag[0]):
+            if field is None or (tag is not None and (field.alias or name) == tag[0]):
                 continue
             child = getattr(value, name, None)
             if _is_default(value, name, child):
@@ -328,17 +390,18 @@ def _walk(value: Any, annotation: Any, path: str, fields: set[str], choices: set
             wire = field.alias or name
             child_path = f"{prefix}.{wire}" if prefix else wire
             fields.add(child_path)
-            _walk(child, field.annotation, child_path, fields, choices)
+            declared = field.discriminator if isinstance(field.discriminator, str) else None
+            _walk(child, field.annotation, child_path, fields, choices, declared)
     elif isinstance(value, (list, tuple, set, frozenset)):
         item = _items_annotation(annotation)
         for element in value:
-            _walk(element, item, path, fields, choices)
+            _walk(element, item, path, fields, choices, discriminator)
     elif isinstance(value, Mapping):
         # A mapping's keys are the caller's (parameter names, labels), so only
         # its values are walked, as a list's items are.
         item = _items_annotation(annotation)
         for element in value.values():
-            _walk(element, item, path, fields, choices)
+            _walk(element, item, path, fields, choices, discriminator)
     else:
         word = value.value if isinstance(value, enum.Enum) else value
         if isinstance(word, str) and path and word in _vocabulary(annotation):
@@ -352,7 +415,7 @@ def request_names(request: BaseModel) -> tuple[list[str], list[str]]:
     A name is a field path: nested fields count, list positions and mapping
     keys are dropped, and each path appears once. A field the caller left out,
     or sent at its default, is not set. The fields of an item tagged as one
-    member of a union are named under the tag
+    member of a discriminated union are named under its declared discriminator
     (``recipes[metric=value].spec.allow_incomplete``,
     ``queries[kind=hierarchy].cursor``). A choice is ``path=word`` for a value
     a ``Literal`` or enum of the field's own type names
@@ -366,6 +429,7 @@ def request_names(request: BaseModel) -> tuple[list[str], list[str]]:
     return sorted(fields), sorted(choices)
 
 
+@_never_raises
 def emit_tool_event(
     tool: str | None,
     duration_s: float,
@@ -396,6 +460,7 @@ def emit_tool_event(
     _emit_call("mcp", tool, duration_s, outcome, code, size, request)
 
 
+@_never_raises
 def emit_api_event(
     operation: str,
     duration_s: float,
@@ -454,6 +519,7 @@ def _emit_call(
     )
 
 
+@_never_raises
 def emit_read_event(
     event: Literal["resource_read", "prompt_get"],
     name: str | None,
