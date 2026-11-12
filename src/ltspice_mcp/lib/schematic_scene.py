@@ -29,7 +29,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from ltspice_mcp.lib.asc_document import Window
+from ltspice_mcp.lib.asc_document import Window, shown_value
 from ltspice_mcp.lib.connectivity import point_on_segment
 from ltspice_mcp.lib.encoding import refused_sheet_mark
 from ltspice_mcp.lib.geometry import BBox
@@ -48,11 +48,23 @@ from ltspice_mcp.lib.symbol_geometry import (
 )
 from ltspice_mcp.lib.symbol_library import SymbolResolver
 
-# Attribute-window numbers we render as text next to a symbol. LTspice assigns
-# window 0 to the instance name and window 3 to the value; the rest (SpiceLine,
-# SpiceModel, …) are omitted from V1 rendering.
-_WINDOW_INSTNAME = 0
-_WINDOW_VALUE = 3
+#: The attribute a window shows, by the window's number, as LTspice's own
+#: symbols pair them: each of their ``WINDOW 39`` lines sits with a
+#: ``SpiceLine`` attribute, and so on. Both builds draw each of these
+#: attributes through a visible window, wherever the window puts it, the
+#: symbol's origin included, and at any size (``draw/part_text``,
+#: ``draw/value2``, ``draw/attribute_windows``, ``draw/value2_at_origin``).
+#: A window of any other number shows an attribute no recording names, so the
+#: scene does not lay it out, and the layout check says so
+#: (``verify.LAYOUT_COVERAGE``).
+WINDOW_ATTRIBUTES: dict[int, str] = {
+    0: "InstName",
+    3: "Value",
+    123: "Value2",
+    38: "SpiceModel",
+    39: "SpiceLine",
+    40: "SpiceLine2",
+}
 
 # Fixed placeholder-box extent (symbol-local) for an unresolved symbol. The
 # real body is unknown, so a stable default box is drawn at the placement
@@ -453,6 +465,8 @@ class DrawText:
     # How the text is drawn from (x, y), the point it is placed by: LTspice
     # places text by the edges or the middle of its line (see text_layout).
     layout: TextLayout
+    #: For a part's text, the attribute it shows (``WINDOW_ATTRIBUTES``).
+    attribute: str = ""
 
     def points(self) -> tuple[tuple[int, int], ...]:
         return ((self.x, self.y),)
@@ -727,39 +741,28 @@ def _place_symbol(part: SheetPart) -> PlacedSymbol:
 def _attr_texts(
     part: SheetPart, windows: Sequence[Window], ox: int, oy: int, rot: str
 ) -> list[DrawText]:
-    """Instance-name and value text at their window anchors.
+    """A part's attribute text at its window anchors (``WINDOW_ATTRIBUTES``).
 
     Window anchor coordinates are symbol-local: a per-instance ``WINDOW``
     override in the ``.asc`` replaces the ``.asy`` default, then the anchor is
-    rotated and offset to the placement origin. Attributes without a resolvable
-    window and without a value are omitted.
+    rotated and offset to the placement origin. An attribute is drawn only
+    through a window, and only when it shows text (``shown_value``).
 
     The glyphs turn with the symbol, not just the anchor — see
     :func:`text_layout`. A window justified ``Invisible`` draws nothing.
     """
     out: list[DrawText] = []
-    overrides = {w.number: w for w in part.record.windows}
-
-    def placed(number: int, text: str) -> DrawText | None:
-        w = overrides.get(number) or next((w for w in windows if w.number == number), None)
-        if w is None:
-            return None
-        layout = text_layout(w.align, w.size, rot)
-        if layout is None:
-            return None
-        ax, ay = place_point(w.x, w.y, ox, oy, rot)
-        return DrawText(ax, ay, text, w.size, "attr", layout)
-
-    for number, text in (
-        (_WINDOW_INSTNAME, part.reference),
-        (_WINDOW_VALUE, part.attribute("Value") or ""),
-    ):
-        if not text:
+    by_number = {w.number: w for w in windows} | {w.number: w for w in part.record.windows}
+    for number, w in sorted(by_number.items()):
+        attribute = WINDOW_ATTRIBUTES.get(number)
+        if attribute is None:
             continue
-        drawn = placed(number, text)
-        if drawn is not None:
-            out.append(drawn)
-
+        text = shown_value(part.reference if number == 0 else part.attribute(attribute))
+        layout = text_layout(w.align, w.size, rot) if text else None
+        if layout is None:
+            continue
+        ax, ay = place_point(w.x, w.y, ox, oy, rot)
+        out.append(DrawText(ax, ay, text, w.size, "attr", layout, attribute))
     return out
 
 
@@ -905,7 +908,7 @@ def sheet_view(scene: Scene) -> SheetView:
                 box=sym.box,
                 body=sym.body,
                 pins=tuple((pin.name, pin.x, pin.y) for pin in sym.pins),
-                texts=tuple((x, y, text) for x, y, text, _extent in drawn),
+                texts=tuple((x, y, text) for x, y, text, _extent, _attribute in drawn),
                 text_extents=drawn,
                 strokes=_strokes(sym.graphics),
                 areas=tuple(
@@ -922,7 +925,7 @@ def sheet_view(scene: Scene) -> SheetView:
             for sym in scene.symbols
             for drawn in [
                 tuple(
-                    (t.x, t.y, decode_text_lines(t.text)[0], drawn_text_extent(t))
+                    (t.x, t.y, decode_text_lines(t.text)[0], drawn_text_extent(t), t.attribute)
                     for t in sym.texts
                 )
             ]

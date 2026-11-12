@@ -36,9 +36,13 @@ GROUND_TRIANGLE = (18, 18)
 GROUND_TRIANGLE_SMALLER_ON_THE_SERVER_ONLY = (6, 10)
 #: A value as the server keeps it, and as both builds draw it.
 DRAWN_WITH_A_MICRO_SIGN_BY_LTSPICE_ONLY = {"66u": "66µ"}
-#: A Value2 with a visible window, which both builds draw and the scene does
-#: not hold, so the render does not show it and no rule sees it.
-DRAWN_BY_LTSPICE_AND_LEFT_OUT_OF_THE_SCENE = {"AC 22"}
+#: What a symbol draws of its own that the layout check says it does not read
+#: (``verify.LAYOUT_COVERAGE``): the symbol's TEXT line and its pin names.
+SYMBOL_TEXT_AND_PIN_NAMES = {"CELL", "IN", "OUT"}
+#: Texts at size 0 (``draw/value2_at_origin``), which both builds draw a few
+#: units shorter than the scene estimates: the scene sets size 0 at a 10-unit
+#: font where a build's text runs as if at about 9.5.
+DRAWN_SHORTER_BY_LTSPICE_AT_SIZE_0 = {"AC 22", "Rser=22"}
 #: How far a drawn point may lie from the sheet's in sheet units: an image's
 #: coordinates are whole numbers, at a scale of a few to the sheet unit.
 NEAR = 1
@@ -82,7 +86,7 @@ def _laid_out(build: str, case_id: str, directory: Path) -> list[tuple[str, BBox
     return [
         (text, box)
         for part in sheet_view(_scene(build, case_id, directory)).parts
-        for _x, _y, text, box in part.text_extents
+        for _x, _y, text, box, _attribute in part.text_extents
     ]
 
 
@@ -153,17 +157,32 @@ def test_part_text_lies_where_the_scene_lays_it_out(build: str, tmp_path: Path):
     laid_out = _laid_out(build, case_id, tmp_path)
     assert len(laid_out) == 16
     for text, box in laid_out:
-        shown = texts[DRAWN_WITH_A_MICRO_SIGN_BY_LTSPICE_ONLY.get(text, text)]
-        x1, y1, x2, y2 = _cell(shown, scale)
-        if shown["escapement"] == 0:
-            ours = (box.x1, box.x2, box.y2)
-            theirs = (x1, x2, y2)
-            assert y1 < box.y1, text
-        else:
-            ours = (box.y1, box.y2, box.x2)
-            theirs = (y1, y2, x2)
-            assert x1 < box.x1, text
-        assert ours == pytest.approx(theirs, abs=2), text
+        _assert_where_drawn(
+            text, box, texts[DRAWN_WITH_A_MICRO_SIGN_BY_LTSPICE_ONLY.get(text, text)], scale
+        )
+
+
+def _assert_where_drawn(text: str, box: BBox, shown: dict[str, Any], scale: _Scale) -> None:
+    """The scene's box for ``text`` starts and ends where a build drew it. A
+    drawn box is the text's cell and the scene's is the ink it estimates, so
+    they share the edge below the glyphs and the cell's other edge lies
+    beyond the ink. A text at size 0 ends up to a tenth of its length past
+    where a build ends it (``DRAWN_SHORTER_BY_LTSPICE_AT_SIZE_0``)."""
+    x1, y1, x2, y2 = _cell(shown, scale)
+    if shown["escapement"] == 0:
+        ours = (box.x1, box.x2, box.y2)
+        theirs = (x1, x2, y2)
+        assert y1 < box.y1, text
+    else:
+        ours = (box.y1, box.y2, box.x2)
+        theirs = (y1, y2, x2)
+        assert x1 < box.x1, text
+    if text in DRAWN_SHORTER_BY_LTSPICE_AT_SIZE_0:
+        start, end, below = ours
+        length = theirs[1] - theirs[0]
+        assert theirs[1] < end <= theirs[1] + length / 10, text
+        ours = (start, theirs[1], below)
+    assert ours == pytest.approx(theirs, abs=2), text
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -198,12 +217,37 @@ def test_value2_is_drawn_only_with_a_visible_window(build: str):
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
-def test_the_scene_holds_every_part_text_a_build_draws_but_a_value2(build: str, tmp_path: Path):
-    case_id = "draw/value2"
+@pytest.mark.parametrize(
+    "case_id", ["draw/value2", "draw/attribute_windows", "draw/value2_at_origin"]
+)
+def test_the_scene_lays_out_every_attribute_a_build_draws_where_it_draws_it(
+    build: str, case_id: str, tmp_path: Path
+):
+    """Each name, value, Value2, SpiceLine, SpiceLine2 and SpiceModel a build
+    draws, and nothing else, each where the build draws it: through a window
+    at an offset or at the symbol's origin, at size 2 or size 0, and turned
+    with its part. An attribute written as "" draws nothing (V3's)."""
+    drawn = rec.drawing(build, case_id)
+    texts = {text["text"]: text for text in drawn["texts"]}
+    laid_out = dict(_laid_out(build, case_id, tmp_path))
+    assert set(laid_out) == set(texts)
+    scale = _scale(case_id, drawn)
+    for text, box in laid_out.items():
+        _assert_where_drawn(text, box, texts[text], scale)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_what_the_scene_leaves_out_is_a_symbols_own_text_and_its_pin_names(
+    build: str, tmp_path: Path
+):
+    """What the layout check and the render say they do not read
+    (``verify.LAYOUT_COVERAGE``): both builds draw the cell's TEXT line and
+    its two pin names, and the scene lays out only the part's name."""
+    case_id = "draw/symbol_text"
     drawn = {text["text"] for text in rec.drawing(build, case_id)["texts"]}
     laid_out = {text for text, _box in _laid_out(build, case_id, tmp_path)}
-    assert drawn - laid_out == DRAWN_BY_LTSPICE_AND_LEFT_OUT_OF_THE_SCENE
-    assert laid_out - drawn == set()
+    assert laid_out == {"U1"}
+    assert drawn - laid_out == SYMBOL_TEXT_AND_PIN_NAMES
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)

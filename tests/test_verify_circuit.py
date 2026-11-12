@@ -906,6 +906,39 @@ async def test_layout_reports_attribute_text_under_a_ground_flag(
     )
 
 
+async def test_layout_reads_value2_and_spiceline_text_and_says_what_it_does_not_read(
+    state_no_sim, work_dir, asc_symbols
+):
+    """A Value2 and a SpiceLine shown through windows are drawn by both builds
+    (``draw/value2``, ``draw/attribute_windows``), so each is checked: here
+    each crosses a wire, which the scan used to pass by. The layout check and
+    the render each say what text they do not read."""
+    sheet = (
+        "Version 4\nSHEET 1 880 680\n"
+        "SYMBOL res 200 200 R0\nWINDOW 123 36 76 Left 2\nWINDOW 39 36 132 Left 2\n"
+        "SYMATTR InstName R1\nSYMATTR Value 1k\nSYMATTR Value2 tc=1\n"
+        "SYMATTR SpiceLine tc=0.01\n"
+        "WIRE 256 256 256 296\nWIRE 276 320 276 360\n"
+    )
+    asc = _write(work_dir, "windows.asc", sheet)
+    data = await _run(
+        state_no_sim,
+        path=str(asc),
+        checks=["layout"],
+        render={"mode": "with_checks", "format": "svg"},
+    )
+    assert [
+        f["evidence"]["detail"]
+        for f in data["findings"]
+        if f["rule_id"] == "attribute_text_overlap"
+    ] == [
+        "R1's text 'tc=0.01' at (236,332) is drawn across wire (276,320)->(276,360)",
+        "R1's text 'tc=1' at (236,276) is drawn across wire (256,256)->(256,296)",
+    ]
+    assert vc.LAYOUT_COVERAGE in data["observations"]
+    assert vc.RENDER_COVERAGE in data["observations"]
+
+
 async def test_layout_reports_comments_drawn_over_each_other(state_no_sim, work_dir):
     """A comment drawn across another: before this rule, sheet text was
     compared only with part text, so the overlap was checked by eye."""

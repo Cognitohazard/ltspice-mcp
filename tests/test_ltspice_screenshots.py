@@ -135,7 +135,14 @@ def _calibration(scene: Scene) -> tuple[tuple[int, int], tuple[int, int]]:
 def _ours(scene: Scene) -> list[_Text]:
     """Every text the layout checks read, where they read it drawn."""
     view = sheet_view(scene)
-    drawn = [*(entry for part in view.parts for entry in part.text_extents), *view.text_extents]
+    drawn = [
+        *(
+            (x, y, text, extent)
+            for part in view.parts
+            for x, y, text, extent, _ in part.text_extents
+        ),
+        *view.text_extents,
+    ]
     return [_Text(text, (x, y), extent) for x, y, text, extent in drawn]
 
 

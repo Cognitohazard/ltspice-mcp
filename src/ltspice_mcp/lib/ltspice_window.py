@@ -64,6 +64,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal
 
+from ltspice_mcp.lib.asc_document import shown_value
 from ltspice_mcp.lib.encoding import decode_spice_bytes, decode_windows_1252
 from ltspice_mcp.lib.ltspice_bridge import (
     DEFAULT_TIMEOUT_S,
@@ -165,7 +166,7 @@ def _on_text_grid(coordinate: str) -> str:
 
 def _has_no_value(attribute_line: str) -> bool:
     words = attribute_line.split(None, 2)
-    return len(words) < 3 or words[2].strip() in ("", '""')
+    return len(words) < 3 or not shown_value(words[2]).strip()
 
 
 def sheet_content(text: str) -> list[str]:

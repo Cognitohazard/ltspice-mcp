@@ -1,0 +1,1 @@
+The layout check and the render now lay out a part's Value2, SpiceModel, SpiceLine and SpiceLine2 where LTspice draws them, through their windows, so text drawn across a wire or another part in one of those attributes is reported. The layout check and every render now say that they do not read a symbol's own text or its pin names.

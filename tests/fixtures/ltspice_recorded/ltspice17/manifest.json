@@ -5465,6 +5465,33 @@
         ".raw"
       ]
     },
+    "draw/attribute_windows": {
+      "behaviour": "sheet-drawing-other-text",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/attribute_windows.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "draw/attribute_windows.asc": "c27c76a1703a9f148ff585d73102d7b217bb7da981c978573c1185ade8eed450",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/attribute_windows.drawn": {
+          "bytes": 2179,
+          "sha256": "861960939ffba67d93cb9481da303c888c27fc0d5c8bbe1823cbbd135dd5d646"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
     "draw/ground_flags": {
       "behaviour": "sheet-drawing",
       "command": [
@@ -5577,6 +5604,33 @@
         ".emf"
       ]
     },
+    "draw/symbol_text": {
+      "behaviour": "sheet-drawing-other-text",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/symbol_text.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "draw/labelled_cell.asy": "0d3fe5a4f9eff43292c671239418f3aa621d1621fe5cf8b9da5d1d03812ac4df",
+        "draw/symbol_text.asc": "34996f291d3441e376f098694a4ac5a197a17429590ff656abef9f1d4b275354"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/symbol_text.drawn": {
+          "bytes": 1058,
+          "sha256": "fdafeadd48095b5aee53adab191b91e97147419aaf28ad71b68ce55dcc4a0a8b"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
     "draw/text_backslash": {
       "behaviour": "text-backslash",
       "command": [
@@ -5622,6 +5676,33 @@
         "draw/value2.drawn": {
           "bytes": 2009,
           "sha256": "9d3cfb48900f27c2b8b7373b0c1d16666ae0262818ad8af633f1a98c6fb5b3da"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
+    "draw/value2_at_origin": {
+      "behaviour": "sheet-drawing-other-text",
+      "command": [
+        "XVIIx64.exe",
+        "<dir>/value2_at_origin.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4",
+        "draw/value2_at_origin.asc": "f972efb74b0026e8af5b6e6ab380553ed5c25e6d395da8065fa91b1bc47e332c"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/value2_at_origin.drawn": {
+          "bytes": 3153,
+          "sha256": "fde633489618e931a53fb939ea4c55dbad9870eaf76792b5c618957b6882ddf5"
         }
       },
       "reported_build": null,

@@ -5445,6 +5445,33 @@
         ".raw"
       ]
     },
+    "draw/attribute_windows": {
+      "behaviour": "sheet-drawing-other-text",
+      "command": [
+        "LTspice.exe",
+        "<dir>/attribute_windows.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "draw/attribute_windows.asc": "c27c76a1703a9f148ff585d73102d7b217bb7da981c978573c1185ade8eed450",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/attribute_windows.drawn": {
+          "bytes": 2178,
+          "sha256": "95ef3e91f4d8325b463551ca83a1368c1d958a1b7e381535c7e9b2fbb6e4d437"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
     "draw/ground_flags": {
       "behaviour": "sheet-drawing",
       "command": [
@@ -5557,6 +5584,33 @@
         ".emf"
       ]
     },
+    "draw/symbol_text": {
+      "behaviour": "sheet-drawing-other-text",
+      "command": [
+        "LTspice.exe",
+        "<dir>/symbol_text.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "draw/labelled_cell.asy": "0d3fe5a4f9eff43292c671239418f3aa621d1621fe5cf8b9da5d1d03812ac4df",
+        "draw/symbol_text.asc": "34996f291d3441e376f098694a4ac5a197a17429590ff656abef9f1d4b275354"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/symbol_text.drawn": {
+          "bytes": 1058,
+          "sha256": "f8b435a75ddb108cb1fe2eb5cbca633f54faa4b4885a17f10376c31d6732a849"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
     "draw/text_backslash": {
       "behaviour": "text-backslash",
       "command": [
@@ -5602,6 +5656,33 @@
         "draw/value2.drawn": {
           "bytes": 2009,
           "sha256": "e1d9a9452c92bddd5e404ca638fa310b2820d806971fae135c46d4d0723ab970"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
+    "draw/value2_at_origin": {
+      "behaviour": "sheet-drawing-other-text",
+      "command": [
+        "LTspice.exe",
+        "<dir>/value2_at_origin.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "benchmark/voltage.asy": "a137d222313315d3537974197ce5d29de0cd389424c202486914ec99943309c4",
+        "draw/value2_at_origin.asc": "f972efb74b0026e8af5b6e6ab380553ed5c25e6d395da8065fa91b1bc47e332c"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/value2_at_origin.drawn": {
+          "bytes": 3153,
+          "sha256": "00e7d332847cededf91cae9fc3ff826e82eb9b35f2906b7af7449472641372ee"
         }
       },
       "reported_build": null,

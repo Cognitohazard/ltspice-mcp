@@ -479,6 +479,28 @@ class TestAscParsing:
         # WINDOW 3 (Value) local (16,24) + origin (100,100).
         assert texts["5"] == (116, 124)
 
+    def test_each_attribute_with_a_window_is_laid_out_there(self, tmp_path: Path) -> None:
+        """Value2, SpiceModel, SpiceLine and SpiceLine2 shown through a visible
+        window are laid out, as both builds draw them (``draw/value2``,
+        ``draw/attribute_windows``). An invisible window, an attribute written
+        as "" and a window no attribute is known for draw nothing here."""
+        _write(tmp_path / "box2.asy", BOX2_ASY)
+        asc = _write(
+            tmp_path / "s.asc",
+            "Version 4\nSHEET 1 880 680\nSYMBOL box2 100 100 R0\n"
+            "WINDOW 123 16 52 Left 2\nWINDOW 39 16 80 Left 2\nWINDOW 40 16 108 Left 2\n"
+            "WINDOW 38 16 136 Invisible 2\nWINDOW 7 16 164 Left 2\n"
+            "SYMATTR InstName X1\nSYMATTR Value 5\nSYMATTR Value2 AC 1\n"
+            'SYMATTR SpiceLine tc=1\nSYMATTR SpiceLine2 ""\nSYMATTR SpiceModel M\n',
+        )
+        (part,) = build_scene(asc, SymbolResolver(local_dir=tmp_path)).symbols
+        assert [(t.attribute, t.text, t.x, t.y) for t in part.texts] == [
+            ("InstName", "X1", 116, 96),
+            ("Value", "5", 116, 124),
+            ("SpiceLine", "tc=1", 116, 180),
+            ("Value2", "AC 1", 116, 152),
+        ]
+
     def test_sideways_symbol_attributes_do_not_overprint(self, tmp_path: Path) -> None:
         # Field regression: readers of a rendered sheet read a sideways
         # capacitor's "C1" and "100n" as the single string "1001n". The windows

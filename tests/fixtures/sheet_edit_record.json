@@ -3277,6 +3277,15 @@
    "tests/test_plot_in_ltspice.py::test_the_call_the_note_of_a_plot_standing_alone_names_is_taken"
   ]
  },
+ "d1f96943d66e2dd0": {
+  "answer": {
+   "reply": "da1ac2f9a60d0b7a",
+   "sheet": "5f20d4b74a33ddb4"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_spiceline_the_batch_draws_across_a_wire_is_the_batchs"
+  ]
+ },
  "d26af1693561cee6": {
   "answer": {
    "reply": "5a62a07b57a6f5e6",

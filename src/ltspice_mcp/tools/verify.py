@@ -374,8 +374,16 @@ _RULES_OF_CHECK: dict[str, tuple[str, ...]] = {
 # not how bounding boxes are built.
 LAYOUT_COVERAGE = (
     "Layout scan checks text by extents estimated from LTspice's font: a part's "
-    "text against what it crosses, and comments, directives and labels against "
-    "each other."
+    "name, value, Value2, SpiceModel, SpiceLine and SpiceLine2 against what they "
+    "cross, and comments, directives and labels against each other. It does not "
+    "read a symbol's own text, its pin names or an attribute in any other window."
+)
+# Stated beside every render, so a word missing from the picture is not read
+# as missing from the sheet.
+RENDER_COVERAGE = (
+    "The render draws a part's name, value, Value2, SpiceModel, SpiceLine and "
+    "SpiceLine2, and not a symbol's own text, its pin names or an attribute in "
+    "any other window."
 )
 
 
@@ -2217,7 +2225,7 @@ async def _do_render(
         # client reads only the structured payload, so the drawing rides
         # there, once.
         payload["svg"] = image.data.decode("utf-8")
-    return payload, (image if inline and image.is_raster else None), failures, []
+    return payload, (image if inline and image.is_raster else None), failures, [RENDER_COVERAGE]
 
 
 def _render_note(image: RenderedImage, returned_inline: bool) -> str | None:

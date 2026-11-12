@@ -307,7 +307,8 @@ class Part:
     placed. ``pins`` are ``(name, x, y)`` in SpiceOrder, the order a symbol
     gives them in, and ``texts`` the anchors of its drawn attributes as
     ``(x, y, first line)``, and ``text_extents`` where each is drawn, as
-    ``(x, y, first line, extent)``. ``strokes`` are the lines it draws, as segments,
+    ``(x, y, first line, extent, attribute)``, the attribute being the one the
+    text shows (``schematic_scene.WINDOW_ATTRIBUTES``). ``strokes`` are the lines it draws, as segments,
     and ``areas`` the rectangles and circles it draws, as boxes. ``missing``
     says its symbol was not found: whatever box it carries is then a
     placeholder's, and no rule reads it.
@@ -318,7 +319,7 @@ class Part:
     box: BBox | None = None
     pins: tuple[tuple[str, int, int], ...] = ()
     texts: tuple[tuple[int, int, str], ...] = ()
-    text_extents: tuple[tuple[int, int, str, BBox], ...] = ()
+    text_extents: tuple[tuple[int, int, str, BBox, str], ...] = ()
     strokes: tuple[tuple[Point, Point], ...] = ()
     areas: tuple[BBox, ...] = ()
     missing: bool = False
@@ -1031,17 +1032,19 @@ def _attribute_texts_across_drawing(ix: _Index) -> list[Finding]:
     # was not found has none to report. Each text is compared with the texts
     # after it: the other attribute texts, then the sheet's own.
     drawn = [
-        (index, part, (x, y), text, _core(extent))
+        (index, part, (x, y), text, _core(extent), attribute)
         for index, part in enumerate(ix.view.parts)
         if not part.missing
-        for x, y, text, extent in part.text_extents
+        for x, y, text, extent, attribute in part.text_extents
     ]
-    texts: list[tuple[Part | None, Point, str, BBox]] = [
-        (part, at, text, core) for _index, part, at, text, core in drawn
+    # Each text with the part that draws it and the attribute it shows, or no
+    # part for the sheet's own text.
+    texts: list[tuple[Part | None, Point, str, BBox, str]] = [
+        (part, at, text, core, attribute) for _index, part, at, text, core, attribute in drawn
     ]
-    texts += [(None, at, text, core) for at, text, core in ix.sheet_texts]
+    texts += [(None, at, text, core, "") for at, text, core in ix.sheet_texts]
     found: list[Finding] = []
-    for n, (index, part, at, text, core) in enumerate(drawn):
+    for n, (index, part, at, text, core, attribute) in enumerate(drawn):
         # What the text is drawn across: words for it, the parts and the
         # points it names, its own facts, and what it is by name, which a move
         # of the parts it names or a new value leaves as it was.
@@ -1069,11 +1072,9 @@ def _attribute_texts_across_drawing(ix: _Index) -> list[Finding]:
                 (owner.name,) if owner else (),
                 (other_at,),
                 {"across": "text", "other_text": other_text},
-                ("text", _attribute_of(owner, other_text))
-                if owner
-                else ("text", other_text, other_at),
+                ("text", other_attribute) if owner else ("text", other_text, other_at),
             )
-            for owner, other_at, other_text, other_core in texts[n + 1 :]
+            for owner, other_at, other_text, other_core, other_attribute in texts[n + 1 :]
             if other_core.overlaps(core)
         ]
         found += [
@@ -1083,17 +1084,11 @@ def _attribute_texts_across_drawing(ix: _Index) -> list[Finding]:
                 refs=(part.name, *others),
                 points=(at, *points),
                 facts={"text": text, **facts},
-                about=(_attribute_of(part, text), *of),
+                about=(attribute, *of),
             )
             for what, others, points, facts, of in across
         ]
     return found
-
-
-def _attribute_of(part: Part, text: str) -> str:
-    """Which of a part's two drawn attributes ``text`` is: its reference, which
-    the InstName window shows, or else its value."""
-    return "InstName" if text == part.ref else "Value"
 
 
 @_finds("sheet_text_overlap")
