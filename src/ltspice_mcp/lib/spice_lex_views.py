@@ -456,11 +456,15 @@ def _is_amount(token: Token) -> bool:
 class _SourceReading:
     """``read_source_text``'s answer with where it found each part in the
     text it read: the runs of the value, and the tokens of the keyed own
-    parameters (``Rser=1k``, ``AC=2``)."""
+    parameters (``Rser=1k``, ``AC=2``). ``shown`` is the text with those keyed
+    parameters cut out, in its order (``DC 0 AC 1 SIN(0 1 1k)``): what display
+    shows of the source and what a comparison compares besides its
+    parameters."""
 
     text: SourceText
     value_runs: list[tuple[int, int]]
     keyed: list[Token]
+    shown: str
 
 
 def _read_source(text: str, prefix: str) -> _SourceReading:
@@ -505,6 +509,7 @@ def _read_source(text: str, prefix: str) -> _SourceReading:
         ),
         runs,
         keyed,
+        text_without(text, [(tok.body_offset, tok.body_end) for tok in keyed], end),
     )
 
 
@@ -750,9 +755,6 @@ class InstanceLine:
     # parameters (``read_source_text``); None for every other card, and for a
     # source the rule does not read (one that plays a .wav file).
     source: SourceText | None = None
-    # A source's words after its nodes with its keyed own parameters cut out,
-    # in card order: what display shows of it.
-    _source_shown: str = ""
 
     @classmethod
     def from_card(cls, card: SpiceCard) -> InstanceLine:
@@ -931,11 +933,6 @@ class InstanceLine:
                 body_length=last - first,
             )
         keyed = [replace(tok, body_offset=tok.body_offset + start) for tok in reading.keyed]
-        tail = card.body[start:]
-        cut = [(tok.body_offset, tok.body_end) for tok in reading.keyed]
-        end = next(
-            (t.body_offset - start for t in tokens if t.kind == TokenKind.COMMENT_TRAIL), None
-        )
         return cls(
             card=card,
             ref=tokens[0].text,
@@ -946,8 +943,21 @@ class InstanceLine:
             _node_span=_exact_node_span(nodes, 2),
             _params=_Params.of(keyed),
             source=reading.text,
-            _source_shown=text_without(tail, cut, end),
         )
+
+    def _source_reading(self) -> _SourceReading | None:
+        """The source rule's reading of the card as it now stands, so an edit
+        made through this view shows; None when the rule does not read it."""
+        tokens = tokenize_body(self.card.body)
+        start = _source_value_start(tokens)
+        return None if start is None else _read_source(self.card.body[start:], self.ref)
+
+    def _reread_source(self) -> None:
+        """Take ``source`` and ``value`` again from the card after an edit."""
+        reading = self._source_reading()
+        if reading is not None:
+            self.source = reading.text
+            self.value = reading.text.value or None
 
     @property
     def own_words(self) -> tuple[str, ...]:
@@ -969,6 +979,8 @@ class InstanceLine:
             self.set_param(self._value_param_key, new)
             return
         self._update_slot_in_place(new)
+        if self.source is not None:
+            self._reread_source()
 
     def set_nodes(self, new_nodes: list[str]) -> None:
         """Rewrite the positional node list (connectivity edit).
@@ -1074,6 +1086,8 @@ class InstanceLine:
             self._canonical_rerender()
         elif before_value:
             self._model_token = None
+        if self.source is not None:
+            self._reread_source()
 
     def _refuse_unowned(self, key: str) -> None:
         """Refuse ``key`` on a source that does not own it."""
@@ -1158,8 +1172,9 @@ class InstanceLine:
             return self.model if self.control is None else f"{self.control} {self.model}"
         if self.source is not None:
             # Its value and the own parameters written without ``=``, in card
-            # order (``DC 0 AC 1 SIN(0 1 1k)``).
-            return self._source_shown
+            # order (``DC 0 AC 1 SIN(0 1 1k)``), as the card now reads.
+            reading = self._source_reading()
+            return "" if reading is None else reading.shown
         if self.value is not None:
             return self.value
         for key in ("V", "I", "v", "i"):

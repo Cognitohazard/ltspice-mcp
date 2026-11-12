@@ -15,6 +15,8 @@ import pytest
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.instance_targeting import InstanceEdit, apply_edit
+from ltspice_mcp.lib.netlist_diff import read_deck, structural_delta
+from ltspice_mcp.lib.netlist_graph import compare_graphs
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
@@ -1702,6 +1704,30 @@ class TestASourceCardReadByTheSourceRule:
         view.set_param("AC" if "AC" in body else "Rser", "22")
         view.set_value("7")
         assert card.body == after
+
+    @pytest.mark.parametrize(
+        ("body", "shown"),
+        [
+            ("V1 a 0 5 AC 1", "7 AC 1"),
+            ("V1 a 0 AC=1 PULSE(0 1 0 1n 1n 1u 2u)", "7"),
+            ("I1 a 0 1m load", "7 load"),
+        ],
+    )
+    def test_display_follows_an_edit_on_the_same_view(self, body: str, shown: str) -> None:
+        view = InstanceLine.from_card(lex(body + "\n").cards[0])
+        view.set_value("7")
+        assert (view.value, view.display_value()) == ("7", shown)
+        assert view.display_value() == InstanceLine.from_card(view.card).display_value()
+
+    def test_both_comparisons_read_a_source_in_its_card_order(self) -> None:
+        """``compare_graphs`` and ``netlist_diff`` sign a source by one
+        projection, so they agree on a card whose words come in another order."""
+        before = "* t\nV1 a 0 DC 0 AC 1 SIN(0 1 1k)\nR1 a 0 1k\n.end\n"
+        after = "* t\nV1 a 0 DC 0 SIN(0 1 1k) AC 1\nR1 a 0 1k\n.end\n"
+        delta = structural_delta(read_deck(before), read_deck(after))
+        assert compare_graphs(before, before).equivalent
+        assert not compare_graphs(before, after).equivalent
+        assert delta["components_changed"]
 
     def test_a_value_edit_on_a_continued_card_keeps_its_own_parameters(self) -> None:
         card = lex("V1 a 0 5\n+ AC 1 Rser=1\n").cards[0]
