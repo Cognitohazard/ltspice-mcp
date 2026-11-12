@@ -1970,7 +1970,7 @@ def test_an_edit_through_the_card_view_keeps_a_sources_own_parameters(case_id: s
     card = fresh_card("deck/source_parameters", "V4")
     InstanceLine.from_card(card).set_param("Rser", "2k")
     assert after_nodes(card) == "PWL TIME_SCALE_FACTOR=2 (0 4 1 4) Rser=2k"
-    with pytest.raises(NetlistError, match=r"part of its value\. Edit the value instead"):
+    with pytest.raises(NetlistError, match=r"TIME_SCALE_FACTOR= is part of its value"):
         InstanceLine.from_card(card).set_param("TIME_SCALE_FACTOR", "3")
     assert after_nodes(card) == "PWL TIME_SCALE_FACTOR=2 (0 4 1 4) Rser=2k"
 

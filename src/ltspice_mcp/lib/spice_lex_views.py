@@ -391,6 +391,8 @@ SOURCE_PARAMETERS: dict[str, frozenset[str]] = {
     "V": frozenset({"rser", "cpar", "ac"}),
     "I": frozenset({"ac"}),
 }
+#: Each own keyed parameter as a message names it.
+SOURCE_PARAMETER_NAMES = {"rser": "Rser=", "cpar": "Cpar=", "ac": "AC="}
 #: The flag after a current source's value that makes it a load, which both
 #: builds read there (``deck/source_parameters``).
 LOAD_FLAG = "load"
@@ -522,9 +524,10 @@ def read_source_text(text: str, prefix: str) -> SourceText:
 def _source_value_start(tokens: list[Token]) -> int | None:
     """Where the words after a V or I card's two nodes start in its body, when
     the source rule (``read_source_text``) reads them: the card's first two
-    words after its reference are nodes and some word follows them. None for
-    every other card, and for a source that plays a .wav file, whose words are
-    all nodes (``_DEFINING_KEYS``).
+    words after its reference are nodes, whether or not a word follows them
+    (``V1 a 0`` has no value, as a value edit reads it). None for every other
+    card, and for a source that plays a .wav file, whose words are all nodes
+    (``_DEFINING_KEYS``).
     """
     if (
         not tokens
@@ -533,7 +536,7 @@ def _source_value_start(tokens: list[Token]) -> int | None:
     ):
         return None
     words = [t for t in tokens[1:] if t.kind != TokenKind.COMMENT_TRAIL]
-    if len(words) < 3 or any(t.kind == TokenKind.KEY_VALUE for t in words[:2]):
+    if len(words) < 2 or any(t.kind == TokenKind.KEY_VALUE for t in words[:2]):
         return None
     if any((t.key or "").casefold() == WAVEFILE for t in words):
         return None
@@ -747,6 +750,9 @@ class InstanceLine:
     # parameters (``read_source_text``); None for every other card, and for a
     # source the rule does not read (one that plays a .wav file).
     source: SourceText | None = None
+    # A source's words after its nodes with its keyed own parameters cut out,
+    # in card order: what display shows of it.
+    _source_shown: str = ""
 
     @classmethod
     def from_card(cls, card: SpiceCard) -> InstanceLine:
@@ -925,6 +931,11 @@ class InstanceLine:
                 body_length=last - first,
             )
         keyed = [replace(tok, body_offset=tok.body_offset + start) for tok in reading.keyed]
+        tail = card.body[start:]
+        cut = [(tok.body_offset, tok.body_end) for tok in reading.keyed]
+        end = next(
+            (t.body_offset - start for t in tokens if t.kind == TokenKind.COMMENT_TRAIL), None
+        )
         return cls(
             card=card,
             ref=tokens[0].text,
@@ -935,6 +946,7 @@ class InstanceLine:
             _node_span=_exact_node_span(nodes, 2),
             _params=_Params.of(keyed),
             source=reading.text,
+            _source_shown=text_without(tail, cut, end),
         )
 
     @property
@@ -1044,22 +1056,47 @@ class InstanceLine:
         case: setting one left the others at their old value, and which copy a
         simulator reads is not recorded here. In place where the card allows;
         otherwise, and for a new key, the card is rendered again with every
-        copy kept. The parameters follow the model and value tokens, so an
-        in-place edit of one moves nothing before it.
+        copy kept. A source's own parameter may come before its value
+        (``V1 a 0 AC=1 PULSE(...)``), so a later value edit on this view then
+        renders the card again rather than write at an offset the edit moved.
+
+        A V or I source has only its own parameters (``SOURCE_PARAMETERS``):
+        any other ``key=`` after its nodes is part of its value, so setting one
+        is refused, naming the fix.
         """
         if self.source is not None:
-            letter = self.ref[:1].upper()
-            if key.casefold() not in SOURCE_PARAMETERS[letter]:
-                own = ", ".join(
-                    f"{name.capitalize()}=" for name in sorted(SOURCE_PARAMETERS[letter])
-                )
-                raise NetlistError(
-                    f"{self.ref}: {key}= is no parameter of a {letter} source: every word "
-                    f"after its nodes is its value or one of its own parameters ({own}), "
-                    f"so {key}= is part of its value. Edit the value instead."
-                )
+            self._refuse_unowned(key)
+        value_token = self._model_token
+        before_value = value_token is not None and any(
+            tok.body_offset < value_token.body_offset for tok in self._params.tokens or ()
+        )
         if not self._params.set(self.card, key, _format_value(value)):
             self._canonical_rerender()
+        elif before_value:
+            self._model_token = None
+
+    def _refuse_unowned(self, key: str) -> None:
+        """Refuse ``key`` on a source that does not own it."""
+        letter = self.ref[:1].upper()
+        if key.casefold() in SOURCE_PARAMETERS[letter]:
+            return
+        source = "an I source" if letter == "I" else "a V source"
+        own = ", ".join(SOURCE_PARAMETER_NAMES[name] for name in sorted(SOURCE_PARAMETERS[letter]))
+        written = any(
+            (tok.key or "").casefold() == key.casefold()
+            for tok in tokenize_body(self.value or "")
+            if tok.kind == TokenKind.KEY_VALUE
+        )
+        if written:
+            raise NetlistError(
+                f"{self.ref}: {key}= is part of its value ({self.value}), not a parameter "
+                f"of {source}, whose own are {own}. Edit the value instead."
+            )
+        raise NetlistError(
+            f"{self.ref}: {key}= is no parameter of {source}, whose own are {own}; any "
+            f"other key=value after its nodes is read as part of its value. Edit the "
+            f"value to change it."
+        )
 
     def remove_param(self, key: str) -> None:
         """Remove every copy of a parameter (no-op if absent)."""
@@ -1120,8 +1157,9 @@ class InstanceLine:
         if self.model is not None:
             return self.model if self.control is None else f"{self.control} {self.model}"
         if self.source is not None:
-            # Its value and the own parameters written without ``=``.
-            return " ".join(word for word in (self.value, *self.own_words) if word)
+            # Its value and the own parameters written without ``=``, in card
+            # order (``DC 0 AC 1 SIN(0 1 1k)``).
+            return self._source_shown
         if self.value is not None:
             return self.value
         for key in ("V", "I", "v", "i"):

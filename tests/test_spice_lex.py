@@ -14,6 +14,7 @@ from collections.abc import Callable
 import pytest
 
 from ltspice_mcp.errors import NetlistError
+from ltspice_mcp.lib.instance_targeting import InstanceEdit, apply_edit
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
@@ -40,6 +41,7 @@ from ltspice_mcp.lib.spice_lex_views import (
     find_model,
     iter_instances,
     iter_models,
+    read_source_text,
 )
 
 # ---------------------------------------------------------------------------
@@ -1663,6 +1665,62 @@ class TestInstanceLine:
         text = emit(cards)
         assert "W=20u" in text
         assert "W=10u" not in text
+
+
+class TestASourceCardReadByTheSourceRule:
+    """A V or I card read by ``read_source_text``, beyond the recorded decks
+    (``tests/test_recorded_ltspice_decks.py`` checks those)."""
+
+    def test_a_source_with_no_value_has_two_nodes(self) -> None:
+        """``V1 a 0`` reads as its two nodes and no value, as a value edit
+        reads it, so the arity check and the edit agree."""
+        view = InstanceLine.from_card(lex("V1 a 0\n").cards[0])
+        assert (view.nodes, view.value, view.display_value()) == (["a", "0"], None, "")
+        card = lex("V1 a 0\n").cards[0]
+        InstanceLine.from_card(card).set_value("7")
+        assert card.body == "V1 a 0 7"
+
+    def test_display_keeps_the_card_order(self) -> None:
+        view = InstanceLine.from_card(lex("V1 a 0 DC 0 AC 1 SIN(0 1 1k) Rser=1\n").cards[0])
+        assert view.value == "DC 0 SIN(0 1 1k)"
+        assert view.own_words == ("AC 1",)
+        assert view.display_value() == "DC 0 AC 1 SIN(0 1 1k)"
+
+    @pytest.mark.parametrize(
+        ("body", "after"),
+        [
+            ("V1 a 0 AC=1 PULSE(0 1 0 1n 1n 1u 2u)", "V1 a 0 7 AC=22"),
+            ("V1 a 0 Rser=1 5", "V1 a 0 7 Rser=22"),
+        ],
+    )
+    def test_a_value_edit_after_an_own_parameter_before_it(self, body: str, after: str) -> None:
+        """An own parameter may come before the value; setting it moves the
+        value, so a value edit on the same view then renders the card again,
+        value first, rather than write at the value's old place."""
+        card = lex(body + "\n").cards[0]
+        view = InstanceLine.from_card(card)
+        view.set_param("AC" if "AC" in body else "Rser", "22")
+        view.set_value("7")
+        assert card.body == after
+
+    def test_a_value_edit_on_a_continued_card_keeps_its_own_parameters(self) -> None:
+        card = lex("V1 a 0 5\n+ AC 1 Rser=1\n").cards[0]
+        InstanceLine.from_card(card).set_value("7")
+        assert InstanceLine.from_card(card).source == read_source_text("7 AC 1 Rser=1", "V")
+
+    def test_a_parameter_a_source_does_not_own_is_refused(self) -> None:
+        card = lex("I1 a 0 1m\n").cards[0]
+        with pytest.raises(NetlistError, match=r"Rser= is no parameter of an I source"):
+            InstanceLine.from_card(card).set_param("Rser", "1")
+        card = lex("V1 a 0 PWL TIME_SCALE_FACTOR=2 (0 4 1 4)\n").cards[0]
+        with pytest.raises(NetlistError, match=r"TIME_SCALE_FACTOR= is part of its value"):
+            apply_edit(
+                card,
+                InstanceEdit(
+                    instance=("V1",), attribute="parameter", value=3, parameter="TIME_SCALE_FACTOR"
+                ),
+            )
+        assert card.body == "V1 a 0 PWL TIME_SCALE_FACTOR=2 (0 4 1 4)"
 
 
 class TestSubcktCard:
