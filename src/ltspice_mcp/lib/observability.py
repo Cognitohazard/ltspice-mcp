@@ -182,7 +182,7 @@ Door = Literal["mcp", "python_api"]
 # list so a note made in a context copied from the opener's (a task the call
 # starts) still reaches it.
 _REQUEST: contextvars.ContextVar[list[BaseModel] | None] = contextvars.ContextVar(
-    "ltspice_mcp_event_request", default=None
+    "event_request", default=None
 )
 
 

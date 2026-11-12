@@ -2214,9 +2214,12 @@ names in the arguments as the caller wrote them (before the automatic mode
 drops a presentation control or submits with `execution.wait_s` of 0),
 `reply_chars` null, and `controls`, the API's own options it set (`raw_page`,
 `wait`, `detach`). An operation the API runs for its caller, such as the
-polls of `wait` or of `run_experiments` waiting for its job, writes none. An API error that carries a
-tool's error payload is `error` with that payload's `code`, a refused argument
-is `error` with `invalid_arguments`, and an interrupt is `cancelled`. The
+polls of `wait` or of `run_experiments` waiting for its job, writes none.
+A call the automatic mode refuses (one that sends a paging control) still
+names what the caller set, since the names are read before that check. An
+API error that carries a tool's error payload is `error` with that payload's
+`code`, a refused argument is `error` with `invalid_arguments`, and an
+interrupt is `cancelled`. The
 API's other methods (`wait`, `load_raw`, `measurements`, `device_op_points`,
 `reference`, `guide`) write none. A `run_code` snippet's records reach the
 server's stderr through its worker, which logs at the server's level. A

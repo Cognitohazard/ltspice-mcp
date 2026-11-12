@@ -17,6 +17,7 @@ import pytest
 from mcp import types
 from mcp.shared.exceptions import MCPError
 
+from ltspice_mcp.api import _methods as methods_module
 from ltspice_mcp.api._exceptions import ApiCallError, ApiValidationError
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import observability
@@ -631,4 +632,19 @@ class TestPythonApiCallsEmitOne:
         monkeypatch.setattr(observability, "request_names", breaks)
         result = SyncApi(state_no_sim).inspect(queries=[{"kind": "capabilities"}])
         assert result["results"][0]["ok"] is True
+        assert _events(events_caplog) == []
+
+    def test_an_operation_run_inside_another_does_not_fill_its_record(
+        self, state_no_sim: SessionState, events_caplog: pytest.LogCaptureFixture
+    ):
+        """Inside an operation, an inner one's validated request is its own:
+        the outer record stays as the outer caller's arguments left it."""
+        api = SyncApi(state_no_sim)
+
+        def outer() -> None:
+            api.inspect(queries=[{"kind": "capabilities"}])
+
+        with observability.capturing_request() as request, methods_module._inside_operation():
+            outer()
+        assert request == []
         assert _events(events_caplog) == []

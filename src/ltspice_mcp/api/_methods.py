@@ -147,7 +147,7 @@ def _note_caller_request(model: type[BaseModel], arguments: Mapping[str, Any]) -
 #: of its own (``wait``) runs operations for its caller: an operation called
 #: inside it writes no event, so one call of the caller's is counted once.
 _INSIDE_OPERATION: contextvars.ContextVar[bool] = contextvars.ContextVar(
-    "ltspice_mcp_api_inside_operation", default=False
+    "api_inside_operation", default=False
 )
 
 
@@ -772,7 +772,10 @@ class _CataloguedMethod:
         from ltspice_mcp.tools._base import as_sent  # an operation call pays the import anyway
 
         if _INSIDE_OPERATION.get():
-            return self._run(as_sent, args, kwargs)
+            # Its own holder, which nothing reads: the request this call
+            # validates must not fill the record of the call it runs inside.
+            with capturing_request():
+                return self._run(as_sent, args, kwargs)
         with _inside_operation():
             return self._counted(as_sent, emit_api_event, capturing_request, args, kwargs)
 
