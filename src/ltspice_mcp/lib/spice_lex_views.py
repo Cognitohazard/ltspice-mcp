@@ -953,11 +953,21 @@ class InstanceLine:
         return None if start is None else _read_source(self.card.body[start:], self.ref)
 
     def _reread_source(self) -> None:
-        """Take ``source`` and ``value`` again from the card after an edit."""
-        reading = self._source_reading()
-        if reading is not None:
-            self.source = reading.text
-            self.value = reading.text.value or None
+        """Read the card again after an edit, as ``from_card`` reads it: the
+        value, its own parameters and where each now is, so a value of several
+        words the edit wrote (``5 AC 1``) is read by the rule and a later edit
+        lands on the value alone."""
+        tokens = tokenize_body(self.card.body)
+        start = _source_value_start(tokens)
+        if start is None:
+            return
+        fresh = self._from_source(self.card, tokens, start)
+        self.value, self.source = fresh.value, fresh.source
+        self._model_token, self._node_span, self._params = (
+            fresh._model_token,
+            fresh._node_span,
+            fresh._params,
+        )
 
     @property
     def own_words(self) -> tuple[str, ...]:
@@ -1069,8 +1079,8 @@ class InstanceLine:
         simulator reads is not recorded here. In place where the card allows;
         otherwise, and for a new key, the card is rendered again with every
         copy kept. A source's own parameter may come before its value
-        (``V1 a 0 AC=1 PULSE(...)``), so a later value edit on this view then
-        renders the card again rather than write at an offset the edit moved.
+        (``V1 a 0 AC=1 PULSE(...)``), so a source is read again after the edit,
+        and a later value edit on this view lands where the value now is.
 
         A V or I source has only its own parameters (``SOURCE_PARAMETERS``):
         any other ``key=`` after its nodes is part of its value, so setting one
@@ -1078,14 +1088,8 @@ class InstanceLine:
         """
         if self.source is not None:
             self._refuse_unowned(key)
-        value_token = self._model_token
-        before_value = value_token is not None and any(
-            tok.body_offset < value_token.body_offset for tok in self._params.tokens or ()
-        )
         if not self._params.set(self.card, key, _format_value(value)):
             self._canonical_rerender()
-        elif before_value:
-            self._model_token = None
         if self.source is not None:
             self._reread_source()
 

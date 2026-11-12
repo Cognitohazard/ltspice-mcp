@@ -1691,14 +1691,14 @@ class TestASourceCardReadByTheSourceRule:
     @pytest.mark.parametrize(
         ("body", "after"),
         [
-            ("V1 a 0 AC=1 PULSE(0 1 0 1n 1n 1u 2u)", "V1 a 0 7 AC=22"),
-            ("V1 a 0 Rser=1 5", "V1 a 0 7 Rser=22"),
+            ("V1 a 0 AC=1 PULSE(0 1 0 1n 1n 1u 2u)", "V1 a 0 AC=22 7"),
+            ("V1 a 0 Rser=1 5", "V1 a 0 Rser=22 7"),
         ],
     )
     def test_a_value_edit_after_an_own_parameter_before_it(self, body: str, after: str) -> None:
         """An own parameter may come before the value; setting it moves the
-        value, so a value edit on the same view then renders the card again,
-        value first, rather than write at the value's old place."""
+        value, and a value edit on the same view then lands on the value where
+        it now is."""
         card = lex(body + "\n").cards[0]
         view = InstanceLine.from_card(card)
         view.set_param("AC" if "AC" in body else "Rser", "22")
@@ -1718,6 +1718,16 @@ class TestASourceCardReadByTheSourceRule:
         view.set_value("7")
         assert (view.value, view.display_value()) == ("7", shown)
         assert view.display_value() == InstanceLine.from_card(view.card).display_value()
+
+    def test_a_value_of_several_words_is_read_by_the_rule_after_the_edit(self) -> None:
+        """``AC 1`` in a new value is an own parameter of the source, so a
+        later value edit on the same view replaces only the value."""
+        card = lex("V1 a 0 3 AC 2\n").cards[0]
+        view = InstanceLine.from_card(card)
+        view.set_value("5 AC 1")
+        assert (view.value, view.own_words) == ("5", ("AC 1", "AC 2"))
+        view.set_value("7")
+        assert card.body == "V1 a 0 7 AC 1 AC 2"
 
     def test_both_comparisons_read_a_source_in_its_card_order(self) -> None:
         """``compare_graphs`` and ``netlist_diff`` sign a source by one
