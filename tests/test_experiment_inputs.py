@@ -19,7 +19,7 @@ from ltspice_mcp.lib.experiment_inputs import (
 )
 from ltspice_mcp.lib.experiment_types import ManifestEntry
 from ltspice_mcp.lib.pdk_native import ArtifactDigest, NativePaths, prepare_launch
-from ltspice_mcp.lib.recovery_records import RecoveryError
+from ltspice_mcp.lib.recovery_records import FrozenInputs, RecoveryError
 from ltspice_mcp.lib.store import Store, StoreError
 from ltspice_mcp.lib.variations import MaterializedCase
 from tests.conftest import needs_controlled_startup, symlink_or_skip
@@ -64,6 +64,8 @@ def test_materialized_digest_beats_original_manifest_hash(tmp_path):
     [
         (b".control\nrun\n.endc\n", "recovery_control_unsupported"),
         (b'V1 in 0 PWL FILE="ambient.txt"\n', "recovery_external_reader"),
+        (b"V1 in 0 wavefile=level.wav\n", "recovery_external_reader"),
+        (b'I1 in 0 WAVEFILE = "level.wav" chan=1\n', "recovery_external_reader"),
         (b"B1 in 0 V=gauss(1)\n", "recovery_random_unsupported"),
         (b".param draw={rand()}\n", "recovery_random_unsupported"),
         (b"B1 in 0 V=unknown_function(1)\n", "recovery_expression_unsupported"),
@@ -86,6 +88,26 @@ def test_unsupported_constructs_refuse_in_nested_include(tmp_path, body, code):
     with pytest.raises(RecoveryError) as error:
         capture_case_inputs(case, source, lineage_root=job.output_folder)
     assert error.value.code == code
+
+
+@pytest.mark.parametrize(
+    "card", [b"V1 in 0 wavefile=level.wav", b'V1 in 0 wavefile="level.wav" chan=0']
+)
+def test_inputs_frozen_with_a_played_file_are_refused_when_verified_again(tmp_path, card):
+    """A job recorded before a source that plays a .wav file was refused froze
+    its deck without the file. Resume and each launch verify the frozen inputs
+    again, and that refuses the card, rather than run it against a file that
+    may have changed since."""
+    job = recovery_job(tmp_path)
+    assert job.output_folder is not None
+    deck = job.cases[0].staged_deck
+    deck.write_bytes(b"* case\n" + card + b"\nR1 in 0 1k\n.tran 1m\n.end\n")
+    digest = ArtifactDigest(deck, sha256_file(deck))
+    frozen = FrozenInputs(job.output_folder, digest, (digest,))
+    with pytest.raises(RecoveryError) as error:
+        verify_case_inputs(frozen, dialect="ltspice")
+    assert error.value.code == "recovery_external_reader"
+    assert "line 2: " + card.decode() in str(error.value)
 
 
 def test_one_refusal_names_every_construct_with_its_file_and_line(tmp_path):

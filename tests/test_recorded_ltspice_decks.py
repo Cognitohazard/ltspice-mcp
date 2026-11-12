@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import deck_prep, montecarlo
 from ltspice_mcp.lib.component_value import apply_value_to_instance
@@ -25,6 +26,7 @@ from ltspice_mcp.lib.encoding import (
     read_spice_text_with_encoding,
     rewrite_codec,
 )
+from ltspice_mcp.lib.experiment_runner import ExperimentRunner
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.hierarchy_expr import evaluate
 from ltspice_mcp.lib.instance_targeting import InstanceEdit, apply_edit
@@ -67,8 +69,11 @@ from ltspice_mcp.lib.variations import (
     expand_variations,
     materialize_variants,
 )
+from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
 from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
 from tests import _ltspice_recorded as rec
+from tests.conftest import FakeSim
 from tests.ltspice_recorder import INPUTS
 from tests.test_inspect_tools import _run
 
@@ -1640,6 +1645,64 @@ async def test_every_reader_takes_both_words_of_a_source_that_plays_a_file_as_no
     assert result["ok"], result
     rows = {row["reference"]: row for row in result["data"]["components"]}
     assert rows["V1"]["nodes"] == ["a", "b"]
+
+
+@pytest.mark.parametrize("simulator", ["LTspice", "NGspiceSimulator"])
+@pytest.mark.parametrize("case_id", WAVEFILE_DECKS)
+async def test_a_recoverable_run_refuses_a_source_that_plays_a_file(
+    case_id: str,
+    simulator: str,
+    config: ServerConfig,
+    work_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Both builds play level.wav, named in quotes or not (the drive levels of
+    the test above come from it), and recovery saves no copy of a file a card
+    plays, so a resumed case could run against a changed one. A recoverable
+    run of either deck is refused before anything is submitted, naming each
+    card; on ngspice too, since the refusal reads the deck, not the run."""
+    submitted: list[str] = []
+
+    def submit(self, netlist, run_filename, callback, **_kwargs):
+        submitted.append(run_filename)
+        return object()
+
+    monkeypatch.setattr(ExperimentRunner, "submit_netlist", submit)
+    source = INPUTS / rec.CASES.case(case_id).source
+    deck = work_dir / source.name
+    deck.write_bytes(source.read_bytes())
+    (work_dir / "level.wav").write_bytes((INPUTS / "deck" / "level.wav").read_bytes())
+    state = SessionState.create(config, available={"sim": type(simulator, (FakeSim,), {})})
+    args = RunExperimentsInput.model_validate(
+        {
+            "request_id": f"recoverable-{source.stem}-{simulator}",
+            "circuits": [{"path": str(deck)}],
+            "execution": {"recoverable": True, "wait_s": 0},
+            "lint": "off",
+        }
+    )
+
+    result = await handle_run_experiments(args, state)
+
+    assert result.is_error
+    data = result.structured_content
+    assert data is not None
+    error = data["error"]
+    assert (error["code"], error["commit_state"]) == (
+        "recovery_external_reader",
+        "not_started",
+    ), error
+    played = [
+        (number, line)
+        for number, line in enumerate(deck_text(case_id).splitlines(), start=1)
+        if "wavefile=" in line
+    ]
+    message = error["message"]
+    assert "`wavefile=`, which reads a file" in message, message
+    assert f": {played[0][1]};" in message, message
+    assert [int(n) for n in re.findall(r" line (\d+)", message)] == [n for n, _ in played]
+    assert not state.all_jobs
+    assert submitted == []
 
 
 #: What each build ran with each element (element-terminals), from its nodes:
