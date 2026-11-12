@@ -2170,13 +2170,54 @@ in the tool result.
 
 At `INFO`, the `ltspice_mcp.events` logger writes one record for each tool call,
 with a structured payload on the record's `ltspice_event` attribute:
-`event: "tool_call"`, `tool`, `duration_s`, `outcome`, the error's `code`, and
-`reply_chars`, the length of the result as sent. `outcome` is `ok` or `error`
-for a call that returned a result, `cancelled` for one the client cancelled,
-and `raised` for one answered with a protocol error, such as an unknown tool
-name; those two have no `code` or `reply_chars`. The call's arguments are not
-logged. A call through the Python API is not a tool call over MCP and writes
-none. The same logger writes a job's lifecycle events.
+`event: "tool_call"`, `door`, `tool`, `duration_s`, `outcome`, the error's
+`code`, `reply_chars`, the length of the result as sent, `fields` and
+`choices`. `door` is `mcp`. `outcome` is `ok` or `error` for a call that
+returned a result, `cancelled` for one the client cancelled, and `raised` for
+one answered with a protocol error, such as an unknown tool name; those two
+have no `code` or `reply_chars`. A tool name the server does not serve is
+recorded as null.
+
+`fields` lists the argument fields the call set, as sorted dotted paths, each
+once: nested fields count, list positions and mapping keys are dropped, and a
+field left out or sent at its default value is not set. The fields of an item
+tagged as one member of a union are named under its tag, so a call that
+batches several kinds says which set what: `queries[kind=hierarchy].cursor`,
+`recipes[metric=value].spec.allow_incomplete`, `ops[op=add_component].x`. An
+item the handler refuses on its own (one `inspect` query, one recipe) is still
+named, by its tag and those of its keys its member declares. `choices` lists,
+as `path=word`, each value that picked a word of the server's own vocabulary,
+a `Literal` or enum of the field's type: `action=wait`,
+`queries.kind=simulator_docs`, `recipes.metric=plot`,
+`recipes[metric=value].reduce=mean`, `ops.op=add_component`. A call refused
+before its arguments validated has both null.
+
+The record carries no argument value: no path, file name, label, signal,
+expression, number, cursor, job or result-set id, mapping key or free text,
+and no part of the reply. Results the reply reports, such as an
+`indeterminate` spec verdict or a cut `fail_cases` list, are not recorded;
+what the call asked for to reach them is (`spec.allow_incomplete`,
+`include.per_run`). A field typed as free text records its name only, even
+when its value happens to be a word the server also uses (`group_by`).
+
+A resource read writes `event: "resource_read"` with the URI `template` it
+matched (`spice://results/{job_id}/signals`, `spice://config`), never the URI
+itself, and a prompt get writes `event: "prompt_get"` with the `prompt` name,
+never its arguments; each has `duration_s`, `outcome` (`ok`, `error` for a
+read or get answered with a protocol error, `cancelled`, `raised`) and the
+error's `code`. A URI or prompt name the server does not serve is null.
+
+A Python API operation (`run_experiments`, `jobs`, `analyze_results`,
+`inspect`, `edit_schematic`, `verify_circuit`, also what a `run_code` snippet
+calls) writes the same `tool_call` record with `door: "python_api"`, the
+request it validated, `reply_chars` null, and `controls`, the API's own
+options it set (`raw_page`, `wait`, `detach`). An API error that carries a
+tool's error payload is `error` with that payload's `code`, a refused argument
+is `error` with `invalid_arguments`, and an interrupt is `cancelled`. The
+API's other methods (`wait`, `load_raw`, `measurements`, `device_op_points`,
+`reference`, `guide`) write none. A `run_code` snippet's records reach the
+server's stderr through its worker, which logs at the server's level.
+The same logger writes a job's lifecycle events.
 
 ---
 
