@@ -187,7 +187,11 @@ _MODULE_DIRECTIVES = frozenset({".load", ".hdl", ".verilog", ".osdi", ".pre_osdi
 #: named in quotes or not (``deck/wavefile_nodes``, ``deck/wavefile_unquoted``).
 _FILE_KEYWORDS = frozenset({"file", "sfile", "pwlfile", WAVEFILE})
 # Each keyword as a whole word, so ``profile=`` names no file, then a PWL
-# whose parenthesized points hold a quoted name.
+# whose parenthesized points hold a quoted name. It reads the text of every
+# card kind, in each dialect's spelling, not only an LTspice V or I card, so it
+# does not go through the source view (``spice_lex_views.read_source_text``),
+# which splits such a card into its value and its own parameters and leaves a
+# ``file=`` inside the value unread.
 _FILE_READER = re.compile(
     r"(?i)\b(?:"
     + "|".join(sorted(_FILE_KEYWORDS, key=len, reverse=True))
