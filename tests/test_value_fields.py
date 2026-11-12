@@ -2,9 +2,10 @@
 
 A source's field holds its DC value and its AC specification, as in
 ``V1 a 0 5V AC 1``, and each token is its own value. So no path reads such a
-field by its leading number: not the value reader every path shares, not the
-netlist compare behind ``verify_circuit``, and not the nominal a random rule
-draws around.
+field by its leading number: not the value reader every path shares, and not
+the netlist compare behind ``verify_circuit``. A random rule draws around the
+source's value alone, ``5V``, and keeps its ``AC 1``, which is the source's own
+parameter (``read_source_text``, the source-parameters recordings).
 """
 
 from __future__ import annotations
@@ -18,7 +19,6 @@ from ltspice_mcp.lib.netlist_graph import compare_graphs
 from ltspice_mcp.lib.variations import (
     CircuitDeck,
     RandomVariation,
-    VariationError,
     expand_variations,
     materialize_variants,
 )
@@ -64,11 +64,11 @@ def test_sources_whose_tokens_hold_the_same_values_are_equivalent(
 
 
 @pytest.mark.parametrize(("ref", "field"), [(ref, field) for ref, field, _ in FIELDS])
-def test_a_random_rule_has_no_nominal_on_a_field_of_several_tokens(
+def test_a_random_rule_draws_a_sources_value_and_keeps_its_ac_magnitude(
     tmp_path: Path, ref: str, field: str
 ):
-    """Drawing around the leading number would write the draw over a later
-    token of the field (``5V AC 5.1``), so the rule is refused instead."""
+    """The draw replaces the source's value, never a later token of the field
+    (``5V AC 5.1``), and the AC magnitude after it stays as written."""
     path = tmp_path / "dut.cir"
     text = _deck(ref, field)
     path.write_text(text, encoding="utf-8")
@@ -82,7 +82,13 @@ def test_a_random_rule_has_no_nominal_on_a_field_of_several_tokens(
         }
     )
 
-    with pytest.raises(VariationError, match="no plain numeric nominal") as excinfo:
-        materialize_variants(circuit, expand_variations([circuit], [variation]), tmp_path / "out")
+    (case,) = materialize_variants(
+        circuit, expand_variations([circuit], [variation]), tmp_path / "out"
+    )
 
-    assert excinfo.value.code == "random_nominal_unavailable"
+    (card,) = [line for line in case.text.splitlines() if line.split()[:1] == [ref]]
+    value, own = field.split(None, 1)
+    words = card.split()
+    assert " ".join(words[4:]) == own
+    assert words[3] != value
+    assert parse_spice_value(words[3]) == pytest.approx(parse_spice_value(value), rel=0.5)

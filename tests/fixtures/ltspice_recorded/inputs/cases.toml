@@ -457,7 +457,20 @@ extra = ["deck/level.wav"]
 
 [behaviour.source-parameters]
 summary = "That a source's own parameters follow its value whatever form the value takes, a number, PULSE(), PWL() and SINE() among them: a voltage source's Rser= and Cpar=, either source's AC magnitude written AC=6 or AC 2, read in an AC analysis, and a current source's load flag; and that a PWL's scale keyword before its points is part of its value."
-model = ["lib/component_value.py", "lib/schematic_ops.py", "lib/spice_lex_views.py", "lib/variations.py", "lib/instance_targeting.py"]
+model = [
+    "lib/spice_lex_views.py",
+    "lib/component_value.py",
+    "lib/schematic_ops.py",
+    "lib/variations.py",
+    "lib/instance_targeting.py",
+    "lib/hierarchy.py",
+    "lib/netlist_graph.py",
+    "lib/netlist_diff.py",
+    "lib/spice_validator.py",
+    "lib/result_observations.py",
+    "lib/services.py",
+    "tools/inspect_tools.py",
+]
 # Each source drives a 1k load. Through Rser=1k, V1's 5 V gives v(a) 2.5,
 # V2's PWL at 2 V gives v(b) 1, V3's SINE of offset 3 and no amplitude gives
 # v(c) 1.5, and V4's PWL at 4 V gives v(d) 2 whatever its time scale. I1

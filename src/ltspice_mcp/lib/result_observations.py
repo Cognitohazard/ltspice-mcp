@@ -299,14 +299,15 @@ def parse_source_amplitudes(netlist_text: str) -> dict[str, float]:
         if card.kind != "instance" or not card.name or card.name[0] not in "Vv":
             continue
         line = read_instance(card)
-        if line is None or len(line.nodes) < 2 or line.value is None:
-            # Unreadable, or no positional value (``V1 a 0 value={x}``, or a
-            # source that plays a .wav file, whose second word is a node): it
-            # might be the largest source.
+        if line is None or len(line.nodes) < 2 or (line.value is None and not line.own_words):
+            # Unreadable, or no value (a source that plays a .wav file, whose
+            # second word is a node): it might be the largest source.
             return {}
-        # The value is the positional source spec (``DC 5``, ``SIN(0 1 1k)``);
-        # a ``Rser=1`` after it is a parameter, never a drive level.
-        tokens = (line.value or "").replace("(", " ").replace(")", " ").replace(",", " ").split()
+        # The value is the source spec (``DC 5``, ``SIN(0 1 1k)``); its own
+        # parameters after it (``Rser=1``, ``AC 2``) are never a drive level.
+        # A source with no value but an ``AC 1`` drives nothing.
+        spec = line.value if line.value is not None else " ".join(line.own_words)
+        tokens = spec.replace("(", " ").replace(")", " ").replace(",", " ").split()
         if not tokens:
             continue
         amp = _v_card_amplitude([_resolve_param_ref(tok, params) for tok in tokens])

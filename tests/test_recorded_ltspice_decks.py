@@ -18,7 +18,7 @@ import pytest
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import deck_prep, montecarlo
-from ltspice_mcp.lib.component_value import SourceText, apply_value_to_instance, read_source_text
+from ltspice_mcp.lib.component_value import apply_value_to_instance
 from ltspice_mcp.lib.encoding import (
     decode_spice_bytes_with_encoding,
     read_spice_text,
@@ -40,10 +40,18 @@ from ltspice_mcp.lib.netlist_graph import (
 )
 from ltspice_mcp.lib.result_observations import parse_requested_outputs, parse_source_amplitudes
 from ltspice_mcp.lib.runner_base import deck_requirements
+from ltspice_mcp.lib.schematic_ops import netlist_card_value
+from ltspice_mcp.lib.services import extract_netlist_info
 from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build, is_cp1252_ltspice_executable
 from ltspice_mcp.lib.spice_lex import SpiceCard, directive_head, emit, lex, lex_deck, lex_for_edit
 from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
-from ltspice_mcp.lib.spice_lex_views import InstanceLine, ModelCard, read_instance
+from ltspice_mcp.lib.spice_lex_views import (
+    InstanceLine,
+    ModelCard,
+    SourceText,
+    read_instance,
+    read_source_text,
+)
 from ltspice_mcp.lib.spice_validator import (
     _instance_terminals,
     validate_directive,
@@ -1844,20 +1852,127 @@ def test_an_edit_that_gives_a_parameter_sets_it_and_keeps_the_rest():
     assert after_nodes(card) == "Rser=2k AC 1"
 
 
-def test_a_source_card_reads_otherwise_in_the_card_view_only():
-    """Both builds run V4's ``PWL TIME_SCALE_FACTOR=2 (0 4 1 4)`` and read
-    I1's ``load`` as a flag (v(d) 2 and v(e) 0 above). An edit reads them so
-    (``read_source_text``). The card view, which display, comparison and
-    nested-instance edits read a card through, cannot split V4, and the lint
-    warns of it as a value it could not parse; and it takes ``load`` as part
-    of I1's value."""
-    cards = source_cards("deck/source_parameters")
-    assert read_instance(cards["V4"]) is None
-    warned = [f["rule_id"] for f in lint_input("deck/source_parameters")]
-    assert warned == ["value-expression-remnant"]
-    view = read_instance(cards["I1"])
-    assert view is not None
-    assert (view.value, SOURCE_TEXTS["deck/source_parameters"]["I1"].value) == ("1m load", "1m")
+def keyed_pairs(source: SourceText) -> list[tuple[str, str]]:
+    """A source's own parameters written with ``=``, as ``(key, value)``."""
+    return [tuple(word.split("=", 1)) for word in source.own if "=" in word]  # type: ignore[misc]
+
+
+def unkeyed(source: SourceText) -> tuple[str, ...]:
+    """A source's own parameters written without ``=`` (``AC 2``, ``load``)."""
+    return tuple(word for word in source.own if "=" not in word)
+
+
+def shown(source: SourceText) -> str:
+    """What a display of the source reads: its value, then its own words
+    without ``=``; the keyed ones are its parameters."""
+    return " ".join(word for word in (source.value, *unkeyed(source)) if word)
+
+
+@pytest.mark.parametrize("case_id", sorted(SOURCE_TEXTS))
+def test_the_card_view_reads_a_source_by_the_rule_an_edit_does(case_id: str):
+    """Both builds run every card of these decks as written: V4's ``PWL
+    TIME_SCALE_FACTOR=2 (0 4 1 4)``, and I1's ``load``, read as a flag (v(d) 2
+    and v(e) 0 above). The card view, which display, the components listing,
+    comparison and nested-instance edits read a card through, reads each by
+    the rule an edit does (``read_source_text``): the value, the own keyed
+    parameters as its parameters, its own words without ``=`` apart. The lint
+    warns of none of them, and the drive-level reader reads no own parameter
+    as a level."""
+    text = deck_text(case_id)
+    cards = source_cards(case_id)
+    for ref, wanted in SOURCE_TEXTS[case_id].items():
+        view = read_instance(cards[ref])
+        assert view is not None, ref
+        assert view.nodes == cards[ref].body.split()[1:3], ref
+        assert view.source == wanted, ref
+        assert view.value == wanted.value, ref
+        assert view.model is None, ref
+        assert view.param_pairs() == keyed_pairs(wanted), ref
+        assert view.own_words == unkeyed(wanted), ref
+        assert view.display_value() == shown(wanted), ref
+        assert netlist_card_value(cards[ref]) == shown(wanted), ref
+    assert lint_input(case_id) == []
+    assert validate_netlist_arity(lex_deck(text).cards) == []
+    graph = {c.ref: c for c in parse_netlist_graph(text).components}
+    for ref, wanted in SOURCE_TEXTS[case_id].items():
+        assert graph[ref].value == shown(wanted), ref
+        assert list(graph[ref].params) == keyed_pairs(wanted), ref
+    # Each source's level: the value alone, never an AC magnitude after it.
+    assert (
+        parse_source_amplitudes(text)
+        == {
+            "deck/source_ac": {"V1": 1.0, "V2": 3.0, "V3": 1.0, "V4": 1.0},
+            # A PWL whose points are scaled is not bounded by them.
+            "deck/source_parameters": {},
+        }[case_id]
+    )
+
+
+@pytest.mark.parametrize("case_id", sorted(SOURCE_TEXTS))
+async def test_the_listings_read_a_source_by_the_rule_an_edit_does(
+    case_id: str, state_no_sim, work_dir: Path
+):
+    """``inspect(kind="components")``, the netlist info and the hierarchy
+    read every source of the decks both builds ran, with its value and own
+    parameters as the card view has them."""
+    path = work_dir / Path(rec.CASES.case(case_id).source).name
+    path.write_bytes((INPUTS / rec.CASES.case(case_id).source).read_bytes())
+    (result,) = await _run(
+        state_no_sim, [{"kind": "components", "path": str(path), "detail": "full"}]
+    )
+    assert result["ok"], result
+    rows = {row["reference"]: row for row in result["data"]["components"]}
+    listed = {row["reference"]: row["value"] for row in extract_netlist_info(path)["components"]}
+    hierarchy = await hierarchy_rows(state_no_sim, work_dir, case_id)
+    for ref, wanted in SOURCE_TEXTS[case_id].items():
+        assert rows[ref]["value"] == shown(wanted), ref
+        assert rows[ref]["nodes"] == source_cards(case_id)[ref].body.split()[1:3], ref
+        assert rows[ref].get("params", {}) == dict(keyed_pairs(wanted)), ref
+        assert listed[ref] == shown(wanted), ref
+        row = hierarchy[(ref,)]
+        assert [node["name"] for node in row["nodes"]] == rows[ref]["nodes"], ref
+        assert row["value"]["expression"] == wanted.value, ref
+
+
+@pytest.mark.parametrize("case_id", sorted(SOURCE_TEXTS))
+def test_a_comparison_sees_each_word_of_a_source(case_id: str):
+    """A change to a word of a source's value (V4's time scale) or of one of
+    its own parameters (I1's ``load``, an ``AC`` magnitude) is a change to the
+    circuit, in both comparisons."""
+    text = deck_text(case_id)
+    changed = {
+        "deck/source_parameters": [
+            ("TIME_SCALE_FACTOR=2", "TIME_SCALE_FACTOR=3"),
+            ("1m load", "1m"),
+            ("Rser=1k Cpar=1p", "Rser=1k Cpar=2p"),
+        ],
+        "deck/source_ac": [("2u) AC 2", "2u) AC 3"), ("AC=6", "AC=7"), ("AC 2m", "AC 3m")],
+    }[case_id]
+    for old, new in changed:
+        (card,) = [line for line in text.splitlines() if old in line]
+        other = with_card(text, card, card.replace(old, new))
+        assert not compare_graphs(text, other).equivalent, old
+        assert not no_structural_change(structural_delta(read_deck(text), read_deck(other))), old
+    assert compare_graphs(text, text).equivalent
+
+
+@pytest.mark.parametrize("case_id", sorted(SOURCE_TEXTS))
+def test_an_edit_through_the_card_view_keeps_a_sources_own_parameters(case_id: str):
+    """``set_value``, which a random draw of a component writes with, replaces
+    the value and keeps the own parameters; ``set_param`` sets an own one and
+    refuses a keyword of the value, naming the fix."""
+    for ref, wanted in SOURCE_TEXTS[case_id].items():
+        card = fresh_card(case_id, ref)
+        view = InstanceLine.from_card(card)
+        view.set_value("7")
+        assert after_nodes(card) == " ".join(["7", *wanted.own]), ref
+        assert InstanceLine.from_card(card).source == SourceText("7", wanted.own), ref
+    card = fresh_card("deck/source_parameters", "V4")
+    InstanceLine.from_card(card).set_param("Rser", "2k")
+    assert after_nodes(card) == "PWL TIME_SCALE_FACTOR=2 (0 4 1 4) Rser=2k"
+    with pytest.raises(NetlistError, match=r"part of its value\. Edit the value instead"):
+        InstanceLine.from_card(card).set_param("TIME_SCALE_FACTOR", "3")
+    assert after_nodes(card) == "PWL TIME_SCALE_FACTOR=2 (0 4 1 4) Rser=2k"
 
 
 def test_a_source_that_plays_a_file_has_no_value_to_edit():

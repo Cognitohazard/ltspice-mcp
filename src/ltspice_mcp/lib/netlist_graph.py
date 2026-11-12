@@ -1030,11 +1030,11 @@ def _component_from_card(card: object, ports: Sequence[str] = ()) -> Component:
         type_letter=ref[:1].upper(),
         nodes=tuple(canon_net(n, ports) for n in line.nodes),
         model=line.model,
-        value=(
-            line.value
-            if line.control is None
-            else " ".join(part for part in (line.control, line.value) if part)
-        ),
+        # A W switch's controlling source, and a V or I source's own words
+        # without ``=`` (``AC 2``, ``load``), which ``params`` does not hold,
+        # are compared with its value.
+        value=" ".join(part for part in (line.control, line.value, *line.own_words) if part)
+        or None,
         params=tuple(line.param_pairs()),
         line=getattr(card, "line_start", 0),
     )
