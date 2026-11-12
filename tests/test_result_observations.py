@@ -313,6 +313,18 @@ class TestParseSourceAmplitudes:
     def test_ac_spec_after_dc_ignored(self):
         assert parse_source_amplitudes("title\nV1 in 0 5 AC 1\n")["V1"] == pytest.approx(5.0)
 
+    def test_an_ac_magnitude_after_a_function_is_no_level(self):
+        """The source rule reads ``AC 2`` after a PULSE as the source's own
+        parameter, so it neither cuts the PULSE short nor disarms the deck."""
+        text = "title\nV1 in 0 PULSE(0 3 0 1n 1n 1u 2u) AC 2\n"
+        assert parse_source_amplitudes(text) == {"V1": pytest.approx(3.0)}
+
+    def test_a_source_with_only_keyed_own_parameters_drives_nothing(self):
+        """``V1 in 0 AC=1`` has no value, so it drives nothing and does not
+        disarm the deck."""
+        text = "title\nV1 in 0 AC=1\nV2 a 0 Rser=1\nV3 b 0 5\n"
+        assert parse_source_amplitudes(text) == {"V3": pytest.approx(5.0)}
+
     def test_unbounded_source_disarms_whole_deck(self):
         # An unresolvable {expr} rail might be the deck's LARGEST source; a
         # max() over the remaining cards would state a false "largest

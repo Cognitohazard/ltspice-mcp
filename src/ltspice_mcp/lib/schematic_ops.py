@@ -78,12 +78,7 @@ except (ImportError, AttributeError):  # spicelib < 1.6 (the currently pinned ra
 
 from ltspice_mcp.errors import NetlistError, SymbolResolutionError
 from ltspice_mcp.lib.asc_document import is_asc, parse_asc, window_read_past
-from ltspice_mcp.lib.component_value import (
-    POSITIONAL_KINDS,
-    edited_source,
-    read_source_text,
-    text_without,
-)
+from ltspice_mcp.lib.component_value import POSITIONAL_KINDS, edited_source
 from ltspice_mcp.lib.connectivity import (
     NamedNets,
     build_on_wire_predicate,
@@ -143,6 +138,7 @@ from ltspice_mcp.lib.spice_lex import (
     key_value_tokens,
     tokenize_body,
 )
+from ltspice_mcp.lib.spice_lex_views import read_source_text, text_without
 from ltspice_mcp.lib.spice_validator import (
     validate_directive,
 )

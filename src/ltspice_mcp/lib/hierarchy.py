@@ -648,6 +648,11 @@ def _shape(card: SpiceCard, where: str | None = None) -> tuple[InstanceLine, boo
     _assignments(card, where=where)  # first, so a card it cannot split is refused by its line
     view = InstanceLine.from_card(card)
     tokens = _tokens(card)[1:]
+    if view.source is not None:
+        # A V or I source: the source rule reads every word after its nodes as
+        # its value or one of its own parameters, a PWL's ``TIME_SCALE_FACTOR=``
+        # before its points among them (deck/source_parameters).
+        return view, all(t.kind == TokenKind.BARE for t in tokens[:2])
     first = next((i for i, t in enumerate(tokens) if t.kind == TokenKind.KEY_VALUE), len(tokens))
     if any(t.kind != TokenKind.KEY_VALUE for t in tokens[first:]):
         raise NetlistError(
@@ -873,6 +878,11 @@ def resolve_hierarchy(
             kind = view.ref[0].upper()
             nodes = tuple(node(n, scope, ports) for n in view.nodes) if supported else ()
             params = _assignments(item.card, where=item.source.path)
+            if view.source is not None:
+                # A keyed word of a source's value (a PWL's TIME_SCALE_FACTOR=)
+                # is no parameter of it.
+                own = {key.casefold() for key in view.params}
+                params = {key: value for key, value in params.items() if key in own}
             param_facts = tuple(
                 (
                     k,
