@@ -577,7 +577,8 @@ timestamp or a consent choice itself and does not answer LTspice's dialogs.
 Recoverable execution refuses includes read in place
 (`allow_live_includes`), `.control` blocks, external simulator modules
 (`.osdi`, `.pre_osdi`, `.load`, `.hdl`, `.verilog`, XSPICE `A` devices), file
-readers (`file=`, `sfile=`, `pwlfile=`, a PWL that names a file), directives
+readers (`file=`, `sfile=`, `pwlfile=`, a source's `wavefile=` quoted or not,
+a PWL that names a file), directives
 outside the supported set, functions the server does not know, and random
 functions with no seed the server records, because a resumed case could not
 be relied on to run them the same way. Every card of the deck and of each file

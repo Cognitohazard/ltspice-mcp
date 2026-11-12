@@ -72,13 +72,16 @@ version included, is refused (`recovery_startup_unsupported`).
 
 A recoverable request is refused before submission, with an error code that
 names the reason, when a deck reads an include in place at run time
-(`allow_live_includes`, `recovery_live_dependency`), has a `.control` block
+(`allow_live_includes`, `recovery_live_dependency`), has a source that reads a
+data file, such as a PWL with `file=` or a source that plays a .wav file with
+`wavefile=`, quoted or not (`recovery_external_reader`: recovery saves the
+files a deck includes, not the files its sources read), has a `.control` block
 (`recovery_control_unsupported`), loads an external module with `.load`,
 `.osdi` and the like or has an `A` device (`recovery_external_module`), or
 calls one of the random functions `rand`, `random`, `gauss`, `agauss`, `unif`,
 `aunif`, `flat`, `sgauss`, `limit`, `mc`, `poisson`, `white`, `flicker`,
-`trnoise` or `trrandom` (`recovery_random_unsupported`). A source that reads a
-file and a function the server does not know are refused the same way. Every
+`trnoise` or `trrandom` (`recovery_random_unsupported`). A function the server
+does not know is refused the same way. Every
 card of every included library is checked, and a vendor library often fails a
 check. One refusal names the constructs it found, up to twelve, each with its
 file, line and card; fixing those and submitting again lists the rest. On
