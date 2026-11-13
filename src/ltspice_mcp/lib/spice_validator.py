@@ -32,8 +32,6 @@ from ltspice_mcp.lib.spice_lex import (
     SpiceLexErrorCategory,
     directive_head,
     lex,
-    shadowed_cards,
-    subckt_definitions,
     tokenize_body,
     unreadable_cards,
 )
@@ -645,25 +643,25 @@ def _scan_global_nodes(cards: list[SpiceCard]) -> set[str]:
 
 
 def _scope_ports(cards: list[SpiceCard]) -> dict[tuple[str, ...], tuple[str, ...]]:
-    """Each subcircuit body's scope, and the ports the header of the
-    definition in force names (``spice_lex.subckt_definitions``)."""
+    """Each subcircuit body's scope, and the ports its header names.
+
+    The validator reads a deck as LTspice reads it, and which of two
+    definitions of one name LTspice keeps is not recorded, so a body is read
+    by scope, both definitions' cards together, with the later header's
+    ports. ngspice keeps the first (``spice_lex.subckt_definitions``), which
+    the other readers ask; the difference is pinned in
+    tests/test_subckt_definition_in_force.py.
+    """
     ports: dict[tuple[str, ...], tuple[str, ...]] = {}
-    for index in subckt_definitions(cards).values():
-        card = cards[index]
+    for card in cards:
+        if card.kind != "subckt":
+            continue
         try:
             sub = SubcktCard.from_card(card)
         except SpiceLexError:
             continue
         ports[(*card.scope, sub.name)] = tuple(sub.ports)
     return ports
-
-
-def _in_force(cards: list[SpiceCard]) -> list[SpiceCard]:
-    """The cards a reader of bodies by scope counts: none of a subcircuit
-    definition that an earlier one of its name keeps out of force
-    (``spice_lex.shadowed_cards``), whose body shares that one's scope."""
-    shadowed = shadowed_cards(cards)
-    return [card for index, card in enumerate(cards) if index not in shadowed]
 
 
 def _shared(node: str, ports: tuple[str, ...], global_nodes: set[str]) -> bool:
@@ -693,7 +691,6 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
     the lint cannot classify can therefore only hide a warning, never
     create a false one.
     """
-    cards = _in_force(cards)
     global_nodes = _scan_global_nodes(cards)
     scope_ports = _scope_ports(cards)
 
@@ -1192,7 +1189,6 @@ def validate_netlist_bias_topology(cards: list[SpiceCard]) -> list[dict[str, obj
     body ties to node ``0`` internally. ``.asc`` connectivity is invisible
     to this text pass, so the handler runs it on ``.cir``/``.net`` only.
     """
-    cards = _in_force(cards)
     global_nodes = _scan_global_nodes(cards)
     subckt_grounds = _subckt_internal_grounds(cards, global_nodes)
     # .GLOBAL is name-scoping, not a ground reference: a global is a sink only

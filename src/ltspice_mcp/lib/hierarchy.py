@@ -21,7 +21,7 @@ from ltspice_mcp.lib.deck_nodes import GROUND, node_kind
 from ltspice_mcp.lib.deck_staging import (
     DEFAULT_INCLUDE_DEPTH,
     card_sections,
-    read_in_section,
+    in_other_section,
     resolve_existing,
     resolve_reference,
     scan_include_references,
@@ -399,7 +399,15 @@ def walk_active(
                     raise NetlistError(f"malformed .endl at {path}:{card.line_start}")
                 opened = None
                 continue
-            if not read_in_section(owner, section):
+            if in_other_section(owner, section):
+                continue
+            # Hierarchy discovery also leaves out the cards outside every
+            # section of a file pulled in for one, and the cards inside the
+            # sections of a file pulled in for none. No recording decides
+            # either, and the other readers of a library read them
+            # (``deck_staging.in_other_section``; pinned in
+            # tests/test_library_section_read.py).
+            if (owner is None) != (section is None):
                 continue
             if is_orphan_continuation(card):
                 raise NetlistError(f"orphan continuation at {path}:{card.line_start}")

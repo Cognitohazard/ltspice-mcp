@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ltspice_mcp.lib.deck_staging import read_in_section
+from ltspice_mcp.lib.deck_staging import in_other_section
 from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.lint_rules import lint_deck
 from ltspice_mcp.lib.runner_base import _deck_has_sectioned_lib, deck_requirements
@@ -63,8 +63,43 @@ def test_the_unselected_sections_save_and_analysis_are_not_expected(tmp_path: Pa
 
 
 def test_the_section_rule():
-    assert read_in_section("TT", "tt")
-    assert not read_in_section("ff", "tt")
-    assert not read_in_section(None, "tt")
-    assert read_in_section(None, None)
-    assert not read_in_section("tt", None)
+    assert in_other_section("ff", "tt")
+    assert not in_other_section("TT", "tt")
+    assert not in_other_section(None, "tt")
+    assert not in_other_section("tt", None)
+
+
+_OUTSIDE = (
+    "* a card outside every section\n.model nout NMOS(level=1 vto=0.5)\n"
+    ".lib tt\n.model ntt NMOS(level=1 vto=0.7)\n.endl tt\n"
+)
+
+
+def test_hierarchy_alone_leaves_out_the_cards_outside_every_section(tmp_path: Path):
+    """No recording decides whether ``.lib file tt`` reads a card outside
+    every section of the file. Hierarchy discovery leaves it out; the linter
+    reads it, as before (``deck_staging.in_other_section``)."""
+    (tmp_path / "corners.lib").write_text(_OUTSIDE, encoding="utf-8")
+    deck = tmp_path / "d.cir"
+    deck.write_text(
+        "* t\n.lib corners.lib tt\nM1 d g 0 0 nout W=1u L=1u\nV1 d 0 1\nV2 g 0 1\n.op\n.end\n",
+        encoding="utf-8",
+    )
+    assert _model_missing(deck) == []
+    hierarchy = load_hierarchy(str(deck), [tmp_path], SemanticProfile("ngspice", "hsa"))
+    (fet,) = [row for row in hierarchy.instances if row.reference.upper() == "M1"]
+    assert fet.model_family == ()
+
+
+def test_a_model_at_the_end_of_the_deepest_include_staging_takes_is_found(tmp_path: Path):
+    """Staging takes an include chain eight files deep; the linter read the
+    last file's models before following its references, and must still."""
+    for level in range(1, 8):
+        (tmp_path / f"f{level}.inc").write_text(f".include f{level + 1}.inc\n", encoding="utf-8")
+    (tmp_path / "f8.inc").write_text(".model nx NMOS(level=1)\n", encoding="utf-8")
+    deck = tmp_path / "d.cir"
+    deck.write_text(
+        "* t\n.include f1.inc\nM1 d g 0 0 nx W=1u L=1u\nV1 d 0 1\nV2 g 0 1\n.op\n.end\n",
+        encoding="utf-8",
+    )
+    assert _model_missing(deck) == []

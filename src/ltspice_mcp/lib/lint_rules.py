@@ -12,8 +12,8 @@ from typing import Any, Literal, NamedTuple
 from ltspice_mcp.lib.deck_staging import (
     DEFAULT_INCLUDE_DEPTH,
     card_sections,
+    in_other_section,
     is_absolute_reference,
-    read_in_section,
     resolve_reference,
     scan_include_references,
     unreadable_references,
@@ -668,29 +668,33 @@ def _models_from_staged_dependencies(context: _LintContext) -> _ReachedModels:
         cards: list[SpiceCard], source: Path, depth: int, selected: str | None, *, live: bool
     ) -> None:
         nonlocal complete
-        if depth >= DEFAULT_INCLUDE_DEPTH:
-            return
         if blocked := unreadable_references(cards):
-            complete = False
-            if live:
-                unread.extend((source, card, error) for card, error in blocked)
+            # Which sections it opens is not known, so the file's models are
+            # all counted, as before; what it pulls in is not.
+            declared.update(_declared_models(cards))
+            if depth < DEFAULT_INCLUDE_DEPTH:
+                complete = False
+                if live:
+                    unread.extend((source, card, error) for card, error in blocked)
             return
         # ``depth`` here is the recursion budget; the scanner's parameter is
         # the library-context bit (0 = the deck itself, nonzero = a file
         # reached by following a reference). Keep the two separate.
         context_depth = min(depth, 1)
         if selected is not None:
-            # ``.lib file section`` reads that section's cards and no other
-            # (``deck_staging.read_in_section``). With none selected the file
-            # is read whole, as before: whether the cards inside its sections
-            # are read then is not recorded.
+            # ``.lib file section`` reads no other section's cards
+            # (``deck_staging.in_other_section``).
             sections = card_sections(cards, source, context_depth)
             cards = [
                 card
                 for card, owner in zip(cards, sections, strict=True)
-                if read_in_section(owner, selected)
+                if not in_other_section(owner, selected)
             ]
         declared.update(_declared_models(cards))
+        # A file at the limit is read for its own models, as staging stages it,
+        # and what it pulls in is not followed.
+        if depth >= DEFAULT_INCLUDE_DEPTH:
+            return
         for reference in scan_include_references(cards, source, depth=context_depth):
             dependency = resolve_reference(source.parent, reference.raw_path)
             try:

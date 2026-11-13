@@ -24,7 +24,7 @@ from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.deck_staging import (
     card_sections,
     closure_depth,
-    read_in_section,
+    in_other_section,
     resolve_reference,
     scan_include_references,
     unreadable_references,
@@ -218,11 +218,8 @@ def deck_requirements(netlist: Path | None) -> DeckRequirements:
     title nor a card after an ``.END`` counts. The files it follows are the
     ones staging reads the deck to pull in (``scan_include_references``), so
     a library's own ``.lib section`` line is a section, not a file; and a
-    ``.lib file section`` reads only that section's cards
-    (``deck_staging.read_in_section``). A file pulled in with no section
-    selected is read whole, as before: whether the cards inside its sections
-    are read then is not recorded, though hierarchy discovery reads only the
-    cards outside them.
+    ``.lib file section`` reads no other section's cards
+    (``deck_staging.in_other_section``).
     """
     if netlist is None:
         return DeckRequirements()
@@ -251,7 +248,7 @@ def deck_requirements(netlist: Path | None) -> DeckRequirements:
         except OSError:
             return
         for item in items:
-            if selected is not None and not read_in_section(item.owner, selected):
+            if in_other_section(item.owner, selected):
                 continue
             if item.kind == "control":
                 has_control = True

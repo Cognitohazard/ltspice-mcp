@@ -845,21 +845,23 @@ def card_sections(
     return sections
 
 
-def read_in_section(owner: str | None, selected: str | None) -> bool:
+def in_other_section(owner: str | None, selected: str | None) -> bool:
     """Whether a card in library section ``owner`` (``card_sections``; None
-    outside every section) is read when its file is pulled in for section
-    ``selected``: ``.lib file tt`` reads the cards of section ``tt`` and no
-    other, the section names folded as SPICE folds them. With no section
-    selected, the cards outside every section are read.
+    outside every section) sits in a section other than the one its file is
+    pulled in for (``selected``, the section a ``.lib file tt`` names, the
+    names folded as SPICE folds them). Such a card is not read: ``.lib file
+    tt`` reads the cards of section ``tt`` and of no other. With no section
+    selected none is excluded here.
 
-    The one rule for which cards of a sectioned library are read, which
-    hierarchy discovery, the analyses a run expects (``runner_base``) and the
-    models the linter finds all ask. LTspice reads a sectioned ``.lib`` as a
-    file name (deck/lib_section), so the rule is ngspice's.
+    The one rule for which sections of a library are left out, which every
+    reader of a library's cards asks. Whether the cards outside every
+    section are read when a section is selected, and whether a file pulled
+    in with none selected is read whole, is not recorded: hierarchy
+    discovery leaves both out, the other readers read them. LTspice reads a
+    sectioned ``.lib`` as a file name (deck/lib_section), so the rule is
+    ngspice's.
     """
-    if selected is None:
-        return owner is None
-    return owner is not None and owner.casefold() == selected.casefold()
+    return selected is not None and owner is not None and owner.casefold() != selected.casefold()
 
 
 def looks_like_section_declaration(

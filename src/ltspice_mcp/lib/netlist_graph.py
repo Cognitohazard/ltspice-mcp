@@ -94,6 +94,7 @@ from ltspice_mcp.lib.deck_nodes import GROUND, node_kind
 from ltspice_mcp.lib.deck_staging import (
     card_sections,
     closure_depth,
+    in_other_section,
     resolve_reference,
     scan_include_references,
 )
@@ -884,7 +885,7 @@ def _collect_subckts(
         name.casefold() for name in sections if name is not None
     }
     for index, (card, card_section) in enumerate(zip(cards, sections, strict=True)):
-        if wanted is not None and card_section is not None and card_section.casefold() != wanted:
+        if in_other_section(card_section, section):
             continue
         # Every directive here could be split into parts (checked above).
         registry.global_nets.update(name.lower() for name in global_names(card))
