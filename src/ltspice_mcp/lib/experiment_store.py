@@ -263,6 +263,7 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
         simulator_executable=(
             job.simulator_executable.to_record() if job.simulator_executable else None
         ),
+        deck_names_xvii=job.deck_names_xvii,
         completeness=asdict(job.completeness),
         cases=cases,
         sources=sources,
@@ -616,6 +617,9 @@ def deserialize_job(
         error=data.get("error"),
         output_folder=_path_or_none(data.get("output_folder")),
         simulator_executable=SimulatorExecutable.from_record(data.get("simulator_executable")),
+        deck_names_xvii=(
+            data.get("deck_names_xvii") if isinstance(data.get("deck_names_xvii"), bool) else None
+        ),
         failures=list(data.get("failures") or []),
         observations=list(data.get("observations") or []),
         artifacts=list(data.get("artifacts") or []),

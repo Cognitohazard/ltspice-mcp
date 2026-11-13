@@ -480,6 +480,8 @@ class ExperimentRunRequest:
     #: The program this request's cases will launch, identified before the
     #: request gate. Recorded on a new job and compared against a recorded one.
     simulator_executable: SimulatorExecutable | None = None
+    #: The spelling the request's decks were read with (``ExperimentJob.deck_names_xvii``).
+    deck_names_xvii: bool | None = None
     declared: int | None = None
     canonicalizer_version: int = CANONICALIZER_VERSION
     max_parallel: int | None = None
@@ -721,6 +723,7 @@ class ExperimentRunner(RunnerBase):
             sources=staged.sources,
             simulator=request.simulator,
             simulator_executable=request.simulator_executable,
+            deck_names_xvii=request.deck_names_xvii,
             completeness=completeness,
             # The job's own directory inside the runner's stable output folder,
             # not the folder itself: everything this job wrote is under it, and
@@ -1733,6 +1736,7 @@ class ExperimentRunner(RunnerBase):
         outcome = await self._with_logs(execution, outcome)
         if execution.job.recovery is not None:
             self._apply_outcome(execution.job, case, outcome)
+            await self._check_raw_names(execution, case)
         else:
             self._apply_stopped_outcome(execution.job, case, outcome)
         kept = await self._record_progress_then_remove(execution, case)
@@ -1969,18 +1973,13 @@ class ExperimentRunner(RunnerBase):
     async def _check_raw_names(execution: _Execution, case: ExperimentCase) -> None:
         """Say on ``case`` when its raw names subcircuit members otherwise than
         the spelling its deck was read with at submission
-        (``services.submission_producer``, from which the hierarchy profile
-        was built), as an LTspice under another name, never run before, can."""
-        if case.raw_file is None:
+        (``ExperimentJob.deck_names_xvii``), as an LTspice under another name,
+        never run before, can."""
+        expected = execution.job.deck_names_xvii
+        if case.raw_file is None or expected is None:
             return
-        state = execution.request.state
-        raw = case.raw_file
-
-        def check() -> str | None:
-            producer = services.submission_producer(state, execution.job)
-            return naming_disagreement(producer, raw_writer_command(raw))
-
-        disagreement = await asyncio.to_thread(check)
+        command = await asyncio.to_thread(raw_writer_command, case.raw_file)
+        disagreement = naming_disagreement(expected, command)
         if disagreement is not None:
             case.observations.append(
                 {"code": "raw_names_disagree", "kind": "execution", "detail": disagreement}

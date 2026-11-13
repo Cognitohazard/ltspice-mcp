@@ -123,25 +123,25 @@ def naming_for(producer: Producer) -> Naming:
     )
 
 
-def naming_disagreement(producer: Producer, command: str | None) -> str | None:
+def naming_disagreement(expected_xvii: bool, command: str | None) -> str | None:
     """Why the raw whose header's ``Command`` is ``command`` names subcircuit
-    members otherwise than :func:`naming_for` says ``producer`` does, or None
+    members otherwise than the spelling its deck was read with
+    (``expected_xvii``, :func:`naming_for`'s ``xvii`` at submission), or None
     when they agree or the raw names no LTspice writer. For a run the server
     made, where the two must agree."""
     from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build
 
-    if producer.family != "ltspice" or not command or "ltspice" not in command.casefold():
+    if not command or "ltspice" not in command.casefold():
         return None
-    expected = naming_for(producer)
     written = is_cp1252_ltspice_build(command)
-    if written == expected.xvii:
+    if written == expected_xvii:
         return None
-    spelled = "without" if written else "with"
     return (
-        f"The raw's writer ({command}) names each subcircuit instance {spelled} its X, "
-        f"but the run's executable ({producer.program or 'not recorded'}, build "
-        f"{producer.build or 'not reported'}) was read as {expected.read_as}, which "
-        f"does not; names inside subcircuits are read as the raw's writer spells them."
+        f"The raw's writer ({command}) names each subcircuit instance "
+        f"{'without' if written else 'with'} its X, but the job's decks were read with "
+        f"each instance spelled {'without' if expected_xvii else 'with'} it: a name "
+        "inside a subcircuit the deck spelled, a .save among them, may have saved "
+        "nothing. Names in the results are read as the raw's writer spells them."
     )
 
 

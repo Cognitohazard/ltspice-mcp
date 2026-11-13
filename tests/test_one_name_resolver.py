@@ -325,9 +325,9 @@ def test_each_builds_executable_is_read_with_the_spelling_its_raw_is_written_in(
     command = raw_writer_command(rec.recorded(build, f"{SAVE_SPELLINGS[True]}.raw"))
     program = f"C:/install/{rec.manifest(build)['executable']['name']}"
     reported = None if rec.generation(build) == "xvii" else "LTspice 26.1.1 for Windows"
-    assert naming_disagreement(Producer("ltspice", reported, program), command) is None
-    other = "C:/install/LTspice.exe" if rec.generation(build) == "xvii" else "C:/x/XVIIx64.exe"
-    said = naming_disagreement(Producer("ltspice", None, other), command)
+    own = naming_for(Producer("ltspice", reported, program)).xvii
+    assert naming_disagreement(own, command) is None
+    said = naming_disagreement(not own, command)
     assert said is not None and "names each subcircuit instance" in said
 
 
@@ -369,36 +369,50 @@ async def test_inspect_says_how_a_build_with_no_recording_is_spelled(config: Any
     assert "not known until a run on it names itself" in profile["names_note"]
 
 
-def _xvii_job(state: SessionState, program: str, *, job_id: str) -> Any:
-    """A finished job on the LTspice at ``program`` whose run is XVII's
-    recording of ``raw/save_subckt_names``."""
-    from ltspice_mcp.lib.simulator_build import SimulatorExecutable
-    from tests.conftest import make_experiment_job
-
-    raw = state.working_dir / f"{job_id}.raw"
-    raw.write_bytes(rec.recorded("ltspice17", f"{SAVE_SPELLINGS[True]}.raw").read_bytes())
-    job = make_experiment_job(state, job_id=job_id, raw=raw)
-    job.simulator = "LTspice"
-    job.simulator_executable = SimulatorExecutable(program, None, None, None)
-    return job
-
-
-def test_a_run_whose_raw_is_spelled_otherwise_than_its_deck_was_read_says_so(
-    state_no_sim: SessionState,
+async def test_a_run_whose_raw_is_spelled_otherwise_than_its_deck_was_read_says_so(
+    config: Any, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """An XVII under another name that has not run before is read as LTspice
-    26 when its job is submitted (it names no build yet), so its raw, written
-    without the instances' X, disagrees with how the deck was spelled; one
-    named as XVII agrees. The check is against the runs before the job's own,
-    which the deck was read with, not the run's own report."""
-    from ltspice_mcp.lib import services
+    26 when its job is submitted (it names no build yet). The job records that
+    spelling, the record keeps it, and an XVII raw from that job's run, which
+    writes each instance without its X, is reported against it; a job on an
+    executable named as XVII is not. The run is not submitted: the check is
+    the runner's, given the job and a case holding XVII's recorded raw."""
+    from types import SimpleNamespace
 
+    from spicelib.simulators.ltspice_simulator import LTspice
+
+    from ltspice_mcp.lib.experiment_runner import ExperimentRunner
+    from ltspice_mcp.lib.experiment_store import deserialize_job, serialize_job
+    from ltspice_mcp.lib.store import OwnerLiveness
+
+    monkeypatch.setattr(ExperimentRunner, "submit_netlist", lambda *a, **k: object())
+    deck = work_dir / "nested.cir"
+    deck.write_bytes((INPUTS / f"{SAVE_SPELLINGS[True]}.cir").read_bytes())
+    raw = work_dir / "run.raw"
+    raw.write_bytes(rec.recorded("ltspice17", f"{SAVE_SPELLINGS[True]}.raw").read_bytes())
     for program, disagrees in (("C:/tools/lt.exe", True), ("C:/LTC/XVIIx64.exe", False)):
-        job = _xvii_job(state_no_sim, program, job_id=f"j{int(disagrees)}")
-        job.cases[0].simulator_version = "Linear Technology Corporation LTspice XVII"
-        producer = services.submission_producer(state_no_sim, job)
-        said = naming_disagreement(producer, raw_writer_command(job.cases[0].raw_file))
-        assert (said is not None) == disagrees, (program, said)
+        launcher = type(LTspice.__name__, (LTspice,), {"spice_exe": [program]})
+        state = SessionState.create(config, available={"ltspice": launcher})
+        args = RunExperimentsInput.model_validate(
+            {
+                "request_id": f"spelled-{disagrees}",
+                "circuits": [{"path": str(deck)}],
+                "execution": {"wait_s": 0},
+                "lint": "off",
+            }
+        )
+        await handle_run_experiments(args, state)
+        (job,) = state.all_jobs.values()
+        assert job.deck_names_xvii is (not disagrees)
+        reread = deserialize_job(serialize_job(job), job.store_path, liveness=OwnerLiveness.ALIVE)
+        assert reread.deck_names_xvii is job.deck_names_xvii
+        case = job.cases[0]
+        case.raw_file = raw
+        before = len(case.observations)
+        await ExperimentRunner._check_raw_names(SimpleNamespace(job=job), case)  # type: ignore[arg-type]
+        codes = [o["code"] for o in case.observations[before:]]
+        assert codes == (["raw_names_disagree"] if disagrees else []), program
 
 
 def test_a_section_sign_device_names_neither_part_where_both_names_are_there(

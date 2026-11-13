@@ -45,6 +45,7 @@ from ltspice_mcp.lib.deck_staging import (
     stage_deck,
     verify_staged_manifest,
 )
+from ltspice_mcp.lib.device_names import naming_for
 from ltspice_mcp.lib.experiment_inputs import capture_case_inputs
 from ltspice_mcp.lib.experiment_runner import (
     CANONICALIZER_VERSION,
@@ -99,7 +100,7 @@ from ltspice_mcp.lib.simulator import (
     simulator_dialect,
     simulator_library_roots,
 )
-from ltspice_mcp.lib.simulator_build import executable_identity
+from ltspice_mcp.lib.simulator_build import Producer, SimulatorExecutable, executable_identity
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.lib.subckt_mismatch import MismatchPlanError
 from ltspice_mcp.lib.sweep_utils import generate_id
@@ -791,7 +792,7 @@ async def handle_run_experiments(
             sources: list[SourceRecord] = []
             preparations = await asyncio.gather(
                 *(
-                    _prepare_circuit(circuit_input, args, state, simulator, job_id)
+                    _prepare_circuit(circuit_input, args, state, simulator, job_id, reader)
                     for circuit_input in circuit_inputs
                 ),
                 # Admission can refuse a frozen-input capture. Wait for every
@@ -823,7 +824,7 @@ async def handle_run_experiments(
         # (the first identification in a process digests the executable): the
         # gate's replay check compares it with what a recorded job ran on, and
         # a new job records it.
-        executable = await asyncio.to_thread(executable_identity, simulator)
+        executable, reader = await asyncio.to_thread(_job_reader, state, simulator)
         runner = state.runners.get_experiment_runner(
             loop=asyncio.get_running_loop(),
             simulator_class=simulator,
@@ -839,6 +840,7 @@ async def handle_run_experiments(
             stage=stage_decks,
             simulator=simulator.__name__,
             simulator_executable=executable,
+            deck_names_xvii=_recorded_spelling(reader),
             job_id=job_id,
             declared=len(args.circuits),
             max_parallel=args.execution.max_parallel,
@@ -1037,12 +1039,32 @@ async def _render_static_run_receipt(
     )
 
 
+def _job_reader(
+    state: SessionState, simulator: type
+) -> tuple[SimulatorExecutable | None, Producer]:
+    """The program a job run on ``simulator`` launches, and who reads every
+    deck of it: its hierarchy profiles are built from the second, and the job
+    records the spelling it gives (:func:`_recorded_spelling`). Blocking:
+    call off the loop."""
+    return (
+        executable_identity(simulator),
+        deck_producer(state, simulator_dialect(simulator), simulator),
+    )
+
+
+def _recorded_spelling(reader: Producer) -> bool | None:
+    """The spelling a job records for its decks' reader, which each run's raw
+    is held to (``ExperimentJob.deck_names_xvii``); None for no LTspice."""
+    return naming_for(reader).xvii if reader.family == "ltspice" else None
+
+
 async def _prepare_circuit(
     circuit_input: CircuitDeck,
     args: RunExperimentsInput,
     state: SessionState,
     simulator: type,
     job_id: str,
+    reader: Producer,
 ) -> _CircuitPreparation:
     """Stage, lint, and materialize one circuit with isolated failures.
 
@@ -1159,12 +1181,7 @@ async def _prepare_circuit(
                 for included in staged.includes
             ),
             semantic_profile=(
-                SemanticProfile.of(
-                    await asyncio.to_thread(deck_producer, state, dialect, simulator),
-                    mode,
-                )
-                if dialect in SUPPORTED_FAMILIES
-                else None
+                SemanticProfile.of(reader, mode) if dialect in SUPPORTED_FAMILIES else None
             ),
             record_source_lineage=native is not None or args.execution.recoverable,
         )

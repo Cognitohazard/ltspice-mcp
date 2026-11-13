@@ -660,15 +660,13 @@ async def answer_measurements(
 def reported_version(
     state: SessionState,
     executable: SimulatorExecutable | None,
-    *,
-    other_than: str | None = None,
 ) -> tuple[str, dict[str, str]] | None:
     """The build the latest run on this same executable reported, and which run.
 
     Read from the jobs this session holds, its own and the recent ones loaded
     at startup, so it is a run's own output rather than a probe: asking the
     executable would launch the simulator. None until a run on this build has
-    finished and named itself. ``other_than`` leaves that job's runs out.
+    finished and named itself.
     """
     if executable is None:
         return None
@@ -678,7 +676,7 @@ def reported_version(
         (
             (case.completed_at or job.started_at, job, case)
             for job in jobs
-            if job.job_id != other_than and same_executable(job.simulator_executable, executable)
+            if same_executable(job.simulator_executable, executable)
             for case in job.cases
             if case.simulator_version
         ),
@@ -766,29 +764,15 @@ def deck_producer(state: SessionState, family: str | None, simulator: type | Non
     return _producer_of(state, family, executable_identity(simulator))
 
 
-def submission_producer(state: SessionState, job: ExperimentJob) -> Producer:
-    """Who ``job``'s decks were read by when it was submitted: ``deck_producer``
-    for its recorded executable, from the runs before this job's own, which
-    is what the deck's hierarchy profile was built from. A run's raw is held
-    to it (``device_names.naming_disagreement``). Blocking: call off the loop."""
-    family = dialect_for_simulator_name(job.simulator) if job.simulator else None
-    return _producer_of(state, family, job.simulator_executable, other_than=job.job_id)
-
-
 def _producer_of(
-    state: SessionState,
-    family: str | None,
-    identity: SimulatorExecutable | None,
-    *,
-    other_than: str | None = None,
+    state: SessionState, family: str | None, identity: SimulatorExecutable | None
 ) -> Producer:
     program = identity.path if identity is not None else None
     # Only an LTspice's build changes how its names are read, and its file
     # name, where it says, answers without the scan of every recorded run.
     build = None
     if family == "ltspice" and ltspice_before_24(program, None) is None:
-        reported = reported_version(state, identity, other_than=other_than)
-        build = reported[0] if reported is not None else None
+        build = reported_build_of(state, identity)
     return Producer(family=family, build=build, program=program)
 
 
