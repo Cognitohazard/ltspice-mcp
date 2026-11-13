@@ -262,6 +262,39 @@ function, or a replaced function keeps callers for a while, ban its name as
 `CLAUDE.md` describes; Ruff then flags each allowed use whose marker is no
 longer needed.
 
+## Behaviours users rely on
+
+Users have reported these behaviours as working well. Each has a test that
+goes through the tool surface or the Python API, so it holds whatever code
+answers underneath; a change that makes one fail has broken something users
+rely on. They are grouped by the design principle each confirms
+(`docs/DESIGN.md`). A test not named with its module is in
+`tests/test_reported_behaviours.py`.
+
+|behaviour|guarded by|
+|-|-|
+|**One call does the whole job**||
+|`jobs(action="place_beside_sheet")` copies a case's results beside its sheet|`test_one_call_per_task.py::test_a_cases_results_go_beside_its_sheet_in_one_call`|
+|One `edit_schematic` batch removes a comment, rewrites a directive and checks equivalence|`test_one_batch_removes_a_comment_rewrites_a_directive_and_checks_equivalence`|
+|`edit_schematic` with `compare` changes `.model` lines and comes back equivalent|`test_an_edit_that_changes_model_lines_compares_equivalent_with_its_reference`|
+|A reused `request_id` replays the earlier job at once (`replayed: true`)|`test_one_call_per_task.py::test_repeating_a_request_id_answers_from_the_job_in_one_call`|
+|**Results are durable and addressed by id**||
+|A job recorded on disk reloads by id without simulating again|`test_short_reply_data_behind_an_id.py::test_a_job_reloads_by_id_in_a_new_session_without_simulating_again`|
+|A receipt gives the exact raw and log paths|the same test (`jobs(action="runs")` rows read back as the recorded files)|
+|`api.load_raw(path)` reads a raw file from a standalone LTspice run|`test_recorded_ltspice_results.py::TestSteppedRuns::test_the_api_reads_an_operating_point_as_one_number_a_step`, on both builds' recordings|
+|A run's summary comes back in the reply, and the data stays behind a job id that Python reduces|`test_short_reply_data_behind_an_id.py::test_a_sweeps_receipt_and_its_analysis_stay_short`, `test_one_call_per_task.py::test_a_jobs_results_are_reduced_in_python_in_one_call`|
+|**A refusal or finding says exactly what to do and where**||
+|A refused `move` region names the fields it takes (`x1, y1, x2, y2`)|`test_a_refused_move_region_names_its_fields_x1_y1_x2_y2`|
+|Text drawn across a wire comes back with the text's anchor and the wire's ends|`test_a_parts_name_drawn_across_a_wire_gives_the_names_anchor_and_the_wires_ends`; a value's text: `test_verify_circuit.py::test_layout_reports_attribute_text_drawn_across_a_wire`, `test_edit_schematic.py::test_a_value_that_makes_an_overlap_is_the_batchs`|
+|The ngspice `remediation` block in `capabilities` says what is missing and where to set it|`test_capabilities_says_what_ngspice_is_missing_and_where_to_set_it`|
+|Failures, warnings and observations are structured data|`test_failures_warnings_and_observations_come_back_as_structured_records`, `test_a_failed_edit_names_the_op_by_index_and_writes_nothing`; every finding in the suite is held to a place by `tests/conftest.py`|
+|**Checks run where the work happens**||
+|The equivalence check runs on the commit, and a mismatch is reported without undoing the edit|`test_one_call_per_task.py::test_an_edit_is_compared_with_its_reference_in_the_same_call`, `test_one_call_per_task.py::test_a_mismatch_is_reported_in_the_same_call_without_undoing_the_edit`|
+|After a rewire, the export diff shows no component change|`test_a_rewired_sheets_export_diff_shows_no_component_change`, on both builds' exports of each benchmark circuit drawn with wires and with labels|
+|**Works with LTspice's own tools**||
+|`set_plot_panes` writes the `.plt` in the sheet's own transaction|`test_set_plot_panes.py::test_one_batch_edits_the_sheet_and_its_panes`, `::test_a_sheet_rename_that_fails_puts_the_old_panes_back`, `::test_a_plot_settings_write_that_fails_leaves_both_files`|
+|`verify_circuit(in_ltspice=true)` starts LTspice with the sheet in front|`test_verify_in_ltspice.py::test_the_sheet_is_opened_in_the_window_and_put_in_front`, `::test_with_no_window_open_ltspice_is_started_and_shows_it`, against the stand-in bridge replayed from a recording of LTspice 26.1.1|
+
 ## Recorded LTspice behaviour
 
 Development and CI run on Linux, where there is no LTspice, so the suite checks

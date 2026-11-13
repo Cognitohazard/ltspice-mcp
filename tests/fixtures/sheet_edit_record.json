@@ -770,6 +770,15 @@
    "tests/test_edit_open_window.py::test_a_save_is_a_call_of_its_own[other0]"
   ]
  },
+ "313f8a8661b5aaf6": {
+  "answer": {
+   "reply": "4dd8aee9d5ab2678",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_reported_behaviours.py::test_a_failed_edit_names_the_op_by_index_and_writes_nothing"
+  ]
+ },
  "3248fff8be3f58cb": {
   "answer": {
    "reply": "c588ab478b776fd4",
@@ -1091,6 +1100,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_a_move_reply_says_what_moved"
+  ]
+ },
+ "482d0ed7532927c5": {
+  "answer": {
+   "reply": "f5bf79f28a1ce845",
+   "sheet": "f8927d08d258a7b1"
+  },
+  "tests": [
+   "tests/test_reported_behaviours.py::test_one_batch_removes_a_comment_rewrites_a_directive_and_checks_equivalence"
   ]
  },
  "48934a41d8835fa0": {
@@ -2104,6 +2122,15 @@
   },
   "tests": [
    "tests/test_post_op_warnings.py::TestReadabilityWarnings::test_wiring_profile_counts_wired_pins"
+  ]
+ },
+ "8745bfb504716d09": {
+  "answer": {
+   "reply": "56671e749019be71",
+   "sheet": "7dfcf23530068657"
+  },
+  "tests": [
+   "tests/test_reported_behaviours.py::test_an_edit_that_changes_model_lines_compares_equivalent_with_its_reference"
   ]
  },
  "880866ff6f0f7bba": {
