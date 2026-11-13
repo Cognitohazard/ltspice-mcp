@@ -2626,6 +2626,9 @@ class _LogRows(Sequence[dict[str, Any]]):
                 row[key] = value[ordinal] if isinstance(value, list) else value
             if "unreadable" in metadata:
                 row["unreadable"] = metadata["unreadable"]
+            for key in ("answer", "answer_unknown"):
+                if key in metadata:
+                    row[key] = metadata[key]
             row["failed"] = measurement_failed(self._facts, metadata["measurement"], ordinal)
             return row
         key = "entry" if metadata["layout"] == "scalar_print" else "row"
@@ -2640,6 +2643,9 @@ async def _log_results_page(
     section_name = "measurements" if query.view == "measurements" else "native_tables"
     section = logs.section(section_name)
     facts = logs.value(section_name)
+    if query.view == "measurements" and facts is not None:
+        # Each measurement names the field holding its result.
+        facts = await services.answer_measurements(source, facts)
     rows = _LogRows(facts, query.view, _check_prefix(query.prefix))
     identity = {
         **query.model_dump(exclude={"cursor", "limit"}),
@@ -3007,6 +3013,19 @@ _MEASUREMENTS_DATA_PROPERTIES: dict[str, Any] = {
                         "reason": {"type": "string"},
                     },
                     "required": ["reason"],
+                },
+                "answer": {
+                    "type": "string",
+                    "enum": ["value", "at"],
+                    "description": (
+                        "The field holding the measurement's result: 'at' for a "
+                        "WHEN with no FIND printed on its own line, whose value is "
+                        "the level it searched for; 'value' otherwise."
+                    ),
+                },
+                "answer_unknown": {
+                    "type": "string",
+                    "description": "Why the field holding the result is not known.",
                 },
                 "failed": {
                     "type": "boolean",

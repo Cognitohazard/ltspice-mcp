@@ -2093,8 +2093,9 @@ def _measurements_compact(value: dict[str, Any]) -> dict[str, Any]:
     the point a crossing or ``AT`` reported with it goes under ``at``. A name
     the log holds no number for keeps its key with null, so it never reads as
     a missing name, and the value beside says why, each null in one place:
-    ``failed_measurements`` (LTspice printed it failed) and ``unreadable``
-    (LTspice printed something other than a number) come with the metric's
+    ``failed_measurements`` (LTspice printed it failed), ``unreadable``
+    (LTspice printed something other than a number) and ``answer_unknown``
+    (which field holds the result is not known) come with the metric's
     value (``metrics.measurement_rows``), and ``not_finite`` names the rest,
     each a number the log decoder holds as null because it is not finite
     (LTspice 26 prints a stepped FRA's gain margin ``infdB``, recorded as
@@ -2113,7 +2114,11 @@ def _measurements_compact(value: dict[str, Any]) -> dict[str, Any]:
     at = {name: entry["at"] for name, entry in stats.items() if "at" in entry}
     if at:
         compact["at"] = at
-    explained = {*value.get("failed_measurements", ()), *value.get("unreadable", {})}
+    explained = {
+        *value.get("failed_measurements", ()),
+        *value.get("unreadable", {}),
+        *value.get("answer_unknown", {}),
+    }
     not_finite = [
         name for name, number in measured.items() if number is None and name not in explained
     ]

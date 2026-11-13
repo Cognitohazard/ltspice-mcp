@@ -3962,7 +3962,11 @@ with the line and the reason, and the `AT` crossing comes from
 `_RE_MEAS_AT_LINE`. The reason quotes the value as the log printed it
 (`printed_measurements`), not as the reader holds it, since the reader cuts
 `vth^2` to `vth`. The measurements check of `lib/log_decode.py` refuses a
-table that lacks a measurement the log printed.
+table that lacks a measurement the log printed. The threshold is the level a
+WHEN with no FIND searched for, and its result is the crossing
+(`log_parser.measurement_answer`), so such a measurement reads on every route
+(`tests/test_measurement_answer.py`, `tests/test_unreadable_measurement.py`).
+Rechecked on spicelib 1.5.1 on 2026-11-13: the line is still skipped.
 
 ### Summary
 

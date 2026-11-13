@@ -39,7 +39,8 @@ from ltspice_mcp.lib.deck_staging import (
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.experiment_inputs import capture_case_inputs, verify_case_inputs
 from ltspice_mcp.lib.export_nets import exported_pin_nodes
-from ltspice_mcp.lib.metrics import meas_kinds_from_netlist, noise_input_source_unit
+from ltspice_mcp.lib.log_parser import measurement_cards
+from ltspice_mcp.lib.metrics import noise_input_source_unit
 from ltspice_mcp.lib.recovery_records import RecoveryError
 from ltspice_mcp.lib.runner_base import _is_ngspice_lib_section_failure, inject_logopinfo
 from ltspice_mcp.lib.services import extract_netlist_info
@@ -331,7 +332,7 @@ async def operating_point_option(text: str, where: Path, state: SessionState) ->
 
 @reader
 async def measurement_kinds(text: str, where: Path, state: SessionState) -> Any:
-    return meas_kinds_from_netlist(write_deck(where, text))
+    return measurement_cards(write_deck(where, text))
 
 
 @reader

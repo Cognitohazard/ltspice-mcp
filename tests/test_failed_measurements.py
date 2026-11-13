@@ -180,8 +180,9 @@ async def test_every_route_names_the_measurements_ltspice_printed_failed(
     named: dict[str, list[str]] = {}
     rows: dict[str, dict[str, Any]] = {}
 
-    # A log read by its path: the recipe's row and the run's summary. With no
-    # deck to say they are WHENs, the unreadable ones have no number here.
+    # A log read by its path: the recipe's row and the run's summary. The
+    # unreadable ones are WHENs, whose result is the crossing printed after
+    # AT, so they read; only the failed one has no number.
     by_path = await dispatched(
         state_with_sim,
         "analyze_results",
@@ -189,11 +190,8 @@ async def test_every_route_names_the_measurements_ltspice_printed_failed(
         recipes=[_RECIPES[0]],
     )
     rows["recipe row, by path"] = row = _row(by_path, "m")
-    assert {name for name, number in row["measured"].items() if number is None} == {
-        *failed,
-        *unreadable,
-    }
-    assert set(row["unreadable"]) == unreadable
+    assert {name for name, number in row["measured"].items() if number is None} == set(failed)
+    assert "unreadable" not in row
     summary = await dispatched(
         state_with_sim,
         "analyze_results",

@@ -38,7 +38,12 @@ from ltspice_mcp.lib.experiment_types import (
 )
 from ltspice_mcp.lib.job_lifecycle import runs_done
 from ltspice_mcp.lib.log_conditions import Producer
-from ltspice_mcp.lib.log_parser import LogDiagnostics
+from ltspice_mcp.lib.log_parser import (
+    LogDiagnostics,
+    MeasurementsOutput,
+    answered_measurements,  # noqa: TID251 - answer_measurements is the readers' door to it
+    measurement_cards,
+)
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.parser_service import ParserCleanupError, select_raw
 from ltspice_mcp.lib.parser_service import load_artifacts_sync as _parse_artifacts_sync
@@ -631,6 +636,30 @@ def source_producer(
         build=source.simulator_version or reported,
         program=None,
     )
+
+
+def log_producer(
+    source: AnalysisSource, *, read_dialect: str | None = None, reported: str | None = None
+) -> Producer:
+    """Who wrote ``source``'s log (:func:`source_producer`). ``read_dialect``
+    is the dialect a bare path's raw header shows and ``reported`` the build
+    its files name, where the caller has read them; a log-only reader opens no
+    source file in this process, so it passes neither, and the log is read
+    with every recorded build's rules (``log_conditions.rules_for``)."""
+    if source.producer is not None:
+        return source.producer
+    return source_producer(source, read_dialect=read_dialect, reported=reported)
+
+
+async def answer_measurements(
+    source: AnalysisSource, table: MeasurementsOutput, *, producer: Producer | None = None
+) -> MeasurementsOutput:
+    """``source``'s log measurements ``table`` with the field holding each
+    one's result named (``log_parser.answered_measurements``), from who wrote
+    the log (``producer``, else :func:`log_producer`) and the run's deck where
+    it is known. Every reader of a measurement reads it through here."""
+    cards = await asyncio.to_thread(measurement_cards, source.netlist)
+    return answered_measurements(table, producer or log_producer(source), cards)
 
 
 def reported_version(

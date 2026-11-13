@@ -28,13 +28,17 @@ from typing import Any
 
 import pytest
 
-from ltspice_mcp.lib.log_parser import printed_measurements, read_log_text
+from ltspice_mcp.lib.log_conditions import Producer
+from ltspice_mcp.lib.log_parser import (
+    MeasurementAnswer,
+    measurement_answer,
+    printed_measurements,
+    read_log_text,
+)
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
-from tests.conftest import SyncApi, dispatched, make_experiment_job
+from tests.conftest import FIXTURES_DIR, SyncApi, dispatched, make_experiment_job
 from tests.ltspice_recorder import INPUTS
-
-pytestmark = pytest.mark.asyncio
 
 #: An unstepped result line whose point follows an uppercase ``AT``: the
 #: point is the result.
@@ -222,7 +226,151 @@ async def test_every_route_reads_a_measurement_from_the_same_field(
         assert set(answers) == set(first), (route, first_route)
         for name, answer in answers.items():
             assert _same(answer, first[name]), (name, route, answer, first_route, first[name])
+    # Every form both builds print has a recorded reading, so no route leaves
+    # a recorded measurement's field unknown.
+    assert "unknown" not in first.values(), first
     # A crossing printed after an uppercase AT is the result on every route.
     text = read_log_text(rec.recorded(build, f"{case_id}.log"))
     for name, point in _UPPER_AT.findall(text):
         assert first[name.lower()] == [float(point)], (name, first[name.lower()])
+
+
+# ngspice -------------------------------------------------------------------
+
+_NGSPICE_LINE = re.compile(r"^(\w+)\s+=\s+(\S+)", re.M)
+
+
+@pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH")
+def test_ngspice_prints_a_crossing_as_the_value_and_the_server_reads_no_such_line(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """ngspice prints each measurement as ``name = value``, a WHEN's crossing
+    as its value, where LTspice prints the level and the crossing after
+    ``AT``. The log decoder reads no such line (a run the server starts with a
+    raw file prints none: ``No .measure possible in batch mode``), so the
+    ngspice reading in ``log_parser`` holds no printed form, and no route
+    reads a field of one."""
+    import subprocess
+
+    version = subprocess.run(
+        ["ngspice", "-v"], capture_output=True, text=True, check=False, timeout=60
+    ).stdout
+    print("ngspice that ran:", next(line for line in version.splitlines() if "ngspice" in line))
+    deck = work_dir / "forms.cir"
+    deck.write_text(
+        "* WHEN and FIND WHEN in ngspice\n"
+        "V1 in 0 PULSE(0 1 0 1u 1u 1 2)\n"
+        "R1 in out 1k\n"
+        "C1 out 0 100n\n"
+        ".tran 1u 1m\n"
+        ".meas tran m_when WHEN V(out)=0.5\n"
+        ".meas tran m_findwhen FIND V(in) WHEN V(out)=0.5\n"
+        ".end\n",
+        encoding="ascii",
+    )
+    log = deck.with_suffix(".log")
+    subprocess.run(
+        ["ngspice", "-n", "-b", "-o", str(log), str(deck)],
+        cwd=work_dir,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+    printed = dict(_NGSPICE_LINE.findall(read_log_text(log)))
+    assert float(printed["m_when"]) == pytest.approx(100e-6 * math.log(2), rel=0.02)
+    assert float(printed["m_findwhen"]) == pytest.approx(1.0)
+    assert printed_measurements(read_log_text(log)) == {}
+    assert SyncApi(state_no_sim).measurements(path=log)["measurements"] == {}
+
+
+# The decision itself ---------------------------------------------------------
+
+_LT26 = Producer("ltspice", "LTspice 26.1.1 for Windows", None)
+_UNKNOWN = Producer(None, None, None)
+
+
+@pytest.mark.parametrize(
+    ("form", "answer"),
+    [
+        ("line_AT", "at"),
+        ("line_at", "value"),
+        ("line_from_to", "value"),
+        ("line", "value"),
+        ("table_level", "value"),
+        ("table_at", "value"),
+        ("table_from_to", "value"),
+        ("table", "value"),
+    ],
+)
+def test_a_recorded_form_names_its_field_for_any_ltspice_or_an_unknown_writer(
+    form: str, answer: str
+):
+    """The two recorded builds read every form alike, so a build that is not
+    recorded and a writer that is not known read it the same: no recorded
+    producer but LTspice prints these forms."""
+    for producer in (_LT26, Producer("ltspice", "LTspice 24.0.9 for Windows", None), _UNKNOWN):
+        assert measurement_answer(form, producer) == MeasurementAnswer(answer)  # type: ignore[arg-type]
+
+
+def test_a_deriv_when_keeps_the_answer_its_deck_has_always_given():
+    """No recording shows how LTspice prints a DERIV ... WHEN, so its card
+    keeps the deck's answer: the point where the entry has one. Recording it is
+    pending (``log/meas_deriv_when`` in the recorder's cases)."""
+    for form in ("line_AT", "line_at", None):
+        assert measurement_answer(form, _LT26, "deriv_when", has_point=True).field == "at"
+    assert measurement_answer("table_level", _LT26, "deriv_when").field == "value"
+
+
+def test_a_card_the_printed_form_contradicts_leaves_the_answer_unknown():
+    """A WHEN with no FIND is recorded only after an uppercase AT or under a
+    level heading, and any other card only otherwise."""
+    assert measurement_answer("line_AT", _LT26, "when").field == "at"
+    assert measurement_answer("table_level", _LT26, "when").field == "value"
+    for form, card in (("line_at", "when"), ("line_AT", "value"), ("table_level", "value")):
+        answer = measurement_answer(form, _LT26, card)  # type: ignore[arg-type]
+        assert answer.field is None and "deck's card" in str(answer.unknown)
+
+
+def test_an_unrecorded_form_or_simulator_leaves_the_answer_unknown():
+    for producer in (Producer("qspice", None, None), Producer("xyce", None, None)):
+        answer = measurement_answer("line_AT", producer, "when")
+        assert answer.field is None and "no recording" in str(answer.unknown)
+    for form in (None, "something_else"):
+        answer = measurement_answer(form, _LT26)
+        assert answer.field is None and "no recording" in str(answer.unknown)
+    answer = measurement_answer("line_AT", Producer("ngspice", None, None))
+    assert answer.field is None
+
+
+def test_a_failed_measurement_holds_no_number_in_either_field():
+    assert measurement_answer("failed", _UNKNOWN).field == "value"
+
+
+async def test_a_table_with_a_level_beside_a_point_is_a_form_no_recording_shows(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """A stepped WHEN's table printed with its level in the first column and
+    the crossing beside it under ``at`` (``ltspice_step_when.log``, written by
+    hand): LTspice prints the crossing alone under the level heading
+    (``log/meas_when_threshold_tran_step``). The field holding the result is
+    not known, so no number is given for it, and the measurement beside it
+    reads."""
+    log = work_dir / "step_when.log"
+    shutil.copyfile(FIXTURES_DIR / "ltspice_step_when.log", log)
+    reply = await dispatched(
+        state_no_sim,
+        "analyze_results",
+        sources=[{"path": str(log), "label": "log"}],
+        recipes=_RECIPE,
+        include={"fields": ["value"]},
+    )
+    (row,) = reply["results"]["m"]["values"]
+    value = row["value"]
+    assert set(value["answer_unknown"]) == {"tcross"}
+    assert "aggregated_field" not in value["stats"]["tcross"]
+    assert value["stats"]["tcross"]["valid_count"] == 0
+    assert value["stats"]["vfinal"]["aggregated_field"] == "value"
+    assert value["stats"]["vfinal"]["valid_count"] == 3
+    read = await asyncio.to_thread(lambda: SyncApi(state_no_sim).measurements(path=log))
+    assert "answer" not in read["measurements"]["tcross"]
+    assert read["measurements"]["vfinal"]["answer"] == "value"

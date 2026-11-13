@@ -216,6 +216,16 @@ class _MeasurementMetadata(TypedDict, total=False):
     at: float | list[float | None] | None
     unreadable: UnreadableValue
     failed_steps: list[int]
+    #: How the log printed the measurement (``log_parser.PrintedForm``), as the
+    #: decoder found it; a reader turns it into ``answer`` or
+    #: ``answer_unknown`` (``log_parser.answered_measurements``) and never
+    #: passes it on.
+    printed_form: str
+    #: The field holding the measurement's result, ``"value"`` (its
+    #: ``values``) or ``"at"``, as ``log_parser.measurement_answer`` decides.
+    answer: str
+    #: Why the field holding the result is not known, where it is not.
+    answer_unknown: str
 
 
 class MeasurementEntry(_MeasurementMetadata):
@@ -231,7 +241,10 @@ class MeasurementEntry(_MeasurementMetadata):
     threshold written as a parameter or an expression: the value is null, and
     only this entry fails. ``failed_steps`` lists the steps, from 0, whose row
     of a stepped table LTspice printed ``failed``; their values are null
-    (:func:`measurement_failed`).
+    (:func:`measurement_failed`). ``answer`` names the field holding the
+    result: ``at`` for a WHEN with no FIND printed on its own line, whose
+    ``values`` hold the level it searched for, and ``value`` otherwise;
+    ``answer_unknown`` says why it is not known in its place.
     """
 
     values: list[float | None]
