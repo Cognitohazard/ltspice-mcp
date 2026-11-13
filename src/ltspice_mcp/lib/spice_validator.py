@@ -24,7 +24,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Literal
 
-from ltspice_mcp.lib.deck_nodes import GROUND_NAMES, global_names, node_kind
+from ltspice_mcp.lib.deck_nodes import GROUND_NAMES, node_kind
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
@@ -42,8 +42,11 @@ from ltspice_mcp.lib.spice_lex_views import (
     ModelCard,
     SubcktCard,
     body_has_stray_kv_remnant,
+    global_names,
+    may_connect_nodes,
     probe_refs,
     read_instance,
+    unread_node_names,
 )
 
 # Analysis directives that LTspice accepts. Used by validate_netlist to
@@ -611,39 +614,16 @@ class _NodeUse:
 # expression (``B1 out 0 V={V(in)*2``) is one of its words too.
 # A bus name keeps its brackets (``V(d[0])*2`` holds ``d[0]``), and an index
 # may be a node too, so the words are taken both with and without them.
-_UNREAD_SEPARATORS = (
-    re.compile(r"[\s(){}'\",=]+"),
-    re.compile(r"[\s(){}\[\]'\",=]+"),
-)
-_UNREAD_OPERATORS = re.compile(r"[*/+\-<>^&|!?:;%]+")
-
-
-def may_connect_nodes(card: SpiceCard) -> bool:
-    """Whether ``card`` may connect nodes: an instance, a ``.SUBCKT`` header or
-    a ``.GLOBAL``. A directive that only names a node (``.save``, ``.meas``)
-    connects none."""
-    return card.kind in ("instance", "subckt") or directive_head(card) == ".global"
-
-
-def _unread_connectors(cards: list[SpiceCard]) -> list[tuple[SpiceCard, set[str]]]:
-    """Each card that may connect nodes (``may_connect_nodes``) but that no
-    rule could split into parts (``spice_lex.unreadable_cards``), with every
-    word on it, lowercased: as written between spaces (``d[0]``), split again
-    at parentheses, braces and separators, with and without square brackets,
-    and again at operators, since any of them may
-    be a node or a name the card connects or defines. The passes here may
-    only hide a warning, never make one on a guess, so they count each as
-    connected."""
-    found: list[tuple[SpiceCard, set[str]]] = []
-    for card, _error in unreadable_cards(cards):
-        if not may_connect_nodes(card):
-            continue
-        body = card.body.lower()
-        words = set(body.split())
-        words |= {word for split in _UNREAD_SEPARATORS for word in split.split(body) if word}
-        words |= {part for word in words for part in _UNREAD_OPERATORS.split(word) if part}
-        found.append((card, words))
-    return found
+def _unread_connectors(cards: list[SpiceCard]) -> list[tuple[SpiceCard, frozenset[str]]]:
+    """Each card that may connect nodes but that no rule could split into
+    parts, with the names it may still connect or define
+    (``spice_lex_views.unread_node_names``). The passes here may only hide a
+    warning, never make one on a guess, so they count each as connected."""
+    return [
+        (card, unread_node_names(card))
+        for card, _error in unreadable_cards(cards)
+        if may_connect_nodes(card)
+    ]
 
 
 def _scan_global_nodes(cards: list[SpiceCard]) -> set[str]:
@@ -663,7 +643,15 @@ def _scan_global_nodes(cards: list[SpiceCard]) -> set[str]:
 
 
 def _scope_ports(cards: list[SpiceCard]) -> dict[tuple[str, ...], tuple[str, ...]]:
-    """Each subcircuit body's scope, and the ports its header names."""
+    """Each subcircuit body's scope, and the ports its header names.
+
+    The validator reads a deck as LTspice reads it, and which of two
+    definitions of one name LTspice keeps is not recorded, so a body is read
+    by scope, both definitions' cards together, with the later header's
+    ports. ngspice keeps the first (``spice_lex.subckt_definitions``), which
+    the other readers ask; the difference is pinned in
+    tests/test_subckt_definition_in_force.py.
+    """
     ports: dict[tuple[str, ...], tuple[str, ...]] = {}
     for card in cards:
         if card.kind != "subckt":

@@ -42,6 +42,7 @@ from ltspice_mcp.lib.deck_staging import (
     DEFAULT_INCLUDE_DEPTH,
     card_sections,
     closure_depth,
+    in_other_section,
     resolve_existing,
     resolve_reference,
     scan_include_references,
@@ -389,7 +390,9 @@ class _FileIndex:
         if self.active is None:
             return True
         section = self.sections[card_index]
-        return section is None or section.casefold() in self.active
+        return section is None or any(
+            not in_other_section(section, entered) for entered in self.active
+        )
 
 
 def _index_files(files: Sequence[ClosureFile]) -> list[_FileIndex]:

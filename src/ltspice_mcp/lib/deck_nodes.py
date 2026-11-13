@@ -33,8 +33,6 @@ from __future__ import annotations
 from collections.abc import Collection
 from typing import Literal
 
-from ltspice_mcp.lib.spice_lex import SpiceCard, TokenKind, directive_head, tokenize_body
-
 #: Ground as a deck writes it, and as the readers name it.
 GROUND = "0"
 #: The names read as ground outside a subcircuit that has a port of the
@@ -66,19 +64,3 @@ def node_kind(
     if is_port:
         return "port"
     return "local"
-
-
-def global_names(card: SpiceCard) -> tuple[str, ...]:
-    """The node names a ``.global`` card lists, as written; none for any other
-    card. Raises ``SpiceLexError`` for a ``.global`` card whose parts cannot be
-    read, which each caller refuses or passes over by its own rule."""
-    if card.kind != "directive" or directive_head(card) != ".global":
-        return ()
-    tokens = tokenize_body(card.body)[1:]
-    names: list[str] = []
-    for token in tokens:
-        if token.kind == TokenKind.COMMENT_TRAIL:
-            break
-        if token.kind == TokenKind.BARE:
-            names.append(token.text)
-    return tuple(names)

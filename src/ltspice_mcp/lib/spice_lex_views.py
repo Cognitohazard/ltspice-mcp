@@ -1668,6 +1668,57 @@ def directive_args(card: SpiceCard) -> list[str]:
     return args
 
 
+def global_names(card: SpiceCard) -> tuple[str, ...]:
+    """The node names a ``.global`` card lists, as written; none for any other
+    card. A ``.global`` card that cannot be split into its parts is refused
+    (``unreadable_card``), which a caller may pass over by its own rule. Which
+    net each name stands for is ``deck_nodes.node_kind``'s answer."""
+    if card.kind != "directive" or directive_head(card) != ".global":
+        return ()
+    names: list[str] = []
+    for token in _parts(card)[1:]:
+        if token.kind == TokenKind.COMMENT_TRAIL:
+            break
+        if token.kind == TokenKind.BARE:
+            names.append(token.text)
+    return tuple(names)
+
+
+# ---------------------------------------------------------------------------
+# The node names a card that cannot be read still mentions
+# ---------------------------------------------------------------------------
+
+#: Where a word on a card that cannot be split into parts may end: written
+#: between spaces, split again at parentheses, braces and separators, with
+#: and without square brackets (``d[0]``).
+_UNREAD_SEPARATORS = (
+    re.compile(r"[\s(){}'\",=]+"),
+    re.compile(r"[\s(){}\[\]'\",=]+"),
+)
+_UNREAD_OPERATORS = re.compile(r"[*/+\-<>^&|!?:;%]+")
+
+
+def may_connect_nodes(card: SpiceCard) -> bool:
+    """Whether ``card`` may connect nodes: an instance, a ``.SUBCKT`` header or
+    a ``.GLOBAL``. A directive that only names a node (``.save``, ``.meas``)
+    connects none."""
+    return card.kind in ("instance", "subckt") or directive_head(card) == ".global"
+
+
+def unread_node_names(card: SpiceCard) -> frozenset[str]:
+    """Every name a card that cannot be split into its parts
+    (``spice_lex.unreadable_cards``) may still connect or define, lowercased:
+    each word as written between spaces, split again at parentheses, braces
+    and separators, with and without square brackets, and again at
+    operators. Which of them are its nodes is not known, so a reader that
+    must not report on a guess counts every one."""
+    body = card.body.lower()
+    words = set(body.split())
+    words |= {word for split in _UNREAD_SEPARATORS for word in split.split(body) if word}
+    words |= {part for word in words for part in _UNREAD_OPERATORS.split(word) if part}
+    return frozenset(words)
+
+
 def assigned_params(card: SpiceCard) -> list[tuple[str, Token]]:
     """Every ``name=value`` a ``.param`` card sets, in order, with its name as
     written: one card may set several (``.param a=1 b=2``), and each is a

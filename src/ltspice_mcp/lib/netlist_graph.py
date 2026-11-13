@@ -90,10 +90,11 @@ from typing import TypeVar
 
 from ltspice_mcp.errors import UnreadableCardError
 from ltspice_mcp.lib.asc_document import is_asc
-from ltspice_mcp.lib.deck_nodes import GROUND, global_names, node_kind
+from ltspice_mcp.lib.deck_nodes import GROUND, node_kind
 from ltspice_mcp.lib.deck_staging import (
     card_sections,
     closure_depth,
+    in_other_section,
     resolve_reference,
     scan_include_references,
 )
@@ -116,7 +117,7 @@ from ltspice_mcp.lib.spice_lex import (
     unreadable_cards,
 )
 from ltspice_mcp.lib.spice_lex_ops import without_section_sign
-from ltspice_mcp.lib.spice_lex_views import InstanceLine, SubcktCard
+from ltspice_mcp.lib.spice_lex_views import InstanceLine, SubcktCard, global_names
 
 # An include-path resolver: given the filesystem path an ``.include``/``.lib``
 # resolved to (base directory joined with the target, or an absolute target),
@@ -884,7 +885,7 @@ def _collect_subckts(
         name.casefold() for name in sections if name is not None
     }
     for index, (card, card_section) in enumerate(zip(cards, sections, strict=True)):
-        if wanted is not None and card_section is not None and card_section.casefold() != wanted:
+        if in_other_section(card_section, section):
             continue
         # Every directive here could be split into parts (checked above).
         registry.global_nets.update(name.lower() for name in global_names(card))

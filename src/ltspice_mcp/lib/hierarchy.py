@@ -17,10 +17,11 @@ from typing import Any, Literal, get_args
 
 from ltspice_mcp.errors import MultiplierRewriteStop, NetlistError
 from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES
-from ltspice_mcp.lib.deck_nodes import GROUND, global_names, node_kind
+from ltspice_mcp.lib.deck_nodes import GROUND, node_kind
 from ltspice_mcp.lib.deck_staging import (
     DEFAULT_INCLUDE_DEPTH,
     card_sections,
+    in_other_section,
     resolve_existing,
     resolve_reference,
     scan_include_references,
@@ -46,6 +47,7 @@ from ltspice_mcp.lib.spice_lex import (
     TokenKind,
     directive_head,
     find_matching_ends,
+    is_orphan_continuation,
     lex_deck,
 )
 from ltspice_mcp.lib.spice_lex_views import (
@@ -53,6 +55,7 @@ from ltspice_mcp.lib.spice_lex_views import (
     ModelCard,
     SubcktCard,
     card_tokens,
+    global_names,
     unreadable_card,
 )
 
@@ -396,16 +399,17 @@ def walk_active(
                     raise NetlistError(f"malformed .endl at {path}:{card.line_start}")
                 opened = None
                 continue
-            active = (
-                owner is None
-                if section is None
-                else owner is not None and owner.casefold() == section.casefold()
-            )
-            if not active:
+            if in_other_section(owner, section):
                 continue
-            if card.kind == "comment" and any(
-                line.lstrip().startswith("+") for line in card.raw_lines
-            ):
+            # Hierarchy discovery also leaves out the cards outside every
+            # section of a file pulled in for one, and the cards inside the
+            # sections of a file pulled in for none. No recording decides
+            # either, and the other readers of a library read them
+            # (``deck_staging.in_other_section``; pinned in
+            # tests/test_library_section_read.py).
+            if (owner is None) != (section is None):
+                continue
+            if is_orphan_continuation(card):
                 raise NetlistError(f"orphan continuation at {path}:{card.line_start}")
             if card.kind == "end":
                 break
