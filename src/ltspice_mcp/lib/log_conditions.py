@@ -491,7 +491,7 @@ _RULES: tuple[_Rule, ...] = (
     _Rule(
         None,
         _re(
-            r'^(?:binary raw file ".*"'
+            r'^(?:(?:binary|ASCII) raw file ".*"'
             r"|Doing analysis at TEMP = \S+ and TNOM = \S+"
             r"|Using SPARSE 1\.3 as Direct Linear Solver"
             r"|No\. of Data (?:Columns|Rows) : \d+"
