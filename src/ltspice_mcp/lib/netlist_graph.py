@@ -88,6 +88,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TypeVar
 
+from ltspice_mcp.errors import UnreadableCardError
 from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.deck_nodes import GROUND, global_names, node_kind
 from ltspice_mcp.lib.deck_staging import (
@@ -108,6 +109,7 @@ from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
     copies_by_name,
+    directive_head,
     iter_by_kind,
     lex_deck,
     subckt_children,
@@ -892,7 +894,11 @@ def _collect_subckts(
             except (SpiceLexError, NetlistGraphError) as exc:
                 if strict:
                     raise NetlistGraphError(
-                        f"malformed .SUBCKT: {exc}",
+                        # The refusal of a card that cannot be read already
+                        # says which card and what is wrong.
+                        str(exc)
+                        if isinstance(exc, UnreadableCardError)
+                        else f"malformed .SUBCKT: {exc}",
                         line=card.line_start,
                         card="".join(card.raw_lines).strip(),
                     ) from exc
@@ -936,8 +942,7 @@ def _definition_neutral(card: SpiceCard) -> bool:
     marker (``.lib <name>`` declaring one, ``.endl`` closing it)."""
     if card.kind in ("blank", "comment", "end", "subckt", "ends"):
         return True
-    head = card.body.split(None, 1)[0].casefold() if card.body.strip() else ""
-    return head in (".lib", ".endl")
+    return directive_head(card) in (".lib", ".endl")
 
 
 def _follow_include(

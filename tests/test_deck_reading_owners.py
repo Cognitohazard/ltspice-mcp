@@ -207,6 +207,303 @@ def test_the_plain_lex_rule_catches_what_it_names():
     assert _plain_lex_calls_in(tree) == {"deck", "outer.inner"}
 
 
+#: Functions outside the lexer that read a card's text themselves: its ``body``
+#: or ``raw_lines``, or ``tokenize_body`` or ``key_value_tokens`` on it. A fact
+#: about a card is asked of the lexer or a view in ``spice_lex_views``, so two
+#: readers cannot answer it differently. An entry gives the reason it reads
+#: the text: it shows the text, it is not a deck card, it writes cards back,
+#: or it is not yet moved, with the question it answers.
+_CARD_TEXT_READERS: dict[str, str] = {
+    "code_worker.py:execute": "not a deck card: a Python syntax tree's body",
+    "errors.py:UnreadableCardError.__init__": "the refusal keeps the tokenizer error's fields",
+    "lib/asc_document.py:Text.format": "not a deck card: a schematic TEXT line",
+    "lib/component_value.py:_apply_b_source": (
+        "moves to a view in a follow-up: an element card's fields (a B source's value)"
+    ),
+    "lib/component_value.py:_apply_indep_source": (
+        "moves to a view in a follow-up: an element card's fields (a source's value)"
+    ),
+    "lib/component_value.py:apply_value_to_instance": (
+        "a value the caller supplies, read against the card's own parts for an edit"
+    ),
+    "lib/deck_nodes.py:global_names": (
+        "moves to a view in a follow-up: a directive's arguments (the names .global lists)"
+    ),
+    "lib/deck_prep.py:_read_export": (
+        "an LTspice export scrubbed for ngspice's parser: which cards are .backanno"
+    ),
+    "lib/deck_staging.py:card_sections": (
+        "the library-section reader, beside the include scanner it must agree with"
+    ),
+    "lib/deck_staging.py:scan_include_references": (
+        "the include scanner: which file and section an include names"
+    ),
+    "lib/deck_staging.py:stage_deck.snapshot_file": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/experiment_inputs.py:_card_text": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/experiment_inputs.py:_refused_constructs": (
+        "moves to a view in a follow-up: which directive a card is, for recovery's refusals"
+    ),
+    "lib/experiment_inputs.py:_verify_inputs": (
+        "moves to a view in a follow-up: a .func card's name"
+    ),
+    "lib/guide.py:read": "not a deck card: a guide section",
+    "lib/hierarchy.py:_models": "a model's text, kept as the record of its definition",
+    "lib/hierarchy.py:_rewritten_for_m": "moves to a view in a follow-up: an element card's letter",
+    "lib/hierarchy.py:_rewritten_for_m.callee": (
+        "moves to a view in a follow-up: an element card's letter"
+    ),
+    "lib/hierarchy.py:resolve_hierarchy.expand": (
+        "an instance's text, kept as the record of its definition"
+    ),
+    "lib/hierarchy.py:walk_active.visit": (
+        "moves to a view in a follow-up: continuation handling (whether a library section "
+        "card is continued)"
+    ),
+    "lib/hierarchy_expr.py:evaluate": "not a deck card: a Python expression tree's body",
+    "lib/instance_targeting.py:TargetEditor._ancestry": (
+        "an edit writing cards back: line endings of the cards it moves"
+    ),
+    "lib/instance_targeting.py:TargetEditor._copy_includes": (
+        "an edit writing cards back: a rewritten include card replaces the old"
+    ),
+    "lib/instance_targeting.py:TargetEditor.clone_model": (
+        "an edit writing cards back: line endings of the cards it moves"
+    ),
+    "lib/instance_targeting.py:apply_edit": "a value the caller supplies, not a deck line",
+    "lib/instance_targeting.py:validate_payload": "a value the caller supplies, not a deck line",
+    "lib/library_parser.py:parse_library_file": (
+        "a model library's definitions kept as written text"
+    ),
+    "lib/lint_rules.py:_analysis_count_ltspice": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/lint_rules.py:_include_relative": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/lint_rules.py:_lib_section_ltspice": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/lint_rules.py:_lib_section_ngspice": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/lint_rules.py:_meas_function_ltspice": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/lint_rules.py:_meas_name_ltspice": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/lint_rules.py:_meas_ngspice_batch": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/lint_rules.py:_meas_trig_degrees": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/lint_rules.py:_model_missing": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/lint_rules.py:_node_control_byte_ltspice": (
+        "the bytes of an instance card, for the control-byte rule"
+    ),
+    "lib/lint_rules.py:_save_meas_coverage": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/lint_rules.py:_save_pattern_unrecorded": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/lint_rules.py:_step_ngspice": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/lint_rules.py:_step_without_values_ltspice": (
+        "moves to a view in a follow-up: a directive's arguments (.step)"
+    ),
+    "lib/lint_rules.py:_suffix_mega_milli": (
+        "moves to a view in a follow-up: free-text scan of a body for value suffixes"
+    ),
+    "lib/lint_rules.py:_temp_as_param": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/lint_rules.py:_unreadable_card": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/lint_rules.py:_value_suffix_findings": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/montecarlo.py:rewrite_instance_model": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/native_inputs.py:_assignments": (
+        "the native PDK profile: its removal is decided, so it is left as it is"
+    ),
+    "lib/netlist_diff.py:_canonical_words": (
+        "moves to a view in a follow-up: a card's words for comparison"
+    ),
+    "lib/netlist_diff.py:_directive_of": (
+        "moves to a view in a follow-up: which directive a card is"
+    ),
+    "lib/netlist_diff.py:parse_directive": (
+        "moves to a view in a follow-up: which directive a card is, and an include's target"
+    ),
+    "lib/netlist_graph.py:_collect_subckts": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/ngspice_driver.py:seed_option": (
+        "moves to a view in a follow-up: a directive's arguments (.options seed)"
+    ),
+    "lib/pdk_native.py:_owned_parameters": (
+        "pdk_native: its removal is decided, so it is left as it is"
+    ),
+    "lib/pdk_native.py:_validate_controls": (
+        "pdk_native: its removal is decided, so it is left as it is"
+    ),
+    "lib/pdk_native.py:validate_sample": (
+        "pdk_native: its removal is decided, so it is left as it is"
+    ),
+    "lib/plot_settings.py:render_plot_settings": "not a deck card: a .plt section",
+    "lib/result_observations.py:parse_source_amplitudes": (
+        "moves to a view in a follow-up: the names a .param sets (it also reads .params, "
+        "which no recording covers)"
+    ),
+    "lib/runner_base.py:_blank_or_comment": (
+        "moves to a view in a follow-up: continuation and comment handling"
+    ),
+    "lib/runner_base.py:_deck_has_sectioned_lib": (
+        "moves to a view in a follow-up: the target and section of a .lib"
+    ),
+    "lib/runner_base.py:inject_logopinfo": (
+        "moves to a view in a follow-up: free-text scan of a body (logopinfo)"
+    ),
+    "lib/runner_base.py:inject_ngspice_control_write": (
+        "moves to a view in a follow-up: continuation and comment handling in a control block"
+    ),
+    "lib/schematic_ops.py:_apply_component_value": "a value the caller supplies, not a deck line",
+    "lib/schematic_ops.py:_replace_param": "a value the caller supplies, not a deck line",
+    "lib/schematic_ops.py:_set_source_value": "a value the caller supplies, not a deck line",
+    "lib/schematic_ops.py:_validate_component_value": (
+        "a value the caller supplies, not a deck line"
+    ),
+    "lib/schematic_scene.py:_place_symbol": "not a deck card: a symbol drawing",
+    "lib/schematic_scene.py:scene_of_sheet": "not a deck card: a schematic TEXT",
+    "lib/schematic_scene.py:sheet_view": "not a deck card: a symbol drawing",
+    "lib/services.py:extract_netlist_info": (
+        "moves to a view in a follow-up: an element card's fields (a key=value left over)"
+    ),
+    "lib/sheet.py:_placed": "not a deck card: a symbol file",
+    "lib/sheet_findings.py:Part.drawn": "not a deck card: a symbol drawing",
+    "lib/sheet_findings.py:_duplicate_parameters": "a schematic part's attribute, not a deck line",
+    "lib/spice_validator.py:_card_directive": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/spice_validator.py:_unread_connectors": (
+        "moves to a view in a follow-up: free-text scan of a body for names"
+    ),
+    "lib/spice_validator.py:meas_unclosed_paren_refused": (
+        "which cards cannot be read, as the tokenizer answers it"
+    ),
+    "lib/spice_validator.py:validate_directive_card": (
+        "moves to a view in a follow-up: a directive's arguments (.tran and .step)"
+    ),
+    "lib/spice_validator.py:validate_netlist_arity": (
+        "moves to a view in a follow-up: an element card's fields (a key=value left over)"
+    ),
+    "lib/spice_validator.py:validate_netlist_directive_refs": (
+        "moves to a view in a follow-up: which directive a card is (.func, and .function, "
+        "which no recording covers)"
+    ),
+    "lib/spice_validator.py:validate_netlist_duplicate_params": (
+        "moves to a view in a follow-up: free-text scan of a body"
+    ),
+    "lib/subckt_mismatch.py:_append_to_code": (
+        "an edit writing a card back: where its comment starts"
+    ),
+    "lib/subckt_mismatch.py:_deck_scale": (
+        "moves to a view in a follow-up: a directive's arguments (.options scale, and "
+        ".opt, which no recording covers)"
+    ),
+    "lib/subckt_mismatch.py:_render_clone": (
+        "an edit writing cards back: a subcircuit block copied as written"
+    ),
+    "lib/symbol_file.py:SymbolFile.bbox": "not a deck card: a symbol drawing",
+    "lib/variations.py:_closure_model_card": (
+        "a model card copied as written, for a per-device variant"
+    ),
+    "lib/variations.py:_unread_declarations": (
+        "the names a card that cannot be read may declare, which no view reads"
+    ),
+    "tools/inspect_tools.py:_components_netlist_payload": (
+        "moves to a view in a follow-up: an element card's fields (a key=value left over)"
+    ),
+    "tools/verify.py:_meas_angle_findings": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "tools/verify.py:_syntax_findings": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "tools/verify.py:_value_suffix_findings": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+}
+
+_OWNERS = frozenset({"lib/spice_lex.py", "lib/spice_lex_ops.py", "lib/spice_lex_views.py"})
+_TEXT_ATTRIBUTES = frozenset({"body", "raw_lines"})
+_TEXT_READERS = frozenset({"tokenize_body", "key_value_tokens"})
+
+
+def _card_text_reads_in(tree: ast.AST) -> set[str]:
+    """The functions in ``tree`` that read a card's text in their own body."""
+    found: set[str] = set()
+    for name, function in _functions(tree):
+        pending = list(ast.iter_child_nodes(function))
+        while pending:
+            node = pending.pop()
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                continue
+            pending.extend(ast.iter_child_nodes(node))
+            if (
+                isinstance(node, ast.Attribute)
+                and node.attr in _TEXT_ATTRIBUTES
+                and isinstance(node.ctx, ast.Load)
+            ):
+                found.add(name)
+            elif isinstance(node, ast.Call):
+                callee = node.func
+                called = callee.id if isinstance(callee, ast.Name) else getattr(callee, "attr", "")
+                if called in _TEXT_READERS:
+                    found.add(name)
+    return found
+
+
+def test_a_cards_text_is_read_only_by_the_lexer_and_its_views():
+    readers = {
+        f"{module}:{name}"
+        for module, tree in modules().items()
+        if module not in _OWNERS
+        for name in _card_text_reads_in(tree)
+    }
+    assert readers == set(_CARD_TEXT_READERS)
+
+
+def test_the_card_text_rule_catches_what_it_names():
+    tree = ast.parse(
+        "def head(card):\n"
+        "    return card.body.split()[0]\n"
+        "def lines(card):\n"
+        "    return len(card.raw_lines)\n"
+        "def parts(card):\n"
+        "    return spice_lex.tokenize_body(card.body)\n"
+        "def pairs(text):\n"
+        "    return key_value_tokens(text)\n"
+        "def write(card):\n"
+        "    card.body = ''\n"
+        "def view(card):\n"
+        "    return ModelCard.from_card(card).params\n"
+    )
+    assert _card_text_reads_in(tree) == {"head", "lines", "parts", "pairs"}
+
+
 # --------------------------------------------------------------------------
 # Which file and section an include names is read by staging's scanner
 # --------------------------------------------------------------------------

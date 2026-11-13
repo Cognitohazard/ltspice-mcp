@@ -23,11 +23,9 @@ from ltspice_mcp.lib.simulator import DEFAULT_FAMILY, family_for, run_ngbehavior
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
-    TokenKind,
     directive_head,
     lex,
     lex_deck,
-    tokenize_body,
     unreadable_cards,
 )
 from ltspice_mcp.lib.spice_lex_ops import MICRO_SIGN_READERS, ValueSuffixSite, value_suffix_sites
@@ -35,6 +33,7 @@ from ltspice_mcp.lib.spice_lex_views import (
     InstanceLine,
     MeasCard,
     ProbeRef,
+    assigned_params,
     probe_is_pattern,
     probe_refs,
     read_instance,
@@ -787,13 +786,10 @@ def _temp_as_param(
         if card.kind != "param":
             continue
         try:
-            tokens = tokenize_body(card.body)
+            names = [name for name, _token in assigned_params(card)]
         except SpiceLexError:
             # The unreadable-card rule reports it; the names it sets are not known.
             continue
-        names = [
-            token.key for token in tokens[1:] if token.kind == TokenKind.KEY_VALUE and token.key
-        ]
         if not any(name.casefold() == "temp" for name in names):
             continue
         findings.append(

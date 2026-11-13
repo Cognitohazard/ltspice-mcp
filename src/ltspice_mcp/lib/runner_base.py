@@ -50,6 +50,7 @@ from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
     control_blocks,
+    directive_head,
     emit,
     lex_deck,
     lex_for_edit,
@@ -179,10 +180,9 @@ def _deck_items(path: Path, *, root: bool) -> tuple[_DeckItem, ...]:
         if card.kind == "control":
             items.append(("control", ""))
             continue
-        parts = card.body.split(None, 1)
-        if card.kind != "directive" or not parts:
+        if card.kind != "directive":
             continue
-        head = parts[0].lower()
+        head = directive_head(card)
         if head in _REQUESTED_ANALYSES:
             items.append(("analysis", head))
         elif head == ".save":

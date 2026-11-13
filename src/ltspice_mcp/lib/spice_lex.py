@@ -295,12 +295,47 @@ def _closing_quote(body: str, i: int, where: str = "") -> int:
     return end
 
 
+def _refuse_unclosed_paren(body: str, start: int) -> None:
+    """Raise for the ``(`` at ``start`` when no ``)`` closes it, counting
+    parentheses alone. A brace that fails inside an open parenthesis is then
+    reported as the parenthesis left open, the fault a reader asks about
+    (``spice_validator.meas_unclosed_paren_refused``), not as the brace."""
+    depth = 0
+    i = start
+    while i < len(body):
+        c = body[i]
+        if c in ('"', "'"):
+            end = body.find(c, i + 1)
+            if end < 0:
+                return  # a quote left open: that is the fault, not the parenthesis
+            i = end + 1
+            continue
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return
+        i += 1
+    raise SpiceLexError(
+        SpiceLexErrorCategory.UNBALANCED_PAREN,
+        "unterminated (...)",
+        position=start,
+        body=body,
+        suggestion="check for a missing ) matching the (",
+    )
+
+
 def _scan_balanced(body: str, start: int, opener: str, closer: str) -> int:
     """Return the index of the matching ``closer`` for ``body[start] == opener``.
 
-    ``{`` and ``(`` nest independently inside their own kind; quoted
-    strings inside them are skipped as opaque. Raises ``SpiceLexError``
-    on unbalanced input.
+    ``{`` and ``(`` nest inside their own kind; quoted strings inside them are
+    skipped as opaque. A brace's contents are one value, read as an
+    expression, so a parenthesis inside it is the expression's own. A
+    parenthesis group's contents are parts of the card, which a view splits
+    again (a ``.model`` card's parameters, a function's arguments), so a
+    brace opened inside one closes before it: ``(is={1e-14)`` is as
+    unreadable as ``is={1e-14``. Raises ``SpiceLexError`` on unbalanced input.
     """
     assert body[start] == opener
     depth = 1
@@ -311,6 +346,22 @@ def _scan_balanced(body: str, start: int, opener: str, closer: str) -> int:
         if c == '"' or c == "'":
             i = _closing_quote(body, i, f" inside {opener}...{closer}") + 1
             continue
+        if opener == "(" and c == "{":
+            try:
+                i = _scan_balanced(body, i, "{", "}") + 1
+            except SpiceLexError:
+                _refuse_unclosed_paren(body, start)
+                raise
+            continue
+        if opener == "(" and c == "}":
+            _refuse_unclosed_paren(body, start)
+            raise SpiceLexError(
+                SpiceLexErrorCategory.UNEXPECTED_CHAR,
+                "unexpected '}' (no matching opener)",
+                position=i,
+                body=body,
+                suggestion="check for a missing opening { earlier in the body",
+            )
         if c == opener:
             depth += 1
         elif c == closer:

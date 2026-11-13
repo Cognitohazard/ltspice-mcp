@@ -26,7 +26,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import math
-import re
 from collections.abc import Callable, Collection, Coroutine, Sequence
 from pathlib import Path
 from typing import Any, Literal, NoReturn, TypeAlias
@@ -672,13 +671,6 @@ def operating_point_flat(value: dict[str, Any]) -> dict[str, Any]:
 # .MEAS aggregation helpers
 # ---------------------------------------------------------------------------
 
-_RE_MEAS_WHEN = re.compile(r"\bwhen\b", re.IGNORECASE)
-_RE_MEAS_FIND = re.compile(r"\bfind\b", re.IGNORECASE)
-_RE_MEAS_HEAD = re.compile(
-    r"^\.meas(?:ure)?(?:\s+(?:tran|ac|dc|op|sp|fft|noise))?\s+(?P<name>[A-Za-z0-9_$]+)",
-    re.IGNORECASE,
-)
-
 
 def diagnostics_block(diags: list[str], empty_note: str) -> str:
     """Indent diagnostic lines for an error payload, or fall back to
@@ -711,15 +703,18 @@ def meas_kinds_from_netlist(netlist: Path | None) -> dict[str, str]:
         cards = lex_deck(read_spice_text(netlist)).cards
     except Exception:
         return {}
+    from ltspice_mcp.lib.spice_lex import SpiceLexError
+    from ltspice_mcp.lib.spice_lex_views import MeasCard
+
     kinds: dict[str, str] = {}
     for card in cards:
-        body = card.body
-        m = _RE_MEAS_HEAD.match(body)
-        if not m:
+        if card.kind != "meas":
             continue
-        rest = body[m.end() :]
-        is_bare_when = bool(_RE_MEAS_WHEN.search(rest)) and not _RE_MEAS_FIND.search(rest)
-        kinds[m.group("name").lower()] = "when" if is_bare_when else "value"
+        try:
+            meas = MeasCard.from_card(card)
+        except SpiceLexError:
+            continue  # a card no rule reads: its name falls back to the heuristic
+        kinds[meas.name.lower()] = "when" if meas.bare_when else "value"
     return kinds
 
 
@@ -891,9 +886,6 @@ def measurement_step_values(
     return step_values
 
 
-_RE_NOISE_HEAD = re.compile(r"^[ \t]*\.noise\s+(?P<out>\S+)\s+(?P<src>\S+)", re.IGNORECASE)
-
-
 def noise_input_source_unit(netlist: Path | None) -> str | None:
     """SI unit implied by a ``.NOISE`` directive's input-source refdes.
 
@@ -921,12 +913,21 @@ def noise_input_source_unit(netlist: Path | None) -> str | None:
         cards = lex_deck(read_spice_text(netlist)).cards
     except Exception:
         return None
+    from ltspice_mcp.lib.spice_lex import SpiceLexError, directive_head
+    from ltspice_mcp.lib.spice_lex_views import directive_args
+
     units: set[str | None] = set()
     for card in cards:
-        m = _RE_NOISE_HEAD.match(card.body)
-        if not m:
+        if card.kind != "directive" or directive_head(card) != ".noise":
             continue
-        prefix = m.group("src")[:1].upper()
+        try:
+            args = directive_args(card)
+        except SpiceLexError:
+            units.add(None)  # which source it names is not known: ambiguous
+            continue
+        if len(args) < 2:
+            continue
+        prefix = args[1][:1].upper()
         units.add("V" if prefix == "V" else "A" if prefix == "I" else None)
     # Resolve only when every .NOISE directive agrees on one recognized type;
     # otherwise it's ambiguous and we let the trace-derived unit stand.

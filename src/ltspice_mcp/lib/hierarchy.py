@@ -43,14 +43,18 @@ from ltspice_mcp.lib.pathutil import resolve_safe_path, with_roots
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
-    Token,
     TokenKind,
     directive_head,
     find_matching_ends,
     lex_deck,
-    tokenize_body,
 )
-from ltspice_mcp.lib.spice_lex_views import InstanceLine, ModelCard, SubcktCard
+from ltspice_mcp.lib.spice_lex_views import (
+    InstanceLine,
+    ModelCard,
+    SubcktCard,
+    card_tokens,
+    unreadable_card,
+)
 
 MAX_BYTES = 16 * 1024 * 1024
 MAX_CARDS = 100_000
@@ -286,47 +290,22 @@ class _Definition:
     closer: Source
 
 
-def _unreadable(card: SpiceCard, error: SpiceLexError, where: object = None) -> NetlistError:
-    """The refusal of a card the hierarchy needs but cannot split into its
-    parts (``spice_lex.unreadable_cards``), with its line and the fix."""
-    at = f"{where}:{card.line_start}" if where is not None else f"line {card.line_start}"
-    fix = f" {error.suggestion[:1].upper()}{error.suggestion[1:]}." if error.suggestion else ""
-    return NetlistError(f"cannot split the card at {at} into its parts: {error.message}.{fix}")
-
-
 def _refuse_unreadable_references(cards: list[SpiceCard], path: Path) -> None:
     """Refuse an include or library card that cannot be split into parts,
     before the include and section readers raise on it: which file or
     section it opens is not known."""
     for card, error in unreadable_references(cards):
-        raise _unreadable(card, error, path)
-
-
-def _tokens(card: SpiceCard, where: str | None = None) -> list[Token]:
-    """A card's parts, or its refusal by ``where`` (its file) and line."""
-    try:
-        tokens = tokenize_body(card.body)
-    except SpiceLexError as exc:
-        raise _unreadable(card, exc, where) from exc
-    return [t for t in tokens if t.kind != TokenKind.COMMENT_TRAIL]
+        raise unreadable_card(card, error, path)
 
 
 def _assignments(
     card: SpiceCard, *, only: bool = False, where: str | None = None
 ) -> dict[str, str]:
     result: dict[str, str] = {}
-    tokens = _tokens(card, where)[1:]
+    tokens = card_tokens(card, where)[1:]
     if card.kind == "model":
-        try:
-            tokens = [
-                inner
-                for token in tokens
-                for inner in (
-                    tokenize_body(token.text[1:-1]) if token.kind == TokenKind.PARENED else [token]
-                )
-            ]
-        except SpiceLexError as exc:  # inside its parameter list: D(is={1e-14)
-            raise _unreadable(card, exc, where) from exc
+        # Its parameter list's own parts, as the model view reads them.
+        tokens = ModelCard.from_card(card).param_tokens()
     for token in tokens:
         if token.kind == TokenKind.KEY_VALUE:
             assert token.key is not None and token.value is not None
@@ -399,7 +378,7 @@ def walk_active(
             # walk does not need (``.tran 0 1m )``) cannot stop it.
             head = directive_head(card)
             if head == ".lib" and id(card) not in refs:
-                tokens = _tokens(card, str(path))
+                tokens = card_tokens(card, path)
                 if len(tokens) != 2 or opened is not None:
                     raise NetlistError(f"malformed library section at {path}:{card.line_start}")
                 opened = unquote(tokens[1].text).casefold()
@@ -408,7 +387,7 @@ def walk_active(
                 declared.add(opened)
                 continue
             if head == ".endl":
-                tokens = _tokens(card, str(path))
+                tokens = card_tokens(card, path)
                 if (
                     opened is None
                     or len(tokens) > 2
@@ -647,7 +626,7 @@ def _card_multiplier(
 def _shape(card: SpiceCard, where: str | None = None) -> tuple[InstanceLine, bool]:
     _assignments(card, where=where)  # first, so a card it cannot split is refused by its line
     view = InstanceLine.from_card(card)
-    tokens = _tokens(card)[1:]
+    tokens = card_tokens(card)[1:]
     if view.source is not None:
         # A V or I source: the source rule reads every word after its nodes as
         # its value or one of its own parameters, a PWL's ``TIME_SCALE_FACTOR=``
@@ -731,7 +710,7 @@ def resolve_hierarchy(
             _assignments(card, where=item.source.path)
             view = SubcktCard.from_card(card)
             parameters_started = False
-            for token in _tokens(card)[2:]:
+            for token in card_tokens(card)[2:]:
                 if token.kind == TokenKind.KEY_VALUE or token.text.casefold() == "params:":
                     parameters_started = True
                 elif parameters_started or token.kind != TokenKind.BARE:
@@ -740,7 +719,7 @@ def resolve_hierarchy(
             if end is None:
                 raise NetlistError(f"unclosed subcircuit {view.name}")
             closer = cards[end]
-            if len(_tokens(closer, occurrences[end].source.path)) > 2:
+            if len(card_tokens(closer, occurrences[end].source.path)) > 2:
                 raise NetlistError(f"malformed .ends for {view.name}")
             if closer.name and closer.name.casefold() != view.name.casefold():
                 raise NetlistError(f"mismatched .ends for {view.name}")
@@ -790,7 +769,7 @@ def resolve_hierarchy(
             try:
                 listed = global_names(item.card)
             except SpiceLexError as exc:
-                raise _unreadable(item.card, exc, item.source.path) from exc
+                raise unreadable_card(item.card, exc, item.source.path) from exc
             for text in listed:
                 globals_.setdefault(text.casefold(), text)
         if head in {".option", ".options"}:

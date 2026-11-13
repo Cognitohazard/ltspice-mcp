@@ -71,7 +71,7 @@ from ltspice_mcp.lib.spice_lex import (
     tokenize_body,
 )
 from ltspice_mcp.lib.spice_lex_ops import inject_cards_before_end, rename_subckt
-from ltspice_mcp.lib.spice_lex_views import InstanceLine, ModelCard, SubcktCard
+from ltspice_mcp.lib.spice_lex_views import InstanceLine, ModelCard, SubcktCard, assigned_params
 
 logger = logging.getLogger(__name__)
 
@@ -1052,9 +1052,7 @@ def _declared_params(clone_cards: list[SpiceCard]) -> set[str]:
     depth = len(opener.scope) + 1
     for card in clone_cards:
         if card.kind == "param" and len(card.scope) == depth:
-            for token in tokenize_body(card.body)[1:]:
-                if token.kind == TokenKind.KEY_VALUE and token.key:
-                    declared.add(token.key.casefold())
+            declared.update(name.casefold() for name, _token in assigned_params(card))
     return declared
 
 

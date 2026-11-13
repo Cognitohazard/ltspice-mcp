@@ -27,6 +27,7 @@ from ltspice_mcp.errors import (
     RecipeInvalidError,
     ResultError,
     SimulationError,
+    UnreadableCardError,
     UnsupportedFileError,
     raise_site_code,
 )
@@ -999,6 +1000,19 @@ async def handle_run_experiments(
             budget=budget,
             state=state,
         )
+    except UnreadableCardError as exc:
+        # A card of the deck cannot be read: sending it again unchanged fails
+        # the same way, and the message names the card and the fix.
+        return await _error_response(
+            args.request_id,
+            code=exc.code,
+            failure=exc,
+            stage="validate",
+            retryable=False,
+            commit_state="not_started",
+            budget=budget,
+            state=state,
+        )
     except (SimulationError, ResultError, DeckStagingError, OSError, ValueError) as exc:
         return await _error_response(
             args.request_id,
@@ -1616,7 +1630,7 @@ def _append_terminal_cases(
 
 
 def _circuit_error(exc: Exception, source_path: Path) -> tuple[str, str]:
-    if isinstance(exc, (VariationError, DeckStagingError, MismatchPlanError)):
+    if isinstance(exc, (VariationError, DeckStagingError, MismatchPlanError, UnreadableCardError)):
         return exc.code, str(exc)
     if is_asc(source_path) and isinstance(exc, SimulationError):
         return "asc_export_unavailable", str(exc)

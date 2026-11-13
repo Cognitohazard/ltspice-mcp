@@ -40,6 +40,7 @@ from ltspice_mcp.lib.spice_lex import (
     SpiceLexError,
     Token,
     TokenKind,
+    directive_head,
     lex_for_edit,
     tokenize_body,
 )
@@ -667,8 +668,7 @@ def _verify_inputs(
             for key in file_keys.values()
             for card in cards_by_content[key].read
             if card.kind == "directive"
-            if (head := card.body.split(maxsplit=1)[0].casefold())
-            in {".op", ".ac", ".dc", ".tran", ".noise", ".step"}
+            if (head := directive_head(card)) in {".op", ".ac", ".dc", ".tran", ".noise", ".step"}
         ]
         if len(analyses) != 1 or analyses[0] not in {".op", ".ac", ".dc", ".tran"}:
             refused.append(

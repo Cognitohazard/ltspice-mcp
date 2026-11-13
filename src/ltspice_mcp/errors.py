@@ -6,6 +6,8 @@ from typing import Any, ClassVar
 
 from pydantic import ValidationError
 
+from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError
+
 _MAX_VALIDATION_ERRORS = 6
 
 
@@ -276,6 +278,45 @@ class NetlistError(LTSpiceMCPError):
     """Invalid netlist or component reference."""
 
     code = "netlist_invalid"
+
+
+class UnreadableCardError(NetlistError, SpiceLexError):
+    """A card that a reading needs cannot be split into its parts: a quote,
+    brace or parenthesis left open, or a closer with nothing open.
+
+    Every reader of a card raises this one type, built by
+    ``spice_lex_views.unreadable_card``, so the refusal names the file, the
+    line, the card as written, what is wrong and the fix whichever tool met
+    the card. It is a ``SpiceLexError`` too, carrying the tokenizer's
+    category, position and suggestion, so a reader that answers for an
+    unreadable card in its own way still catches it. The message says the
+    fix, so the netlist family's hint is not added."""
+
+    code = "card_unreadable"
+    takes_family_hint = False
+
+    def __init__(
+        self,
+        message: str,
+        error: SpiceLexError,
+        *,
+        card: SpiceCard,
+        source: str | None,
+    ):
+        Exception.__init__(self, message)
+        self.suggestions = []
+        self.show_hint = True
+        self.python_route = False
+        self.category = error.category
+        self.position = error.position
+        self.body = error.body
+        self.suggestion = error.suggestion
+        self.message = error.message
+        self.card = card
+        self.source = source
+
+    def __str__(self) -> str:
+        return str(self.args[0])
 
 
 class MultiplierRewriteStop(NetlistError):

@@ -118,11 +118,17 @@ async def test_backend_default_body_precedence(state_no_sim, hierarchy_deck, sim
         ("R1 a 0 1k x=2 bad", "unsupported tokens"),
         # A card it needs but cannot split into parts is refused by its line,
         # with the fix, not with the lexer's error.
-        ("R1 a 0 {1k", "invalid.cir:2 into its parts: unterminated {...}."),
+        ("R1 a 0 {1k", "line 2 of {path}, 'R1 a 0 {1k': unterminated {...}."),
         (".param a={1\nR1 a 0 {a}", "Check for a missing } matching the {."),
-        ('.include "absent.inc', "invalid.cir:2 into its parts: unterminated quoted string."),
+        (
+            '.include "absent.inc',
+            "line 2 of {path}, '.include \"absent.inc': unterminated quoted string.",
+        ),
         # Left open inside its parameter list, which the card's own split leaves whole.
-        (".model DX D(is={1e-14)\nR1 a 0 1k", "invalid.cir:2 into its parts: unterminated {...}."),
+        (
+            ".model DX D(is={1e-14)\nR1 a 0 1k",
+            "line 2 of {path}, '.model DX D(is={1e-14)': unterminated {...}.",
+        ),
     ],
 )
 async def test_structural_refusals_are_isolated(state_no_sim, work_dir, body, message):
@@ -136,7 +142,7 @@ async def test_structural_refusals_are_isolated(state_no_sim, work_dir, body, me
         ],
     )
     assert not bad["ok"], bad
-    assert message in bad["error"]["message"]
+    assert message.replace("{path}", str(path)) in bad["error"]["message"]
     assert good["ok"], good
 
 
@@ -151,7 +157,8 @@ async def test_a_card_it_cannot_split_in_an_include_is_refused_by_that_file(
     result = await _inspect(state_no_sim, path)
 
     assert not result["ok"], result
-    assert "sub.inc:3 into its parts" in result["error"]["message"], result
+    assert result["error"]["code"] == "card_unreadable", result
+    assert f"line 3 of {work_dir / 'sub.inc'}, 'R1 a 0 {{1k'" in result["error"]["message"], result
 
 
 async def test_a_directive_the_hierarchy_does_not_need_cannot_stop_it(state_no_sim, work_dir):
