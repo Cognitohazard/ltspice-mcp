@@ -21,7 +21,7 @@ from typing import Literal
 
 from ltspice_mcp.errors import NetlistError, UnreadableCardError
 from ltspice_mcp.lib.format import format_spice_value as _format_value
-from ltspice_mcp.lib.format import is_scaled_number, parse_spice_value
+from ltspice_mcp.lib.format import is_scaled_number, parse_spice_value, plain_number
 from ltspice_mcp.lib.spice_lex import (
     MEAS_ANALYSIS_TOKENS,
     SpiceCard,
@@ -57,8 +57,9 @@ def unreadable_card(
     The one refusal for such a card, so a malformed card reads the same
     whichever tool meets it."""
     if isinstance(error, UnreadableCardError):
-        if error.source is not None or source is None:
+        if (error.source is not None or source is None) and not why:
             return error
+        source = error.source if source is None else source
         error = SpiceLexError(
             error.category,
             error.message,
@@ -338,12 +339,9 @@ class ModelCard:
         the one the simulator reads."""
         out: dict[str, float] = {}
         for key, value in self._params.pairs:
-            if not value.strip() or "{" in value or "(" in value:
-                continue
-            try:
-                out[key.upper()] = parse_spice_value(value)
-            except ValueError:
-                continue
+            number = plain_number(value)
+            if number is not None:
+                out[key.upper()] = number
         return out
 
     def repeated_params(self) -> dict[str, list[str]]:
@@ -1651,8 +1649,9 @@ def directive_args(card: SpiceCard) -> list[str]:
     written: ``.noise V(out) V1 dec 10 1 1Meg`` gives ``V(out)``, ``V1``,
     ``dec`` and so on, and ``.four 1k V(out, ref)`` gives ``1k`` and
     ``V(out, ref)``. Words written together are one argument, so a probe or
-    a function call is one, whatever spaces its parentheses hold. Its
-    comment is no argument. A card that cannot be split into its parts is
+    a function call is one, whatever spaces its parentheses hold, and so is
+    a ``key = value`` written with spaces around its ``=`` (``.options
+    gmin = 1e-12`` gives ``gmin = 1e-12``). Its comment is no argument. A card that cannot be split into its parts is
     refused (``unreadable_card``)."""
     args: list[str] = []
     end = None

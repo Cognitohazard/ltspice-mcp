@@ -24,7 +24,7 @@ from pydantic import (
     model_validator,
 )
 
-from ltspice_mcp.errors import MultiplierRewriteStop, NetlistError
+from ltspice_mcp.errors import MultiplierRewriteStop, NetlistError, UnreadableCardError
 from ltspice_mcp.lib import RUN_DECK_SUFFIXES, atomic_write_bytes, component_value
 from ltspice_mcp.lib.deck_staging import (
     card_sections,
@@ -1971,22 +1971,25 @@ def _set_param_value_on_cards(
     )
 
 
-def _instance_view(card: SpiceCard, ref: str, what: str) -> InstanceLine:
+def _instance_view(
+    card: SpiceCard, ref: str, what: str, source: object = None
+) -> InstanceLine:
     """Read an instance card, naming the reference when the card will not parse.
 
     A declaration the tokenizer refuses is skipped while the target index is
     built, so the ambiguity guards never see it and cannot tell whether it is a
     second declaration of the reference they cleared. The writer meets it
-    anyway, and has to say which reference it was rather than surface a raw
-    tokenizer fault from underneath a Monte Carlo.
+    anyway, and refuses it as any reader refuses such a card
+    (``spice_lex_views.unreadable_card``), saying which reference it was.
     """
     try:
         return InstanceLine.from_card(card)
-    except ValueError as exc:
-        raise VariationError(
-            "ambiguous_target",
-            f"{what} {ref!r} has a declaration on line {card.line_start} that could not "
-            f"be read ({exc}), so it cannot be resolved to one declaration",
+    except UnreadableCardError as exc:
+        raise unreadable_card(
+            card,
+            exc,
+            source,
+            why=f"The {what.lower()} {ref!r} cannot be resolved to one declaration.",
         ) from exc
 
 
@@ -2296,7 +2299,7 @@ def _apply_component_rule(
     for card in lexed.read:
         if card.kind != "instance" or not card.name or card.name.casefold() not in refs:
             continue
-        view = _instance_view(card, card.name, "Random component target")
+        view = _instance_view(card, card.name, "Random component target", file.path.name)
         nominal = parse_value(view.value or "")
         if nominal is None:
             raise VariationError(

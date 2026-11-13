@@ -295,6 +295,37 @@ def _closing_quote(body: str, i: int, where: str = "") -> int:
     return end
 
 
+def _refuse_unclosed_paren(body: str, start: int) -> None:
+    """Raise for the ``(`` at ``start`` when no ``)`` closes it, counting
+    parentheses alone. A brace that fails inside an open parenthesis is then
+    reported as the parenthesis left open, the fault a reader asks about
+    (``spice_validator.meas_unclosed_paren_refused``), not as the brace."""
+    depth = 0
+    i = start
+    while i < len(body):
+        c = body[i]
+        if c in ('"', "'"):
+            end = body.find(c, i + 1)
+            if end < 0:
+                break
+            i = end + 1
+            continue
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return
+        i += 1
+    raise SpiceLexError(
+        SpiceLexErrorCategory.UNBALANCED_PAREN,
+        "unterminated (...)",
+        position=start,
+        body=body,
+        suggestion="check for a missing ) matching the (",
+    )
+
+
 def _scan_balanced(body: str, start: int, opener: str, closer: str) -> int:
     """Return the index of the matching ``closer`` for ``body[start] == opener``.
 
@@ -316,9 +347,14 @@ def _scan_balanced(body: str, start: int, opener: str, closer: str) -> int:
             i = _closing_quote(body, i, f" inside {opener}...{closer}") + 1
             continue
         if opener == "(" and c == "{":
-            i = _scan_balanced(body, i, "{", "}") + 1
+            try:
+                i = _scan_balanced(body, i, "{", "}") + 1
+            except SpiceLexError:
+                _refuse_unclosed_paren(body, start)
+                raise
             continue
         if opener == "(" and c == "}":
+            _refuse_unclosed_paren(body, start)
             raise SpiceLexError(
                 SpiceLexErrorCategory.UNEXPECTED_CHAR,
                 "unexpected '}' (no matching opener)",

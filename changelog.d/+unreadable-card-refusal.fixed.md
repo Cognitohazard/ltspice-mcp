@@ -1,7 +1,9 @@
 A card left open (a quote, brace or parenthesis with nothing to close it) is
 now refused the same way by every tool that meets it, with the new error code
 `card_unreadable`: the message names the file, the line, the card as written,
-what is wrong and the fix. A Monte Carlo or mismatch run on such a card ended
+what is wrong and the fix. A variation target that such a card may declare
+was refused as `ambiguous_target` and is now refused as `card_unreadable`.
+A Monte Carlo or mismatch run on such a card ended
 with the tokenizer's bare message, which named neither the card nor its file,
 and a brace left open inside a `.model` card's parentheses
 (`.model D D(is={1e-14)`) passed `verify_circuit` and the linter as having no

@@ -39,7 +39,7 @@ import random
 from dataclasses import dataclass
 from typing import Literal
 
-from ltspice_mcp.lib.format import parse_spice_value
+from ltspice_mcp.lib.format import plain_number
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     emit,
@@ -568,17 +568,11 @@ def find_mismatch_rule(
 def parse_value(value: str | float) -> float | None:
     """Parse a SPICE-formatted component value to float, or None.
 
-    Wraps ``lib.format.parse_spice_value``, so a value reads as LTspice runs
-    it (``4R7`` is 4.7, ``1k5`` 1500, ``2Hz`` 2), with two MC-specific
-    behaviors: skips parametric expressions (``{Rd}``, ``table(...)``) so
-    they don't get corrupted, and accepts numeric passthrough.
+    A value written as a plain number reads as LTspice runs it
+    (``lib.format.plain_number``: ``4R7`` is 4.7, ``1k5`` 1500, ``2Hz`` 2); a
+    parametric expression (``{Rd}``, ``table(...)``) is None, so it is never
+    corrupted, and a number passes through.
     """
     if isinstance(value, int | float):
         return float(value)
-    s = str(value).strip()
-    if not s or "{" in s or "(" in s:
-        return None
-    try:
-        return parse_spice_value(s)
-    except ValueError:
-        return None
+    return plain_number(str(value))

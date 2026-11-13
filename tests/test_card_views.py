@@ -104,3 +104,20 @@ def test_a_measurements_name_and_kind_are_read_from_its_card(tmp_path: Path):
 def test_the_noise_source_is_the_second_argument_however_the_output_is_written(tmp_path: Path):
     path = _deck(tmp_path, "* t\nI1 0 a 1\nR1 a 0 1k\n.noise V(a, 0) I1 dec 10 1 1k\n.end\n")
     assert noise_input_source_unit(path) == "A"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        ".meas tran x FIND V(out AT 0.5m",
+        ".meas tran x FIND V(out AT {t",
+        ".meas tran x FIND V(out AT 1m}",
+    ],
+)
+def test_a_parenthesis_left_open_is_reported_as_such_whatever_brace_it_holds(line: str):
+    """The LTspice rule for a .meas with a parenthesis left open
+    (log/meas_bad_syntax) reads the tokenizer's category, so a brace inside
+    the open parenthesis must not change it."""
+    from ltspice_mcp.lib.spice_validator import meas_unclosed_paren_refused
+
+    assert meas_unclosed_paren_refused(_card(line)) is not None
