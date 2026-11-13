@@ -13,7 +13,7 @@ import statistics
 import time
 from collections.abc import Callable, Collection, Iterable, Mapping, MutableMapping, Sequence
 from collections.abc import Set as AbstractSet
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path, PurePath
 from typing import Annotated, Any, Literal, NamedTuple
 from weakref import WeakValueDictionary
@@ -47,6 +47,7 @@ from ltspice_mcp.lib import (
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, PlotDescriptor
 from ltspice_mcp.lib.format import cap_note, format_spice_value, held_to_cap, unique_name
+from ltspice_mcp.lib.log_conditions import Producer
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
 from ltspice_mcp.lib.log_types import measurement_named
 from ltspice_mcp.lib.pagination import retotal_page
@@ -85,7 +86,9 @@ from ltspice_mcp.lib.signal_analysis import downsample_minmax_traces
 from ltspice_mcp.lib.step_values import step_axis_key
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
+    DIAGNOSTICS_COVERAGE_SCHEMA,
     HINT_SCHEMA,
+    RUN_DIAGNOSTICS_SCHEMA,
     NotedModel,
     OptionalRawSelectionFields,
     OtherRawFields,
@@ -971,7 +974,18 @@ def _serialize_run(run: _ResolvedRun) -> dict[str, Any]:
         "identity": run.source.identity,
         "trusted_job_artifact": run.source.trusted_job_artifact,
         "job_id": run.job_id,
+        "producer": asdict(run.source.producer) if run.source.producer is not None else None,
     }
+
+
+def _stored_producer(data: Any) -> Producer | None:
+    """A resolved run's recorded producer; None for a result set stored before
+    runs recorded one, or a record that is not one, which reads as a bare path's."""
+    if not isinstance(data, dict) or set(data) != {"family", "build", "program"}:
+        return None
+    if not all(value is None or isinstance(value, str) for value in data.values()):
+        return None
+    return Producer(**data)
 
 
 def _deserialize_runs(item: result_store.ResultSet, state: SessionState) -> list[_ResolvedRun]:
@@ -993,6 +1007,7 @@ def _deserialize_runs(item: result_store.ResultSet, state: SessionState) -> list
                     plot_index=data.get("plot_index", 0),
                     identity=dict(data.get("identity") or {}),
                     trusted_job_artifact=bool(data.get("trusted_job_artifact")),
+                    producer=_stored_producer(data.get("producer")),
                 ),
                 job_id=data.get("job_id"),
             )
@@ -2834,6 +2849,8 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
                 "'failed_measurements' and 'unreadable' over all its steps."
             ),
             "properties": {
+                "diagnostics": RUN_DIAGNOSTICS_SCHEMA,
+                "diagnostics_coverage": DIAGNOSTICS_COVERAGE_SCHEMA,
                 "measured": {
                     "type": "object",
                     "additionalProperties": {"type": ["number", "null"]},

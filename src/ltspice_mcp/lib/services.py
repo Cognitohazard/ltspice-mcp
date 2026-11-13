@@ -37,6 +37,7 @@ from ltspice_mcp.lib.experiment_types import (
     partial_raw,
 )
 from ltspice_mcp.lib.job_lifecycle import runs_done
+from ltspice_mcp.lib.log_conditions import Producer
 from ltspice_mcp.lib.log_parser import LogDiagnostics
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.parser_service import ParserCleanupError, select_raw
@@ -164,6 +165,8 @@ class RunContext:
     #: What a read of this case's results has to say of them: a stopped case's
     #: kept raw ends where its run was stopped (``partial_raw_observation``).
     observations: tuple[dict[str, Any], ...] = ()
+    #: Who wrote the case's log (``run_producer``).
+    producer: Producer | None = None
 
 
 @dataclass(frozen=True)
@@ -191,6 +194,9 @@ class AnalysisSource:
     #: The span ``(start, end)`` of the read plot's axis whose points a read
     #: keeps (``raw_decode.AxisWindow``), an end None for open; None keeps all.
     window: tuple[float | None, float | None] | None = None
+    #: Who wrote the log, for a job's case (``run_producer``); None for a bare
+    #: path, whose producer is what ``source_producer`` says.
+    producer: Producer | None = None
     # Resident facts belong to one evaluation, between fresh drift checks.
     captured: ParsedArtifacts | None = field(default=None, repr=False, compare=False)
 
@@ -241,6 +247,7 @@ def source_for_run(
         console=run.console,
         simulator_version=run.simulator_version,
         observations=run.observations,
+        producer=run.producer,
     )
 
 
@@ -533,6 +540,7 @@ def case_run_context(
         console=console,
         simulator_version=case.simulator_version,
         observations=(partial_raw_observation(case, held),) if held is not None else (),
+        producer=run_producer(job, case),
     )
 
 
@@ -590,6 +598,39 @@ def dialect_for_job(job: ExperimentJob, state: SessionState) -> str | None:
     if simulator:
         return dialect_for_simulator_name(simulator)
     return None
+
+
+def run_producer(job: ExperimentJob, case: ExperimentCase) -> Producer:
+    """Who wrote a case's log: the simulator the job recorded, the build the
+    case's run named in its own output, and the program the job launched.
+
+    The one answer for a case, so the classification stored on its run row when
+    the run ended and a later read of its log (the ``summary`` recipe) choose the
+    same rules (``log_conditions.rules_for``).
+    """
+    executable = job.simulator_executable
+    return Producer(
+        family=dialect_for_simulator_name(job.simulator) if job.simulator else None,
+        build=case.simulator_version,
+        program=executable.path if executable is not None else None,
+    )
+
+
+def source_producer(
+    source: AnalysisSource, *, read_dialect: str | None = None, reported: str | None = None
+) -> Producer:
+    """Who wrote ``source``'s log: a job case's recorded producer
+    (``run_producer``). For a bare path, the dialect its caller named or, when
+    it named none, the one its raw's header shows (``read_dialect``, only with
+    evidence), and the build its files name (``reported``, from
+    ``reported_build``); a bare path records no program."""
+    if source.producer is not None:
+        return source.producer
+    return Producer(
+        family=source.dialect or source.explicit_dialect or read_dialect,
+        build=source.simulator_version or reported,
+        program=None,
+    )
 
 
 def reported_version(

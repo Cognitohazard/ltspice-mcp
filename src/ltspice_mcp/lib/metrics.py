@@ -66,6 +66,7 @@ from ltspice_mcp.lib.format import (
     parse_spice_value,
     same_value,
 )
+from ltspice_mcp.lib.log_conditions import decoded_run_diagnostics, reply_fields
 from ltspice_mcp.lib.log_parser import DEVICE_OP_TABLE_DIGITS, device_key
 from ltspice_mcp.lib.log_types import MeasurementsOutput, measurement_failed, measurement_named
 from ltspice_mcp.lib.raw_parser import (
@@ -1039,6 +1040,18 @@ async def summary(
         )
 
     logs = await _logs_for_raw(source, state, raw)
+    # What the simulator said about the run, with the rules its run row was
+    # classified with when it ended, so the two answers are one.
+    if source.producer is not None:
+        producer = source.producer
+    else:
+        descriptor = raw.descriptor
+        producer = services.source_producer(
+            source,
+            read_dialect=descriptor.dialect if descriptor.dialect_evidence else None,
+            reported=await asyncio.to_thread(reported_build, source.log, source.raw),
+        )
+    said = reply_fields(decoded_run_diagnostics(logs, producer))
     try:
         # The worker has materialized every array and companion section. This
         # deadline covers resident summary computation; no artifact parser or
@@ -1097,7 +1110,7 @@ async def summary(
                     f"{facts['step_count']}; pass step=N for other steps."
                 )
 
-    data = dict(facts)
+    data = {**facts, **said}
     if ac_metrics:
         data["ac_bandwidth_metrics"] = ac_metrics
     if ac_signal_used and ac_signal_used != signal:

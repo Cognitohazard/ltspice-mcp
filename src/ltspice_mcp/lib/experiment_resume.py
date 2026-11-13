@@ -588,6 +588,7 @@ def _make_child(
         case.failure_evidence = None
         case.submitted_at = case.completed_at = None
         case.simulator_version = None
+        case.log_diagnostics = None
         case.result_digest = None
         case.observations = []
         prepare_seeded_driver(case, recovery.execution, store, recovery.root_job_id, simulator)

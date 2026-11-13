@@ -68,7 +68,7 @@ class TestMissingRefsFromText:
 class TestExtractLogDiagnostics:
     def test_missing_file_returns_empty(self, tmp_path: Path):
         result = extract_log_diagnostics(tmp_path / "nope.log")
-        assert result == {"warnings": [], "errors": [], "meas_errors": []}
+        assert result == {"warnings": [], "errors": [], "meas_errors": [], "conditions": {}}
 
     def test_ngspice_convergence_failure_classified_as_error(self, tmp_path: Path):
         # ngspice prints convergence FAILURES under a "Warning:" prefix.
@@ -178,7 +178,7 @@ class TestExtractLogDiagnostics:
         log = tmp_path / "empty.log"
         log.write_text("")
         result = extract_log_diagnostics(log)
-        assert result == {"warnings": [], "errors": [], "meas_errors": []}
+        assert result == {"warnings": [], "errors": [], "meas_errors": [], "conditions": {}}
 
     def test_filepath_line_error_with_caret(self, tmp_path: Path):
         log = tmp_path / "caret.log"

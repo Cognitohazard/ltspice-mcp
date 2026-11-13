@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, fields
-from typing import Any, Literal, get_args
+from typing import Any, Literal, NotRequired, get_args
 
 from typing_extensions import TypedDict
 
@@ -172,12 +172,26 @@ class MeasErrorEntry(TypedDict):
     suggestion: str | None
 
 
+class LogCondition(TypedDict):
+    """One condition a run's output named, counted under one set of rules
+    (``log_conditions``)."""
+
+    code: str
+    count: int
+    first_text: str
+    channel: Literal["log", "console"]
+    severity: NotRequired[str]
+
+
 class LogDiagnostics(TypedDict):
     """Return shape of :func:`extract_log_diagnostics`."""
 
     warnings: list[str]
     errors: list[str]
     meas_errors: list[MeasErrorEntry]
+    #: What the log and console say under each set of rules that found
+    #: anything, by the set's name (``log_conditions.classify_channels``).
+    conditions: dict[str, list[LogCondition]]
 
 
 class UnreadableValue(TypedDict):

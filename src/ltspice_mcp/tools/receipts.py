@@ -28,6 +28,7 @@ from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.experiment_runner import live_run_progress
 from ltspice_mcp.lib.experiment_types import (
     ACTIVE_CASE_STATUSES,
+    TERMINAL_CASE_STATUSES,
     Completeness,
     ExperimentCase,
     ExperimentCaseStatus,
@@ -38,6 +39,7 @@ from ltspice_mcp.lib.experiment_types import (
     sample_index,
 )
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
+from ltspice_mcp.lib.log_conditions import reply_fields
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.pagination import page_of
@@ -53,9 +55,11 @@ from ltspice_mcp.lib.simulator_build import SimulatorExecutable
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze
 from ltspice_mcp.tools._base import (
+    DIAGNOSTICS_COVERAGE_SCHEMA,
     ENVELOPE_ERROR_SCHEMA,
     FINDING_SCHEMA,
     OUTCOME_SCHEMA,
+    RUN_DIAGNOSTICS_SCHEMA,
     CallOutcome,
     ResponseBudget,
     failures_schema,
@@ -210,6 +214,8 @@ RUN_RECORD_SCHEMA: dict[str, Any] = {
         "log": {"type": ["string", "null"]},
         "other_raws": {"type": "object", "additionalProperties": {"type": "string"}},
         "simulator_version": {"type": ["string", "null"]},
+        "diagnostics": RUN_DIAGNOSTICS_SCHEMA,
+        "diagnostics_coverage": DIAGNOSTICS_COVERAGE_SCHEMA,
         "attempt": {
             "type": "object",
             "properties": {
@@ -982,6 +988,25 @@ def _manifest_payload(entry: ManifestEntry) -> dict[str, Any]:
     }
 
 
+def run_row_diagnostics(case: ExperimentCase) -> dict[str, Any]:
+    """What the simulator said about ``case``'s run, as its row carries it:
+    ``diagnostics`` and, when that is not the reading of the run's own simulator
+    and build, ``diagnostics_coverage``. A case that never launched, or whose run
+    has not ended, says nothing; one that ended before the server classified
+    logs says its log was not classified."""
+    ran = (
+        case.submitted_at is not None
+        and case.status in TERMINAL_CASE_STATUSES
+        and case.failure_code != "submission_failed"
+    )
+    if not ran:
+        return {}
+    found = case.log_diagnostics
+    if found is None:
+        return {"diagnostics_coverage": "not_classified"}
+    return reply_fields(found)
+
+
 def _run_item(case: ExperimentCase) -> dict[str, Any]:
     row: dict[str, Any] = {
         "case_id": case.case_id,
@@ -997,6 +1022,7 @@ def _run_item(case: ExperimentCase) -> dict[str, Any]:
             else {}
         ),
         "simulator_version": case.simulator_version,
+        **run_row_diagnostics(case),
     }
     if case.recovery is not None:
         attempt = case.recovery.attempt

@@ -23,6 +23,7 @@ from ltspice_mcp.lib.format import SAME_VALUE_RTOL, held_to_cap
 
 # Re-exported façade names: the strict Pydantic base lives in ``lib`` (models
 # below the tool layer declare models too), and the tool modules reach it here.
+from ltspice_mcp.lib.log_conditions import COVERAGE as LOG_COVERAGE
 from ltspice_mcp.lib.ltspice_window import Shown, file_difference
 from ltspice_mcp.lib.models import StrictModel as StrictModel
 from ltspice_mcp.lib.netlist_graph import IncludeResolver
@@ -444,6 +445,42 @@ MEAS_ERRORS_SCHEMA: dict[str, Any] = {
             "suggestion": {"type": ["string", "null"]},
         },
     },
+}
+
+# What the simulator said about a run (``lib/log_conditions.py``): one entry per
+# condition, the first occurrence as written. The run rows of run_experiments
+# and jobs and the summary recipe carry the same two fields.
+RUN_DIAGNOSTICS_SCHEMA: dict[str, Any] = {
+    "type": "array",
+    "description": (
+        "What the simulator said about the run, one entry per condition and channel: 'code' is "
+        "the server's name for it, 'severity' the simulator's own word where it wrote "
+        "one, 'first_text' the first occurrence as written, 'count' how often. A line "
+        "the server does not recognise is counted under 'unclassified'. The run's "
+        "'log' and the summary recipe hold the rest."
+    ),
+    "items": {
+        "type": "object",
+        "properties": {
+            "code": {"type": "string"},
+            "count": {"type": "integer", "minimum": 1},
+            "first_text": {"type": "string"},
+            "channel": {"type": "string", "enum": ["log", "console"]},
+            "severity": {"type": "string"},
+        },
+        "required": ["code", "count", "first_text", "channel"],
+        "additionalProperties": False,
+    },
+}
+DIAGNOSTICS_COVERAGE_SCHEMA: dict[str, Any] = {
+    "type": "string",
+    "enum": list(LOG_COVERAGE),
+    "description": (
+        "Present only when 'diagnostics' is not the reading of the run's own "
+        "simulator and build: "
+        + "; ".join(f"{key}: {text}" for key, text in LOG_COVERAGE.items())
+        + "."
+    ),
 }
 
 # Surfaced result observations — see lib/result_observations.py. A surfacing

@@ -176,8 +176,13 @@ async def test_submission_loads_only_cold_completion_once(tmp_path, monkeypatch,
         assert calls[0][:2] == (raw, log)
         assert calls[0][2] != threading.get_ident()
         assert "Time step too small" in outcome.log_excerpt
+        # The facts that judged the run are the ones its diagnostics come from.
+        assert outcome.logs is facts
     else:
+        # A run that produced is not read here, inside the run's time limit;
+        # its runner reads the log once the outcome has landed.
         assert calls == []
+        assert outcome.logs is None
         assert outcome.raw_file == str(raw)
         assert (outcome.error is None) is (raw_state == "positive")
 

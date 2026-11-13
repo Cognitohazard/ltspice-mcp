@@ -818,7 +818,7 @@ inputs = ["log/device_op_numdgt.cir", "log/device_op_numdgt_off.cir", "raw/op_sa
 
 [behaviour.log-diagnostics]
 summary = "What a failed or doubtful run writes: an unknown directive, a bad card, a missing include or library, an undefined model, subcircuit or parameter, a floating node, a source loop, a duplicate name, no analysis, braces around a voltage, a model parameter the device does not know."
-model = ["lib/log_parser.py", "lib/services.py", "lib/runner_base.py", "lib/result_observations.py"]
+model = ["lib/log_parser.py", "lib/log_conditions.py", "lib/services.py", "lib/runner_base.py", "lib/result_observations.py"]
 inputs = [
     "log/err_unknown_directive.cir",
     "log/err_bad_card.cir",
@@ -839,7 +839,7 @@ inputs = [
 
 [behaviour.log-convergence]
 summary = "What the log says when a solve struggles: a transient whose time step collapses, and an operating point found only by stepping."
-model = ["lib/log_parser.py", "lib/services.py"]
+model = ["lib/log_parser.py", "lib/log_conditions.py", "lib/services.py"]
 inputs = ["log/err_timestep.cir", "log/op_stepping.cir"]
 
 [behaviour.log-native-tables]

@@ -109,6 +109,11 @@ class ExperimentCase:
     #: ``random`` or ``pdk_native`` entry added to ``assignments``: the corner
     #: a sample was drawn at.
     assigned: dict[str, Any] = field(default_factory=dict)
+    #: What the simulator said about the run, read from its log when it ended
+    #: (``log_conditions.RunDiagnostics``): ``{}`` for nothing to report. None
+    #: for a run that has not ended, and for one recorded before the server
+    #: classified logs.
+    log_diagnostics: dict[str, Any] | None = None
 
 
 def sample_index(case: ExperimentCase) -> int | None:

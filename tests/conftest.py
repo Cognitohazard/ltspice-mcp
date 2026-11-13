@@ -48,6 +48,7 @@ from ltspice_mcp.lib.experiment_types import (
 from ltspice_mcp.lib.job_lifecycle import WaitFor
 from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome, _raw_completion_outcome
 from ltspice_mcp.lib.simulator import platform_key
+from ltspice_mcp.lib.simulator_build import reported_build
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import VALIDATION_WARNING_KINDS
 from tests import parser_refusal, schedule_jitter, sheet_edit_record
@@ -594,12 +595,21 @@ def replaying_simulator(monkeypatch: pytest.MonkeyPatch, raw: Path, log: Path) -
     Returns the list each launch's run filename is appended to."""
     launched: list[str] = []
 
-    def submit(self, _netlist: Path, run_filename: str, callback, **_kwargs):
+    def submit(self, _netlist: Path, run_filename: str, callback, **kwargs):
         launched.append(run_filename)
         raw_out, log_out = fake_artifact_paths(self.output_folder, run_filename)
         shutil.copy(raw, raw_out)
         shutil.copy(log, log_out)
-        outcome = RunOutcome(str(raw_out), str(log_out), raw_out.stat().st_size, None)
+        # What the real completion gives a run that produced: the build it
+        # named, and no log facts, which its runner reads once it lands.
+        del kwargs
+        outcome = RunOutcome(
+            str(raw_out),
+            str(log_out),
+            raw_out.stat().st_size,
+            None,
+            simulator_version=reported_build(log_out, raw_out),
+        )
         self.loop.call_soon_threadsafe(callback, outcome)
         return object()
 
