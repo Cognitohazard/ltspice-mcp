@@ -60,7 +60,10 @@ new `Api` with the directory added to `allowed_paths`, rather than to edit the
 config file.
 
 The API does not configure logging. It never calls `logging.basicConfig` and
-writes only through module loggers.
+writes only through module loggers. Each operation call writes one record on
+`ltspice_mcp.events` at `INFO`, the tool call's with `door: "python_api"`:
+the names of the argument fields it set, never their values (`mcp_surface.md`,
+"Server logging").
 
 ## 4. The `Api` object
 

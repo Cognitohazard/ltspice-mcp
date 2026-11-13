@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Literal, NamedTuple, TypedDict, TypeVar, get_args, get_origin
 
 from mcp import types
-from pydantic import Field, PrivateAttr, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 from ltspice_mcp.config import SIM_EXECUTABLES_KEY as _SIM_EXECUTABLES_KEY
 from ltspice_mcp.config import SIM_SECTION as _SIM_SECTION
@@ -26,6 +26,7 @@ from ltspice_mcp.lib.format import SAME_VALUE_RTOL, held_to_cap
 from ltspice_mcp.lib.ltspice_window import Shown, file_difference
 from ltspice_mcp.lib.models import StrictModel as StrictModel
 from ltspice_mcp.lib.netlist_graph import IncludeResolver
+from ltspice_mcp.lib.observability import note_request
 from ltspice_mcp.lib.raster import DEFAULT_SCALE, RenderedImage, render_image
 from ltspice_mcp.lib.raw_parser import OtherRawKind
 from ltspice_mcp.lib.reply_fields import (
@@ -1201,6 +1202,9 @@ class ToolRegistry:
             async def wrapped(arguments: Any, state: SessionState) -> types.CallToolResult:
                 if input_model is not None and not isinstance(arguments, input_model):
                     arguments = input_model.model_validate(arguments or {})
+                if isinstance(arguments, BaseModel):
+                    # The call's event names the fields it set (observability).
+                    note_request(arguments)
                 # Every reply built inside keeps this tool's fields
                 # (ALWAYS_PRESENT), whichever helper builds it.
                 with replying_as(name):
