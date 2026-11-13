@@ -1664,6 +1664,42 @@ class TestExportEncoding:
         assert f"SYMATTR Value 2{MICRO}\n" in text
         assert data["sha256"] == sha_of(sheet)
 
+    async def test_an_edit_adds_no_mark_to_a_utf16_sheet_that_had_none(
+        self, build: str, state_no_sim, work_dir: Path
+    ):
+        """Both builds export a UTF-16 LE sheet with no byte order mark and
+        neither exports one with a mark, so an edit of a sheet stored without
+        one must not add it."""
+        import codecs
+
+        from ltspice_mcp.tools.schematic_edit import EditSchematicInput, handle_edit_schematic
+        from tests._asc_ops import sha_of
+
+        assert self.value(build, "micro_utf16le") == f"1{MICRO}"
+        assert rec.entry(build, "export/micro_utf16le_bom")["outputs"] == {}
+        sheet = rec.stage_sheet(build, "export/micro_utf16le", work_dir)
+        assert sheet.read_bytes().startswith("Version 4".encode("utf-16-le"))
+        result = await handle_edit_schematic(
+            EditSchematicInput.model_validate(
+                {
+                    "path": str(sheet),
+                    "expected_sha256": sha_of(sheet),
+                    "ops": [
+                        {"op": "set_component_value", "reference": "R1", "value": f"2{MICRO}"}
+                    ],
+                }
+            ),
+            state_no_sim,
+        )
+        data = result.structured_content
+        assert data is not None and data["commit_state"] == "committed"
+        written = sheet.read_bytes()
+        assert not written.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE))
+        text = written.decode("utf-16-le")
+        assert text.startswith("Version 4\n")
+        assert f"SYMATTR Value 2{MICRO}\n" in text
+        assert data["sha256"] == sha_of(sheet)
+
     def test_ltspice_26_reads_a_utf8_sheet_as_cp1252(self, build: str):
         """Neither build reads a sheet as UTF-8. LTspice 26 decodes it as cp1252
         and writes what it saw in UTF-8, so a UTF-8 micro sign comes out as the

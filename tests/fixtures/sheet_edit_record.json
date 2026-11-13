@@ -18,6 +18,16 @@
    "tests/test_edit_schematic.py::test_an_edit_reports_what_it_introduced_and_counts_the_rest"
   ]
  },
+ "02e26d0eb5e4fed0": {
+  "answer": {
+   "reply": "2037b98b20f1090f",
+   "sheet": "509ddb679e8bfe03"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::TestExportEncoding::test_an_edit_adds_no_mark_to_a_utf16_sheet_that_had_none[ltspice17]",
+   "tests/test_recorded_ltspice_schematics.py::TestExportEncoding::test_an_edit_adds_no_mark_to_a_utf16_sheet_that_had_none[ltspice26]"
+  ]
+ },
  "03826ee7b8917926": {
   "answer": {
    "reply": "df68aef58088fbe1",
