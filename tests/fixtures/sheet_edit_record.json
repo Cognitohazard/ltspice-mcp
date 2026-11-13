@@ -18,6 +18,15 @@
    "tests/test_edit_schematic.py::test_an_edit_reports_what_it_introduced_and_counts_the_rest"
   ]
  },
+ "0288ad349ee9895b": {
+  "answer": {
+   "reply": "d7a56fc64302254b",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_observability.py::TestEventNamesWhatACallSet::test_no_argument_value_reaches_the_record"
+  ]
+ },
  "02e26d0eb5e4fed0": {
   "answer": {
    "reply": "2037b98b20f1090f",
@@ -2812,6 +2821,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_reference_export_failure_is_a_partial_outcome"
+  ]
+ },
+ "ad1f02bdb03a100e": {
+  "answer": {
+   "reply": "66c7b43fabc1882e",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_observability.py::TestEventNamesWhatACallSet::test_jobs_action_and_edit_ops"
   ]
  },
  "ad7106870a07d3bc": {
