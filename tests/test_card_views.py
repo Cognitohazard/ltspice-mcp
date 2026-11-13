@@ -121,3 +121,14 @@ def test_a_parenthesis_left_open_is_reported_as_such_whatever_brace_it_holds(lin
     from ltspice_mcp.lib.spice_validator import meas_unclosed_paren_refused
 
     assert meas_unclosed_paren_refused(_card(line)) is not None
+
+
+def test_a_quote_left_open_inside_parentheses_is_reported_as_the_quote():
+    """The parenthesis closes; the quote does not, so the .meas rule for a
+    parenthesis left open does not fire."""
+    from ltspice_mcp.lib.spice_validator import meas_unclosed_paren_refused
+
+    card = _card(".meas tran x FIND V(a {'x)")
+    ((_unread, error),) = unreadable_cards([card])
+    assert error.category.value == "unterminated_quote"
+    assert meas_unclosed_paren_refused(card) is None

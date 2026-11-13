@@ -307,7 +307,7 @@ def _refuse_unclosed_paren(body: str, start: int) -> None:
         if c in ('"', "'"):
             end = body.find(c, i + 1)
             if end < 0:
-                break
+                return  # a quote left open: that is the fault, not the parenthesis
             i = end + 1
             continue
         if c == "(":
