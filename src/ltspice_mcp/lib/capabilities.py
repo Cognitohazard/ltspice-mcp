@@ -152,8 +152,9 @@ CAPABILITIES: tuple[Capability, ...] = (
     Capability(
         "diagnostics",
         "baseline",
-        "Read this simulator's log and console into warnings and errors.",
-        "ltspice_mcp.lib.log_parser",
+        "Read this simulator's log and console into warnings and errors, and name each "
+        "condition it reports on a run, counting every line it does not recognise.",
+        "ltspice_mcp.lib.log_conditions",
     ),
     Capability(
         "results",
@@ -344,7 +345,11 @@ ENTRIES: tuple[Entry, ...] = (
         "ltspice",
         "diagnostics",
         "supported",
-        ("recorded:log-diagnostics", "recorded:log-convergence"),
+        (
+            "recorded:log-diagnostics",
+            "recorded:log-convergence",
+            "test:tests/test_run_diagnostics.py",
+        ),
     ),
     Entry(
         "ngspice",
@@ -353,15 +358,17 @@ ENTRIES: tuple[Entry, ...] = (
         (
             "fixture:ngspice_ac_no_meas.log",
             "fixture:native_log_tables/pz_table.log",
+            "fixture:ngspice_runs/unknown_model_param.log",
             "test:tests/test_ngspice_e2e.py",
+            "test:tests/test_run_diagnostics.py",
         ),
     ),
     *_each(
         _UNMODELLED,
         "diagnostics",
         "unverified",
-        "Convergence and fatal errors are read with the generic patterns; no recording of "
-        "{display}'s wording exists.",
+        "Convergence and fatal errors are read with the generic patterns, and every line "
+        "of the log is counted as unclassified; no recording of {display}'s wording exists.",
     ),
     # --- results -----------------------------------------------------------
     Entry(

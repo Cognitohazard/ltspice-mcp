@@ -53,6 +53,7 @@ from ltspice_mcp.lib.job_lifecycle import (
     stop_analysis_for_owner,
 )
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
+from ltspice_mcp.lib.log_conditions import decoded_run_diagnostics
 from ltspice_mcp.lib.native_execution import prepare_native_cases
 from ltspice_mcp.lib.ngspice_driver import validate_seed
 from ltspice_mcp.lib.pdk_native import (
@@ -1580,7 +1581,7 @@ class ExperimentRunner(RunnerBase):
             if stop_reason is not None:
                 await self._stop_active_case(execution, case, future, stop_reason)
             elif outcome is not None:
-                self._apply_outcome(case, outcome)
+                self._apply_outcome(execution.job, case, outcome)
                 if (
                     outcome.error is None
                     and case.raw_file is not None
@@ -1722,9 +1723,9 @@ class ExperimentRunner(RunnerBase):
             return
 
         if execution.job.recovery is not None:
-            self._apply_outcome(case, outcome)
+            self._apply_outcome(execution.job, case, outcome)
         else:
-            self._apply_stopped_outcome(case, outcome)
+            self._apply_stopped_outcome(execution.job, case, outcome)
         kept = await self._record_progress_then_remove(execution, case)
         terminal_status = "cancelled" if reason == "cancelled" else "failed"
         self._mark_case(
@@ -1811,9 +1812,9 @@ class ExperimentRunner(RunnerBase):
         if case is None:
             return
         if execution.job.recovery is not None:
-            self._apply_outcome(case, outcome)
+            self._apply_outcome(execution.job, case, outcome)
         else:
-            self._apply_stopped_outcome(case, outcome)
+            self._apply_stopped_outcome(execution.job, case, outcome)
         case.observations.append(
             {
                 "code": "late_simulator_exit",
@@ -1909,18 +1910,29 @@ class ExperimentRunner(RunnerBase):
         return fact, kept
 
     @staticmethod
-    def _apply_outcome(case: ExperimentCase, outcome: RunOutcome) -> None:
+    def _apply_outcome(job: ExperimentJob, case: ExperimentCase, outcome: RunOutcome) -> None:
         case.raw_file = Path(outcome.raw_file) if outcome.raw_file else None
         case.log_file = Path(outcome.log_file) if outcome.log_file else None
         case.other_raws = list(outcome.other_raws)
         case.simulator_version = outcome.simulator_version
+        # Classified with the build the run just named, so a later read of the
+        # same log (the summary recipe) chooses the same rules.
+        case.log_diagnostics = dict(
+            decoded_run_diagnostics(
+                outcome.logs,
+                services.run_producer(job, case),
+                unread=outcome.logs is None,
+            )
+        )
         if outcome.observations:
             case.observations.extend(outcome.observations)
 
     @staticmethod
-    def _apply_stopped_outcome(case: ExperimentCase, outcome: RunOutcome) -> None:
+    def _apply_stopped_outcome(
+        job: ExperimentJob, case: ExperimentCase, outcome: RunOutcome
+    ) -> None:
         """Keep post-kill diagnostics without advertising artifacts we remove."""
-        ExperimentRunner._apply_outcome(case, outcome)
+        ExperimentRunner._apply_outcome(job, case, outcome)
         case.raw_file = None
         case.other_raws = []
 

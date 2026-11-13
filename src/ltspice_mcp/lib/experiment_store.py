@@ -209,6 +209,11 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
                 # reads back to the bytes it was written as.
                 **({"result_digest": case.result_digest} if case.result_digest else {}),
                 **({"assigned": case.assigned} if case.assigned else {}),
+                **(
+                    {"log_diagnostics": case.log_diagnostics}
+                    if case.log_diagnostics is not None
+                    else {}
+                ),
                 "recovery": case.recovery.to_record() if case.recovery is not None else None,
             }
         )
@@ -424,6 +429,11 @@ def _case_record(data: dict[str, Any]) -> ExperimentCase:
         simulator_version=_optional_str(data.get("simulator_version")),
         result_digest=_optional_str(data.get("result_digest")),
         assigned=dict(data.get("assigned") or {}),
+        log_diagnostics=(
+            dict(data["log_diagnostics"])
+            if isinstance(data.get("log_diagnostics"), dict)
+            else None
+        ),
         recovery=(
             CaseRecovery.from_record(data["recovery"])
             if data.get("recovery") is not None

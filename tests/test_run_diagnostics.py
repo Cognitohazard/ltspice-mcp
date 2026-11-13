@@ -33,6 +33,7 @@ from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.log_conditions import Producer
 from ltspice_mcp.lib.log_parser import extract_log_diagnostics
 from ltspice_mcp.lib.services import AnalysisSource, load_logs_sync
+from ltspice_mcp.lib.simulator import detect_simulators
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
 from ltspice_mcp.tools.jobs import JobsInput, handle_jobs
@@ -152,7 +153,7 @@ async def _summary(state: SessionState, job_id: str) -> dict[str, Any]:
             {
                 "sources": [{"job_id": job_id, "label": "run"}],
                 "recipes": [{"key": "s", "metric": "summary"}],
-                "include": {"per_run": {"limit": 10}},
+                "include": {"per_run": {"limit": 10}, "fields": ["value"]},
             }
         ),
         state,
@@ -236,7 +237,7 @@ async def test_the_recorded_unknown_model_parameter_on_every_path(
         api.analyze_results,
         sources=[{"job_id": reply["job_id"], "label": "run"}],
         recipes=[{"key": "s", "metric": "summary"}],
-        include={"per_run": {"limit": 10}},
+        include={"per_run": {"limit": 10}, "fields": ["value"]},
     )
     (api_summary_row,) = api_summary["results"]["s"]["per_run"]["items"]
     assert _row_diagnostics(api_summary_row["value"]) == expected
@@ -386,14 +387,16 @@ def test_the_design_sentence_holds_for_every_reply_it_names():
     """``docs/DESIGN.md`` says the simulator's diagnostics are on the replies
     of ``run_experiments`` and ``jobs`` and on the ``summary`` recipe; each of
     those declares them."""
-    from ltspice_mcp.lib.metrics import SUMMARY_SCHEMA
+    from ltspice_mcp.tools.analyze import _ATTRIBUTED_VALUE_SCHEMA
     from ltspice_mcp.tools.receipts import RUN_RECORD_SCHEMA
+
+    summary_schema = _ATTRIBUTED_VALUE_SCHEMA["properties"]["value"]
 
     design = (_SRC.parents[1] / "docs" / "DESIGN.md").read_text(encoding="utf-8")
     section = design.split("## Diagnostics", 1)[1].split("\n## ", 1)[0]
     for name in ("run_experiments", "jobs", "summary", "diagnostics", "unclassified"):
         assert name in section, name
-    for schema in (RUN_RECORD_SCHEMA, SUMMARY_SCHEMA):
+    for schema in (RUN_RECORD_SCHEMA, summary_schema):
         assert {"diagnostics", "diagnostics_coverage"} <= set(schema["properties"])
         item = schema["properties"]["diagnostics"]["items"]
         assert set(item["required"]) == {"code", "count", "first_text", "channel"}
@@ -436,7 +439,7 @@ async def test_ngspice_names_the_same_condition_live(work_dir: Path):
     deck = work_dir / "unknown_model_param.cir"
     shutil.copy(FIXTURES_DIR / "ngspice_runs" / "unknown_model_param.cir", deck)
     config = ServerConfig(working_dir=work_dir, allowed_paths=[work_dir], simulator="ngspice")
-    state = SessionState.create(config)
+    state = SessionState.create(config, available=detect_simulators(config))
     reply = await terminal_experiment(
         state,
         {

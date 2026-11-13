@@ -21,6 +21,7 @@ from spicelib.log.semi_dev_op_reader import opLogReader
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.encoding import decode_spice_bytes, read_spice_text
+from ltspice_mcp.lib.log_conditions import classify_channels
 from ltspice_mcp.lib.log_types import LogDiagnostics as LogDiagnostics
 from ltspice_mcp.lib.log_types import MeasErrorEntry as MeasErrorEntry
 from ltspice_mcp.lib.log_types import MeasurementEntry as MeasurementEntry
@@ -719,7 +720,11 @@ def _op_block_recovered(lines: list[str], idx: int) -> bool:
 
 
 def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
-    """Extract structured warnings and errors from an LTspice log file.
+    """Extract structured warnings and errors from a simulator log file.
+
+    ``conditions`` is what the log and its console capture say under every set
+    of rules ``log_conditions`` has, without knowing who wrote them; a reader
+    picks its producer's set with ``log_conditions.run_diagnostics``.
 
     Detects all known LTspice diagnostic patterns:
     - filepath(line): message + source line + ^^^ caret blocks
@@ -757,6 +762,9 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
     # so the classifiers below surface them too. Quiet runs (LTspice batch)
     # leave it empty/absent, so this is a no-op there.
     exe_content = read_log_text(log_path.with_suffix(".exe.log"))
+    # Classified before the fold below, each stream apart: a reader says which
+    # one a line came from.
+    conditions = classify_channels(content, exe_content)
     if exe_content.strip():
         # Fold in only lines not already in the -o log (some builds mirror a
         # diagnostic to both streams; avoid double-reporting), separated by a
@@ -901,6 +909,7 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
         "warnings": _collapse_repeats(warnings),
         "errors": _collapse_repeats(errors),
         "meas_errors": meas_errors,
+        "conditions": conditions,
     }
 
 

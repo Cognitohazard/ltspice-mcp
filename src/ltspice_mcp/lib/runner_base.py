@@ -131,6 +131,12 @@ class RunOutcome(NamedTuple):
     simulator_version: str | None = None
     # The kinds of other raw the run wrote beside its raw (``other_raws``).
     other_raws: tuple[str, ...] = ()
+    # The log facts read when the run ended, produced or not, and why they
+    # could not be read when they were not: what the simulator said about the
+    # run is classified from these (``log_conditions``). Both None when the
+    # completion read no log at all.
+    logs: DecodedLog | None = None
+    logs_error: str | None = None
 
 
 _REQUESTED_ANALYSES: frozenset[str] = frozenset(f".{kind}" for kind in ANALYSIS_KINDS) | {
@@ -1038,20 +1044,22 @@ class RunnerBase:
                 # Read here, before the callback: a stopped case's artifacts
                 # are removed once it lands. Both outcomes below carry it.
                 version = reported_build(log_file, raw_file)
+                # Read for every run, one that produced included: what the
+                # simulator said about a run that finished is part of its answer.
+                logs: DecodedLog | None = None
+                logs_error: str | None = None
+                if completion_logs is None:
+                    logs_error = "No completion log loader was supplied"
+                else:
+                    try:
+                        logs = completion_logs(
+                            Path(raw_name) if raw_name not in ("", ".") else None,
+                            Path(log_name) if log_name not in ("", ".") else None,
+                        )
+                    except Exception as exc:
+                        logs_error = f"{type(exc).__name__}: {exc}"
                 outcome = _raw_completion_outcome(raw_name, log_name)
                 if outcome is None:
-                    logs = None
-                    logs_error = None
-                    if completion_logs is None:
-                        logs_error = "No completion log loader was supplied"
-                    else:
-                        try:
-                            logs = completion_logs(
-                                Path(raw_name) if raw_name not in ("", ".") else None,
-                                Path(log_name) if log_name not in ("", ".") else None,
-                            )
-                        except Exception as exc:
-                            logs_error = f"{type(exc).__name__}: {exc}"
                     outcome = collect_run_outcome(
                         raw_name,
                         log_name,
@@ -1064,7 +1072,9 @@ class RunnerBase:
                         logs=logs,
                         logs_error=logs_error,
                     )
-                outcome = outcome._replace(simulator_version=version)
+                outcome = outcome._replace(
+                    simulator_version=version, logs=logs, logs_error=logs_error
+                )
                 if is_ngspice(simulator):
                     log_path = Path(log_name) if log_name not in ("", ".") else None
                     outcome = _with_mode_check(
@@ -1080,7 +1090,10 @@ class RunnerBase:
                     logs_error=f"Outcome collection: {type(exc).__name__}: {exc}",
                     exit_code=exit_code,
                     simulator_exception=simulator_exception,
-                )._replace(simulator_version=version)
+                )._replace(
+                    simulator_version=version,
+                    logs_error=f"Outcome collection: {type(exc).__name__}: {exc}",
+                )
             self._bridge(callback, outcome, context=f"run {run_filename}")
 
         self._retire_finished_runners()

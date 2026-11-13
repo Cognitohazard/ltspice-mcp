@@ -95,19 +95,26 @@ def _size(data: dict[str, Any], work_dir: Path) -> int:
 
 
 #: A finished 10-case sweep's receipt, with no analysis attached: the job, its
-#: source and completeness, and a row per case with its assignment and its raw
-#: and log paths. The ten rows are most of it (3636 characters when pinned).
-_SWEEP_RECEIPT_CHARS = 3800
+#: source and completeness, and a row per case with its assignment, its raw
+#: and log paths and the LTspice build it ran on. Its log is clean, so a row
+#: carries no diagnostics. The ten rows are most of it (4146 characters when
+#: pinned).
+_SWEEP_RECEIPT_CHARS = 4300
 
 #: analyze_results' reply for one value recipe over the same ten runs, grouped
 #: by the swept part: the overall mean, one mean per group, and a digest per
-#: run read (2638 characters when pinned).
-_SWEEP_ANALYSIS_CHARS = 2750
+#: run read (2838 characters when pinned).
+_SWEEP_ANALYSIS_CHARS = 2950
 
 
 async def test_a_sweeps_receipt_and_its_analysis_stay_short(
-    state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    config: ServerConfig, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    # The runs replay an LTspice 26 recording, so the session runs an LTspice:
+    # its logs are read with that build's rules, as a real sweep's are.
+    state_with_sim = SessionState.create(
+        config, available={"ltspice": type("LTspice", (FakeSim,), {})}
+    )
     recorded_fixture_simulator(monkeypatch)
     values = [f"{k}k" for k in range(1, 11)]
     receipt = await dispatched(

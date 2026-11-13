@@ -373,11 +373,34 @@ rest:
 
 ## Diagnostics
 
-The server reads each simulator log and attaches its warnings and errors
-(parse errors with caret pointers, fatal errors, convergence messages,
-`.MEAS` parse failures) to the replies of `run_experiments`, `jobs` and the
-`summary` recipe as `warnings` and `errors` lists, so the agent reads a
-failure in the tool reply instead of searching a log.
+The server reads each simulator log, and its console capture beside it, when
+the run ends, and puts what the simulator said on the run: each run row of
+`run_experiments` and `jobs`, and the `summary` recipe, carry `diagnostics`,
+one entry per condition, so the agent learns from the reply that a run which
+finished was still warned about, without searching a log. An entry is
+`{code, count, first_text, channel}`, plus `severity` only where the
+simulator wrote one: `code` is the server's name for the condition (one code
+for every build's wording of it), `severity` the simulator's own word, kept
+apart because LTspice XVII calls an ignored model parameter an error on a run
+that finished. `first_text` is the first occurrence as written, `channel`
+says whether it came from the log or the console, and the run's `log` holds
+the rest.
+
+The rules are chosen by the run's producer, the simulator and the build it
+named in its output, and are built from logs each one wrote. A line that is
+neither a known condition nor the producer's routine output (banners,
+settings, timing, step lines, solver statistics, and the result blocks other
+readers decode) is counted under `unclassified` with the first one as
+written, never dropped. `diagnostics_coverage` says when the reading is not
+the producer's own: the build has no recordings, the producer is not known,
+the simulator has no recordings at all (QSPICE and Xyce, whose every line is
+counted as unclassified), the log could not be read, or the run was recorded
+before logs were classified. A run with nothing to report carries neither
+field.
+
+The `summary` recipe also keeps the simulator's warnings and errors as text
+(parse errors with caret pointers, fatal errors, convergence messages, `.MEAS`
+parse failures) in `warnings` and `errors` lists.
 
 The run summary also has an `observations` list:
 
@@ -394,7 +417,8 @@ that the result is correct.
 
 LTspice and ngspice get full diagnostics, with ngspice's console output read
 alongside its log. For QSPICE and Xyce, the server parses convergence and
-fatal errors on a best-effort basis.
+fatal errors into `warnings` and `errors` on a best-effort basis, and their
+`diagnostics` count every line as `unclassified`.
 
 ## Non-goals
 

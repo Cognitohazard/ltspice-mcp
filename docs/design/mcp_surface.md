@@ -882,7 +882,8 @@ finish without it. Left false, it is not part of the request's identity.
 
 **RunRecord** is a schema fragment shared by `run_experiments` and `jobs`:
 `{case_id?, run_index?, circuit?, assignments?, status?, raw?, log?,
-other_raws?, simulator_version?, attempt?}`. Every key is optional because a
+other_raws?, simulator_version?, diagnostics?, diagnostics_coverage?,
+attempt?}`. Every key is optional because a
 run-field projection can remove any of them. `status` is the case's own
 status, which uses a separate vocabulary from the job's `status` on the
 receipt. It is `produced` once the simulator wrote its output, `failed`,
@@ -908,7 +909,17 @@ the run reported in its own output. It is read from the LTspice log banner
 (`ngspice-42, Creation Date: ...`), or the raw header's `Command:` when there
 is none of those (LTspice XVII, QSPICE). It is absent when the output names no
 build. It is recorded per case, so an executable replaced during a job shows
-as two builds. Runs are rendered as `items: [RunRecord]`, each row an object
+as two builds. `diagnostics` is what the simulator said about the run, read
+from its log and console capture when the run ended: one entry per condition,
+`{code, count, first_text, channel, severity?}`, with `severity` only where
+the simulator wrote one, and lines the server does not recognise counted under
+`unclassified` (`docs/DESIGN.md`, "Diagnostics"). It does not change the
+case's `status`: a run the simulator warned about and finished is still
+`produced`. `diagnostics_coverage` is present only when that reading is not
+the run's own simulator and build: `build_unrecorded`, `producer_unknown`,
+`unverified`, `log_unread`, or `not_classified` for a case recorded before
+logs were classified. The `summary` recipe carries the same two fields for
+the same run. Runs are rendered as `items: [RunRecord]`, each row an object
 with the same keys at every budget.
 
 Under a `budget`, receipts keep the common envelope and step down the
@@ -1195,7 +1206,8 @@ continuation replays them.
   `include.fields` the same way, and `run_fields` on `run_experiments` and
   `jobs(runs)` follows the same rules over a run row's keys (`case_id`,
   `run_index`, `circuit`, `assignments`, `native_statistics`, `status`,
-  `raw`, `log`, `other_raws`, `simulator_version`, `attempt`), with no bare
+  `raw`, `log`, `other_raws`, `simulator_version`, `diagnostics`,
+  `diagnostics_coverage`, `attempt`), with no bare
   names. A path that no row on the page reaches is reported in `warnings`
   with the keys that are there.
 - `include.fields` changes only the row view. Every cursor records the
