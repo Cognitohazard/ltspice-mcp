@@ -1426,8 +1426,6 @@ def measurement_answer(
     """
     if form == "failed":
         return MeasurementAnswer("value")
-    if card == "deriv_when":
-        return MeasurementAnswer("at" if has_point else "value")
     rules, _coverage = rules_for(producer)
     sets = _READING_SETS.get(rules, ())
     if not sets:
@@ -1436,6 +1434,8 @@ def measurement_answer(
             f"the server has no recording of how {producer.family or 'this simulator'} "
             "prints a measurement",
         )
+    if card == "deriv_when":
+        return MeasurementAnswer("at" if has_point else "value")
     if form is None:
         return MeasurementAnswer(
             None, "the log printed it in a form no recording of its simulator shows"
@@ -1516,6 +1516,19 @@ def answered_measurements(
             answered["answer_unknown"] = answer.unknown
         entries[name] = answered  # type: ignore[assignment]
     return {**table, "measurements": entries}
+
+
+def result_unreadable(entry: Mapping[str, Any]) -> Any:
+    """Why an answered measurement entry's result could not be read, or None.
+
+    An entry's ``unreadable`` says its ``values`` were printed as other than a
+    number. That is its result unless ``answer`` names ``at``: a WHEN with no
+    FIND printed its threshold there, the level it searched for, and its
+    result is the crossing, which reads. An entry whose answer is not known
+    gives the reason too, as no field of it is read."""
+    if entry.get("answer") == "at":
+        return None
+    return entry.get("unreadable")
 
 
 _RE_FOURIER_NAN = re.compile(

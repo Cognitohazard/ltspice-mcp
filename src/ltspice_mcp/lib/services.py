@@ -638,28 +638,20 @@ def source_producer(
     )
 
 
-def log_producer(
-    source: AnalysisSource, *, read_dialect: str | None = None, reported: str | None = None
-) -> Producer:
-    """Who wrote ``source``'s log (:func:`source_producer`). ``read_dialect``
-    is the dialect a bare path's raw header shows and ``reported`` the build
-    its files name, where the caller has read them; a log-only reader opens no
-    source file in this process, so it passes neither, and the log is read
-    with every recorded build's rules (``log_conditions.rules_for``)."""
-    if source.producer is not None:
-        return source.producer
-    return source_producer(source, read_dialect=read_dialect, reported=reported)
-
-
 async def answer_measurements(
     source: AnalysisSource, table: MeasurementsOutput, *, producer: Producer | None = None
 ) -> MeasurementsOutput:
     """``source``'s log measurements ``table`` with the field holding each
     one's result named (``log_parser.answered_measurements``), from who wrote
-    the log (``producer``, else :func:`log_producer`) and the run's deck where
-    it is known. Every reader of a measurement reads it through here."""
+    the log and the run's deck where it is known. Every reader of a
+    measurement reads it through here. ``producer`` is the one a caller has
+    already resolved (the summary's, read with the build its files name);
+    otherwise it is :func:`source_producer`'s, as a log-only reader opens no
+    source file in this process: a bare path then names no build, and its log
+    is read with every recorded build's rules (``log_conditions.rules_for``),
+    which agree on every recorded form."""
     cards = await asyncio.to_thread(measurement_cards, source.netlist)
-    return answered_measurements(table, producer or log_producer(source), cards)
+    return answered_measurements(table, producer or source_producer(source), cards)
 
 
 def reported_version(

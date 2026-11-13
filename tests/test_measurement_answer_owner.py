@@ -42,7 +42,7 @@ def _called(node: ast.AST) -> str | None:
 def _takes_measurements(nodes: list[ast.AST]) -> bool:
     """Whether a scope reads a decoded log section (``.value(...)`` or
     ``section_value(...)``) and names the measurements section."""
-    reads = any(_called(node) in ("value", "section_value") for node in nodes)
+    reads = any(_called(node) in ("value", "section", "section_value") for node in nodes)
     names = any(isinstance(node, ast.Constant) and node.value == "measurements" for node in nodes)
     return reads and names
 
@@ -63,6 +63,24 @@ def test_every_reader_of_a_logs_measurements_answers_them():
         "holding each result: read them through services.answer_measurements "
         f"(or list a scope that picks no field in _PICKS_NO_FIELD): {unanswered}"
     )
+
+
+#: Scopes that read a log section named by a variable, which the measurements
+#: section may be: each answers it, whatever the scan above sees of its name.
+_READS_A_NAMED_SECTION = (
+    "api/_primitives.py:load_log_section",
+    "tools/inspect_tools.py:_log_results_page",
+)
+
+
+def test_a_reader_of_a_section_named_by_a_variable_answers_the_measurements():
+    found = {
+        f"{path}:{scope}": nodes
+        for path, tree in modules().items()
+        for scope, nodes in scopes(tree)
+    }
+    for key in _READS_A_NAMED_SECTION:
+        assert any(_called(node) == "answer_measurements" for node in found[key]), key
 
 
 def test_every_listed_scope_still_takes_measurements():

@@ -2844,11 +2844,13 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
             "type": "object",
             "description": (
                 "The recipe's value. A measurements row whose run holds one value "
-                "per .meas carries 'measured' {name: value} and 'at' {name: reported "
-                "crossing/AT point}. A null in 'measured' is named once by why: "
-                "'failed_measurements' (LTspice printed it failed), 'unreadable' "
-                "{name: {line, reason}} (it printed something other than a number) "
-                "or 'not_finite' (it printed a number that is not finite). Its "
+                "per .meas carries 'measured' {name: value} and 'at' {name: AT point "
+                "printed beside a result that is its value}. A null in 'measured' is "
+                "named once by why: 'failed_measurements' (LTspice printed it failed), "
+                "'unreadable' {name: {line, reason}} (it printed something other than "
+                "a number for the result), 'answer_unknown' {name: reason} (which "
+                "field holds the result is not known) or 'not_finite' (it printed a "
+                "number that is not finite). Its "
                 "'stats' block is left off the default row and returned by "
                 "include.fields=['value']. A stepped run's row is 'stats', with "
                 "'failed_measurements' and 'unreadable' over all its steps."
@@ -2893,6 +2895,15 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
                         },
                         "required": ["reason"],
                     },
+                },
+                "answer_unknown": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                    "description": (
+                        "The measurements whose 'measured' is null because which "
+                        "field of what the log printed holds the result is not "
+                        "known, with why."
+                    ),
                 },
             },
         },

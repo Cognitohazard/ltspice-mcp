@@ -67,7 +67,12 @@ from ltspice_mcp.lib.format import (
     same_value,
 )
 from ltspice_mcp.lib.log_conditions import decoded_run_diagnostics, reply_fields
-from ltspice_mcp.lib.log_parser import DEVICE_OP_TABLE_DIGITS, device_key, measurement_cards
+from ltspice_mcp.lib.log_parser import (
+    DEVICE_OP_TABLE_DIGITS,
+    device_key,
+    measurement_cards,
+    result_unreadable,
+)
 from ltspice_mcp.lib.log_types import MeasurementsOutput, measurement_failed, measurement_named
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
@@ -970,13 +975,14 @@ async def summary(
     # What the simulator said about the run, with the rules its run row was
     # classified with when it ended, so the two answers are one.
     descriptor = raw.descriptor
-    producer = services.log_producer(
-        source,
-        read_dialect=descriptor.dialect if descriptor.dialect_evidence else None,
-        reported=None
-        if source.producer is not None
-        else await asyncio.to_thread(reported_build, source.log, source.raw),
-    )
+    if source.producer is not None:
+        producer = source.producer
+    else:
+        producer = services.source_producer(
+            source,
+            read_dialect=descriptor.dialect if descriptor.dialect_evidence else None,
+            reported=await asyncio.to_thread(reported_build, source.log, source.raw),
+        )
     said = reply_fields(decoded_run_diagnostics(logs, producer))
     cards = await asyncio.to_thread(measurement_cards, source.netlist)
     try:
@@ -1128,13 +1134,10 @@ async def measurement_rows(
         failed = [name for name in table["failed_measurements"] if name in stats]
         if failed:
             row["failed_measurements"] = failed
-        # A value printed as other than a number, where the value is the
-        # result: a WHEN whose result is its crossing reads, whatever it
-        # printed for the level it searched for.
         unreadable = {
-            name: entry["unreadable"]
+            name: reason
             for name, entry in whole["measurements"].items()
-            if "unreadable" in entry and name in stats and entry.get("answer") != "at"
+            if name in stats and (reason := result_unreadable(entry)) is not None
         }
         if unreadable:
             row["unreadable"] = unreadable

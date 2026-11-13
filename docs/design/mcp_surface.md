@@ -1208,7 +1208,11 @@ agree on every recorded form. A DERIV ... WHEN is not recorded, and keeps the
 answer its deck card has given it: the point. The same `unreadable {line,
 reason}` is on the entry in the summary's `measurements`, in
 `inspect(kind="results", view="measurements")` rows and in the Python API's
-`measurements`. The default row omits the per-name `stats` block;
+`measurements`, where it says the entry's `values` were printed as other than
+a number. An entry whose `answer` is `at` (a WHEN whose threshold is written
+as a parameter or an expression) carries it beside a crossing that reads, so
+the recipe's row, which names why a result is null, does not list it
+(`log_parser.result_unreadable`). The default row omits the per-name `stats` block;
 `include.fields=["value"]` returns it, and reductions and specs read it either
 way. A stepped run's row has `stats`, with `failed_measurements` and
 `unreadable` over all its steps.

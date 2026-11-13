@@ -32,6 +32,7 @@ from ltspice_mcp.lib.log_conditions import Producer
 from ltspice_mcp.lib.log_parser import (
     MeasurementAnswer,
     measurement_answer,
+    measurement_cards,
     printed_measurements,
     read_log_text,
 )
@@ -374,3 +375,24 @@ async def test_a_table_with_a_level_beside_a_point_is_a_form_no_recording_shows(
     read = await asyncio.to_thread(lambda: SyncApi(state_no_sim).measurements(path=log))
     assert "answer" not in read["measurements"]["tcross"]
     assert read["measurements"]["vfinal"]["answer"] == "value"
+
+
+def test_a_find_of_a_derivative_where_a_condition_is_met_is_a_find(work_dir: Path):
+    """``FIND deriv(V(out)) WHEN ...`` is a FIND, whose result is its value,
+    though its card holds both DERIV and WHEN."""
+    deck = work_dir / "find_deriv.cir"
+    deck.write_text(
+        "* t\nV1 a 0 1\n"
+        ".meas tran f_d FIND deriv(V(a)) WHEN V(a)=0.5\n"
+        ".meas tran d_w DERIV V(a) WHEN V(a)=0.5\n"
+        ".tran 1m\n.end\n",
+        encoding="ascii",
+    )
+    cards = measurement_cards(deck)
+    assert cards == {"f_d": "value", "d_w": "deriv_when"}
+    assert measurement_answer("line_at", _LT26, cards["f_d"], has_point=True).field == "value"
+
+
+def test_a_deriv_when_from_a_simulator_with_no_recordings_is_unknown():
+    answer = measurement_answer("line_at", Producer("qspice", None, None), "deriv_when")
+    assert answer.field is None and "no recording" in str(answer.unknown)
