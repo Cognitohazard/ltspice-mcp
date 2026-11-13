@@ -17,7 +17,6 @@ from typing import TYPE_CHECKING
 
 from ltspice_mcp.lib import atomic_write_bytes, capabilities, now
 from ltspice_mcp.lib.asc_document import is_asc
-from ltspice_mcp.lib.component_value import WAVEFILE
 from ltspice_mcp.lib.deck_staging import (
     card_sections,
     sha256_file,
@@ -44,7 +43,7 @@ from ltspice_mcp.lib.spice_lex import (
     lex_for_edit,
     tokenize_body,
 )
-from ltspice_mcp.lib.spice_lex_views import read_instance
+from ltspice_mcp.lib.spice_lex_views import WAVEFILE, read_instance
 from ltspice_mcp.lib.store import Store
 
 if TYPE_CHECKING:
@@ -188,7 +187,11 @@ _MODULE_DIRECTIVES = frozenset({".load", ".hdl", ".verilog", ".osdi", ".pre_osdi
 #: named in quotes or not (``deck/wavefile_nodes``, ``deck/wavefile_unquoted``).
 _FILE_KEYWORDS = frozenset({"file", "sfile", "pwlfile", WAVEFILE})
 # Each keyword as a whole word, so ``profile=`` names no file, then a PWL
-# whose parenthesized points hold a quoted name.
+# whose parenthesized points hold a quoted name. It reads the text of every
+# card kind, in each dialect's spelling, not only an LTspice V or I card, so it
+# does not go through the source view (``spice_lex_views.read_source_text``),
+# which splits such a card into its value and its own parameters and leaves a
+# ``file=`` inside the value unread.
 _FILE_READER = re.compile(
     r"(?i)\b(?:"
     + "|".join(sorted(_FILE_KEYWORDS, key=len, reverse=True))

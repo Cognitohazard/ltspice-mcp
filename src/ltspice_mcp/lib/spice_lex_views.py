@@ -377,6 +377,177 @@ class ParamCard:
 ElementKind = Literal["model", "value", "params_only", "none"]
 
 
+# ---------------------------------------------------------------------------
+# V / I — the words after a source's nodes: its value and its own parameters
+# ---------------------------------------------------------------------------
+
+#: A source's own parameters by its letter, which both LTspice builds read
+#: after its value whatever form the value takes (the ``source-parameters``
+#: recordings): a voltage source's series resistance and parallel capacitance,
+#: and either source's AC magnitude, written ``AC=2`` or ``AC 2``. A value edit
+#: keeps them. Every other word after a source's nodes is its value, a PWL's
+#: ``TIME_SCALE_FACTOR=`` before its points among them, and is replaced.
+SOURCE_PARAMETERS: dict[str, frozenset[str]] = {
+    "V": frozenset({"rser", "cpar", "ac"}),
+    "I": frozenset({"ac"}),
+}
+#: Each own keyed parameter as a message names it.
+SOURCE_PARAMETER_NAMES = {"rser": "Rser=", "cpar": "Cpar=", "ac": "AC="}
+#: The flag after a current source's value that makes it a load, which both
+#: builds read there (``deck/source_parameters``).
+LOAD_FLAG = "load"
+#: The keyword of a source that plays a .wav file, which sets its level in
+#: place of a value (``deck/wavefile_nodes``).
+WAVEFILE = "wavefile"
+
+
+@dataclass(frozen=True)
+class SourceText:
+    """The words after a V or I source's nodes: its value, its own parameters
+    in order, each as written, and the ``wavefile=`` word of a source that
+    plays a .wav file."""
+
+    value: str
+    own: tuple[str, ...]
+    played: str | None = None
+
+    @property
+    def text(self) -> str:
+        """The value then the own parameters, one space apart."""
+        return " ".join(word for word in (self.value, *self.own) if word)
+
+
+def text_without(text: str, spans: list[tuple[int, int]], end: int | None = None) -> str:
+    """``text`` up to ``end`` with each of ``spans`` (start, stop) cut out, in
+    order, the runs left kept as written and joined one space apart: a
+    value with some of its words taken out."""
+    return " ".join(text[start:stop] for start, stop in _runs_without(text, spans, end))
+
+
+def _runs_without(
+    text: str, spans: list[tuple[int, int]], end: int | None = None
+) -> list[tuple[int, int]]:
+    """The (start, stop) of each run of ``text`` up to ``end`` that ``spans``
+    leave, in order, without its surrounding whitespace; empty runs left out."""
+    runs, cursor = [], 0
+    for start, stop in [*spans, (len(text) if end is None else end, len(text))]:
+        piece = text[cursor:start]
+        if piece.strip():
+            lead = len(piece) - len(piece.lstrip())
+            runs.append((cursor + lead, cursor + len(piece.rstrip())))
+        cursor = stop
+    return runs
+
+
+def source_word_key(word: str) -> str:
+    """The name a source's own parameter goes by: its key (``AC=2`` and
+    ``AC 2`` alike), or the flag itself."""
+    return word.split("=", 1)[0].split(None, 1)[0].strip().casefold()
+
+
+def _is_amount(token: Token) -> bool:
+    """A word that can be an AC magnitude or phase: a number or a braced expression."""
+    return token.kind == TokenKind.BRACED or (
+        token.kind == TokenKind.BARE and is_scaled_number(token.text)
+    )
+
+
+@dataclass(frozen=True)
+class _SourceReading:
+    """``read_source_text``'s answer with where it found each part in the
+    text it read: the runs of the value, and the tokens of the keyed own
+    parameters (``Rser=1k``, ``AC=2``). ``shown`` is the text with those keyed
+    parameters cut out, in its order (``DC 0 AC 1 SIN(0 1 1k)``): what display
+    shows of the source and what a comparison compares besides its
+    parameters."""
+
+    text: SourceText
+    value_runs: list[tuple[int, int]]
+    keyed: list[Token]
+    shown: str
+
+
+def _read_source(text: str, prefix: str) -> _SourceReading:
+    """``read_source_text``, with where each part is in ``text``."""
+    letter = prefix[:1].upper()
+    own_keys = SOURCE_PARAMETERS.get(letter, frozenset())
+    tokens = []
+    end = len(text)
+    for tok in tokenize_body(text):
+        if tok.kind == TokenKind.COMMENT_TRAIL:
+            end = tok.body_offset
+            break
+        tokens.append(tok)
+    own: list[tuple[int, int]] = []
+    keyed: list[Token] = []
+    played = None
+    index = 0
+    while index < len(tokens):
+        tok = tokens[index]
+        key = (tok.key or "").casefold() if tok.kind == TokenKind.KEY_VALUE else ""
+        bare = tok.text.casefold() if tok.kind == TokenKind.BARE else ""
+        if key in own_keys or (letter == "I" and bare == LOAD_FLAG):
+            own.append((tok.body_offset, tok.body_end))
+            if key:
+                keyed.append(tok)
+        elif bare == "ac" and "ac" in own_keys:
+            # AC, its magnitude, and a phase where one follows.
+            amounts = 0
+            while amounts < 2 and index + 1 < len(tokens) and _is_amount(tokens[index + 1]):
+                index += 1
+                amounts += 1
+            own.append((tok.body_offset, tokens[index].body_end))
+        elif key == WAVEFILE:
+            played = text[tok.body_offset : tok.body_end]
+        index += 1
+    runs = _runs_without(text, own, end)
+    return _SourceReading(
+        SourceText(
+            value=" ".join(text[start:stop] for start, stop in runs),
+            own=tuple(" ".join(text[start:stop].split()) for start, stop in own),
+            played=played,
+        ),
+        runs,
+        keyed,
+        text_without(text, [(tok.body_offset, tok.body_end) for tok in keyed], end),
+    )
+
+
+def read_source_text(text: str, prefix: str) -> SourceText:
+    """``text``, the words after a source's nodes (on a card, or in a sheet
+    part's Value), read as its value and its own parameters
+    (``SOURCE_PARAMETERS``, ``AC`` with its magnitude and any phase, and a
+    current source's ``load``): the one rule every reader of a source's value
+    reads it by. ``InstanceLine`` reads a V or I card through it, and every
+    edit of a source's value keeps the own parameters by it.
+
+    Raises ``SpiceLexError`` for text that does not split into words.
+    """
+    return _read_source(text, prefix).text
+
+
+def _source_value_start(tokens: list[Token]) -> int | None:
+    """Where the words after a V or I card's two nodes start in its body, when
+    the source rule (``read_source_text``) reads them: the card's first two
+    words after its reference are nodes, whether or not a word follows them
+    (``V1 a 0`` has no value, as a value edit reads it). None for every other
+    card, and for a source that plays a .wav file, whose words are all nodes
+    (``_DEFINING_KEYS``).
+    """
+    if (
+        not tokens
+        or tokens[0].kind != TokenKind.BARE
+        or tokens[0].text[:1].upper() not in SOURCE_PARAMETERS
+    ):
+        return None
+    words = [t for t in tokens[1:] if t.kind != TokenKind.COMMENT_TRAIL]
+    if len(words) < 2 or any(t.kind == TokenKind.KEY_VALUE for t in words[:2]):
+        return None
+    if any((t.key or "").casefold() == WAVEFILE for t in words):
+        return None
+    return words[1].body_end
+
+
 @dataclass(frozen=True)
 class ElementSpec:
     default_kind: ElementKind
@@ -537,11 +708,18 @@ class InstanceLine:
     - ``W``: ``model`` carries the switch model; the source whose current
       sets the switch, written between its two nodes and its model, is
       neither a node nor the model.
-    - ``R`` / ``C`` / ``L`` / ``V`` / ``I``: ``value`` carries the
-      passive value or source magnitude (e.g. ``"1k"``), ``model`` is
-      None. A value carried by a keyword (``R=``, a capacitor's ``Q=``, an
-      inductor's ``Flux=``, a source's ``wavefile=``) leaves every
-      positional a node.
+    - ``R`` / ``C`` / ``L``: ``value`` carries the passive value (e.g.
+      ``"1k"``), ``model`` is None. A value carried by a keyword (``R=``, a
+      capacitor's ``Q=``, an inductor's ``Flux=``) leaves every positional
+      a node.
+    - ``V`` / ``I``: the words after the two nodes are read by the source
+      rule (``read_source_text``) into ``source``: ``value`` is its value
+      (``"PULSE(0 1 0 1n 1n 1u 2u)"``, ``"PWL TIME_SCALE_FACTOR=2 (0 4 1
+      4)"``), None when it gives none; its own keyed parameters (``Rser=``,
+      ``Cpar=``, ``AC=``) are ``params``, and its own words without ``=``
+      (``AC 2``, a current source's ``load``) are ``own_words``. A source
+      that plays a .wav file (``wavefile=``) has every positional a node and
+      no value.
     - ``B`` / ``E`` / ``G``: both are None — the value lives in
       ``params["V"]`` or ``params["I"]``.
     - ``T`` / ``@``: both are None — every positional is a node and the
@@ -573,6 +751,10 @@ class InstanceLine:
     # tail. None when there are no nodes or their offsets are synthesized.
     _node_span: tuple[int, int] | None = None
     _params: _Params = field(default_factory=_Params)
+    # A V or I source's words after its nodes as its value and its own
+    # parameters (``read_source_text``); None for every other card, and for a
+    # source the rule does not read (one that plays a .wav file).
+    source: SourceText | None = None
 
     @classmethod
     def from_card(cls, card: SpiceCard) -> InstanceLine:
@@ -582,6 +764,9 @@ class InstanceLine:
             raise _malformed(card, "empty instance card")
         if tokens[0].kind != TokenKind.BARE:
             raise _malformed(card, "instance card does not start with a bare ref")
+        start = _source_value_start(tokens)
+        if start is not None:
+            return cls._from_source(card, tokens, start)
         ref = tokens[0].text
         prefix = ref[:1].upper()
 
@@ -731,6 +916,66 @@ class InstanceLine:
             _params=kv,
         )
 
+    @classmethod
+    def _from_source(cls, card: SpiceCard, tokens: list[Token], start: int) -> InstanceLine:
+        """A V or I card read by the source rule, whose words after its two
+        nodes start at body offset ``start`` (``_source_value_start``)."""
+        nodes = [t for t in tokens[1:] if t.kind != TokenKind.COMMENT_TRAIL][:2]
+        reading = _read_source(card.body[start:], tokens[0].text)
+        value_token = None
+        if len(reading.value_runs) == 1:
+            # One run of words, which ``set_value`` replaces in place.
+            first, last = (start + offset for offset in reading.value_runs[0])
+            value_token = Token(
+                kind=TokenKind.BARE,
+                text=card.body[first:last],
+                body_offset=first,
+                body_length=last - first,
+            )
+        keyed = [replace(tok, body_offset=tok.body_offset + start) for tok in reading.keyed]
+        return cls(
+            card=card,
+            ref=tokens[0].text,
+            nodes=[t.text for t in nodes],
+            model=None,
+            value=reading.text.value or None,
+            _model_token=value_token,
+            _node_span=_exact_node_span(nodes, 2),
+            _params=_Params.of(keyed),
+            source=reading.text,
+        )
+
+    def _source_reading(self) -> _SourceReading | None:
+        """The source rule's reading of the card as it now stands, so an edit
+        made through this view shows; None when the rule does not read it."""
+        tokens = tokenize_body(self.card.body)
+        start = _source_value_start(tokens)
+        return None if start is None else _read_source(self.card.body[start:], self.ref)
+
+    def _reread_source(self) -> None:
+        """Read the card again after an edit, as ``from_card`` reads it: the
+        value, its own parameters and where each now is, so a value of several
+        words the edit wrote (``5 AC 1``) is read by the rule and a later edit
+        lands on the value alone."""
+        tokens = tokenize_body(self.card.body)
+        start = _source_value_start(tokens)
+        if start is None:
+            return
+        fresh = self._from_source(self.card, tokens, start)
+        self.value, self.source = fresh.value, fresh.source
+        self._model_token, self._node_span, self._params = (
+            fresh._model_token,
+            fresh._node_span,
+            fresh._params,
+        )
+
+    @property
+    def own_words(self) -> tuple[str, ...]:
+        """A V or I source's own parameters written without ``=`` (``AC 2``, a
+        current source's ``load``), in card order; its keyed ones are in
+        ``params``. Empty for every other card."""
+        return tuple(word for word in self.source.own if "=" not in word) if self.source else ()
+
     def set_model(self, name: str) -> None:
         """Replace the model/subckt-name token."""
         self.model = name
@@ -744,6 +989,8 @@ class InstanceLine:
             self.set_param(self._value_param_key, new)
             return
         self._update_slot_in_place(new)
+        if self.source is not None:
+            self._reread_source()
 
     def set_nodes(self, new_nodes: list[str]) -> None:
         """Rewrite the positional node list (connectivity edit).
@@ -831,11 +1078,43 @@ class InstanceLine:
         case: setting one left the others at their old value, and which copy a
         simulator reads is not recorded here. In place where the card allows;
         otherwise, and for a new key, the card is rendered again with every
-        copy kept. The parameters follow the model and value tokens, so an
-        in-place edit of one moves nothing before it.
+        copy kept. A source's own parameter may come before its value
+        (``V1 a 0 AC=1 PULSE(...)``), so a source is read again after the edit,
+        and a later value edit on this view lands where the value now is.
+
+        A V or I source has only its own parameters (``SOURCE_PARAMETERS``):
+        any other ``key=`` after its nodes is part of its value, so setting one
+        is refused, naming the fix.
         """
+        if self.source is not None:
+            self._refuse_unowned(key)
         if not self._params.set(self.card, key, _format_value(value)):
             self._canonical_rerender()
+        if self.source is not None:
+            self._reread_source()
+
+    def _refuse_unowned(self, key: str) -> None:
+        """Refuse ``key`` on a source that does not own it."""
+        letter = self.ref[:1].upper()
+        if key.casefold() in SOURCE_PARAMETERS[letter]:
+            return
+        source = "an I source" if letter == "I" else "a V source"
+        own = ", ".join(SOURCE_PARAMETER_NAMES[name] for name in sorted(SOURCE_PARAMETERS[letter]))
+        written = any(
+            (tok.key or "").casefold() == key.casefold()
+            for tok in tokenize_body(self.value or "")
+            if tok.kind == TokenKind.KEY_VALUE
+        )
+        if written:
+            raise NetlistError(
+                f"{self.ref}: {key}= is part of its value ({self.value}), not a parameter "
+                f"of {source}, whose own are {own}. Edit the value instead."
+            )
+        raise NetlistError(
+            f"{self.ref}: {key}= is no parameter of {source}, whose own are {own}; any "
+            f"other key=value after its nodes is read as part of its value. Edit the "
+            f"value to change it."
+        )
 
     def remove_param(self, key: str) -> None:
         """Remove every copy of a parameter (no-op if absent)."""
@@ -878,6 +1157,7 @@ class InstanceLine:
                 parts.append(self.value)
         elif self.value is not None and self._value_param_key is None:
             parts.append(self.value)
+        parts.extend(self.own_words)
         if self._params_marker is not None:
             parts.append(self._params_marker)
         parts.extend(self._params.rendered())
@@ -889,10 +1169,16 @@ class InstanceLine:
     def display_value(self) -> str:
         """Single-string projection for display: model name for M/Q/J/X,
         the controlling source and model for a W switch, value field for
-        R/C/L/V/I/E/F/G/H, KV pair for B-sources, empty for malformed
+        R/C/L/E/F/G/H, a V or I source's value then its own words without
+        ``=`` (``1m load``), KV pair for B-sources, empty for malformed
         bodies."""
         if self.model is not None:
             return self.model if self.control is None else f"{self.control} {self.model}"
+        if self.source is not None:
+            # Its value and the own parameters written without ``=``, in card
+            # order (``DC 0 AC 1 SIN(0 1 1k)``), as the card now reads.
+            reading = self._source_reading()
+            return "" if reading is None else reading.shown
         if self.value is not None:
             return self.value
         for key in ("V", "I", "v", "i"):
@@ -907,10 +1193,16 @@ class InstanceLine:
 def body_has_stray_kv_remnant(body: str) -> bool:
     """True iff the body's KV parser left orphan tokens after the first
     KEY=VALUE. Callers surface ``<unparseable>`` rather than render a
-    truncated value."""
+    truncated value. Never for a V or I source the source rule reads, whose
+    words after its nodes are each its value's or its own parameter's."""
     try:
         toks = tokenize_body(body)
     except Exception:
+        return False
+    if _source_value_start(toks) is not None:
+        # The source rule reads every word after a source's nodes as its value
+        # or one of its own parameters, a PWL's ``TIME_SCALE_FACTOR=2`` before
+        # its points among them (deck/source_parameters).
         return False
     seen_kv = False
     for tok in toks:

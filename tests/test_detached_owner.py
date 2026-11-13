@@ -27,6 +27,7 @@ import pytest
 from ltspice_mcp.api import Api, ApiCallError, ApiValidationError, _detach
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.experiment_runner import REQUEST_GATE_TIMEOUT_S
+from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from tests.conftest import (
@@ -593,19 +594,29 @@ def test_killing_a_detached_owner_leaves_an_interrupted_job(work_dir: Path) -> N
             # Read it back from the session that spawned the owner and has not
             # collected it. Its pid is still in the process table, and a job whose
             # owner is gone must not read as one that is still running.
-            interrupted = wait_until(
+            #
+            # Wait for a terminal status, not merely for one other than
+            # "running": the owner persists its "running" transition off its
+            # event loop, so the record can still say "queued" while its
+            # simulator runs, and a read made before the kill has taken effect
+            # (TerminateProcess returns before the process is gone) sees that
+            # "queued" from an owner still alive.
+            stopped = wait_until(
                 lambda: (
                     status
-                    if (status := api.jobs(action="status", job_id=job_id))["status"] != "running"
+                    if (status := api.jobs(action="status", job_id=job_id))["status"]
+                    in TERMINAL_STATUSES
                     else None
                 ),
                 timeout_s=RECLASSIFY_TIMEOUT_S,
-                what="the killed owner's job to stop reporting as running",
+                what="the killed owner's job to reach a terminal status",
             )
-            assert interrupted["status"] == "interrupted", interrupted
+            assert stopped["status"] == "interrupted", stopped
             child.wait(timeout=LIVENESS_S)
         finally:
-            if child.is_running():
+            # The owner's Job Object or process group may already have stopped
+            # the simulator, between any check and the kill.
+            with contextlib.suppress(psutil.NoSuchProcess):
                 child.kill()
 
     with _api(work_dir) as fresh:
