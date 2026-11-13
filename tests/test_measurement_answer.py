@@ -35,6 +35,7 @@ from ltspice_mcp.lib.log_parser import (
     measurement_cards,
     printed_measurements,
     read_log_text,
+    result_unreadable,
 )
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
@@ -396,3 +397,10 @@ def test_a_find_of_a_derivative_where_a_condition_is_met_is_a_find(work_dir: Pat
 def test_a_deriv_when_from_a_simulator_with_no_recordings_is_unknown():
     answer = measurement_answer("line_at", Producer("qspice", None, None), "deriv_when")
     assert answer.field is None and "no recording" in str(answer.unknown)
+
+
+def test_a_null_whose_field_is_unknown_has_that_one_reason():
+    entry = {"values": [None], "answer_unknown": "why", "unreadable": {"line": "", "reason": "x"}}
+    assert result_unreadable(entry) is None
+    assert result_unreadable({"values": [None], "answer": "at", "unreadable": {}}) is None
+    assert result_unreadable({"values": [None], "answer": "value", "unreadable": {"r": 1}})

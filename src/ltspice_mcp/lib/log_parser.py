@@ -1525,8 +1525,8 @@ def result_unreadable(entry: Mapping[str, Any]) -> Any:
     number. That is its result unless ``answer`` names ``at``: a WHEN with no
     FIND printed its threshold there, the level it searched for, and its
     result is the crossing, which reads. An entry whose answer is not known
-    gives the reason too, as no field of it is read."""
-    if entry.get("answer") == "at":
+    is named by ``answer_unknown`` alone, so each null has one reason."""
+    if entry.get("answer") == "at" or "answer_unknown" in entry:
         return None
     return entry.get("unreadable")
 
