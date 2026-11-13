@@ -461,3 +461,97 @@ async def test_ngspice_names_the_same_condition_live(work_dir: Path):
     assert "unrecognized parameter (bogus) - ignored" in entry["first_text"]
     # What else this ngspice said, it said in a form the server knows.
     assert "unclassified" not in by_code, by_code
+
+
+def test_one_code_on_both_channels_is_one_entry_per_channel():
+    found = log_conditions.classify(
+        {"log": "Error: said in the log\n", "console": "Error: said on the console\n"},
+        "ngspice",
+    )
+    assert [(entry["code"], entry["channel"], entry["count"]) for entry in found] == [
+        ("simulator_error", "log", 1),
+        ("simulator_error", "console", 1),
+    ]
+
+
+def test_a_case_that_has_not_ended_or_never_ran_says_nothing(work_dir: Path):
+    """A retried case keeps no earlier attempt's answer on its row while it runs,
+    and a case whose submission failed ran no simulator to say anything."""
+    from ltspice_mcp.lib.experiment_types import ExperimentCase
+    from ltspice_mcp.tools.receipts import runs_page
+
+    stale = {"diagnostics": EXPECTED["ltspice26"]["diagnostics"]}
+
+    def case(**fields: Any) -> ExperimentCase:
+        return ExperimentCase(
+            case_id="c",
+            run_index=0,
+            circuit="dut",
+            circuit_path=work_dir / "dut.cir",
+            staged_deck=work_dir / "dut.cir",
+            deck_sha256="0" * 64,
+            **fields,
+        )
+
+    rows = runs_page(
+        [
+            case(status="running", submitted_at=_now(), log_diagnostics=stale),
+            case(status="queued", log_diagnostics=stale),
+            case(status="failed", submitted_at=_now(), failure_code="submission_failed"),
+        ]
+    )["items"]
+    assert [_row_diagnostics(row) for row in rows] == [{}, {}, {}]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("dialect", [None, "ltspice"])
+async def test_a_bare_paths_summary_reads_the_producer_its_files_name(
+    dialect: str | None, work_dir: Path, state_no_sim: SessionState
+):
+    """A raw read by path has no case: the summary takes the simulator from the
+    caller or the raw's header, and the build from the log's banner, so a
+    recorded LTspice 26 run reads as its run row would."""
+    for suffix in (".raw", ".log"):
+        shutil.copy(
+            rec.recorded("ltspice26", "log") / f"unknown_model_param{suffix}",
+            work_dir / f"unknown_model_param{suffix}",
+        )
+    source: dict[str, Any] = {"path": str(work_dir / "unknown_model_param.raw"), "label": "p"}
+    if dialect is not None:
+        source["dialect"] = dialect
+    result = await handle_analyze_results(
+        AnalyzeResultsInput.model_validate(
+            {
+                "sources": [source],
+                "recipes": [{"key": "s", "metric": "summary"}],
+                "include": {"per_run": {"limit": 10}, "fields": ["value"]},
+            }
+        ),
+        state_no_sim,
+    )
+    data = result.structured_content
+    assert data is not None, result.content
+    (row,) = data["results"]["s"]["per_run"]["items"]
+    assert _row_diagnostics(row["value"]) == EXPECTED["ltspice26"]
+
+
+def test_a_result_set_stored_before_runs_named_their_producer_reads_as_a_bare_path():
+    from ltspice_mcp.tools.analyze import _stored_producer
+
+    assert _stored_producer(None) is None
+    assert _stored_producer({"family": "ltspice"}) is None
+    assert _stored_producer({"family": 3, "build": None, "program": None}) is None
+    assert _stored_producer({"family": "ngspice", "build": None, "program": None}) == Producer(
+        "ngspice", None, None
+    )
+
+
+def test_only_xvii_of_the_builds_before_24_reads_with_xviis_rules():
+    assert log_conditions.rules_for(Producer("ltspice", None, "C:/LTC/XVIIx64.exe")) == (
+        "ltspice17",
+        None,
+    )
+    assert log_conditions.rules_for(Producer("ltspice", None, "C:/LTC/scad3.exe")) == (
+        "ltspice",
+        "build_unrecorded",
+    )

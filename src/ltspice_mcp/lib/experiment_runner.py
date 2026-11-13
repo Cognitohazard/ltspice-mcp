@@ -1581,6 +1581,7 @@ class ExperimentRunner(RunnerBase):
             if stop_reason is not None:
                 await self._stop_active_case(execution, case, future, stop_reason)
             elif outcome is not None:
+                outcome = await self._with_logs(execution, outcome)
                 self._apply_outcome(execution.job, case, outcome)
                 if (
                     outcome.error is None
@@ -1722,6 +1723,8 @@ class ExperimentRunner(RunnerBase):
             self._fail_if_capacity_retained(execution)
             return
 
+        # Read before the stopped case's artifacts are removed below.
+        outcome = await self._with_logs(execution, outcome)
         if execution.job.recovery is not None:
             self._apply_outcome(execution.job, case, outcome)
         else:
@@ -1908,6 +1911,33 @@ class ExperimentRunner(RunnerBase):
             kept=kept,
         )
         return fact, kept
+
+    @staticmethod
+    async def _with_logs(execution: _Execution, outcome: RunOutcome) -> RunOutcome:
+        """``outcome`` with its log facts, read here when its completion did not
+        read them (a run that produced). Read after the run's time limit has
+        stopped counting, and without the raw, which a log read does not need."""
+        if outcome.logs is not None or outcome.logs_error is not None:
+            return outcome
+        if not outcome.log_file or outcome.log_file == ".":
+            return outcome._replace(logs_error="The run left no log")
+        from ltspice_mcp.lib.services import AnalysisSource, load_logs_sync
+
+        log = Path(outcome.log_file)
+        source = AnalysisSource(
+            raw=None,
+            log=log,
+            console=log.with_suffix(".exe.log"),
+            netlist=None,
+            dialect=dialect_for_simulator_name(execution.job.simulator),
+            identity=None,
+            trusted_job_artifact=True,
+        )
+        try:
+            logs = await asyncio.to_thread(load_logs_sync, source, execution.request.state)
+        except Exception as exc:
+            return outcome._replace(logs_error=f"{type(exc).__name__}: {exc}")
+        return outcome._replace(logs=logs)
 
     @staticmethod
     def _apply_outcome(job: ExperimentJob, case: ExperimentCase, outcome: RunOutcome) -> None:

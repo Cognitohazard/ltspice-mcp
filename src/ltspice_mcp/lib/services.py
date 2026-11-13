@@ -616,13 +616,21 @@ def run_producer(job: ExperimentJob, case: ExperimentCase) -> Producer:
     )
 
 
-def source_producer(source: AnalysisSource) -> Producer:
-    """Who wrote ``source``'s log: a job case's recorded producer, or for a bare
-    path the dialect its caller named (none when it named none), with no build
-    or program, which a bare path does not record."""
+def source_producer(
+    source: AnalysisSource, *, read_dialect: str | None = None, reported: str | None = None
+) -> Producer:
+    """Who wrote ``source``'s log: a job case's recorded producer
+    (``run_producer``). For a bare path, the dialect its caller named or, when
+    it named none, the one its raw's header shows (``read_dialect``, only with
+    evidence), and the build its files name (``reported``, from
+    ``reported_build``); a bare path records no program."""
     if source.producer is not None:
         return source.producer
-    return Producer(family=source.dialect, build=source.simulator_version, program=None)
+    return Producer(
+        family=source.dialect or source.explicit_dialect or read_dialect,
+        build=source.simulator_version or reported,
+        program=None,
+    )
 
 
 def reported_version(

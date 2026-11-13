@@ -1041,7 +1041,16 @@ async def summary(
     logs = await _logs_for_raw(source, state, raw)
     # What the simulator said about the run, with the rules its run row was
     # classified with when it ended, so the two answers are one.
-    said = reply_fields(decoded_run_diagnostics(logs, services.source_producer(source)))
+    if source.producer is not None:
+        producer = source.producer
+    else:
+        descriptor = raw.descriptor
+        producer = services.source_producer(
+            source,
+            read_dialect=descriptor.dialect if descriptor.dialect_evidence else None,
+            reported=await asyncio.to_thread(reported_build, source.log, source.raw),
+        )
+    said = reply_fields(decoded_run_diagnostics(logs, producer))
     try:
         # The worker has materialized every array and companion section. This
         # deadline covers resident summary computation; no artifact parser or

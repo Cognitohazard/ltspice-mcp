@@ -978,6 +978,16 @@ def _serialize_run(run: _ResolvedRun) -> dict[str, Any]:
     }
 
 
+def _stored_producer(data: Any) -> Producer | None:
+    """A resolved run's recorded producer; None for a result set stored before
+    runs recorded one, or a record that is not one, which reads as a bare path's."""
+    if not isinstance(data, dict) or set(data) != {"family", "build", "program"}:
+        return None
+    if not all(value is None or isinstance(value, str) for value in data.values()):
+        return None
+    return Producer(**data)
+
+
 def _deserialize_runs(item: result_store.ResultSet, state: SessionState) -> list[_ResolvedRun]:
     runs: list[_ResolvedRun] = []
     for data in item.inputs.get("resolved_runs", []):
@@ -997,7 +1007,7 @@ def _deserialize_runs(item: result_store.ResultSet, state: SessionState) -> list
                     plot_index=data.get("plot_index", 0),
                     identity=dict(data.get("identity") or {}),
                     trusted_job_artifact=bool(data.get("trusted_job_artifact")),
-                    producer=Producer(**data["producer"]) if data.get("producer") else None,
+                    producer=_stored_producer(data.get("producer")),
                 ),
                 job_id=data.get("job_id"),
             )

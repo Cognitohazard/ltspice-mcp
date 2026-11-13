@@ -376,7 +376,7 @@ rest:
 The server reads each simulator log, and its console capture beside it, when
 the run ends, and puts what the simulator said on the run: each run row of
 `run_experiments` and `jobs`, and the `summary` recipe, carry `diagnostics`,
-one entry per condition, so the agent learns from the reply that a run which
+one entry per condition and channel, so the agent learns from the reply that a run which
 finished was still warned about, without searching a log. An entry is
 `{code, count, first_text, channel}`, plus `severity` only where the
 simulator wrote one: `code` is the server's name for the condition (one code

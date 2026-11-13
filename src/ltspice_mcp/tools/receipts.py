@@ -994,10 +994,16 @@ def run_row_diagnostics(case: ExperimentCase) -> dict[str, Any]:
     and build, ``diagnostics_coverage``. A case that never launched, or whose run
     has not ended, says nothing; one that ended before the server classified
     logs says its log was not classified."""
+    ran = (
+        case.submitted_at is not None
+        and case.status in TERMINAL_CASE_STATUSES
+        and case.failure_code != "submission_failed"
+    )
+    if not ran:
+        return {}
     found = case.log_diagnostics
     if found is None:
-        ended = case.submitted_at is not None and case.status in TERMINAL_CASE_STATUSES
-        return {"diagnostics_coverage": "not_classified"} if ended else {}
+        return {"diagnostics_coverage": "not_classified"}
     return reply_fields(found)
 
 

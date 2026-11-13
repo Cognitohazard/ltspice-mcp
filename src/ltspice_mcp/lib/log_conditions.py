@@ -191,6 +191,7 @@ _LINE_ERROR = _re(r"^Error on line \d+ : ")
 # A number as LTspice and ngspice print it in a table row: with a unit tail
 # (dB, a degree sign, a percent sign), or the word a failed or infinite one is.
 _NUMBER = r"[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?(?:dB|°|%)?|[-+]?inf(?:dB)?|failed"
+_FLOAT = r"[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?"
 _ROW = _re(rf"^\(?(?:{_NUMBER})\)?(?:[\s,]+\(?(?:{_NUMBER})\)?)*,?$")
 _KEYED_NUMBERS = _re(rf"^[A-Za-z]\w*:?(?:\s+(?:{_NUMBER}))+$")
 
@@ -304,12 +305,12 @@ _RULES: tuple[_Rule, ...] = (
         "measurement_error",
         _re(_FILE_LINE),
         _ONLY_26,
-        _source_and_caret(_re(r"(?i)^\.meas")),
+        _source_and_caret(_re(r"^(?i:\.meas)")),
         needs_follow=True,
     ),
     _Rule(
         "measurement_error",
-        _re(r"(?i)^\.meas"),
+        _re(r"^(?i:\.meas)"),
         _ONLY_17,
         _next(_re(r"^Error: ")),
         needs_follow=True,
@@ -467,7 +468,12 @@ _RULES: tuple[_Rule, ...] = (
     _Rule(None, _step_line, _BOTH_LT),
     _Rule(None, _re(r"^Measurement: \S+$"), _BOTH_LT),
     _Rule(None, _re(r"^step\t"), _BOTH_LT),
-    _Rule(None, _re(r"^[\w.]+: .*="), _BOTH_LT),
+    # A measurement's result: its name, what it measured, and where.
+    _Rule(
+        None,
+        _re(r"^[\w.]+: \S.*=\S+(?: (?:at|AT) \S+| FROM \S+ TO \S+)?$"),
+        _BOTH_LT,
+    ),
     _Rule(None, _re(r"^\w+=\S+ FROM \S+ TO \S+$"), _BOTH_LT),
     _Rule(None, _re(r"^Semiconductor Device Operating Points:$"), _BOTH_LT),
     _Rule(None, _re(r"^--- .+ ---$"), _BOTH_LT),
@@ -515,10 +521,57 @@ _RULES: tuple[_Rule, ...] = (
         ),
         _ONLY_NG,
     ),
-    _Rule(None, _re(r"^\S+ = \S+$"), _ONLY_NG),
+    # A value ngspice's print command wrote: a name and a real or complex number.
+    _Rule(None, _re(rf"^\S+ = {_FLOAT}(?:,{_FLOAT})?$"), _ONLY_NG),
 )
 
 _SEVERITY = re.compile(r"^(Fatal Error|Error|ERROR|Warning|WARNING|Note)\b")
+
+
+class _RuleSet:
+    """One set of rules, ready to find the first that starts at a line.
+
+    Each run of consecutive regex heads is compiled into one alternation,
+    every head anchored at the line's start, so the first alternative that
+    matches is the first rule of the run whose head matches: the regex engine
+    tries them in order, not Python. A callable head is tried on its own.
+    """
+
+    def __init__(self, rules: Sequence[_Rule]) -> None:
+        self.rules = tuple(rules)
+        self._runs: list[tuple[int, int, re.Pattern[str] | None]] = []
+        start = 0
+        while start < len(self.rules):
+            end = start
+            while end < len(self.rules) and isinstance(self.rules[end].head, re.Pattern):
+                end += 1
+            if end == start:
+                self._runs.append((start, start + 1, None))
+                start += 1
+                continue
+            heads = "|".join(
+                f"(?P<r{index}>{self.rules[index].head.pattern})"  # type: ignore[union-attr]
+                for index in range(start, end)
+            )
+            self._runs.append((start, end, re.compile(heads)))
+            start = end
+
+    def first(self, lines: Sequence[str], index: int, after: int = 0) -> int | None:
+        """The position of the first rule from ``after`` on whose head starts at
+        ``lines[index]``, or None."""
+        stripped = lines[index].strip()
+        for start, end, combined in self._runs:
+            if end <= after:
+                continue
+            if combined is not None and start >= after:
+                match = combined.match(stripped)
+                if match is not None:
+                    return int(match.lastgroup[1:])  # type: ignore[index]
+                continue
+            for position in range(max(start, after), end):
+                if self.rules[position].starts(lines, index):
+                    return position
+        return None
 
 
 def _rules_of(*builds: str) -> tuple[_Rule, ...]:
@@ -528,18 +581,18 @@ def _rules_of(*builds: str) -> tuple[_Rule, ...]:
 #: Each set of rules a log can be read with, by name. ``ltspice`` is every
 #: recorded LTspice build's, ``wording`` every recorded simulator's, and
 #: ``unverified`` none.
-_CLASSIFIERS: dict[str, tuple[_Rule, ...]] = {
-    _LT26: _rules_of(_LT26),
-    _LT17: _rules_of(_LT17),
-    "ltspice": _rules_of(_LT26, _LT17),
-    _NG: _rules_of(_NG),
-    "wording": _RULES,
-    "unverified": (),
+_CLASSIFIERS: dict[str, _RuleSet] = {
+    _LT26: _RuleSet(_rules_of(_LT26)),
+    _LT17: _RuleSet(_rules_of(_LT17)),
+    "ltspice": _RuleSet(_rules_of(_LT26, _LT17)),
+    _NG: _RuleSet(_rules_of(_NG)),
+    "wording": _RuleSet(_RULES),
+    "unverified": _RuleSet(()),
 }
 CLASSIFIERS: tuple[str, ...] = tuple(_CLASSIFIERS)
 
 
-def _occurrences(text: str, rules: Sequence[_Rule]) -> list[tuple[str, list[str]]]:
+def _occurrences(text: str, rules: _RuleSet) -> list[tuple[str, list[str]]]:
     """Each condition ``text`` names, with its lines as written, in order."""
     lines = text.splitlines()
     found: list[tuple[str, list[str]]] = []
@@ -548,11 +601,12 @@ def _occurrences(text: str, rules: Sequence[_Rule]) -> list[tuple[str, list[str]
         if not lines[index].strip():
             index += 1
             continue
-        for rule in rules:
-            if not rule.starts(lines, index):
-                continue
+        after = 0
+        while (position := rules.first(lines, index, after)) is not None:
+            rule = rules.rules[position]
             taken = rule.follow(lines, index + 1)
             if rule.needs_follow and not taken:
+                after = position + 1
                 continue
             if rule.code is not None:
                 found.append((rule.code, lines[index : index + 1 + taken]))
@@ -579,12 +633,14 @@ def _held(text: str) -> str:
 
 def classify(channels: Mapping[Channel, str], rules_name: str) -> list[LogCondition]:
     """The conditions the ``channels``' text names under one set of rules: one
-    entry per code, in the order each first appears, log before console."""
+    entry per code and channel, in the order each first appears, log before
+    console. ``severity`` is the first occurrence's."""
     rules = _CLASSIFIERS[rules_name]
-    entries: dict[str, LogCondition] = {}
+    entries: dict[tuple[str, Channel], LogCondition] = {}
+    channel: Channel
     for channel in ("log", "console"):
         for code, block in _occurrences(channels.get(channel) or "", rules):
-            seen = entries.get(code)
+            seen = entries.get((code, channel))
             if seen is not None:
                 seen["count"] += 1
                 continue
@@ -600,7 +656,7 @@ def classify(channels: Mapping[Channel, str], rules_name: str) -> list[LogCondit
             )
             if severity is not None:
                 entry["severity"] = severity
-            entries[code] = entry
+            entries[(code, channel)] = entry
     return list(entries.values())
 
 
@@ -631,7 +687,10 @@ def rules_for(producer: Producer) -> tuple[str, str | None]:
     if producer.family is None:
         return "wording", "producer_unknown"
     if producer.family == "ltspice":
-        if ltspice_before_24(producer.program, producer.build) is not None:
+        # Of the builds before 24, only XVII is recorded: IV reads with every
+        # recorded build's wording, as a build after 26 does.
+        before_24 = ltspice_before_24(producer.program, producer.build)
+        if before_24 is not None and re.search(r"XVII", before_24, re.IGNORECASE):
             return _LT17, None
         if producer.build is not None and _LTSPICE_26.match(producer.build):
             return _LT26, None

@@ -126,10 +126,7 @@ def test_unavailable_loader_preserves_process_failure():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("raw_state", ["positive", "broken", "missing"])
-async def test_submission_loads_every_completions_logs_once(tmp_path, monkeypatch, raw_state):
-    """A run that produced its raw has its log read too, once, off the loop:
-    what the simulator said about a run that finished is part of its answer
-    (``RunOutcome.logs``)."""
+async def test_submission_loads_only_cold_completion_once(tmp_path, monkeypatch, raw_state):
     loop = asyncio.get_running_loop()
     base = runner_base.RunnerBase(loop, type("RecordedSimulator", (), {}), tmp_path)
     deck = tmp_path / "deck.cir"
@@ -174,14 +171,18 @@ async def test_submission_loads_every_completions_logs_once(tmp_path, monkeypatc
     thread.join(timeout=LIVENESS_S)
     assert not thread.is_alive()
     outcome = await asyncio.wait_for(received, LIVENESS_S)
-    assert len(calls) == 1
-    assert calls[0][:2] == (raw, log)
-    assert calls[0][2] != threading.get_ident()
-    assert outcome.logs is facts
-    assert outcome.logs_error is None
     if raw_state == "missing":
+        assert len(calls) == 1
+        assert calls[0][:2] == (raw, log)
+        assert calls[0][2] != threading.get_ident()
         assert "Time step too small" in outcome.log_excerpt
+        # The facts that judged the run are the ones its diagnostics come from.
+        assert outcome.logs is facts
     else:
+        # A run that produced is not read here, inside the run's time limit;
+        # its runner reads the log once the outcome has landed.
+        assert calls == []
+        assert outcome.logs is None
         assert outcome.raw_file == str(raw)
         assert (outcome.error is None) is (raw_state == "positive")
 

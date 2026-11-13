@@ -910,7 +910,8 @@ the run reported in its own output. It is read from the LTspice log banner
 is none of those (LTspice XVII, QSPICE). It is absent when the output names no
 build. It is recorded per case, so an executable replaced during a job shows
 as two builds. `diagnostics` is what the simulator said about the run, read
-from its log and console capture when the run ended: one entry per condition,
+from its log and console capture when the run ended: one entry per condition
+and channel,
 `{code, count, first_text, channel, severity?}`, with `severity` only where
 the simulator wrote one, and lines the server does not recognise counted under
 `unclassified` (`docs/DESIGN.md`, "Diagnostics"). It does not change the

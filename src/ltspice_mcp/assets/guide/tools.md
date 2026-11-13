@@ -172,7 +172,7 @@ lint blocks a mismatch. A case that produced nothing is counted in
   server shutdown or a closed `Api`) before its runs finished. Each run row's
   `status` describes its case (`produced` when it ran; `failed`, `cancelled`
   or `skipped` when it did not). A row's `diagnostics` is what the simulator
-  said about that run, one entry per `code` with the first line as written: a
+  said about that run, one entry per `code` and `channel` with the first line as written: a
   `produced` run can still carry `unknown_model_parameter`, whose numbers come
   from a model missing that parameter. Lines the server does not recognise
   are counted under `unclassified`; read the row's `log` for the rest.
