@@ -47,6 +47,7 @@ from ltspice_mcp.lib.deck_staging import (
     resolve_reference,
     scan_include_references,
 )
+from ltspice_mcp.lib.device_names import path_text
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.hierarchy import ResolvedInstance, param_assignments
 from ltspice_mcp.lib.hierarchy_expr import Environment, NumericFact, card_copies
@@ -849,7 +850,7 @@ def _refuse_repeated_instance(
     seen: dict[str, list[str]] = {}
     for x_ref, file_index, card, _section in picked:
         where = indexes[file_index].file.path.name
-        scope = ".".join(card.scope) if card.scope else "top level"
+        scope = path_text(card.scope) if card.scope else "top level"
         seen.setdefault(x_ref.casefold(), []).append(f"{where} ({scope})")
     for folded, places in seen.items():
         if len(places) > 1:

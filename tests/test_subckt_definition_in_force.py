@@ -17,6 +17,7 @@ from ltspice_mcp.lib.netlist_graph import parse_netlist_graph
 from ltspice_mcp.lib.spice_lex import lex_deck, shadowed_cards, subckt_definitions
 from ltspice_mcp.lib.spice_validator import validate_netlist_dangling_nodes
 from ltspice_mcp.tools.inspect_tools import _subcircuit_ports
+from tests.conftest import LTSPICE_READER
 
 _DECK = (
     "* two definitions of cell\n"
@@ -45,7 +46,7 @@ def test_a_definition_nested_in_one_out_of_force_is_out_of_force_too():
 def test_the_graph_and_the_inspect_ports_read_the_first(work_dir: Path):
     path = work_dir / "d.cir"
     path.write_text(_DECK, encoding="utf-8")
-    graph = parse_netlist_graph(path)
+    graph = parse_netlist_graph(path, reader=LTSPICE_READER)
     assert list(graph.subckts["cell"].ports) == ["a", "b"]
     assert _subcircuit_ports(lex_deck(_DECK).cards) == {"cell": ("a", "b")}
 
@@ -57,5 +58,25 @@ def test_the_validator_still_reads_both_definitions_until_ltspice_is_recorded():
     recording run; when LTspice's choice is recorded, the validator asks
     ``subckt_definitions`` (or a simulator-keyed form of it) and this test
     changes."""
-    issues = validate_netlist_dangling_nodes(lex_deck(_DECK).cards)
+    issues = validate_netlist_dangling_nodes(lex_deck(_DECK).cards, reader=LTSPICE_READER)
     assert any("'y'" in str(issue["message"]) for issue in issues), issues
+
+
+def test_the_name_resolvers_paths_never_choose_between_two_definitions(work_dir: Path):
+    """The paths the name resolver spells a name inside a subcircuit through
+    (hierarchy discovery's ``.save`` and voltage-trace spellings) refuse a
+    deck with two definitions of one name, told LTspice or ngspice: neither
+    reader's choice is taken there. The comparison, told either reader, reads
+    the first, as ngspice keeps it."""
+    import pytest
+
+    from ltspice_mcp.errors import NetlistError
+    from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
+
+    path = work_dir / "d.cir"
+    path.write_text(_DECK, encoding="utf-8")
+    for reader in (LTSPICE_READER, SemanticProfile("ngspice", "hsa")):
+        with pytest.raises(NetlistError, match="duplicate active subcircuit"):
+            load_hierarchy(str(path), None, reader)
+        graph = parse_netlist_graph(path, reader=reader)
+        assert list(graph.subckts["cell"].ports) == ["a", "b"]

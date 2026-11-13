@@ -616,7 +616,7 @@ def signal_stats_defined(analysis: str, *, windowed: bool = False) -> bool:
 OP_BUCKETS = ("voltages", "currents", "device_op_points", "other")
 
 
-def filter_operating_point(op_data: dict, device: str, *, xvii: bool = False) -> bool:
+def filter_operating_point(op_data: dict, device: str, *, xvii: bool) -> bool:
     """Narrow ``op_data`` (in place) to one device's operating-point params +
     terminal currents. Returns whether anything matched.
 

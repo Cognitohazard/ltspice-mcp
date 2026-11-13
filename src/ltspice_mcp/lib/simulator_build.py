@@ -132,6 +132,23 @@ def ltspice_generation_before_24(
 
 
 @dataclass(frozen=True)
+class Producer:
+    """Who reads a deck or wrote a result: the simulator family, the build a
+    run named in its own output (``reported_build``), and the program that
+    ran or will run.
+
+    ``family`` is a dialect name (``ltspice``, ``ngspice``, ``qspice``,
+    ``xyce``) or None when it is not known; ``build`` and ``program`` are None
+    when not known. The log's rules (``log_conditions.rules_for``) and the
+    names a build spells (``device_names.naming_for``) are read off it.
+    """
+
+    family: str | None
+    build: str | None
+    program: str | None
+
+
+@dataclass(frozen=True)
 class SimulatorExecutable:
     """The program a simulator class launches, as found on disk.
 

@@ -91,7 +91,7 @@ from ltspice_mcp.lib.recipes import (
     StepSelectionFields,
 )
 from ltspice_mcp.lib.recovery_records import CaseAttempt, CaseRecovery, RecoveryError
-from ltspice_mcp.lib.services import cp1252_ltspice
+from ltspice_mcp.lib.services import cp1252_ltspice, deck_producer
 from ltspice_mcp.lib.sheet_results import NotPlaced, check_request
 from ltspice_mcp.lib.simulator import (
     SIMULATOR_SELECTOR_PATTERN,
@@ -1159,9 +1159,9 @@ async def _prepare_circuit(
                 for included in staged.includes
             ),
             semantic_profile=(
-                SemanticProfile(
-                    "ngspice" if dialect == "ngspice" else "ltspice",
-                    mode if dialect == "ngspice" else None,
+                SemanticProfile.of(
+                    await asyncio.to_thread(deck_producer, state, dialect, simulator),
+                    mode,
                 )
                 if dialect in SUPPORTED_FAMILIES
                 else None

@@ -30,10 +30,10 @@ from spicelib.simulators.ltspice_simulator import LTspice
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import log_conditions, wsl
 from ltspice_mcp.lib.encoding import read_spice_text
-from ltspice_mcp.lib.log_conditions import Producer
 from ltspice_mcp.lib.log_parser import extract_log_diagnostics
 from ltspice_mcp.lib.services import AnalysisSource, load_logs_sync
 from ltspice_mcp.lib.simulator import detect_simulators
+from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
 from ltspice_mcp.tools.jobs import JobsInput, handle_jobs

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, NamedTuple
 
+from ltspice_mcp.lib.deck_nodes import is_ground
 from ltspice_mcp.lib.deck_staging import (
     DEFAULT_INCLUDE_DEPTH,
     card_sections,
@@ -45,7 +46,6 @@ from ltspice_mcp.lib.spice_lex_views import (
 from ltspice_mcp.lib.spice_validator import (
     ARITY_CHECKS,
     EXCLUSIVE_ANALYSIS_KINDS,
-    is_ground_node,
     meas_functions_refused,
     meas_name_refused,
     meas_unclosed_paren_refused,
@@ -178,7 +178,7 @@ def _finding(
     }
 
 
-def _probe_signals(probe: ProbeRef) -> set[str]:
+def _probe_signals(probe: ProbeRef, context: _LintContext) -> set[str]:
     """The signals a probe asks for in a ``.meas``, or saves in a ``.save``.
 
     A voltage between two nodes is its two nodes: both LTspice builds measure
@@ -191,7 +191,10 @@ def _probe_signals(probe: ProbeRef) -> set[str]:
     if (
         probe.kind == "V"
         and len(probe.names) == 2
-        and not any(is_ground_node(name) for name in probe.names)
+        and not any(
+            is_ground(name, simulator=context.family, ngbehavior=context.ngbehavior)
+            for name in probe.names
+        )
     ):
         return {_normalize_signal(f"V({name})") for name in probe.names}
     return {_normalize_signal(probe.text)}
@@ -228,11 +231,13 @@ def _unsaved(context: _LintContext) -> list[_Unsaved]:
         signal
         for probe in probes
         if not probe_is_pattern(probe)
-        for signal in _probe_signals(probe)
+        for signal in _probe_signals(probe, context)
     }
     found = []
     for card in measurements:
-        required = {signal for probe in probe_refs(card) for signal in _probe_signals(probe)}
+        required = {
+            signal for probe in probe_refs(card) for signal in _probe_signals(probe, context)
+        }
         unnamed = sorted(required - saved)
         missing, unchecked = ([], unnamed) if patterns else (unnamed, [])
         if unnamed:

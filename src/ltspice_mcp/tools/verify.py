@@ -97,6 +97,7 @@ from ltspice_mcp.lib.deck_prep import asc_export_lock, stage_sheet_copy
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding, refused_sheet_mark_note
 from ltspice_mcp.lib.families import DISPLAY
 from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
+from ltspice_mcp.lib.hierarchy import SemanticProfile
 from ltspice_mcp.lib.lint_rules import (
     MEAS_ANGLE_REASON,
     deck_generator,
@@ -122,7 +123,7 @@ from ltspice_mcp.lib.netlist_graph import (
 )
 from ltspice_mcp.lib.raster import RenderedImage
 from ltspice_mcp.lib.schematic_scene import Scene, build_scene, sheet_view
-from ltspice_mcp.lib.services import cp1252_ltspice
+from ltspice_mcp.lib.services import cp1252_ltspice, deck_producer, session_reader
 from ltspice_mcp.lib.sheet_findings import (
     RULES,
     Finding,
@@ -1454,11 +1455,17 @@ _NETLIST_QUALITY_RULES: tuple[tuple[str, str, Any], ...] = (
     ("dangling_node", "observation", validate_netlist_dangling_nodes),
     ("undefined_reference", "warning", validate_netlist_directive_refs),
     ("floating_net", "warning", validate_netlist_bias_topology),
-    ("duplicate_parameter", "observation", validate_netlist_duplicate_params),
+    (
+        "duplicate_parameter",
+        "observation",
+        lambda cards, _reader: validate_netlist_duplicate_params(cards),
+    ),
 )
 
 
-def _netlist_quality_findings(path: Path, deck: _LexedDeck) -> list[dict[str, Any]]:
+def _netlist_quality_findings(
+    path: Path, deck: _LexedDeck, reader: SemanticProfile
+) -> list[dict[str, Any]]:
     """Quality findings over a lexed netlist: nodes wired to one terminal,
     directives naming something that exists nowhere, nets with no DC path to
     ground, and instances giving a parameter more than once."""
@@ -1466,7 +1473,7 @@ def _netlist_quality_findings(path: Path, deck: _LexedDeck) -> list[dict[str, An
     for rule_id, severity, validate in _NETLIST_QUALITY_RULES:
         findings.extend(
             _rule_finding(issue, path, rule_id=rule_id, severity=severity)
-            for issue in validate(deck.cards)
+            for issue in validate(deck.cards, reader)
         )
     return findings
 
@@ -1618,10 +1625,11 @@ def _export_if_written(simulator_cls: Any, asc_path: Path, timeout: float) -> Pa
     return net_path if net_path.exists() else None
 
 
-def _netlist_counts(net_path: Path) -> tuple[int | None, int | None]:
-    """Component and net counts of an exported netlist, or ``(None, None)``."""
+def _netlist_counts(net_path: Path, reader: SemanticProfile) -> tuple[int | None, int | None]:
+    """Component and net counts of an exported netlist as ``reader`` reads
+    it, or ``(None, None)``."""
     try:
-        graph = parse_netlist_graph(net_path)
+        graph = parse_netlist_graph(net_path, reader=reader)
     except (NetlistGraphError, OSError, SpiceLexError):
         return (None, None)
     nets = {node for comp in graph.components for node in comp.nodes}
@@ -1680,7 +1688,9 @@ class _MeasuredNetlist(NamedTuple):
     findings: list[dict[str, Any]]
 
 
-def _measure_netlist(net_path: Path, *, cp1252_reader: str | None) -> _MeasuredNetlist | None:
+def _measure_netlist(
+    net_path: Path, *, cp1252_reader: str | None, reader: SemanticProfile
+) -> _MeasuredNetlist | None:
     """Component count, net count, digest and value-suffix findings of a
     just-exported netlist.
 
@@ -1695,7 +1705,7 @@ def _measure_netlist(net_path: Path, *, cp1252_reader: str | None) -> _MeasuredN
     """
     if not net_path.exists():
         return None
-    components, nets = _netlist_counts(net_path)
+    components, nets = _netlist_counts(net_path, reader)
     return _MeasuredNetlist(
         components,
         nets,
@@ -1743,6 +1753,10 @@ async def _run_export(
     observations: list[str] = []
     warnings: list[str] = []
     timeout = state.config.default_timeout
+    # The export is LTspice's, and its nets are counted as that LTspice reads them.
+    reader = SemanticProfile.of(
+        await asyncio.to_thread(deck_producer, state, "ltspice", simulator_cls), None
+    )
     payload: dict[str, Any] = {
         "ok": False,
         "netlist": None,
@@ -1769,7 +1783,7 @@ async def _run_export(
                     warnings.extend(diff_warnings)
                 net_path = new_path
                 measured = await asyncio.to_thread(
-                    _measure_netlist, net_path, cp1252_reader=cp1252_reader
+                    _measure_netlist, net_path, cp1252_reader=cp1252_reader, reader=reader
                 )
         else:
             scratch = (
@@ -1783,7 +1797,7 @@ async def _run_export(
                     _create_netlist, simulator_cls, staged_asc, timeout
                 )
                 measured = await asyncio.to_thread(
-                    _measure_netlist, net_path, cp1252_reader=cp1252_reader
+                    _measure_netlist, net_path, cp1252_reader=cp1252_reader, reader=reader
                 )
                 if measured is not None:
                     payload["diff_vs_prior"], diff_warnings = await _diff_vs_last_managed(
@@ -1948,6 +1962,7 @@ def _parse_side_or_fail(
     where: Path,
     resolver: IncludeResolver,
     *,
+    reader: SemanticProfile,
     base_dir: Path | None = None,
 ) -> tuple[NetlistGraph | None, dict[str, Any] | None]:
     """Parse one side of an equivalence compare, or produce a ``compare`` failure.
@@ -1957,7 +1972,9 @@ def _parse_side_or_fail(
     ``where``. The graph holds each scope's directives beside its wiring.
     """
     try:
-        graph = parse_netlist_graph(source, base_dir=base_dir, include_resolver=resolver)
+        graph = parse_netlist_graph(
+            source, reader=reader, base_dir=base_dir, include_resolver=resolver
+        )
     except (NetlistGraphError, SpiceLexError, OSError) as exc:
         return None, _failure(
             "compare", f"the {label} could not be parsed: {exc}", where=str(where)
@@ -1986,6 +2003,7 @@ def compare_equivalence(
     *,
     denied_hint: str,
     ref_base_dir: Path | None,
+    reader: SemanticProfile,
 ) -> CompareResult:
     """Graph-compare candidate against reference through the safe_path resolver,
     and compare their directives scope by scope (``circuit_directive_delta``).
@@ -1995,23 +2013,29 @@ def compare_equivalence(
     candidate's relative includes resolve in its directory, not in the store
     scratch an export was made in. ``ref_base_dir`` is the reference's
     (``ReferenceNetlist.base_dir``). ``denied_hint`` is the sandbox guidance
-    each refused include's finding carries.
+    each refused include's finding carries. ``reader`` is who reads both
+    decks (``services.session_reader``).
     """
     findings: list[dict[str, Any]] = []
     ref_graph, failure = _parse_side_or_fail(
-        reference, "reference netlist", ref_source, resolver, base_dir=ref_base_dir
+        reference, "reference netlist", ref_source, resolver, reader=reader, base_dir=ref_base_dir
     )
     if failure is not None:
         return None, findings, failure, []
     cand_graph, failure = _parse_side_or_fail(
-        candidate, "netlist under test", cand_source, resolver, base_dir=cand_source.parent
+        candidate,
+        "netlist under test",
+        cand_source,
+        resolver,
+        reader=reader,
+        base_dir=cand_source.parent,
     )
     if failure is not None:
         return None, findings, failure, []
     assert ref_graph is not None and cand_graph is not None  # failure is None ⇒ both parsed
     findings.extend(_denied_include_findings(ref_graph, ref_source, denied_hint))
     findings.extend(_denied_include_findings(cand_graph, cand_source, denied_hint))
-    comparison = compare_graphs(ref_graph, cand_graph, anchors=anchors, rtol=rtol)
+    comparison = compare_graphs(ref_graph, cand_graph, reader=None, anchors=anchors, rtol=rtol)
     added, removed = circuit_directive_delta(ref_graph, cand_graph, comparison.calls)
     directives_equivalent = not added and not removed
     payload: dict[str, Any] = {
@@ -2121,6 +2145,7 @@ def compare_netlists(
         make_include_resolver(state),
         denied_hint=state.sandbox_guidance(),
         ref_base_dir=ref_base_dir,
+        reader=session_reader(state),
     )
 
 
@@ -2656,7 +2681,8 @@ async def evaluate_verify_circuit(
         checks_run.append("syntax")
 
     if wanted.get("quality") and deck is not None and kind == "netlist":
-        findings.extend(await asyncio.to_thread(_netlist_quality_findings, path, deck))
+        reader = await asyncio.to_thread(session_reader, state)
+        findings.extend(await asyncio.to_thread(_netlist_quality_findings, path, deck, reader))
         checks_run.append("quality")
 
     # --- scene-derived checks (symbols, layout, quality, dropped wires) -----

@@ -1315,7 +1315,9 @@ def unreadable_cards(cards: Iterable[SpiceCard]) -> list[tuple[SpiceCard, SpiceL
 def is_orphan_continuation(card: SpiceCard) -> bool:
     """Whether ``card`` is a ``+`` line with no card before it to continue,
     which ``lex`` keeps as a comment so the text round-trips."""
-    return card.kind == "comment" and any(_is_continuation(line.lstrip()) for line in card.raw_lines)
+    return card.kind == "comment" and any(
+        _is_continuation(line.lstrip()) for line in card.raw_lines
+    )
 
 
 def directive_head(card: SpiceCard) -> str:

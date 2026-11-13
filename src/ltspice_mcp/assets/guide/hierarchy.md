@@ -95,7 +95,10 @@ subcircuit only in the spelling its raw file uses, which on XVII drops the X
 from each instance. The other spelling stores nothing on LTspice 26 and makes
 XVII save everything but the current. `simulator: "ltspice"` gives the
 spelling for the session's LTspice, and `"ltspice:<name>"` the spelling for a
-named build; `profile.xvii_names` reports which spelling applies.
+named build; `profile.xvii_names` reports which spelling applies, and
+`profile.names_read_as` the recorded build it follows. A build with no
+recording (LTspice IV, 24, 25, one after 26, or one no run has named yet) is
+spelled as its nearest recorded build, and `profile.names_note` says so.
 
 Keep the full name, because it distinguishes other instances of the same
 subcircuit. When a row has no address, `address.reason` gives the reason; do

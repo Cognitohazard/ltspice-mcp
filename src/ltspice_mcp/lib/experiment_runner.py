@@ -24,6 +24,7 @@ from ltspice_mcp.lib.controlled_ngspice import (
     verify_seeded_driver,
 )
 from ltspice_mcp.lib.deck_staging import sha256_file, verify_staged_manifest
+from ltspice_mcp.lib.device_names import naming_disagreement
 from ltspice_mcp.lib.experiment_inputs import (
     capture_produced_artifacts,
     verify_case_inputs,
@@ -68,6 +69,7 @@ from ltspice_mcp.lib.raw_parser import (
     cut_partial_raw,
     other_raw_path,
     points_reached,
+    raw_writer_command,
     read_partial_raw_progress,
     result_digest,
 )
@@ -1971,6 +1973,16 @@ class ExperimentRunner(RunnerBase):
         case.log_diagnostics = ExperimentRunner._classified(job, case, outcome)
         if outcome.observations:
             case.observations.extend(outcome.observations)
+        if case.raw_file is not None:
+            # The spelling the run's executable was read with (the deck's
+            # hierarchy profile) and the one its raw was written in must agree.
+            disagreement = naming_disagreement(
+                services.run_producer(job, case), raw_writer_command(case.raw_file)
+            )
+            if disagreement is not None:
+                case.observations.append(
+                    {"code": "raw_names_disagree", "kind": "execution", "detail": disagreement}
+                )
 
     @staticmethod
     def _apply_stopped_outcome(

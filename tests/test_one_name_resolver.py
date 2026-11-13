@@ -29,8 +29,17 @@ import pytest
 from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
 from ltspice_mcp.errors import ResultError
+from ltspice_mcp.lib.device_names import (
+    device_address,
+    naming_disagreement,
+    naming_for,
+    section_sign_spellings,
+    spelled_name,
+)
 from ltspice_mcp.lib.hierarchy import load_hierarchy
 from ltspice_mcp.lib.raw_header import preflight_raw
+from ltspice_mcp.lib.raw_parser import raw_writer_command
+from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import experiments
 from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
@@ -66,9 +75,10 @@ def test_a_section_sign_name_reads_the_parts_own_trace(
         ],
     )
     assert "failures" not in analyzed, analyzed.get("failures")
-    (row,) = analyzed["results"]["v"]["per_run"]["items"]
-    assert row["value"] == pytest.approx(LOAD_CURRENT)
-    (op,) = analyzed["results"]["op"]["per_run"]["items"]
+    (row,) = analyzed["results"]["v"]["values"]
+    assert row["value"]["signal"] == "I(Load)"
+    assert row["value"]["value"] == pytest.approx(LOAD_CURRENT)
+    (op,) = analyzed["results"]["op"]["values"]
     assert {name.lower() for name in op["value"]["currents"]} == {"i(load)"}
 
 
@@ -259,3 +269,101 @@ async def test_run_experiments_spells_nested_names_for_the_build_that_runs(
     (profile,) = seen
     assert profile is not None
     build_stores_its_own(build, hierarchy_saves(profile))
+
+
+# --- One derivation of a build's spelling ------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("producer", "xvii", "read_as", "noted"),
+    [
+        (
+            Producer("ltspice", "LTspice 26.0.2 for Windows", "LTspice.exe"),
+            False,
+            "LTspice 26",
+            False,
+        ),
+        (Producer("ltspice", None, "C:/LTC/XVIIx64.exe"), True, "LTspice XVII", False),
+        (
+            Producer("ltspice", "Linear Technology Corporation LTspice XVII", None),
+            True,
+            "LTspice XVII",
+            False,
+        ),
+        (Producer("ltspice", None, "C:/LTC/scad3.exe"), True, "LTspice XVII", True),
+        (
+            Producer("ltspice", "LTspice 24.0.12 for Windows", "LTspice.exe"),
+            False,
+            "LTspice 26",
+            True,
+        ),
+        (
+            Producer("ltspice", "LTspice 27.0.1 for Windows", "LTspice.exe"),
+            False,
+            "LTspice 26",
+            True,
+        ),
+        (Producer("ltspice", None, "LTspice.exe"), False, "LTspice 26", True),
+        (Producer("ngspice", "ngspice-42", "/usr/bin/ngspice"), False, "ngspice", False),
+    ],
+)
+def test_a_builds_spelling_comes_from_its_producer(
+    producer: Producer, xvii: bool, read_as: str, noted: bool
+):
+    """XVII and IV write each instance without its X, every build from 24 on
+    with it; a build with no recording is read as its nearest recorded one,
+    and the answer says so."""
+    naming = naming_for(producer)
+    assert (naming.xvii, naming.read_as, naming.note is not None) == (xvii, read_as, noted)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_the_spelling_read_off_the_executable_agrees_with_the_raws_writer(build: str):
+    """Each recorded build's executable gives the spelling its raw is written
+    in, so a run on it reports no disagreement; read as the other build, it
+    does."""
+    command = raw_writer_command(rec.recorded(build, f"{SAVE_SPELLINGS[True]}.raw"))
+    program = f"C:/install/{rec.manifest(build)['executable']['name']}"
+    reported = None if rec.generation(build) == "xvii" else "LTspice 26.1.1 for Windows"
+    assert naming_disagreement(Producer("ltspice", reported, program), command) is None
+    other = "C:/install/LTspice.exe" if rec.generation(build) == "xvii" else "C:/x/XVIIx64.exe"
+    said = naming_disagreement(Producer("ltspice", None, other), command)
+    assert said is not None and "names each subcircuit instance" in said
+
+
+@pytest.mark.parametrize(
+    ("producer", "trace", "device"),
+    [
+        (Producer("ltspice", "LTspice 26.1.1", None), "xa:xin:mid", "xa:xin:mtail"),
+        (Producer("ltspice", None, "XVIIx64.exe"), "a:in:mid", "xa:xin:mtail"),
+        (Producer("ngspice", None, None), "xa.xin.mid", "m.xa.xin.mtail"),
+    ],
+)
+def test_one_speller_spells_a_path_for_each_reader(producer: Producer, trace: str, device: str):
+    naming = naming_for(producer)
+    assert spelled_name(("Xa", "Xin"), "mid", naming) == trace
+    assert device_address(("Xa", "Xin", "Mtail"), naming) == device
+
+
+def test_a_section_sign_name_has_the_parts_own_name_and_the_bare_one():
+    assert section_sign_spellings("I(R§Load)") == ("I(Load)", "I(RLoad)")
+    assert section_sign_spellings("I(x1:R§Load)") == ("I(x1:Load)", "I(x1:RLoad)")
+    assert section_sign_spellings("I(R1)") == ()
+
+
+async def test_inspect_says_how_a_build_with_no_recording_is_spelled(config: Any, work_dir: Path):
+    """An LTspice whose build no run has named yet is spelled as LTspice 26,
+    and the hierarchy's profile says so."""
+    deck = work_dir / "nested.cir"
+    deck.write_bytes((INPUTS / f"{SAVE_SPELLINGS[True]}.cir").read_bytes())
+    state = SessionState.create(config, available={"ltspice": rec.launcher("ltspice26")})
+    data = await dispatched(
+        state,
+        "inspect",
+        queries=[{"kind": "hierarchy", "path": str(deck), "simulator": "ltspice"}],
+    )
+    (result,) = data["results"]
+    assert result["ok"], result
+    profile = result["data"]["profile"]
+    assert profile["names_read_as"] == "LTspice 26"
+    assert "not known until a run on it names itself" in profile["names_note"]

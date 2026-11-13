@@ -243,6 +243,11 @@ summary = "What a run of a sheet names the device inside a part whose symbol is 
 model = ["lib/trace_names.py"]
 pending = "Written where no LTspice runs. Record it on Windows with uv run python scripts/record_ltspice_fixtures.py --only 'export/sheet_part_names', then remove this key."
 
+[behaviour.section-sign-trace-tran]
+summary = "What a transient run of a sheet names the current of a part exported as R§Load, which plot_waveform charts: the name the operating point gives it (I(Load)) or another."
+model = ["lib/trace_names.py", "lib/device_names.py", "tools/analysis.py"]
+pending = "Written where no LTspice runs. Record it on Windows with uv run python scripts/record_ltspice_fixtures.py --only 'export/load_name_tran', then remove this key."
+
 [behaviour.export-instance-prefix]
 summary = "What an instance's own Prefix attribute does on export: the element letter it gives the card and how the instance name is then written, in either case of the letter, before or after InstName, on a library-style symbol, a stock symbol and a block symbol."
 model = ["lib/schematic_ops.py"]
@@ -808,7 +813,7 @@ inputs = ["log/subckt_names.cir", "log/subckt_names_off.cir", "raw/subckt_names_
 
 [behaviour.save-subckt-names]
 summary = "Which spelling of a device current and a node inside nested subcircuit instances each build's .save accepts, with and without the instances' X, and what the raw then holds."
-model = ["lib/hierarchy.py"]
+model = ["lib/hierarchy.py", "lib/device_names.py"]
 inputs = ["raw/save_subckt_names.cir", "raw/save_subckt_names_no_x.cir"]
 
 [behaviour.log-device-op-precision]
@@ -1496,6 +1501,15 @@ behaviour = "sheet-drawing"
 kind = "draw"
 source = "draw/value2.asc"
 extra = ["export/res.asy", "benchmark/voltage.asy"]
+
+# The same sheet run as a transient, for a reader that charts a waveform.
+[[case]]
+id = "export/load_name_tran"
+behaviour = "section-sign-trace-tran"
+kind = "run"
+source = "export/load_name_tran.asc"
+extra = ["export/res.asy", "benchmark/voltage.asy"]
+keep = ["net", "raw"]
 
 # A part named without its element letter, on a sheet that runs. The two
 # resistors differ, so each current in the raw says which part it is.

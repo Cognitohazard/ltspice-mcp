@@ -9,7 +9,7 @@ because LTspice XVII calls an ignored model parameter an error on a run that
 finished.
 
 The wording differs by simulator and by build, so the rules are chosen by the
-run's producer (:class:`Producer`). Each set of rules is built from logs the
+run's producer (``simulator_build.Producer``). Each set of rules is built from logs the
 simulator wrote (``tests/fixtures/ltspice_recorded`` for LTspice 26 and XVII,
 the ngspice fixtures and a live ngspice run), and every line outside a known
 condition and outside the producer's routine output (banners, settings,
@@ -28,10 +28,15 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from ltspice_mcp.lib.format import cap_note
 from ltspice_mcp.lib.log_types import LogCondition
+
+if TYPE_CHECKING:
+    # Only named here: the parser worker imports this module, and
+    # simulator_build brings the raw reader with it.
+    from ltspice_mcp.lib.simulator_build import Producer
 
 Channel = Literal["log", "console"]
 
@@ -66,21 +71,6 @@ COVERAGE: dict[str, str] = {
 #: ``{"diagnostics": [LogCondition, ...], "coverage": <a COVERAGE key>}``, each
 #: key only when it says something.
 RunDiagnostics = dict[str, Any]
-
-
-@dataclass(frozen=True)
-class Producer:
-    """Who wrote a log: the simulator family, the build the run named in its own
-    output (``simulator_build.reported_build``), and the program that ran.
-
-    ``family`` is a dialect name (``ltspice``, ``ngspice``, ``qspice``,
-    ``xyce``) or None when it is not known; ``build`` and ``program`` are None
-    when not known.
-    """
-
-    family: str | None
-    build: str | None
-    program: str | None
 
 
 # --- Rules -----------------------------------------------------------------

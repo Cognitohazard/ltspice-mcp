@@ -201,7 +201,6 @@ NGSPICE_M_TAKERS = frozenset("CDFGIJLMQRXZ")
 NGSPICE_M_EXEMPT = frozenset("ABEHKSTVW")
 
 
-
 def card_copies(
     own: NumericFact | None,
     passed: NumericFact | None,

@@ -158,7 +158,7 @@ from ltspice_mcp.lib.connectivity import (
     named_labels,
 )
 from ltspice_mcp.lib.cursor_codec import canonical_hash
-from ltspice_mcp.lib.deck_nodes import node_kind
+from ltspice_mcp.lib.deck_nodes import settled_node_kind
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, TraceDescriptor
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import cap_note
@@ -1498,6 +1498,7 @@ def _netlist_node_from_at(
     *,
     cards: Sequence[SpiceCard],
     unread: int,
+    reader: SemanticProfile,
 ) -> str:
     """Resolve a netlist ``at`` to a node of the deck's own cards.
 
@@ -1520,7 +1521,7 @@ def _netlist_node_from_at(
         )
     spellings = _node_spellings(nodes_of)
     if at.startswith("net:"):
-        return _deck_node(at[4:], spellings, cards=cards, unread=unread)
+        return _deck_node(at[4:], spellings, cards=cards, unread=unread, reader=reader)
     if "." in at:
         ref, _, term = at.rpartition(".")
         if term.isdigit():
@@ -1543,7 +1544,7 @@ def _netlist_node_from_at(
                 f"{len(nodes)}), or at='net:NAME' for a node",
             )
     # A dotted name whose tail is not a terminal index is a node of that name.
-    return _deck_node(at, spellings, cards=cards, unread=unread)
+    return _deck_node(at, spellings, cards=cards, unread=unread, reader=reader)
 
 
 def _node_spellings(nodes_of: dict[str, list[str]]) -> dict[str, str]:
@@ -1557,7 +1558,12 @@ def _node_spellings(nodes_of: dict[str, list[str]]) -> dict[str, str]:
 
 
 def _deck_node(
-    name: str, spellings: Mapping[str, str], *, cards: Sequence[SpiceCard], unread: int
+    name: str,
+    spellings: Mapping[str, str],
+    *,
+    cards: Sequence[SpiceCard],
+    unread: int,
+    reader: SemanticProfile,
 ) -> str:
     """``name``, when it is ground or one of the deck's own nodes
     (``spellings``, by :func:`_node_spellings`); else the refusal, which names
@@ -1571,17 +1577,18 @@ def _deck_node(
     globals_listed = {fold_case(text) for card in cards for text in _readable_global_names(card)}
     inside = _subcircuits_using(key, cards)
     if key in globals_listed:
-        # A body whose port has the name reads it as that port, as LTspice
-        # does (``deck_nodes``), so only the other bodies are on the global.
+        # A body whose port has the name reads it as that port to LTspice
+        # (``deck_nodes``), so only the other bodies are on the global there.
         ports = _subcircuit_ports(cards)
         inside = [
             name
             for name in inside
-            if node_kind(
+            if settled_node_kind(
                 key,
                 ports=ports.get(fold_case(name), ()),
                 global_names=globals_listed,
-                simulator="ltspice",
+                simulator=reader.simulator,
+                ngbehavior=reader.ngbehavior,
             )
             == "global"
         ]
@@ -1710,7 +1717,9 @@ _GND_IN_A_DECK = (
 )
 
 
-def _net_netlist_payload(text: str, at: str | list[int]) -> dict[str, Any]:
+def _net_netlist_payload(
+    text: str, at: str | list[int], reader: SemanticProfile
+) -> dict[str, Any]:
     """Card-membership for a node in a netlist — no geometry keys (by contract).
 
     The members are the deck's own cards: a card in a ``.subckt`` body is on
@@ -1733,7 +1742,9 @@ def _net_netlist_payload(text: str, at: str | list[int]) -> dict[str, Any]:
         parsed[ref_lower] = line
         nodes_of[ref_lower] = line.nodes
 
-    node = _netlist_node_from_at(at, nodes_of, cards=lexed.cards, unread=unparseable)
+    node = _netlist_node_from_at(
+        at, nodes_of, cards=lexed.cards, unread=unparseable, reader=reader
+    )
     node_key = name_key(node)
     members: list[dict[str, Any]] = []
     spellings = {node}
@@ -1766,7 +1777,8 @@ async def _do_net(q: NetQuery, state: SessionState, view: _View) -> dict[str, An
         except OSError as exc:
             raise _QueryError("read_error", str(exc)) from exc
         try:
-            payload = await asyncio.to_thread(_net_netlist_payload, text, q.at)
+            reader = await asyncio.to_thread(services.session_reader, state)
+            payload = await asyncio.to_thread(_net_netlist_payload, text, q.at, reader)
         except SpiceLexError as exc:
             raise _QueryError("parse_error", str(exc)) from exc
         members = payload.pop("members")
@@ -2456,10 +2468,9 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
     prefix = _check_prefix(q.prefix)
     family = q.family
     simulator = _hierarchy_simulator(q.simulator, state)
-    profile = SemanticProfile(
-        family,
+    profile = SemanticProfile.of(
+        services.deck_producer(state, family, simulator),
         run_ngbehavior(simulator, q.ngbehavior) if family == "ngspice" else None,
-        xvii_names=family == "ltspice" and services.simulator_before_24(state, simulator),
     )
     sandbox = state.allowed_paths()
     hierarchy = load_hierarchy(

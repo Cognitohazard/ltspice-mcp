@@ -530,8 +530,7 @@ _PROBE_PATTERN = re.compile(r"\[[VvIi]{2}\](?:\\s\*)?\\\(|(?:(?<![A-Za-z])|(?<=\
 #: Modules that compile a probe pattern for text that is not a deck's card.
 _PROBE_PATTERN_READERS: dict[str, str] = {
     "lib/trace_names.py": (
-        "the results side: a caller's signal name or node pair V(a,b), read against a "
-        "raw's traces"
+        "the results side: a caller's signal name or node pair V(a,b), read against a raw's traces"
     ),
     "lib/decoded_raw.py": "the results side: a trace name a raw file holds",
 }

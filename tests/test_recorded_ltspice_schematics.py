@@ -53,7 +53,7 @@ from tests import _ltspice_recorded as rec
 from tests._asc_ops import _inspect_item as inspect_item
 from tests._asc_ops import apply_ops, inspect_one, inspect_refusal, sha_of, sheet_findings
 from tests._schematic_fixtures import open_editor
-from tests.conftest import FIXTURES_DIR, FakeSim, SyncApi
+from tests.conftest import FIXTURES_DIR, LTSPICE_READER, FakeSim, SyncApi
 from tests.ltspice_recorder import INPUTS
 from tests.test_verify_circuit import _run as run_verify_circuit
 
@@ -193,7 +193,9 @@ def test_the_stand_in_symbols_that_claim_stock_pins_have_them(build: str):
 def exported_groups(build: str, case_id: str) -> set[frozenset[str]]:
     """The pins LTspice put on each node, as ``REF.order`` sets."""
     nodes: dict[str, set[str]] = {}
-    for component in parse_netlist_graph(rec.recorded(build, f"{case_id}.net")).components:
+    for component in parse_netlist_graph(
+        rec.recorded(build, f"{case_id}.net"), reader=LTSPICE_READER
+    ).components:
         for order, node in enumerate(component.nodes, start=1):
             nodes.setdefault(node, set()).add(f"{canon_ref(component.ref)}.{order}")
     return {frozenset(pins) for pins in nodes.values()}
@@ -1899,7 +1901,7 @@ class TestExportedNames:
         front of a subcircuit instance pairs as a rename, not as one removed
         part and one added."""
         export = rec.export_text(build, "export/instance_names")
-        result = compare_graphs(self.WRITTEN, export)
+        result = compare_graphs(self.WRITTEN, export, reader=LTSPICE_READER)
         assert (result.added, result.removed) == ([], [])
         # References are compared without the marker, as LTspice 26 names them.
         assert [(r.reference_ref, r.candidate_ref) for r in result.renamed] == [

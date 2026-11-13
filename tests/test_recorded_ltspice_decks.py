@@ -73,7 +73,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
 from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
 from tests import _ltspice_recorded as rec
-from tests.conftest import FakeSim
+from tests.conftest import LTSPICE_READER, FakeSim
 from tests.ltspice_recorder import INPUTS
 from tests.test_inspect_tools import _run
 
@@ -167,7 +167,7 @@ def test_a_deck_is_the_same_circuit_with_its_values_written_as_ltspice_ran_them(
     for line in map(read_instance, cards):
         if line is not None and line.ref[:1] == "R":
             line.set_value(repr(voltages[f"v({line.nodes[0].lower()})"]))
-    comparison = compare_graphs(deck_text(case_id), emit(cards))
+    comparison = compare_graphs(deck_text(case_id), emit(cards), reader=LTSPICE_READER)
     assert comparison.equivalent, comparison.value_mismatches
 
 
@@ -434,7 +434,7 @@ def test_a_name_holding_two_section_signs_is_one_name_without_them(tmp_path: Pat
     }
     assert drawn_for(text, export, ngspice_name, tmp_path / "random") == ["R§a§b"]
     # And the comparison pairs the two copies' parts by that name.
-    comparison = compare_graphs(text, ngspice)
+    comparison = compare_graphs(text, ngspice, reader=LTSPICE_READER)
     assert comparison.equivalent, comparison
     assert not comparison.renamed, comparison
 
@@ -694,13 +694,14 @@ class TestDeckStructure:
         to_ground = body(".subckt ported top gnd", "R1 top 0 1k")
 
         nodes = {
-            c.ref.lower(): c.nodes for c in flatten_graph(parse_netlist_graph(text)).components
+            c.ref.lower(): c.nodes
+            for c in flatten_graph(parse_netlist_graph(text, reader=LTSPICE_READER)).components
         }
         assert nodes["x2.r1"] == ("c", "mid")
         assert nodes["x1.r1"] == ("b", "0")
         assert nodes["r1"] == ("a", "0")
-        assert compare_graphs(text, renamed).equivalent
-        assert not compare_graphs(text, to_ground).equivalent
+        assert compare_graphs(text, renamed, reader=LTSPICE_READER).equivalent
+        assert not compare_graphs(text, to_ground, reader=LTSPICE_READER).equivalent
         path = work_dir / "gnd_alias.cir"
         path.write_text(text, encoding="utf-8")
         for reference, equivalent in ((renamed, True), (to_ground, False)):
@@ -717,21 +718,27 @@ class TestDeckStructure:
         # to floats, whatever the port is called.
         floating = text.replace("R3 mid 0 1k", "C3 mid 0 1n")
         floating_renamed = body(".subckt ported top p", "R1 top p 1k", floating)
-        found = validate_netlist_bias_topology(lex_deck(floating).cards)
+        found = validate_netlist_bias_topology(lex_deck(floating).cards, reader=LTSPICE_READER)
         assert found
         assert [i["message"] for i in found] == [
-            i["message"] for i in validate_netlist_bias_topology(lex_deck(floating_renamed).cards)
+            i["message"]
+            for i in validate_netlist_bias_topology(
+                lex_deck(floating_renamed).cards, reader=LTSPICE_READER
+            )
         ]
         # A port wired to nothing in its body is reported whatever it is called.
         unused = body(".subckt ported top gnd", "R1 top 0 1k")
         unused_renamed = body(".subckt ported top p", "R1 top 0 1k")
         dangling = [
             str(i["message"]).replace("'gnd'", "'p'")
-            for i in validate_netlist_dangling_nodes(lex_deck(unused).cards)
+            for i in validate_netlist_dangling_nodes(lex_deck(unused).cards, reader=LTSPICE_READER)
         ]
         assert dangling
         assert dangling == [
-            i["message"] for i in validate_netlist_dangling_nodes(lex_deck(unused_renamed).cards)
+            i["message"]
+            for i in validate_netlist_dangling_nodes(
+                lex_deck(unused_renamed).cards, reader=LTSPICE_READER
+            )
         ]
 
     async def test_every_reader_of_a_deck_reads_a_port_named_like_a_global_as_the_port(
@@ -759,11 +766,12 @@ class TestDeckStructure:
         to_rail = body(".subckt leg top p", "R1 top vdd 1k")
 
         nodes = {
-            c.ref.lower(): c.nodes for c in flatten_graph(parse_netlist_graph(text)).components
+            c.ref.lower(): c.nodes
+            for c in flatten_graph(parse_netlist_graph(text, reader=LTSPICE_READER)).components
         }
         assert nodes["x2.r1"] == ("c", "mid")
-        assert compare_graphs(text, renamed).equivalent
-        assert not compare_graphs(text, to_rail).equivalent
+        assert compare_graphs(text, renamed, reader=LTSPICE_READER).equivalent
+        assert not compare_graphs(text, to_rail, reader=LTSPICE_READER).equivalent
         path = work_dir / "global_port.cir"
         path.write_text(text, encoding="utf-8")
         for reference, equivalent in ((renamed, True), (to_rail, False)):
@@ -784,21 +792,27 @@ class TestDeckStructure:
         # to floats, whatever the port is called.
         floating = text.replace("R3 mid 0 1k", "C3 mid 0 1n")
         floating_renamed = body(".subckt leg top p", "R1 top p 1k", floating)
-        found = validate_netlist_bias_topology(lex_deck(floating).cards)
+        found = validate_netlist_bias_topology(lex_deck(floating).cards, reader=LTSPICE_READER)
         assert found
         assert [i["message"] for i in found] == [
-            i["message"] for i in validate_netlist_bias_topology(lex_deck(floating_renamed).cards)
+            i["message"]
+            for i in validate_netlist_bias_topology(
+                lex_deck(floating_renamed).cards, reader=LTSPICE_READER
+            )
         ]
         # A port wired to nothing in its body is reported whatever it is called.
         unused = body(".subckt leg top vdd", "R1 top 0 1k")
         unused_renamed = body(".subckt leg top p", "R1 top 0 1k")
         dangling = [
             str(i["message"]).replace("'vdd'", "'p'")
-            for i in validate_netlist_dangling_nodes(lex_deck(unused).cards)
+            for i in validate_netlist_dangling_nodes(lex_deck(unused).cards, reader=LTSPICE_READER)
         ]
         assert dangling
         assert dangling == [
-            i["message"] for i in validate_netlist_dangling_nodes(lex_deck(unused_renamed).cards)
+            i["message"]
+            for i in validate_netlist_dangling_nodes(
+                lex_deck(unused_renamed).cards, reader=LTSPICE_READER
+            )
         ]
 
     async def test_every_reader_of_a_deck_reads_gnd_bang_as_a_node_of_its_own(
@@ -814,18 +828,19 @@ class TestDeckStructure:
         assert voltages["v(gnd!)"] == pytest.approx(1000.0)
         text = deck_text("deck/gnd_bang")
         nodes = {
-            c.ref.lower(): c.nodes for c in flatten_graph(parse_netlist_graph(text)).components
+            c.ref.lower(): c.nodes
+            for c in flatten_graph(parse_netlist_graph(text, reader=LTSPICE_READER)).components
         }
         assert nodes["r1"] == ("a", "gnd!")
         to_ground = text.replace("R1 a gnd! 1k\nR2 gnd! 0 1k", "R1 a 0 1k")
         assert to_ground != text
-        assert not compare_graphs(text, to_ground).structurally_equivalent
+        assert not compare_graphs(text, to_ground, reader=LTSPICE_READER).structurally_equivalent
         rows = await hierarchy_rows(state_no_sim, work_dir, "deck/gnd_bang")
         bang = rows[("R1",)]["nodes"][1]
         assert (bang.get("scope", []), bang["name"]) == ([], "gnd!")
         floating = text.replace("R2 gnd! 0 1k", "C2 gnd! 0 1n")
         assert floating != text
-        assert validate_netlist_bias_topology(lex_deck(floating).cards)
+        assert validate_netlist_bias_topology(lex_deck(floating).cards, reader=LTSPICE_READER)
 
     @pytest.mark.parametrize("at", ["0", "gnd", "GND"])
     async def test_the_net_query_reads_gnd_as_node_0(
@@ -951,7 +966,7 @@ def test_the_comparisons_read_only_the_cards_ltspice_reads(case_id: str):
     ``.param``, nor the resistor after ``.end``."""
     text = deck_text(case_id)
     read = as_ltspice_reads(text)
-    graphs = compare_graphs(text, read)
+    graphs = compare_graphs(text, read, reader=LTSPICE_READER)
     assert graphs.equivalent, graphs.as_dict()
     assert no_structural_change(structural_delta(read_deck(text), read_deck(read)))
 
@@ -1154,8 +1169,10 @@ class TestRecordedValuesOfTheForms:
         same = deck.replace("X1 in mid div params: r=2k", "X1 in mid div r=2k").replace(
             "X3 in mid3 div\n", "X3 in mid3 div r=1k\n"
         )
-        assert compare_graphs(deck, same).equivalent
-        other = compare_graphs(deck, deck.replace("X3 in mid3 div\n", "X3 in mid3 div r=2k\n"))
+        assert compare_graphs(deck, same, reader=LTSPICE_READER).equivalent
+        other = compare_graphs(
+            deck, deck.replace("X3 in mid3 div\n", "X3 in mid3 div r=2k\n"), reader=LTSPICE_READER
+        )
         rows = [
             (d.ref, d.key, d.reference_value, d.candidate_value) for d in other.param_mismatches
         ]
@@ -1179,7 +1196,9 @@ async def test_a_charge_or_flux_defined_part_has_two_terminals(
 
     text = deck_text("deck/keyword_values")
     expected = {"C1": ["b", "0"], "L1": ["c", "0"]}
-    graph = {c.ref: list(c.nodes) for c in parse_netlist_graph(text).components}
+    graph = {
+        c.ref: list(c.nodes) for c in parse_netlist_graph(text, reader=LTSPICE_READER).components
+    }
     assert {ref: graph[ref] for ref in expected} == expected
     lines = {line.ref: line for line in map(read_instance, lex_deck(text).cards) if line}
     assert {ref: _instance_terminals(lines[ref])[0] for ref in expected} == expected
@@ -1521,14 +1540,16 @@ def test_the_comparison_reads_a_three_node_q_card_as_ltspice_runs_it(build: str,
         for twin in twins:
             four = moved_to(card_of(text, f"Q{twin}"), stage)
             same = all(same_wave(read[f"v({n}{twin})"], read[f"v({n}{stage})"]) for n in "cbe")
-            result = compare_graphs(text, with_card(text, three, four))
+            result = compare_graphs(text, with_card(text, three, four), reader=LTSPICE_READER)
             assert result.equivalent == same, (four, result.as_dict())
             if same:
                 matched.append(four)
     assert matched == ["Q1 c1 b1 e1 0 QN", "Q5 c5 b5 e5 0 QP"]
 
     assert same_wave(read["v(c9)"], read["v(c10)"])
-    assert compare_graphs(text, with_card(text, "Q1 c b e QN", "Q1 c b e 0 QN")).equivalent
+    assert compare_graphs(
+        text, with_card(text, "Q1 c b e QN", "Q1 c b e 0 QN"), reader=LTSPICE_READER
+    ).equivalent
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -1543,7 +1564,7 @@ def test_three_node_q_cards_match_the_export_of_three_pin_transistors(build: str
             assert tokens[4] == "0", line
             line = " ".join(tokens[:4] + tokens[5:])
         written.append(line)
-    assert compare_graphs("\n".join(written) + "\n", export).equivalent
+    assert compare_graphs("\n".join(written) + "\n", export, reader=LTSPICE_READER).equivalent
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -1564,7 +1585,9 @@ def test_a_three_node_m_card_is_not_the_card_an_export_writes(build: str, tmp_pa
         assert "M1 vdd gn s1 NM" in log
         assert "M4 vss gp s4 PM" in log
     text = deck_text(case_id)
-    result = compare_graphs(text, with_card(text, "M1 vdd gn s1 NM", "M1 vdd gn s1 s1 NM"))
+    result = compare_graphs(
+        text, with_card(text, "M1 vdd gn s1 NM", "M1 vdd gn s1 s1 NM"), reader=LTSPICE_READER
+    )
     assert not result.equivalent
     (error,) = result.arity_errors
     assert (error.ref, error.reference_arity, error.candidate_arity) == ("M1", 3, 4)
@@ -1631,11 +1654,16 @@ async def test_every_reader_takes_both_words_of_a_source_that_plays_a_file_as_no
             assert (lines[ref].nodes, lines[ref].value) == (nodes, None), ref
             assert _instance_terminals(lines[ref])[0] == nodes, ref
     assert validate_netlist_arity(cards) == []
-    assert validate_netlist_dangling_nodes(cards) == []
-    assert validate_netlist_bias_topology(cards) == []
-    graph = {c.ref: c.nodes for c in flatten_graph(parse_netlist_graph(text)).components}
+    assert validate_netlist_dangling_nodes(cards, reader=LTSPICE_READER) == []
+    assert validate_netlist_bias_topology(cards, reader=LTSPICE_READER) == []
+    graph = {
+        c.ref: c.nodes
+        for c in flatten_graph(parse_netlist_graph(text, reader=LTSPICE_READER)).components
+    }
     assert graph["V1"] == ("a", "b")
-    assert not compare_graphs(text, text.replace("V1 a b ", "V1 a 0 ")).structurally_equivalent
+    assert not compare_graphs(
+        text, text.replace("V1 a b ", "V1 a 0 "), reader=LTSPICE_READER
+    ).structurally_equivalent
     assert parse_source_amplitudes(text) == {}
     path = work_dir / Path(case_id).with_suffix(".cir").name
     path.write_text(text, encoding="utf-8")
@@ -1772,8 +1800,11 @@ def test_every_reader_takes_an_elements_nodes_as_ltspice_ran_them(case_id: str):
     for ref, (nodes, _model, _value) in wanted.items():
         assert _instance_terminals(lines[ref])[0] == nodes, ref
     assert validate_netlist_arity(cards) == []
-    assert validate_netlist_dangling_nodes(cards) == []
-    graph = {c.ref: c.nodes for c in flatten_graph(parse_netlist_graph(text)).components}
+    assert validate_netlist_dangling_nodes(cards, reader=LTSPICE_READER) == []
+    graph = {
+        c.ref: c.nodes
+        for c in flatten_graph(parse_netlist_graph(text, reader=LTSPICE_READER)).components
+    }
     for ref, (nodes, _model, _value) in wanted.items():
         assert graph[ref] == tuple(nodes), ref
         card = card_of(text, ref)
@@ -1781,11 +1812,13 @@ def test_every_reader_takes_an_elements_nodes_as_ltspice_ran_them(case_id: str):
         words = card.split()
         assert words[len(nodes)] == nodes[-1], card
         moved = " ".join([*words[: len(nodes)], "elsewhere", *words[len(nodes) + 1 :]])
-        assert not compare_graphs(text, with_card(text, card, moved)).structurally_equivalent
+        assert not compare_graphs(
+            text, with_card(text, card, moved), reader=LTSPICE_READER
+        ).structurally_equivalent
     if case_id == "deck/element_w":
         assert lines["W1"].control == "Vsense"
         other = text.replace("W1 a 0 Vsense sw", "W1 a 0 Vother sw")
-        assert not compare_graphs(text, other).equivalent
+        assert not compare_graphs(text, other, reader=LTSPICE_READER).equivalent
 
 
 # --------------------------------------------------------------------------
@@ -1956,7 +1989,7 @@ def test_the_card_view_reads_a_source_by_the_rule_an_edit_does(case_id: str):
         assert netlist_card_value(cards[ref]) == shown(wanted), ref
     assert lint_input(case_id) == []
     assert validate_netlist_arity(lex_deck(text).cards) == []
-    graph = {c.ref: c for c in parse_netlist_graph(text).components}
+    graph = {c.ref: c for c in parse_netlist_graph(text, reader=LTSPICE_READER).components}
     for ref, wanted in SOURCE_TEXTS[case_id].items():
         assert graph[ref].value == shown(wanted), ref
         assert list(graph[ref].params) == keyed_pairs(wanted), ref
@@ -2014,9 +2047,9 @@ def test_a_comparison_sees_each_word_of_a_source(case_id: str):
     for old, new in changed:
         (card,) = [line for line in text.splitlines() if old in line]
         other = with_card(text, card, card.replace(old, new))
-        assert not compare_graphs(text, other).equivalent, old
+        assert not compare_graphs(text, other, reader=LTSPICE_READER).equivalent, old
         assert not no_structural_change(structural_delta(read_deck(text), read_deck(other))), old
-    assert compare_graphs(text, text).equivalent
+    assert compare_graphs(text, text, reader=LTSPICE_READER).equivalent
 
 
 @pytest.mark.parametrize("case_id", sorted(SOURCE_TEXTS))

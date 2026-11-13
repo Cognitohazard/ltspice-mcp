@@ -39,6 +39,7 @@ from ltspice_mcp.api._primitives import (
 )
 from ltspice_mcp.errors import InvalidCursorError, PathSecurityError
 from ltspice_mcp.lib import experiment_store, parser_service, services
+from ltspice_mcp.lib.device_names import path_text
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.log_types import LogSectionName
@@ -276,9 +277,9 @@ def _enforce_auto_door(arguments: Any, model: type[BaseModel]) -> list[str]:
             continue
         if kind in _DROPPED_CLASSES:
             _remove_field(arguments, path)
-            dropped.append(f"{'.'.join(path)}: {_DOOR_REMEDIES[kind]}")
+            dropped.append(f"{path_text(path)}: {_DOOR_REMEDIES[kind]}")
         else:
-            rejected.setdefault(kind, []).append(".".join(path))
+            rejected.setdefault(kind, []).append(path_text(path))
     if rejected:
         parts = [
             f"{', '.join(dict.fromkeys(fields))}: {_DOOR_REMEDIES[kind]}"

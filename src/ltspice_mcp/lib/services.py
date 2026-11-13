@@ -17,7 +17,7 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import numpy as np
 
@@ -37,7 +37,6 @@ from ltspice_mcp.lib.experiment_types import (
     partial_raw,
 )
 from ltspice_mcp.lib.job_lifecycle import runs_done
-from ltspice_mcp.lib.log_conditions import Producer
 from ltspice_mcp.lib.log_parser import LogDiagnostics
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.parser_service import ParserCleanupError, select_raw
@@ -58,6 +57,7 @@ from ltspice_mcp.lib.result_observations import (
 )
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name
 from ltspice_mcp.lib.simulator_build import (
+    Producer,
     SimulatorExecutable,
     executable_identity,
     ltspice_before_24,
@@ -70,6 +70,9 @@ from ltspice_mcp.lib.trace_names import (
     why_not,
 )
 from ltspice_mcp.state import SessionState
+
+if TYPE_CHECKING:
+    from ltspice_mcp.lib.hierarchy import SemanticProfile
 
 logger = logging.getLogger(__name__)
 
@@ -698,12 +701,45 @@ def reported_build_of(state: SessionState, executable: SimulatorExecutable | Non
     return reported[0] if reported is not None else None
 
 
-def simulator_before_24(state: SessionState, simulator: type | None) -> bool:
-    """``cp1252_ltspice`` for a simulator class: whether it launches an LTspice
-    before 24. Blocking (the executable is identified): call off the loop."""
+def session_reader(state: SessionState) -> SemanticProfile:
+    """Who reads a deck the session checks without running it
+    (``verify_circuit``, ``inspect``'s net query): the family a
+    ``run_experiments`` call with no override would run it on, that family's
+    executable (``deck_producer``), and ngspice's mode. Blocking: call off
+    the loop.
+
+    A family with no reader profile (QSPICE, Xyce), or none detected, is read
+    as LTspice reads a deck, as every deck was before the readers were told
+    who reads it."""
+    from ltspice_mcp.lib.hierarchy import SUPPORTED_FAMILIES, SemanticProfile
+    from ltspice_mcp.lib.simulator import DEFAULT_FAMILY, family_for, run_ngbehavior
+
+    family = family_for(None, state.default_simulator)
+    if family not in SUPPORTED_FAMILIES:
+        family = DEFAULT_FAMILY
+    simulator = state.available_simulators.get(family)
+    return SemanticProfile.of(
+        deck_producer(state, family, simulator),
+        run_ngbehavior(simulator) if family == "ngspice" else None,
+    )
+
+
+def deck_producer(state: SessionState, family: str | None, simulator: type | None) -> Producer:
+    """Who will read a deck run on ``simulator`` of ``family``: the family,
+    the build the latest run on the same executable reported
+    (``reported_build_of``), and the program it launches. The one answer for
+    a deck's reader before it runs, which ``hierarchy.SemanticProfile.of``
+    takes, as ``run_producer`` is for a run that ended. With no simulator
+    (an offline query) only the family is known. Blocking (the executable is
+    identified): call off the loop."""
     if simulator is None:
-        return False
-    return cp1252_ltspice(state, executable_identity(simulator)) is not None
+        return Producer(family=family, build=None, program=None)
+    identity = executable_identity(simulator)
+    return Producer(
+        family=family,
+        build=reported_build_of(state, identity),
+        program=identity.path if identity is not None else None,
+    )
 
 
 # Absolute worker deadline; the supervisor confirms owned-tree cleanup before

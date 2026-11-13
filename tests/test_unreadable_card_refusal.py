@@ -24,7 +24,7 @@ from ltspice_mcp.lib.montecarlo import parse_model_params
 from ltspice_mcp.lib.spice_lex import lex_deck
 from ltspice_mcp.lib.spice_validator import validate_netlist_directive_refs
 from ltspice_mcp.state import SessionState
-from tests.conftest import FakeSim, SyncApi, dispatch, fake_simulator
+from tests.conftest import LTSPICE_READER, FakeSim, SyncApi, dispatch, fake_simulator
 from tests.test_inspect_tools import _run
 
 _FIX = "Check for a missing } matching the {."
@@ -127,7 +127,7 @@ async def test_the_checks_report_the_card(state_no_sim, work_dir: Path, case: st
 
     cards = lex_deck(path.read_text(encoding="utf-8")).cards
     # The validator leaves the card out of its node checks rather than raising.
-    validate_netlist_directive_refs(cards)
+    validate_netlist_directive_refs(cards, reader=LTSPICE_READER)
     findings = lint_deck(path.read_text(encoding="utf-8"), path, "ltspice", "ltspice")
     assert [f["at"]["line"] for f in findings if f["rule_id"] == "unreadable-card"] == [line]
 

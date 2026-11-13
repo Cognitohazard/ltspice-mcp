@@ -52,6 +52,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
+from ltspice_mcp.lib.device_names import path_text
 from ltspice_mcp.lib.hierarchy import Hierarchy, ResolvedInstance
 from ltspice_mcp.lib.ngspice_driver import control_path
 from ltspice_mcp.lib.ngspice_mode import deck_flags, flags_for, mode_notes, run_batch
@@ -130,7 +131,7 @@ class HierarchyCheck:
             first = self.differences[0]
             return (
                 f"ngspice gives other values for {len(self.differences)} of "
-                f"{self.compared} compared, first {'.'.join(first.instance)} "
+                f"{self.compared} compared, first {path_text(first.instance)} "
                 f"{first.field}: reader {first.reader:g}, ngspice {first.ngspice:g}"
             )
         missing = dict(self.not_compared).get("no_ngspice_value")
