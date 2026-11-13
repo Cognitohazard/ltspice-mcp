@@ -121,7 +121,12 @@ from ltspice_mcp.lib.netlist_graph import (
     parse_netlist_graph,
 )
 from ltspice_mcp.lib.raster import RenderedImage
-from ltspice_mcp.lib.schematic_scene import Scene, build_scene, sheet_view
+from ltspice_mcp.lib.schematic_scene import (
+    WINDOW_ATTRIBUTES,
+    Scene,
+    build_scene,
+    sheet_view,
+)
 from ltspice_mcp.lib.services import cp1252_ltspice
 from ltspice_mcp.lib.sheet_findings import (
     RULES,
@@ -369,21 +374,25 @@ _RULES_OF_CHECK: dict[str, tuple[str, ...]] = {
     for check in ("symbols", "layout", "quality", "export")
 }
 
+# The attributes the scene lays out, as the notes below name them.
+*_FIRST, _LAST = WINDOW_ATTRIBUTES.values()
+_LAID_OUT = f"{', '.join(_FIRST)} and {_LAST}"
 # Stated inline so an empty findings list is not read as a clean drawing. Kept
 # to the one fact that changes what a caller concludes — the scan's blind spot,
 # not how bounding boxes are built.
 LAYOUT_COVERAGE = (
     "Layout scan checks text by extents estimated from LTspice's font: a part's "
-    "name, value, Value2, SpiceModel, SpiceLine and SpiceLine2 against what they "
-    "cross, and comments, directives and labels against each other. It does not "
-    "read a symbol's own text, its pin names or an attribute in any other window."
+    f"{_LAID_OUT} text against what it crosses, and comments, directives and "
+    "labels against each other. It does not read a symbol's own text, its pin "
+    "names, an attribute in any other window or a value a part takes from its "
+    "symbol."
 )
 # Stated beside every render, so a word missing from the picture is not read
 # as missing from the sheet.
 RENDER_COVERAGE = (
-    "The render draws a part's name, value, Value2, SpiceModel, SpiceLine and "
-    "SpiceLine2, and not a symbol's own text, its pin names or an attribute in "
-    "any other window."
+    f"The render draws a part's {_LAID_OUT} text, and not a symbol's own text, "
+    "its pin names, an attribute in any other window or a value a part takes "
+    "from its symbol."
 )
 
 

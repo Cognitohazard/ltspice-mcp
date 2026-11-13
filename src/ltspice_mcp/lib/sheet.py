@@ -24,6 +24,7 @@ from ltspice_mcp.lib.asc_document import (
     Record,
     Symbol,
     parse_asc_text,
+    shown_value,
     window_read_past,
 )
 from ltspice_mcp.lib.connectivity import NamedNets, fold_case, nets_by_ltspice
@@ -135,6 +136,14 @@ class SheetPart:
     def attribute(self, name: str) -> str | None:
         """The value of attribute ``name``; the last one when the part repeats it."""
         return self.record.attr(name)
+
+    def shown_attribute(self, name: str) -> str:
+        """The text the scene draws for attribute ``name`` through its window:
+        the part's own value, and none for a value written as ``""``
+        (``draw/attribute_defaults``). LTspice also draws the symbol's value
+        when the part gives none, which the scene does not lay out yet; the
+        layout check says so (``verify.LAYOUT_COVERAGE``)."""
+        return shown_value(self.attribute(name))
 
     @property
     def element(self) -> str:

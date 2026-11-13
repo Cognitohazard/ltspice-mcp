@@ -179,9 +179,9 @@ class Window:
 
 
 def shown_value(value: str | None) -> str:
-    """The text LTspice shows for an attribute's value: none for a value it
-    writes as ``""``, which is how a build keeps an attribute that has no
-    value. Neither build draws one (``draw/value2_at_origin``)."""
+    """The text LTspice draws for an attribute's value: none for a value
+    written as ``""``, which neither build draws (``draw/value2_at_origin``,
+    ``draw/attribute_defaults``)."""
     return "" if value is None or value.strip() == '""' else value
 
 

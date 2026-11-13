@@ -5445,6 +5445,34 @@
         ".raw"
       ]
     },
+    "draw/attribute_defaults": {
+      "behaviour": "sheet-drawing-other-text",
+      "command": [
+        "LTspice.exe",
+        "<dir>/attribute_defaults.asc",
+        "-ini",
+        "<settings>"
+      ],
+      "exit_code": null,
+      "inputs": {
+        "draw/attribute_defaults.asc": "966da224952c2f6b7234f66a614ddbce5e6d48602d8b30f0e726941b51a8857f",
+        "draw/defaulted.asy": "a15664e9c2036d329e818ede22c50f5b6984e3f2435095c8ebe2362ac1e852fe",
+        "export/res.asy": "92a811a8b1b08bbaa8749dec6126136f0e264ad89526ba5cd7d1abb92c17d37b"
+      },
+      "kind": "draw",
+      "outputs": {
+        "draw/attribute_defaults.drawn": {
+          "bytes": 2206,
+          "sha256": "64e98350b42cf031e49cbc18195496a17660bfede773de0dfa3b4b7380c86e3a"
+        }
+      },
+      "reported_build": null,
+      "stopped": true,
+      "written": [
+        ".drawn",
+        ".emf"
+      ]
+    },
     "draw/attribute_windows": {
       "behaviour": "sheet-drawing-other-text",
       "command": [

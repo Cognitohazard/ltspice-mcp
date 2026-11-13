@@ -29,7 +29,7 @@ from itertools import pairwise
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from ltspice_mcp.lib.asc_document import Window, shown_value
+from ltspice_mcp.lib.asc_document import Window
 from ltspice_mcp.lib.connectivity import point_on_segment
 from ltspice_mcp.lib.encoding import refused_sheet_mark
 from ltspice_mcp.lib.geometry import BBox
@@ -746,18 +746,22 @@ def _attr_texts(
     Window anchor coordinates are symbol-local: a per-instance ``WINDOW``
     override in the ``.asc`` replaces the ``.asy`` default, then the anchor is
     rotated and offset to the placement origin. An attribute is drawn only
-    through a window, and only when it shows text (``shown_value``).
+    through a window, and only when it shows text
+    (``SheetPart.shown_attribute``).
 
     The glyphs turn with the symbol, not just the anchor — see
     :func:`text_layout`. A window justified ``Invisible`` draws nothing.
     """
     out: list[DrawText] = []
-    by_number = {w.number: w for w in windows} | {w.number: w for w in part.record.windows}
+    # A symbol's first window of a number, then the part's last.
+    by_number = {w.number: w for w in reversed(windows)} | {
+        w.number: w for w in part.record.windows
+    }
     for number, w in sorted(by_number.items()):
         attribute = WINDOW_ATTRIBUTES.get(number)
         if attribute is None:
             continue
-        text = shown_value(part.reference if number == 0 else part.attribute(attribute))
+        text = part.reference if number == 0 else part.shown_attribute(attribute)
         layout = text_layout(w.align, w.size, rot) if text else None
         if layout is None:
             continue

@@ -7,6 +7,7 @@ two longest wires of each sheet give the scale to sheet units.
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,7 @@ from ltspice_mcp.lib.schematic_scene import (
     line_height,
     sheet_view,
 )
+from ltspice_mcp.lib.sheet_findings import findings
 from ltspice_mcp.lib.symbol_library import SymbolResolver
 from tests import _ltspice_recorded as rec
 from tests.ltspice_recorder import INPUTS
@@ -43,6 +45,9 @@ SYMBOL_TEXT_AND_PIN_NAMES = {"CELL", "IN", "OUT"}
 #: units shorter than the scene estimates: the scene sets size 0 at a 10-unit
 #: font where a build's text runs as if at about 9.5.
 DRAWN_SHORTER_BY_LTSPICE_AT_SIZE_0 = {"AC 22", "Rser=22"}
+#: The values U1 and U2 take from their symbol (``draw/attribute_defaults``):
+#: both builds draw them, and the scene lays out only a part's own values.
+DRAWN_FROM_THE_SYMBOL_BY_LTSPICE_ONLY = {"draw/attribute_defaults": ["DEFMOD", "DEFMOD", "LT1001"]}
 #: How far a drawn point may lie from the sheet's in sheet units: an image's
 #: coordinates are whole numbers, at a scale of a few to the sheet unit.
 NEAR = 1
@@ -218,7 +223,8 @@ def test_value2_is_drawn_only_with_a_visible_window(build: str):
 
 @pytest.mark.parametrize("build", rec.BUILDS)
 @pytest.mark.parametrize(
-    "case_id", ["draw/value2", "draw/attribute_windows", "draw/value2_at_origin"]
+    "case_id",
+    ["draw/value2", "draw/attribute_windows", "draw/value2_at_origin", "draw/attribute_defaults"],
 )
 def test_the_scene_lays_out_every_attribute_a_build_draws_where_it_draws_it(
     build: str, case_id: str, tmp_path: Path
@@ -226,14 +232,38 @@ def test_the_scene_lays_out_every_attribute_a_build_draws_where_it_draws_it(
     """Each name, value, Value2, SpiceLine, SpiceLine2 and SpiceModel a build
     draws, and nothing else, each where the build draws it: through a window
     at an offset or at the symbol's origin, at size 2 or size 0, and turned
-    with its part. An attribute written as "" draws nothing (V3's)."""
+    with its part. A value written as "" draws nothing, and hides the symbol's
+    (V3's, R3's). A value a part takes from its symbol is drawn by both builds
+    and not laid out (``DRAWN_FROM_THE_SYMBOL_BY_LTSPICE_ONLY``)."""
     drawn = rec.drawing(build, case_id)
-    texts = {text["text"]: text for text in drawn["texts"]}
-    laid_out = dict(_laid_out(build, case_id, tmp_path))
-    assert set(laid_out) == set(texts)
     scale = _scale(case_id, drawn)
-    for text, box in laid_out.items():
-        _assert_where_drawn(text, box, texts[text], scale)
+    laid_out = _laid_out(build, case_id, tmp_path)
+    left_out = Counter(t["text"] for t in drawn["texts"]) - Counter(t for t, _box in laid_out)
+    assert sorted(left_out.elements()) == DRAWN_FROM_THE_SYMBOL_BY_LTSPICE_ONLY.get(case_id, [])
+    assert not Counter(t for t, _box in laid_out) - Counter(t["text"] for t in drawn["texts"])
+    for text, box in laid_out:
+        # The drawing of that text nearest the box, for a text two parts draw.
+        shown = min(
+            (t for t in drawn["texts"] if t["text"] == text),
+            key=lambda t: abs(_cell(t, scale)[0] - box.x1) + abs(_cell(t, scale)[3] - box.y2),
+        )
+        _assert_where_drawn(text, box, shown, scale)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_two_attributes_at_one_point_are_drawn_over_each_other(build: str, tmp_path: Path):
+    """V1 shows its Value2 and its SpiceLine through windows at the symbol's
+    origin, as LTspice writes them on most of its own example sheets: both
+    builds draw the two texts over each other, and the layout check says so."""
+    case_id = "draw/value2_at_origin"
+    drawn = rec.drawing(build, case_id)
+    scale = _scale(case_id, drawn)
+    cells = {t["text"]: BBox(*map(round, _cell(t, scale))) for t in drawn["texts"]}
+    assert cells["AC 11"].overlaps(cells["Rser=11"])
+    found = findings(sheet_view(_scene(build, case_id, tmp_path)))
+    assert "V1's text 'Rser=11' at (32,32) is drawn across V1's text 'AC 11' at (32,32)" in [
+        f.detail for f in found if f.rule == "attribute_text_overlap"
+    ]
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)

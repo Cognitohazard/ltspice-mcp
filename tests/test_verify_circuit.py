@@ -937,6 +937,10 @@ async def test_layout_reads_value2_and_spiceline_text_and_says_what_it_does_not_
     ]
     assert vc.LAYOUT_COVERAGE in data["observations"]
     assert vc.RENDER_COVERAGE in data["observations"]
+    # The render draws both texts.
+    svg = Path(data["render"]["path"]).read_text(encoding="utf-8")  # noqa: ASYNC240
+    assert ">tc=1<" in svg
+    assert ">tc=0.01<" in svg
 
 
 async def test_layout_reports_comments_drawn_over_each_other(state_no_sim, work_dir):

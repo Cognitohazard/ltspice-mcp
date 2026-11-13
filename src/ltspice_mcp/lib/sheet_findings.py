@@ -308,8 +308,9 @@ class Part:
     gives them in, and ``texts`` the anchors of its drawn attributes as
     ``(x, y, first line)``, and ``text_extents`` where each is drawn, as
     ``(x, y, first line, extent, attribute)``, the attribute being the one the
-    text shows (``schematic_scene.WINDOW_ATTRIBUTES``). ``strokes`` are the lines it draws, as segments,
-    and ``areas`` the rectangles and circles it draws, as boxes. ``missing``
+    text shows (``schematic_scene.WINDOW_ATTRIBUTES``). ``strokes`` are the
+    lines it draws, as segments, and ``areas`` the rectangles and circles it
+    draws, as boxes. ``missing``
     says its symbol was not found: whatever box it carries is then a
     placeholder's, and no rule reads it.
     """
