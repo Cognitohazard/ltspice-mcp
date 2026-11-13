@@ -38,7 +38,7 @@ from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from ltspice_mcp.lib import now
 from ltspice_mcp.lib.cache import FileCache
@@ -74,8 +74,8 @@ _WHITESPACE = re.compile(r"\s+")
 # XVIIx64.exe / XVIIx86.exe (XVII) and scad3.exe (IV), and the raw header names
 # the writer as "Linear Technology Corporation LTspice XVII". LTspice 24 and
 # later are LTspice.exe and name themselves "LTspice 24.0.12 ...".
-_CP1252_LTSPICE_EXECUTABLE = re.compile(r"(?i)(?:^|[\\/])(?:XVIIx(?:64|86)|scad3)\.exe$")
-_CP1252_LTSPICE_BUILD = re.compile(r"(?i)\bLTspice\s+(?:XVII|IV)\b")
+_CP1252_LTSPICE_EXECUTABLE = re.compile(r"(?i)(?:^|[\\/])(XVIIx(?:64|86)|scad3)\.exe$")
+_CP1252_LTSPICE_BUILD = re.compile(r"(?i)\bLTspice\s+(XVII|IV)\b")
 
 
 def is_cp1252_ltspice_executable(program: str) -> bool:
@@ -115,6 +115,19 @@ def ltspice_before_24(program: str | None, reported: str | None) -> str | None:
         return program
     if reported and is_cp1252_ltspice_build(reported):
         return f"{reported} ({program})" if program else reported
+    return None
+
+
+def ltspice_generation_before_24(
+    program: str | None, reported: str | None
+) -> Literal["xvii", "iv"] | None:
+    """Which LTspice before 24 ``program`` is, from the same evidence as
+    :func:`ltspice_before_24` and in the same order: ``xvii`` or ``iv``, or None
+    for any other simulator."""
+    if program and (found := _CP1252_LTSPICE_EXECUTABLE.search(program)) is not None:
+        return "iv" if found[1].lower() == "scad3" else "xvii"
+    if reported and (named := _CP1252_LTSPICE_BUILD.search(reported)) is not None:
+        return "iv" if named[1].upper() == "IV" else "xvii"
     return None
 
 

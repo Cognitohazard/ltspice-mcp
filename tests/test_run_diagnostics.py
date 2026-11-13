@@ -562,6 +562,11 @@ def test_only_xvii_of_the_builds_before_24_reads_with_xviis_rules():
     assert log_conditions.rules_for(
         Producer("ltspice", "Linear Technology Corporation LTspice XVII", "LTspice.exe")
     ) == ("ltspice17", None)
+    # The same reading of a build's name as every other answer about XVII.
+    assert log_conditions.rules_for(Producer("ltspice", "LTSPICE  XVII", None)) == (
+        "ltspice17",
+        None,
+    )
 
 
 @pytest.mark.asyncio
@@ -596,6 +601,46 @@ async def test_a_produced_runs_log_is_read_once_it_lands_and_without_its_raw(
     )
     (row,) = reply["runs"]["items"]
     assert row["status"] == "produced"
+    assert _row_diagnostics(row) == EXPECTED["ltspice26"]
+    (read,) = [source for source in reads if source.log == Path(row["log"])]
+    assert read.raw is None
+
+
+@pytest.mark.asyncio
+async def test_the_replaying_stand_in_leaves_the_log_read_to_the_runner(
+    config: ServerConfig, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The stand-in most run tests replay recordings through returns what the
+    real completion returns for a run that produced, no log facts, so the read
+    those tests cover is the runner's own: once, without the raw."""
+    from ltspice_mcp.lib import services
+    from tests.conftest import FakeSim, replaying_simulator
+
+    reads: list[AnalysisSource] = []
+    real = services.load_logs_sync
+
+    def recording(source: AnalysisSource, state: SessionState, **kwargs: Any):
+        reads.append(source)
+        return real(source, state, **kwargs)
+
+    monkeypatch.setattr(services, "load_logs_sync", recording)
+    recorded = rec.recorded("ltspice26", "log")
+    replaying_simulator(
+        monkeypatch, recorded / "unknown_model_param.raw", recorded / "unknown_model_param.log"
+    )
+    state = SessionState.create(config, available={"ltspice": type("LTspice", (FakeSim,), {})})
+    deck = work_dir / "unknown_model_param.cir"
+    shutil.copy(rec.INPUTS / "log" / "unknown_model_param.cir", deck)
+    reply = await terminal_experiment(
+        state,
+        {
+            "request_id": "replayed",
+            "circuits": [{"path": str(deck), "id": "dut"}],
+            "execution": {"wait_s": 30},
+            "lint": "off",
+        },
+    )
+    (row,) = reply["runs"]["items"]
     assert _row_diagnostics(row) == EXPECTED["ltspice26"]
     (read,) = [source for source in reads if source.log == Path(row["log"])]
     assert read.raw is None

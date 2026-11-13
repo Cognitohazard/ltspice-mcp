@@ -675,17 +675,6 @@ def classify_channels(log_text: str, console_text: str) -> dict[str, list[LogCon
 
 
 _LTSPICE_26 = re.compile(r"^LTspice 26\.")
-_XVII_BUILD = re.compile(r"\bLTspice XVII\b")
-_XVII_PROGRAM = re.compile(r"(?i)^XVIIx(?:64|86)\.exe$")
-
-
-def _is_xvii(producer: Producer) -> bool:
-    """Whether the build the run named, or else the program's own file name, is
-    XVII's: the one build before 24 the rules are recorded from."""
-    if producer.build is not None:
-        return _XVII_BUILD.search(producer.build) is not None
-    name = re.split(r"[\\/]", producer.program or "")[-1]
-    return _XVII_PROGRAM.match(name) is not None
 
 
 def rules_for(producer: Producer) -> tuple[str, str | None]:
@@ -693,14 +682,14 @@ def rules_for(producer: Producer) -> tuple[str, str | None]:
     :data:`COVERAGE` key that says why it is not the producer's own, if so."""
     # Here rather than at the top: the parser worker imports this module, and
     # the build check would bring the raw reader into it.
-    from ltspice_mcp.lib.simulator_build import ltspice_before_24
+    from ltspice_mcp.lib.simulator_build import ltspice_generation_before_24
 
     if producer.family is None:
         return "wording", "producer_unknown"
     if producer.family == "ltspice":
         # Of the builds before 24, only XVII is recorded: IV reads with every
         # recorded build's wording, as a build after 26 does.
-        if ltspice_before_24(producer.program, producer.build) is not None and _is_xvii(producer):
+        if ltspice_generation_before_24(producer.program, producer.build) == "xvii":
             return _LT17, None
         if producer.build is not None and _LTSPICE_26.match(producer.build):
             return _LT26, None
