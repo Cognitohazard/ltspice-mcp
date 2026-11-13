@@ -133,3 +133,15 @@ def test_a_quote_left_open_inside_parentheses_is_reported_as_the_quote():
     ((_unread, error),) = unreadable_cards([card])
     assert error.category.value == "unterminated_quote"
     assert meas_unclosed_paren_refused(card) is None
+
+
+def test_the_node_names_a_card_that_cannot_be_read_still_mentions():
+    """The validator counts every one as connected and defined, and the
+    linter's unreadable-card finding says so."""
+    from ltspice_mcp.lib.spice_lex_views import may_connect_nodes, unread_node_names
+
+    card = _card("X1 Out d[0] cell w={a+b")
+    assert unreadable_cards([card])
+    assert may_connect_nodes(card)
+    assert {"x1", "out", "d[0]", "d", "0", "cell", "w", "a", "b"} <= unread_node_names(card)
+    assert not may_connect_nodes(_card('.save V("a'))

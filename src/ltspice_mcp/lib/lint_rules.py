@@ -11,6 +11,8 @@ from typing import Any, Literal, NamedTuple
 
 from ltspice_mcp.lib.deck_staging import (
     DEFAULT_INCLUDE_DEPTH,
+    card_sections,
+    in_other_section,
     is_absolute_reference,
     resolve_reference,
     scan_include_references,
@@ -34,6 +36,7 @@ from ltspice_mcp.lib.spice_lex_views import (
     MeasCard,
     ProbeRef,
     assigned_params,
+    may_connect_nodes,
     probe_is_pattern,
     probe_refs,
     read_instance,
@@ -43,7 +46,6 @@ from ltspice_mcp.lib.spice_validator import (
     ARITY_CHECKS,
     EXCLUSIVE_ANALYSIS_KINDS,
     is_ground_node,
-    may_connect_nodes,
     meas_functions_refused,
     meas_name_refused,
     meas_unclosed_paren_refused,
@@ -656,48 +658,74 @@ def _models_from_staged_dependencies(context: _LintContext) -> _ReachedModels:
     declared: set[str] = set()
     complete = True
     unread: list[tuple[Path, SpiceCard, SpiceLexError]] = []
-    snapshot: dict[Path, list[SpiceCard]] = {}
-    for file in context.files[1:]:
-        declared.update(_declared_models(file.cards))
-        snapshot[file.path.resolve(strict=False)] = file.cards
-    visited: set[Path] = set(snapshot)
+    snapshot: dict[Path, list[SpiceCard]] = {
+        file.path.resolve(strict=False): file.cards for file in context.files[1:]
+    }
+    reached: set[Path] = set()
+    visited: set[tuple[Path, str | None]] = set()
 
-    def walk(cards: list[SpiceCard], source: Path, depth: int, *, live: bool) -> None:
+    def walk(
+        cards: list[SpiceCard], source: Path, depth: int, selected: str | None, *, live: bool
+    ) -> None:
         nonlocal complete
-        if depth >= DEFAULT_INCLUDE_DEPTH:
-            return
         if blocked := unreadable_references(cards):
-            complete = False
-            if live:
-                unread.extend((source, card, error) for card, error in blocked)
+            # Which sections it opens is not known, so the file's models are
+            # all counted, as before; what it pulls in is not.
+            declared.update(_declared_models(cards))
+            if depth < DEFAULT_INCLUDE_DEPTH:
+                complete = False
+                if live:
+                    unread.extend((source, card, error) for card, error in blocked)
             return
         # ``depth`` here is the recursion budget; the scanner's parameter is
         # the library-context bit (0 = the deck itself, nonzero = a file
         # reached by following a reference). Keep the two separate.
-        for reference in scan_include_references(cards, source, depth=min(depth, 1)):
+        context_depth = min(depth, 1)
+        if selected is not None:
+            # ``.lib file section`` reads no other section's cards
+            # (``deck_staging.in_other_section``).
+            sections = card_sections(cards, source, context_depth)
+            cards = [
+                card
+                for card, owner in zip(cards, sections, strict=True)
+                if not in_other_section(owner, selected)
+            ]
+        declared.update(_declared_models(cards))
+        # A file at the limit is read for its own models, as staging stages it,
+        # and what it pulls in is not followed.
+        if depth >= DEFAULT_INCLUDE_DEPTH:
+            return
+        for reference in scan_include_references(cards, source, depth=context_depth):
             dependency = resolve_reference(source.parent, reference.raw_path)
             try:
                 resolved = dependency.resolve(strict=False)
             except OSError:
                 continue
-            if resolved in visited:
+            if (resolved, reference.section) in visited:
                 continue
-            visited.add(resolved)
+            visited.add((resolved, reference.section))
+            if resolved in snapshot:
+                # A staged copy is read from its snapshot, never from disk.
+                reached.add(resolved)
+                walk(snapshot[resolved], resolved, depth + 1, reference.section, live=False)
+                continue
             if not resolved.is_file():
                 continue
             try:
                 nested = lex(read_spice_text(resolved)).cards
             except (OSError, UnicodeError, ValueError):
                 continue
-            declared.update(_declared_models(nested))
-            walk(nested, resolved, depth + 1, live=True)
+            walk(nested, resolved, depth + 1, reference.section, live=True)
 
-    walk(context.cards, context.path, 0, live=False)
+    walk(context.cards, context.path, 0, None, live=False)
     for staged_path, cards in snapshot.items():
-        # Scanned from the snapshot, never from disk; the only thing this can
-        # find that the snapshot itself does not carry is a live reference
-        # nested inside a staged file.
-        walk(cards, staged_path, 1, live=False)
+        if staged_path in reached:
+            continue
+        # A staged file no reference here reaches is read whole, as before;
+        # the only thing its scan can find beyond its own models is a live
+        # reference nested inside it.
+        visited.add((staged_path, None))
+        walk(cards, staged_path, 1, None, live=False)
     return _ReachedModels(declared, complete, unread)
 
 

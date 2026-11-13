@@ -158,7 +158,7 @@ from ltspice_mcp.lib.connectivity import (
     named_labels,
 )
 from ltspice_mcp.lib.cursor_codec import canonical_hash
-from ltspice_mcp.lib.deck_nodes import global_names, node_kind
+from ltspice_mcp.lib.deck_nodes import node_kind
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, TraceDescriptor
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import cap_note
@@ -218,8 +218,14 @@ from ltspice_mcp.lib.spice_lex import (
     SpiceLexError,
     directive_head,
     lex_deck,
+    subckt_definitions,
 )
-from ltspice_mcp.lib.spice_lex_views import InstanceLine, SubcktCard, instances_by_ref
+from ltspice_mcp.lib.spice_lex_views import (
+    InstanceLine,
+    SubcktCard,
+    global_names,
+    instances_by_ref,
+)
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, symbol_info_of
 from ltspice_mcp.lib.symbol_library import SymbolResolver
 from ltspice_mcp.state import SessionState
@@ -1620,7 +1626,7 @@ def _deck_node(
 
 
 def _readable_global_names(card: SpiceCard) -> tuple[str, ...]:
-    """The node names a ``.global`` card lists (``deck_nodes``), none for a
+    """The node names a ``.global`` card lists (``spice_lex_views.global_names``), none for a
     card that cannot be split into parts."""
     try:
         return global_names(card)
@@ -1629,12 +1635,12 @@ def _readable_global_names(card: SpiceCard) -> tuple[str, ...]:
 
 
 def _subcircuit_ports(cards: Sequence[SpiceCard]) -> dict[str, tuple[str, ...]]:
-    """The ports each subcircuit's header names, by its case-folded name;
-    none for a header that cannot be split into parts."""
+    """The ports the header of each subcircuit's definition in force names
+    (``spice_lex.subckt_definitions``), by its case-folded name; none for a
+    header that cannot be split into parts."""
     ports: dict[str, tuple[str, ...]] = {}
-    for card in cards:
-        if card.kind != "subckt":
-            continue
+    for index in subckt_definitions(cards).values():
+        card = cards[index]
         try:
             sub = SubcktCard.from_card(card)
         except SpiceLexError:

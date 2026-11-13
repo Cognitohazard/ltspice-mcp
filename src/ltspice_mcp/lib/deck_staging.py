@@ -845,6 +845,25 @@ def card_sections(
     return sections
 
 
+def in_other_section(owner: str | None, selected: str | None) -> bool:
+    """Whether a card in library section ``owner`` (``card_sections``; None
+    outside every section) sits in a section other than the one its file is
+    pulled in for (``selected``, the section a ``.lib file tt`` names, the
+    names folded as SPICE folds them). Such a card is not read: ``.lib file
+    tt`` reads the cards of section ``tt`` and of no other. With no section
+    selected none is excluded here.
+
+    The one rule for which sections of a library are left out, which every
+    reader of a library's cards asks. Whether the cards outside every
+    section are read when a section is selected, and whether a file pulled
+    in with none selected is read whole, is not recorded: hierarchy
+    discovery leaves both out, the other readers read them. LTspice reads a
+    sectioned ``.lib`` as a file name (deck/lib_section), so the rule is
+    ngspice's.
+    """
+    return selected is not None and owner is not None and owner.casefold() != selected.casefold()
+
+
 def looks_like_section_declaration(
     raw_path: str,
     source: Path,

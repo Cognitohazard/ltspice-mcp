@@ -226,9 +226,6 @@ _CARD_TEXT_READERS: dict[str, str] = {
     "lib/component_value.py:apply_value_to_instance": (
         "a value the caller supplies, read against the card's own parts for an edit"
     ),
-    "lib/deck_nodes.py:global_names": (
-        "moves to a view in a follow-up: a directive's arguments (the names .global lists)"
-    ),
     "lib/deck_prep.py:_read_export": (
         "an LTspice export scrubbed for ngspice's parser: which cards are .backanno"
     ),
@@ -258,10 +255,6 @@ _CARD_TEXT_READERS: dict[str, str] = {
     ),
     "lib/hierarchy.py:resolve_hierarchy.expand": (
         "an instance's text, kept as the record of its definition"
-    ),
-    "lib/hierarchy.py:walk_active.visit": (
-        "moves to a view in a follow-up: continuation handling (whether a library section "
-        "card is continued)"
     ),
     "lib/hierarchy_expr.py:evaluate": "not a deck card: a Python expression tree's body",
     "lib/instance_targeting.py:TargetEditor._ancestry": (
@@ -370,9 +363,6 @@ _CARD_TEXT_READERS: dict[str, str] = {
     "lib/runner_base.py:_blank_or_comment": (
         "moves to a view in a follow-up: continuation and comment handling"
     ),
-    "lib/runner_base.py:_deck_has_sectioned_lib": (
-        "moves to a view in a follow-up: the target and section of a .lib"
-    ),
     "lib/runner_base.py:inject_logopinfo": (
         "moves to a view in a follow-up: free-text scan of a body (logopinfo)"
     ),
@@ -396,9 +386,6 @@ _CARD_TEXT_READERS: dict[str, str] = {
     "lib/sheet_findings.py:_duplicate_parameters": "a schematic part's attribute, not a deck line",
     "lib/spice_validator.py:_card_directive": (
         "display: the card's text shown in a finding, message or record, not read for a fact"
-    ),
-    "lib/spice_validator.py:_unread_connectors": (
-        "moves to a view in a follow-up: free-text scan of a body for names"
     ),
     "lib/spice_validator.py:meas_unclosed_paren_refused": (
         "which cards cannot be read, as the tokenizer answers it"

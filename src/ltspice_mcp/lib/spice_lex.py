@@ -1312,6 +1312,12 @@ def unreadable_cards(cards: Iterable[SpiceCard]) -> list[tuple[SpiceCard, SpiceL
     return found
 
 
+def is_orphan_continuation(card: SpiceCard) -> bool:
+    """Whether ``card`` is a ``+`` line with no card before it to continue,
+    which ``lex`` keeps as a comment so the text round-trips."""
+    return card.kind == "comment" and any(_is_continuation(line.lstrip()) for line in card.raw_lines)
+
+
 def directive_head(card: SpiceCard) -> str:
     """The name a directive card starts with, casefolded (``.tran``,
     ``.save``), or ``""`` for an empty body.
@@ -1451,6 +1457,48 @@ def subckt_children(
     for i in range(opener_idx + 1, len(cards) if closer is None else closer):
         if len(cards[i].scope) == depth:
             yield i, cards[i]
+
+
+def _definitions(
+    cards: Sequence[SpiceCard],
+) -> tuple[dict[tuple[tuple[str, ...], str], int], set[int]]:
+    """``subckt_definitions`` and ``shadowed_cards`` in one walk."""
+    in_force: dict[tuple[tuple[str, ...], str], int] = {}
+    shadowed: set[int] = set()
+    for index, card in enumerate(cards):
+        if card.kind != "subckt" or not card.name or index in shadowed:
+            continue
+        key = (card.scope, card.name.casefold())
+        if key not in in_force:
+            in_force[key] = index
+            continue
+        closer = find_matching_ends(cards, index)
+        shadowed.update(range(index, len(cards) if closer is None else closer + 1))
+    return in_force, shadowed
+
+
+def subckt_definitions(cards: Sequence[SpiceCard]) -> dict[tuple[tuple[str, ...], str], int]:
+    """The index of the ``.SUBCKT`` opener in force for each name in each
+    scope, keyed by the scope it is defined in and the name case-folded, in
+    card order.
+
+    When two definitions share a name in one scope the first, in card order,
+    is in force and a later one is ignored: ngspice warns "redefinition of
+    .subckt X, ignored" (``netlist_graph.DuplicateSubckt``); what LTspice
+    does is not recorded. The one rule for which definition of a name is
+    read, which every reader of a subcircuit's header or body asks, with
+    ``shadowed_cards`` for the cards no reader should count.
+    """
+    return _definitions(cards)[0]
+
+
+def shadowed_cards(cards: Sequence[SpiceCard]) -> set[int]:
+    """The indexes of the cards of every ``.SUBCKT`` definition that an
+    earlier one of the same name in the same scope keeps out of force
+    (``subckt_definitions``): its opener, its body, any definition nested in
+    it, and its ``.ENDS``. A reader that takes a body by scope leaves these
+    out, since the two bodies share one scope tuple."""
+    return _definitions(cards)[1]
 
 
 def iter_by_kind(
