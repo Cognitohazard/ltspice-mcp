@@ -1638,6 +1638,14 @@ class MeasCard:
         words = {tok.text.casefold() for tok in self.body_tokens if tok.kind == TokenKind.BARE}
         return "when" in words and "find" not in words
 
+    @property
+    def deriv_when(self) -> bool:
+        """Whether the measurement is a ``DERIV ... WHEN``: a derivative taken
+        where a condition is met, with no FIND (``FIND deriv(...) WHEN`` is a
+        FIND). No recording shows how LTspice prints one."""
+        words = {tok.text.casefold() for tok in self.body_tokens if tok.kind == TokenKind.BARE}
+        return "deriv" in words and "when" in words and "find" not in words
+
 
 # ---------------------------------------------------------------------------
 # A directive's arguments and a .param card's assignments

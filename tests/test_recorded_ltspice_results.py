@@ -38,10 +38,13 @@ from ltspice_mcp.lib.encoding import (
 from ltspice_mcp.lib.experiment_types import PARTIAL_RAW_KEY
 from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.lint_rules import lint_deck
+from ltspice_mcp.lib.log_conditions import Producer
 from ltspice_mcp.lib.log_parser import (
+    answered_measurements,
     classify_failure_code,
     count_op_iterations,
     extract_log_diagnostics,
+    measurement_cards,
     parse_measurements,
     parse_step_iterations,
     parse_temperatures,
@@ -1365,6 +1368,14 @@ def test_the_temperature_lines_are_read(build: str):
     assert parse_temperatures(text=hot) == (50.0, 27.0)
 
 
+def answered(build: str, data: Any, deck: Path) -> Any:
+    """A recorded log's measurement table as every reader returns it, each
+    entry naming the field holding its result, read with the build's own
+    rules and the case's deck."""
+    producer = Producer("ltspice", rec.manifest(build)["reported_build"], None)
+    return answered_measurements(data, producer, measurement_cards(deck))
+
+
 def first_values(build: str, case_id: str) -> dict[str, float]:
     """The first value of each measurement in a recorded log, by name."""
     data = cast(dict[str, Any], parse_measurements(rec.recorded(build, f"{case_id}.log")))
@@ -1406,7 +1417,9 @@ class TestMeasurements:
         """A WHEN measurement prints the level it looked for and the time it
         found it; the time is the result."""
         data = parse_measurements(rec.recorded(build, "log/meas_forms.log"))
-        flat, _, _, _ = aggregate_log_measurements(data, INPUTS / "log/meas_forms.cir")
+        flat, _, _, _ = aggregate_log_measurements(
+            answered(build, data, INPUTS / "log/meas_forms.cir")
+        )
         assert flat["m_when"][0] == pytest.approx(100e-6 * math.log(2), abs=3e-6)
         assert data["measurements"]["m_when"]["values"] == [0.5]
 
@@ -1437,7 +1450,9 @@ class TestMeasurements:
             "t_meas": "v(out)=vmax/2",
         }
         data = parse_measurements(rec.recorded(build, f"{case_id}.log"))
-        flat, _, _, _ = aggregate_log_measurements(data, INPUTS / f"{case_id}.cir")
+        flat, _, _, _ = aggregate_log_measurements(
+            answered(build, data, INPUTS / f"{case_id}.cir")
+        )
         crossing, half_max = flat["t_number"][0], flat["t_meas"][0]
         assert crossing is not None and half_max is not None
         assert crossing == pytest.approx(100e-6 * math.log(2), abs=3e-6)
@@ -1513,7 +1528,9 @@ class TestMeasurements:
         assert list(data["measurements"]) == [
             "t_number", "t_param", "t_expr", "t_braced", "vmax", "t_meas",
         ]  # fmt: skip
-        flat, _, _, _ = aggregate_log_measurements(data, INPUTS / f"{case_id}.cir")
+        flat, _, _, _ = aggregate_log_measurements(
+            answered(build, data, INPUTS / f"{case_id}.cir")
+        )
         assert flat["t_braced"] == flat["t_param"] == flat["t_number"]
 
     def test_only_xvii_fails_an_ac_when_against_a_parameter(self, build: str):
@@ -1527,7 +1544,11 @@ class TestMeasurements:
             )
         case_id = "log/meas_when_threshold_ac"
         flat, _, _, _ = aggregate_log_measurements(
-            parse_measurements(rec.recorded(build, f"{case_id}.log")), INPUTS / f"{case_id}.cir"
+            answered(
+                build,
+                parse_measurements(rec.recorded(build, f"{case_id}.log")),
+                INPUTS / f"{case_id}.cir",
+            )
         )
         assert flat["f_number"][0] == pytest.approx(1000.0, rel=1e-3)
         assert flat["f_param"] == ([None] if xvii else flat["f_number"])

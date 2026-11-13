@@ -38,7 +38,12 @@ from ltspice_mcp.lib.experiment_types import (
 )
 from ltspice_mcp.lib.job_lifecycle import runs_done
 from ltspice_mcp.lib.log_conditions import Producer
-from ltspice_mcp.lib.log_parser import LogDiagnostics
+from ltspice_mcp.lib.log_parser import (
+    LogDiagnostics,
+    MeasurementsOutput,
+    answered_measurements,  # noqa: TID251 - answer_measurements is the readers' door to it
+    measurement_cards,
+)
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.parser_service import ParserCleanupError, select_raw
 from ltspice_mcp.lib.parser_service import load_artifacts_sync as _parse_artifacts_sync
@@ -631,6 +636,22 @@ def source_producer(
         build=source.simulator_version or reported,
         program=None,
     )
+
+
+async def answer_measurements(
+    source: AnalysisSource, table: MeasurementsOutput, *, producer: Producer | None = None
+) -> MeasurementsOutput:
+    """``source``'s log measurements ``table`` with the field holding each
+    one's result named (``log_parser.answered_measurements``), from who wrote
+    the log and the run's deck where it is known. Every reader of a
+    measurement reads it through here. ``producer`` is the one a caller has
+    already resolved (the summary's, read with the build its files name);
+    otherwise it is :func:`source_producer`'s, as a log-only reader opens no
+    source file in this process: a bare path then names no build, and its log
+    is read with every recorded build's rules (``log_conditions.rules_for``),
+    which agree on every recorded form."""
+    cards = await asyncio.to_thread(measurement_cards, source.netlist)
+    return answered_measurements(table, producer or source_producer(source), cards)
 
 
 def reported_version(

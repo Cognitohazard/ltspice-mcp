@@ -5,9 +5,11 @@ a parameter, an expression, a braced expression or another measurement
 (recorded as ``log/meas_when_threshold_tran``). The server reads a number
 there and cannot read the others; LTspice 26's braced form,
 ``t_braced: V(out)={vth} AT ...``, is a line spicelib's reader does not match
-at all. Each such entry fails by itself, with the line LTspice printed, the
+at all. Each such entry's value is null, with the line LTspice printed, the
 reason and the crossing, while every other measurement of the log reads; each
-door reports the same entries the same way.
+door reports the same entries the same way. The threshold is the level a WHEN
+with no FIND searched for, not its result, so the measurements recipe reads
+the crossing it printed after ``AT`` and has nothing unreadable to report.
 """
 
 from __future__ import annotations
@@ -104,7 +106,9 @@ def test_inspect_gives_each_failed_entry_its_line_and_reason(
         assert "unreadable" not in by_name[name], name
 
 
-def test_the_measurements_recipe_fails_each_entry_alone(state_no_sim: SessionState, log: Path):
+def test_the_measurements_recipe_reads_each_crossing_whatever_its_level_prints(
+    state_no_sim: SessionState, log: Path
+):
     reply = SyncApi(state_no_sim).analyze_results(
         sources=[{"path": str(log), "label": "run"}],
         recipes=[{"key": "m", "metric": "measurements"}],
@@ -114,17 +118,15 @@ def test_the_measurements_recipe_fails_each_entry_alone(state_no_sim: SessionSta
     value = row["value"]
     printed, unreadable = _printed(log), _unreadable(log)
     assert set(printed) <= set(value["measured"])
-    # LTspice printed each of them, so none is named failed: unreadable says why
-    # it has no number.
+    # LTspice printed each of them, so none is named failed, and the result of
+    # each is the crossing, a number.
     assert "failed_measurements" not in value
     assert "not_finite" not in value
+    assert "unreadable" not in value
     for name in unreadable:
-        assert value["measured"][name] is None, name
-        assert value["unreadable"][name]["line"] == printed[name]
-        assert value["at"][name] == _crossing(printed[name])
+        assert value["measured"][name] == _crossing(printed[name]), name
     for name in set(value["measured"]) - set(unreadable):
         assert value["measured"][name] is not None, name
-    assert set(value["unreadable"]) == set(unreadable)
 
 
 def test_the_run_summary_carries_each_failed_entry(state_no_sim: SessionState, log: Path):
