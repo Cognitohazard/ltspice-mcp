@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import copy
 import functools
 import inspect
@@ -119,6 +120,55 @@ def _validate(
         return model.model_validate(dict(arguments))
     except ValidationError as exc:
         raise _validation_error(operation, exc, state) from None
+
+
+def _note_caller_request(model: type[BaseModel], arguments: Mapping[str, Any]) -> None:
+    """Give the operation's event the request as the caller wrote it.
+
+    Validated here, before the operation rewrites its arguments: the
+    automatic mode drops presentation controls the caller sent and submits
+    with ``execution.wait_s=0`` the caller did not, and the event names what
+    the caller set. Validated only when the event would be written; arguments
+    that do not validate leave the event's names null, as a refused tool call's
+    are, and the operation reports them itself.
+    """
+    from ltspice_mcp.lib.observability import events_enabled, note_request
+
+    if not events_enabled():
+        return
+    try:
+        request = model.model_validate(copy.deepcopy(dict(arguments)))
+    except Exception:
+        return
+    note_request(request)
+
+
+#: Set while an operation call runs, and while a method that is no operation
+#: of its own (``wait``) runs operations for its caller: an operation called
+#: inside it writes no event, so one call of the caller's is counted once.
+_INSIDE_OPERATION: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "api_inside_operation", default=False
+)
+
+
+@contextlib.contextmanager
+def _inside_operation() -> Iterator[None]:
+    token = _INSIDE_OPERATION.set(True)
+    try:
+        yield
+    finally:
+        _INSIDE_OPERATION.reset(token)
+
+
+def _counted_by_caller(method: Callable[_P, _R]) -> Callable[_P, _R]:
+    """Run ``method`` with the operations it calls writing no event."""
+
+    @functools.wraps(method)
+    def counted(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        with _inside_operation():
+            return method(*args, **kwargs)
+
+    return counted
 
 
 def _walk_fields(
@@ -690,6 +740,11 @@ _P = ParamSpec("_P")
 _R = TypeVar("_R")
 
 
+#: The options of the API's own that an operation takes beside the tool's
+#: arguments, with their defaults: an operation's event names those a call set.
+_API_CONTROLS: dict[str, bool] = {"raw_page": False, "wait": True, "detach": False}
+
+
 class _CataloguedMethod:
     # A method whose docstring and signature come from the catalogue on first
     # read. Rendering them needs the tool models (0.7 s and the mcp import the
@@ -713,15 +768,67 @@ class _CataloguedMethod:
         (``lib/reply_fields.py``), so a script and a tool call read one shape.
         This is the one place the API applies the rule; a raw page already is a
         sent reply."""
-        if kwargs.get("raw_page"):
-            return self.__func__(*args, **kwargs)
+        from ltspice_mcp.lib.observability import capturing_request, emit_api_event
         from ltspice_mcp.tools._base import as_sent  # an operation call pays the import anyway
 
+        if _INSIDE_OPERATION.get():
+            # Its own holder, which nothing reads: the request this call
+            # validates must not fill the record of the call it runs inside.
+            with capturing_request():
+                return self._run(as_sent, args, kwargs)
+        with _inside_operation():
+            return self._counted(as_sent, emit_api_event, capturing_request, args, kwargs)
+
+    def _run(self, as_sent: Callable[..., Any], args: Any, kwargs: dict[str, Any]) -> Any:
+        if kwargs.get("raw_page"):
+            return self.__func__(*args, **kwargs)
         try:
             return as_sent(self.__func__(*args, **kwargs), self.__name__)
         except ApiCallError as exc:
             exc.payload = as_sent(exc.payload, self.__name__)
             raise
+
+    def _counted(
+        self,
+        as_sent: Callable[..., Any],
+        emit_api_event: Callable[..., None],
+        capturing_request: Callable[[], contextlib.AbstractContextManager[list[BaseModel]]],
+        args: Any,
+        kwargs: dict[str, Any],
+    ) -> Any:
+        """Run the operation and write its one event (``lib/observability``)."""
+        started = time.monotonic()
+        outcome: Literal["ok", "error", "cancelled", "raised"] = "raised"
+        code: str | None = None
+        with capturing_request() as request:
+            try:
+                result = self._run(as_sent, args, kwargs)
+            except ApiCallError as exc:
+                outcome, code = "error", exc.code
+                raise
+            except ApiValidationError:
+                # What a tool call answers ``invalid_arguments`` for.
+                outcome, code = "error", "invalid_arguments"
+                raise
+            except KeyboardInterrupt:
+                outcome = "cancelled"
+                raise
+            else:
+                outcome = "ok"
+                return result
+            finally:
+                emit_api_event(
+                    self.__name__,
+                    time.monotonic() - started,
+                    outcome,
+                    code,
+                    request[0] if request else None,
+                    (
+                        name
+                        for name, default in _API_CONTROLS.items()
+                        if isinstance(kwargs.get(name), bool) and kwargs[name] is not default
+                    ),
+                )
 
     @property
     def __signature__(self) -> inspect.Signature:  # type: ignore[override]
@@ -870,6 +977,7 @@ class ApiMethodsMixin(ABC):
         is also what admits the wire-only controls the automatic mode rejects.
         """
         self._check_process_and_thread()
+        _note_caller_request(model, arguments)
         dropped = [] if raw_page else _enforce_auto_door(arguments, model)
         request = _validate(name, model, arguments, self._state)
         coroutine = (
@@ -899,6 +1007,7 @@ class ApiMethodsMixin(ABC):
             raise ApiValidationError("wait must be a bool")
         if not isinstance(detach, bool):
             raise ApiValidationError("detach must be a bool")
+        _note_caller_request(experiments.RunExperimentsInput, arguments)
         if detach:
             if wait:
                 raise ApiValidationError(
@@ -1022,6 +1131,7 @@ class ApiMethodsMixin(ABC):
                 raise ApiValidationError("detach=True cannot be combined with raw_page=True.")
             if not self._state.config.persist_jobs:
                 raise ApiValidationError("detach=True needs persisted job records (persist_jobs).")
+            _note_caller_request(jobs.JobsInput, arguments)
             return self._resume_detached(arguments)
         return self._dispatch(
             "jobs",
@@ -1100,6 +1210,7 @@ class ApiMethodsMixin(ABC):
                 raise ApiCallError(data["error"]["message"], payload=data) from exc
         return _with_warnings(handoff.receipt, dropped)
 
+    @_counted_by_caller
     def wait(
         self,
         job_id: str,

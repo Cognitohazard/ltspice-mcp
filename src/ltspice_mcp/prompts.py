@@ -164,6 +164,11 @@ def list_prompts() -> list[types.Prompt]:
     return [entry.prompt for entry in _PROMPTS]
 
 
+def prompt_names() -> frozenset[str]:
+    """The names of the prompts this server serves."""
+    return frozenset(_BY_NAME)
+
+
 def get_prompt(name: str, arguments: dict[str, str] | None) -> types.GetPromptResult:
     """Build a prompt's messages, interpolating its arguments."""
     entry = _BY_NAME.get(name)
