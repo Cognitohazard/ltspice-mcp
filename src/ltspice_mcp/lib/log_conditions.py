@@ -30,6 +30,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from ltspice_mcp.lib.format import cap_note
 from ltspice_mcp.lib.log_types import LogCondition
 
 Channel = Literal["log", "console"]
@@ -568,10 +569,12 @@ FIRST_TEXT_CHARS = 600
 
 
 def _held(text: str) -> str:
-    """``text`` as written, cut at :data:`FIRST_TEXT_CHARS` with the length left out."""
+    """``text`` as written, cut at :data:`FIRST_TEXT_CHARS`, saying its whole length
+    and where the rest is."""
     if len(text) <= FIRST_TEXT_CHARS:
         return text
-    return f"{text[:FIRST_TEXT_CHARS]}… (+{len(text) - FIRST_TEXT_CHARS} characters)"
+    note = cap_note(FIRST_TEXT_CHARS, len(text), "characters", "the run's log holds the rest")
+    return f"{text[:FIRST_TEXT_CHARS]}… ({note})"
 
 
 def classify(channels: Mapping[Channel, str], rules_name: str) -> list[LogCondition]:
