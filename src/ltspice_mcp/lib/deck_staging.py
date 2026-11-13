@@ -845,6 +845,23 @@ def card_sections(
     return sections
 
 
+def read_in_section(owner: str | None, selected: str | None) -> bool:
+    """Whether a card in library section ``owner`` (``card_sections``; None
+    outside every section) is read when its file is pulled in for section
+    ``selected``: ``.lib file tt`` reads the cards of section ``tt`` and no
+    other, the section names folded as SPICE folds them. With no section
+    selected, the cards outside every section are read.
+
+    The one rule for which cards of a sectioned library are read, which
+    hierarchy discovery, the analyses a run expects (``runner_base``) and the
+    models the linter finds all ask. LTspice reads a sectioned ``.lib`` as a
+    file name (deck/lib_section), so the rule is ngspice's.
+    """
+    if selected is None:
+        return owner is None
+    return owner is not None and owner.casefold() == selected.casefold()
+
+
 def looks_like_section_declaration(
     raw_path: str,
     source: Path,

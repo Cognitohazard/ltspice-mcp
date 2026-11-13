@@ -24,7 +24,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Literal
 
-from ltspice_mcp.lib.deck_nodes import GROUND_NAMES, global_names, node_kind
+from ltspice_mcp.lib.deck_nodes import GROUND_NAMES, node_kind
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
@@ -32,6 +32,8 @@ from ltspice_mcp.lib.spice_lex import (
     SpiceLexErrorCategory,
     directive_head,
     lex,
+    shadowed_cards,
+    subckt_definitions,
     tokenize_body,
     unreadable_cards,
 )
@@ -42,8 +44,11 @@ from ltspice_mcp.lib.spice_lex_views import (
     ModelCard,
     SubcktCard,
     body_has_stray_kv_remnant,
+    global_names,
+    may_connect_nodes,
     probe_refs,
     read_instance,
+    unread_node_names,
 )
 
 # Analysis directives that LTspice accepts. Used by validate_netlist to
@@ -611,39 +616,16 @@ class _NodeUse:
 # expression (``B1 out 0 V={V(in)*2``) is one of its words too.
 # A bus name keeps its brackets (``V(d[0])*2`` holds ``d[0]``), and an index
 # may be a node too, so the words are taken both with and without them.
-_UNREAD_SEPARATORS = (
-    re.compile(r"[\s(){}'\",=]+"),
-    re.compile(r"[\s(){}\[\]'\",=]+"),
-)
-_UNREAD_OPERATORS = re.compile(r"[*/+\-<>^&|!?:;%]+")
-
-
-def may_connect_nodes(card: SpiceCard) -> bool:
-    """Whether ``card`` may connect nodes: an instance, a ``.SUBCKT`` header or
-    a ``.GLOBAL``. A directive that only names a node (``.save``, ``.meas``)
-    connects none."""
-    return card.kind in ("instance", "subckt") or directive_head(card) == ".global"
-
-
-def _unread_connectors(cards: list[SpiceCard]) -> list[tuple[SpiceCard, set[str]]]:
-    """Each card that may connect nodes (``may_connect_nodes``) but that no
-    rule could split into parts (``spice_lex.unreadable_cards``), with every
-    word on it, lowercased: as written between spaces (``d[0]``), split again
-    at parentheses, braces and separators, with and without square brackets,
-    and again at operators, since any of them may
-    be a node or a name the card connects or defines. The passes here may
-    only hide a warning, never make one on a guess, so they count each as
-    connected."""
-    found: list[tuple[SpiceCard, set[str]]] = []
-    for card, _error in unreadable_cards(cards):
-        if not may_connect_nodes(card):
-            continue
-        body = card.body.lower()
-        words = set(body.split())
-        words |= {word for split in _UNREAD_SEPARATORS for word in split.split(body) if word}
-        words |= {part for word in words for part in _UNREAD_OPERATORS.split(word) if part}
-        found.append((card, words))
-    return found
+def _unread_connectors(cards: list[SpiceCard]) -> list[tuple[SpiceCard, frozenset[str]]]:
+    """Each card that may connect nodes but that no rule could split into
+    parts, with the names it may still connect or define
+    (``spice_lex_views.unread_node_names``). The passes here may only hide a
+    warning, never make one on a guess, so they count each as connected."""
+    return [
+        (card, unread_node_names(card))
+        for card, _error in unreadable_cards(cards)
+        if may_connect_nodes(card)
+    ]
 
 
 def _scan_global_nodes(cards: list[SpiceCard]) -> set[str]:
@@ -663,17 +645,25 @@ def _scan_global_nodes(cards: list[SpiceCard]) -> set[str]:
 
 
 def _scope_ports(cards: list[SpiceCard]) -> dict[tuple[str, ...], tuple[str, ...]]:
-    """Each subcircuit body's scope, and the ports its header names."""
+    """Each subcircuit body's scope, and the ports the header of the
+    definition in force names (``spice_lex.subckt_definitions``)."""
     ports: dict[tuple[str, ...], tuple[str, ...]] = {}
-    for card in cards:
-        if card.kind != "subckt":
-            continue
+    for index in subckt_definitions(cards).values():
+        card = cards[index]
         try:
             sub = SubcktCard.from_card(card)
         except SpiceLexError:
             continue
         ports[(*card.scope, sub.name)] = tuple(sub.ports)
     return ports
+
+
+def _in_force(cards: list[SpiceCard]) -> list[SpiceCard]:
+    """The cards a reader of bodies by scope counts: none of a subcircuit
+    definition that an earlier one of its name keeps out of force
+    (``spice_lex.shadowed_cards``), whose body shares that one's scope."""
+    shadowed = shadowed_cards(cards)
+    return [card for index, card in enumerate(cards) if index not in shadowed]
 
 
 def _shared(node: str, ports: tuple[str, ...], global_nodes: set[str]) -> bool:
@@ -703,6 +693,7 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
     the lint cannot classify can therefore only hide a warning, never
     create a false one.
     """
+    cards = _in_force(cards)
     global_nodes = _scan_global_nodes(cards)
     scope_ports = _scope_ports(cards)
 
@@ -1201,6 +1192,7 @@ def validate_netlist_bias_topology(cards: list[SpiceCard]) -> list[dict[str, obj
     body ties to node ``0`` internally. ``.asc`` connectivity is invisible
     to this text pass, so the handler runs it on ``.cir``/``.net`` only.
     """
+    cards = _in_force(cards)
     global_nodes = _scan_global_nodes(cards)
     subckt_grounds = _subckt_internal_grounds(cards, global_nodes)
     # .GLOBAL is name-scoping, not a ground reference: a global is a sink only
