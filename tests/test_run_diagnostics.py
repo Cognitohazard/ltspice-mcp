@@ -555,3 +555,47 @@ def test_only_xvii_of_the_builds_before_24_reads_with_xviis_rules():
         "ltspice",
         "build_unrecorded",
     )
+    # A folder named for XVII does not make 17.1 the build the rules were recorded from.
+    assert log_conditions.rules_for(
+        Producer("ltspice", "LTspice 17.1.8 for Windows", "C:/LTspiceXVII/LTspice.exe")
+    ) == ("ltspice", "build_unrecorded")
+    assert log_conditions.rules_for(
+        Producer("ltspice", "Linear Technology Corporation LTspice XVII", "LTspice.exe")
+    ) == ("ltspice17", None)
+
+
+@pytest.mark.asyncio
+async def test_a_produced_runs_log_is_read_once_it_lands_and_without_its_raw(
+    work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The read happens after the run's time limit stopped counting, not inside
+    the completion the limit waits on, and copies only the log and console: a
+    raw past the parser's input limit would refuse a read that captured it."""
+    from ltspice_mcp.lib import services
+
+    monkeypatch.setattr(wsl, "is_wsl", lambda: False)
+    reads: list[AnalysisSource] = []
+    real = services.load_logs_sync
+
+    def recording(source: AnalysisSource, state: SessionState, **kwargs: Any):
+        reads.append(source)
+        return real(source, state, **kwargs)
+
+    monkeypatch.setattr(services, "load_logs_sync", recording)
+    state = _session(work_dir, _recorded_simulator(work_dir, "ltspice26"))
+    deck = work_dir / "unknown_model_param.cir"
+    shutil.copy(rec.INPUTS / "log" / "unknown_model_param.cir", deck)
+    reply = await terminal_experiment(
+        state,
+        {
+            "request_id": "read-once",
+            "circuits": [{"path": str(deck), "id": "dut"}],
+            "execution": {"wait_s": 30},
+            "lint": "off",
+        },
+    )
+    (row,) = reply["runs"]["items"]
+    assert row["status"] == "produced"
+    assert _row_diagnostics(row) == EXPECTED["ltspice26"]
+    (read,) = [source for source in reads if source.log == Path(row["log"])]
+    assert read.raw is None

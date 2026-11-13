@@ -600,16 +600,15 @@ def replaying_simulator(monkeypatch: pytest.MonkeyPatch, raw: Path, log: Path) -
         raw_out, log_out = fake_artifact_paths(self.output_folder, run_filename)
         shutil.copy(raw, raw_out)
         shutil.copy(log, log_out)
-        # What the real completion adds to a run that produced: the build it
-        # named and its log, read through the loader the runner supplied.
-        loader = kwargs.get("completion_logs")
+        # What the real completion gives a run that produced: the build it
+        # named, and no log facts, which its runner reads once it lands.
+        del kwargs
         outcome = RunOutcome(
             str(raw_out),
             str(log_out),
             raw_out.stat().st_size,
             None,
             simulator_version=reported_build(log_out, raw_out),
-            logs=loader(raw_out, log_out) if loader is not None else None,
         )
         self.loop.call_soon_threadsafe(callback, outcome)
         return object()

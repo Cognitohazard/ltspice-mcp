@@ -1581,6 +1581,9 @@ class ExperimentRunner(RunnerBase):
             if stop_reason is not None:
                 await self._stop_active_case(execution, case, future, stop_reason)
             elif outcome is not None:
+                # The simulator has exited: its permit goes to the next case
+                # before the log is read, which waits on the one parser.
+                self._release_slot(execution, case.case_id)
                 outcome = await self._with_logs(execution, outcome)
                 self._apply_outcome(execution.job, case, outcome)
                 if (
@@ -1835,14 +1838,22 @@ class ExperimentRunner(RunnerBase):
         )
         # The permit is free once the process is gone. Read progress off-loop,
         # preserve recovery artifacts, and save the final facts.
-        self._background.spawn(self._retire_late_exit(execution, case), key=job_id, loop=self.loop)
+        self._background.spawn(
+            self._retire_late_exit(execution, case, outcome), key=job_id, loop=self.loop
+        )
         self._release_slot(execution, case_id)
         if execution.live.done and not execution.retained_slots:
             self._executions.pop(job_id, None)
 
-    async def _retire_late_exit(self, execution: _Execution, case: ExperimentCase) -> None:
+    async def _retire_late_exit(
+        self, execution: _Execution, case: ExperimentCase, outcome: RunOutcome
+    ) -> None:
         """Record late-exit progress and persist final artifact facts."""
         try:
+            # Off the loop, as for any run that ended: what its log said.
+            read = await self._with_logs(execution, outcome)
+            if read is not outcome:
+                case.log_diagnostics = self._classified(execution.job, case, read)
             kept = await self._record_progress_then_remove(execution, case)
             case.failure_evidence = _with_partial_raw(case.failure_evidence, kept)
         finally:
@@ -1940,20 +1951,24 @@ class ExperimentRunner(RunnerBase):
         return outcome._replace(logs=logs)
 
     @staticmethod
+    def _classified(job: ExperimentJob, case: ExperimentCase, outcome: RunOutcome) -> dict:
+        """What the simulator said about ``case``'s run, from ``outcome``'s log
+        facts, classified with the build the run named (set on ``case`` first),
+        so a later read of the same log (the summary recipe) chooses the same
+        rules."""
+        return dict(
+            decoded_run_diagnostics(
+                outcome.logs, services.run_producer(job, case), unread=outcome.logs is None
+            )
+        )
+
+    @staticmethod
     def _apply_outcome(job: ExperimentJob, case: ExperimentCase, outcome: RunOutcome) -> None:
         case.raw_file = Path(outcome.raw_file) if outcome.raw_file else None
         case.log_file = Path(outcome.log_file) if outcome.log_file else None
         case.other_raws = list(outcome.other_raws)
         case.simulator_version = outcome.simulator_version
-        # Classified with the build the run just named, so a later read of the
-        # same log (the summary recipe) chooses the same rules.
-        case.log_diagnostics = dict(
-            decoded_run_diagnostics(
-                outcome.logs,
-                services.run_producer(job, case),
-                unread=outcome.logs is None,
-            )
-        )
+        case.log_diagnostics = ExperimentRunner._classified(job, case, outcome)
         if outcome.observations:
             case.observations.extend(outcome.observations)
 
