@@ -192,7 +192,12 @@ def _probe_signals(probe: ProbeRef, context: _LintContext) -> set[str]:
         probe.kind == "V"
         and len(probe.names) == 2
         and not any(
-            is_ground(name, simulator=context.family, ngbehavior=context.ngbehavior)
+            is_ground(
+                name,
+                simulator=context.family,
+                # The mode a run passes, as the other ngspice rules read it.
+                ngbehavior=run_ngbehavior(mode=context.ngbehavior),
+            )
             for name in probe.names
         )
     ):

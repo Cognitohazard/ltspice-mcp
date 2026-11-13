@@ -318,7 +318,7 @@ def test_a_builds_spelling_comes_from_its_producer(
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
-def test_the_spelling_read_off_the_executable_agrees_with_the_raws_writer(build: str):
+def test_each_builds_executable_is_read_with_the_spelling_its_raw_is_written_in(build: str):
     """Each recorded build's executable gives the spelling its raw is written
     in, so a run on it reports no disagreement; read as the other build, it
     does."""
@@ -367,3 +367,89 @@ async def test_inspect_says_how_a_build_with_no_recording_is_spelled(config: Any
     profile = result["data"]["profile"]
     assert profile["names_read_as"] == "LTspice 26"
     assert "not known until a run on it names itself" in profile["names_note"]
+
+
+def _xvii_job(state: SessionState, program: str, *, job_id: str) -> Any:
+    """A finished job on the LTspice at ``program`` whose run is XVII's
+    recording of ``raw/save_subckt_names``."""
+    from ltspice_mcp.lib.simulator_build import SimulatorExecutable
+    from tests.conftest import make_experiment_job
+
+    raw = state.working_dir / f"{job_id}.raw"
+    raw.write_bytes(rec.recorded("ltspice17", f"{SAVE_SPELLINGS[True]}.raw").read_bytes())
+    job = make_experiment_job(state, job_id=job_id, raw=raw)
+    job.simulator = "LTspice"
+    job.simulator_executable = SimulatorExecutable(program, None, None, None)
+    return job
+
+
+def test_a_run_whose_raw_is_spelled_otherwise_than_its_deck_was_read_says_so(
+    state_no_sim: SessionState,
+):
+    """An XVII under another name that has not run before is read as LTspice
+    26 when its job is submitted (it names no build yet), so its raw, written
+    without the instances' X, disagrees with how the deck was spelled; one
+    named as XVII agrees. The check is against the runs before the job's own,
+    which the deck was read with, not the run's own report."""
+    from ltspice_mcp.lib import services
+
+    for program, disagrees in (("C:/tools/lt.exe", True), ("C:/LTC/XVIIx64.exe", False)):
+        job = _xvii_job(state_no_sim, program, job_id=f"j{int(disagrees)}")
+        job.cases[0].simulator_version = "Linear Technology Corporation LTspice XVII"
+        producer = services.submission_producer(state_no_sim, job)
+        said = naming_disagreement(producer, raw_writer_command(job.cases[0].raw_file))
+        assert (said is not None) == disagrees, (program, said)
+
+
+def test_a_section_sign_device_names_neither_part_where_both_names_are_there(
+    state_no_sim: SessionState,
+):
+    """``device=R§Load`` reads LTspice's ``I(Load)``; where a result also holds
+    ``I(RLoad)``, another part, it names neither, as a trace name does."""
+    from ltspice_mcp.lib.metrics import filter_operating_point
+
+    alone = {"currents": {"I(Load)": 1.0, "I(R1)": 2.0}}
+    assert filter_operating_point(alone, "R§Load", xvii=False)
+    assert alone["currents"] == {"I(Load)": 1.0}
+    both = {"currents": {"I(Load)": 1.0, "I(RLoad)": 3.0}}
+    assert not filter_operating_point(both, "R§Load", xvii=False)
+
+
+def test_a_hierarchy_cursor_does_not_change_when_a_run_names_the_build():
+    """The note on a build no run has named goes once a run names it; the
+    profile a cursor and a native record are bound to stays the same."""
+    from ltspice_mcp.lib.hierarchy import SemanticProfile
+
+    before = SemanticProfile.of(Producer("ltspice", None, "C:/LT/LTspice.exe"), None)
+    after = SemanticProfile.of(Producer("ltspice", "LTspice 26.1.1", "C:/LT/LTspice.exe"), None)
+    assert before.reply() != after.reply()
+    assert before.record() == after.record()
+    assert set(before.record()) == {"simulator", "ngbehavior", "evaluation_context", "xvii_names"}
+
+
+def test_the_lint_reads_an_ngspice_deck_in_the_runs_mode_when_told_none():
+    from ltspice_mcp.lib.lint_rules import lint_deck
+
+    deck = "* t\nV1 a 0 1\nR1 a b 1k\nR2 b 0 1k\n.save V(a)\n.meas op x find V(a,b)\n.op\n.end\n"
+    assert isinstance(lint_deck(deck, Path("t.cir"), "ngspice", None), list)
+
+
+def test_a_port_ngspice_reads_as_ground_binds_nothing_to_the_floating_check():
+    """``foo``'s body ties its port ``gnd`` to node 0 through R1. To LTspice
+    that grounds ``b``, the node wired to the port. To ngspice the body's
+    ``gnd`` is ground itself and the port binds nothing, so ``b``, otherwise
+    wired only to capacitors, floats, as hierarchy discovery leaves the port
+    unbound."""
+    from ltspice_mcp.lib.hierarchy import SemanticProfile
+    from ltspice_mcp.lib.spice_lex import lex_deck
+    from ltspice_mcp.lib.spice_validator import validate_netlist_bias_topology
+    from tests.conftest import LTSPICE_READER
+
+    deck = (
+        "* t\n.subckt foo gnd\nR1 gnd 0 1k\n.ends\nV1 a 0 1\nC1 a b 1p\nX1 b foo\n"
+        "C2 b 0 1p\n.op\n.end\n"
+    )
+    cards = lex_deck(deck).cards
+    assert validate_netlist_bias_topology(cards, LTSPICE_READER) == []
+    floating = validate_netlist_bias_topology(cards, SemanticProfile("ngspice", "hsa"))
+    assert floating and "'b'" in str(floating[0]["message"]), floating

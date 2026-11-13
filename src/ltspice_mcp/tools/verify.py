@@ -123,7 +123,7 @@ from ltspice_mcp.lib.netlist_graph import (
 )
 from ltspice_mcp.lib.raster import RenderedImage
 from ltspice_mcp.lib.schematic_scene import Scene, build_scene, sheet_view
-from ltspice_mcp.lib.services import cp1252_ltspice, deck_producer, session_reader
+from ltspice_mcp.lib.services import cp1252_ltspice, session_reader
 from ltspice_mcp.lib.sheet_findings import (
     RULES,
     Finding,
@@ -1753,10 +1753,9 @@ async def _run_export(
     observations: list[str] = []
     warnings: list[str] = []
     timeout = state.config.default_timeout
-    # The export is LTspice's, and its nets are counted as that LTspice reads them.
-    reader = SemanticProfile.of(
-        await asyncio.to_thread(deck_producer, state, "ltspice", simulator_cls), None
-    )
+    # The export's nets are counted as the deck's reader reads them, the one
+    # the compare and quality checks of the same call ask.
+    reader = await asyncio.to_thread(session_reader, state)
     payload: dict[str, Any] = {
         "ok": False,
         "netlist": None,

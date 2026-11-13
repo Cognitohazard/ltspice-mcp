@@ -2512,7 +2512,7 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
     return {
         "data": {
             "instances": [row.row() for row in page["items"]],
-            "profile": identity["profile"],
+            "profile": hierarchy.profile.reply(),
             "inputs": identity["inputs"],
             "ngspice_check": check.payload() if check is not None else None,
             "total": page["total"],

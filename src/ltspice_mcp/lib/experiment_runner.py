@@ -1588,6 +1588,7 @@ class ExperimentRunner(RunnerBase):
                 self._release_slot(execution, case.case_id)
                 outcome = await self._with_logs(execution, outcome)
                 self._apply_outcome(execution.job, case, outcome)
+                await self._check_raw_names(execution, case)
                 if (
                     outcome.error is None
                     and case.raw_file is not None
@@ -1965,6 +1966,27 @@ class ExperimentRunner(RunnerBase):
         )
 
     @staticmethod
+    async def _check_raw_names(execution: _Execution, case: ExperimentCase) -> None:
+        """Say on ``case`` when its raw names subcircuit members otherwise than
+        the spelling its deck was read with at submission
+        (``services.submission_producer``, from which the hierarchy profile
+        was built), as an LTspice under another name, never run before, can."""
+        if case.raw_file is None:
+            return
+        state = execution.request.state
+        raw = case.raw_file
+
+        def check() -> str | None:
+            producer = services.submission_producer(state, execution.job)
+            return naming_disagreement(producer, raw_writer_command(raw))
+
+        disagreement = await asyncio.to_thread(check)
+        if disagreement is not None:
+            case.observations.append(
+                {"code": "raw_names_disagree", "kind": "execution", "detail": disagreement}
+            )
+
+    @staticmethod
     def _apply_outcome(job: ExperimentJob, case: ExperimentCase, outcome: RunOutcome) -> None:
         case.raw_file = Path(outcome.raw_file) if outcome.raw_file else None
         case.log_file = Path(outcome.log_file) if outcome.log_file else None
@@ -1973,16 +1995,6 @@ class ExperimentRunner(RunnerBase):
         case.log_diagnostics = ExperimentRunner._classified(job, case, outcome)
         if outcome.observations:
             case.observations.extend(outcome.observations)
-        if case.raw_file is not None:
-            # The spelling the run's executable was read with (the deck's
-            # hierarchy profile) and the one its raw was written in must agree.
-            disagreement = naming_disagreement(
-                services.run_producer(job, case), raw_writer_command(case.raw_file)
-            )
-            if disagreement is not None:
-                case.observations.append(
-                    {"code": "raw_names_disagree", "kind": "execution", "detail": disagreement}
-                )
 
     @staticmethod
     def _apply_stopped_outcome(

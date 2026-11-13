@@ -633,7 +633,8 @@ def filter_operating_point(op_data: dict, device: str, *, xvii: bool) -> bool:
     simulator wrote it, or an instance, which keeps everything inside it and
     its port currents.
     """
-    names_device = device_query(device, xvii=xvii)
+    every = [name for bucket in OP_BUCKETS for name in op_data.get(bucket, {})]
+    names_device = device_query(device, xvii=xvii, among=every)
     matched = False
     for bucket in OP_BUCKETS:
         kept = {}

@@ -1112,7 +1112,8 @@ def _subckt_internal_grounds(
         changed = False
         for name, (ports, body) in defs.items():
             dsu = _DSU()
-            # Ground and the globals, but not a port named like either.
+            # Ground and the globals, and a port named like either where the
+            # reader reads the name so (ngspice) rather than as the port.
             named = {*ports, *(t.lower() for _inst, terminals in body for t in terminals)}
             for sink in named | global_nodes:
                 if _shared(sink, tuple(ports), global_nodes, reader):
@@ -1120,7 +1121,15 @@ def _subckt_internal_grounds(
             for inst, terminals in body:
                 _union_instance(dsu, inst, terminals, grounds)
             groot = dsu.find(_GROUND_SINK)
-            reached = frozenset(i for i, port in enumerate(ports) if dsu.find(port) == groot)
+            # A port the reader reads as ground or a global inside the body
+            # (ngspice, for a port named gnd) binds nothing there: the node
+            # wired to it reaches nothing through it.
+            reached = frozenset(
+                i
+                for i, port in enumerate(ports)
+                if dsu.find(port) == groot
+                and _kind(port, tuple(ports), global_nodes, reader) == "port"
+            )
             if reached != grounds[name]:
                 grounds[name] = reached
                 changed = True

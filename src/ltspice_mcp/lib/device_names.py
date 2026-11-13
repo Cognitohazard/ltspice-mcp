@@ -372,24 +372,37 @@ def _own(segment: str, which: int) -> str:
     return names[which] if names else segment
 
 
-def device_query(wanted: str, *, xvii: bool) -> Callable[[str], bool]:
+def device_query(wanted: str, *, xvii: bool, among: Iterable[str]) -> Callable[[str], bool]:
     """A test of whether an operating-point value's name belongs to what
     ``wanted`` names: the device as the simulator spells it (``m.xa.xleaf.m0``,
     which ``inspect``'s hierarchy addresses use), its path or part of it
     (``mtail``, ``xin.mtail``, ``xa.xin.mtail``; dots or colons), or an
-    instance it is inside. A name exported with LTspice's ``§`` (``R§Load``)
-    names the part by each of its names (:func:`section_sign_spellings`)."""
-    asked = (wanted, *section_sign_spellings(wanted))
-    literals = {spelled.strip().casefold() for spelled in asked}
-    wants = [split_path(spelled) for spelled in asked]
+    instance it is inside.
 
-    def names(name: str) -> bool:
-        owner = _owner(name, xvii=xvii)
-        return owner is not None and (
-            owner.text.casefold() in literals or any(_within(owner.path, w) for w in wants)
-        )
+    A name exported with LTspice's ``§`` (``R§Load``) names the part by the
+    one of its names (:func:`section_sign_spellings`) that a name of ``among``,
+    every name of the result, belongs to: ``Load`` in LTspice's results,
+    ``RLoad`` in ngspice's. Where both are there, they are two parts and the
+    name answers to neither, as ``trace_names.find_trace`` refuses it."""
+    names = list(among)
 
-    return names
+    def query(spelled: str) -> Callable[[str], bool]:
+        literal = spelled.strip().casefold()
+        want = split_path(spelled)
+
+        def belongs(name: str) -> bool:
+            owner = _owner(name, xvii=xvii)
+            return owner is not None and (
+                owner.text.casefold() == literal or _within(owner.path, want)
+            )
+
+        return belongs
+
+    spellings = section_sign_spellings(wanted)
+    if not spellings:
+        return query(wanted)
+    found = [q for q in map(query, (wanted, *spellings)) if any(map(q, names))]
+    return found[0] if len(found) == 1 else (lambda _name: False)
 
 
 def find_device_param(names: Iterable[str], device: str, param: str) -> str | None:

@@ -154,12 +154,21 @@ class SemanticProfile:
         return self.names.xvii
 
     def record(self) -> dict[str, Any]:
-        """The profile as a reply and a cursor binding carry it."""
+        """The profile as a cursor binding and a native record's digest hold
+        it: what decides the answer, and nothing that changes when it does not
+        (the note on an unrecorded build goes once a run names the build)."""
         return {
             "simulator": self.simulator,
             "ngbehavior": self.ngbehavior,
             "evaluation_context": self.evaluation_context,
             "xvii_names": self.xvii_names,
+        }
+
+    def reply(self) -> dict[str, Any]:
+        """The profile as a reply carries it: :meth:`record`, and which
+        recorded build the names are spelled as, and why when it is another's."""
+        return {
+            **self.record(),
             "names_read_as": self.names.read_as,
             "names_note": self.names.note,
         }

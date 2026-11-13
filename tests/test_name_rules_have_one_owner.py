@@ -11,7 +11,8 @@ result. Outside them no code:
 - joins path segments into a trace or device name;
 - sets ``xvii_names``, or passes a literal for ``xvii``;
 - holds a constant that stands for a simulator when it reads names;
-- adds or removes ``§`` or the added ``X``.
+- adds or removes ``§`` or the added ``X``;
+- builds a ``hierarchy.SemanticProfile`` but through ``SemanticProfile.of``.
 
 The scan reads the package's syntax trees, so a docstring or comment that
 names a rule is not a use of it. Each site it finds outside the owners must
@@ -63,10 +64,6 @@ ALLOWED: dict[tuple[str, str, str], str] = {
     ("lib/native_inputs.py", "NativeCaseValidator.validate", "simulator"): (
         "native statistics run only on ngspice, in the mode the policy pins"
     ),
-    # verify_circuit counts the nets of LTspice's own export.
-    ("tools/verify.py", "_run_export", "simulator"): (
-        "the export is LTspice's, so its nets are counted as LTspice reads them"
-    ),
 }
 
 
@@ -88,8 +85,19 @@ def _rules(node: ast.AST) -> set[str]:
     found: set[str] = set()
     if isinstance(node, ast.Compare):
         compared = [node.left, *node.comparators]
-        if any(_constant(side) in ("0", "gnd", "GND") for side in compared) or any(
-            isinstance(side, ast.Name) and side.id in ("GROUND", "_GROUND") for side in compared
+        listed = [
+            element
+            for side in compared
+            if isinstance(side, (ast.Tuple, ast.List, ast.Set))
+            for element in side.elts
+        ]
+        if (
+            any(_constant(side) in ("0", "gnd", "GND") for side in compared)
+            or any((_constant(side) or "").casefold() == "gnd" for side in listed)
+            or any(
+                isinstance(side, ast.Name) and side.id in ("GROUND", "_GROUND")
+                for side in compared
+            )
         ):
             found.add("ground")
     if isinstance(node, (ast.Name, ast.Attribute)):
@@ -136,6 +144,24 @@ def _rules(node: ast.AST) -> set[str]:
             found.add("added_x")
     if isinstance(node, ast.Constant) and isinstance(node.value, str) and "§" in node.value:
         found.add("section_sign")
+    if isinstance(node, ast.Call) and _callee(node) == "SemanticProfile":
+        found.add("profile")
+    if isinstance(node, ast.arguments):
+        named = [*node.posonlyargs, *node.args]
+        defaults = dict(
+            zip(
+                [a.arg for a in named][len(named) - len(node.defaults) :],
+                node.defaults,
+                strict=True,
+            )
+        )
+        defaults.update(
+            (a.arg, d)
+            for a, d in zip(node.kwonlyargs, node.kw_defaults, strict=True)
+            if d is not None
+        )
+        if isinstance(defaults.get("xvii"), ast.Constant):
+            found.add("xvii")
     return found
 
 
