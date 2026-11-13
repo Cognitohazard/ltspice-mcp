@@ -621,7 +621,7 @@ def signal_stats_defined(analysis: str, *, windowed: bool = False) -> bool:
 OP_BUCKETS = ("voltages", "currents", "device_op_points", "other")
 
 
-def filter_operating_point(op_data: dict, device: str, *, xvii: bool = False) -> bool:
+def filter_operating_point(op_data: dict, device: str, *, xvii: bool) -> bool:
     """Narrow ``op_data`` (in place) to one device's operating-point params +
     terminal currents. Returns whether anything matched.
 
@@ -633,7 +633,8 @@ def filter_operating_point(op_data: dict, device: str, *, xvii: bool = False) ->
     simulator wrote it, or an instance, which keeps everything inside it and
     its port currents.
     """
-    names_device = device_query(device, xvii=xvii)
+    every = [name for bucket in OP_BUCKETS for name in op_data.get(bucket, {})]
+    names_device = device_query(device, xvii=xvii, among=every)
     matched = False
     for bucket in OP_BUCKETS:
         kept = {}

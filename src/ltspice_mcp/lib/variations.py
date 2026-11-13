@@ -32,6 +32,7 @@ from ltspice_mcp.lib.deck_staging import (
     rewrite_staged_reference_cards,
     staged_reference_targets,
 )
+from ltspice_mcp.lib.device_names import path_text
 from ltspice_mcp.lib.encoding import encode_spice_text
 from ltspice_mcp.lib.format import parse_plain_value, parse_spice_value, unique_name  # noqa: TID251 - a written assignment must be a plain or SI value
 from ltspice_mcp.lib.hierarchy import Hierarchy, ResolvedInstance, SemanticProfile, Source
@@ -1360,7 +1361,7 @@ def _select_target_file(
 
 
 def _site_label(site: _Site) -> str:
-    where = f".subckt {'.'.join(site.scope)}" if site.scope else "top level"
+    where = f".subckt {path_text(site.scope)}" if site.scope else "top level"
     if site.section is not None:
         return f"{where} of section {site.section!r}"
     return where
@@ -1971,9 +1972,7 @@ def _set_param_value_on_cards(
     )
 
 
-def _instance_view(
-    card: SpiceCard, ref: str, what: str, source: object = None
-) -> InstanceLine:
+def _instance_view(card: SpiceCard, ref: str, what: str, source: object = None) -> InstanceLine:
     """Read an instance card, naming the reference when the card will not parse.
 
     A declaration the tokenizer refuses is skipped while the target index is
@@ -2710,7 +2709,7 @@ def _legacy_instance_edits(
             continue
         alias = edit.refs[0].casefold()
         matches = [
-            row for row in hierarchy.instances if ".".join(row.instance).casefold() == alias
+            row for row in hierarchy.instances if path_text(row.instance).casefold() == alias
         ]
         if len(matches) != 1:
             raise VariationError(
@@ -2936,7 +2935,7 @@ def _rewrite_change_message(
     written: Mapping[tuple[str, ...], NumericFact | None],
 ) -> str:
     """Why a card no edit writes would build another count, and a fix that keeps it."""
-    card = ".".join(row.instance)
+    card = path_text(row.instance)
     body = row.source.definition or "the top level"
     change = (
         f"{card}, which no edit writes, would build {_copies_text(other.multiplier)} "
@@ -2945,14 +2944,14 @@ def _rewrite_change_message(
     was = (row.source.definition or "").casefold() in as_written.m_rewritten
     now = (other.source.definition or "").casefold() in edited.m_rewritten
     calls = [
-        ".".join(row.instance[:depth])
+        path_text(row.instance[:depth])
         for depth in range(1, len(row.instance))
         if written.get(row.instance[:depth]) is None
     ]
     if was and not now:
         return (
             f"ngspice rewrites {body} for m because one of its callers writes m, but the "
-            f"private copy this case gives {'.'.join(row.instance[:-1])} has no caller "
+            f"private copy this case gives {path_text(row.instance[:-1])} has no caller "
             f"that does, so {change}. Write m=1 on {', '.join(calls) or 'its X line'}: "
             "each card then builds what it does as written, and the copy is rewritten too"
         )
@@ -2993,7 +2992,7 @@ def _path_multiplier(row: ResolvedInstance) -> float:
         why = "is unknown" if multiplier is None else multiplier.reason
         raise VariationError(
             "mismatch_geometry_unresolved",
-            f"multiplier {why}, so the mismatch area of {'.'.join(row.instance)} is unknown",
+            f"multiplier {why}, so the mismatch area of {path_text(row.instance)} is unknown",
         )
     return multiplier.value
 
@@ -3016,7 +3015,7 @@ def _takes_model_copy(row: ResolvedInstance, simulator: str) -> bool:
     if row.model_source is None or len(row.model_family) != 1:
         raise VariationError(
             "model_missing",
-            f"mismatch on {'.'.join(row.instance)} gives it its own copy of its .model "
+            f"mismatch on {path_text(row.instance)} gives it its own copy of its .model "
             "card, which needs one exact model definition; a binned model has one per "
             "size bin",
         )

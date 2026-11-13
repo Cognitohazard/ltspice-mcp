@@ -28,7 +28,6 @@ from typing import Any
 
 import pytest
 
-from ltspice_mcp.lib.log_conditions import Producer
 from ltspice_mcp.lib.log_parser import (
     MeasurementAnswer,
     measurement_answer,
@@ -37,6 +36,7 @@ from ltspice_mcp.lib.log_parser import (
     read_log_text,
     result_unreadable,
 )
+from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
 from tests.conftest import FIXTURES_DIR, SyncApi, dispatched, make_experiment_job

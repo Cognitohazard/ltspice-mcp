@@ -488,6 +488,14 @@ def section_sign_names(ref: str) -> tuple[str, ...]:
     return (without_section_sign(ref), own) if sign and own else ()
 
 
+def without_added_x(key: str) -> str:
+    """A dotted reference key (``netlist_graph.canon_ref``'s) with the ``X``
+    LTspice's export adds in front of a subcircuit symbol's instance taken
+    off each instance segment that holds one: ``xxe.r1`` is ``xe.r1``. The
+    netlist comparison pairs an export with a hand-written deck by it."""
+    return ".".join(seg[1:] if seg.startswith("xx") else seg for seg in key.split("."))
+
+
 def strip_instance_section_signs(cards: list[SpiceCard]) -> None:
     """Drop ``§`` from every instance name that holds one, wherever it is named.
 

@@ -18,6 +18,7 @@ from ltspice_mcp.lib.netlist_graph import (
     flatten_graph,
     parse_netlist_graph,
 )
+from tests.conftest import LTSPICE_READER
 
 # ---------------------------------------------------------------------------
 # Fixtures: netlists as text
@@ -59,7 +60,7 @@ R2 in mid 2k
 
 
 def test_parse_reuses_lexer_and_projects_components() -> None:
-    graph = parse_netlist_graph(DIVIDER)
+    graph = parse_netlist_graph(DIVIDER, reader=LTSPICE_READER)
     refs = {c.ref for c in graph.components}
     assert refs == {"Vin", "R1", "R2"}
     r1 = next(c for c in graph.components if c.ref == "R1")
@@ -72,7 +73,7 @@ def test_parse_reuses_lexer_and_projects_components() -> None:
 
 
 def test_renamed_internal_nets_are_equivalent() -> None:
-    result = compare_graphs(DIVIDER, DIVIDER_RENAMED, anchors=["in"])
+    result = compare_graphs(DIVIDER, DIVIDER_RENAMED, anchors=["in"], reader=LTSPICE_READER)
     assert result.equivalent is True
     assert result.structurally_equivalent is True
     assert result.node_partition_mismatches == []
@@ -80,7 +81,7 @@ def test_renamed_internal_nets_are_equivalent() -> None:
 
 
 def test_swapped_resistors_report_named_partition_mismatch() -> None:
-    result = compare_graphs(DIVIDER, DIVIDER_SWAPPED, anchors=["in", "mid"])
+    result = compare_graphs(DIVIDER, DIVIDER_SWAPPED, anchors=["in", "mid"], reader=LTSPICE_READER)
     assert result.equivalent is False
     # A reference net is forced onto more than one candidate net...
     mismatches = result.node_partition_mismatches
@@ -100,7 +101,7 @@ def test_shorted_nets_report_names_both_reference_nets() -> None:
     # candidate net, so the caller sees which two nets were shorted together.
     ref = "* t\nVin p 0 5\nR1 p a 1k\nR2 p b 1k\n.end\n"
     cand = "* t\nVin p 0 5\nR1 p m 1k\nR2 p m 1k\n.end\n"
-    result = compare_graphs(ref, cand, anchors=["p"])
+    result = compare_graphs(ref, cand, anchors=["p"], reader=LTSPICE_READER)
     mismatches = result.node_partition_mismatches
     assert mismatches, "expected a short to be reported"
     short = next(d for d in mismatches if len(d.reference_nets) > 1)
@@ -110,7 +111,7 @@ def test_shorted_nets_report_names_both_reference_nets() -> None:
 
 
 def test_swapped_resistors_are_not_structurally_equivalent() -> None:
-    result = compare_graphs(DIVIDER, DIVIDER_SWAPPED, anchors=["in", "mid"])
+    result = compare_graphs(DIVIDER, DIVIDER_SWAPPED, anchors=["in", "mid"], reader=LTSPICE_READER)
     assert result.structurally_equivalent is False
 
 
@@ -139,7 +140,9 @@ R3 b 0 1k
 
 
 def test_misanchored_output_reports_anchor_violation() -> None:
-    result = compare_graphs(STRING_REF, STRING_MISANCHORED, anchors=["in", "out"])
+    result = compare_graphs(
+        STRING_REF, STRING_MISANCHORED, anchors=["in", "out"], reader=LTSPICE_READER
+    )
     # Wiring is the same three-resistor string...
     assert result.structurally_equivalent is True
     # ...but `out` sits on a structurally different net -> anchor violation.
@@ -149,7 +152,7 @@ def test_misanchored_output_reports_anchor_violation() -> None:
 
 def test_anchor_absent_on_one_side_is_a_violation() -> None:
     # Net `a` exists in STRING_REF but not in STRING_MISANCHORED.
-    result = compare_graphs(STRING_REF, STRING_MISANCHORED, anchors=["a"])
+    result = compare_graphs(STRING_REF, STRING_MISANCHORED, anchors=["a"], reader=LTSPICE_READER)
     violation = next(v for v in result.anchor_violations if v.anchor == "a")
     assert "reference" in violation.detail
 
@@ -173,7 +176,7 @@ def test_anchor_absent_on_one_side_is_a_violation() -> None:
 def test_value_tolerance(ref_val: str, cand_val: str, equal: bool) -> None:
     ref = f"* t\nVin in 0 5\nR1 in 0 {ref_val}\n.end\n"
     cand = f"* t\nVin in 0 5\nR1 in 0 {cand_val}\n.end\n"
-    result = compare_graphs(ref, cand, anchors=["in"])
+    result = compare_graphs(ref, cand, anchors=["in"], reader=LTSPICE_READER)
     if equal:
         assert result.value_mismatches == []
         assert result.equivalent is True
@@ -190,7 +193,7 @@ def test_retype_and_param_mismatch_are_distinct_channels() -> None:
     ref = "* t\nVin in 0 5\nM1 d g 0 0 nmos W=1u L=1u\n.end\n"
     # Same ref M1: model nmos -> pmos (retype) AND W widened (param mismatch).
     cand = "* t\nVin in 0 5\nM1 d g 0 0 pmos W=2u L=1u\n.end\n"
-    result = compare_graphs(ref, cand, anchors=["in", "d", "g"])
+    result = compare_graphs(ref, cand, anchors=["in", "d", "g"], reader=LTSPICE_READER)
     assert [r.ref for r in result.retyped] == ["M1"]
     assert result.retyped[0].reference_type == "M:nmos"
     assert result.retyped[0].candidate_type == "M:pmos"
@@ -214,7 +217,7 @@ def test_two_part_numbers_are_two_models(card: str, ref_model: str, cand_model: 
     reads them as the card's model: a retype, never a value within tolerance."""
     ref = f"* t\nVin in 0 5\n{card.format(ref_model)}\n.end\n"
     cand = f"* t\nVin in 0 5\n{card.format(cand_model)}\n.end\n"
-    result = compare_graphs(ref, cand, anchors=["in"])
+    result = compare_graphs(ref, cand, anchors=["in"], reader=LTSPICE_READER)
     (retyped,) = result.retyped
     assert retyped.reference_type.lower() == f"{card[0]}:{ref_model}".lower()
     assert retyped.candidate_type.lower() == f"{card[0]}:{cand_model}".lower()
@@ -230,7 +233,7 @@ def test_a_parameter_given_twice_alike_is_equivalent_and_reported() -> None:
     so the circuit compares equal; that the card names the threshold twice is
     reported, where before nothing showed it."""
     cand = "* t\nV1 in 0 5\nA1 in 0 0 0 0 out 0 0 SCHMITT Vt=4.15 Vh=0.2 vt=4.150\n.end\n"
-    result = compare_graphs(SCHMITT_ONCE, cand)
+    result = compare_graphs(SCHMITT_ONCE, cand, reader=LTSPICE_READER)
     assert result.equivalent
     assert [(d.ref, d.side, d.key, d.values) for d in result.duplicate_params] == [
         ("A1", "candidate", "vt", ("4.15", "4.150"))
@@ -251,7 +254,7 @@ def test_a_parameter_given_twice_differently_is_a_mismatch() -> None:
     compare equal to neither: the first copy matches the reference, the second
     does not."""
     cand = "* t\nV1 in 0 5\nA1 in 0 0 0 0 out 0 0 SCHMITT Vt=4.15 Vh=0.2 Vt=3\n.end\n"
-    result = compare_graphs(SCHMITT_ONCE, cand)
+    result = compare_graphs(SCHMITT_ONCE, cand, reader=LTSPICE_READER)
     assert not result.equivalent
     (param,) = result.param_mismatches
     assert (param.key, param.reference_value, param.candidate_value) == ("vt", "4.15", "3")
@@ -265,7 +268,7 @@ def test_a_card_inside_a_subcircuit_is_reported_once_however_often_it_is_used() 
         "* t\nV1 in 0 5\nX1 in a stage\nX2 a 0 stage\n"
         ".subckt stage p n\nM1 p p n n nmos W=1u w=2u\n.ends\n.end\n"
     )
-    result = compare_graphs(deck, deck)
+    result = compare_graphs(deck, deck, reader=LTSPICE_READER)
     assert [(d.side, d.subckt, d.ref, d.key) for d in result.duplicate_params] == [
         ("reference", "stage", "M1", "w"),
         ("candidate", "stage", "M1", "w"),
@@ -278,7 +281,7 @@ def test_a_card_inside_a_subcircuit_is_reported_once_however_often_it_is_used() 
 
 def test_the_same_copies_in_the_same_order_are_equivalent() -> None:
     deck = "* t\nV1 in 0 5\nA1 in 0 0 0 0 out 0 0 SCHMITT Vt=1 Vt=2\n.end\n"
-    result = compare_graphs(deck, deck)
+    result = compare_graphs(deck, deck, reader=LTSPICE_READER)
     assert result.equivalent
     assert [d.side for d in result.duplicate_params] == ["reference", "candidate"]
 
@@ -309,7 +312,7 @@ def test_type_letter_change_is_add_remove_not_retype() -> None:
     # component identity changed, so it reads as removed + added, not a retype.
     ref = "* t\nVin in 0 5\nR1 in 0 1k\n.end\n"
     cand = "* t\nVin in 0 5\nC1 in 0 1k\n.end\n"
-    result = compare_graphs(ref, cand, anchors=["in"])
+    result = compare_graphs(ref, cand, anchors=["in"], reader=LTSPICE_READER)
     assert [d.ref for d in result.removed] == ["R1"]
     assert [d.ref for d in result.added] == ["C1"]
     assert result.retyped == []
@@ -318,7 +321,7 @@ def test_type_letter_change_is_add_remove_not_retype() -> None:
 def test_added_and_removed_components() -> None:
     ref = "* t\nVin in 0 5\nR1 in 0 1k\n.end\n"
     cand = "* t\nVin in 0 5\nR1 in 0 1k\nC1 in 0 1p\n.end\n"
-    result = compare_graphs(ref, cand, anchors=["in"])
+    result = compare_graphs(ref, cand, anchors=["in"], reader=LTSPICE_READER)
     assert [d.ref for d in result.added] == ["C1"]
     assert result.removed == []
     assert result.equivalent is False
@@ -332,7 +335,7 @@ def test_added_and_removed_components() -> None:
 def test_ground_alias_gnd_equals_zero() -> None:
     ref = "* t\nVin in 0 5\nR1 in 0 1k\n.end\n"
     cand = "* t\nVin in GND 5\nR1 in GND 1k\n.end\n"
-    result = compare_graphs(ref, cand, anchors=["in"])
+    result = compare_graphs(ref, cand, anchors=["in"], reader=LTSPICE_READER)
     assert result.equivalent is True
     assert result.structurally_equivalent is True
 
@@ -358,7 +361,7 @@ R1 p q 1k
 
 
 def test_flatten_nested_subckt_hierarchical_refs_and_unique_nets() -> None:
-    graph = parse_netlist_graph(NESTED)
+    graph = parse_netlist_graph(NESTED, reader=LTSPICE_READER)
     flat = flatten_graph(graph)
     refs = {c.ref for c in flat.components}
     # Top-level Vin stays flat; the nested resistors get hierarchical paths.
@@ -388,7 +391,7 @@ R2 m q 1k
 .ends HALF
 .end
 """
-    flat = flatten_graph(parse_netlist_graph(text))
+    flat = flatten_graph(parse_netlist_graph(text, reader=LTSPICE_READER))
     a_mid = next(c for c in flat.components if c.ref == "XA.R1").nodes[1]
     b_mid = next(c for c in flat.components if c.ref == "XB.R1").nodes[1]
     assert a_mid != b_mid
@@ -409,7 +412,7 @@ X§RB VDD5 NB1 0 ppolyf_u_1k r_length=820u r_width=2u ;§pnba A)B)BODY
 
 
 def test_undefined_pdk_subckt_stays_a_black_box_leaf() -> None:
-    graph = parse_netlist_graph(PDK_WRAPPED)
+    graph = parse_netlist_graph(PDK_WRAPPED, reader=LTSPICE_READER)
     flat = flatten_graph(graph)
     refs = {c.ref for c in flat.components}
     # § marker stripped; no expansion (subckt undefined) -> instance kept whole.
@@ -422,13 +425,13 @@ def test_undefined_pdk_subckt_stays_a_black_box_leaf() -> None:
 
 
 def test_pdk_export_compares_equal_to_itself() -> None:
-    result = compare_graphs(PDK_WRAPPED, PDK_WRAPPED, anchors=["VDD5"])
+    result = compare_graphs(PDK_WRAPPED, PDK_WRAPPED, anchors=["VDD5"], reader=LTSPICE_READER)
     assert result.equivalent is True
 
 
 def test_pdk_fet_widening_is_a_param_mismatch() -> None:
     widened = PDK_WRAPPED.replace("W=10u L=2u", "W=20u L=2u")
-    result = compare_graphs(PDK_WRAPPED, widened, anchors=["VDD5"])
+    result = compare_graphs(PDK_WRAPPED, widened, anchors=["VDD5"], reader=LTSPICE_READER)
     assert any(p.ref == "XMB1" and p.key == "w" for p in result.param_mismatches)
     assert result.equivalent is False
 
@@ -449,7 +452,7 @@ R1 a b 1k
 
 
 def test_flatten_raises_on_port_arity_mismatch() -> None:
-    graph = parse_netlist_graph(ARITY_BAD)
+    graph = parse_netlist_graph(ARITY_BAD, reader=LTSPICE_READER)
     with pytest.raises(NetlistGraphError) as exc:
         flatten_graph(graph)
     assert "arity" in str(exc.value).lower()
@@ -466,7 +469,7 @@ R1 a b 1k
 .ends TWOPORT
 .end
 """
-    result = compare_graphs(good, ARITY_BAD, anchors=["in"])
+    result = compare_graphs(good, ARITY_BAD, anchors=["in"], reader=LTSPICE_READER)
     assert result.arity_errors, "arity mismatch should be surfaced, not raised"
     assert any("XU1" in e.ref for e in result.arity_errors)
     assert result.equivalent is False
@@ -475,7 +478,7 @@ R1 a b 1k
 def test_unbalanced_brace_is_a_parse_failure_naming_the_line() -> None:
     bad = "* t\nVin in 0 5\nBad n1 0 V={1+\n.end\n"
     with pytest.raises(NetlistGraphError) as exc:
-        parse_netlist_graph(bad)
+        parse_netlist_graph(bad, reader=LTSPICE_READER)
     assert exc.value.line == 3
 
 
@@ -487,14 +490,14 @@ def test_a_directive_with_a_bracket_left_open_is_a_parse_failure_naming_the_line
     # unreadable reference only, so the walk refuses every unreadable directive.
     bad = f"* t\nVin in 0 5\nR1 in 0 1k\n{directive}\n.end\n"
     with pytest.raises(NetlistGraphError, match="malformed directive") as exc:
-        parse_netlist_graph(bad)
+        parse_netlist_graph(bad, reader=LTSPICE_READER)
     assert exc.value.line == 4
 
 
 def test_unclosed_subckt_is_a_parse_failure() -> None:
     bad = "* t\nVin in 0 5\n.subckt LEAK a b\nR1 a b 1k\n.end\n"
     with pytest.raises(NetlistGraphError):
-        parse_netlist_graph(bad)
+        parse_netlist_graph(bad, reader=LTSPICE_READER)
 
 
 # ---------------------------------------------------------------------------
@@ -506,12 +509,12 @@ def test_symmetric_resistor_authored_backwards_still_matches() -> None:
     ref = "* t\nVin in 0 5\nR1 in mid 1k\nR2 mid 0 2k\n.end\n"
     # R2 written 0->mid instead of mid->0: same connection, terminals swapped.
     cand = "* t\nVin in 0 5\nR1 in mid 1k\nR2 0 mid 2k\n.end\n"
-    result = compare_graphs(ref, cand, anchors=["in"])
+    result = compare_graphs(ref, cand, anchors=["in"], reader=LTSPICE_READER)
     assert result.equivalent is True
 
 
 def test_result_as_dict_is_json_shaped() -> None:
-    result = compare_graphs(DIVIDER, DIVIDER_SWAPPED, anchors=["in", "mid"])
+    result = compare_graphs(DIVIDER, DIVIDER_SWAPPED, anchors=["in", "mid"], reader=LTSPICE_READER)
     payload = result.as_dict()
     assert payload["equivalent"] is False
     assert isinstance(payload["node_partition_mismatches"], list)
@@ -561,11 +564,11 @@ def test_block_in_lib_matches_inline_reference(tmp_path: Path) -> None:
     external = tmp_path / "external.cir"
     external.write_text(EXTERNAL_BLOCK)
 
-    result = compare_graphs(inline, external, anchors=["in", "out"])
+    result = compare_graphs(inline, external, anchors=["in", "out"], reader=LTSPICE_READER)
     assert result.equivalent is True, result.as_dict()
     assert result.unresolved_subckts == []
     # The block really was expanded on both sides, not black-boxed on both.
-    flat = flatten_graph(parse_netlist_graph(external))
+    flat = flatten_graph(parse_netlist_graph(external, reader=LTSPICE_READER))
     assert {c.ref for c in flat.components} == {"Vin", "XSTAGE.R1", "XSTAGE.R2"}
 
 
@@ -574,7 +577,7 @@ def test_lib_with_section_token_still_resolves(tmp_path: Path) -> None:
     (tmp_path / "divblock.lib").write_text(BLOCK_LIB)
     deck = tmp_path / "sectioned.cir"
     deck.write_text(EXTERNAL_BLOCK.replace(".include divblock.lib", ".lib divblock.lib typical"))
-    flat = flatten_graph(parse_netlist_graph(deck))
+    flat = flatten_graph(parse_netlist_graph(deck, reader=LTSPICE_READER))
     assert "XSTAGE.R1" in {c.ref for c in flat.components}
 
 
@@ -582,7 +585,7 @@ def test_quoted_include_path_resolves(tmp_path: Path) -> None:
     (tmp_path / "div block.lib").write_text(BLOCK_LIB)
     deck = tmp_path / "quoted.cir"
     deck.write_text(EXTERNAL_BLOCK.replace(".include divblock.lib", '.include "div block.lib"'))
-    flat = flatten_graph(parse_netlist_graph(deck))
+    flat = flatten_graph(parse_netlist_graph(deck, reader=LTSPICE_READER))
     assert "XSTAGE.R1" in {c.ref for c in flat.components}
 
 
@@ -590,12 +593,14 @@ def test_missing_lib_names_the_unresolved_subckt(tmp_path: Path) -> None:
     deck = tmp_path / "external.cir"
     deck.write_text(EXTERNAL_BLOCK)  # divblock.lib deliberately not written
 
-    graph = parse_netlist_graph(deck)
+    graph = parse_netlist_graph(deck, reader=LTSPICE_READER)
     assert [m.target for m in graph.missing_includes] == ["divblock.lib"]
     flat = flatten_graph(graph)
     assert flat.unresolved_subckts == ("DIVBLOCK",)
 
-    result = compare_graphs(tmp_path / "external.cir", tmp_path / "external.cir")
+    result = compare_graphs(
+        tmp_path / "external.cir", tmp_path / "external.cir", reader=LTSPICE_READER
+    )
     unresolved = result.unresolved_subckts[0]
     assert unresolved.name == "DIVBLOCK"
     # The missing include is what separates this from a plain PDK black box.
@@ -616,7 +621,7 @@ def test_include_resolver_denial_blocks_the_read(tmp_path: Path) -> None:
         seen.append(candidate)
         return None
 
-    graph = parse_netlist_graph(deck, include_resolver=deny)
+    graph = parse_netlist_graph(deck, include_resolver=deny, reader=LTSPICE_READER)
     # The resolver was consulted with the joined candidate path.
     assert seen and seen[0].name == "divblock.lib"
     # Denied → recorded as missing with the denial reason, definition never loaded.
@@ -631,7 +636,7 @@ def test_include_resolver_allows_by_returning_path(tmp_path: Path) -> None:
     deck = tmp_path / "external.cir"
     deck.write_text(EXTERNAL_BLOCK)
 
-    graph = parse_netlist_graph(deck, include_resolver=lambda p: p)
+    graph = parse_netlist_graph(deck, include_resolver=lambda p: p, reader=LTSPICE_READER)
     assert graph.missing_includes == ()
     assert "XSTAGE.R1" in {c.ref for c in flatten_graph(graph).components}
 
@@ -640,7 +645,7 @@ def test_pdk_black_box_reports_no_missing_include() -> None:
     # No include directive at all: the model is simply not supplied, which must
     # read differently from "the definition file is missing".
     deck = "* t\nVin in 0 5\nX1 in out nmos_6p0\n.end\n"
-    result = compare_graphs(deck, deck, anchors=["in"])
+    result = compare_graphs(deck, deck, anchors=["in"], reader=LTSPICE_READER)
     unresolved = result.unresolved_subckts[0]
     assert unresolved.name == "nmos_6p0"
     assert unresolved.missing_includes == ()
@@ -664,7 +669,7 @@ def test_duplicate_definition_first_in_textual_order_wins(
     deck = tmp_path / "dup.cir"
     deck.write_text(f"* t\nVin in 0 5\nXD in out DUP\n{body}.end\n")
 
-    graph = parse_netlist_graph(deck)
+    graph = parse_netlist_graph(deck, reader=LTSPICE_READER)
     winner = graph.subckts["dup"]
     assert winner.components[0].value == expected_ref
 
@@ -708,14 +713,14 @@ def test_an_instance_runs_the_one_body_its_deck_selects(
     path = tmp_path / "deck.cir"
     path.write_text(deck)
 
-    graph = parse_netlist_graph(path)
+    graph = parse_netlist_graph(path, reader=LTSPICE_READER)
 
     assert graph.missing_includes == ()
     assert [(c.ref, c.value) for c in flatten_graph(graph).components if c.ref != "V1"] == [
         ("X1.R1", value)
     ]
     inline = f"{_AMP_CALL}.subckt amp a b\nR1 a b {value}\n.ends amp\n.end\n"
-    assert compare_graphs(path, inline).equivalent
+    assert compare_graphs(path, inline, reader=LTSPICE_READER).equivalent
 
 
 def test_include_cycle_terminates(tmp_path: Path) -> None:
@@ -725,7 +730,9 @@ def test_include_cycle_terminates(tmp_path: Path) -> None:
     deck = tmp_path / "cyc.cir"
     deck.write_text("* t\nVin in 0 5\nXSTAGE in out DIVBLOCK\n.include a.lib\n.end\n")
 
-    graph = parse_netlist_graph(deck)  # terminates rather than recursing forever
+    graph = parse_netlist_graph(
+        deck, reader=LTSPICE_READER
+    )  # terminates rather than recursing forever
     assert "divblock" in graph.subckts
     assert "other" in graph.subckts
     flat = flatten_graph(graph)
@@ -741,7 +748,7 @@ def test_include_depth_is_bounded(tmp_path: Path) -> None:
     deck = tmp_path / "deep.cir"
     deck.write_text("* t\nVin in 0 5\nXD in out DEEP\n.include L1.lib\n.end\n")
 
-    graph = parse_netlist_graph(deck)
+    graph = parse_netlist_graph(deck, reader=LTSPICE_READER)
     assert "deep" not in graph.subckts
     assert any("depth limit" in m.reason for m in graph.missing_includes)
 
@@ -749,14 +756,14 @@ def test_include_depth_is_bounded(tmp_path: Path) -> None:
 def test_text_parse_records_unresolvable_include() -> None:
     # Bare text has no directory context, so an include cannot be followed --
     # a fact worth surfacing rather than a silent black box.
-    graph = parse_netlist_graph(EXTERNAL_BLOCK)
+    graph = parse_netlist_graph(EXTERNAL_BLOCK, reader=LTSPICE_READER)
     assert [m.target for m in graph.missing_includes] == ["divblock.lib"]
     assert "no base directory" in graph.missing_includes[0].reason
 
 
 def test_base_dir_lets_text_resolve_includes(tmp_path: Path) -> None:
     (tmp_path / "divblock.lib").write_text(BLOCK_LIB)
-    graph = parse_netlist_graph(EXTERNAL_BLOCK, base_dir=tmp_path)
+    graph = parse_netlist_graph(EXTERNAL_BLOCK, base_dir=tmp_path, reader=LTSPICE_READER)
     assert graph.missing_includes == ()
     flat = flatten_graph(graph)
     assert "XSTAGE.R1" in {c.ref for c in flat.components}
@@ -767,7 +774,7 @@ def test_unreadable_included_file_degrades_to_a_recorded_fact(tmp_path: Path) ->
     (tmp_path / "divblock.lib").write_text(".subckt DIVBLOCK a b\nR1 a b {1+\n.ends\n")
     deck = tmp_path / "external.cir"
     deck.write_text(EXTERNAL_BLOCK)
-    graph = parse_netlist_graph(deck)
+    graph = parse_netlist_graph(deck, reader=LTSPICE_READER)
     assert graph.missing_includes, "a broken include should be recorded, not swallowed"
     assert flatten_graph(graph).unresolved_subckts == ("DIVBLOCK",)
 
@@ -791,7 +798,7 @@ def test_windows_spelled_include_reaches_the_resolver_as_a_real_path(
         seen.append(candidate)
         return None
 
-    parse_netlist_graph(deck, include_resolver=recording_resolver)
+    parse_netlist_graph(deck, include_resolver=recording_resolver, reader=LTSPICE_READER)
 
     assert seen == [Path("/mnt/c/Users/dev/LTspice/lib/cmp/standard.mos")]
 
@@ -810,9 +817,9 @@ def test_a_schematic_is_refused_rather_than_lexed_as_spice(tmp_path: Path) -> No
     )
 
     with pytest.raises(NetlistGraphError, match=r"amp\.asc is an \.asc schematic"):
-        parse_netlist_graph(sheet)
+        parse_netlist_graph(sheet, reader=LTSPICE_READER)
     with pytest.raises(NetlistGraphError, match=r"amp\.asc is an \.asc schematic"):
-        compare_graphs(str(sheet), DIVIDER)
+        compare_graphs(str(sheet), DIVIDER, reader=LTSPICE_READER)
 
 
 _HALVES = """\
@@ -829,7 +836,7 @@ def test_an_instance_ltspice_exported_with_an_added_x_is_a_rename() -> None:
     the marker, as every comparison reference is."""
     written = f"* t\nVin in 0 5\nXe in 0 HALF\n{_HALVES}.end\n"
     exported = f"* t\nVin in 0 5\nX§Xe in 0 HALF\n{_HALVES}.end\n"
-    result = compare_graphs(written, exported)
+    result = compare_graphs(written, exported, reader=LTSPICE_READER)
     assert (result.added, result.removed) == ([], [])
     assert [(r.reference_ref, r.candidate_ref) for r in result.renamed] == [("Xe", "XXe")]
     assert result.equivalent
@@ -841,7 +848,7 @@ def test_a_netlist_holding_both_spellings_is_compared_by_name() -> None:
     the added X: the names are taken as written."""
     reference = f"* t\nXe in 0 HALF\nXXe 0 in HALF\n{_HALVES}.end\n"
     candidate = f"* t\nXXe in 0 HALF\nXXXe 0 in HALF\n{_HALVES}.end\n"
-    result = compare_graphs(reference, candidate)
+    result = compare_graphs(reference, candidate, reader=LTSPICE_READER)
     assert result.renamed == []
     assert result.added and result.removed
 
@@ -852,7 +859,9 @@ def test_a_card_naming_its_subcircuit_twice_says_so() -> None:
     subcircuit's ports. The arity error names the side, the nodes, the ports
     and the repeated name."""
     body = ".subckt LP6 in out\nR1 in out 1k\n.ends LP6\n.end\n"
-    result = compare_graphs(f"* t\nXU1 a b LP6\n{body}", f"* t\nXU1 a b LP6 LP6\n{body}")
+    result = compare_graphs(
+        f"* t\nXU1 a b LP6\n{body}", f"* t\nXU1 a b LP6 LP6\n{body}", reader=LTSPICE_READER
+    )
     (error,) = result.arity_errors
     assert (error.side, error.reference_arity, error.candidate_arity) == ("candidate", 3, 2)
     assert error.detail.startswith(
@@ -886,7 +895,7 @@ def test_a_graph_holds_each_scope_s_directive_cards(tmp_path: Path) -> None:
         ".param after_end=1\n",
         newline="\n",
     )
-    graph = parse_netlist_graph(deck)
+    graph = parse_netlist_graph(deck, reader=LTSPICE_READER)
     assert _bodies(graph.directives) == [".param g0=2", ".op"]
     assert _bodies(graph.subckts["amp"].directives) == [".param g={g0}", ".meas op x FIND V(out)"]
     assert graph.subckts["amp"].param_defaults == (("k", "1"),)
@@ -943,7 +952,7 @@ def test_an_include_brings_definitions_only_when_its_file_defines_nothing_else(
     _write_files(tmp_path, files)
     deck = tmp_path / "d.cir"
     deck.write_text(f"* d\nV1 a 0 1\nX1 a b AMP\n{line}\n.op\n.end\n", newline="\n")
-    graph = parse_netlist_graph(deck)
+    graph = parse_netlist_graph(deck, reader=LTSPICE_READER)
     assert _bodies(graph.definition_includes) == ([line] if brings_definitions_only else [])
 
 
@@ -957,7 +966,7 @@ def test_a_file_included_twice_or_in_a_cycle_is_read_once(tmp_path: Path) -> Non
         "* d\nV1 a 0 1\nX1 a b AMP\n.include amp.lib\n.include amp.lib\n.op\n.end\n",
         newline="\n",
     )
-    graph = parse_netlist_graph(deck)
+    graph = parse_netlist_graph(deck, reader=LTSPICE_READER)
     assert len(graph.subckts) == 1
     # The cycle's back edge is taken as unknown while the file is being read,
     # so the outer file does more than define subcircuits as far as is known.
@@ -978,6 +987,6 @@ def test_a_subcircuit_keeps_its_directives_however_many_files_were_read_first(
         "* d\nV1 a 0 1\nX1 a b AMP\nR2 b 0 1k\n.include vendor.lib\n.include amp.lib\n.op\n.end\n",
         newline="\n",
     )
-    graph = parse_netlist_graph(deck)
+    graph = parse_netlist_graph(deck, reader=LTSPICE_READER)
     assert _bodies(graph.subckts["amp"].directives) == [".param g={g0}"]
     assert _bodies(graph.definition_includes) == [".include vendor.lib", ".include amp.lib"]

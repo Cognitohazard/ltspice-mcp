@@ -23386,6 +23386,19 @@
   },
   "verify": []
  },
+ "fixtures/ltspice_recorded/inputs/export/load_name_tran.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [],
+   "wiring": {
+    "pins_label_only": 3,
+    "pins_total": 6,
+    "pins_wired": 3,
+    "wire_segments": 2
+   }
+  },
+  "verify": []
+ },
  "fixtures/ltspice_recorded/inputs/export/micro_cp1252.asc": {
   "dropped_wire": [],
   "edit": {

@@ -14,10 +14,10 @@ from pathlib import Path
 import pytest
 
 from ltspice_mcp.lib import services
-from ltspice_mcp.lib.log_conditions import Producer
 from ltspice_mcp.lib.log_parser import answered_measurements, measurement_cards, parse_measurements
 from ltspice_mcp.lib.metrics import aggregate_log_measurements, measurements
 from ltspice_mcp.lib.recipes import MeasurementsRecipe
+from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
 from tests.ltspice_recorder import INPUTS

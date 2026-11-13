@@ -1857,7 +1857,7 @@ class TestTraceDeviceFilter:
             "currents": {"Id(M1)": 1e-3, "I(R1)": 2e-3},
             "device_op_points": {"@m1[gm]": 1e-3, "@m2[gm]": 2e-3},
         }
-        assert _filter_operating_point(op, "M1") is True
+        assert _filter_operating_point(op, "M1", xvii=False) is True
         assert op["currents"] == {"Id(M1)": 1e-3}
         assert op["device_op_points"] == {"@m1[gm]": 1e-3}
         # Node voltages are not device-scoped -> dropped from the focused view.
@@ -1865,12 +1865,12 @@ class TestTraceDeviceFilter:
 
     def test_filter_matches_subcircuit_path_suffix(self):
         op = {"voltages": {}, "currents": {}, "device_op_points": {"@m.x1.mn[gm]": 5.0}}
-        assert _filter_operating_point(op, "mn") is True
+        assert _filter_operating_point(op, "mn", xvii=False) is True
         assert op["device_op_points"] == {"@m.x1.mn[gm]": 5.0}
 
     def test_filter_no_match_reports_false(self):
         op = {"voltages": {}, "currents": {"Id(M1)": 1.0}, "device_op_points": {}}
-        assert _filter_operating_point(op, "Q9") is False
+        assert _filter_operating_point(op, "Q9", xvii=False) is False
 
 
 @pytest.mark.asyncio

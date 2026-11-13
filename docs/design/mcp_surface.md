@@ -2014,7 +2014,8 @@ cursors where listed:
     each instance's own reference (the last segment), so a one-letter
     prefix still selects an element type. LTspice names are spelled for the
     session's LTspice, or the named build, as its raw names them
-    (`profile.xvii_names`)
+    (`profile.xvii_names`; `profile.names_read_as` and `names_note` say
+    which recorded build the spelling follows when the build has none)
 {kind: "model", mode: "search"|"enumerate", query?, libs?, cursor?}
     search requires query and fuzzy-matches it; enumerate requires libs and,
     given a query, lists the names containing it (case-insensitive). A

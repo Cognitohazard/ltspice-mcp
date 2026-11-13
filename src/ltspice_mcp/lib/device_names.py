@@ -27,12 +27,15 @@ builds, and the raw then holds only the instances' port currents.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from ltspice_mcp.lib.spice_lex_ops import SECTION_SIGN, section_sign_names
+
 if TYPE_CHECKING:
     from ltspice_mcp.lib.decoded_raw import RawData
+    from ltspice_mcp.lib.simulator_build import Producer
 
 DevicePath = tuple[str, ...]
 
@@ -44,6 +47,102 @@ _SHORTHAND = re.compile(r"([a-z][\w.]*)\.([a-z]\w*)")
 _CURRENT = re.compile(r"^(i[a-z]?)\(([^)]+)\)$", re.IGNORECASE)
 #: A trace of one node or one device: ``V(xa:xin:mid)``, ``Id(a:in:Mtail)``.
 _TRACE = re.compile(r"^([a-z]+)\(([^(),]+)\)$", re.IGNORECASE)
+
+
+#: An LTspice build its own run names, ``LTspice 26.0.2 for Windows``.
+_NUMBERED_LTSPICE = re.compile(r"(?i)\bLTspice\s+(\d+)\.")
+#: The LTspice builds whose names are recorded (``tests/fixtures/ltspice_recorded``).
+_RECORDED_LTSPICE = {26: "LTspice 26"}
+
+
+@dataclass(frozen=True)
+class Naming:
+    """How a reader of a deck, or the writer of a result, spells a name
+    inside subcircuit instances (:func:`naming_for`).
+
+    ``family`` is the simulator family (``ltspice``, ``ngspice``) or None.
+    ``xvii`` says each instance is spelled without its X, as LTspice XVII
+    and IV spell it. ``read_as`` is the recorded build whose spelling this
+    follows, and ``note`` says why that is not the build's own, when it is
+    not: a build with no recording is read as its nearest recorded one.
+    """
+
+    family: str | None
+    xvii: bool
+    read_as: str | None
+    note: str | None = None
+
+
+def naming_for(producer: Producer) -> Naming:
+    """The spelling ``producer`` reads a deck's names in and writes a
+    result's names in: the one derivation of a build's naming facts, for the
+    deck side (``hierarchy.SemanticProfile.of``) and to check a result's
+    writer (:func:`naming_disagreement`).
+
+    LTspice XVII and IV write each instance without its X; LTspice 26 and
+    every build from 24 on write it with its X (recorded:
+    ``raw/save_subckt_names*``, ``raw/subckt_names_tran_saved``). Only 26 and
+    XVII are recorded, so IV is read as XVII, and 24, 25, a build after 26 and
+    one whose number is not known yet are read as 26, each with a note.
+    ngspice spells a path with dots and keeps every X.
+    """
+    # Here, not at the top: the raw parser reads device names through this
+    # module, and simulator_build reads a raw's writer through the raw parser.
+    from ltspice_mcp.lib.simulator_build import ltspice_generation_before_24
+
+    if producer.family == "ngspice":
+        return Naming("ngspice", xvii=False, read_as="ngspice")
+    if producer.family != "ltspice":
+        return Naming(producer.family, xvii=False, read_as=None)
+    generation = ltspice_generation_before_24(producer.program, producer.build)
+    if generation == "xvii":
+        return Naming("ltspice", xvii=True, read_as="LTspice XVII")
+    if generation == "iv":
+        return Naming(
+            "ltspice",
+            xvii=True,
+            read_as="LTspice XVII",
+            note=(
+                "LTspice IV's names inside subcircuits are not recorded; they are "
+                "spelled as LTspice XVII, the nearest recorded build, spells them"
+            ),
+        )
+    numbered = _NUMBERED_LTSPICE.search(producer.build or "")
+    if numbered is not None and int(numbered[1]) in _RECORDED_LTSPICE:
+        return Naming("ltspice", xvii=False, read_as=_RECORDED_LTSPICE[int(numbered[1])])
+    which = (
+        f"LTspice {numbered[1]}'s names inside subcircuits are not recorded"
+        if numbered is not None
+        else "the LTspice build is not known until a run on it names itself"
+    )
+    return Naming(
+        "ltspice",
+        xvii=False,
+        read_as="LTspice 26",
+        note=f"{which}; they are spelled as LTspice 26, the nearest recorded build, spells them",
+    )
+
+
+def naming_disagreement(expected_xvii: bool, command: str | None) -> str | None:
+    """Why the raw whose header's ``Command`` is ``command`` names subcircuit
+    members otherwise than the spelling its deck was read with
+    (``expected_xvii``, :func:`naming_for`'s ``xvii`` at submission), or None
+    when they agree or the raw names no LTspice writer. For a run the server
+    made, where the two must agree."""
+    from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build
+
+    if not command or "ltspice" not in command.casefold():
+        return None
+    written = is_cp1252_ltspice_build(command)
+    if written == expected_xvii:
+        return None
+    return (
+        f"The raw's writer ({command}) names each subcircuit instance "
+        f"{'without' if written else 'with'} its X, but the job's decks were read with "
+        f"each instance spelled {'without' if expected_xvii else 'with'} it: a name "
+        "inside a subcircuit the deck spelled, a .save among them, may have saved "
+        "nothing. Names in the results are read as the raw's writer spells them."
+    )
 
 
 def writes_xvii_names(raw: RawData) -> bool:
@@ -192,6 +291,28 @@ def raw_name(scope: Iterable[str], name: str, *, xvii: bool) -> str:
     return ":".join((*instances, name.lower()))
 
 
+def spelled_name(scope: Iterable[str], name: str, naming: Naming) -> str:
+    """A node or device inside the instances ``scope``, as ``naming``'s reader
+    spells it in a trace and a ``.save``: LTspice's :func:`raw_name`, or
+    ngspice's dotted path (``xa.xin.mid``). The one speller of a path."""
+    if naming.family == "ngspice":
+        return ".".join((*(segment.lower() for segment in scope), name.lower()))
+    return raw_name(scope, name, xvii=naming.xvii)
+
+
+def device_address(path: Sequence[str], naming: Naming) -> str:
+    """How a device at ``path`` (its instances, then its own name) is named
+    to select it: ngspice's device name, its class letter before a nested
+    path (``m.xa.mn``, ``m1`` at the top); for LTspice the path as the
+    ``operating_point`` selector reads it on either build (``xa:mn``,
+    :func:`device_query`)."""
+    lowered = [segment.lower() for segment in path]
+    if naming.family == "ngspice":
+        device = ".".join(lowered)
+        return f"{lowered[-1][0]}.{device}" if len(lowered) > 1 else device
+    return ":".join(lowered)
+
+
 TraceKey = tuple[str, DevicePath]
 
 
@@ -231,22 +352,57 @@ def _within(path: DevicePath, want: DevicePath) -> bool:
     )
 
 
-def device_query(wanted: str, *, xvii: bool) -> Callable[[str], bool]:
+def section_sign_spellings(name: str) -> tuple[str, ...]:
+    """The other names a result may give what ``name`` names when a segment
+    of it carries LTspice's ``§`` (``R§Load``): the part's own name, which
+    LTspice's results use (``I(Load)``, recorded: ``export/load_name_op``),
+    then the name without the marker, which ngspice's copy of the deck gives
+    it (``spice_lex_ops.section_sign_names``). None for a name without one."""
+    if SECTION_SIGN not in name:
+        return ()
+    parts = re.split(r"([(),.:\s]+)", name)
+    own = "".join(_own(part, 1) for part in parts)
+    bare = "".join(_own(part, 0) for part in parts)
+    return tuple(dict.fromkeys(spelled for spelled in (own, bare) if spelled != name))
+
+
+def _own(segment: str, which: int) -> str:
+    """``segment``'s name without the marker (``which`` 0) or its own (1)."""
+    names = section_sign_names(segment)
+    return names[which] if names else segment
+
+
+def device_query(wanted: str, *, xvii: bool, among: Iterable[str]) -> Callable[[str], bool]:
     """A test of whether an operating-point value's name belongs to what
     ``wanted`` names: the device as the simulator spells it (``m.xa.xleaf.m0``,
     which ``inspect``'s hierarchy addresses use), its path or part of it
     (``mtail``, ``xin.mtail``, ``xa.xin.mtail``; dots or colons), or an
-    instance it is inside."""
-    literal = wanted.strip().casefold()
-    want = split_path(wanted)
+    instance it is inside.
 
-    def names(name: str) -> bool:
-        owner = _owner(name, xvii=xvii)
-        return owner is not None and (
-            owner.text.casefold() == literal or _within(owner.path, want)
-        )
+    A name exported with LTspice's ``§`` (``R§Load``) names the part by the
+    one of its names (:func:`section_sign_spellings`) that a name of ``among``,
+    every name of the result, belongs to: ``Load`` in LTspice's results,
+    ``RLoad`` in ngspice's. Where both are there, they are two parts and the
+    name answers to neither, as ``trace_names.find_trace`` refuses it."""
+    names = list(among)
 
-    return names
+    def query(spelled: str) -> Callable[[str], bool]:
+        literal = spelled.strip().casefold()
+        want = split_path(spelled)
+
+        def belongs(name: str) -> bool:
+            owner = _owner(name, xvii=xvii)
+            return owner is not None and (
+                owner.text.casefold() == literal or _within(owner.path, want)
+            )
+
+        return belongs
+
+    spellings = section_sign_spellings(wanted)
+    if not spellings:
+        return query(wanted)
+    found = [q for q in map(query, (wanted, *spellings)) if any(map(q, names))]
+    return found[0] if len(found) == 1 else (lambda _name: False)
 
 
 def find_device_param(names: Iterable[str], device: str, param: str) -> str | None:
@@ -254,15 +410,19 @@ def find_device_param(names: Iterable[str], device: str, param: str) -> str | No
     device as the simulator spells it, or the end of its path (``x1.mn`` for
     ``MN`` inside ``X1``, wherever ``X1`` is), whichever build or simulator
     wrote it. None when there is not exactly one."""
-    literal = device.casefold()
-    want = split_path(device)
+    asked = (device, *section_sign_spellings(device))
+    literals = {spelled.casefold() for spelled in asked}
+    wants = [want for spelled in asked if (want := split_path(spelled))]
     found = [
         name
         for name in names
         if (owner := _param_owner(name)) is not None
         and owner.param is not None
         and owner.param.casefold() == param.casefold()
-        and (owner.text.casefold() == literal or (want and owner.path[-len(want) :] == want))
+        and (
+            owner.text.casefold() in literals
+            or any(owner.path[-len(want) :] == want for want in wants)
+        )
     ]
     return found[0] if len(found) == 1 else None
 

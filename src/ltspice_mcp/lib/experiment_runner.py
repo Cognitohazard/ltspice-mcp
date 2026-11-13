@@ -24,6 +24,7 @@ from ltspice_mcp.lib.controlled_ngspice import (
     verify_seeded_driver,
 )
 from ltspice_mcp.lib.deck_staging import sha256_file, verify_staged_manifest
+from ltspice_mcp.lib.device_names import naming_disagreement
 from ltspice_mcp.lib.experiment_inputs import (
     capture_produced_artifacts,
     verify_case_inputs,
@@ -68,6 +69,7 @@ from ltspice_mcp.lib.raw_parser import (
     cut_partial_raw,
     other_raw_path,
     points_reached,
+    raw_writer_command,
     read_partial_raw_progress,
     result_digest,
 )
@@ -478,6 +480,8 @@ class ExperimentRunRequest:
     #: The program this request's cases will launch, identified before the
     #: request gate. Recorded on a new job and compared against a recorded one.
     simulator_executable: SimulatorExecutable | None = None
+    #: The spelling the request's decks were read with (``ExperimentJob.deck_names_xvii``).
+    deck_names_xvii: bool | None = None
     declared: int | None = None
     canonicalizer_version: int = CANONICALIZER_VERSION
     max_parallel: int | None = None
@@ -719,6 +723,7 @@ class ExperimentRunner(RunnerBase):
             sources=staged.sources,
             simulator=request.simulator,
             simulator_executable=request.simulator_executable,
+            deck_names_xvii=request.deck_names_xvii,
             completeness=completeness,
             # The job's own directory inside the runner's stable output folder,
             # not the folder itself: everything this job wrote is under it, and
@@ -1586,6 +1591,7 @@ class ExperimentRunner(RunnerBase):
                 self._release_slot(execution, case.case_id)
                 outcome = await self._with_logs(execution, outcome)
                 self._apply_outcome(execution.job, case, outcome)
+                await self._check_raw_names(execution, case)
                 if (
                     outcome.error is None
                     and case.raw_file is not None
@@ -1730,6 +1736,7 @@ class ExperimentRunner(RunnerBase):
         outcome = await self._with_logs(execution, outcome)
         if execution.job.recovery is not None:
             self._apply_outcome(execution.job, case, outcome)
+            await self._check_raw_names(execution, case)
         else:
             self._apply_stopped_outcome(execution.job, case, outcome)
         kept = await self._record_progress_then_remove(execution, case)
@@ -1961,6 +1968,22 @@ class ExperimentRunner(RunnerBase):
                 outcome.logs, services.run_producer(job, case), unread=outcome.logs is None
             )
         )
+
+    @staticmethod
+    async def _check_raw_names(execution: _Execution, case: ExperimentCase) -> None:
+        """Say on ``case`` when its raw names subcircuit members otherwise than
+        the spelling its deck was read with at submission
+        (``ExperimentJob.deck_names_xvii``), as an LTspice under another name,
+        never run before, can."""
+        expected = execution.job.deck_names_xvii
+        if case.raw_file is None or expected is None:
+            return
+        command = await asyncio.to_thread(raw_writer_command, case.raw_file)
+        disagreement = naming_disagreement(expected, command)
+        if disagreement is not None:
+            case.observations.append(
+                {"code": "raw_names_disagree", "kind": "execution", "detail": disagreement}
+            )
 
     @staticmethod
     def _apply_outcome(job: ExperimentJob, case: ExperimentCase, outcome: RunOutcome) -> None:

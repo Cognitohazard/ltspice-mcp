@@ -39,7 +39,6 @@ from ltspice_mcp.lib.decoded_raw import (
     time_offset,
 )
 from ltspice_mcp.lib.format import cap_list
-from ltspice_mcp.lib.log_conditions import Producer
 from ltspice_mcp.lib.log_parser import (
     CardKind,
     answered_measurements,  # noqa: TID251 - the summary is built off the loop, handed its producer and cards
@@ -49,6 +48,7 @@ from ltspice_mcp.lib.log_types import LogSectionName
 from ltspice_mcp.lib.raw_header import STEPPED_TEMPERATURE, RawDialectError, command_writer
 from ltspice_mcp.lib.result_kinds import AC_SHAPED, plot_analysis, sampled_axis
 from ltspice_mcp.lib.result_observations import surface_observations
+from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.trace_names import TraceQuantity, is_node_voltage, trace_quantity
 
 # What a raw accessor raises when the thing being asked for is not there: a

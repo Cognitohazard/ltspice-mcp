@@ -18,6 +18,7 @@ from typing import Any, Literal, get_args
 from ltspice_mcp.errors import MultiplierRewriteStop, NetlistError
 from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES
 from ltspice_mcp.lib.deck_nodes import GROUND, node_kind
+from ltspice_mcp.lib.deck_nodes import unestablished_reason as _unestablished_node
 from ltspice_mcp.lib.deck_staging import (
     DEFAULT_INCLUDE_DEPTH,
     card_sections,
@@ -28,7 +29,13 @@ from ltspice_mcp.lib.deck_staging import (
     unquote,
     unreadable_references,
 )
-from ltspice_mcp.lib.device_names import raw_name
+from ltspice_mcp.lib.device_names import (
+    Naming,
+    device_address,
+    naming_for,
+    path_text,
+    spelled_name,
+)
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.hierarchy_expr import (
     NGSPICE_M_EXEMPT,
@@ -41,6 +48,7 @@ from ltspice_mcp.lib.hierarchy_expr import (
 )
 from ltspice_mcp.lib.ngspice_compat import drops_lib_sections, multiplies_m
 from ltspice_mcp.lib.pathutil import resolve_safe_path, with_roots
+from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
@@ -93,24 +101,77 @@ def established_modes() -> str:
 
 @dataclass(frozen=True)
 class SemanticProfile:
+    """Who reads the deck a hierarchy is resolved for: the simulator family,
+    ngspice's compatibility mode, and the spelling of names inside subcircuit
+    instances (``naming``, which ``device_names.naming_for`` derives from the
+    reader's ``Producer``). Built for a run or a query by :meth:`of`; built
+    with a family alone, it spells names as that family's reader of no known
+    build does."""
+
     simulator: Family
     ngbehavior: str | None = None
     evaluation_context: str = "initial_deck"
-    #: The LTspice is XVII (or IV), which spells a node or device inside a
-    #: subcircuit without each instance's X, as its raw names it.
-    xvii_names: bool = False
+    naming: Naming | None = None
 
     def __post_init__(self) -> None:
         if self.simulator not in SUPPORTED_FAMILIES:
             raise NetlistError("hierarchy supports ltspice or ngspice")
         if self.simulator == "ltspice" and self.ngbehavior is not None:
             raise NetlistError("ngbehavior is only valid for ngspice")
-        if self.simulator != "ltspice" and self.xvii_names:
-            raise NetlistError("xvii_names is only valid for ltspice")
         if self.simulator == "ngspice" and self.ngbehavior is None:
             raise NetlistError("ngspice hierarchy requires its effective ngbehavior")
         if self.evaluation_context != "initial_deck":
             raise NetlistError("hierarchy supports only initial_deck evaluation context")
+        if self.naming is None:
+            object.__setattr__(self, "naming", naming_for(Producer(self.simulator, None, None)))
+        elif self.naming.family != self.simulator:
+            raise NetlistError("a profile's naming is its own simulator's")
+
+    @classmethod
+    def of(cls, producer: Producer, ngbehavior: str | None) -> SemanticProfile:
+        """The profile of a deck ``producer`` reads, in ngspice's
+        ``ngbehavior`` mode (None for any other simulator): the one
+        constructor a run or a query builds its profile with."""
+        if producer.family not in SUPPORTED_FAMILIES:
+            raise NetlistError("hierarchy supports ltspice or ngspice")
+        family: Family = "ngspice" if producer.family == "ngspice" else "ltspice"
+        return cls(
+            family,
+            ngbehavior if family == "ngspice" else None,
+            naming=naming_for(producer),
+        )
+
+    @property
+    def names(self) -> Naming:
+        """``naming``, set by the time a profile exists."""
+        assert self.naming is not None
+        return self.naming
+
+    @property
+    def xvii_names(self) -> bool:
+        """The LTspice is XVII (or IV), which spells a node or device inside a
+        subcircuit without each instance's X, as its raw names it."""
+        return self.names.xvii
+
+    def record(self) -> dict[str, Any]:
+        """The profile as a cursor binding and a native record's digest hold
+        it: what decides the answer, and nothing that changes when it does not
+        (the note on an unrecorded build goes once a run names the build)."""
+        return {
+            "simulator": self.simulator,
+            "ngbehavior": self.ngbehavior,
+            "evaluation_context": self.evaluation_context,
+            "xvii_names": self.xvii_names,
+        }
+
+    def reply(self) -> dict[str, Any]:
+        """The profile as a reply carries it: :meth:`record`, and which
+        recorded build the names are spelled as, and why when it is another's."""
+        return {
+            **self.record(),
+            "names_read_as": self.names.read_as,
+            "names_note": self.names.note,
+        }
 
     @property
     def established(self) -> bool:
@@ -249,7 +310,7 @@ class Hierarchy:
 
     def binding(self) -> dict[str, Any]:
         return {
-            "profile": asdict(self.profile),
+            "profile": self.profile.record(),
             "inputs": [
                 {
                     "path": str(f.path),
@@ -623,7 +684,7 @@ def _card_multiplier(
             None, reason=f"whether ngspice appends m to {kind} cards is not measured"
         )
     return card_copies(
-        own, passed, multiply=multiply, where=".".join(path), passed_from=".".join(scope)
+        own, passed, multiply=multiply, where=path_text(path), passed_from=path_text(scope)
     )
 
 
@@ -666,20 +727,16 @@ def _address(
 ) -> tuple[str | None, str | None, str | None]:
     if kind not in "RM" or not all(len(p) > 1 and _SAFE_NAME.fullmatch(p) for p in path):
         return None, None, "backend address unavailable for this element or spelling"
+    device = device_address(path, profile.names)
     if profile.simulator == "ngspice":
-        device = ".".join(p.lower() for p in path)
-        if len(path) > 1:
-            device = kind.lower() + "." + device
         parameter = "gm" if kind == "M" else "i"
         return device, f".save @{device}[{parameter}]", None
-    # The operating_point selector reads the device by its path on either build.
-    device = ":".join(p.lower() for p in path)
     if kind == "M":
         # No directive: the server asks LTspice 24 and later for the device
         # table on every .op run, and XVII prints it unasked and ends the run
         # on .options logopinfo (recorded: log/subckt_names*).
         return device, None, None
-    return device, f".save I({raw_name(path[:-1], path[-1], xvii=profile.xvii_names)})", None
+    return device, f".save I({spelled_name(path[:-1], path[-1], profile.names)})", None
 
 
 def resolve_hierarchy(
@@ -795,24 +852,15 @@ def resolve_hierarchy(
 
     def node(name: str, scope: tuple[str, ...], ports: Mapping[str, Node]) -> Node:
         folded = name.casefold()
-        # Ground is established for native and hsa mode only; kiltpsa's
-        # reading differs across ngspice versions, and no other mode's is
-        # recorded, so those refuse rather than guess.
-        if (
-            folded == "gnd"
-            and profile.simulator == "ngspice"
-            and profile.ngbehavior not in ("", "hsa")
-        ):
-            reading = (
-                "version-dependent"
-                if profile.ngbehavior == "kiltpsa"
-                else "unrecorded reading of the"
-            )
-            raise NetlistError(
-                f"{reading} ground alias 'gnd' in {profile.ngbehavior} mode; "
-                "use explicit node 0 or inspect a supported native/hsa deck"
-            )
-        kind = node_kind(name, ports=ports, global_names=globals_, simulator=profile.simulator)
+        kind = node_kind(
+            name,
+            ports=ports,
+            global_names=globals_,
+            simulator=profile.simulator,
+            ngbehavior=profile.ngbehavior,
+        )
+        if kind == "unestablished":
+            raise NetlistError(_unestablished_node(name, profile.ngbehavior))
         if kind == "port":
             return ports[folded]
         if kind == "ground":
@@ -825,10 +873,7 @@ def resolve_hierarchy(
         trace = None
         reason = None
         if all(_SAFE_NAME.fullmatch(p) for p in scope) and _SAFE_NODE.fullmatch(name):
-            if profile.simulator == "ltspice":
-                trace = f"V({raw_name(scope, name, xvii=profile.xvii_names)})"
-            else:
-                trace = "V(" + ".".join((*[p.lower() for p in scope], name.lower())) + ")"
+            trace = f"V({spelled_name(scope, name, profile.names)})"
         else:
             reason = "backend node spelling unavailable"
         resolved = Node(scope, name, trace, reason)
@@ -911,7 +956,7 @@ def resolve_hierarchy(
                     overrides["m"] = multiplier
                     if not rewrites and not defaults and not local:
                         raise MultiplierRewriteStop(
-                            f"ngspice stops on this deck: {'.'.join(path)} calls "
+                            f"ngspice stops on this deck: {path_text(path)} calls "
                             f"{child.view.name}, which takes no parameters, with the m ngspice "
                             f"appends to every card of {enclosing} ('Mismatch: 0 formal but 1 "
                             f"actual params'). To pass that m on to {child.view.name}'s cards, "

@@ -639,6 +639,7 @@ async def _start_attempt(
         stage=already_staged,
         job_id=job.job_id,
         simulator_executable=execution.executable,
+        deck_names_xvii=job.deck_names_xvii,
         recoverable=True,
         simulator_seed=execution.simulator_seed,
         max_parallel=execution.max_parallel,

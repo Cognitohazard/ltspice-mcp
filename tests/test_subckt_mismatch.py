@@ -28,6 +28,7 @@ from ltspice_mcp.lib.subckt_mismatch import (
 )
 from tests._mismatch_fixtures import BINNED_MINI_FET as MINI_FET
 from tests._mismatch_fixtures import clone_body, instance_line
+from tests.conftest import LTSPICE_READER
 
 DECK = f"""\
 * mini pdk-shaped deck
@@ -463,7 +464,7 @@ class TestPatchedDeckStillValidates:
 
         cards = lex(self._patched()).cards
         assert validate_netlist_arity(cards, simulator="ngspice") == []
-        assert validate_netlist_directive_refs(cards) == []
+        assert validate_netlist_directive_refs(cards, reader=LTSPICE_READER) == []
 
     def test_the_patched_deck_reparses_to_the_same_text(self):
         from ltspice_mcp.lib.spice_lex import emit

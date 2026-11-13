@@ -21,11 +21,12 @@ from spicelib.log.semi_dev_op_reader import opLogReader
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.encoding import decode_spice_bytes, read_spice_text
-from ltspice_mcp.lib.log_conditions import Producer, classify_channels, rules_for
+from ltspice_mcp.lib.log_conditions import classify_channels, rules_for
 from ltspice_mcp.lib.log_types import LogDiagnostics as LogDiagnostics
 from ltspice_mcp.lib.log_types import MeasErrorEntry as MeasErrorEntry
 from ltspice_mcp.lib.log_types import MeasurementEntry as MeasurementEntry
 from ltspice_mcp.lib.log_types import MeasurementsOutput as MeasurementsOutput
+from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.lib.store import parser_file_in
 

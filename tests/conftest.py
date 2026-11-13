@@ -45,6 +45,7 @@ from ltspice_mcp.lib.experiment_types import (
     ExperimentJob,
     SourceRecord,
 )
+from ltspice_mcp.lib.hierarchy import SemanticProfile
 from ltspice_mcp.lib.job_lifecycle import WaitFor
 from ltspice_mcp.lib.runner_base import RunnerBase, RunOutcome, _raw_completion_outcome
 from ltspice_mcp.lib.simulator import platform_key
@@ -732,6 +733,10 @@ _POLL_INTERVAL_S = 0.01
 #: holds, so a generous value costs nothing when the code is right, and a
 #: slow runner (Windows, a loaded CI box, a jitter seed) cannot fail a correct
 #: test. ``tests/test_test_hygiene.py`` holds the suite's waits to it.
+#: Who reads the suite's LTspice decks and exports where a test does not name
+#: a build: LTspice, of no known build (``hierarchy.SemanticProfile``).
+LTSPICE_READER = SemanticProfile("ltspice")
+
 LIVENESS_S = 30.0
 
 

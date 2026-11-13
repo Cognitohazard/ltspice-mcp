@@ -86,11 +86,11 @@ from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
 
 from ltspice_mcp.errors import UnreadableCardError
 from ltspice_mcp.lib.asc_document import is_asc
-from ltspice_mcp.lib.deck_nodes import GROUND, node_kind
+from ltspice_mcp.lib.deck_nodes import GROUND, settled_node_kind
 from ltspice_mcp.lib.deck_staging import (
     card_sections,
     closure_depth,
@@ -98,6 +98,7 @@ from ltspice_mcp.lib.deck_staging import (
     resolve_reference,
     scan_include_references,
 )
+from ltspice_mcp.lib.device_names import path_text
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import (
     SAME_VALUE_RTOL,
@@ -116,8 +117,11 @@ from ltspice_mcp.lib.spice_lex import (
     subckt_children,
     unreadable_cards,
 )
-from ltspice_mcp.lib.spice_lex_ops import without_section_sign
+from ltspice_mcp.lib.spice_lex_ops import without_added_x, without_section_sign
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, SubcktCard, global_names
+
+if TYPE_CHECKING:
+    from ltspice_mcp.lib.hierarchy import SemanticProfile
 
 # An include-path resolver: given the filesystem path an ``.include``/``.lib``
 # resolved to (base directory joined with the target, or an absolute target),
@@ -128,15 +132,11 @@ IncludeResolver = Callable[[Path], "Path | None"]
 
 # Ground as the graph names it: every name ``deck_nodes`` reads as ground
 # (``0``, ``gnd`` in any case) folds to it, so a deck written with ``gnd`` and
-# one written with ``0`` compare equal.
+# one written with ``0`` compare equal. Which names those are depends on the
+# deck's reader (a ``hierarchy.SemanticProfile``), which every parse is told:
+# to LTspice a subcircuit port named ``gnd`` is the port, and to ngspice it is
+# ground.
 _GROUND = GROUND
-# The comparison reads a deck as LTspice does, whichever simulator the deck is
-# for: a port named ``gnd`` or named like a ``.global`` net is the port, where
-# ngspice reads it as ground or the global, and ``gnd`` is ground, which
-# ngspice's kiltpsa mode may read otherwise (``deck_nodes``). Hierarchy
-# discovery, which is told the simulator, reads each as that simulator does;
-# tests/test_deck_nodes.py pins the difference.
-_READ_AS = "ltspice"
 
 # Passive two-terminal devices whose terminals are electrically interchangeable.
 # Their pins share one role so a resistor authored "backwards" (b a instead of
@@ -318,6 +318,9 @@ class NetlistGraph:
 
     components: list[Component]
     subckts: dict[str, SubcktDef]
+    #: Who reads the deck, whose reading of ground and ``.global`` nets the
+    #: graph's nets follow (``deck_nodes``).
+    reader: SemanticProfile
     warnings: list[str] = field(default_factory=list)
     missing_includes: tuple[MissingInclude, ...] = ()
     duplicate_subckts: tuple[DuplicateSubckt, ...] = ()
@@ -589,12 +592,15 @@ class GraphComparison:
 # ---------------------------------------------------------------------------
 
 
-def canon_net(name: str, ports: Sequence[str] = ()) -> str:
+def canon_net(name: str, reader: SemanticProfile, ports: Sequence[str] = ()) -> str:
     """Canonicalize a net name as a scope whose ports are ``ports`` reads it
-    (none at the top level): stripped and lowercased, with ground
-    (``deck_nodes``) as ``0``."""
+    (none at the top level), to the deck's ``reader``: stripped and
+    lowercased, with ground (``deck_nodes``) as ``0``."""
     n = name.strip().lower()
-    return _GROUND if node_kind(n, ports=ports, simulator=_READ_AS) == "ground" else n
+    kind = settled_node_kind(
+        n, ports=ports, simulator=reader.simulator, ngbehavior=reader.ngbehavior
+    )
+    return _GROUND if kind == "ground" else n
 
 
 def canon_ref(ref: str) -> str:
@@ -694,6 +700,7 @@ _STRUCTURAL_WARNING_MARKERS = ("unclosed", ".ends", "no preceding card")
 def parse_netlist_graph(
     path_or_text: str | Path,
     *,
+    reader: SemanticProfile,
     base_dir: Path | None = None,
     include_resolver: IncludeResolver | None = None,
 ) -> NetlistGraph:
@@ -725,6 +732,9 @@ def parse_netlist_graph(
 
     An ``X`` instance still lacking a definition is kept as a top-level
     component and treated as a black box by :func:`flatten_graph`.
+
+    ``reader`` is who reads the deck: which names are ground and which a
+    ``.global`` net is its reading (``deck_nodes``).
     """
     result, source = _load_cards(path_or_text)
     cards = result.cards
@@ -737,7 +747,7 @@ def parse_netlist_graph(
     if structural:
         raise NetlistGraphError("malformed netlist: " + "; ".join(structural))
 
-    registry = _SubcktRegistry()
+    registry = _SubcktRegistry(reader=reader)
     directory = base_dir if base_dir is not None else source.parent if source else None
     _collect_subckts(
         cards,
@@ -751,7 +761,9 @@ def parse_netlist_graph(
         include_resolver=include_resolver,
     )
 
-    components = [_component_from_card(card) for card in iter_by_kind(cards, "instance", scope=())]
+    components = [
+        _component_from_card(card, reader) for card in iter_by_kind(cards, "instance", scope=())
+    ]
     directives = tuple(
         card
         for card in cards
@@ -766,6 +778,7 @@ def parse_netlist_graph(
     return NetlistGraph(
         components=components,
         subckts=registry.subckts,
+        reader=reader,
         warnings=list(result.warnings),
         missing_includes=tuple(registry.missing),
         duplicate_subckts=registry.duplicate_records(),
@@ -779,6 +792,8 @@ def parse_netlist_graph(
 class _SubcktRegistry:
     """Accumulates subcircuit definitions in textual order, first-wins."""
 
+    #: Who reads the deck (``parse_netlist_graph``).
+    reader: SemanticProfile
     subckts: dict[str, SubcktDef] = field(default_factory=dict)
     sources: dict[str, str] = field(default_factory=dict)
     ignored: dict[str, list[str]] = field(default_factory=dict)
@@ -809,7 +824,9 @@ class _SubcktRegistry:
         )
 
 
-def _subckt_def_from(cards: list[SpiceCard], opener_index: int) -> SubcktDef:
+def _subckt_def_from(
+    cards: list[SpiceCard], opener_index: int, reader: SemanticProfile
+) -> SubcktDef:
     """Project one ``.SUBCKT`` opener and the body it opens into a definition.
 
     The body is read by span (``spice_lex.subckt_children``): a second
@@ -818,7 +835,11 @@ def _subckt_def_from(cards: list[SpiceCard], opener_index: int) -> SubcktDef:
     """
     view = SubcktCard.from_card(cards[opener_index])
     children = [card for _, card in subckt_children(cards, opener_index)]
-    body = [_component_from_card(card, view.ports) for card in children if card.kind == "instance"]
+    body = [
+        _component_from_card(card, reader, view.ports)
+        for card in children
+        if card.kind == "instance"
+    ]
     return SubcktDef(
         name=view.name,
         ports=tuple(view.ports),
@@ -891,7 +912,7 @@ def _collect_subckts(
         registry.global_nets.update(name.lower() for name in global_names(card))
         if card.kind == "subckt":
             try:
-                registry.register(_subckt_def_from(cards, index), source)
+                registry.register(_subckt_def_from(cards, index, registry.reader), source)
             except (SpiceLexError, NetlistGraphError) as exc:
                 if strict:
                     raise NetlistGraphError(
@@ -1018,7 +1039,9 @@ def _follow_include(
     return registry.files[selected]
 
 
-def _component_from_card(card: object, ports: Sequence[str] = ()) -> Component:
+def _component_from_card(
+    card: object, reader: SemanticProfile, ports: Sequence[str] = ()
+) -> Component:
     """Build a :class:`Component` from an instance card via the typed view, in
     a scope whose ports are ``ports`` (none at the top level)."""
     try:
@@ -1034,7 +1057,7 @@ def _component_from_card(card: object, ports: Sequence[str] = ()) -> Component:
     return Component(
         ref=ref,
         type_letter=ref[:1].upper(),
-        nodes=tuple(canon_net(n, ports) for n in line.nodes),
+        nodes=tuple(canon_net(n, reader, ports) for n in line.nodes),
         model=line.model,
         # A V or I source compares as display shows it: its value and its own
         # words without ``=`` (``AC 2``, ``load``), which ``params`` does not
@@ -1090,6 +1113,7 @@ def _flatten(
             path=(),
             net_map=None,
             global_nets=graph.global_nets,
+            reader=graph.reader,
             out=leaves,
             calls=calls,
             stack=(),
@@ -1113,6 +1137,7 @@ def _expand(
     path: tuple[str, ...],
     net_map: dict[str, str] | None,
     global_nets: frozenset[str],
+    reader: SemanticProfile,
     out: list[FlatComponent],
     calls: list[FlatCall],
     stack: tuple[str, ...],
@@ -1155,7 +1180,7 @@ def _expand(
                     ),
                     line=comp.line,
                 )
-            ref = ".".join((*path, comp.ref))
+            ref = path_text((*path, comp.ref))
             arity.append(
                 ArityError(
                     ref=ref,
@@ -1176,7 +1201,7 @@ def _expand(
     if not is_expandable:
         out.append(
             FlatComponent(
-                ref=".".join((*path, comp.ref)),
+                ref=path_text((*path, comp.ref)),
                 type_letter=comp.type_letter,
                 nodes=flat_nodes,
                 model=comp.model,
@@ -1189,8 +1214,8 @@ def _expand(
     assert model_key is not None
     sub = subckts[model_key]
     child_path = (*path, comp.ref)
-    calls.append(FlatCall(".".join(child_path), model_key, _passed(sub, comp.params)))
-    child_map = _build_child_net_map(sub, flat_nodes, ".".join(child_path), global_nets)
+    calls.append(FlatCall(path_text(child_path), model_key, _passed(sub, comp.params)))
+    child_map = _build_child_net_map(sub, flat_nodes, path_text(child_path), global_nets, reader)
     for child in sub.components:
         _expand(
             child,
@@ -1198,6 +1223,7 @@ def _expand(
             path=child_path,
             net_map=child_map,
             global_nets=global_nets,
+            reader=reader,
             out=out,
             calls=calls,
             stack=(*stack, model_key),
@@ -1207,7 +1233,11 @@ def _expand(
 
 
 def _build_child_net_map(
-    sub: SubcktDef, bound_ports: tuple[str, ...], prefix: str, global_nets: frozenset[str]
+    sub: SubcktDef,
+    bound_ports: tuple[str, ...],
+    prefix: str,
+    global_nets: frozenset[str],
+    reader: SemanticProfile,
 ) -> dict[str, str]:
     """Map every net named inside ``sub``'s body to its flattened name, by
     what the name stands for there (``deck_nodes``).
@@ -1224,7 +1254,13 @@ def _build_child_net_map(
         for net in child.nodes:
             if net in net_map:
                 continue
-            kind = node_kind(net, ports=sub.ports, global_names=global_nets, simulator=_READ_AS)
+            kind = settled_node_kind(
+                net,
+                ports=sub.ports,
+                global_names=global_nets,
+                simulator=reader.simulator,
+                ngbehavior=reader.ngbehavior,
+            )
             if kind == "ground":
                 net_map[net] = _GROUND
             elif kind == "global":
@@ -1245,6 +1281,7 @@ def compare_graphs(
     reference: NetlistGraph | str | Path,
     candidate: NetlistGraph | str | Path,
     *,
+    reader: SemanticProfile | None,
     anchors: list[str] | tuple[str, ...] | frozenset[str] | None = None,
     rtol: float = SAME_VALUE_RTOL,
 ) -> GraphComparison:
@@ -1256,12 +1293,15 @@ def compare_graphs(
     ``anchors`` are named nets (ports, rails, outputs, measurement nets) that
     must map *by name*: an anchor may not silently land on a different structural
     position between the two sides. Ground is always an implicit anchor.
+    ``reader`` is who reads a side given as a path or text
+    (``parse_netlist_graph``); a graph carries its own, and two graphs take
+    None.
     ``rtol`` is the relative tolerance for numeric value/param comparison.
 
     Returns a :class:`GraphComparison`. Never a bare bool.
     """
-    ref = _coerce_capturing_arity(reference)
-    cand = _coerce_capturing_arity(candidate)
+    ref = _coerce_capturing_arity(reference, reader)
+    cand = _coerce_capturing_arity(candidate, reader)
 
     result = GraphComparison(equivalent=False, structurally_equivalent=False)
     result.arity_errors.extend(replace(e, side="reference") for e in ref.arity_errors)
@@ -1270,7 +1310,7 @@ def compare_graphs(
     ref_flat = ref.flat
     cand_flat = cand.flat
 
-    anchor_set = {canon_net(a) for a in (anchors or ())}
+    anchor_set = {canon_net(a, ref.graph.reader) for a in (anchors or ())}
     anchor_set.add(_GROUND)
 
     # --- structural (wiring) verdict + anchor placement, via 1-WL colors ------
@@ -1340,12 +1380,6 @@ def compare_graphs(
 _V = TypeVar("_V")
 
 
-def _without_added_x(key: str) -> str:
-    """A reference key with the ``X`` LTspice adds taken off each instance
-    segment (``xxe.r1`` is ``xe.r1``)."""
-    return ".".join(seg[1:] if seg.startswith("xx") else seg for seg in key.split("."))
-
-
 def rekey_across_added_x(
     reference: Mapping[str, object], candidate: Mapping[str, _V]
 ) -> tuple[dict[str, _V], list[str]]:
@@ -1365,7 +1399,7 @@ def rekey_across_added_x(
         grouped: dict[str, list[str]] = {}
         for key in keys:
             if key not in others:
-                grouped.setdefault(_without_added_x(key), []).append(key)
+                grouped.setdefault(without_added_x(key), []).append(key)
         return grouped
 
     by_reference = unmatched(reference, candidate)
@@ -1448,14 +1482,21 @@ class _FlattenOutcome:
     graph: NetlistGraph
 
 
-def _coerce_capturing_arity(src: NetlistGraph | str | Path) -> _FlattenOutcome:
+def _coerce_capturing_arity(
+    src: NetlistGraph | str | Path, reader: SemanticProfile | None
+) -> _FlattenOutcome:
     """Flatten ``src``, turning a flattening arity error into a recorded fact.
 
     A malformed *card* still raises (that is a parse failure); only the
     connectivity-level arity mismatch is captured so ``compare_graphs`` can
     report it alongside the other differences instead of aborting.
     """
-    graph = src if isinstance(src, NetlistGraph) else parse_netlist_graph(src)
+    if isinstance(src, NetlistGraph):
+        graph = src
+    elif reader is None:
+        raise TypeError("a netlist given as a path or text needs its reader")
+    else:
+        graph = parse_netlist_graph(src, reader=reader)
     try:
         flat, arity = flatten_graph(graph), []
     except PortArityMismatch:

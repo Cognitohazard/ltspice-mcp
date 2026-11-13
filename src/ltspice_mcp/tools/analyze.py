@@ -47,7 +47,6 @@ from ltspice_mcp.lib import (
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, PlotDescriptor
 from ltspice_mcp.lib.format import cap_note, format_spice_value, held_to_cap, unique_name
-from ltspice_mcp.lib.log_conditions import Producer
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
 from ltspice_mcp.lib.log_types import measurement_named
 from ltspice_mcp.lib.pagination import retotal_page
@@ -83,6 +82,7 @@ from ltspice_mcp.lib.result_observations import (
     coarse_waveform_observation,
 )
 from ltspice_mcp.lib.signal_analysis import downsample_minmax_traces
+from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.step_values import step_axis_key
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (

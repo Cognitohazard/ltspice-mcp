@@ -22,9 +22,9 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
-from ltspice_mcp.lib.deck_nodes import GROUND_NAMES, node_kind
+from ltspice_mcp.lib.deck_nodes import settled_node_kind
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
@@ -48,6 +48,9 @@ from ltspice_mcp.lib.spice_lex_views import (
     read_instance,
     unread_node_names,
 )
+
+if TYPE_CHECKING:
+    from ltspice_mcp.lib.hierarchy import SemanticProfile
 
 # Analysis directives that LTspice accepts. Used by validate_netlist to
 # match ``.meas <kind>`` against the active analysis and detect duplicates.
@@ -497,21 +500,10 @@ def validate_netlist_arity(
     return issues
 
 
-# The names ``deck_nodes`` reads as ground, always considered connected.
-_GROUND_NODES = GROUND_NAMES
-# The floating- and dangling-node checks read a deck as LTspice does, whichever
-# simulator the deck is for: a port named ``gnd`` or named like a ``.global``
-# net is the port, where ngspice reads it as ground or the global
-# (``deck_nodes``), so for an ngspice deck they can report a node floating that
-# such a port ties to ground or to the global. Hierarchy discovery, which is
-# told the simulator, reads it as that simulator does; tests/test_deck_nodes.py
-# pins the difference.
-_READ_AS = "ltspice"
-
-
-def is_ground_node(name: str) -> bool:
-    """Whether a deck's node name is ground, as the validator reads it."""
-    return name.casefold() in _GROUND_NODES
+# Which net a node name stands for is ``deck_nodes``'s answer, asked for the
+# deck's reader (``reader``, a ``hierarchy.SemanticProfile``): to LTspice a
+# subcircuit port named ``gnd`` or named like a ``.global`` net is the port,
+# where ngspice reads it as ground or the global.
 
 
 # Characters that cannot appear in a plain node name. Positional tokens
@@ -664,14 +656,30 @@ def _scope_ports(cards: list[SpiceCard]) -> dict[tuple[str, ...], tuple[str, ...
     return ports
 
 
-def _shared(node: str, ports: tuple[str, ...], global_nodes: set[str]) -> bool:
+def _shared(
+    node: str, ports: tuple[str, ...], global_nodes: set[str], reader: SemanticProfile
+) -> bool:
     """Whether ``node``, written in a scope with ``ports``, is ground or a
-    ``.GLOBAL`` net, which every scope shares (``deck_nodes``)."""
-    kind = node_kind(node, ports=ports, global_names=global_nodes, simulator=_READ_AS)
-    return kind in ("ground", "global")
+    ``.GLOBAL`` net, which every scope shares, to ``reader`` (``deck_nodes``)."""
+    return _kind(node, ports, global_nodes, reader) in ("ground", "global")
 
 
-def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, object]]:
+def _kind(
+    node: str, ports: tuple[str, ...], global_nodes: set[str], reader: SemanticProfile
+) -> str:
+    """What ``node``, written in a scope with ``ports``, stands for to ``reader``."""
+    return settled_node_kind(
+        node,
+        ports=ports,
+        global_names=global_nodes,
+        simulator=reader.simulator,
+        ngbehavior=reader.ngbehavior,
+    )
+
+
+def validate_netlist_dangling_nodes(
+    cards: list[SpiceCard], reader: SemanticProfile
+) -> list[dict[str, object]]:
     """Flag nodes referenced by exactly one element terminal in their scope.
 
     Warning-level companion to ``validate_netlist_arity`` — the caller
@@ -702,7 +710,7 @@ def validate_netlist_dangling_nodes(cards: list[SpiceCard]) -> list[dict[str, ob
     def record(
         scope: tuple[str, ...], node: str, referrer: str, card: SpiceCard, is_port: bool = False
     ) -> None:
-        if _shared(node, scope_ports.get(scope, ()), global_nodes):
+        if _shared(node, scope_ports.get(scope, ()), global_nodes, reader):
             return
         key = node.lower()
         nodes = occurrences.setdefault(scope, {})
@@ -818,7 +826,7 @@ def _known_names(cards: list[SpiceCard]) -> set[str]:
     pass can only fire on a name that is genuinely absent, never on one it
     failed to classify.
     """
-    known: set[str] = set(_GROUND_NODES) | set(_RESERVED_TRACES)
+    known: set[str] = set(_RESERVED_TRACES)
     known |= _scan_global_nodes(cards)
     # A card no rule could read may define any word on it.
     known |= {word for _card, words in _unread_connectors(cards) for word in words}
@@ -842,7 +850,9 @@ def _known_names(cards: list[SpiceCard]) -> set[str]:
     return known
 
 
-def validate_netlist_directive_refs(cards: list[SpiceCard]) -> list[dict[str, object]]:
+def validate_netlist_directive_refs(
+    cards: list[SpiceCard], reader: SemanticProfile
+) -> list[dict[str, object]]:
     """Flag ``V(...)``/``I(...)`` references to names that exist nowhere.
 
     A ``.meas``, output directive, or behavioral source that names a node no
@@ -871,7 +881,7 @@ def validate_netlist_directive_refs(cards: list[SpiceCard]) -> list[dict[str, ob
                 if not _PLAIN_REF_RE.fullmatch(name):
                     continue
                 key = name.lower()
-                if key in known or key in seen:
+                if key in known or key in seen or _kind(name, (), set(), reader) == "ground":
                     continue
                 seen.add(key)
                 issues.append(
@@ -1060,7 +1070,7 @@ class _BiasGraph:
 
 
 def _subckt_internal_grounds(
-    cards: list[SpiceCard], global_nodes: set[str]
+    cards: list[SpiceCard], global_nodes: set[str], reader: SemanticProfile
 ) -> dict[str, frozenset[int]]:
     """Map each ``.SUBCKT`` name to the indices of its ports that reach
     ground (node ``0`` / ``.GLOBAL``) through the body's own elements.
@@ -1102,14 +1112,24 @@ def _subckt_internal_grounds(
         changed = False
         for name, (ports, body) in defs.items():
             dsu = _DSU()
-            # Ground and the globals, but not a port named like either.
-            for sink in _GROUND_NODES | global_nodes:
-                if _shared(sink, tuple(ports), global_nodes):
+            # Ground and the globals, and a port named like either where the
+            # reader reads the name so (ngspice) rather than as the port.
+            named = {*ports, *(t.lower() for _inst, terminals in body for t in terminals)}
+            for sink in named | global_nodes:
+                if _shared(sink, tuple(ports), global_nodes, reader):
                     dsu.union(_GROUND_SINK, sink)
             for inst, terminals in body:
                 _union_instance(dsu, inst, terminals, grounds)
             groot = dsu.find(_GROUND_SINK)
-            reached = frozenset(i for i, port in enumerate(ports) if dsu.find(port) == groot)
+            # A port the reader reads as ground or a global inside the body
+            # (ngspice, for a port named gnd) binds nothing there: the node
+            # wired to it reaches nothing through it.
+            reached = frozenset(
+                i
+                for i, port in enumerate(ports)
+                if dsu.find(port) == groot
+                and _kind(port, tuple(ports), global_nodes, reader) == "port"
+            )
             if reached != grounds[name]:
                 grounds[name] = reached
                 changed = True
@@ -1119,7 +1139,11 @@ def _subckt_internal_grounds(
 
 
 def _qualify(
-    node: str, scope: tuple[str, ...], global_nodes: set[str], ports: tuple[str, ...]
+    node: str,
+    scope: tuple[str, ...],
+    global_nodes: set[str],
+    ports: tuple[str, ...],
+    reader: SemanticProfile,
 ) -> str:
     """Key a node, written in ``scope`` whose ports are ``ports``, for the
     deck-wide global-reachability graph.
@@ -1131,7 +1155,9 @@ def _qualify(
     global or the ground sentinel.
     """
     key = node.lower()
-    if _shared(node, ports, global_nodes):
+    if _kind(node, ports, global_nodes, reader) == "ground":
+        return _GROUND_SINK
+    if _shared(node, ports, global_nodes, reader):
         return key
     return "\x00".join(s.lower() for s in scope) + "\x01" + key
 
@@ -1140,6 +1166,7 @@ def _grounded_globals(
     cards: list[SpiceCard],
     global_nodes: set[str],
     subckt_grounds: dict[str, frozenset[int]],
+    reader: SemanticProfile,
 ) -> set[str]:
     """The ``.GLOBAL`` nodes that reach ground (node ``0``) somewhere in the
     whole deck.
@@ -1155,18 +1182,19 @@ def _grounded_globals(
     if not global_nodes:
         return set()
     dsu = _DSU()
-    for sink in _GROUND_NODES:
-        dsu.union(_GROUND_SINK, sink)
+    dsu.find(_GROUND_SINK)
     scope_ports = _scope_ports(cards)
     for card, inst, terminals in _iter_instances(cards):
         ports = scope_ports.get(card.scope, ())
-        qualified = [_qualify(t, card.scope, global_nodes, ports) for t in terminals]
+        qualified = [_qualify(t, card.scope, global_nodes, ports, reader) for t in terminals]
         _union_instance(dsu, inst, qualified, subckt_grounds)
     ground_root = dsu.find(_GROUND_SINK)
     return {g for g in global_nodes if dsu.find(g) == ground_root}
 
 
-def validate_netlist_bias_topology(cards: list[SpiceCard]) -> list[dict[str, object]]:
+def validate_netlist_bias_topology(
+    cards: list[SpiceCard], reader: SemanticProfile
+) -> list[dict[str, object]]:
     """Flag nets with no DC path to ground — undefined operating-point bias.
 
     Companion to the dangling-node pass (which owns degree-1 nodes): this
@@ -1190,11 +1218,12 @@ def validate_netlist_bias_topology(cards: list[SpiceCard]) -> list[dict[str, obj
     to this text pass, so the handler runs it on ``.cir``/``.net`` only.
     """
     global_nodes = _scan_global_nodes(cards)
-    subckt_grounds = _subckt_internal_grounds(cards, global_nodes)
+    subckt_grounds = _subckt_internal_grounds(cards, global_nodes, reader)
     # .GLOBAL is name-scoping, not a ground reference: a global is a sink only
     # where it actually reaches node 0 somewhere in the deck. A floating
     # global rail stays a normal node so it can be flagged.
-    grounded_globals = _grounded_globals(cards, global_nodes, subckt_grounds)
+    grounded_globals = _grounded_globals(cards, global_nodes, subckt_grounds, reader)
+    scope_ports = _scope_ports(cards)
     graphs: dict[tuple[str, ...], _BiasGraph] = {}
 
     for card in cards:
@@ -1241,7 +1270,9 @@ def validate_netlist_bias_topology(cards: list[SpiceCard]) -> list[dict[str, obj
 
     issues: list[dict[str, object]] = []
     for scope, graph in graphs.items():
-        for sink in graph.sinks | grounded_globals | unread_globals | _GROUND_NODES:
+        ports = scope_ports.get(scope, ())
+        grounds = {key for key in graph.referrers if _kind(key, ports, set(), reader) == "ground"}
+        for sink in graph.sinks | grounded_globals | unread_globals | grounds:
             graph.dsu.union(_GROUND_SINK, sink)
         ground_root = graph.dsu.find(_GROUND_SINK)
 

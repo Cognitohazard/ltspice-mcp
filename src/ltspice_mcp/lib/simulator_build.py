@@ -44,7 +44,6 @@ from ltspice_mcp.lib import now
 from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.encoding import decode_spice_bytes
-from ltspice_mcp.lib.raw_parser import raw_writer_command
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +128,23 @@ def ltspice_generation_before_24(
     if reported and (named := _CP1252_LTSPICE_BUILD.search(reported)) is not None:
         return "iv" if named[1].upper() == "IV" else "xvii"
     return None
+
+
+@dataclass(frozen=True)
+class Producer:
+    """Who reads a deck or wrote a result: the simulator family, the build a
+    run named in its own output (``reported_build``), and the program that
+    ran or will run.
+
+    ``family`` is a dialect name (``ltspice``, ``ngspice``, ``qspice``,
+    ``xyce``) or None when it is not known; ``build`` and ``program`` are None
+    when not known. The log's rules (``log_conditions.rules_for``) and the
+    names a build spells (``device_names.naming_for``) are read off it.
+    """
+
+    family: str | None
+    build: str | None
+    program: str | None
 
 
 @dataclass(frozen=True)
@@ -289,6 +305,10 @@ def reported_build(log_file: Path | None, raw_file: Path | None = None) -> str |
                     return _clean(f"{banner[1]}, Creation Date: {created[1]}")
                 return _clean(banner[1])
         if raw_file is not None:
+            # Here, not at the top: the raw parser names a result's Producer,
+            # which this module defines.
+            from ltspice_mcp.lib.raw_parser import raw_writer_command
+
             command = raw_writer_command(raw_file)
             if command:
                 return _clean(command)

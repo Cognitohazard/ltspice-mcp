@@ -16,7 +16,7 @@ from ltspice_mcp.lib.spice_validator import (
     validate_netlist_dangling_nodes,
     validate_netlist_directive_refs,
 )
-from tests.conftest import FIXTURES_DIR
+from tests.conftest import FIXTURES_DIR, LTSPICE_READER
 
 
 def _ids(
@@ -378,12 +378,14 @@ def test_each_reader_of_a_probe_reads_its_nodes(
     view_names = [name for probe in MeasCard.from_card(meas).signal_refs for name in probe.names]
     assert view_names == names
     dangling = {
-        str(issue["message"]).split("'")[1] for issue in validate_netlist_dangling_nodes(cards)
+        str(issue["message"]).split("'")[1]
+        for issue in validate_netlist_dangling_nodes(cards, reader=LTSPICE_READER)
     }
     assert dangling == {"a", "b"} - {name.casefold() for name in names}
     elsewhere = lex_deck(deck.replace("R1 in a 1k\nR2 in b 1k\n", "R9 in 0 1k\n")).cards
     undefined = [
-        str(issue["message"]).split("'")[1] for issue in validate_netlist_directive_refs(elsewhere)
+        str(issue["message"]).split("'")[1]
+        for issue in validate_netlist_directive_refs(elsewhere, reader=LTSPICE_READER)
     ]
     assert undefined == [name for name in names if ":" not in name]
 

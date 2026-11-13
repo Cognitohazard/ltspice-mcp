@@ -337,6 +337,12 @@ class ExperimentJob:
     #: request would launch now is a different build. None when the simulator
     #: named no program, and on a record written before it was recorded.
     simulator_executable: SimulatorExecutable | None = None
+    #: Whether the job's decks were read with each subcircuit instance spelled
+    #: without its X (LTspice XVII and IV, ``device_names.naming_for``), as
+    #: their hierarchy profile was built at submission: what each run's raw is
+    #: held to. None for a deck read by no LTspice, and on a record written
+    #: before it was recorded.
+    deck_names_xvii: bool | None = None
     failures: list[dict[str, Any]] = field(default_factory=list)
     observations: list[dict[str, Any]] = field(default_factory=list)
     artifacts: list[dict[str, Any]] = field(default_factory=list)

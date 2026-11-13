@@ -38,7 +38,6 @@ from ltspice_mcp.lib.encoding import (
 from ltspice_mcp.lib.experiment_types import PARTIAL_RAW_KEY
 from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.lint_rules import lint_deck
-from ltspice_mcp.lib.log_conditions import Producer
 from ltspice_mcp.lib.log_parser import (
     answered_measurements,
     classify_failure_code,
@@ -68,6 +67,7 @@ from ltspice_mcp.lib.recipes import (
     ValueRecipe,
 )
 from ltspice_mcp.lib.result_observations import coarse_compressed_waveform, deck_tran_max_step
+from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analysis, inspect_tools
@@ -2253,7 +2253,9 @@ class TestSaveInsideSubcircuits:
         that will run it stores it."""
         xvii = rec.generation(build) == "xvii"
         deck = INPUTS / f"{_SAVE_SPELLINGS[True]}.cir"
-        hierarchy = load_hierarchy(str(deck), None, SemanticProfile("ltspice", xvii_names=xvii))
+        program = f"C:/install/{rec.manifest(build)['executable']['name']}"
+        profile = SemanticProfile.of(Producer("ltspice", None, program), None)
+        hierarchy = load_hierarchy(str(deck), None, profile)
         rows = {"/".join(row.instance).casefold(): row for row in hierarchy.instances}
         stored = {name.casefold() for name in self._stored(build, with_x=not xvii)}
         for path in ("xa/xin/rin", "xa/rd"):
