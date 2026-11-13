@@ -2219,13 +2219,12 @@ A call the automatic mode refuses (one that sends a paging control) still
 names what the caller set, since the names are read before that check. An
 API error that carries a tool's error payload is `error` with that payload's
 `code`, a refused argument is `error` with `invalid_arguments`, and an
-interrupt is `cancelled`. The
-API's other methods (`wait`, `load_raw`, `measurements`, `device_op_points`,
-`reference`, `guide`) write none. A `run_code` snippet's records reach the
-server's stderr through its worker, which logs at the server's level. A
-detached run (`detach=True`) is submitted again by the process spawned to own
-it, an ordinary API caller, so its log holds a second `run_experiments`
-record for the same job.
+interrupt is `cancelled`. The API's other methods (`wait`, `load_raw`,
+`measurements`, `device_op_points`, `reference`, `guide`) write none. A
+`run_code` snippet's records reach the server's stderr through its worker,
+which logs at the server's level. A detached run (`detach=True`) is submitted
+again by the process spawned to own it, an ordinary API caller, so its log
+holds a second `run_experiments` record for the same job.
 The same logger writes a job's lifecycle events.
 
 ---
