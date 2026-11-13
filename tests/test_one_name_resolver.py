@@ -467,3 +467,54 @@ def test_a_port_ngspice_reads_as_ground_binds_nothing_to_the_floating_check():
     assert validate_netlist_bias_topology(cards, LTSPICE_READER) == []
     floating = validate_netlist_bias_topology(cards, SemanticProfile("ngspice", "hsa"))
     assert floating and "'b'" in str(floating[0]["message"]), floating
+
+
+async def test_a_later_job_on_the_same_executable_does_not_change_an_earlier_jobs_check(
+    config: Any, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Two jobs on a renamed XVII: the first is read as LTspice 26 (no run
+    has named the build), and its run reports XVII. The second is then read
+    as XVII. The first job's raw is still held to the spelling its own decks
+    were read with, and is reported; the second's agrees."""
+    from types import SimpleNamespace
+
+    from spicelib.simulators.ltspice_simulator import LTspice
+
+    from ltspice_mcp.lib.experiment_runner import ExperimentRunner
+
+    monkeypatch.setattr(ExperimentRunner, "submit_netlist", lambda *a, **k: object())
+    deck = work_dir / "nested.cir"
+    deck.write_bytes((INPUTS / f"{SAVE_SPELLINGS[True]}.cir").read_bytes())
+    raw = work_dir / "run.raw"
+    raw.write_bytes(rec.recorded("ltspice17", f"{SAVE_SPELLINGS[True]}.raw").read_bytes())
+    launcher = type(LTspice.__name__, (LTspice,), {"spice_exe": ["C:/tools/lt.exe"]})
+    state = SessionState.create(config, available={"ltspice": launcher})
+
+    async def submit(request_id: str) -> Any:
+        args = RunExperimentsInput.model_validate(
+            {
+                "request_id": request_id,
+                "circuits": [{"path": str(deck)}],
+                "execution": {"wait_s": 0},
+                "lint": "off",
+            }
+        )
+        known = set(state.all_jobs)
+        await handle_run_experiments(args, state)
+        (job_id,) = set(state.all_jobs) - known
+        return state.all_jobs[job_id]
+
+    async def reported(job: Any) -> list[str]:
+        case = job.cases[0]
+        case.raw_file = raw
+        before = len(case.observations)
+        await ExperimentRunner._check_raw_names(SimpleNamespace(job=job), case)  # type: ignore[arg-type]
+        return [o["code"] for o in case.observations[before:]]
+
+    first = await submit("first")
+    assert first.deck_names_xvii is False
+    first.cases[0].simulator_version = "Linear Technology Corporation LTspice XVII"
+    second = await submit("second")
+    assert second.deck_names_xvii is True
+    assert await reported(first) == ["raw_names_disagree"]
+    assert await reported(second) == []
