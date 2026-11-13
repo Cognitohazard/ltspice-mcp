@@ -505,13 +505,11 @@ OBSERVATIONS_SCHEMA: dict[str, Any] = {
     },
 }
 
-# Parsed .MEAS results, keyed by measurement name. Shared by run_simulation,
-# check_job, and simulation_summary so the WHEN/AT field semantics are
-# described identically everywhere. For a plain value measurement ``values``
-# holds the scalar(s); for a WHEN/AT point measurement ``values`` is the
-# constant trigger LEVEL and the crossing time/frequency lives in ``at`` —
-# the descriptions below are the only place that distinction is self-evident
-# to a client reading the schema.
+# Parsed .MEAS results, keyed by measurement name. Each entry names the field
+# holding its result in ``answer`` (``log_parser.measurement_answer``): a WHEN
+# with no FIND printed on its own line prints the level it searched for, which
+# ``values`` holds, and the crossing, which ``at`` holds; any other entry's
+# result is in ``values``.
 MEASUREMENTS_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": {
@@ -521,9 +519,8 @@ MEASUREMENTS_SCHEMA: dict[str, Any] = {
                 "type": "array",
                 "items": {"type": ["number", "null"]},
                 "description": (
-                    "Per-.step scalar(s). For a WHEN/AT measurement this is the "
-                    "constant trigger level, not the crossing point; read 'at' "
-                    "for the crossing time/frequency."
+                    "Per-.step value(s) printed after '='. The result unless "
+                    "'answer' is 'at', where it is the level a WHEN searched for."
                 ),
             },
             # Scalar when the bound is constant across .step iterations; list
@@ -540,10 +537,24 @@ MEASUREMENTS_SCHEMA: dict[str, Any] = {
                 "type": ["number", "array", "null"],
                 "items": {"type": ["number", "null"]},
                 "description": (
-                    "Crossing time (.tran) or frequency (.ac) for a WHEN/AT point "
-                    "measurement. This is the answer for a WHEN rise-time/crossing "
-                    "query; 'values' holds the constant level. Null for plain "
-                    "value measurements."
+                    "The point printed after AT: a WHEN's crossing time (.tran) or "
+                    "frequency (.ac), which is its result where 'answer' is 'at', "
+                    "or the point a FIND, DERIV or MAX read at."
+                ),
+            },
+            "answer": {
+                "type": "string",
+                "enum": ["value", "at"],
+                "description": (
+                    "The field holding the result: 'at' for a WHEN with no FIND "
+                    "printed on its own line, 'value' (the 'values' list) otherwise."
+                ),
+            },
+            "answer_unknown": {
+                "type": "string",
+                "description": (
+                    "Why the field holding the result is not known, in place of "
+                    "'answer'; read neither field as the result."
                 ),
             },
             "unreadable": {

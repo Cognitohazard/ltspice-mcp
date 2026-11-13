@@ -2093,8 +2093,9 @@ def _measurements_compact(value: dict[str, Any]) -> dict[str, Any]:
     the point a crossing or ``AT`` reported with it goes under ``at``. A name
     the log holds no number for keeps its key with null, so it never reads as
     a missing name, and the value beside says why, each null in one place:
-    ``failed_measurements`` (LTspice printed it failed) and ``unreadable``
-    (LTspice printed something other than a number) come with the metric's
+    ``failed_measurements`` (LTspice printed it failed), ``unreadable``
+    (LTspice printed something other than a number) and ``answer_unknown``
+    (which field holds the result is not known) come with the metric's
     value (``metrics.measurement_rows``), and ``not_finite`` names the rest,
     each a number the log decoder holds as null because it is not finite
     (LTspice 26 prints a stepped FRA's gain margin ``infdB``, recorded as
@@ -2113,7 +2114,11 @@ def _measurements_compact(value: dict[str, Any]) -> dict[str, Any]:
     at = {name: entry["at"] for name, entry in stats.items() if "at" in entry}
     if at:
         compact["at"] = at
-    explained = {*value.get("failed_measurements", ()), *value.get("unreadable", {})}
+    explained = {
+        *value.get("failed_measurements", ()),
+        *value.get("unreadable", {}),
+        *value.get("answer_unknown", {}),
+    }
     not_finite = [
         name for name, number in measured.items() if number is None and name not in explained
     ]
@@ -2839,11 +2844,13 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
             "type": "object",
             "description": (
                 "The recipe's value. A measurements row whose run holds one value "
-                "per .meas carries 'measured' {name: value} and 'at' {name: reported "
-                "crossing/AT point}. A null in 'measured' is named once by why: "
-                "'failed_measurements' (LTspice printed it failed), 'unreadable' "
-                "{name: {line, reason}} (it printed something other than a number) "
-                "or 'not_finite' (it printed a number that is not finite). Its "
+                "per .meas carries 'measured' {name: value} and 'at' {name: AT point "
+                "printed beside a result that is its value}. A null in 'measured' is "
+                "named once by why: 'failed_measurements' (LTspice printed it failed), "
+                "'unreadable' {name: {line, reason}} (it printed something other than "
+                "a number for the result), 'answer_unknown' {name: reason} (which "
+                "field holds the result is not known) or 'not_finite' (it printed a "
+                "number that is not finite). Its "
                 "'stats' block is left off the default row and returned by "
                 "include.fields=['value']. A stepped run's row is 'stats', with "
                 "'failed_measurements' and 'unreadable' over all its steps."
@@ -2888,6 +2895,15 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
                         },
                         "required": ["reason"],
                     },
+                },
+                "answer_unknown": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                    "description": (
+                        "The measurements whose 'measured' is null because which "
+                        "field of what the log printed holds the result is not "
+                        "known, with why."
+                    ),
                 },
             },
         },

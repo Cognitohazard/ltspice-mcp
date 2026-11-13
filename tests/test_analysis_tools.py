@@ -1014,8 +1014,9 @@ class TestPeriodicMetrics:
 @pytest.mark.asyncio
 class TestMeasurementStats:
     async def test_basic(self, state_no_sim: SessionState, work_dir: Path):
-        # One .MEAS result from a single run reaches the stats block intact.
-        # Multi-step aggregation is covered by
+        # One .MEAS result from a single run reaches the stats block intact: a
+        # WHEN with no FIND, whose result is the crossing printed after AT, not
+        # the level before it. Multi-step aggregation is covered by
         # tests/test_signal_analysis.py::TestComputeMeasurementStats.
         log = work_dir / "meas.log"
         log.write_text(
@@ -1032,10 +1033,9 @@ class TestMeasurementStats:
         assert list(result["stats"]) == ["fc"]
         entry = result["stats"]["fc"]
         assert entry["valid_count"] == 1
-        assert entry["mean"] == pytest.approx(0.707)
-        assert entry["aggregated_field"] == "value"
-        # A single-run AT measurement also echoes where it was taken.
-        assert entry["at"] == pytest.approx(1591.5)
+        assert entry["mean"] == pytest.approx(1591.5)
+        assert entry["aggregated_field"] == "at"
+        assert "at" not in entry  # the point is the result, not echoed beside it
 
     async def test_missing_log_file(self, state_no_sim: SessionState, work_dir: Path):
         with pytest.raises(ResultError):

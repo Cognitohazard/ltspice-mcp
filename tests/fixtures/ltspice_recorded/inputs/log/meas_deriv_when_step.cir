@@ -1,0 +1,10 @@
+* DERIV of a transient where a condition is met (stepped)
+V1 in 0 PULSE(0 1 0 1u 1u 1 2)
+R1 in out {Rv}
+C1 out 0 100n
+.step param Rv list 1k 2k
+.tran 0 1m 0 1u
+.meas tran d_when DERIV V(out) WHEN V(out)=0.5
+.meas tran d_at DERIV V(out) AT 0.1m
+.meas tran t_when WHEN V(out)=0.5
+.end

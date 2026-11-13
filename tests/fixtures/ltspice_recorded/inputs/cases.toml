@@ -734,9 +734,16 @@ evidence = "every recorded log; a stepped temperature writes the one non-ASCII c
 
 [behaviour.log-meas]
 summary = "How each .meas form is printed: MAX/MIN/PP/AVG/RMS/INTEG with FROM and TO, FIND AT, WHEN, TRIG/TARG, PARAM, complex AC results, the tables of a stepped run, and a stepped .op, whose log has no .step lines and which neither build prints a table for."
-model = ["lib/log_parser.py", "lib/log_types.py", "lib/metrics.py", "lib/log_decode.py", "lib/result_observations.py", "lib/raw_parser.py", "tools/analyze.py", "tools/inspect_tools.py"]
+model = ["lib/log_parser.py", "lib/log_types.py", "lib/metrics.py", "lib/log_decode.py", "lib/result_observations.py", "lib/raw_parser.py", "lib/services.py", "lib/spice_lex_views.py", "api/_primitives.py", "tools/analyze.py", "tools/inspect_tools.py"]
 inputs = ["log/meas_forms.cir", "log/meas_ac.cir", "log/meas_step.cir", "log/meas_step_op.cir"]
 keep = ["log"]
+
+[behaviour.log-meas-deriv-when]
+summary = "How a DERIV ... WHEN measurement is printed, alone and stepped: whether its point follows an uppercase AT, as a WHEN with no FIND's crossing does, or a lowercase at, as a DERIV ... AT's does. Until it is recorded, which field holds its result is the one its deck card has always given it, the point."
+model = ["lib/log_parser.py", "lib/spice_lex_views.py"]
+inputs = ["log/meas_deriv_when.cir", "log/meas_deriv_when_step.cir"]
+keep = ["log"]
+pending = "Written where no LTspice runs. Record it on Windows with uv run python scripts/record_ltspice_fixtures.py --only 'log/meas_deriv_when' --only 'log/meas_deriv_when_step', then remove this key."
 
 [behaviour.log-meas-failed]
 summary = "What the log says of a measurement that cannot be taken or does not parse, and what happens to the measurements around it."

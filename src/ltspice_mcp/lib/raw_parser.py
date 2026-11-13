@@ -19,7 +19,7 @@ import math
 import os
 import re
 import struct
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, TypedDict, get_args
@@ -39,11 +39,16 @@ from ltspice_mcp.lib.decoded_raw import (
     time_offset,
 )
 from ltspice_mcp.lib.format import cap_list
-from ltspice_mcp.lib.log_parser import is_op_stepping_failure
+from ltspice_mcp.lib.log_parser import (
+    CardKind,
+    answered_measurements,  # noqa: TID251 - the summary is built off the loop, handed its producer and cards
+    is_op_stepping_failure,
+)
 from ltspice_mcp.lib.log_types import LogSectionName
 from ltspice_mcp.lib.raw_header import STEPPED_TEMPERATURE, RawDialectError, command_writer
 from ltspice_mcp.lib.result_kinds import AC_SHAPED, plot_analysis, sampled_axis
 from ltspice_mcp.lib.result_observations import surface_observations
+from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.trace_names import TraceQuantity, is_node_voltage, trace_quantity
 
 # What a raw accessor raises when the thing being asked for is not there: a
@@ -718,6 +723,8 @@ def build_simulation_summary(
     requested: dict[str, list[str]] | None = None,
     value_scan: bool = False,
     source_amplitudes: dict[str, float] | None = None,
+    producer: Producer | None = None,
+    cards: Mapping[str, CardKind] | None = None,
 ) -> dict:
     """Build comprehensive, type-aware simulation summary.
 
@@ -739,6 +746,10 @@ def build_simulation_summary(
         source_amplitudes: Parsed independent voltage-source amplitudes from
             the deck (``parse_source_amplitudes``); arms the source-relative
             extreme-value observation. None when the caller has no netlist.
+        producer: Who wrote the log, and ``cards`` what the deck says each
+            measurement is: each measurement names the field holding its
+            result from them (``log_parser.answered_measurements``). With no
+            producer, the log is read as one whose writer is not known.
 
     Returns:
         Dictionary with sim_type, range info, signals, point_count, step_count,
@@ -858,7 +869,10 @@ def build_simulation_summary(
             # only what failed there (``metrics.measurement_rows``). Pinned by
             # test_a_summary_names_failures_at_any_step_and_a_step_row_its_own.
             if meas_data["measurements"]:
-                summary["measurements"] = meas_data["measurements"]
+                answered = answered_measurements(
+                    meas_data, producer or Producer(None, None, None), cards
+                )
+                summary["measurements"] = answered["measurements"]
             # A failed measurement is distinct from an absent request or a
             # section the worker could not decode.
             if meas_data["failed_measurements"]:

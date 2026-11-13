@@ -139,9 +139,13 @@ The `resonance` recipe gives the peak frequency, Q and bandwidth in one step.
 - Without `TD=`, TARG matches from t=0 and can match the wrong edge.
 - AC measurements use a 65k-point ceiling; exceeding it silently reduces
   resolution.
-- A WHEN or AT measurement returns the crossing time (`.tran`) or frequency
-  (`.ac`) in the result's `at` field, and its `values` list holds the target
-  level, one entry per `.step` run.
+- Each measurement read from a log names the field holding its result in
+  `answer`. A WHEN with no FIND, unstepped, prints the level it searched for
+  (`values`) and the crossing time or frequency (`at`), so its `answer` is
+  `at`; in a stepped run's table the crossing is the value. A FIND, DERIV or
+  MAX prints its result as the value and the point it read at in `at`.
+  `answer_unknown` in its place says why the field is not known; read
+  neither then. The measurements recipe reads the named field for you.
 
 ## General notes
 

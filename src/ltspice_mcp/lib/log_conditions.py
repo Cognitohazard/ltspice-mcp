@@ -34,8 +34,7 @@ from ltspice_mcp.lib.format import cap_note
 from ltspice_mcp.lib.log_types import LogCondition
 
 if TYPE_CHECKING:
-    # Only named here: the parser worker imports this module, and
-    # simulator_build brings the raw reader with it.
+    # Only named here, for annotations: the readers construct it.
     from ltspice_mcp.lib.simulator_build import Producer
 
 Channel = Literal["log", "console"]

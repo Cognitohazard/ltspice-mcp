@@ -9,7 +9,8 @@ from pathlib import Path
 import pytest
 
 from ltspice_mcp.errors import UnreadableCardError
-from ltspice_mcp.lib.metrics import meas_kinds_from_netlist, noise_input_source_unit
+from ltspice_mcp.lib.log_parser import measurement_cards
+from ltspice_mcp.lib.metrics import noise_input_source_unit
 from ltspice_mcp.lib.spice_lex import SpiceCard, lex_deck, unreadable_cards
 from ltspice_mcp.lib.spice_lex_views import (
     MeasCard,
@@ -92,7 +93,7 @@ def test_a_measurements_name_and_kind_are_read_from_its_card(tmp_path: Path):
         ".measure m_max MAX V(a)\n"
         ".tran 1m\n.end\n",
     )
-    assert meas_kinds_from_netlist(path) == {"t.rise": "when", "m_find": "value", "m_max": "value"}
+    assert measurement_cards(path) == {"t.rise": "when", "m_find": "value", "m_max": "value"}
     cards = [MeasCard.from_card(c) for c in lex_deck(path.read_text()).cards if c.kind == "meas"]
     assert [(m.name, m.bare_when) for m in cards] == [
         ("t.rise", True),

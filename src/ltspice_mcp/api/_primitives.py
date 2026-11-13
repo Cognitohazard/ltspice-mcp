@@ -500,7 +500,11 @@ async def load_log_section(
             raise ResultError(f"Experiment case {context.identity['case_id']!r} has no log file")
         source = services.source_for_run(context)
     logs = await services.load_logs(source, state)
-    return logs.value(name), source.observations
+    section = logs.value(name)
+    if name == "measurements" and section is not None:
+        # Each measurement names the field holding its result.
+        section = await services.answer_measurements(source, section)
+    return section, source.observations
 
 
 def measurements_of(section: Any, observations: tuple[dict[str, Any], ...]) -> LogResult[Any]:

@@ -1155,19 +1155,23 @@ changed RAW.
 When a run has one value per `.meas` (each case of a sweep with no `.step`
 does), its `measurements` row contains `measured: {name: value}`, the number a
 reduction or spec reads for that name, and `at: {name: point}` where the log
-printed a crossing or `AT` point with it. A name the log holds no number for
-has a null `measured` entry, not an absent one, and the row names it in one
-of three places, by why:
+printed an `AT` point beside a result that is its value. A name the log holds
+no number for has a null `measured` entry, not an absent one, and the row
+names it in one of four places, by why:
 
 - `failed_measurements: [name]`: LTspice printed it as failed at the step the
   row reads, as `Measurement "name" FAIL'ed` or as `failed` in that step's row
   of a stepped table (LTspice 24 and later; XVII prints 0 there, which the
   `measurement_zero_or_failed` observation names).
 - `unreadable: {name: {line, reason}}`: LTspice printed something other than
-  a number, such as a WHEN threshold written as a parameter, an expression or
-  (on LTspice 26) a braced expression. The entry gives the log line and what
+  a number where the result belongs. The entry gives the log line and what
   it printed; only that entry fails, and every other measurement of the log
-  reads.
+  reads. A WHEN threshold written as a parameter, an expression or (on
+  LTspice 26) a braced expression is not one: it is the level a WHEN with no
+  FIND searched for, and its result is the crossing.
+- `answer_unknown: {name: reason}`: which field of what the log printed holds
+  the result is not known, for a form or a simulator no recording shows, or
+  a deck card the printed form contradicts.
 - `not_finite: [name]`: LTspice printed a number that is not finite, such as
   a stepped FRA's gain margin of `infdB`, which the log decoder holds as null.
 
@@ -1184,10 +1188,31 @@ does not name it and the summary beside it does. `inspect` marks each value
 LTspice printed as failed with `failed: true` on its row, so a failed value
 reads apart from one that is null for another reason. Every measurement the
 log printed has an entry; a log whose measurements cannot all be given one
-fails the measurements read, naming the ones it lacks. The same `unreadable {line,
+fails the measurements read, naming the ones it lacks.
+
+Which field of a printed measurement holds its result is decided once, by
+`log_parser.measurement_answer`, from the printed form, the producer and
+build that wrote the log, and the run's deck card where it is known; every
+reply reads it from there. LTspice 26 and XVII (recorded) print a WHEN with
+no FIND, unstepped, as `name: expr=level AT point`, and its result is the
+point; a FIND, a DERIV ... AT and a FIND ... WHEN print the result after `=`
+and their point after a lowercase `at`; a stepped table prints each step's
+result in its first column, a WHEN's crossing included. The measurements
+recipe aggregates the field so named (`aggregated_field`). Each entry of the
+summary's `measurements`, the Python API's `measurements()` and each row of
+`inspect(kind="results", view="measurements")` names it in `answer` (`value`
+or `at`), or says why it is not known in `answer_unknown`, and then the recipe
+gives that name no number and no `aggregated_field`. A bare path names no
+build, so its log is read with every recorded LTspice build's rules, which
+agree on every recorded form. A DERIV ... WHEN is not recorded, and keeps the
+answer its deck card has given it: the point. The same `unreadable {line,
 reason}` is on the entry in the summary's `measurements`, in
 `inspect(kind="results", view="measurements")` rows and in the Python API's
-`measurements`. The default row omits the per-name `stats` block;
+`measurements`, where it says the entry's `values` were printed as other than
+a number. An entry whose `answer` is `at` (a WHEN whose threshold is written
+as a parameter or an expression) carries it beside a crossing that reads, so
+the recipe's row, which names why a result is null, does not list it
+(`log_parser.result_unreadable`). The default row omits the per-name `stats` block;
 `include.fields=["value"]` returns it, and reductions and specs read it either
 way. A stepped run's row has `stats`, with `failed_measurements` and
 `unreadable` over all its steps.

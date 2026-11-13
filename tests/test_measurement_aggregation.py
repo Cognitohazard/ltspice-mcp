@@ -1,29 +1,26 @@
-"""The .MEAS axis swap, over a recorded stepped LTspice log.
+"""The field a .MEAS aggregate is taken over, on a recorded stepped LTspice log.
 
-A ``WHEN``-style measurement prints the same trigger level on every step and
-the crossing time separately, so aggregating the printed value would report the
-constant level three times. The aggregator has to switch to the folded ``at``
-field instead. Fixture: a real 3-step LTspice run of an RC low-pass with
-
-    .meas tran vfinal FIND V(out) AT=0.9m     (value varies per step)
-    .meas tran tcross WHEN V(out)=0.5         (level constant, time varies)
+A stepped run prints a table per measurement, each row the step's result: a
+WHEN's crossing under a heading of its ``expr=level`` alone, a FIND's value
+beside an ``at`` column (``log/meas_step``, both builds). So both aggregate
+their values. The per-run logs of a sweep (``ltspice_sweep_meas_run<n>.log``)
+print a WHEN's level and its crossing after ``AT``; their constants are here
+for the sweep tests that read them.
 """
 
+import math
 from pathlib import Path
 
 import pytest
 
 from ltspice_mcp.lib import services
-from ltspice_mcp.lib.log_parser import parse_measurements
-from ltspice_mcp.lib.metrics import (
-    aggregate_log_measurements as _aggregate_log_measurements,
-)
-from ltspice_mcp.lib.metrics import measurements
+from ltspice_mcp.lib.log_parser import answered_measurements, measurement_cards, parse_measurements
+from ltspice_mcp.lib.metrics import aggregate_log_measurements, measurements
 from ltspice_mcp.lib.recipes import MeasurementsRecipe
+from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.state import SessionState
-from tests.conftest import (
-    FIXTURES_DIR,
-)
+from tests import _ltspice_recorded as rec
+from tests.ltspice_recorder import INPUTS
 
 # R1 of sweep runs 0 / 1 / 2 (one ltspice_sweep_meas_run<n>.log per run).
 RUN_PARAMS = [1000.0, 2200.0, 4700.0]
@@ -32,13 +29,6 @@ RUN_PARAMS = [1000.0, 2200.0, 4700.0]
 VFINAL = [0.999876166042, 0.98323999039, 0.852486569628]
 # Crossing times printed by LTspice (tcross: WHEN V(out)=0.5 -> "... AT <t>").
 TCROSS_AT = [6.98285618328e-05, 0.000152998664495, 0.000326276827772]
-
-# Stepped single-run log (3 steps in ONE log, not one log per run): vfinal is a
-# FIND (value varies), tcross is a WHEN (level constant 0.5, crossing varies).
-STEP_WHEN_LOG = FIXTURES_DIR / "ltspice_step_when.log"
-STEP_WHEN_VFINAL = [0.63212, 0.77687, 0.95021]
-STEP_WHEN_TCROSS_AT = [6.98285e-05, 1.53000e-04, 3.26000e-04]
-
 
 # Verbatim ngspice-42 batch-mode log (captured from `ngspice -b -r out.raw
 # -o out.log` on a .tran deck with a .meas directive): batch mode with a
@@ -69,56 +59,47 @@ _NGSPICE_BATCH_MEAS_BLOCKED_LOG = (
 )
 
 
-class TestSteppedLogWhenAxis:
-    """A stepped single-run log must apply the WHEN -> ``at`` axis swap exactly
-    like the batch path. Before the shared swap, this path always aggregated the
-    ``value`` field, so a stepped WHEN .MEAS reported the constant trigger level
-    instead of the per-step crossing times. Fixture: ltspice_step_when.log."""
+@pytest.mark.parametrize("build", rec.BUILDS)
+class TestSteppedLogAggregate:
+    """A stepped log's WHEN and FIND both aggregate the values their tables
+    print, the WHEN's being its crossings."""
 
-    def test_stepped_log_when_swaps_to_at_axis(self):
-        flat_values, axis_map, steps_label, _ = _aggregate_log_measurements(
-            parse_measurements(STEP_WHEN_LOG)
+    def table(self, build: str):
+        log = rec.recorded(build, "log/meas_step.log")
+        producer = Producer("ltspice", rec.manifest(build)["reported_build"], None)
+        return answered_measurements(
+            parse_measurements(log), producer, measurement_cards(INPUTS / "log/meas_step.cir")
         )
-        # Constant level (0.5) across steps + varying crossing -> aggregate ``at``.
-        assert axis_map["tcross"] == "at"
-        assert flat_values["tcross"] == pytest.approx(STEP_WHEN_TCROSS_AT)
+
+    def test_a_stepped_when_aggregates_the_crossings_its_table_prints(self, build: str):
+        flat_values, axis_map, steps_label, _ = aggregate_log_measurements(self.table(build))
+        assert axis_map["s_when"] == "value"
+        assert flat_values["s_when"][:2] == pytest.approx(
+            [1e3 * 100e-9 * math.log(2), 2e3 * 100e-9 * math.log(2)], abs=3e-6
+        )
         assert "3 step(s)" in steps_label
 
-    def test_stepped_log_find_stays_on_value_axis(self):
-        flat_values, axis_map, _, _ = _aggregate_log_measurements(
-            parse_measurements(STEP_WHEN_LOG)
-        )
-        # FIND value varies per step -> stays on the value axis.
-        assert axis_map["vfinal"] == "value"
-        assert flat_values["vfinal"] == pytest.approx(STEP_WHEN_VFINAL)
+    def test_a_stepped_find_aggregates_its_values(self, build: str):
+        table = self.table(build)
+        flat_values, axis_map, _, _ = aggregate_log_measurements(table)
+        assert axis_map["s_find"] == "value"
+        assert flat_values["s_find"] == table["measurements"]["s_find"]["values"]
 
-    @pytest.mark.asyncio
-    async def test_stepped_when_log_swaps_to_at_axis_through_the_tool(
-        self, state_no_sim: SessionState, work_dir: Path
+    async def test_the_recipe_aggregates_a_stepped_when_over_its_crossings(
+        self, build: str, state_no_sim: SessionState, work_dir: Path
     ):
-        staged = work_dir / STEP_WHEN_LOG.name
-        staged.write_bytes(STEP_WHEN_LOG.read_bytes())
+        log = work_dir / "meas_step.log"
+        log.write_bytes(rec.recorded(build, "log/meas_step.log").read_bytes())
         data = await measurements(
-            services.AnalysisSource(
-                raw=staged.with_suffix(".raw"),
-                log=staged,
-                netlist=None,
-                dialect=None,
-                identity=None,
-                trusted_job_artifact=False,
-            ),
+            services.resolve_analysis_source(state_no_sim, log_file=str(log)),
             MeasurementsRecipe(key="m", metric="measurements"),
             None,
             state_no_sim,
         )
-        tcross = data["stats"]["tcross"]
-        assert tcross["aggregated_field"] == "at"
-        assert tcross["min"] == pytest.approx(STEP_WHEN_TCROSS_AT[0])
-        assert tcross["max"] == pytest.approx(STEP_WHEN_TCROSS_AT[2])
-        assert tcross["mean"] == pytest.approx(sum(STEP_WHEN_TCROSS_AT) / 3)
-        # The FIND measurement in the same log stays on the value axis. Its
-        # per-step ``at`` (probe point 0.9m) must NOT be echoed: the n=1 crossing
-        # echo is gated on total_count==1, and this is a 3-step aggregate.
-        vfinal = data["stats"]["vfinal"]
-        assert vfinal["aggregated_field"] == "value"
-        assert "at" not in vfinal
+        crossing = data["stats"]["s_when"]
+        assert crossing["aggregated_field"] == "value"
+        # The third step never crosses: LTspice 26 prints failed, XVII 0.
+        assert crossing["max"] == pytest.approx(2e3 * 100e-9 * math.log(2), abs=3e-6)
+        # A FIND's point is not echoed over a stepped aggregate: the echo is
+        # for a single sample.
+        assert "at" not in data["stats"]["s_find"]

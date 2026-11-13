@@ -44,7 +44,6 @@ from ltspice_mcp.lib import now
 from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.encoding import decode_spice_bytes
-from ltspice_mcp.lib.raw_parser import raw_writer_command
 
 logger = logging.getLogger(__name__)
 
@@ -306,6 +305,10 @@ def reported_build(log_file: Path | None, raw_file: Path | None = None) -> str |
                     return _clean(f"{banner[1]}, Creation Date: {created[1]}")
                 return _clean(banner[1])
         if raw_file is not None:
+            # Here, not at the top: the raw parser names a result's Producer,
+            # which this module defines.
+            from ltspice_mcp.lib.raw_parser import raw_writer_command
+
             command = raw_writer_command(raw_file)
             if command:
                 return _clean(command)
