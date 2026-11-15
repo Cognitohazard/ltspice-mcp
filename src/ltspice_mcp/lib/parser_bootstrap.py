@@ -217,8 +217,12 @@ def _reap_tree(child: subprocess.Popen[bytes], grace: float) -> bool:
         raise RuntimeError("Linux-only parser containment")
     deadline = time.monotonic() + grace
     signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGCHLD})
-    with contextlib.suppress(ProcessLookupError):
-        os.killpg(child.pid, signal.SIGKILL)
+    # The worker's group, only while the worker is not yet reaped: once
+    # ``child.poll()`` reaped it, its pid may name another process. What it
+    # left is then this subreaper's to stop, through the scan below.
+    from ltspice_mcp.lib.proc_kill import child_start_marker, kill_process_group
+
+    kill_process_group(child.pid, child_start_marker(child))
     children_file = Path(f"/proc/{os.getpid()}/task/{os.getpid()}/children")
     while True:
         # Subreaper adoption includes descendants which started another session.

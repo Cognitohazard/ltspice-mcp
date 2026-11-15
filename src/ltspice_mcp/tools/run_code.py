@@ -42,7 +42,8 @@ from ltspice_mcp.code_worker import (
     STDOUT_TAIL_CHARS,
     empty_reply,
 )
-from ltspice_mcp.lib.proc_kill import kill_process_group
+from ltspice_mcp.lib.background import BackgroundTasks
+from ltspice_mcp.lib.proc_kill import reap_process_group
 from ltspice_mcp.lib.windows_job import WindowsJob, python_launch
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import NotedModel, ToolInput, format_response, registry
@@ -259,6 +260,10 @@ class CodeWorker:
         self.restarted: dict[str, Any] | None = None
         self._drain: asyncio.Task[None] | None = None
         self._windows_job: WindowsJob | None = None
+        #: Reaps each worker as it exits and stops what it left in its group
+        #: (``proc_kill.reap_process_group``).
+        self._background = BackgroundTasks()
+        self._reaped: asyncio.Task[int] | None = None
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -286,6 +291,7 @@ class CodeWorker:
             start_new_session=os.name != "nt",
             limit=_PIPE_LINE_LIMIT,
         )
+        self._reaped = self._background.spawn(reap_process_group(self.process))
         if os.name == "nt":
             try:
                 self._windows_job = WindowsJob(self.process.pid)
@@ -345,13 +351,23 @@ class CodeWorker:
         if process.returncode is None:
             with contextlib.suppress(ProcessLookupError):
                 process.kill()
-            await process.wait()
         # A child a snippet spawned would otherwise outlive the worker, which
-        # was started as a session leader. A simulator LTspice launched over
-        # WSL interop is a Windows process and is not reached; its job record,
-        # owned by a dead pid, reads as interrupted.
-        kill_process_group(process.pid)
+        # was started as a session leader: the reap stops it as the worker
+        # exits, whenever that was, and nothing here signals by the worker's
+        # pid, which another process may hold by now. A simulator LTspice
+        # launched over WSL interop is a Windows process and is not reached;
+        # its job record, owned by a dead pid, reads as interrupted.
+        if self._reaped is not None:
+            await asyncio.shield(self._reaped)
+            self._reaped = None
+        else:
+            await process.wait()
         self.process = None
+
+    async def settled(self) -> None:
+        """Return once every worker that exited has been reaped and what it left
+        in its group stopped."""
+        await self._background.settled()
 
     def _interrupt(self) -> None:
         """Ask the worker to stop the running snippet (POSIX: SIGINT to it alone)."""
@@ -366,8 +382,10 @@ class CodeWorker:
             # the graceful path is POSIX-only.
             process.kill()
             return
+        # Through the process handle, which signals only a worker not yet
+        # reaped, never a pid another process may hold by now.
         with contextlib.suppress(ProcessLookupError):
-            os.kill(process.pid, signal.SIGINT)
+            process.send_signal(signal.SIGINT)
 
     async def close(self, reason: str | None = None, grace_s: float = CLOSE_GRACE_S) -> None:
         """Stop the worker: interrupt what runs, ask it to close, then kill."""

@@ -22,16 +22,20 @@ attempted by the runners; on any given platform at most one finds a match.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import functools
 import logging
 import os
 import re
 import signal
+import subprocess
 import sys
 import time
 from collections.abc import Collection, Iterator
 from enum import Enum
 from pathlib import Path, PurePath
+from typing import Any
 
 import psutil
 
@@ -326,18 +330,78 @@ def simulator_presence(token: str, executable_names: Collection[str]) -> Process
     return ProcessPresence.UNKNOWN if unknown else ProcessPresence.ABSENT
 
 
-def kill_process_group(pid: int, sig: int | None = None) -> bool:
-    """Signal the whole process group of a child spawned as a session leader
-    (its pid is the group id): the child and everything it started. ``sig``
-    defaults to SIGKILL, resolved here because Windows has no such name. True
-    when the group was signalled; False on Windows, which has no group to
-    signal, and when the group is already gone — the caller then signals the
-    one process it holds, if it still needs to.
-    """
-    if os.name != "posix":
+def _is_started_process(pid: int, start_marker: str | None) -> bool:
+    """Whether ``pid`` still names the process ``start_marker`` identifies,
+    running or exited and not yet reaped (a zombie keeps its pid, and the group
+    it leads keeps that id, until it is reaped)."""
+    if pid <= 0 or not start_marker:
         return False
     try:
-        os.killpg(pid, signal.SIGKILL if sig is None else sig)
+        return process_start_marker(pid) == start_marker
+    except (psutil.Error, OSError, ValueError, IndexError):
+        return False
+
+
+def child_start_marker(parent: subprocess.Popen[Any], pid: int | None = None) -> str | None:
+    """The start marker of ``parent``, a child this server started, or of
+    ``pid``, a child of ``parent``; None once ``parent`` is reaped, when ``pid``
+    is not its child, or when the marker cannot be read.
+
+    Until ``parent`` is reaped, which only this server does for a process it
+    started with ``subprocess.Popen``, its pid names it alone, so the marker
+    read now is the one it started with. A process whose parent it is was
+    started by it, or adopted from its own descendants when it is a subreaper.
+    ``returncode`` is read, never ``poll()``, which would reap it.
+    """
+    if parent.returncode is not None:
+        return None
+    try:
+        if pid is not None and psutil.Process(pid).ppid() != parent.pid:
+            return None
+        return process_start_marker(parent.pid if pid is None else pid)
+    except (psutil.Error, OSError, ValueError, IndexError):
+        return None
+
+
+def kill_process_group(pid: int, start_marker: str | None, sig: int | None = None) -> bool:
+    """Signal the whole process group of a child spawned as a session leader
+    (its pid is the group id): the child and everything it started.
+
+    Only while ``pid`` still names the process ``start_marker`` identifies
+    (``process_start_marker``, read when it was started), running or exited and
+    not yet reaped. Once it is reaped, the system can give its pid to another
+    process, which can lead a group with that id, so a signal sent to the id
+    could stop processes this server never started; then nothing is signalled.
+    ``sig`` defaults to SIGKILL, resolved here because Windows has no such name.
+
+    True when the group was signalled; False on Windows, which has no group to
+    signal, when the leader is gone or is not the one started, and when the
+    group is already gone. The caller then signals the one process it holds,
+    through the handle that started it, if it still needs to.
+    """
+    if os.name != "posix" or not _is_started_process(pid, start_marker):
+        return False
+    try:
+        os.killpg(pid, signal.SIGKILL if sig is None else sig)  # noqa: TID251 - the leader is the one started
     except (ProcessLookupError, PermissionError):
         return False
     return True
+
+
+async def reap_process_group(process: asyncio.subprocess.Process) -> int:
+    """Wait for ``process``, a session leader this server started, to exit; then
+    stop what it left running in its group. Returns its exit status.
+
+    asyncio reaps the process as it exits, so ``kill_process_group`` can no
+    longer tell its group apart once this returns. This is the one place that
+    signals a reaped leader's group, and it does so as soon as the event loop
+    learns of the exit, never later: a reaped pid is handed out again only
+    after the system has allocated every other pid in its range, which cannot
+    happen in that moment. A process holding the pid by then is another one,
+    and by POSIX the group is then empty, so nothing is signalled.
+    """
+    status = await process.wait()
+    if os.name == "posix" and not psutil.pid_exists(process.pid):
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(process.pid, signal.SIGKILL)  # noqa: TID251 - at the reap, see above
+    return status
