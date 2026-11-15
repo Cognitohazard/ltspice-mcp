@@ -413,8 +413,8 @@ folder the server was started in when it is relative); the server's
   `PathSecurityError` gets one note (PEP 678) with the same guidance as a tool
   call's `hint`, so the traceback shows what to change (with a sandbox, the
   setting that defines it); its type and message are not changed. The note
-  names `working_dir` as the folder a relative path is taken from, since that
-  is where the API takes it from.
+  names the folder a relative path is taken from: `working_dir`, or the first
+  allowed directory when the sandbox leaves `working_dir` out.
 - A result with `isError=True` raises `ApiCallError`, which contains the
   complete structured payload and has the attributes `code`, `commit_state`,
   `job_id` and `control_token`. When the error comes after a job was submitted

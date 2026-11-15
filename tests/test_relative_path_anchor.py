@@ -147,7 +147,7 @@ class TestStoredArtifacts:
             {"kind": "results", "path": str(raw)},
         ):
             reply = await dispatched(state, "inspect", queries=[query])
-            assert "error" not in json.dumps(reply["results"][0]).lower()[:200], reply
+            assert reply["results"][0]["ok"] is True, reply
 
 
 # -- run_code: a real worker process --------------------------------------------

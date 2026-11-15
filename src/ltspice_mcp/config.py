@@ -851,7 +851,7 @@ class ServerConfig:
     """Path that was resolved for the config file (set by load())."""
 
     def __post_init__(self) -> None:
-        """Anchor every folder the configuration names, once.
+        """Anchor the working directory, the config file and the sandbox, once.
 
         The working directory (resolved) and the config file are taken from the
         folder the process was started in, and a relative sandbox entry from the working
