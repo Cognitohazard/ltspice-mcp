@@ -764,7 +764,9 @@ class TestLoadCoversEveryKey:
             "hidden_desktop": False,
             "ngbehavior": "kipsa",
             "working_dir": Path.cwd(),
-            "allowed_paths": [Path("/tmp/toml-a"), Path("/tmp/toml-b")],
+            # Anchored when the config is built: on Windows a path without a
+            # drive names the current drive's folder.
+            "allowed_paths": [Path("/tmp/toml-a").absolute(), Path("/tmp/toml-b").absolute()],
             "max_parallel_sims": 6,
             "max_experiment_cases": 77,
             "default_timeout": 45.5,
@@ -809,8 +811,8 @@ class TestLoadCoversEveryKey:
             "ltspice_ini": Path("/opt/env/established.ini"),
             "hidden_desktop": True,
             "ngbehavior": "hsa",
-            "working_dir": Path("/tmp/env-working-dir"),
-            "allowed_paths": [Path("/tmp/env-a"), Path("/tmp/env-b")],
+            "working_dir": Path("/tmp/env-working-dir").resolve(),
+            "allowed_paths": [Path("/tmp/env-a").absolute(), Path("/tmp/env-b").absolute()],
             "max_parallel_sims": 9,
             "max_experiment_cases": 88,
             "default_timeout": 99.5,
