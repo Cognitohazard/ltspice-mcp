@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, BinaryIO
 
 import numpy as np
-from spicelib.raw.plot_data import PlotData
+from spicelib.raw.plot_data import PlotData, dtype_map
 
 from ltspice_mcp.lib.decoded_raw import deck_time, transient_time_offset
 from ltspice_mcp.lib.encoding import decode_spice_bytes_strictly, encode_spice_text
@@ -158,6 +158,27 @@ class _PlotView:
 
 
 class _WorkerPlot(PlotData):
+    def __init__(self, *args: Any, value_bytes: tuple[int, ...], **kwargs: Any) -> None:
+        # The widths preflight found the file's values at (raw_header), which
+        # the text reader below needs before the dependency's own constructor
+        # reads the payload.
+        self._value_bytes = value_bytes
+        super().__init__(*args, **kwargs)
+
+    def _read_ascii_vector(self, raw_file: Any) -> None:
+        # A variable of a complex plot that the text payload holds as real
+        # numbers (raw_header._Scanner.text_payload) is read as real, as the
+        # file holds it; spicelib reads every variable of a complex text plot
+        # as complex and refuses a real one (docs/spicelib_bugs.md, Bug 43).
+        if len(self._value_bytes) != len(self._trace_info):
+            raise RawDecodeError("Dependency trace inventory contradicts RAW preflight")
+        for index, (info, width) in enumerate(
+            zip(self._trace_info, self._value_bytes, strict=True)
+        ):
+            if width == 8 and info.dtype == dtype_map["complex"]:
+                self._trace_info[index] = replace(info, dtype=dtype_map["double"])
+        super()._read_ascii_vector(raw_file)
+
     def _load_step_information(self, filename: Path) -> None:
         # Dependency construction calls this before arrays exist. Loading
         # captured step facts separately avoids hidden companion reads and
@@ -553,7 +574,15 @@ def decode_raw(
         source, start, header_end, end, encoding = _prepared_plot(path, directory, plot)
         with source.open("rb") as handle:
             view = _PlotView(handle, start, end, header_end=header_end, encoding=encoding)
-            reader = _WorkerPlot(view, source, plot.index + 1, encoding, plot.dialect, False)  # pyright: ignore[reportArgumentType]
+            reader = _WorkerPlot(
+                view,  # pyright: ignore[reportArgumentType]
+                source,
+                plot.index + 1,
+                encoding,
+                plot.dialect,
+                False,
+                value_bytes=plot.value_bytes,
+            )
         names = [variable.name for variable in plot.variables]
         if (
             reader.nPoints != plot.point_count

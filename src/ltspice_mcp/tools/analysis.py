@@ -728,6 +728,22 @@ class PlotData:
     facts: dict[str, Any]
 
 
+def _by_response(raw, plan: PlotPlan, step: int) -> list[list[services.Signal]]:
+    """``plan``'s panel groups for an AC plot, each parted into the signals
+    that hold a complex response, drawn as a magnitude and a phase, and those
+    that hold real values, drawn as they are: a device parameter ngspice saves
+    in an AC run, which its ASCII raw file holds as real numbers
+    (``raw_header._Scanner.text_payload``)."""
+    parted: list[list[services.Signal]] = []
+    for group in plan.groups:
+        kinds = [np.iscomplexobj(sig.wave(raw, step)) for sig in group]
+        for response in (True, False):
+            part = [sig for sig, kind in zip(group, kinds, strict=True) if kind == response]
+            if part:
+                parted.append(part)
+    return parted
+
+
 def extract_plot(raw, plan: PlotPlan, *, summary_limit: int = 0) -> PlotData:
     """Read, window and measure every trace ``plan`` draws (no I/O but the raw).
 
@@ -771,10 +787,13 @@ def extract_plot(raw, plan: PlotPlan, *, summary_limit: int = 0) -> PlotData:
     summaries: list[TraceSummary] = []
     total = 0
     groups: list[tuple[list[str], list[_Trace]]] = []
-    suffix_titles = len(plan.groups) > 1
-    for group in plan.groups:
+    drawn = _by_response(raw, plan, next(iter(windows))) if is_ac else plan.groups
+    suffix_titles = len(drawn) > 1
+    for group in drawn:
         title = _group_title(group, plan.units)
-        if is_ac:
+        # A trace of an AC plot that holds real values is drawn as its values.
+        response = is_ac and np.iscomplexobj(group[0].wave(raw, next(iter(windows))))
+        if response:
             suffix = f" — {title}" if suffix_titles else ""
             rows = [f"Magnitude (dB){suffix}", f"Phase (deg){suffix}"]
         else:
@@ -784,7 +803,7 @@ def extract_plot(raw, plan: PlotPlan, *, summary_limit: int = 0) -> PlotData:
         for col in group:
             for step, (axis_w, lo, hi) in windows.items():
                 wave = col.wave(raw, step)[lo:hi]
-                if is_ac:
+                if response:
                     x, h = prepare_ac_arrays(axis_w, wave)
                     phase, warns = unwrap_phase_safe(h)
                     phase_warnings.extend(warns)

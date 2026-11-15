@@ -11,27 +11,34 @@ lived. Run shape assertions on REAL ngspice output, not hand-built fixtures.
 """
 
 import asyncio
+import dataclasses
 import math
 import shutil
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pytest
 
 from ltspice_mcp.api._primitives import load_raw_result
 from ltspice_mcp.config import ServerConfig
+from ltspice_mcp.errors import ResultError
+from ltspice_mcp.lib import services
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner, live_run_progress
 from ltspice_mcp.lib.native_execution import observe_simulator
+from ltspice_mcp.lib.parser_service import load_artifacts_sync
 from ltspice_mcp.lib.simulator import detect_simulators
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools.analysis import PlotWaveformInput, handle_plot_waveform
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from ltspice_mcp.tools.jobs import (
     JobsInput,
     handle_jobs,
 )
-from tests.conftest import FIXTURES_DIR, await_until, start_when, terminal_experiment
+from tests.conftest import FIXTURES_DIR, LIVENESS_S, await_until, start_when, terminal_experiment
 
 pytestmark = [
     pytest.mark.asyncio,
@@ -535,14 +542,7 @@ def _write_raw_as(raw_format: str, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("SPICE_ASCIIRAWFILE", "1")
 
 
-@pytest.mark.parametrize(
-    "raw_format",
-    _raw_formats(
-        "ngspice writes the real device parameter of this complex AC plot as one number in "
-        "an ASCII raw file, which the raw reader, like spicelib's (docs/spicelib_bugs.md, "
-        "Bug 43), refuses as not complex"
-    ),
-)
+@pytest.mark.parametrize("raw_format", ["installed", "ascii"])
 async def test_an_ac_summary_defaults_to_no_device_parameter(
     ngspice_state: SessionState, work_dir: Path, raw_format: str, monkeypatch: pytest.MonkeyPatch
 ):
@@ -575,6 +575,163 @@ async def test_an_ac_summary_defaults_to_no_device_parameter(
     data = await _analyze(ngspice_state, receipt["job_id"], [{"key": "sum", "metric": "summary"}])
     warnings = data["results"]["sum"].get("warnings", [])
     assert any("holds no node voltage to default to" in w for w in warnings), data
+
+
+_AC_DEVICE_PARAMETER_DECK = (
+    "* common-source stage\n"
+    "Vd vdd 0 1.8\n"
+    "Vg g 0 0.9 AC 1\n"
+    "Rd vdd out 10k\n"
+    "M1 out g 0 0 NM L=1u W=10u AD=10p AS=10p PD=22u PS=22u\n"
+    ".model NM NMOS (LEVEL=49 VERSION=3.3)\n"
+    ".save @m1[vth] i(vd)\n"
+    ".ac dec 10 1k 1G\n"
+    ".end\n"
+)
+
+
+def _first_point_lines(raw: Path) -> list[str] | None:
+    """The value lines of the first point of an ngspice raw file, or None for a
+    binary one: what the file itself holds, read without the server."""
+    data = raw.read_bytes()
+    marker = data.find(b"Values:")
+    if marker < 0:
+        assert b"Binary:" in data
+        return None
+    lines = data[marker:].decode("ascii").splitlines()[1:]
+    return [line.strip() for line in lines[:3]]
+
+
+async def _ac_readings(state: SessionState, work_dir: Path, raw_format: str) -> dict[str, Any]:
+    """Run the AC deck with ngspice writing ``raw_format`` and read its results
+    through every path that reads them: the parser subprocess (whole file and
+    chosen traces), the Python API, analyze_results, inspect and plot_waveform."""
+    net = _write(work_dir, f"acvth_{raw_format}.cir", _AC_DEVICE_PARAMETER_DECK)
+    receipt = await _run_one(state, f"ng-ac-real-{raw_format}", net)
+    job_id = receipt["job_id"]
+    [row] = receipt["runs"]["items"]
+    raw = Path(row["raw"])
+    if not raw.is_absolute():
+        raw = work_dir / raw
+    vth = "v(@m1[vth])"
+
+    def parse(signals: tuple[str, ...] | None) -> Any:
+        source = services.source_for_raw_path(raw, state, dialect="ngspice")
+        if signals is not None:
+            source = dataclasses.replace(source, signals=signals)
+        artifacts = load_artifacts_sync(
+            source, state, deadline=time.monotonic() + LIVENESS_S, require_raw=True
+        )
+        assert artifacts.raw is not None
+        return artifacts.raw
+
+    whole = await asyncio.to_thread(parse, None)
+    chosen = await asyncio.to_thread(parse, (vth,))
+    loaded = await load_raw_result(
+        state=state, raw_path=None, job_id=job_id, run_index=0, case_id=None
+    )
+    analyzed = await _analyze(
+        state, job_id, [{"key": "vth", "metric": "value", "expr": vth, "at": "1k"}]
+    )
+    inspected = await handle_inspect(
+        InspectInput.model_validate(
+            {"queries": [{"kind": "results", "view": "signals", "job_id": job_id}]}
+        ),
+        state,
+    )
+    assert inspected.structured_content is not None
+    [signals] = inspected.structured_content["results"]
+    try:
+        reply = await handle_plot_waveform(
+            PlotWaveformInput.model_validate({"job_id": job_id, "signals": [vth], "open": False}),
+            state,
+        )
+    except ResultError as refused:
+        plotted: dict[str, Any] = {"refused": str(refused)}
+    else:
+        assert reply.structured_content is not None
+        plotted = {"traces": reply.structured_content["traces"]}
+    return {
+        "file": _first_point_lines(raw),
+        "parsed": [np.asarray(whole.get_wave(vth)), np.asarray(chosen.get_wave(vth))],
+        "current": np.asarray(whole.get_wave("i(vd)")),
+        "api": loaded.trace(vth),
+        "analyzed": analyzed["results"]["vth"],
+        "signals": signals,
+        "plotted": plotted,
+    }
+
+
+async def test_a_real_variable_of_a_complex_plot_reads_as_each_file_holds_it(
+    ngspice_state: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """ngspice writes a device parameter saved in an AC run, @m1[vth], as one
+    real number a point in an ASCII raw file, and as a complex number with a
+    zero imaginary part in a binary one. Every reader of the run's results
+    returns the values the file holds: real from the ASCII file, with no
+    imaginary part made up, and complex from the binary file, as before. The
+    numbers are the same; only what the file says of their kind differs."""
+    if sys.platform == "win32":
+        pytest.skip("the official Windows build's spinit writes every raw file as ASCII")
+    monkeypatch.delenv("SPICE_ASCIIRAWFILE", raising=False)
+    binary = await _ac_readings(ngspice_state, work_dir, "binary")
+    monkeypatch.setenv("SPICE_ASCIIRAWFILE", "1")
+    text = await _ac_readings(ngspice_state, work_dir, "ascii")
+
+    # What each file holds: the parameter is one number in the ASCII file.
+    assert binary["file"] is None
+    first, current, parameter = text["file"]
+    assert first.split("\t")[-1].count(",") == 1, text["file"]
+    assert current.count(",") == 1, text["file"]
+    assert parameter.count(",") == 0, text["file"]
+
+    vth = pytest.approx(1.815172031040211, rel=1e-12)
+    for wave in [*binary["parsed"], binary["api"]]:
+        assert np.iscomplexobj(wave), wave.dtype
+        assert np.all(np.imag(wave) == 0)
+    for wave in [*text["parsed"], text["api"]]:
+        assert not np.iscomplexobj(wave), wave.dtype
+    for wave in [*binary["parsed"], binary["api"], *text["parsed"], text["api"]]:
+        assert len(wave) == 61
+        assert list(np.real(wave)) == [vth] * 61
+    for reading in (binary, text):
+        assert np.iscomplexobj(reading["current"])
+        assert np.any(np.imag(reading["current"]) != 0)
+    # The ASCII file prints 16 significant digits of each double.
+    assert np.allclose(binary["current"], text["current"], rtol=1e-14, atol=0)
+
+    # analyze_results reads each as the file holds it: the binary file's
+    # complex value as a magnitude and phase, the ASCII file's real value as
+    # itself. Nothing else in the reading differs.
+    binary_value = binary["analyzed"]["values"][0].pop("value")
+    text_value = text["analyzed"]["values"][0].pop("value")
+    assert text["analyzed"] == binary["analyzed"]
+    assert binary_value.pop("magnitude_linear") == vth
+    assert binary_value.pop("phase_deg") == 0
+    assert binary_value.pop("magnitude_db") == pytest.approx(20 * math.log10(1.815172031040211))
+    assert text_value.pop("value") == vth
+    assert text_value == binary_value
+    assert text_value["actual_x"] == pytest.approx(1e3)
+
+    assert text["signals"]["ok"], text["signals"]
+    # inspect says the same of each: real in the ASCII file, complex in the binary.
+    text_signals = text["signals"]["data"]["signals"]
+    binary_signals = binary["signals"]["data"]["signals"]
+    assert [s.pop("representation") for s in text_signals] == ["complex", "complex", "real"]
+    assert [s.pop("representation") for s in binary_signals] == ["complex"] * 3
+    assert text_signals == binary_signals
+
+    # plot_waveform answers the same for both files. Its answer is a refusal
+    # where this ngspice writes a nonzero imaginary part for the frequency, which
+    # it does for every AC run on some builds; that refusal is about the axis,
+    # which both files hold alike, and not about reading the parameter.
+    assert "Failed to parse" not in text["plotted"].get("refused", ""), text["plotted"]
+    assert text["plotted"].keys() == binary["plotted"].keys()
+    if "refused" in binary["plotted"]:
+        assert text["plotted"] == binary["plotted"]
+    else:
+        [drawn] = text["plotted"]["traces"]
+        assert drawn["max"] == vth, drawn
 
 
 async def test_mosfet_dc_sweep_internal_reachable_by_shorthand(
