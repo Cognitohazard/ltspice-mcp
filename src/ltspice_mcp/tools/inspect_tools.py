@@ -190,7 +190,7 @@ from ltspice_mcp.lib.montecarlo import matches_prefix
 from ltspice_mcp.lib.ngspice_compat import mode_as_given
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
 from ltspice_mcp.lib.raster import RasterSupport, raster_support
-from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER, rows, series
+from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER, rows
 from ltspice_mcp.lib.routing import segment_json, wires_through
 from ltspice_mcp.lib.schematic_ops import (
     crossing_refused,
@@ -3130,7 +3130,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                             "table": {
                                 "type": "array",
                                 "items": {"type": "object"},
-                                CUT: series("waveform"),
+                                CUT: ITEMS,
                             },
                             "native_tables": {
                                 "type": "array",

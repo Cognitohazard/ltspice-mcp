@@ -25,7 +25,7 @@ from mcp import types
 from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib import response_budget, services
 from ltspice_mcp.lib.asc_document import is_asc
-from ltspice_mcp.lib.continuation import call_to_continue
+from ltspice_mcp.lib.continuation import Unfilled, call_to_continue
 from ltspice_mcp.lib.experiment_runner import live_run_progress
 from ltspice_mcp.lib.experiment_types import (
     ACTIVE_CASE_STATUSES,
@@ -1445,7 +1445,12 @@ def render_runs_envelope(
         "warnings": run_warnings,
         "failures": [],
         "hint": (
-            "Use next_cursor to continue the run page."
+            "Run records are paged; read the rest with "
+            + call_to_continue(
+                "jobs",
+                {"action": "runs", "job_id": snapshot.job_id, "cursor": Unfilled("next_cursor")},
+            )
+            + "."
             if page["truncated"]
             else f"Returned all recorded runs for job {snapshot.job_id}."
         ),

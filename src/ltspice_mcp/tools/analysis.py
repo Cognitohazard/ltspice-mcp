@@ -81,7 +81,7 @@ from ltspice_mcp.lib.raw_parser import (
     safe_magnitude_db,
 )
 from ltspice_mcp.lib.recipes import WAVEFORM_MAX_POINTS_CAP, StepSelector
-from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER, series
+from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER
 from ltspice_mcp.lib.result_kinds import AC_SHAPED, kind_named
 from ltspice_mcp.lib.sheet_results import place_beside_sheet
 from ltspice_mcp.lib.signal_analysis import (
@@ -1447,7 +1447,7 @@ def _rest_of_summary(
             "analysis_type": {"type": "string"},
             "plot_index": {"type": "integer", "minimum": 0},
             "descriptor": {"type": "object"},
-            "signals": {"type": "array", "items": {"type": "string"}, CUT: series("signals")},
+            "signals": {"type": "array", "items": {"type": "string"}, CUT: ITEMS},
             "n_steps": {"type": "integer"},
             "steps_plotted": {"type": "integer"},
             "panels": {"type": "integer"},
@@ -1455,7 +1455,7 @@ def _rest_of_summary(
             "points_per_series": {
                 "type": "array",
                 "items": {"type": "integer"},
-                CUT: series("signals"),
+                CUT: ITEMS,
             },
             "max_points": {"type": "integer"},
             "downsampled": {"type": "boolean"},

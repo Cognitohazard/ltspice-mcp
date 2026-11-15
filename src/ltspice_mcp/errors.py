@@ -490,8 +490,9 @@ ERROR_HINTS: dict[type[LTSpiceMCPError], str] = {
     ),
     InvalidCursorError: (
         "Send back, unchanged, the cursor this tool's own previous page returned "
-        "(next_cursor), or leave it out to start from the first page; for "
-        "analyze_results send the reply's next whole: "
+        "(next_cursor), or leave it out to start from the first page. An "
+        "analyze_results cursor goes in continue with its result_set_id, as the "
+        "reply's next holds them: "
         + call_to_continue("analyze_results", {"continue": Unfilled("next")})
         + "."
     ),

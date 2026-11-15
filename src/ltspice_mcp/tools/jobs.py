@@ -35,6 +35,7 @@ from ltspice_mcp.errors import (
     PathSecurityError,
 )
 from ltspice_mcp.lib import experiment_store, recent, response_budget, services
+from ltspice_mcp.lib.continuation import Unfilled, call_to_continue
 from ltspice_mcp.lib.experiment_runner import (
     ExperimentCancellationError,
     IdempotencyConflictError,
@@ -753,6 +754,13 @@ def _decode_jobs_cursor(cursor: str | None) -> int:
 #: This tool's budget epilogue. No hint mirror: a jobs envelope's ``hint`` is the
 #: control-plane's next step, and the ladder's own note reaches the caller on
 #: ``observations`` without displacing it.
+#: What a list page held to its cap says of the groups after it.
+_LIST_PAGED = (
+    "Read the next groups with "
+    + call_to_continue("jobs", {"action": "list", "cursor": Unfilled("next_cursor")})
+    + "."
+)
+
 _BUDGET_NOTES = response_budget.Notes(
     cut="presentation was reduced, no run or receipt was dropped.",
     route=(
@@ -1654,7 +1662,7 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
             if held is not None:
                 evaluation = replace(
                     evaluation,
-                    warnings=(f"{held} Page on with next_cursor.", *evaluation.warnings),
+                    warnings=(f"{held} {_LIST_PAGED}", *evaluation.warnings),
                 )
         try:
             budget = resolve_response_budget(args.budget, state)

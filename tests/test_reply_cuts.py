@@ -423,8 +423,10 @@ def test_a_list_cut_today_is_declared_cuttable():
                 wrong.append(f"{name}: {path} is not a list")
             elif item.kind is None and id(item.schema) in exempt:
                 continue
-            elif item.kind not in ("items", "rows", "series"):
-                wrong.append(f"{name}: {path} is cut today and declared {item.kind}")
+            elif item.kind not in ("items", "rows"):
+                # Cut today by a page and its cursor: what a series thinning
+                # leaves out could not be read on.
+                wrong.append(f"{name}: {path} is paged today and declared {item.kind}")
     assert not wrong, wrong
 
 
@@ -818,6 +820,71 @@ def test_no_continuation_sentence_is_written_by_hand():
     assert not written, (
         f"Write the call that reads the rest with lib/continuation.call_to_continue: {written}"
     )
+
+
+def _continuation_calls() -> Iterator[tuple[str, ast.Call]]:
+    for path in sorted(PACKAGE.rglob("*.py")):
+        name = path.relative_to(PACKAGE).as_posix()
+        for node in ast.walk(parsed(path)):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "call_to_continue"
+            ):
+                yield f"{name}:{node.lineno}", node
+
+
+def test_every_continuation_names_arguments_the_tool_takes():
+    # The calls are written at run time, so the referral scan over string
+    # literals (tests/test_referrals.py) does not read them: each call site is
+    # held to the tool's input model here.
+    from tests.test_referrals import _Call, _check_tool_call
+
+    problems: list[str] = []
+    sites = list(_continuation_calls())
+    assert len(sites) >= 8
+    for where, call in sites:
+        tool, arguments = call.args
+        if not isinstance(tool, ast.Constant) or not isinstance(tool.value, str):
+            problems.append(f"{where}: name the tool as a literal")
+            continue
+        if isinstance(arguments, ast.Call):
+            continue  # Unfilled(...): the caller fills in every argument
+        if not isinstance(arguments, ast.Dict) or not all(
+            isinstance(key, ast.Constant) for key in arguments.keys
+        ):
+            problems.append(f"{where}: write the arguments as a dict literal")
+            continue
+        keywords: dict[str, ast.AST] = {
+            str(key.value): value  # type: ignore[union-attr]
+            for key, value in zip(arguments.keys, arguments.values, strict=True)
+        }
+        problems += _check_tool_call(_Call(tool.value, [], keywords), where)
+    assert not problems, problems
+
+
+def test_the_argument_check_catches_a_misspelled_argument():
+    from tests.test_referrals import _Call, _check_tool_call
+
+    bad: dict[str, ast.AST] = {"findings_cursors": ast.Constant("c")}
+    assert _check_tool_call(_Call("verify_circuit", [], bad), "planted")
+
+
+def test_every_budget_route_fits_the_room_the_ladder_keeps():
+    # The ladder holds back room for a note whose route is 160 characters
+    # (response_budget.NOTE_RESERVE_TOKENS).
+    import ltspice_mcp.tools as tools_pkg
+    from ltspice_mcp.lib.response_budget import Notes
+
+    routes = [
+        (module.__name__, value.route)
+        for module in vars(tools_pkg).values()
+        if isinstance(module, ModuleType)
+        for value in vars(module).values()
+        if isinstance(value, Notes)
+    ]
+    assert routes
+    assert all(len(route) <= 160 for _, route in routes), routes
 
 
 def test_the_sentence_scan_catches_a_planted_sentence():

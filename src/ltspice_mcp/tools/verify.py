@@ -2427,14 +2427,17 @@ def _with_the_cut(headline: str, data: Mapping[str, Any], listing: str | None) -
         f"{entry['omitted']} more {rule} ({check_reporting(rule, data['kind'])} check)"
         for rule, entry in omitted.items()
     )
-    again = {
-        "path": data["path"],
-        "checks": [Unfilled("its check")],
-        "findings_cursor": Unfilled("its findings_omitted next_cursor"),
-    }
+    again = call_to_continue(
+        "verify_circuit",
+        {
+            "path": data["path"],
+            "checks": [Unfilled("its check")],
+            "findings_cursor": Unfilled("its findings_omitted next_cursor"),
+        },
+    )
     return (
         f"{headline.rstrip('.')}. Not listed: {more}; list a rule's next findings with "
-        f"{call_to_continue('verify_circuit', again)}, keeping this call's other arguments."
+        f"{again}, keeping this call's other arguments."
     )
 
 
