@@ -32,13 +32,14 @@ class TestAllowedPathsShape:
         toml_path = work_dir / "ltspice-mcp.toml"
         toml_path.write_text('[security]\nallowed_paths = "/home/me/circuits"\n')
         config = ServerConfig.load(toml_path)
-        assert config.allowed_paths == [Path("/home/me/circuits")]
+        # Anchored: on Windows a path without a drive names the current drive's folder.
+        assert config.allowed_paths == [Path("/home/me/circuits").absolute()]
 
     def test_list_of_strings_accepted(self, work_dir: Path):
         toml_path = work_dir / "ltspice-mcp.toml"
         toml_path.write_text('[security]\nallowed_paths = ["/opt/a", "/opt/b"]\n')
         config = ServerConfig.load(toml_path)
-        assert config.allowed_paths == [Path("/opt/a"), Path("/opt/b")]
+        assert config.allowed_paths == [Path("/opt/a").absolute(), Path("/opt/b").absolute()]
 
 
 class TestSymbolPathsShape:
