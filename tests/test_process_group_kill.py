@@ -20,7 +20,12 @@ from pathlib import Path
 import psutil
 import pytest
 
-from ltspice_mcp.lib.proc_kill import child_start_marker, kill_process_group
+from ltspice_mcp.lib.proc_kill import (
+    ProcessPresence,
+    child_start_marker,
+    kill_process_group,
+    process_identity_presence,
+)
 from tests.conftest import wait_until, written
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="Windows has no process groups")
@@ -43,7 +48,8 @@ while True:
 """
 
 
-#: Starts a recorder in its own group, writes the recorder's pid, and exits.
+#: Starts a recorder in the leader's own group (no new session), writes the
+#: recorder's pid, and exits.
 _LEADER = """
 import pathlib, subprocess, sys
 recorder = subprocess.Popen([sys.executable, "-c", sys.argv[1], sys.argv[2], sys.argv[3]])
@@ -105,7 +111,11 @@ def test_a_pid_that_names_another_process_is_not_signalled(
     assert _delivered(other, log) == ["SIGUSR2", "SIGUSR1", "SIGUSR2"]
 
 
-def test_a_leader_that_exited_unreaped_still_names_its_group(tmp_path: Path):
+@pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="the start marker of an exited, unreaped process is read from /proc",
+)
+def test_an_unreaped_leader_names_its_group_though_its_owner_liveness_is_absent(tmp_path: Path):
     """Until it is reaped, an exited leader holds its pid, so its group is still
     the one it led and what it left there is signalled."""
     log, ready, recorder_pid = tmp_path / "signals", tmp_path / "ready", tmp_path / "recorder"
@@ -122,6 +132,9 @@ def test_a_leader_that_exited_unreaped_still_names_its_group(tmp_path: Path):
             what="the leader to exit",
         )
         assert child_start_marker(leader) == started
+        # It can run no more work, which an owner's liveness asks about, but
+        # its pid still names it alone, which a signal to its group asks.
+        assert process_identity_presence(leader.pid, started) is ProcessPresence.ABSENT
         assert kill_process_group(leader.pid, started, signal.SIGUSR1) is True
         wait_until(lambda: "SIGUSR1" in _signals(log), what="the group member to get SIGUSR1")
     finally:

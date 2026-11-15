@@ -215,7 +215,14 @@ def process_start_marker(pid: int, process: psutil.Process | None = None) -> str
 
 
 def process_identity_presence(pid: int, start_marker: str | None) -> ProcessPresence:
-    """Compare a process's start identity as well as its reusable PID."""
+    """Compare a process's start identity as well as its reusable PID.
+
+    An exited process not yet reaped (a zombie) is ABSENT here: it can run no
+    more work, which is what an owner's liveness asks. ``_is_started_process``
+    counts it as present instead, because until it is reaped its pid, and the
+    group id that is the same number, still name it alone, which is what a
+    signal to its group asks.
+    """
     if pid <= 0 or not start_marker:
         return ProcessPresence.UNKNOWN
     try:
@@ -333,7 +340,11 @@ def simulator_presence(token: str, executable_names: Collection[str]) -> Process
 def _is_started_process(pid: int, start_marker: str | None) -> bool:
     """Whether ``pid`` still names the process ``start_marker`` identifies,
     running or exited and not yet reaped (a zombie keeps its pid, and the group
-    it leads keeps that id, until it is reaped)."""
+    it leads keeps that id, until it is reaped).
+
+    ``process_identity_presence`` answers a different question, whether the
+    process can still run work, so it calls a zombie ABSENT.
+    """
     if pid <= 0 or not start_marker:
         return False
     try:

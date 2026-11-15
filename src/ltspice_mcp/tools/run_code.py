@@ -365,8 +365,10 @@ class CodeWorker:
         self.process = None
 
     async def settled(self) -> None:
-        """Return once every worker that exited has been reaped and what it left
-        in its group stopped."""
+        """Return once every worker has been reaped and what it left in its group
+        stopped. The live worker's reap is among them and ends only when that
+        worker exits, so this is for a caller that has stopped the worker; for
+        the same reason ``SessionState.settled`` does not wait for it."""
         await self._background.settled()
 
     def _interrupt(self) -> None:
