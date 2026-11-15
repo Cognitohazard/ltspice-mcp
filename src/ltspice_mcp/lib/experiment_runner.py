@@ -582,8 +582,8 @@ class _Execution:
     claimed_cancel_priors: dict[str, str] = field(default_factory=dict)
     persistence_error: Exception | None = None
     #: The build an earlier run on this job's executable reported, read on the
-    #: loop as the job starts: with the executable's name, what tells whether it
-    #: is an LTspice before 24 (``simulator_build.ltspice_before_24``).
+    #: loop as the job starts: the first evidence of which LTspice it is
+    #: (``simulator_build.ltspice_generation``).
     reported_build: str | None = None
 
     @property
@@ -1411,6 +1411,7 @@ class ExperimentRunner(RunnerBase):
                 self.simulator_class,
                 case.run_token,
                 reported=execution.reported_build,
+                observations=case.observations,
             )
             # On ngspice, a `.control` script replaces the raw the simulator would
             # otherwise write, so a scripted deck that never calls write/wrdata

@@ -30,10 +30,12 @@ artifact, and no digest of an executable past ``_DIGEST_CAP_BYTES``.
 from __future__ import annotations
 
 import logging
+import mmap
 import os
 import re
 import shutil
 import stat
+import struct
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import datetime
@@ -69,64 +71,157 @@ _XYCE_BANNER = re.compile(r"^\*+[ \t]*This is version[ \t]+(Xyce\b[^\r\n]*)", re
 _NGSPICE_BANNER = re.compile(r"^\*\*[ \t]*(ngspice-[^\s:]+)", re.MULTILINE)
 _NGSPICE_CREATED = re.compile(r"^\*\*[ \t]*Creation Date:[ \t]*(\S[^\r\n]*)", re.MULTILINE)
 _WHITESPACE = re.compile(r"\s+")
-# LTspice XVII and earlier decode a deck as cp1252. Their executables are
-# XVIIx64.exe / XVIIx86.exe (XVII) and scad3.exe (IV), and the raw header names
-# the writer as "Linear Technology Corporation LTspice XVII". LTspice 24 and
-# later are LTspice.exe and name themselves "LTspice 24.0.12 ...".
-_CP1252_LTSPICE_EXECUTABLE = re.compile(r"(?i)(?:^|[\\/])(XVIIx(?:64|86)|scad3)\.exe$")
-_CP1252_LTSPICE_BUILD = re.compile(r"(?i)\bLTspice\s+(XVII|IV)\b")
+# The file names LTspice XVII (XVIIx64.exe / XVIIx86.exe) and IV (scad3.exe)
+# install under. LTspice 24 and later install as LTspice.exe, a name an XVII
+# can be given too, so that name shows nothing.
+_STOCK_BEFORE_24 = re.compile(r"(?i)(?:^|[\\/])(XVIIx(?:64|86)|scad3)\.exe$")
+# How a run names an LTspice before 24: XVII's raw header names its writer
+# "Linear Technology Corporation LTspice XVII"; LTspice 24 and later open their
+# log with "LTspice 26.1.1 for Windows".
+_REPORTED_BEFORE_24 = re.compile(r"(?i)\bLTspice\s+(XVII|IV)\b")
+_REPORTED_NUMBERED = re.compile(r"(?i)\bLTspice\s+(\d+)\.")
+#: The first release numbered after the year, which reads its decks as UTF-8.
+_FIRST_CURRENT = 24
+#: The signature that opens a version resource's VS_FIXEDFILEINFO.
+_FIXED_FILE_INFO = struct.pack("<I", 0xFEEF04BD)
+_RT_VERSION = 16
+#: File versions by executable, reread when the file's (mtime, size) stamp moves.
+_FILE_VERSIONS: FileCache[tuple[int, int, int, int] | None] = FileCache(maxsize=32)
+
+LtspiceGeneration = Literal["iv", "xvii", "current"]
 
 
-def is_cp1252_ltspice_executable(program: str) -> bool:
-    """Whether ``program`` is the executable of an LTspice that decodes decks as cp1252.
+@dataclass(frozen=True)
+class Generation:
+    """Which LTspice an executable is, and what shows it.
 
-    Matched on the file name in either path spelling, so a Windows path read on
-    Linux (under Wine or WSL) is recognized too.
+    ``generation`` is ``"xvii"`` (LTspice XVII), ``"iv"`` (LTspice IV) or
+    ``"current"`` (LTspice 24 and later). ``evidence`` names what shows it,
+    for a finding or a note to cite.
     """
-    return _CP1252_LTSPICE_EXECUTABLE.search(program) is not None
+
+    generation: LtspiceGeneration
+    evidence: str
+
+    @property
+    def before_24(self) -> bool:
+        """An LTspice before 24 decodes a deck as cp1252, prints each
+        semiconductor's operating point in the log of every ``.op`` run and
+        ends the run with "unrecognized option" when a deck asks for it with
+        ``.options logopinfo``, and writes each subcircuit instance's name
+        without its X."""
+        return self.generation != "current"
 
 
-def is_cp1252_ltspice_build(reported: str) -> bool:
-    """Whether a build a run reported (``reported_build``) is an LTspice that
-    decodes decks as cp1252: XVII or earlier."""
-    return _CP1252_LTSPICE_BUILD.search(reported) is not None
+def ltspice_generation(program: str | None, reported: str | None) -> Generation | None:
+    """Which LTspice ``program`` is, or None when nothing shows it.
 
+    The one answer to that question, for everything that turns on it: the
+    deck a run is handed, how a deck's and a result's names are spelled, which
+    log wording is read, which encoding a deck is read in and which library a
+    run stages against. Evidence, the first that answers:
 
-def ltspice_before_24(program: str | None, reported: str | None) -> str | None:
-    """The evidence that ``program`` is an LTspice before 24, XVII or IV, or None.
+    1. ``reported``, the build a run on this executable named in its own
+       output (``reported_build``): what the program says it is.
+    2. The version resource of the program file itself (its file version:
+       17 for XVII, 24 and later for the current builds), read from the file
+       without launching it, on any platform (``executable_file_version``).
+    3. The file name LTspice XVII or IV installs under (``XVIIx64.exe``,
+       ``XVIIx86.exe``, ``scad3.exe``).
 
-    The one answer to that question, for everything that turns on it. Those
-    builds decode a deck as cp1252, so a UTF-8 micro sign loses its scale; they
-    print each semiconductor's operating point in the log of every ``.op`` run
-    and end the run with "unrecognized option" when a deck asks for it with
-    ``.options logopinfo``; and they write each subcircuit instance's name
-    without its X.
-
-    Shown by the executable's own file name (``XVIIx64.exe``, ``XVIIx86.exe``,
-    ``scad3.exe``), or by ``reported``, the build an earlier run on the same
-    executable named in its output (``reported_build``), which is what shows a
-    copy under another name for what it is. Neither launches the simulator, so
-    an executable under another name that has not run yet is not shown to be
-    one. Any other simulator answers None. The answer names the evidence, for a
-    finding to cite.
+    ``LTspice.exe`` alone shows nothing: an XVII can carry that name. A
+    program none of these speak for (a wrapper script, a copy whose version
+    resource is gone, a build with no run yet on a platform whose executables
+    carry no version resource) answers None, and a caller says the generation
+    is not established instead of assuming one. Call off the loop: it may read
+    the program file.
     """
-    if program and is_cp1252_ltspice_executable(program):
-        return program
-    if reported and is_cp1252_ltspice_build(reported):
-        return f"{reported} ({program})" if program else reported
+    if reported:
+        generation = _reported_generation(reported)
+        if generation is not None:
+            evidence = f"{reported} ({program})" if program else reported
+            return Generation(generation, evidence)
+    if not program:
+        return None
+    version = executable_file_version(program)
+    if version is not None:
+        generation = _numbered_generation(version[0])
+        if generation is not None:
+            return Generation(
+                generation, f"{program} (file version {'.'.join(map(str, version))})"
+            )
+    stock = _STOCK_BEFORE_24.search(program)
+    if stock is not None:
+        return Generation("iv" if stock[1].lower() == "scad3" else "xvii", program)
     return None
 
 
-def ltspice_generation_before_24(
-    program: str | None, reported: str | None
-) -> Literal["xvii", "iv"] | None:
-    """Which LTspice before 24 ``program`` is, from the same evidence as
-    :func:`ltspice_before_24` and in the same order: ``xvii`` or ``iv``, or None
-    for any other simulator."""
-    if program and (found := _CP1252_LTSPICE_EXECUTABLE.search(program)) is not None:
-        return "iv" if found[1].lower() == "scad3" else "xvii"
-    if reported and (named := _CP1252_LTSPICE_BUILD.search(reported)) is not None:
+def is_cp1252_ltspice_build(reported: str) -> bool:
+    """Whether a build a run reported (``reported_build``, or a raw header's
+    ``Command``) is an LTspice before 24, which decodes decks as cp1252: the
+    answer :func:`ltspice_generation` gives from that report alone."""
+    found = ltspice_generation(None, reported)
+    return found is not None and found.before_24
+
+
+def _reported_generation(reported: str) -> LtspiceGeneration | None:
+    named = _REPORTED_BEFORE_24.search(reported)
+    if named is not None:
         return "iv" if named[1].upper() == "IV" else "xvii"
+    # A number establishes only a current build here: XVII names itself in no
+    # log banner, so a report of "LTspice 17.x" is not one this server has
+    # seen, and is left unestablished.
+    numbered = _REPORTED_NUMBERED.search(reported)
+    if numbered is not None and int(numbered[1]) >= _FIRST_CURRENT:
+        return "current"
+    return None
+
+
+def _numbered_generation(major: int) -> LtspiceGeneration | None:
+    # Recorded: XVII's file version is 17.0.37.0, LTspice 26's 26.1.1.0
+    # (tests/fixtures/ltspice_recorded/*/manifest.json, "executable").
+    if major == 17:
+        return "xvii"
+    if major >= _FIRST_CURRENT:
+        return "current"
+    return None
+
+
+def executable_file_version(program: str) -> tuple[int, int, int, int] | None:
+    """The file version in ``program``'s own version resource, the four numbers
+    Windows reports for it (``GetFileVersionInfo``, VS_FIXEDFILEINFO), or None
+    for a file that is not a Windows executable or carries no version resource.
+
+    Read from the file, so it answers on Linux, under Wine and on WSL as on
+    Windows. Only :func:`ltspice_generation` reads it (``pyproject.toml`` bans
+    it elsewhere): a version alone is not an answer to which build a program
+    is. Blocking.
+    """
+    path = Path(program)
+    try:
+        return _FILE_VERSIONS.get(path, _read_file_version)
+    except OSError:
+        return None
+
+
+def _read_file_version(path: Path) -> tuple[int, int, int, int] | None:
+    from ltspice_mcp.lib.pe_menu import resources
+
+    try:
+        with (
+            path.open("rb") as file,
+            mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ) as image,
+        ):
+            blobs = resources(image, _RT_VERSION)
+    except (ValueError, struct.error, IndexError):
+        # Empty, not a Windows executable, or a resource table it cannot hold.
+        return None
+    for blob in blobs:
+        at = blob.find(_FIXED_FILE_INFO)
+        if at < 0 or len(blob) < at + 16:
+            continue
+        ms, ls = struct.unpack_from("<II", blob, at + 8)
+        return (ms >> 16, ms & 0xFFFF, ls >> 16, ls & 0xFFFF)
     return None
 
 

@@ -12,6 +12,7 @@ import functools
 import json
 import os
 import shutil
+import tempfile
 from collections.abc import Iterator
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -28,6 +29,7 @@ from ltspice_mcp.lib.parser_worker import parse_request
 from ltspice_mcp.lib.raw_header import RawLimits
 from ltspice_mcp.lib.spice_lex import SpiceCard, cards_from_path
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, read_instance
+from tests._stand_in_pe import stand_in_windows_program
 from tests.ltspice_recorder import (
     FIXTURES,
     INPUTS,
@@ -57,20 +59,25 @@ def generation(build: str) -> str:
     return manifest(build)["generation"]
 
 
+@functools.cache
 def launcher(build: str) -> type:
-    """spicelib's LTspice class, launching the executable ``build`` was recorded
-    with, by its file name.
+    """spicelib's LTspice class, launching a stand-in for the executable
+    ``build`` was recorded with: its file name, and the file version the
+    recording read from its version resource.
 
     Before a run on it has reported its build, the server tells LTspice builds
-    apart by that name (``simulator_build.ltspice_before_24``), so the folder
-    is made up and nothing is run. A test that uses this does the same on every machine; one
-    that uses spicelib's class as imported gets whichever LTspice spicelib
-    found installed.
+    apart by that resource (``simulator_build.ltspice_generation``), so the
+    stand-in carries it and nothing is run. A test that uses this does the
+    same on every machine; one that uses spicelib's class as imported gets
+    whichever LTspice spicelib found installed. The stand-in lives in a
+    folder of this process's own, so parallel workers never write one file.
     """
     from spicelib.simulators.ltspice_simulator import LTspice
 
-    executable = manifest(build)["executable"]["name"]
-    return type(LTspice.__name__, (LTspice,), {"spice_exe": [f"C:/install/{executable}"]})
+    executable = manifest(build)["executable"]
+    folder = Path(tempfile.gettempdir()) / "ltspice-mcp-launchers" / str(os.getpid()) / build
+    program = stand_in_windows_program(folder / executable["name"], executable["file_version"])
+    return type(LTspice.__name__, (LTspice,), {"spice_exe": [str(program)]})
 
 
 def recorded(build: str, name: str) -> Path:

@@ -48,7 +48,7 @@ from ltspice_mcp.lib.pdk_native import LAUNCH_POLICY, NativeLaunchPolicy
 from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
 from ltspice_mcp.lib.raw_parser import other_raws
 from ltspice_mcp.lib.simulator import NGSPICE_NO_USER_INIT, is_ngspice, run_ngbehavior
-from ltspice_mcp.lib.simulator_build import executable_path, ltspice_before_24, reported_build
+from ltspice_mcp.lib.simulator_build import executable_path, ltspice_generation, reported_build
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
@@ -579,7 +579,12 @@ def collect_run_outcome(
 
 
 def inject_logopinfo(
-    netlist_path: Path, simulator: type, job_id: str, *, reported: str | None = None
+    netlist_path: Path,
+    simulator: type,
+    job_id: str,
+    *,
+    reported: str | None = None,
+    observations: list[dict[str, Any]] | None = None,
 ) -> Path:
     """Return a runnable netlist with ``.options logopinfo`` added, for LTspice ``.op`` runs.
 
@@ -609,14 +614,21 @@ def inject_logopinfo(
     deck is rewritten in its own encoding, and the option's line ends with
     the deck's own line break, so every byte the option does not add is the
     caller's.
+
+    The option goes in only when the LTspice is shown to be 24 or later
+    (``simulator_build.ltspice_generation``, which ``reported``, the build an
+    earlier run on this executable named, feeds). When which LTspice it is is
+    not established, an ``.op`` deck runs without it, since on an XVII the
+    option would end the run, and ``observations`` gets a
+    ``logopinfo_withheld`` entry saying so.
     """
     from spicelib.simulators.ltspice_simulator import LTspice
 
     if not (isinstance(simulator, type) and issubclass(simulator, LTspice)):
         return netlist_path
-    # ``reported`` is the build an earlier run on this executable named
-    # (``services.reported_build_of``): an LTspice before 24 under another name.
-    if ltspice_before_24(executable_path(simulator), reported):
+    program = executable_path(simulator)
+    generation = ltspice_generation(program, reported)
+    if generation is not None and generation.before_24:
         return netlist_path
     if netlist_path.suffix.lower() not in RUN_DECK_SUFFIXES:
         return netlist_path
@@ -640,6 +652,10 @@ def inject_logopinfo(
     # Only a real .op analysis emits the operating-point block; .dc does not.
     if ".op" not in deck_requirements(netlist_path).analyses:
         return netlist_path
+    if generation is None:
+        if observations is not None:
+            observations.append(_logopinfo_withheld(program))
+        return netlist_path
 
     inject_card_before_end(deck.cards, ".options logopinfo\n")
     try:
@@ -655,6 +671,21 @@ def inject_logopinfo(
     except OSError:
         return netlist_path
     return run_path
+
+
+def _logopinfo_withheld(program: str | None) -> dict[str, Any]:
+    return {
+        "code": "logopinfo_withheld",
+        "kind": "execution",
+        "detail": (
+            f"Which LTspice {program or 'this'} is is not established: no run on it "
+            "has named its build yet, and neither its version resource nor its file "
+            "name shows it. LTspice XVII ends a run on '.options logopinfo', so the "
+            "option was not added, and the log may hold no per-device operating "
+            "point (gm, vth, vdsat) for this run. The run names the build, and a "
+            "later .op run on an LTspice 24 or later gets the option."
+        ),
+    }
 
 
 # A ``write``/``wrdata`` command starting a line ngspice reads, anywhere in the

@@ -431,38 +431,41 @@ It leaves the installation's ``spinit``, which loads ngspice's code models.
 
 
 def generation_of(simulator_class: type | None) -> str | None:
-    """Which LTspice a class launches, read off its program's file name.
+    """Which LTspice a class launches, as ``simulator_build.ltspice_generation``
+    answers it from the program itself: ``"xvii"``, ``"iv"`` or ``"current"``
+    (LTspice 24 and later), None for a class that is not LTspice or a program
+    nothing shows to be one (a wrapper script, a copy without its version
+    resource). The builds keep their model libraries in different places, so
+    a run's library roots are the ones of the build it runs on
+    (``simulator_library_roots``). Blocking: it may read the program file.
 
-    ``"xvii"`` for LTspice XVII (``XVIIx64.exe``), ``"current"`` for LTspice 24
-    and later (``LTspice.exe``; the macOS app's ``LTspice`` too), None for a
-    class that is not LTspice or a program whose name says neither (LTspice
-    IV's ``scad3.exe``, a renamed copy, a wrapper script). The two keep their
-    model libraries in different places, so a run's library roots are the
-    ones of the build it runs on (``simulator_library_roots``).
+    It asks without the build a run reported, which only a session's records
+    hold: the library is chosen where there is none (the symbol library built
+    at startup, a library search), so an LTspice the program itself does not
+    show keeps every build's library even after a run on it named its build
+    (pinned by ``test_an_xvii_is_known_by_what_it_is_or_what_its_runs_report``).
     """
-    from ltspice_mcp.lib.simulator_build import executable_path
+    from ltspice_mcp.lib.simulator_build import executable_path, ltspice_generation
 
-    program = executable_path(simulator_class) if is_ltspice(simulator_class) else None
-    if program is None:
+    if not is_ltspice(simulator_class):
         return None
-    # PureWindowsPath splits on both separators, so a posix spice_exe and a
-    # Windows one name the same file.
-    name = PureWindowsPath(program).name.casefold()
-    if "xvii" in name:
-        return "xvii"
-    if name.startswith("ltspice"):
-        return "current"
-    return None
+    found = ltspice_generation(executable_path(simulator_class), None)
+    return found.generation if found is not None else None
 
 
 def _in_generation(path: Path, generation: str | None) -> bool:
-    """Whether one of spicelib's default library directories is ``generation``'s.
+    """Whether one of spicelib's default library directories belongs to the
+    build ``generation`` (``generation_of``) names.
 
-    spicelib lists every LTspice's library directory for every LTspice class
-    and keeps whichever exist, so with XVII and a later build both installed a
-    class would report both. XVII's are the ``LTspiceXVII`` folders.
+    Not a second answer to which build an executable is: it takes that answer
+    and says which library folders go with it. spicelib lists every LTspice's
+    library directory for every LTspice class and keeps whichever exist, so
+    with XVII and a later build both installed a class would report both.
+    XVII's are the ``LTspiceXVII`` folders. With the generation not
+    established, or LTspice IV, whose library layout is not recorded, every
+    folder is kept.
     """
-    if generation is None:
+    if generation not in ("xvii", "current"):
         return True
     xvii = any(part.casefold() == "ltspicexvii" for part in PureWindowsPath(str(path)).parts)
     return xvii if generation == "xvii" else not xvii
@@ -497,7 +500,11 @@ def simulator_library_roots(simulator_class: type | None) -> list[Path]:
     if is_ltspice(simulator_class):
         from ltspice_mcp.lib.wsl import get_ltspice_lib_paths
 
-        candidates += [Path(p) for p in get_ltspice_lib_paths(generation)]
+        # IV's library layout is not recorded: probed as when the build is
+        # not established.
+        candidates += [
+            Path(p) for p in get_ltspice_lib_paths(generation if generation != "iv" else None)
+        ]
     try:
         candidates += [
             Path(p)

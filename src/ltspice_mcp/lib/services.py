@@ -65,7 +65,7 @@ from ltspice_mcp.lib.simulator_build import (
     Producer,
     SimulatorExecutable,
     executable_identity,
-    ltspice_before_24,
+    ltspice_generation,
     same_executable,
 )
 from ltspice_mcp.lib.trace_names import (
@@ -696,23 +696,20 @@ def cp1252_ltspice(state: SessionState, executable: SimulatorExecutable | None) 
 
     LTspice XVII and earlier read a deck as cp1252, so a UTF-8 micro sign
     (C2 B5) reaches them as the two characters ``Âµ`` and loses its scale;
-    LTspice 24 and later read the UTF-8 they write. The same builds refuse
-    ``.options logopinfo`` and name subcircuit instances without their X, so
-    every decision about them asks here, or passes the same two facts to
-    ``simulator_build.ltspice_before_24``: the executable's own name
-    (``XVIIx64.exe``), and the build the latest run on it reported, the one
+    LTspice 24 and later read the UTF-8 they write. The answer is
+    ``simulator_build.ltspice_generation``'s, from the executable itself and
+    the build the latest run on it reported, the one
     ``inspect(kind="capabilities")`` reports. Neither launches the simulator.
-    Any other simulator answers None. The answer names the evidence, for a
-    finding to cite.
+    Any other simulator, or an LTspice nothing shows to be one before 24,
+    answers None. The answer names the evidence, for a finding to cite.
     """
     if executable is None:
         return None
-    # The name answers without the scan of every recorded run that the
-    # reported build takes.
-    named = ltspice_before_24(executable.path, None)
-    if named is not None:
-        return named
-    return ltspice_before_24(executable.path, reported_build_of(state, executable))
+    # The executable itself answers without the scan of every recorded run.
+    found = ltspice_generation(executable.path, None)
+    if found is None or not found.before_24:
+        found = ltspice_generation(executable.path, reported_build_of(state, executable))
+    return found.evidence if found is not None and found.before_24 else None
 
 
 def reported_build_of(state: SessionState, executable: SimulatorExecutable | None) -> str | None:
@@ -768,11 +765,14 @@ def _producer_of(
     state: SessionState, family: str | None, identity: SimulatorExecutable | None
 ) -> Producer:
     program = identity.path if identity is not None else None
-    # Only an LTspice's build changes how its names are read, and its file
-    # name, where it says, answers without the scan of every recorded run.
+    # Only an LTspice's build changes how its names are read; an executable
+    # that itself shows a build before 24 answers without the scan of every
+    # recorded run, and every other one is read with its build's own wording.
     build = None
-    if family == "ltspice" and ltspice_before_24(program, None) is None:
-        build = reported_build_of(state, identity)
+    if family == "ltspice":
+        found = ltspice_generation(program, None)
+        if found is None or not found.before_24:
+            build = reported_build_of(state, identity)
     return Producer(family=family, build=build, program=program)
 
 

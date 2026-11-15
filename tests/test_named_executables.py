@@ -44,6 +44,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import resolve_run_simulator
 from ltspice_mcp.tools.experiments import RunExperimentsInput
 from tests._schematic_fixtures import BOX2_ASY, write_file
+from tests._stand_in_pe import stand_in_windows_program
 from tests.conftest import (
     capabilities_report,
     stand_in_program,
@@ -63,8 +64,10 @@ _DECK = "* rc\nV1 in 0 1\nR1 in out 1k\nC1 out 0 1u\n.tran 1m\n.end\n"
 
 
 def _ran_on(cls: type) -> str:
-    """The build the program a class launches names: the program's own bytes."""
-    return Path(cls.spice_exe[-1]).read_text()
+    """The build the program a class launches names: the text its stand-in
+    carries after its image (``stand_in_windows_program``'s overlay), or the
+    whole file for a stand-in that is text."""
+    return Path(cls.spice_exe[-1]).read_bytes().rsplit(b"\0", 1)[-1].decode()
 
 
 class RecordingLTspice(LTspice):
@@ -151,16 +154,19 @@ def recording_families(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def builds(work_dir: Path) -> dict[str, Path]:
-    """Three LTspice builds installed side by side, at their usual file names."""
+    """Three LTspice builds installed side by side, at their usual file names,
+    each carrying its version in its version resource as the real ones do."""
     return {
-        "default": stand_in_program(
-            work_dir / "programs" / "ADI" / "LTspice.exe", DEFAULT_BUILD.encode()
+        "default": stand_in_windows_program(
+            work_dir / "programs" / "ADI" / "LTspice.exe",
+            "26.0.2.0",
+            overlay=DEFAULT_BUILD.encode(),
         ),
-        "xvii": stand_in_program(
-            work_dir / "programs" / "LTC" / "XVIIx64.exe", XVII_BUILD.encode()
+        "xvii": stand_in_windows_program(
+            work_dir / "programs" / "LTC" / "XVIIx64.exe", "17.1.8.0", overlay=XVII_BUILD.encode()
         ),
-        "lt24": stand_in_program(
-            work_dir / "programs" / "LT24" / "LTspice.exe", LT24_BUILD.encode()
+        "lt24": stand_in_windows_program(
+            work_dir / "programs" / "LT24" / "LTspice.exe", "24.1.9.0", overlay=LT24_BUILD.encode()
         ),
     }
 

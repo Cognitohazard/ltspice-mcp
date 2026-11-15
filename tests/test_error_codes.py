@@ -548,6 +548,7 @@ FROZEN_ERROR_CODES = (
     "live_include",
     "log_error",
     "log_unread",
+    "logopinfo_withheld",
     "max_points_not_applied",
     "meas_batch_abort",
     "meas_parse_error",

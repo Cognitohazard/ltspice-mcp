@@ -2891,8 +2891,9 @@ with Api(working_dir=project) as api:
 For a supported nested MOS, ngspice gives `device: "m.xa.xleaf.m0"`
 and `.save @m.xa.xleaf.m0[gm]`; LTspice gives
 `device: "xa:xleaf:m0"` and no directive, since the server asks LTspice 26
-for the device table on every `.op` run and XVII prints it unasked and stops
-on `.options logopinfo`. Add any directive given to the deck before
+for the device table on every `.op` run (once it knows the build, see
+`logopinfo_withheld`) and XVII prints it unasked and stops on
+`.options logopinfo`. Add any directive given to the deck before
 `run_experiments`, then pass `address.device` to the `analyze_results`
 `operating_point` recipe. On LTspice, that selector also matches any longer
 path that ends with it, so an instance whose whole path is the end of another

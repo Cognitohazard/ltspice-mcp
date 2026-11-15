@@ -22,12 +22,14 @@ from ltspice_mcp.lib.simulator_build import (
     executable_identity,
     executable_path,
     is_cp1252_ltspice_build,
-    is_cp1252_ltspice_executable,
+    ltspice_generation,
     reported_build,
     same_executable,
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.jobs import JobsInput, handle_jobs
+from tests import _ltspice_recorded as rec
+from tests._stand_in_pe import stand_in_windows_program
 from tests.conftest import (
     capabilities_report,
     job_runs,
@@ -257,30 +259,62 @@ class TestReportedBuild:
 # ---------------------------------------------------------------------------
 
 
-class TestCp1252LTspice:
-    """Which LTspice decodes a deck as cp1252, read off names alone."""
+class TestLtspiceGeneration:
+    """Which LTspice a program is, from evidence about it, never from a name an
+    XVII can also carry."""
 
     @pytest.mark.parametrize(
-        "program",
+        ("program", "generation"),
         [
-            "C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe",
-            "/mnt/c/Program Files (x86)/LTC/LTspiceXVII/XVIIx86.exe",
-            "/home/user/.wine/drive_c/Program Files/LTC/LTspiceIV/scad3.exe",
+            ("C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe", "xvii"),
+            ("/mnt/c/Program Files (x86)/LTC/LTspiceXVII/XVIIx86.exe", "xvii"),
+            ("/home/user/.wine/drive_c/Program Files/LTC/LTspiceIV/scad3.exe", "iv"),
         ],
     )
-    def test_xvii_and_earlier_executables(self, program: str):
-        assert is_cp1252_ltspice_executable(program)
+    def test_the_stock_names_of_the_builds_before_24(self, program: str, generation: str):
+        found = ltspice_generation(program, None)
+        assert found is not None and found.generation == generation and found.before_24
 
     @pytest.mark.parametrize(
         "program",
         [
             "C:\\Program Files\\ADI\\LTspice\\LTspice.exe",
-            "/usr/bin/ngspice",
             "/opt/tools/notXVIIx64.exe",
+            "/opt/tools/LTspiceXVII.exe",
+            "/opt/tools/spice17.exe",
         ],
     )
-    def test_other_executables(self, program: str):
-        assert not is_cp1252_ltspice_executable(program)
+    def test_any_other_name_alone_establishes_nothing(self, program: str):
+        assert ltspice_generation(program, None) is None
+
+    @pytest.mark.parametrize(
+        ("build", "generation"), [(build, rec.generation(build)) for build in rec.BUILDS]
+    )
+    def test_the_recorded_version_resource_names_the_build(
+        self, build: str, generation: str, tmp_path: Path
+    ):
+        version = rec.manifest(build)["executable"]["file_version"]
+        program = stand_in_windows_program(tmp_path / "spice.exe", version)
+        found = ltspice_generation(str(program), None)
+        assert found is not None and found.generation == generation
+        assert version in found.evidence
+
+    def test_a_program_without_a_version_resource_establishes_nothing(self, tmp_path: Path):
+        assert (
+            ltspice_generation(str(stand_in_windows_program(tmp_path / "a.exe", None)), None)
+            is None
+        )
+        script = stand_in_program(tmp_path / "LTspice.exe", b"#!/bin/sh\nexec wine x.exe")
+        assert ltspice_generation(str(script), None) is None
+        empty = stand_in_program(tmp_path / "empty.exe", b"")
+        assert ltspice_generation(str(empty), None) is None
+
+    def test_a_reported_build_answers_first(self, tmp_path: Path):
+        lt26 = stand_in_windows_program(tmp_path / "LTspice.exe", "26.1.1.0")
+        found = ltspice_generation(str(lt26), "Linear Technology Corporation LTspice XVII")
+        assert found is not None and found.generation == "xvii"
+        found = ltspice_generation("/opt/spice17.exe", LTSPICE_26)
+        assert found is not None and found.generation == "current" and not found.before_24
 
     def test_reported_builds(self):
         assert is_cp1252_ltspice_build("Linear Technology Corporation LTspice XVII")
