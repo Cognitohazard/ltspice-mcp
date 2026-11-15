@@ -32,6 +32,7 @@ from __future__ import annotations
 import logging
 import mmap
 import os
+import plistlib
 import re
 import shutil
 import stat
@@ -86,7 +87,7 @@ _FIRST_CURRENT = 24
 _FIXED_FILE_INFO = struct.pack("<I", 0xFEEF04BD)
 _RT_VERSION = 16
 #: File versions by executable, reread when the file's (mtime, size) stamp moves.
-_FILE_VERSIONS: FileCache[tuple[int, int, int, int] | None] = FileCache(maxsize=32)
+_FILE_VERSIONS: FileCache[tuple[int, ...] | None] = FileCache(maxsize=32)
 
 LtspiceGeneration = Literal["iv", "xvii", "current"]
 
@@ -113,7 +114,7 @@ class Generation:
         return self.generation != "current"
 
 
-def ltspice_generation(program: str | None, reported: str | None) -> Generation | None:
+def which_ltspice(program: str | None, reported: str | None) -> Generation | None:
     """Which LTspice ``program`` is, or None when nothing shows it.
 
     The one answer to that question, for everything that turns on it: the
@@ -123,9 +124,10 @@ def ltspice_generation(program: str | None, reported: str | None) -> Generation 
 
     1. ``reported``, the build a run on this executable named in its own
        output (``reported_build``): what the program says it is.
-    2. The version resource of the program file itself (its file version:
-       17 for XVII, 24 and later for the current builds), read from the file
-       without launching it, on any platform (``executable_file_version``).
+    2. The version the program carries about itself, read without launching
+       it, on any platform (``executable_file_version``): a Windows
+       executable's version resource (its file version: 17 for XVII, 24 and
+       later for the current builds), or a macOS bundle's version.
     3. The file name LTspice XVII or IV installs under (``XVIIx64.exe``,
        ``XVIIx86.exe``, ``scad3.exe``).
 
@@ -159,8 +161,8 @@ def ltspice_generation(program: str | None, reported: str | None) -> Generation 
 def is_cp1252_ltspice_build(reported: str) -> bool:
     """Whether a build a run reported (``reported_build``, or a raw header's
     ``Command``) is an LTspice before 24, which decodes decks as cp1252: the
-    answer :func:`ltspice_generation` gives from that report alone."""
-    found = ltspice_generation(None, reported)
+    answer :func:`which_ltspice` gives from that report alone."""
+    found = which_ltspice(None, reported)
     return found is not None and found.before_24
 
 
@@ -187,15 +189,18 @@ def _numbered_generation(major: int) -> LtspiceGeneration | None:
     return None
 
 
-def executable_file_version(program: str) -> tuple[int, int, int, int] | None:
-    """The file version in ``program``'s own version resource, the four numbers
-    Windows reports for it (``GetFileVersionInfo``, VS_FIXEDFILEINFO), or None
-    for a file that is not a Windows executable or carries no version resource.
+def executable_file_version(program: str) -> tuple[int, ...] | None:
+    """The version ``program`` carries about itself, or None when it carries
+    none this reads.
 
-    Read from the file, so it answers on Linux, under Wine and on WSL as on
-    Windows. Only :func:`ltspice_generation` reads it (``pyproject.toml`` bans
-    it elsewhere): a version alone is not an answer to which build a program
-    is. Blocking.
+    For a Windows executable, the file version in its version resource: the
+    four numbers Windows reports for it (``GetFileVersionInfo``,
+    VS_FIXEDFILEINFO), read from the file, so it answers on Linux, under Wine
+    and on WSL as on Windows. For the program inside a macOS application
+    bundle (``LTspice.app/Contents/MacOS/LTspice``), the bundle's
+    ``CFBundleShortVersionString``. Only :func:`which_ltspice` reads it
+    (``pyproject.toml`` bans it elsewhere): a version alone is not an answer
+    to which build a program is. Blocking.
     """
     path = Path(program)
     try:
@@ -204,15 +209,22 @@ def executable_file_version(program: str) -> tuple[int, int, int, int] | None:
         return None
 
 
-def _read_file_version(path: Path) -> tuple[int, int, int, int] | None:
+def _read_file_version(path: Path) -> tuple[int, ...] | None:
+    if path.parent.name == "MacOS" and path.parent.parent.name == "Contents":
+        return _bundle_version(path.parent.parent / "Info.plist")
     from ltspice_mcp.lib.pe_menu import resources
 
     try:
-        with (
-            path.open("rb") as file,
-            mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ) as image,
-        ):
-            blobs = resources(image, _RT_VERSION)
+        try:
+            with (
+                path.open("rb") as file,
+                mmap.mmap(file.fileno(), 0, access=mmap.ACCESS_READ) as image,
+            ):
+                blobs = resources(image, _RT_VERSION)
+        except OSError:
+            # A file system or a process limit that refuses the mapping: the
+            # same bytes, read.
+            blobs = resources(path.read_bytes(), _RT_VERSION)
     except (ValueError, struct.error, IndexError):
         # Empty, not a Windows executable, or a resource table it cannot hold.
         return None
@@ -223,6 +235,17 @@ def _read_file_version(path: Path) -> tuple[int, int, int, int] | None:
         ms, ls = struct.unpack_from("<II", blob, at + 8)
         return (ms >> 16, ms & 0xFFFF, ls >> 16, ls & 0xFFFF)
     return None
+
+
+def _bundle_version(info: Path) -> tuple[int, ...] | None:
+    """The leading numbers of a macOS bundle's ``CFBundleShortVersionString``."""
+    try:
+        with info.open("rb") as file:
+            version = plistlib.load(file).get("CFBundleShortVersionString")
+    except (OSError, ValueError, plistlib.InvalidFileException, AttributeError):
+        return None
+    numbers = re.match(r"\s*(\d+(?:\.\d+)*)", version) if isinstance(version, str) else None
+    return tuple(int(part) for part in numbers[1].split(".")) if numbers else None
 
 
 @dataclass(frozen=True)

@@ -47,7 +47,7 @@ from ltspice_mcp.lib.services import extract_netlist_info
 from ltspice_mcp.lib.simulator_build import (
     executable_path,
     is_cp1252_ltspice_build,
-    ltspice_generation,
+    which_ltspice,
 )
 from ltspice_mcp.lib.spice_lex import SpiceCard, directive_head, emit, lex, lex_deck, lex_for_edit
 from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
@@ -331,7 +331,7 @@ def test_a_cp1252_reader_loses_a_utf8_micro_sign_and_nothing_else(
     manifest = rec.manifest(build)
     cp1252_reader = is_cp1252_ltspice_build(manifest["reported_build"])
     # The executable, before any run on it, gives the same answer as its runs.
-    found = ltspice_generation(executable_path(rec.launcher(build)), None)
+    found = which_ltspice(executable_path(rec.launcher(build)), None)
     assert found is not None and found.before_24 == cp1252_reader
     assert cp1252_reader == (rec.generation(build) == "xvii")
     survives_cp1252 = MICRO_DECKS[case_id][1]

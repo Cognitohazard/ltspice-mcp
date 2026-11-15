@@ -66,7 +66,7 @@ def launcher(build: str) -> type:
     recording read from its version resource.
 
     Before a run on it has reported its build, the server tells LTspice builds
-    apart by that resource (``simulator_build.ltspice_generation``), so the
+    apart by that resource (``simulator_build.which_ltspice``), so the
     stand-in carries it and nothing is run. A test that uses this does the
     same on every machine; one that uses spicelib's class as imported gets
     whichever LTspice spicelib found installed. The stand-in lives in a

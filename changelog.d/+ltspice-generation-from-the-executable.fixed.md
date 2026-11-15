@@ -1,7 +1,8 @@
 An LTspice XVII under a name other than `XVIIx64.exe` or `XVIIx86.exe` (an
 `LTspice.exe`, `spice17.exe`, a renamed copy) is now known as XVII before any
 run on it, from the file version in its own version resource, which the
-server reads from the file on Windows, under Wine and on WSL alike. Before,
+server reads from the file on Windows, under Wine and on WSL alike (on macOS,
+from the app bundle's version). Before,
 it was taken for LTspice 26 until a run reported its build: the server added
 `.options logopinfo` to every `.op` deck run on it, XVII ended each such run
 with `unrecognized option`, and since that run reported no build every `.op`

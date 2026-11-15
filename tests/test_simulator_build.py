@@ -22,9 +22,9 @@ from ltspice_mcp.lib.simulator_build import (
     executable_identity,
     executable_path,
     is_cp1252_ltspice_build,
-    ltspice_generation,
     reported_build,
     same_executable,
+    which_ltspice,
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.jobs import JobsInput, handle_jobs
@@ -272,7 +272,7 @@ class TestLtspiceGeneration:
         ],
     )
     def test_the_stock_names_of_the_builds_before_24(self, program: str, generation: str):
-        found = ltspice_generation(program, None)
+        found = which_ltspice(program, None)
         assert found is not None and found.generation == generation and found.before_24
 
     @pytest.mark.parametrize(
@@ -285,7 +285,7 @@ class TestLtspiceGeneration:
         ],
     )
     def test_any_other_name_alone_establishes_nothing(self, program: str):
-        assert ltspice_generation(program, None) is None
+        assert which_ltspice(program, None) is None
 
     @pytest.mark.parametrize(
         ("build", "generation"), [(build, rec.generation(build)) for build in rec.BUILDS]
@@ -295,25 +295,41 @@ class TestLtspiceGeneration:
     ):
         version = rec.manifest(build)["executable"]["file_version"]
         program = stand_in_windows_program(tmp_path / "spice.exe", version)
-        found = ltspice_generation(str(program), None)
+        found = which_ltspice(str(program), None)
         assert found is not None and found.generation == generation
         assert version in found.evidence
 
     def test_a_program_without_a_version_resource_establishes_nothing(self, tmp_path: Path):
-        assert (
-            ltspice_generation(str(stand_in_windows_program(tmp_path / "a.exe", None)), None)
-            is None
-        )
+        assert which_ltspice(str(stand_in_windows_program(tmp_path / "a.exe", None)), None) is None
         script = stand_in_program(tmp_path / "LTspice.exe", b"#!/bin/sh\nexec wine x.exe")
-        assert ltspice_generation(str(script), None) is None
+        assert which_ltspice(str(script), None) is None
         empty = stand_in_program(tmp_path / "empty.exe", b"")
-        assert ltspice_generation(str(empty), None) is None
+        assert which_ltspice(str(empty), None) is None
+
+    @pytest.mark.parametrize(
+        ("version", "generation"), [("24.1.9", "current"), ("17.0.36", "xvii"), (None, None)]
+    )
+    def test_a_macos_bundle_shows_its_version(
+        self, version: str | None, generation: str | None, tmp_path: Path
+    ):
+        """The macOS app's program carries no version resource; its bundle's
+        Info.plist names the version. Without one, nothing is established."""
+        import plistlib
+
+        contents = tmp_path / "LTspice.app" / "Contents"
+        program = stand_in_program(contents / "MacOS" / "LTspice", b"\xcf\xfa\xed\xfe")
+        if version is not None:
+            (contents / "Info.plist").write_bytes(
+                plistlib.dumps({"CFBundleShortVersionString": version})
+            )
+        found = which_ltspice(str(program), None)
+        assert (found.generation if found else None) == generation
 
     def test_a_reported_build_answers_first(self, tmp_path: Path):
         lt26 = stand_in_windows_program(tmp_path / "LTspice.exe", "26.1.1.0")
-        found = ltspice_generation(str(lt26), "Linear Technology Corporation LTspice XVII")
+        found = which_ltspice(str(lt26), "Linear Technology Corporation LTspice XVII")
         assert found is not None and found.generation == "xvii"
-        found = ltspice_generation("/opt/spice17.exe", LTSPICE_26)
+        found = which_ltspice("/opt/spice17.exe", LTSPICE_26)
         assert found is not None and found.generation == "current" and not found.before_24
 
     def test_reported_builds(self):

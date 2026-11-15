@@ -48,7 +48,7 @@ from ltspice_mcp.lib.pdk_native import LAUNCH_POLICY, NativeLaunchPolicy
 from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
 from ltspice_mcp.lib.raw_parser import other_raws
 from ltspice_mcp.lib.simulator import NGSPICE_NO_USER_INIT, is_ngspice, run_ngbehavior
-from ltspice_mcp.lib.simulator_build import executable_path, ltspice_generation, reported_build
+from ltspice_mcp.lib.simulator_build import executable_path, reported_build, which_ltspice
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
@@ -616,7 +616,7 @@ def inject_logopinfo(
     caller's.
 
     The option goes in only when the LTspice is shown to be 24 or later
-    (``simulator_build.ltspice_generation``, which ``reported``, the build an
+    (``simulator_build.which_ltspice``, which ``reported``, the build an
     earlier run on this executable named, feeds). When which LTspice it is is
     not established, an ``.op`` deck runs without it, since on an XVII the
     option would end the run, and ``observations`` gets a
@@ -627,7 +627,7 @@ def inject_logopinfo(
     if not (isinstance(simulator, type) and issubclass(simulator, LTspice)):
         return netlist_path
     program = executable_path(simulator)
-    generation = ltspice_generation(program, reported)
+    generation = which_ltspice(program, reported)
     if generation is not None and generation.before_24:
         return netlist_path
     if netlist_path.suffix.lower() not in RUN_DECK_SUFFIXES:

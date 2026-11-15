@@ -8,7 +8,7 @@ it reported, by the file version in its own version resource (recorded:
 ``17.0.37.0``), or by its stock file name; ``LTspice.exe`` is a name an XVII can
 carry too. The run's deck, the hierarchy's spelling, the log's wording, the
 encoding warning and the library all take that one answer
-(``simulator_build.ltspice_generation``), so an XVII under another name is not
+(``simulator_build.which_ltspice``), so an XVII under another name is not
 handed a deck it refuses, and an executable nothing speaks for is not taken for
 LTspice 26.
 """

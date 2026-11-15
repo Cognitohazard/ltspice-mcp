@@ -192,7 +192,7 @@ class Build:
 
     ``label`` names the directory its recordings live in: ``ltspice`` and the
     major version (``ltspice26``; XVII is ``ltspice17``). ``generation`` is the
-    server's own answer (``simulator_build.ltspice_generation``): ``xvii`` keeps
+    server's own answer (``simulator_build.which_ltspice``): ``xvii`` keeps
     its settings and library in other places than every later build does.
     """
 
@@ -262,7 +262,7 @@ def identify_build(exe: Path, label: str | None = None) -> Build:
         raise RecorderError(f"not an executable file: {exe.name}")
     from ltspice_mcp.lib.simulator_build import (
         executable_file_version,
-        ltspice_generation,
+        which_ltspice,
     )
 
     version = file_version(exe)
@@ -273,7 +273,7 @@ def identify_build(exe: Path, label: str | None = None) -> Build:
         raise RecorderError(
             f"the server reads {exe.name}'s version as {read}, Windows as {version}"
         )
-    found = ltspice_generation(str(exe), None)
+    found = which_ltspice(str(exe), None)
     if found is None or found.generation == "iv":
         raise RecorderError(f"cannot tell which LTspice {exe.name} is")
     generation = found.generation

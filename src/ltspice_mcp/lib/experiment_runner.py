@@ -583,7 +583,7 @@ class _Execution:
     persistence_error: Exception | None = None
     #: The build an earlier run on this job's executable reported, read on the
     #: loop as the job starts: the first evidence of which LTspice it is
-    #: (``simulator_build.ltspice_generation``).
+    #: (``simulator_build.which_ltspice``).
     reported_build: str | None = None
 
     @property

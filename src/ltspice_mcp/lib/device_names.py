@@ -88,13 +88,13 @@ def naming_for(producer: Producer) -> Naming:
     """
     # Here, not at the top: the raw parser reads device names through this
     # module, and simulator_build reads a raw's writer through the raw parser.
-    from ltspice_mcp.lib.simulator_build import ltspice_generation
+    from ltspice_mcp.lib.simulator_build import which_ltspice
 
     if producer.family == "ngspice":
         return Naming("ngspice", xvii=False, read_as="ngspice")
     if producer.family != "ltspice":
         return Naming(producer.family, xvii=False, read_as=None)
-    found = ltspice_generation(producer.program, producer.build)
+    found = which_ltspice(producer.program, producer.build)
     generation = found.generation if found is not None else None
     if generation == "xvii":
         return Naming("ltspice", xvii=True, read_as="LTspice XVII")

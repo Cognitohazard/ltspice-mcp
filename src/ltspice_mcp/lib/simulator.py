@@ -431,7 +431,7 @@ It leaves the installation's ``spinit``, which loads ngspice's code models.
 
 
 def generation_of(simulator_class: type | None) -> str | None:
-    """Which LTspice a class launches, as ``simulator_build.ltspice_generation``
+    """Which LTspice a class launches, as ``simulator_build.which_ltspice``
     answers it from the program itself: ``"xvii"``, ``"iv"`` or ``"current"``
     (LTspice 24 and later), None for a class that is not LTspice or a program
     nothing shows to be one (a wrapper script, a copy without its version
@@ -445,11 +445,11 @@ def generation_of(simulator_class: type | None) -> str | None:
     show keeps every build's library even after a run on it named its build
     (pinned by ``test_an_xvii_is_known_by_what_it_is_or_what_its_runs_report``).
     """
-    from ltspice_mcp.lib.simulator_build import executable_path, ltspice_generation
+    from ltspice_mcp.lib.simulator_build import executable_path, which_ltspice
 
     if not is_ltspice(simulator_class):
         return None
-    found = ltspice_generation(executable_path(simulator_class), None)
+    found = which_ltspice(executable_path(simulator_class), None)
     return found.generation if found is not None else None
 
 

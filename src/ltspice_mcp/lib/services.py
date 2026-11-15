@@ -65,8 +65,8 @@ from ltspice_mcp.lib.simulator_build import (
     Producer,
     SimulatorExecutable,
     executable_identity,
-    ltspice_generation,
     same_executable,
+    which_ltspice,
 )
 from ltspice_mcp.lib.trace_names import (
     NODE_PAIR_RE,
@@ -697,7 +697,7 @@ def cp1252_ltspice(state: SessionState, executable: SimulatorExecutable | None) 
     LTspice XVII and earlier read a deck as cp1252, so a UTF-8 micro sign
     (C2 B5) reaches them as the two characters ``Âµ`` and loses its scale;
     LTspice 24 and later read the UTF-8 they write. The answer is
-    ``simulator_build.ltspice_generation``'s, from the executable itself and
+    ``simulator_build.which_ltspice``'s, from the executable itself and
     the build the latest run on it reported, the one
     ``inspect(kind="capabilities")`` reports. Neither launches the simulator.
     Any other simulator, or an LTspice nothing shows to be one before 24,
@@ -706,9 +706,9 @@ def cp1252_ltspice(state: SessionState, executable: SimulatorExecutable | None) 
     if executable is None:
         return None
     # The executable itself answers without the scan of every recorded run.
-    found = ltspice_generation(executable.path, None)
+    found = which_ltspice(executable.path, None)
     if found is None or not found.before_24:
-        found = ltspice_generation(executable.path, reported_build_of(state, executable))
+        found = which_ltspice(executable.path, reported_build_of(state, executable))
     return found.evidence if found is not None and found.before_24 else None
 
 
@@ -770,7 +770,7 @@ def _producer_of(
     # recorded run, and every other one is read with its build's own wording.
     build = None
     if family == "ltspice":
-        found = ltspice_generation(program, None)
+        found = which_ltspice(program, None)
         if found is None or not found.before_24:
             build = reported_build_of(state, identity)
     return Producer(family=family, build=build, program=program)

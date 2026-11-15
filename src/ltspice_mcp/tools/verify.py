@@ -2647,7 +2647,8 @@ async def evaluate_verify_circuit(
     ltspice = state.available_simulators.get("ltspice")
     if ltspice is not None and (wanted.get("syntax") or wanted.get("export")):
         executable = await asyncio.to_thread(executable_identity, ltspice)
-        cp1252_reader = cp1252_ltspice(state, executable)
+        # Off the loop: it may read the program file (its version resource).
+        cp1252_reader = await asyncio.to_thread(cp1252_ltspice, state, executable)
 
     if wanted.get("syntax") and decoded is not None and deck is not None:
         text, encoding = decoded

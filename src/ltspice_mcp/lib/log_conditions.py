@@ -671,14 +671,14 @@ def rules_for(producer: Producer) -> tuple[str, str | None]:
     :data:`COVERAGE` key that says why it is not the producer's own, if so."""
     # Here rather than at the top: the parser worker imports this module, and
     # the build check would bring the raw reader into it.
-    from ltspice_mcp.lib.simulator_build import ltspice_generation
+    from ltspice_mcp.lib.simulator_build import which_ltspice
 
     if producer.family is None:
         return "wording", "producer_unknown"
     if producer.family == "ltspice":
         # Of the builds before 24, only XVII is recorded: IV reads with every
         # recorded build's wording, as a build after 26 does.
-        found = ltspice_generation(producer.program, producer.build)
+        found = which_ltspice(producer.program, producer.build)
         if found is not None and found.generation == "xvii":
             return _LT17, None
         if producer.build is not None and _LTSPICE_26.match(producer.build):
