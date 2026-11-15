@@ -242,7 +242,9 @@ def _bundle_version(info: Path) -> tuple[int, ...] | None:
     try:
         with info.open("rb") as file:
             version = plistlib.load(file).get("CFBundleShortVersionString")
-    except (OSError, ValueError, plistlib.InvalidFileException, AttributeError):
+    except Exception:
+        # A damaged plist raises whatever its parser meets (an XML parser
+        # error, a struct error in a binary one): no version, not a failure.
         return None
     numbers = re.match(r"\s*(\d+(?:\.\d+)*)", version) if isinstance(version, str) else None
     return tuple(int(part) for part in numbers[1].split(".")) if numbers else None

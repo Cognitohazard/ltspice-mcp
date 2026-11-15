@@ -325,6 +325,12 @@ class TestLtspiceGeneration:
         found = which_ltspice(str(program), None)
         assert (found.generation if found else None) == generation
 
+    def test_a_damaged_bundle_plist_shows_nothing(self, tmp_path: Path):
+        contents = tmp_path / "LTspice.app" / "Contents"
+        program = stand_in_program(contents / "MacOS" / "LTspice", b"\xcf\xfa\xed\xfe")
+        (contents / "Info.plist").write_bytes(b'<?xml version="1.0"?><plist><dict><key>a</key>')
+        assert which_ltspice(str(program), None) is None
+
     def test_a_reported_build_answers_first(self, tmp_path: Path):
         lt26 = stand_in_windows_program(tmp_path / "LTspice.exe", "26.1.1.0")
         found = which_ltspice(str(lt26), "Linear Technology Corporation LTspice XVII")
