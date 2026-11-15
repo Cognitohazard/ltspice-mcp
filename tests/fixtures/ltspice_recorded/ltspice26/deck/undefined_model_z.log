@@ -1,0 +1,6 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\undefined_model_z.cir
+Start Time: Thu Jan 15 00:00:00 2026
+C:\recording\undefined_model_z.cir(4): Undefined model "mesmod".
+Z1 d g 0 MESMOD
+         ^^^^^^

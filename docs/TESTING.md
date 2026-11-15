@@ -316,7 +316,9 @@ All files are under `tests/fixtures/ltspice_recorded/`.
   `-netlist`; anything else is run with `-Run -b`. A `plot` case runs a sheet
   in LTspice's window instead (*Plot settings* below), a `save` case opens a
   sheet there and saves it (*Saved sheets* below), and a `draw` case opens one
-  there and has it write an image (*Drawn sheets* below). A behaviour with no
+  there and has it write an image (*Drawn sheets* below). A `[[case]]` with
+  `cwd` starts the build in that folder under the case's own, so a case can
+  ask what a relative path is relative to. A behaviour with no
   input of its own names in an `evidence` key where it is recorded instead (a
   manifest field, the files of other cases, or the bridge recordings), or
   gives in an `unrecordable` key the reason it cannot be recorded. A behaviour
@@ -345,7 +347,7 @@ These tests run on any machine, without LTspice:
 |`test_recorded_ltspice_unread_cards.py`|that every reader of a deck's cards (the components listing, variation targets and rules, the mismatch plan, staging and the recovery of a staged closure, the `.op` option a run adds, the measurement kinds and noise unit read off a run's deck, an export's pin nodes) reads neither the title line nor a card after `.end`, and reads an included file up to its own `.end`|
 |`test_recorded_ltspice_results.py`|every raw layout, stepped runs, measurements and the angle unit of trigonometric functions in them, Fourier and device operating-point blocks, a frequency response analysis's results file, and how a failed run is classified|
 |`test_recorded_ltspice_sheet_save.py`|the sheet each build writes on save (line endings, encoding, record order), and that `asc_document` reads it, writes it back byte-identical, and formats a record as the build does|
-|`test_recorded_ltspice_drawing.py`|what each build draws for a sheet: the ground triangle at each orientation and text size, where part text lands and how high it is, a text holding a backslash, a WINDOW line short of its justification or size, and the text the scene leaves out|
+|`test_recorded_ltspice_drawing.py`|what each build draws for a sheet: the ground triangle at each orientation and text size, where part text lands and how high it is, a text holding a backslash, a WINDOW line short of its justification or size, a hidden or moved window, a flag named GND, where a net label's text goes, a port's outline, and the text the scene leaves out|
 |`test_recorded_ltspice_plot_settings.py`|the plot settings file each build saves (encoding and line endings, pane order, the Log line) and what each build displays for a file the server wrote|
 |`test_build_benchmark.py`|the benchmark's net reading of every sheet it builds, pin by pin; the fourth node of a transistor drawn with three pins; and that each export matches the benchmark's reference circuit|
 |`test_ltspice_recorder.py`|the recorder, and the tree: every listed file is present with its recorded digest, every input matches the one that was run, and every behaviour is recorded on every build or has a reason|

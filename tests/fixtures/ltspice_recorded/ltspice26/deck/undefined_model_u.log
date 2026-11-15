@@ -1,0 +1,6 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\undefined_model_u.cir
+Start Time: Thu Jan 15 00:00:00 2026
+C:\recording\undefined_model_u.cir(3): Undefined model "urcmod".
+U1 a b 0 URCMOD L=1m
+         ^^^^^^

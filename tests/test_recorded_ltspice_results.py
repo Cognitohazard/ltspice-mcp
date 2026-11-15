@@ -2938,3 +2938,224 @@ class TestCompareRuns:
         assert plain.compare(stepped, other_step=0)["signals"]
         with pytest.raises(ResultError, match="Not a signal of both results: V\\(nowhere\\)"):
             plain.compare(stepped, other_step=0, signals=["V(nowhere)"])
+
+
+# --------------------------------------------------------------------------
+# Questions the code answered without a recording
+# --------------------------------------------------------------------------
+
+#: A DERIV ... WHEN: both builds print the derivative after ``=`` and the point
+#: after a lowercase ``at``, as they print a DERIV ... AT, alone and in a
+#: stepped table's ``at`` column. The server answers it with the point, the
+#: answer its deck card has always given it (``log_parser.measurement_answer``).
+DERIV_WHEN_ANSWERED_WITH_ITS_POINT_BY_THE_SERVER_ONLY = "at"
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+@pytest.mark.parametrize("case_id", ["log/meas_deriv_when", "log/meas_deriv_when_step"])
+def test_a_deriv_when_prints_the_derivative_and_its_point(build: str, case_id: str):
+    """RC is 100 us charging to 1 V, so where V(out) crosses 0.5 its slope is
+    5000 V/s, at 69 us. LTspice 26 labels the line ``V(out)=``, XVII
+    ``D(v(out))=``."""
+    data = cast(dict[str, Any], parse_measurements(rec.recorded(build, f"{case_id}.log")))
+    entries = data["measurements"]
+    when, at = entries["d_when"], entries["d_at"]
+    stepped = case_id.endswith("_step")
+    assert when["printed_form"] == at["printed_form"] == ("table_at" if stepped else "line_at")
+    assert when["values"][0] == pytest.approx(5000, rel=0.06)
+    point = when["at"][0] if stepped else when["at"]
+    assert point == pytest.approx(100e-6 * math.log(2), rel=0.01)
+    read = answered(build, data, INPUTS / f"{case_id}.cir")["measurements"]
+    assert read["d_at"]["answer"] == "value"
+    assert read["d_when"]["answer"] == DERIV_WHEN_ANSWERED_WITH_ITS_POINT_BY_THE_SERVER_ONLY
+
+
+#: XVII prints a stepped WHEN that finds no crossing in a step as 0 in that
+#: step's row, where LTspice 26 prints "failed"; the server reads XVII's 0 as a
+#: crossing at 0 s.
+FAILED_STEP_PRINTED_AS_ZERO_BY_XVII = 0.0
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_stepped_when_table_never_prints_a_level_beside_a_point(build: str):
+    """RISE, FALL, CROSS=LAST, TD and a WHEN of an expression each print the
+    crossing alone under a heading of ``expr=level``; a FIND ... WHEN prints
+    its value beside an ``at`` column. No table has a level column beside an
+    ``at`` column."""
+    data = cast(
+        dict[str, Any], parse_measurements(rec.recorded(build, "log/meas_when_step_forms.log"))
+    )
+    forms = {name: entry["printed_form"] for name, entry in data["measurements"].items()}
+    assert forms == {
+        "w_rise": "table_level",
+        "w_fall": "table_level",
+        "w_last": "table_level",
+        "w_td": "table_level",
+        "w_expr": "table_level",
+        "w_find": "table_at",
+    }
+    text = read_log_text(rec.recorded(build, "log/meas_when_step_forms.log"))
+    headings = re.findall(r"^  step\t(.*)$", text, re.M)
+    assert all(not (h.count("\t") and "=" in h.split("\t")[0]) for h in headings), headings
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_step_where_a_when_finds_no_crossing(build: str):
+    data = cast(
+        dict[str, Any], parse_measurements(rec.recorded(build, "log/meas_when_step_fails.log"))
+    )
+    first, second = data["measurements"]["w_one"]["values"]
+    assert first == pytest.approx(100e-6 * math.log(2), rel=0.01)
+    if rec.generation(build) == "xvii":
+        assert second == FAILED_STEP_PRINTED_AS_ZERO_BY_XVII
+        assert data["failed_measurements"] == []
+    else:
+        assert second is None
+        assert data["failed_measurements"] == ["w_one"]
+
+
+#: A measurement named with a dot (both builds) or a dash (XVII; LTspice 26
+#: refuses the deck with "syntax error"): the log prints the name as written
+#: and the crossing after AT, and the server's log reader reads no measurement.
+NAMED_WITH_PUNCTUATION_AND_DROPPED_BY_THE_LOG_READER = {"t.rise", "t-fall"}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_measurement_named_with_punctuation(build: str):
+    taken = ["log/meas_name_dot"]
+    if rec.generation(build) == "xvii":
+        taken.append("log/meas_name_dash")
+    else:
+        assert rec.entry(build, "log/meas_name_dash")["exit_code"] == 1
+        assert "syntax error" in read_log_text(rec.recorded(build, "log/meas_name_dash.log"))
+    for case_id in taken:
+        text = read_log_text(rec.recorded(build, f"{case_id}.log"))
+        (name,) = re.findall(r"^(t[.-]\w+): v\(out\)=0\.5 AT ", text, re.M | re.I)
+        assert name in NAMED_WITH_PUNCTUATION_AND_DROPPED_BY_THE_LOG_READER
+        assert (
+            cast(dict[str, Any], parse_measurements(rec.recorded(build, f"{case_id}.log")))[
+                "measurements"
+            ]
+            == {}
+        )
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_temperature_stepped_in_upper_case_reads_as_temp(build: str, tmp_path: Path):
+    """``.step TEMP list`` logs ``.step temp=...`` as ``.step temp list``
+    does, so the run reads the same steps."""
+    upper = rec.decode(build, "raw/step_temp_upper", tmp_path / "upper").raw.descriptor.steps
+    lower = rec.decode(build, "raw/step_temp", tmp_path / "lower").raw.descriptor.steps
+    assert [dict(s.parameters) for s in upper] == [dict(s.parameters) for s in lower]
+    assert [dict(s.parameters) for s in upper] == [{"temp": t} for t in (-40.0, 27.0, 125.0)]
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_bsim3_device_table_gives_charge_derivatives_not_capacitances(
+    build: str, tmp_path: Path
+):
+    """LTspice 26 prints the device table of an ``.op`` only under
+    ``.options logopinfo``; XVII prints it without and refuses the option.
+    For a BSIM3 device both print the overlap capacitances and the charge
+    derivatives dQ/dV, and no Cgs, Cgd or Cgb. The derivatives with respect
+    to the gate are the capacitances an AC run measures at the terminals:
+    ``dQgdVgb`` the gate's to everything, ``-dQddVgb`` the drain's and
+    ``-dQbdVgb`` the bulk's, at 1 MHz from the 0 V sources' currents."""
+    case_id = (
+        "log/mos_charges_op"
+        if rec.generation(build) == "current"
+        else ("log/mos_charges_op_plain")
+    )
+    other = "log/mos_charges_op_plain" if case_id == "log/mos_charges_op" else "log/mos_charges_op"
+    assert read_device_op_points(rec.recorded(build, f"{other}.log")) == {}
+    table = read_device_op_points(rec.recorded(build, f"{case_id}.log"))
+    assert not {"@m1[cgs]", "@m1[cgd]", "@m1[cgb]"} & set(table)
+    raw = rec.decode(build, "log/mos_charges_ac", tmp_path).raw
+    currents = {name.lower(): complex(raw.get_wave(name, 0)[0]) for name in raw.get_trace_names()}
+    omega = 2 * math.pi * 1e6
+    measured = {
+        "@m1[dqgdvgb]": -currents["i(vg)"].imag / omega,
+        "@m1[dqddvgb]": -currents["i(vd)"].imag / omega,
+        "@m1[dqbdvgb]": -currents["i(vb)"].imag / omega,
+    }
+    for name, capacitance in measured.items():
+        assert table[name] == pytest.approx(capacitance, rel=0.01), name
+
+
+#: XVII writes the collapse of a time step after its operating point on one
+#: line, ``Heightened Def Con from <time> ++++...`` followed by its ``Fatal
+#: Error: Analysis: Time step too small``; the server's rule reads that error
+#: only at the start of a line, so it extracts no error from the log.
+DEF_CON_LINE_MISSED_BY_THE_CLASSIFIER = ("execution_failed", None)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_time_step_that_collapses_part_way(build: str):
+    """LTspice 26 warns that it relaxed its tolerance from 5 us, then fails with
+    "Convergence Failure: Time step too small; time = 5e-06" and "Simulation
+    Failed: Iteration limit reached". Both keep the raw up to 5 us."""
+    case_id = "log/timestep_collapse_mid"
+    assert rec.entry(build, case_id)["exit_code"] == 1
+    text = read_log_text(rec.recorded(build, f"{case_id}.log"))
+    diagnostics = extract_log_diagnostics(rec.recorded(build, f"{case_id}.log"))
+    if rec.generation(build) == "xvii":
+        (line,) = [line for line in text.splitlines() if "Def Con" in line]
+        assert re.fullmatch(
+            r"Heightened Def Con from 5e-006 \++Fatal Error: Analysis:  Time step too small; "
+            r'time = 5e-006, timestep = 1\.25e-019: trouble with node "a"',
+            line,
+        ), line
+        assert (
+            classify_failure_code(diagnostics["errors"]) == DEF_CON_LINE_MISSED_BY_THE_CLASSIFIER
+        )
+    else:
+        assert "Def Con" not in text
+        assert "Simulation tolerance relaxed to achieve convergence from" in text
+        assert "Convergence Failure:  Time step too small; time = 5e-06" in text
+        assert classify_failure_code(diagnostics["errors"])[0] == "convergence_failed"
+
+
+#: The device table's name for D1 inside the block placed as U1, by build:
+#: LTspice 26 writes the path (U1 without the X the export gives it), XVII the
+#: element letter, the instance and the device's name without its letter.
+BLOCK_DEVICE_IN_THE_TABLE = {"current": "@u1:d1[id]", "xvii": "@d:u1:1[id]"}
+
+
+#: What ``api.device_op_points`` calls that device: a deck instance X1's M1 is
+#: ``x1.m1`` on both builds, and this one has no name the two builds share.
+BLOCK_DEVICE_NAMED_BY_THE_API_UNLIKE_ON_THE_OTHER_BUILD = {"current": "u1d1", "xvii": "xu1.d1"}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_device_inside_a_block_not_named_with_x(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """LTspice 26 prints the table only under ``.options logopinfo``, which
+    XVII refuses ("unrecognized option") and prints the table without. Both
+    exports name the block X§U1 (26) or XU1 (XVII). The API reads the device
+    by a name of its own on each build: on LTspice 26 the path's two words
+    run together, and on XVII the path with the X the export gives U1, so
+    one device is asked for by two names."""
+    generation = rec.generation(build)
+    shown = (
+        "export/hier_device_logopinfo" if generation == "current" else "export/hier_device_plain"
+    )
+    other = (
+        "export/hier_device_plain"
+        if shown == "export/hier_device_logopinfo"
+        else ("export/hier_device_logopinfo")
+    )
+    if generation == "xvii":
+        assert rec.entry(build, other)["exit_code"] == 1
+    else:
+        assert read_device_op_points(rec.recorded(build, f"{other}.log")) == {}
+    points = read_device_op_points(rec.recorded(build, f"{shown}.log"))
+    assert points == {
+        BLOCK_DEVICE_IN_THE_TABLE[generation].replace("[id]", f"[{p}]"): v
+        for p, v in (("id", 2.26e-3), ("vd", 0.676), ("req", 11.5), ("cap", 0.0))
+    }
+    log = work_dir / "hier_device.log"
+    log.write_bytes(rec.recorded(build, f"{shown}.log").read_bytes())
+    by_device = SyncApi(state_no_sim).device_op_points(log)
+    name = BLOCK_DEVICE_NAMED_BY_THE_API_UNLIKE_ON_THE_OTHER_BUILD[generation]
+    assert by_device == {name: {"id": 2.26e-3, "vd": 0.676, "req": 11.5, "cap": 0.0}}

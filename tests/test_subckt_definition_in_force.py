@@ -2,11 +2,13 @@
 
 ngspice keeps the first, in card order, and warns "redefinition of .subckt X,
 ignored" (``netlist_graph.DuplicateSubckt``): ``spice_lex.subckt_definitions``
-answers that, and the netlist graph and the inspect port table read it. What
-LTspice keeps is not recorded, and the validator, which reads a deck as
-LTspice does, still reads both definitions' bodies as one scope with the
-later header's ports. The difference is pinned below until a recording
-decides it.
+answers that, and the netlist graph and the inspect port table read it.
+LTspice is recorded (``deck/subckt_defined_twice``): LTspice 26 refuses such
+a deck and XVII runs the second definition, and
+``test_recorded_ltspice_decks.test_a_subcircuit_defined_twice`` pins that
+beside the server's first. The validator, which reads a deck as LTspice
+does, still reads both definitions' bodies as one scope with the later
+header's ports, which neither build does.
 """
 
 from __future__ import annotations
@@ -54,10 +56,8 @@ def test_the_graph_and_the_inspect_ports_read_the_first(work_dir: Path):
 def test_the_validator_still_reads_both_definitions_until_ltspice_is_recorded():
     """Kept as it was: the later header's ports, both bodies in one scope, so
     the later header's port ``y`` reads as left open, where ngspice reads the
-    first definition and finds nothing. Listed for the next
-    recording run; when LTspice's choice is recorded, the validator asks
-    ``subckt_definitions`` (or a simulator-keyed form of it) and this test
-    changes."""
+    first definition and finds nothing. LTspice's choice is now recorded
+    (the module docstring); the validator does not follow it yet."""
     issues = validate_netlist_dangling_nodes(lex_deck(_DECK).cards, reader=LTSPICE_READER)
     assert any("'y'" in str(issue["message"]) for issue in issues), issues
 

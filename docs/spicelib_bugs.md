@@ -4633,3 +4633,94 @@ runs the deck above with ngspice's ASCII format (`SPICE_ASCIIRAWFILE=1`)
 and as the installed ngspice writes it. It is marked as an expected failure
 (`xfail`, strict) where the file is ASCII, so it fails again once a
 workaround makes it pass.
+
+---
+
+## Bug 44 — `LTSpiceLogReader` skips a measurement whose name holds a dot or a dash
+
+**Status:** draft for an upstream spicelib pull request. Observed 2026-11-15.
+**Affected version:** spicelib 1.5.1 (`spicelib/log/ltsteps.py`,
+`LTSpiceLogReader.__init__`, the stepless measurement regex).
+**Our workaround:** none yet. `log_parser.printed_measurements`, which finds
+the measurements a log printed so that a line the reader skipped fails its
+own entry (Bug 38), reads a name with the same `\w+` (`_RE_MEAS_RESULT_LINE`
+in `src/ltspice_mcp/lib/log_parser.py`), so it misses these lines too.
+
+### Summary
+
+Both LTspice 26 and XVII take a `.meas` named `t.rise`, and XVII one named
+`t-fall` (LTspice 26 refuses that deck with "syntax error"). Each build prints
+the result line with the name as written: `t.rise: V(out)=0.5 AT
+6.98157501917e-05`. The stepless regex reads a name as `\w+`, so a name
+holding `.` or `-` does not match, and the measurement, its value and its
+crossing are missing from the reader's dataset and from
+`get_measure_names()`. Nothing says a line was skipped.
+
+### Affected code
+
+```python
+# ltsteps.py, LTSpiceLogReader.__init__
+regx = re.compile(
+        r"^(?P<name>\w+)(:\s+.*)?=(?P<value>[\d(inf)E+\-\(\)dB,°(-/\w]+)( FROM (?P<from>[\d\.E+-]*) TO (?P<to>[\d\.E+-]*)|( at (?P<at>[\d\.E+-]*)))?",
+        re.IGNORECASE)
+```
+
+`\w+` stops at the `.` of `t.rise`; the optional `:` clause cannot start
+there, and no `=` follows, so `regx.match(line)` is None.
+
+### Reproduction
+
+The log LTspice 26.1.1 wrote for `.meas tran t.rise WHEN V(out)=0.5`
+(recorded as `tests/fixtures/ltspice_recorded/ltspice26/log/meas_name_dot.log`):
+
+```
+t.rise: V(out)=0.5 AT 6.98157501917e-05
+```
+
+```python
+from spicelib.log.ltsteps import LTSpiceLogReader
+reader = LTSpiceLogReader("meas_name_dot.log")
+reader.get_measure_names()   # []
+```
+
+LTspice XVII 17.0.37 prints `t-fall: v(out)=0.5 AT 6.9672e-005` for the
+deck named with a dash (`ltspice17/log/meas_name_dash.log`), with the same
+result.
+
+### Impact
+
+A measurement LTspice took and printed reads as one the deck never asked
+for: no value, no failure, no error.
+
+### Proposed fix
+
+Read the name as the text up to the first `:` or `=` that is not inside it
+(LTspice prints `<name>: ` before the expression):
+
+```python
+regx = re.compile(
+    r"^(?P<name>[^\s:=]+)(:\s+.*?)?=(?P<value>\S+)"
+    r"(\s+FROM\s+(?P<from>[\d\.E+-]*)\s+TO\s+(?P<to>[\d\.E+-]*)"
+    r"|\s+at\s+(?P<at>[\d\.E+-]*))?",
+    re.IGNORECASE)
+```
+
+### Suggested upstream test
+
+```python
+def test_a_measurement_named_with_a_dot_is_read(tmp_path):
+    log = tmp_path / "dot.log"
+    log.write_text(
+        "Circuit: * t\n\nt.rise: V(out)=0.5 AT 6.98157501917e-05\n", encoding="utf-8"
+    )
+    reader = LTSpiceLogReader(str(log))
+    assert reader.dataset["t.rise_at"] == [6.98157501917e-05]
+```
+
+### Cross-reference
+
+`tests/test_recorded_ltspice_results.py::test_a_measurement_named_with_punctuation`
+pins what each build prints beside the server reading no measurement
+(`NAMED_WITH_PUNCTUATION_AND_DROPPED_BY_THE_LOG_READER`), and
+`tests/test_run_diagnostics.py` lists XVII's dashed line among the lines the
+log classifier does not know.

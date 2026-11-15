@@ -1,0 +1,6 @@
+* .function as a .func
+.function dbl(x) 2*x
+I1 0 a 1
+R1 a 0 {dbl(1k)}
+.op
+.end

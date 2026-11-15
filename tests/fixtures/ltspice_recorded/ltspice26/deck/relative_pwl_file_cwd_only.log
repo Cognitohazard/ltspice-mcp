@@ -1,0 +1,6 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\relative_pwl_file_cwd_only.cir
+Start Time: Thu Jan 15 00:00:00 2026
+C:\recording\relative_pwl_file_cwd_only.cir(2): File "C:\recording\data\level.txt" not found.
+V1 a 0 PWL file=data/level.txt
+           ^^^^^^^^^^^^^^^^^^^

@@ -1,0 +1,10 @@
+* a charge-model MOSFET: its capacitances in the device table
+.options logopinfo
+VD d 0 2
+VG g 0 1.5
+VS s 0 0
+VB b 0 0
+M1 d g s b NCH W=10u L=1u
+.model NCH NMOS(level=8 tox=10n vth0=0.5)
+.op
+.end

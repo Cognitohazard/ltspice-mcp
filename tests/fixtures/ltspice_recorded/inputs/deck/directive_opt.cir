@@ -1,0 +1,6 @@
+* .opt as a short .options
+.opt temp=50
+I1 0 a 1
+R1 a 0 1k tc1=0.01
+.op
+.end

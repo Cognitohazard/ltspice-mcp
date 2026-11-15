@@ -1,0 +1,3 @@
+C:\recording\meas_name_dash.cir(6): syntax error
+.meas tran t-fall WHEN V(out)=0.5
+            ^^^^^^^^^^^^^^^^^^^^^

@@ -1,0 +1,13 @@
+* WHEN forms in the table of a stepped run
+V1 in 0 PULSE(0 1 0 1u 1u 0.4m 1m)
+R1 in out {Rv}
+C1 out 0 100n
+.step param Rv list 1k 2k
+.tran 0 1m 0 1u
+.meas tran w_rise WHEN V(out)=0.5 RISE=1
+.meas tran w_fall WHEN V(out)=0.5 FALL=1
+.meas tran w_last WHEN V(out)=0.5 CROSS=LAST
+.meas tran w_td WHEN V(out)=0.5 TD=0.1m
+.meas tran w_expr WHEN V(out)-0.5*V(in)=0
+.meas tran w_find FIND V(in) WHEN V(out)=0.5
+.end
