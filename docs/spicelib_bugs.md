@@ -1812,8 +1812,10 @@ build it named.
 `LTspice._default_lib_paths`; `spicelib/sim/simulator.py`,
 `Simulator.get_default_library_paths`).
 **Our workaround:** `src/ltspice_mcp/lib/simulator.py` — `generation_of`
-determines which LTspice a class launches from its program's file name
-(`XVIIx64.exe` is XVII, `LTspice.exe` is 24 and later), and
+determines which LTspice a class launches from the program itself
+(`simulator_build.which_ltspice`: its version resource, the macOS bundle's
+version, or the names XVII and IV install under; `LTspice.exe` alone shows
+nothing, and then every build's directories are kept), and
 `simulator_library_roots` keeps only that generation's directories from
 spicelib's list (`_in_generation`). On WSL, spicelib's list expands against the
 Linux home and finds nothing, so `wsl.get_ltspice_lib_paths(generation)` checks

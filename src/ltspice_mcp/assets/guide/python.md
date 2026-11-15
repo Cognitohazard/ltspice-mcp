@@ -48,7 +48,8 @@ with Api(working_dir=".") as api:
 
 Create one `Api` per process, and not inside a process that serves the MCP
 server.
-Relative paths resolve against `working_dir`. Closing it, or exiting the
+Relative paths resolve against `working_dir`, or against the first allowed
+directory when `allowed_paths` leaves `working_dir` out. Closing it, or exiting the
 process, stops the jobs it submitted without `detach=True`, which then read
 `interrupted`.
 

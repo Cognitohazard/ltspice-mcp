@@ -1,49 +1,45 @@
 """Resolving the paths callers name, and the optional sandbox they must lie in."""
 
-from collections.abc import Iterable, Iterator, Sequence
-from contextlib import contextmanager
-from contextvars import ContextVar
+from collections.abc import Iterable, Sequence
 from pathlib import Path
 
 from ltspice_mcp.errors import PathSecurityError
 
-#: Directory a relative path is taken from, when a host declares one
-#: (``resolve_safe_path`` gives the order). The in-process ``Api`` sets it to its
-#: ``working_dir`` around every call: ``Api(working_dir=D)`` plus a bare
-#: ``"opamp2.asc"`` names ``D/opamp2.asc``. A context variable rather than an
-#: argument: every relative path on every op has to be rebased, so the rule
-#: belongs at the one chokepoint they all pass through, where no new path field
-#: can be added without inheriting it.
-_relative_base: ContextVar[Path | None] = ContextVar("relative_path_base", default=None)
 
+def relative_base(allowed_dirs: Sequence[Path] | None, working_dir: Path | None) -> Path | None:
+    """The directory a relative path is taken from: the working directory,
+    unless a sandbox leaves it out, and then the first allowed directory.
 
-@contextmanager
-def relative_paths_from(base: Path | None) -> Iterator[None]:
-    """Resolve relative paths against ``base`` inside this block (and its tasks)."""
-    token = _relative_base.set(base)
-    try:
-        yield
-    finally:
-        _relative_base.reset(token)
-
-
-def _anchor(path: Path, base: Path | None) -> Path:
-    return path if base is None or path.is_absolute() else base / path
-
-
-def relative_base(allowed_dirs: Sequence[Path] | None, relative_to: Path | None) -> Path | None:
-    """The directory a relative path is taken from: the host's declared base
-    (``relative_paths_from``) when there is one, else the first allowed
-    directory, else ``relative_to``.
-
-    The one rule for it, so resolving a relative path, listing the files a
-    relative name can reach and telling a caller where relatives go all name
-    the same directory.
+    The one rule for it, in every host: a tool call, the Python API (and so a
+    ``run_code`` snippet and a detached job's owner) and a resource read take
+    a relative name from the same folder, and resolving a relative path,
+    listing the files a relative name can reach and telling a caller where
+    relatives go all name it. ``ServerConfig`` makes the working directory and
+    every sandbox entry absolute when it is loaded, so the folder does not
+    depend on the folder a process was started in. With neither, ``None``:
+    the process's folder.
     """
-    base = _relative_base.get()
-    if base is not None:
-        return base
-    return allowed_dirs[0] if allowed_dirs else relative_to
+    if not allowed_dirs:
+        return working_dir
+    if working_dir is not None:
+        try:
+            if _inside(working_dir.resolve(), allowed_dirs):
+                return working_dir
+        except (OSError, RuntimeError):
+            pass
+    return allowed_dirs[0]
+
+
+def _inside(resolved: Path, allowed_dirs: Sequence[Path]) -> bool:
+    """Whether the resolved ``resolved`` lies in one of ``allowed_dirs``; an
+    entry that cannot be resolved holds nothing."""
+    for allowed_dir in allowed_dirs:
+        try:
+            if resolved.is_relative_to(allowed_dir.resolve()):
+                return True
+        except (OSError, RuntimeError):
+            continue
+    return False
 
 
 def with_roots(allowed_dirs: Sequence[Path] | None, extra: Iterable[Path]) -> list[Path] | None:
@@ -74,9 +70,7 @@ def resolve_safe_path(
     after it, as the open would follow it, and on Windows ``..`` collapses
     before any link is followed, as the open collapses it.
 
-    A relative path is taken from the host's declared base
-    (``relative_paths_from``) when there is one, else from the first allowed
-    directory, else from ``relative_to``.
+    A relative path is taken from ``relative_base(allowed_dirs, relative_to)``.
 
     Args:
         user_path: Path string from user (relative or absolute)
@@ -95,8 +89,10 @@ def resolve_safe_path(
     if "\x00" in user_path:
         raise PathSecurityError(f"Failed to resolve path {user_path!r}: embedded null byte")
 
-    base = _relative_base.get()
-    path = _anchor(Path(user_path), relative_base(allowed_dirs, relative_to))
+    path = Path(user_path)
+    base = relative_base(allowed_dirs, relative_to)
+    if base is not None and not path.is_absolute():
+        path = base / path
 
     # Resolve symlinks and normalize (strict=False allows non-existent files).
     # ValueError covers an embedded NUL byte ("embedded null byte"), which
@@ -109,18 +105,11 @@ def resolve_safe_path(
     if allowed_dirs is None:
         return resolved
 
-    # Check if resolved path is within any allowed directory. A relative entry
-    # in that list (``allowed_paths = ["."]`` in a config file, say) is anchored
-    # the same way the user path was, so a declared base moves the sandbox with
-    # it instead of leaving it pinned to the process cwd.
-    for allowed_dir in allowed_dirs:
-        try:
-            allowed_resolved = _anchor(allowed_dir, base).resolve()
-            if resolved.is_relative_to(allowed_resolved):
-                return resolved
-        except (OSError, RuntimeError):
-            # Skip this allowed_dir if it can't be resolved
-            continue
+    # A configured entry is already absolute (``ServerConfig`` anchors it on
+    # the working directory); a relative one handed in directly is taken from
+    # the cwd.
+    if _inside(resolved, allowed_dirs):
+        return resolved
 
     # Path is outside all allowed directories
     raise PathSecurityError(
@@ -137,7 +126,7 @@ def describe_roots(allowed_dirs: Sequence[Path]) -> str:
         if allowed_dir.is_absolute():
             return str(allowed_dir)
         try:
-            return f"{allowed_dir} ({_anchor(allowed_dir, _relative_base.get()).resolve()})"
+            return f"{allowed_dir} ({allowed_dir.resolve()})"
         except (OSError, RuntimeError):
             return str(allowed_dir)
 

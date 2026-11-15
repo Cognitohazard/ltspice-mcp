@@ -1,9 +1,9 @@
 """Where a relative path is taken from, said the same way it is used.
 
-With a sandbox whose first entry is not the working directory, the MCP side
-reads a relative name from that first entry and the Python API reads it from
-its working directory. Each door's listings and refusal notes must name the
-folder that door actually reads from.
+A relative name is read from the working directory, or from the first allowed
+directory when the sandbox leaves the working directory out, whichever door
+it comes through. Listings and refusal notes must name the folder a read of
+that name opens.
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ from mcp.types import TextResourceContents
 
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.errors import PathSecurityError
-from ltspice_mcp.lib.pathutil import relative_paths_from
 from ltspice_mcp.resources import handle_read_resource
 from ltspice_mcp.state import SessionState
 from tests.conftest import SyncApi, stage_recorded_fixture
@@ -68,23 +67,40 @@ class TestNetlistResource:
     def test_the_listing_is_the_folder_a_relative_name_resolves_in(
         self, split_state: SessionState
     ) -> None:
-        first = _first(split_state)
-        (first / "deck.cir").write_text(_DECK, encoding="utf-8")
+        (split_state.working_dir / "deck.cir").write_text(_DECK, encoding="utf-8")
         assert _listed_uris(split_state) == ["spice://netlists/deck.cir"]
         assert split_state.resolve_path("deck.cir").parent == split_state.relative_base()
 
 
 class TestRelativeBase:
-    def test_it_is_the_folder_resolve_path_anchors_on(self, split_state: SessionState) -> None:
-        first = _first(split_state)
-        assert split_state.relative_base() == first.resolve()
-        assert split_state.resolve_path("x.cir") == first.resolve() / "x.cir"
-
-    def test_a_declared_base_moves_it(self, split_state: SessionState) -> None:
+    def test_it_is_the_working_directory_inside_the_sandbox(
+        self, split_state: SessionState
+    ) -> None:
         work = split_state.working_dir
-        with relative_paths_from(work):
-            assert split_state.relative_base() == work.resolve()
-            assert split_state.resolve_path("x.cir") == work.resolve() / "x.cir"
+        assert split_state.relative_base() == work.resolve()
+        assert split_state.resolve_path("x.cir") == work.resolve() / "x.cir"
+
+    def test_a_sandbox_without_the_working_directory_moves_it_to_the_first_entry(
+        self, tmp_path: Path
+    ) -> None:
+        work, first = tmp_path / "work", tmp_path / "first"
+        work.mkdir()
+        first.mkdir()
+        config = ServerConfig(
+            working_dir=work,
+            allowed_paths=[first],
+            config_path=tmp_path / "unused.ltspice-mcp.toml",
+            write_config=False,
+        )
+        state = SessionState.create(config, available={})
+        assert state.relative_base() == first.resolve()
+        assert state.resolve_path("x.cir") == first.resolve() / "x.cir"
+        (first / "deck.cir").write_text(_DECK, encoding="utf-8")
+        assert _listed_uris(state) == ["spice://netlists/deck.cir"]
+        # The Python API on the same session reads the same file.
+        assert SyncApi(state).verify_circuit(path="deck.cir")["path"] == str(
+            first.resolve() / "deck.cir"
+        )
 
     def test_without_a_sandbox_it_is_the_working_directory(self, tmp_path: Path) -> None:
         config = ServerConfig(
@@ -101,9 +117,8 @@ class TestRefusalNotes:
     def test_the_mcp_guidance_names_the_folder_mcp_reads_from(
         self, split_state: SessionState
     ) -> None:
-        first = _first(split_state)
         guidance = split_state.sandbox_guidance()
-        assert f"A relative path is taken from {first.resolve()}," in guidance
+        assert f"A relative path is taken from {split_state.working_dir.resolve()}," in guidance
 
     def test_the_api_note_names_the_folder_the_api_reads_from(
         self, split_state: SessionState, tmp_path: Path

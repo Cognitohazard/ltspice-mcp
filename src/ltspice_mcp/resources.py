@@ -112,7 +112,7 @@ def get_static_resources() -> list[types.Resource]:
             uri="spice://netlists/",
             description=(
                 "List of netlist files in the folder a relative path is read from: "
-                "the working directory, or the first allowed path under a sandbox"
+                "the working directory, or the first allowed path when a sandbox leaves it out"
             ),
             mime_type="application/json",
         ),
@@ -341,8 +341,9 @@ def _read_netlists_list(
     """List the netlist files in the folder a relative name is read from.
 
     That folder is the one ``spice://netlists/{filename}`` resolves a name
-    in: the working directory, or the first allowed path when a sandbox is
-    set. Listing any other folder would advertise URIs the read refuses.
+    in (``SessionState.relative_base``): the working directory, or the first
+    allowed path when the sandbox leaves the working directory out. Listing
+    any other folder would advertise URIs the read refuses.
     """
     del params
     folder = state.relative_base()
