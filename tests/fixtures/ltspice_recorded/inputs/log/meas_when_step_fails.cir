@@ -1,0 +1,8 @@
+* a stepped WHEN that is crossed in one step only
+V1 in 0 PULSE(0 1 0 1u 1u 1 2)
+R1 in out {Rv}
+C1 out 0 100n
+.step param Rv list 1k 100k
+.tran 0 1m 0 1u
+.meas tran w_one WHEN V(out)=0.5
+.end

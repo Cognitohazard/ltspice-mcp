@@ -1,0 +1,10 @@
+* a .global net used inside a subcircuit body, not a port
+.global vdd
+.subckt leg top
+R1 top vdd 1k
+.ends
+V1 vdd 0 5
+I3 0 c 1m
+X2 c leg
+.op
+.end

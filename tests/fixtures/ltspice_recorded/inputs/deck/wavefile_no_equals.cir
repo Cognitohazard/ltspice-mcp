@@ -1,0 +1,5 @@
+* a source playing a .wav file, wavefile written without =
+V1 a 0 wavefile level.wav
+R1 a 0 1k
+.tran 10m
+.end

@@ -1,0 +1,6 @@
+* .fourier as a .four
+V1 a 0 SINE(0 1 1k)
+R1 a 0 1k
+.fourier 1k V(a)
+.tran 0 2m 0 1u
+.end

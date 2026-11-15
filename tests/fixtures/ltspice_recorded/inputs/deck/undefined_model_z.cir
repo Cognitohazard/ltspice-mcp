@@ -1,0 +1,6 @@
+* a MESFET whose model is not defined
+V1 d 0 5
+V2 g 0 0
+Z1 d g 0 MESMOD
+.op
+.end

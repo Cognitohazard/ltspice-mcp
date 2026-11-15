@@ -1,0 +1,6 @@
+* C:\recording\text_irregular_spacing.asc
+R1 NC_01 NC_02 1k
+.tran 1m
+.param p=1
+.backanno
+.end

@@ -521,6 +521,11 @@ SPACED_TEXT = (
 )
 
 
+#: A recorded sheet holding such a line, which both LTspice builds read and
+#: export (``export/text_irregular_spacing``) and the editor refuses to open.
+SPACED_TEXT_READ_BY_LTSPICE_AND_REFUSED_BY_THE_EDITOR = {"text_irregular_spacing.asc"}
+
+
 class TestTheEditorHoldsWhatTheSheetHolds:
     """An edit is committed from what the schematic editor read, so a record it
     did not read would be deleted by any edit, while ``inspect`` and
@@ -538,8 +543,10 @@ class TestTheEditorHoldsWhatTheSheetHolds:
             refusal = str(refused)
         else:
             refusal = ""
-        # No sheet in the suite holds a record the editor skips.
-        assert "the schematic editor skips" not in refusal
+        # No sheet in the suite holds a record the editor skips but the one
+        # recorded to show that both LTspice builds read it.
+        if path.name not in SPACED_TEXT_READ_BY_LTSPICE_AND_REFUSED_BY_THE_EDITOR:
+            assert "the schematic editor skips" not in refusal
         if refusal:
             pytest.skip(f"the editor does not open it: {refusal}")
         document = parse_asc(path.read_bytes())

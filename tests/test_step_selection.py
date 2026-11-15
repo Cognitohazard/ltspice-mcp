@@ -217,9 +217,11 @@ def test_each_value_a_deck_steps_selects_its_step_from_what_its_log_printed(
     """``raw/step_digits`` steps r over values the deck writes to seventeen
     digits and two that differ only in the sixth. The log prints each to at
     least the six digits a step value is matched to, and the deck's own value
-    selects its step."""
-    if not rec.has(build, "raw/step_digits.log"):
-        pytest.skip(rec.CASES.behaviours["step-value-digits"].pending)
+    selects its step.
+
+    Both builds run a ``list`` in ascending order, not in the order the deck
+    writes it, so a step's index is its place in the log, never in the deck.
+    LTspice 26 prints a value to fifteen significant digits and XVII to six."""
     deck = (rec.INPUTS / "raw/step_digits.cir").read_text(encoding="utf-8")
     (line,) = [card for card in deck.splitlines() if card.startswith(".step ")]
     written = [parse_spice_value(token) for token in line.partition(" list ")[2].split()]
@@ -228,11 +230,16 @@ def test_each_value_a_deck_steps_selects_its_step_from_what_its_log_printed(
         for step in rec.decode(build, "raw/step_digits", tmp_path).raw.descriptor.steps
     ]
     assert len(steps) == len(written)
-    for index, value in enumerate(written):
+    printed_values = [step["r"] for step in steps]
+    assert printed_values == sorted(printed_values)
+    assert written != sorted(written)
+    digits = {"ltspice26": "2154.43469003188", "ltspice17": "2154.43"}[build]
+    assert float(digits) in printed_values
+    for value in written:
+        index = StepSelector(axis="r", value=value).pick(steps)
         printed = steps[index]["r"]
         assert isinstance(printed, float), steps[index]
         assert abs(printed - value) <= printed_half_unit(value), (printed, value)
-        assert StepSelector(axis="r", value=value).pick(steps) == index
 
 
 def test_an_at_read_is_exact_over_a_wider_gap_than_a_step_value_selects():

@@ -1,0 +1,55 @@
+Circuit: * WHEN forms in the table of a stepped run
+
+.OP point found by inspection.
+.step rv=1000
+.step rv=2000
+
+
+Measurement: w_rise
+  step	v(out)=0.5
+     1	6.98893e-005
+     2	0.000139536
+
+Measurement: w_fall
+  step	v(out)=0.5
+     1	0.000469149
+     2	0.000511377
+
+Measurement: w_last
+  step	v(out)=0.5
+     1	0.000469149
+     2	0.000511377
+
+Measurement: w_td
+  step	v(out)=0.5
+     1	0.000469149
+     2	0.000139536
+
+Measurement: w_expr
+  step	v(out)-0.5*v(in)=0
+     1	0
+     2	0
+
+Measurement: w_find
+  step	v(in)	at
+     1	1	6.98893e-005
+     2	1	0.000139536
+
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = modified trap
+totiter = 2056
+traniter = 2056
+tranpoints = 1029
+accept = 1029
+rejected = 0
+matrix size = 3
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)
+

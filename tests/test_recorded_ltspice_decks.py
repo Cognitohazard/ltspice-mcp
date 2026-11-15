@@ -20,6 +20,7 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import deck_prep, montecarlo
 from ltspice_mcp.lib.component_value import apply_value_to_instance
+from ltspice_mcp.lib.deck_staging import stage_deck
 from ltspice_mcp.lib.encoding import (
     decode_spice_bytes_with_encoding,
     read_spice_text,
@@ -31,7 +32,11 @@ from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.hierarchy_expr import evaluate
 from ltspice_mcp.lib.instance_targeting import InstanceEdit, apply_edit
 from ltspice_mcp.lib.lint_rules import lint_deck
-from ltspice_mcp.lib.log_parser import parse_measurements
+from ltspice_mcp.lib.log_parser import (
+    classify_failure_code,
+    extract_log_diagnostics,
+    parse_measurements,
+)
 from ltspice_mcp.lib.log_types import MeasurementsOutput
 from ltspice_mcp.lib.netlist_diff import read_deck, structural_delta
 from ltspice_mcp.lib.netlist_graph import (
@@ -45,7 +50,15 @@ from ltspice_mcp.lib.runner_base import deck_requirements
 from ltspice_mcp.lib.schematic_ops import netlist_card_value
 from ltspice_mcp.lib.services import extract_netlist_info
 from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build, is_cp1252_ltspice_executable
-from ltspice_mcp.lib.spice_lex import SpiceCard, directive_head, emit, lex, lex_deck, lex_for_edit
+from ltspice_mcp.lib.spice_lex import (
+    SpiceCard,
+    directive_head,
+    emit,
+    lex,
+    lex_deck,
+    lex_for_edit,
+    subckt_definitions,
+)
 from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
 from ltspice_mcp.lib.spice_lex_views import (
     InstanceLine,
@@ -2140,3 +2153,284 @@ def test_no_recorded_step_that_ran_is_refused():
                 assert validate_directive(card.body) is None, (case.case_id, card.body)
                 checked += 1
     assert checked > 10
+
+
+# --------------------------------------------------------------------------
+# Questions the code answered without a recording
+# --------------------------------------------------------------------------
+
+
+def _log(build: str, case_id: str) -> str:
+    return read_spice_text(rec.recorded(build, f"{case_id}.log"))
+
+
+#: Which body of a subcircuit defined twice is in force: ngspice's first, which
+#: ``spice_lex.subckt_definitions`` answers for every reader, against the
+#: second, which XVII runs. LTspice 26 refuses the deck.
+FIRST_BODY_KEPT_BY_THE_SERVER_AND_LAST_RUN_BY_XVII = {"server": 1000.0, "xvii": 2000.0}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_subcircuit_defined_twice(build: str, tmp_path: Path):
+    """LTspice 26 refuses the deck ("more than one sub-circuit definition with
+    this name, which is ill-formed"); XVII runs the second body (2k). The
+    server reads the first body (1k), as ngspice keeps it, and its checks
+    pass the deck that LTspice 26 refuses."""
+    case_id = "deck/subckt_defined_twice"
+    if rec.generation(build) == "xvii":
+        assert ran(build, case_id)
+        v_in = rec.operating_point(build, case_id, tmp_path)["v(in)"]
+        assert v_in == FIRST_BODY_KEPT_BY_THE_SERVER_AND_LAST_RUN_BY_XVII["xvii"]
+    else:
+        assert not ran(build, case_id)
+        assert "more than one sub-circuit definition with this name" in _log(build, case_id)
+    text = deck_text(case_id)
+    cards = lex_deck(text).cards
+    ((_key, index),) = subckt_definitions(cards).items()
+    assert cards[index].line_start == 2
+    graph = parse_netlist_graph(text, reader=LTSPICE_READER)
+    (body,) = graph.subckts["amp"].components
+    assert body.value is not None
+    assert (
+        parse_spice_value(body.value)
+        == FIRST_BODY_KEPT_BY_THE_SERVER_AND_LAST_RUN_BY_XVII["server"]
+    )
+    assert refusals(case_id) == set()
+
+
+#: What v(a) is when a build reads the copy of the data file beside the deck;
+#: the copy in the folder the build was started in holds 0.75.
+DATA_BESIDE_THE_DECK = 0.5
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+@pytest.mark.parametrize("stem", ["relative_wavefile", "relative_pwl_file"])
+def test_a_relative_data_file_is_read_beside_the_deck(build: str, stem: str, tmp_path: Path):
+    """Both builds read ``data/level.wav`` and ``data/level.txt`` from the
+    deck's folder, not the folder they were started in, and fail when only
+    that folder holds the file: LTspice 26 "Could not open wavefile." or
+    "File ... not found.", XVII "Could not open"."""
+    raw = rec.decode(build, f"deck/{stem}", tmp_path).raw
+    assert set(np.asarray(raw.get_wave("V(a)", 0)).round(6)) == {DATA_BESIDE_THE_DECK}
+    alone = f"deck/{stem}_cwd_only"
+    assert not ran(build, alone)
+    log = _log(build, alone)
+    assert "ould not open" in log or "not found." in log
+
+
+def test_staging_leaves_a_relative_data_file_behind(tmp_path: Path):
+    """A staged run starts from a copy of the deck in a folder of its own, and
+    staging copies include and library files only, so a relative ``file=``
+    or ``wavefile=`` names a file the copy's folder does not hold, which both
+    builds then fail to open (the test above). A recoverable run refuses such
+    a card before anything runs (``recovery_external_reader``)."""
+    for stem, data in (("relative_wavefile", "level.wav"), ("relative_pwl_file", "level.txt")):
+        root = tmp_path / stem
+        (root / "data").mkdir(parents=True)
+        deck = root / f"{stem}.cir"
+        deck.write_bytes((INPUTS / "deck" / f"{stem}.cir").read_bytes())
+        (root / "data" / data).write_bytes((INPUTS / "deck" / "data" / data).read_bytes())
+        staged = stage_deck(deck, tmp_path / f"stage_{stem}", [root], origin=deck)
+        assert f"data/{data}" in staged.text
+        assert not (staged.staged_deck.parent / "data" / data).exists()
+
+
+#: ``V1 a 0 wavefile level.wav``, with no ``=``: both builds play the file, and
+#: the server reads ``wavefile level.wav`` as the source's value, so it does not
+#: know the card plays a file, and a recoverable run does not refuse it.
+PLAYED_BY_LTSPICE_AND_READ_AS_A_VALUE_BY_THE_SERVER = "wavefile level.wav"
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_wavefile_written_without_equals_is_played(build: str, tmp_path: Path):
+    raw = rec.decode(build, "deck/wavefile_no_equals", tmp_path).raw
+    assert set(np.asarray(raw.get_wave("V(a)", 0)).round(6)) == {0.5}
+    (card,) = [c for c in lex_deck(deck_text("deck/wavefile_no_equals")).cards if c.name == "V1"]
+    line = read_instance(card)
+    assert line is not None
+    assert line.value == PLAYED_BY_LTSPICE_AND_READ_AS_A_VALUE_BY_THE_SERVER
+    assert line.source is not None and line.source.played is None
+
+
+async def test_a_recoverable_run_does_not_refuse_a_wavefile_without_equals(
+    config: ServerConfig, work_dir: Path
+):
+    """The refusal of a card that reads a file looks for ``wavefile=``, so the
+    card both builds play (the test above) passes the deck check a
+    recoverable run makes, whose refusal of ``wavefile=`` names the card
+    (``test_a_recoverable_run_refuses_a_source_that_plays_a_file``). What
+    refuses this run, if anything, is a later stage, and names no file."""
+    source = INPUTS / "deck" / "wavefile_no_equals.cir"
+    deck = work_dir / source.name
+    deck.write_bytes(source.read_bytes())
+    (work_dir / "level.wav").write_bytes((INPUTS / "deck" / "level.wav").read_bytes())
+    state = SessionState.create(config, available={"sim": type("LTspice", (FakeSim,), {})})
+    args = RunExperimentsInput.model_validate(
+        {
+            "request_id": "recoverable-wavefile-no-equals",
+            "circuits": [{"path": str(deck)}],
+            "execution": {"recoverable": True, "wait_s": 0},
+            "lint": "off",
+        }
+    )
+    result = await handle_run_experiments(args, state)
+    error = (result.structured_content or {}).get("error") or {}
+    assert error.get("code") != "recovery_external_reader", error
+    assert "wavefile" not in error.get("message", ""), error
+    await state.settled()
+
+
+#: Each spelling and the node voltage the deck gives when the directive is read.
+DIRECTIVE_SPELLINGS = {
+    "deck/directive_opt": 1230.0,
+    "deck/directive_params": 2000.0,
+    "deck/directive_function": 2000.0,
+}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+@pytest.mark.parametrize("case_id", sorted(DIRECTIVE_SPELLINGS))
+def test_a_short_or_variant_directive_name_is_read(build: str, case_id: str, tmp_path: Path):
+    """``.opt``, ``.params`` and ``.function`` are read as ``.options``,
+    ``.param`` and ``.func`` on both builds, and the checks pass each deck."""
+    v_a = rec.operating_point(build, case_id, tmp_path)["v(a)"]
+    assert v_a == pytest.approx(DIRECTIVE_SPELLINGS[case_id], rel=1e-6)
+    assert refusals(case_id) == set()
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_fourier_is_read_as_four(build: str):
+    assert "Fourier components of V(a)" in _log(build, "deck/directive_fourier")
+    assert refusals("deck/directive_fourier") == set()
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_save_in_an_included_file_is_read(build: str, tmp_path: Path):
+    """``probes.inc`` holds ``.save V(in)``: both builds save V(in) alone and
+    so do not take the ``.meas`` of V(out) (LTspice 26 "Voltage not found.",
+    XVII FAIL'ed). A list split between the deck and the file saves both."""
+    traces, data = pair_run(build, "deck/save_in_include", tmp_path)
+    assert traces == ["time", "V(in)"]
+    taken = {
+        name for name, entry in data["measurements"].items() if entry["values"][0] is not None
+    }
+    assert "vout" not in taken
+    split = rec.decode(build, "deck/save_split_include", tmp_path / "split").raw
+    assert split.get_trace_names() == ["time", "V(in)", "V(out)"]
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_global_named_inside_a_body_is_the_global(build: str, tmp_path: Path):
+    """v(c) is 6: the body's vdd is the global 5 V rail."""
+    values = rec.operating_point(build, "deck/global_in_body", tmp_path)
+    assert values["v(c)"] == pytest.approx(6.0, rel=1e-6)
+    assert refusals("deck/global_in_body") == set()
+
+
+#: How each build refuses a Z, O or U card naming a model nothing defines. The
+#: server's checks pass all three decks: no rule asks whether an element's
+#: model is defined, so the run is what fails.
+UNDEFINED_ELEMENT_MODEL_PASSED_BY_THE_CHECKS = {
+    "current": 'Undefined model "{model}".',
+    "xvii": 'Unable to find definition of model "{model}"',
+}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+@pytest.mark.parametrize(
+    ("case_id", "model"),
+    [
+        ("deck/undefined_model_z", "mesmod"),
+        ("deck/undefined_model_o", "lossy"),
+        ("deck/undefined_model_u", "urcmod"),
+    ],
+)
+def test_an_undefined_element_model_stops_the_run(build: str, case_id: str, model: str):
+    """Every run fails the same way (a re-recording with ``--check`` reads
+    each log back unchanged), and the failure is classified as a missing
+    model naming it."""
+    assert not ran(build, case_id)
+    wording = UNDEFINED_ELEMENT_MODEL_PASSED_BY_THE_CHECKS[rec.generation(build)]
+    assert wording.format(model=model) in _log(build, case_id)
+    errors = extract_log_diagnostics(rec.recorded(build, f"{case_id}.log"))["errors"]
+    assert classify_failure_code(errors) == ("missing_model", {"missing_refs": [model]})
+    assert refusals(case_id) == set()
+
+
+#: Both builds run ``10Ω`` as 10 ohms; the server's value parser refuses it,
+#: and the lint only warns of a non-ASCII suffix (``value-suffix-nonascii``).
+READ_AS_TEN_BY_LTSPICE_AND_REFUSED_BY_THE_VALUE_PARSER = "10Ω"
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_value_written_with_an_ohm_sign_is_its_number(build: str, tmp_path: Path):
+    """``10Ω`` runs as 10 ohms in UTF-8, in UTF-16 and in cp1253 on both
+    builds (cp1252 has no ohm sign; XVII reads the UTF-8 bytes as two cp1252
+    letters, which it skips as it skips any unit). The checks pass the
+    decks, and the server's value parser refuses the value."""
+    for stem in ("ohm_utf8", "ohm_utf16le_bom", "ohm_cp1253"):
+        assert rec.operating_point(build, f"deck/{stem}", tmp_path / stem)["v(a)"] == 10.0
+        assert refusals(f"deck/{stem}") == set()
+    with pytest.raises(ValueError, match="Cannot parse"):
+        parse_spice_value(READ_AS_TEN_BY_LTSPICE_AND_REFUSED_BY_THE_VALUE_PARSER)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_params_with_no_space_after_the_colon_is_passed(build: str, tmp_path: Path):
+    """``X1 a 0 sub params:g=3`` runs with g=3 (3000 V) on both builds."""
+    assert rec.operating_point(build, "deck/params_no_space", tmp_path)["v(a)"] == 3000.0
+    assert refusals("deck/params_no_space") == set()
+
+
+#: An unquoted ``.lib`` path holding a space: both builds read it as one path,
+#: and the server reads the word after the space as a section name, so it
+#: refuses the deck LTspice runs.
+ONE_PATH_TO_LTSPICE_AND_A_SECTION_TO_THE_SERVER = {"lib-section-ltspice", "model-missing"}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_lib_path_holding_a_space_is_one_path(build: str, tmp_path: Path):
+    for stem in ("lib_path_space_unquoted", "lib_path_space_quoted"):
+        assert rec.operating_point(build, f"deck/{stem}", tmp_path / stem)["v(a)"] == 2000.0
+    assert refusals("deck/lib_path_space_quoted") == set()
+    assert refusals("deck/lib_path_space_unquoted") == (
+        ONE_PATH_TO_LTSPICE_AND_A_SECTION_TO_THE_SERVER
+    )
+
+
+#: The spelling of XAMP's node mid each build's ``.meas`` takes when the
+#: settings save subcircuit nodes; on the defaults neither build takes either.
+MEAS_SUBCKT_NODE = {"current": "deck/meas_subckt_node_x", "xvii": "deck/meas_subckt_node_no_x"}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_measurement_of_a_node_inside_a_subcircuit(build: str):
+    """LTspice 26 takes ``V(xamp:mid)`` and XVII ``V(amp:mid)``, each only with
+    the subcircuit's nodes saved: on the defaults both fail (LTspice 26
+    "Voltage not found.", XVII FAIL'ed), and the other build's spelling fails
+    either way. The checks pass all four decks."""
+    taken = MEAS_SUBCKT_NODE[rec.generation(build)]
+    for stem in ("deck/meas_subckt_node_x", "deck/meas_subckt_node_no_x"):
+        for suffix in ("", "_saved"):
+            data = parse_measurements(rec.recorded(build, f"{stem}{suffix}.log"))
+            values = [entry["values"][0] for entry in data["measurements"].values()]
+            if stem == taken and suffix:
+                assert values == [0.5]
+            else:
+                assert values in ([], [None])
+        assert refusals(stem) == set()
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_options_seed_is_refused_and_draws_repeat_without_it(build: str, tmp_path: Path):
+    """Neither build takes ``.options seed`` (LTspice 26 "syntax error", XVII
+    "unrecognized option"), which the checks pass. With no seed, ``mc()``,
+    ``gauss()`` and ``flat()`` draw the same numbers on every run of a build,
+    and other numbers on the other build."""
+    for stem in ("seed_7", "seed_7_again", "seed_8"):
+        assert not ran(build, f"deck/{stem}")
+    assert refusals("deck/seed_7") == set()
+    first = rec.operating_point(build, "deck/seed_none", tmp_path / "first")
+    again = rec.operating_point(build, "deck/seed_none_again", tmp_path / "again")
+    assert first == again
+    assert 1000.0 not in {first["v(a)"], first["v(b)"], first["v(c)"]}

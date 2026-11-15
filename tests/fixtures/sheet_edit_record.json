@@ -2042,6 +2042,16 @@
    "tests/test_recorded_ltspice_schematics.py::TestTheServerFindsASymbolWhereEitherBuildDoes::test_every_tool[holding the symbol-search/named_subfolder]"
   ]
  },
+ "80b4107abe321451": {
+  "answer": {
+   "reply": "f8594d8918f2232f",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/same_instance_run_past_second_pin]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_run_past_second_pin]"
+  ]
+ },
  "817a0848ec20b7af": {
   "answer": {
    "reply": "2860b10fb5108aed",
@@ -2851,6 +2861,16 @@
    "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[voltage-AC 1-set_component_value]",
    "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[voltage-PULSE(0 1 0 1n 1n 5n 10n)-set_component_attribute]",
    "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[voltage-PULSE(0 1 0 1n 1n 5n 10n)-set_component_value]"
+  ]
+ },
+ "ad9346fab102d573": {
+  "answer": {
+   "reply": "77ae185b828e53de",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/diagonal_end_on_wire_interior]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/diagonal_end_on_wire_interior]"
   ]
  },
  "ade6f222eb6bdc68": {
