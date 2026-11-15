@@ -17,7 +17,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-from ltspice_mcp.errors import InvalidCursorError, ResultError
+from ltspice_mcp.errors import InvalidCursorError, ResultError, ResultSetExpiredError
 from ltspice_mcp.lib import now, parse_iso_datetime
 from ltspice_mcp.lib.cursor_codec import CursorError
 from ltspice_mcp.lib.cursor_codec import canonical_hash as canonical_hash
@@ -191,7 +191,7 @@ def load(result_set_id: str, working_dir: Path) -> ResultSet:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        raise ResultError(
+        raise ResultSetExpiredError(
             f"Result set {result_set_id!r} is missing or expired; submit a fresh "
             "analyze_results request."
         ) from None
@@ -208,7 +208,7 @@ def load(result_set_id: str, working_dir: Path) -> ResultSet:
         with contextlib.suppress(OSError):
             path.unlink()
         _delete_artifacts(working_dir, result_set_id)
-        raise ResultError(
+        raise ResultSetExpiredError(
             f"Result set {result_set_id!r} expired; submit a fresh analyze_results request."
         )
     missing = _job_record_missing(item)

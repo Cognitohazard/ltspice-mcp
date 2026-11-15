@@ -6,6 +6,7 @@ from typing import Any, ClassVar
 
 from pydantic import ValidationError
 
+from ltspice_mcp.lib.continuation import Unfilled, call_to_continue
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError
 
 _MAX_VALIDATION_ERRORS = 6
@@ -442,6 +443,12 @@ class RecipeInvalidError(LTSpiceMCPError):
     code = "recipe_invalid"
 
 
+class ResultSetExpiredError(ResultError):
+    """A continuation named a stored analyze_results result that is gone: it
+    expired, or was never written. The stored request goes with it, so the
+    caller sends the request again."""
+
+
 class InvalidCursorError(LTSpiceMCPError):
     """A page cursor did not decode, failed its integrity check, or was minted
     for another listing, view, request or result set, or for a file that has
@@ -489,8 +496,16 @@ ERROR_HINTS: dict[type[LTSpiceMCPError], str] = {
     ),
     InvalidCursorError: (
         "Send back, unchanged, the cursor this tool's own previous page returned "
-        "(next_cursor; for analyze_results also the next block's cursor), or leave "
-        "it out to start from the first page."
+        "(next_cursor), or leave it out to start from the first page; for "
+        "analyze_results send the reply's next whole: "
+        + call_to_continue("analyze_results", {"continue": Unfilled("next")})
+        + "."
+    ),
+    ResultSetExpiredError: (
+        "A stored result is kept for a while and then removed; send the request "
+        "that made it again, without continue: "
+        + call_to_continue("analyze_results", Unfilled("the request, without continue"))
+        + "."
     ),
 }
 

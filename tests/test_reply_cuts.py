@@ -70,7 +70,7 @@ def _lists() -> Iterator[tuple[str, ReplyList]]:
 
 def _unbranched(path: str) -> str:
     """A path without its union branches: the jobs actions share their lists."""
-    return re.sub(r"<(?:anyOf|oneOf|allOf)\d+>\.?", "", path)
+    return re.sub(r"<(?:anyOf|oneOf|allOf)\d+>", "", path).replace("..", ".").lstrip(".")
 
 
 def _reachable(value: Any, into: set[int]) -> None:
@@ -249,7 +249,92 @@ _UNBOUNDED = "unbounded: no cap where it is made"
 #: Each list declared ``never``, by handler and path (union branches left out),
 #: with what bounds it where it is made. A list with no bound says so; it is
 #: listed to be bounded, not cut.
-NEVER_BOUNDS: dict[tuple[str, str], str] = {}
+_DIAGNOSTICS = "one per diagnostic code and channel (lib/log_conditions.py)"
+_MEASUREMENT_NAMES = "one per .meas the deck names"
+_CASE_FAILURES = (
+    "one per failure code and message with its numbers folded "
+    "(receipts._collapse_case_failures); no cap on distinct reasons"
+)
+_CASE_IDS = "receipts._FAILURE_CASE_ID_CAP (10), with count the true number"
+
+NEVER_BOUNDS: dict[tuple[str, str], str] = {
+    **{
+        (handler, path): _UNBOUNDED
+        for handler in (
+            "analysis.handle_plot_waveform",
+            "analyze.handle_analyze_results",
+            "experiments.handle_run_experiments",
+            "inspect_tools.handle_inspect",
+            "inspect_tools.handle_trace_net",
+            "jobs.handle_jobs",
+            "run_code.handle_run_code",
+            "verify.handle_verify_circuit",
+        )
+        for path in ("observations", "warnings")
+        if (handler, path) != ("inspect_tools.handle_trace_net", "observations")
+        and (handler, path) != ("run_code.handle_run_code", "observations")
+    },
+    ("analyze.handle_analyze_results", "results.*.warnings"): _UNBOUNDED,
+    ("experiments.handle_run_experiments", "analysis.observations"): _UNBOUNDED,
+    ("jobs.handle_jobs", "analysis.observations"): _UNBOUNDED,
+    ("inspect_tools.handle_inspect", "results[].data.observations"): _UNBOUNDED,
+    # Run diagnostics, failed and non-finite measurements.
+    ("experiments.handle_run_experiments", "runs.items[].diagnostics"): _DIAGNOSTICS,
+    ("jobs.handle_jobs", "runs.items[].diagnostics"): _DIAGNOSTICS,
+    ("jobs.handle_jobs", "items[].diagnostics"): _DIAGNOSTICS,
+    ("analyze.handle_analyze_results", "results.*.per_run.items[].value.diagnostics"): (
+        _DIAGNOSTICS
+    ),
+    ("analyze.handle_analyze_results", "results.*.values[].value.diagnostics"): _DIAGNOSTICS,
+    (
+        "analyze.handle_analyze_results",
+        "results.*.per_run.items[].value.failed_measurements",
+    ): _MEASUREMENT_NAMES,
+    ("analyze.handle_analyze_results", "results.*.values[].value.failed_measurements"): (
+        _MEASUREMENT_NAMES
+    ),
+    ("analyze.handle_analyze_results", "results.*.per_run.items[].value.not_finite"): (
+        _MEASUREMENT_NAMES
+    ),
+    ("analyze.handle_analyze_results", "results.*.values[].value.not_finite"): (
+        _MEASUREMENT_NAMES
+    ),
+    ("inspect_tools.handle_inspect", "results[].data.failed_measurements"): _MEASUREMENT_NAMES,
+    # Failures.
+    ("experiments.handle_run_experiments", "failures"): _CASE_FAILURES,
+    ("jobs.handle_jobs", "failures"): _CASE_FAILURES,
+    ("experiments.handle_run_experiments", "failures[].case_ids"): _CASE_IDS,
+    ("jobs.handle_jobs", "failures[].case_ids"): _CASE_IDS,
+    ("analyze.handle_analyze_results", "failures"): (
+        "one per code, stage and folded message, capped at analyze._FAILURE_CAP (100) "
+        "with a failures_truncated observation naming the rest"
+    ),
+    ("analyze.handle_analyze_results", "failures[].wheres"): (
+        "analyze._FAILURE_WHERE_CAP (10), with count the true number"
+    ),
+    ("verify.handle_verify_circuit", "failures"): "one per check that failed",
+    # What a check looked at, what a write did, and fixed shapes.
+    ("verify.handle_verify_circuit", "checks_run"): "one per check verify_circuit has",
+    ("verify.handle_verify_circuit", "checks_skipped"): "one per check verify_circuit has",
+    ("verify.handle_verify_circuit", "scene.bbox"): "four numbers",
+    ("analysis.handle_plot_waveform", "window_used"): "two numbers",
+    ("analysis.handle_plot_waveform", "ltspice.panes"): (
+        "one per panel the call asks for, at most analysis._MAX_PANELS (8)"
+    ),
+    ("analysis.handle_plot_waveform", "ltspice.panes[]"): (
+        "the signals the call asks for in that panel; no cap"
+    ),
+    ("analysis.handle_plot_waveform", "ltspice.saved_panes"): _UNBOUNDED,
+    ("analysis.handle_plot_waveform", "ltspice.saved_panes[].traces"): _UNBOUNDED,
+    ("inspect_tools.handle_inspect", "results"): "one per query in the call, at most 64",
+    ("inspect_tools.handle_inspect", "results[].error.supported"): (
+        "the values the refused argument accepts"
+    ),
+    ("jobs.handle_jobs", "files"): "one per file the run wrote beside its results",
+    # A sheet finding's own parts, in edit_schematic's preexisting view.
+    ("schematic_edit.handle_edit_schematic", "views.preexisting.items[].refs"): _UNBOUNDED,
+    ("schematic_edit.handle_edit_schematic", "views.preexisting.items[].points"): _UNBOUNDED,
+}
 
 
 def test_every_list_sent_whole_states_its_bound():
@@ -495,7 +580,103 @@ def _sites() -> dict[str, list[str]]:
 #: Each function that knows about cursors or reply budgets today, with the tool
 #: whose move onto the reply layer takes it off this list. The list only
 #: shrinks.
-REPLY_SIZE_SITES: dict[str, str] = {}
+REPLY_SIZE_SITES: dict[str, str] = {
+    "tools/verify.py:<module>": "verify_circuit",
+    "tools/verify.py:FindingsCursor.encode": "verify_circuit",
+    "tools/verify.py:decode_findings_cursor": "verify_circuit",
+    "tools/verify.py:VerifyCircuitInput": "verify_circuit",
+    "tools/verify.py:render_verify_circuit": "verify_circuit",
+    "tools/verify.py:_stale_cursor_text": "verify_circuit",
+    "tools/verify.py:_refuse_unfit_cursor": "verify_circuit",
+    "tools/verify.py:handle_verify_circuit": "verify_circuit",
+    "tools/inspect_tools.py:<module>": "inspect",
+    "tools/inspect_tools.py:SymbolsQuery": "inspect",
+    "tools/inspect_tools.py:NetQuery": "inspect",
+    "tools/inspect_tools.py:ComponentsQuery": "inspect",
+    "tools/inspect_tools.py:HierarchyQuery": "inspect",
+    "tools/inspect_tools.py:ModelQuery": "inspect",
+    "tools/inspect_tools.py:ResultsQuery": "inspect",
+    "tools/inspect_tools.py:SimulatorDocsQuery": "inspect",
+    "tools/inspect_tools.py:OpenInLtspiceQuery": "inspect",
+    "tools/inspect_tools.py:InspectInput": "inspect",
+    "tools/inspect_tools.py:_invalid_cursor": "inspect",
+    "tools/inspect_tools.py:_paginate": "inspect",
+    "tools/inspect_tools.py:_paginate_pair": "inspect",
+    "tools/inspect_tools.py:_do_symbols": "inspect",
+    "tools/inspect_tools.py:_do_net": "inspect",
+    "tools/inspect_tools.py:_do_components": "inspect",
+    "tools/inspect_tools.py:_do_model": "inspect",
+    "tools/inspect_tools.py:_simulator_docs_page": "inspect",
+    "tools/inspect_tools.py:_do_open_in_ltspice.read": "inspect",
+    "tools/inspect_tools.py:_window_difference_page": "inspect",
+    "tools/inspect_tools.py:_hierarchy_page": "inspect",
+    "tools/inspect_tools.py:_log_results_page": "inspect",
+    "tools/inspect_tools.py:_results_page": "inspect",
+    "tools/inspect_tools.py:handle_inspect": "inspect",
+    "tools/inspect_tools.py:_degrade_inspect": "inspect",
+    "tools/inspect_tools.py:_negotiate_inspect": "inspect",
+    "tools/inspect_tools.py:_negotiate_inspect.shrunk": "inspect",
+    "tools/inspect_tools.py:_negotiate_inspect.build": "inspect",
+    "tools/inspect_tools.py:_negotiate_inspect.render": "inspect",
+    "lib/pin_legend.py:<module>": "edit_schematic",
+    "tools/analyze.py:<module>": "analyze_results",
+    "tools/analyze.py:PerRunInclude": "analyze_results",
+    "tools/analyze.py:ContinueInput": "analyze_results",
+    "tools/analyze.py:AnalyzeResultsInput": "analyze_results",
+    "tools/analyze.py:_page": "analyze_results",
+    "tools/analyze.py:_page_of": "analyze_results",
+    "tools/analyze.py:_assemble": "analyze_results",
+    "tools/analyze.py:_snapshot_from_assembly": "analyze_results",
+    "tools/analyze.py:_snapshot_from_assembly.coverage_cursor_base": "analyze_results",
+    "tools/analyze.py:_rebind_snapshot_cursors": "analyze_results",
+    "tools/analyze.py:_shrink_snapshot_page": "analyze_results",
+    "tools/analyze.py:render_attached_analysis": "analyze_results",
+    "tools/analyze.py:trim_analysis": "analyze_results",
+    "tools/analyze.py:fit_waveform_samples": "analyze_results",
+    "tools/analyze.py:fit_waveform_samples.fits": "analyze_results",
+    "tools/analyze.py:_degrade_analysis": "analyze_results",
+    "tools/analyze.py:_negotiate_analysis": "analyze_results",
+    "tools/analyze.py:_negotiate_analysis.candidate": "analyze_results",
+    "tools/analyze.py:_negotiate_analysis.render": "analyze_results",
+    "tools/analyze.py:_cursor_fields": "analyze_results",
+    "tools/analyze.py:_resolve_drive_start": "analyze_results",
+    "tools/analyze.py:handle_analyze_results": "analyze_results",
+    "lib/result_store.py:<module>": "analyze_results",
+    "tools/experiments.py:<module>": "run_experiments",
+    "tools/experiments.py:AnalysisPerRun": "run_experiments",
+    "tools/experiments.py:RunExperimentsInput": "run_experiments",
+    "tools/experiments.py:handle_run_experiments": "run_experiments",
+    "tools/experiments.py:_render_static_run_receipt": "run_experiments",
+    "tools/experiments.py:_dwell_and_respond": "run_experiments",
+    "tools/experiments.py:_dwell_and_respond.build": "run_experiments",
+    "tools/experiments.py:_routing_failure_response": "run_experiments",
+    "tools/experiments.py:_routing_failure_response.build": "run_experiments",
+    "tools/experiments.py:_error_response": "run_experiments",
+    "tools/experiments.py:_post_submit_error_response": "run_experiments",
+    "tools/receipts.py:<module>": "run_experiments",
+    "tools/receipts.py:_degrade_receipt": "run_experiments",
+    "tools/receipts.py:negotiate_receipt": "run_experiments",
+    "tools/receipts.py:negotiate_receipt.candidate": "run_experiments",
+    "tools/receipts.py:negotiate_receipt.render": "run_experiments",
+    "tools/receipts.py:render_run_receipt": "run_experiments",
+    "tools/jobs.py:<module>": "jobs",
+    "tools/jobs.py:JobsInput": "jobs",
+    "tools/jobs.py:JobsListInput": "jobs",
+    "tools/jobs.py:JobsRunsInput": "jobs",
+    "tools/jobs.py:_jobs_page_schema": "jobs",
+    "tools/jobs.py:_decode_jobs_cursor": "jobs",
+    "tools/jobs.py:_negotiate_jobs": "jobs",
+    "tools/jobs.py:render_jobs_data": "jobs",
+    "tools/jobs.py:handle_jobs": "jobs",
+    "tools/schematic_edit.py:<module>": "edit_schematic",
+    "tools/schematic_edit.py:EditSchematicInput": "edit_schematic",
+    "tools/schematic_edit.py:_preexisting_block": "edit_schematic",
+    "tools/schematic_edit.py:_requested_views": "edit_schematic",
+    "tools/schematic_edit.py:_present_edit_views": "edit_schematic",
+    "tools/schematic_edit.py:_present_edit_views.page": "edit_schematic",
+    "tools/schematic_edit.py:_evaluate_edit_schematic": "edit_schematic",
+    "tools/schematic_edit.py:_validate_view_cursors": "edit_schematic",
+}
 
 
 def test_only_the_reply_layer_knows_about_reply_size():
@@ -505,6 +686,18 @@ def test_only_the_reply_layer_knows_about_reply_size():
         "An operation returns its whole answer; cutting it, cursors and reply budgets "
         f"are the reply layer's (tools/_base.py): {unlisted}"
     )
+
+
+def test_each_allowed_site_waits_for_an_operation():
+    operations = {
+        "run_experiments",
+        "jobs",
+        "analyze_results",
+        "inspect",
+        "edit_schematic",
+        "verify_circuit",
+    }
+    assert set(REPLY_SIZE_SITES.values()) <= operations
 
 
 def test_the_allowed_sites_still_need_their_place():
@@ -601,7 +794,7 @@ def _hand_written(tree: ast.AST) -> list[str]:
     for node in ast.walk(tree):
         if isinstance(node, ast.JoinedStr):
             text = "".join(
-                part.value if isinstance(part, ast.Constant) else "{}" for part in node.values
+                str(part.value) if isinstance(part, ast.Constant) else "{}" for part in node.values
             )
             for part in node.values:
                 skip.add(id(part))

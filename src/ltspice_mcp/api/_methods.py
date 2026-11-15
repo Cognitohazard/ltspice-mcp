@@ -39,6 +39,7 @@ from ltspice_mcp.api._primitives import (
 )
 from ltspice_mcp.errors import InvalidCursorError, PathSecurityError
 from ltspice_mcp.lib import experiment_store, parser_service, services
+from ltspice_mcp.lib.continuation import is_paging_argument
 from ltspice_mcp.lib.device_names import path_text
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
@@ -215,10 +216,6 @@ _DOOR_REMEDIES: dict[str, str] = {
 _DROPPED_CLASSES = frozenset({"budget", "dwell"})
 
 
-#: Field names that page a reply rather than say what to compute.
-_PAGING_NAMES = frozenset({"cursor", "continuation", "continue", "view_cursors"})
-
-
 def _control_class(path: tuple[str, ...]) -> str | None:
     """Which refusal class a field of an operation's model falls in, if any."""
     key = path[-1]
@@ -226,7 +223,7 @@ def _control_class(path: tuple[str, ...]) -> str | None:
         return "budget"
     if path == ("execution", "wait_s"):
         return "dwell"
-    if key in _PAGING_NAMES or key.endswith(("_cursor", "_cursors")):
+    if is_paging_argument(key):
         return "paging"
     return None
 

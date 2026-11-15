@@ -30,6 +30,7 @@ from ltspice_mcp.lib.netlist_graph import IncludeResolver
 from ltspice_mcp.lib.observability import note_request
 from ltspice_mcp.lib.raster import DEFAULT_SCALE, RenderedImage, render_image
 from ltspice_mcp.lib.raw_parser import OtherRawKind
+from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER, rows
 from ltspice_mcp.lib.reply_fields import (
     Kept,
     active_kept,
@@ -225,7 +226,7 @@ HINT_SCHEMA: dict[str, str] = {"type": "string"}
 
 # Free-text measurement caveats (see the observations-vs-warnings rule in
 # lib/result_observations.py).
-WARNINGS_SCHEMA: dict[str, Any] = {"type": "array", "items": {"type": "string"}}
+WARNINGS_SCHEMA: dict[str, Any] = {"type": "array", "items": {"type": "string"}, CUT: NEVER}
 
 PIN_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -284,6 +285,7 @@ LTSPICE_DIFFERENCE_ENTRIES: dict[str, Any] = {
     "only_in_window": {
         "type": "array",
         "items": {"type": "string"},
+        CUT: ITEMS,
         "description": (
             "Where it differs: what the window has and the file lacks, each a "
             "symbol with its attributes or one other line, as .asc lines. A part "
@@ -293,6 +295,7 @@ LTSPICE_DIFFERENCE_ENTRIES: dict[str, Any] = {
     "only_in_file": {
         "type": "array",
         "items": {"type": "string"},
+        CUT: ITEMS,
         "description": "The same, for what the file has and the window lacks.",
     },
     "difference_omitted": {
@@ -401,6 +404,7 @@ VALIDATION_WARNINGS_SCHEMA: dict[str, Any] = {
             "refs": {
                 "type": "array",
                 "items": {"type": "string"},
+                CUT: NEVER,
                 "description": "Every part the finding names, when it names more than one.",
             },
             "pin": {"type": "string"},
@@ -412,6 +416,7 @@ VALIDATION_WARNINGS_SCHEMA: dict[str, Any] = {
             "y": {"type": "integer"},
             "points": {
                 "type": "array",
+                CUT: NEVER,
                 "items": {
                     "type": "object",
                     "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
@@ -452,6 +457,9 @@ MEAS_ERRORS_SCHEMA: dict[str, Any] = {
 # and jobs and the summary recipe carry the same two fields.
 RUN_DIAGNOSTICS_SCHEMA: dict[str, Any] = {
     "type": "array",
+    # One entry is one condition on one channel: leaving one out would hide
+    # something the simulator said.
+    CUT: NEVER,
     "description": (
         "What the simulator said about the run, one entry per condition and channel: 'code' is "
         "the server's name for it, 'severity' the simulator's own word where it wrote "
@@ -489,6 +497,7 @@ DIAGNOSTICS_COVERAGE_SCHEMA: dict[str, Any] = {
 # classification); ``value``/``reconciliation``/``coverage`` items omit it.
 OBSERVATIONS_SCHEMA: dict[str, Any] = {
     "type": "array",
+    CUT: NEVER,
     "items": {
         "type": "object",
         "properties": {
@@ -922,7 +931,7 @@ ENVELOPE_ERROR_SCHEMA: dict[str, Any] = {
 
 def failures_schema(row: dict[str, Any]) -> dict[str, Any]:
     """The ``failures`` channel over one tool's failure-row shape."""
-    return {"type": "array", "items": row}
+    return {"type": "array", "items": row, CUT: NEVER}
 
 
 # One lint/check finding, wherever findings are reported. ``at`` locates it as
@@ -950,6 +959,10 @@ FINDING_SCHEMA: dict[str, Any] = {
     "required": ["rule_id", "severity", "ok", "evidence", "at", "subject"],
 }
 
+#: How a list of findings is cut: whole findings, each named by its rule, what
+#: it is about and where.
+FINDING_ROWS_CUT: dict[str, Any] = rows("rule_id", "subject", "at")
+
 #: The keys every offset page declares — see ``lib/pagination.page``, which
 #: builds them.
 PAGE_REQUIRED: list[str] = ["items", "total", "returned", "truncated", "next_cursor"]
@@ -971,7 +984,7 @@ def page_schema(
         "properties": {
             "items": items
             if items is not None
-            else {"type": "array", "items": {"type": "object"}},
+            else {"type": "array", "items": {"type": "object"}, CUT: ITEMS},
             "total": {"type": "integer"},
             "returned": {"type": "integer"},
             "truncated": {"type": "boolean"},

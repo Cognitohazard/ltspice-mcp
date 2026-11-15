@@ -81,6 +81,7 @@ from ltspice_mcp.lib.raw_parser import (
     safe_magnitude_db,
 )
 from ltspice_mcp.lib.recipes import WAVEFORM_MAX_POINTS_CAP, StepSelector
+from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER, series
 from ltspice_mcp.lib.result_kinds import AC_SHAPED, kind_named
 from ltspice_mcp.lib.sheet_results import place_beside_sheet
 from ltspice_mcp.lib.signal_analysis import (
@@ -1446,17 +1447,25 @@ def _rest_of_summary(
             "analysis_type": {"type": "string"},
             "plot_index": {"type": "integer", "minimum": 0},
             "descriptor": {"type": "object"},
-            "signals": {"type": "array", "items": {"type": "string"}},
+            "signals": {"type": "array", "items": {"type": "string"}, CUT: series("signals")},
             "n_steps": {"type": "integer"},
             "steps_plotted": {"type": "integer"},
             "panels": {"type": "integer"},
             "series_count": {"type": "integer"},
-            "points_per_series": {"type": "array", "items": {"type": "integer"}},
+            "points_per_series": {
+                "type": "array",
+                "items": {"type": "integer"},
+                CUT: series("signals"),
+            },
             "max_points": {"type": "integer"},
             "downsampled": {"type": "boolean"},
-            "window_used": {"type": "array", "items": {"type": "number"}},
+            "window_used": {"type": "array", "items": {"type": "number"}, CUT: NEVER},
             "x_unit": {"type": ["string", "null"]},
-            "traces": {"type": "array", "items": schema_from_typeddict(TraceSummary)},
+            "traces": {
+                "type": "array",
+                "items": schema_from_typeddict(TraceSummary),
+                CUT: ITEMS,
+            },
             "traces_truncated": {
                 "type": "integer",
                 "description": (
@@ -1516,10 +1525,15 @@ def _rest_of_summary(
                     },
                     "saved_panes": {
                         "type": "array",
+                        CUT: NEVER,
                         "items": {
                             "type": "object",
                             "properties": {
-                                "traces": {"type": "array", "items": {"type": "string"}},
+                                "traces": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    CUT: NEVER,
+                                },
                                 "x_scale": {"type": "string"},
                                 "y_scale": {"type": "string"},
                             },
@@ -1534,7 +1548,8 @@ def _rest_of_summary(
                     },
                     "panes": {
                         "type": "array",
-                        "items": {"type": "array", "items": {"type": "string"}},
+                        CUT: NEVER,
+                        "items": {"type": "array", "items": {"type": "string"}, CUT: NEVER},
                         "description": "The traces asked for, per pane.",
                     },
                     "reason": {"type": "string", "description": "Why it was not shown."},

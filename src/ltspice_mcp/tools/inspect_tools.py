@@ -157,6 +157,7 @@ from ltspice_mcp.lib.connectivity import (
     name_keys,
     named_labels,
 )
+from ltspice_mcp.lib.continuation import call_to_continue
 from ltspice_mcp.lib.cursor_codec import canonical_hash
 from ltspice_mcp.lib.deck_nodes import settled_node_kind
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, TraceDescriptor
@@ -189,6 +190,7 @@ from ltspice_mcp.lib.montecarlo import matches_prefix
 from ltspice_mcp.lib.ngspice_compat import mode_as_given
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
 from ltspice_mcp.lib.raster import RasterSupport, raster_support
+from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER, rows, series
 from ltspice_mcp.lib.routing import segment_json, wires_through
 from ltspice_mcp.lib.schematic_ops import (
     crossing_refused,
@@ -306,9 +308,10 @@ async def _sheet_of_file(path: Path, state: SessionState) -> tuple[Sheet, str]:
                 "type": "object",
                 "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
             },
-            "labels": {"type": "array", "items": {"type": "string"}},
+            "labels": {"type": "array", "items": {"type": "string"}, CUT: ITEMS},
             "pins": {
                 "type": "array",
+                CUT: ITEMS,
                 "items": {
                     "type": "object",
                     "properties": {
@@ -321,6 +324,7 @@ async def _sheet_of_file(path: Path, state: SessionState) -> tuple[Sheet, str]:
             },
             "coordinates": {
                 "type": "array",
+                CUT: ITEMS,
                 "items": {
                     "type": "object",
                     "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
@@ -1829,9 +1833,14 @@ async def _do_net(q: NetQuery, state: SessionState, view: _View) -> dict[str, An
     if "snapped_to_wire" in tdata:
         data["snapped_to_wire"] = tdata["snapped_to_wire"]
     if page["secondary_truncated"]:
+        again = {
+            **q.model_dump(mode="json", exclude_defaults=True, exclude={"cursor"}),
+            "cursor": page["next_cursor"],
+        }
         data["hint"] = (
             f"{page['secondary_returned']} of {page['secondary_total']} wire-vertex "
-            "coordinates returned; repeat this query with next_cursor for the rest "
+            "coordinates returned; read the rest with "
+            f"{call_to_continue('inspect', {'queries': [again]})} "
             "(one cursor advances pins and coordinates independently)."
         )
     if tdata.get("warnings"):
@@ -2829,7 +2838,7 @@ _ERROR_SCHEMA: dict[str, Any] = {
     "properties": {
         "code": {"type": "string"},
         "message": {"type": "string"},
-        "supported": {"type": "array", "items": {"type": "string"}},
+        "supported": {"type": "array", "items": {"type": "string"}, CUT: NEVER},
         "hint": HINT_SCHEMA,
     },
     "required": ["code", "message"],
@@ -2871,7 +2880,7 @@ _REFERENCE_BRANCH_SCHEMA: dict[str, Any] = {
         "name": {"type": "string", "description": "The discriminant value to pass."},
         "summary": {"type": "string"},
         "call": {"type": "string", "description": "How the call carrying this branch is written."},
-        "fields": {"type": "array", "items": _REFERENCE_FIELD_SCHEMA},
+        "fields": {"type": "array", "items": _REFERENCE_FIELD_SCHEMA, CUT: ITEMS},
     },
     "required": ["tool", "family", "name", "summary"],
 }
@@ -2882,12 +2891,14 @@ _REFERENCE_DATA_PROPERTIES: dict[str, Any] = {
     "query": {"type": ["string", "null"]},
     "matches": {
         "type": "array",
+        CUT: ITEMS,
         "items": _REFERENCE_BRANCH_SCHEMA,
         "description": "Best matches first, each with its full field table.",
     },
     "total_matches": {"type": "integer"},
     "contents": {
         "type": "array",
+        CUT: ITEMS,
         "description": "The table of contents, returned when no query was given.",
         "items": {
             "type": "object",
@@ -2896,6 +2907,7 @@ _REFERENCE_DATA_PROPERTIES: dict[str, Any] = {
                 "family": {"type": "string"},
                 "branches": {
                     "type": "array",
+                    CUT: ITEMS,
                     "items": {
                         "type": "object",
                         "properties": {"name": {"type": "string"}, "summary": {"type": "string"}},
@@ -2929,6 +2941,7 @@ _SIMULATOR_DOCS_DATA_PROPERTIES: dict[str, Any] = {
     "source": {"type": "string", "description": "The directory the documents are read from."},
     "docs": {
         "type": "array",
+        CUT: ITEMS,
         "items": {
             "type": "object",
             "properties": {
@@ -2941,6 +2954,7 @@ _SIMULATOR_DOCS_DATA_PROPERTIES: dict[str, Any] = {
     },
     "sections": {
         "type": "array",
+        CUT: ITEMS,
         "description": "The document in order, cut at its second-level headings.",
         "items": {
             "type": "object",
@@ -2980,6 +2994,7 @@ _OPEN_DESIGNS_DATA_PROPERTIES: dict[str, Any] = {
     "total": {"type": "integer", "description": "How many documents they have open in all."},
     "designs": {
         "type": "array",
+        CUT: ITEMS,
         "items": {
             "type": "object",
             "properties": {
@@ -3008,6 +3023,8 @@ _OPEN_DESIGNS_DATA_PROPERTIES: dict[str, Any] = {
 _MEASUREMENTS_DATA_PROPERTIES: dict[str, Any] = {
     "measurements": {
         "type": "array",
+        # A row is cut whole, so its answer, failed and unreadable stay with it.
+        CUT: rows("measurement", "value_index"),
         "items": {
             "type": "object",
             "properties": {
@@ -3060,6 +3077,7 @@ _MEASUREMENTS_DATA_PROPERTIES: dict[str, Any] = {
     "failed_measurements": {
         "type": "array",
         "items": {"type": "string"},
+        CUT: NEVER,
         "description": (
             "The measurements LTspice printed as failed at any step; each failed "
             "value's row is marked failed."
@@ -3080,6 +3098,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         "outcome": outcome_schema("complete", "partial"),
         "results": {
             "type": "array",
+            CUT: NEVER,
             "items": {
                 "type": "object",
                 "properties": {
@@ -3102,15 +3121,28 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                             "dialect": {"type": "string"},
                             "analysis": {"type": "string"},
                             "axis": {"type": ["object", "null"]},
-                            "plots": {"type": "array", "items": {"type": "object"}},
-                            "signals": {"type": "array", "items": {"type": "object"}},
-                            "table": {"type": "array", "items": {"type": "object"}},
-                            "native_tables": {"type": "array", "items": {"type": "object"}},
+                            "plots": {"type": "array", "items": {"type": "object"}, CUT: ITEMS},
+                            "signals": {
+                                "type": "array",
+                                "items": {"type": "object"},
+                                CUT: ITEMS,
+                            },
+                            "table": {
+                                "type": "array",
+                                "items": {"type": "object"},
+                                CUT: series("waveform"),
+                            },
+                            "native_tables": {
+                                "type": "array",
+                                "items": {"type": "object"},
+                                CUT: ITEMS,
+                            },
                             "capture_facts": {"type": "object"},
                             "scan": {"type": "object"},
                             "observations": {
                                 "type": "array",
                                 "items": {"type": "object"},
+                                CUT: NEVER,
                                 "description": (
                                     "What the results read say of themselves: partial_raw "
                                     "for a stopped case's kept raw."
@@ -3180,6 +3212,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         # own item's 'error' and never surface here.
         "observations": {
             "type": "array",
+            CUT: NEVER,
             "items": {
                 "type": "object",
                 "properties": {
