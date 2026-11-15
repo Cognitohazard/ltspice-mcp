@@ -443,12 +443,6 @@ class RecipeInvalidError(LTSpiceMCPError):
     code = "recipe_invalid"
 
 
-class ResultSetExpiredError(ResultError):
-    """A continuation named a stored analyze_results result that is gone: it
-    expired, or was never written. The stored request goes with it, so the
-    caller sends the request again."""
-
-
 class InvalidCursorError(LTSpiceMCPError):
     """A page cursor did not decode, failed its integrity check, or was minted
     for another listing, view, request or result set, or for a file that has
@@ -499,12 +493,6 @@ ERROR_HINTS: dict[type[LTSpiceMCPError], str] = {
         "(next_cursor), or leave it out to start from the first page; for "
         "analyze_results send the reply's next whole: "
         + call_to_continue("analyze_results", {"continue": Unfilled("next")})
-        + "."
-    ),
-    ResultSetExpiredError: (
-        "A stored result is kept for a while and then removed; send the request "
-        "that made it again, without continue: "
-        + call_to_continue("analyze_results", Unfilled("the request, without continue"))
         + "."
     ),
 }

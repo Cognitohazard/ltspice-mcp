@@ -20,6 +20,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+#: The name the Python form calls the API by, as ``run_code`` binds it.
+_API = "api."
+
 #: Argument names that page a reply rather than say what to compute.
 _PAGING_NAMES = frozenset({"cursor", "continuation", "continue", "view_cursors"})
 
@@ -85,7 +88,7 @@ def python_call(tool: str, arguments: Mapping[str, Any] | Unfilled) -> str:
     only with ``raw_page=True``. An argument whose name is a Python keyword
     (``continue``) goes in a ``**`` mapping."""
     if isinstance(arguments, Unfilled):
-        return f"api.{tool}({_python_value(arguments)})"
+        return f"{_API}{tool}({_python_value(arguments)})"
     plain = [
         f"{k}={_python_value(v)}"
         for k, v in arguments.items()
@@ -95,7 +98,7 @@ def python_call(tool: str, arguments: Mapping[str, Any] | Unfilled) -> str:
     parts = [*plain, "raw_page=True"] if _pages(arguments) else plain
     if spelled:
         parts.append("**" + _python_value(spelled))
-    return f"api.{tool}(" + ", ".join(parts) + ")"
+    return f"{_API}{tool}(" + ", ".join(parts) + ")"
 
 
 def call_to_continue(tool: str, arguments: Mapping[str, Any] | Unfilled) -> str:
