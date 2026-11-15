@@ -1450,7 +1450,8 @@ def render_runs_envelope(
                 "jobs",
                 {"action": "runs", "job_id": snapshot.job_id, "cursor": Unfilled("next_cursor")},
             )
-            + "."
+            # The cursor is an offset: the projection is the call's to repeat.
+            + (", with the same run_fields." if run_fields else ".")
             if page["truncated"]
             else f"Returned all recorded runs for job {snapshot.job_id}."
         ),

@@ -751,9 +751,6 @@ def _decode_jobs_cursor(cursor: str | None) -> int:
     return offset
 
 
-#: This tool's budget epilogue. No hint mirror: a jobs envelope's ``hint`` is the
-#: control-plane's next step, and the ladder's own note reaches the caller on
-#: ``observations`` without displacing it.
 #: What a list page held to its cap says of the groups after it.
 _LIST_PAGED = (
     "Read the next groups with "
@@ -761,6 +758,9 @@ _LIST_PAGED = (
     + "."
 )
 
+#: This tool's budget epilogue. No hint mirror: a jobs envelope's ``hint`` is the
+#: control-plane's next step, and the ladder's own note reaches the caller on
+#: ``observations`` without displacing it.
 _BUDGET_NOTES = response_budget.Notes(
     cut="presentation was reduced, no run or receipt was dropped.",
     route=(
