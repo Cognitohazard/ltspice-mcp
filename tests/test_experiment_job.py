@@ -434,7 +434,9 @@ class TestLiveJobs:
     @pytest.mark.asyncio
     async def test_waiting_on_a_record_nothing_here_runs_answers_from_it(self, work_dir: Path):
         """A record naming this process as owner, with no live job behind it
-        here, will not change: the registry's wait answers from the record."""
+        here and no persistence to re-read it from, will not change: the
+        registry's wait answers from the record at once, and not as a timeout,
+        so a caller waiting until the job ends does not ask again for ever."""
         circuit = work_dir / "deck.cir"
         circuit.write_text(".op\n.end\n")
         job = _job(work_dir, circuit, status="running")
@@ -445,7 +447,8 @@ class TestLiveJobs:
         # the record returns in time.
         current, timed_out = await asyncio.wait_for(registry.wait(job, 120), LIVENESS_S)
 
-        assert current is job and timed_out
+        assert current is job and not timed_out
+        assert registry.wait_cannot_end(job)
         assert job.job_id not in registry.live
 
     @pytest.mark.asyncio

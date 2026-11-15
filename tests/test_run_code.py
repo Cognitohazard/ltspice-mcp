@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import signal
 import subprocess
 import sys
 from collections.abc import AsyncIterator, Iterator
@@ -410,6 +411,41 @@ class TestLifetime:
         finally:
             if child.is_running():
                 child.kill()
+
+    @pytest.mark.skipif(not POSIX, reason="Windows has no process groups to signal")
+    async def test_a_worker_that_died_between_calls_is_not_signalled_by_its_pid(
+        self, state: SessionState, monkeypatch: pytest.MonkeyPatch
+    ):
+        """The worker exits between calls and is reaped, so the system may
+        give its pid, and the group id that is the same number, to another
+        process. The next call replaces the worker and signals nothing by that
+        pid: what the worker left in its group was stopped when it exited."""
+        before = (await run(state, "1"))["worker_pid"]
+        worker = worker_for(state)
+        assert worker.process is not None
+        os.kill(before, signal.SIGKILL)
+        await worker.process.wait()
+        await worker.settled()
+
+        signalled: list[int] = []
+        killpg, kill = os.killpg, os.kill
+
+        def record_killpg(pgid: int, sig: int) -> None:
+            signalled.append(pgid)
+            killpg(pgid, sig)
+
+        def record_kill(pid: int, sig: int) -> None:
+            signalled.append(pid)
+            kill(pid, sig)
+
+        monkeypatch.setattr(os, "killpg", record_killpg)
+        monkeypatch.setattr(os, "kill", record_kill)
+        reply = await run(state, "'replaced'")
+        monkeypatch.undo()
+
+        assert reply["status"] == "ok"
+        assert reply["worker_restarted"] == {"previous_pid": before, "reason": "the worker exited"}
+        assert before not in signalled
 
     async def test_a_second_call_while_one_runs_is_busy(self, state: SessionState):
         # The first snippet runs until the test releases it, so both later

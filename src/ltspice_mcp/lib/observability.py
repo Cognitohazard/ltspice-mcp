@@ -61,6 +61,7 @@ from typing import (
 
 from pydantic import BaseModel, SkipValidation, TypeAdapter
 
+from ltspice_mcp.errors import reply_error_code
 from ltspice_mcp.lib import now
 from ltspice_mcp.lib.experiment_types import ExperimentJob
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
@@ -455,7 +456,7 @@ def emit_tool_event(
     else:
         outcome = "error" if ended.is_error else "ok"
         if ended.is_error:
-            code = (ended.structured_content or {}).get("code")
+            code = reply_error_code(ended.structured_content)
         size = len(ended.model_dump_json(by_alias=True, exclude_none=True))
     _emit_call("mcp", tool, duration_s, outcome, code, size, request)
 

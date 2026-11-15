@@ -1375,7 +1375,15 @@ async def evaluate_jobs(args: JobsInput, state: SessionState) -> JobsEvaluation:
                 "timeout_s", args.timeout_s, experiments.JOBS_WAIT_CAP_S, "s"
             )
             held = () if note is None else (f"{note} Wait again to keep waiting.",)
+            cannot_end = state.job_registry.wait_cannot_end(job, args.wait_for)
             job, timed_out = await state.job_registry.wait(job, timeout_s, wait_for=args.wait_for)
+            if cannot_end:
+                held = (
+                    *held,
+                    f"Nothing in this session runs job {job.job_id!r} and job records are "
+                    "not kept ([state] persist_jobs = false), so no wait here can see it "
+                    "change: the wait returned at once.",
+                )
         # A runs page carries no observations, so it skips the progress reads.
         snapshot = (
             snapshot_receipt(job, state)

@@ -749,8 +749,9 @@ async def job_done(
 ) -> bool:
     """Whether ``job``, or with ``wait_for="runs"`` its runs, finished within
     ``timeout_s``: the registry's one wait, read as a yes or no."""
-    _, timed_out = await state.job_registry.wait(job, timeout_s, wait_for=wait_for)
-    return not timed_out
+    waited, timed_out = await state.job_registry.wait(job, timeout_s, wait_for=wait_for)
+    # A wait nothing here can end answers at once without timing out.
+    return not timed_out and not state.job_registry.wait_cannot_end(waited, wait_for)
 
 
 async def coordinator_returned(state: SessionState, job: ExperimentJob) -> None:

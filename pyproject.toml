@@ -170,6 +170,7 @@ known-first-party = ["ltspice_mcp"]
 "ltspice_mcp.lib.experiment_store.load_job".msg = "Resolve a job through the registry (JobRegistry.get_or_load), which reconciles a record another process owns."
 "ltspice_mcp.lib.experiment_store.load_job_from_path".msg = "Resolve a job through the registry (JobRegistry.get_or_load), which reconciles a record another process owns."
 "ltspice_mcp.lib.proc_kill.process_start_marker".msg = "Read this process's identity with store.this_process_start_marker; ask whether a process a record names is still running with store.owner_liveness or proc_kill.process_identity_presence; ask whether this process runs a job with JobRegistry.owns."
+"os.killpg".msg = "Signal a process group with proc_kill.kill_process_group, which signals it only while its leader is still the process started: a reaped leader's pid, and the group id that is the same number, can name another process."
 "ltspice_mcp.lib.recipes.validate_recipe".msg = "Validate a request's recipe with analyze.recipe_of_request, which also checks the source labels it names."
 "ltspice_mcp.tools.analyze.validate_recipe".msg = "Validate a request's recipe with analyze.recipe_of_request, which also checks the source labels it names."
 "ltspice_mcp.lib.log_parser.measurement_answer".msg = "Read a log's measurements through services.answer_measurements, which names the field holding each result."
