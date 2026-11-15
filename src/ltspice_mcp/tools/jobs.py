@@ -35,6 +35,7 @@ from ltspice_mcp.errors import (
     PathSecurityError,
 )
 from ltspice_mcp.lib import experiment_store, recent, response_budget, services
+from ltspice_mcp.lib.continuation import Unfilled, call_to_continue
 from ltspice_mcp.lib.experiment_runner import (
     ExperimentCancellationError,
     IdempotencyConflictError,
@@ -55,6 +56,7 @@ from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.pagination import decode_offset, unpaged
 from ltspice_mcp.lib.pagination import page as _page
 from ltspice_mcp.lib.recovery_records import RecoveryError
+from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER, rows
 from ltspice_mcp.lib.sheet_results import NotPlaced, check_case, place_case
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import experiments
@@ -83,6 +85,7 @@ from ltspice_mcp.tools.receipts import (
     RECEIPT_DEFAULT_ROUTE,
     RUN_EXPERIMENTS_OUTPUT_SCHEMA,
     RUN_RECORD_SCHEMA,
+    RUN_ROWS_CUT,
     RUNS_PAGE_SCHEMA,
     ReceiptBuild,
     ReceiptSnapshot,
@@ -461,8 +464,8 @@ def _value_shape(field: dict[str, Any]) -> tuple[list[dict[str, Any]], Any]:
 
 _JOBS_COMMON_PROPERTIES: dict[str, Any] = {
     "outcome": OUTCOME_SCHEMA,
-    "observations": {"type": "array", "items": OBSERVATION_SCHEMA},
-    "warnings": {"type": "array", "items": {"type": "string"}},
+    "observations": {"type": "array", "items": OBSERVATION_SCHEMA, CUT: NEVER},
+    "warnings": {"type": "array", "items": {"type": "string"}, CUT: NEVER},
     "failures": failures_schema(CASE_FAILURE_SCHEMA),
     "hint": HINT_SCHEMA,
     "error": ENVELOPE_ERROR_SCHEMA,
@@ -539,9 +542,11 @@ _CIRCUIT_GROUP_SCHEMA: dict[str, Any] = {
         "interrupted_job_ids": {
             "type": "array",
             "items": {"type": "string"},
+            CUT: ITEMS,
         },
         "recent_jobs": {
             "type": "array",
+            CUT: rows("job_id"),
             "description": (
                 "The circuit's experiment jobs, newest activity first, capped at "
                 f"{_RECENT_JOBS_CAP}. These job_ids are what jobs(status)/"
@@ -614,10 +619,11 @@ def _jobs_receipt_schema(action: Literal["status", "wait", "resume"]) -> dict[st
 def _jobs_page_schema(
     action: Literal["cancel", "list", "runs"],
     item_schema: dict[str, Any],
+    cut: dict[str, Any],
     *,
     addressed: bool,
 ) -> dict[str, Any]:
-    page = page_schema({"type": "array", "items": item_schema})
+    page = page_schema({"type": "array", "items": item_schema, CUT: cut})
     properties = {
         "action": {"const": action},
         **_JOBS_COMMON_PROPERTIES,
@@ -656,6 +662,8 @@ _PLACE_BESIDE_SHEET_SCHEMA: dict[str, Any] = {
         "sheet": {"type": "string"},
         "files": {
             "type": "array",
+            # What a write did: leaving one out would hide a file it replaced.
+            CUT: NEVER,
             "description": "Each file copied beside the sheet, and whether it replaced one there.",
             "items": {
                 "type": "object",
@@ -700,9 +708,11 @@ JOBS_OUTPUT_SCHEMA: dict[str, Any] = {
     "oneOf": [
         _jobs_receipt_schema("status"),
         _jobs_receipt_schema("wait"),
-        _jobs_page_schema("cancel", _KILL_RECEIPT_SCHEMA, addressed=True),
-        _jobs_page_schema("list", _CIRCUIT_GROUP_SCHEMA, addressed=False),
-        _jobs_page_schema("runs", RUN_RECORD_SCHEMA, addressed=True),
+        _jobs_page_schema(
+            "cancel", _KILL_RECEIPT_SCHEMA, rows("case_id", "run_index"), addressed=True
+        ),
+        _jobs_page_schema("list", _CIRCUIT_GROUP_SCHEMA, rows("path"), addressed=False),
+        _jobs_page_schema("runs", RUN_RECORD_SCHEMA, RUN_ROWS_CUT, addressed=True),
         _jobs_receipt_schema("resume"),
         _PLACE_BESIDE_SHEET_SCHEMA,
     ],
@@ -740,6 +750,13 @@ def _decode_jobs_cursor(cursor: str | None) -> int:
         )
     return offset
 
+
+#: What a list page held to its cap says of the groups after it.
+_LIST_PAGED = (
+    "Read the next groups with "
+    + call_to_continue("jobs", {"action": "list", "cursor": Unfilled("next_cursor")})
+    + "."
+)
 
 #: This tool's budget epilogue. No hint mirror: a jobs envelope's ``hint`` is the
 #: control-plane's next step, and the ladder's own note reaches the caller on
@@ -1653,7 +1670,7 @@ async def handle_jobs(args: JobsInput, state: SessionState) -> types.CallToolRes
             if held is not None:
                 evaluation = replace(
                     evaluation,
-                    warnings=(f"{held} Page on with next_cursor.", *evaluation.warnings),
+                    warnings=(f"{held} {_LIST_PAGED}", *evaluation.warnings),
                 )
         try:
             budget = resolve_response_budget(args.budget, state)

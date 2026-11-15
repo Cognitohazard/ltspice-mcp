@@ -6,6 +6,7 @@ from typing import Any, ClassVar
 
 from pydantic import ValidationError
 
+from ltspice_mcp.lib.continuation import Unfilled, call_to_continue
 from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError
 
 _MAX_VALIDATION_ERRORS = 6
@@ -489,8 +490,11 @@ ERROR_HINTS: dict[type[LTSpiceMCPError], str] = {
     ),
     InvalidCursorError: (
         "Send back, unchanged, the cursor this tool's own previous page returned "
-        "(next_cursor; for analyze_results also the next block's cursor), or leave "
-        "it out to start from the first page."
+        "(next_cursor), or leave it out to start from the first page. An "
+        "analyze_results cursor goes in continue with its result_set_id, as the "
+        "reply's next holds them: "
+        + call_to_continue("analyze_results", {"continue": Unfilled("next")})
+        + "."
     ),
 }
 

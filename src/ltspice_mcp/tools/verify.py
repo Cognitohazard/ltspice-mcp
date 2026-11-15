@@ -92,6 +92,7 @@ from ltspice_mcp.lib import (
     capabilities,
 )
 from ltspice_mcp.lib.asc_document import is_asc
+from ltspice_mcp.lib.continuation import Unfilled, call_to_continue
 from ltspice_mcp.lib.cursor_codec import CursorError, decode_cursor, encode_cursor
 from ltspice_mcp.lib.deck_prep import asc_export_lock, stage_sheet_copy
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding, refused_sheet_mark_note
@@ -122,6 +123,7 @@ from ltspice_mcp.lib.netlist_graph import (
     parse_netlist_graph,
 )
 from ltspice_mcp.lib.raster import RenderedImage
+from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER
 from ltspice_mcp.lib.schematic_scene import Scene, build_scene, sheet_view
 from ltspice_mcp.lib.services import cp1252_ltspice, session_reader
 from ltspice_mcp.lib.sheet_findings import (
@@ -149,6 +151,7 @@ from ltspice_mcp.lib.spice_validator import (
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
+    FINDING_ROWS_CUT,
     FINDING_SCHEMA,
     HINT_SCHEMA,
     LTSPICE_SHOWN_PROPERTIES,
@@ -194,16 +197,19 @@ from ltspice_mcp.tools._base import (
 STRUCTURAL_DELTA_PROPS: dict[str, Any] = {
     "components_added": {
         "type": "array",
+        CUT: ITEMS,
         "items": {"type": "string"},
         "description": "References present in the compared deck but absent from the baseline.",
     },
     "components_removed": {
         "type": "array",
+        CUT: ITEMS,
         "items": {"type": "string"},
         "description": "References present in the baseline but absent from the compared deck.",
     },
     "components_renamed": {
         "type": "array",
+        CUT: ITEMS,
         "items": {
             "type": "object",
             "properties": {
@@ -219,6 +225,7 @@ STRUCTURAL_DELTA_PROPS: dict[str, Any] = {
     },
     "components_changed": {
         "type": "array",
+        CUT: ITEMS,
         "items": {
             "type": "object",
             "properties": {
@@ -234,6 +241,7 @@ STRUCTURAL_DELTA_PROPS: dict[str, Any] = {
     },
     "directives_added": {
         "type": "array",
+        CUT: ITEMS,
         "items": {"type": "string"},
         "description": (
             "SPICE directives in the compared deck and not the baseline, each "
@@ -243,6 +251,7 @@ STRUCTURAL_DELTA_PROPS: dict[str, Any] = {
     },
     "directives_removed": {
         "type": "array",
+        CUT: ITEMS,
         "items": {"type": "string"},
         "description": "SPICE directives in the baseline and not the compared deck.",
     },
@@ -466,7 +475,7 @@ _SCENE_SCHEMA: dict[str, Any] = {
         "wires": {"type": "integer"},
         "flags": {"type": "integer"},
         "directives": {"type": "integer"},
-        "bbox": {"type": ["array", "null"], "items": {"type": "integer"}},
+        "bbox": {"type": ["array", "null"], "items": {"type": "integer"}, CUT: NEVER},
     },
 }
 
@@ -563,16 +572,19 @@ _NODE_PARTITION_DIFF_SCHEMA: dict[str, Any] = {
     "properties": {
         "reference_nets": {
             "type": "array",
+            CUT: ITEMS,
             "items": {"type": "string"},
             "description": "The reference-side nets in the collision.",
         },
         "candidate_nets": {
             "type": "array",
+            CUT: ITEMS,
             "items": {"type": "string"},
             "description": "The candidate-side nets they could not be reconciled with.",
         },
         "involved": {
             "type": "array",
+            CUT: ITEMS,
             "items": {"type": "string"},
             "description": "Device pins ('R1.2') that witness the constraint.",
         },
@@ -635,6 +647,7 @@ _UNRESOLVED_SUBCKT_SCHEMA: dict[str, Any] = {
         },
         "missing_includes": {
             "type": "array",
+            CUT: ITEMS,
             "items": {"type": "string"},
             "description": (
                 "That side's unusable include targets — empty means the library was "
@@ -656,6 +669,7 @@ _DUPLICATE_SUBCKT_SCHEMA: dict[str, Any] = {
         "used": {"type": "string", "description": "The source whose definition won."},
         "ignored": {
             "type": "array",
+            CUT: ITEMS,
             "items": {"type": "string"},
             "description": "The sources whose definitions were discarded.",
         },
@@ -680,6 +694,7 @@ _DUPLICATE_PARAM_SCHEMA: dict[str, Any] = {
         "key": {"type": "string", "description": "The parameter, case-folded."},
         "values": {
             "type": "array",
+            CUT: ITEMS,
             "items": {"type": "string"},
             "description": "Every copy, in card order.",
         },
@@ -735,16 +750,19 @@ COMPARISON_SCHEMA: dict[str, Any] = {
         },
         "added": {
             "type": "array",
+            CUT: ITEMS,
             "items": _COMPONENT_DELTA_SCHEMA,
             "description": "equivalence: components present only in this circuit.",
         },
         "removed": {
             "type": "array",
+            CUT: ITEMS,
             "items": _COMPONENT_DELTA_SCHEMA,
             "description": "equivalence: components present only in the reference.",
         },
         "renamed": {
             "type": "array",
+            CUT: ITEMS,
             "items": _RENAMED_INSTANCE_SCHEMA,
             "description": (
                 "equivalence: subcircuit instances matched across the X LTspice puts "
@@ -754,16 +772,19 @@ COMPARISON_SCHEMA: dict[str, Any] = {
         },
         "retyped": {
             "type": "array",
+            CUT: ITEMS,
             "items": _RETYPE_DIFF_SCHEMA,
             "description": "equivalence: matched components whose type or model changed.",
         },
         "value_mismatches": {
             "type": "array",
+            CUT: ITEMS,
             "items": _VALUE_DIFF_SCHEMA,
             "description": "equivalence: matched components whose value differs beyond rtol.",
         },
         "param_mismatches": {
             "type": "array",
+            CUT: ITEMS,
             "items": _PARAM_DIFF_SCHEMA,
             "description": (
                 "equivalence: matched components, subcircuit instances among them, "
@@ -773,31 +794,37 @@ COMPARISON_SCHEMA: dict[str, Any] = {
         },
         "node_partition_mismatches": {
             "type": "array",
+            CUT: ITEMS,
             "items": _NODE_PARTITION_DIFF_SCHEMA,
             "description": "equivalence: the wiring collisions — where a miswire shows up.",
         },
         "anchor_violations": {
             "type": "array",
+            CUT: ITEMS,
             "items": _ANCHOR_VIOLATION_SCHEMA,
             "description": "equivalence: anchor nets not in corresponding positions.",
         },
         "arity_errors": {
             "type": "array",
+            CUT: ITEMS,
             "items": _ARITY_ERROR_SCHEMA,
             "description": "equivalence: matched components whose terminal count differs.",
         },
         "unresolved_subckts": {
             "type": "array",
+            CUT: ITEMS,
             "items": _UNRESOLVED_SUBCKT_SCHEMA,
             "description": "equivalence: subcircuits left as black boxes on either side.",
         },
         "duplicate_subckts": {
             "type": "array",
+            CUT: ITEMS,
             "items": _DUPLICATE_SUBCKT_SCHEMA,
             "description": "equivalence: subcircuits defined more than once.",
         },
         "duplicate_params": {
             "type": "array",
+            CUT: ITEMS,
             "items": _DUPLICATE_PARAM_SCHEMA,
             "description": "equivalence: cards that give a parameter more than once.",
         },
@@ -812,10 +839,10 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         "path": {"type": "string"},
         "kind": {"type": "string"},
         "outcome": outcome_schema("complete", "partial", "failed"),
-        "checks_run": {"type": "array", "items": {"type": "string"}},
+        "checks_run": {"type": "array", "items": {"type": "string"}, CUT: NEVER},
         "rules_run": RULES_RUN_SCHEMA,
-        "checks_skipped": {"type": "array", "items": _CHECK_SKIPPED_SCHEMA},
-        "findings": {"type": "array", "items": FINDING_SCHEMA},
+        "checks_skipped": {"type": "array", "items": _CHECK_SKIPPED_SCHEMA, CUT: NEVER},
+        "findings": {"type": "array", "items": FINDING_SCHEMA, CUT: FINDING_ROWS_CUT},
         "findings_omitted": FINDINGS_OMITTED_SCHEMA,
         "comparison": COMPARISON_SCHEMA,
         "export": _EXPORT_SCHEMA,
@@ -2400,10 +2427,17 @@ def _with_the_cut(headline: str, data: Mapping[str, Any], listing: str | None) -
         f"{entry['omitted']} more {rule} ({check_reporting(rule, data['kind'])} check)"
         for rule, entry in omitted.items()
     )
+    again = call_to_continue(
+        "verify_circuit",
+        {
+            "path": data["path"],
+            "checks": [Unfilled("its check")],
+            "findings_cursor": Unfilled("its findings_omitted next_cursor"),
+        },
+    )
     return (
-        f"{headline.rstrip('.')}. Not listed: {more}; pass a rule's findings_omitted "
-        "next_cursor as findings_cursor to list them, with checks set to its check "
-        "alone to skip the others."
+        f"{headline.rstrip('.')}. Not listed: {more}; list a rule's next findings with "
+        f"{again}, keeping this call's other arguments."
     )
 
 
