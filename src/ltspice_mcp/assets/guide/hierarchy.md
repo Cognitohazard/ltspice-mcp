@@ -88,7 +88,7 @@ Put the row's `address.save` line in the deck, if it has one, run it with
 | a nested resistor's current | `.save @r.xa.xleaf.r1[i]` | `.save I(xa:xleaf:r1)` | `.save I(a:leaf:r1)` |
 
 LTspice needs no line for a MOS, because the server asks LTspice 26 for the
-log's device table on every `.op` run. XVII prints the table for every `.op`
+log's device table on every `.op` run once it knows the build. XVII prints the table for every `.op`
 without being asked, and it stops with an `unrecognized option` error on a deck
 that contains `.options logopinfo`. Each build's `.save` accepts a name inside a
 subcircuit only in the spelling its raw file uses, which on XVII drops the X

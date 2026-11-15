@@ -1,0 +1,11 @@
+* one subcircuit defined twice
+.subckt amp a b
+R1 a b 1k
+.ends
+.subckt amp a b
+R1 a b 2k
+.ends
+I1 0 in 1
+X1 in 0 amp
+.op
+.end

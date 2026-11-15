@@ -1,0 +1,5 @@
+* C:\recording\value_inner_space.asc
+R1 NC_01 NC_02 1 k
+R2 NC_03 NC_04 1k tol=5
+.backanno
+.end

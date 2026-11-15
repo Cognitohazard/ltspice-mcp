@@ -258,16 +258,33 @@ def _unclassified(path: Path, rules: str, console: Path | None = None) -> list[d
     ]
 
 
+#: Lines LTspice XVII prints that no rule of the log classifier knows: a
+#: measurement named with a dash, which neither spicelib's reader nor the
+#: server's reads (docs/spicelib_bugs.md, Bug 44), and the line on which a
+#: time step that collapses after the operating point is reported, which
+#: starts "Heightened Def Con" and ends in the fatal error the convergence
+#: rule reads only at the start of a line.
+UNKNOWN_TO_THE_CLASSIFIER = {
+    "ltspice17/log/meas_name_dash.log": "t-fall: v(out)=0.5 AT 6.9672e-005",
+    "ltspice17/log/timestep_collapse_mid.log": "Heightened Def Con from 5e-006 ",
+}
+
+
 @pytest.mark.parametrize("build", ["ltspice26", "ltspice17"])
 def test_every_recorded_ltspice_line_is_a_known_condition_or_routine(build: str):
     logs = _recorded_logs(build)
     assert len(logs) > 150, "the recordings were not found"
     leftover = {
-        str(path.relative_to(rec.FIXTURES)): found
+        path.relative_to(rec.FIXTURES).as_posix(): found
         for path in logs
         if (found := _unclassified(path, build))
     }
-    assert leftover == {}
+    known = {
+        name: text for name, text in UNKNOWN_TO_THE_CLASSIFIER.items() if name.startswith(build)
+    }
+    assert set(leftover) == set(known)
+    for name, found in leftover.items():
+        assert [entry["first_text"][: len(known[name])] for entry in found] == [known[name]]
 
 
 def test_every_ngspice_fixture_line_is_a_known_condition_or_routine():

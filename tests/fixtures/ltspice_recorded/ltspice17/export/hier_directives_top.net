@@ -1,0 +1,16 @@
+* C:\recording\hier_directives_top.asc
+V1 N001 0 1
+XX1 N001 out hier_directives
+R3 out 0 10k
+
+* block symbol definitions
+.subckt hier_directives IN OUT
+R1 IN OUT {rb}
+R2 OUT 0 1k
+.param rb=2k
+.model DX D(Is=1f)
+.ends hier_directives
+
+.op
+.backanno
+.end

@@ -250,6 +250,13 @@ def _toml_preload_recent_count(value: Any) -> Any:
     return _SKIP
 
 
+def _absolute(path: Path) -> Path:
+    """``path`` made absolute against the process's folder, its ``..`` kept: a
+    sandbox entry is resolved at each check, where a link before a ``..`` is
+    followed as the open would follow it (``pathutil.resolve_safe_path``)."""
+    return path.absolute()
+
+
 def _env_path(value: str) -> Any:
     return Path(value)
 
@@ -676,14 +683,19 @@ class ServerConfig:
     ``-n``, so a ``set ngbehavior`` in a ``.spiceinit`` is not read."""
 
     working_dir: Path = field(default_factory=Path.cwd)
-    """Working directory for circuit files."""
+    """Working directory for circuit files: where a relative path is taken
+    from and the store is kept. ``LTSPICE_MCP_WORKING_DIR``; a relative value
+    is taken from the folder the process was started in. Resolved when the
+    configuration is built."""
 
     allowed_paths: list[Path] | None = None
     """The sandbox: the directories every path a caller names must lie in.
     ``None`` (unset, or an empty list) is no sandbox: a path is resolved
     wherever it lands. ``[security] allowed_paths`` (a bare string there names
     one directory), ``LTSPICE_MCP_ALLOWED_PATHS`` or
-    ``Api(allowed_paths=...)``."""
+    ``Api(allowed_paths=...)``. A relative entry is taken from
+    ``working_dir``, and every entry is absolute once the configuration is
+    built."""
 
     max_parallel_sims: int = field(default_factory=lambda: min(os.cpu_count() or 4, 8))
     """Maximum concurrent simulations.
@@ -839,9 +851,24 @@ class ServerConfig:
     """Path that was resolved for the config file (set by load())."""
 
     def __post_init__(self) -> None:
-        """An empty ``allowed_paths`` is no sandbox, the same as an unset one."""
+        """Anchor the working directory, the config file and the sandbox, once.
+
+        The working directory (resolved) and the config file are taken from the
+        folder the process was started in, and a relative sandbox entry from the working
+        directory, so a relative entry such as ``allowed_paths = ["."]`` names
+        the working directory and every later reader (a tool call, the Python
+        API, a ``run_code`` worker or a detached job's owner, each started in a
+        folder of its own) sees the same absolute folders. An empty
+        ``allowed_paths`` is no sandbox, the same as an unset one.
+        """
+        # Resolved, as ``Api(working_dir=...)`` resolves it: the folder every
+        # report names and the store is written under.
+        self.working_dir = self.working_dir.resolve()
+        self.config_path = _absolute(self.config_path)
         if not self.allowed_paths:
             self.allowed_paths = None
+        else:
+            self.allowed_paths = [_absolute(self.working_dir / p) for p in self.allowed_paths]
 
     @classmethod
     def load(
@@ -1004,8 +1031,12 @@ def generate_default_config(path: Path) -> None:
     sec = table()
     sec.add(comment("Sandbox. Every path given to a tool must be inside one of these"))
     sec.add(comment("directories. If unset (the default), there is no sandbox and a path may"))
-    sec.add(comment("name any file this process can open. When the list is set, a relative path"))
-    sec.add(comment("is resolved against its first entry. The list does not confine run_code,"))
+    sec.add(
+        comment('name any file this process can open. A relative entry, such as ".", is taken')
+    )
+    sec.add(comment("from the working directory, and so is a relative path given to a tool, or"))
+    sec.add(comment("from the first entry when the list leaves the working directory out. The"))
+    sec.add(comment("list does not confine run_code,"))
     sec.add(comment("so also set [tools] run_code = false to keep a client inside these"))
     sec.add(comment("directories. The server reads the list again on the next call after you"))
     sec.add(comment("save the file."))

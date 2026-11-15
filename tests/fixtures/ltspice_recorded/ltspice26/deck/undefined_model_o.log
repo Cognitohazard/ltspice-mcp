@@ -1,0 +1,6 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\undefined_model_o.cir
+Start Time: Thu Jan 15 00:00:00 2026
+C:\recording\undefined_model_o.cir(3): Undefined model "lossy".
+O1 a 0 b 0 LOSSY
+           ^^^^^

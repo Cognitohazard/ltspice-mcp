@@ -24,7 +24,7 @@ import math
 import re
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -32,6 +32,7 @@ from ltspice_mcp.lib.log_parser import (
     MeasurementAnswer,
     measurement_answer,
     measurement_cards,
+    parse_measurements,
     printed_measurements,
     read_log_text,
     result_unreadable,
@@ -218,16 +219,37 @@ async def _every_route(
     return routes
 
 
+#: A DERIV ... WHEN, which both builds print as a DERIV ... AT, with the
+#: derivative after ``=`` and the point after a lowercase ``at``
+#: (``log/meas_deriv_when``). A route that reads the log alone answers with
+#: the derivative, as LTspice prints it; a route that knows the run's deck
+#: answers with the point, the answer the deck's card has always given it
+#: (``measurement_answer``). Each measurement of this kind, by deck.
+DERIV_WHEN_READ_BY_ITS_POINT_BY_JOB_AND_BY_ITS_VALUE_BY_PATH = {
+    "log/meas_deriv_when": {"d_when"},
+    "log/meas_deriv_when_step": {"d_when"},
+}
+
+
 @pytest.mark.parametrize(("build", "case_id"), _LOGS, ids=[f"{b}/{c}" for b, c in _LOGS])
 async def test_every_route_reads_a_measurement_from_the_same_field(
     build: str, case_id: str, state_no_sim: SessionState, work_dir: Path
 ):
     routes = await _every_route(build, case_id, state_no_sim, work_dir)
+    split = DERIV_WHEN_READ_BY_ITS_POINT_BY_JOB_AND_BY_ITS_VALUE_BY_PATH.get(case_id, set())
     first_route, first = next(iter(routes.items()))
+    by_job = next(answers for route, answers in routes.items() if route.endswith("by job"))
     for route, answers in routes.items():
         assert set(answers) == set(first), (route, first_route)
         for name, answer in answers.items():
-            assert _same(answer, first[name]), (name, route, answer, first_route, first[name])
+            agreed = by_job if name in split and route.endswith("by job") else first
+            assert _same(answer, agreed[name]), (name, route, answer, first_route, agreed[name])
+    for name in split:
+        data = cast(dict[str, Any], parse_measurements(rec.recorded(build, f"{case_id}.log")))
+        entry = data["measurements"][name]
+        points = entry["at"] if isinstance(entry["at"], list) else [entry["at"]]
+        assert _same(first[name], entry["values"]), (name, first[name])
+        assert _same(by_job[name], points), (name, by_job[name])
     # Every form both builds print has a recorded reading, so no route leaves
     # a recorded measurement's field unknown.
     assert "unknown" not in first.values(), first
@@ -315,9 +337,11 @@ def test_a_recorded_form_names_its_field_for_any_ltspice_or_an_unknown_writer(
 
 
 def test_a_deriv_when_keeps_the_answer_its_deck_has_always_given():
-    """No recording shows how LTspice prints a DERIV ... WHEN, so its card
-    keeps the deck's answer: the point where the entry has one. Recording it is
-    pending (``log/meas_deriv_when`` in the recorder's cases)."""
+    """A DERIV ... WHEN's card keeps the deck's answer: the point where the
+    entry has one. Both builds print the derivative after ``=`` and the point
+    after a lowercase ``at`` (``log/meas_deriv_when``), so the recording
+    disagrees; ``test_recorded_ltspice_results`` pins the two side by side
+    (``DERIV_WHEN_ANSWERED_WITH_ITS_POINT_BY_THE_SERVER_ONLY``)."""
     for form in ("line_AT", "line_at", None):
         assert measurement_answer(form, _LT26, "deriv_when", has_point=True).field == "at"
     assert measurement_answer("table_level", _LT26, "deriv_when").field == "value"

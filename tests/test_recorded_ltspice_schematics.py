@@ -2631,3 +2631,90 @@ def test_each_element_is_exported_with_a_node_for_each_pin_and_read_so(build: st
     assert cards["W1"].control == "Vsense"
     pins = exported_pin_nodes(rec.export_text(build, "export/elements"), ELEMENT_PARTS)
     assert len(pins) == sum(len(part_pins) for _ref, _letter, part_pins in ELEMENT_PARTS)
+
+
+# ---------------------------------------------------------------------------
+# Questions the code answered without a recording
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_text_line_spaced_irregularly_is_read(build: str):
+    """``TEXT  32 176<tab>Left  2 !.tran 1m``: both builds export the
+    ``.tran``, and the server's sheet reader reads the line's directive as
+    they do. The schematic editor refuses the sheet, since spicelib's editor
+    skips the line and a save would delete it (docs/spicelib_bugs.md, Bug 36),
+    so a sheet both builds run cannot be edited here."""
+    assert exported_bodies(build, "export/text_irregular_spacing")[1:3] == [
+        ".tran 1m",
+        ".param p=1",
+    ]
+    texts = parse_asc((INPUTS / "export/text_irregular_spacing.asc").read_bytes()).texts
+    assert [(t.kind, t.body) for t in texts] == [("!", ".tran 1m"), ("!", ".param p=1")]
+    with pytest.raises(NetlistError, match="is a TEXT record the schematic editor skips"):
+        make_editor(INPUTS / "export/text_irregular_spacing.asc")
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_value_with_an_inner_space_and_a_spiceline_are_exported_as_written(
+    build: str, tmp_path: Path
+):
+    """``Value 1 k`` is exported ``1 k``, and ``Value 1k`` with ``SpiceLine
+    tol=5`` as ``1k tol=5``; the suite's stand-in exporter writes the same."""
+    exported = {
+        line.split()[0]: line.split(None, 3)[3]
+        for line in rec.export_text(build, "export/value_inner_space").splitlines()
+        if line.startswith("R")
+    }
+    assert exported == {"R1": "1 k", "R2": "1k tol=5"}
+    faked = fake_netlister.netlist_text(
+        rec.stage_sheet(build, "export/value_inner_space", tmp_path)
+    )
+    for reference, tail in exported.items():
+        assert f"{reference} " in faked and faked.split(f"{reference} ", 1)[1].split("\n")[0]
+        assert faked.split(f"{reference} ", 1)[1].split("\n")[0].endswith(tail), reference
+
+
+#: A block's own sheet holds a .param, a .model and a .options. Both builds put
+#: the .param and the .model inside the block's .subckt and leave the .options
+#: out of the export altogether.
+OPTIONS_ON_A_BLOCK_SHEET_DROPPED_BY_LTSPICE = ".options gmin=1e-13"
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_block_sheets_directives_go_inside_its_subcircuit(build: str):
+    case_id = "export/hier_directives_top"
+    cards = rec.export_cards(build, case_id)
+    bodies = exported_bodies(build, case_id)
+    start = bodies.index(".subckt hier_directives IN OUT")
+    end = bodies.index(".ends hier_directives")
+    assert bodies[start + 1 : end] == [
+        "R1 IN OUT {rb}",
+        "R2 OUT 0 1k",
+        ".param rb=2k",
+        ".model DX D(Is=1f)",
+    ]
+    assert OPTIONS_ON_A_BLOCK_SHEET_DROPPED_BY_LTSPICE.split("=")[0] not in "\n".join(bodies)
+    scoped = {
+        card.body: card.scope for card in cards if card.body.startswith((".param", ".model"))
+    }
+    assert set(scoped.values()) == {("hier_directives",)}, scoped
+
+
+#: An A-device's pins that touch nothing: both builds export each as node 0,
+#: with the pin on the ground flag. The server's nets leave each on a net of
+#: its own.
+OPEN_A_DEVICE_PINS_GROUNDED_BY_LTSPICE_ONLY = frozenset({"a1.3", "a1.4", "a1.5", "a1.6", "a1.8"})
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_an_a_device_pin_on_nothing_is_exported_as_ground(build: str, tmp_path: Path):
+    case_id = "export/adevice_open_pin"
+    assert exported_bodies(build, case_id)[0] == "A1 a b 0 0 0 0 y 0 AND"
+    exported = exported_groups(build, case_id)
+    assert OPEN_A_DEVICE_PINS_GROUNDED_BY_LTSPICE_ONLY in exported
+    modelled = modelled_groups(rec.stage_sheet(build, case_id, tmp_path))
+    assert OPEN_A_DEVICE_PINS_GROUNDED_BY_LTSPICE_ONLY not in modelled
+    assert {pin for group in modelled if len(group) == 1 for pin in group} >= (
+        OPEN_A_DEVICE_PINS_GROUNDED_BY_LTSPICE_ONLY
+    )

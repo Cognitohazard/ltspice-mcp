@@ -1100,9 +1100,10 @@ async def _prepare_circuit(
             compact_digests = frozenset((await asyncio.to_thread(profile_pins)).values())
         # A micro sign spelled 'u' changes what a value means only to an
         # LTspice that decodes decks as cp1252, so only then is it reported.
-        # The identity is cached per executable, so this is a stat here.
-        cp1252_reader = cp1252_ltspice(
-            state, await asyncio.to_thread(executable_identity, simulator)
+        # Off the loop: the answer may read the program file (its version
+        # resource) and scans the recorded runs.
+        cp1252_reader = await asyncio.to_thread(
+            cp1252_ltspice, state, await asyncio.to_thread(executable_identity, simulator)
         )
         staged = await asyncio.to_thread(
             stage_deck,

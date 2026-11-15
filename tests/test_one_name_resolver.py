@@ -7,10 +7,8 @@ through every path that takes a name and checks each against a recording or
 a live ngspice run:
 
 - a part LTspice exported as ``R§Load``, whose current both builds name
-  ``I(Load)`` (``export/load_name_op``). That recording is an operating
-  point, which plot_waveform does not chart; plot_waveform reads a name
-  through the same lookup (``services.resolve_signal``), and a transient of
-  such a part is listed for the next recording run;
+  ``I(Load)`` in an operating point (``export/load_name_op``) and in a
+  transient (``export/load_name_tran``), which plot_waveform charts;
 - a subcircuit port named ``gnd`` in a deck for ngspice, which ngspice reads
   as ground (a live run);
 - a name inside nested subcircuits, which each LTspice build's ``.save``
@@ -41,7 +39,7 @@ from ltspice_mcp.lib.raw_header import preflight_raw
 from ltspice_mcp.lib.raw_parser import raw_writer_command
 from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools import experiments
+from ltspice_mcp.tools import analysis, experiments
 from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
 from tests import _ltspice_recorded as rec
 from tests.conftest import LIVENESS_S, SyncApi, dispatched
@@ -106,6 +104,23 @@ def test_a_name_that_misses_by_its_element_letter_is_refused_naming_the_trace(
     texts.append(failure["message"])
     for text in texts:
         assert "I(Load) is in this result" in text, text
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_plot_waveform_charts_a_section_sign_name_from_a_transient(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """Both builds name the transient current of the part exported as
+    ``R§Load`` ``I(Load)``, as the operating point does, and plot_waveform
+    charts it asked for by the netlist's name."""
+    raw = rec.stage_run(build, "export/load_name_tran", work_dir)
+    plot = await analysis.handle_plot_waveform(
+        analysis.PlotWaveformInput(path=str(raw), signals=["I(R§Load)"], open=False),
+        state_no_sim,
+    )
+    assert not plot.is_error, plot.structured_content
+    assert plot.structured_content is not None
+    assert plot.structured_content["signals"] == ["I(Load)"]
 
 
 # --- A subcircuit port named gnd, in a deck for ngspice ----------------------

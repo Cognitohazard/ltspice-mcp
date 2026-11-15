@@ -1,0 +1,9 @@
+* the same MOSFET's capacitances read from an AC run
+VD d 0 2
+VG g 0 1.5 AC 1
+VS s 0 0
+VB b 0 0
+M1 d g s b NCH W=10u L=1u
+.model NCH NMOS(level=8 tox=10n vth0=0.5)
+.ac list 1Meg
+.end

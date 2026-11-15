@@ -1,0 +1,16 @@
+* C:\recording\hier_device_plain.asc
+V1 N001 0 3
+XU1 N001 out hier_device
+R3 out 0 10k
+
+* block symbol definitions
+.subckt hier_device IN OUT
+R1 IN OUT 1k
+D1 OUT 0 D
+.ends hier_device
+
+.model D D
+.lib C:\Users\user\Documents\LTspiceXVII\lib\cmp\standard.dio
+.op
+.backanno
+.end

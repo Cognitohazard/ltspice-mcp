@@ -7,6 +7,7 @@ two longest wires of each sheet give the scale to sheet units.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -254,3 +255,145 @@ def test_nothing_on_these_sheets_is_drawn_in_a_way_the_reader_does_not_read(
     build: str, case_id: str
 ):
     assert rec.drawing(build, case_id)["other"] == []
+
+
+# --------------------------------------------------------------------------
+# Questions the code answered without a recording
+# --------------------------------------------------------------------------
+
+
+def _drawn_boxes(build: str, case_id: str) -> dict[str, tuple[float, float, float, float, int]]:
+    """Each text a build drew, its box in sheet units and its escapement."""
+    drawn = rec.drawing(build, case_id)
+    scale = _scale(case_id, drawn)
+    boxes = {}
+    for text in drawn["texts"]:
+        x0, y0, x1, y1 = text["bounds"]
+        (ax, ay), (bx, by) = scale.point(x0, y0), scale.point(x1, y1)
+        boxes[text["text"]] = (ax, ay, bx, by, text["escapement"])
+    return boxes
+
+
+#: A port, which both builds draw as an outline around its name: an input's
+#: arrow tip on its point and its body running away from it, an output's flat
+#: end on its point and its tip away, a two-way port's tips at both ends, and
+#: on a wire's end the same along the wire, away from it. The scene holds a
+#: port as a net label, its name centred over the point, with no outline.
+PORT_DRAWN_AS_AN_OUTLINE_BY_LTSPICE_AND_AS_A_LABEL_BY_THE_SCENE = {
+    "pin_in": ((64, 64), (-29, 64)),
+    "pin_out": ((240, 64), (350, 64)),
+    "pin_io": ((400, 64), (507, 64)),
+    "wired_in": ((96, 160), (96, 37)),
+}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_port_is_drawn_as_an_outline_around_its_name(build: str, tmp_path: Path):
+    case_id = "draw/port_outlines"
+    drawn = rec.drawing(build, case_id)
+    scale = _scale(case_id, drawn)
+    segments = [(scale.point(x1, y1), scale.point(x2, y2)) for x1, y1, x2, y2 in drawn["strokes"]]
+
+    def on_a_stroke(x: float, y: float) -> bool:
+        """Whether a stroke passes through (x, y), an end or a side."""
+        for (ax, ay), (bx, by) in segments:
+            length = math.hypot(bx - ax, by - ay)
+            crossed = length and abs((bx - ax) * (ay - y) - (ax - x) * (by - ay)) / length <= NEAR
+            within = min(ax, bx) - NEAR <= x <= max(ax, bx) + NEAR
+            if crossed and within and min(ay, by) - NEAR <= y <= max(ay, by) + NEAR:
+                return True
+        return False
+
+    boxes = _drawn_boxes(build, case_id)
+    view = sheet_view(_scene(build, case_id, tmp_path))
+    laid_out = {text: (x, y, box) for x, y, text, box in view.text_extents}
+    outlines = PORT_DRAWN_AS_AN_OUTLINE_BY_LTSPICE_AND_AS_A_LABEL_BY_THE_SCENE
+    for name, (near, far) in outlines.items():
+        assert on_a_stroke(*near) and on_a_stroke(*far), (name, near, far)
+        x0, y0, x1, y1, _ = boxes[name]
+        lo_x, hi_x = sorted((near[0], far[0]))
+        lo_y, hi_y = sorted((near[1], far[1]))
+        # The name lies along the outline, inside its span.
+        if lo_x != hi_x:
+            assert lo_x - NEAR <= x0 and x1 <= hi_x + NEAR, name
+        else:
+            assert lo_y - NEAR <= y0 and y1 <= hi_y + NEAR, name
+        x, y, box = laid_out[name]
+        assert (x, y) == near
+        assert box.y2 == y or box.y2 == near[1], name
+    assert (view.texts, view.grounds) == ((), ())
+    assert {label[2] for label in view.labels} == set(
+        PORT_DRAWN_AS_AN_OUTLINE_BY_LTSPICE_AND_AS_A_LABEL_BY_THE_SCENE
+    )
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_window_justified_invisible_is_not_drawn_and_a_moved_one_is(build: str, tmp_path: Path):
+    """A window justified ``Invisible`` draws nothing, the name's or the
+    value's alone or both, and the scene leaves it out too. A window moved to
+    the left of the body, and one moved, turned and given another size, are
+    drawn where the scene lays them out, to within the cell's top (a drawn box
+    is its cell, a laid-out one its glyphs)."""
+    case_id = "draw/windows_hidden_moved"
+    drawn = _drawn_boxes(build, case_id)
+    assert set(drawn) == {"R1", "1k", "2k", "R3", "R5", "5k", "R6", "6k"}
+    laid_out = dict(_laid_out(build, case_id, tmp_path))
+    assert set(laid_out) == set(drawn)
+    slack = 2
+    for text, (x0, y0, x1, y1, escapement) in drawn.items():
+        box = laid_out[text]
+        if escapement:
+            assert (box.y1, box.y2, box.x2) == pytest.approx((y0, y1, x1), abs=slack), text
+        else:
+            assert (box.x1, box.x2, box.y2) == pytest.approx((x0, x1, y1), abs=slack), text
+
+
+#: A flag named GND: both builds draw it as they draw a flag named 0, a ground
+#: triangle and no text. The scene draws a triangle for 0 only and holds GND as
+#: a net label's text, though every reader of nets takes it as ground.
+GND_FLAG_DRAWN_AS_A_GROUND_BY_LTSPICE_AND_AS_A_LABEL_BY_THE_SCENE = "GND"
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_flag_named_gnd_is_drawn_as_a_ground(build: str, tmp_path: Path):
+    case_id = "draw/gnd_and_zero_flags"
+    drawn = rec.drawing(build, case_id)
+    scale = _scale(case_id, drawn)
+    assert {text["text"] for text in drawn["texts"]} == {"a", "b"}
+    scene = _scene(build, case_id, tmp_path)
+    flags = {flag.text: flag for flag in scene.flags}
+    for name in ("0", GND_FLAG_DRAWN_AS_A_GROUND_BY_LTSPICE_AND_AS_A_LABEL_BY_THE_SCENE):
+        corners = _triangle(drawn, scale, flags[name])
+        assert len(corners) == 3, (name, corners)
+    view = sheet_view(scene)
+    assert [(x, y) for x, y, _corners in view.grounds] == [(64, 96)]
+    assert (256, 96, "GND") in view.labels
+
+
+#: A net label in the middle of an upright wire: both builds draw its text
+#: along the wire, turned a quarter, on the wire's left; the scene lays it
+#: across the wire, to the right of its point.
+LABEL_ON_AN_UPRIGHT_WIRE_DRAWN_ALONG_IT_BY_LTSPICE_AND_ACROSS_IT_BY_THE_SCENE = "mid_upright"
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_where_a_net_labels_text_goes_mid_span_and_at_a_corner(build: str, tmp_path: Path):
+    """A label in the middle of a level wire and one at the corner of two
+    wires: both builds centre the text above the point, and the scene lays it
+    there too."""
+    case_id = "draw/label_mid_span_and_corner"
+    drawn = _drawn_boxes(build, case_id)
+    view = sheet_view(_scene(build, case_id, tmp_path))
+    laid_out = {text: (x, y, box) for x, y, text, box in view.text_extents}
+    for text in ("mid_level", "corner"):
+        x0, _y0, x1, y1, escapement = drawn[text]
+        x, y, box = laid_out[text]
+        assert escapement == 0 and y1 == pytest.approx(y, abs=NEAR)
+        assert (x0 + x1) / 2 == pytest.approx(x, abs=NEAR)
+        assert (box.x1, box.x2, box.y2) == pytest.approx((x0, x1, y1), abs=NEAR), text
+    upright = LABEL_ON_AN_UPRIGHT_WIRE_DRAWN_ALONG_IT_BY_LTSPICE_AND_ACROSS_IT_BY_THE_SCENE
+    x0, y0, x1, y1, escapement = drawn[upright]
+    x, y, box = laid_out[upright]
+    assert escapement == 900 and x1 == pytest.approx(x, abs=NEAR)
+    assert (y0 + y1) / 2 == pytest.approx(y, abs=NEAR)
+    assert box.x1 == x and box.y1 < y < box.y2

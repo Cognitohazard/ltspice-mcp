@@ -1410,6 +1410,34 @@
     }
    }
   },
+  "fixtures/ltspice_recorded/inputs/connectivity/diagonal_end_on_wire_interior.asc": {
+   "labels": {
+    "asked_sha256": "d3e86f0e3dc9c65a633016b990a1e53c5313436bad271a46a793451c023dfbbd",
+    "order": "6 1 4 6 1 4 7 2 8 5 0 3 7 2 8 7 2 8 7 2 8 6 1 4 7 2 8 6 1 4 7 2 8",
+    "proposals": 33,
+    "sha256": "3c038c2be838b6ebab50c62673fea5e99584efa08f787df5ed46c3262e392e91",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 4,
+     "placed [a name already here; 1 at the point, 1 named]": 6,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 4,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 4,
+     "placed [ground; 1 at the point, 1 named]": 6,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 6
+    }
+   },
+   "moves": {
+    "asked_sha256": "c47ae1d3ddc0cae9754c81ca07ba508dfb0d73759322534d28e79fd1f42e42b0",
+    "order": "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+    "proposals": 34,
+    "sha256": "d601dd1a7e7dc95c2d25dc8e10f7a6c163dc5d5ef73b249bf3973c77165ecf4b",
+    "shapes": {
+     "moved": 34
+    }
+   }
+  },
   "fixtures/ltspice_recorded/inputs/connectivity/diagonal_wire_end.asc": {
    "labels": {
     "asked_sha256": "1aefaea33dab21dfc918ed193c796810ca96485dd22d2296a36478b74f7898ec",
@@ -2135,6 +2163,32 @@
     }
    }
   },
+  "fixtures/ltspice_recorded/inputs/connectivity/same_instance_run_past_second_pin.asc": {
+   "labels": {
+    "asked_sha256": "9df4abc1b58a62e3c5090f5e8dd764222ae4cd115bd2fee2dd4df01a274b72b3",
+    "order": "1 6 4 5 6 1 4 5 0 0 3 2 6 1 4 5 1 6 4 5 6 1 4 5",
+    "proposals": 24,
+    "sha256": "d4c3e144a2c2b1a7dcbd4b2b020b8ae33977e8a063b104c7d5b33581ac625be0",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed [a name already here; 1 at the point, 1 named]": 5,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 1 named]": 5,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 5,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 5
+    }
+   },
+   "moves": {
+    "asked_sha256": "f60419c2c8b6c3c2359334da8f80f20fe054e411fc420857fc2f1e77272fb062",
+    "order": "0 0 0 0 0 0 0 0 0",
+    "proposals": 9,
+    "sha256": "66fafafb04d26d869e5ab5d1e151ee3252f174de66d19fac95e9045401caeabc",
+    "shapes": {
+     "moved": 9
+    }
+   }
+  },
   "fixtures/ltspice_recorded/inputs/connectivity/same_instance_t_junction.asc": {
    "labels": {
     "asked_sha256": "af2539fdbe04e0c2fa04d564b022d56b9d769a455bd8bc7b1d075b918bdbdb0f",
@@ -2569,6 +2623,35 @@
     }
    }
   },
+  "fixtures/ltspice_recorded/inputs/export/adevice_open_pin.asc": {
+   "labels": {
+    "asked_sha256": "e66699c1f74bcd9533e58d0ec84ca9c00e8615f520d665ebf496239a666b8e78",
+    "order": "2 9 7 9 8 9 2 7 9 8 1 1 6 1 4 9 9 7 2 8 0 0 5 0 3 2 9 7 9 8 9 2 7 9 8 1 1 6 1 4 1 1 6 1 4 1 1 6 1 4 1 1 6 1 4 9 9 7 2 8 1 1 6 1 4",
+    "proposals": 65,
+    "sha256": "ca6af9d0acf49aa3c34fb2e1d5d17bf9139a3341d0ffc6c53106098236ef8ca2",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 3,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 18,
+     "placed [a name already here; 1 at the point, 1 named]": 6,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 6,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 6,
+     "placed [ground; 1 at the point, 1 named]": 6,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 6,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 12
+    }
+   },
+   "moves": {
+    "asked_sha256": "43e1c3d6b61b0f560ca169911a4b99511cb192b0580a5e596887dfdb15db891c",
+    "order": "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+    "proposals": 41,
+    "sha256": "1d7bdbe0c69ea28a908e9138bc7ad240662ff8655c23585f64a1ffb9b334a6e9",
+    "shapes": {
+     "moved": 41
+    }
+   }
+  },
   "fixtures/ltspice_recorded/inputs/export/attributes.asc": {
    "labels": {
     "asked_sha256": "01376790673bcd60e6490415c12335d83f907f03ba579ffd93eb8ce628a53871",
@@ -2748,6 +2831,148 @@
     "sha256": "d601dd1a7e7dc95c2d25dc8e10f7a6c163dc5d5ef73b249bf3973c77165ecf4b",
     "shapes": {
      "moved": 34
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/export/hier_device.asc": {
+   "labels": {
+    "asked_sha256": "858c9ee2b8eca519c90f937b66df0d3d13342dc3bf89b4fd5949f5c5f12e014b",
+    "order": "2 9 7 8 9 2 7 8 1 1 6 4 0 0 5 3 1 1 6 4 1 1 6 4 1 1 6 4 1 1 6 4 1 1 6 4 1 1 6 4",
+    "proposals": 40,
+    "sha256": "a32a16fbb3e847b0782233fc11f6781999458ef916465938f6378ba9dc05fbdf",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 14,
+     "placed [a name already here; 1 at the point, 1 named]": 2,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 7,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 7,
+     "placed [ground; 1 at the point, 1 named]": 2,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 2,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 2
+    }
+   },
+   "moves": {
+    "asked_sha256": "ffcfef6e244051edb8bc68b523b9afe8c34a58f2fd1898ee3f79acef0fab6290",
+    "order": "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+    "proposals": 34,
+    "sha256": "d601dd1a7e7dc95c2d25dc8e10f7a6c163dc5d5ef73b249bf3973c77165ecf4b",
+    "shapes": {
+     "moved": 34
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/export/hier_device_logopinfo.asc": {
+   "labels": {
+    "asked_sha256": "2e2b4a5f219973292083e558afe7e1861d3533ff86f4d50cd7ca31e017c3195f",
+    "order": "6 1 4 7 2 8 6 1 4 5 0 3 6 1 4 6 1 4 6 1 4 6 1 4 6 1 4 6 1 4 7 2 8 6 1 4 6 1 4",
+    "proposals": 39,
+    "sha256": "46ecc3ec44b32e21af41551f87c73a1658d92b1b249867f16ece67a5a64deb2b",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 10,
+     "placed [a name already here; 1 at the point, 1 named]": 2,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 10,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 10,
+     "placed [ground; 1 at the point, 1 named]": 2,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 2
+    }
+   },
+   "moves": {
+    "asked_sha256": "b7686139af010ee40067e1a806c9c33310a8be98831ff60f08147c822c3ab530",
+    "order": "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+    "proposals": 65,
+    "sha256": "9efb85fc351f7061482898b56a56c895d40892d083d72a682949d2bfc1e6b813",
+    "shapes": {
+     "moved": 65
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/export/hier_device_plain.asc": {
+   "labels": {
+    "asked_sha256": "2e2b4a5f219973292083e558afe7e1861d3533ff86f4d50cd7ca31e017c3195f",
+    "order": "6 1 4 7 2 8 6 1 4 5 0 3 6 1 4 6 1 4 6 1 4 6 1 4 6 1 4 6 1 4 7 2 8 6 1 4 6 1 4",
+    "proposals": 39,
+    "sha256": "46ecc3ec44b32e21af41551f87c73a1658d92b1b249867f16ece67a5a64deb2b",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 10,
+     "placed [a name already here; 1 at the point, 1 named]": 2,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 10,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 10,
+     "placed [ground; 1 at the point, 1 named]": 2,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 2
+    }
+   },
+   "moves": {
+    "asked_sha256": "b7686139af010ee40067e1a806c9c33310a8be98831ff60f08147c822c3ab530",
+    "order": "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+    "proposals": 65,
+    "sha256": "9efb85fc351f7061482898b56a56c895d40892d083d72a682949d2bfc1e6b813",
+    "shapes": {
+     "moved": 65
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/export/hier_directives.asc": {
+   "labels": {
+    "asked_sha256": "4000ec64e7c9f35c66036b8fb5a0d37975a5c3b65517f1ab580af44afc664c4d",
+    "order": "2 9 7 8 9 2 7 8 1 1 6 4 0 0 5 3 9 2 7 8 9 2 7 8 1 1 6 4 1 1 6 4 1 1 6 4 1 1 6 4",
+    "proposals": 40,
+    "sha256": "d27c3bd34aed51209a1c9f821750f0d53761cbab5a9317b36592172bbfb99211",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 2,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 10,
+     "placed [a name already here; 1 at the point, 1 named]": 4,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 5,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 5,
+     "placed [ground; 1 at the point, 1 named]": 4,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 4,
+     "refused: Refused to add net '\u2026' at (#,#): the label would join nets that each carry a name (['\u2026']; ['\u2026']), shorting them together. To join them on purpose, give both the same name: remove one side'\u2026's name. [a name already elsewhere; 1 at the point, 1 named]": 4
+    }
+   },
+   "moves": {
+    "asked_sha256": "55d1877d628e971482ff69f9559fecdba40b87ca7b81abee6b47bbb8dae96c5d",
+    "order": "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+    "proposals": 34,
+    "sha256": "d601dd1a7e7dc95c2d25dc8e10f7a6c163dc5d5ef73b249bf3973c77165ecf4b",
+    "shapes": {
+     "moved": 34
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/export/hier_directives_top.asc": {
+   "labels": {
+    "asked_sha256": "b6e958c2d714feae5d2e15c1fda70c5412befd87e691427849ad1b075c7c8880",
+    "order": "6 1 4 7 2 8 6 1 4 5 0 3 6 1 4 6 1 4 6 1 4 6 1 4 6 1 4 6 1 4 7 2 8 6 1 4 6 1 4",
+    "proposals": 39,
+    "sha256": "46ecc3ec44b32e21af41551f87c73a1658d92b1b249867f16ece67a5a64deb2b",
+    "shapes": {
+     "placed [a name already elsewhere; 0 at the point, 0 named]": 1,
+     "placed [a name already elsewhere; 1 at the point, 0 named]": 10,
+     "placed [a name already here; 1 at the point, 1 named]": 2,
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 10,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 10,
+     "placed [ground; 1 at the point, 1 named]": 2,
+     "placed | sheet: net_with_two_names [a new name; 1 at the point, 1 named]": 2
+    }
+   },
+   "moves": {
+    "asked_sha256": "a98aafc2416cf6d0b13ddfa794c91ec0bbe0f54ff34b62c90cddd860d889075c",
+    "order": "0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+    "proposals": 65,
+    "sha256": "9efb85fc351f7061482898b56a56c895d40892d083d72a682949d2bfc1e6b813",
+    "shapes": {
+     "moved": 65
     }
    }
   },
@@ -3282,6 +3507,29 @@
     "sha256": "a913b31fd283841e048ca17d8e4afe93150d2cebe7818f14736fe92c2edd9434",
     "shapes": {
      "moved": 30
+    }
+   }
+  },
+  "fixtures/ltspice_recorded/inputs/export/value_inner_space.asc": {
+   "labels": {
+    "asked_sha256": "9f48090797446e9327de6662132d3eee413ee95d0387a1e483b7208de40862b3",
+    "order": "2 0 3 1 3 1 3 1 3 1",
+    "proposals": 10,
+    "sha256": "c4db5727777494c5fb089d05fe9a3aec22b137773177c582c6ce039ee23f5edf",
+    "shapes": {
+     "placed [a new name; 0 at the point, 0 named]": 1,
+     "placed [a new name; 1 at the point, 0 named]": 4,
+     "placed [ground; 0 at the point, 0 named]": 1,
+     "placed [ground; 1 at the point, 0 named]": 4
+    }
+   },
+   "moves": {
+    "asked_sha256": "6a151f82f43215901c8d45cd09e0c3973c32abb608a0f6d997421f5fe33561e5",
+    "order": "0 0 0 0 0 0 0 0 0 0 0 0 0 0",
+    "proposals": 14,
+    "sha256": "7c34975f371b47deb3bcc512c5c4c1a1d3ed1108170e67a5e61edfa91dafc574",
+    "shapes": {
+     "moved": 14
     }
    }
   },

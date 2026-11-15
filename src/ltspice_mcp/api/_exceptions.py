@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from ltspice_mcp.errors import reply_error_code
+
 
 class ApiError(Exception):
     """Base class for Python API failures."""
@@ -23,7 +25,7 @@ class ApiCallError(ApiError):
         self.payload = dict(payload or {})
         error = self.payload.get("error")
         details = error if isinstance(error, Mapping) else self.payload
-        self.code = details.get("code")
+        self.code = reply_error_code(self.payload)
         self.commit_state = details.get("commit_state")
         self.job_id = details.get("job_id", self.payload.get("job_id"))
         self.control_token = details.get(

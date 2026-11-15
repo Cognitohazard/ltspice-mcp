@@ -131,7 +131,7 @@ hidden_desktop = true    # Windows: run LTspice where its window can't take your
 # xvii = "C:/Program Files/LTC/LTspiceXVII/XVIIx64.exe"
 
 [security]
-# allowed_paths = ["."]  # a sandbox: the only folders the tools may use; unset = no sandbox
+# allowed_paths = ["."]  # a sandbox: the only folders the tools may use, relative to the working directory; unset = no sandbox
 
 [simulation]
 # max_parallel = 4       # default: number of CPU cores, capped at 8

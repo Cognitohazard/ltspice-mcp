@@ -1,0 +1,26 @@
+Circuit: * DERIV of a transient where a condition is met
+
+.OP point found by inspection.
+
+d_when: D(v(out))=5004.63 at 6.9672e-005
+d_at: D(v(out))=3728.2 at 0.0001
+t_when: v(out)=0.5 AT 6.9672e-005
+
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = modified trap
+totiter = 2042
+traniter = 2042
+tranpoints = 1022
+accept = 1022
+rejected = 0
+matrix size = 3
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)
+

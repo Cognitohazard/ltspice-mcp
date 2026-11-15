@@ -44,6 +44,7 @@ from ltspice_mcp.lib import (
     result_store,
     services,
 )
+from ltspice_mcp.lib.continuation import Unfilled, call_to_continue
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, PlotDescriptor
 from ltspice_mcp.lib.format import cap_note, format_spice_value, held_to_cap, unique_name
@@ -77,6 +78,7 @@ from ltspice_mcp.lib.recipes import (
     WaveformRecipe,
     validate_recipe,  # noqa: TID251 - recipe_of_request, its owner, is in this module
 )
+from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER, rows
 from ltspice_mcp.lib.result_kinds import AC_SHAPED
 from ltspice_mcp.lib.result_observations import (
     coarse_waveform_observation,
@@ -2790,18 +2792,41 @@ def _source_hashes(
     return [{key: manifest.get(key) for key in keys} for manifest in item.source_manifests]
 
 
-def _page_of(item_schema: dict[str, Any]) -> dict[str, Any]:
-    """The shared offset page, with its rows narrowed to ``item_schema``.
+def _page_of(item_schema: dict[str, Any], cut: Any) -> dict[str, Any]:
+    """The shared offset page, with its rows narrowed to ``item_schema`` and
+    cut as ``cut`` declares (``lib/reply_cuts.py``).
 
     Closed to extra keys: a page this tool renders carries the five page keys
     and nothing else, so anything else on it is a schema failure rather than a
     silent pass. A fresh dict per call — the surfaces that share this shape
     each declare their own row type.
     """
-    return {**page_schema({"type": "array", "items": item_schema}), "additionalProperties": False}
+    return {
+        **page_schema({"type": "array", "items": item_schema, CUT: cut}),
+        "additionalProperties": False,
+    }
 
 
-_PAGE_SCHEMA: dict[str, Any] = _page_of({"type": "object"})
+_PAGE_SCHEMA: dict[str, Any] = _page_of({"type": "object"}, ITEMS)
+
+#: The call that continues a partial analysis: the reply's ``next`` is its
+#: ``continue`` argument.
+_CONTINUE_CALL = call_to_continue("analyze_results", {"continue": Unfilled("next")})
+
+#: What a reply says when its page of missing cases is cut.
+_MISSING_CASES_HINT = (
+    "coverage.missing_cases is truncated; read the next page of missing cases with "
+    + call_to_continue(
+        "analyze_results",
+        {
+            "continue": {
+                "result_set_id": Unfilled("result_set_id"),
+                "cursor": Unfilled("coverage.missing_cases.next_cursor"),
+            }
+        },
+    )
+    + " (no work is replayed)."
+)
 
 #: spec.fail_cases: a page with no cursor, because it is worked out in the call
 #: that returns it and never stored. Cut short, its hint names the view that
@@ -2869,6 +2894,7 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
                 "failed_measurements": {
                     "type": "array",
                     "items": {"type": "string"},
+                    CUT: NEVER,
                     "description": (
                         "The measurements LTspice printed as failed at the step(s) "
                         "the row reads: FAIL'ed, or 'failed' in a stepped table. A "
@@ -2879,6 +2905,7 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
                 "not_finite": {
                     "type": "array",
                     "items": {"type": "string"},
+                    CUT: NEVER,
                     "description": (
                         "The measurements whose 'measured' is null because LTspice "
                         "printed a number that is not finite, such as a gain margin "
@@ -2910,6 +2937,12 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
     },
     "additionalProperties": False,
 }
+
+#: How a list of attributed rows is cut: whole rows, each named by the source,
+#: case, run and step it reads, which include.fields may project out.
+_ATTRIBUTED_ROWS_CUT: dict[str, Any] = rows(
+    "source", "case_id", "run_index", "step_index", projected_by="include.fields"
+)
 
 _REDUCED_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -2972,7 +3005,7 @@ _SPEC_SCHEMA: dict[str, Any] = {
             "enum": ["pass", "fail", "indeterminate"],
         },
         "allow_incomplete": {"type": "boolean"},
-        "outliers": {"type": "array", "items": {"type": "object"}},
+        "outliers": {"type": "array", "items": {"type": "object"}, CUT: ITEMS},
     },
     "required": [
         "field",
@@ -2991,13 +3024,13 @@ _RESULT_ENTRY_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "metric": {"type": "string"},
-        "reduced": {"type": "array", "items": _REDUCED_SCHEMA},
-        "groups": {"type": "array", "items": {"type": "object"}},
-        "steps": {"type": "array", "items": {"type": "object"}},
+        "reduced": {"type": "array", "items": _REDUCED_SCHEMA, CUT: rows("field", "stat")},
+        "groups": {"type": "array", "items": {"type": "object"}, CUT: ITEMS},
+        "steps": {"type": "array", "items": {"type": "object"}, CUT: ITEMS},
         "spec": _SPEC_SCHEMA,
-        "per_run": _page_of(_ATTRIBUTED_VALUE_SCHEMA),
-        "values": {"type": "array", "items": _ATTRIBUTED_VALUE_SCHEMA},
-        "warnings": {"type": "array", "items": {"type": "string"}},
+        "per_run": _page_of(_ATTRIBUTED_VALUE_SCHEMA, _ATTRIBUTED_ROWS_CUT),
+        "values": {"type": "array", "items": _ATTRIBUTED_VALUE_SCHEMA, CUT: _ATTRIBUTED_ROWS_CUT},
+        "warnings": {"type": "array", "items": {"type": "string"}, CUT: NEVER},
     },
     "required": ["metric", "reduced", "warnings"],
     "additionalProperties": False,
@@ -3023,6 +3056,7 @@ OUTPUT_SCHEMA: dict[str, Any] = {
         },
         "observations": {
             "type": "array",
+            CUT: NEVER,
             "items": {
                 "type": "object",
                 "properties": {
@@ -3037,6 +3071,7 @@ OUTPUT_SCHEMA: dict[str, Any] = {
         },
         "failures": {
             "type": "array",
+            CUT: NEVER,
             "items": {
                 "type": "object",
                 "properties": {
@@ -3046,7 +3081,7 @@ OUTPUT_SCHEMA: dict[str, Any] = {
                     "message": {"type": "string"},
                     # Present on a row that stands for several failures with one
                     # cause: the distinct places, capped, and the true count.
-                    "wheres": {"type": "array", "items": {"type": "string"}},
+                    "wheres": {"type": "array", "items": {"type": "string"}, CUT: NEVER},
                     "count": {"type": "integer", "minimum": 2},
                 },
                 "required": ["code", "stage", "where", "message"],
@@ -3058,10 +3093,12 @@ OUTPUT_SCHEMA: dict[str, Any] = {
             "additionalProperties": {
                 "type": "array",
                 "items": {"type": "string"},
+                CUT: ITEMS,
             },
         },
         "source_hashes": {
             "type": "array",
+            CUT: ITEMS,
             "items": {
                 "type": "object",
                 "properties": {
@@ -3446,16 +3483,9 @@ def _assemble(
         )
     if next_value is not None:
         reason = "an artifact item was deferred intact" if a.deferred else "the call budget ended"
-        hints.append(
-            f"Analysis is partial because {reason}; call analyze_results with "
-            f"continue={{result_set_id, cursor}} from 'next'."
-        )
+        hints.append(f"Analysis is partial because {reason}; continue with {_CONTINUE_CALL}.")
     if missing_page["next_cursor"] is not None:
-        hints.append(
-            "coverage.missing_cases is truncated; call analyze_results with "
-            "continue={result_set_id, cursor: coverage.missing_cases.next_cursor} "
-            "for the next page of missing cases (no work is replayed)."
-        )
+        hints.append(_MISSING_CASES_HINT)
     hints.extend(a.argument_notes)
     if hints:
         data["hint"] = " ".join(hints)
@@ -3702,8 +3732,7 @@ def render_attached_analysis(
                 response_budget.append_hint(
                     data,
                     "Analysis is partial because the response budget reduced the "
-                    "per_run page; call analyze_results with "
-                    "continue={result_set_id, cursor} from 'next', or read the "
+                    f"per_run page; continue with {_CONTINUE_CALL}, or read the "
                     "complete set through the Python API (ltspice_mcp.api).",
                 )
         if row_limit is not None:
@@ -3744,13 +3773,7 @@ def render_attached_analysis(
                 fields=fields,
             )
             if coverage["missing_cases"]["next_cursor"] is not None:
-                response_budget.append_hint(
-                    data,
-                    "coverage.missing_cases is truncated; call analyze_results with "
-                    "continue={result_set_id, cursor: "
-                    "coverage.missing_cases.next_cursor} for the next page of "
-                    "missing cases (no work is replayed).",
-                )
+                response_budget.append_hint(data, _MISSING_CASES_HINT)
     if answer_channel:
         data.pop("signals_available", None)
         hashes = data.get("source_hashes")
@@ -3766,19 +3789,13 @@ def render_attached_analysis(
             )
             response_budget.append_hint(
                 data,
-                f"Analysis is partial because {reason}; call analyze_results with "
-                "continue={result_set_id, cursor} from 'next', or read the complete "
-                "set through the Python API (ltspice_mcp.api).",
+                f"Analysis is partial because {reason}; continue with {_CONTINUE_CALL}, "
+                "or read the complete set through the Python API (ltspice_mcp.api).",
             )
         coverage = data.get("coverage")
         missing_page = coverage.get("missing_cases") if isinstance(coverage, dict) else None
         if isinstance(missing_page, dict) and missing_page.get("next_cursor") is not None:
-            response_budget.append_hint(
-                data,
-                "coverage.missing_cases is truncated; call analyze_results with "
-                "continue={result_set_id, cursor: coverage.missing_cases.next_cursor} "
-                "for the next page of missing cases (no work is replayed).",
-            )
+            response_budget.append_hint(data, _MISSING_CASES_HINT)
         failures = data.get("failures")
         has_failures = isinstance(failures, list) and bool(failures)
         missing_total = int(missing_page.get("total", 0)) if isinstance(missing_page, dict) else 0
@@ -4064,10 +4081,9 @@ _BUDGET_NOTES = response_budget.Notes(
         "presentation was reduced; every recipe that produced a result "
         "still has one, and its reductions and spec verdict are intact."
     ),
-    route=(
-        "Ask again with a larger 'budget' for the full presentation, or continue "
-        "with continue={result_set_id, cursor}."
-    ),
+    # The ladder holds back room for a route of 160 characters
+    # (response_budget.NOTE_RESERVE_TOKENS).
+    route=f"Ask again with a larger 'budget', or continue with {_CONTINUE_CALL}.",
     default_route=(
         "Each row still names its source by manifest_id and label; "
         "include.provenance keeps source_hashes."

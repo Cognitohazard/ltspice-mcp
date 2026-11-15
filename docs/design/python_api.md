@@ -397,9 +397,12 @@ Each of the six methods has its `reference()` text as its `__doc__`, so
 
 **Relative path arguments resolve from `working_dir`**, not the process CWD,
 as does any relative entry in `allowed_paths` (such as a config file's
-`allowed_paths = ["."]`). The MCP server resolves a relative path from the
-first allowed directory when there is a sandbox, and from its working
-directory otherwise; its `spice://netlists/` resource lists that same folder.
+`allowed_paths = ["."]`). When a sandbox leaves `working_dir` out, a relative
+path resolves from its first allowed directory instead. The MCP server, a
+`run_code` snippet and a detached job's owner follow the same rule, with
+`LTSPICE_MCP_WORKING_DIR` as the server's working directory (taken from the
+folder the server was started in when it is relative); the server's
+`spice://netlists/` resource lists that same folder.
 
 ## 6. Errors
 
@@ -410,8 +413,8 @@ directory otherwise; its `spice://netlists/` resource lists that same folder.
   `PathSecurityError` gets one note (PEP 678) with the same guidance as a tool
   call's `hint`, so the traceback shows what to change (with a sandbox, the
   setting that defines it); its type and message are not changed. The note
-  names `working_dir` as the folder a relative path is taken from, since that
-  is where the API takes it from.
+  names the folder a relative path is taken from: `working_dir`, or the first
+  allowed directory when the sandbox leaves `working_dir` out.
 - A result with `isError=True` raises `ApiCallError`, which contains the
   complete structured payload and has the attributes `code`, `commit_state`,
   `job_id` and `control_token`. When the error comes after a job was submitted

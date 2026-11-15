@@ -373,10 +373,10 @@ async def test_run_experiments_refuses_a_circuit_outside_the_sandbox_before_a_jo
     assert result.is_error and data is not None
     assert (data["error"]["code"], data["error"]["commit_state"]) == ("path_denied", "not_started")
     assert str(box.deck) in data["error"]["message"]
-    # The roots as written, and where a relative one is: in the refusal and
-    # in the guidance beside it alike.
-    assert f"[. ({box.work.resolve()})]" in data["error"]["message"]
-    assert f"Allowed paths: . ({box.work.resolve()})" in data["hint"]
+    # The roots as the session holds them, a relative entry anchored on the
+    # working directory: in the refusal and in the guidance beside it alike.
+    assert f"[{box.work.resolve()}]" in data["error"]["message"]
+    assert f"Allowed paths: {box.work.resolve()}." in data["hint"]
     _assert_guidance(data["hint"], box.toml)
     assert not any(state.store.experiments_dir.glob("*"))
 

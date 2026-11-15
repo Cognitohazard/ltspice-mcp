@@ -15174,6 +15174,58 @@
    }
   ]
  },
+ "fixtures/ltspice_recorded/inputs/connectivity/diagonal_end_on_wire_interior.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "from": {
+      "x": 32,
+      "y": 64
+     },
+     "kind": "diagonal_wire",
+     "message": "Wire (32,64)->(96,192) is diagonal; LTspice joins anything on it, along its length as at its ends",
+     "to": {
+      "x": 96,
+      "y": 192
+     }
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 2,
+    "pins_total": 4,
+    "pins_wired": 2,
+    "wire_segments": 2
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "diagonal_end_on_wire_interior.asc",
+     "x": 32,
+     "y": 64
+    },
+    "evidence": {
+     "coords": [
+      [
+       32,
+       64
+      ],
+      [
+       96,
+       192
+      ]
+     ],
+     "detail": "Wire (32,64)->(96,192) is diagonal; LTspice joins anything on it, along its length as at its ends",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "diagonal_wire",
+    "severity": "observation",
+    "subject": "(32,64)"
+   }
+  ]
+ },
  "fixtures/ltspice_recorded/inputs/connectivity/diagonal_wire_end.asc": {
   "dropped_wire": [],
   "edit": {
@@ -17547,6 +17599,136 @@
    }
   ]
  },
+ "fixtures/ltspice_recorded/inputs/connectivity/same_instance_run_past_second_pin.asc": {
+  "dropped_wire": [
+   {
+    "at": {
+     "file": "same_instance_run_past_second_pin.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ],
+      [
+       96,
+       192
+      ]
+     ],
+     "detail": "Wire (96,96)->(96,192) joins two pins of the same instance R1 and is not exported",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "dropped_wire",
+    "severity": "warning",
+    "subject": "R1"
+   }
+  ],
+  "edit": {
+   "warnings": [
+    {
+     "from": {
+      "x": 96,
+      "y": 96
+     },
+     "kind": "dropped_wire",
+     "message": "Wire (96,96)->(96,192) joins two pins of the same instance R1 and is not exported",
+     "ref": "R1",
+     "to": {
+      "x": 96,
+      "y": 192
+     }
+    },
+    {
+     "kind": "pin_inside_wire",
+     "message": "R1.2 at (96,192) lies inside the wire (96,96)->(96,288), so it is joined to that wire's net, though no wire ends on it",
+     "ref": "R1",
+     "x": 96,
+     "y": 192
+    },
+    {
+     "kind": "wire_through_symbol",
+     "message": "Wire (96,96)->(96,288) passes through R1's body",
+     "points": [
+      {
+       "x": 96,
+       "y": 96
+      },
+      {
+       "x": 96,
+       "y": 288
+      }
+     ],
+     "ref": "R1",
+     "x": 96,
+     "y": 96
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 0,
+    "pins_total": 2,
+    "pins_wired": 2,
+    "wire_segments": 1
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "same_instance_run_past_second_pin.asc",
+     "x": 96,
+     "y": 192
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       192
+      ]
+     ],
+     "detail": "R1.2 at (96,192) lies inside the wire (96,96)->(96,288), so it is joined to that wire's net, though no wire ends on it",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "pin_inside_wire",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "same_instance_run_past_second_pin.asc",
+     "x": 96,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       96
+      ],
+      [
+       96,
+       288
+      ]
+     ],
+     "detail": "Wire (96,96)->(96,288) passes through R1's body",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "R1"
+   }
+  ]
+ },
  "fixtures/ltspice_recorded/inputs/connectivity/same_instance_t_junction.asc": {
   "dropped_wire": [],
   "edit": {
@@ -18705,6 +18887,145 @@
    }
   },
   "verify": []
+ },
+ "fixtures/ltspice_recorded/inputs/export/adevice_open_pin.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: A1.3 at (64,96)",
+     "pin": "3",
+     "ref": "A1",
+     "x": 64,
+     "y": 96
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: A1.4 at (64,112)",
+     "pin": "4",
+     "ref": "A1",
+     "x": 64,
+     "y": 112
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: A1.6 at (128,64)",
+     "pin": "6",
+     "ref": "A1",
+     "x": 128,
+     "y": 64
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: A1.8 at (128,96)",
+     "pin": "8",
+     "ref": "A1",
+     "x": 128,
+     "y": 96
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 4,
+    "pins_total": 8,
+    "pins_wired": 0,
+    "wire_segments": 0
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "adevice_open_pin.asc",
+     "x": 64,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       64,
+       96
+      ]
+     ],
+     "detail": "Floating pin: A1.3 at (64,96)",
+     "refs": [
+      "A1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "A1"
+   },
+   {
+    "at": {
+     "file": "adevice_open_pin.asc",
+     "x": 64,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       64,
+       112
+      ]
+     ],
+     "detail": "Floating pin: A1.4 at (64,112)",
+     "refs": [
+      "A1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "A1"
+   },
+   {
+    "at": {
+     "file": "adevice_open_pin.asc",
+     "x": 128,
+     "y": 64
+    },
+    "evidence": {
+     "coords": [
+      [
+       128,
+       64
+      ]
+     ],
+     "detail": "Floating pin: A1.6 at (128,64)",
+     "refs": [
+      "A1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "A1"
+   },
+   {
+    "at": {
+     "file": "adevice_open_pin.asc",
+     "x": 128,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       128,
+       96
+      ]
+     ],
+     "detail": "Floating pin: A1.8 at (128,96)",
+     "refs": [
+      "A1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "A1"
+   }
+  ]
  },
  "fixtures/ltspice_recorded/inputs/export/attributes.asc": {
   "dropped_wire": [],
@@ -21310,6 +21631,1318 @@
     "rule_id": "dangling_label",
     "severity": "observation",
     "subject": "(0,192)"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/export/hier_device.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.1 at (-16,-48)",
+     "pin": "1",
+     "ref": "R1",
+     "x": -16,
+     "y": -48
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: D1.K at (-16,144)",
+     "pin": "K",
+     "ref": "D1",
+     "x": -16,
+     "y": 144
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (0,160) meets no pin, net label, or other wire",
+     "x": 0,
+     "y": 160
+    },
+    {
+     "kind": "dangling_label",
+     "label": "IN",
+     "message": "Dangling label 'IN' at (0,16)",
+     "x": 0,
+     "y": 16
+    },
+    {
+     "kind": "dangling_label",
+     "label": "OUT",
+     "message": "Dangling label 'OUT' at (0,96)",
+     "x": 0,
+     "y": 96
+    },
+    {
+     "across": "text",
+     "kind": "attribute_text_overlap",
+     "message": "D1's text 'D1' at (8,88) is drawn across the text 'OUT' at (0,96)",
+     "other_text": "OUT",
+     "points": [
+      {
+       "x": 8,
+       "y": 88
+      },
+      {
+       "x": 0,
+       "y": 96
+      }
+     ],
+     "ref": "D1",
+     "text": "D1",
+     "x": 8,
+     "y": 88
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 0,
+    "pins_total": 4,
+    "pins_wired": 0,
+    "wire_segments": 1
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "hier_device.asc",
+     "x": -16,
+     "y": -48
+    },
+    "evidence": {
+     "coords": [
+      [
+       -16,
+       -48
+      ]
+     ],
+     "detail": "Floating pin: R1.1 at (-16,-48)",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "hier_device.asc",
+     "x": -16,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       -16,
+       144
+      ]
+     ],
+     "detail": "Floating pin: D1.K at (-16,144)",
+     "refs": [
+      "D1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "D1"
+   },
+   {
+    "at": {
+     "file": "hier_device.asc",
+     "x": 0,
+     "y": 160
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       160
+      ]
+     ],
+     "detail": "Wire end at (0,160) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(0,160)"
+   },
+   {
+    "at": {
+     "file": "hier_device.asc",
+     "x": 0,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       16
+      ]
+     ],
+     "detail": "Dangling label 'IN' at (0,16)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(0,16)"
+   },
+   {
+    "at": {
+     "file": "hier_device.asc",
+     "x": 0,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       96
+      ]
+     ],
+     "detail": "Dangling label 'OUT' at (0,96)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(0,96)"
+   },
+   {
+    "at": {
+     "file": "hier_device.asc",
+     "x": 8,
+     "y": 88
+    },
+    "evidence": {
+     "coords": [
+      [
+       8,
+       88
+      ],
+      [
+       0,
+       96
+      ]
+     ],
+     "detail": "D1's text 'D1' at (8,88) is drawn across the text 'OUT' at (0,96)",
+     "refs": [
+      "D1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "attribute_text_overlap",
+    "severity": "observation",
+    "subject": "D1"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/export/hier_device_logopinfo.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.+ at (0,-32)",
+     "pin": "+",
+     "ref": "V1",
+     "x": 0,
+     "y": -32
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.- at (0,32)",
+     "pin": "-",
+     "ref": "V1",
+     "x": 0,
+     "y": 32
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R3.1 at (192,-48)",
+     "pin": "1",
+     "ref": "R3",
+     "x": 192,
+     "y": -48
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R3.2 at (192,48)",
+     "pin": "2",
+     "ref": "R3",
+     "x": 192,
+     "y": 48
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (0,16) meets no pin, net label, or other wire",
+     "x": 0,
+     "y": 16
+    },
+    {
+     "kind": "dangling_label",
+     "label": "0",
+     "message": "Dangling label '0' at (0,96)",
+     "x": 0,
+     "y": 96
+    },
+    {
+     "kind": "dangling_label",
+     "label": "0",
+     "message": "Dangling label '0' at (208,96)",
+     "x": 208,
+     "y": 96
+    },
+    {
+     "kind": "symbol_overlap",
+     "message": "U1 and R3: bounding boxes share a 32x64 region at (176,-16)",
+     "points": [
+      {
+       "x": 176,
+       "y": -16
+      },
+      {
+       "x": 208,
+       "y": 48
+      }
+     ],
+     "ref": "U1",
+     "refs": [
+      "U1",
+      "R3"
+     ],
+     "x": 176,
+     "y": -16
+    },
+    {
+     "kind": "wire_through_symbol",
+     "message": "Wire (0,16)->(112,16) passes through V1's body",
+     "points": [
+      {
+       "x": 0,
+       "y": 16
+      },
+      {
+       "x": 112,
+       "y": 16
+      }
+     ],
+     "ref": "V1",
+     "x": 0,
+     "y": 16
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 1,
+    "pins_total": 6,
+    "pins_wired": 1,
+    "wire_segments": 1
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "hier_device_logopinfo.asc",
+     "x": 0,
+     "y": -32
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       -32
+      ]
+     ],
+     "detail": "Floating pin: V1.+ at (0,-32)",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "hier_device_logopinfo.asc",
+     "x": 0,
+     "y": 32
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       32
+      ]
+     ],
+     "detail": "Floating pin: V1.- at (0,32)",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "hier_device_logopinfo.asc",
+     "x": 192,
+     "y": -48
+    },
+    "evidence": {
+     "coords": [
+      [
+       192,
+       -48
+      ]
+     ],
+     "detail": "Floating pin: R3.1 at (192,-48)",
+     "refs": [
+      "R3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R3"
+   },
+   {
+    "at": {
+     "file": "hier_device_logopinfo.asc",
+     "x": 192,
+     "y": 48
+    },
+    "evidence": {
+     "coords": [
+      [
+       192,
+       48
+      ]
+     ],
+     "detail": "Floating pin: R3.2 at (192,48)",
+     "refs": [
+      "R3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R3"
+   },
+   {
+    "at": {
+     "file": "hier_device_logopinfo.asc",
+     "x": 0,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       16
+      ]
+     ],
+     "detail": "Wire end at (0,16) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(0,16)"
+   },
+   {
+    "at": {
+     "file": "hier_device_logopinfo.asc",
+     "x": 0,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       96
+      ]
+     ],
+     "detail": "Dangling label '0' at (0,96)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(0,96)"
+   },
+   {
+    "at": {
+     "file": "hier_device_logopinfo.asc",
+     "x": 208,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       208,
+       96
+      ]
+     ],
+     "detail": "Dangling label '0' at (208,96)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(208,96)"
+   },
+   {
+    "at": {
+     "file": "hier_device_logopinfo.asc",
+     "x": 176,
+     "y": -16
+    },
+    "evidence": {
+     "coords": [
+      [
+       176,
+       -16
+      ],
+      [
+       208,
+       48
+      ]
+     ],
+     "detail": "U1 and R3: bounding boxes share a 32x64 region at (176,-16)",
+     "refs": [
+      "U1",
+      "R3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "symbol_overlap",
+    "severity": "observation",
+    "subject": "U1 & R3"
+   },
+   {
+    "at": {
+     "file": "hier_device_logopinfo.asc",
+     "x": 0,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       16
+      ],
+      [
+       112,
+       16
+      ]
+     ],
+     "detail": "Wire (0,16)->(112,16) passes through V1's body",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "V1"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/export/hier_device_plain.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.+ at (0,-32)",
+     "pin": "+",
+     "ref": "V1",
+     "x": 0,
+     "y": -32
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.- at (0,32)",
+     "pin": "-",
+     "ref": "V1",
+     "x": 0,
+     "y": 32
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R3.1 at (192,-48)",
+     "pin": "1",
+     "ref": "R3",
+     "x": 192,
+     "y": -48
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R3.2 at (192,48)",
+     "pin": "2",
+     "ref": "R3",
+     "x": 192,
+     "y": 48
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (0,16) meets no pin, net label, or other wire",
+     "x": 0,
+     "y": 16
+    },
+    {
+     "kind": "dangling_label",
+     "label": "0",
+     "message": "Dangling label '0' at (0,96)",
+     "x": 0,
+     "y": 96
+    },
+    {
+     "kind": "dangling_label",
+     "label": "0",
+     "message": "Dangling label '0' at (208,96)",
+     "x": 208,
+     "y": 96
+    },
+    {
+     "kind": "symbol_overlap",
+     "message": "U1 and R3: bounding boxes share a 32x64 region at (176,-16)",
+     "points": [
+      {
+       "x": 176,
+       "y": -16
+      },
+      {
+       "x": 208,
+       "y": 48
+      }
+     ],
+     "ref": "U1",
+     "refs": [
+      "U1",
+      "R3"
+     ],
+     "x": 176,
+     "y": -16
+    },
+    {
+     "kind": "wire_through_symbol",
+     "message": "Wire (0,16)->(112,16) passes through V1's body",
+     "points": [
+      {
+       "x": 0,
+       "y": 16
+      },
+      {
+       "x": 112,
+       "y": 16
+      }
+     ],
+     "ref": "V1",
+     "x": 0,
+     "y": 16
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 1,
+    "pins_total": 6,
+    "pins_wired": 1,
+    "wire_segments": 1
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "hier_device_plain.asc",
+     "x": 0,
+     "y": -32
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       -32
+      ]
+     ],
+     "detail": "Floating pin: V1.+ at (0,-32)",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "hier_device_plain.asc",
+     "x": 0,
+     "y": 32
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       32
+      ]
+     ],
+     "detail": "Floating pin: V1.- at (0,32)",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "hier_device_plain.asc",
+     "x": 192,
+     "y": -48
+    },
+    "evidence": {
+     "coords": [
+      [
+       192,
+       -48
+      ]
+     ],
+     "detail": "Floating pin: R3.1 at (192,-48)",
+     "refs": [
+      "R3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R3"
+   },
+   {
+    "at": {
+     "file": "hier_device_plain.asc",
+     "x": 192,
+     "y": 48
+    },
+    "evidence": {
+     "coords": [
+      [
+       192,
+       48
+      ]
+     ],
+     "detail": "Floating pin: R3.2 at (192,48)",
+     "refs": [
+      "R3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R3"
+   },
+   {
+    "at": {
+     "file": "hier_device_plain.asc",
+     "x": 0,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       16
+      ]
+     ],
+     "detail": "Wire end at (0,16) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(0,16)"
+   },
+   {
+    "at": {
+     "file": "hier_device_plain.asc",
+     "x": 0,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       96
+      ]
+     ],
+     "detail": "Dangling label '0' at (0,96)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(0,96)"
+   },
+   {
+    "at": {
+     "file": "hier_device_plain.asc",
+     "x": 208,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       208,
+       96
+      ]
+     ],
+     "detail": "Dangling label '0' at (208,96)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(208,96)"
+   },
+   {
+    "at": {
+     "file": "hier_device_plain.asc",
+     "x": 176,
+     "y": -16
+    },
+    "evidence": {
+     "coords": [
+      [
+       176,
+       -16
+      ],
+      [
+       208,
+       48
+      ]
+     ],
+     "detail": "U1 and R3: bounding boxes share a 32x64 region at (176,-16)",
+     "refs": [
+      "U1",
+      "R3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "symbol_overlap",
+    "severity": "observation",
+    "subject": "U1 & R3"
+   },
+   {
+    "at": {
+     "file": "hier_device_plain.asc",
+     "x": 0,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       16
+      ],
+      [
+       112,
+       16
+      ]
+     ],
+     "detail": "Wire (0,16)->(112,16) passes through V1's body",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "V1"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/export/hier_directives.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.1 at (-16,-48)",
+     "pin": "1",
+     "ref": "R1",
+     "x": -16,
+     "y": -48
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R2.2 at (-16,144)",
+     "pin": "2",
+     "ref": "R2",
+     "x": -16,
+     "y": 144
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (0,112) meets no pin, net label, or other wire",
+     "x": 0,
+     "y": 112
+    },
+    {
+     "kind": "dangling_label",
+     "label": "IN",
+     "message": "Dangling label 'IN' at (0,16)",
+     "x": 0,
+     "y": 16
+    },
+    {
+     "kind": "dangling_label",
+     "label": "0",
+     "message": "Dangling label '0' at (0,192)",
+     "x": 0,
+     "y": 192
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 0,
+    "pins_total": 4,
+    "pins_wired": 0,
+    "wire_segments": 1
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "hier_directives.asc",
+     "x": -16,
+     "y": -48
+    },
+    "evidence": {
+     "coords": [
+      [
+       -16,
+       -48
+      ]
+     ],
+     "detail": "Floating pin: R1.1 at (-16,-48)",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "hier_directives.asc",
+     "x": -16,
+     "y": 144
+    },
+    "evidence": {
+     "coords": [
+      [
+       -16,
+       144
+      ]
+     ],
+     "detail": "Floating pin: R2.2 at (-16,144)",
+     "refs": [
+      "R2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R2"
+   },
+   {
+    "at": {
+     "file": "hier_directives.asc",
+     "x": 0,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       112
+      ]
+     ],
+     "detail": "Wire end at (0,112) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(0,112)"
+   },
+   {
+    "at": {
+     "file": "hier_directives.asc",
+     "x": 0,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       16
+      ]
+     ],
+     "detail": "Dangling label 'IN' at (0,16)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(0,16)"
+   },
+   {
+    "at": {
+     "file": "hier_directives.asc",
+     "x": 0,
+     "y": 192
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       192
+      ]
+     ],
+     "detail": "Dangling label '0' at (0,192)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(0,192)"
+   }
+  ]
+ },
+ "fixtures/ltspice_recorded/inputs/export/hier_directives_top.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.+ at (0,-32)",
+     "pin": "+",
+     "ref": "V1",
+     "x": 0,
+     "y": -32
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: V1.- at (0,32)",
+     "pin": "-",
+     "ref": "V1",
+     "x": 0,
+     "y": 32
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R3.1 at (192,-48)",
+     "pin": "1",
+     "ref": "R3",
+     "x": 192,
+     "y": -48
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R3.2 at (192,48)",
+     "pin": "2",
+     "ref": "R3",
+     "x": 192,
+     "y": 48
+    },
+    {
+     "kind": "dangling_wire_end",
+     "message": "Wire end at (0,16) meets no pin, net label, or other wire",
+     "x": 0,
+     "y": 16
+    },
+    {
+     "kind": "dangling_label",
+     "label": "0",
+     "message": "Dangling label '0' at (0,96)",
+     "x": 0,
+     "y": 96
+    },
+    {
+     "kind": "dangling_label",
+     "label": "0",
+     "message": "Dangling label '0' at (208,96)",
+     "x": 208,
+     "y": 96
+    },
+    {
+     "kind": "symbol_overlap",
+     "message": "X1 and R3: bounding boxes share a 32x64 region at (176,-16)",
+     "points": [
+      {
+       "x": 176,
+       "y": -16
+      },
+      {
+       "x": 208,
+       "y": 48
+      }
+     ],
+     "ref": "X1",
+     "refs": [
+      "X1",
+      "R3"
+     ],
+     "x": 176,
+     "y": -16
+    },
+    {
+     "kind": "wire_through_symbol",
+     "message": "Wire (0,16)->(112,16) passes through V1's body",
+     "points": [
+      {
+       "x": 0,
+       "y": 16
+      },
+      {
+       "x": 112,
+       "y": 16
+      }
+     ],
+     "ref": "V1",
+     "x": 0,
+     "y": 16
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 1,
+    "pins_total": 6,
+    "pins_wired": 1,
+    "wire_segments": 1
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "hier_directives_top.asc",
+     "x": 0,
+     "y": -32
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       -32
+      ]
+     ],
+     "detail": "Floating pin: V1.+ at (0,-32)",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "hier_directives_top.asc",
+     "x": 0,
+     "y": 32
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       32
+      ]
+     ],
+     "detail": "Floating pin: V1.- at (0,32)",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "V1"
+   },
+   {
+    "at": {
+     "file": "hier_directives_top.asc",
+     "x": 192,
+     "y": -48
+    },
+    "evidence": {
+     "coords": [
+      [
+       192,
+       -48
+      ]
+     ],
+     "detail": "Floating pin: R3.1 at (192,-48)",
+     "refs": [
+      "R3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R3"
+   },
+   {
+    "at": {
+     "file": "hier_directives_top.asc",
+     "x": 192,
+     "y": 48
+    },
+    "evidence": {
+     "coords": [
+      [
+       192,
+       48
+      ]
+     ],
+     "detail": "Floating pin: R3.2 at (192,48)",
+     "refs": [
+      "R3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R3"
+   },
+   {
+    "at": {
+     "file": "hier_directives_top.asc",
+     "x": 0,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       16
+      ]
+     ],
+     "detail": "Wire end at (0,16) meets no pin, net label, or other wire",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_wire_end",
+    "severity": "observation",
+    "subject": "(0,16)"
+   },
+   {
+    "at": {
+     "file": "hier_directives_top.asc",
+     "x": 0,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       96
+      ]
+     ],
+     "detail": "Dangling label '0' at (0,96)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(0,96)"
+   },
+   {
+    "at": {
+     "file": "hier_directives_top.asc",
+     "x": 208,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       208,
+       96
+      ]
+     ],
+     "detail": "Dangling label '0' at (208,96)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(208,96)"
+   },
+   {
+    "at": {
+     "file": "hier_directives_top.asc",
+     "x": 176,
+     "y": -16
+    },
+    "evidence": {
+     "coords": [
+      [
+       176,
+       -16
+      ],
+      [
+       208,
+       48
+      ]
+     ],
+     "detail": "X1 and R3: bounding boxes share a 32x64 region at (176,-16)",
+     "refs": [
+      "X1",
+      "R3"
+     ]
+    },
+    "ok": false,
+    "rule_id": "symbol_overlap",
+    "severity": "observation",
+    "subject": "X1 & R3"
+   },
+   {
+    "at": {
+     "file": "hier_directives_top.asc",
+     "x": 0,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       16
+      ],
+      [
+       112,
+       16
+      ]
+     ],
+     "detail": "Wire (0,16)->(112,16) passes through V1's body",
+     "refs": [
+      "V1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "wire_through_symbol",
+    "severity": "observation",
+    "subject": "V1"
    }
   ]
  },
@@ -74592,12 +76225,247 @@
    }
   ]
  },
+ "fixtures/ltspice_recorded/inputs/export/text_irregular_spacing.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "unopenable": true
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "text_irregular_spacing.asc",
+     "x": 0,
+     "y": -48
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       -48
+      ]
+     ],
+     "detail": "Floating pin: R1.1 at (0,-48)",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "text_irregular_spacing.asc",
+     "x": 0,
+     "y": 48
+    },
+    "evidence": {
+     "coords": [
+      [
+       0,
+       48
+      ]
+     ],
+     "detail": "Floating pin: R1.2 at (0,48)",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "text_irregular_spacing.asc",
+     "x": 16,
+     "y": 96
+    },
+    "evidence": {
+     "coords": [
+      [
+       16,
+       96
+      ]
+     ],
+     "detail": "Dangling label '0' at (16,96)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(16,96)"
+   },
+   {
+    "at": {
+     "file": "text_irregular_spacing.asc",
+     "x": 16,
+     "y": 16
+    },
+    "evidence": {
+     "coords": [
+      [
+       16,
+       16
+      ]
+     ],
+     "detail": "Dangling label 'a' at (16,16)",
+     "refs": []
+    },
+    "ok": false,
+    "rule_id": "dangling_label",
+    "severity": "observation",
+    "subject": "(16,16)"
+   }
+  ]
+ },
  "fixtures/ltspice_recorded/inputs/export/unknown_record.asc": {
   "dropped_wire": [],
   "edit": {
    "unopenable": true
   },
   "verify": []
+ },
+ "fixtures/ltspice_recorded/inputs/export/value_inner_space.asc": {
+  "dropped_wire": [],
+  "edit": {
+   "warnings": [
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.1 at (96,112)",
+     "pin": "1",
+     "ref": "R1",
+     "x": 96,
+     "y": 112
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R1.2 at (96,208)",
+     "pin": "2",
+     "ref": "R1",
+     "x": 96,
+     "y": 208
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R2.1 at (256,112)",
+     "pin": "1",
+     "ref": "R2",
+     "x": 256,
+     "y": 112
+    },
+    {
+     "kind": "floating_pin",
+     "message": "Floating pin: R2.2 at (256,208)",
+     "pin": "2",
+     "ref": "R2",
+     "x": 256,
+     "y": 208
+    }
+   ],
+   "wiring": {
+    "pins_label_only": 0,
+    "pins_total": 4,
+    "pins_wired": 0,
+    "wire_segments": 0
+   }
+  },
+  "verify": [
+   {
+    "at": {
+     "file": "value_inner_space.asc",
+     "x": 96,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       112
+      ]
+     ],
+     "detail": "Floating pin: R1.1 at (96,112)",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "value_inner_space.asc",
+     "x": 96,
+     "y": 208
+    },
+    "evidence": {
+     "coords": [
+      [
+       96,
+       208
+      ]
+     ],
+     "detail": "Floating pin: R1.2 at (96,208)",
+     "refs": [
+      "R1"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R1"
+   },
+   {
+    "at": {
+     "file": "value_inner_space.asc",
+     "x": 256,
+     "y": 112
+    },
+    "evidence": {
+     "coords": [
+      [
+       256,
+       112
+      ]
+     ],
+     "detail": "Floating pin: R2.1 at (256,112)",
+     "refs": [
+      "R2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R2"
+   },
+   {
+    "at": {
+     "file": "value_inner_space.asc",
+     "x": 256,
+     "y": 208
+    },
+    "evidence": {
+     "coords": [
+      [
+       256,
+       208
+      ]
+     ],
+     "detail": "Floating pin: R2.2 at (256,208)",
+     "refs": [
+      "R2"
+     ]
+    },
+    "ok": false,
+    "rule_id": "floating_pin",
+    "severity": "observation",
+    "subject": "R2"
+   }
+  ]
  },
  "fixtures/ltspice_recorded/inputs/export/value_spaces.asc": {
   "dropped_wire": [],

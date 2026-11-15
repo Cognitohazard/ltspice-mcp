@@ -1,0 +1,5 @@
+* a source playing a .wav file named by a relative path
+V1 a 0 wavefile=data/level.wav
+R1 a 0 1k
+.tran 10m
+.end
