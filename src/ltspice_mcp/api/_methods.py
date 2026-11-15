@@ -47,7 +47,6 @@ from ltspice_mcp.lib.model_fields import (
     field_name,
     models_in,
 )
-from ltspice_mcp.lib.pathutil import relative_paths_from
 from ltspice_mcp.lib.raw_parser import OTHER_RAW_KINDS, OtherRawKind
 from ltspice_mcp.state import SessionState
 
@@ -307,17 +306,6 @@ def _with_warnings(payload: dict[str, Any], warnings: list[str]) -> dict[str, An
         existing = payload.get("warnings")
         payload["warnings"] = [*existing, *warnings] if isinstance(existing, list) else warnings
     return payload
-
-
-async def _anchored_on(base: Path, coroutine: Coroutine[Any, Any, _T]) -> _T:
-    """Run one call with its relative path arguments taken from ``base``.
-
-    Applied inside the coroutine for the same reason the automatic-mode flag is:
-    the path chokepoint reads the base from the session loop's task context, and
-    a set on the calling thread would never reach it.
-    """
-    with relative_paths_from(base):
-        return await coroutine
 
 
 async def _through_auto_door(coroutine: Coroutine[Any, Any, _T], tool: str) -> _T:
@@ -933,31 +921,27 @@ class ApiMethodsMixin(ABC):
         cancel_on_interrupt: bool = False,
         preserve_interrupt: bool = False,
     ) -> _T:
-        """Marshal one call with relative paths anchored on the working dir.
+        """Marshal one call into the session.
 
-        The Python API lets the caller name a working directory that is not their
-        cwd, so ``Api(working_dir=D)`` plus a bare ``"opamp2.asc"`` — the idiom
-        the contract documents — has to look in ``D``. Anchoring here rather
-        than per path field means every op, and every path field a future op
-        adds, inherits it: they all pass through this one call.
+        A relative path argument is taken where a tool call takes it
+        (``SessionState.relative_base``): ``ServerConfig`` anchored the working
+        directory and the sandbox when the session opened, so
+        ``Api(working_dir=D)`` plus a bare ``"opamp2.asc"`` names
+        ``D/opamp2.asc`` without a rule of the API's own.
 
         A refused path gets the same guidance a tool call's does, as a note
         on the exception: a script, or a ``run_code`` snippet, sees it in the
         traceback, and the exception's type and message stay what they were.
-        The note is written under the same anchor as the call, so the folder
-        it says relative paths are taken from is the one this door used.
         """
-        base = self._state.config.working_dir
         try:
             return self._call(
-                _anchored_on(base, coroutine),
+                coroutine,
                 cancelable=cancelable,
                 cancel_on_interrupt=cancel_on_interrupt,
                 preserve_interrupt=preserve_interrupt,
             )
         except PathSecurityError as exc:
-            with relative_paths_from(base):
-                exc.add_note(self._state.sandbox_guidance())
+            exc.add_note(self._state.sandbox_guidance())
             raise
 
     def _dispatch(

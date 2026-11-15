@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from ltspice_mcp.errors import PathSecurityError
-from ltspice_mcp.lib.pathutil import relative_paths_from, resolve_safe_path
+from ltspice_mcp.lib.pathutil import relative_base, resolve_safe_path
 from tests.conftest import symlink_or_skip
 
 
@@ -121,11 +121,13 @@ class TestResolveSafePath:
             resolve_safe_path("sneaky_link", [sandbox])
 
 
-class TestDeclaredRelativeBase:
-    """A host may declare where relative paths are taken from; unset, nothing
-    about the old resolution changes."""
+class TestRelativeBase:
+    """A relative path is taken from the working directory, unless the sandbox
+    leaves it out; then from the first allowed directory."""
 
-    def test_unset_base_still_uses_the_first_allowed_dir(self, tmp_path: Path, monkeypatch):
+    def test_without_a_working_directory_the_first_allowed_dir(
+        self, tmp_path: Path, monkeypatch
+    ):
         elsewhere = tmp_path / "elsewhere"
         elsewhere.mkdir()
         sandbox = tmp_path / "sandbox"
@@ -133,7 +135,7 @@ class TestDeclaredRelativeBase:
         monkeypatch.chdir(elsewhere)
         assert resolve_safe_path("file.cir", [sandbox]) == sandbox / "file.cir"
 
-    def test_unset_base_resolves_a_relative_sandbox_against_the_cwd(
+    def test_a_relative_entry_handed_in_directly_is_taken_from_the_cwd(
         self, tmp_path: Path, monkeypatch
     ):
         here = tmp_path / "here"
@@ -141,42 +143,31 @@ class TestDeclaredRelativeBase:
         monkeypatch.chdir(here)
         assert resolve_safe_path("file.cir", [Path(".")]) == here / "file.cir"
 
-    def test_declared_base_anchors_the_user_path(self, tmp_path: Path, monkeypatch):
-        elsewhere = tmp_path / "elsewhere"
-        elsewhere.mkdir()
-        base = tmp_path / "designs"
-        base.mkdir()
-        monkeypatch.chdir(elsewhere)
-        with relative_paths_from(base):
-            assert resolve_safe_path("file.cir", [base]) == base / "file.cir"
+    def test_a_working_directory_inside_the_sandbox_anchors_the_path(
+        self, tmp_path: Path, monkeypatch
+    ):
+        sandbox = tmp_path / "sandbox"
+        work = sandbox / "designs"
+        work.mkdir(parents=True)
+        monkeypatch.chdir(tmp_path)
+        assert resolve_safe_path("file.cir", [sandbox], relative_to=work) == work / "file.cir"
 
-    def test_declared_base_also_anchors_a_relative_sandbox_root(self, tmp_path: Path, monkeypatch):
-        # The generated TOML ships allowed_paths = ["."]. Left pinned to the
-        # process cwd, rebasing the user path onto the working dir would put it
-        # outside the sandbox and turn the fix into a security refusal.
-        elsewhere = tmp_path / "elsewhere"
-        elsewhere.mkdir()
-        base = tmp_path / "designs"
-        base.mkdir()
-        monkeypatch.chdir(elsewhere)
-        with relative_paths_from(base):
-            assert resolve_safe_path("file.cir", [Path(".")]) == base / "file.cir"
+    def test_a_working_directory_outside_the_sandbox_yields_to_its_first_entry(
+        self, tmp_path: Path
+    ):
+        sandbox = tmp_path / "sandbox"
+        sandbox.mkdir()
+        work = tmp_path / "work"
+        work.mkdir()
+        assert relative_base([sandbox], work) == sandbox
+        assert resolve_safe_path("file.cir", [sandbox], relative_to=work) == sandbox / "file.cir"
 
-    def test_absolute_paths_are_untouched_by_a_base(self, tmp_path: Path):
+    def test_absolute_paths_are_untouched_by_the_base(self, tmp_path: Path):
         base = tmp_path / "designs"
         base.mkdir()
         other = tmp_path / "other"
         other.mkdir()
         target = other / "file.cir"
-        with relative_paths_from(base):
-            assert resolve_safe_path(str(target), [base, other]) == target
+        assert resolve_safe_path(str(target), [base, other], relative_to=base) == target
 
-    def test_the_base_is_restored_on_exit(self, tmp_path: Path, monkeypatch):
-        here = tmp_path / "here"
-        here.mkdir()
-        base = tmp_path / "designs"
-        base.mkdir()
-        monkeypatch.chdir(here)
-        with relative_paths_from(base):
-            pass
-        assert resolve_safe_path("file.cir", [Path(".")]) == here / "file.cir"
+

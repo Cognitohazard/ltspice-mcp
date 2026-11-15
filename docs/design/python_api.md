@@ -397,9 +397,12 @@ Each of the six methods has its `reference()` text as its `__doc__`, so
 
 **Relative path arguments resolve from `working_dir`**, not the process CWD,
 as does any relative entry in `allowed_paths` (such as a config file's
-`allowed_paths = ["."]`). The MCP server resolves a relative path from the
-first allowed directory when there is a sandbox, and from its working
-directory otherwise; its `spice://netlists/` resource lists that same folder.
+`allowed_paths = ["."]`). When a sandbox leaves `working_dir` out, a relative
+path resolves from its first allowed directory instead. The MCP server, a
+`run_code` snippet and a detached job's owner follow the same rule, with
+`LTSPICE_MCP_WORKING_DIR` as the server's working directory (taken from the
+folder the server was started in when it is relative); the server's
+`spice://netlists/` resource lists that same folder.
 
 ## 6. Errors
 

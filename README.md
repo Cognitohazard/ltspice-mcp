@@ -156,7 +156,8 @@ records and results in `.ltspice-mcp/` in the working directory; add that
 folder to `.gitignore`.
 
 **The tools can use any path unless you set a sandbox.**
-`[security] allowed_paths` limits them to the folders it lists. It does not
+`[security] allowed_paths` limits them to the folders it lists; a relative
+entry, such as `"."`, is a folder in the working directory. It does not
 limit `run_code`, which runs Python with the server's own permissions, so
 approve `run_code` in your client as you would a shell command. If anyone
 else can reach the server, set `[tools] run_code = false`.
