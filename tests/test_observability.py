@@ -207,6 +207,48 @@ class TestEachToolCallEmitsOne:
             },
         ]
 
+    async def test_each_tools_failed_call_logs_the_code_its_reply_carried(
+        self, config: ServerConfig, events_caplog: pytest.LogCaptureFixture
+    ):
+        """A failure is reported as ``{error, code}`` by some tools and as the
+        envelope's ``error: {code, ...}`` by others; the event logs the code
+        either way. A failed ``jobs`` or ``run_experiments`` call was logged
+        with no code."""
+        state = SessionState.create(replace(config, run_code=True), available={})
+        ctx = fake_request_context(state)
+        calls = {
+            "run_experiments": ({"circuits": [{"path": "rc.cir"}]}, "submission_failed"),
+            "jobs": ({"action": "status", "job_id": "no-such-job"}, "job_not_found"),
+            "analyze_results": (
+                {"continue": {"result_set_id": "no-such-set", "cursor": "x"}},
+                "result_unreadable",
+            ),
+            "inspect": ({"queries": [], "continue": "x"}, "invalid_arguments"),
+            "edit_schematic": (
+                {
+                    "path": "/etc/outside.asc",
+                    "ops": [{"op": "remove_component", "reference": "R1"}],
+                },
+                "path_denied",
+            ),
+            "verify_circuit": ({"path": "rc.cir", "unknown_field": 1}, "invalid_arguments"),
+            "plot_waveform": (
+                {"path": "missing.raw", "signals": ["V(out)"]},
+                "result_file_not_found",
+            ),
+            "run_code": ({"code": " "}, "invalid_arguments"),
+        }
+        try:
+            for tool, (arguments, _) in calls.items():
+                result = await call_tool(ctx, call_tool_params(tool, arguments))
+                assert result.is_error, (tool, result.structured_content)
+        finally:
+            await state.shutdown()
+        logged = {
+            event["tool"]: (event["outcome"], event["code"]) for event in _events(events_caplog)
+        }
+        assert logged == {tool: ("error", code) for tool, (_, code) in calls.items()}
+
     async def test_a_cancelled_call(
         self,
         state_no_sim: SessionState,

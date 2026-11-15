@@ -558,3 +558,20 @@ def caller_message(exc: BaseException, served: Collection[str]) -> str:
     if getattr(exc, "python_route", False):
         return f"{message} {python_route_text(served)}"
     return message
+
+
+def reply_error_code(reply: Mapping[str, Any] | None) -> str | None:
+    """The error code a tool's reply carried, in either shape a failure takes.
+
+    A failure a tool raises, or arguments refused before it runs, is
+    ``{error: <message>, code}``; a failure an enveloped tool reports is the
+    envelope's ``error: {code, message, ...}``
+    (``docs/design/mcp_surface.md``, "Shared conventions"). Every reader of a
+    reply's code asks here: the per-call event and ``ApiCallError``. None when
+    the reply carries no code.
+    """
+    if not reply:
+        return None
+    error = reply.get("error")
+    code = (error if isinstance(error, Mapping) else reply).get("code")
+    return code if isinstance(code, str) else None
