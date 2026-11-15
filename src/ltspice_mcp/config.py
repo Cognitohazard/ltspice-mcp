@@ -1031,7 +1031,9 @@ def generate_default_config(path: Path) -> None:
     sec = table()
     sec.add(comment("Sandbox. Every path given to a tool must be inside one of these"))
     sec.add(comment("directories. If unset (the default), there is no sandbox and a path may"))
-    sec.add(comment('name any file this process can open. A relative entry, such as ".", is taken'))
+    sec.add(
+        comment('name any file this process can open. A relative entry, such as ".", is taken')
+    )
     sec.add(comment("from the working directory, and so is a relative path given to a tool, or"))
     sec.add(comment("from the first entry when the list leaves the working directory out. The"))
     sec.add(comment("list does not confine run_code,"))

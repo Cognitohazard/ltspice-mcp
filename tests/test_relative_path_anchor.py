@@ -142,7 +142,10 @@ class TestStoredArtifacts:
                 state, "analyze_results", sources=[{**source, "label": "s"}], recipes=recipe
             )
             assert reply["results"]["v"].get("values"), (source, reply)
-        for query in ({"kind": "results", "job_id": "kept"}, {"kind": "results", "path": str(raw)}):
+        for query in (
+            {"kind": "results", "job_id": "kept"},
+            {"kind": "results", "path": str(raw)},
+        ):
             reply = await dispatched(state, "inspect", queries=[query])
             assert "error" not in json.dumps(reply["results"][0]).lower()[:200], reply
 

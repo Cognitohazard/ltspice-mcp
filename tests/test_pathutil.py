@@ -125,9 +125,7 @@ class TestRelativeBase:
     """A relative path is taken from the working directory, unless the sandbox
     leaves it out; then from the first allowed directory."""
 
-    def test_without_a_working_directory_the_first_allowed_dir(
-        self, tmp_path: Path, monkeypatch
-    ):
+    def test_without_a_working_directory_the_first_allowed_dir(self, tmp_path: Path, monkeypatch):
         elsewhere = tmp_path / "elsewhere"
         elsewhere.mkdir()
         sandbox = tmp_path / "sandbox"
@@ -169,5 +167,3 @@ class TestRelativeBase:
         other.mkdir()
         target = other / "file.cir"
         assert resolve_safe_path(str(target), [base, other], relative_to=base) == target
-
-
