@@ -1317,15 +1317,15 @@ def test_run_experiments_takes_a_relative_circuit_path_from_the_working_dir(
     assert str(elsewhere / "absent.cir") not in reported
 
 
-def test_the_mcp_door_still_resolves_against_the_process_cwd(
+def test_the_mcp_door_takes_a_relative_path_from_the_working_dir_too(
     state_relative_sandbox: SessionState,
-    elsewhere: Path,
+    work_dir: Path,
 ) -> None:
-    """The base is the Python API's opt-in. A server request carries none,
-    so the same relative sandbox resolves exactly where it always did."""
+    """A tool call takes a relative name, and the relative sandbox, from the
+    same folder the Python API does, whatever folder the process is in."""
     from ltspice_mcp.tools._base import safe_path
 
-    assert safe_path("deck.cir", state_relative_sandbox) == elsewhere / "deck.cir"
+    assert safe_path("deck.cir", state_relative_sandbox) == work_dir.resolve() / "deck.cir"
 
 
 def test_inspect_reference_answers_through_the_same_handler(
