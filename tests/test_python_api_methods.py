@@ -33,7 +33,7 @@ from ltspice_mcp.tools import analyze, experiments, inspect_tools, schematic_edi
 from ltspice_mcp.tools import jobs as jobs_mod
 from ltspice_mcp.tools.reference_index import validation_error_detail
 from tests._source_scan import modules
-from tests.conftest import SyncApi, make_experiment_job, stage_recorded_fixture
+from tests.conftest import LIVENESS_S, SyncApi, make_experiment_job, stage_recorded_fixture
 from tests.test_edit_schematic import (
     _DIVIDER_OPS,
     _FACT_OPS,
@@ -1343,3 +1343,52 @@ def test_inspect_reference_answers_through_the_same_handler(
     top = entry["data"]["matches"][0]
     assert (top["tool"], top["name"]) == ("analyze_results", "stability")
     assert {field["name"] for field in top["fields"]} >= {"key", "signal", "reduce"}
+
+
+async def test_a_wait_on_a_job_nothing_here_can_change_answers_at_once(
+    work_dir: Path,
+) -> None:
+    """With job records off, a job this session does not run has no record to
+    re-read and no live job to signal, so no wait can see it change. The
+    registry, ``jobs(action="wait")`` and ``api.wait`` each answer at once, not
+    as a timeout, and say why; ``api.wait`` looped on the timeout for ever."""
+    state = SessionState.create(
+        ServerConfig(working_dir=work_dir, allowed_paths=[work_dir], persist_jobs=False),
+        available={},
+    )
+    job = make_experiment_job(state, job_id="exp-stranded", count=1, status="queued")
+
+    assert state.job_registry.wait_cannot_end(job)
+    waited, timed_out = await state.job_registry.wait(job, LIVENESS_S)
+    assert (waited.status, timed_out) == ("queued", False)
+
+    result = await jobs_mod.handle_jobs(
+        jobs_mod.JobsInput.model_validate(
+            {"action": "wait", "job_id": job.job_id, "timeout_s": LIVENESS_S}
+        ),
+        state,
+    )
+    page = result.structured_content
+    assert page is not None
+    # ``timed_out`` is false, so the reply leaves it out.
+    assert page["status"] == "queued"
+    assert "timed_out" not in page
+    assert any("persist_jobs" in warning for warning in page["warnings"])
+
+
+def test_api_wait_on_a_job_nothing_here_can_change_returns(work_dir: Path) -> None:
+    state = SessionState.create(
+        ServerConfig(working_dir=work_dir, allowed_paths=[work_dir], persist_jobs=False),
+        available={},
+    )
+    job = make_experiment_job(state, job_id="exp-stranded", count=1, status="queued")
+    api = SyncApi(state)
+    # The bound only stops a hang: the wait must return without it.
+    try:
+        with api._waits_ending_at(time.monotonic() + LIVENESS_S):
+            waited = api.wait(job.job_id)
+    except ApiInterrupted:
+        pytest.fail("api.wait kept waiting on a job nothing here can change")
+    assert waited["status"] == "queued"
+    assert "timed_out" not in waited
+    assert any("persist_jobs" in warning for warning in waited["warnings"])
