@@ -145,9 +145,13 @@ class _PlotView:
             if self.encoding == "utf_8" and size == 1 and data and data[0] >= 0xC2:
                 width = 2 if data[0] < 0xE0 else 3 if data[0] < 0xF0 else 4
                 extra = width - 1
-            elif self.encoding == "utf_16_le" and size == 2 and len(data) == 2:
-                if 0xD800 <= int.from_bytes(data, "little") <= 0xDBFF:
-                    extra = 2
+            elif (
+                self.encoding == "utf_16_le"
+                and size == 2
+                and len(data) == 2
+                and 0xD800 <= int.from_bytes(data, "little") <= 0xDBFF
+            ):
+                extra = 2
         if extra:
             data += self.handle.read(min(extra, self.header_end - self.tell()))
         return data
