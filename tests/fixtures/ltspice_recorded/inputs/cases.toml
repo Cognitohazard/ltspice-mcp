@@ -737,7 +737,7 @@ inputs = ["log/meas_forms.cir", "log/meas_ac.cir", "log/meas_step.cir", "log/mea
 keep = ["log"]
 
 [behaviour.log-meas-deriv-when]
-summary = "How a DERIV ... WHEN measurement is printed, alone and stepped: whether its point follows an uppercase AT, as a WHEN with no FIND's crossing does, or a lowercase at, as a DERIV ... AT's does. Until it is recorded, which field holds its result is the one its deck card has always given it, the point."
+summary = "How a DERIV ... WHEN measurement is printed, alone and stepped: whether its point follows an uppercase AT, as a WHEN with no FIND's crossing does, or a lowercase at, as a DERIV ... AT's does. Both builds print a lowercase at, so its result is the derivative printed after =."
 model = ["lib/log_parser.py", "lib/spice_lex_views.py"]
 inputs = ["log/meas_deriv_when.cir", "log/meas_deriv_when_step.cir"]
 keep = ["log"]
@@ -1025,8 +1025,8 @@ model = ["lib/log_parser.py", "lib/log_conditions.py", "lib/lint_rules.py"]
 inputs = ["deck/undefined_model_z.cir", "deck/undefined_model_o.cir", "deck/undefined_model_u.cir"]
 
 [behaviour.log-meas-when-step-table]
-summary = "Whether the table of a stepped WHEN ever prints a level column beside an at column: with RISE, FALL, CROSS=LAST and TD, a WHEN of an expression, a FIND ... WHEN, and a WHEN crossed in only one step."
-model = ["lib/log_parser.py", "lib/log_decode.py"]
+summary = "Whether the table of a stepped WHEN ever prints a level column beside an at column: with RISE, FALL, CROSS=LAST and TD, a WHEN of an expression, a FIND ... WHEN, and a WHEN crossed in only one step, whose other step XVII prints as 0, as it prints a crossing at 0 s."
+model = ["lib/log_parser.py", "lib/log_decode.py", "lib/services.py", "lib/metrics.py", "tools/analyze.py", "tools/inspect_tools.py"]
 inputs = ["log/meas_when_step_forms.cir", "log/meas_when_step_fails.cir"]
 keep = ["log"]
 

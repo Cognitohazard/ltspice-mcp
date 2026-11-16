@@ -91,14 +91,21 @@ def test_a_measurements_name_and_kind_are_read_from_its_card(tmp_path: Path):
         "  .meas tran t.rise WHEN V(a)=0.5\n"
         ".meas tran m_find FIND V(a) WHEN V(a)=0.5\n"
         ".measure m_max MAX V(a)\n"
+        ".meas tran d_when DERIV V(a) WHEN V(a)=0.5\n"
         ".tran 1m\n.end\n",
     )
-    assert measurement_cards(path) == {"t.rise": "when", "m_find": "value", "m_max": "value"}
+    assert measurement_cards(path) == {
+        "t.rise": "when",
+        "m_find": "value",
+        "m_max": "value",
+        "d_when": "value",
+    }
     cards = [MeasCard.from_card(c) for c in lex_deck(path.read_text()).cards if c.kind == "meas"]
     assert [(m.name, m.bare_when) for m in cards] == [
         ("t.rise", True),
         ("m_find", False),
         ("m_max", False),
+        ("d_when", False),
     ]
 
 

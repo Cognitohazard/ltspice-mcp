@@ -251,6 +251,7 @@ _UNBOUNDED = "unbounded: no cap where it is made"
 #: listed to be bounded, not cut.
 _DIAGNOSTICS = "one per diagnostic code and channel (lib/log_conditions.py)"
 _MEASUREMENT_NAMES = "one per .meas the deck names"
+_STEP_INDICES = "at most one per step of the run's .step sweep"
 _CASE_FAILURES = (
     "one per failure code and message with its numbers folded "
     "(receipts._collapse_case_failures); no cap on distinct reasons"
@@ -300,6 +301,14 @@ NEVER_BOUNDS: dict[tuple[str, str], str] = {
         _MEASUREMENT_NAMES
     ),
     ("inspect_tools.handle_inspect", "results[].data.failed_measurements"): _MEASUREMENT_NAMES,
+    (
+        "analyze.handle_analyze_results",
+        "results.*.per_run.items[].value.not_established.*.steps",
+    ): _STEP_INDICES,
+    (
+        "analyze.handle_analyze_results",
+        "results.*.values[].value.not_established.*.steps",
+    ): _STEP_INDICES,
     # Failures.
     ("experiments.handle_run_experiments", "failures"): _CASE_FAILURES,
     ("jobs.handle_jobs", "failures"): _CASE_FAILURES,
