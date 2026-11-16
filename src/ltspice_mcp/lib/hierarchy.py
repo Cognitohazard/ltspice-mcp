@@ -50,16 +50,17 @@ from ltspice_mcp.lib.ngspice_compat import drops_lib_sections, multiplies_m
 from ltspice_mcp.lib.pathutil import resolve_safe_path, with_roots
 from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.spice_lex import (
+    Definition,
     DefinitionRule,
     SpiceCard,
     SpiceLexError,
     TokenKind,
-    definition_place,
     definition_rule,
     directive_head,
     find_matching_ends,
     is_orphan_continuation,
     lex_deck,
+    settle_definitions,
 )
 from ltspice_mcp.lib.spice_lex_views import (
     InstanceLine,
@@ -768,31 +769,36 @@ def _address(
 
 
 def _definitions_read(
-    occurrences: Sequence[_Occurrence], profile: SemanticProfile
+    occurrences: Sequence[_Occurrence], profile: SemanticProfile, root: Path
 ) -> tuple[_Occurrence, ...]:
     """The occurrences ``profile``'s reader reads: of a top-level subcircuit
-    name defined more than once, in the deck or across its includes, only
-    the definition the reader keeps in force (``spice_lex.definition_rule``);
+    name defined more than once, in the deck or in the files it includes,
+    only the definition the reader keeps in force
+    (``spice_lex.settle_definitions``, told the walk's reading order);
     refused, with the reason and the fix, when it keeps none. A definition
     inside a subcircuit is refused by discovery whatever its name."""
     cards = [o.card for o in occurrences]
-    groups: dict[str, list[int]] = {}
-    for i, item in enumerate(occurrences):
-        if item.card.kind == "subckt" and item.card.name and item.source.definition is None:
-            groups.setdefault(item.card.name.casefold(), []).append(i)
-    aside: set[int] = set()
-    for name, group in groups.items():
-        if len(group) == 1:
-            continue
-        place = definition_place(
-            ((), name), files=len({occurrences[i].source.path for i in group})
+    openers = [
+        i
+        for i, item in enumerate(occurrences)
+        if item.card.kind == "subckt" and item.card.name and item.source.definition is None
+    ]
+    found = [
+        Definition(
+            (),
+            cards[i].name or "",
+            occurrences[i].source.path,
+            occurrences[i].source.path == str(root),
         )
-        kept = profile.subckt_rule.kept(place, len(group))
-        if kept is None:
-            reason = profile.subckt_rule.reason(cards[group[0]].name or name, place)
-            raise NetlistError(f"duplicate active subcircuit {name}: {reason}")
-        for i in group:
-            if i != group[kept]:
+        for i in openers
+    ]
+    aside: set[int] = set()
+    for answer in settle_definitions(found, profile.subckt_rule):
+        if answer.kept is None:
+            raise NetlistError(f"duplicate active subcircuit {answer.name}: {answer.reason}")
+        for member in answer.members:
+            if member != answer.kept:
+                i = openers[member]
                 end = find_matching_ends(cards, i)
                 aside.update(range(i, len(cards) if end is None else end + 1))
     return tuple(item for i, item in enumerate(occurrences) if i not in aside)
@@ -818,7 +824,9 @@ def resolve_hierarchy(
     library_bindings: list[LibraryBinding] = []
     include_bindings: list[IncludeBinding] = []
     occurrences = _definitions_read(
-        walk_active(root, active_file, profile, library_bindings, include_bindings), profile
+        walk_active(root, active_file, profile, library_bindings, include_bindings),
+        profile,
+        root,
     )
     definitions: dict[str, _Definition] = {}
     models: dict[str | None, dict[str, ModelDefinition]] = {None: {}}

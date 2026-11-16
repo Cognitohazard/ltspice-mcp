@@ -62,17 +62,18 @@ from ltspice_mcp.lib.montecarlo import (
 )
 from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.spice_lex import (
+    Definition,
     DefinitionRule,
     EditCards,
     SpiceCard,
     SpiceLexError,
     TokenKind,
-    definition_place,
     definition_rule,
     emit,
     find_matching_ends,
     lex,
     lex_for_edit,
+    settle_definitions,
     subckt_children,
     tokenize_body,
 )
@@ -495,6 +496,53 @@ def _subckt_definitions(indexes: list[_FileIndex]) -> dict[str, list[tuple[int, 
     return definitions
 
 
+def _site_in_force(
+    subckt: str,
+    x_ref: str,
+    sites: list[tuple[int, int]],
+    indexes: list[_FileIndex],
+    rule: DefinitionRule,
+) -> tuple[int, int]:
+    """The definition of ``subckt`` the deck's reader keeps in force among
+    ``sites`` (``spice_lex.settle_definitions``), refused when it keeps none.
+
+    The plan knows each file's cards but not where in the deck each file is
+    read, so where the definitions are in more than one file it cannot give
+    the reader its reading order: it refuses, as it does a name defined in
+    more than one scope (one inside a subcircuit is local to it)."""
+    if len(sites) == 1:
+        return sites[0]
+    where = ", ".join(
+        f"{indexes[f].file.path.name} line {indexes[f].cards[c].line_start}" for f, c in sites
+    )
+    head = (
+        f"Subcircuit {subckt!r} instantiated by {x_ref!r} is defined at {len(sites)} "
+        f"active sites ({where})."
+    )
+    found = [Definition(indexes[f].cards[c].scope, subckt, str(f), f == 0) for f, c in sites]
+    answers = settle_definitions(found, rule)
+    if len(answers) > 1:
+        raise MismatchPlanError(
+            "ambiguous_subckt",
+            f"{head} They are in more than one scope, and the mismatch plan cannot tell "
+            f"which a call reaches. Rename the local definition of {subckt}.",
+        )
+    (answer,) = answers
+    if answer.kept is None:
+        raise MismatchPlanError(
+            "ambiguous_subckt",
+            f"{head} {answer.reason} A section-selected library counts one definition.",
+        )
+    if len({f for f, _ in sites}) > 1:
+        raise MismatchPlanError(
+            "ambiguous_subckt",
+            f"{head} {rule.reader} reads one of them by where each file is read in the "
+            "deck, which the mismatch plan does not follow. Rename or delete all but one "
+            f"definition of {subckt}, or section-select one.",
+        )
+    return sites[answer.kept]
+
+
 def _closer_index(cards: list[SpiceCard], opener_index: int) -> int:
     closer = find_matching_ends(cards, opener_index)
     return len(cards) if closer is None else closer
@@ -664,29 +712,7 @@ def build_plan(
             )
             continue
         sites = _narrow_to_section(sites, indexes, file_index, x_section)
-        kept = 0
-        if len(sites) > 1:
-            place = definition_place(
-                (
-                    tuple(scope for f, c in sites for scope in indexes[f].cards[c].scope),
-                    subckt.casefold(),
-                ),
-                files=len({f for f, _ in sites}),
-            )
-            found = rule.kept(place, len(sites))
-            if found is None:
-                where = ", ".join(
-                    f"{indexes[f].file.path.name} line {indexes[f].cards[c].line_start}"
-                    for f, c in sites
-                )
-                raise MismatchPlanError(
-                    "ambiguous_subckt",
-                    f"Subcircuit {subckt!r} instantiated by {x_ref!r} is defined at "
-                    f"{len(sites)} active sites ({where}). {rule.reason(subckt, place)} "
-                    "A section-selected library counts one definition.",
-                )
-            kept = found
-        def_file, opener_index = sites[kept]
+        def_file, opener_index = _site_in_force(subckt, x_ref, sites, indexes, rule)
         def_index = indexes[def_file]
         children = list(subckt_children(def_index.cards, opener_index))
         inner_cards = _instances(children, "M")
@@ -801,8 +827,12 @@ def _narrow_to_section(
     same file and the same section as the instance is the one that instance
     means; without that, selecting two corners of one library reads as two
     definitions of the same name and refuses a deck the simulator accepts.
+
+    Only an instance inside a library section is narrowed: of definitions
+    outside every section, the one in force is the reader's answer
+    (``_site_in_force``), never the one beside the instance.
     """
-    if len(sites) < 2:
+    if len(sites) < 2 or x_section is None:
         return sites
     local = [
         (file_index, card_index)

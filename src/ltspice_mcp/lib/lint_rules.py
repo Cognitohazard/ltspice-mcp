@@ -959,20 +959,17 @@ def definition_sites(
     ``verify_circuit``'s syntax check report, so both say the same thing. A
     name the reader settles (ngspice's first, XVII's last of two) is no site:
     every reader of a body reads the definition in force."""
-    found = subckt_definitions(cards, definitions)
     sites: list[DefinitionSite] = []
-    for opener, reason in found.reasons(cards):
-        card = cards[opener]
-        key = next(key for key, openers in found.unsettled.items() if openers[0] == opener)
-        choice = definitions.choice("nested" if key[0] else "deck")
+    for answer in subckt_definitions(cards, definitions).unsettled.values():
+        assert answer.reason is not None
         sites.append(
             DefinitionSite(
-                card,
+                cards[answer.members[0]],
                 "subckt-defined-twice"
-                if choice == "refused"
+                if answer.choice == "refused"
                 else "subckt-defined-twice-unrecorded",
-                reason,
-                tuple(cards[index].line_start for index in found.unsettled[key]),
+                answer.reason,
+                tuple(cards[index].line_start for index in answer.members),
             )
         )
     return sites

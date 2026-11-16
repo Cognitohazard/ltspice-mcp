@@ -1467,24 +1467,24 @@ def subckt_children(
 
 
 #: Which of several definitions of one subcircuit name a reader keeps in
-#: force: the first or the last in card order, none because it refuses the
+#: force: the first or the last in reading order, none because it refuses the
 #: deck, or none known because what it does is not recorded.
 DefinitionChoice = Literal["first", "last", "refused", "unestablished"]
-#: Where the definitions of one name are: all at the top level of one file
-#: (``deck``), inside one subcircuit body (``nested``), or in more than one
-#: file, the deck and a file it includes (``include``).
+#: Where the definitions of one name are: all at the top level of the deck
+#: itself (``deck``), inside one subcircuit body (``nested``), or in a file
+#: the deck includes, with or without one in the deck (``include``).
 DefinitionPlace = Literal["deck", "nested", "include"]
 
 _DEFINITION_PLACES: dict[DefinitionPlace, str] = {
     "deck": "at the top level of one deck",
     "nested": "inside one subcircuit",
-    "include": "across the deck and a file it includes",
+    "include": "in a file the deck includes",
 }
 #: The recording that would settle a choice that is not established, by place.
 _DEFINITION_RECORDINGS: dict[DefinitionPlace, str] = {
     "deck": "a recording of a deck with two top-level definitions on this build",
     "nested": "a recording of two definitions of one name inside one subcircuit",
-    "include": "a recording of one definition in the deck and another in an include",
+    "include": "a recording of definitions of one name in an included file",
 }
 #: What LTspice 26 writes when it refuses the deck (``deck/subckt_defined_twice``).
 LTSPICE_26_REFUSAL = (
@@ -1495,39 +1495,35 @@ LTSPICE_26_REFUSAL = (
 @dataclass(frozen=True)
 class DefinitionRule:
     """Which definition of a subcircuit name a reader keeps when one scope
-    defines the name more than once, by where the definitions are
-    (:func:`definition_rule`, the one derivation, from the reader's
-    ``simulator_build.Producer``).
+    defines the name more than once, by where the definitions are, as
+    :func:`definition_rule` derives it from the reader's
+    ``simulator_build.Producer``. Readers ask it through
+    :func:`settle_definitions`, never directly.
 
     ``reader`` names the reader for a message; ``deck``, ``nested`` and
-    ``include`` are its choice in each ``DefinitionPlace``.
+    ``include`` are its choice in each ``DefinitionPlace``; ``most`` is the
+    most definitions of one name the choices are established for (None for
+    any number): beyond it, nothing is recorded.
     """
 
     reader: str
     deck: DefinitionChoice
     nested: DefinitionChoice
     include: DefinitionChoice
+    most: int | None = None
 
-    def choice(self, place: DefinitionPlace) -> DefinitionChoice:
+    def choice(self, place: DefinitionPlace, count: int) -> DefinitionChoice:
+        """The choice for ``count`` definitions of one name in ``place``."""
+        if self.most is not None and count > self.most:
+            return "unestablished"
         if place == "deck":
             return self.deck
         return self.nested if place == "nested" else self.include
 
-    def kept(self, place: DefinitionPlace, count: int) -> int | None:
-        """Which of ``count`` definitions of one name, in card order, is in
-        force; None when the reader refuses the deck or what it does is not
-        recorded (:meth:`reason` says which)."""
-        choice = self.choice(place)
-        if choice == "first":
-            return 0
-        if choice == "last":
-            return count - 1
-        return None
-
-    def reason(self, name: str, place: DefinitionPlace) -> str | None:
+    def reason(self, name: str, place: DefinitionPlace, count: int) -> str | None:
         """Why no definition of ``name`` is in force, with the fix; None when
         the reader keeps one."""
-        choice = self.choice(place)
+        choice = self.choice(place, count)
         fix = f"Rename or delete all but one definition of {name}."
         if choice == "refused":
             return (
@@ -1535,27 +1531,35 @@ class DefinitionRule:
                 f'once {_DEFINITION_PLACES[place]} ("{LTSPICE_26_REFUSAL}"). {fix}'
             )
         if choice == "unestablished":
+            beyond = self.most is not None and count > self.most
+            needed = (
+                f"a recording of {count} definitions of one name on this build"
+                if beyond
+                else _DEFINITION_RECORDINGS[place]
+            )
+            times = f"{count} times" if beyond else "more than once"
             return (
                 f"Which definition of subcircuit {name} {self.reader} reads when it is "
-                f"defined more than once {_DEFINITION_PLACES[place]} is not recorded "
-                f"(needed: {_DEFINITION_RECORDINGS[place]}), so no definition of it was "
-                f"read here. {fix}"
+                f"defined {times} {_DEFINITION_PLACES[place]} is not recorded "
+                f"(needed: {needed}), so no definition of it was read here. {fix}"
             )
         return None
 
 
 def definition_rule(producer: Producer) -> DefinitionRule:
     """The definitions ``producer`` keeps in force, from what is recorded or
-    measured; the one answer, which every reader of a subcircuit's header or
-    body asks through :func:`subckt_definitions` or :meth:`DefinitionRule.kept`.
+    measured; the one derivation, which :func:`settle_definitions` applies.
 
-    - ngspice keeps the first in card order, an include read where its line
-      is, and warns "redefinition of .subckt X, ignored". Measured on ngspice
-      42 in every compatibility mode, at the top level, inside a subcircuit
-      and across an include (``tests/test_subckt_defined_twice_per_reader.py``).
-    - LTspice 26 refuses two top-level definitions in one deck; XVII runs the
-      last (recorded: ``deck/subckt_defined_twice``). Neither build is
-      recorded with the definitions inside a subcircuit or across an include.
+    - ngspice keeps the first in reading order, an include read where its
+      line is, and warns "redefinition of .subckt X, ignored". Measured on
+      ngspice 42 in every compatibility mode, at the top level, inside a
+      subcircuit, within an included file and across an include, with two
+      and three definitions (``tests/test_subckt_defined_twice_per_reader.py``).
+    - LTspice 26.1.1 refuses two top-level definitions in the deck itself;
+      XVII runs the last of the two (recorded: ``deck/subckt_defined_twice``).
+      Every LTspice 26 build is read as 26.1.1. Neither build is recorded with
+      the definitions inside a subcircuit, in an included file, or with more
+      than two.
     - Any other LTspice build, an LTspice whose build is not known yet,
       QSPICE and Xyce: nothing is recorded.
     """
@@ -1570,9 +1574,9 @@ def definition_rule(producer: Producer) -> DefinitionRule:
         return DefinitionRule(reader, "unestablished", "unestablished", "unestablished")
     found = which_ltspice(producer.program, producer.build)
     if found is not None and found.generation == "xvii":
-        return DefinitionRule("LTspice XVII", "last", "unestablished", "unestablished")
+        return DefinitionRule("LTspice XVII", "last", "unestablished", "unestablished", most=2)
     if found is not None and found.generation == "current" and found.major == 26:
-        return DefinitionRule("LTspice 26", "refused", "unestablished", "unestablished")
+        return DefinitionRule("LTspice 26", "refused", "unestablished", "unestablished", most=2)
     if found is None:
         reader = "an LTspice whose build is not known yet"
     elif found.generation == "iv":
@@ -1588,8 +1592,89 @@ DefinitionKey = tuple[tuple[str, ...], str]
 
 
 @dataclass(frozen=True)
+class Definition:
+    """One ``.SUBCKT`` definition as a reader meets it (:func:`settle_definitions`).
+
+    ``scope`` names the subcircuits it is defined inside, outermost first
+    (empty at the top level); ``file`` is the file it is read from, and
+    ``in_deck`` whether that is the deck itself rather than a file it includes.
+    """
+
+    scope: tuple[str, ...]
+    name: str
+    file: str
+    in_deck: bool
+
+    @property
+    def key(self) -> DefinitionKey:
+        return (tuple(part.casefold() for part in self.scope), self.name.casefold())
+
+
+@dataclass(frozen=True)
+class Settled:
+    """Which definition of one name in one scope is in force
+    (:func:`settle_definitions`).
+
+    ``members`` are the indexes of its definitions in the reader's list, in
+    reading order; ``kept`` the one in force, None when the reader keeps none
+    (``choice`` says whether it refuses the deck or nothing is recorded, and
+    ``reason`` says why with the fix).
+    """
+
+    key: DefinitionKey
+    name: str
+    members: tuple[int, ...]
+    kept: int | None
+    place: DefinitionPlace
+    choice: DefinitionChoice | None
+    reason: str | None
+
+
+def settle_definitions(found: Sequence[Definition], rule: DefinitionRule) -> list[Settled]:
+    """Which definition of each subcircuit name in each scope ``rule``'s
+    reader keeps in force: the one answer to that question, for a reader of
+    one file (:func:`subckt_definitions`) and for one that reads a deck with
+    its includes (the netlist graph, hierarchy discovery, the mismatch plan).
+
+    ``found`` must be in reading order: the order the simulator reads the
+    cards, each included file's cards where the line that includes it is.
+    Definitions of one name in different scopes are different keys: a
+    definition inside a subcircuit is local to it.
+    """
+    groups: dict[DefinitionKey, list[int]] = {}
+    for index, definition in enumerate(found):
+        groups.setdefault(definition.key, []).append(index)
+    settled: list[Settled] = []
+    for key, members in groups.items():
+        name = found[members[0]].name
+        if len(members) == 1:
+            settled.append(Settled(key, name, tuple(members), members[0], "deck", None, None))
+            continue
+        if key[0]:
+            place: DefinitionPlace = "nested"
+        elif all(found[i].in_deck for i in members):
+            place = "deck"
+        else:
+            place = "include"
+        choice = rule.choice(place, len(members))
+        kept = members[0] if choice == "first" else members[-1] if choice == "last" else None
+        settled.append(
+            Settled(
+                key,
+                name,
+                tuple(members),
+                kept,
+                place,
+                choice,
+                rule.reason(name, place, len(members)),
+            )
+        )
+    return settled
+
+
+@dataclass(frozen=True)
 class SubcktDefinitions:
-    """The definitions a reader keeps in force in one file's cards
+    """The definitions a reader keeps in force in the deck's own cards
     (:func:`subckt_definitions`).
 
     ``in_force`` is the opener in force for each name in each scope, in card
@@ -1597,39 +1682,21 @@ class SubcktDefinitions:
     out of force: its opener, its body, any definition nested in it, and its
     ``.ENDS``. ``unsettled`` holds, for each name defined more than once in
     one scope whose reader keeps none in force (it refuses the deck, or what
-    it does is not recorded), every opener; ``unsettled_cards`` their cards.
-    A reader that takes a body by scope leaves both sets of cards out, since
-    every definition of a name in one scope shares one scope tuple.
+    it does is not recorded), the answer, whose ``members`` are card indexes;
+    ``unsettled_cards`` their cards. A reader that takes a body by scope
+    leaves both sets of cards out, since every definition of a name in one
+    scope shares one scope tuple.
     """
 
-    rule: DefinitionRule
     in_force: dict[DefinitionKey, int]
     shadowed: frozenset[int]
-    unsettled: dict[DefinitionKey, tuple[int, ...]]
+    unsettled: dict[DefinitionKey, Settled]
     unsettled_cards: frozenset[int]
 
     @property
     def aside(self) -> frozenset[int]:
         """Every card of a definition not read: shadowed or unsettled."""
         return self.shadowed | self.unsettled_cards
-
-    def reasons(self, cards: Sequence[SpiceCard]) -> list[tuple[int, str]]:
-        """Each unsettled name's first opener and why no definition of it is
-        in force (:meth:`DefinitionRule.reason`), in card order."""
-        found: list[tuple[int, str]] = []
-        for key, openers in sorted(self.unsettled.items(), key=lambda item: item[1][0]):
-            reason = self.rule.reason(cards[openers[0]].name or key[1], definition_place(key))
-            if reason is not None:
-                found.append((openers[0], reason))
-        return found
-
-
-def definition_place(key: DefinitionKey, *, files: int = 1) -> DefinitionPlace:
-    """Where the definitions of ``key`` are: in more than one of ``files``,
-    else inside a subcircuit when its scope is one, else the deck's top level."""
-    if files > 1:
-        return "include"
-    return "nested" if key[0] else "deck"
 
 
 def _span(cards: Sequence[SpiceCard], opener: int) -> range:
@@ -1638,44 +1705,48 @@ def _span(cards: Sequence[SpiceCard], opener: int) -> range:
 
 
 def subckt_definitions(cards: Sequence[SpiceCard], rule: DefinitionRule) -> SubcktDefinitions:
-    """Which ``.SUBCKT`` definition of each name in each scope of one file
-    ``rule``'s reader keeps in force (:func:`definition_rule`).
+    """Which ``.SUBCKT`` definition of each name in each scope of the deck's
+    own cards ``rule``'s reader keeps in force (:func:`settle_definitions`).
 
     Scopes are settled outermost first, so a definition nested in one that is
-    out of force, or unsettled, is never read. The one rule for which
-    definition of a name is read within a file, which every reader of a
-    subcircuit's header or body asks; a reader that walks several files
-    groups the definitions itself and asks :meth:`DefinitionRule.kept`.
+    out of force, or unsettled, is never read.
     """
     openers = [i for i, card in enumerate(cards) if card.kind == "subckt" and card.name]
     in_force: dict[DefinitionKey, int] = {}
     shadowed: set[int] = set()
-    unsettled: dict[DefinitionKey, tuple[int, ...]] = {}
+    unsettled: dict[DefinitionKey, Settled] = {}
     unsettled_cards: set[int] = set()
     for depth in sorted({len(cards[i].scope) for i in openers}):
-        groups: dict[DefinitionKey, list[int]] = {}
-        for i in openers:
-            card = cards[i]
-            if len(card.scope) != depth or i in shadowed or i in unsettled_cards:
-                continue
-            assert card.name is not None
-            groups.setdefault((card.scope, card.name.casefold()), []).append(i)
-        for key, group in groups.items():
-            kept = 0 if len(group) == 1 else rule.kept(definition_place(key), len(group))
-            if kept is None:
-                unsettled[key] = tuple(group)
-                for i in group:
+        live = [
+            i
+            for i in openers
+            if len(cards[i].scope) == depth and i not in shadowed and i not in unsettled_cards
+        ]
+        found = [Definition(cards[i].scope, cards[i].name or "", "<deck>", True) for i in live]
+        for answer in settle_definitions(found, rule):
+            members = tuple(live[m] for m in answer.members)
+            if answer.kept is None:
+                unsettled[answer.key] = Settled(
+                    answer.key,
+                    answer.name,
+                    members,
+                    None,
+                    answer.place,
+                    answer.choice,
+                    answer.reason,
+                )
+                for i in members:
                     unsettled_cards.update(_span(cards, i))
                 continue
-            in_force[key] = group[kept]
-            for i in group:
-                if i != group[kept]:
+            kept = live[answer.kept]
+            in_force[answer.key] = kept
+            for i in members:
+                if i != kept:
                     shadowed.update(_span(cards, i))
     return SubcktDefinitions(
-        rule=rule,
         in_force=dict(sorted(in_force.items(), key=lambda item: item[1])),
         shadowed=frozenset(shadowed),
-        unsettled=unsettled,
+        unsettled=dict(sorted(unsettled.items(), key=lambda item: item[1].members[0])),
         unsettled_cards=frozenset(unsettled_cards),
     )
 

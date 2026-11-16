@@ -93,11 +93,12 @@ def test_the_answerer(reader: str):
     found = subckt_definitions(cards, definition_rule(READERS[reader][0]))
     if _body_value(reader) is None:
         assert found.in_force == {}
-        assert [cards[i].line_start for i in found.unsettled[((), "amp")]] == [2, 5]
+        answer = found.unsettled[((), "amp")]
+        assert [cards[i].line_start for i in answer.members] == [2, 5]
         assert sorted(cards[i].line_start for i in found.unsettled_cards) == [2, 3, 4, 5, 6, 7]
         assert found.shadowed == frozenset()
-        ((_line, reason),) = [(cards[i].line_start, text) for i, text in found.reasons(cards)]
-        assert "Rename or delete all but one definition of amp" in reason
+        assert answer.reason is not None
+        assert "Rename or delete all but one definition of amp" in answer.reason
     else:
         (index,) = found.in_force.values()
         body = cards[index + 1].body
@@ -265,13 +266,21 @@ def test_a_reader_with_no_profile_gets_its_own_gap(family: str):
 
 
 # ---------------------------------------------------------------------------
-# Places nothing records for LTspice: a definition repeated across an include,
-# and two inside one subcircuit. ngspice is measured for both.
+# Places nothing records for LTspice: a definition repeated across an include
+# or within an included file, two inside one subcircuit, and three of one
+# name. ngspice is measured for each.
 # ---------------------------------------------------------------------------
 
 INCLUDED = ".subckt amp a b\nR1 a b 2k\n.ends\n"
 #: The deck's own 1k definition, then the include's 2k one.
 ACROSS_INCLUDE = "* inc\n.subckt amp a b\nR1 a b 1k\n.ends\n.include inc.lib\nI1 0 in 1\nX1 in 0 amp\n.op\n.end\n"
+#: Both definitions in one included file.
+WITHIN_INCLUDE = "* inc\n.include two.lib\nI1 0 in 1\nX1 in 0 amp\n.op\n.end\n"
+TWO_LIB = ".subckt amp a b\nR1 a b 1k\n.ends\n.subckt amp a b\nR1 a b 2k\n.ends\n"
+#: Three definitions at the top level of the deck.
+THREE = DECK.replace(".ends\nI1", ".ends\n.subckt amp a b\nR1 a b 3k\n.ends\nI1", 1)
+#: The include's 2k definition read first, then the deck's own 1k one.
+INCLUDE_FIRST = "* inc\n.include inc.lib\n.subckt amp a b\nR1 a b 1k\n.ends\nI1 0 in 1\nX1 in 0 amp\n.op\n.end\n"
 #: Two definitions of ``amp`` inside ``outer``.
 NESTED = (
     "* nested\n.subckt outer p\n.subckt amp a b\nR1 a b 1k\n.ends\n"
@@ -286,9 +295,89 @@ def test_an_ltspice_definition_across_an_include_is_not_established(reader: str,
     path.write_text(ACROSS_INCLUDE, encoding="utf-8")
     (record,) = parse_netlist_graph(path, reader=_profile(reader)).duplicate_subckts
     assert record.reason is not None
-    assert "across the deck and a file it includes is not recorded" in record.reason
+    assert "in a file the deck includes is not recorded" in record.reason
     with pytest.raises(NetlistError, match="is not recorded"):
         load_hierarchy(str(path), None, _profile(reader))
+
+
+@pytest.mark.parametrize("reader", ["xvii", "ltspice26"])
+def test_two_ltspice_definitions_in_one_included_file_are_not_established(
+    reader: str, tmp_path: Path
+):
+    """The recording has both definitions in the deck itself; two in a
+    library the deck includes are another place."""
+    (tmp_path / "two.lib").write_text(TWO_LIB, encoding="utf-8")
+    path = tmp_path / "d.cir"
+    path.write_text(WITHIN_INCLUDE, encoding="utf-8")
+    (record,) = parse_netlist_graph(path, reader=_profile(reader)).duplicate_subckts
+    assert record.reason is not None
+    assert "in a file the deck includes is not recorded" in record.reason
+    with pytest.raises(NetlistError, match="is not recorded"):
+        load_hierarchy(str(path), None, _profile(reader))
+
+
+@pytest.mark.parametrize("reader", ["xvii", "ltspice26"])
+def test_three_ltspice_definitions_are_not_established(reader: str):
+    """Two definitions are recorded; what either build does with three is not."""
+    cards = lex_deck(THREE).cards
+    (answer,) = subckt_definitions(cards, _profile(reader).subckt_rule).unsettled.values()
+    assert answer.choice == "unestablished"
+    assert answer.reason is not None and "defined 3 times" in answer.reason
+    findings = lint_deck(THREE, Path("t.cir"), "ltspice", None, reader=READERS[reader][0])
+    assert [f["rule_id"] for f in findings if "subckt" in f["rule_id"]] == [
+        "subckt-defined-twice-unrecorded"
+    ]
+
+
+#: ``fet`` defined at the top level and again inside ``wrap``, where it is
+#: local; the top-level call reaches the top-level one.
+APART = (
+    "* apart\n.subckt fet a b\nR1 a b 2k\n.ends\n"
+    ".subckt wrap p\n.subckt fet a b\nR1 a b 1k\n.ends\nX1 p 0 fet\n.ends\n"
+    "I1 0 in 1\nX0 in 0 fet\n.op\n.end\n"
+)
+
+
+@pytest.mark.parametrize("reader", list(READERS))
+def test_one_name_in_two_scopes_is_two_definitions(reader: str):
+    """A definition inside a subcircuit is local to it: the answerer keeps
+    both, and the graph, which keys definitions by name, reads neither and
+    says why, rather than flatten the top-level call to the local body."""
+    cards = lex_deck(APART).cards
+    found = subckt_definitions(cards, _profile(reader).subckt_rule)
+    assert set(found.in_force) == {((), "fet"), ((), "wrap"), (("wrap",), "fet")}
+    assert found.unsettled == {}
+    graph = parse_netlist_graph(APART, reader=_profile(reader))
+    assert "fet" not in graph.subckts
+    (record,) = graph.duplicate_subckts
+    assert record.reason is not None and "more than one scope" in record.reason
+
+
+@pytest.mark.parametrize("reader", ["ngspice", "xvii"])
+def test_the_mismatch_plan_refuses_what_it_cannot_order(reader: str):
+    """The plan knows each file's cards but not where each file is read, so
+    of definitions in two files it patches neither; nor of one name in two
+    scopes."""
+    include_first = [
+        ClosureFile(
+            index=0,
+            path=Path("/deck/deck.cir"),
+            text=(
+                "* m\n.include lib.lib\n" + _FET.format(n="ROOT") + "XN0 d g 0 0 fet W=1 L=0.15\n"
+                "V1 d 0 0.9\nVg g 0 0.9\n.op\n.end\n"
+            ),
+        ),
+        ClosureFile(index=1, path=Path("/deck/lib.lib"), text=_FET.format(n="LIB")),
+    ]
+    with pytest.raises(MismatchPlanError) as exc:
+        build_plan(include_first, prefix="XN", subckt_rule=_profile(reader).subckt_rule)
+    assert exc.value.code == "ambiguous_subckt"
+    apart = MISMATCH_DECK.replace(
+        _FET.format(n="1"), ".subckt wrap p\n" + _FET.format(n="1") + ".ends wrap\n", 1
+    )
+    files = [ClosureFile(index=0, path=Path("/deck/deck.cir"), text=apart)]
+    with pytest.raises(MismatchPlanError, match="more than one scope"):
+        build_plan(files, prefix="XN", subckt_rule=_profile(reader).subckt_rule)
 
 
 @pytest.mark.parametrize("reader", ["xvii", "ltspice26"])
@@ -296,8 +385,9 @@ def test_an_ltspice_definition_inside_a_subcircuit_is_not_established(reader: st
     cards = lex_deck(NESTED).cards
     found = subckt_definitions(cards, _profile(reader).subckt_rule)
     assert list(found.unsettled) == [(("outer",), "amp")]
-    ((_index, reason),) = found.reasons(cards)
-    assert "inside one subcircuit is not recorded" in reason
+    (answer,) = found.unsettled.values()
+    assert answer.reason is not None
+    assert "inside one subcircuit is not recorded" in answer.reason
     findings = lint_deck(NESTED, Path("n.cir"), "ltspice", None, reader=READERS[reader][0])
     assert [f["rule_id"] for f in findings if "subckt" in f["rule_id"]] == [
         "subckt-defined-twice-unrecorded"
@@ -346,16 +436,27 @@ def _server_value(deck_path: Path, mode: str) -> float:
 
 @needs_ngspice
 @pytest.mark.parametrize("mode", MODES)
-@pytest.mark.parametrize("case", ["deck", "include", "nested"])
+@pytest.mark.parametrize(
+    "case", ["deck", "include", "include-first", "within-include", "three", "nested"]
+)
 def test_ngspice_runs_the_body_the_server_reads(mode: str, case: str, tmp_path: Path):
     """ngspice warns "redefinition of .subckt amp, ignored" and runs the first
-    body in every mode: at the top level, across an include and inside a
+    body it reads in every mode: at the top level, across an include in
+    either order, within an included file, of three, and inside a
     subcircuit. The server's reading for an ngspice reader is that body."""
-    deck = {"deck": DECK, "include": ACROSS_INCLUDE, "nested": NESTED}[case]
+    deck = {
+        "deck": DECK,
+        "include": ACROSS_INCLUDE,
+        "include-first": INCLUDE_FIRST,
+        "within-include": WITHIN_INCLUDE,
+        "three": THREE,
+        "nested": NESTED,
+    }[case]
     (tmp_path / "inc.lib").write_text(INCLUDED, encoding="utf-8")
+    (tmp_path / "two.lib").write_text(TWO_LIB, encoding="utf-8")
     v_in, output = _ngspice_v_in(deck, mode, tmp_path)
     assert "redefinition of .subckt amp, ignored" in output
-    assert v_in == 1000.0
+    assert v_in == (2000.0 if case == "include-first" else 1000.0)
     path = tmp_path / "server.cir"
     path.write_text(deck, encoding="utf-8")
     if case == "nested":

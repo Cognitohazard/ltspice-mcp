@@ -110,14 +110,15 @@ from ltspice_mcp.lib.format import (
     same_value,
 )
 from ltspice_mcp.lib.spice_lex import (
+    Definition,
     LexResult,
     SpiceCard,
     SpiceLexError,
     copies_by_name,
-    definition_place,
     directive_head,
     iter_by_kind,
     lex_deck,
+    settle_definitions,
     subckt_children,
     unreadable_cards,
 )
@@ -767,7 +768,7 @@ def parse_netlist_graph(
         depth=0,
         registry=registry,
         seen=set(),
-        source="<inline>",
+        source=_DECK_SOURCE,
         strict=True,
         include_resolver=include_resolver,
     )
@@ -800,22 +801,22 @@ def parse_netlist_graph(
     )
 
 
+#: The source a definition in the deck itself is recorded under.
+_DECK_SOURCE = "<inline>"
+
+
 @dataclass
 class _SubcktRegistry:
-    """Accumulates subcircuit definitions in textual order; :meth:`settle`
-    then keeps, of a name defined more than once, the one the reader keeps
-    in force (``spice_lex.DefinitionRule.kept``).
-
-    Definitions are keyed by name alone, as the graph's namespace is, so a
-    definition inside a subcircuit and one at the top level of the same name
-    are read as two definitions of one name, inside a subcircuit."""
+    """Accumulates subcircuit definitions in reading order; :meth:`settle`
+    then keeps, of a name defined more than once in one scope, the one the
+    reader keeps in force (``spice_lex.settle_definitions``)."""
 
     #: Who reads the deck (``parse_netlist_graph``).
     reader: SemanticProfile
     subckts: dict[str, SubcktDef] = field(default_factory=dict)
-    #: Every definition of each name, in textual order: the definition, its
-    #: source, and whether it is inside a subcircuit.
-    candidates: dict[str, list[tuple[SubcktDef, str, bool]]] = field(default_factory=dict)
+    #: Every definition, in reading order: the definition, its source (the
+    #: deck's own is ``<inline>``), and the scope it is defined in.
+    candidates: list[tuple[SubcktDef, str, tuple[str, ...]]] = field(default_factory=list)
     duplicates: list[DuplicateSubckt] = field(default_factory=list)
     missing: list[MissingInclude] = field(default_factory=list)
     global_nets: set[str] = field(default_factory=set)
@@ -825,42 +826,67 @@ class _SubcktRegistry:
     definitions_only: list[SpiceCard] = field(default_factory=list)
     files: dict[tuple[Path, str | None], bool] = field(default_factory=dict)
 
-    def register(self, definition: SubcktDef, source: str, *, nested: bool) -> None:
-        self.candidates.setdefault(definition.name.lower(), []).append(
-            (definition, source, nested)
-        )
+    def register(self, definition: SubcktDef, source: str, scope: tuple[str, ...]) -> None:
+        self.candidates.append((definition, source, scope))
 
     def settle(self) -> None:
         """Keep each name's definition in force; record every name defined
-        more than once, with the reason when none is kept."""
-        rule = self.reader.subckt_rule
-        for key, found in self.candidates.items():
-            if len(found) == 1:
-                self.subckts[key] = found[0][0]
+        more than once, with the reason when none is kept.
+
+        The graph keys definitions by name alone, so a name defined in more
+        than one scope (one inside a subcircuit, local to it, and another
+        elsewhere) cannot be told apart by a call: none of its definitions is
+        read, and the record says why."""
+        found = [
+            Definition(scope, definition.name, source, source == _DECK_SOURCE)
+            for definition, source, scope in self.candidates
+        ]
+        answers = settle_definitions(found, self.reader.subckt_rule)
+        scopes: dict[str, int] = {}
+        for answer in answers:
+            scopes[answer.key[1]] = scopes.get(answer.key[1], 0) + 1
+        apart: set[str] = set()
+        for answer in answers:
+            key = answer.key[1]
+            if scopes[key] > 1:
+                if key not in apart:
+                    apart.add(key)
+                    self.duplicates.append(
+                        DuplicateSubckt(
+                            name=answer.name,
+                            used=None,
+                            ignored=tuple(
+                                source
+                                for d, source, _s in self.candidates
+                                if d.name.casefold() == key
+                            ),
+                            reason=(
+                                f"Subcircuit {answer.name} is defined in more than one "
+                                "scope (one inside another subcircuit is local to it), "
+                                "and the comparison reads definitions by name alone, so "
+                                f"none was read. Rename the local definition of {answer.name}."
+                            ),
+                        )
+                    )
                 continue
-            place = definition_place(
-                ((key,) if any(nested for _d, _s, nested in found) else (), key),
-                files=len({source for _d, source, _n in found}),
-            )
-            kept = rule.kept(place, len(found))
-            name = found[0][0].name
-            if kept is None:
+            if len(answer.members) == 1:
+                self.subckts[key] = self.candidates[answer.members[0]][0]
+                continue
+            sources = [self.candidates[m][1] for m in answer.members]
+            if answer.kept is None:
                 self.duplicates.append(
                     DuplicateSubckt(
-                        name=name,
-                        used=None,
-                        ignored=tuple(source for _d, source, _n in found),
-                        reason=rule.reason(name, place),
+                        name=answer.name, used=None, ignored=tuple(sources), reason=answer.reason
                     )
                 )
                 continue
-            self.subckts[key] = found[kept][0]
+            self.subckts[key] = self.candidates[answer.kept][0]
             self.duplicates.append(
                 DuplicateSubckt(
-                    name=found[kept][0].name,
-                    used=found[kept][1],
+                    name=self.candidates[answer.kept][0].name,
+                    used=self.candidates[answer.kept][1],
                     ignored=tuple(
-                        source for index, (_d, source, _n) in enumerate(found) if index != kept
+                        self.candidates[m][1] for m in answer.members if m != answer.kept
                     ),
                 )
             )
@@ -956,9 +982,7 @@ def _collect_subckts(
         if card.kind == "subckt":
             try:
                 registry.register(
-                    _subckt_def_from(cards, index, registry.reader),
-                    source,
-                    nested=bool(card.scope),
+                    _subckt_def_from(cards, index, registry.reader), source, card.scope
                 )
             except (SpiceLexError, NetlistGraphError) as exc:
                 if strict:
