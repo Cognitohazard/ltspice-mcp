@@ -20,7 +20,11 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import deck_prep, montecarlo
 from ltspice_mcp.lib.component_value import apply_value_to_instance
-from ltspice_mcp.lib.deck_staging import stage_deck
+from ltspice_mcp.lib.deck_staging import (
+    relative_data_path_established,
+    scan_data_references,
+    stage_deck,
+)
 from ltspice_mcp.lib.encoding import (
     decode_spice_bytes_with_encoding,
     read_spice_text,
@@ -1694,20 +1698,10 @@ async def test_every_reader_takes_both_words_of_a_source_that_plays_a_file_as_no
     assert rows["V1"]["nodes"] == ["a", "b"]
 
 
-@pytest.mark.parametrize("simulator", ["LTspice", "NGspiceSimulator"])
-@pytest.mark.parametrize("case_id", WAVEFILE_DECKS)
-async def test_a_recoverable_run_refuses_a_source_that_plays_a_file(
-    case_id: str,
-    simulator: str,
-    config: ServerConfig,
-    work_dir: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    """Both builds play level.wav, named in quotes or not (the drive levels of
-    the test above come from it), and recovery saves no copy of a file a card
-    plays, so a resumed case could run against a changed one. A recoverable
-    run of either deck is refused before anything is submitted, naming each
-    card; on ngspice too, since the refusal reads the deck, not the run."""
+async def _recoverable(
+    case_id: str, simulator: str, config: ServerConfig, work_dir: Path, monkeypatch
+) -> tuple[dict, list[str], SessionState]:
+    """A recoverable run of the recorded deck, and the runs it submitted."""
     submitted: list[str] = []
 
     def submit(self, netlist, run_filename, callback, **_kwargs):
@@ -1728,13 +1722,38 @@ async def test_a_recoverable_run_refuses_a_source_that_plays_a_file(
             "lint": "off",
         }
     )
-
     result = await handle_run_experiments(args, state)
+    return (result.structured_content or {}).get("error") or {}, submitted, state
 
-    assert result.is_error
-    data = result.structured_content
-    assert data is not None
-    error = data["error"]
+
+@pytest.mark.parametrize("case_id", WAVEFILE_DECKS)
+async def test_a_recoverable_run_checks_a_source_that_plays_a_file(
+    case_id: str, config: ServerConfig, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Both builds play level.wav, named in quotes or not (the drive levels of
+    the test above come from it). Staging copies it and recovery freezes the
+    copy with the deck, so the deck check a recoverable LTspice run makes
+    passes each card. What refuses this run here is a later stage (an
+    LTspice startup is verified on Windows only), and names no file."""
+    error, _submitted, state = await _recoverable(
+        case_id, "LTspice", config, work_dir, monkeypatch
+    )
+    assert error.get("code") != "recovery_external_reader", error
+    assert "wavefile" not in error.get("message", ""), error
+    await state.settled()
+
+
+@pytest.mark.parametrize("case_id", WAVEFILE_DECKS)
+async def test_a_recoverable_ngspice_run_refuses_a_source_that_plays_a_file(
+    case_id: str, config: ServerConfig, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """ngspice plays no .wav file, so the reader of data cards reads none on
+    these cards for it and staging copies nothing; the refusal of any card
+    that names a file by its text (``recovery_external_reader``) refuses the
+    run before anything is submitted, naming each card."""
+    error, submitted, state = await _recoverable(
+        case_id, "NGspiceSimulator", config, work_dir, monkeypatch
+    )
     assert (error["code"], error["commit_state"]) == (
         "recovery_external_reader",
         "not_started",
@@ -2224,26 +2243,61 @@ def test_a_relative_data_file_is_read_beside_the_deck(build: str, stem: str, tmp
     assert "ould not open" in log or "not found." in log
 
 
-def test_staging_leaves_a_relative_data_file_behind(tmp_path: Path):
-    """A staged run starts from a copy of the deck in a folder of its own, and
-    staging copies include and library files only, so a relative ``file=``
-    or ``wavefile=`` names a file the copy's folder does not hold, which both
-    builds then fail to open (the test above). A recoverable run refuses such
-    a card before anything runs (``recovery_external_reader``)."""
+def test_staging_copies_a_relative_data_file_and_names_the_copy(tmp_path: Path):
+    """A staged run starts from a copy of the deck in a folder of its own,
+    where a relative ``file=`` or ``wavefile=`` names no file, which both
+    builds then fail to open (the test above). Staging copies the data file
+    and the staged card names the copy by its whole path."""
     for stem, data in (("relative_wavefile", "level.wav"), ("relative_pwl_file", "level.txt")):
         root = tmp_path / stem
         (root / "data").mkdir(parents=True)
         deck = root / f"{stem}.cir"
         deck.write_bytes((INPUTS / "deck" / f"{stem}.cir").read_bytes())
-        (root / "data" / data).write_bytes((INPUTS / "deck" / "data" / data).read_bytes())
-        staged = stage_deck(deck, tmp_path / f"stage_{stem}", [root], origin=deck)
-        assert f"data/{data}" in staged.text
-        assert not (staged.staged_deck.parent / "data" / data).exists()
+        source = INPUTS / "deck" / "data" / data
+        (root / "data" / data).write_bytes(source.read_bytes())
+        staged = stage_deck(
+            deck, tmp_path / f"stage_{stem}", [root], origin=deck, dialect="ltspice"
+        )
+        (reference,) = scan_data_references(lex_deck(staged.text).cards, "ltspice")
+        assert Path(reference.raw_path).is_absolute()
+        assert Path(reference.raw_path).read_bytes() == source.read_bytes()
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+@pytest.mark.parametrize("stem", ["absolute_wavefile", "absolute_pwl_file"])
+def test_a_data_file_named_by_an_absolute_path_is_read(build: str, stem: str, tmp_path: Path):
+    """A staged deck names the staged copy of each data file by its absolute
+    path, and the staging reports that this reading is not recorded
+    (``data_path_unrecorded``) until this passes: then that note goes."""
+    pending = rec.CASES.behaviours["data-file-absolute-path"].pending
+    if pending:
+        pytest.skip(pending)
+    raw = rec.decode(build, f"deck/{stem}", tmp_path).raw
+    assert set(np.asarray(raw.get_wave("V(a)", 0)).round(6)) == {DATA_BESIDE_THE_DECK}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_which_folder_a_relative_data_path_in_an_included_file_is_read_from(
+    build: str, tmp_path: Path
+):
+    """Staging refuses a relative data path on a card in an included file for
+    LTspice (``data_file_unestablished``), since which folder it is read from
+    is not recorded. Once it is, the reading here says what staging may do:
+    from the deck's folder, staging reads it as it reads one in the deck."""
+    pending = rec.CASES.behaviours["data-file-relative-path-in-include"].pending
+    if pending:
+        pytest.skip(pending)
+    raw = rec.decode(build, "deck/included_relative_pwl_file", tmp_path).raw
+    (level,) = set(np.asarray(raw.get_wave("V(a)", 0)).round(6))
+    assert relative_data_path_established("ltspice", in_deck=False) == (
+        level == DATA_BESIDE_THE_DECK
+    ), level
 
 
 #: ``V1 a 0 wavefile level.wav``, with no ``=``: both builds play the file, and
-#: the server reads ``wavefile level.wav`` as the source's value, so it does not
-#: know the card plays a file, and a recoverable run does not refuse it.
+#: the source view reads ``wavefile level.wav`` as the source's value. The
+#: reader of data cards (``scan_data_references``) reads it as playing the file,
+#: so staging copies it and a recoverable run checks it is frozen.
 PLAYED_BY_LTSPICE_AND_READ_AS_A_VALUE_BY_THE_SERVER = "wavefile level.wav"
 
 
@@ -2256,16 +2310,17 @@ def test_a_wavefile_written_without_equals_is_played(build: str, tmp_path: Path)
     assert line is not None
     assert line.value == PLAYED_BY_LTSPICE_AND_READ_AS_A_VALUE_BY_THE_SERVER
     assert line.source is not None and line.source.played is None
+    (reference,) = scan_data_references([card], "ltspice")
+    assert reference.raw_path == "level.wav"
 
 
 async def test_a_recoverable_run_does_not_refuse_a_wavefile_without_equals(
     config: ServerConfig, work_dir: Path
 ):
-    """The refusal of a card that reads a file looks for ``wavefile=``, so the
-    card both builds play (the test above) passes the deck check a
-    recoverable run makes, whose refusal of ``wavefile=`` names the card
-    (``test_a_recoverable_run_refuses_a_source_that_plays_a_file``). What
-    refuses this run, if anything, is a later stage, and names no file."""
+    """The card both builds play (the test above) is staged and its file
+    frozen, so the deck check a recoverable run makes passes it, as it passes
+    ``wavefile=`` (``test_a_recoverable_run_checks_a_source_that_plays_a_file``).
+    What refuses this run, if anything, is a later stage, and names no file."""
     source = INPUTS / "deck" / "wavefile_no_equals.cir"
     deck = work_dir / source.name
     deck.write_bytes(source.read_bytes())

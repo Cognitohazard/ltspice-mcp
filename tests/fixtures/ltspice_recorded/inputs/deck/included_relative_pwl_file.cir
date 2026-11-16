@@ -1,0 +1,5 @@
+* a PWL source in an included file reading a file named by a relative path
+.include run/pwl_source.inc
+R1 a 0 1k
+.tran 10m
+.end

@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
+from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib import atomic_write_bytes, wsl
 from ltspice_mcp.lib.encoding import (
     decode_spice_bytes_with_encoding,
@@ -17,6 +18,7 @@ from ltspice_mcp.lib.encoding import (
     rewrite_codec,
 )
 from ltspice_mcp.lib.experiment_types import ManifestEntry
+from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.spice_lex import (
     INCLUDE_HEADS,
     SpiceCard,
@@ -34,6 +36,7 @@ from ltspice_mcp.lib.spice_lex_ops import (
     ValueSuffixSite,
     fold_micro_suffix_cards,
 )
+from ltspice_mcp.lib.spice_lex_views import WAVEFILE
 
 # Sized for real foundry PDKs, which fan out further than a hand-written deck:
 # sky130 reaches a device model five levels down (deck -> sky130.lib.spice ->
@@ -201,6 +204,7 @@ def stage_deck(
     allowed_roots: list[Path] | None,
     *,
     origin: Path,
+    dialect: str | None,
     allow_live_includes: bool = False,
     max_depth: int = DEFAULT_INCLUDE_DEPTH,
     windows_paths: bool = False,
@@ -208,7 +212,8 @@ def stage_deck(
     compact_digests: Collection[str] = (),
     cp1252_reader: str | None = None,
 ) -> StagedDeck:
-    """Copy a primary deck and its include/lib closure into ``staging_root``.
+    """Copy a primary deck, its include/lib closure and the data files it
+    reads into ``staging_root``.
 
     ``compact_digests`` identifies audited model contents whose only external
     references use the include/lib grammar below. Those dependencies receive
@@ -240,6 +245,17 @@ def stage_deck(
     ``origin`` is, so the store need not sit inside the allowed roots, and its
     relative references resolve against ``origin``'s directory, which is the
     directory the schematic's own ``.include`` lines name files in.
+
+    ``dialect`` is the simulator that reads the deck (``simulator_dialect``),
+    which decides the data files it names (``scan_data_references``). Each is
+    resolved against the deck's folder, where both simulators look for one
+    (``relative_data_path_established``), and refused when it does not exist
+    or lies outside ``allowed_roots``. A data file named by a relative path is
+    copied, as bytes, and the card is rewritten to name the copy by its
+    absolute path, wherever the card is: the run starts from a copy of the
+    deck somewhere else. One named by an absolute path is read where it is, a
+    live manifest entry, and spelled the Windows way when ``windows_paths``
+    is set and it was not.
 
     ``windows_paths`` renders the root deck's rewritten references in Windows
     form, for a Windows simulator reached across the WSL boundary: it cannot
@@ -304,6 +320,10 @@ def stage_deck(
     processed_depths: dict[Path, int] = {}
     processing: set[Path] = set()
     observations: list[dict[str, Any]] = []
+    # The data files read in place, each reported once.
+    live_data: set[Path] = set()
+    # The data references rewritten to an absolute path, for the LTspice note.
+    absolute_data: list[str] = []
 
     primary_destination = _destination_for(stands_at, staging_root, roots, root_index)
 
@@ -486,6 +506,12 @@ def stage_deck(
                         )
                         changed = True
 
+            for named in scan_data_references(parsed.read, dialect):
+                rewritten = stage_data_file(named, resolved, depth)
+                if rewritten is not None:
+                    named.card.replace_span(named.start, named.end, rewritten)
+                    changed = True
+
             destination.parent.mkdir(parents=True, exist_ok=True)
             # Every staged SPICE file is a simulator input. A micro-sign suffix
             # is spelled 'u', which every simulator in every encoding reads as
@@ -507,6 +533,85 @@ def stage_deck(
             processing.discard(resolved)
         processed_depths[resolved] = depth
         return destination
+
+    def stage_data_file(data: DataReference, reader: Path, depth: int) -> str | None:
+        """Stage the data file ``data`` names on a card of ``reader``; return
+        the text that replaces its path on the card, or None to keep it."""
+        where = f"{data.keyword}{data.raw_path} on line {data.card.line_start} of {reader}"
+        absolute = is_absolute_reference(data.raw_path)
+        if not absolute and not relative_data_path_established(dialect, in_deck=depth == 0):
+            raise DeckStagingError(
+                "data_file_unestablished",
+                f"Cannot stage {where}: which folder LTspice reads a relative data "
+                "path on a card in an included file from is not recorded (on a card "
+                "in the deck it is the deck's folder). Name the file by an absolute "
+                "path, or move the card into the deck.",
+                reference=data.raw_path,
+            )
+        target = resolve_reference(stands_at.parent, data.raw_path)
+        try:
+            located = resolve_safe_path(str(target), allowed_roots)
+        except PathSecurityError as exc:
+            raise DeckStagingError(
+                "data_file_outside_allowed_paths",
+                f"Cannot stage {where}: {exc}. Add its folder to [security] "
+                "allowed_paths (LTSPICE_MCP_ALLOWED_PATHS), or move the file into "
+                "an allowed folder.",
+                reference=data.raw_path,
+            ) from exc
+        if not located.is_file():
+            raise DeckStagingError(
+                "data_file_missing",
+                f"Cannot stage {where}: {target} "
+                + ("is not a file" if located.exists() else "does not exist")
+                + (
+                    ""
+                    if absolute
+                    else f". A relative path is read from the deck's folder ({stands_at.parent})"
+                )
+                + ". Put the file there, or correct the path on the card.",
+                reference=data.raw_path,
+            )
+        if absolute:
+            if located not in live_data:
+                live_data.add(located)
+                add_manifest(
+                    ManifestEntry(
+                        path=located,
+                        sha256="",
+                        staged=False,
+                        live=True,
+                        reason="data file named by an absolute path, read where it is",
+                    )
+                )
+                observations.append(
+                    {
+                        "code": "live_data_file",
+                        "kind": "provenance",
+                        "detail": (
+                            f"{data.keyword}{data.raw_path} is named by an absolute path, "
+                            "so the run reads it where it is; its content is not covered "
+                            "by the staged snapshot hash. Name it relative to the deck to "
+                            "have it staged."
+                        ),
+                        "evidence": {"file": str(reader), "reference": data.raw_path},
+                    }
+                )
+            if windows_paths and not (
+                _WINDOWS_DRIVE_RE.match(data.raw_path) or data.raw_path.startswith("\\\\")
+            ):
+                return _render_data_path(wsl.to_windows_path(located), data.quoted)
+            return None
+        root = _containing_root(located, roots)
+        if root is None:
+            roots.append(located.parent)
+            root = len(roots) - 1
+        copied = snapshot_file(
+            located, _destination_for(located, staging_root, roots, root), depth + 1, walk=False
+        )
+        rendered = _render_absolute(copied)
+        absolute_data.append(rendered)
+        return _render_data_path(rendered, data.quoted)
 
     def _snapshot_origin(resolved: Path) -> str:
         """Snapshot the file the primary deck was generated from; return its digest.
@@ -539,6 +644,21 @@ def stage_deck(
         entry.sha256 for entry in manifest if entry.path == source and entry.section is None
     )
     origin_sha = _snapshot_origin(authored)
+    if absolute_data and dialect == "ltspice":
+        observations.append(
+            {
+                "code": "data_path_unrecorded",
+                "kind": "provenance",
+                "detail": (
+                    "The staged deck names the staged copy of each data file it reads "
+                    "by an absolute path. That LTspice reads an absolute wavefile= or "
+                    "PWL file= path is not recorded (data-file-absolute-path in the "
+                    "LTspice recordings, pending): if a case reports the file missing, "
+                    "this is why."
+                ),
+                "evidence": {"paths": absolute_data},
+            }
+        )
     return StagedDeck(
         source_path=source,
         staged_deck=staged_primary,
@@ -768,6 +888,160 @@ def scan_include_references(
     return references
 
 
+@dataclass(frozen=True)
+class DataReference:
+    """One data file a card reads when it runs, named in the card's text.
+
+    ``start`` and ``end`` are the span of the path in the card's body as
+    written, quotes included, so a rewrite replaces the path and nothing else.
+    """
+
+    card: SpiceCard
+    start: int
+    end: int
+    raw_path: str
+    quoted: bool
+    #: How the card names the file, as a refusal quotes it (``wavefile=``).
+    keyword: str
+
+
+#: The data files each simulator reads, by the words that name them on a card
+#: it reads. LTspice: a V or I source's ``wavefile=`` (the
+#: ``wavefile-source-nodes`` recordings), the same written ``wavefile level.wav``
+#: with no ``=`` (``wavefile-without-equals``), and a PWL source's ``file=``
+#: (``data-file-relative-path``). ngspice: a ``filesource`` model's ``file=``
+#: (measured on ngspice-42; ``tests/test_staged_data_files.py``). Other
+#: simulators' data cards are not read here.
+DATA_READING_DIALECTS = frozenset({"ltspice", "ngspice"})
+
+
+def scan_data_references(cards: list[SpiceCard], dialect: str | None) -> list[DataReference]:
+    """The data files ``cards`` name, as the simulator of ``dialect`` reads them.
+
+    The one reader of these cards: staging copies what it returns, and a
+    recoverable run checks that each file it returns was frozen with the deck
+    (``experiment_inputs._verify_inputs``). A data file is read when the case
+    runs, so the staged copy of the deck must name a file the run can open.
+    Whether it is known where a simulator looks for a relative path is
+    ``relative_data_path_established``.
+    """
+    if dialect not in DATA_READING_DIALECTS:
+        return []
+    found: list[DataReference] = []
+    for card in cards:
+        try:
+            tokens = [
+                token
+                for token in tokenize_body(card.body)
+                if token.kind != TokenKind.COMMENT_TRAIL
+            ]
+        except SpiceLexError:
+            continue  # reported by the lint's unreadable-card rule
+        if dialect == "ltspice":
+            found.extend(_ltspice_data_references(card, tokens))
+        else:
+            found.extend(_ngspice_data_references(card, tokens))
+    return found
+
+
+def _ltspice_data_references(card: SpiceCard, tokens: list[Token]) -> list[DataReference]:
+    if card.kind != "instance" or not tokens or tokens[0].text[:1].upper() not in "VI":
+        return []
+    found = []
+    for index, token in enumerate(tokens):
+        if token.kind == TokenKind.KEY_VALUE and (token.key or "").casefold() in {
+            WAVEFILE,
+            "file",
+        }:
+            reference = _value_reference(card, card.body, token, 0, f"{token.key}=")
+            if reference is not None:
+                found.append(reference)
+        elif (
+            token.kind == TokenKind.BARE
+            and token.text.casefold() == WAVEFILE
+            and index + 1 < len(tokens)
+            and tokens[index + 1].kind in (TokenKind.BARE, TokenKind.QUOTED)
+        ):
+            path = tokens[index + 1]
+            raw = unquote(path.text)
+            if raw:
+                found.append(
+                    DataReference(
+                        card,
+                        path.body_offset,
+                        path.body_end,
+                        raw,
+                        path.kind == TokenKind.QUOTED,
+                        f"{token.text} ",
+                    )
+                )
+    return found
+
+
+def _ngspice_data_references(card: SpiceCard, tokens: list[Token]) -> list[DataReference]:
+    if card.kind != "model" or len(tokens) < 3:
+        return []
+    if tokens[2].text.split("(", 1)[0].casefold() != "filesource":
+        return []
+    found = []
+    for token in tokens[2:]:
+        if token.kind == TokenKind.KEY_VALUE:
+            candidates, text, offset = [token], card.body, 0
+        elif token.kind == TokenKind.PARENED:
+            text = token.text[1:-1]
+            offset = token.body_offset + 1
+            try:
+                candidates = tokenize_body(text)
+            except SpiceLexError:
+                continue
+        else:
+            continue
+        for candidate in candidates:
+            if candidate.kind == TokenKind.KEY_VALUE and (candidate.key or "").casefold() == "file":
+                reference = _value_reference(card, text, candidate, offset, f"{candidate.key}=")
+                if reference is not None:
+                    found.append(reference)
+    return found
+
+
+def _value_reference(
+    card: SpiceCard, text: str, token: Token, offset: int, keyword: str
+) -> DataReference | None:
+    """The path a ``key=path`` token names, with its span in ``card.body``.
+
+    ``text`` is the text the token was read from, which starts at ``offset``
+    in the card's body (the inside of a model's parentheses).
+    """
+    written = text[token.body_offset : token.body_end]
+    value = written.split("=", 1)[1]
+    start = token.body_offset + len(written) - len(value) + (len(value) - len(value.lstrip()))
+    value = value.strip()
+    raw = unquote(value)
+    if not raw:
+        return None
+    quoted = raw != value
+    return DataReference(
+        card, offset + start, offset + start + len(value), raw, quoted, keyword
+    )
+
+
+def relative_data_path_established(dialect: str | None, *, in_deck: bool) -> bool:
+    """Whether it is established which folder the simulator of ``dialect``
+    reads a relative data path from: for both simulators here, when
+    established, it is the deck's folder.
+
+    LTspice reads a relative path on a card in the deck from the deck's
+    folder, never from the folder it was started in (the
+    ``data-file-relative-path`` recordings, both builds). For a card in an
+    included file no recording shows which folder it is read from
+    (``data-file-relative-path-in-include``, pending). ngspice-42 reads it
+    from the deck's folder for a card in the deck and in an included file
+    alike, and only then from the folder it was started in, which the server
+    does not choose for a run (``tests/test_staged_data_files.py``).
+    """
+    return in_deck or dialect != "ltspice"
+
+
 def unreadable_references(cards: list[SpiceCard]) -> list[tuple[SpiceCard, SpiceLexError]]:
     """The include and library cards whose path cannot be read, because the
     card cannot be split into parts (``spice_lex.unreadable_cards``): an
@@ -899,6 +1173,11 @@ def unquote(value: str) -> str:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
         return value[1:-1]
     return value
+
+
+def _render_data_path(path: str, quoted: bool) -> str:
+    """A data path as a card names it: in quotes when it was, or when it holds a space."""
+    return f'"{path}"' if quoted or any(char.isspace() for char in path) else path
 
 
 def _replace_reference(reference: IncludeReference, path: str) -> None:

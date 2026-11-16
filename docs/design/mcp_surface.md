@@ -578,8 +578,9 @@ timestamp or a consent choice itself and does not answer LTspice's dialogs.
 Recoverable execution refuses includes read in place
 (`allow_live_includes`), `.control` blocks, external simulator modules
 (`.osdi`, `.pre_osdi`, `.load`, `.hdl`, `.verilog`, XSPICE `A` devices), file
-readers (`file=`, `sfile=`, `pwlfile=`, a source's `wavefile=` quoted or not,
-a PWL that names a file), directives
+readers the server does not stage (`sfile=`, `pwlfile=`, a PWL that names a
+file in its points, and every file reader on a simulator whose data cards it
+does not read), a data file read in place (`recovery_live_dependency`), directives
 outside the supported set, functions the server does not know, and random
 functions with no seed the server records, because a resumed case could not
 be relied on to run them the same way. Every card of the deck and of each file
@@ -745,6 +746,20 @@ always does, at its line, since which file it names is not known. With
 `allow_live_includes: true`, runs read those files in place, the manifest
 marks them `live: true`, and an observation reports the weaker provenance.
 Every live reference is listed.
+
+The data files a deck reads are staged with it: on LTspice a source's
+`wavefile=` (or `wavefile` with no `=`) and a PWL's `file=`, on ngspice a
+`filesource` model's `file=`. A relative path is read from the deck's folder,
+as both simulators read it, for a card in an included file too on ngspice; on
+LTspice such a card in an included file is refused (`data_file_unestablished`),
+since which folder LTspice reads it from is not recorded. The file is copied
+byte for byte and the staged card names the copy by its absolute path, which
+an LTspice run reports as not recorded (`data_path_unrecorded`). A data file
+named by an absolute path is read where it is: the manifest marks it `live:
+true` and an observation (`live_data_file`) reports it. A data file that does
+not exist (`data_file_missing`) or lies outside `[security] allowed_paths`
+(`data_file_outside_allowed_paths`) fails that circuit's submission before it
+runs, naming the card, its line and where the file was looked for.
 
 Provenance in the response is opt-in. Digests, staged paths, the full
 manifest, the linter version and the job's `simulator_executable` are returned
