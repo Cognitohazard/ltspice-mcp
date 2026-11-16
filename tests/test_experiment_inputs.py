@@ -110,6 +110,56 @@ def test_inputs_frozen_with_a_played_file_are_refused_when_verified_again(tmp_pa
     assert "line 2: " + card.decode() in str(error.value)
 
 
+def test_inputs_frozen_with_the_staged_copy_of_a_played_file_verify(tmp_path):
+    """Staging copies a played file and names the copy by its whole path, and
+    recovery freezes the copy with the deck: verifying those inputs again
+    passes the card, and refuses it once the copy is no longer frozen."""
+    job = recovery_job(tmp_path)
+    assert job.output_folder is not None
+    deck = job.cases[0].staged_deck
+    played = job.output_folder / "data" / "level.wav"
+    played.parent.mkdir()
+    played.write_bytes(b"RIFF")
+    deck.write_bytes(f"* case\nV1 in 0 wavefile={played}\nR1 in 0 1k\n.tran 1m\n.end\n".encode())
+    digest = ArtifactDigest(deck, sha256_file(deck))
+    copy = ArtifactDigest(played, sha256_file(played))
+    verify_case_inputs(FrozenInputs(job.output_folder, digest, (digest, copy)), dialect="ltspice")
+    with pytest.raises(RecoveryError) as error:
+        verify_case_inputs(FrozenInputs(job.output_folder, digest, (digest,)), dialect="ltspice")
+    assert error.value.code == "recovery_external_reader"
+    assert "did not save" in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("card", "name", "content"),
+    [
+        # Points that read as a directive and as an XSPICE device if lexed.
+        ("PWL file", "points.txt", b"0 0\n.5m 1\nA 2\n"),
+        ("wavefile", "level.wav", b"RIFF\x00\n.end\nA1 x\n\xff\xfe" * 64),
+    ],
+)
+def test_a_frozen_data_file_is_digested_and_not_read_as_spice(tmp_path, card, name, content):
+    """A data file the deck reads (staged and frozen with it) holds samples,
+    not cards: verifying the frozen inputs checks its bytes, and refuses
+    nothing for what its bytes would mean as SPICE."""
+    job = recovery_job(tmp_path)
+    assert job.output_folder is not None
+    deck = job.cases[0].staged_deck
+    data = job.output_folder / "data" / name
+    data.parent.mkdir()
+    data.write_bytes(content)
+    deck.write_bytes(f"* case\nV1 in 0 {card}={data}\nR1 in 0 1k\n.tran 1m\n.end\n".encode())
+    digest = ArtifactDigest(deck, sha256_file(deck))
+    frozen = FrozenInputs(
+        job.output_folder, digest, (digest, ArtifactDigest(data, sha256_file(data)))
+    )
+    verify_case_inputs(frozen, dialect="ltspice")
+    data.write_bytes(content + b"0")
+    with pytest.raises(RecoveryError) as error:
+        verify_case_inputs(frozen, dialect="ltspice")
+    assert error.value.code == "recovery_input_drift"
+
+
 def test_one_refusal_names_every_construct_with_its_file_and_line(tmp_path):
     """A deck and its library fail several checks: one refusal lists each
     construct, in the file the caller wrote and on its line, so the deck is

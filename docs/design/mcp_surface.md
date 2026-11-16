@@ -578,8 +578,9 @@ timestamp or a consent choice itself and does not answer LTspice's dialogs.
 Recoverable execution refuses includes read in place
 (`allow_live_includes`), `.control` blocks, external simulator modules
 (`.osdi`, `.pre_osdi`, `.load`, `.hdl`, `.verilog`, XSPICE `A` devices), file
-readers (`file=`, `sfile=`, `pwlfile=`, a source's `wavefile=` quoted or not,
-a PWL that names a file), directives
+readers the server does not stage (`sfile=`, `pwlfile=`, a PWL that names a
+file in its points, and every file reader on a simulator whose data cards it
+does not read), a data file read in place (`recovery_live_dependency`), directives
 outside the supported set, functions the server does not know, and random
 functions with no seed the server records, because a resumed case could not
 be relied on to run them the same way. Every card of the deck and of each file
@@ -745,6 +746,20 @@ always does, at its line, since which file it names is not known. With
 `allow_live_includes: true`, runs read those files in place, the manifest
 marks them `live: true`, and an observation reports the weaker provenance.
 Every live reference is listed.
+
+The data files a deck reads are staged with it: on LTspice a source's
+`wavefile=` (or `wavefile` with no `=`) and a PWL's `file=`, on ngspice a
+`filesource` model's `file=`. A relative path is read from the deck's folder,
+as both simulators read it, for a card in an included file too on ngspice; on
+LTspice such a card in an included file is refused (`data_file_unestablished`),
+since which folder LTspice reads it from is not recorded. The file is copied
+byte for byte and the staged card names the copy by its absolute path, which
+an LTspice run reports as not recorded (`data_path_unrecorded`). A data file
+named by an absolute path is read where it is: the manifest marks it `live:
+true` and an observation (`live_data_file`) reports it. A data file that does
+not exist (`data_file_missing`) or lies outside `[security] allowed_paths`
+(`data_file_outside_allowed_paths`) fails that circuit's submission before it
+runs, naming the card, its line and where the file was looked for.
 
 Provenance in the response is opt-in. Digests, staged paths, the full
 manifest, the linter version and the job's `simulator_executable` are returned
@@ -1157,12 +1172,12 @@ does), its `measurements` row contains `measured: {name: value}`, the number a
 reduction or spec reads for that name, and `at: {name: point}` where the log
 printed an `AT` point beside a result that is its value. A name the log holds
 no number for has a null `measured` entry, not an absent one, and the row
-names it in one of four places, by why:
+names it in one of five places, by why:
 
 - `failed_measurements: [name]`: LTspice printed it as failed at the step the
   row reads, as `Measurement "name" FAIL'ed` or as `failed` in that step's row
-  of a stepped table (LTspice 24 and later; XVII prints 0 there, which the
-  `measurement_zero_or_failed` observation names).
+  of a stepped table (LTspice 24 and later; XVII prints 0 there, see
+  `not_established`).
 - `unreadable: {name: {line, reason}}`: LTspice printed something other than
   a number where the result belongs. The entry gives the log line and what
   it printed; only that entry fails, and every other measurement of the log
@@ -1172,6 +1187,18 @@ names it in one of four places, by why:
 - `answer_unknown: {name: reason}`: which field of what the log printed holds
   the result is not known, for a form or a simulator no recording shows, or
   a deck card the printed form contradicts.
+- `not_established: {name: {steps, reason}}`: what the log printed at those
+  steps (from 0) is not established as the result. LTspice XVII prints `0` in
+  a stepped table both for a step whose measurement failed and for a crossing
+  at 0 s (recorded: `log/meas_when_step_fails`, `log/meas_when_step_forms`),
+  so a `0` in a stepped WHEN's table a build that may be XVII wrote is not
+  taken. No recording shows how XVII prints a failed step of any other
+  table, so a `0` there is not taken either, with a reason that says so.
+  LTspice 24 and later print `failed` for a failure, so their `0` is a
+  result. The summary's
+  entries and the Python API's `measurements()` carry the same
+  `not_established` with those steps null in `values`, and an `inspect`
+  measurements row carries its reason.
 - `not_finite: [name]`: LTspice printed a number that is not finite, such as
   a stepped FRA's gain margin of `infdB`, which the log decoder holds as null.
 
@@ -1202,10 +1229,15 @@ recipe aggregates the field so named (`aggregated_field`). Each entry of the
 summary's `measurements`, the Python API's `measurements()` and each row of
 `inspect(kind="results", view="measurements")` names it in `answer` (`value`
 or `at`), or says why it is not known in `answer_unknown`, and then the recipe
-gives that name no number and no `aggregated_field`. A bare path names no
-build, so its log is read with every recorded LTspice build's rules, which
-agree on every recorded form. A DERIV ... WHEN is not recorded, and keeps the
-answer its deck card has given it: the point. The same `unreadable {line,
+gives that name no number and no `aggregated_field`. A bare path is read
+with the build its log's first line names (LTspice 24 and later open a log
+with a banner); the summary also reads the build a raw's `Command:` names. A
+log that names no build, as XVII's does not, is read with every recorded
+LTspice build's rules, which agree on every recorded form, and may be XVII's,
+so a `0` in its stepped tables is `not_established`. A DERIV ... WHEN prints its derivative after `=` and its point
+after a lowercase `at`, as a DERIV ... AT does (recorded:
+`log/meas_deriv_when`), so its result is its value with the deck known or
+not. The same `unreadable {line,
 reason}` is on the entry in the summary's `measurements`, in
 `inspect(kind="results", view="measurements")` rows and in the Python API's
 `measurements`, where it says the entry's `values` were printed as other than
@@ -1840,8 +1872,15 @@ than diffing a schematic's attributes against a netlist's cards. Both modes
 read the cards the simulator reads: line 1 of a deck is its title and is not
 read, nor is a card after `.end`. `equivalence` follows includes as staging
 reads them, so `.lib <file> <section>` brings in that section's definitions
-only, and of two definitions of one subcircuit name the first is the body
-compared, the others listed in `duplicate_subckts`. `structural_diff` lexes
+only, and of two definitions of one subcircuit name the body compared is the
+one the session's simulator keeps in force (ngspice the first, LTspice XVII the
+last of two in one deck), the others listed in `duplicate_subckts`; where the
+simulator keeps none (LTspice 26 refuses the deck) or what it does is not
+recorded (any other build or place, QSPICE, Xyce), no body is read, the
+instances are compared as black boxes, and the entry's `reason` says why. A
+name defined both inside a subcircuit (local to it) and elsewhere is read
+neither way, since the comparison keys definitions by name, and the entry
+says so. `structural_diff` lexes
 both decks, so a `+` continuation belongs to the card it continues, and
 compares directives as parsed rather than as text, so spacing, case, comma
 separators and assignment order in `.model`/`.param` are ignored. It ignores
@@ -2317,6 +2356,8 @@ Suppression is per call, and `linter_version` is reported in provenance.
 | `step-ngspice` | warning | ngspice: a `.step`, which ngspice ignores in batch mode, so the deck runs once at the base value |
 | `temp-as-param` | blocking | a deck that sweeps temperature as a parameter (§3.1) |
 | `duplicate-param` | warning | an instance, `.model` or `.subckt` card giving one parameter more than once, in any case; which copy the simulator reads is not known, and `verify_circuit` reports the same as `duplicate_parameter` |
+| `subckt-defined-twice` | blocking | a subcircuit name defined more than once at the top level of the deck, which the reader refuses: LTspice 26 (recorded). `verify_circuit`'s `syntax` check reports the same as `subckt_defined_twice`. ngspice (the first) and LTspice XVII (the last of two) run a definition, which every check reads, and get no finding |
+| `subckt-defined-twice-unrecorded` | warning | a subcircuit name defined more than once in one scope, where what the reader does is not recorded: an LTspice build other than 26 and XVII, one whose build is not known yet, QSPICE, Xyce, or for LTspice two definitions inside one subcircuit or more than two of one name. No check reads any of the bodies; `verify_circuit` reports the same as `subckt_defined_twice_unrecorded`. A definition repeated across the deck and an include is not linted |
 | `unreadable-card` | warning | a card no rule can split into its parts: an unclosed quote, brace or parenthesis, or a closer with nothing open. The other rules leave it out. On a part, `.subckt` header or `.global` its words count as connected and defined nodes and names, so no rule reports something on a guess about it; a variation or random rule on a part, `.model` or `.param` name a card like it may declare is refused (`ambiguous_target`). It covers the deck and its staged includes, and an include card in a live include, for which `model-missing` then says nothing. What a simulator does with such a card is recorded only for the `.meas` of `meas-unclosed-paren-ltspice`; `verify_circuit` reports the same as `unreadable_card` |
 | `value-suffix-mojibake` | blocking | a suffix showing the file was decoded in an encoding it was not written in, such as the `Âµ` a UTF-8 `µ` becomes under cp1252; the simulator reads the bare number, off by a factor of 1e6 |
 | `value-suffix-nonascii` | warning | any other symbol after a number, such as `10Ω` or `25°C`, read as the bare number, which is usually the intended value. Staging spells a `µ`/`μ` as `u` before the deck is linted; for a deck run elsewhere `verify_circuit` reports it as one observation per file, or as a warning per value when a reader the server knows of (LTspice XVII) would decode the file differently |
@@ -2856,8 +2897,12 @@ subcircuit defined at top level may be called from inside another, but a
 a `.subckt` is allowed and is used there before a top-level model of the same
 name. Recursive subcircuit calls; a missing include, `.lib` section or called
 subcircuit; an include cycle; a malformed `.subckt`/`.ends` or `.lib`/`.endl`
-pair; and a subcircuit, model or reference defined twice among the cards in
-use fail the query. A binned model (`nch.1`, `nch.2`, ...) is reported with
+pair; and a model or reference defined twice among the cards in use fail
+the query. Of a subcircuit defined twice at the top level, the definition the
+reader keeps is read (ngspice the first, LTspice XVII the last of two in one
+deck); the query fails, saying why, where the reader refuses the deck
+(LTspice 26) or what it does is not recorded (any other LTspice build, more
+than two definitions, or a definition in an included file). A binned model (`nch.1`, `nch.2`, ...) is reported with
 every bin under `model.family` and a reason that the bin is not selected,
 rather than as one model. Cards after the root `.end` are ignored.
 

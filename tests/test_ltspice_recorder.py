@@ -319,6 +319,16 @@ class TestCaseList:
             if behaviour.pending:
                 assert CASES.of(key), f"{key} is pending but names no input to record"
 
+    def test_a_source_deck_names_the_case_folder_where_it_writes_dir(self, tmp_path: Path):
+        """A deck can name a file of its own case by an absolute path; the
+        other inputs, and the digest the manifest keeps, are as committed."""
+        case = CASES.case("deck/absolute_pwl_file")
+        data = (INPUTS / case.source).read_bytes()
+        assert b"<dir>" in data
+        run = case.input_in(case.source, data, tmp_path)
+        assert run == data.replace(b"<dir>", str(tmp_path).encode())
+        assert case.input_in("deck/data/level.txt", b"<dir>", tmp_path) == b"<dir>"
+
     def test_every_behaviour_names_the_code_that_models_it(self):
         """A behaviour recorded before any code models it lists none, and its
         summary says so."""

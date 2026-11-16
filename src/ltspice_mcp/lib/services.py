@@ -650,9 +650,11 @@ async def answer_measurements(
     measurement reads it through here. ``producer`` is the one a caller has
     already resolved (the summary's, read with the build its files name);
     otherwise it is :func:`source_producer`'s, as a log-only reader opens no
-    source file in this process: a bare path then names no build, and its log
-    is read with every recorded build's rules (``log_conditions.rules_for``),
-    which agree on every recorded form."""
+    source file in this process: a bare path then names no build here, and
+    ``answered_measurements`` reads the build the log's own first line names,
+    which the decoder found (``printed_by``); a log that names none is read
+    with every recorded build's rules (``log_conditions.rules_for``), which
+    agree on every recorded form."""
     cards = await asyncio.to_thread(measurement_cards, source.netlist)
     return answered_measurements(table, producer or source_producer(source), cards)
 
@@ -728,11 +730,14 @@ def session_reader(state: SessionState) -> SemanticProfile:
 
     A family with no reader profile (QSPICE, Xyce), or none detected, is read
     as LTspice reads a deck, as every deck was before the readers were told
-    who reads it."""
+    who reads it, except for which definition of a subcircuit defined twice
+    is in force: that is the family's own answer (``definitions_of``), which
+    for QSPICE and Xyce is not recorded."""
     from ltspice_mcp.lib.hierarchy import SUPPORTED_FAMILIES, SemanticProfile
     from ltspice_mcp.lib.simulator import DEFAULT_FAMILY, family_for, run_ngbehavior
 
-    family = family_for(None, state.default_simulator)
+    detected = family_for(None, state.default_simulator)
+    family = detected
     if family not in SUPPORTED_FAMILIES:
         family = DEFAULT_FAMILY
     # The executable a run with no override uses: the default, when it is of
@@ -745,6 +750,11 @@ def session_reader(state: SessionState) -> SemanticProfile:
     return SemanticProfile.of(
         deck_producer(state, family, simulator),
         run_ngbehavior(simulator) if family == "ngspice" else None,
+        definitions_of=(
+            deck_producer(state, detected, state.default_simulator)
+            if detected is not None and detected != family
+            else None
+        ),
     )
 
 

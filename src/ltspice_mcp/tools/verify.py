@@ -102,6 +102,7 @@ from ltspice_mcp.lib.hierarchy import SemanticProfile
 from ltspice_mcp.lib.lint_rules import (
     MEAS_ANGLE_REASON,
     deck_generator,
+    definition_sites,
     export_writer,
     meas_angle_sites,
     rule_severity,
@@ -135,7 +136,7 @@ from ltspice_mcp.lib.sheet_findings import (
 )
 from ltspice_mcp.lib.simulator import DEFAULT_FAMILY, family_for
 from ltspice_mcp.lib.simulator_build import executable_identity, is_cp1252_ltspice_build
-from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, lex_deck
+from ltspice_mcp.lib.spice_lex import DefinitionRule, SpiceCard, SpiceLexError, lex_deck
 from ltspice_mcp.lib.spice_lex_ops import (
     MICRO_SIGN_READERS,
     ValueSuffixSite,
@@ -661,20 +662,31 @@ _UNRESOLVED_SUBCKT_SCHEMA: dict[str, Any] = {
 _DUPLICATE_SUBCKT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "description": (
-        "A subcircuit defined more than once; SPICE keeps the first in textual "
-        "order. A fact, not a difference: it does not change 'equivalent'."
+        "A subcircuit defined more than once, read as the session's simulator "
+        "reads it: ngspice keeps the first, LTspice XVII the last of two in one deck. "
+        "A fact, not a difference: it does not change 'equivalent'."
     ),
     "properties": {
         "name": {"type": "string", "description": "The duplicated subcircuit name."},
-        "used": {"type": "string", "description": "The source whose definition won."},
+        "used": {
+            "type": "string",
+            "description": "The source whose definition is read; absent when none is.",
+        },
         "ignored": {
             "type": "array",
             CUT: ITEMS,
             "items": {"type": "string"},
-            "description": "The sources whose definitions were discarded.",
+            "description": "The sources whose definitions were not read.",
+        },
+        "reason": {
+            "type": "string",
+            "description": (
+                "Why no definition was read, its instances compared as black boxes: "
+                "the simulator refuses the deck, or what it does is not recorded."
+            ),
         },
     },
-    "required": ["name", "used", "ignored"],
+    "required": ["name", "ignored"],
 }
 
 _DUPLICATE_PARAM_SCHEMA: dict[str, Any] = {
@@ -1383,9 +1395,10 @@ def _syntax_findings(
     *,
     cp1252_reader: str | None,
     family: str,
+    definitions: DefinitionRule,
 ) -> list[dict[str, Any]]:
-    """Directive, unreadable-card, element-arity, value-suffix and .meas angle
-    findings in a netlist.
+    """Directive, unreadable-card, element-arity, value-suffix, .meas angle
+    and subcircuit-defined-twice findings in a netlist.
 
     Everything here changes what the simulator reads, or what it computes from
     it: LTspice takes a trig function's angle in a .meas in degrees. A finding
@@ -1395,7 +1408,8 @@ def _syntax_findings(
     ``_value_suffix_findings``).
     ``family`` is the simulator family the session runs decks on, ``ltspice``
     or ``ngspice``: some directive and element forms are a fault for one and
-    valid for the other. The facts that are legal-but-notable live in the
+    valid for the other. ``definitions`` is which definition of a subcircuit
+    defined twice the session's reader keeps (``services.session_reader``). The facts that are legal-but-notable live in the
     quality check.
     """
     simulator = DISPLAY[family]
@@ -1443,6 +1457,18 @@ def _syntax_findings(
     )
     if simulator == "LTspice":
         findings.extend(_meas_angle_findings(deck.cards, path))
+    # The linter's subckt-defined-twice rules: the same sites, severity and
+    # reason, so both surfaces say the same thing.
+    findings.extend(
+        _finding(
+            rule_id=site.rule_id.replace("-", "_"),
+            severity=rule_severity(site.rule_id),
+            at={"file": str(path), "line": site.card.line_start},
+            subject=site.card.name or ".subckt",
+            evidence={"lines": list(site.lines), "reason": site.reason},
+        )
+        for site in definition_sites(deck.cards, definitions)
+    )
     return findings
 
 
@@ -2701,6 +2727,7 @@ async def evaluate_verify_circuit(
         gap = capabilities.gap_reason(family, "validator_rules")
         if gap is not None:
             observations.append(f"syntax: {gap}")
+        reader = await asyncio.to_thread(session_reader, state)
         findings.extend(
             await asyncio.to_thread(
                 _syntax_findings,
@@ -2710,6 +2737,7 @@ async def evaluate_verify_circuit(
                 encoding,
                 cp1252_reader=cp1252_reader,
                 family=family,
+                definitions=reader.subckt_rule,
             )
         )
         checks_run.append("syntax")

@@ -144,7 +144,7 @@ from ltspice_mcp.lib.signal_analysis import (
     window_and_clean,
     window_span,
 )
-from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build, reported_build
+from ltspice_mcp.lib.simulator_build import reported_build
 from ltspice_mcp.lib.trace_names import (
     find_trace,  # noqa: TID251 - an op-point value's name, read against the .log's names
     naming_note,
@@ -788,9 +788,14 @@ def measurements_at_step(meas_data: MeasurementsOutput, step: int) -> Measuremen
 
     one: dict[str, Any] = {}
     for name, entry in meas_data.get("measurements", {}).items():
-        # failed_steps names steps rather than holding a field per step; the
-        # step's own failed_measurements says it of the one step kept.
-        row = {key: at_step(field) for key, field in entry.items() if key != "failed_steps"}
+        # failed_steps and not_established name steps rather than holding a
+        # field per step: the step's own failed_measurements says the one, and
+        # its null value the other (metrics.measurement_rows names it).
+        row = {
+            key: at_step(field)
+            for key, field in entry.items()
+            if key not in ("failed_steps", "not_established")
+        }
         row["values"] = [row["values"]]
         one[name] = row
     failed = [
@@ -1080,8 +1085,9 @@ async def measurement_rows(
     the run's log: ``None`` aggregates every step, an index reads that step's
     row (:func:`measurements_at_step`). Each names the measurements LTspice
     printed as failed at its steps in ``failed_measurements``, and those it
-    printed as other than a number in ``unreadable``. The deck and the build
-    that wrote the run are read once for all of them."""
+    printed as other than a number in ``unreadable``, and the steps whose
+    printed value is not established as the result in ``not_established``.
+    The deck and the build that wrote the run are read once for all of them."""
     logs = await services.load_logs(source, state)
     decoded = logs.value("measurements")
     if decoded is None or source.log is None:
@@ -1104,7 +1110,7 @@ async def measurement_rows(
 
     aggregated = await services.bounded_parse(source.log, aggregate_each)
     values: list[MetricValue] = []
-    for table, (stats, axis_map, at_map) in zip(tables, aggregated, strict=True):
+    for step, table, (stats, axis_map, at_map) in zip(steps, tables, aggregated, strict=True):
         # Surface which field each stat block was computed from so a downstream
         # consumer can tell "this is the level (constant)" from "this is the
         # WHEN-clause crossing frequency".
@@ -1151,71 +1157,22 @@ async def measurement_rows(
         }
         if unknown:
             row["answer_unknown"] = unknown
-        values.append(row)
-    zeros = await _zeros_a_failed_step_prints(source, whole, set(values[0]["stats"]))
-    if zeros is not None:
-        build, zero_steps = zeros
-        for step, data in zip(steps, values, strict=True):
-            at_step = {
-                name: [index for index in indices if step in (None, index)]
-                for name, indices in zero_steps.items()
+        # The steps whose printed value is not established as the result
+        # (XVII prints 0 for a failed step: log_parser.answered_measurements),
+        # by the run's step, from 0: those this row reads.
+        unset = {
+            name: {
+                "steps": [i for i in entry["not_established"]["steps"] if step in (None, i)],
+                "reason": entry["not_established"]["reason"],
             }
-            at_step = {name: indices for name, indices in at_step.items() if indices}
-            if at_step:
-                data["observations"] = [_zero_or_failed(build, at_step)]
+            for name, entry in whole["measurements"].items()
+            if "not_established" in entry and name in stats
+        }
+        unset = {name: item for name, item in unset.items() if item["steps"]}
+        if unset:
+            row["not_established"] = unset
+        values.append(row)
     return values
-
-
-async def _zeros_a_failed_step_prints(
-    source: services.AnalysisSource, parsed: MeasurementsOutput, names: set[str]
-) -> tuple[str, dict[str, list[int]]] | None:
-    """The build and the steps that read exactly 0, by measurement, when the
-    build prints 0 for a failure; None otherwise.
-
-    In a stepped measurement table LTspice 24 and later print ``failed`` for a
-    step whose measurement could not be taken; LTspice XVII and earlier print
-    ``0``, which the log does not tell apart from a measurement that is 0. The
-    build is the one the run named in its own output: as the job's case
-    recorded it, or for a bare path, read from the head of its log or raw.
-    Every exact zero is named, as a fact for the caller to weigh: a true zero
-    and a failure read the same here.
-    """
-    measurements = parsed.get("measurements") or {}
-    if (parsed.get("step_count") or 0) < 2 or not measurements:
-        return None
-    zeros = {
-        name: [index for index, value in enumerate(entry.get("values") or []) if value == 0]
-        for name, entry in measurements.items()
-        if name in names
-    }
-    zeros = {name: steps for name, steps in zeros.items() if steps}
-    if not zeros:
-        return None
-    build = source.simulator_version or await asyncio.to_thread(
-        reported_build, source.log, source.raw
-    )
-    if build is None or not is_cp1252_ltspice_build(build):
-        return None
-    return build, zeros
-
-
-def _zero_or_failed(build: str, zeros: dict[str, list[int]]) -> dict[str, Any]:
-    """The observation naming the steps that read 0 on a build that prints 0
-    for a failure (:func:`_zeros_a_failed_step_prints`)."""
-    listed = "; ".join(
-        f"{name} at step(s) {', '.join(map(str, steps))}" for name, steps in zeros.items()
-    )
-    return {
-        "code": "measurement_zero_or_failed",
-        "kind": "value",
-        "detail": (
-            f"This run was written by {build}, which prints 0 in a stepped "
-            f"measurement table for a step whose measurement failed, where "
-            f"LTspice 24 and later print 'failed'. These read exactly 0 and "
-            f"may be failures: {listed} (0-based steps)."
-        ),
-        "evidence": {"build": build, "zero_steps": zeros},
-    }
 
 
 async def value(

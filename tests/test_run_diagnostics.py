@@ -259,8 +259,9 @@ def _unclassified(path: Path, rules: str, console: Path | None = None) -> list[d
 
 
 #: Lines LTspice XVII prints that no rule of the log classifier knows: a
-#: measurement named with a dash, which neither spicelib's reader nor the
-#: server's reads (docs/spicelib_bugs.md, Bug 44), and the line on which a
+#: measurement named with a dash, which the measurement reader reads
+#: (log_parser.printed_measurements; spicelib's does not, docs/spicelib_bugs.md,
+#: Bug 44) and the classifier's own result-line rule does not, and the line on which a
 #: time step that collapses after the operating point is reported, which
 #: starts "Heightened Def Con" and ends in the fatal error the convergence
 #: rule reads only at the start of a line.

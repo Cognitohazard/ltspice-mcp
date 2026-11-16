@@ -1583,7 +1583,7 @@ def _deck_node(
     if key in globals_listed:
         # A body whose port has the name reads it as that port to LTspice
         # (``deck_nodes``), so only the other bodies are on the global there.
-        ports = _subcircuit_ports(cards)
+        ports = _subcircuit_ports(cards, reader)
         inside = [
             name
             for name in inside
@@ -1645,12 +1645,15 @@ def _readable_global_names(card: SpiceCard) -> tuple[str, ...]:
         return ()
 
 
-def _subcircuit_ports(cards: Sequence[SpiceCard]) -> dict[str, tuple[str, ...]]:
-    """The ports the header of each subcircuit's definition in force names
-    (``spice_lex.subckt_definitions``), by its case-folded name; none for a
-    header that cannot be split into parts."""
+def _subcircuit_ports(
+    cards: Sequence[SpiceCard], reader: SemanticProfile
+) -> dict[str, tuple[str, ...]]:
+    """The ports the header of each subcircuit's definition in force to
+    ``reader`` names (``spice_lex.subckt_definitions``), by its case-folded
+    name; none for a header that cannot be split into parts, or for a name
+    defined more than once of which the reader keeps no definition."""
     ports: dict[str, tuple[str, ...]] = {}
-    for index in subckt_definitions(cards).values():
+    for index in subckt_definitions(cards, reader.subckt_rule).in_force.values():
         card = cards[index]
         try:
             sub = SubcktCard.from_card(card)
@@ -2655,6 +2658,9 @@ class _LogRows(Sequence[dict[str, Any]]):
             for key in ("answer", "answer_unknown"):
                 if key in metadata:
                     row[key] = metadata[key]
+            unset = metadata.get("not_established")
+            if unset is not None and ordinal in unset["steps"]:
+                row["not_established"] = unset["reason"]
             row["failed"] = measurement_failed(self._facts, metadata["measurement"], ordinal)
             return row
         key = "entry" if metadata["layout"] == "scalar_print" else "row"
@@ -3060,6 +3066,14 @@ _MEASUREMENTS_DATA_PROPERTIES: dict[str, Any] = {
                 "answer_unknown": {
                     "type": "string",
                     "description": "Why the field holding the result is not known.",
+                },
+                "not_established": {
+                    "type": "string",
+                    "description": (
+                        "Why the value printed in this row is not established as "
+                        "the result, which is then null: LTspice XVII prints 0 in "
+                        "a stepped table for a step whose measurement failed."
+                    ),
                 },
                 "failed": {
                     "type": "boolean",

@@ -20,7 +20,7 @@ mismatches, etc.
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
@@ -30,8 +30,10 @@ from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
     SpiceLexErrorCategory,
+    SubcktDefinitions,
     directive_head,
     lex,
+    subckt_definitions,
     tokenize_body,
     unreadable_cards,
 )
@@ -634,16 +636,24 @@ def _scan_global_nodes(cards: list[SpiceCard]) -> set[str]:
     return nodes
 
 
-def _scope_ports(cards: list[SpiceCard]) -> dict[tuple[str, ...], tuple[str, ...]]:
-    """Each subcircuit body's scope, and the ports its header names.
+def _cards_read(
+    cards: list[SpiceCard], reader: SemanticProfile
+) -> tuple[list[SpiceCard], SubcktDefinitions]:
+    """The cards ``reader`` reads, and its answer for the deck's subcircuit
+    definitions (``spice_lex.subckt_definitions``): every card but those of
+    a definition it keeps out of force and those of a name defined more than
+    once that it keeps no definition of (``unsettled``), whose bodies no
+    check here reads. The checks below take a body by scope, which every
+    definition of one name in one scope shares, so they read only these."""
+    found = subckt_definitions(cards, reader.subckt_rule)
+    aside = found.aside
+    return [card for index, card in enumerate(cards) if index not in aside], found
 
-    The validator reads a deck as LTspice reads it, and which of two
-    definitions of one name LTspice keeps is not recorded, so a body is read
-    by scope, both definitions' cards together, with the later header's
-    ports. ngspice keeps the first (``spice_lex.subckt_definitions``), which
-    the other readers ask; the difference is pinned in
-    tests/test_subckt_definition_in_force.py.
-    """
+
+def _scope_ports(cards: list[SpiceCard]) -> dict[tuple[str, ...], tuple[str, ...]]:
+    """Each subcircuit body's scope, and the ports its header names, over
+    the cards a reader reads (:func:`_cards_read`), which hold one
+    definition per name in each scope."""
     ports: dict[tuple[str, ...], tuple[str, ...]] = {}
     for card in cards:
         if card.kind != "subckt":
@@ -699,6 +709,7 @@ def validate_netlist_dangling_nodes(
     the lint cannot classify can therefore only hide a warning, never
     create a false one.
     """
+    cards, _found = _cards_read(cards, reader)
     global_nodes = _scan_global_nodes(cards)
     scope_ports = _scope_ports(cards)
 
@@ -864,7 +875,11 @@ def validate_netlist_directive_refs(
     reported once. The caller attaches severity. ``cards`` are the cards the
     simulator reads (``spice_lex.lex_deck``).
     """
-    known = _known_names(cards)
+    read, found = _cards_read(cards, reader)
+    # A superset, as _known_names is: a body no definition of whose name is
+    # in force may still define a name, so only a body out of force is left out.
+    known = _known_names([card for index, card in enumerate(cards) if index not in found.shadowed])
+    cards = read
 
     issues: list[dict[str, object]] = []
     seen: set[str] = set()
@@ -1070,7 +1085,10 @@ class _BiasGraph:
 
 
 def _subckt_internal_grounds(
-    cards: list[SpiceCard], global_nodes: set[str], reader: SemanticProfile
+    cards: list[SpiceCard],
+    global_nodes: set[str],
+    reader: SemanticProfile,
+    unsettled: Iterable[str] = (),
 ) -> dict[str, frozenset[int]]:
     """Map each ``.SUBCKT`` name to the indices of its ports that reach
     ground (node ``0`` / ``.GLOBAL``) through the body's own elements.
@@ -1081,13 +1099,16 @@ def _subckt_internal_grounds(
     external node wired to that port even though the black-box clique cannot
     see inside, so the port must be propagated as a ground source. A
     fixpoint resolves subckts that ground a port only through a nested ``X``.
+    A subcircuit in ``unsettled`` (no definition of it is in force to the
+    reader, :func:`_cards_read`) is read as one that may tie any port to
+    ground, so no net is flagged on a body that was not read.
     """
     # Parse each body once up front; the fixpoint below only re-runs the
     # cheap union step, never re-lexes.
     defs: dict[str, tuple[list[str], list[tuple[InstanceLine, list[str]]]]] = {}
     # A subckt whose header, or a card in whose body that may connect nodes,
     # cannot be split into parts may tie any port to ground.
-    unread: set[str] = set()
+    unread: set[str] = set(unsettled)
     for card in cards:
         if card.kind != "subckt":
             continue
@@ -1217,8 +1238,11 @@ def validate_netlist_bias_topology(
     body ties to node ``0`` internally. ``.asc`` connectivity is invisible
     to this text pass, so the handler runs it on ``.cir``/``.net`` only.
     """
+    cards, found = _cards_read(cards, reader)
     global_nodes = _scan_global_nodes(cards)
-    subckt_grounds = _subckt_internal_grounds(cards, global_nodes, reader)
+    subckt_grounds = _subckt_internal_grounds(
+        cards, global_nodes, reader, (key[1] for key in found.unsettled)
+    )
     # .GLOBAL is name-scoping, not a ground reference: a global is a sink only
     # where it actually reaches node 0 somewhere in the deck. A floating
     # global rail stays a normal node so it can be flagged.

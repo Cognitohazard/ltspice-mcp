@@ -98,11 +98,14 @@ class Generation:
 
     ``generation`` is ``"xvii"`` (LTspice XVII), ``"iv"`` (LTspice IV) or
     ``"current"`` (LTspice 24 and later). ``evidence`` names what shows it,
-    for a finding or a note to cite.
+    for a finding or a note to cite. ``major`` is the release number the
+    evidence shows (26 for LTspice 26.1.1, 17 for XVII's file version), None
+    when it shows none (a stock file name, XVII's raw header).
     """
 
     generation: LtspiceGeneration
     evidence: str
+    major: int | None = None
 
     @property
     def before_24(self) -> bool:
@@ -142,7 +145,8 @@ def which_ltspice(program: str | None, reported: str | None) -> Generation | Non
         generation = _reported_generation(reported)
         if generation is not None:
             evidence = f"{reported} ({program})" if program else reported
-            return Generation(generation, evidence)
+            numbered = _REPORTED_NUMBERED.search(reported)
+            return Generation(generation, evidence, int(numbered[1]) if numbered else None)
     if not program:
         return None
     version = executable_file_version(program)
@@ -150,7 +154,9 @@ def which_ltspice(program: str | None, reported: str | None) -> Generation | Non
         generation = _numbered_generation(version[0])
         if generation is not None:
             return Generation(
-                generation, f"{program} (file version {'.'.join(map(str, version))})"
+                generation,
+                f"{program} (file version {'.'.join(map(str, version))})",
+                version[0],
             )
     stock = _STOCK_BEFORE_24.search(program)
     if stock is not None:
@@ -393,6 +399,14 @@ def _digest(program: Path, size: int) -> str | None:
         return None
 
 
+def log_banner_build(text: str) -> str | None:
+    """The LTspice build a log's text names on its first line, which LTspice
+    24 and later open a log with (``LTspice 26.1.1 for Windows``); None for a
+    log that opens otherwise, as XVII's does, with its ``Circuit:`` line."""
+    first_line = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    return _clean(first_line) if _LTSPICE_BANNER.fullmatch(first_line) else None
+
+
 def reported_build(log_file: Path | None, raw_file: Path | None = None) -> str | None:
     """The build a run named in its own output, or None when it named none.
 
@@ -408,12 +422,9 @@ def reported_build(log_file: Path | None, raw_file: Path | None = None) -> str |
     try:
         if log_file is not None:
             log_head = _head_text(log_file)
-            first_line = next(
-                (line.strip() for line in log_head.splitlines() if line.strip()),
-                "",
-            )
-            if _LTSPICE_BANNER.fullmatch(first_line):
-                return _clean(first_line)
+            banner = log_banner_build(log_head)
+            if banner is not None:
+                return banner
             xyce = _XYCE_BANNER.search(log_head)
             if xyce is not None:
                 return _clean(xyce[1])

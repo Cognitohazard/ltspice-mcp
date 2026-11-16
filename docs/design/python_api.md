@@ -628,7 +628,7 @@ class.
 The `measurements` recipe's rows are the MCP rows, rendered by the same code.
 For a run with one value per `.meas`, such as one case of a sweep, the value
 is `row["value"]["measured"][name]`. It is null where the log holds no number
-for that name, and the name is then in one of four places, by why.
+for that name, and the name is then in one of five places, by why.
 `row["value"]["failed_measurements"]` lists it where LTspice printed it as
 failed at the step the row reads (`FAIL'ed`, or `failed` in a stepped
 table), which is what `failed_measurements` means wherever it appears,
@@ -641,7 +641,12 @@ searched for, not its result: `measurements()` marks the entry
 `unreadable`, and the row reads the crossing. Where it
 printed a number that is not finite (a gain margin of `infdB`),
 `row["value"]["not_finite"]` lists it. Where which field holds the result
-is not known, `row["value"]["answer_unknown"][name]` says why. Any `AT`
+is not known, `row["value"]["answer_unknown"][name]` says why. Where what it
+printed is not established as the result (LTspice XVII prints `0` in a
+stepped table both for a failed step and for a crossing at 0 s),
+`row["value"]["not_established"][name]` gives the steps and the reason, and
+`measurements()` gives the same on the entry, those steps null in
+`values`. Any `AT`
 point the log printed beside a result that is its value is under
 `row["value"]["at"][name]`; a WHEN with no FIND's result is its crossing, so
 that is its `measured` value. Each entry of `measurements()` names the field

@@ -423,6 +423,15 @@ class Case:
     def applies_to(self, build: Build) -> bool:
         return not self.builds or build.generation in self.builds or build.label in self.builds
 
+    def input_in(self, name: str, data: bytes, work: Path) -> bytes:
+        """The bytes of input ``name`` as the case's run reads them: in its
+        source deck, ``<dir>`` is the folder the case runs in, so a deck can
+        name one of its files by an absolute path. The manifest keeps the
+        digest of the input as committed."""
+        if name != self.source:
+            return data
+        return data.replace(CASE_DIR.encode("ascii"), str(work).encode("utf-8"))
+
     def settings_in(self, work: Path) -> dict[str, str]:
         """The case's settings for a run in ``work``: ``<dir>`` in a value is
         that folder, so a setting can name a folder of the case's own
@@ -1677,7 +1686,7 @@ def run_case(
     for name, target in case.copies.items():
         data = (inputs / name).read_bytes()
         (work / target).parent.mkdir(parents=True, exist_ok=True)
-        (work / target).write_bytes(data)
+        (work / target).write_bytes(case.input_in(name, data, work))
         digests[name] = sha256_bytes(data)
     # Outside the case directory, so nothing the build writes can pick it up.
     ini = work.parent / f"{work.name}.ini"

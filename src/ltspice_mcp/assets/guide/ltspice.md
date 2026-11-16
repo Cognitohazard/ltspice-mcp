@@ -256,8 +256,10 @@ C1 out 0 {C}
   (`byte-85-ltspice`, `node-control-byte-ltspice`); save decks as UTF-8.
 - **A failed step on XVII**: in a stepped measurement table XVII prints `0`
   where LTspice 24 and later print `failed`, which replies name in
-  `failed_measurements`. The `measurements` recipe names every such zero on a
-  run XVII wrote (`measurement_zero_or_failed`).
+  `failed_measurements`. XVII prints a crossing at 0 s as `0` too, so a `0`
+  in its table is not taken as the result: the step's value is null and
+  replies name it under `not_established`. A log read by path whose files
+  name no build may be XVII's and is read the same way.
 - **`startup`** on `.tran` (`.tran 0 5m 0 10u startup`) ramps the sources up
   from zero. ngspice has no equivalent keyword.
 - **Frequency response analysis** (`.fra` with an analyzer `@N`): the run

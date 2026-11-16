@@ -30,6 +30,7 @@ import pytest
 
 from ltspice_mcp.lib.log_parser import (
     MeasurementAnswer,
+    answered_measurements,
     measurement_answer,
     measurement_cards,
     parse_measurements,
@@ -37,7 +38,7 @@ from ltspice_mcp.lib.log_parser import (
     read_log_text,
     result_unreadable,
 )
-from ltspice_mcp.lib.simulator_build import Producer
+from ltspice_mcp.lib.simulator_build import Producer, log_banner_build
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
 from tests.conftest import FIXTURES_DIR, SyncApi, dispatched, make_experiment_job
@@ -46,10 +47,13 @@ from tests.ltspice_recorder import INPUTS
 #: An unstepped result line whose point follows an uppercase ``AT``: the
 #: point is the result.
 _UPPER_AT = re.compile(
-    r"^(\w+): [^\r\n]*=[^\r\n]*? AT ([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)\s*$", re.M
+    r"^(\w[\w.-]*): [^\r\n]*=[^\r\n]*? AT ([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)\s*$", re.M
 )
 
-Answer = list[float | None] | str
+#: What a route gives for a step whose result it names as not established.
+NOT_ESTABLISHED = "not established"
+
+Answer = list[float | str | None] | str
 
 
 def _measurement_logs() -> list[tuple[str, str]]:
@@ -101,8 +105,13 @@ def _entry_answer(entry: dict[str, Any]) -> Answer:
     values = entry["values"]
     # An entry that names no field is read as a caller reads it: its values.
     if entry.get("answer", "value") == "at":
-        return _numbers(entry.get("at"), len(values))
-    return list(values)
+        numbers: list[float | str | None] = list(_numbers(entry.get("at"), len(values)))
+    else:
+        numbers = list(values)
+    for step in entry.get("not_established", {}).get("steps", ()):
+        assert numbers[step] is None, (entry, step)
+        numbers[step] = NOT_ESTABLISHED
+    return numbers
 
 
 def _recipe_answers(reply: dict[str, Any]) -> dict[str, Answer]:
@@ -117,6 +126,9 @@ def _recipe_answers(reply: dict[str, Any]) -> dict[str, Answer]:
             else:
                 held = answers.setdefault(name, [])
                 assert isinstance(held, list)
+                if step in value.get("not_established", {}).get(name, {}).get("steps", ()):
+                    assert number is None, (name, step)
+                    number = NOT_ESTABLISHED
                 held.append(number)
     return answers
 
@@ -131,7 +143,11 @@ def _inspect_answers(item: dict[str, Any]) -> dict[str, Answer]:
             continue
         held = answers.setdefault(name, [])
         assert isinstance(held, list)
-        held.append(row.get("at") if row.get("answer", "value") == "at" else row.get("value"))
+        number = row.get("at") if row.get("answer", "value") == "at" else row.get("value")
+        if "not_established" in row:
+            assert number is None, row
+            number = NOT_ESTABLISHED
+        held.append(number)
     return answers
 
 
@@ -139,7 +155,12 @@ def _same(left: Answer, right: Answer) -> bool:
     if isinstance(left, str) or isinstance(right, str):
         return left == right
     return len(left) == len(right) and all(
-        a == b or (a is not None and b is not None and math.isclose(a, b, rel_tol=1e-12))
+        a == b
+        or (
+            isinstance(a, float | int)
+            and isinstance(b, float | int)
+            and math.isclose(a, b, rel_tol=1e-12)
+        )
         for a, b in zip(left, right, strict=True)
     )
 
@@ -186,6 +207,8 @@ async def _every_route(
 
     job_id = "exp_" + re.sub(r"\W", "_", f"{build}_{case_id}")
     job = make_experiment_job(state, job_id=job_id, raw=raw, netlist=deck)
+    # A run records its simulator's class name and the build it named.
+    job.simulator = "LTspice"
     job.cases[0].simulator_version = rec.manifest(build)["reported_build"]
     routes["recipe, by job"] = _recipe_answers(
         await dispatched(
@@ -219,37 +242,19 @@ async def _every_route(
     return routes
 
 
-#: A DERIV ... WHEN, which both builds print as a DERIV ... AT, with the
-#: derivative after ``=`` and the point after a lowercase ``at``
-#: (``log/meas_deriv_when``). A route that reads the log alone answers with
-#: the derivative, as LTspice prints it; a route that knows the run's deck
-#: answers with the point, the answer the deck's card has always given it
-#: (``measurement_answer``). Each measurement of this kind, by deck.
-DERIV_WHEN_READ_BY_ITS_POINT_BY_JOB_AND_BY_ITS_VALUE_BY_PATH = {
-    "log/meas_deriv_when": {"d_when"},
-    "log/meas_deriv_when_step": {"d_when"},
-}
-
-
 @pytest.mark.parametrize(("build", "case_id"), _LOGS, ids=[f"{b}/{c}" for b, c in _LOGS])
 async def test_every_route_reads_a_measurement_from_the_same_field(
     build: str, case_id: str, state_no_sim: SessionState, work_dir: Path
 ):
+    """Every route gives the same answer per step, a DERIV ... WHEN's
+    derivative included (``log/meas_deriv_when``), whether it knows the
+    run's deck or reads the log alone."""
     routes = await _every_route(build, case_id, state_no_sim, work_dir)
-    split = DERIV_WHEN_READ_BY_ITS_POINT_BY_JOB_AND_BY_ITS_VALUE_BY_PATH.get(case_id, set())
     first_route, first = next(iter(routes.items()))
-    by_job = next(answers for route, answers in routes.items() if route.endswith("by job"))
     for route, answers in routes.items():
         assert set(answers) == set(first), (route, first_route)
         for name, answer in answers.items():
-            agreed = by_job if name in split and route.endswith("by job") else first
-            assert _same(answer, agreed[name]), (name, route, answer, first_route, agreed[name])
-    for name in split:
-        data = cast(dict[str, Any], parse_measurements(rec.recorded(build, f"{case_id}.log")))
-        entry = data["measurements"][name]
-        points = entry["at"] if isinstance(entry["at"], list) else [entry["at"]]
-        assert _same(first[name], entry["values"]), (name, first[name])
-        assert _same(by_job[name], points), (name, by_job[name])
+            assert _same(answer, first[name]), (name, route, answer, first_route, first[name])
     # Every form both builds print has a recorded reading, so no route leaves
     # a recorded measurement's field unknown.
     assert "unknown" not in first.values(), first
@@ -257,6 +262,38 @@ async def test_every_route_reads_a_measurement_from_the_same_field(
     text = read_log_text(rec.recorded(build, f"{case_id}.log"))
     for name, point in _UPPER_AT.findall(text):
         assert first[name.lower()] == [float(point)], (name, first[name.lower()])
+    data = cast(dict[str, Any], parse_measurements(rec.recorded(build, f"{case_id}.log")))
+    for name, entry in data["measurements"].items():
+        # A DERIV ... WHEN prints its derivative after '=' and the point after a
+        # lowercase 'at', as a DERIV ... AT does: the derivative is the result.
+        if name == "d_when":
+            assert _same(first[name], entry["values"]), (name, first[name])
+        # XVII prints 0 in a stepped table's row for a step whose measurement
+        # failed (log/meas_when_step_fails, log/meas_step): no route gives
+        # that 0 as the result.
+        if rec.generation(build) == "xvii" and entry.get("printed_form", "").startswith("table"):
+            for step, number in enumerate(entry["values"]):
+                if number == 0:
+                    assert first[name][step] == NOT_ESTABLISHED, (name, step, first[name])
+
+
+@pytest.mark.parametrize(
+    ("build", "case_id", "name"),
+    [
+        ("ltspice26", "log/meas_name_dot", "t.rise"),
+        ("ltspice17", "log/meas_name_dot", "t.rise"),
+        ("ltspice17", "log/meas_name_dash", "t-fall"),
+    ],
+)
+async def test_every_route_reads_a_measurement_named_with_punctuation(
+    build: str, case_id: str, name: str, state_no_sim: SessionState, work_dir: Path
+):
+    """A name holding a dot or a dash, printed as written, reads on every
+    route under that name, its crossing the result."""
+    routes = await _every_route(build, case_id, state_no_sim, work_dir)
+    point = float(_UPPER_AT.findall(read_log_text(rec.recorded(build, f"{case_id}.log")))[0][1])
+    for route, answers in routes.items():
+        assert answers == {name: [point]}, route
 
 
 # ngspice -------------------------------------------------------------------
@@ -336,15 +373,14 @@ def test_a_recorded_form_names_its_field_for_any_ltspice_or_an_unknown_writer(
         assert measurement_answer(form, producer) == MeasurementAnswer(answer)  # type: ignore[arg-type]
 
 
-def test_a_deriv_when_keeps_the_answer_its_deck_has_always_given():
-    """A DERIV ... WHEN's card keeps the deck's answer: the point where the
-    entry has one. Both builds print the derivative after ``=`` and the point
-    after a lowercase ``at`` (``log/meas_deriv_when``), so the recording
-    disagrees; ``test_recorded_ltspice_results`` pins the two side by side
-    (``DERIV_WHEN_ANSWERED_WITH_ITS_POINT_BY_THE_SERVER_ONLY``)."""
-    for form in ("line_AT", "line_at", None):
-        assert measurement_answer(form, _LT26, "deriv_when", has_point=True).field == "at"
-    assert measurement_answer("table_level", _LT26, "deriv_when").field == "value"
+def test_a_deriv_when_is_answered_by_its_printed_form_as_a_deriv_at_is():
+    """Both builds print a DERIV ... WHEN as a DERIV ... AT: the derivative
+    after ``=`` and the point after a lowercase ``at`` (``log/meas_deriv_when``),
+    so its card is any other card's and its result is its value."""
+    deck_cards = measurement_cards(INPUTS / "log/meas_deriv_when.cir")
+    assert deck_cards["d_when"] == deck_cards["d_at"] == "value"
+    for form in ("line_at", "table_at"):
+        assert measurement_answer(form, _LT26, deck_cards["d_when"]).field == "value"
 
 
 def test_a_card_the_printed_form_contradicts_leaves_the_answer_unknown():
@@ -414,12 +450,12 @@ def test_a_find_of_a_derivative_where_a_condition_is_met_is_a_find(work_dir: Pat
         encoding="ascii",
     )
     cards = measurement_cards(deck)
-    assert cards == {"f_d": "value", "d_w": "deriv_when"}
-    assert measurement_answer("line_at", _LT26, cards["f_d"], has_point=True).field == "value"
+    assert cards == {"f_d": "value", "d_w": "value"}
+    assert measurement_answer("line_at", _LT26, cards["f_d"]).field == "value"
 
 
 def test_a_deriv_when_from_a_simulator_with_no_recordings_is_unknown():
-    answer = measurement_answer("line_at", Producer("qspice", None, None), "deriv_when")
+    answer = measurement_answer("line_at", Producer("qspice", None, None), "value")
     assert answer.field is None and "no recording" in str(answer.unknown)
 
 
@@ -428,3 +464,86 @@ def test_a_null_whose_field_is_unknown_has_that_one_reason():
     assert result_unreadable(entry) is None
     assert result_unreadable({"values": [None], "answer": "at", "unreadable": {}}) is None
     assert result_unreadable({"values": [None], "answer": "value", "unreadable": {"r": 1}})
+
+
+# A 0 in a stepped table --------------------------------------------------------
+
+_XVII = Producer("ltspice", rec.manifest("ltspice17")["reported_build"], None)
+
+
+def _w_expr(build: str, producer: Producer, *, banner: bool = True) -> dict[str, Any]:
+    """``w_expr`` of ``log/meas_when_step_forms`` as read for ``producer``:
+    a WHEN that crosses at 0 s in both steps, printed ``0`` by both builds."""
+    table = cast(Any, parse_measurements(rec.recorded(build, "log/meas_when_step_forms.log")))
+    assert table["measurements"]["w_expr"]["values"] == [0.0, 0.0]
+    if not banner:
+        table.pop("printed_by", None)
+    return cast(Any, answered_measurements(table, producer))["measurements"]["w_expr"]
+
+
+@pytest.mark.parametrize(
+    "producer",
+    [
+        _LT26,
+        Producer("ltspice", "LTspice 24.1.9 for Windows", None),
+        Producer(None, "LTspice 25.0.1 for Windows", None),
+        _UNKNOWN,  # the log's own banner names LTspice 26
+    ],
+)
+def test_a_zero_a_current_build_printed_in_a_stepped_table_is_its_result(producer: Producer):
+    """LTspice 24 and later print ``failed`` for a step that fails, so a 0
+    they print is the result: here a crossing at 0 s."""
+    entry = _w_expr("ltspice26", producer)
+    assert entry["values"] == [0.0, 0.0]
+    assert "not_established" not in entry
+
+
+@pytest.mark.parametrize(
+    ("build", "producer", "who"),
+    [
+        ("ltspice17", _XVII, "LTspice XVII printed 0"),
+        ("ltspice17", _UNKNOWN, "may have been written by LTspice XVII"),
+        ("ltspice26", _UNKNOWN, "may have been written by LTspice XVII"),
+        ("ltspice17", Producer("ltspice", None, "scad3.exe"), "LTspice IV"),
+    ],
+)
+def test_a_zero_xvii_may_have_printed_in_a_stepped_table_is_not_established(
+    build: str, producer: Producer, who: str
+):
+    """XVII prints a crossing at 0 s as 0, as it prints a step whose WHEN
+    finds no crossing, so the two read the same. A log that names no build
+    may be XVII's (the LTspice 26 log here with its banner removed)."""
+    entry = _w_expr(build, producer, banner=False)
+    assert entry["values"] == [None, None]
+    assert entry["not_established"]["steps"] == [0, 1]
+    assert who in entry["not_established"]["reason"]
+    assert "crossing at 0 s" in entry["not_established"]["reason"]
+
+
+def test_a_zero_xvii_printed_in_another_stepped_table_says_no_recording_shows_its_failure():
+    """Only a stepped WHEN's failure is recorded on XVII; for a FIND's table
+    the reason says that no recording shows how a failed step prints."""
+    table = cast(Any, parse_measurements(rec.recorded("ltspice17", "log/meas_step.log")))
+    entry = table["measurements"]["s_find"]
+    assert entry["printed_form"] == "table_at"
+    entry["values"] = [0.0, *entry["values"][1:]]
+    read = cast(Any, answered_measurements(table, _XVII))["measurements"]["s_find"]
+    assert read["values"][0] is None
+    assert read["not_established"]["steps"] == [0]
+    assert "no recording shows" in read["not_established"]["reason"]
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_the_build_a_log_names_on_its_first_line(build: str):
+    """LTspice 26 opens its log with its banner; XVII opens it with its
+    ``Circuit:`` line and names no build."""
+    path = rec.recorded(build, "log/meas_step.log")
+    named = log_banner_build(read_log_text(path))
+    table = cast(Any, parse_measurements(path))
+    if rec.generation(build) == "xvii":
+        assert named is None
+        assert "printed_by" not in table
+    else:
+        assert named == rec.manifest(build)["reported_build"]
+        assert table["printed_by"] == named
+    assert "printed_by" not in cast(Any, answered_measurements(table, _UNKNOWN))

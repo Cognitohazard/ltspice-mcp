@@ -499,7 +499,14 @@ WAVEFILE = "wavefile"
 class SourceText:
     """The words after a V or I source's nodes: its value, its own parameters
     in order, each as written, and the ``wavefile=`` word of a source that
-    plays a .wav file."""
+    plays a .wav file.
+
+    ``played`` answers which words are nodes and which are the value, for an
+    edit or a display of the card. Which file a card reads when it runs is
+    ``deck_staging.scan_data_references``, which also reads ``wavefile
+    level.wav`` with no ``=`` as playing the file, as both LTspice builds do;
+    here those words stay the value (``PLAYED_BY_LTSPICE_AND_READ_AS_A_VALUE_BY_THE_SERVER``
+    in ``tests/test_recorded_ltspice_decks.py`` pins both readings)."""
 
     value: str
     own: tuple[str, ...]
@@ -1632,19 +1639,14 @@ class MeasCard:
 
     @property
     def bare_when(self) -> bool:
-        """Whether the measurement is a ``WHEN`` search with no ``FIND``: its
-        result is the crossing, and the value its log line prints is the
-        trigger level (log/meas_forms, ``m_when`` against ``m_findwhen``)."""
+        """Whether the measurement is a ``WHEN`` search with no ``FIND`` and no
+        ``DERIV``: its result is the crossing, and the value its log line
+        prints is the trigger level (log/meas_forms, ``m_when`` against
+        ``m_findwhen``). A ``DERIV ... WHEN`` prints the derivative as its
+        value and the point after ``at``, as a ``DERIV ... AT`` does
+        (log/meas_deriv_when); ``FIND deriv(...) WHEN`` is a FIND."""
         words = {tok.text.casefold() for tok in self.body_tokens if tok.kind == TokenKind.BARE}
-        return "when" in words and "find" not in words
-
-    @property
-    def deriv_when(self) -> bool:
-        """Whether the measurement is a ``DERIV ... WHEN``: a derivative taken
-        where a condition is met, with no FIND (``FIND deriv(...) WHEN`` is a
-        FIND). No recording shows how LTspice prints one."""
-        words = {tok.text.casefold() for tok in self.body_tokens if tok.kind == TokenKind.BARE}
-        return "deriv" in words and "when" in words and "find" not in words
+        return "when" in words and "find" not in words and "deriv" not in words
 
 
 # ---------------------------------------------------------------------------
