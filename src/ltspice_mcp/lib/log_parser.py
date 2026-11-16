@@ -26,7 +26,7 @@ from ltspice_mcp.lib.log_types import LogDiagnostics as LogDiagnostics
 from ltspice_mcp.lib.log_types import MeasErrorEntry as MeasErrorEntry
 from ltspice_mcp.lib.log_types import MeasurementEntry as MeasurementEntry
 from ltspice_mcp.lib.log_types import MeasurementsOutput as MeasurementsOutput
-from ltspice_mcp.lib.simulator_build import Producer
+from ltspice_mcp.lib.simulator_build import Producer, log_banner_build
 from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.lib.store import parser_file_in
 
@@ -1176,6 +1176,14 @@ _MEAS_METADATA_SUFFIXES: tuple[tuple[str, str], ...] = (
 # rather than seeing a silent absence.
 _RE_MEAS_FAILED = re.compile(r"Measurement\s+\"([^\"]+)\"\s+FAIL[''`]?ed", re.IGNORECASE)
 
+# A measurement's name as a log prints it: as the deck wrote it, a dot
+# included on both builds and a dash on XVII (recorded: log/meas_name_dot,
+# log/meas_name_dash; LTspice 26 refuses a dash), on a line where ``: ``
+# follows the name. spicelib's reader reads neither (docs/spicelib_bugs.md,
+# Bug 44). A name holding either is taken only there: a Fourier block's
+# ``N-Period=1`` is no measurement.
+_MEAS_NAME = r"(?:\w+|\w[\w.\-]*(?=:[ \t]))"
+
 # AT/WHEN crossing line, e.g. ``tcross: V(out)=0.5  AT 0.000693147672285``.
 # spicelib's LTSpiceLogReader matches the AT clause with a literal single-space
 # `` at `` pattern (ltsteps.py — case-insensitive, but the spaces are literal),
@@ -1185,7 +1193,7 @@ _RE_MEAS_FAILED = re.compile(r"Measurement\s+\"([^\"]+)\"\s+FAIL[''`]?ed", re.IG
 # ``at`` unset. ``.*?`` stops at the first ``=`` so the level is the value and
 # the trailing number after AT is the crossing point.
 _RE_MEAS_AT_LINE = re.compile(
-    r"^\s*(?P<name>\w+):\s+.*?=\s*\S+\s+at\s+(?P<at>[-+]?[\d.][\d.eE+-]*)",
+    rf"^\s*(?P<name>{_MEAS_NAME}):\s+.*?=\s*\S+\s+at\s+(?P<at>[-+]?[\d.][\d.eE+-]*)",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -1202,7 +1210,7 @@ _MEAS_CLAUSE_NUMBER = r"[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?"
 # (a PARAM's number). The expression ends at the first ``=`` a value can
 # follow. A warning such as ``Warning: Pd = 0 is less than W.`` is neither.
 _RE_MEAS_RESULT_LINE = re.compile(
-    r"^(?P<name>\w+)(?::[ \t]+[^\r\n]*?)?="
+    rf"^(?P<name>{_MEAS_NAME})(?::[ \t]+[^\r\n]*?)?="
     r"(?:(?P<value>\S[^\r\n]*?)[ \t]+"
     rf"(?:FROM[ \t]+{_MEAS_CLAUSE_NUMBER}[ \t]+TO[ \t]+{_MEAS_CLAUSE_NUMBER}"
     rf"|AT[ \t]+{_MEAS_CLAUSE_NUMBER})"
@@ -1334,10 +1342,11 @@ def printed_form(printed: PrintedMeasurement | None) -> PrintedForm | None:
 AnswerField = Literal["value", "at"]
 
 #: What a measurement's card says it is, as ``MeasCard`` reads it
-#: (:func:`measurement_cards`): ``when`` for a WHEN with no FIND
-#: (``MeasCard.bare_when``), ``deriv_when`` for a DERIV ... WHEN, ``value``
-#: for any other.
-CardKind = Literal["when", "deriv_when", "value"]
+#: (:func:`measurement_cards`): ``when`` for a WHEN with no FIND and no DERIV
+#: (``MeasCard.bare_when``), ``value`` for any other. A DERIV ... WHEN is a
+#: ``value``: both builds print it as a DERIV ... AT (recorded:
+#: log/meas_deriv_when, log/meas_deriv_when_step).
+CardKind = Literal["when", "value"]
 
 
 @dataclass(frozen=True)
@@ -1357,8 +1366,8 @@ _OTHER = frozenset({"value"})
 #: ``log/meas_ac``, ``log/meas_db``, ``log/meas_when_threshold_*``,
 #: ``log/meas_step``, ``raw/ac``, ``raw/step_*``): a WHEN with no FIND prints
 #: the level it searched for after ``=`` and the crossing after an uppercase
-#: ``AT``; a FIND, a DERIV ... AT and a FIND ... WHEN print the result after
-#: ``=`` and their point after a lowercase ``at``. A stepped table prints each
+#: ``AT``; a FIND, a DERIV ... AT, a DERIV ... WHEN and a FIND ... WHEN print
+#: the result after ``=`` and their point after a lowercase ``at``. A stepped table prints each
 #: step's result in its first column: a WHEN's crossing under a heading of its
 #: ``expr=level`` alone, a FIND's value beside an ``at`` column. A form a set
 #: lacks is not one its producer prints: ngspice prints ``name = value`` with
@@ -1404,8 +1413,6 @@ def measurement_answer(
     form: str | None,
     producer: Producer,
     card: CardKind | None = None,
-    *,
-    has_point: bool = False,
 ) -> MeasurementAnswer:
     """Which field of a measurement holds its result: the one answer to "what
     does this printed measurement line answer", which every reader of a
@@ -1420,10 +1427,8 @@ def measurement_answer(
     prints that form, when they agree. A card the form contradicts makes the
     answer unknown, as does a form or a producer with no recording.
 
-    A DERIV ... WHEN is not recorded: its card keeps the answer the deck has
-    always given it, the point where the entry has one (``has_point``), the
-    value otherwise. A measurement printed ``FAIL'ed`` holds no number in
-    either field, and reads as ``value``.
+    A measurement printed ``FAIL'ed`` holds no number in either field, and
+    reads as ``value``.
     """
     if form == "failed":
         return MeasurementAnswer("value")
@@ -1435,8 +1440,6 @@ def measurement_answer(
             f"the server has no recording of how {producer.family or 'this simulator'} "
             "prints a measurement",
         )
-    if card == "deriv_when":
-        return MeasurementAnswer("at" if has_point else "value")
     if form is None:
         return MeasurementAnswer(
             None, "the log printed it in a form no recording of its simulator shows"
@@ -1486,11 +1489,35 @@ def measurement_cards(netlist: Path | None) -> dict[str, CardKind]:
             meas = MeasCard.from_card(card)
         except SpiceLexError:
             continue
-        if meas.deriv_when:
-            kinds[meas.name.lower()] = "deriv_when"
-        else:
-            kinds[meas.name.lower()] = "when" if meas.bare_when else "value"
+        kinds[meas.name.lower()] = "when" if meas.bare_when else "value"
     return kinds
+
+
+#: The recorded builds that print ``0`` in a stepped table's row for a step
+#: whose measurement could not be taken, where LTspice 26 prints ``failed``:
+#: XVII, recorded for a WHEN that finds no crossing (log/meas_when_step_fails,
+#: log/meas_step). Its log prints a result of 0 the same way, so the two are
+#: not told apart.
+_ZERO_FOR_A_FAILED_STEP = frozenset({"ltspice17"})
+
+
+def _zero_steps_reason(producer: Producer) -> str | None:
+    """Why a 0 in a stepped table's row is not established as a result, when
+    the log may have been written by a build that prints 0 for a step whose
+    measurement failed; None when it cannot have been."""
+    rules, _coverage = rules_for(producer)
+    sets = _READING_SETS.get(rules, ())
+    if not _ZERO_FOR_A_FAILED_STEP & set(sets):
+        return None
+    printed = (
+        "LTspice XVII printed 0 in this step's row"
+        if set(sets) <= _ZERO_FOR_A_FAILED_STEP
+        else "the log may have been written by LTspice XVII, which prints 0 in a step's row"
+    )
+    return (
+        f"{printed}, as it does for a step whose measurement failed (LTspice 26 prints "
+        "'failed'), so a failure and a result of 0 read the same"
+    )
 
 
 def answered_measurements(
@@ -1499,24 +1526,42 @@ def answered_measurements(
     """A log's measurement ``table`` as every reader returns it: each entry
     with ``answer``, the field holding its result, or ``answer_unknown``, why
     that is not known (:func:`measurement_answer`), in place of the
-    ``printed_form`` the decoder found. One unknown costs only its own entry."""
+    ``printed_form`` the decoder found. One unknown costs only its own entry.
+
+    Where the log may have been written by a build that prints 0 in a stepped
+    table's row for a step whose measurement failed (XVII), a 0 in a row is
+    not taken as the result: the value at that step is null, and the entry's
+    ``not_established`` gives the steps, from 0, and why. A step it names is
+    not in ``failed_measurements``, which means the log printed ``failed``.
+
+    A ``producer`` that names no build is read with the build the log's own
+    first line names (``printed_by``), as the run named itself there; the
+    decoder read it in the parser's process, so a reader of the log alone
+    opens no source file for it."""
+    banner = table.get("printed_by")
+    if banner is not None and producer.build is None:
+        producer = Producer(producer.family or "ltspice", banner, producer.program)
+    zero_reason = _zero_steps_reason(producer)
     entries: dict[str, MeasurementEntry] = {}
     for name, entry in table.get("measurements", {}).items():
         form = entry.get("printed_form")
         answered: dict[str, Any] = {k: v for k, v in entry.items() if k != "printed_form"}
-        at = entry.get("at")
-        has_point = (
-            any(item is not None for item in at) if isinstance(at, list) else at is not None
-        )
-        answer = measurement_answer(
-            form, producer, (cards or {}).get(name.lower()), has_point=has_point
-        )
+        answer = measurement_answer(form, producer, (cards or {}).get(name.lower()))
         if answer.field is not None:
             answered["answer"] = answer.field
         else:
             answered["answer_unknown"] = answer.unknown
+        if zero_reason is not None and answer.field == "value" and str(form).startswith("table"):
+            values = list(entry["values"])
+            zeros = [step for step, value in enumerate(values) if value == 0]
+            if zeros:
+                answered["values"] = [None if value == 0 else value for value in values]
+                answered["not_established"] = {"steps": zeros, "reason": zero_reason}
         entries[name] = answered  # type: ignore[assignment]
-    return {**table, "measurements": entries}
+    answered_table: dict[str, Any] = {
+        key: value for key, value in table.items() if key != "printed_by"
+    }
+    return {**answered_table, "measurements": entries}  # type: ignore[typeddict-item]
 
 
 def result_unreadable(entry: Mapping[str, Any]) -> Any:
@@ -1896,13 +1941,17 @@ def parse_measurements(
         *(name for name in measurements if "failed_steps" in measurements[name]),
     ]
     failed = sorted(dict.fromkeys(failed), key=lambda name: order.get(name.lower(), len(order)))
-    return {
+    table: MeasurementsOutput = {
         "measurements": measurements,
         "step_count": step_count,
         "errors": None,
         "warnings": None,
         "failed_measurements": failed,
     }
+    banner = log_banner_build(log_text)
+    if banner is not None:
+        table["printed_by"] = banner
+    return table
 
 
 def parse_fourier_data(

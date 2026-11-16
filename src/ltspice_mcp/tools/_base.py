@@ -514,6 +514,17 @@ OBSERVATIONS_SCHEMA: dict[str, Any] = {
     },
 }
 
+#: The steps of a measurement whose printed value is not established as its
+#: result, from 0, and why (``log_parser.answered_measurements``).
+NOT_ESTABLISHED_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "steps": {"type": "array", "items": {"type": "integer"}, CUT: NEVER},
+        "reason": {"type": "string"},
+    },
+    "required": ["steps", "reason"],
+}
+
 # Parsed .MEAS results, keyed by measurement name. Each entry names the field
 # holding its result in ``answer`` (``log_parser.measurement_answer``): a WHEN
 # with no FIND printed on its own line prints the level it searched for, which
@@ -564,6 +575,15 @@ MEASUREMENTS_SCHEMA: dict[str, Any] = {
                 "description": (
                     "Why the field holding the result is not known, in place of "
                     "'answer'; read neither field as the result."
+                ),
+            },
+            "not_established": {
+                **NOT_ESTABLISHED_SCHEMA,
+                "description": (
+                    "The steps, from 0, whose printed value is not established as "
+                    "the result, and why: LTspice XVII prints 0 in a stepped "
+                    "table for a step whose measurement failed. Their 'values' "
+                    "are null."
                 ),
             },
             "unreadable": {

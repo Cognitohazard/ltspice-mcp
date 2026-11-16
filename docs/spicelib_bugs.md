@@ -4641,10 +4641,12 @@ workaround makes it pass.
 **Status:** draft for an upstream spicelib pull request. Observed 2026-11-15.
 **Affected version:** spicelib 1.5.1 (`spicelib/log/ltsteps.py`,
 `LTSpiceLogReader.__init__`, the stepless measurement regex).
-**Our workaround:** none yet. `log_parser.printed_measurements`, which finds
-the measurements a log printed so that a line the reader skipped fails its
-own entry (Bug 38), reads a name with the same `\w+` (`_RE_MEAS_RESULT_LINE`
-in `src/ltspice_mcp/lib/log_parser.py`), so it misses these lines too.
+**Our workaround:** `log_parser.printed_measurements`, which finds the
+measurements a log printed so that a line the reader skipped still gets its
+own entry (Bug 38), reads a name as LTspice prints it, a dot or a dash
+included (`_MEAS_NAME` in `src/ltspice_mcp/lib/log_parser.py`).
+`parse_measurements` then reads the skipped line's value from the log's own
+text, and its crossing from `_RE_MEAS_AT_LINE`, which reads the same names.
 
 ### Summary
 
@@ -4720,7 +4722,9 @@ def test_a_measurement_named_with_a_dot_is_read(tmp_path):
 ### Cross-reference
 
 `tests/test_recorded_ltspice_results.py::test_a_measurement_named_with_punctuation`
-pins what each build prints beside the server reading no measurement
-(`NAMED_WITH_PUNCTUATION_AND_DROPPED_BY_THE_LOG_READER`), and
-`tests/test_run_diagnostics.py` lists XVII's dashed line among the lines the
-log classifier does not know.
+pins what each build prints and that the server reads the measurement under
+its name, its crossing the result;
+`tests/test_measurement_answer.py::test_every_route_reads_a_measurement_named_with_punctuation`
+reads it on every route. `tests/test_run_diagnostics.py` still lists XVII's
+dashed line among the lines the log classifier does not know: the classifier
+reads a result line with a pattern of its own.

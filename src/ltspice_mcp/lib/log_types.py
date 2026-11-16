@@ -202,6 +202,14 @@ class UnreadableValue(TypedDict):
     reason: str
 
 
+class NotEstablished(TypedDict):
+    """The steps of a measurement whose printed value is not established as
+    its result, from 0, and why."""
+
+    steps: list[int]
+    reason: str
+
+
 class _MeasurementMetadata(TypedDict, total=False):
     """Optional metadata folded into a .MEAS result.
 
@@ -226,6 +234,10 @@ class _MeasurementMetadata(TypedDict, total=False):
     answer: str
     #: Why the field holding the result is not known, where it is not.
     answer_unknown: str
+    #: The steps, from 0, whose printed value is not established as the
+    #: result, and why (``log_parser.answered_measurements``): their values
+    #: are null.
+    not_established: NotEstablished
 
 
 class MeasurementEntry(_MeasurementMetadata):
@@ -245,6 +257,9 @@ class MeasurementEntry(_MeasurementMetadata):
     result: ``at`` for a WHEN with no FIND printed on its own line, whose
     ``values`` hold the level it searched for, and ``value`` otherwise;
     ``answer_unknown`` says why it is not known in its place.
+    ``not_established`` names the steps whose printed value is not
+    established as the result (XVII prints 0 for a failed step), null in
+    ``values``.
     """
 
     values: list[float | None]
@@ -289,6 +304,11 @@ class MeasurementsOutput(TypedDict):
     errors: list[str] | None
     warnings: list[str] | None
     failed_measurements: list[str]
+    #: The LTspice build the log's first line names, as the decoder found it
+    #: (``simulator_build.log_banner_build``); a reader turns it into the
+    #: producer its entries are answered for
+    #: (``log_parser.answered_measurements``) and never passes it on.
+    printed_by: NotRequired[str]
 
 
 def measurement_failed(table: Mapping[str, Any], name: str, step: int | None = None) -> bool:

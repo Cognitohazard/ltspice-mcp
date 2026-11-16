@@ -142,8 +142,9 @@ The `resonance` recipe gives the peak frequency, Q and bandwidth in one step.
 - Each measurement read from a log names the field holding its result in
   `answer`. A WHEN with no FIND, unstepped, prints the level it searched for
   (`values`) and the crossing time or frequency (`at`), so its `answer` is
-  `at`; in a stepped run's table the crossing is the value. A FIND, DERIV or
-  MAX prints its result as the value and the point it read at in `at`.
+  `at`; in a stepped run's table the crossing is the value. A FIND, a DERIV
+  (with AT or WHEN) or a MAX prints its result as the value and the point it
+  read at in `at`.
   `answer_unknown` in its place says why the field is not known; read
   neither then. The measurements recipe reads the named field for you.
 

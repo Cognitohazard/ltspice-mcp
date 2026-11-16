@@ -1157,12 +1157,12 @@ does), its `measurements` row contains `measured: {name: value}`, the number a
 reduction or spec reads for that name, and `at: {name: point}` where the log
 printed an `AT` point beside a result that is its value. A name the log holds
 no number for has a null `measured` entry, not an absent one, and the row
-names it in one of four places, by why:
+names it in one of five places, by why:
 
 - `failed_measurements: [name]`: LTspice printed it as failed at the step the
   row reads, as `Measurement "name" FAIL'ed` or as `failed` in that step's row
-  of a stepped table (LTspice 24 and later; XVII prints 0 there, which the
-  `measurement_zero_or_failed` observation names).
+  of a stepped table (LTspice 24 and later; XVII prints 0 there, see
+  `not_established`).
 - `unreadable: {name: {line, reason}}`: LTspice printed something other than
   a number where the result belongs. The entry gives the log line and what
   it printed; only that entry fails, and every other measurement of the log
@@ -1172,6 +1172,15 @@ names it in one of four places, by why:
 - `answer_unknown: {name: reason}`: which field of what the log printed holds
   the result is not known, for a form or a simulator no recording shows, or
   a deck card the printed form contradicts.
+- `not_established: {name: {steps, reason}}`: what the log printed at those
+  steps (from 0) is not established as the result. LTspice XVII prints `0` in
+  a stepped table both for a step whose measurement failed and for a crossing
+  at 0 s (recorded: `log/meas_when_step_fails`, `log/meas_when_step_forms`),
+  so a `0` in a table a build that may be XVII wrote is not taken; LTspice 26
+  prints `failed` for a failure, so its `0` is a result. The summary's
+  entries and the Python API's `measurements()` carry the same
+  `not_established` with those steps null in `values`, and an `inspect`
+  measurements row carries its reason.
 - `not_finite: [name]`: LTspice printed a number that is not finite, such as
   a stepped FRA's gain margin of `infdB`, which the log decoder holds as null.
 
@@ -1202,10 +1211,14 @@ recipe aggregates the field so named (`aggregated_field`). Each entry of the
 summary's `measurements`, the Python API's `measurements()` and each row of
 `inspect(kind="results", view="measurements")` names it in `answer` (`value`
 or `at`), or says why it is not known in `answer_unknown`, and then the recipe
-gives that name no number and no `aggregated_field`. A bare path names no
-build, so its log is read with every recorded LTspice build's rules, which
-agree on every recorded form. A DERIV ... WHEN is not recorded, and keeps the
-answer its deck card has given it: the point. The same `unreadable {line,
+gives that name no number and no `aggregated_field`. A bare path is read
+with the build its files name (`reported_build`: an LTspice 26 log's banner,
+an XVII raw's `Command:`), as the summary reads it; one whose files name no
+build is read with every recorded LTspice build's rules, which agree on every
+recorded form. A DERIV ... WHEN prints its derivative after `=` and its point
+after a lowercase `at`, as a DERIV ... AT does (recorded:
+`log/meas_deriv_when`), so its result is its value with the deck known or
+not. The same `unreadable {line,
 reason}` is on the entry in the summary's `measurements`, in
 `inspect(kind="results", view="measurements")` rows and in the Python API's
 `measurements`, where it says the entry's `values` were printed as other than

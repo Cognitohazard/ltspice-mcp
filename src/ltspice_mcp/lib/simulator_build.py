@@ -393,6 +393,14 @@ def _digest(program: Path, size: int) -> str | None:
         return None
 
 
+def log_banner_build(text: str) -> str | None:
+    """The LTspice build a log's text names on its first line, which LTspice
+    24 and later open a log with (``LTspice 26.1.1 for Windows``); None for a
+    log that opens otherwise, as XVII's does, with its ``Circuit:`` line."""
+    first_line = next((line.strip() for line in text.splitlines() if line.strip()), "")
+    return _clean(first_line) if _LTSPICE_BANNER.fullmatch(first_line) else None
+
+
 def reported_build(log_file: Path | None, raw_file: Path | None = None) -> str | None:
     """The build a run named in its own output, or None when it named none.
 
@@ -408,12 +416,9 @@ def reported_build(log_file: Path | None, raw_file: Path | None = None) -> str |
     try:
         if log_file is not None:
             log_head = _head_text(log_file)
-            first_line = next(
-                (line.strip() for line in log_head.splitlines() if line.strip()),
-                "",
-            )
-            if _LTSPICE_BANNER.fullmatch(first_line):
-                return _clean(first_line)
+            banner = log_banner_build(log_head)
+            if banner is not None:
+                return banner
             xyce = _XYCE_BANNER.search(log_head)
             if xyce is not None:
                 return _clean(xyce[1])

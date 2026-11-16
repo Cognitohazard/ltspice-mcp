@@ -2655,6 +2655,9 @@ class _LogRows(Sequence[dict[str, Any]]):
             for key in ("answer", "answer_unknown"):
                 if key in metadata:
                     row[key] = metadata[key]
+            unset = metadata.get("not_established")
+            if unset is not None and ordinal in unset["steps"]:
+                row["not_established"] = unset["reason"]
             row["failed"] = measurement_failed(self._facts, metadata["measurement"], ordinal)
             return row
         key = "entry" if metadata["layout"] == "scalar_print" else "row"
@@ -3060,6 +3063,14 @@ _MEASUREMENTS_DATA_PROPERTIES: dict[str, Any] = {
                 "answer_unknown": {
                     "type": "string",
                     "description": "Why the field holding the result is not known.",
+                },
+                "not_established": {
+                    "type": "string",
+                    "description": (
+                        "Why the value printed in this row is not established as "
+                        "the result, which is then null: LTspice XVII prints 0 in "
+                        "a stepped table for a step whose measurement failed."
+                    ),
                 },
                 "failed": {
                     "type": "boolean",

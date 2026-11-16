@@ -1632,19 +1632,14 @@ class MeasCard:
 
     @property
     def bare_when(self) -> bool:
-        """Whether the measurement is a ``WHEN`` search with no ``FIND``: its
-        result is the crossing, and the value its log line prints is the
-        trigger level (log/meas_forms, ``m_when`` against ``m_findwhen``)."""
+        """Whether the measurement is a ``WHEN`` search with no ``FIND`` and no
+        ``DERIV``: its result is the crossing, and the value its log line
+        prints is the trigger level (log/meas_forms, ``m_when`` against
+        ``m_findwhen``). A ``DERIV ... WHEN`` prints the derivative as its
+        value and the point after ``at``, as a ``DERIV ... AT`` does
+        (log/meas_deriv_when); ``FIND deriv(...) WHEN`` is a FIND."""
         words = {tok.text.casefold() for tok in self.body_tokens if tok.kind == TokenKind.BARE}
-        return "when" in words and "find" not in words
-
-    @property
-    def deriv_when(self) -> bool:
-        """Whether the measurement is a ``DERIV ... WHEN``: a derivative taken
-        where a condition is met, with no FIND (``FIND deriv(...) WHEN`` is a
-        FIND). No recording shows how LTspice prints one."""
-        words = {tok.text.casefold() for tok in self.body_tokens if tok.kind == TokenKind.BARE}
-        return "deriv" in words and "when" in words and "find" not in words
+        return "when" in words and "find" not in words and "deriv" not in words
 
 
 # ---------------------------------------------------------------------------

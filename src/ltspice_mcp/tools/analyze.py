@@ -90,6 +90,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     DIAGNOSTICS_COVERAGE_SCHEMA,
     HINT_SCHEMA,
+    NOT_ESTABLISHED_SCHEMA,
     RUN_DIAGNOSTICS_SCHEMA,
     NotedModel,
     OptionalRawSelectionFields,
@@ -2096,8 +2097,9 @@ def _measurements_compact(value: dict[str, Any]) -> dict[str, Any]:
     the log holds no number for keeps its key with null, so it never reads as
     a missing name, and the value beside says why, each null in one place:
     ``failed_measurements`` (LTspice printed it failed), ``unreadable``
-    (LTspice printed something other than a number) and ``answer_unknown``
-    (which field holds the result is not known) come with the metric's
+    (LTspice printed something other than a number), ``answer_unknown``
+    (which field holds the result is not known) and ``not_established`` (the
+    printed value is not established as the result) come with the metric's
     value (``metrics.measurement_rows``), and ``not_finite`` names the rest,
     each a number the log decoder holds as null because it is not finite
     (LTspice 26 prints a stepped FRA's gain margin ``infdB``, recorded as
@@ -2120,6 +2122,7 @@ def _measurements_compact(value: dict[str, Any]) -> dict[str, Any]:
         *value.get("failed_measurements", ()),
         *value.get("unreadable", {}),
         *value.get("answer_unknown", {}),
+        *value.get("not_established", {}),
     }
     not_finite = [
         name for name, number in measured.items() if number is None and name not in explained
@@ -2874,8 +2877,9 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
                 "named once by why: 'failed_measurements' (LTspice printed it failed), "
                 "'unreadable' {name: {line, reason}} (it printed something other than "
                 "a number for the result), 'answer_unknown' {name: reason} (which "
-                "field holds the result is not known) or 'not_finite' (it printed a "
-                "number that is not finite). Its "
+                "field holds the result is not known), 'not_established' {name: "
+                "{steps, reason}} (what it printed is not established as the result) "
+                "or 'not_finite' (it printed a number that is not finite). Its "
                 "'stats' block is left off the default row and returned by "
                 "include.fields=['value']. A stepped run's row is 'stats', with "
                 "'failed_measurements' and 'unreadable' over all its steps."
@@ -2930,6 +2934,15 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
                         "The measurements whose 'measured' is null because which "
                         "field of what the log printed holds the result is not "
                         "known, with why."
+                    ),
+                },
+                "not_established": {
+                    "type": "object",
+                    "additionalProperties": NOT_ESTABLISHED_SCHEMA,
+                    "description": (
+                        "The measurements with a step whose printed value is not "
+                        "established as the result, such as a 0 LTspice XVII prints "
+                        "for a failed step: no number is given for those steps."
                     ),
                 },
             },
