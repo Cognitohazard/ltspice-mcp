@@ -1504,18 +1504,22 @@ def _zero_steps_reason(producer: Producer, form: str) -> str | None:
     LTspice 26 prints ``failed`` for the first. No recording shows how XVII
     prints a failed step of any other table, so a 0 there is not established
     either. Which generation wrote the log is :func:`which_ltspice`'s answer:
-    a current build (24 and later) prints ``failed``, and XVII or a log no
-    evidence names may be XVII's."""
+    a current build (24 and later) prints ``failed``; XVII, IV (a build before
+    24 no recording shows) or a log no evidence names may print 0."""
     if producer.family not in (None, "ltspice"):
         return None
     found = which_ltspice(producer.program, producer.build)
-    if found is not None and found.generation != "xvii":
+    if found is not None and found.generation == "current":
         return None
-    who = (
-        "LTspice XVII printed 0 in this step's row"
-        if found is not None
-        else "the log may have been written by LTspice XVII, which prints 0 in a step's row"
-    )
+    if found is None:
+        who = "the log may have been written by LTspice XVII, which prints 0 in a step's row"
+    elif found.generation == "xvii":
+        who = "LTspice XVII printed 0 in this step's row"
+    else:
+        who = (
+            "LTspice IV, a build before 24 that no recording shows, printed 0 in this "
+            "step's row, where XVII, the recorded build before 24, prints 0"
+        )
     if form == "table_level":
         return (
             f"{who}, as it does both for a step where a WHEN finds no crossing and for "
@@ -1550,6 +1554,8 @@ def answered_measurements(
     if banner is not None and producer.build is None:
         producer = Producer(producer.family or "ltspice", banner, producer.program)
     entries: dict[str, MeasurementEntry] = {}
+    # Why a 0 is not established, by printed form, read once per table.
+    zero_reasons: dict[str, str | None] = {}
     for name, entry in table.get("measurements", {}).items():
         form = entry.get("printed_form")
         answered: dict[str, Any] = {k: v for k, v in entry.items() if k != "printed_form"}
@@ -1560,7 +1566,9 @@ def answered_measurements(
             answered["answer_unknown"] = answer.unknown
         zeros = [step for step, value in enumerate(entry["values"]) if value == 0]
         if zeros and answer.field == "value" and str(form).startswith("table"):
-            reason = _zero_steps_reason(producer, str(form))
+            if str(form) not in zero_reasons:
+                zero_reasons[str(form)] = _zero_steps_reason(producer, str(form))
+            reason = zero_reasons[str(form)]
             if reason is not None:
                 answered["values"] = [None if v == 0 else v for v in entry["values"]]
                 answered["not_established"] = {"steps": zeros, "reason": reason}

@@ -504,6 +504,7 @@ def test_a_zero_a_current_build_printed_in_a_stepped_table_is_its_result(produce
         ("ltspice17", _XVII, "LTspice XVII printed 0"),
         ("ltspice17", _UNKNOWN, "may have been written by LTspice XVII"),
         ("ltspice26", _UNKNOWN, "may have been written by LTspice XVII"),
+        ("ltspice17", Producer("ltspice", None, "scad3.exe"), "LTspice IV"),
     ],
 )
 def test_a_zero_xvii_may_have_printed_in_a_stepped_table_is_not_established(
