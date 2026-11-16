@@ -1516,9 +1516,10 @@ def _zero_steps_reason(producer: Producer, form: str) -> str | None:
     elif found.generation == "xvii":
         who = "LTspice XVII printed 0 in this step's row"
     else:
-        who = (
-            "LTspice IV, a build before 24 that no recording shows, printed 0 in this "
-            "step's row, where XVII, the recorded build before 24, prints 0"
+        return (
+            "LTspice IV, which no recording shows, printed 0 in this step's row; XVII, "
+            "the recorded build before 24, prints 0 both for a failed WHEN step and for "
+            "a crossing at 0 s, so a 0 here is not established as a result"
         )
     if form == "table_level":
         return (
