@@ -531,6 +531,7 @@ async def test_every_ngspice_case_reads_the_data_file_beside_the_deck(
     assert levels == pytest.approx([BESIDE_THE_DECK] * len(levels))
 
 
+@needs_ngspice
 def test_a_detached_ngspice_job_hands_ngspice_the_staged_copy(work_dir: Path):
     """The detached owner stages the deck in a process of its own; the deck it
     hands ngspice names the staged copy of the data file, which holds the
