@@ -17,6 +17,7 @@ was started in (measured below).
 from __future__ import annotations
 
 import dataclasses
+import os
 import re
 import shutil
 import subprocess
@@ -531,6 +532,35 @@ async def test_every_ngspice_case_reads_the_data_file_beside_the_deck(
     assert levels == pytest.approx([BESIDE_THE_DECK] * len(levels))
 
 
+def _detached_diagnosis(api: Api, receipt: dict, final: dict, deck_path: Path) -> str:
+    """What a failed detached run shows, beside the same deck run in this
+    process through the same API, so a failure says which side it is on."""
+    owner = next(
+        (item for item in receipt.get("observations", []) if item["code"] == "detached_owner"),
+        None,
+    )
+    log = ""
+    if owner is not None:
+        try:
+            log = Path(owner["evidence"]["log_file"]).read_text(errors="replace")[-4000:]
+        except OSError as exc:
+            log = f"(owner log unreadable: {exc})"
+    attached = api.run_experiments(
+        wait=True,
+        request_id="ng-data-attached",
+        circuits=[{"path": str(deck_path), "id": "dut"}],
+    )
+    spice_vars = {
+        name: value for name, value in os.environ.items() if name.upper().startswith("SPICE")
+    }
+    return (
+        f"detached failures: {final.get('failures')}\n"
+        f"same deck in this process: {attached.get('status')} {attached.get('failures')}\n"
+        f"ngspice on PATH: {shutil.which('ngspice')}; SPICE_ variables: {spice_vars}\n"
+        f"owner log:\n{log}"
+    )
+
+
 @needs_ngspice
 def test_a_detached_ngspice_job_reads_the_data_file_beside_the_deck(work_dir: Path):
     deck_path = _bench(work_dir)
@@ -544,7 +574,8 @@ def test_a_detached_ngspice_job_reads_the_data_file_beside_the_deck(work_dir: Pa
             circuits=[{"path": str(deck_path), "id": "dut"}],
         )
         final = api.wait(receipt["job_id"], timeout=120)
-        assert final["status"] == "completed", (final.get("failures"), final)
+        if final["status"] != "completed":
+            pytest.fail(_detached_diagnosis(api, receipt, final, deck_path))
         analysis = api.analyze_results(
             sources=[{"job_id": receipt["job_id"], "label": "dut"}],
             recipes=[{"key": "va", "metric": "value", "expr": "v(a)", "at": "0.5"}],
