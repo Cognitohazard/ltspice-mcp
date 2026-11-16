@@ -499,7 +499,14 @@ WAVEFILE = "wavefile"
 class SourceText:
     """The words after a V or I source's nodes: its value, its own parameters
     in order, each as written, and the ``wavefile=`` word of a source that
-    plays a .wav file."""
+    plays a .wav file.
+
+    ``played`` answers which words are nodes and which are the value, for an
+    edit or a display of the card. Which file a card reads when it runs is
+    ``deck_staging.scan_data_references``, which also reads ``wavefile
+    level.wav`` with no ``=`` as playing the file, as both LTspice builds do;
+    here those words stay the value (``PLAYED_BY_LTSPICE_AND_READ_AS_A_VALUE_BY_THE_SERVER``
+    in ``tests/test_recorded_ltspice_decks.py`` pins both readings)."""
 
     value: str
     own: tuple[str, ...]

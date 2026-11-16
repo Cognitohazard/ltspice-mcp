@@ -506,11 +506,25 @@ def stage_deck(
                         )
                         changed = True
 
-            for named in scan_data_references(parsed.read, dialect):
-                rewritten = stage_data_file(named, resolved, depth)
-                if rewritten is not None:
+            rewrites = [
+                (named, rewritten)
+                for named in scan_data_references(parsed.read, dialect)
+                if (rewritten := stage_data_file(named, resolved, depth)) is not None
+            ]
+            # Last first, so a rewrite never moves a span still to be rewritten
+            # on the same card.
+            for named, rewritten in sorted(rewrites, key=lambda item: -item[0].start):
+                try:
                     named.card.replace_span(named.start, named.end, rewritten)
-                    changed = True
+                except SpiceLexError as exc:
+                    raise DeckStagingError(
+                        "data_file_unstaged",
+                        f"Cannot name the staged copy of {named.keyword}{named.raw_path} on "
+                        f"line {named.card.line_start} of {resolved}: {exc.message}. Write "
+                        "the path on one line of the card.",
+                        reference=named.raw_path,
+                    ) from exc
+                changed = True
 
             destination.parent.mkdir(parents=True, exist_ok=True)
             # Every staged SPICE file is a simulator input. A micro-sign suffix
@@ -610,7 +624,8 @@ def stage_deck(
             located, _destination_for(located, staging_root, roots, root), depth + 1, walk=False
         )
         rendered = _render_absolute(copied)
-        absolute_data.append(rendered)
+        if rendered not in absolute_data:
+            absolute_data.append(rendered)
         return _render_data_path(rendered, data.quoted)
 
     def _snapshot_origin(resolved: Path) -> str:
@@ -651,10 +666,11 @@ def stage_deck(
                 "kind": "provenance",
                 "detail": (
                     "The staged deck names the staged copy of each data file it reads "
-                    "by an absolute path. That LTspice reads an absolute wavefile= or "
-                    "PWL file= path is not recorded (data-file-absolute-path in the "
-                    "LTspice recordings, pending): if a case reports the file missing, "
-                    "this is why."
+                    "by an absolute path, in quotes when it holds a space. That LTspice "
+                    "reads an absolute wavefile= or PWL file= path, and a quoted one, "
+                    "is not recorded (data-file-absolute-path in the LTspice "
+                    "recordings, pending): if a case reports the file missing, this is "
+                    "why."
                 ),
                 "evidence": {"paths": absolute_data},
             }

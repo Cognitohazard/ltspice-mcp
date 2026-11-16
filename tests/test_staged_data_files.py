@@ -205,6 +205,32 @@ def test_staging_copies_a_relative_data_file_and_names_the_copy(
     assert note["evidence"]["paths"] == [str(copy)]
 
 
+def test_two_data_paths_on_one_card_are_each_rewritten(tmp_path: Path):
+    """Each rewrite lengthens the card, so they are made last first: one made
+    first would move the span of the next."""
+    for name in ("a.wav", "bb.wav"):
+        (tmp_path / name).write_bytes(name.encode())
+    deck = tmp_path / "tb.cir"
+    deck.write_text("* t\nV1 a 0 wavefile=a.wav wavefile=bb.wav\nR1 a 0 1k\n.tran 1\n.end\n")
+
+    staged = stage_deck(deck, tmp_path / "stage", [tmp_path], origin=deck, dialect="ltspice")
+
+    named = [ref.raw_path for ref in scan_data_references(lex_deck(staged.text).cards, "ltspice")]
+    assert [Path(path).read_bytes() for path in named] == [b"a.wav", b"bb.wav"]
+
+
+def test_a_data_path_on_a_continuation_line_is_rewritten_there(tmp_path: Path):
+    (tmp_path / "level.wav").write_bytes(b"RIFF")
+    deck = tmp_path / "tb.cir"
+    deck.write_text("* t\nV1 a 0 wavefile=\n+ level.wav\nR1 a 0 1k\n.tran 1\n.end\n")
+
+    staged = stage_deck(deck, tmp_path / "stage", [tmp_path], origin=deck, dialect="ltspice")
+
+    (reference,) = scan_data_references(lex_deck(staged.text).cards, "ltspice")
+    assert Path(reference.raw_path).read_bytes() == b"RIFF"
+    assert staged.text.splitlines()[1:3] == ["V1 a 0 wavefile=", f"+ {reference.raw_path}"]
+
+
 def test_ngspice_staging_reads_an_included_files_data_path_from_the_decks_folder(
     tmp_path: Path,
 ):

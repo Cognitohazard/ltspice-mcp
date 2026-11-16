@@ -2264,7 +2264,15 @@ def test_staging_copies_a_relative_data_file_and_names_the_copy(tmp_path: Path):
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
-@pytest.mark.parametrize("stem", ["absolute_wavefile", "absolute_pwl_file"])
+@pytest.mark.parametrize(
+    "stem",
+    [
+        "absolute_wavefile",
+        "absolute_pwl_file",
+        "absolute_quoted_wavefile",
+        "absolute_quoted_pwl_file",
+    ],
+)
 def test_a_data_file_named_by_an_absolute_path_is_read(build: str, stem: str, tmp_path: Path):
     """A staged deck names the staged copy of each data file by its absolute
     path, and the staging reports that this reading is not recorded

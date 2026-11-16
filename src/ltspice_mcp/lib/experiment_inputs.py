@@ -7,6 +7,7 @@ so no second recursive include or hierarchy walker is needed.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import re
@@ -645,19 +646,54 @@ def _verify_inputs(
     # Every construct the inputs cannot be recovered with, so one refusal names
     # them all (``_refusal`` says in which order).
     refused: list[_Refused] = []
-    for artifact in inputs.files:
-        path = artifact.path
-        if path in native_setups:
-            continue
-        key = (artifact.sha256, path in roots)
-        file_keys[path] = key
-        if key in cards_by_content:
-            continue
-        content = contents[artifact.sha256]
+    by_digest = {item.path.resolve(): item.sha256 for item in inputs.files}
+
+    def lexed(path: Path, sha256: str) -> EditCards:
         # A card after a file's end marker is not read, nor a root deck's
         # line 1, its title (lex_for_edit). Every card is still classified, so
         # the warnings and the constructs of an unread card refuse as well.
-        parsed = lex_for_edit(decode_spice_bytes(content), deck=path in roots)
+        key = (sha256, path in roots)
+        if key not in cards_by_content:
+            cards_by_content[key] = lex_for_edit(
+                decode_spice_bytes(contents[sha256]), deck=path in roots
+            )
+        return cards_by_content[key]
+
+    # The frozen data files (a played .wav, a PWL's points): the files the
+    # decks' data cards name (``scan_data_references``), found by following
+    # each deck's includes from the root. They are digested like every input
+    # and never read as SPICE, which a sample's bytes are not.
+    spice: set[Path] = set()
+    data: set[Path] = set()
+    walk = [path for path in roots if path not in native_setups]
+    while walk:
+        path = walk.pop()
+        resolved = path.resolve()
+        if resolved in spice or resolved not in by_digest:
+            continue
+        spice.add(resolved)
+        cards = lexed(path, by_digest[resolved]).read
+        depth = 0 if path in roots else 1
+        # A target that cannot be resolved is refused below, where the
+        # closure is checked.
+        with contextlib.suppress(ValueError, OSError):
+            walk.extend(staged_card_reference_targets(cards, path, depth=depth))
+        data.update(
+            resolve_reference(path.parent, reference.raw_path).resolve()
+            for reference in scan_data_references(cards, dialect)
+        )
+    data -= spice
+    warned: set[tuple[str, bool]] = set()
+    for artifact in inputs.files:
+        path = artifact.path
+        if path in native_setups or path.resolve() in data:
+            continue
+        key = (artifact.sha256, path in roots)
+        file_keys[path] = key
+        if key in warned:
+            continue
+        warned.add(key)
+        parsed = lexed(path, artifact.sha256)
         for warning in parsed.warnings:
             found = _WARNING_LINE.match(warning)
             refused.append(
@@ -669,7 +705,6 @@ def _verify_inputs(
                     warning[found.end() :].strip() if found else warning,
                 )
             )
-        cards_by_content[key] = parsed
     functions = {
         match.group(1).casefold()
         for parsed in cards_by_content.values()

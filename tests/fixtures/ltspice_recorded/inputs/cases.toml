@@ -987,8 +987,20 @@ model = ["lib/deck_staging.py"]
 # Each deck names data/level.wav or data/level.txt beside it by its absolute
 # path (<dir> is the case's folder, written in when the case runs). The copy
 # holds 0.5, so v(a) is 0.5 if the build reads the file and missing if not.
-inputs = ["deck/absolute_wavefile.cir", "deck/absolute_pwl_file.cir"]
-extra = ["deck/data/level.wav", "deck/data/level.txt"]
+# The _quoted decks name a copy in a folder whose name holds a space, in
+# quotes, as staging writes a path with a space.
+inputs = [
+    "deck/absolute_wavefile.cir",
+    "deck/absolute_pwl_file.cir",
+    "deck/absolute_quoted_wavefile.cir",
+    "deck/absolute_quoted_pwl_file.cir",
+]
+extra = [
+    "deck/data/level.wav",
+    "deck/data/level.txt",
+    "deck/data with space/level.wav",
+    "deck/data with space/level.txt",
+]
 pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.data-file-relative-path-in-include]
