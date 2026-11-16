@@ -29,6 +29,7 @@ from ltspice_mcp.lib.encoding import (
 )
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
 from ltspice_mcp.lib.format import parse_spice_value
+from ltspice_mcp.lib.hierarchy import SemanticProfile
 from ltspice_mcp.lib.hierarchy_expr import evaluate
 from ltspice_mcp.lib.instance_targeting import InstanceEdit, apply_edit
 from ltspice_mcp.lib.lint_rules import lint_deck
@@ -50,18 +51,19 @@ from ltspice_mcp.lib.runner_base import deck_requirements
 from ltspice_mcp.lib.schematic_ops import netlist_card_value
 from ltspice_mcp.lib.services import extract_netlist_info
 from ltspice_mcp.lib.simulator_build import (
+    Producer,
     executable_path,
     is_cp1252_ltspice_build,
     which_ltspice,
 )
 from ltspice_mcp.lib.spice_lex import (
+    LTSPICE_26_REFUSAL,
     SpiceCard,
     directive_head,
     emit,
     lex,
     lex_deck,
     lex_for_edit,
-    subckt_definitions,
 )
 from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
 from ltspice_mcp.lib.spice_lex_views import (
@@ -2170,38 +2172,49 @@ def _log(build: str, case_id: str) -> str:
     return read_spice_text(rec.recorded(build, f"{case_id}.log"))
 
 
-#: Which body of a subcircuit defined twice is in force: ngspice's first, which
-#: ``spice_lex.subckt_definitions`` answers for every reader, against the
-#: second, which XVII runs. LTspice 26 refuses the deck.
-FIRST_BODY_KEPT_BY_THE_SERVER_AND_LAST_RUN_BY_XVII = {"server": 1000.0, "xvii": 2000.0}
+#: The body LTspice XVII runs of a subcircuit defined twice: the last (2k).
+#: LTspice 26 refuses the deck.
+LAST_BODY_RUN_BY_XVII = 2000.0
+
+#: Who reads the deck on each recorded build, as a run names it.
+_RECORDED_READER = {
+    "ltspice26": Producer("ltspice", "LTspice 26.1.1 for Windows", None),
+    "ltspice17": Producer("ltspice", "Linear Technology Corporation LTspice XVII", None),
+}
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
 def test_a_subcircuit_defined_twice(build: str, tmp_path: Path):
     """LTspice 26 refuses the deck ("more than one sub-circuit definition with
-    this name, which is ill-formed"); XVII runs the second body (2k). The
-    server reads the first body (1k), as ngspice keeps it, and its checks
-    pass the deck that LTspice 26 refuses."""
+    this name, which is ill-formed"), and the server's checks refuse it
+    before a run; XVII runs the second body (2k), which the server reads for
+    it (``spice_lex.definition_rule``)."""
     case_id = "deck/subckt_defined_twice"
+    reader = _RECORDED_READER[build]
+    text = deck_text(case_id)
+    profile = SemanticProfile.of(reader, None)
+    graph = parse_netlist_graph(text, reader=profile)
+    path = INPUTS / rec.CASES.case(case_id).source
+    lint = {
+        f["rule_id"]
+        for f in lint_deck(text, path, "ltspice", "LTspice", reader=reader)
+        if f["severity"] == "error"
+    }
     if rec.generation(build) == "xvii":
         assert ran(build, case_id)
         v_in = rec.operating_point(build, case_id, tmp_path)["v(in)"]
-        assert v_in == FIRST_BODY_KEPT_BY_THE_SERVER_AND_LAST_RUN_BY_XVII["xvii"]
+        assert v_in == LAST_BODY_RUN_BY_XVII
+        (body,) = graph.subckts["amp"].components
+        assert body.value is not None
+        assert parse_spice_value(body.value) == v_in
+        assert lint == set()
     else:
         assert not ran(build, case_id)
-        assert "more than one sub-circuit definition with this name" in _log(build, case_id)
-    text = deck_text(case_id)
-    cards = lex_deck(text).cards
-    ((_key, index),) = subckt_definitions(cards).items()
-    assert cards[index].line_start == 2
-    graph = parse_netlist_graph(text, reader=LTSPICE_READER)
-    (body,) = graph.subckts["amp"].components
-    assert body.value is not None
-    assert (
-        parse_spice_value(body.value)
-        == FIRST_BODY_KEPT_BY_THE_SERVER_AND_LAST_RUN_BY_XVII["server"]
-    )
-    assert refusals(case_id) == set()
+        assert LTSPICE_26_REFUSAL in _log(build, case_id)
+        assert "amp" not in graph.subckts
+        assert lint == {"subckt-defined-twice"}
+        (record,) = graph.duplicate_subckts
+        assert record.reason is not None and LTSPICE_26_REFUSAL in record.reason
 
 
 #: What v(a) is when a build reads the copy of the data file beside the deck;
