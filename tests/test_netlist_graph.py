@@ -12,12 +12,14 @@ from pathlib import Path
 
 import pytest
 
+from ltspice_mcp.lib.hierarchy import SemanticProfile
 from ltspice_mcp.lib.netlist_graph import (
     NetlistGraphError,
     compare_graphs,
     flatten_graph,
     parse_netlist_graph,
 )
+from ltspice_mcp.lib.simulator_build import Producer
 from tests.conftest import LTSPICE_READER
 
 # ---------------------------------------------------------------------------
@@ -659,9 +661,11 @@ def test_pdk_black_box_reports_no_missing_include() -> None:
 def test_duplicate_definition_first_in_textual_order_wins(
     tmp_path: Path, inline_first: bool, expected_ref: str
 ) -> None:
-    """Pins the measured simulator rule: first definition wins, later ones are
-    ignored (ngspice 42: "redefinition of .subckt DUP, ignored"). Inline does not
-    win by virtue of being inline -- only by coming first."""
+    """Pins the measured rule for an ngspice reader: first definition wins,
+    later ones are ignored (ngspice 42: "redefinition of .subckt DUP,
+    ignored"), across an include too. Inline does not win by virtue of being
+    inline -- only by coming first. What LTspice does across an include is
+    not recorded (test_subckt_defined_twice_per_reader)."""
     (tmp_path / "dup.lib").write_text(".subckt DUP a b\nR1 a b 9k\n.ends DUP\n")
     inline_def = ".subckt DUP a b\nR1 a b 1k\n.ends DUP\n"
     include_line = ".include dup.lib\n"
@@ -669,7 +673,7 @@ def test_duplicate_definition_first_in_textual_order_wins(
     deck = tmp_path / "dup.cir"
     deck.write_text(f"* t\nVin in 0 5\nXD in out DUP\n{body}.end\n")
 
-    graph = parse_netlist_graph(deck, reader=LTSPICE_READER)
+    graph = parse_netlist_graph(deck, reader=_NGSPICE_READER)
     winner = graph.subckts["dup"]
     assert winner.components[0].value == expected_ref
 
@@ -677,7 +681,12 @@ def test_duplicate_definition_first_in_textual_order_wins(
     dup = graph.duplicate_subckts[0]
     assert dup.name == "DUP"
     assert len(dup.ignored) == 1
+    assert dup.used is not None and dup.reason is None
     assert ("<inline>" in dup.used) is inline_first
+
+
+#: An ngspice reader, which keeps the first of two definitions of one name.
+_NGSPICE_READER = SemanticProfile.of(Producer("ngspice", None, None), "kiltpsa")
 
 
 #: One subcircuit defined per corner section of a library, as an ngspice deck
@@ -706,21 +715,22 @@ _AMP_CALL = "* t\nV1 in 0 1\nX1 in 0 amp\n"
 def test_an_instance_runs_the_one_body_its_deck_selects(
     tmp_path: Path, deck: str, value: str
 ) -> None:
-    """The graph flattens ``X1`` to the one definition the deck selects: a
-    library section by name, or the first of two inline definitions. It reads
-    neither section's ``.lib`` as an include of a file named after it."""
+    """The graph flattens ``X1`` to the one definition the deck selects, as
+    ngspice reads it: a library section by name, or the first of two inline
+    definitions. It reads neither section's ``.lib`` as an include of a file
+    named after it."""
     (tmp_path / "corners.lib").write_text(_CORNERS)
     path = tmp_path / "deck.cir"
     path.write_text(deck)
 
-    graph = parse_netlist_graph(path, reader=LTSPICE_READER)
+    graph = parse_netlist_graph(path, reader=_NGSPICE_READER)
 
     assert graph.missing_includes == ()
     assert [(c.ref, c.value) for c in flatten_graph(graph).components if c.ref != "V1"] == [
         ("X1.R1", value)
     ]
     inline = f"{_AMP_CALL}.subckt amp a b\nR1 a b {value}\n.ends amp\n.end\n"
-    assert compare_graphs(path, inline, reader=LTSPICE_READER).equivalent
+    assert compare_graphs(path, inline, reader=_NGSPICE_READER).equivalent
 
 
 def test_include_cycle_terminates(tmp_path: Path) -> None:

@@ -50,13 +50,17 @@ from ltspice_mcp.lib.ngspice_compat import drops_lib_sections, multiplies_m
 from ltspice_mcp.lib.pathutil import resolve_safe_path, with_roots
 from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.spice_lex import (
+    Definition,
+    DefinitionRule,
     SpiceCard,
     SpiceLexError,
     TokenKind,
+    definition_rule,
     directive_head,
     find_matching_ends,
     is_orphan_continuation,
     lex_deck,
+    settle_definitions,
 )
 from ltspice_mcp.lib.spice_lex_views import (
     InstanceLine,
@@ -102,16 +106,19 @@ def established_modes() -> str:
 @dataclass(frozen=True)
 class SemanticProfile:
     """Who reads the deck a hierarchy is resolved for: the simulator family,
-    ngspice's compatibility mode, and the spelling of names inside subcircuit
+    ngspice's compatibility mode, the spelling of names inside subcircuit
     instances (``naming``, which ``device_names.naming_for`` derives from the
-    reader's ``Producer``). Built for a run or a query by :meth:`of`; built
-    with a family alone, it spells names as that family's reader of no known
-    build does."""
+    reader's ``Producer``), and which definition of a subcircuit defined
+    twice it keeps (``definitions``, which ``spice_lex.definition_rule``
+    derives from the same ``Producer``). Built for a run or a query by
+    :meth:`of`; built with a family alone, it reads as that family's reader
+    of no known build does."""
 
     simulator: Family
     ngbehavior: str | None = None
     evaluation_context: str = "initial_deck"
     naming: Naming | None = None
+    definitions: DefinitionRule | None = None
 
     def __post_init__(self) -> None:
         if self.simulator not in SUPPORTED_FAMILIES:
@@ -126,12 +133,27 @@ class SemanticProfile:
             object.__setattr__(self, "naming", naming_for(Producer(self.simulator, None, None)))
         elif self.naming.family != self.simulator:
             raise NetlistError("a profile's naming is its own simulator's")
+        if self.definitions is None:
+            object.__setattr__(
+                self, "definitions", definition_rule(Producer(self.simulator, None, None))
+            )
 
     @classmethod
-    def of(cls, producer: Producer, ngbehavior: str | None) -> SemanticProfile:
+    def of(
+        cls,
+        producer: Producer,
+        ngbehavior: str | None,
+        *,
+        definitions_of: Producer | None = None,
+    ) -> SemanticProfile:
         """The profile of a deck ``producer`` reads, in ngspice's
         ``ngbehavior`` mode (None for any other simulator): the one
-        constructor a run or a query builds its profile with."""
+        constructor a run or a query builds its profile with.
+
+        ``definitions_of`` is the simulator that will read the deck when a
+        family with no profile of its own (QSPICE, Xyce) is read through
+        ``producer``'s: which definition of a subcircuit defined twice is in
+        force is that simulator's answer, never ``producer``'s."""
         if producer.family not in SUPPORTED_FAMILIES:
             raise NetlistError("hierarchy supports ltspice or ngspice")
         family: Family = "ngspice" if producer.family == "ngspice" else "ltspice"
@@ -139,7 +161,14 @@ class SemanticProfile:
             family,
             ngbehavior if family == "ngspice" else None,
             naming=naming_for(producer),
+            definitions=definition_rule(definitions_of or producer),
         )
+
+    @property
+    def subckt_rule(self) -> DefinitionRule:
+        """``definitions``, set by the time a profile exists."""
+        assert self.definitions is not None
+        return self.definitions
 
     @property
     def names(self) -> Naming:
@@ -739,6 +768,42 @@ def _address(
     return device, f".save I({spelled_name(path[:-1], path[-1], profile.names)})", None
 
 
+def _definitions_read(
+    occurrences: Sequence[_Occurrence], profile: SemanticProfile, root: Path
+) -> tuple[_Occurrence, ...]:
+    """The occurrences ``profile``'s reader reads: of a top-level subcircuit
+    name defined more than once, in the deck or in the files it includes,
+    only the definition the reader keeps in force
+    (``spice_lex.settle_definitions``, told the walk's reading order);
+    refused, with the reason and the fix, when it keeps none. A definition
+    inside a subcircuit is refused by discovery whatever its name."""
+    cards = [o.card for o in occurrences]
+    openers = [
+        i
+        for i, item in enumerate(occurrences)
+        if item.card.kind == "subckt" and item.card.name and item.source.definition is None
+    ]
+    found = [
+        Definition(
+            (),
+            cards[i].name or "",
+            occurrences[i].source.path,
+            occurrences[i].source.path == str(root),
+        )
+        for i in openers
+    ]
+    aside: set[int] = set()
+    for answer in settle_definitions(found, profile.subckt_rule):
+        if answer.kept is None:
+            raise NetlistError(f"duplicate active subcircuit {answer.name}: {answer.reason}")
+        for member in answer.members:
+            if member != answer.kept:
+                i = openers[member]
+                end = find_matching_ends(cards, i)
+                aside.update(range(i, len(cards) if end is None else end + 1))
+    return tuple(item for i, item in enumerate(occurrences) if i not in aside)
+
+
 def resolve_hierarchy(
     root: Path, files: Mapping[Path, CapturedFile], profile: SemanticProfile
 ) -> Hierarchy:
@@ -758,7 +823,11 @@ def resolve_hierarchy(
 
     library_bindings: list[LibraryBinding] = []
     include_bindings: list[IncludeBinding] = []
-    occurrences = walk_active(root, active_file, profile, library_bindings, include_bindings)
+    occurrences = _definitions_read(
+        walk_active(root, active_file, profile, library_bindings, include_bindings),
+        profile,
+        root,
+    )
     definitions: dict[str, _Definition] = {}
     models: dict[str | None, dict[str, ModelDefinition]] = {None: {}}
     top: list[_Occurrence] = []

@@ -730,11 +730,14 @@ def session_reader(state: SessionState) -> SemanticProfile:
 
     A family with no reader profile (QSPICE, Xyce), or none detected, is read
     as LTspice reads a deck, as every deck was before the readers were told
-    who reads it."""
+    who reads it, except for which definition of a subcircuit defined twice
+    is in force: that is the family's own answer (``definitions_of``), which
+    for QSPICE and Xyce is not recorded."""
     from ltspice_mcp.lib.hierarchy import SUPPORTED_FAMILIES, SemanticProfile
     from ltspice_mcp.lib.simulator import DEFAULT_FAMILY, family_for, run_ngbehavior
 
-    family = family_for(None, state.default_simulator)
+    detected = family_for(None, state.default_simulator)
+    family = detected
     if family not in SUPPORTED_FAMILIES:
         family = DEFAULT_FAMILY
     # The executable a run with no override uses: the default, when it is of
@@ -747,6 +750,11 @@ def session_reader(state: SessionState) -> SemanticProfile:
     return SemanticProfile.of(
         deck_producer(state, family, simulator),
         run_ngbehavior(simulator) if family == "ngspice" else None,
+        definitions_of=(
+            deck_producer(state, detected, state.default_simulator)
+            if detected is not None and detected != family
+            else None
+        ),
     )
 
 

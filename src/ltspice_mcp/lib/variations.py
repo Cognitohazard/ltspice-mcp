@@ -67,6 +67,7 @@ from ltspice_mcp.lib.montecarlo import MismatchRule as EngineMismatchRule
 from ltspice_mcp.lib.ngspice_compat import multiplies_m
 from ltspice_mcp.lib.ngspice_driver import SEED_MAX, deck_seeds
 from ltspice_mcp.lib.spice_lex import (
+    DefinitionRule,
     EditCards,
     SpiceCard,
     SpiceLexError,
@@ -430,6 +431,10 @@ class CircuitDeck:
     record_source_lineage: bool = False
     # The codec a case deck is written in (``StagedDeck.codec``).
     codec: str = "utf-8"
+    # Which definition of a subcircuit defined twice the deck's reader keeps
+    # (``spice_lex.definition_rule``), for a deck with no semantic profile
+    # (QSPICE, Xyce); None for a reader that is not known.
+    definitions: DefinitionRule | None = None
 
 
 @dataclass(frozen=True)
@@ -594,6 +599,7 @@ class _DeckClosure:
     circuit_id: str
     files: tuple[_ClosureFile, ...]
     semantic_profile: SemanticProfile | None = None
+    definitions: DefinitionRule | None = None
     # Mismatch plans built over the UNEDITED closure, keyed by what was
     # selected. One circuit's cases select the same devices and differ only in
     # the values written, and a plan costs a lex of every file in the closure —
@@ -1325,6 +1331,11 @@ def _build_closure(circuit: CircuitDeck) -> _DeckClosure:
         circuit_id=circuit.circuit_id,
         files=tuple(files),
         semantic_profile=circuit.semantic_profile,
+        definitions=(
+            circuit.semantic_profile.subckt_rule
+            if circuit.semantic_profile is not None
+            else circuit.definitions
+        ),
     )
 
 
@@ -1645,7 +1656,13 @@ def _mismatch_plan(
     if unedited and key in closure.plans:
         return closure.plans[key]
     try:
-        plan = build_plan(files, prefix=prefixes, selectors=selectors, exact=exact)
+        plan = build_plan(
+            files,
+            prefix=prefixes,
+            selectors=selectors,
+            exact=exact,
+            subckt_rule=closure.definitions,
+        )
     except MismatchPlanError as exc:
         raise VariationError(exc.code, f"Circuit {closure.circuit_id!r}: {exc}") from exc
     if unedited:

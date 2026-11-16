@@ -1583,7 +1583,7 @@ def _deck_node(
     if key in globals_listed:
         # A body whose port has the name reads it as that port to LTspice
         # (``deck_nodes``), so only the other bodies are on the global there.
-        ports = _subcircuit_ports(cards)
+        ports = _subcircuit_ports(cards, reader)
         inside = [
             name
             for name in inside
@@ -1645,12 +1645,15 @@ def _readable_global_names(card: SpiceCard) -> tuple[str, ...]:
         return ()
 
 
-def _subcircuit_ports(cards: Sequence[SpiceCard]) -> dict[str, tuple[str, ...]]:
-    """The ports the header of each subcircuit's definition in force names
-    (``spice_lex.subckt_definitions``), by its case-folded name; none for a
-    header that cannot be split into parts."""
+def _subcircuit_ports(
+    cards: Sequence[SpiceCard], reader: SemanticProfile
+) -> dict[str, tuple[str, ...]]:
+    """The ports the header of each subcircuit's definition in force to
+    ``reader`` names (``spice_lex.subckt_definitions``), by its case-folded
+    name; none for a header that cannot be split into parts, or for a name
+    defined more than once of which the reader keeps no definition."""
     ports: dict[str, tuple[str, ...]] = {}
-    for index in subckt_definitions(cards).values():
+    for index in subckt_definitions(cards, reader.subckt_rule).in_force.values():
         card = cards[index]
         try:
             sub = SubcktCard.from_card(card)
