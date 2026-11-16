@@ -524,6 +524,9 @@ def _layout(
                 "unsupported LTspice binary analysis layout; no validated byte formula",
             )
     if "complex" in flags:
+        # Every variable of a binary complex plot is stored complex, a real one
+        # with a zero imaginary part; a text payload can narrow a variable to
+        # the real numbers it holds (_Scanner.text_payload).
         widths = ((8,) + (16,) * (count - 1)) if dialect == "qspice" else (16,) * count
     elif dialect == "ltspice" and "double" not in flags:
         widths = (8,) + (4,) * (count - 1)

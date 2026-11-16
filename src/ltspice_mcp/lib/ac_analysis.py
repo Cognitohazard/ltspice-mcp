@@ -112,7 +112,8 @@ def prepare_ac_arrays(freqs_raw: np.ndarray, H_raw: np.ndarray) -> tuple[np.ndar
         raise ValueError(
             "AC analysis tools require complex transfer-function data; got real-valued "
             "samples: a transient result, or a trace of an AC plot that holds real "
-            "values, such as a device parameter ngspice saves in an AC run"
+            "values, such as a device parameter ngspice saves in an AC run. Read its "
+            "values rather than an AC response, or name a node voltage or branch current"
         )
 
     freqs = np.asarray(freqs_raw)

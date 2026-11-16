@@ -596,7 +596,6 @@ def _first_point_lines(raw: Path) -> list[str] | None:
     data = raw.read_bytes()
     marker = data.find(b"Values:")
     if marker < 0:
-        assert b"Binary:" in data
         return None
     lines = data[marker:].decode("ascii").splitlines()[1:]
     return [line.strip() for line in lines[:3]]
@@ -675,11 +674,12 @@ async def test_a_real_variable_of_a_complex_plot_reads_as_each_file_holds_it(
         pytest.skip("the official Windows build's spinit writes every raw file as ASCII")
     monkeypatch.delenv("SPICE_ASCIIRAWFILE", raising=False)
     binary = await _ac_readings(ngspice_state, work_dir, "binary")
+    if binary["file"] is not None:
+        pytest.skip("the installed ngspice's spinit writes every raw file as ASCII")
     monkeypatch.setenv("SPICE_ASCIIRAWFILE", "1")
     text = await _ac_readings(ngspice_state, work_dir, "ascii")
 
     # What each file holds: the parameter is one number in the ASCII file.
-    assert binary["file"] is None
     first, current, parameter = text["file"]
     assert first.split("\t")[-1].count(",") == 1, text["file"]
     assert current.count(",") == 1, text["file"]

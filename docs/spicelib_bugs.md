@@ -4640,9 +4640,11 @@ reads both through the parser subprocess, the Python API, `analyze_results`,
 `tests/test_ngspice_e2e.py::test_an_ac_summary_defaults_to_no_device_parameter`
 runs the summary on both formats. `tests/test_raw_header.py` pins the
 preflight's widths and refusals, and `tests/test_ascii_real_in_complex_plot.py`
-draws the real variable with `plot_waveform`. Once spicelib reads the file,
-`_WorkerPlot._read_ascii_vector` can go; the preflight's widths stay, since
-the proposed fix above still makes the variable complex.
+draws the real variable with `plot_waveform`. The override and the
+preflight's eight-byte width go together: the proposed fix above reads the
+value as complex, so with the override removed the decoder would hand a
+complex array to a real slot and refuse the file. Once spicelib reads such a
+file, keep the override as long as the variable is to stay real.
 
 ---
 
