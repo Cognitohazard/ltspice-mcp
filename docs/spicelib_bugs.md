@@ -4541,9 +4541,14 @@ pins that a recoverable run is not affected.
 ngspice-42 on Linux and the official ngspice-47 Windows build.
 **Affected version:** spicelib 1.5.1
 (`spicelib/raw/plot_data.py`, `PlotData._read_ascii_vector`).
-**Our workaround:** none yet. The server's own preflight read
-(`raw_header.py`, `text_payload`) refuses the same file first, with the
-same rule.
+**Our workaround:** the server's preflight read
+(`raw_header.py`, `_Scanner.text_payload`) finds each variable of an
+ngspice complex text plot that holds one number a point and gives it an
+eight-byte real width, and the decoder (`raw_decode.py`, `_WorkerPlot`)
+reads those variables as real before spicelib's `_read_ascii_vector` runs.
+Every reader of the results gets the real values the file holds; no
+imaginary part is added. The same shape from another writer is still
+refused, because no recording shows one writing it.
 
 ### Summary
 
@@ -4628,11 +4633,18 @@ part at that point.
 
 ### Cross-reference
 
+`tests/test_ngspice_e2e.py::test_a_real_variable_of_a_complex_plot_reads_as_each_file_holds_it`
+runs the deck above with ngspice writing a binary and an ASCII raw file and
+reads both through the parser subprocess, the Python API, `analyze_results`,
+`inspect` and `plot_waveform`.
 `tests/test_ngspice_e2e.py::test_an_ac_summary_defaults_to_no_device_parameter`
-runs the deck above with ngspice's ASCII format (`SPICE_ASCIIRAWFILE=1`)
-and as the installed ngspice writes it. It is marked as an expected failure
-(`xfail`, strict) where the file is ASCII, so it fails again once a
-workaround makes it pass.
+runs the summary on both formats. `tests/test_raw_header.py` pins the
+preflight's widths and refusals, and `tests/test_ascii_real_in_complex_plot.py`
+draws the real variable with `plot_waveform`. The override and the
+preflight's eight-byte width go together: the proposed fix above reads the
+value as complex, so with the override removed the decoder would hand a
+complex array to a real slot and refuse the file. Once spicelib reads such a
+file, keep the override as long as the variable is to stay real.
 
 ---
 

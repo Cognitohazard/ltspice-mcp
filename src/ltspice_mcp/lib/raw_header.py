@@ -10,7 +10,9 @@ not make an inline third-party decoder safe.
 Binary widths follow spicelib 1.5.1's PlotData trace construction: LTspice
 uses an eight-byte first real variable and four-byte remaining variables
 (all eight with ``double``); complex variables occupy sixteen bytes.
-ngspice/Xyce use eight-byte real or sixteen-byte complex variables. QSPICE
+ngspice/Xyce use eight-byte real or sixteen-byte complex variables; in a
+text payload ngspice can write one variable of a complex plot as real
+numbers, which then take eight (``_Scanner.text_payload``). QSPICE
 uses eight bytes for the first complex variable and sixteen for the rest.
 FastAccess changes ordering, not total length. LTspice's layouts are checked
 against files LTspice 26 and LTspice XVII wrote (the recorded fixtures
@@ -339,7 +341,29 @@ class _Scanner:
             raise self.error(RawHeaderError, f"invalid {name}: expected positive count")
         return value
 
-    def text_payload(self, encoding: str, points: int, widths: tuple[int, ...]) -> None:
+    def text_payload(
+        self,
+        encoding: str,
+        points: int,
+        widths: tuple[int, ...],
+        dialect: str,
+        variables: tuple[RawVariable, ...],
+    ) -> tuple[int, ...]:
+        """Check a text payload, and return the width each variable's values
+        take as the file holds them.
+
+        In a complex plot ngspice writes a variable that holds real values,
+        such as a device parameter (``.save @m1[vth]``), as one number a point,
+        though nothing in the header says so; its binary writer stores the
+        same values as complex numbers with a zero imaginary part. Such a
+        variable is read as the real numbers the file holds (eight bytes a
+        value), so no reader is handed an imaginary part the file does not
+        hold. A variable that is real at one point and complex at another is
+        refused. No other writer has been seen to write this shape, so in
+        their files it is refused, saying so.
+        """
+        real_at: list[int | None] = [None] * len(widths)
+        complex_at: list[int | None] = [None] * len(widths)
         for point in range(points):
             for index, width in enumerate(widths):
                 line = self.line(encoding).strip()
@@ -355,12 +379,39 @@ class _Scanner:
                     line = line.strip()
                 parts = line.split(",")
                 expected = 2 if width == 16 else 1
-                if len(parts) != expected or any(not _NUMBER.fullmatch(p.strip()) for p in parts):
+                if any(not _NUMBER.fullmatch(p.strip()) for p in parts) or (
+                    len(parts) != expected and not (width == 16 and len(parts) == 1)
+                ):
                     raise self.error(
                         RawHeaderError,
                         f"invalid numeric text payload at point {point}, variable {index}: "
                         f"{line[:60]!r}",
                     )
+                if width != 16:
+                    continue
+                if len(parts) == 2:
+                    complex_at[index] = point if complex_at[index] is None else complex_at[index]
+                    continue
+                name = variables[index].name
+                if dialect != "ngspice":
+                    raise self.error(
+                        RawLayoutError,
+                        f"variable {index} ({name}) of this complex plot holds a real "
+                        f"value at point {point}: {line[:60]!r}. A real variable in a "
+                        f"complex text plot is established only for ngspice's raw files, "
+                        f"not for {dialect}'s",
+                    )
+                real_at[index] = point if real_at[index] is None else real_at[index]
+        for index, (real, complex_) in enumerate(zip(real_at, complex_at, strict=True)):
+            if real is not None and complex_ is not None:
+                raise self.error(
+                    RawHeaderError,
+                    f"variable {index} ({variables[index].name}) of this complex plot is "
+                    f"real at point {real} and complex at point {complex_}",
+                )
+        return tuple(
+            8 if real is not None else width for real, width in zip(real_at, widths, strict=True)
+        )
 
     def skip_text_separators(self, encoding: str) -> None:
         separators = {char.encode(encoding) for char in " \t\r\n"}
@@ -473,6 +524,9 @@ def _layout(
                 "unsupported LTspice binary analysis layout; no validated byte formula",
             )
     if "complex" in flags:
+        # Every variable of a binary complex plot is stored complex, a real one
+        # with a zero imaginary part; a text payload can narrow a variable to
+        # the real numbers it holds (_Scanner.text_payload).
         widths = ((8,) + (16,) * (count - 1)) if dialect == "qspice" else (16,) * count
     elif dialect == "ltspice" and "double" not in flags:
         widths = (8,) + (4,) * (count - 1)
@@ -556,7 +610,11 @@ def _read_plot(
             )
         scanner.handle.seek(end)
     else:
-        scanner.text_payload(encoding, points, widths)
+        # A text payload can hold a variable narrower than the header's flags
+        # say (text_payload); the budget above was held at the wider width.
+        widths = scanner.text_payload(encoding, points, widths, resolved, tuple(variables))
+        scanner.numeric_bytes -= numeric_bytes - points * sum(widths)
+        numeric_bytes = points * sum(widths)
     payload_end = scanner.handle.tell()
     return RawPlotHeader(
         index=scanner.plot_index,
