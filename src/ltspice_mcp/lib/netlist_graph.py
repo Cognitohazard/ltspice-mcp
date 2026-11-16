@@ -30,11 +30,14 @@ references are followed (resolved against the including file's own directory,
 depth-bounded and cycle-guarded, as ``deck_staging`` reads them: the
 ``.lib file section`` form reads only that section of the file, and a library's
 own ``.lib section`` line declares a section rather than naming a file). When
-one name is defined more than once, the FIRST definition in textual order wins,
-with its own body only, and the losers are recorded — measured behavior, not
-assumption: ngspice 42 warns ``redefinition of .subckt X, ignored`` and keeps
-whichever definition came first, so an inline block only wins when it precedes
-the include (the usual LTspice layout), not because it is inline.
+one name is defined more than once, the definition the deck's reader keeps in
+force is read, with its own body only, and the others are recorded
+(``spice_lex.definition_rule``): ngspice 42 warns ``redefinition of .subckt X,
+ignored`` and keeps whichever definition came first, so an inline block only
+wins when it precedes the include, not because it is inline; LTspice XVII runs
+the last of two in one deck, and LTspice 26 refuses the deck. Where the reader
+keeps none, or what it does is not recorded, no definition is read and the
+record says why.
 - :func:`compare_graphs` flattens both sides and reports what differs:
   components added / removed / retyped, value and parameter mismatches, node
   partition (connectivity) mismatches, anchor violations, and port-arity
@@ -111,6 +114,7 @@ from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
     copies_by_name,
+    definition_place,
     directive_head,
     iter_by_kind,
     lex_deck,
@@ -262,15 +266,20 @@ class MissingInclude:
 class DuplicateSubckt:
     """A subcircuit defined more than once across the deck and its includes.
 
-    SPICE keeps the FIRST definition in textual order and ignores later ones
-    (measured on ngspice 42, which warns "redefinition of .subckt X, ignored").
-    ``used`` names the source that won, ``ignored`` the sources that lost --
-    surfaced as a fact so the pick is never silent.
+    Which definition is in force is the deck's reader's answer
+    (``spice_lex.definition_rule``): ngspice keeps the first in textual
+    order, LTspice XVII the last of two in one deck. ``used`` names the
+    source whose definition is read and ``ignored`` the others, surfaced as
+    a fact so the pick is never silent. When the reader keeps none (LTspice
+    26 refuses the deck; for other readers and places it is not recorded),
+    ``used`` is None, every source is in ``ignored``, no definition is read,
+    and ``reason`` says why.
     """
 
     name: str
-    used: str
+    used: str | None
     ignored: tuple[str, ...]
+    reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -311,7 +320,7 @@ class NetlistGraph:
     """Parsed, un-flattened netlist: top-level components + subcircuit defs.
 
     ``subckts`` merges definitions found inline with those pulled in through
-    ``.include``/``.lib``, first-in-textual-order winning. ``missing_includes``
+    ``.include``/``.lib``, each the one the reader keeps in force. ``missing_includes``
     and ``duplicate_subckts`` are the fact-level record of what could not be
     loaded and what was defined twice.
     """
@@ -571,7 +580,7 @@ class GraphComparison:
                 for d in self.unresolved_subckts
             ],
             "duplicate_subckts": [
-                {"name": d.name, "used": d.used, "ignored": list(d.ignored)}
+                {"name": d.name, "used": d.used, "ignored": list(d.ignored), "reason": d.reason}
                 for d in self.duplicate_subckts
             ],
             "duplicate_params": [
@@ -716,9 +725,10 @@ def parse_netlist_graph(
     from every ``.include``/``.inc``/``.lib`` it pulls in (resolved against the
     including file's own directory, depth-bounded and cycle-guarded); a
     ``.lib <file> <section>`` reads only that section of the file. When a name
-    is defined more than once the FIRST definition wins and the rest are recorded
-    in ``duplicate_subckts`` — matching the simulator, which ignores
-    redefinitions (measured on ngspice 42). Includes that yield nothing are
+    is defined more than once the definition ``reader`` keeps in force is read
+    and every definition is recorded in ``duplicate_subckts``; where the reader
+    keeps none, none is read, so its instances are black boxes, and the
+    record says why (``spice_lex.definition_rule``). Includes that yield nothing are
     recorded in ``missing_includes``; a malformed *included* file degrades to
     such a record rather than failing the whole parse, while the deck's own cards
     must parse.
@@ -734,7 +744,8 @@ def parse_netlist_graph(
     component and treated as a black box by :func:`flatten_graph`.
 
     ``reader`` is who reads the deck: which names are ground and which a
-    ``.global`` net is its reading (``deck_nodes``).
+    ``.global`` net is its reading (``deck_nodes``), and which definition of
+    a name defined twice it keeps in force.
     """
     result, source = _load_cards(path_or_text)
     cards = result.cards
@@ -760,6 +771,7 @@ def parse_netlist_graph(
         strict=True,
         include_resolver=include_resolver,
     )
+    registry.settle()
 
     components = [
         _component_from_card(card, reader) for card in iter_by_kind(cards, "instance", scope=())
@@ -781,7 +793,7 @@ def parse_netlist_graph(
         reader=reader,
         warnings=list(result.warnings),
         missing_includes=tuple(registry.missing),
-        duplicate_subckts=registry.duplicate_records(),
+        duplicate_subckts=tuple(registry.duplicates),
         global_nets=frozenset(registry.global_nets),
         directives=directives,
         definition_includes=tuple(card for card in registry.definitions_only if id(card) in held),
@@ -790,13 +802,21 @@ def parse_netlist_graph(
 
 @dataclass
 class _SubcktRegistry:
-    """Accumulates subcircuit definitions in textual order, first-wins."""
+    """Accumulates subcircuit definitions in textual order; :meth:`settle`
+    then keeps, of a name defined more than once, the one the reader keeps
+    in force (``spice_lex.DefinitionRule.kept``).
+
+    Definitions are keyed by name alone, as the graph's namespace is, so a
+    definition inside a subcircuit and one at the top level of the same name
+    are read as two definitions of one name, inside a subcircuit."""
 
     #: Who reads the deck (``parse_netlist_graph``).
     reader: SemanticProfile
     subckts: dict[str, SubcktDef] = field(default_factory=dict)
-    sources: dict[str, str] = field(default_factory=dict)
-    ignored: dict[str, list[str]] = field(default_factory=dict)
+    #: Every definition of each name, in textual order: the definition, its
+    #: source, and whether it is inside a subcircuit.
+    candidates: dict[str, list[tuple[SubcktDef, str, bool]]] = field(default_factory=dict)
+    duplicates: list[DuplicateSubckt] = field(default_factory=list)
     missing: list[MissingInclude] = field(default_factory=list)
     global_nets: set[str] = field(default_factory=set)
     #: Each include card whose file defines subcircuits and nothing else
@@ -805,23 +825,46 @@ class _SubcktRegistry:
     definitions_only: list[SpiceCard] = field(default_factory=list)
     files: dict[tuple[Path, str | None], bool] = field(default_factory=dict)
 
-    def register(self, definition: SubcktDef, source: str) -> None:
-        key = definition.name.lower()
-        if key in self.subckts:
-            self.ignored.setdefault(key, []).append(source)
-            return
-        self.subckts[key] = definition
-        self.sources[key] = source
-
-    def duplicate_records(self) -> tuple[DuplicateSubckt, ...]:
-        return tuple(
-            DuplicateSubckt(
-                name=self.subckts[key].name,
-                used=self.sources[key],
-                ignored=tuple(losers),
-            )
-            for key, losers in sorted(self.ignored.items())
+    def register(self, definition: SubcktDef, source: str, *, nested: bool) -> None:
+        self.candidates.setdefault(definition.name.lower(), []).append(
+            (definition, source, nested)
         )
+
+    def settle(self) -> None:
+        """Keep each name's definition in force; record every name defined
+        more than once, with the reason when none is kept."""
+        rule = self.reader.subckt_rule
+        for key, found in self.candidates.items():
+            if len(found) == 1:
+                self.subckts[key] = found[0][0]
+                continue
+            place = definition_place(
+                ((key,) if any(nested for _d, _s, nested in found) else (), key),
+                files=len({source for _d, source, _n in found}),
+            )
+            kept = rule.kept(place, len(found))
+            name = found[0][0].name
+            if kept is None:
+                self.duplicates.append(
+                    DuplicateSubckt(
+                        name=name,
+                        used=None,
+                        ignored=tuple(source for _d, source, _n in found),
+                        reason=rule.reason(name, place),
+                    )
+                )
+                continue
+            self.subckts[key] = found[kept][0]
+            self.duplicates.append(
+                DuplicateSubckt(
+                    name=found[kept][0].name,
+                    used=found[kept][1],
+                    ignored=tuple(
+                        source for index, (_d, source, _n) in enumerate(found) if index != kept
+                    ),
+                )
+            )
+        self.duplicates.sort(key=lambda record: record.name.lower())
 
 
 def _subckt_def_from(
@@ -912,7 +955,11 @@ def _collect_subckts(
         registry.global_nets.update(name.lower() for name in global_names(card))
         if card.kind == "subckt":
             try:
-                registry.register(_subckt_def_from(cards, index, registry.reader), source)
+                registry.register(
+                    _subckt_def_from(cards, index, registry.reader),
+                    source,
+                    nested=bool(card.scope),
+                )
             except (SpiceLexError, NetlistGraphError) as exc:
                 if strict:
                     raise NetlistGraphError(

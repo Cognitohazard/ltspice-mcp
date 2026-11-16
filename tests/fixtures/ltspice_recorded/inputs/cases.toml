@@ -965,6 +965,8 @@ model = [
     "lib/spice_validator.py",
     "lib/hierarchy.py",
     "lib/subckt_mismatch.py",
+    "lib/lint_rules.py",
+    "tools/verify.py",
 ]
 # The first body's R1 is 1k and the second's 2k; 1 A into in gives v(in)
 # 1000 if the first body runs, 2000 if the second does, and no raw if the

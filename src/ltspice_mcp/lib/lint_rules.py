@@ -23,12 +23,16 @@ from ltspice_mcp.lib.encoding import latin1_reading, read_spice_text
 from ltspice_mcp.lib.families import DISPLAY
 from ltspice_mcp.lib.ngspice_compat import drops_lib_sections, reads_lib_as_includes
 from ltspice_mcp.lib.simulator import DEFAULT_FAMILY, family_for, run_ngbehavior
+from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.spice_lex import (
+    DefinitionRule,
     SpiceCard,
     SpiceLexError,
+    definition_rule,
     directive_head,
     lex,
     lex_deck,
+    subckt_definitions,
     unreadable_cards,
 )
 from ltspice_mcp.lib.spice_lex_ops import MICRO_SIGN_READERS, ValueSuffixSite, value_suffix_sites
@@ -57,7 +61,7 @@ from ltspice_mcp.lib.spice_validator import (
 Disposition = Literal["blocking", "warning", "observation"]
 LintFinding = dict[str, Any]
 
-linter_version = "14"
+linter_version = "15"
 
 # A capital M straight after a number is milli unless the letters after it
 # make it Meg or mil. Other letters do not: LTspice reads 1MHz as a millihertz.
@@ -118,6 +122,10 @@ class _LintContext:
     # An LTspice the session knows reads decks as cp1252 (XVII or earlier),
     # with the evidence; None when nothing shows one.
     cp1252_reader: str | None = None
+    # Which definition of a subcircuit defined twice the deck's reader keeps
+    # (``spice_lex.definition_rule``); None reads as the family's reader of
+    # no known build.
+    definitions: DefinitionRule | None = None
 
     @functools.cached_property
     def arity_issues(self) -> list[dict[str, object]]:
@@ -929,6 +937,65 @@ def _unreadable_card(context: _LintContext, rule: LintRule) -> list[LintFinding]
     ]
 
 
+class DefinitionSite(NamedTuple):
+    """A subcircuit name defined more than once in one scope of a deck, of
+    which its reader keeps no definition in force (:func:`definition_sites`)."""
+
+    card: SpiceCard
+    #: ``subckt-defined-twice`` when the reader refuses the deck,
+    #: ``subckt-defined-twice-unrecorded`` when what it does is not recorded.
+    rule_id: str
+    reason: str
+    #: The line of every definition of the name, in card order.
+    lines: tuple[int, ...]
+
+
+def definition_sites(
+    cards: Sequence[SpiceCard], definitions: DefinitionRule
+) -> list[DefinitionSite]:
+    """Each name ``cards`` define more than once in one scope that the reader
+    of ``definitions`` keeps no definition of (``spice_lex.subckt_definitions``),
+    at its first definition: the cards the linter's two rules and
+    ``verify_circuit``'s syntax check report, so both say the same thing. A
+    name the reader settles (ngspice's first, XVII's last of two) is no site:
+    every reader of a body reads the definition in force."""
+    found = subckt_definitions(cards, definitions)
+    sites: list[DefinitionSite] = []
+    for opener, reason in found.reasons(cards):
+        card = cards[opener]
+        key = next(key for key, openers in found.unsettled.items() if openers[0] == opener)
+        choice = definitions.choice("nested" if key[0] else "deck")
+        sites.append(
+            DefinitionSite(
+                card,
+                "subckt-defined-twice"
+                if choice == "refused"
+                else "subckt-defined-twice-unrecorded",
+                reason,
+                tuple(cards[index].line_start for index in found.unsettled[key]),
+            )
+        )
+    return sites
+
+
+def _subckt_defined_twice(context: _LintContext, rule: LintRule) -> list[LintFinding]:
+    """A subcircuit defined more than once in one scope of the deck, which
+    the reader refuses (``subckt-defined-twice``) or keeps a definition of
+    that is not recorded (``subckt-defined-twice-unrecorded``)."""
+    assert context.definitions is not None
+    return [
+        _finding(
+            context,
+            rule,
+            line=site.card.line_start,
+            subject=site.card.name or ".subckt",
+            evidence={"lines": list(site.lines), "reason": site.reason},
+        )
+        for site in definition_sites(context.cards, context.definitions)
+        if site.rule_id == rule.rule_id
+    ]
+
+
 def _duplicate_param(context: _LintContext, rule: LintRule) -> list[LintFinding]:
     """An instance, ``.model`` or ``.subckt`` card giving one parameter more
     than once: which copy the simulator reads is not known here, so a value a
@@ -1221,6 +1288,12 @@ RULES: tuple[LintRule, ...] = (
     # A warning: the deck runs, but a parameter given twice is read one way or
     # the other, and which is not recorded here.
     LintRule("duplicate-param", "warning", _duplicate_param),
+    # Blocking: LTspice 26 refuses a deck that defines one subcircuit twice
+    # (recorded: deck/subckt_defined_twice), so the run would fail.
+    LintRule("subckt-defined-twice", "blocking", _subckt_defined_twice),
+    # A warning: the deck may run, but which definition the reader runs is
+    # not recorded, so no check here read either body.
+    LintRule("subckt-defined-twice-unrecorded", "warning", _subckt_defined_twice),
     # A warning: a card no rule could split into its parts is checked by
     # none, which a caller must know. What a simulator does with it is not
     # recorded, except for the .meas above, so the deck runs.
@@ -1259,6 +1332,7 @@ def lint_deck(
     ngbehavior: str | None = None,
     codec: str = "utf-8",
     cp1252_reader: str | None = None,
+    reader: Producer | None = None,
 ) -> list[LintFinding]:
     """Run all unsuppressed rules and return fixable findings only.
 
@@ -1268,18 +1342,22 @@ def lint_deck(
     is the one the deck was decoded in, as each snapshot's is
     (``StagedFile.codec``); ``cp1252_reader`` is the evidence that the
     session's LTspice reads decks as cp1252 (``services.cp1252_ltspice``).
+    ``reader`` is who will read the deck (``services.deck_producer``); None
+    reads it as the family's reader of no known build.
     """
     suppressed = set(suppress)
+    family = family_for(dialect, simulator) or DEFAULT_FAMILY
     context = _LintContext(
         text=deck_text,
         path=path,
         cards=lex_deck(deck_text).cards,
         # A deck nothing names is linted as the default family's.
-        family=family_for(dialect, simulator) or DEFAULT_FAMILY,
+        family=family,
         includes=tuple(includes),
         ngbehavior=ngbehavior,
         codec=codec,
         cp1252_reader=cp1252_reader,
+        definitions=definition_rule(reader or Producer(family, None, None)),
     )
     findings: list[LintFinding] = []
     for rule in RULES:

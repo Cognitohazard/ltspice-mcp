@@ -1840,8 +1840,12 @@ than diffing a schematic's attributes against a netlist's cards. Both modes
 read the cards the simulator reads: line 1 of a deck is its title and is not
 read, nor is a card after `.end`. `equivalence` follows includes as staging
 reads them, so `.lib <file> <section>` brings in that section's definitions
-only, and of two definitions of one subcircuit name the first is the body
-compared, the others listed in `duplicate_subckts`. `structural_diff` lexes
+only, and of two definitions of one subcircuit name the body compared is the
+one the session's simulator keeps in force (ngspice the first, LTspice XVII the
+last of two in one deck), the others listed in `duplicate_subckts`; where the
+simulator keeps none (LTspice 26 refuses the deck) or what it does is not
+recorded (any other build or place, QSPICE, Xyce), no body is read, the
+instances are compared as black boxes, and the entry's `reason` says why. `structural_diff` lexes
 both decks, so a `+` continuation belongs to the card it continues, and
 compares directives as parsed rather than as text, so spacing, case, comma
 separators and assignment order in `.model`/`.param` are ignored. It ignores
@@ -2317,6 +2321,8 @@ Suppression is per call, and `linter_version` is reported in provenance.
 | `step-ngspice` | warning | ngspice: a `.step`, which ngspice ignores in batch mode, so the deck runs once at the base value |
 | `temp-as-param` | blocking | a deck that sweeps temperature as a parameter (§3.1) |
 | `duplicate-param` | warning | an instance, `.model` or `.subckt` card giving one parameter more than once, in any case; which copy the simulator reads is not known, and `verify_circuit` reports the same as `duplicate_parameter` |
+| `subckt-defined-twice` | blocking | a subcircuit name defined more than once at the top level of the deck, which the reader refuses: LTspice 26 (recorded). `verify_circuit`'s `syntax` check reports the same as `subckt_defined_twice`. ngspice (the first) and LTspice XVII (the last of two) run a definition, which every check reads, and get no finding |
+| `subckt-defined-twice-unrecorded` | warning | a subcircuit name defined more than once in one scope, where what the reader does is not recorded: an LTspice build other than 26 and XVII, one whose build is not known yet, QSPICE, Xyce, or for LTspice two definitions inside one subcircuit. No check reads either body; `verify_circuit` reports the same as `subckt_defined_twice_unrecorded`. A definition repeated across the deck and an include is not linted |
 | `unreadable-card` | warning | a card no rule can split into its parts: an unclosed quote, brace or parenthesis, or a closer with nothing open. The other rules leave it out. On a part, `.subckt` header or `.global` its words count as connected and defined nodes and names, so no rule reports something on a guess about it; a variation or random rule on a part, `.model` or `.param` name a card like it may declare is refused (`ambiguous_target`). It covers the deck and its staged includes, and an include card in a live include, for which `model-missing` then says nothing. What a simulator does with such a card is recorded only for the `.meas` of `meas-unclosed-paren-ltspice`; `verify_circuit` reports the same as `unreadable_card` |
 | `value-suffix-mojibake` | blocking | a suffix showing the file was decoded in an encoding it was not written in, such as the `Âµ` a UTF-8 `µ` becomes under cp1252; the simulator reads the bare number, off by a factor of 1e6 |
 | `value-suffix-nonascii` | warning | any other symbol after a number, such as `10Ω` or `25°C`, read as the bare number, which is usually the intended value. Staging spells a `µ`/`μ` as `u` before the deck is linted; for a deck run elsewhere `verify_circuit` reports it as one observation per file, or as a warning per value when a reader the server knows of (LTspice XVII) would decode the file differently |
@@ -2856,8 +2862,12 @@ subcircuit defined at top level may be called from inside another, but a
 a `.subckt` is allowed and is used there before a top-level model of the same
 name. Recursive subcircuit calls; a missing include, `.lib` section or called
 subcircuit; an include cycle; a malformed `.subckt`/`.ends` or `.lib`/`.endl`
-pair; and a subcircuit, model or reference defined twice among the cards in
-use fail the query. A binned model (`nch.1`, `nch.2`, ...) is reported with
+pair; and a model or reference defined twice among the cards in use fail
+the query. Of a subcircuit defined twice at the top level, the definition the
+reader keeps is read (ngspice the first, LTspice XVII the last of two in one
+deck); the query fails, saying why, where the reader refuses the deck
+(LTspice 26) or what it does is not recorded (any other LTspice build, or
+the two definitions in different files). A binned model (`nch.1`, `nch.2`, ...) is reported with
 every bin under `model.family` and a reason that the bin is not selected,
 rather than as one model. Cards after the root `.end` are ignored.
 

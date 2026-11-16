@@ -101,6 +101,7 @@ from ltspice_mcp.lib.simulator import (
     simulator_library_roots,
 )
 from ltspice_mcp.lib.simulator_build import Producer, SimulatorExecutable, executable_identity
+from ltspice_mcp.lib.spice_lex import definition_rule
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.lib.subckt_mismatch import MismatchPlanError
 from ltspice_mcp.lib.sweep_utils import generate_id
@@ -1147,6 +1148,7 @@ async def _prepare_circuit(
                 ngbehavior=mode,
                 codec=staged.codec,
                 cp1252_reader=cp1252_reader,
+                reader=reader,
             )
         )
         source = SourceRecord(
@@ -1184,6 +1186,7 @@ async def _prepare_circuit(
             semantic_profile=(
                 SemanticProfile.of(reader, mode) if dialect in SUPPORTED_FAMILIES else None
             ),
+            definitions=definition_rule(reader),
             record_source_lineage=native is not None or args.execution.recoverable,
         )
         # A recoverable run records its cards' sources by the hierarchy
