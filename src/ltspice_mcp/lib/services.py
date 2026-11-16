@@ -650,9 +650,11 @@ async def answer_measurements(
     measurement reads it through here. ``producer`` is the one a caller has
     already resolved (the summary's, read with the build its files name);
     otherwise it is :func:`source_producer`'s, as a log-only reader opens no
-    source file in this process: a bare path then names no build, and its log
-    is read with every recorded build's rules (``log_conditions.rules_for``),
-    which agree on every recorded form."""
+    source file in this process: a bare path then names no build here, and
+    ``answered_measurements`` reads the build the log's own first line names,
+    which the decoder found (``printed_by``); a log that names none is read
+    with every recorded build's rules (``log_conditions.rules_for``), which
+    agree on every recorded form."""
     cards = await asyncio.to_thread(measurement_cards, source.netlist)
     return answered_measurements(table, producer or source_producer(source), cards)
 

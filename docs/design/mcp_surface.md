@@ -1176,8 +1176,11 @@ names it in one of five places, by why:
   steps (from 0) is not established as the result. LTspice XVII prints `0` in
   a stepped table both for a step whose measurement failed and for a crossing
   at 0 s (recorded: `log/meas_when_step_fails`, `log/meas_when_step_forms`),
-  so a `0` in a table a build that may be XVII wrote is not taken; LTspice 26
-  prints `failed` for a failure, so its `0` is a result. The summary's
+  so a `0` in a stepped WHEN's table a build that may be XVII wrote is not
+  taken. No recording shows how XVII prints a failed step of any other
+  table, so a `0` there is not taken either, with a reason that says so.
+  LTspice 24 and later print `failed` for a failure, so their `0` is a
+  result. The summary's
   entries and the Python API's `measurements()` carry the same
   `not_established` with those steps null in `values`, and an `inspect`
   measurements row carries its reason.
@@ -1212,10 +1215,11 @@ summary's `measurements`, the Python API's `measurements()` and each row of
 `inspect(kind="results", view="measurements")` names it in `answer` (`value`
 or `at`), or says why it is not known in `answer_unknown`, and then the recipe
 gives that name no number and no `aggregated_field`. A bare path is read
-with the build its files name (`reported_build`: an LTspice 26 log's banner,
-an XVII raw's `Command:`), as the summary reads it; one whose files name no
-build is read with every recorded LTspice build's rules, which agree on every
-recorded form. A DERIV ... WHEN prints its derivative after `=` and its point
+with the build its log's first line names (LTspice 24 and later open a log
+with a banner); the summary also reads the build a raw's `Command:` names. A
+log that names no build, as XVII's does not, is read with every recorded
+LTspice build's rules, which agree on every recorded form, and may be XVII's,
+so a `0` in its stepped tables is `not_established`. A DERIV ... WHEN prints its derivative after `=` and its point
 after a lowercase `at`, as a DERIV ... AT does (recorded:
 `log/meas_deriv_when`), so its result is its value with the deck known or
 not. The same `unreadable {line,

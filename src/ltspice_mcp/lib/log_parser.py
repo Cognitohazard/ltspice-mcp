@@ -26,7 +26,7 @@ from ltspice_mcp.lib.log_types import LogDiagnostics as LogDiagnostics
 from ltspice_mcp.lib.log_types import MeasErrorEntry as MeasErrorEntry
 from ltspice_mcp.lib.log_types import MeasurementEntry as MeasurementEntry
 from ltspice_mcp.lib.log_types import MeasurementsOutput as MeasurementsOutput
-from ltspice_mcp.lib.simulator_build import Producer, log_banner_build
+from ltspice_mcp.lib.simulator_build import Producer, log_banner_build, which_ltspice
 from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.lib.store import parser_file_in
 
@@ -1493,30 +1493,38 @@ def measurement_cards(netlist: Path | None) -> dict[str, CardKind]:
     return kinds
 
 
-#: The recorded builds that print ``0`` in a stepped table's row for a step
-#: whose measurement could not be taken, where LTspice 26 prints ``failed``:
-#: XVII, recorded for a WHEN that finds no crossing (log/meas_when_step_fails,
-#: log/meas_step). Its log prints a result of 0 the same way, so the two are
-#: not told apart.
-_ZERO_FOR_A_FAILED_STEP = frozenset({"ltspice17"})
+def _zero_steps_reason(producer: Producer, form: str) -> str | None:
+    """Why a 0 in a row of a stepped table printed in ``form`` is not
+    established as a result, when the log may have been written by LTspice
+    XVII; None when it cannot have been.
 
-
-def _zero_steps_reason(producer: Producer) -> str | None:
-    """Why a 0 in a stepped table's row is not established as a result, when
-    the log may have been written by a build that prints 0 for a step whose
-    measurement failed; None when it cannot have been."""
-    rules, _coverage = rules_for(producer)
-    sets = _READING_SETS.get(rules, ())
-    if not _ZERO_FOR_A_FAILED_STEP & set(sets):
+    XVII prints 0 in a stepped WHEN's row (``table_level``) both for a step
+    where it finds no crossing (log/meas_when_step_fails, log/meas_step) and
+    for a crossing at 0 s (log/meas_when_step_forms, ``w_expr``), where
+    LTspice 26 prints ``failed`` for the first. No recording shows how XVII
+    prints a failed step of any other table, so a 0 there is not established
+    either. Which generation wrote the log is :func:`which_ltspice`'s answer:
+    a current build (24 and later) prints ``failed``, and XVII or a log no
+    evidence names may be XVII's."""
+    if producer.family not in (None, "ltspice"):
         return None
-    printed = (
+    found = which_ltspice(producer.program, producer.build)
+    if found is not None and found.generation != "xvii":
+        return None
+    who = (
         "LTspice XVII printed 0 in this step's row"
-        if set(sets) <= _ZERO_FOR_A_FAILED_STEP
+        if found is not None
         else "the log may have been written by LTspice XVII, which prints 0 in a step's row"
     )
+    if form == "table_level":
+        return (
+            f"{who}, as it does both for a step where a WHEN finds no crossing and for "
+            "a crossing at 0 s, so a failure and a result of 0 read the same"
+        )
     return (
-        f"{printed}, as it does for a step whose measurement failed (LTspice 26 prints "
-        "'failed'), so a failure and a result of 0 read the same"
+        f"{who}; XVII prints 0 for a step where a WHEN finds no crossing, and no "
+        "recording shows how it prints a failed step of this kind, so a 0 here is not "
+        "established as a result"
     )
 
 
@@ -1528,8 +1536,8 @@ def answered_measurements(
     that is not known (:func:`measurement_answer`), in place of the
     ``printed_form`` the decoder found. One unknown costs only its own entry.
 
-    Where the log may have been written by a build that prints 0 in a stepped
-    table's row for a step whose measurement failed (XVII), a 0 in a row is
+    Where the log may have been written by LTspice XVII, which prints 0 in a
+    stepped table's row for a step whose measurement failed, a 0 in a row is
     not taken as the result: the value at that step is null, and the entry's
     ``not_established`` gives the steps, from 0, and why. A step it names is
     not in ``failed_measurements``, which means the log printed ``failed``.
@@ -1541,7 +1549,6 @@ def answered_measurements(
     banner = table.get("printed_by")
     if banner is not None and producer.build is None:
         producer = Producer(producer.family or "ltspice", banner, producer.program)
-    zero_reason = _zero_steps_reason(producer)
     entries: dict[str, MeasurementEntry] = {}
     for name, entry in table.get("measurements", {}).items():
         form = entry.get("printed_form")
@@ -1551,12 +1558,12 @@ def answered_measurements(
             answered["answer"] = answer.field
         else:
             answered["answer_unknown"] = answer.unknown
-        if zero_reason is not None and answer.field == "value" and str(form).startswith("table"):
-            values = list(entry["values"])
-            zeros = [step for step, value in enumerate(values) if value == 0]
-            if zeros:
-                answered["values"] = [None if value == 0 else value for value in values]
-                answered["not_established"] = {"steps": zeros, "reason": zero_reason}
+        zeros = [step for step, value in enumerate(entry["values"]) if value == 0]
+        if zeros and answer.field == "value" and str(form).startswith("table"):
+            reason = _zero_steps_reason(producer, str(form))
+            if reason is not None:
+                answered["values"] = [None if v == 0 else v for v in entry["values"]]
+                answered["not_established"] = {"steps": zeros, "reason": reason}
         entries[name] = answered  # type: ignore[assignment]
     answered_table: dict[str, Any] = {
         key: value for key, value in table.items() if key != "printed_by"

@@ -1032,7 +1032,7 @@ keep = ["log"]
 
 [behaviour.log-meas-name-punctuation]
 summary = "Whether a .meas named with a dot (t.rise) or a dash (t-fall) is taken, and how the log prints its name."
-model = ["lib/log_parser.py", "lib/spice_lex_views.py", "lib/log_conditions.py"]
+model = ["lib/log_parser.py", "lib/spice_lex_views.py"]
 inputs = ["log/meas_name_dot.cir", "log/meas_name_dash.cir"]
 keep = ["log"]
 

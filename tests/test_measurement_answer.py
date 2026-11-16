@@ -30,6 +30,7 @@ import pytest
 
 from ltspice_mcp.lib.log_parser import (
     MeasurementAnswer,
+    answered_measurements,
     measurement_answer,
     measurement_cards,
     parse_measurements,
@@ -37,7 +38,7 @@ from ltspice_mcp.lib.log_parser import (
     read_log_text,
     result_unreadable,
 )
-from ltspice_mcp.lib.simulator_build import Producer
+from ltspice_mcp.lib.simulator_build import Producer, log_banner_build
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
 from tests.conftest import FIXTURES_DIR, SyncApi, dispatched, make_experiment_job
@@ -463,3 +464,85 @@ def test_a_null_whose_field_is_unknown_has_that_one_reason():
     assert result_unreadable(entry) is None
     assert result_unreadable({"values": [None], "answer": "at", "unreadable": {}}) is None
     assert result_unreadable({"values": [None], "answer": "value", "unreadable": {"r": 1}})
+
+
+# A 0 in a stepped table --------------------------------------------------------
+
+_XVII = Producer("ltspice", rec.manifest("ltspice17")["reported_build"], None)
+
+
+def _w_expr(build: str, producer: Producer, *, banner: bool = True) -> dict[str, Any]:
+    """``w_expr`` of ``log/meas_when_step_forms`` as read for ``producer``:
+    a WHEN that crosses at 0 s in both steps, printed ``0`` by both builds."""
+    table = cast(Any, parse_measurements(rec.recorded(build, "log/meas_when_step_forms.log")))
+    assert table["measurements"]["w_expr"]["values"] == [0.0, 0.0]
+    if not banner:
+        table.pop("printed_by", None)
+    return cast(Any, answered_measurements(table, producer))["measurements"]["w_expr"]
+
+
+@pytest.mark.parametrize(
+    "producer",
+    [
+        _LT26,
+        Producer("ltspice", "LTspice 24.1.9 for Windows", None),
+        Producer(None, "LTspice 25.0.1 for Windows", None),
+        _UNKNOWN,  # the log's own banner names LTspice 26
+    ],
+)
+def test_a_zero_a_current_build_printed_in_a_stepped_table_is_its_result(producer: Producer):
+    """LTspice 24 and later print ``failed`` for a step that fails, so a 0
+    they print is the result: here a crossing at 0 s."""
+    entry = _w_expr("ltspice26", producer)
+    assert entry["values"] == [0.0, 0.0]
+    assert "not_established" not in entry
+
+
+@pytest.mark.parametrize(
+    ("build", "producer", "who"),
+    [
+        ("ltspice17", _XVII, "LTspice XVII printed 0"),
+        ("ltspice17", _UNKNOWN, "may have been written by LTspice XVII"),
+        ("ltspice26", _UNKNOWN, "may have been written by LTspice XVII"),
+    ],
+)
+def test_a_zero_xvii_may_have_printed_in_a_stepped_table_is_not_established(
+    build: str, producer: Producer, who: str
+):
+    """XVII prints a crossing at 0 s as 0, as it prints a step whose WHEN
+    finds no crossing, so the two read the same. A log that names no build
+    may be XVII's (the LTspice 26 log here with its banner removed)."""
+    entry = _w_expr(build, producer, banner=False)
+    assert entry["values"] == [None, None]
+    assert entry["not_established"]["steps"] == [0, 1]
+    assert who in entry["not_established"]["reason"]
+    assert "crossing at 0 s" in entry["not_established"]["reason"]
+
+
+def test_a_zero_xvii_printed_in_another_stepped_table_says_no_recording_shows_its_failure():
+    """Only a stepped WHEN's failure is recorded on XVII; for a FIND's table
+    the reason says that no recording shows how a failed step prints."""
+    table = cast(Any, parse_measurements(rec.recorded("ltspice17", "log/meas_step.log")))
+    entry = table["measurements"]["s_find"]
+    assert entry["printed_form"] == "table_at"
+    entry["values"] = [0.0, *entry["values"][1:]]
+    read = cast(Any, answered_measurements(table, _XVII))["measurements"]["s_find"]
+    assert read["values"][0] is None
+    assert read["not_established"]["steps"] == [0]
+    assert "no recording shows" in read["not_established"]["reason"]
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_the_build_a_log_names_on_its_first_line(build: str):
+    """LTspice 26 opens its log with its banner; XVII opens it with its
+    ``Circuit:`` line and names no build."""
+    path = rec.recorded(build, "log/meas_step.log")
+    named = log_banner_build(read_log_text(path))
+    table = cast(Any, parse_measurements(path))
+    if rec.generation(build) == "xvii":
+        assert named is None
+        assert "printed_by" not in table
+    else:
+        assert named == rec.manifest(build)["reported_build"]
+        assert table["printed_by"] == named
+    assert "printed_by" not in cast(Any, answered_measurements(table, _UNKNOWN))
