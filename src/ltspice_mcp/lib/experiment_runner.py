@@ -394,7 +394,8 @@ def verify_replay_sources(job: ExperimentJob, request_id: str) -> None:
         if live:
             raise IdempotencyConflictError(
                 f"request_id {request_id!r} already ran circuit {source.circuit!r} "
-                f"against live include(s) {', '.join(live)}, whose content was never "
+                f"against file(s) read in place {', '.join(live)} (a live include, "
+                "or a data file named by an absolute path), whose content was never "
                 "digested; this receipt cannot be shown to describe them now. Submit "
                 "under a new request_id to run it again."
             )

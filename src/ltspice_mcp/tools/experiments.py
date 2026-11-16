@@ -1116,6 +1116,7 @@ async def _prepare_circuit(
             # exactly what a replay skips, leaving an edited .asc invisible to
             # every check made over this record.
             origin=source_path,
+            dialect=dialect,
             allow_live_includes=args.allow_live_includes,
             windows_paths=paths.windows_native,
             compact_digests=compact_digests,

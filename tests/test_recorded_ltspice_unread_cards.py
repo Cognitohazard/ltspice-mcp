@@ -219,7 +219,7 @@ def materialized(text: str, where: Path, variation: AssignVariation | RandomVari
     reaches the files it includes, as ``run_experiments`` hands them over."""
     deck = write_deck(where, text)
     try:
-        staged = stage_deck(deck, where / "stage", [where], origin=deck)
+        staged = stage_deck(deck, where / "stage", [where], origin=deck, dialect=None)
     except DeckStagingError as exc:
         return exc.code
     circuit = CircuitDeck(
@@ -290,7 +290,7 @@ async def staging(text: str, where: Path, state: SessionState) -> Any:
     """The files a run's snapshot takes in."""
     deck = write_deck(where, text)
     try:
-        staged = stage_deck(deck, where / "stage", [where], origin=deck)
+        staged = stage_deck(deck, where / "stage", [where], origin=deck, dialect=None)
     except DeckStagingError as exc:
         return exc.code
     return sorted((entry.path.name, entry.section or "") for entry in staged.manifest)

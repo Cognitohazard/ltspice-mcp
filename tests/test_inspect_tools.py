@@ -1021,7 +1021,13 @@ async def test_model_include_directive_is_staged_on_wsl(
     library = await asyncio.to_thread(simulator_library.resolve)
 
     staged = await asyncio.to_thread(
-        stage_deck, deck, work_dir / "staged", [work_dir], origin=deck, simulator_roots=[library]
+        stage_deck,
+        deck,
+        work_dir / "staged",
+        [work_dir],
+        origin=deck,
+        dialect=None,
+        simulator_roots=[library],
     )
 
     assert library / "cmp" / "standard.bjt" in {included.source for included in staged.includes}

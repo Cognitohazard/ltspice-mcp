@@ -232,6 +232,15 @@ _CARD_TEXT_READERS: dict[str, str] = {
     "lib/deck_staging.py:card_sections": (
         "the library-section reader, beside the include scanner it must agree with"
     ),
+    "lib/deck_staging.py:_ltspice_data_references": (
+        "the data-card reader, LTspice's cards: which data file a source reads"
+    ),
+    "lib/deck_staging.py:_ngspice_data_references": (
+        "the data-card reader, ngspice's cards: which data file a filesource reads"
+    ),
+    "lib/deck_staging.py:scan_data_references": (
+        "the data-card reader: which data files a deck's cards read"
+    ),
     "lib/deck_staging.py:scan_include_references": (
         "the include scanner: which file and section an include names"
     ),

@@ -73,9 +73,11 @@ version included, is refused (`recovery_startup_unsupported`).
 A recoverable request is refused before submission, with an error code that
 names the reason, when a deck reads an include in place at run time
 (`allow_live_includes`, `recovery_live_dependency`), has a source that reads a
-data file, such as a PWL with `file=` or a source that plays a .wav file with
-`wavefile=`, quoted or not (`recovery_external_reader`: recovery saves the
-files a deck includes, not the files its sources read), has a `.control` block
+data file the server does not stage, such as an `sfile=` or `pwlfile=`, or
+one named by an absolute path, which is read in place
+(`recovery_external_reader`, `recovery_live_dependency`; a relative LTspice
+`wavefile=` or PWL `file=` and an ngspice `filesource` `file=` are staged and
+saved with the deck), has a `.control` block
 (`recovery_control_unsupported`), loads an external module with `.load`,
 `.osdi` and the like or has an `A` device (`recovery_external_module`), or
 calls one of the random functions `rand`, `random`, `gauss`, `agauss`, `unif`,

@@ -983,6 +983,39 @@ model = ["lib/deck_staging.py", "lib/experiment_inputs.py"]
 # the folder the build started in, and missing if neither is found. The
 # _cwd_only cases have only the copy under run.
 
+[behaviour.data-file-absolute-path]
+summary = "Whether a build reads a data file named by an absolute path (wavefile= and PWL file=), as a staged deck names the staged copy of each data file it reads."
+model = ["lib/deck_staging.py"]
+# Each deck names data/level.wav or data/level.txt beside it by its absolute
+# path (<dir> is the case's folder, written in when the case runs). The copy
+# holds 0.5, so v(a) is 0.5 if the build reads the file and missing if not.
+# The _quoted decks name a copy in a folder whose name holds a space, in
+# quotes, as staging writes a path with a space.
+inputs = [
+    "deck/absolute_wavefile.cir",
+    "deck/absolute_pwl_file.cir",
+    "deck/absolute_quoted_wavefile.cir",
+    "deck/absolute_quoted_pwl_file.cir",
+]
+extra = [
+    "deck/data/level.wav",
+    "deck/data/level.txt",
+    "deck/data with space/level.wav",
+    "deck/data with space/level.txt",
+]
+pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
+
+[behaviour.data-file-relative-path-in-include]
+summary = "Which folder a build reads a relative data path from on a card in an included file in another folder: the deck's or the included file's."
+model = ["lib/deck_staging.py"]
+# The deck includes run/pwl_source.inc, whose PWL source reads data/level.txt.
+# The copy beside the deck holds 0.5 and the copy beside the included file
+# 0.75, so v(a) is 0.5 if the path is relative to the deck's folder and 0.75
+# if it is relative to the included file's.
+inputs = ["deck/included_relative_pwl_file.cir"]
+extra = ["deck/run/pwl_source.inc", "deck/data/level.txt", "deck/run/data/level.txt"]
+pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
+
 [behaviour.wavefile-without-equals]
 summary = "Whether a source written wavefile level.wav, with no =, plays the file."
 model = ["lib/spice_lex_views.py", "lib/experiment_inputs.py"]
