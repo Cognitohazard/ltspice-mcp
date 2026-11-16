@@ -90,25 +90,31 @@ def _bench(root: Path, deck: str = FILESOURCE_DECK) -> Path:
 # --------------------------------------------------------------------------
 
 
-def _ngspice_level(deck: Path, started_in: Path) -> float | None:
+def _ngspice_level(deck: Path, started_in: Path) -> tuple[float | None, str]:
     """v(a) half way through the run of ``deck`` by ngspice started in
-    ``started_in``, in the mode the server runs it in; None when it fails."""
+    ``started_in``, in the mode the server runs it in (None when it fails),
+    and what ngspice printed."""
     control = deck.with_name(deck.stem + "_probe.cir")
     control.write_text(
         deck.read_text().replace(
             ".end\n", ".control\nrun\nmeas tran va find v(a) at=0.5\n.endc\n.end\n"
         )
     )
+    executable = shutil.which("ngspice")
+    assert executable is not None
     completed = subprocess.run(
-        ["ngspice", NGSPICE_NO_USER_INIT, "-D", "ngbehavior=kiltpsa", "-b", str(control)],
+        [executable, NGSPICE_NO_USER_INIT, "-D", "ngbehavior=kiltpsa", "-b", str(control)],
         cwd=started_in,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=LIVENESS_S,
         check=False,
     )
     found = re.search(r"^va\s*=\s*(\S+)", completed.stdout, re.MULTILINE)
-    return float(found.group(1)) if found else None
+    printed = f"{completed.stdout}\n{completed.stderr}"[-3000:]
+    return (float(found.group(1)) if found else None), printed
 
 
 @needs_ngspice
@@ -119,9 +125,11 @@ def test_ngspice_reads_a_relative_data_path_from_the_decks_folder(tmp_path: Path
     include); with no copy beside the deck it falls back to the folder it was
     started in, which the server does not choose for a run."""
     deck_path = _bench(tmp_path, deck)
-    assert _ngspice_level(deck_path, tmp_path) == BESIDE_THE_DECK
+    level, printed = _ngspice_level(deck_path, tmp_path)
+    assert level == BESIDE_THE_DECK, printed
     (deck_path.parent / "data" / "level.txt").unlink()
-    assert _ngspice_level(deck_path, tmp_path) == DECOY
+    level, printed = _ngspice_level(deck_path, tmp_path)
+    assert level == DECOY, printed
 
 
 # --------------------------------------------------------------------------
@@ -335,7 +343,15 @@ def test_windows_paths_name_the_data_copy_through_the_conversion(
     copy = next(item.staged_path for item in staged.manifest if item.path.name == "level.wav")
     assert copy is not None
     named = [ref.raw_path for ref in scan_data_references(lex_deck(staged.text).cards, "ltspice")]
-    assert named == [wsl.to_windows_path(copy), wsl.to_windows_path(absolute.resolve())]
+    # A path already spelled the Windows way, as on Windows itself, is left
+    # as written.
+    written = str(absolute)
+    assert named == [
+        wsl.to_windows_path(copy),
+        written
+        if re.match(r"^[A-Za-z]:[\\/]", written)
+        else wsl.to_windows_path(absolute.resolve()),
+    ]
 
 
 # --------------------------------------------------------------------------
@@ -528,7 +544,7 @@ def test_a_detached_ngspice_job_reads_the_data_file_beside_the_deck(work_dir: Pa
             circuits=[{"path": str(deck_path), "id": "dut"}],
         )
         final = api.wait(receipt["job_id"], timeout=120)
-        assert final["status"] == "completed", final
+        assert final["status"] == "completed", (final.get("failures"), final)
         analysis = api.analyze_results(
             sources=[{"job_id": receipt["job_id"], "label": "dut"}],
             recipes=[{"key": "va", "metric": "value", "expr": "v(a)", "at": "0.5"}],
