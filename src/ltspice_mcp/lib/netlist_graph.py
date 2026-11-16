@@ -844,10 +844,11 @@ class _SubcktRegistry:
         answers = settle_definitions(found, self.reader.subckt_rule)
         scopes: dict[str, int] = {}
         for answer in answers:
-            scopes[answer.key[1]] = scopes.get(answer.key[1], 0) + 1
+            scopes[answer.name.lower()] = scopes.get(answer.name.lower(), 0) + 1
         apart: set[str] = set()
         for answer in answers:
-            key = answer.key[1]
+            # Keyed by ``lower()``, the fold every lookup in this module uses.
+            key = answer.name.lower()
             if scopes[key] > 1:
                 if key not in apart:
                     apart.add(key)
@@ -858,7 +859,7 @@ class _SubcktRegistry:
                             ignored=tuple(
                                 source
                                 for d, source, _s in self.candidates
-                                if d.name.casefold() == key
+                                if d.name.lower() == key
                             ),
                             reason=(
                                 f"Subcircuit {answer.name} is defined in more than one "

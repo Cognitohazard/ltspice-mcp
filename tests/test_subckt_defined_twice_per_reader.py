@@ -31,7 +31,7 @@ from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.lint_rules import lint_deck
-from ltspice_mcp.lib.netlist_graph import compare_graphs, parse_netlist_graph
+from ltspice_mcp.lib.netlist_graph import compare_graphs, flatten_graph, parse_netlist_graph
 from ltspice_mcp.lib.simulator import NGSPICE_NO_USER_INIT
 from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.spice_lex import definition_rule, lex_deck, subckt_definitions
@@ -501,3 +501,11 @@ def test_a_definition_nested_in_one_out_of_force_is_out_of_force_too(reader: str
     in_force = sorted(cards[i].line_start for i in found.in_force.values())
     assert in_force == ([2] if reader == "ngspice" else [5, 6])
     assert line in in_force
+
+
+def test_the_graph_finds_a_subcircuit_whose_name_folds_two_ways():
+    """The graph keys its definitions by the fold its lookups use, so a name
+    ``casefold`` and ``lower`` fold differently (``Straße``) still expands."""
+    deck = "* t\n.subckt Straße a b\nR1 a b 1k\n.ends\nI1 0 in 1\nX1 in 0 Straße\n.op\n.end\n"
+    graph = parse_netlist_graph(deck, reader=_profile("ngspice"))
+    assert [c.ref for c in flatten_graph(graph).components if c.ref != "I1"] == ["X1.R1"]
