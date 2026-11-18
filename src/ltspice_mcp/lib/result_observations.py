@@ -64,7 +64,7 @@ from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.device_names import DevicePath, path_text, spelled_name, split_path, trace_key
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import parse_spice_value
-from ltspice_mcp.lib.log_types import measurement_failed, measurement_named
+from ltspice_mcp.lib.log_types import given_no_value, measurement_named, run_measurement_facts
 from ltspice_mcp.lib.spice_lex import SpiceLexError, directive_head, lex_deck
 from ltspice_mcp.lib.spice_lex_views import directive_args, read_instance
 from ltspice_mcp.lib.spice_validator import leading_numeric_tokens
@@ -731,27 +731,18 @@ def reconciliation_observations(
     """
     obs: list[Observation] = []
 
-    # Which measurement a requested name refers to is measurement_named's answer.
-    failed = [
-        name
-        for name in summary.get("failed_measurements") or []
-        if measurement_failed(summary, name)
-    ]
-    # A FAILED .meas still appears as a null-valued key in ``measurements`` (and
-    # in ``failed_measurements``). Without removing it here, the produced-check
-    # below would treat it as produced and skip it — shadowing the "failed"
-    # classification, so a failed measurement never surfaced as an observation.
-    produced_meas = [
-        name
-        for name in summary.get("measurements") or {}
-        if measurement_named(name, failed) is None
-    ]
+    # Which requested .meas the run gave no value for, and which of those it
+    # printed failed, is run_measurement_facts' answer, the one the run row
+    # and the every-run observation read; this only adds why.
+    facts = run_measurement_facts(summary, requested.get("meas") or [])
+    no_value = given_no_value(facts)
+    failed = facts.get("failed") or []
     warns = " ".join(summary.get("warnings") or []).lower()
     meas_batch_skipped = "batch mode" in warns and "meas" in warns
     four_batch_skipped = ".fourier line ignored" in warns or "skips .four" in warns
 
     for name in requested.get("meas", []):
-        if measurement_named(name, produced_meas) is not None:
+        if measurement_named(name, no_value) is None:
             continue
         if measurement_named(name, failed) is not None:
             reason = "failed"

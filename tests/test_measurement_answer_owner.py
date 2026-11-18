@@ -28,6 +28,9 @@ _PICKS_NO_FIELD: dict[str, str] = {
     "tools/analyze.py:_measurements_failed_everywhere": (
         "reads which names LTspice printed failed, never a value"
     ),
+    "lib/services.py:measurements_unread": (
+        "reads only whether the section was decoded, never a value"
+    ),
 }
 
 

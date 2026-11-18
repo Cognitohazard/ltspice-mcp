@@ -1308,16 +1308,15 @@ def _measurements_failed_everywhere(
     """The ``.meas`` that gave no value in any run this analysis read
     (``result_observations.measurements_failed_in_every_run``), for each
     set of runs whose decks request the same names. A run whose log's
-    measurements could not be read is not counted; ``_relay_solve_failures``
-    already says its log was not read."""
+    measurements were not read (``services.measurements_unread``) is not
+    counted; ``_relay_solve_failures`` already says a log was not read."""
     groups: dict[tuple[str, ...] | None, tuple[list[list[str]], set[str]]] = {}
     for run in runs:
         logs = captured_logs.get(run.manifest_id)
-        if logs is None:
+        family = run.source.explicit_dialect or run.source.dialect
+        if logs is None or services.measurements_unread(logs, family) is not None:
             continue
         section = logs.section("measurements")
-        if section["status"] == "error":
-            continue
         requested = (
             deck_observation_inputs(run.source.netlist)[0]
             if run.source.netlist is not None

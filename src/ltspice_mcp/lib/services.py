@@ -262,6 +262,29 @@ def source_for_run(
     )
 
 
+#: The families whose logs the server reads ``.meas`` results from
+#: (``docs/design/mcp_surface.md``): a QSPICE or Xyce run's measure output is
+#: not read.
+MEASURING_FAMILIES = frozenset({"ltspice", "ngspice"})
+
+
+def measurements_unread(logs: DecodedLog | None, family: str | None) -> str | None:
+    """Why a run's log says nothing of its measurements that can be trusted,
+    or None when its measurements section was read: ``simulator_unsupported``
+    for a family whose measure output the server does not read,
+    ``log_unread`` for a log that was not captured or whose section could not
+    be decoded. A family not known (a bare log path) is read as the log
+    decoder read it. The one answer the run row and the analysis both ask before
+    they take an empty section to mean "printed nothing"."""
+    if family is not None and family not in MEASURING_FAMILIES:
+        return "simulator_unsupported"
+    if logs is None or not any(item.role == "log" for item in logs.captured.files):
+        return "log_unread"
+    if logs.section("measurements")["status"] == "error":
+        return "log_unread"
+    return None
+
+
 def compression_drops_points(source: AnalysisSource, raw: DecodedRaw) -> bool:
     """Whether ``raw`` is a transient that LTspice XVII saved with waveform
     compression on, so its stored samples leave out points the run computed

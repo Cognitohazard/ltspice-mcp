@@ -1997,10 +1997,13 @@ class ExperimentRunner(RunnerBase):
         measurement reads it (``services.answer_measurements``), with the
         build the run named and the deck it ran; or that the log's
         measurements could not be read."""
-        section = outcome.logs.section("measurements") if outcome.logs is not None else None
-        if section is None or section["status"] == "error":
-            case.measurement_facts = {"coverage": "log_unread"}
+        unread = services.measurements_unread(
+            outcome.logs, dialect_for_simulator_name(job.simulator)
+        )
+        if unread is not None or outcome.logs is None:
+            case.measurement_facts = {"coverage": unread or "log_unread"}
             return
+        section = outcome.logs.section("measurements")
         requested, _ = await asyncio.to_thread(deck_observation_inputs, case.staged_deck)
         names = requested["meas"] if requested is not None else None
         if section["status"] != "parsed":

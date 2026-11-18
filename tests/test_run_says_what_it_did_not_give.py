@@ -799,3 +799,27 @@ def test_a_read_by_path_of_a_compressed_xvii_transient_says_so(
     raw = SyncApi(state_no_sim).load_raw(_recorded_pair(build, "tran", work_dir))
     expected = ["compressed_transient"] if rec.generation(build) == "xvii" else []
     assert _compression(list(raw.observations)) == expected
+
+
+@pytest.mark.parametrize("family", ["qspice", "xyce"])
+async def test_a_run_on_a_simulator_whose_measures_are_not_read_says_so(
+    family: str, config: ServerConfig, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The server reads ``.meas`` results only from LTspice and ngspice logs,
+    so a QSPICE or Xyce run's rows say its measurements were not read, and
+    neither name any as not given nor send the caller to a recipe that cannot
+    read them. The stand-in hands back a recorded log; only the simulator's
+    family decides."""
+    from ltspice_mcp.lib.simulator import SIMULATORS
+
+    stand_in = type(SIMULATORS[family].__name__, (FakeSim,), {})
+    state = SessionState.create(config, available={family: stand_in})
+    deck, raw, log = _recorded_run(
+        "ltspice26", "log/meas_failed", "raw/tran_uncompressed", work_dir
+    )
+    replaying_simulator(monkeypatch, raw, log)
+    receipt = await _run(state, deck, f"unread-{family}", variations=[])
+    for row in receipt["runs"]["items"]:
+        assert _measured(row) == {"measurements_coverage": "simulator_unsupported"}
+    assert _ROUTE not in receipt["hint"]
+    assert _every_run_failed(receipt.get("observations", [])) == []

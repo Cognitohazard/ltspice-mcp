@@ -988,9 +988,10 @@ steps of a stepped run only, `measurements_not_established` the steps whose
 printed value is not established as the result (LTspice XVII prints 0 for a
 failed step), and `measurements_not_printed` the requested ones the log
 printed nothing for. `measurements_coverage` is `not_read` for a case recorded
-before these were kept and `log_unread` when the log's measurements could not
-be read; the fields left out otherwise mean every requested `.meas` gave a
-value. When a row names one, the receipt's hint names the `measurements`
+before these were kept, `log_unread` when the log's measurements could not
+be read, and `simulator_unsupported` for a QSPICE or Xyce run, whose measure
+output the server does not read; the fields left out otherwise mean every
+requested `.meas` gave a value. When a row names one, the receipt's hint names the `measurements`
 recipe, and a `meas_failed_in_every_run` observation names each `.meas` that
 gave no value in any run. Runs are rendered as `items: [RunRecord]`, each row an object
 with the same keys at every budget.

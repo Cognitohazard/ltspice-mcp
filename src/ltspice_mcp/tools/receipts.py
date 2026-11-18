@@ -199,7 +199,7 @@ _ARTIFACT_SCHEMA: dict[str, Any] = {
 }
 
 #: Why a run row's measurement fields were not read (``measurements_coverage``).
-MEASUREMENTS_COVERAGE = ("not_read", "log_unread")
+MEASUREMENTS_COVERAGE = ("not_read", "log_unread", "simulator_unsupported")
 
 #: A list of steps of one measurement: the run's step count bounds it.
 _STEPS_SCHEMA: dict[str, Any] = {"type": "array", "items": {"type": "integer"}, CUT: NEVER}
@@ -271,8 +271,9 @@ RUN_RECORD_SCHEMA: dict[str, Any] = {
             "description": (
                 "Present when the row's failed_measurements were not read: "
                 "'not_read', a run recorded before the server kept them; "
-                "'log_unread', the log's measurements could not be read. Read them "
-                "with the measurements recipe."
+                "'log_unread', the log's measurements could not be read; "
+                "'simulator_unsupported', a simulator whose measure output the server "
+                "does not read."
             ),
         },
         "attempt": {
