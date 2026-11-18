@@ -159,8 +159,21 @@ api.verify_circuit(**args)
 **Fields left out.** A result leaves out the fields that say nothing (an
 empty list or object, a null, a false flag), by the same rule and with the
 same kept fields as the tool's reply (`docs/design/mcp_surface.md`, §2,
-"Fields left out"), so a script and a tool call read one shape. Read a field
-that may be empty with a default, such as `row.get("assignments", {})`.
+"Fields left out"), so a script and a tool call read one shape. Reading a
+field the operation's output schema declares and the result left out gives the
+field's empty value: an empty list, an empty object, `False`, or `None` for
+anything else (a sub-answer the answer beside it implies reads as that answer:
+`structurally_equivalent` is true beside `equivalent: true`). So
+`row["assignments"]` is `{}` for a run with no variation, and
+`result.get("failures")` is `[]`. The rule holds in nested objects and rows, a
+field one branch of the schema declares counts as declared (a `jobs` result
+answers `timed_out` for every action), and a raw page and an `ApiCallError`'s
+`payload` answer the same way. `get(key, default)` gives your default. A key
+the schema does not declare still raises `KeyError`, so a misspelt name fails.
+Everything else is the result as sent: `in`, `len`, iteration, equality, `repr`
+and `json.dumps` see only the fields the reply carried, so `"failures" in
+result` still tells whether the reply carried the field. `dict(result)` and
+`result.copy()` give plain dicts, which no longer answer a left-out field.
 
 **Complete results.** Where an MCP tool pages or caps a result, the method
 returns all of it:

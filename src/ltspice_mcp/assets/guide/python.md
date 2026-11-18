@@ -75,7 +75,9 @@ starting a session.
   variation set something, and the case's `status`), `failures` and
   `observations` when there are any, and the `analysis` block when you
   attached `analyze`. A result leaves out a field that says nothing, as a
-  reply does, so read one that may be empty with `.get`. A row's status describes its case. A case that ran is
+  reply does, and reading a left-out field gives its empty value (`[]`, `{}`,
+  `False` or `None`), so `row["assignments"]` is `{}` for an unswept run; `in`
+  still tells whether the reply carried it, and a misspelt key raises. A row's status describes its case. A case that ran is
   `"produced"` while the job is `"completed"`, so select rows on `"produced"`.
 - `wait=False` returns the receipt at once; `api.wait(job_id, timeout_s=None)`
   blocks until the job is terminal. A timeout returns the current snapshot with
