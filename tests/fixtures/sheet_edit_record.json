@@ -3468,15 +3468,6 @@
    "tests/test_edit_schematic.py::test_a_value_a_resistor_would_read_as_another_node_is_refused_by_every_writer[1 k-set_component_value]"
   ]
  },
- "d884fb75781c2fbb": {
-  "answer": {
-   "reply": "5551ffee5fde1ce6",
-   "sheet": "4f700298c191ce88"
-  },
-  "tests": [
-   "tests/test_recursive_subcircuit_compare.py::test_edit_schematic_reference_stage_states_the_failure"
-  ]
- },
  "daf6cfa941c166e1": {
   "answer": {
    "message": "invalid view_cursors.preexisting: malformed page cursor: 'tampered'",
@@ -3681,6 +3672,16 @@
   },
   "tests": [
    "tests/test_recorded_ltspice_schematics.py::test_an_edit_of_a_sources_value_keeps_its_own_parameters_on_a_sheet"
+  ]
+ },
+ "e94fce57dfda0f01": {
+  "answer": {
+   "reply": "5551ffee5fde1ce6",
+   "sheet": "4f700298c191ce88"
+  },
+  "platform": "posix",
+  "tests": [
+   "tests/test_recursive_subcircuit_compare.py::test_edit_schematic_reference_stage_states_the_failure"
   ]
  },
  "e9f96d301c87cc8c": {
