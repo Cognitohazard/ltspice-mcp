@@ -648,7 +648,7 @@ inputs = ["raw/tran.cir", "raw/tran_uncompressed.cir", "raw/tran_double.cir"]
 
 [behaviour.raw-compression]
 summary = "What waveform compression keeps of a transient: a 1 mV RC charge compressed, uncompressed, with a maximum step and with a maximum step of a fifth of the run, the same charge at 1 V, and what a .meas reads from each."
-model = ["lib/raw_parser.py", "lib/result_observations.py"]
+model = ["lib/raw_parser.py", "lib/result_observations.py", "lib/services.py", "tools/analyze.py"]
 inputs = ["raw/compress_1mv.cir", "raw/compress_1mv_off.cir", "raw/compress_1mv_maxstep.cir", "raw/compress_1mv_wide_maxstep.cir", "raw/compress_1v.cir"]
 
 [behaviour.raw-window-offset]
@@ -752,7 +752,7 @@ keep = ["log"]
 
 [behaviour.log-meas-failed]
 summary = "What the log says of a measurement that cannot be taken or does not parse, and what happens to the measurements around it."
-model = ["lib/log_parser.py", "lib/log_types.py", "lib/metrics.py", "lib/result_observations.py", "lib/raw_parser.py", "lib/lint_rules.py", "lib/spice_validator.py", "tools/analyze.py", "tools/inspect_tools.py"]
+model = ["lib/log_parser.py", "lib/log_types.py", "lib/metrics.py", "lib/result_observations.py", "lib/raw_parser.py", "lib/lint_rules.py", "lib/spice_validator.py", "tools/analyze.py", "tools/inspect_tools.py", "tools/receipts.py", "lib/experiment_runner.py", "lib/log_conditions.py"]
 inputs = ["log/meas_failed.cir", "log/meas_bad_syntax.cir"]
 keep = ["log"]
 
@@ -820,12 +820,12 @@ keep = ["log"]
 
 [behaviour.subckt-device-names]
 summary = "How each build names a device, a node and a port current inside named and nested subcircuit instances: in the .op device table with and without logopinfo, in an operating-point raw, and in a transient's raw, stepped and not."
-model = ["lib/device_names.py", "lib/trace_names.py", "lib/metrics.py", "lib/log_parser.py"]
+model = ["lib/device_names.py", "lib/trace_names.py", "lib/metrics.py", "lib/log_parser.py", "lib/result_observations.py", "lib/experiment_runner.py"]
 inputs = ["log/subckt_names.cir", "log/subckt_names_off.cir", "raw/subckt_names_tran.cir", "raw/subckt_names_step.cir"]
 
 [behaviour.save-subckt-names]
 summary = "Which spelling of a device current and a node inside nested subcircuit instances each build's .save accepts, with and without the instances' X, and what the raw then holds."
-model = ["lib/hierarchy.py", "lib/device_names.py"]
+model = ["lib/hierarchy.py", "lib/device_names.py", "lib/result_observations.py", "lib/experiment_runner.py"]
 inputs = ["raw/save_subckt_names.cir", "raw/save_subckt_names_no_x.cir"]
 
 [behaviour.log-device-op-precision]
@@ -1068,7 +1068,7 @@ inputs = ["deck/undefined_model_z.cir", "deck/undefined_model_o.cir", "deck/unde
 
 [behaviour.log-meas-when-step-table]
 summary = "Whether the table of a stepped WHEN ever prints a level column beside an at column: with RISE, FALL, CROSS=LAST and TD, a WHEN of an expression, a FIND ... WHEN, and a WHEN crossed in only one step, whose other step XVII prints as 0, as it prints a crossing at 0 s."
-model = ["lib/log_parser.py", "lib/log_decode.py", "lib/services.py", "lib/metrics.py", "tools/analyze.py", "tools/inspect_tools.py"]
+model = ["lib/log_parser.py", "lib/log_decode.py", "lib/services.py", "lib/metrics.py", "tools/analyze.py", "tools/inspect_tools.py", "lib/log_types.py", "tools/receipts.py"]
 inputs = ["log/meas_when_step_forms.cir", "log/meas_when_step_fails.cir"]
 keep = ["log"]
 

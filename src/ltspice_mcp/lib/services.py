@@ -55,9 +55,11 @@ from ltspice_mcp.lib.raw_parser import (
     points_reached,
 )
 from ltspice_mcp.lib.result_observations import (
+    READ_BY_JOB,
     coarse_compressed_waveform,
     coarse_waveform_observation,
     compressed_transient,
+    compressed_xvii_observation,
     deck_tran_max_step,
 )
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name
@@ -65,6 +67,7 @@ from ltspice_mcp.lib.simulator_build import (
     Producer,
     SimulatorExecutable,
     executable_identity,
+    reported_build,
     same_executable,
     which_ltspice,
 )
@@ -259,6 +262,47 @@ def source_for_run(
     )
 
 
+#: The families whose logs the server reads ``.meas`` results from
+#: (``docs/design/mcp_surface.md``): a QSPICE or Xyce run's measure output is
+#: not read.
+MEASURING_FAMILIES = frozenset({"ltspice", "ngspice"})
+
+
+def measurements_unread(logs: DecodedLog | None, family: str | None) -> str | None:
+    """Why a run's log says nothing of its measurements that can be trusted,
+    or None when its measurements section was read: ``simulator_unsupported``
+    for a family whose measure output the server does not read,
+    ``log_unread`` for a log that was not captured or whose section could not
+    be decoded. A family not known (a bare log path) is read as the log
+    decoder read it. The one answer the run row and the analysis both ask before
+    they take an empty section to mean "printed nothing"."""
+    if family is not None and family not in MEASURING_FAMILIES:
+        return "simulator_unsupported"
+    if logs is None or not any(item.role == "log" for item in logs.captured.files):
+        return "log_unread"
+    if logs.section("measurements")["status"] == "error":
+        return "log_unread"
+    return None
+
+
+def compression_drops_points(source: AnalysisSource, raw: DecodedRaw) -> bool:
+    """Whether ``raw`` is a transient that LTspice XVII saved with waveform
+    compression on, so its stored samples leave out points the run computed
+    (recorded: ``raw/compress_1mv``, 13 points where ``raw/compress_1mv_off``
+    stores 1078). The build is the source's producer
+    (:func:`source_producer`), with the build its files name for a bare path.
+    LTspice 26 stored every point of the same run, and a build not shown is
+    not claimed. The one answer every read and recipe that takes samples
+    asks. Blocking: it may read the run's log and raw headers."""
+    if not compressed_transient(raw):
+        return False
+    producer = source.producer or source_producer(
+        source, read_dialect="ltspice", reported=reported_build(source.log, source.raw)
+    )
+    found = which_ltspice(producer.program, producer.build)
+    return found is not None and found.generation == "xvii"
+
+
 def coarse_waveform(source: AnalysisSource, raw: DecodedRaw) -> dict[str, float] | None:
     """Whether waveform compression left ``raw``'s transient coarse
     (``coarse_compressed_waveform``), judged against the maximum step of the
@@ -282,10 +326,12 @@ def read_observations(source: AnalysisSource, raw: DecodedRaw) -> tuple[dict[str
     """
     observations = list(source.observations)
     found = None if source.window is not None else coarse_waveform(source, raw)
+    case_id = (source.identity or {}).get("case_id")
+    label = str(case_id) if case_id else (source.raw.name if source.raw else "this run")
     if found is not None:
-        case_id = (source.identity or {}).get("case_id")
-        label = str(case_id) if case_id else (source.raw.name if source.raw else "this run")
         observations.append(dict(coarse_waveform_observation([(label, found)], run_cap=1)))
+    elif compression_drops_points(source, raw):
+        observations.append(dict(compressed_xvii_observation([label], run_cap=1)))
     if source.signals is not None:
         observations.append(
             {
@@ -547,7 +593,10 @@ def case_run_context(
         identity=identity,
         console=console,
         simulator_version=case.simulator_version,
-        observations=(partial_raw_observation(case, held),) if held is not None else (),
+        observations=(
+            *((partial_raw_observation(case, held),) if held is not None else ()),
+            *(item for item in case.observations if item.get("code") in READ_BY_JOB),
+        ),
         producer=run_producer(job, case),
     )
 

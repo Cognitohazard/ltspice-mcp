@@ -171,9 +171,7 @@ async def test_an_axis_whose_imaginary_part_can_be_a_coordinate_is_refused_on_ev
     assert len(loaded.trace("v(out)")) == 16
     # A window of the axis is refused too, rather than kept by its real part.
     with pytest.raises(ResultError, match="imaginary part that can be a coordinate"):
-        await asyncio.to_thread(
-            api.load_raw, str(raw), dialect="ngspice", window=(2e3, 2e4)
-        )
+        await asyncio.to_thread(api.load_raw, str(raw), dialect="ngspice", window=(2e3, 2e4))
     failures = readings["analyzed"]["failures"]
     assert sorted(f["where"] for f in failures) == ["ac:0", "ac:0"]
     for failure in failures:

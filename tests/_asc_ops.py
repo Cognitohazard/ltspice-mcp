@@ -146,6 +146,10 @@ def run_ops(
     entries, abort = run_op_batch(editor, typed, path, stop_on_error=stop_on_error)
     if save and abort is None:
         editor.save_netlist(path)
+        # As edit_schematic's commit does: the cached entry's stamp is the
+        # file's before this save, so a later write of the same size within
+        # one file-time tick would otherwise hand back this edited editor.
+        state.editors.invalidate(path)
     return entries, abort, editor
 
 
