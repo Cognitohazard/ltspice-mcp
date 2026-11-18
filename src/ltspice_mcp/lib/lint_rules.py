@@ -623,7 +623,8 @@ def _lib_read_nothing_ngspice(
     """A ``.lib`` card naming no section from which ngspice, in the run's
     mode, reads nothing (``deck_staging.library_read``): native and hsa
     ngspice stop on it, and a mode that reads ``.lib`` as an include drops
-    every card of a file that declares sections and runs on without them.
+    every card of a file that declares sections, after which some builds run
+    on without them and others stop (``deck_staging.AFTER_A_MISSING_INCLUDE``).
     In the deck or in any file it reaches."""
     return [
         _finding(
@@ -1324,8 +1325,9 @@ RULES: tuple[LintRule, ...] = (
     LintRule("lib-section-ngspice", "blocking", _lib_section_ngspice, family="ngspice"),
     # Blocking: native and hsa ngspice stop on a .lib that names no section,
     # and a mode that reads .lib as an include drops every card of a file
-    # that declares sections and runs on without them, a wrong number with
-    # only a missing-include line in the log (measured on ngspice-42).
+    # that declares sections. ngspice-42 then runs on without them, a wrong
+    # number with only a missing-include line in the log; ngspice-45 stops on
+    # the missing include. Refused before the run for either build.
     LintRule(
         "lib-without-section-ngspice", "blocking", _lib_read_nothing_ngspice, family="ngspice"
     ),

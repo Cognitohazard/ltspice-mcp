@@ -167,8 +167,9 @@ X1 input output myfilter rval=1k cval=1n
     (lint `lib-without-section-ngspice`).
   - **This server's default `kiltpsa`** (a mixed LTspice/PSPICE-compatibility
     mode) inverts this. A bare `.lib <file>` loads an unsectioned file whole;
-    on a file that declares sections it drops every card of the file and the
-    run goes on without them (lint `lib-sections-dropped-ngspice`). A
+    on a file that declares sections it reads none of the file's cards, and
+    depending on the build the run either stops or goes on without them (lint
+    `lib-sections-dropped-ngspice`). A
     sectioned `.lib <file> <section>` (the PDK corner idiom) is split by the
     `lt`/`ps` flags into two plain includes that drop the section.
     `run_experiments` refuses such a deck (lint `lib-section-ngspice`); run

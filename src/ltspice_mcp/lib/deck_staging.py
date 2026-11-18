@@ -1242,6 +1242,15 @@ class LibraryRead:
         return self.selected is None or owner.casefold() == self.selected.casefold()
 
 
+#: What ngspice does after it fails to find a file a ``.lib`` line names as an
+#: include, which differs by build: none of the file's cards are read in
+#: either, and only whether the run stops differs (ngspice-42 measured here,
+#: ngspice-45 in CI, ``tests/test_library_card_read.py``).
+AFTER_A_MISSING_INCLUDE = (
+    "whether the run then stops on the missing include or goes on without them, "
+    "a wrong number, depends on the ngspice build (ngspice-42 goes on, ngspice-45 stops)"
+)
+
 #: The file itself, or a file pulled in whole: every card is read.
 WHOLE_FILE = LibraryRead()
 
@@ -1265,14 +1274,17 @@ def library_read(
       file brings in nothing. What LTspice makes of a file that declares
       sections, named by a ``.lib`` with no section, is not recorded: it is
       read whole, as before (to record: ``lib-whole-sectioned`` in ``inputs/cases.toml``).
-    - ngspice, measured on ngspice-42 (``tests/test_library_card_read.py``):
+    - ngspice, measured on ngspice-42 and, where it differs, ngspice-45
+      (``tests/test_library_card_read.py``):
       with a section named, only that section's cards, not the cards outside
       every section; in a mode that reads ``.lib`` as an include (``lt`` or
       ``ps`` set) or not at all (``s3``), nothing. With no section, in a mode
       that reads ``.lib`` as an include, the whole file when it declares no
       section, and nothing when it does: the file's own ``.lib tt`` is read as
-      an include of a file ``tt``, and every card of the file is dropped
-      while the run goes on. In any other mode ngspice stops on the card
+      an include of a file ``tt`` that does not exist, and no card of the
+      file is read. ngspice-42 then runs on without them, a wrong number;
+      ngspice-45 stops on the missing include (``AFTER_A_MISSING_INCLUDE``).
+      In any other mode ngspice stops on the card
       ("unimplemented dot command '.lib'"). An include of a file that
       declares sections reads its section lines as the deck's own: a mode
       that reads ``.lib`` as an include drops every card of the file, and
@@ -1310,7 +1322,7 @@ def library_read(
                 unread=(
                     f"ngspice in mode {mode!r} reads the section line of {reference.raw_path} "
                     f"(.lib {named[0]}) as an include of a file that does not exist, so it "
-                    "drops every card of the file and runs on without them. "
+                    f"drops every card of the file: {AFTER_A_MISSING_INCLUDE}. "
                     f'{fix}, in a mode that reads sections ([simulator] ngbehavior = "hsa")'
                 ),
                 rule_id="lib-sections-dropped-ngspice",
@@ -1331,7 +1343,8 @@ def library_read(
                 unread=(
                     f"ngspice in mode {mode!r} reads .lib {reference.raw_path} "
                     f"{reference.section} as two plain includes: it finds no file "
-                    f"{reference.section!r} and drops the library's cards"
+                    f"{reference.section!r} and reads none of the library's cards: "
+                    f"{AFTER_A_MISSING_INCLUDE}"
                 ),
                 rule_id="lib-section-ngspice",
             )
@@ -1369,8 +1382,8 @@ def library_read(
         unread=(
             f"ngspice in mode {mode!r} reads .lib {reference.raw_path} as an include, "
             f"and the file's own section line (.lib {named[0]}) as an include of a "
-            f"file that does not exist, so it drops every card of the file and runs "
-            f"on without them. Name the section: .lib {reference.raw_path} {named[0]} "
+            f"file that does not exist, so it drops every card of the file: "
+            f"{AFTER_A_MISSING_INCLUDE}. Name the section: .lib {reference.raw_path} {named[0]} "
             f"(sections: {', '.join(named)}), in a mode that reads sections "
             '([simulator] ngbehavior = "hsa")'
         ),

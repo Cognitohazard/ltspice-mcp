@@ -8,8 +8,9 @@ expects, `inspect(kind="hierarchy")` and `verify_circuit`'s comparison.
   selected section.
 - A `.lib <file>` with no section, or an `.include`, of a file that declares
   sections, in ngspice's default `kiltpsa` mode, is now refused
-  (`lib-sections-dropped-ngspice`): ngspice drops every card of the file and
-  the run went on with a wrong answer.
+  (`lib-sections-dropped-ngspice`): ngspice reads none of the file's cards,
+  and then, depending on the build, either stops (ngspice-45) or goes on
+  with a wrong answer (ngspice-42).
 - A `.lib <file>` with no section in native or `hsa` mode, and an `.include`
   of a file that declares sections there, on which ngspice stops, are now
   refused before the run (`lib-without-section-ngspice`).

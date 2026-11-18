@@ -108,13 +108,15 @@ def _lint(deck: Path, mode: str, family: str = "ngspice") -> dict[str, list[dict
 def test_kiltpsa_reads_nothing_of_a_sectioned_file_named_by_a_bare_lib(tmp_path: Path):
     """kiltpsa reads ``.lib sect.lib`` as an include, and the file's own
     ``.lib tt`` as an include of a file ``tt`` that does not exist: ngspice
-    drops every card of the file and runs on. Every reader says so."""
+    reads none of the file's cards, then runs on (ngspice-42) or stops
+    (ngspice-45). Every reader says so, and names both."""
     deck = _deck(tmp_path, ".lib sect.lib", "V1 a 0 1\nM1 a a 0 0 nout\nX1 a amp\n")
     findings = _lint(deck, "kiltpsa")
     (refusal,) = findings["lib-sections-dropped-ngspice"]
     assert refusal["at"]["line"] == 2
     reason = refusal["evidence"]["reason"]
     assert "drops every card" in reason and "Name the section" in reason
+    assert "ngspice-42 goes on, ngspice-45 stops" in reason
     # The models the file declares are not there for ngspice.
     assert [f["subject"] for f in findings["model-missing"]] == ["M1", "X1"]
     # The run expects only the deck's own analysis.
@@ -344,7 +346,9 @@ def _ngspice_value(deck: Path, mode: str) -> float | str:
         return float(match.group(1))
     if "unimplemented dot command" in text:
         return "unimplemented"
-    return "failed"
+    if "Could not find include file tt" in text:
+        return "missing include"
+    return "failed: " + text[-400:]
 
 
 #: v(b) of a 1 V source over rv and a 1 ohm resistor: 1/(1+rv). The deck
@@ -353,7 +357,12 @@ def _ngspice_value(deck: Path, mode: str) -> float | str:
 _LIVE_LIBRARY = ".param rv=1\n.lib tt\n.param rv=2\n.endl tt\n.param rv=3\n"
 _VALUE = {1000: 1 / 1001, 2: 1 / 3, 3: 1 / 4}
 
-#: What ngspice-42 does with each card in each mode (measured).
+#: What ngspice does with each card in each mode (measured on ngspice-42, and
+#: on ngspice-45 where CI runs it). 1000 is "none of the file's cards are
+#: read", which the builds show two ways: ngspice-42 runs on with the deck's
+#: own value, ngspice-45 stops on the missing include ``tt``
+#: (``deck_staging.AFTER_A_MISSING_INCLUDE``). Either is accepted, and the
+#: test prints which it saw.
 LIVE_TABLE = {
     (".lib sect.lib tt", ""): 2,
     (".lib sect.lib tt", "hsa"): 2,
@@ -397,9 +406,12 @@ def test_ngspice_reads_a_lib_card_as_the_table_says(card: str, mode: str, tmp_pa
         ".op\n.control\nop\nprint v(b)\n.endc\n.end\n",
     )
     measured = _ngspice_value(deck, mode)
+    print(f"ngspice gave: {measured!r}")
     expected = LIVE_TABLE[card, mode]
     if isinstance(expected, str):
         assert measured == expected
+    elif expected == 1000 and measured == "missing include":
+        pass  # none of the file read, and the build stops on it
     else:
         assert measured == pytest.approx(_VALUE[expected], rel=1e-5)
     # The one answer says the same: what it reads, or that it reads nothing.
