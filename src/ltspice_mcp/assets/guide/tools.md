@@ -302,9 +302,32 @@ reduces every field.
 ## The response budget
 
 `run_experiments`, `jobs`, `analyze_results` and `inspect` take a `budget` in
-estimated tokens (compact characters / 4, minimum 500). If the assembled
-response is over it, the server applies the rungs of a fixed reduction ladder
-in order until it fits:
+estimated tokens (compact characters / 4, minimum 500). It is the reply's
+target. If you omit it, the server's default (`[analysis] default_budget`,
+4000 tokens) is the target; set the config value to `0` to send every reply
+whole.
+
+`run_experiments` and `jobs` cut a reply over its target by run rows, whole
+rows from the end, keeping at least one. The reply's `cut` names what it left
+out (`"/runs/items": {total, returned, next}`), and its hint gives
+`jobs(action="runs", job_id, cursor)`, which reads the rest from the job's
+record; pass `run_fields` again with each cursor. A page read later shows the
+job as it stands then, with its `status` and `progress`. `jobs(action="list")`
+is cut by circuit groups the same way, and its `cursor` reads on.
+`failures`, `observations`, `warnings`, `completeness`, `progress` and each
+kept row's diagnostics and measurement fields are never cut: a target too
+small for them still returns them in full, with one `budget_not_met`
+observation saying the reply is over its target.
+
+A note that describes the job or your request (a micro sign read as micro, an
+ngspice mode that could not be checked, results left in the job folder, the
+request's `lint` and `source`, the route to the `measurements` recipe) is sent
+in full once per session. After that it comes back as its code with
+`said_before` in place of its text, and the hint names
+`jobs(action="status", job_id)`, which always sends every note in full.
+
+`analyze_results`, `inspect` and a receipt's attached analysis apply the rungs
+of a fixed reduction ladder in order until the reply fits:
 
 | rung | what is removed |
 |-|-|
@@ -314,21 +337,13 @@ in order until it fits:
 
 Rung 2 lowers one page limit on every list in the reply at once, to the
 largest limit at which all their rows fit, so the values of three recipes
-share the budget instead of each taking all of it. If even one row per list
-is over the budget, a `run_experiments` or `jobs` receipt contains no per-case
-rows at all, so its minimum size is the same for 4 cases or 400.
-`completeness` and `runs.total` still count the runs, `jobs(runs)` pages them
-from `runs.next_cursor`, and `analyze_results` over the `job_id` returns the
-attached analysis's rows. `reduce` results and spec verdicts are kept.
+share the budget instead of each taking all of it. In a receipt it lowers the
+attached analysis's rows, down to none; `analyze_results` over the `job_id`
+returns them. `reduce` results and spec verdicts are kept.
 
-`failures`, `observations`, `warnings`, `completeness` and spec verdicts are
-never cut. A budget too small for them still returns them in full, with an
-observation that the reply is over the budget.
-
-If you omit `budget`, the server applies its own default
-(`[analysis] default_budget`, 4000 tokens) at rung 0 only, so a large response
-loses only `source_hashes` and the inline waveform points
-you did not ask for; set `max_points` to keep a count, or use `"format":
-"csv"` for every sample. A receipt thins its attached waveforms either way;
-`analyze_results` over the job reads more. A thinned recipe says so in its
-`warnings`. Set the config value to `0` to turn the default off.
+With no `budget`, only rung 0 applies, so a large response loses only
+`source_hashes` and the inline waveform points you did not ask for; set
+`max_points` to keep a count, or use `"format": "csv"` for every sample. A
+receipt thins its attached waveforms either way; `analyze_results` over the
+job with a larger `max_points` returns more. A thinned recipe says so in its
+`warnings`.

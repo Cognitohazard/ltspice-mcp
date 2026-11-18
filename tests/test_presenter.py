@@ -28,10 +28,13 @@ from ltspice_mcp.errors import InvalidCursorError
 from ltspice_mcp.lib.presenter import (
     ListCut,
     Presented,
+    Record,
     cuttable_lists,
     open_page,
+    open_record,
     present,
     present_page,
+    present_record_page,
     resolve_pointer,
 )
 from ltspice_mcp.lib.reply_cuts import schema_lists
@@ -322,6 +325,92 @@ def test_every_page_in_order_rebuilds_each_list(made_up, tmp_path):
             pages += 1
             assert pages <= len(resolve_pointer(answer, pointer))
         assert read == resolve_pointer(answer, pointer), (name, pointer)
+
+
+def test_every_page_of_a_record_rebuilds_its_list(made_up, tmp_path):
+    """The second kind of source: a list the server keeps in a record. Its
+    cut stores nothing, its cursor names the record and an offset, and reading
+    every page from the record, in order, rebuilds the list."""
+    name, schema, answer = made_up
+    store = _store(tmp_path)
+    target = estimate_tokens(answer, as_sent=False) // 3
+    records = {
+        pointer: Record("made_up", f"record-{index}")
+        for index, (pointer, _) in enumerate(cuttable_lists(answer, schema))
+    }
+
+    shown = present(
+        answer,
+        schema,
+        target=target,
+        tool="tool",
+        snapshot={},
+        store=store,
+        ttl_hours=1.0,
+        records=records,
+    )
+
+    assert shown.stored is None
+    assert "stored_answer" not in shown.reply
+    assert not list(store.results_dir.glob("*.json")), name
+    for pointer, entry in shown.cut.items():
+        record = records[pointer]
+        read = list(resolve_pointer(shown.reply, pointer, default=[]))
+        following: str | None = entry.next
+        pages = 0
+        while following is not None:
+            key, offset = open_record(following, kind=record.kind)
+            assert (key, offset) == (record.key, len(read))
+            page = present_record_page(answer, pointer, offset, record, target=target)
+            more = page.cut[pointer]
+            assert more.offset == offset
+            assert more.total == len(resolve_pointer(answer, pointer))
+            assert more.returned >= 1
+            read.extend(resolve_pointer(page.reply, pointer)[: more.returned])
+            following = more.next
+            pages += 1
+            assert pages <= len(resolve_pointer(answer, pointer))
+        assert read == resolve_pointer(answer, pointer), (name, pointer)
+
+
+def test_a_record_cursor_is_not_a_stored_answers(tmp_path):
+    record_page_cursor = (
+        present(
+            _big(),
+            _SCHEMA,
+            target=400,
+            tool="tool",
+            snapshot={},
+            store=_store(tmp_path),
+            ttl_hours=1.0,
+            records={"/rows": Record("rows", "r1")},
+        )
+        .cut["/rows"]
+        .next
+    )
+    assert record_page_cursor is not None
+    with pytest.raises(InvalidCursorError):
+        open_page(record_page_cursor, _SCHEMA, tool="tool", store=_store(tmp_path), gone="")
+    with pytest.raises(InvalidCursorError):
+        open_record(record_page_cursor, kind="another")
+
+
+def test_a_reply_over_its_target_says_so_once(tmp_path):
+    said: list[tuple[int, int]] = []
+
+    shown = present(
+        {"notes": [f"note {index} " + "x" * 40 for index in range(50)]},
+        _SCHEMA,
+        target=100,
+        tool="tool",
+        snapshot={},
+        store=_store(tmp_path),
+        ttl_hours=1.0,
+        over=lambda reply, size, target: said.append((size, target)),
+    )
+
+    assert not shown.met
+    assert said == [(shown.size, 100)]
 
 
 # ---------------------------------------------------------------------------
