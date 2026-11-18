@@ -45,7 +45,6 @@ from ltspice_mcp.lib.recovery_records import RecoveryError
 from ltspice_mcp.lib.runner_base import _is_ngspice_lib_section_failure, inject_logopinfo
 from ltspice_mcp.lib.services import extract_netlist_info
 from ltspice_mcp.lib.spice_lex import lex_deck
-from ltspice_mcp.lib.subckt_mismatch import MismatchPlanError, build_plan, closure_from_deck
 from ltspice_mcp.lib.variations import (
     AssignVariation,
     CircuitDeck,
@@ -301,24 +300,6 @@ async def staged_references(text: str, where: Path, state: SessionState) -> Any:
     """The files a staged deck names, which a case's copies are routed by."""
     deck = write_deck(where, text)
     return sorted(path.name for path in staged_reference_targets(text, deck, depth=0))
-
-
-@reader
-async def mismatch_closure(text: str, where: Path, state: SessionState) -> Any:
-    """The files the per-instance mismatch plan reads for one deck."""
-    deck = write_deck(where, text)
-    return [file.path.name for file in closure_from_deck(deck, text)]
-
-
-@reader
-async def mismatch_plan(text: str, where: Path, state: SessionState) -> Any:
-    """The devices a mismatch prefix reaches through a subcircuit."""
-    deck = write_deck(where, text)
-    try:
-        plan = build_plan(closure_from_deck(deck, text), prefix="XN")
-    except MismatchPlanError as exc:
-        return exc.code
-    return [target.ref for target in plan.targets]
 
 
 @reader

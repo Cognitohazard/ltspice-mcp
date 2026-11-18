@@ -391,7 +391,6 @@ model = [
     "tools/inspect_tools.py",
     "lib/experiment_inputs.py",
     "lib/variations.py",
-    "lib/subckt_mismatch.py",
     "lib/montecarlo.py",
     "lib/deck_staging.py",
     "lib/runner_base.py",
@@ -594,7 +593,6 @@ model = [
     "lib/deck_staging.py",
     "lib/experiment_inputs.py",
     "lib/variations.py",
-    "lib/subckt_mismatch.py",
     "lib/montecarlo.py",
 ]
 # The included file's first line is R1 (1k) and R2 (3k) follows its .end, so
@@ -680,7 +678,7 @@ inputs = ["raw/op.cir", "raw/op_one_subckt.cir", "raw/op_subckt.cir"]
 
 [behaviour.mos-multiplier]
 summary = "That a MOSFET card with m=4 is four parallel copies of one device, each drawing one copy's current from the same model, which is what a mismatch draw's area of m·W·L assumes; and what each build makes of m on a subcircuit's X line, one or two levels up, and of m={mult} set from it: both ignore the X line's m, so an LTspice draw counts only the device's own."
-model = ["lib/montecarlo.py", "lib/variations.py", "lib/subckt_mismatch.py"]
+model = ["lib/montecarlo.py", "lib/variations.py"]
 # Each device's drain is fed through a 0 V source, so the operating-point raw
 # holds its current: one copy (V1) against m=4 on the card (V4), and in the
 # second deck one copy in a body against m=4 on the X line (VX) and against a
@@ -974,7 +972,6 @@ model = [
     "tools/inspect_tools.py",
     "lib/spice_validator.py",
     "lib/hierarchy.py",
-    "lib/subckt_mismatch.py",
     "lib/lint_rules.py",
     "tools/verify.py",
 ]
@@ -1035,7 +1032,7 @@ extra = ["deck/level.wav"]
 
 [behaviour.directive-spellings]
 summary = "Whether a build reads .opt as .options, .params as .param, .function as .func and .fourier as .four."
-model = ["lib/netlist_diff.py", "lib/subckt_mismatch.py", "lib/result_observations.py"]
+model = ["lib/netlist_diff.py", "lib/result_observations.py"]
 # directive_opt: 1 A through 1k with tc1=0.01 is 1230 V at 50 degrees and
 # 1000 at 27. directive_params: 2000 if rv is read, a refusal if not.
 # directive_function: 2000 if dbl is defined. directive_fourier: a Fourier

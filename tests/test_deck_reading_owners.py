@@ -136,8 +136,6 @@ _PLAIN_LEX: dict[str, str] = {
     "lib/montecarlo.py:parse_model_params": "one .model card",
     "lib/spice_lex_ops.py:inject_card_before_end": "the one card to insert",
     "lib/spice_validator.py:validate_directive": "one directive",
-    "lib/subckt_mismatch.py:_render_clone": "one subcircuit block, copied out of a file",
-    "lib/subckt_mismatch.py:render": "a patched subcircuit block the plan rendered",
     "lib/variations.py:_validate_write_sets": "one card the hierarchy resolved",
     "lib/instance_targeting.py:TargetEditor._copy_includes": "one include card, rewritten",
     "lib/instance_targeting.py:TargetEditor.clone_model": "one .model card",
@@ -414,16 +412,6 @@ _CARD_TEXT_READERS: dict[str, str] = {
     ),
     "lib/spice_validator.py:validate_netlist_duplicate_params": (
         "moves to a view in a follow-up: free-text scan of a body"
-    ),
-    "lib/subckt_mismatch.py:_append_to_code": (
-        "an edit writing a card back: where its comment starts"
-    ),
-    "lib/subckt_mismatch.py:_deck_scale": (
-        "moves to a view in a follow-up: a directive's arguments (.options scale, and "
-        ".opt, which no recording covers)"
-    ),
-    "lib/subckt_mismatch.py:_render_clone": (
-        "an edit writing cards back: a subcircuit block copied as written"
     ),
     "lib/symbol_file.py:SymbolFile.bbox": "not a deck card: a symbol drawing",
     "lib/variations.py:_closure_model_card": (
