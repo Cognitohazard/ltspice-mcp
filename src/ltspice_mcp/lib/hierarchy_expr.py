@@ -23,7 +23,6 @@ _BINARY = {
     ast.Sub: operator.sub,
     ast.Mult: operator.mul,
     ast.Div: operator.truediv,
-    ast.Pow: operator.pow,
 }
 
 
@@ -49,20 +48,81 @@ def references_sibling(expression: str, siblings: set[str]) -> bool:
     return any(name.casefold() in siblings for name in names)
 
 
+#: The ngspice modes in which a negative base raised to an integer computes
+#: as Python computes it, signed: ``(-2)^3`` is -8 and ``(-2)^-1`` -0.5
+#: (measured on ngspice-42, ``tests/test_power_operator.py``). In native mode
+#: ngspice takes the power of the base's magnitude instead (8), and no other
+#: mode was measured.
+_SIGNED_POWER_MODES = frozenset({"hsa", "kiltpsa"})
+
+
+def _require_mode(simulator: str, ngbehavior: str | None) -> None:
+    """Refuse to read an ngspice expression with no mode: what a power gives
+    there depends on it."""
+    if simulator == "ngspice" and ngbehavior is None:
+        raise ValueError(
+            "an ngspice expression is read in the deck's ngspice mode "
+            "(ngbehavior), and none was given"
+        )
+
+
+def _power(base: float, exponent: float, simulator: str, ngbehavior: str | None) -> float:
+    """``base`` raised to ``exponent`` where the reader's value is the one the
+    simulator computes, else a refusal saying why.
+
+    A positive base gives the same value in every ngspice mode, and so does a
+    zero base with a positive exponent. A zero base with a zero or negative
+    exponent differs by mode (``0^0`` is 0 under hsa and 1 otherwise, and
+    ``0^-1`` stops native and kiltpsa ngspice where hsa gives 0), and a
+    negative base with a fractional exponent gives a different number in
+    each mode, none of them a real power; both are declined. ngspice's own
+    arithmetic is not modelled.
+    """
+    if base > 0 or (base == 0 and exponent > 0):
+        return base**exponent
+    if base == 0:
+        raise ValueError(
+            "a zero base with a zero or negative exponent is not resolved: ngspice "
+            "computes it differently in each mode (0^0 is 0 under hsa and 1 otherwise)"
+        )
+    if simulator == "ngspice" and (ngbehavior or "") == "":
+        raise ValueError(
+            "a negative base is not resolved in ngspice's native mode, where ngspice "
+            "takes the power of its magnitude ((-2)^3 is 8 there)"
+        )
+    if not float(exponent).is_integer():
+        raise ValueError(
+            "a negative base with a fractional exponent is not resolved: it has no "
+            "real power, and ngspice gives a different number in each mode"
+        )
+    if simulator == "ngspice" and ngbehavior not in _SIGNED_POWER_MODES:
+        raise ValueError(
+            f"the power of a negative base is not established in ngspice mode "
+            f"{ngbehavior!r}; it is for hsa and kiltpsa"
+        )
+    return base**exponent
+
+
 def evaluate(
     expression: str,
     lookup: Callable[[str], float],
     *,
     simulator: str,
+    ngbehavior: str | None,
     element_value: bool = False,
 ) -> float:
     """Interpret finite arithmetic, identifiers and SPICE suffixes under fixed bounds.
+
+    ``ngbehavior`` is the ngspice mode the deck is read in (``""`` for
+    native), required for ngspice and None for any other simulator: what a
+    power gives depends on it (``_power``).
 
     With ``element_value`` the text is an element's value field, where a bare
     number is read as LTspice reads a value (``1k5`` is 1500, ``9V1`` is 9,
     recorded). What LTspice makes of those spellings inside an expression is
     not recorded, so there they are declined.
     """
+    _require_mode(simulator, ngbehavior)
     if simulator == "ltspice" and "^" in expression:
         raise ValueError("LTspice caret semantics are unsupported")
     if len(expression) > MAX_EXPRESSION_LENGTH:
@@ -95,11 +155,16 @@ def evaluate(
             result = lookup(node.id.casefold())
         elif isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
             result = visit(node.operand) * (-1 if isinstance(node.op, ast.USub) else 1)
-        elif isinstance(node, ast.BinOp) and type(node.op) in _BINARY:
+        elif isinstance(node, ast.BinOp) and (
+            type(node.op) in _BINARY or isinstance(node.op, ast.Pow)
+        ):
             left, right = visit(node.left), visit(node.right)
-            if isinstance(node.op, ast.Pow) and abs(right) > 64:
-                raise ValueError("power exponent exceeds 64")
-            result = _BINARY[type(node.op)](left, right)
+            if isinstance(node.op, ast.Pow):
+                if abs(right) > 64:
+                    raise ValueError("power exponent exceeds 64")
+                result = _power(left, right, simulator, ngbehavior)
+            else:
+                result = _BINARY[type(node.op)](left, right)
         else:
             raise ValueError("unsupported expression; only static arithmetic is resolved")
         if not isinstance(result, (float, int)) or not math.isfinite(result):
@@ -110,18 +175,24 @@ def evaluate(
 
 
 class Environment:
-    """Lexical environment with caller-evaluated overrides and lazy dependencies."""
+    """Lexical environment with caller-evaluated overrides and lazy dependencies.
+
+    ``simulator`` and ``ngbehavior`` are who reads the expressions, as
+    ``evaluate`` takes them: the mode is required for ngspice."""
 
     def __init__(
         self,
         expressions: Mapping[str, str],
         *,
         simulator: str,
+        ngbehavior: str | None,
         parent: Environment | None = None,
         overrides: Mapping[str, NumericFact] | None = None,
         dynamic_reason: str | None = None,
     ) -> None:
+        _require_mode(simulator, ngbehavior)
         self.simulator = simulator
+        self.ngbehavior = ngbehavior
         self.expressions = {key.casefold(): value for key, value in expressions.items()}
         self.parent = parent
         self.overrides = dict(overrides or {})
@@ -166,7 +237,11 @@ class Environment:
 
         try:
             value = evaluate(
-                expression, lookup, simulator=self.simulator, element_value=element_value
+                expression,
+                lookup,
+                simulator=self.simulator,
+                ngbehavior=self.ngbehavior,
+                element_value=element_value,
             )
             return NumericFact(expression, value, unit, "resolved")
         except (ValueError, SyntaxError, ArithmeticError, RecursionError) as exc:

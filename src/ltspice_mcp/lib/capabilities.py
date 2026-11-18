@@ -298,7 +298,11 @@ ENTRIES: tuple[Entry, ...] = (
         "ngspice",
         "lint_rules",
         "supported",
-        ("test:tests/test_lint_rules.py", "fixture:ngspice_ac_no_meas.log"),
+        (
+            "test:tests/test_lint_rules.py",
+            "fixture:ngspice_ac_no_meas.log",
+            "test:tests/test_library_card_read.py",
+        ),
     ),
     *_each(
         _UNMODELLED,
@@ -331,7 +335,12 @@ ENTRIES: tuple[Entry, ...] = (
         "ngspice",
         "hierarchy",
         "supported",
-        ("test:tests/test_hierarchy.py", "test:tests/test_hierarchy_check.py"),
+        (
+            "test:tests/test_hierarchy.py",
+            "test:tests/test_hierarchy_check.py",
+            "test:tests/test_library_card_read.py",
+            "test:tests/test_power_operator.py",
+        ),
     ),
     *_each(
         _UNMODELLED,
@@ -521,6 +530,8 @@ ENTRIES: tuple[Entry, ...] = (
             "test:tests/test_hierarchy.py",
             "test:tests/test_ngspice_startup_mode.py",
             "test:tests/test_ngspice_mode.py",
+            "test:tests/test_library_card_read.py",
+            "test:tests/test_power_operator.py",
         ),
         mechanism=(
             "[simulator] ngbehavior, passed as -D ngbehavior= on every run, with -n so that "

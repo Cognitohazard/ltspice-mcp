@@ -67,6 +67,14 @@ def reads_lib_as_includes(mode: str | None) -> bool:
     return bool(compat_flags(mode) & {"lt", "ps"})
 
 
+def rejects_lib(mode: str | None) -> bool:
+    """Whether ngspice in ``mode`` stops on every ``.lib`` card, with or
+    without a section ("unimplemented dot command '.lib'"), as it does with
+    ``s3`` set and neither ``lt`` nor ``ps`` (spice3f5 has no ``.lib``).
+    Measured on ngspice-42 (``tests/test_library_card_read.py``)."""
+    return "s3" in compat_flags(mode) and not reads_lib_as_includes(mode)
+
+
 def multiplies_m(mode: str | None) -> bool:
     """Whether ngspice in ``mode`` multiplies a card's own ``m`` by the ``m``
     its subcircuit passes down, rather than replacing it, as it does with

@@ -15,9 +15,11 @@ from ltspice_mcp.lib import atomic_write_bytes, wsl
 from ltspice_mcp.lib.encoding import (
     decode_spice_bytes_with_encoding,
     encode_spice_text,
+    read_spice_text,
     rewrite_codec,
 )
 from ltspice_mcp.lib.experiment_types import ManifestEntry
+from ltspice_mcp.lib.ngspice_compat import reads_lib_as_includes, rejects_lib
 from ltspice_mcp.lib.pathutil import resolve_safe_path
 from ltspice_mcp.lib.spice_lex import (
     INCLUDE_HEADS,
@@ -27,6 +29,7 @@ from ltspice_mcp.lib.spice_lex import (
     TokenKind,
     directive_head,
     emit,
+    lex_deck,
     lex_for_edit,
     tokenize_body,
     unreadable_cards,
@@ -122,12 +125,21 @@ class StagedDeck:
 
 @dataclass(frozen=True)
 class IncludeReference:
-    """One quote-aware include or library reference in a parsed deck."""
+    """One quote-aware include or library reference in a parsed deck.
+
+    ``token`` spans the path as written: for LTspice, which reads the rest of
+    a ``.lib`` line as one path, every word after ``.lib``. ``head`` is the
+    card's head, folded (``.lib``, ``.include``). ``first_word`` is, for such
+    an LTspice path of more than one word, its first word when that alone
+    names a file: what a reader that splits off a section would have read.
+    """
 
     card: SpiceCard
     token: Token
     raw_path: str
     section: str | None
+    head: str = ".include"
+    first_word: str | None = None
 
 
 def _micro_fold_observation(
@@ -396,7 +408,9 @@ def stage_deck(
                     f"known. {error.suggestion[:1].upper()}{error.suggestion[1:]}.",
                     reference=" ".join(card.body.split()),
                 )
-            for reference in scan_include_references(parsed.read, anchor, depth=depth):
+            for reference in scan_include_references(
+                parsed.read, anchor, family=dialect, depth=depth
+            ):
                 target = resolve_reference(anchor.parent, reference.raw_path)
                 target_resolved = resolve_existing(target)
                 target_root = None
@@ -412,6 +426,11 @@ def stage_deck(
                     depth=depth,
                     max_depth=max_depth,
                 )
+                if target_resolved is None and dialect == "ltspice":
+                    # What LTspice reads instead, and why it is nothing.
+                    reason = (
+                        library_read(reference, None, LibraryReader("ltspice")).unread or reason
+                    )
                 if reason is not None:
                     if not allow_live_includes:
                         # Only the root escape has these two remedies; a
@@ -497,6 +516,10 @@ def stage_deck(
                     if (
                         is_absolute_reference(reference.raw_path)
                         or expected != actual_destination.resolve()
+                        # An LTspice path of more than one word is written in
+                        # quotes, so every reader of the staged copy reads
+                        # one path (``scan_include_references``).
+                        or _unquoted_words(reference)
                     ):
                         _replace_reference(
                             reference,
@@ -699,6 +722,13 @@ def stage_deck(
     )
 
 
+#: The family a staged copy's references are split as, by the readers of
+#: staged copies below: every family reads a staged copy alike, since
+#: staging writes an LTspice path of more than one word in quotes
+#: (``stage_deck``) and splits every other family's as ngspice does.
+STAGED_COPY_FAMILY: str | None = None
+
+
 def staged_reference_targets(text: str, source: Path, *, depth: int) -> list[Path]:
     """Return the resolved paths one staged file's include references name.
 
@@ -716,7 +746,9 @@ def staged_card_reference_targets(
     """Resolve staged references from cards already parsed for this file."""
     return [
         resolve_reference(source.parent, reference.raw_path).resolve()
-        for reference in scan_include_references(cards, source, depth=depth)
+        for reference in scan_include_references(
+            cards, source, family=STAGED_COPY_FAMILY, depth=depth
+        )
     ]
 
 
@@ -757,7 +789,9 @@ def rewrite_staged_reference_cards(
     Returns whether any reference was rewritten.
     """
     changed = False
-    for reference in scan_include_references(cards, source, depth=depth):
+    for reference in scan_include_references(
+        cards, source, family=STAGED_COPY_FAMILY, depth=depth
+    ):
         target = resolve_reference(source.parent, reference.raw_path).resolve()
         name = renames.get(target)
         if name is None:
@@ -857,10 +891,20 @@ def scan_include_references(
     cards: list[SpiceCard],
     source: Path,
     *,
+    family: str | None,
     depth: int = 0,
     exists: Callable[[Path], bool] | None = None,
 ) -> list[IncludeReference]:
     """Return quote-aware include/library references from parsed cards.
+
+    ``family`` is the simulator family that reads the cards. The one place a
+    ``.lib`` card is split into a path and a section: LTspice reads the whole
+    rest of the line as one path, quoted or not (recorded on both builds:
+    ``deck/lib_path_space_unquoted``, ``deck/lib_path_space_quoted``,
+    ``deck/lib_section``), so its references name no section. Every other
+    family reads the second word as the path and a third as the section, as
+    ngspice does. A staged copy writes an LTspice path of more than one word
+    in quotes (``stage_deck``), so the two readings of a staged copy agree.
 
     ``depth`` is 0 for the deck itself and >0 for a file reached by following
     a reference out of it — inside such a file a bare ``.lib <name>`` is a
@@ -879,17 +923,33 @@ def scan_include_references(
                 # (``unreadable_references``) before reading any.
                 raise
             continue  # a directive that names no file
+        tokens = [token for token in tokens if token.kind != TokenKind.COMMENT_TRAIL]
         if len(tokens) < 2 or tokens[0].text.casefold() not in INCLUDE_HEADS:
             continue
+        head = tokens[0].text.casefold()
+        is_lib = head == ".lib"
         path_token = tokens[1]
         raw_path = unquote(path_token.text)
+        first_word: str | None = None
+        if is_lib and family == "ltspice" and len(tokens) > 2:
+            # The rest of the line, as written, is one path.
+            start, end = tokens[1].body_offset, tokens[-1].body_end
+            path_token = Token(
+                TokenKind.BARE, card.body[start:end], None, None, start, end - start
+            )
+            raw_path = path_token.text
+            first_word = unquote(tokens[1].text)
+            if not (exists or Path.exists)(resolve_reference(source.parent, first_word)):
+                first_word = None
+            section = None
+        else:
+            section = unquote(tokens[2].text) if is_lib and len(tokens) > 2 else None
         if not raw_path:
             continue
-        is_lib = tokens[0].text.casefold() == ".lib"
-        section = unquote(tokens[2].text) if is_lib and len(tokens) > 2 else None
         if (
             is_lib
             and section is None
+            and len(tokens) == 2
             and looks_like_section_declaration(raw_path, source, depth, exists=exists)
         ):
             continue
@@ -899,6 +959,8 @@ def scan_include_references(
                 token=path_token,
                 raw_path=raw_path,
                 section=section,
+                head=head,
+                first_word=first_word,
             )
         )
     return references
@@ -1013,7 +1075,10 @@ def _ngspice_data_references(card: SpiceCard, tokens: list[Token]) -> list[DataR
         else:
             continue
         for candidate in candidates:
-            if candidate.kind == TokenKind.KEY_VALUE and (candidate.key or "").casefold() == "file":
+            if (
+                candidate.kind == TokenKind.KEY_VALUE
+                and (candidate.key or "").casefold() == "file"
+            ):
                 reference = _value_reference(card, text, candidate, offset, f"{candidate.key}=")
                 if reference is not None:
                     found.append(reference)
@@ -1036,9 +1101,7 @@ def _value_reference(
     if not raw:
         return None
     quoted = raw != value
-    return DataReference(
-        card, offset + start, offset + start + len(value), raw, quoted, keyword
-    )
+    return DataReference(card, offset + start, offset + start + len(value), raw, quoted, keyword)
 
 
 def relative_data_path_established(dialect: str | None, *, in_deck: bool) -> bool:
@@ -1135,23 +1198,188 @@ def card_sections(
     return sections
 
 
-def in_other_section(owner: str | None, selected: str | None) -> bool:
-    """Whether a card in library section ``owner`` (``card_sections``; None
-    outside every section) sits in a section other than the one its file is
-    pulled in for (``selected``, the section a ``.lib file tt`` names, the
-    names folded as SPICE folds them). Such a card is not read: ``.lib file
-    tt`` reads the cards of section ``tt`` and of no other. With no section
-    selected none is excluded here.
+@dataclass(frozen=True)
+class LibraryReader:
+    """Who reads a deck's ``.lib`` cards: the simulator family and, for
+    ngspice, the compatibility mode it reads the deck in (``""`` for native),
+    which decides what a ``.lib`` card brings in (``library_read``)."""
 
-    The one rule for which sections of a library are left out, which every
-    reader of a library's cards asks. Whether the cards outside every
-    section are read when a section is selected, and whether a file pulled
-    in with none selected is read whole, is not recorded: hierarchy
-    discovery leaves both out, the other readers read them. LTspice reads a
-    sectioned ``.lib`` as a file name (deck/lib_section), so the rule is
-    ngspice's.
+    family: str | None
+    mode: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.family == "ngspice" and self.mode is None:
+            raise ValueError("ngspice reads a .lib card by its mode; give the run's mode")
+
+
+#: The reader for a deck whose simulator's reading of a library is not
+#: decided (QSPICE, Xyce, or none named): the reading the server had before
+#: it knew ngspice's, kept for them (``library_read``).
+UNDECIDED_READER = LibraryReader(None)
+
+
+@dataclass(frozen=True)
+class LibraryRead:
+    """What one include or library card brings in (``library_read``).
+
+    ``unread`` says why nothing is read, and ``rule_id`` names the refusal the
+    lint gives it; with neither, ``reads`` says which cards of the file are
+    read: ``selected`` names the one section read (None reads every
+    section), and ``outside`` whether the cards outside every section are.
     """
-    return selected is not None and owner is not None and owner.casefold() != selected.casefold()
+
+    selected: str | None = None
+    outside: bool = True
+    unread: str | None = None
+    rule_id: str | None = None
+
+    def reads(self, owner: str | None) -> bool:
+        """Whether a card of the file in section ``owner`` (``card_sections``;
+        None outside every section) is read. The one comparison of a card's
+        section with the section a card selects."""
+        if self.unread is not None:
+            return False
+        if owner is None:
+            return self.outside
+        return self.selected is None or owner.casefold() == self.selected.casefold()
+
+
+#: The file itself, or a file pulled in whole: every card is read.
+WHOLE_FILE = LibraryRead()
+
+
+def library_read(
+    reference: IncludeReference | None,
+    sections: Sequence[str | None] | None,
+    reader: LibraryReader,
+) -> LibraryRead:
+    """What ``reference`` brings in for ``reader``: one section's cards, the
+    whole file, or nothing, with the reason.
+
+    ``reference`` is None for the deck itself, which is read whole.
+    ``sections`` are the ``card_sections`` of the file it names, or None when
+    no such file exists. The one answer every reader of a deck's library
+    cards asks: hierarchy discovery, the linter, the analyses a run expects,
+    the comparison of ``verify_circuit`` and the mismatch plan.
+
+    - LTspice reads the rest of the line as one path
+      (``scan_include_references``) and a file by that name whole. No such
+      file brings in nothing. What LTspice makes of a file that declares
+      sections, named by a ``.lib`` with no section, is not recorded: it is
+      read whole, as before (to record: ``lib-whole-sectioned`` in ``inputs/cases.toml``).
+    - ngspice, measured on ngspice-42 (``tests/test_library_card_read.py``):
+      with a section named, only that section's cards, not the cards outside
+      every section; in a mode that reads ``.lib`` as an include (``lt`` or
+      ``ps`` set) or not at all (``s3``), nothing. With no section, in a mode
+      that reads ``.lib`` as an include, the whole file when it declares no
+      section, and nothing when it does: the file's own ``.lib tt`` is read as
+      an include of a file ``tt``, and every card of the file is dropped
+      while the run goes on. In any other mode ngspice stops on the card
+      ("unimplemented dot command '.lib'").
+    - Any other simulator's reading is not decided: a section named reads
+      that section and the cards outside every section, and none reads the
+      whole file, as before.
+    """
+    if reference is None:
+        return WHOLE_FILE
+    missing = LibraryRead(
+        unread=_no_file(reference, reader), rule_id=_missing_rule(reference, reader)
+    )
+    if reference.head != ".lib" or reader.family != "ngspice":
+        if sections is None:
+            return missing
+        if reference.head != ".lib" or reader.family == "ltspice":
+            return WHOLE_FILE
+        return LibraryRead(selected=reference.section) if reference.section else WHOLE_FILE
+    # ngspice. What a named section, or a .lib in a mode that does not read
+    # .lib as an include, brings in does not depend on what the file holds.
+    mode = reader.mode or ""
+    if reference.section is not None:
+        if reads_lib_as_includes(mode):
+            return LibraryRead(
+                unread=(
+                    f"ngspice in mode {mode!r} reads .lib {reference.raw_path} "
+                    f"{reference.section} as two plain includes: it finds no file "
+                    f"{reference.section!r} and drops the library's cards"
+                ),
+                rule_id="lib-section-ngspice",
+            )
+        if rejects_lib(mode):
+            return LibraryRead(
+                unread=f"ngspice in mode {mode!r} (s3) does not read .lib at all",
+                rule_id="lib-section-ngspice",
+            )
+        if sections is None:
+            return missing
+        return LibraryRead(selected=reference.section, outside=False)
+    if not reads_lib_as_includes(mode):
+        declares = sections is not None and any(owner is not None for owner in sections)
+        fix = (
+            f"Name the section the file declares: .lib {reference.raw_path} <section>"
+            if declares
+            else f"Use .include {reference.raw_path} for a file with no sections"
+            if sections is not None
+            else f"Name the section to read (.lib {reference.raw_path} <section>), or use "
+            ".include for a file with no sections"
+        )
+        return LibraryRead(
+            unread=(
+                f"ngspice in mode {mode!r} stops on a .lib card that names no section "
+                f"(\"unimplemented dot command '.lib'\"). {fix}"
+            ),
+            rule_id="lib-without-section-ngspice",
+        )
+    if sections is None:
+        return missing
+    named = sorted({owner for owner in sections if owner is not None}, key=str.casefold)
+    if not named:
+        return WHOLE_FILE
+    return LibraryRead(
+        unread=(
+            f"ngspice in mode {mode!r} reads .lib {reference.raw_path} as an include, "
+            f"and the file's own section line (.lib {named[0]}) as an include of a "
+            f"file that does not exist, so it drops every card of the file and runs "
+            f"on without them. Name the section: .lib {reference.raw_path} {named[0]} "
+            f"(sections: {', '.join(named)}), in a mode that reads sections "
+            '([simulator] ngbehavior = "hsa")'
+        ),
+        rule_id="lib-sections-dropped-ngspice",
+    )
+
+
+def _no_file(reference: IncludeReference, reader: LibraryReader) -> str:
+    """Why a reference to a file that does not exist reads nothing."""
+    if reader.family == "ltspice" and reference.first_word is not None:
+        return (
+            "LTspice has no library sections: it reads the rest of the line, "
+            f"{reference.raw_path!r}, as one file name, and no such file exists; "
+            f"{reference.first_word!r} alone names a file. Include the file the "
+            "section's models are in, or a copy holding only that section"
+        )
+    return f"no file {reference.raw_path!r} exists"
+
+
+def _missing_rule(reference: IncludeReference, reader: LibraryReader) -> str | None:
+    if reader.family == "ltspice" and any(char.isspace() for char in reference.raw_path):
+        return "lib-section-ltspice"
+    return None
+
+
+def library_reads_of(deck: Path, reader: LibraryReader) -> list[LibraryRead]:
+    """What each include and library card of the deck at ``deck`` brings in
+    for ``reader``, in card order: ``library_read`` over the deck's own
+    references."""
+    cards = lex_deck(read_spice_text(deck)).cards
+    reads = []
+    for reference in scan_include_references(cards, deck, family=reader.family):
+        target = resolve_existing(resolve_reference(deck.parent, reference.raw_path))
+        sections = (
+            None
+            if target is None or not target.is_file()
+            else card_sections(lex_deck(read_spice_text(target), title=False).cards, target, 1)
+        )
+        reads.append(library_read(reference, sections, reader))
+    return reads
 
 
 def looks_like_section_declaration(
@@ -1194,6 +1422,13 @@ def unquote(value: str) -> str:
 def _render_data_path(path: str, quoted: bool) -> str:
     """A data path as a card names it: in quotes when it was, or when it holds a space."""
     return f'"{path}"' if quoted or any(char.isspace() for char in path) else path
+
+
+def _unquoted_words(reference: IncludeReference) -> bool:
+    """Whether the path of ``reference`` is more than one word, unquoted."""
+    return reference.token.kind != TokenKind.QUOTED and any(
+        char.isspace() for char in reference.raw_path
+    )
 
 
 def _replace_reference(reference: IncludeReference, path: str) -> None:

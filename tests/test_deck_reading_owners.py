@@ -289,6 +289,9 @@ _CARD_TEXT_READERS: dict[str, str] = {
     "lib/lint_rules.py:_lib_section_ltspice": (
         "display: the card's text shown in a finding, message or record, not read for a fact"
     ),
+    "lib/lint_rules.py:_lib_read_nothing_ngspice": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
     "lib/lint_rules.py:_lib_section_ngspice": (
         "display: the card's text shown in a finding, message or record, not read for a fact"
     ),

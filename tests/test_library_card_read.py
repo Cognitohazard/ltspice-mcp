@@ -48,17 +48,17 @@ MODES = ("", "hsa", "kiltpsa")
 SECTIONED = (
     "* a sectioned library\n"
     ".param rv=1\n"
-    ".model dout D(is=1e-14)\n"
+    ".model nout NMOS(level=1)\n"
     ".save v(a)\n"
     ".tran 1n 10n\n"
     ".subckt amp p\nR1 p 0 1k\n.ends amp\n"
     ".lib tt\n"
     ".param rv=2\n"
-    ".model dtt D(is=1e-14)\n"
+    ".model ntt NMOS(level=1)\n"
     ".subckt amp p\nR1 p 0 2k\n.ends amp\n"
     ".endl tt\n"
 )
-PLAIN = "* a library with no sections\n.param rv=1\n.model dplain D(is=1e-14)\n"
+PLAIN = "* a library with no sections\n.param rv=1\n.model nplain NMOS(level=1)\n"
 
 
 def _write(folder: Path, name: str, text: str) -> Path:
@@ -97,14 +97,14 @@ def test_kiltpsa_reads_nothing_of_a_sectioned_file_named_by_a_bare_lib(tmp_path:
     """kiltpsa reads ``.lib sect.lib`` as an include, and the file's own
     ``.lib tt`` as an include of a file ``tt`` that does not exist: ngspice
     drops every card of the file and runs on. Every reader says so."""
-    deck = _deck(tmp_path, ".lib sect.lib", "V1 a 0 1\nD1 a 0 dout\nX1 a amp\n")
+    deck = _deck(tmp_path, ".lib sect.lib", "V1 a 0 1\nM1 a a 0 0 nout\nX1 a amp\n")
     findings = _lint(deck, "kiltpsa")
     (refusal,) = findings["lib-sections-dropped-ngspice"]
     assert refusal["at"]["line"] == 2
     reason = refusal["evidence"]["reason"]
-    assert "drops every card" in reason and "name the section" in reason
+    assert "drops every card" in reason and "Name the section" in reason
     # The models the file declares are not there for ngspice.
-    assert [f["subject"] for f in findings["model-missing"]] == ["D1", "X1"]
+    assert [f["subject"] for f in findings["model-missing"]] == ["M1", "X1"]
     # The run expects only the deck's own analysis.
     requirements = deck_requirements(deck, reader=LibraryReader("ngspice", "kiltpsa"))
     assert requirements.analyses == (".op",)
@@ -119,11 +119,11 @@ def test_kiltpsa_reads_nothing_of_a_sectioned_file_named_by_a_bare_lib(tmp_path:
 
 
 def test_kiltpsa_reads_a_file_with_no_sections_whole(tmp_path: Path):
-    deck = _deck(tmp_path, ".lib plain.lib", "V1 a 0 1\nD1 a 0 dplain\n")
+    deck = _deck(tmp_path, ".lib plain.lib", "V1 a 0 1\nM1 a a 0 0 nplain\n")
     assert _lint(deck, "kiltpsa") == {}
     hierarchy = load_hierarchy(str(deck), [tmp_path], SemanticProfile("ngspice", "kiltpsa"))
-    (diode,) = [row for row in hierarchy.instances if row.reference == "D1"]
-    assert [model.name for model in diode.model_family] == ["dplain"]
+    (fet,) = [row for row in hierarchy.instances if row.reference == "M1"]
+    assert [model.name for model in fet.model_family] == ["nplain"]
 
 
 @pytest.mark.parametrize("mode", ["", "hsa"])
@@ -136,7 +136,9 @@ def test_native_and_hsa_fail_on_a_lib_card_with_no_section(
     deck = _deck(tmp_path, f".lib {library}")
     (refusal,) = _lint(deck, mode)["lib-without-section-ngspice"]
     reason = refusal["evidence"]["reason"]
-    assert "unimplemented" in reason and ".include" in reason
+    assert "unimplemented" in reason
+    # The fix: name a section the file declares, or include a file with none.
+    assert ("Name the section" if library == "sect.lib" else ".include plain.lib") in reason
     requirements = deck_requirements(deck, reader=LibraryReader("ngspice", mode))
     assert requirements.analyses == (".op",)
     with pytest.raises(NetlistError, match="unimplemented"):
@@ -153,12 +155,12 @@ def test_native_and_hsa_fail_on_a_lib_card_with_no_section(
 
 @pytest.mark.parametrize("mode", ["", "hsa"])
 def test_a_model_outside_every_section_is_missing(mode: str, tmp_path: Path):
-    deck = _deck(tmp_path, ".lib sect.lib tt", "V1 a 0 1\nD1 a 0 dout\nD2 a 0 dtt\n")
-    assert [f["subject"] for f in _lint(deck, mode)["model-missing"]] == ["D1"]
+    deck = _deck(tmp_path, ".lib sect.lib tt", "V1 a 0 1\nM1 a a 0 0 nout\nM2 a a 0 0 ntt\n")
+    assert [f["subject"] for f in _lint(deck, mode)["model-missing"]] == ["M1"]
     hierarchy = load_hierarchy(str(deck), [tmp_path], SemanticProfile("ngspice", mode))
     families = {row.reference: row.model_family for row in hierarchy.instances}
-    assert families["D1"] == ()
-    assert [model.name for model in families["D2"]] == ["dtt"]
+    assert families["M1"] == ()
+    assert [model.name for model in families["M2"]] == ["ntt"]
 
 
 @pytest.mark.parametrize("mode", ["", "hsa"])
@@ -282,6 +284,15 @@ LIVE_TABLE = {
     (".lib plain.lib", ""): "unimplemented",
     (".lib plain.lib", "hsa"): "unimplemented",
     (".lib plain.lib", "kiltpsa"): 3,
+    # Modes outside the three the reader models, read by their flags
+    # (``ngspice_compat``): lt reads .lib as an include as kiltpsa does, and
+    # s3 stops on every .lib card.
+    (".lib sect.lib tt", "lt"): 1000,
+    (".lib sect.lib", "lt"): 1000,
+    (".lib plain.lib", "lt"): 3,
+    (".lib sect.lib tt", "s3"): "unimplemented",
+    (".lib sect.lib", "s3"): "unimplemented",
+    (".lib plain.lib", "s3"): "unimplemented",
 }
 
 

@@ -1,5 +1,5 @@
 """Which cards of a sectioned library are read: ``.lib file tt`` reads the
-cards of section ``tt`` and no other (``deck_staging.read_in_section``).
+cards of section ``tt`` and no other (``deck_staging.library_read``).
 
 Hierarchy discovery read only the selected section, while the analyses a run
 expects (``runner_base.deck_requirements``) and the models the linter finds
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ltspice_mcp.lib.deck_staging import in_other_section
+from ltspice_mcp.lib.deck_staging import LibraryRead, LibraryReader
 from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.lint_rules import lint_deck
 from ltspice_mcp.lib.runner_base import _deck_has_sectioned_lib, deck_requirements
@@ -56,17 +56,20 @@ def test_a_model_the_selected_section_declares_is_found(tmp_path: Path):
 
 def test_the_unselected_sections_save_and_analysis_are_not_expected(tmp_path: Path):
     deck = _deck(tmp_path, "ntt")
-    requirements = deck_requirements(deck)
+    requirements = deck_requirements(deck, reader=LibraryReader("ngspice", "hsa"))
     assert requirements.analyses == (".op",)
     assert not requirements.has_save
     assert _deck_has_sectioned_lib(deck)
 
 
 def test_the_section_rule():
-    assert in_other_section("ff", "tt")
-    assert not in_other_section("TT", "tt")
-    assert not in_other_section(None, "tt")
-    assert not in_other_section("tt", None)
+    """ngspice's reading of ``.lib file tt``: section tt's cards, folded as
+    SPICE folds names, and no other card."""
+    read = LibraryRead(selected="tt", outside=False)
+    assert not read.reads("ff")
+    assert read.reads("TT")
+    assert not read.reads(None)
+    assert LibraryRead().reads("tt") and LibraryRead().reads(None)
 
 
 _OUTSIDE = (

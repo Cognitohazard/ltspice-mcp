@@ -570,7 +570,13 @@ inputs = [
 
 [behaviour.deck-includes]
 summary = "How .include and .lib are resolved: a file beside the deck, and a .lib that names a section."
-model = ["lib/deck_staging.py", "lib/lint_rules.py", "lib/runner_base.py"]
+model = [
+    "lib/deck_staging.py",
+    "lib/lint_rules.py",
+    "lib/runner_base.py",
+    "lib/hierarchy.py",
+    "lib/netlist_graph.py",
+]
 inputs = ["deck/lib_section.cir", "deck/include_relative.cir"]
 extra = ["deck/corners.lib", "deck/models.inc"]
 
@@ -1091,10 +1097,31 @@ inputs = ["deck/params_no_space.cir"]
 
 [behaviour.lib-path-with-space]
 summary = "Whether a .lib path holding a space is read as one path, unquoted and quoted."
-model = ["lib/deck_staging.py", "lib/lint_rules.py"]
+model = [
+    "lib/deck_staging.py",
+    "lib/lint_rules.py",
+    "lib/runner_base.py",
+    "lib/hierarchy.py",
+    "lib/netlist_graph.py",
+]
 # load.lib holds a 2k subcircuit: 1 A into it gives v(a) 2000 if the file is read.
 inputs = ["deck/lib_path_space_unquoted.cir", "deck/lib_path_space_quoted.cir"]
 extra = ["deck/spaced folder/load.lib"]
+
+[behaviour.lib-whole-sectioned]
+summary = "What a build reads of a file that declares sections, named by a .lib with no section: every card, the cards outside every section, or none."
+model = ["lib/deck_staging.py"]
+# sections.lib sets rout outside every section, rtt in section tt and rff in
+# section ff. Each deck reads one of them through 1 A: v(a) is its value if
+# that card is read, and there is no raw if it is not (or the line is
+# refused). The server reads every card (``deck_staging.library_read``).
+inputs = [
+    "deck/lib_whole_sectioned_rout.cir",
+    "deck/lib_whole_sectioned_rtt.cir",
+    "deck/lib_whole_sectioned_rff.cir",
+]
+extra = ["deck/sections.lib"]
+pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.meas-subckt-node]
 summary = "Whether a .meas reads a node inside a subcircuit instance XAMP, named xamp:mid and amp:mid, on the build's default settings and with subcircuit node voltages saved."

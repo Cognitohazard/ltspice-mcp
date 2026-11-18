@@ -21,6 +21,7 @@ from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import deck_prep, montecarlo
 from ltspice_mcp.lib.component_value import apply_value_to_instance
 from ltspice_mcp.lib.deck_staging import (
+    LibraryReader,
     relative_data_path_established,
     scan_data_references,
     stage_deck,
@@ -99,6 +100,9 @@ from tests import _ltspice_recorded as rec
 from tests.conftest import LTSPICE_READER, FakeSim
 from tests.ltspice_recorder import INPUTS
 from tests.test_inspect_tools import _run
+
+#: LTspice's reading of a deck's ``.lib`` cards (``deck_staging.library_read``).
+LTSPICE_LIBRARIES = LibraryReader("ltspice")
 
 MICRO = "µ"
 
@@ -258,7 +262,7 @@ def test_a_digit_after_the_letters_is_declined_inside_an_expression():
     an exponent are not after the letters."""
 
     def ltspice(text: str, **options) -> float:
-        return evaluate(text, lambda name: 0.0, simulator="ltspice", **options)
+        return evaluate(text, lambda name: 0.0, simulator="ltspice", ngbehavior=None, **options)
 
     with pytest.raises(ValueError, match="1k5"):
         ltspice("{1k5}")
@@ -1032,7 +1036,7 @@ async def test_the_checks_read_only_the_cards_ltspice_reads(
                 (f["rule_id"], f["at"].get("line"))
                 for f in verified.structured_content.get("findings", [])
             ),
-            deck_requirements(path),
+            deck_requirements(path, reader=LTSPICE_LIBRARIES),
             parse_requested_outputs(text),
             parse_source_amplitudes(text),
         )
@@ -1089,7 +1093,9 @@ async def test_a_card_ltspice_does_not_read_changes_no_reading(
     assert [
         f for f in verified.structured_content.get("findings", []) if f["severity"] == "error"
     ] == []
-    assert deck_requirements(path) == deck_requirements(read)
+    assert deck_requirements(path, reader=LTSPICE_LIBRARIES) == deck_requirements(
+        read, reader=LTSPICE_LIBRARIES
+    )
     assert parse_requested_outputs(text) == parse_requested_outputs(as_ltspice_reads(text))
     assert parse_source_amplitudes(text) == parse_source_amplitudes(as_ltspice_reads(text))
 
@@ -1469,7 +1475,7 @@ class TestDeckSemantics:
             assert rows[(reference,)]["value"]["status"] == "unresolved"
             assert "value" not in rows[(reference,)]["value"]
         with pytest.raises(ValueError, match="caret"):
-            evaluate("2^3", lambda name: 0.0, simulator="ltspice")
+            evaluate("2^3", lambda name: 0.0, simulator="ltspice", ngbehavior=None)
 
     async def test_a_subcircuits_header_default_beats_a_param_in_its_body(
         self, build: str, tmp_path: Path, state_no_sim, work_dir: Path

@@ -138,7 +138,7 @@ def test_every_reader_of_a_mode_reads_a_lib_section_as_ngspice_does(tmp_path: Pa
     classified = _is_ngspice_lib_section_failure(deck, NGspiceSimulator, mode)
     assert (classified is not None) is as_includes
     if drops:
-        with pytest.raises(NetlistError, match="sectioned libraries"):
+        with pytest.raises(NetlistError, match=r"two plain includes|does not read \.lib"):
             load_hierarchy(str(deck), [tmp_path], SemanticProfile("ngspice", mode))
     else:
         load_hierarchy(str(deck), [tmp_path], SemanticProfile("ngspice", mode))

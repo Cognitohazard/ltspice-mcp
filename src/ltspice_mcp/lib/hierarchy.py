@@ -21,8 +21,10 @@ from ltspice_mcp.lib.deck_nodes import GROUND, node_kind
 from ltspice_mcp.lib.deck_nodes import unestablished_reason as _unestablished_node
 from ltspice_mcp.lib.deck_staging import (
     DEFAULT_INCLUDE_DEPTH,
+    IncludeReference,
+    LibraryReader,
     card_sections,
-    in_other_section,
+    library_read,
     resolve_existing,
     resolve_reference,
     scan_include_references,
@@ -46,7 +48,7 @@ from ltspice_mcp.lib.hierarchy_expr import (
     references_sibling,
     scaled_geometry,
 )
-from ltspice_mcp.lib.ngspice_compat import drops_lib_sections, multiplies_m
+from ltspice_mcp.lib.ngspice_compat import multiplies_m
 from ltspice_mcp.lib.pathutil import resolve_safe_path, with_roots
 from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.spice_lex import (
@@ -169,6 +171,11 @@ class SemanticProfile:
         """``definitions``, set by the time a profile exists."""
         assert self.definitions is not None
         return self.definitions
+
+    @property
+    def library_reader(self) -> LibraryReader:
+        """Who reads the deck's ``.lib`` cards (``deck_staging.library_read``)."""
+        return LibraryReader(self.simulator, self.ngbehavior)
 
     @property
     def names(self) -> Naming:
@@ -442,8 +449,15 @@ def walk_active(
     count = 0
     lexical_scope: list[str] = []
 
-    def visit(path: Path, section: str | None, stack: tuple[tuple[Path, str | None], ...]) -> None:
+    reader = profile.library_reader
+
+    def visit(
+        path: Path,
+        reference: IncludeReference | None,
+        stack: tuple[tuple[Path, str | None], ...],
+    ) -> None:
         nonlocal count
+        section = reference.section if reference is not None else None
         key = (path, section.casefold() if section else None)
         if key in stack:
             raise NetlistError(f"active include cycle at {path}")
@@ -457,10 +471,17 @@ def walk_active(
         existence = dict(captured.existence)
         _refuse_unreadable_references(cards, path)
         sections = card_sections(cards, path, len(stack), exists=existence.__getitem__)
+        read = library_read(reference, sections, reader)
+        if read.unread is not None:
+            raise NetlistError(f"{read.unread} ({path})")
         refs = {
             id(ref.card): ref
             for ref in scan_include_references(
-                cards, path, depth=len(stack), exists=existence.__getitem__
+                cards,
+                path,
+                family=reader.family,
+                depth=len(stack),
+                exists=existence.__getitem__,
             )
         }
         targets = dict(captured.targets)
@@ -489,15 +510,7 @@ def walk_active(
                     raise NetlistError(f"malformed .endl at {path}:{card.line_start}")
                 opened = None
                 continue
-            if in_other_section(owner, section):
-                continue
-            # Hierarchy discovery also leaves out the cards outside every
-            # section of a file pulled in for one, and the cards inside the
-            # sections of a file pulled in for none. No recording decides
-            # either, and the other readers of a library read them
-            # (``deck_staging.in_other_section``; pinned in
-            # tests/test_library_section_read.py).
-            if (owner is None) != (section is None):
+            if not read.reads(owner):
                 continue
             if is_orphan_continuation(card):
                 raise NetlistError(f"orphan continuation at {path}:{card.line_start}")
@@ -505,18 +518,10 @@ def walk_active(
                 break
             ref = refs.get(id(card))
             if ref is not None:
-                if (
-                    ref.section
-                    and profile.simulator == "ngspice"
-                    and drops_lib_sections(profile.ngbehavior)
-                ):
-                    raise NetlistError(
-                        "sectioned libraries require an ngbehavior ngspice reads without "
-                        "lt, ps or s3, which drop the section"
-                    )
                 target = targets.get(ref.raw_path)
                 if target is None:
-                    raise NetlistError(f"missing include {ref.raw_path!r} from {path}")
+                    why = library_read(ref, None, reader).unread
+                    raise NetlistError(f"missing include {ref.raw_path!r} from {path}: {why}")
                 source = Source(
                     str(path), card.line_start, owner, lexical_scope[-1] if lexical_scope else None
                 )
@@ -525,7 +530,7 @@ def walk_active(
                     include_bindings.append(IncludeBinding(source, target, ref.section))
                 if ref.section is not None and library_bindings is not None:
                     library_bindings.append(LibraryBinding(source, target, ref.section))
-                visit(target, ref.section, (*stack, key))
+                visit(target, ref, (*stack, key))
             else:
                 if card.kind == "ends" and lexical_scope:
                     lexical_scope.pop()
@@ -594,7 +599,9 @@ def load_hierarchy(
             return existence[candidate]
 
         _refuse_unreadable_references(cards, source)
-        refs = scan_include_references(cards, source, depth=depth, exists=exists)
+        refs = scan_include_references(
+            cards, source, family=profile.library_reader.family, depth=depth, exists=exists
+        )
         card_sections(cards, source, depth, exists=exists)
         targets = tuple(
             (ref.raw_path, resolve_existing(resolve_reference(source.parent, ref.raw_path)))
@@ -911,7 +918,10 @@ def resolve_hierarchy(
                     raise NetlistError("local .option scale is unsupported")
                 scale_expression = values["scale"]
     global_env = Environment(
-        _parameters(top, profile), simulator=profile.simulator, dynamic_reason=dynamic_reason
+        _parameters(top, profile),
+        simulator=profile.simulator,
+        ngbehavior=profile.ngbehavior,
+        dynamic_reason=dynamic_reason,
     )
     scale = global_env.fact(scale_expression)
     rewritten = _rewritten_for_m(occurrences, definitions, top, profile)
@@ -1037,6 +1047,7 @@ def resolve_hierarchy(
                 child_env = Environment(
                     expressions,
                     simulator=profile.simulator,
+                    ngbehavior=profile.ngbehavior,
                     parent=env,
                     overrides=overrides,
                     dynamic_reason=dynamic_reason,
