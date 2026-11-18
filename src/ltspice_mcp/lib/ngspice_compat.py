@@ -67,6 +67,14 @@ def reads_lib_as_includes(mode: str | None) -> bool:
     return bool(compat_flags(mode) & {"lt", "ps"})
 
 
+def rejects_lib(mode: str | None) -> bool:
+    """Whether ngspice in ``mode`` stops on every ``.lib`` card, with or
+    without a section ("unimplemented dot command '.lib'"), as it does with
+    ``s3`` set and neither ``lt`` nor ``ps`` (spice3f5 has no ``.lib``).
+    Measured on ngspice-42 (``tests/test_library_card_read.py``)."""
+    return "s3" in compat_flags(mode) and not reads_lib_as_includes(mode)
+
+
 def multiplies_m(mode: str | None) -> bool:
     """Whether ngspice in ``mode`` multiplies a card's own ``m`` by the ``m``
     its subcircuit passes down, rather than replacing it, as it does with
@@ -74,3 +82,11 @@ def multiplies_m(mode: str | None) -> bool:
     ``R1 p 0 1k m=3`` in a body called with ``m=4`` builds 12 copies under
     ``hsa`` and 4 under ``kiltpsa`` or ``hsps``."""
     return "hs" in compat_flags(mode)
+
+
+def signed_power(mode: str | None) -> bool:
+    """Whether ngspice in ``mode`` raises a negative base to an integer power
+    with its sign, ``(-2)^3`` being -8, as it does with ``hs`` or ``lt`` set;
+    in every other mode it takes the power of the base's magnitude, 8.
+    Measured on ngspice-42 (``tests/test_ngspice_compat.py``)."""
+    return bool(compat_flags(mode) & {"hs", "lt"})

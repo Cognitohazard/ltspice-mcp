@@ -17,6 +17,7 @@ from spicelib.sim.run_task import RunTask
 from spicelib.sim.simulator import Simulator
 from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
+from ltspice_mcp.lib.deck_staging import LibraryReader
 from ltspice_mcp.lib.montecarlo import MCSampler, MismatchRule
 from ltspice_mcp.lib.runner_base import (
     SUBPROCESS_TIMEOUT_CEILING_S,
@@ -796,7 +797,7 @@ def test_missing_raw_detection_follows_windows_include_separators(tmp_path: Path
     outcome = collect_run_outcome(
         str(tmp_path / "main.raw"),
         str(log),
-        requirements=deck_requirements(deck),
+        requirements=deck_requirements(deck, reader=LibraryReader("ltspice")),
         exit_code=0,
         logs=captured_completion_facts(tmp_path, log),
     )

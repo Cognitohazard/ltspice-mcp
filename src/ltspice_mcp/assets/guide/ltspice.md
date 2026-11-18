@@ -207,9 +207,10 @@ C1 out 0 {C}
 ```
 
 - `.include <path>` — include file contents verbatim.
-- `.lib <path>` — same as .include in LTspice. LTspice has no library
-  sections, so `.lib file section` makes it look for a file named
-  `file section`, and `run_experiments` refuses that deck (lint
+- `.lib <path>` — same as .include in LTspice, and the rest of the line is
+  the path, quoted or not: `.lib my models/amp.lib` reads `my models/amp.lib`.
+  LTspice has no library sections, so `.lib file section` makes it look for a
+  file named `file section`, and `run_experiments` refuses that deck (lint
   `lib-section-ltspice`).
 - Model aliasing: `.model 3904 ako: 2N3904` — inherit and override parameters.
 
