@@ -124,6 +124,9 @@ _SCHEMAS = _schemas()
 def _answer(schema: Mapping[str, Any]) -> dict[str, Any]:
     made = _Maker(schema).make(schema)
     assert isinstance(made, dict)
+    # The presenter's own fields are never part of an answer.
+    made.pop("cut", None)
+    made.pop("stored_answer", None)
     return reply_payload(made)
 
 
@@ -277,7 +280,19 @@ def test_a_list_sent_whole_is_never_cut(made_up, tmp_path):
             continue
         for pointer, whole in _concrete(answer, item.path):
             assert pointer not in shown.cut, (name, pointer)
+            if _in_a_row_left_out(pointer, shown.cut):
+                continue  # it goes whole with its row, to the page that holds it
             assert resolve_pointer(shown.reply, pointer) == whole, (name, pointer)
+
+
+def _in_a_row_left_out(pointer: str, cut: Mapping[str, ListCut]) -> bool:
+    """Whether ``pointer`` is inside an entry a cut list left out."""
+    for listed, entry in cut.items():
+        if pointer.startswith(listed + "/"):
+            index = int(pointer[len(listed) + 1 :].split("/", 1)[0])
+            if index >= entry.offset + entry.returned:
+                return True
+    return False
 
 
 def test_every_page_in_order_rebuilds_each_list(made_up, tmp_path):
@@ -434,3 +449,32 @@ def test_an_annotation_is_measured_with_the_reply(tmp_path):
     assert shown.reply["hint"].startswith("read the rest")
     assert estimate_tokens(shown.reply, as_sent=False) <= 500
     assert seen and all(page is None for page, _ in seen)
+
+
+def test_the_made_up_answers_exercise_the_cut(tmp_path):
+    # A property that held only because nothing was cut would hold vacuously.
+    cut = set()
+    for name, schema in _SCHEMAS.items():
+        answer = _answer(schema)
+        shown = _presented(schema, answer, _store(tmp_path), estimate_tokens(answer) // 3)
+        if shown.cut:
+            cut.add(name)
+    assert "verify.handle_verify_circuit" in cut
+    assert len(cut) >= len(_SCHEMAS) // 2, sorted(set(_SCHEMAS) - cut)
+
+
+async def test_a_reply_that_fits_is_what_format_response_sends(made_up, config):
+    # The reply layer's call, beside reply_payload: the same bytes as today.
+    from ltspice_mcp.state import SessionState
+    from ltspice_mcp.tools._base import format_response, present_reply
+
+    _, schema, answer = made_up
+    config.default_budget = estimate_tokens(answer, as_sent=False) + 1
+    state = SessionState.create(config, available={})
+
+    shown = await present_reply(dict(answer), tool="tool", schema=schema, snapshot={}, state=state)
+
+    assert json.dumps(shown.structured_content) == json.dumps(
+        format_response(dict(answer)).structured_content
+    )
+    assert json.dumps(shown.structured_content) == json.dumps(reply_payload(dict(answer)))

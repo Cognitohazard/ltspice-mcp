@@ -1,5 +1,6 @@
 """Shared utilities for tool handlers."""
 
+import asyncio
 import base64
 import contextlib
 import contextvars
@@ -18,7 +19,7 @@ from pydantic import BaseModel, Field, PrivateAttr, model_validator
 from ltspice_mcp.config import SIM_EXECUTABLES_KEY as _SIM_EXECUTABLES_KEY
 from ltspice_mcp.config import SIM_SECTION as _SIM_SECTION
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError, SimulationError, error_hint
-from ltspice_mcp.lib import atomic_write_bytes, response_budget
+from ltspice_mcp.lib import atomic_write_bytes, presenter, response_budget
 from ltspice_mcp.lib.format import SAME_VALUE_RTOL, held_to_cap
 
 # Re-exported façade names: the strict Pydantic base lives in ``lib`` (models
@@ -28,9 +29,11 @@ from ltspice_mcp.lib.ltspice_window import Shown, file_difference
 from ltspice_mcp.lib.models import StrictModel as StrictModel
 from ltspice_mcp.lib.netlist_graph import IncludeResolver
 from ltspice_mcp.lib.observability import note_request
+from ltspice_mcp.lib.presenter import ListCut as ListCut
+from ltspice_mcp.lib.presenter import StoredAnswer as StoredAnswer
 from ltspice_mcp.lib.raster import DEFAULT_SCALE, RenderedImage, render_image
 from ltspice_mcp.lib.raw_parser import OtherRawKind
-from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER, rows
+from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER
 from ltspice_mcp.lib.reply_fields import (
     Kept,
     active_kept,
@@ -206,6 +209,76 @@ def format_response(data: Mapping[str, Any]) -> types.CallToolResult:
     return types.CallToolResult(content=[], structured_content=reply_payload(payload))
 
 
+def reply_target(state: SessionState) -> int | None:
+    """The size, in estimated tokens, a reply of a tool with no ``budget``
+    argument is presented to: ``[analysis] default_budget``, or None (every
+    answer whole) when that is 0, or under the Python API's automatic mode,
+    which promises complete results."""
+    if _AUTOMATIC_DOOR.get():
+        return None
+    default = state.config.default_budget
+    return default if default > 0 else None
+
+
+async def present_reply(
+    data: dict[str, Any],
+    *,
+    tool: str,
+    schema: Mapping[str, Any],
+    snapshot: dict[str, Any],
+    state: SessionState,
+    annotate: presenter.Annotate | None = None,
+) -> types.CallToolResult:
+    """``data``, a complete answer, as a reply: whole when it fits the reply
+    target, else stored and cut by ``lib/presenter.py``. ``snapshot`` names
+    what the answer was computed from; ``annotate`` adds the tool's words
+    about a cut. An answer that fits is what :func:`format_response` sends
+    for ``data``."""
+    payload = reply_payload(data)
+    shown = await asyncio.to_thread(
+        presenter.present,
+        payload,
+        schema,
+        target=reply_target(state),
+        tool=tool,
+        snapshot=snapshot,
+        store=state.store,
+        ttl_hours=state.config.result_set_ttl_hours,
+        annotate=annotate,
+    )
+    # Through format_response, as every reply is built: the presented reply
+    # is already as sent, which the rule leaves as it is.
+    return format_response(shown.reply)
+
+
+async def open_stored_page(
+    text: str, *, tool: str, state: SessionState, gone: str
+) -> tuple[presenter.StoredAnswer, str, int]:
+    """The stored answer, list pointer and offset a presenter cursor names;
+    ``InvalidCursorError`` (adding ``gone``, how to get a fresh answer) when
+    it is not one or its answer has expired."""
+    return await asyncio.to_thread(
+        presenter.open_page, text, tool=tool, store=state.store, gone=gone
+    )
+
+
+def present_stored_page(
+    stored: presenter.StoredAnswer,
+    pointer: str,
+    offset: int,
+    *,
+    schema: Mapping[str, Any],
+    state: SessionState,
+    annotate: presenter.Annotate | None = None,
+) -> types.CallToolResult:
+    """One page of a stored answer's list, read from the stored file and cut
+    to the reply target. Nothing is computed again."""
+    shown = presenter.present_page(
+        stored, pointer, offset, schema, target=reply_target(state), annotate=annotate
+    )
+    return format_response(shown.reply)
+
+
 def image_content(image: RenderedImage) -> types.ImageContent:
     """A raster image as the MCP image block a model looks at."""
     return types.ImageContent(
@@ -218,6 +291,53 @@ def image_content(image: RenderedImage) -> types.ImageContent:
 # ---------------------------------------------------------------------------
 # Shared tool schema fragments and annotations
 # ---------------------------------------------------------------------------
+
+#: ``cut``: present on a reply too long to send whole, by the JSON Pointer of
+#: each list it cut (``lib/presenter.py``).
+CUT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "description": (
+        "Present when the reply was too long to send whole: each list it cut, by "
+        "JSON Pointer, with the entries it holds. Pass next back to read the rest."
+    ),
+    "additionalProperties": {
+        "type": "object",
+        "properties": {
+            "total": {"type": "integer", "description": "Entries in the whole list."},
+            "returned": {"type": "integer", "description": "Entries this reply holds."},
+            "offset": {
+                "type": "integer",
+                "description": "The index of the first entry this reply holds; absent for 0.",
+            },
+            "next": {
+                "type": "string",
+                "description": "The cursor for the entries after these; absent on the last.",
+            },
+        },
+        "required": ["total", "returned"],
+    },
+}
+
+#: ``stored_answer``: where the complete answer behind a cut reply is kept.
+STORED_ANSWER_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "description": (
+        "Present beside cut: the complete answer, kept as JSON under 'answer' in the "
+        "file at path until it expires, and what it was computed from."
+    ),
+    "properties": {
+        "id": {"type": "string"},
+        "path": {"type": "string"},
+        "snapshot": {
+            "type": "object",
+            "description": (
+                "What the answer was computed from, such as a file's sha256: a page "
+                "read later says whether it predates a change."
+            ),
+        },
+    },
+    "required": ["id", "path", "snapshot"],
+}
 
 # Output-schema fragment for the optional ``hint`` key: caller guidance a
 # reply carries in its data (see format_response). Sites needing a custom
@@ -979,9 +1099,10 @@ FINDING_SCHEMA: dict[str, Any] = {
     "required": ["rule_id", "severity", "ok", "evidence", "at", "subject"],
 }
 
-#: How a list of findings is cut: whole findings, each named by its rule, what
-#: it is about and where.
-FINDING_ROWS_CUT: dict[str, Any] = rows("rule_id", "subject", "at")
+#: How a list of findings is cut: whole findings, from the end. Their fields
+#: do not name one finding (one rule can report one subject at one place more
+#: than once), so a finding is named by its place in the list.
+FINDING_LIST_CUT: str = ITEMS
 
 #: The keys every offset page declares — see ``lib/pagination.page``, which
 #: builds them.

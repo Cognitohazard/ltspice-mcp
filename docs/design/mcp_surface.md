@@ -143,8 +143,9 @@ Codes named after the stage, used where the stage is the more useful fact:
 **Page object.** No tool returns an unbounded collection. Every collection
 that can be large is a page, `{items, total, returned, truncated,
 next_cursor}`, and every tool that returns a page accepts its cursor as input.
-`verify_circuit`'s `findings` is one list with a cap per rule instead: a rule
-cut at the cap has a `findings_omitted` entry with its own cursor (§3.5).
+`verify_circuit` is on the presenter instead (below): its `findings` is cut
+only when its reply is too long to send whole, and then read on from the
+stored answer (§3.5).
 
 An `inspect` item's `page` names the data key its cursor pages in a
 `collections {<data key>: {total, returned, truncated}}` block, which is how
@@ -253,6 +254,48 @@ wherever they appear in its reply, and is the whole exemption:
 
 The list is `ALWAYS_PRESENT` in `tools/_base.py`, and the suite fails any
 reply that carries a silent field not on it.
+
+**A reply too long to send whole.** A tool on the presenter
+(`lib/presenter.py`; `verify_circuit` today, the other tools as they move)
+computes its complete answer and hands it, with its output schema, to one
+function that decides what is sent. The target is the tool's `budget`
+argument where it has one, and `[analysis] default_budget` (4000 estimated
+tokens) where it has none; 0 sends every answer whole.
+
+- An answer within the target is sent exactly as "Fields left out" makes it.
+  It carries neither field below, and nothing is stored.
+- An answer over the target is stored whole, as one JSON file in the store's
+  `results/` folder, under the expiry of `[analysis] result_set_ttl_hours`.
+  Its id is the digest of the answer and of its snapshot, what it was computed
+  from, so the same answer of the same inputs is one file.
+- Then the lists the schema declares `items` or `rows` (`x-cut`,
+  `lib/reply_cuts.py`) are cut from the end, whole entries only, the largest
+  list first, until the reply fits or each holds one entry. A list declared
+  `never` is sent whole, and nothing inside a list's entries is cut apart from
+  its entry: a list inside a row goes with the row. A reply that still does
+  not fit goes out over the target.
+
+A cut reply carries two fields, declared once in `tools/_base.py`:
+
+- `cut`: by the JSON Pointer of each list it cut, `{total, returned, offset?,
+  next?}`. `offset` is the index of the first entry the reply holds, absent
+  for 0; `next` is the cursor for the entries after them, absent on the last.
+- `stored_answer`: `{id, path, snapshot}`. `path` is the stored JSON file,
+  whose `answer` is the complete answer; `snapshot` is what it was computed
+  from, such as a file's `sha256`.
+
+A cursor names the stored answer, the list's pointer and an offset. Reading
+it slices the stored file: nothing is computed again and no request is
+replayed, so a page is never refused as stale. It carries `stored_answer`, so
+the caller compares the snapshot with the file to tell whether the page
+predates a change. A page holds the list it reads from the offset on, cut to
+the target the same way, and the answer's other fields as stored; each other
+cuttable list is named in `cut` with none returned and the cursor that reads
+it from its start. A cursor for an answer that has expired or is missing is
+refused with `invalid_cursor`, saying the stored answer is gone and how to
+compute a fresh one. The tool's `hint` names three ways to read the rest: the
+stored file, the call with the cursor, and the same call through the Python
+API.
 
 
 **Presentation fields.** Fields that control how a receipt is rendered, rather
@@ -1765,8 +1808,8 @@ in_ltspice    also open the file in the LTspice window the user has running,
               in front; default false
 export_to     "managed" (default) | "sidecar"
 findings_cursor
-              a findings_omitted entry's next_cursor: lists that rule's next
-              25 findings in place of its first
+              a cut entry's next: reads the findings after those from the
+              stored answer, without checking again; give the same path
 ```
 
 `compare` (`{reference, anchors, rtol, mode}`) means the same here as in
@@ -1891,8 +1934,9 @@ component's signature is its model or value plus its instance parameters,
 without nodes (`equivalence` is the mode that compares wiring); a parameter
 given twice contributes both copies, so a second copy counts as a change.
 
-Output: findings in the shared shape, `findings_omitted` for the rules cut
-at the cap (below), a comparison block per mode, a render block `{path,
+Output: findings in the shared shape, `cut`, `stored_answer` and
+`findings_omitted` when the reply was too long to send whole (below), a
+comparison block per mode, a render block `{path,
 sha256, source_sha256, width, height, downscaled, returned_inline, svg?,
 note, …}`, a scene summary, `outcome` and `hint`.
 
@@ -1941,39 +1985,37 @@ move the part or the item its text crosses. `wire_through_symbol` and `text_in_s
 what a part draws, not its box, so a wire or a text anchor in the empty corner
 beside an amplifier's triangle is not in the part.
 
-A reply lists at most 25 findings of each layout and quality rule, of each
-value-suffix rule (`value_suffix_micro_sign`, `value_suffix_mojibake`,
-`value_suffix_nonascii`) and of `dropped_wire`. A rule with more has an entry
-in `findings_omitted`, keyed by its `rule_id`: `{omitted, total,
-next_cursor}`, where `omitted` counts its findings after the ones listed and
-`total` counts them all. Passing `next_cursor` back as `findings_cursor` lists
-that rule's next 25 findings in place of its first; the entry in that reply
-carries the cursor for the page after, and the last page has none. The rest
-of the reply, `rules_run` included, is the same as without the cursor. The
-`hint` counts every finding, not only those listed, names each rule cut short
-with the check that reports it, so a caller can narrow `checks` to that check
-to skip the others, and on a cursor's page says which findings it lists.
+Findings are sent whole when the reply fits the target, however many a rule
+has; the check returns every finding, in the order the checks found them,
+and that order is their identity. A reply over the target is presented as
+"A reply too long to send whole" (§2) describes, with the snapshot
+`{path, sha256, reference_sha256?}`: the checked file's digest, and the
+reference's when one was compared (of its text when the reference is netlist
+text). `findings` is declared `items`, cut from the end; `observations`,
+`warnings`, `failures`, `checks_run` and `checks_skipped` are `never` lists
+and go out whole. The `hint` counts every finding the check found, not only
+those sent, and names the stored file, the `findings_cursor` call and its
+Python form.
 
-A cursor is bound to every finding of its rule as the call that returned it
-found them, which depends on more than the checked file: the symbols a sheet
-uses, its export, the build that reads a deck. A call that does not run the
-check that reports the rule is refused with `invalid_cursor` before any check
-runs, and the refusal names what to change (add the check to `checks`, or
-leave `render.mode` at `with_checks`). A call whose findings of the rule are
-not the ones the cursor was counted against is refused with `invalid_cursor`
-once they are found, and the refusal says why: the check did not run, with
-its reason; it failed, with its error; or what the findings are read from
-changed. Either refusal says to call again without `findings_cursor`, and
-neither carries the generic cursor hint. A malformed cursor is refused with
-`invalid_cursor` too.
+`findings_cursor` takes a `cut` entry's `next`. The call reads the next
+findings from the stored answer and runs no check; it needs the same `path`,
+and a cursor for another circuit's answer is refused with `invalid_cursor`.
+The page's `hint` says which findings it holds and that they were read from
+the stored answer. `findings_omitted`, keyed by `rule_id`, keeps the shape it
+had while findings were capped per rule, `{omitted, total, next_cursor}`, and
+is filled from the cut: `omitted` counts that rule's findings after the ones
+sent, `total` all of them, and `next_cursor` is the `cut` entry's `next`,
+which continues the whole list rather than that rule alone. It and
+`findings_cursor` go at the next breaking release.
+
 `api.verify_circuit` returns every finding and takes no `findings_cursor`
-unless called with `raw_page=True`.
+unless called with `raw_page=True`, which returns the reply a client reads.
 
 **No `baseline` filter.** `verify_circuit` reports on the whole file. To find
 what changed relative to a copy the caller kept, diff the two finding lists,
-which include `rule_id`, `at` and `subject`. Diff complete lists: follow each
-`findings_omitted` cursor to the end, or diff the findings
-`api.verify_circuit` returns, which are never capped.
+which include `rule_id`, `at` and `subject`. Diff complete lists: the stored
+answer's when the reply was cut, or the findings `api.verify_circuit`
+returns, which are never cut.
 
 ### 3.6 `inspect` — pure read
 
