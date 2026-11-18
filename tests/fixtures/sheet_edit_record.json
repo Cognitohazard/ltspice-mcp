@@ -366,16 +366,6 @@
    "tests/test_edit_schematic.py::test_reference_outside_sandbox_names_the_text_alternative"
   ]
  },
- "19642cc2b293eb8d": {
-  "answer": {
-   "reply": "0b34a05f166a3180",
-   "sheet": "4f700298c191ce88"
-  },
-  "platform": "windows",
-  "tests": [
-   "tests/test_edit_schematic.py::test_asc_reference_is_exported_like_the_committed_sheet[equivalence]"
-  ]
- },
  "19aca848f42578fd": {
   "answer": {
    "reply": "9d25dc6cc4b4680a",
@@ -3682,6 +3672,16 @@
   },
   "tests": [
    "tests/test_recorded_ltspice_schematics.py::test_an_edit_of_a_sources_value_keeps_its_own_parameters_on_a_sheet"
+  ]
+ },
+ "e94fce57dfda0f01": {
+  "answer": {
+   "reply": "5551ffee5fde1ce6",
+   "sheet": "4f700298c191ce88"
+  },
+  "platform": "posix",
+  "tests": [
+   "tests/test_recursive_subcircuit_compare.py::test_edit_schematic_reference_stage_states_the_failure"
   ]
  },
  "e9f96d301c87cc8c": {

@@ -159,18 +159,6 @@ def test_a_run_draws_no_mismatch_from_a_multiplier_ngspice_reads_otherwise(tmp_p
     assert "zero" in str(exc.value)
 
 
-def test_the_mismatch_plan_reads_a_power_as_native_ngspice():
-    """The plan for a deck with no semantic profile (QSPICE, Xyce) reads an
-    expression in ngspice's native mode, the strictest: it computes a power
-    of a positive base, and leaves a negative one unresolved."""
-    from ltspice_mcp.lib.subckt_mismatch import _environment
-
-    scope = _environment({"p": "(-2)^3", "q": "2^3"})
-    assert scope.fact("p").value is None
-    assert "magnitude" in (scope.fact("p").reason or "")
-    assert scope.fact("q").value == 8.0
-
-
 # --------------------------------------------------------------------------
 # Live: ngspice computes each power as the table says
 # --------------------------------------------------------------------------

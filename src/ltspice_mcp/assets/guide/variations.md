@@ -17,7 +17,7 @@ first, then bare names:
 | Target | Meaning |
 |-|-|
 | `"M1@model"`, glob `"M*@model"` | swap the instance's model card — the corner idiom, `{"M*@model": ["NTT", "NSS", "NFF"]}` |
-| `"X1:delvto"`, `"X1:mulu0"` | per-instance mismatch delta on the FET inside subckt instance X1 (ngspice BSIM3/4, through exactly one X→M level; a multi-FET body needs the qualified `"X1.M0:delvto"`) |
+| `"X1:delvto"`, `"X1:mulu0"` | per-instance mismatch delta on the FET inside subckt instance X1 (ngspice BSIM3/4, through exactly one X→M level; a multi-FET body needs the qualified `"X1.M0:delvto"`; refused on QSPICE and Xyce) |
 | a declared `.param` name | substitute that parameter |
 | a component reference (`R1`, `C2`) | substitute that component's value |
 
@@ -151,6 +151,12 @@ applies to the model card's `VTO`/`KP`:
   List the physical MOS instances with `inspect(kind="hierarchy")` (guide
   section 'hierarchy'). Sampling uses each device's final W/L, after any
   `assign` variation has set it.
+- On QSPICE and Xyce a rule whose `prefix` names an `X` instance, an
+  `instance` rule and `X1:delvto` are refused with
+  `mismatch_inside_subcircuit_unmodelled`: the server does not model how those
+  simulators read a subcircuit body, so it cannot tell the device's W, L and m.
+  Run the deck on LTspice or ngspice. A rule on top-level `M` cards runs there,
+  reading literal W, L, m and model parameters.
 
 ## Explicit per-instance values
 

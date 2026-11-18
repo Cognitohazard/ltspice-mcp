@@ -346,8 +346,10 @@ ENTRIES: tuple[Entry, ...] = (
         _UNMODELLED,
         "hierarchy",
         "gap",
-        "The hierarchy reader models LTspice and ngspice only; a run on {display} gets no "
-        "semantic profile, so nested instance targeting is unavailable.",
+        "The hierarchy reader models LTspice and ngspice only: the server does not model how "
+        "{display} reads a subcircuit body, so a run on {display} gets no semantic profile, "
+        "and nested instance targeting and a mismatch draw for a device inside a subcircuit "
+        "are refused. Run the deck on LTspice or ngspice for either.",
     ),
     # --- diagnostics -------------------------------------------------------
     Entry(
@@ -445,8 +447,9 @@ ENTRIES: tuple[Entry, ...] = (
         "statistical_sampling",
         "unverified",
         "The random variation writes its draws into the deck as values, but no recording "
-        "or live test of a {display} run exists, and a mismatch draw inside a subcircuit "
-        "needs the hierarchy reader, which does not model {display}.",
+        "or live test of a {display} run exists. A mismatch draw for a device inside a "
+        "subcircuit is refused (see hierarchy); one for a top-level M card reads its "
+        "literal W, L and m and the model's literal parameters, evaluating no expression.",
     ),
     # --- refinements -------------------------------------------------------
     Entry("ltspice", "progress_in_point", "supported", ("recorded:raw-partial",)),
