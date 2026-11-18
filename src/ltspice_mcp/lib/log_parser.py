@@ -1262,6 +1262,15 @@ def prints_measurement(line: str) -> bool:
     return _printed_on(line) is not None
 
 
+def failed_measurement_on(line: str) -> str | None:
+    """The measurement a log's ``line`` says LTspice could not take, as
+    printed (``Measurement "name" FAIL'ed``), or None. The one reading of
+    such a line: :func:`printed_measurements` and the log classifier
+    (``log_conditions``) both ask it."""
+    failed = _RE_MEAS_FAILED.search(line)
+    return failed[1] if failed is not None else None
+
+
 def printed_measurements(text: str) -> dict[str, PrintedMeasurement]:
     """Every measurement a log printed, by name in lower case, in the order
     printed: each result line of a run with no ``.step``, each table heading
@@ -1286,8 +1295,8 @@ def printed_measurements(text: str) -> dict[str, PrintedMeasurement]:
                     found = PrintedMeasurement(
                         found.line, columns=tuple(columns["columns"].split("\t"))
                     )
-        elif (failed := _RE_MEAS_FAILED.search(line)) is not None:
-            name, found = failed[1], PrintedMeasurement(line.strip())
+        elif (failed := failed_measurement_on(line)) is not None:
+            name, found = failed, PrintedMeasurement(line.strip())
         else:
             continue
         measurements.setdefault(name.lower(), found)

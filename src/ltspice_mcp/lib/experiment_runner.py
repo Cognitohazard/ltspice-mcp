@@ -55,6 +55,7 @@ from ltspice_mcp.lib.job_lifecycle import (
 )
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.log_conditions import decoded_run_diagnostics
+from ltspice_mcp.lib.log_types import run_measurement_facts
 from ltspice_mcp.lib.native_execution import prepare_native_cases
 from ltspice_mcp.lib.ngspice_driver import validate_seed
 from ltspice_mcp.lib.pdk_native import (
@@ -74,6 +75,11 @@ from ltspice_mcp.lib.raw_parser import (
     result_digest,
 )
 from ltspice_mcp.lib.recovery_records import LaunchIntent, RecoveryError
+from ltspice_mcp.lib.result_observations import (
+    Observation,
+    deck_observation_inputs,
+    subcircuit_nodes_not_saved,
+)
 from ltspice_mcp.lib.runner_base import (
     DEFAULT_MAX_PARALLEL,
     NativeLaunchContext,
@@ -85,8 +91,14 @@ from ltspice_mcp.lib.runner_base import (
     inject_ngspice_control_write,
 )
 from ltspice_mcp.lib.sheet_results import not_placed_for_owner_stop, place_job_beside_sheets
-from ltspice_mcp.lib.simulator import dialect_for_simulator_name, is_ngspice, raw_extension_for
+from ltspice_mcp.lib.simulator import (
+    dialect_for_simulator_name,
+    is_ngspice,
+    raw_extension_for,
+    run_ngbehavior,
+)
 from ltspice_mcp.lib.simulator_build import (
+    Producer,
     SimulatorExecutable,
     describe_executable,
     same_executable,
@@ -1593,7 +1605,9 @@ class ExperimentRunner(RunnerBase):
                 self._release_slot(execution, case.case_id)
                 outcome = await self._with_logs(execution, outcome)
                 self._apply_outcome(execution.job, case, outcome)
+                await self._read_measurements(execution.job, case, outcome)
                 await self._check_raw_names(execution, case)
+                await self._check_subcircuit_nodes(execution, case)
                 if (
                     outcome.error is None
                     and case.raw_file is not None
@@ -1739,8 +1753,10 @@ class ExperimentRunner(RunnerBase):
         if execution.job.recovery is not None:
             self._apply_outcome(execution.job, case, outcome)
             await self._check_raw_names(execution, case)
+            await self._check_subcircuit_nodes(execution, case)
         else:
             self._apply_stopped_outcome(execution.job, case, outcome)
+        await self._read_measurements(execution.job, case, outcome)
         kept = await self._record_progress_then_remove(execution, case)
         terminal_status = "cancelled" if reason == "cancelled" else "failed"
         self._mark_case(
@@ -1863,6 +1879,7 @@ class ExperimentRunner(RunnerBase):
             read = await self._with_logs(execution, outcome)
             if read is not outcome:
                 case.log_diagnostics = self._classified(execution.job, case, read)
+            await self._read_measurements(execution.job, case, read)
             kept = await self._record_progress_then_remove(execution, case)
             case.failure_evidence = _with_partial_raw(case.failure_evidence, kept)
         finally:
@@ -1970,6 +1987,59 @@ class ExperimentRunner(RunnerBase):
                 outcome.logs, services.run_producer(job, case), unread=outcome.logs is None
             )
         )
+
+    @staticmethod
+    async def _read_measurements(
+        job: ExperimentJob, case: ExperimentCase, outcome: RunOutcome
+    ) -> None:
+        """Keep on ``case`` what its run's log says its measurements did not
+        give (``log_types.run_measurement_facts``), read as every reader of a
+        measurement reads it (``services.answer_measurements``), with the
+        build the run named and the deck it ran; or that the log's
+        measurements could not be read."""
+        unread = services.measurements_unread(
+            outcome.logs, dialect_for_simulator_name(job.simulator)
+        )
+        if unread is not None or outcome.logs is None:
+            case.measurement_facts = {"coverage": unread or "log_unread"}
+            return
+        section = outcome.logs.section("measurements")
+        requested, _ = await asyncio.to_thread(deck_observation_inputs, case.staged_deck)
+        names = requested["meas"] if requested is not None else None
+        if section["status"] != "parsed":
+            # The log printed no measurement: each the deck requests gave none.
+            case.measurement_facts = run_measurement_facts({}, names)
+            return
+        source = services.AnalysisSource(
+            raw=None,
+            log=case.log_file,
+            console=None,
+            netlist=case.staged_deck,
+            dialect=dialect_for_simulator_name(job.simulator),
+            identity=None,
+            trusted_job_artifact=True,
+        )
+        table = await services.answer_measurements(
+            source, section["value"], producer=services.run_producer(job, case)
+        )
+        case.measurement_facts = run_measurement_facts(table, names)
+
+    async def _check_subcircuit_nodes(self, execution: _Execution, case: ExperimentCase) -> None:
+        """Say on ``case`` when its raw holds no node inside the deck's
+        subcircuits (``result_observations.subcircuit_nodes_not_saved``), read
+        off the raw's header and the deck as the run's simulator reads it."""
+        if case.raw_file is None:
+            return
+        found = await asyncio.to_thread(
+            _subcircuit_nodes_observation,
+            case.raw_file,
+            case.staged_deck,
+            services.run_producer(execution.job, case),
+            run_ngbehavior(self.simulator_class) if is_ngspice(self.simulator_class) else None,
+            case.circuit,
+        )
+        if found is not None:
+            case.observations.append(dict(found))
 
     @staticmethod
     async def _check_raw_names(execution: _Execution, case: ExperimentCase) -> None:
@@ -2533,3 +2603,35 @@ def _read_live_progress(
                 case_id, run_index, *read, code="run_progress", running_s=running_s
             )
     return observations
+
+
+def _subcircuit_nodes_observation(
+    raw: Path, deck: Path, producer: Producer, ngbehavior: str | None, circuit: str
+) -> Observation | None:
+    """``subcircuit_nodes_not_saved`` for a run: the traces its raw's header
+    holds, and the deck flattened as ``producer`` reads it, with whether it
+    has a ``.save`` card. None for a run on another family, and where the raw
+    or the deck cannot be read, which other observations report."""
+    from ltspice_mcp.errors import NetlistError
+    from ltspice_mcp.lib.hierarchy import SUPPORTED_FAMILIES, SemanticProfile
+    from ltspice_mcp.lib.netlist_graph import (
+        NetlistGraphError,
+        flatten_graph,
+        parse_netlist_graph,
+    )
+    from ltspice_mcp.lib.raw_parser import first_plot_traces
+    from ltspice_mcp.lib.spice_lex import SpiceLexError, directive_head
+
+    if producer.family not in SUPPORTED_FAMILIES:
+        return None
+    traces = first_plot_traces(raw)
+    if traces is None:
+        return None
+    try:
+        profile = SemanticProfile.of(producer, ngbehavior)
+        graph = parse_netlist_graph(deck, reader=profile)
+        flat = flatten_graph(graph)
+    except (NetlistError, NetlistGraphError, SpiceLexError, OSError, ValueError):
+        return None
+    saves = any(directive_head(card) == ".save" for card in graph.directives)
+    return subcircuit_nodes_not_saved(flat, traces, profile.names, saves=saves, circuit=circuit)

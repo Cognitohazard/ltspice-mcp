@@ -49,7 +49,7 @@ from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, PlotDescriptor
 from ltspice_mcp.lib.format import cap_note, format_spice_value, held_to_cap, unique_name
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
-from ltspice_mcp.lib.log_types import measurement_named
+from ltspice_mcp.lib.log_types import given_no_value, measurement_named, run_measurement_facts
 from ltspice_mcp.lib.pagination import retotal_page
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.projection import (
@@ -82,6 +82,9 @@ from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER, rows
 from ltspice_mcp.lib.result_kinds import AC_SHAPED
 from ltspice_mcp.lib.result_observations import (
     coarse_waveform_observation,
+    compressed_xvii_observation,
+    deck_observation_inputs,
+    measurements_failed_in_every_run,
 )
 from ltspice_mcp.lib.signal_analysis import downsample_minmax_traces
 from ltspice_mcp.lib.simulator_build import Producer
@@ -1239,12 +1242,14 @@ async def _capture_ltspice_raws(
     deadline: float | None,
 ) -> None:
     """Read the raw of each run that may be LTspice's compressed transient,
-    for a recipe that reads only the log. LTspice computes its own .meas
-    results from the waveform it stores, and XVII's move with compression
-    (``raw/compress_*``), so whether the run was left coarse is a fact about
-    those results too. Read before the log is, the capture serves both. A raw
-    whose header says it is no compressed transient is not read, and one that
-    is absent or cannot be read is not this recipe's failure."""
+    for a recipe that reads only the log, so the reply can say the run was
+    left coarse. LTspice XVII computes its own .meas results from points its
+    compressed raw does not hold (``raw/compress_1mv``: within 0.25% of the
+    uncompressed run's, where values read from the stored points were up to
+    1.15% off), and the observation says so by build. Read before the log
+    is, the capture serves both. A raw whose header says it is no compressed
+    transient is not read, and one that is absent or cannot be read is not
+    this recipe's failure."""
     for run in runs:
         raw = run.source.raw
         dialect = run.source.explicit_dialect or run.source.dialect
@@ -1259,15 +1264,22 @@ async def _capture_ltspice_raws(
 
 
 def _coarse_waveform_observations(
-    runs: list[_ResolvedRun], captures: Mapping[_CaptureKey, ParsedArtifacts]
+    runs: list[_ResolvedRun],
+    captures: Mapping[_CaptureKey, ParsedArtifacts],
+    *,
+    samples: bool = True,
 ) -> list[Observation]:
-    """The transient runs a unit read that waveform compression left coarse.
+    """The transient runs a unit read that waveform compression left coarse,
+    and the LTspice XVII ones it saved compressed that are not coarse
+    (``services.compression_drops_points``).
 
     Every value read from such a run is interpolated across its gaps. Only a
     run whose samples were read has them to look at; the evidence is the first
-    such run's.
+    such run's. A unit that read only the log (the measurements recipe) took
+    no samples, so it is told only of a coarse run.
     """
     coarse: list[tuple[str, dict[str, float]]] = []
+    dropped: list[str] = []
     for run in runs:
         artifacts = captures.get(_capture_key(run.source))
         if artifacts is None or artifacts.raw is None:
@@ -1276,9 +1288,52 @@ def _coarse_waveform_observations(
             raw = services.select_raw(artifacts, run.source.plot_index)
             if (found := services.coarse_waveform(run.source, raw)) is not None:
                 coarse.append((run.label, found))
-    if not coarse:
-        return []
-    return [Observation.of(coarse_waveform_observation(coarse, run_cap=_SOLVE_FAILURE_RUN_CAP))]
+            elif samples and services.compression_drops_points(run.source, raw):
+                dropped.append(run.label)
+    observations = []
+    if coarse:
+        observations.append(
+            Observation.of(coarse_waveform_observation(coarse, run_cap=_SOLVE_FAILURE_RUN_CAP))
+        )
+    if dropped:
+        observations.append(
+            Observation.of(compressed_xvii_observation(dropped, run_cap=_SOLVE_FAILURE_RUN_CAP))
+        )
+    return observations
+
+
+def _measurements_failed_everywhere(
+    runs: list[_ResolvedRun], captured_logs: Mapping[str, DecodedLog]
+) -> list[Observation]:
+    """The ``.meas`` that gave no value in any run this analysis read
+    (``result_observations.measurements_failed_in_every_run``), for each
+    set of runs whose decks request the same names. A run whose log's
+    measurements were not read (``services.measurements_unread``) is not
+    counted; ``_relay_solve_failures`` already says a log was not read."""
+    groups: dict[tuple[str, ...] | None, tuple[list[list[str]], set[str]]] = {}
+    for run in runs:
+        logs = captured_logs.get(run.manifest_id)
+        family = run.source.explicit_dialect or run.source.dialect
+        if logs is None or services.measurements_unread(logs, family) is not None:
+            continue
+        section = logs.section("measurements")
+        requested = (
+            deck_observation_inputs(run.source.netlist)[0]
+            if run.source.netlist is not None
+            else None
+        )
+        key = tuple(requested["meas"]) if requested is not None else None
+        facts = run_measurement_facts(section["value"] or {}, key)
+        read, circuits = groups.setdefault(key, ([], set()))
+        read.append(given_no_value(facts))
+        circuits.add(str((run.source.identity or {}).get("circuit") or run.label))
+    observations: list[Observation] = []
+    for key, (read, circuits) in groups.items():
+        circuit = ", ".join(sorted(circuits)) if len(groups) > 1 else None
+        found = measurements_failed_in_every_run(read, key, circuit=circuit)
+        if found is not None:
+            observations.append(Observation.of(found))
+    return observations
 
 
 def _relay_solve_failures(
@@ -1501,6 +1556,9 @@ async def _create_result_set(args: AnalyzeResultsInput, state: SessionState, dea
                 }
             )
     observations.extend(_relay_solve_failures(runs, captured_logs))
+    observations.extend(
+        await asyncio.to_thread(_measurements_failed_everywhere, runs, captured_logs)
+    )
     request = _request_inputs(args)
     work = request.pop("work")
     inputs = {
@@ -4226,7 +4284,14 @@ async def _evaluate_unit(
     observations.extend(_absence_observations(recipe, key, records))
     observations.extend(_log_precision_observations(records))
     observations.extend(
-        await asyncio.to_thread(_coarse_waveform_observations, eligible_runs, captures)
+        await asyncio.to_thread(
+            functools.partial(
+                _coarse_waveform_observations,
+                samples=not isinstance(recipe, MeasurementsRecipe),
+            ),
+            eligible_runs,
+            captures,
+        )
     )
     return WorkUnit(
         key=key,
