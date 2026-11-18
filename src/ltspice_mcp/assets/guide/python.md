@@ -20,7 +20,7 @@ process the server starts once and keeps for the session, with `api` already
 open on the server's working directory. The snippet also has
 `np`, `load_raw`, `measurements`, `reference`, `window_and_clean`,
 `compute_signal_stats` and `time_weighted_quantiles` in scope. `np` is
-NumPy 2, so a name it removed fails: write `np.trapezoid` (or
+NumPy 2, which removed or deprecates some NumPy 1 names: write `np.trapezoid` (or
 `compute_signal_stats`) for `np.trapz`, `np.ptp(a)` for `a.ptp()` and
 `np.isin` for `np.in1d`. `print()` output and the repr of a trailing expression are returned, so print the result
 you need, such as the crossing or the worst corner, rather than the whole

@@ -6,7 +6,9 @@ prefix names an `X` instance, a rule with `instance`, and `X1:delvto` /
 body, and the draw it made there read the device's size off the `X` line and
 evaluated the body as ngspice would, so the reported spread could be several
 times too large. Run such a deck on LTspice or ngspice; a mismatch rule on
-top-level `M` devices still runs on QSPICE and Xyce. The codes that path alone
+top-level `M` devices still runs on QSPICE and Xyce. A rule whose prefix names
+any `X` instance is refused there even when that instance holds no transistor
+(it used to be skipped by name): narrow the prefix to the top-level devices. The codes that path alone
 returned are gone: `ambiguous_inner_device`, `ambiguous_instance_ref`,
 `ambiguous_scale`, `ambiguous_subckt`, `clone_include_unsupported`,
 `geometry_not_literal`, `inner_device_not_found`, `inner_model_unresolved`,

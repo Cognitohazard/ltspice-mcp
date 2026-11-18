@@ -719,10 +719,11 @@ class TestWorkerProcess:
         assert out.stdout.strip() == "[]"
 
 
-def test_the_numpy_names_the_guide_says_fail_do_fail_and_their_replacements_work():
+def test_the_numpy_names_the_guide_says_to_replace_fail_and_their_replacements_work():
     """The Python guide names NumPy 1 spellings a snippet's ``np`` lacks, each
     with what to write; each is checked against the NumPy this package runs."""
     import re
+    import warnings
     from importlib.resources import files
 
     import numpy as np
@@ -734,8 +735,11 @@ def test_the_numpy_names_the_guide_says_fail_do_fail_and_their_replacements_work
     a = np.arange(4.0)
     scope = {"np": np, "a": a}
     for new, old in pairs:
-        with pytest.raises(AttributeError):
-            eval(old if old.endswith(")") else f"{old}(a)", scope)
+        # Removed in the locked NumPy; on an earlier 2.x, deprecated.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            with pytest.raises((AttributeError, DeprecationWarning)):
+                eval(old if old.endswith(")") else f"{old}(a)", scope)
         eval(new if new.endswith(")") else f"{new}(a, a)", scope)
 
 

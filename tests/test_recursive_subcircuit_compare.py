@@ -128,4 +128,5 @@ async def test_edit_schematic_reference_stage_states_the_failure(
     assert data["commit_state"] == "committed"
     verification = data["verification"]
     assert "recursive .SUBCKT definition: loop -> loop" in verification["compare_error"]
+    assert "calls itself" in verification["compare_error"]
     assert verification["equivalent"] is None

@@ -117,3 +117,24 @@ async def test_the_edit_path_export_keeps_no_snapshot(state_no_sim: SessionState
 
     assert text == _EXPORT
     assert not state_no_sim.store.exports_dir.exists()
+
+
+@pytest.mark.parametrize("codec", ["utf-8", "cp1252"])
+def test_the_record_of_a_renamed_part_takes_a_crlf_decks_line_breaks(tmp_path: Path, codec: str):
+    """The comment naming what the ngspice copy renamed ends with the deck's
+    own line break and is written in its encoding, and reads back."""
+    from ltspice_mcp.lib.deck_prep import _read_export
+    from ltspice_mcp.lib.encoding import decode_spice_bytes_with_encoding
+    from ltspice_mcp.lib.spice_lex import lex
+    from ltspice_mcp.lib.spice_lex_ops import exported_names
+
+    export = tmp_path / "load.net"
+    export.write_bytes("* load\r\nV1 in 0 1\r\nR§Load in 0 2k\r\n.op\r\n.end\r\n".encode(codec))
+    _stem, data = _read_export(export, for_ngspice=True)
+    text, _ = decode_spice_bytes_with_encoding(data)
+    assert text == (
+        "* load\r\n* ltspice-mcp: RLoad was exported as R§Load\r\n"
+        "V1 in 0 1\r\nRLoad in 0 2k\r\n.op\r\n.end\r\n"
+    )
+    assert data == text.encode(codec)
+    assert exported_names(lex(text).cards) == {"rload": "R§Load"}

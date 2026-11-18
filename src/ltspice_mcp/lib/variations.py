@@ -2438,6 +2438,16 @@ def _validate_mismatch_rules(closure: _DeckClosure, rules: list[MismatchRule]) -
     even when it also reaches top-level devices: drawing for those alone would
     report a spread that leaves out the devices the prefix asked for.
     """
+    _refuse_rules_reaching_subcircuits(closure, rules)
+    texts = closure.texts()
+    _refuse_unreached(closure, rules, _flat_mismatch_files(closure, texts, rules))
+
+
+def _refuse_rules_reaching_subcircuits(closure: _DeckClosure, rules: list[MismatchRule]) -> None:
+    """Refuse, on a deck with no semantic profile, a nested ``instance`` rule
+    and a rule whose prefix names an ``X`` instance, even one that also
+    reaches top-level devices: drawing for those alone would report a spread
+    that leaves out the devices the prefix asked for."""
     nested = [rule.instance for rule in rules if rule.instance is not None]
     if nested:
         _refuse_descent_without_profile(
@@ -2446,7 +2456,6 @@ def _validate_mismatch_rules(closure: _DeckClosure, rules: list[MismatchRule]) -
             "inside a subcircuit, and a mismatch draw for it needs a reading of the "
             "subcircuit's body",
         )
-    texts = closure.texts()
     reaching = [rule.prefix for rule in rules if _names_subckt_instance(closure, rule)]
     if reaching:
         _refuse_descent_without_profile(
@@ -2455,7 +2464,6 @@ def _validate_mismatch_rules(closure: _DeckClosure, rules: list[MismatchRule]) -
             "instance, and a mismatch draw for a device inside a subcircuit needs a "
             "reading of its body (or narrow the prefix to top-level M devices)",
         )
-    _refuse_unreached(closure, rules, _flat_mismatch_files(closure, texts, rules))
 
 
 def _apply_mismatch_rules(
@@ -2473,6 +2481,9 @@ def _apply_mismatch_rules(
     wrote.
     """
     mismatch_rules = [rule for rule in rules if isinstance(rule, MismatchRule)]
+    # Refused when the rules were read (``_validate_mismatch_rules``); a case
+    # expanded elsewhere is refused here by the same rule.
+    _refuse_rules_reaching_subcircuits(closure, mismatch_rules)
     flat = _flat_mismatch_files(closure, texts, mismatch_rules)
     draws: dict[str, float] = {}
     for rule, indexes in zip(mismatch_rules, flat, strict=True):
