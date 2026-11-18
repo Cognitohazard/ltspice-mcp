@@ -293,6 +293,9 @@ def is_stored_answer_id(text: object) -> bool:
     )
 
 
+# Not result_store's expiry: a result set computed from jobs lives as long as
+# its jobs, while a stored answer depends on no job and expires by time alone.
+# Both read [analysis] result_set_ttl_hours; result_store.cleanup says the same.
 def _expired(data: Mapping[str, Any]) -> bool:
     expires = parse_iso_datetime(str(data.get("expires_at", "")))
     return expires is None or expires <= now()
