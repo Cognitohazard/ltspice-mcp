@@ -1839,13 +1839,7 @@ def parse_measurements(
         # mode" is a *warning*-class diagnostic; without carrying it, callers
         # (e.g. measurement_stats) report "no diagnostics" while every other
         # tool surfaces the reason.
-        empty = empty_measurements(extract_log_diagnostics(log_path), failed_names)
-        # The build the log names, as the full table carries it below: a
-        # reader of the log's other sections asks it too (the device table's
-        # spelling, ``device_names.table_naming``).
-        if (banner := log_banner_build(log_text)) is not None:
-            empty["printed_by"] = banner
-        return empty
+        return empty_measurements(extract_log_diagnostics(log_path), failed_names)
 
     # A value LTspice printed that is not a number (a WHEN's threshold written
     # as a parameter, an expression or a braced expression) fails its own

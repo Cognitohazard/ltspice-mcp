@@ -27,6 +27,7 @@ from ltspice_mcp.lib.device_names import (
 )
 from ltspice_mcp.lib.log_types import LogSectionName
 from ltspice_mcp.lib.raw_parser import OtherRawKind, get_step_count, real_axis
+from ltspice_mcp.lib.simulator_build import log_head_build
 from ltspice_mcp.lib.step_values import StepValues, listed_steps, step_values_text, step_with
 from ltspice_mcp.state import SessionState
 
@@ -529,15 +530,19 @@ async def load_device_op_points(
     """The log's device table as ``Api.device_op_points`` returns it, its
     names read as the build that wrote the log spells them
     (``device_names.table_naming``): the one the source names, else the one
-    the log's first line names."""
+    the log's first line names (``simulator_build.log_head_build``)."""
     source = await _log_source(state, job_id, run_index, case_id, log_path)
     logs = await services.load_logs(source, state)
     section = logs.value("device_op")
-    # The decoder keeps the build the log's first line names with the
-    # measurements, whether or not the log printed any.
-    measurements = logs.section("measurements").get("value")
-    printed_by = measurements.get("printed_by") if isinstance(measurements, dict) else None
-    naming = table_naming(services.source_producer(source), printed_by)
+    writer = services.source_producer(source)
+    # The banner on the log's own first line, read apart from every decoded
+    # section, so the keys never turn on another section's read.
+    printed_by = (
+        await asyncio.to_thread(log_head_build, source.log)
+        if writer.build is None and section and source.log is not None
+        else None
+    )
+    naming = table_naming(writer, printed_by)
     return device_op_points_of(section, source.observations, xvii=naming.xvii)
 
 

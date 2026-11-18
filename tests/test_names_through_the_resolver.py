@@ -30,7 +30,7 @@ from ltspice_mcp.lib.device_names import trace_key
 from ltspice_mcp.lib.lint_rules import lint_deck
 from ltspice_mcp.lib.metrics import noise_trace_unit
 from ltspice_mcp.lib.raw_header import preflight_raw
-from ltspice_mcp.lib.simulator_build import Producer, reported_build
+from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.trace_names import find_trace
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
@@ -38,17 +38,6 @@ from tests import _ltspice_recorded as rec
 from tests.conftest import LIVENESS_S, SyncApi, dispatched
 from tests.ltspice_recorder import INPUTS
 from tests.test_metric_plot_kinds import header
-
-
-def recorded_producer(build: str) -> Producer:
-    """Who ran the recorded build, as its own output names it: the banner on
-    LTspice 26's log, the writer in XVII's raw header."""
-    case = "raw/save_subckt_names"
-    reported = reported_build(
-        rec.recorded(build, f"{case}.log"), rec.recorded(build, f"{case}.raw")
-    )
-    assert reported is not None
-    return Producer("ltspice", reported, None)
 
 
 def stored_traces(raw: Path, dialect: str | None = None) -> list[str]:
@@ -100,9 +89,11 @@ def ngspice_producer() -> Producer:
     return Producer("ngspice", "ngspice-42", shutil.which("ngspice"))
 
 
-def test_ngspice_measures_a_colon_name_its_dotted_save_stored(tmp_path: Path):
-    """``.save v(x1.mid)`` stores the node, and the server reads a ``.meas``
-    of ``v(x1:mid)`` from it: the lint accepts the deck."""
+def test_ngspice_stores_a_dotted_save_the_server_reads_by_its_colon_name(tmp_path: Path):
+    """``.save v(x1.mid)`` stores the node, and the server reads ``v(x1:mid)``
+    from it: the lint accepts a ``.meas`` of that name. ngspice's own
+    ``.meas`` does not parse ``x1:mid``, but a batch run with a raw
+    evaluates no top-level ``.meas`` (``meas-ngspice-batch``)."""
     deck = f"* dotted save\n{DIVIDER}.save v(in) v(x1.mid)\n.meas tran vmid FIND v(x1:mid) AT=0.5m\n.end\n"
     traces, _ = ngspice_run(tmp_path, "dotted", deck)
     assert [t.casefold() for t in traces] == ["v(in)", "v(x1.mid)"]
@@ -147,7 +138,7 @@ def test_a_save_inside_subcircuits_counts_only_in_the_builds_spelling(
     own = with_x == (rec.generation(build) != "xvii")
     stored = [t.casefold() for t in stored_traces(rec.recorded(build, f"{case}.raw"))]
     assert (node.casefold() in stored) == own, stored
-    found = lint(deck, tmp_path / "nested.cir", recorded_producer(build))
+    found = lint(deck, tmp_path / "nested.cir", rec.producer(build))
     if own:
         assert "save-meas-coverage" not in found, found
     else:
@@ -177,12 +168,62 @@ def test_a_measurement_inside_a_subcircuit_is_checked_for_the_build(
     values = [entry["values"][0] for entry in saved["measurements"].values()]
     assert (values == [0.5]) == own
     text = (INPUTS / f"{stem}.cir").read_text(encoding="utf-8")
-    found = lint(text, tmp_path / "meas.cir", recorded_producer(build))
+    found = lint(text, tmp_path / "meas.cir", rec.producer(build))
     if own:
         assert "save-meas-coverage" not in found, found
         assert "meas-subckt-node-unsaved-ltspice" in found, found
     else:
         assert "save-meas-coverage" in found, found
+
+
+def test_an_instance_in_an_included_file_is_an_instance_of_the_deck(tmp_path: Path):
+    """The instance a name's path starts at may be placed in an included
+    file: the deck saves and measures the node in the build's own spelling,
+    and the lint accepts it."""
+    body = tmp_path / "body.inc"
+    body.write_text("XAMP in div\n", encoding="utf-8")
+    deck = (
+        "* included\n.subckt div top\nR1 top mid 1k\nR2 mid 0 1k\n.ends\n"
+        f'V1 in 0 1\n.include "{body.name}"\n.save V(in) V(xamp:mid)\n'
+        ".tran 1m\n.meas tran vmid FIND V(xamp:mid) AT=0.5m\n.end\n"
+    )
+    for build in rec.BUILDS:
+        own = rec.generation(build) == "current"
+        text = deck if own else deck.replace("xamp:mid", "amp:mid")
+        found = lint(
+            text,
+            tmp_path / "included.cir",
+            rec.producer(build),
+            includes=[(body, body.read_text(encoding="utf-8"), "utf-8")],
+        )
+        assert "save-meas-coverage" not in found, (build, found)
+        assert "save-name-not-stored" not in found, (build, found)
+
+
+def test_xvii_refuses_a_save_naming_another_spelling_and_saves_everything(tmp_path: Path):
+    """XVII refuses the whole ``.save`` that names a path it does not store
+    and saves every signal instead ("Invalid .save command. Just saving
+    everything...", recorded): a ``.meas`` of a top-level node is measured,
+    and one of a node inside the subcircuit is kept only on the setting."""
+    (xvii,) = [build for build in rec.BUILDS if rec.generation(build) == "xvii"]
+    log = rec.recorded(xvii, "raw/save_subckt_names.log").read_bytes()
+    assert b"Invalid .save command.  Just saving everything..." in log.replace(b"\x00", b"")
+    divider = (
+        "* xvii\n.subckt div top\nR1 top mid 1k\nR2 mid 0 1k\n.ends\n"
+        "V1 in 0 1\nR9 in out 1k\nR8 out 0 1k\nXamp in div\n"
+    )
+    top = divider + ".save V(xamp:mid) V(out)\n.tran 1m\n.meas tran v FIND V(in) AT=0.5m\n.end\n"
+    found = lint(top, tmp_path / "top.cir", rec.producer(xvii))
+    assert "save-meas-coverage" not in found, found
+    (refused,) = found["save-name-not-stored"]
+    assert "Just saving everything" in refused["evidence"]["reason"]
+    inside = (
+        divider + ".save V(xamp:mid) V(amp:mid)\n.tran 1m\n"
+        ".meas tran v FIND V(amp:mid) AT=0.5m\n.end\n"
+    )
+    found = lint(inside, tmp_path / "inside.cir", rec.producer(xvii))
+    assert "save-meas-coverage" not in found, found
+    assert "meas-subckt-node-unsaved-ltspice" in found, found
 
 
 @pytest.mark.parametrize("stem", sorted(OWN_MEAS_SPELLING.values()))
@@ -206,7 +247,7 @@ def test_a_dotted_name_in_an_ltspice_deck_is_not_established(tmp_path: Path):
         ".tran 1m\n.meas tran vmid FIND V(xamp.mid) AT=0.5m\n.end\n"
     )
     for build in rec.BUILDS:
-        found = lint(deck, tmp_path / "dotted.cir", recorded_producer(build))
+        found = lint(deck, tmp_path / "dotted.cir", rec.producer(build))
         assert "save-meas-coverage" not in found, found
         assert "save-meas-spelling-unestablished" in found, found
 
@@ -315,7 +356,7 @@ def test_the_lint_reads_mass_and_eszett_as_the_trace_reader_does(tmp_path: Path)
     )
     assert find_trace(["V(maß)"], "V(mass)", xvii=False) is None
     for build in rec.BUILDS:
-        found = lint(deck, tmp_path / "eszett.cir", recorded_producer(build))
+        found = lint(deck, tmp_path / "eszett.cir", rec.producer(build))
         (coverage,) = found["save-meas-coverage"]
         assert coverage["evidence"]["missing_signals"] == ["v(mass)"]
 

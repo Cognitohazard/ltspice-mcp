@@ -573,7 +573,8 @@ ops.observations               # a log reader's dict (LogResult) says the same o
   letter, the instance's name without its X, and the device's name without
   its letter). A block LTspice 26 exports as `X§U1` and XVII as `XU1` is
   `xu1` on both (`xu1.d1`), where LTspice 26's table writes `u1:d1`. The
-  table's own name for each device is in `.table_names`, by key, for a
+  table's own name for each device is in `.table_names` (the result is a
+  `DeviceOpPoints`, a `LogResult` that adds it), by key, for a
   caller quoting the log. Which build wrote the table is read from the job
   case's record or, for a bare path, from the build the log's first line
   names; a log whose first line names none was written by a build before 24,
@@ -728,7 +729,8 @@ are the shapes the MCP tools return, so they change only when the tools'
 outputs change and are versioned with them. The docstrings of the §8
 functions fix their signatures, units and array conventions.
 
-`__all__` contains `Api`, `RawResult`, the exception types, the §8 functions,
+`__all__` contains `Api`, `RawResult`, `LogResult`, `DeviceOpPoints`, the
+exception types, the §8 functions,
 and these typing names:
 
 - aliases: `Quantity`, `SearchDirection`, `CrossingDirection` (defined

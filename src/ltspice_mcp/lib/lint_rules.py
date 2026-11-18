@@ -269,20 +269,25 @@ class _Coverage(NamedTuple):
     patterns: list[str]
 
 
-def _instances(cards: Sequence[SpiceCard]) -> tuple[frozenset[str], frozenset[str]]:
-    """The deck's top-level subcircuit instances, folded, and the own names of
-    those LTspice exported with a ``§`` (``U1`` for ``X§U1``)."""
+def _instances(context: _LintContext) -> tuple[frozenset[str], frozenset[str]]:
+    """The subcircuit instances at the top level of the deck and of each
+    file of its staged closure, folded, and the names of those LTspice
+    exported with a ``§`` (``X§U1``), both its own (``u1``, as LTspice 26
+    names the block in its results) and the export's without the marker
+    (``xu1``): which of them a ``.save`` takes is not recorded."""
     names: set[str] = set()
     marked: set[str] = set()
-    for card in cards:
-        if card.kind != "instance" or card.scope != () or not card.name:
-            continue
-        spellings = section_sign_names(card.name)
-        bare = spellings[0] if spellings else card.name
-        if fold_name(bare).startswith("x"):
-            names.add(fold_name(bare))
+    for file in context.files:
+        for card in file.cards:
+            if card.kind != "instance" or card.scope != () or not card.name:
+                continue
+            spellings = section_sign_names(card.name)
+            bare = fold_name(spellings[0] if spellings else card.name)
+            if not bare.startswith("x"):
+                continue
+            names.add(bare)
             if spellings:
-                marked.add(fold_name(spellings[1]))
+                marked.update((bare, fold_name(spellings[1])))
     return frozenset(names), frozenset(marked)
 
 
@@ -295,29 +300,41 @@ def _coverage(context: _LintContext) -> _Coverage | None:
     if any(save.saves_all for save in saves) or unreadable_cards(save.card for save in saves):
         return None
     naming = naming_for(context.reader)
-    instances, marked = _instances(context.cards)
+    instances, marked = _instances(context)
 
     def read(card: SpiceCard, text: str, *, saved: bool) -> _Read:
         signal = deck_signal(text, naming, instances, saved=saved, marked=marked)
         return _Read(card, text, signal)
 
     probes = [(save.card, probe) for save in saves for probe in save.probes]
-    return _Coverage(
-        saves=[
-            read(card, text, saved=True)
-            for card, probe in probes
-            if not probe_is_pattern(probe)
-            for text in _probe_signals(probe, context)
-        ],
-        measured=[
-            read(card, text, saved=False)
-            for card in measurements
-            for probe in probe_refs(card)
-            for text in _probe_signals(probe, context)
-        ],
-        listed=bool(saves),
-        patterns=[probe.text for _card, probe in probes if probe_is_pattern(probe)],
-    )
+    saved = [
+        read(card, text, saved=True)
+        for card, probe in probes
+        if not probe_is_pattern(probe)
+        for text in _probe_signals(probe, context)
+    ]
+    measured = [
+        read(card, text, saved=False)
+        for card in measurements
+        for probe in probe_refs(card)
+        for text in _probe_signals(probe, context)
+    ]
+    patterns = [probe.text for _card, probe in probes if probe_is_pattern(probe)]
+    if any(entry.read.voids_save for entry in saved):
+        if len(saves) == 1:
+            # XVII refuses the whole .save and saves every signal, as with no
+            # .save at all (recorded: raw/save_subckt_names on XVII).
+            return _Coverage(saved, measured, listed=False, patterns=[])
+        # What XVII does with a deck's other .save cards is not recorded.
+        unsettled = DeckSignal(
+            None,
+            "XVII refuses a .save naming a path it does not store and saves every "
+            "signal instead; what it does with the deck's other .save cards is not "
+            "recorded",
+            established=False,
+        )
+        saved = [*saved, _Read(saves[0].card, ".save", unsettled)]
+    return _Coverage(saved, measured, listed=bool(saves), patterns=patterns)
 
 
 class _Unsaved(NamedTuple):

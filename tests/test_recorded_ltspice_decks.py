@@ -100,7 +100,6 @@ from tests import _ltspice_recorded as rec
 from tests.conftest import LTSPICE_READER, FakeSim
 from tests.ltspice_recorder import INPUTS
 from tests.test_inspect_tools import _run
-from tests.test_names_through_the_resolver import recorded_producer
 
 #: LTspice's reading of a deck's ``.lib`` cards (``deck_staging.library_read``).
 LTSPICE_LIBRARIES = LibraryReader("ltspice")
@@ -2510,7 +2509,7 @@ def test_a_measurement_of_a_node_inside_a_subcircuit(build: str):
                 assert values in ([], [None])
         refused = {
             f["rule_id"]
-            for f in lint_input(stem, reader=recorded_producer(build))
+            for f in lint_input(stem, reader=rec.producer(build))
             if f["severity"] == "error"
         }
         assert refused == (set() if stem == taken else {"save-meas-coverage"})

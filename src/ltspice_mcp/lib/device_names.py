@@ -226,10 +226,12 @@ def table_naming(writer: Producer, printed_by: str | None) -> Naming:
     opens with ``printed_by`` (``simulator_build.log_banner_build``), None
     when its first line names no build.
 
-    The build ``writer`` names, else the one the banner names; a log with no
-    banner and nothing else naming its build was written by an LTspice before
-    24, as 24 and later open every log with the banner (every LTspice 26
-    recording does; no XVII recording does), and is read as XVII writes it.
+    The build ``writer`` names, else the one the banner names; a log with a
+    device table, no banner and nothing else naming its build was written by
+    an LTspice before 24, as 24 and later open the log of every run they
+    start with the banner (every LTspice 26 recording of a run does; only a
+    deck refused before its run lacks it, and prints no table; no XVII
+    recording has one), and is read as XVII writes it.
     """
     # Here, not at the top: the raw parser reads device names through this
     # module, and simulator_build reads a raw's writer through the raw parser.
@@ -499,6 +501,9 @@ class DeckSignal:
     why: str | None = None
     established: bool = True
     spelled: str | None = None
+    #: The reader refuses the whole ``.save`` that names it and saves every
+    #: signal instead, as XVII does.
+    voids_save: bool = False
 
 
 #: Where each LTspice build's spelling of a name inside subcircuit instances
@@ -529,15 +534,21 @@ def deck_signal(
     ASCII case. A path through instances:
 
     - ngspice stores a path spelled with dots; a ``.save`` of one spelled
-      with colons stores nothing (ngspice-42, measured), and in a ``.meas``
-      it is read as the dotted path, as every reader of a result reads it.
+      with colons stores nothing (ngspice-42, measured). A ``.meas`` of a
+      colon path is read as the dotted path the run stores, as every reader
+      of the result reads it; ngspice's own ``.meas`` does not parse it
+      ("can't parse 'x1:mid': ignored", measured), but a run in batch mode
+      with a raw evaluates no top-level ``.meas`` (lint
+      ``meas-ngspice-batch``), so the server's reading is the one that counts.
     - Each LTspice build stores and measures a path only in its own spelling
-      (:data:`_SPELLING_RECORDED`): the other build's spelling stores and
-      reads nothing, as does a path whose first segment names no instance in
-      either. Which spelling a build of no known spelling takes, a dotted
-      path in an LTspice deck, and a segment that names an instance in both
-      spellings or one exported with a ``§`` are not recorded: the reading
-      is not established.
+      (:data:`_SPELLING_RECORDED`), whose first segment must name an instance
+      of the deck. Otherwise LTspice 26 stores and reads nothing for it, and
+      XVII reads nothing for it in a ``.meas`` and refuses the whole ``.save``
+      that names it, saving every signal instead ("Invalid .save command.
+      Just saving everything...", ``voids_save``). Which spelling a build of
+      no known spelling takes, a dotted path in an LTspice deck, and a
+      segment that names an instance in both spellings or one exported with
+      a ``§`` are not recorded: the reading is not established.
     """
     # A probe's spaces are no part of its name: ``v( a )`` is ``v(a)``.
     text = re.sub(r"\s+", "", text)
@@ -574,19 +585,19 @@ def deck_signal(
     first = fold_name(node.split(":", 1)[0])
     with_x = first in instances
     without_x = f"x{first}" in instances
-    marked_folded = {fold_name(name) for name in marked}
-    if first in marked_folded or (with_x and without_x):
+    if first in {fold_name(name) for name in marked} or (with_x and without_x):
         return DeckSignal(
             None,
             f"{first!r} names more than one instance of the deck as LTspice spells it, "
-            "and which one it reads is not recorded",
+            "or one exported with a §, and which one it reads is not recorded",
             established=False,
         )
-    if not with_x and not without_x:
+    if not with_x and not without_x and not saved:
+        # The same on both builds: neither measures a path through no instance.
         return DeckSignal(
             None,
-            f"no instance of the deck is named {first!r} or {('x' + first)!r}, so neither "
-            f"LTspice build stores or measures it ({_SPELLING_RECORDED})",
+            f"{text} names no instance of the deck ({first!r} or {('x' + first)!r}), "
+            f"so neither LTspice build measures it ({_SPELLING_RECORDED})",
         )
     if naming.note is not None:
         return DeckSignal(
@@ -595,15 +606,31 @@ def deck_signal(
             f"({naming.note}; {_SPELLING_RECORDED})",
             established=False,
         )
-    if with_x != naming.xvii:
+    if (with_x if not naming.xvii else without_x):
         return DeckSignal(trace_key(text, xvii=naming.xvii))
-    key = trace_key(text, xvii=not naming.xvii)
-    *scope, name = key[1]
-    spelled = f"{function}({spelled_name(scope, name, naming)})"
+    spelled = None
+    if with_x or without_x:
+        key = trace_key(text, xvii=not naming.xvii)
+        *scope, name = key[1]
+        spelled = f"{function}({spelled_name(scope, name, naming)})"
+    names = (
+        f"names nothing; it is spelled {spelled}"
+        if spelled is not None
+        else f"names no instance of the deck ({first!r} as {naming.read_as} spells it)"
+    )
+    if naming.xvii and saved:
+        return DeckSignal(
+            None,
+            f"to {naming.read_as} {text} {names}, so it refuses the whole .save "
+            "(\"Invalid .save command. Just saving everything...\") and saves every "
+            f"signal outside subcircuits instead ({_SPELLING_RECORDED})",
+            spelled=spelled,
+            voids_save=True,
+        )
     return DeckSignal(
         None,
-        f"{naming.read_as} stores and measures {text.strip()} as {spelled}, and the name "
-        f"as written names nothing ({_SPELLING_RECORDED})",
+        f"to {naming.read_as} {text} {names}, and it stores and measures nothing for it "
+        f"({_SPELLING_RECORDED})",
         spelled=spelled,
     )
 

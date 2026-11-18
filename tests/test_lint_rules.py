@@ -272,6 +272,8 @@ _SEED_READERS = {
     "subckt-defined-twice": Producer("ltspice", "LTspice 26.1.1 for Windows", None),
     # The node is kept only on a setting, and its spelling is the build's.
     "meas-subckt-node-unsaved-ltspice": Producer("ltspice", "LTspice 26.1.1 for Windows", None),
+    # A .save LTspice 26 stores nothing for is known only for that build.
+    "save-name-not-stored": Producer("ltspice", "LTspice 26.1.1 for Windows", None),
 }
 
 #: The ngspice mode a seed rule is linted in, where it is not the class's
