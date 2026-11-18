@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -118,6 +118,35 @@ def _implied(obj: Mapping[Any, Any]) -> list[str]:
         for field, (overall, value) in IMPLIED.items()
         if field in obj and overall in obj and obj[overall] is value
     ]
+
+
+def left_out_value(
+    name: str, kinds: Iterable[str], beside: Mapping[Any, Any], kept: Mapping[str, Kept]
+) -> Any:
+    """The value field ``name`` held when :func:`omit_silent` left it out of the
+    object ``beside``: the inverse of the rule, for a reader of a sent reply.
+
+    ``kinds`` are the JSON Schema types the field is declared with. A sub-answer
+    the overall answer beside it implies (:data:`IMPLIED`) has that answer's
+    value; otherwise a list was empty, an object empty, a flag false, and any
+    other field null. Any other kept field raises ``KeyError``: the rule never
+    leaves one out, so its absence means something else, which its
+    :class:`Kept` reason states.
+    """
+    if name in IMPLIED:
+        overall, value = IMPLIED[name]
+        if overall in beside and beside[overall] is value:
+            return value
+    if _rule(name, kept) is not None:
+        raise KeyError(name)
+    declared = set(kinds) - {"null"}
+    if declared == {"array"}:
+        return []
+    if declared == {"object"}:
+        return {}
+    if declared == {"boolean"}:
+        return False
+    return None
 
 
 def omit_silent(value: Any, kept: Mapping[str, Kept]) -> Any:
