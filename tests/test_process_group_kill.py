@@ -36,8 +36,14 @@ pytestmark = pytest.mark.skipif(os.name != "posix", reason="Windows has no proce
 #: ``ready`` once both are blocked. It takes them one at a time with
 #: ``sigwait``, which returns a signal already pending before one sent later,
 #: so the log is in the order they arrived (a Python handler can be interrupted
-#: by the next one and log after it). After ``ready`` it writes how it found
-#: each signal's disposition and mask, which it inherited, for a failure to show.
+#: by the next one and log after it).
+#:
+#: On macOS, libc's ``sigwait`` reports an interrupted wait as success without
+#: storing a signal number, and Python returns whatever the variable held: a
+#: number that names no signal. No signal was taken then, so the recorder notes
+#: it on stderr and waits again; logging it as a signal killed the recorder.
+#: After ``ready`` it writes how it found each signal's disposition and mask,
+#: which it inherited, for a failure to show.
 _RECORDER = """
 import pathlib, signal, sys, threading
 log = pathlib.Path(sys.argv[1])
@@ -52,6 +58,9 @@ pathlib.Path(sys.argv[2]).write_text(
 )
 while True:
     number = signal.sigwait(wanted)
+    if number not in wanted:
+        print(f"sigwait returned {number}, which is no signal waited for", file=sys.stderr)
+        continue
     with log.open("a", encoding="utf-8") as stream:
         stream.write(signal.Signals(number).name + "\\n")
 """

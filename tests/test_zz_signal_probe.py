@@ -21,10 +21,22 @@ _PROBE_WAIT = 4.0
 _ROUNDS = 150
 
 
+def proc_err(proc: subprocess.Popen[bytes]) -> str:
+    return (
+        ""
+        if proc.stderr is None
+        else proc.stderr.read().decode(errors="replace")[-300:]
+        if proc.poll() is not None
+        else "alive"
+    )
+
+
 def _one(tmp: Path, variant: str) -> str | None:
     log, ready = tmp / "signals", tmp / "ready"
     proc = subprocess.Popen(
-        [sys.executable, "-c", _RECORDER, str(log), str(ready)], start_new_session=True
+        [sys.executable, "-c", _RECORDER, str(log), str(ready)],
+        start_new_session=True,
+        stderr=subprocess.PIPE,
     )
     try:
         report = wait_until(written(ready, str.strip), what="ready")
@@ -41,11 +53,14 @@ def _one(tmp: Path, variant: str) -> str | None:
             os.kill(proc.pid, signal.SIGUSR2)
         try:
             wait_until(lambda: len(_signals(log)) >= 2, timeout_s=_PROBE_WAIT, what="both")
-            return None
+            proc.kill()
+            proc.wait()
+            err = proc_err(proc)
+            return f"spurious {variant}: {err!r}" if err else None
         except pytest.fail.Exception:
             return (
                 f"{variant}: log={_signals(log)} alive={proc.poll() is None} "
-                f"os_threads={threads}/{psutil.Process(proc.pid).num_threads()} "
+                f"os_threads={threads} stderr={proc_err(proc)!r} "
                 f"report={report!r}"
             )
     finally:
