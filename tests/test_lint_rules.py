@@ -225,6 +225,33 @@ _SEED_CASES = [
         "LTspice",
     ),
     (
+        "save-name-not-stored",
+        "V1 in 0 1\nXamp in div\n.subckt div top\nR1 top mid 1k\nR2 mid 0 1k\n.ends\n"
+        ".save V(in) V(x1:mid)\n.tran 1m\n.end\n",
+        None,
+        "LTspice",
+    ),
+    (
+        "save-meas-spelling-unestablished",
+        "V1 in 0 1\nXamp in div\n.subckt div top\nR1 top mid 1k\nR2 mid 0 1k\n.ends\n"
+        ".save V(in) V(xamp:mid)\n.tran 1m\n.end\n",
+        None,
+        "LTspice",
+    ),
+    (
+        "meas-subckt-node-unsaved-ltspice",
+        "V1 in 0 1\nXamp in div\n.subckt div top\nR1 top mid 1k\nR2 mid 0 1k\n.ends\n"
+        ".tran 1m\n.meas tran m FIND V(xamp:mid) AT=0.5m\n.end\n",
+        None,
+        "LTspice",
+    ),
+    (
+        "node-non-ascii-ngspice",
+        "V1 aé 0 1\nR1 aé 0 1k\n.op\n.end\n",
+        "ngspice",
+        "NGspiceSimulator",
+    ),
+    (
         "subckt-defined-twice",
         _DEFINED_TWICE,
         None,
@@ -241,7 +268,11 @@ _CASE_IDS = [case[0] for case in _SEED_CASES]
 #: Who reads a seed rule's deck, where a rule turns on the build: LTspice 26
 #: refuses a subcircuit defined twice, and an LTspice whose build is not known
 #: (no reader given) has nothing recorded.
-_SEED_READERS = {"subckt-defined-twice": Producer("ltspice", "LTspice 26.1.1 for Windows", None)}
+_SEED_READERS = {
+    "subckt-defined-twice": Producer("ltspice", "LTspice 26.1.1 for Windows", None),
+    # The node is kept only on a setting, and its spelling is the build's.
+    "meas-subckt-node-unsaved-ltspice": Producer("ltspice", "LTspice 26.1.1 for Windows", None),
+}
 
 #: The ngspice mode a seed rule is linted in, where it is not the class's
 #: kiltpsa: native ngspice stops on a .lib that names no section.

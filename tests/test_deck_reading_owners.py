@@ -438,6 +438,18 @@ _CARD_TEXT_READERS: dict[str, str] = {
     "tools/verify.py:_meas_angle_findings": (
         "display: the card's text shown in a finding, message or record, not read for a fact"
     ),
+    "lib/lint_rules.py:_meas_subckt_node_unsaved_ltspice": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/lint_rules.py:_node_non_ascii_ngspice": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/lint_rules.py:_save_meas_spelling_unestablished": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
+    "lib/lint_rules.py:_save_name_not_stored": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
     "tools/verify.py:_syntax_findings": (
         "display: the card's text shown in a finding, message or record, not read for a fact"
     ),

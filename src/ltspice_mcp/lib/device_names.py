@@ -539,7 +539,9 @@ def deck_signal(
       spellings or one exported with a ``§`` are not recorded: the reading
       is not established.
     """
-    match = _TRACE.match(text.strip())
+    # A probe's spaces are no part of its name: ``v( a )`` is ``v(a)``.
+    text = re.sub(r"\s+", "", text)
+    match = _TRACE.match(text)
     if match is None:
         return DeckSignal(trace_key(text, xvii=naming.xvii))
     function, node = match.group(1), match.group(2).strip()

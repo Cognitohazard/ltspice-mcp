@@ -1502,7 +1502,7 @@ def _node_non_ascii_ngspice(context: _LintContext, rule: LintRule) -> list[LintF
             continue
         seen: set[str] = set()
         for card in cards:
-            if card.kind != "instance" or card.body.isascii():
+            if card.kind != "instance":
                 continue
             line = read_instance(card)
             for node in line.nodes if line is not None else ():
