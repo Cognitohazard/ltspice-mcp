@@ -33,44 +33,46 @@ from tests.conftest import wait_until, written
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="Windows has no process groups")
 
 #: Logs each SIGUSR1 and SIGUSR2 it gets, one name per line, after writing
-#: ``ready`` once both are blocked. It keeps both blocked and takes the pending
-#: ones one at a time, lowest number first, by unblocking that one signal so its
-#: handler logs it (``pthread_sigmask`` runs the handler before it returns).
-#: SIGUSR1 is the lower number on every platform, so a SIGUSR1 pending when a
-#: SIGUSR2 is sent is logged before that SIGUSR2.
+#: ``ready`` once it handles both. Python's C-level handler writes each
+#: signal's number to the wakeup pipe as the signal is delivered, and the
+#: recorder logs what one read of the pipe returns in a single write. A system
+#: delivers every pending signal before the recorder's code runs again, so
+#: signals pending together arrive in one read; Linux runs their handlers in
+#: reverse (it stacks one frame per signal), so a read is logged lowest number
+#: first, the order in which a process takes pending signals. SIGUSR1 is the
+#: lower number on every platform, so a SIGUSR1 pending when a SIGUSR2 is sent
+#: is logged no later than that SIGUSR2.
 #:
-#: It does not use ``signal.sigwait``. On macOS, when two signals reach a
-#: process waiting in ``sigwait`` before it runs again, the first is lost: of
-#: fifty such pairs on a GitHub macOS runner, forty-nine logged only the second.
-#: It can also return a number that names no signal (its wait was interrupted
-#: and nothing was stored). Polling the pending set loses neither.
+#: It neither blocks the signals nor uses ``signal.sigwait``. On a GitHub macOS
+#: runner, two signals reaching a recorder waiting in ``sigwait`` lost the first
+#: in forty-nine pairs of fifty, ``sigwait`` once returned a number that names
+#: no signal, and a recorder that polled its blocked, pending signals saw a
+#: SIGUSR1 sent by ``killpg`` only after a SIGUSR2 sent after it.
 #: After ``ready`` it writes how it found each signal's disposition and mask,
 #: which it inherited, for a failure to show.
 _RECORDER = """
-import pathlib, signal, sys, threading, time
+import os, pathlib, signal, sys, threading
 log = pathlib.Path(sys.argv[1])
 wanted = {signal.SIGUSR1, signal.SIGUSR2}
-inherited = signal.pthread_sigmask(signal.SIG_BLOCK, wanted)
+inherited = signal.pthread_sigmask(signal.SIG_BLOCK, ())
 found = " ".join(
     f"{s.name}={signal.getsignal(s)!r}{'(blocked)' if s in inherited else ''}"
     for s in sorted(wanted)
 )
-def record(number, frame):
-    with log.open("a", encoding="utf-8") as stream:
-        stream.write(signal.Signals(number).name + "\\n")
+reader, writer = os.pipe()
+os.set_blocking(writer, False)
+signal.set_wakeup_fd(writer, warn_on_full_buffer=False)
 for number in wanted:
-    signal.signal(number, record)
+    signal.signal(number, lambda *_: None)
+signal.pthread_sigmask(signal.SIG_UNBLOCK, wanted)
 pathlib.Path(sys.argv[2]).write_text(
     f"ready {found} threads={threading.active_count()}", encoding="utf-8"
 )
 while True:
-    pending = signal.sigpending() & wanted
-    if not pending:
-        time.sleep(0.005)
-        continue
-    first = min(pending)
-    signal.pthread_sigmask(signal.SIG_UNBLOCK, {first})
-    signal.pthread_sigmask(signal.SIG_BLOCK, {first})
+    names = [signal.Signals(n).name for n in sorted(os.read(reader, 64)) if n in wanted]
+    if names:
+        with log.open("a", encoding="utf-8") as stream:
+            stream.write("".join(name + "\\n" for name in names))
 """
 
 
@@ -167,20 +169,25 @@ def recorder(tmp_path: Path) -> Iterator[Recorder]:
         process.wait()
 
 
-def _delivered(recorder: Recorder) -> list[str]:
-    """Every signal the recorder has been sent so far, read once it logged a
-    SIGUSR2 sent now: a signal pending before it is delivered no later."""
-    sent = _signals(recorder.log).count("SIGUSR2") + 1
-    os.kill(recorder.process.pid, signal.SIGUSR2)
+def _logged(recorder: Recorder, name: str, count: int) -> list[str]:
+    """The recorder's log, read once it holds ``count`` of signal ``name``."""
 
     def logged() -> list[str] | None:
         seen = _signals(recorder.log)
-        return seen if seen.count("SIGUSR2") == sent else None
+        return seen if seen.count(name) == count else None
 
     try:
-        return wait_until(logged, what="the recorder to log SIGUSR2")
+        return wait_until(logged, what=f"the recorder to log {name}")
     except pytest.fail.Exception as exc:
         pytest.fail(f"{exc}\n{recorder.diagnosis()}")
+
+
+def _delivered(recorder: Recorder) -> list[str]:
+    """Every signal the recorder has been sent so far, read once it logged a
+    SIGUSR2 sent now: a SIGUSR1 pending before it is logged no later."""
+    sent = _signals(recorder.log).count("SIGUSR2") + 1
+    os.kill(recorder.process.pid, signal.SIGUSR2)
+    return _logged(recorder, "SIGUSR2", sent)
 
 
 def test_a_pid_that_names_another_process_is_not_signalled(recorder: Recorder):
@@ -200,7 +207,7 @@ def test_a_pid_that_names_another_process_is_not_signalled(recorder: Recorder):
     assert _delivered(recorder) == ["SIGUSR2"]
 
     assert recorder.kill_group(other.pid, child_start_marker(other), signal.SIGUSR1) is True
-    assert _delivered(recorder) == ["SIGUSR2", "SIGUSR1", "SIGUSR2"]
+    assert _logged(recorder, "SIGUSR1", 1) == ["SIGUSR2", "SIGUSR1"]
 
 
 @pytest.mark.skipif(
