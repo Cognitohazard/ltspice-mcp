@@ -56,7 +56,10 @@ jobs:
     # The Linux suite on the matrix's middle interpreter, in every tier.
     name: check (3.12)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # About twice the longest run of any interpreter's suite in recent full
+    # runs (under 15 minutes), so a slow runner does not fail it. The three
+    # Linux jobs share this limit.
+    timeout-minutes: &linux-suite-timeout 30
     env:
       PYTHON: "3.12"
     steps: &linux-suite
@@ -100,7 +103,7 @@ jobs:
     name: check (3.11)
     if: inputs.tier == 'full' || inputs.tier == 'release'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: *linux-suite-timeout
     env:
       PYTHON: "3.11"
     steps: *linux-suite
@@ -110,7 +113,7 @@ jobs:
     name: check (3.13)
     if: inputs.tier == 'full' || inputs.tier == 'release'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: *linux-suite-timeout
     env:
       PYTHON: "3.13"
     steps: *linux-suite
