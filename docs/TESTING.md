@@ -220,7 +220,7 @@ starts a run that skips every check and cancels nothing. A pull request retitled
 full from its next push, or at once if it is labelled `full-ci`.
 
 A landing is held to Linux and Windows; macOS is checked at release. No
-tier that `ci.yml` picks runs `check-macos`, so a macOS regression first shows
+tier a landing gets runs `check-macos`, so a macOS regression first shows
 when a release is cut, and holds the release until it is fixed. To run the
 release tier on a branch before then, start CI by hand on it: the Actions
 tab, the CI workflow, "Run workflow", or `gh workflow run ci.yml --ref
