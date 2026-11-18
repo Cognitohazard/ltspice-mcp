@@ -164,9 +164,7 @@ def plan(
         return None
     seen = tuple(dict.fromkeys(_notes(answer, job_id, route)))
     short = {
-        key: before
-        for key in seen
-        if (before := shortened(memory, delivery, key)) is not None
+        key: before for key in seen if (before := shortened(memory, delivery, key)) is not None
     }
     return Plan(job_id, seen, short, route, short_route)
 

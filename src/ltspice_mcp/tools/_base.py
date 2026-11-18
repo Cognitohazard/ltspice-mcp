@@ -481,9 +481,7 @@ def present_job_answer(
     planned: said_once.Plan | None = None
     planned_once = False
 
-    def candidate(
-        rung: response_budget.Rung | None, rows: int | None
-    ) -> presenter.Presented:
+    def candidate(rung: response_budget.Rung | None, rows: int | None) -> presenter.Presented:
         nonlocal planned, planned_once
         data = build(rung, rows)
         job_id = data.get("job_id")

@@ -713,8 +713,7 @@ KEPT_UNTIL_BREAKING: dict[str, str] = {
         "analysis is trimmed at; " + _ATTACHED_ANALYSIS
     ),
     "tools/experiments.py:AnalysisPerRun": (
-        "the attached analysis's per_run cursor, which is analyze_results'; "
-        + _ATTACHED_ANALYSIS
+        "the attached analysis's per_run cursor, which is analyze_results'; " + _ATTACHED_ANALYSIS
     ),
     "tools/experiments.py:RunExperimentsInput": _BUDGET_ARGUMENT,
     "tools/experiments.py:handle_run_experiments": _HANDS_BUDGET_ON,

@@ -137,9 +137,7 @@ class Presented:
 #: paged)``, where ``stored`` is None when every cut list is a record, and
 #: ``paged`` is the pointer of the list a page reads, or None on a first
 #: reply. Called on each candidate, so what it adds is measured.
-Annotate = Callable[
-    [dict[str, Any], Mapping[str, ListCut], StoredAnswer | None, str | None], None
-]
+Annotate = Callable[[dict[str, Any], Mapping[str, ListCut], StoredAnswer | None, str | None], None]
 
 #: Says, once, that a reply went out over its target: ``(reply, size, target)``.
 #: Called on the reply sent, after the cut, only when it is still over.
