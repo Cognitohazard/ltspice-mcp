@@ -53,7 +53,8 @@ async def test_the_ngspice_scrub_changes_only_instance_names_and_backanno(
 ):
     """The '§' leaves the instance names LTspice put it in, wherever the deck
     names them, and nothing else: a comment, a quoted string and an include
-    path keep every character, and the deck keeps its encoding."""
+    path keep every character, and the deck keeps its encoding. A comment
+    after the first line records each name changed."""
     export = (
         "* amp.asc § rev 2\n"
         '.include "models µ§/core.inc"\n'
@@ -72,7 +73,9 @@ async def test_the_ngspice_scrub_changes_only_instance_names_and_backanno(
 
     assert deck.read_bytes() == export.replace(".backanno\n", "").replace(
         "R§Load in 0", "RLoad in 0"
-    ).replace("I(R§Load)", "I(RLoad)").encode(codec)
+    ).replace("I(R§Load)", "I(RLoad)").replace(
+        "rev 2\n", "rev 2\n* ltspice-mcp: RLoad was exported as R§Load\n"
+    ).encode(codec)
 
 
 @pytest.mark.asyncio

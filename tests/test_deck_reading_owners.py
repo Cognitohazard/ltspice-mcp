@@ -135,6 +135,7 @@ _PLAIN_LEX: dict[str, str] = {
     "lib/montecarlo.py:render_variant_model_card": "one .model card",
     "lib/montecarlo.py:parse_model_params": "one .model card",
     "lib/spice_lex_ops.py:inject_card_before_end": "the one card to insert",
+    "lib/spice_lex_ops.py:strip_instance_section_signs": "the comment lines it adds, naming what it renamed",
     "lib/spice_validator.py:validate_directive": "one directive",
     "lib/variations.py:_validate_write_sets": "one card the hierarchy resolved",
     "lib/instance_targeting.py:TargetEditor._copy_includes": "one include card, rewritten",

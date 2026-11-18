@@ -76,7 +76,11 @@ from ltspice_mcp.lib.spice_lex import (
     lex_for_edit,
     tokenize_body,
 )
-from ltspice_mcp.lib.spice_lex_ops import fold_micro_suffix_cards, section_sign_names
+from ltspice_mcp.lib.spice_lex_ops import (
+    exported_names,
+    fold_micro_suffix_cards,
+    section_sign_names,
+)
 from ltspice_mcp.lib.spice_lex_views import (
     InstanceLine,
     ModelCard,
@@ -512,8 +516,12 @@ class _DeckTargets:
     models_by_ref: dict[str, str]
     model_names: dict[str, list[_Site]]
     #: The other names of each component LTspice exported with its section
-    #: sign (``spice_lex_ops.section_sign_names``), by case-folded name.
+    #: sign (``_other_names``), by case-folded name.
     aliases: dict[str, list[_Site]] = field(default_factory=dict)
+    #: Each part an ngspice copy of an LTspice export renamed, by its folded
+    #: name in the copy, with the name LTspice exported it under
+    #: (``spice_lex_ops.exported_names``).
+    exported: dict[str, str] = field(default_factory=dict)
     #: Each name a card that cannot be split into parts may declare, by
     #: case-folded name: a part's reference, a ``.model``'s name, or a name a
     #: ``.param`` may set (a word before ``=``). With each, the card's line,
@@ -1220,7 +1228,7 @@ def _refuse_unread(
     variation needs it."""
     for file in closure.files:
         for name, declarations in file.targets.unread.items():
-            names = (name, *section_sign_names(name))
+            names = (name, *(n.casefold() for n in _other_names(name, file.targets.exported)))
             if pattern not in names and not (
                 _is_glob(pattern) and any(fnmatch.fnmatchcase(n, pattern) for n in names)
             ):
@@ -1258,7 +1266,9 @@ def _deck_targets(text: str, source: Path, depth: int) -> _DeckTargets:
     model_names: dict[str, list[_Site]] = {}
     aliases: dict[str, list[_Site]] = {}
     unread: dict[str, list[_UnreadDeclaration]] = {}
-    cards = _lexed_file(text, depth).read
+    lexed = _lexed_file(text, depth)
+    exported = exported_names(lexed.cards)
+    cards = lexed.read
     for card, section in zip(cards, card_sections(cards, source, depth), strict=True):
         if (unread_card := _unread_declarations(card)) is not None:
             names, declared = unread_card
@@ -1279,7 +1289,7 @@ def _deck_targets(text: str, source: Path, depth: int) -> _DeckTargets:
                 continue
             site = _Site(view.ref, card.scope, section)
             components.setdefault(view.ref.casefold(), []).append(site)
-            for alias in section_sign_names(view.ref):
+            for alias in _other_names(view.ref, exported):
                 aliases.setdefault(alias.casefold(), []).append(site)
             if view.model is not None:
                 models_by_ref.setdefault(view.ref.casefold(), view.ref)
@@ -1290,7 +1300,20 @@ def _deck_targets(text: str, source: Path, depth: int) -> _DeckTargets:
         model_names=model_names,
         aliases=aliases,
         unread=unread,
+        exported=exported,
     )
+
+
+def _other_names(ref: str, exported: dict[str, str]) -> tuple[str, ...]:
+    """Every other name the part ``ref`` answers to as a target: those of the
+    name LTspice exported it under (``spice_lex_ops.section_sign_names``),
+    which is ``ref`` itself in LTspice's copy of an export and the name the
+    copy records in ngspice's (``spice_lex_ops.exported_names``). ``R§Load``
+    answers to ``RLoad`` and ``Load``; ``RLoad`` in ngspice's copy answers to
+    ``R§Load`` and ``Load``."""
+    original = exported.get(ref.casefold(), ref)
+    names = (original, *section_sign_names(original))
+    return tuple(name for name in names if name.casefold() != ref.casefold())
 
 
 def _build_closure(circuit: CircuitDeck) -> _DeckClosure:
@@ -1669,7 +1692,10 @@ def _resolve_random_rule_targets(
             for folded, sites in file.targets.components.items():
                 # A part exported as ``R§Load`` answers to ``RLoad`` and ``Load``
                 # too, so a target works on either simulator's copy of the deck.
-                names = (folded, *section_sign_names(folded))
+                names = (
+                    folded,
+                    *(n.casefold() for n in _other_names(folded, file.targets.exported)),
+                )
                 if any(fnmatch.fnmatchcase(name, pattern) for name in names):
                     by_ref.setdefault(folded, []).extend((file, site) for site in sites)
         if not by_ref:

@@ -25,7 +25,8 @@ Public surface:
   found at a suffix position rewritten as ``u`` in place.
 - ``strip_instance_section_signs(cards)`` — drop the ``§`` LTspice's
   netlister writes into an instance name, from that name wherever the deck
-  names it, and nowhere else.
+  names it, and nowhere else, recording each name it changed
+  (``exported_names`` reads the record).
 
 Future cross-card transformations (component rename, subcircuit
 inline/extract, structural diff, atomic change-set commit) will land
@@ -496,6 +497,31 @@ def without_added_x(key: str) -> str:
     return ".".join(seg[1:] if seg.startswith("xx") else seg for seg in key.split("."))
 
 
+#: The comment an ngspice copy of an LTspice export carries for each instance
+#: whose ``§`` it took out (``strip_instance_section_signs``), naming the
+#: instance as LTspice exported it, so the copy's reader can still answer to
+#: every name of the part (``exported_names``, ``section_sign_names``):
+#: ``Load`` cannot be recovered from ``RLoad``.
+_EXPORTED_AS = re.compile(
+    rf"^\*\s*ltspice-mcp: (?P<name>[^\s{SECTION_SIGN}]+) was exported as (?P<exported>\S+)\s*$"
+)
+
+
+def exported_names(cards: Iterable[SpiceCard]) -> dict[str, str]:
+    """Each instance an ngspice copy of an LTspice export renamed, by its
+    case-folded name in the copy, with the name LTspice exported it under
+    (``RLoad`` -> ``R§Load``), read from the copy's record of it
+    (``strip_instance_section_signs``). Empty for any other deck."""
+    found: dict[str, str] = {}
+    for card in cards:
+        if card.kind != "comment" or not card.raw_lines:
+            continue
+        match = _EXPORTED_AS.match(card.raw_lines[0].rstrip("\r\n"))
+        if match and without_section_sign(match["exported"]) == match["name"]:
+            found[match["name"].casefold()] = match["exported"]
+    return found
+
+
 def strip_instance_section_signs(cards: list[SpiceCard]) -> None:
     """Drop ``§`` from every instance name that holds one, wherever it is named.
 
@@ -504,6 +530,11 @@ def strip_instance_section_signs(cards: list[SpiceCard]) -> None:
     and in every other card that names the instance (``I(R§Load)`` in a
     ``.meas``). Nothing else changes: a ``§`` in a comment, a double-quoted
     string or an include path is part of a file name or text, not an instance.
+
+    The copy records each name it changed in a comment after its first line
+    (``* ltspice-mcp: RLoad was exported as R§Load``), which ``exported_names``
+    reads back, so a variation on the copy still answers to ``Load`` and
+    ``R§Load``.
     """
     renamed = {
         card.instance_ref: without_section_sign(card.instance_ref)
@@ -512,6 +543,13 @@ def strip_instance_section_signs(cards: list[SpiceCard]) -> None:
     }
     if not renamed:
         return
+    eol = line_break(cards)
+    record = "".join(
+        f"* ltspice-mcp: {new} was exported as {old}{eol}" for old, new in renamed.items()
+    )
+    if cards and not cards[0].raw_lines[-1].endswith("\n"):
+        cards[0].raw_lines[-1] += eol
+    cards[1:1] = lex(record).cards
     by_name = {old.casefold(): new for old, new in renamed.items()}
     names = "|".join(re.escape(old) for old in sorted(renamed, key=len, reverse=True))
     pattern = re.compile(rf"(?<![\w{SECTION_SIGN}])(?:{names})(?![\w{SECTION_SIGN}])", re.I)

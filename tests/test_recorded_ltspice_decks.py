@@ -9,8 +9,10 @@ lint and arity rules read the same card and have to reach the same answer.
 
 from __future__ import annotations
 
+import asyncio
 import math
 import re
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -55,6 +57,7 @@ from ltspice_mcp.lib.result_observations import parse_requested_outputs, parse_s
 from ltspice_mcp.lib.runner_base import deck_requirements
 from ltspice_mcp.lib.schematic_ops import netlist_card_value
 from ltspice_mcp.lib.services import extract_netlist_info
+from ltspice_mcp.lib.simulator import detect_simulators
 from ltspice_mcp.lib.simulator_build import (
     Producer,
     executable_path,
@@ -422,9 +425,10 @@ def test_a_part_exported_with_a_section_sign_is_a_target_by_its_names(
     build: str, case_id: str, for_ngspice: bool, tmp_path: Path
 ):
     """A variation names ``R§Load`` as the sheet does (``Load``), as LTspice's
-    results do (``I(Load)``, recorded) or as ``verify_circuit`` reports it
-    (``RLoad``), and ``RLoad`` names it on either simulator's copy of the
-    deck, though ngspice's has the marker taken out."""
+    results do (``I(Load)``, recorded), as the export does (``R§Load``) or as
+    ``verify_circuit`` reports it (``RLoad``), on either simulator's copy of
+    the deck: ngspice's has the marker taken out and records the name it
+    took it out of (``spice_lex_ops.exported_names``)."""
     assert "i(load)" in rec.operating_point(build, case_id, tmp_path / "raw")
     export = tmp_path / "load.net"
     export.write_bytes((INPUTS / rec.CASES.case(case_id).source).read_bytes())
@@ -435,11 +439,48 @@ def test_a_part_exported_with_a_section_sign_is_a_target_by_its_names(
         for line in map(read_instance, lex(text).cards)
         if line and line.nodes == ["a", "0"]
     ]
-    names = ["RLoad"] if for_ngspice else ["R§Load", "RLoad", "Load", "load"]
+    names = ["R§Load", "RLoad", "Load", "load"]
     for index, target in enumerate(names):
         values = variant_values(text, export, target, tmp_path / str(index))
         assert values == {"I1": "1", load: "2k"}, target
         assert drawn_for(text, export, target, tmp_path / f"random{index}") == [load], target
+
+
+@pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH")
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_sheet_run_on_ngspice_takes_a_target_by_each_name_of_its_part(
+    build: str, work_dir: Path
+):
+    """``run_experiments`` on ngspice, over the sheet exported as ``R§Load``
+    (``export/load_name_op``): each of the part's names sets the part ngspice
+    runs, which then draws the current the new value gives (1 V across 1k and
+    4k in parallel)."""
+    from tests._fake_netlister import install_fixed_exporter
+    from tests.conftest import terminal_experiment
+
+    config = ServerConfig(simulator="ngspice", working_dir=work_dir, allowed_paths=[work_dir])
+    state = SessionState.create(config, detect_simulators(config))
+    assert "ngspice" in state.available_simulators
+    install_fixed_exporter(state, rec.export_text(build, "export/load_name_op"))
+    sheet = work_dir / "load_name_op.asc"
+    sheet.write_bytes((INPUTS / "export" / "load_name_op.asc").read_bytes())
+
+    for index, target in enumerate(["R§Load", "RLoad", "Load", "load"]):
+        receipt = asyncio.run(
+            terminal_experiment(
+                state,
+                {
+                    "request_id": f"names-{build}-{index}",
+                    "circuits": [{"path": str(sheet), "id": "sheet"}],
+                    "variations": [{"kind": "assign", "assign": {target: ["4k"]}}],
+                    "execution": {"simulator": "ngspice", "wait_s": 90},
+                    "analyze": {"recipes": [{"metric": "value", "key": "i", "expr": "I(V1)"}]},
+                },
+            )
+        )
+        assert receipt["status"] == "completed", (target, receipt)
+        (row,) = receipt["analysis"]["result"]["results"]["i"]["values"]
+        assert abs(row["value"]["value"]) == pytest.approx(1.25e-3, rel=1e-6), (target, row)
 
 
 def test_a_name_holding_two_section_signs_is_one_name_without_them(tmp_path: Path):
@@ -2520,3 +2561,35 @@ def test_options_seed_is_refused_and_draws_repeat_without_it(build: str, tmp_pat
     again = rec.operating_point(build, "deck/seed_none_again", tmp_path / "again")
     assert first == again
     assert 1000.0 not in {first["v(a)"], first["v(b)"], first["v(c)"]}
+
+
+#: The scopes that may ask for a part's other names (``section_sign_names``)
+#: or for the name an ngspice copy of an export records (``exported_names``),
+#: with the reason. A variation asks ``variations._other_names``, which reads
+#: both, so a target answers to the same names on either simulator's copy.
+PART_NAME_ASKERS = {
+    "lib/spice_lex_ops.py:section_sign_names": "the one answer",
+    "lib/spice_lex_ops.py:exported_names": "reads the record the copy writes",
+    "lib/variations.py:_other_names": "a variation target's names, on either copy",
+    "lib/variations.py:_deck_targets": "reads the copy's record once per file",
+    "lib/device_names.py:_own": "a result's names (section_sign_spellings), which LTspice writes",
+}
+
+
+def test_only_the_owners_ask_for_a_parts_other_names():
+    import ast
+
+    from tests._source_scan import modules, scopes
+
+    asked = {"section_sign_names", "exported_names"}
+    found = {
+        f"{name}:{scope}"
+        for name, tree in modules().items()
+        for scope, nodes in scopes(tree)
+        if any(
+            isinstance(node, ast.Call)
+            and getattr(node.func, "id", getattr(node.func, "attr", None)) in asked
+            for node in nodes
+        )
+    }
+    assert found <= set(PART_NAME_ASKERS), sorted(found - set(PART_NAME_ASKERS))
