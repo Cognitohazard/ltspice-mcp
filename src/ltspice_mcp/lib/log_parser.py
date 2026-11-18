@@ -21,7 +21,7 @@ from spicelib.log.semi_dev_op_reader import opLogReader
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.encoding import decode_spice_bytes, read_spice_text
-from ltspice_mcp.lib.log_conditions import classify_channels, rules_for
+from ltspice_mcp.lib.log_conditions import classify_channels, log_lines, rules_for
 from ltspice_mcp.lib.log_types import LogDiagnostics as LogDiagnostics
 from ltspice_mcp.lib.log_types import MeasErrorEntry as MeasErrorEntry
 from ltspice_mcp.lib.log_types import MeasurementEntry as MeasurementEntry
@@ -776,7 +776,7 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
         if extra:
             content = content + "\n\n" + "\n".join(extra)
 
-    lines = content.splitlines()
+    lines = log_lines(content)
     i = 0
     while i < len(lines):
         line = lines[i]
@@ -1219,10 +1219,10 @@ _RE_MEAS_RESULT_LINE = re.compile(
 )
 
 # The heading of a stepped run's table for one measurement.
-_RE_MEAS_HEADING = re.compile(r"^Measurement:[ \t]*(?P<name>\S+)", re.MULTILINE)
+_RE_MEAS_HEADING = re.compile(r"^Measurement:[ \t]*(?P<name>\S+)")
 # The line under a heading naming the table's columns: ``step``, then the rest
 # by tab.
-_RE_TABLE_COLUMNS = re.compile(r"[^\n]*\n[ \t]*step\t(?P<columns>[^\r\n]*?)[ \t]*\r?$", re.M)
+_RE_TABLE_COLUMNS = re.compile(r"^[ \t]*step\t(?P<columns>.*?)[ \t]*$")
 
 
 @dataclass(frozen=True)
@@ -1237,11 +1237,28 @@ class PrintedMeasurement:
     columns: tuple[str, ...] = ()
 
 
-def _line_at(text: str, position: int) -> str:
-    """The line of ``text`` holding ``position``, without its line break."""
-    start = text.rfind("\n", 0, position) + 1
-    end = text.find("\n", position)
-    return text[start : len(text) if end == -1 else end].strip()
+def _printed_on(line: str) -> tuple[str, PrintedMeasurement] | None:
+    """The measurement ``line`` prints a result of or heads a stepped run's
+    table of, by its name as printed, or None. The table's columns are left
+    to :func:`printed_measurements`, which has the next line."""
+    result = _RE_MEAS_RESULT_LINE.match(line)
+    if result is not None and result["name"].lower() != _NGSPICE_TITLE_PSEUDO_MEAS:
+        return result["name"], PrintedMeasurement(
+            result[0].strip(), result["value"] or result["word"]
+        )
+    heading = _RE_MEAS_HEADING.match(line)
+    if heading is not None:
+        return heading["name"], PrintedMeasurement(line.strip())
+    return None
+
+
+def prints_measurement(line: str) -> bool:
+    """Whether a log's ``line`` prints a measurement's result or heads a
+    stepped run's table of one: a line :func:`printed_measurements` reads a
+    measurement from, apart from a ``Measurement "name" FAIL'ed`` line, which
+    says that one failed. The log classifier asks this of a line rather than
+    keeping a pattern of its own (``log_conditions``)."""
+    return _printed_on(line) is not None
 
 
 def printed_measurements(text: str) -> dict[str, PrintedMeasurement]:
@@ -1252,25 +1269,27 @@ def printed_measurements(text: str) -> dict[str, PrintedMeasurement]:
     The one answer to which measurements a run printed:
     :func:`parse_measurements` gives each of them an entry, and the log
     decoder refuses a table that lacks one. The ``Circuit:`` line that names
-    the deck is not a measurement, whatever its title holds.
+    the deck is not a measurement, whatever its title holds. The lines are
+    those every reader of a log's conditions reads (``log_conditions.log_lines``).
     """
-    found: list[tuple[int, str, PrintedMeasurement]] = []
-    for match in _RE_MEAS_RESULT_LINE.finditer(text):
-        if match["name"].lower() != _NGSPICE_TITLE_PSEUDO_MEAS:
-            printed = PrintedMeasurement(match[0].strip(), match["value"] or match["word"])
-            found.append((match.start(), match["name"], printed))
-    for match in _RE_MEAS_HEADING.finditer(text):
-        columns = _RE_TABLE_COLUMNS.match(text, match.start())
-        heading = PrintedMeasurement(
-            _line_at(text, match.start()),
-            columns=tuple(columns["columns"].split("\t")) if columns else (),
-        )
-        found.append((match.start(), match[1], heading))
-    for match in _RE_MEAS_FAILED.finditer(text):
-        found.append((match.start(), match[1], PrintedMeasurement(_line_at(text, match.start()))))
     measurements: dict[str, PrintedMeasurement] = {}
-    for _, name, printed in sorted(found, key=lambda item: item[0]):
-        measurements.setdefault(name.lower(), printed)
+    lines = log_lines(text)
+    for index, line in enumerate(lines):
+        printed = _printed_on(line)
+        if printed is not None:
+            name, found = printed
+            if _RE_MEAS_HEADING.match(line):
+                following = lines[index + 1] if index + 1 < len(lines) else ""
+                columns = _RE_TABLE_COLUMNS.match(following)
+                if columns is not None:
+                    found = PrintedMeasurement(
+                        found.line, columns=tuple(columns["columns"].split("\t"))
+                    )
+        elif (failed := _RE_MEAS_FAILED.search(line)) is not None:
+            name, found = failed[1], PrintedMeasurement(line.strip())
+        else:
+            continue
+        measurements.setdefault(name.lower(), found)
     return measurements
 
 

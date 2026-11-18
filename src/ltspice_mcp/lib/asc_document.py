@@ -178,6 +178,13 @@ class Window:
         return f"WINDOW {self.number} {self.x} {self.y} {self.align} {self.size}"
 
 
+def shown_value(value: str | None) -> str:
+    """The text LTspice draws for an attribute's value: none for a value
+    written as ``""``, which neither build draws (``draw/value2_at_origin``,
+    ``draw/attribute_defaults``)."""
+    return "" if value is None or value.strip() == '""' else value
+
+
 @dataclass(frozen=True)
 class Symbol(_Record):
     """A placed part: its ``SYMBOL`` line and the ``WINDOW`` and ``SYMATTR`` lines under it.

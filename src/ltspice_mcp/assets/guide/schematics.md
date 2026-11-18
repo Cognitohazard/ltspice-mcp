@@ -271,8 +271,8 @@ show no multi-label shorts. Review the result with `inspect(kind="components")`.
   sheet. Also heed the sheet findings in `warnings`. They are the
   findings `verify_circuit` reports for the same sheet (a floating pin, a
   loose wire end, parts that overlap, a wire through a part, a label or text
-  inside one, a part's name or value drawn across a wire, another part or
-  other text, a wire LTspice leaves out of the netlist), returned by the edit
+  inside one, a part's name, value or other attribute text drawn across a
+  wire, another part or other text, a wire LTspice leaves out of the netlist), returned by the edit
   that caused them. A part's text moves with the part and no op moves the text
   alone, so move the part (`move` with `drag: true`, below) or the item its
   text crosses.

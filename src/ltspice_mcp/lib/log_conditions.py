@@ -193,6 +193,21 @@ def _step_line(lines: Sequence[str], index: int) -> bool:
     return read_step_line(lines[index]) is not None
 
 
+_PRINTS_MEASUREMENT: list[Callable[[str], bool]] = []
+
+
+def _printed_measurement(lines: Sequence[str], index: int) -> bool:
+    """A line the measurement reader reads a measurement from
+    (``log_parser.prints_measurement``), as written: the classifier keeps no
+    pattern of its own for one."""
+    if not _PRINTS_MEASUREMENT:
+        # Imported on first use: the log parser imports this module.
+        from ltspice_mcp.lib.log_parser import prints_measurement
+
+        _PRINTS_MEASUREMENT.append(prints_measurement)
+    return _PRINTS_MEASUREMENT[0](lines[index])
+
+
 def _native_print_header(lines: Sequence[str], index: int) -> bool:
     """The head of an ngspice ``print`` table: two title lines over a ruled
     ``Index`` header."""
@@ -444,6 +459,9 @@ _RULES: tuple[_Rule, ...] = (
     _Rule(None, _re(r"^Matrix Compiler\d: "), _ONLY_17),
     # Progress lines of a time step or bias-point search.
     _Rule(None, _re(r"^Changing Tseed to \S+$"), _BOTH_LT),
+    # XVII's progress of a transient it is struggling with, read apart from
+    # the error it writes on the same line (log_lines).
+    _Rule(None, _re(r"^Heightened Def Con from \S+ \+*$"), _ONLY_17),
     _Rule(
         None,
         _re(
@@ -455,15 +473,10 @@ _RULES: tuple[_Rule, ...] = (
     # Step lines and the result blocks the measurement, Fourier, device
     # operating-point and frequency-response readers decode.
     _Rule(None, _step_line, _BOTH_LT),
-    _Rule(None, _re(r"^Measurement: \S+$"), _BOTH_LT),
+    # A measurement's result, or the heading of a stepped run's table of one,
+    # as the measurement reader reads it, and the columns under that heading.
+    _Rule(None, _printed_measurement, _BOTH_LT),
     _Rule(None, _re(r"^step\t"), _BOTH_LT),
-    # A measurement's result: its name, what it measured, and where.
-    _Rule(
-        None,
-        _re(r"^[\w.]+: \S.*=\S+(?: (?:at|AT) \S+| FROM \S+ TO \S+)?$"),
-        _BOTH_LT,
-    ),
-    _Rule(None, _re(r"^\w+=\S+ FROM \S+ TO \S+$"), _BOTH_LT),
     _Rule(None, _re(r"^Semiconductor Device Operating Points:$"), _BOTH_LT),
     _Rule(None, _re(r"^--- .+ ---$"), _BOTH_LT),
     _Rule(None, _re(r"^(?:Name|Model):(?:\s+\S+)+$"), _BOTH_LT),
@@ -581,9 +594,32 @@ _CLASSIFIERS: dict[str, _RuleSet] = {
 CLASSIFIERS: tuple[str, ...] = tuple(_CLASSIFIERS)
 
 
+#: LTspice XVII writes the collapse of a time step after its operating point on
+#: the line of its "Heightened Def Con" progress, with no line break between
+#: them: ``Heightened Def Con from 5e-006 ++++...++Fatal Error: Analysis:  Time
+#: step too small; ...`` (recorded: log/timestep_collapse_mid). LTspice 26
+#: writes the same failure on a line of its own.
+_PROGRESS_THEN_ERROR = re.compile(r"^(\s*Heightened Def Con from \S+ \+*)(Fatal Error:.*)$")
+
+
+def log_lines(text: str) -> list[str]:
+    """The lines of a simulator's log, as every reader of its conditions reads
+    them: ``text`` split at its line breaks, and a line on which LTspice XVII
+    wrote an error straight after its progress split where the error starts,
+    so the error is read as the line it would have been."""
+    lines: list[str] = []
+    for line in text.splitlines():
+        glued = _PROGRESS_THEN_ERROR.match(line)
+        if glued is None:
+            lines.append(line)
+        else:
+            lines.extend(glued.groups())
+    return lines
+
+
 def _occurrences(text: str, rules: _RuleSet) -> list[tuple[str, list[str]]]:
     """Each condition ``text`` names, with its lines as written, in order."""
-    lines = text.splitlines()
+    lines = log_lines(text)
     found: list[tuple[str, list[str]]] = []
     index = 0
     while index < len(lines):

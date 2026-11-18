@@ -1926,9 +1926,14 @@ another session sharing the working directory may commit between
 the `sha256` `edit_schematic` returned to confirm the image shows that
 revision. The export block's `sha256` is the netlist's.
 
-The layout check reads a part's attribute text where LTspice draws it, with
-its extent estimated from the font's widths rather than measured off its
-glyphs. `attribute_text_overlap` reports text that a wire, a line another
+The layout check reads a part's name, value, Value2, SpiceModel, SpiceLine
+and SpiceLine2 where LTspice draws them, through their windows, with each
+extent estimated from the font's widths rather than measured off its glyphs.
+Any of them but the name written as `""` has no text, and LTspice draws none. A symbol's
+own text, its pin names, an attribute in any other window and a value a part
+takes from its symbol are not read, which the layout check's `observations`
+say, and so does a render's.
+`attribute_text_overlap` reports text that a wire, a line another
 part draws or a ground flag passes through, or that lies over a rectangle or
 circle another part draws or over other text, by more than the estimate's
 slack. A ground flag is taken as the triangle the render draws, turned as
@@ -2533,7 +2538,9 @@ where it sits.
 The receipt compares the samples of a `random` or `pdk_native` entry by what
 they computed, one `assign` point at a time. Each produced sample keeps a
 digest of its raw: every plot's variables and points, a complex frequency or
-other sampled axis by its real part, and nothing else of its headers. Where every sample
+other sampled axis by its real part where its imaginary part is one no
+simulator computes as a coordinate (zero, or the subnormal number ngspice 42
+writes) and by both parts otherwise, and nothing else of its headers. Where every sample
 compared at a point computed one result, an `identical_samples` observation
 (`kind: "sampling"`) lists the point in its `evidence.groups` as `circuit`,
 `assigned` (that point's `assign` values, left out when the entry has none)
