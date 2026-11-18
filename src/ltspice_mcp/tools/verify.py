@@ -395,15 +395,13 @@ LAYOUT_COVERAGE = (
     "Layout scan checks text by extents estimated from LTspice's font: a part's "
     f"{_LAID_OUT} text against what it crosses, and comments, directives and "
     "labels against each other. It does not read a symbol's own text, its pin "
-    "names, an attribute in any other window or a value a part takes from its "
-    "symbol."
+    "names or an attribute in any other window."
 )
 # Stated beside every render, so a word missing from the picture is not read
 # as missing from the sheet.
 RENDER_COVERAGE = (
     f"The render draws a part's {_LAID_OUT} text, and not a symbol's own text, "
-    "its pin names, an attribute in any other window or a value a part takes "
-    "from its symbol."
+    "its pin names or an attribute in any other window."
 )
 
 

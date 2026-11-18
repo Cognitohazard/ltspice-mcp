@@ -191,6 +191,37 @@ class TestFlagPlacement:
         for is_ground in (True, False):
             assert resolve_flag_placement(is_ground, {wire_side}) == (orientation, vertical)
 
+    @pytest.mark.parametrize(
+        ("rotation", "on_a", "on_b"),
+        [
+            ("R0", ("left", False), ("right", False)),
+            ("R180", ("right", False), ("left", False)),
+            ("M0", ("right", False), ("left", False)),
+            ("R90", ("up", True), ("down", True)),
+        ],
+    )
+    def test_a_label_on_a_bare_pin_faces_out_of_the_part(
+        self, tmp_path: Path, rotation: str, on_a: tuple[str, bool], on_b: tuple[str, bool]
+    ) -> None:
+        """box2's pin A is on its box's left edge and B on its right, so a label
+        on either with no wire puts its text out of the part, turned with it,
+        as both builds draw it (``draw/suite_nmos4_orientations``). A wire
+        there decides instead, and a ground keeps its resting side."""
+        _write(tmp_path / "box2.asy", BOX2_ASY)
+        resolver = SymbolResolver(local_dir=tmp_path)
+        sheet = _asc_with_box2(rotation, 96, 96)
+        (part,) = build_scene(_write(tmp_path / "bare.asc", sheet), resolver).symbols
+        a, b = ((pin.x, pin.y) for pin in part.pins)
+        labelled = sheet + f"FLAG {a[0]} {a[1]} in\nFLAG {b[0]} {b[1]} out\n"
+        flags = build_scene(_write(tmp_path / "labels.asc", labelled), resolver).flags
+        assert [(f.orientation, f.text_vertical) for f in flags] == [on_a, on_b]
+        wired = sheet + f"WIRE {a[0]} {a[1]} {a[0]} {a[1] - 64}\nFLAG {a[0]} {a[1]} in\n"
+        (flag,) = build_scene(_write(tmp_path / "wired.asc", wired), resolver).flags
+        assert (flag.orientation, flag.text_vertical) == ("down", True)
+        grounded = sheet + f"FLAG {a[0]} {a[1]} 0\n"
+        (flag,) = build_scene(_write(tmp_path / "ground.asc", grounded), resolver).flags
+        assert flag.orientation == "down"
+
     def test_no_wire_uses_resting_orientation(self) -> None:
         assert resolve_flag_placement(True, set()) == ("down", False)
         assert resolve_flag_placement(False, set()) == ("up", False)

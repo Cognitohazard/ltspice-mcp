@@ -40,7 +40,7 @@ from ltspice_mcp.lib.sheet import (
     read_sheet_text,
 )
 from ltspice_mcp.lib.sheet_findings import Part, SheetView, label_connects
-from ltspice_mcp.lib.symbol_file import SymbolArc
+from ltspice_mcp.lib.symbol_file import SymbolArc, SymbolFile
 from ltspice_mcp.lib.symbol_geometry import (
     _apply_rotation,  # pyright: ignore[reportPrivateUsage]  # shared rotation/mirror transform
     place_box,
@@ -221,6 +221,50 @@ def wire_directions_at(wires: Sequence[Wire], x: int, y: int) -> set[str]:
         else:
             out.add("down" if dy > 0 else "up")
     return out
+
+
+def _outward_at(symbols: Sequence[PlacedSymbol], x: int, y: int) -> set[str]:
+    """The side a part faces out on at its pin at ``(x, y)``, as the side a
+    wire there would occupy, when one part's pin is there, else nothing.
+
+    Both builds lay a net label on a part's pin with no wire out away from the
+    part, on the side of the symbol's box the pin lies on, the top or bottom
+    at a corner, as the symbol is drawn, then turned with the part
+    (``draw/suite_nmos4_orientations``, ``draw/suite_npn_orientations``, every
+    placement; ``DrawPin.outward``). Where a wire meets the label the wire
+    decides, and where two parts' pins meet nothing is recorded, so the label
+    keeps its resting side. A ground flag on a pin is not recorded either and
+    keeps its own.
+    """
+    sides = [
+        pin.outward
+        for sym in symbols
+        if not sym.missing
+        for pin in sym.pins
+        if (pin.x, pin.y) == (x, y)
+    ]
+    if len(sides) != 1 or not sides[0]:
+        return set()
+    return {_GLYPH_AWAY_FROM[sides[0]]}
+
+
+def _outward(file: SymbolFile, x: int, y: int) -> tuple[int, int] | None:
+    """Which way the symbol-local pin at ``(x, y)`` faces out of the symbol's
+    box: up or down on its top or bottom edge, which win at a corner, else
+    left or right; ``None`` for a pin inside the box."""
+    box = file.bbox
+    if y == box.y1:
+        return (0, -1)
+    if y == box.y2:
+        return (0, 1)
+    if x == box.x1:
+        return (-1, 0)
+    if x == box.x2:
+        return (1, 0)
+    return None
+
+
+_SIDE_OF = {(0, -1): "up", (0, 1): "down", (-1, 0): "left", (1, 0): "right"}
 
 
 def resolve_flag_placement(
@@ -483,6 +527,9 @@ class DrawPin:
     x: int
     y: int
     name: str = ""
+    #: The side the part faces out on at this pin, turned with the part:
+    #: where a net label on the pin with no wire puts its text (``_outward``).
+    outward: str = ""
 
     def points(self) -> tuple[tuple[int, int], ...]:
         return ((self.x, self.y),)
@@ -733,7 +780,14 @@ def _place_symbol(part: SheetPart) -> PlacedSymbol:
         poly = _arc_polyline(arc, ox, oy, rot)
         if poly is not None:
             placed.graphics.append(poly)
-    placed.pins.extend(DrawPin(pin.x, pin.y, pin.name) for pin in part.pins)
+    outward = {
+        place_point(pin.x, pin.y, ox, oy, rot): _SIDE_OF[_apply_rotation(*facing, rot)]
+        for pin in drawing.pins
+        if (facing := _outward(drawing, pin.x, pin.y)) is not None
+    }
+    placed.pins.extend(
+        DrawPin(pin.x, pin.y, pin.name, outward.get((pin.x, pin.y), "")) for pin in part.pins
+    )
     placed.texts.extend(_attr_texts(part, drawing.windows, ox, oy, rot))
     return placed
 
@@ -854,6 +908,8 @@ def scene_of_sheet(
     flags = [NetFlag(x, y, name, is_ground=(name.strip() == "0")) for x, y, name in sheet.labels]
     for fl in flags:
         occupied = wire_directions_at(wires, fl.x, fl.y)
+        if not occupied and not fl.is_ground:
+            occupied = _outward_at(scene.symbols, fl.x, fl.y)
         orientation, text_vertical = resolve_flag_placement(fl.is_ground, occupied)
         scene.flags.append(
             replace(

@@ -1117,16 +1117,27 @@ class TestMirroredQuarterTurnsMatchLTspice:
     async def test_verify_circuit_finds_nothing_floating_or_dangling(
         self, asc_state: SessionState, sheet: Path
     ):
+        """Nothing floats or dangles. The layout scan finds only each part's
+        NMOS, the value its symbol gives, drawn across a wire, as both builds
+        draw it (``draw/suite_nmos4_mirrored``)."""
         data = await run_verify_circuit(
             asc_state, path=str(sheet), checks=["symbols", "layout"], render=False
         )
         assert data["checks_run"] == ["symbols", "layout"]
-        assert "findings" not in data
+        assert [(f["rule_id"], f["subject"]) for f in data["findings"]] == [
+            ("attribute_text_overlap", "M1"),
+            ("attribute_text_overlap", "M2"),
+        ]
 
     async def test_post_op_warnings_find_no_floating_pin(
         self, asc_state: SessionState, sheet: Path
     ):
-        assert structured_warnings(load_editor(asc_state, sheet)) == []
+        """As above: only the two values drawn across a wire."""
+        rows = structured_warnings(load_editor(asc_state, sheet))
+        assert [(row["kind"], row["ref"]) for row in rows] == [
+            ("attribute_text_overlap", "M1"),
+            ("attribute_text_overlap", "M2"),
+        ]
 
 
 # Canonical device archetypes the schematic-build path MUST handle, beyond the
