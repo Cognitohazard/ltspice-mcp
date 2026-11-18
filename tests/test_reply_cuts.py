@@ -463,9 +463,10 @@ def test_a_list_sent_whole_carries_no_sign_of_a_cut():
 # ---------------------------------------------------------------------------
 
 #: The modules whose code is the reply-size machinery. ``cursor_codec`` also
-#: holds the canonical hash, so only its cursor names count.
-_MACHINERY_MODULES = frozenset({"response_budget", "pagination", "cursor_codec"})
-_WHOLLY_MACHINERY = frozenset({"response_budget", "pagination"})
+#: holds the canonical hash, so only its cursor names count. ``presenter`` is
+#: the reply layer's own, which ``tools/_base.py`` calls.
+_MACHINERY_MODULES = frozenset({"response_budget", "pagination", "cursor_codec", "presenter"})
+_WHOLLY_MACHINERY = frozenset({"response_budget", "pagination", "presenter"})
 
 #: Names of the machinery: the response budget, the shared page schema, the
 #: paginator in ``lib/pin_legend.py``, and the cursor functions of
@@ -592,14 +593,6 @@ def _sites() -> dict[str, list[str]]:
 #: whose move onto the reply layer takes it off this list. The list only
 #: shrinks.
 REPLY_SIZE_SITES: dict[str, str] = {
-    "tools/verify.py:<module>": "verify_circuit",
-    "tools/verify.py:FindingsCursor.encode": "verify_circuit",
-    "tools/verify.py:decode_findings_cursor": "verify_circuit",
-    "tools/verify.py:VerifyCircuitInput": "verify_circuit",
-    "tools/verify.py:render_verify_circuit": "verify_circuit",
-    "tools/verify.py:_stale_cursor_text": "verify_circuit",
-    "tools/verify.py:_refuse_unfit_cursor": "verify_circuit",
-    "tools/verify.py:handle_verify_circuit": "verify_circuit",
     "tools/inspect_tools.py:<module>": "inspect",
     "tools/inspect_tools.py:SymbolsQuery": "inspect",
     "tools/inspect_tools.py:NetQuery": "inspect",
@@ -690,9 +683,24 @@ REPLY_SIZE_SITES: dict[str, str] = {
 }
 
 
+#: Each function of a tool already on the presenter that still names a cursor,
+#: with why. Each goes at the next breaking release.
+KEPT_UNTIL_BREAKING: dict[str, str] = {
+    "tools/verify.py:VerifyCircuitInput": (
+        "the findings_cursor argument, which now takes the presenter's cursor; "
+        "kept until the next breaking release"
+    ),
+    "tools/verify.py:handle_verify_circuit": (
+        "hands findings_cursor to the presenter's page reader (tools/_base.py); "
+        "kept with the argument until the next breaking release"
+    ),
+}
+
+
 def test_only_the_reply_layer_knows_about_reply_size():
     sites = _sites()
-    unlisted = {site: said for site, said in sites.items() if site not in REPLY_SIZE_SITES}
+    allowed = REPLY_SIZE_SITES.keys() | KEPT_UNTIL_BREAKING.keys()
+    unlisted = {site: said for site, said in sites.items() if site not in allowed}
     assert not unlisted, (
         "An operation returns its whole answer; cutting it, cursors and reply budgets "
         f"are the reply layer's (tools/_base.py): {unlisted}"
@@ -711,8 +719,38 @@ def test_each_allowed_site_waits_for_an_operation():
     assert set(REPLY_SIZE_SITES.values()) <= operations
 
 
+def test_a_tool_on_the_presenter_waits_for_no_move():
+    moved = {"verify_circuit"}
+    assert not moved & set(REPLY_SIZE_SITES.values())
+    assert not set(KEPT_UNTIL_BREAKING) & set(REPLY_SIZE_SITES)
+
+
+def test_the_check_returns_its_whole_answer():
+    # The evaluation knows no cursor and no budget: what a reply holds of it
+    # is the presenter's to decide.
+    assert not any(site.startswith("tools/verify.py:evaluate_verify_circuit") for site in _sites())
+
+
+def test_nothing_outside_the_presenter_cuts_a_verify_circuit_list():
+    import ltspice_mcp.tools.verify as verify
+    from tests._source_scan import modules
+    from tests.test_capped_lists import _capping_functions
+
+    for gone in (
+        "FINDING_RULE_CAP",
+        "FindingsCursor",
+        "decode_findings_cursor",
+        "findings_digest",
+    ):
+        assert not hasattr(verify, gone), gone
+    capping = [
+        name for name in _capping_functions(modules()) if name.startswith("tools/verify.py:")
+    ]
+    assert not capping, capping
+
+
 def test_the_allowed_sites_still_need_their_place():
-    stale = sorted(set(REPLY_SIZE_SITES) - set(_sites()))
+    stale = sorted((set(REPLY_SIZE_SITES) | set(KEPT_UNTIL_BREAKING)) - set(_sites()))
     assert not stale, f"These no longer mention reply size; take them off the list: {stale}"
     found = {
         f"{module}:{scope}" for module, tree in _scanned().items() for scope in _mentions(tree)

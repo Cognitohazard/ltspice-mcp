@@ -1,379 +1,388 @@
-"""verify_circuit lists at most 25 findings of a rule, and says how to read the rest.
+"""verify_circuit sends every finding when its reply fits, and stores the
+answer and says how to read the rest when it does not.
 
-Design principle "Safe edits" (``docs/DESIGN.md``): a list cut short says how
-to read the rest. A rule cut at the cap has a ``findings_omitted`` entry with
-the count left out and a ``next_cursor``, which ``findings_cursor`` takes back
-to list the rule's next findings. Every call here goes through the server's own
-dispatch (``server.call_tool``), as a client's does, and no ``run_code``.
+Design principle "A short reply, the data behind an id" (``docs/DESIGN.md``):
+the findings are cut by the presenter (``lib/presenter.py``) only when the
+reply is over the reply target (``[analysis] default_budget``), never at a
+number per rule. A cut reply stores the complete answer and names three ways
+to read the rest: the stored file, the call with ``findings_cursor``, and its
+Python form. Reading on slices the stored answer: no check runs again, and a
+page read after the file changed still reads, carrying the snapshot the
+answer was computed from. Every call here goes through the server's own
+dispatch (``server.call_tool``), as a client's does.
 
-The finding lists are checked against what the files hold, and against the
-uncapped list ``api.verify_circuit`` returns: the pages together are that list,
-in its order, each finding once.
+The findings read are checked against what the files hold, and against the
+complete list ``api.verify_circuit`` returns.
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any
 
 import pytest
 
 from ltspice_mcp.config import ServerConfig
-from ltspice_mcp.lib.cursor_codec import encode_cursor
+from ltspice_mcp.lib.response_budget import estimate_tokens
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import verify
-from ltspice_mcp.tools.verify import FINDING_RULE_CAP
 from tests.conftest import SyncApi, dispatch, dispatched
 
-#: More findings of one rule than one reply lists, and not a multiple of the
-#: cap, so the last page is a short one.
-MANY = 2 * FINDING_RULE_CAP + 7
+#: More findings of one rule than the old cap of 25 listed.
+FITTING_DECK = 30
+FITTING_SHEET = 50
+
+#: A reply target those findings fit on every platform. Each finding carries
+#: the checked file's path, which is longer on Windows and JSON-escaped there,
+#: so how many fit the 4000-token default depends on the machine: a deck's
+#: value-suffix finding weighs about 105 tokens on Linux, a sheet's dangling
+#: label about 60, and more under a Windows temp folder.
+ROOMY = 20_000
+
+#: Enough findings that a reply holding them all is over the default target.
+OVER = 400
 
 
-def _netlist(work_dir: Path, values: int = MANY) -> Path:
+def _netlist(work_dir: Path, values: int, name: str = "ohms.cir") -> Path:
     """A deck whose every resistor spells its value with an ohm sign: one
     ``value_suffix_nonascii`` finding per resistor, on lines 2 onward. The
     resistors are in parallel, so no node is left on one terminal."""
     cards = "".join(f"R{index} a 0 {index + 1}Ω\n" for index in range(values))
-    deck = work_dir / "ohms.cir"
+    deck = work_dir / name
     deck.write_bytes(f"* ohms\n{cards}.end\n".encode())
     return deck
 
 
-def _sheet(work_dir: Path, labels: int = MANY, more: str = "") -> Path:
-    """A sheet of net labels on nothing, one ``dangling_label`` finding each,
-    then the lines ``more``."""
+def _sheet(work_dir: Path, labels: int) -> Path:
+    """A sheet of net labels on nothing, one ``dangling_label`` finding each."""
     flags = "".join(f"FLAG {64 * index} 0 n{index}\n" for index in range(labels))
     sheet = work_dir / "labels.asc"
-    sheet.write_text(f"Version 4\nSHEET 1 880 680\n{flags}{more}", encoding="utf-8")
+    sheet.write_text(f"Version 4\nSHEET 1 880 680\n{flags}", encoding="utf-8")
     return sheet
+
+
+def _stored_file(reply: dict[str, Any]) -> dict[str, Any]:
+    return json.loads(Path(reply["stored_answer"]["path"]).read_text(encoding="utf-8"))
+
+
+def _remove_stored_file(reply: dict[str, Any]) -> None:
+    Path(reply["stored_answer"]["path"]).unlink()
+
+
+def _stored_file_exists(reply: dict[str, Any]) -> bool:
+    return Path(reply["stored_answer"]["path"]).exists()
 
 
 def _of(findings: list[dict[str, Any]], rule: str) -> list[dict[str, Any]]:
     return [finding for finding in findings if finding["rule_id"] == rule]
 
 
-async def _every_finding(
-    state: SessionState, path: Path, rule: str, **arguments: Any
-) -> tuple[list[dict[str, Any]], int]:
-    """Every ``rule`` finding, read by following its cursor; and the replies read."""
-    data = await dispatched(state, "verify_circuit", path=str(path), **arguments)
-    read = _of(data["findings"], rule)
-    replies = 1
-    while rule in data.get("findings_omitted", {}):
-        entry = data["findings_omitted"][rule]
-        assert entry["total"] == MANY
-        assert entry["omitted"] == MANY - len(read), entry
-        data = await dispatched(
-            state,
-            "verify_circuit",
-            path=str(path),
-            findings_cursor=entry["next_cursor"],
-            **arguments,
-        )
-        page = _of(data["findings"], rule)
-        assert 0 < len(page) <= FINDING_RULE_CAP
-        read.extend(page)
-        replies += 1
-    return read, replies
-
-
-async def _uncapped(state: SessionState, path: Path, rule: str, **arguments: Any) -> list:
-    """Every ``rule`` finding as ``api.verify_circuit`` returns it."""
+async def _complete(state: SessionState, path: Path, **arguments: Any) -> list[dict[str, Any]]:
+    """Every finding, as ``api.verify_circuit`` returns it."""
     result = await asyncio.to_thread(
         lambda: SyncApi(state).verify_circuit(path=str(path), **arguments)
     )
-    return _of(result["findings"], rule)
+    return result["findings"]
 
 
-async def test_every_finding_of_a_netlist_rule_is_read_through_the_cursor(state_no_sim, work_dir):
-    deck = _netlist(work_dir)
-
-    read, replies = await _every_finding(state_no_sim, deck, "value_suffix_nonascii")
-
-    assert replies == 3
-    assert [finding["subject"] for finding in read] == [f"{index + 1}Ω" for index in range(MANY)]
-    assert [finding["at"]["line"] for finding in read] == list(range(2, MANY + 2))
-    assert read == await _uncapped(state_no_sim, deck, "value_suffix_nonascii")
-
-
-async def test_every_finding_of_a_sheet_rule_is_read_through_the_cursor(state_no_sim, work_dir):
-    sheet = _sheet(work_dir)
-
-    read, replies = await _every_finding(state_no_sim, sheet, "dangling_label", checks=["layout"])
-
-    assert replies == 3
-    assert [(finding["at"]["x"], finding["at"]["y"]) for finding in read] == [
-        (64 * index, 0) for index in range(MANY)
-    ]
-    assert read == await _uncapped(state_no_sim, sheet, "dangling_label", checks=["layout"])
+async def _read_on(
+    state: SessionState, path: Path, first: dict[str, Any]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Every finding, read from ``first`` by following its cursor, and the
+    pages read."""
+    read = list(first["findings"])
+    pages = []
+    entry = first["cut"]["/findings"]
+    while "next" in entry:
+        page = await dispatched(
+            state, "verify_circuit", path=str(path), findings_cursor=entry["next"]
+        )
+        pages.append(page)
+        entry = page["cut"]["/findings"]
+        assert entry["offset"] == len(read)
+        read.extend(page["findings"])
+        assert entry["returned"] == len(page["findings"])
+    return read, pages
 
 
-async def test_the_first_reply_counts_what_it_leaves_out(state_no_sim, work_dir):
-    data = await dispatched(state_no_sim, "verify_circuit", path=str(_netlist(work_dir)))
-
-    entry = data["findings_omitted"]["value_suffix_nonascii"]
-    assert entry["omitted"] == MANY - FINDING_RULE_CAP
-    assert entry["total"] == MANY
-    # A summary-line reader learns of the cut, and the way on, from the hint.
-    assert f"{MANY - FINDING_RULE_CAP} more value_suffix_nonascii" in data["hint"]
-    assert "findings_cursor" in data["hint"]
+# ---------------------------------------------------------------------------
+# A reply that fits
+# ---------------------------------------------------------------------------
 
 
-async def test_a_rule_at_the_cap_or_under_it_has_no_entry(state_no_sim, work_dir):
-    deck = _netlist(work_dir, values=FINDING_RULE_CAP)
+def _roomy(config: ServerConfig) -> SessionState:
+    """A session whose reply target the fitting findings fit on any machine."""
+    config.default_budget = ROOMY
+    return SessionState.create(config, available={})
+
+
+def _assert_fits(complete: list[dict[str, Any]]) -> None:
+    """The test's premise: the complete findings are within the target, so a
+    reply that cuts them cuts by something else than size."""
+    assert estimate_tokens(complete, as_sent=False) < ROOMY // 2
+
+
+async def test_findings_that_fit_all_go_out_past_25_a_rule(config, work_dir):
+    state_no_sim = _roomy(config)
+    deck = _netlist(work_dir, FITTING_DECK)
+    _assert_fits(await _complete(state_no_sim, deck))
 
     data = await dispatched(state_no_sim, "verify_circuit", path=str(deck))
 
-    assert len(data["findings"]) == FINDING_RULE_CAP
-    assert "findings_omitted" not in data
+    found = _of(data["findings"], "value_suffix_nonascii")
+    assert [finding["subject"] for finding in found] == [f"{i + 1}Ω" for i in range(FITTING_DECK)]
+    assert data["findings"] == await _complete(state_no_sim, deck)
+    for field in ("findings_omitted", "cut", "stored_answer"):
+        assert field not in data
+    assert not list(state_no_sim.store.results_dir.glob("sa_*.json"))
 
 
-async def test_a_cursor_pages_its_own_rule_and_leaves_the_others_as_they_were(
-    state_no_sim, work_dir
-):
-    # Two capped rules on one sheet: each label on nothing, and each wire drawn
-    # twice. Paging one leaves the other listed, and counted, from its start.
-    wires = "".join(f"WIRE {64 * index} 200 {64 * index + 32} 200\n" * 2 for index in range(MANY))
-    sheet = _sheet(work_dir, more=wires)
+async def test_a_sheet_rule_that_fits_goes_out_whole(config, work_dir):
+    state_no_sim = _roomy(config)
+    sheet = _sheet(work_dir, FITTING_SHEET)
+    _assert_fits(await _complete(state_no_sim, sheet, checks=["layout"]))
+
+    data = await dispatched(state_no_sim, "verify_circuit", path=str(sheet), checks=["layout"])
+
+    assert [(f["at"]["x"], f["at"]["y"]) for f in _of(data["findings"], "dangling_label")] == [
+        (64 * index, 0) for index in range(FITTING_SHEET)
+    ]
+    assert "cut" not in data
+
+
+async def test_no_target_sends_every_finding(config, work_dir):
+    config.default_budget = 0
+    state = SessionState.create(config, available={})
+    deck = _netlist(work_dir, OVER)
+
+    data = await dispatched(state, "verify_circuit", path=str(deck))
+
+    assert len(data["findings"]) == OVER
+    assert "cut" not in data
+
+
+# ---------------------------------------------------------------------------
+# A reply that does not fit
+# ---------------------------------------------------------------------------
+
+
+async def test_a_reply_over_the_target_is_cut_and_names_three_ways_on(state_no_sim, work_dir):
+    deck = _netlist(work_dir, OVER)
+
+    data = await dispatched(state_no_sim, "verify_circuit", path=str(deck))
+
+    entry = data["cut"]["/findings"]
+    assert entry["total"] == OVER
+    assert entry["returned"] == len(data["findings"]) < OVER
+    assert estimate_tokens(data, as_sent=False) <= state_no_sim.config.default_budget
+    stored = data["stored_answer"]
+    assert stored["snapshot"] == {
+        "path": str(deck),
+        "sha256": hashlib.sha256(deck.read_bytes()).hexdigest(),
+    }
+    on_disk = _stored_file(data)
+    assert on_disk["answer"]["findings"] == await _complete(state_no_sim, deck)
+    # The three ways on: the stored file, the call, and its Python form.
+    hint = data["hint"]
+    assert stored["path"] in hint
+    assert "verify_circuit(path=" in hint and "findings_cursor=" in hint
+    assert "api.verify_circuit(" in hint and "raw_page=True" in hint
+    # The hint counts every finding the check found, not those the reply holds.
+    assert f"{OVER} warning(s): value_suffix_nonascii" in hint
+
+
+async def test_findings_omitted_is_filled_from_the_cut(state_no_sim, work_dir):
+    deck = _netlist(work_dir, OVER)
+
+    data = await dispatched(state_no_sim, "verify_circuit", path=str(deck))
+
+    entry = data["cut"]["/findings"]
+    assert data["findings_omitted"] == {
+        "value_suffix_nonascii": {
+            "omitted": OVER - entry["returned"],
+            "total": OVER,
+            "next_cursor": entry["next"],
+        }
+    }
+
+
+async def test_every_finding_is_read_through_the_cursor(state_no_sim, work_dir):
+    deck = _netlist(work_dir, OVER)
+    first = await dispatched(state_no_sim, "verify_circuit", path=str(deck))
+
+    read, pages = await _read_on(state_no_sim, deck, first)
+
+    assert pages
+    assert [finding["subject"] for finding in read] == [f"{i + 1}Ω" for i in range(OVER)]
+    assert [finding["at"]["line"] for finding in read] == list(range(2, OVER + 2))
+    assert read == await _complete(state_no_sim, deck)
+    assert "findings_omitted" not in pages[-1]
+    assert all(page["stored_answer"] == first["stored_answer"] for page in pages)
+
+
+async def test_every_finding_of_a_sheet_rule_is_read_through_the_cursor(state_no_sim, work_dir):
+    sheet = _sheet(work_dir, OVER)
     first = await dispatched(state_no_sim, "verify_circuit", path=str(sheet), checks=["layout"])
-    assert set(first["findings_omitted"]) >= {"dangling_label", "duplicate_wire"}
 
-    second = await dispatched(
+    read, _ = await _read_on(state_no_sim, sheet, first)
+
+    assert [(f["at"]["x"], f["at"]["y"]) for f in _of(read, "dangling_label")] == [
+        (64 * index, 0) for index in range(OVER)
+    ]
+    assert read == await _complete(state_no_sim, sheet, checks=["layout"])
+
+
+async def test_a_continuation_runs_no_check(state_no_sim, work_dir, monkeypatch):
+    deck = _netlist(work_dir, OVER)
+    first = await dispatched(state_no_sim, "verify_circuit", path=str(deck))
+
+    async def no_check(*_args: Any, **_kwargs: Any) -> Any:
+        raise AssertionError("a page ran the check")
+
+    monkeypatch.setattr(verify, "evaluate_verify_circuit", no_check)
+    page = await dispatched(
         state_no_sim,
         "verify_circuit",
-        path=str(sheet),
-        checks=["layout"],
-        findings_cursor=first["findings_omitted"]["dangling_label"]["next_cursor"],
+        path=str(deck),
+        findings_cursor=first["cut"]["/findings"]["next"],
     )
 
-    assert _of(second["findings"], "duplicate_wire") == _of(first["findings"], "duplicate_wire")
-    assert (
-        second["findings_omitted"]["duplicate_wire"] == first["findings_omitted"]["duplicate_wire"]
-    )
-    assert _of(second["findings"], "dangling_label") != _of(first["findings"], "dangling_label")
-    assert second["findings_omitted"]["dangling_label"]["omitted"] == MANY - 2 * FINDING_RULE_CAP
-    assert f"dangling_label findings {FINDING_RULE_CAP + 1}" in second["hint"]
+    assert page["findings"][0]["subject"] == f"{first['cut']['/findings']['returned'] + 1}Ω"
 
 
-async def test_a_cursor_from_before_the_file_changed_is_refused(state_no_sim, work_dir):
-    deck = _netlist(work_dir)
+async def test_a_page_after_the_file_changed_reads_the_older_snapshot(state_no_sim, work_dir):
+    deck = _netlist(work_dir, OVER)
+    before = hashlib.sha256(deck.read_bytes()).hexdigest()
     first = await dispatched(state_no_sim, "verify_circuit", path=str(deck))
-    cursor = first["findings_omitted"]["value_suffix_nonascii"]["next_cursor"]
-    # One finding fewer: the cursor's offset would now skip one.
-    deck.write_bytes(deck.read_bytes().replace("R0 a 0 1Ω".encode(), b"R0 a 0 1"))
+    returned = first["cut"]["/findings"]["returned"]
+    # Every value fixed: a check now finds nothing.
+    deck.write_bytes(deck.read_bytes().replace("Ω".encode(), b""))
 
-    result = await dispatch(
-        state_no_sim, "verify_circuit", {"path": str(deck), "findings_cursor": cursor}
+    page = await dispatched(
+        state_no_sim,
+        "verify_circuit",
+        path=str(deck),
+        findings_cursor=first["cut"]["/findings"]["next"],
     )
 
-    assert result.is_error
+    assert page["findings"][0]["subject"] == f"{returned + 1}Ω"
+    assert page["stored_answer"]["snapshot"]["sha256"] == before
+    assert before != hashlib.sha256(deck.read_bytes()).hexdigest()
+    assert "compare stored_answer.snapshot" in page["hint"]
+
+
+async def test_a_page_holds_only_the_list_it_reads_and_the_lists_sent_whole(
+    state_no_sim, work_dir
+):
+    deck = _netlist(work_dir, OVER)
+    first = await dispatched(state_no_sim, "verify_circuit", path=str(deck))
+
+    page = await dispatched(
+        state_no_sim,
+        "verify_circuit",
+        path=str(deck),
+        findings_cursor=first["cut"]["/findings"]["next"],
+    )
+
+    for field in ("path", "kind", "outcome", "checks_run", "rules_run", "observations"):
+        assert page.get(field) == first.get(field), field
+
+
+# ---------------------------------------------------------------------------
+# Refusals
+# ---------------------------------------------------------------------------
+
+
+async def _refusal(state: SessionState, path: Path, cursor: str) -> dict[str, Any]:
+    result = await dispatch(
+        state, "verify_circuit", {"path": str(path), "findings_cursor": cursor}
+    )
+    assert result.is_error, result.structured_content
     refusal = result.structured_content
     assert refusal["code"] == "invalid_cursor"
-    assert "changed" in refusal["error"]
-    assert "without findings_cursor" in refusal["error"]
+    return refusal
+
+
+async def test_a_missing_stored_answer_is_refused_with_the_fix(state_no_sim, work_dir):
+    deck = _netlist(work_dir, OVER)
+    first = await dispatched(state_no_sim, "verify_circuit", path=str(deck))
+    _remove_stored_file(first)
+
+    refusal = await _refusal(state_no_sim, deck, first["cut"]["/findings"]["next"])
+
+    assert "is gone" in refusal["error"]
+    assert "again without findings_cursor" in refusal["error"]
     # The generic cursor hint would send the caller back to this dead cursor.
     assert "hint" not in refusal
 
 
+def _expire(reply: dict[str, Any]) -> None:
+    """Move the stored answer's expiry into the past, as time would."""
+    path = Path(reply["stored_answer"]["path"])
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record["expires_at"] = "2000-01-01T00:00:00+00:00"
+    path.write_text(json.dumps(record), encoding="utf-8")
+
+
+async def test_an_expired_stored_answer_is_refused_with_the_fix(state_no_sim, work_dir):
+    state = state_no_sim
+    deck = _netlist(work_dir, OVER)
+    first = await dispatched(state, "verify_circuit", path=str(deck))
+    _expire(first)
+
+    refusal = await _refusal(state, deck, first["cut"]["/findings"]["next"])
+
+    assert "expired" in refusal["error"]
+    assert "hint" not in refusal
+    assert "again without findings_cursor" in refusal["error"]
+    assert not _stored_file_exists(first)
+
+
 async def test_a_cursor_for_another_file_is_refused(state_no_sim, work_dir):
-    first = await dispatched(state_no_sim, "verify_circuit", path=str(_netlist(work_dir)))
-    cursor = first["findings_omitted"]["value_suffix_nonascii"]["next_cursor"]
-    other = work_dir / "other.cir"
-    other.write_bytes((work_dir / "ohms.cir").read_bytes())
+    deck = _netlist(work_dir, OVER)
+    first = await dispatched(state_no_sim, "verify_circuit", path=str(deck))
+    other = _netlist(work_dir, OVER, name="other.cir")
 
-    result = await dispatch(
-        state_no_sim, "verify_circuit", {"path": str(other), "findings_cursor": cursor}
-    )
+    refusal = await _refusal(state_no_sim, other, first["cut"]["/findings"]["next"])
 
-    assert result.is_error
-    assert result.structured_content["code"] == "invalid_cursor"
+    assert str(deck) in refusal["error"]
 
 
-async def test_a_cursor_whose_check_this_call_does_not_run_is_refused(state_no_sim, work_dir):
-    sheet = _sheet(work_dir)
-    first = await dispatched(state_no_sim, "verify_circuit", path=str(sheet), checks=["layout"])
-    cursor = first["findings_omitted"]["dangling_label"]["next_cursor"]
-
-    result = await dispatch(
-        state_no_sim,
-        "verify_circuit",
-        {"path": str(sheet), "checks": ["quality"], "findings_cursor": cursor},
-    )
-
-    assert result.is_error
-    refusal = result.structured_content
-    assert refusal["code"] == "invalid_cursor"
-    # It names the check to add, which is the way round.
-    assert "'layout'" in refusal["error"]
-
-
+@pytest.mark.parametrize("cursor", ["o:25", ""])
 async def test_a_cursor_that_is_not_one_is_refused_as_every_tool_refuses_one(
-    state_no_sim, work_dir
+    state_no_sim, work_dir, cursor
 ):
-    result = await dispatch(
-        state_no_sim,
-        "verify_circuit",
-        {"path": str(_netlist(work_dir)), "findings_cursor": "o:25"},
+    refusal = await _refusal(state_no_sim, _netlist(work_dir, 3), cursor)
+
+    assert "next" in refusal["error"]
+
+
+# ---------------------------------------------------------------------------
+# The Python API
+# ---------------------------------------------------------------------------
+
+
+async def test_the_python_api_returns_the_complete_answer(state_no_sim, work_dir):
+    deck = _netlist(work_dir, OVER)
+
+    found = await _complete(state_no_sim, deck)
+
+    assert len(_of(found, "value_suffix_nonascii")) == OVER
+
+
+async def test_a_raw_page_is_the_reply_a_client_reads(state_no_sim, work_dir):
+    deck = _netlist(work_dir, OVER)
+    api = SyncApi(state_no_sim)
+
+    first = await asyncio.to_thread(lambda: api.verify_circuit(path=str(deck), raw_page=True))
+    page = await asyncio.to_thread(
+        lambda: api.verify_circuit(
+            path=str(deck), findings_cursor=first["cut"]["/findings"]["next"], raw_page=True
+        )
     )
 
-    assert result.is_error
-    refusal = result.structured_content
-    assert refusal["code"] == "invalid_cursor"
-    assert "findings_cursor" in refusal["error"]
-    assert "next_cursor" in refusal["error"]
-
-
-class _LTspice:
-    """LTspice as the session detects it; its export is ``verify._create_netlist``,
-    which each test below replaces with the netlist it exports."""
-
-    spice_exe: ClassVar[list[str]] = ["/fake/LTspice.exe"]
-
-
-def _exporting(netlist: str):
-    """An export that writes ``netlist`` beside the sheet, as LTspice's does."""
-
-    def export(_simulator: Any, asc_path: Path, timeout: float = 0) -> Path:
-        net = Path(asc_path).with_suffix(".net")
-        net.write_bytes(netlist.encode())
-        return net
-
-    return export
-
-
-def _writing_nothing(_simulator: Any, asc_path: Path, timeout: float = 0) -> Path:
-    """An export that exits without writing the netlist."""
-    return Path(asc_path).with_suffix(".net")
-
-
-async def _export_cursor(
-    config: ServerConfig, work_dir: Path, monkeypatch: pytest.MonkeyPatch
-) -> tuple[SessionState, Path, str]:
-    """A session with LTspice, a sheet whose export spells every value with an
-    ohm sign, and the cursor a real call returned for those findings, which
-    the export check reports."""
-    cards = "".join(f"R{index} a 0 {index + 1}Ω\n" for index in range(MANY))
-    monkeypatch.setattr(verify, "_create_netlist", _exporting(f"* ohms\n{cards}.end\n"))
-    state = SessionState.create(config, available={"ltspice": _LTspice})
-    sheet = _sheet(work_dir, labels=1)
-    first = await dispatched(state, "verify_circuit", path=str(sheet), checks=["export"])
-    return state, sheet, first["findings_omitted"]["value_suffix_nonascii"]["next_cursor"]
-
-
-async def _refusal(state: SessionState, sheet: Path, cursor: str, **arguments: Any) -> dict:
-    result = await dispatch(
-        state, "verify_circuit", {"path": str(sheet), "findings_cursor": cursor, **arguments}
-    )
-    assert result.is_error, result.structured_content
-    assert result.structured_content["code"] == "invalid_cursor"
-    return result.structured_content
-
-
-async def test_a_cursor_whose_check_could_not_run_says_why(config, work_dir, monkeypatch):
-    # The export the cursor's findings came from cannot run in this call, so
-    # the refusal names the skipped check and its reason rather than reading
-    # as "no more findings".
-    state, sheet, cursor = await _export_cursor(config, work_dir, monkeypatch)
-    del state.available_simulators["ltspice"]
-
-    refusal = await _refusal(state, sheet, cursor)
-
-    assert (
-        "the export check that reports them did not run (LTspice not detected)"
-        in (refusal["error"])
-    )
-    assert "without findings_cursor" in refusal["error"]
-
-
-async def test_a_cursor_whose_check_failed_names_the_failure(config, work_dir, monkeypatch):
-    state, sheet, cursor = await _export_cursor(config, work_dir, monkeypatch)
-    monkeypatch.setattr(verify, "_create_netlist", _writing_nothing)
-
-    refusal = await _refusal(state, sheet, cursor)
-
-    assert "produced no .net file" in refusal["error"]
-
-
-async def test_a_cursor_whose_export_lists_other_findings_is_refused(
-    config, work_dir, monkeypatch
-):
-    # The sheet is unchanged; what its export says is not. The cursor's place
-    # in the old list would serve a page of the new one.
-    state, sheet, cursor = await _export_cursor(config, work_dir, monkeypatch)
-    cards = "".join(f"R{index} a 0 {index + 1001}Ω\n" for index in range(MANY))
-    monkeypatch.setattr(verify, "_create_netlist", _exporting(f"* ohms\n{cards}.end\n"))
-
-    refusal = await _refusal(state, sheet, cursor)
-
-    assert "changed" in refusal["error"]
-
-
-#: A two-pin part, kept beside the sheet that uses it.
-_TWO_PINS = (
-    "Version 4\nSymbolType BLOCK\nRECTANGLE Normal -16 -16 16 16\n"
-    "PIN -16 0 LEFT 8\nPINATTR PinName A\nPINATTR SpiceOrder 1\n"
-    "PIN 16 0 RIGHT 8\nPINATTR PinName B\nPINATTR SpiceOrder 2\n"
-)
-
-
-async def test_a_cursor_whose_symbol_changed_is_refused(state_no_sim, work_dir):
-    # The sheet is unchanged; the symbol its parts use loses a pin, so each
-    # part has one floating pin where it had two.
-    symbol = work_dir / "twopin.asy"
-    symbol.write_text(_TWO_PINS, encoding="utf-8")
-    parts = "".join(
-        f"SYMBOL twopin {128 * index} 0 R0\nSYMATTR InstName X{index}\n" for index in range(30)
-    )
-    sheet = work_dir / "parts.asc"
-    sheet.write_text(f"Version 4\nSHEET 1 880 680\n{parts}", encoding="utf-8")
-    first = await dispatched(state_no_sim, "verify_circuit", path=str(sheet), checks=["layout"])
-    assert first["findings_omitted"]["floating_pin"]["total"] == 60
-    cursor = first["findings_omitted"]["floating_pin"]["next_cursor"]
-    symbol.write_text(_TWO_PINS.split("PIN 16 0")[0], encoding="utf-8")
-
-    refusal = await _refusal(state_no_sim, sheet, cursor, checks=["layout"])
-
-    assert "changed" in refusal["error"]
-
-
-async def test_a_render_only_call_names_the_render_mode_to_leave(state_no_sim, work_dir):
-    sheet = _sheet(work_dir)
-    first = await dispatched(state_no_sim, "verify_circuit", path=str(sheet), checks=["layout"])
-    cursor = first["findings_omitted"]["dangling_label"]["next_cursor"]
-
-    refusal = await _refusal(
-        state_no_sim, sheet, cursor, checks=["layout"], render={"format": "svg", "mode": "only"}
-    )
-
-    assert "render.mode" in refusal["error"]
-    assert "among the checks" not in refusal["error"]
-
-
-async def test_the_hint_names_the_cut_beside_a_failure(state_no_sim, work_dir):
-    # A compare against a sheet needs LTspice to export it, so the compare
-    # fails; the findings that were listed are still cut, and the hint says so.
-    deck = _netlist(work_dir)
-    reference = _sheet(work_dir, labels=1)
-    arguments = {"compare": {"reference": str(reference)}}
-    first = await dispatched(state_no_sim, "verify_circuit", path=str(deck), **arguments)
-    assert first["failures"]
-    assert f"{MANY - FINDING_RULE_CAP} more value_suffix_nonascii" in first["hint"]
-
-    second = await dispatched(
-        state_no_sim,
-        "verify_circuit",
-        path=str(deck),
-        findings_cursor=first["findings_omitted"]["value_suffix_nonascii"]["next_cursor"],
-        **arguments,
-    )
-
-    assert f"value_suffix_nonascii findings {FINDING_RULE_CAP + 1}" in second["hint"]
-
-
-async def test_a_cursor_naming_no_rule_is_refused_as_a_cursor(state_no_sim, work_dir):
-    # The codec's checksum is not a secret, so any body can be encoded.
-    crafted = encode_cursor({"rule": ["floating_pin"], "offset": FINDING_RULE_CAP, "of": None})
-
-    await _refusal(state_no_sim, _netlist(work_dir), crafted)
+    assert first["cut"]["/findings"]["returned"] < OVER
+    assert page["cut"]["/findings"]["offset"] == first["cut"]["/findings"]["returned"]
