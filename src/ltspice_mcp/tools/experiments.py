@@ -1037,7 +1037,7 @@ async def _render_static_run_receipt(
 ) -> types.CallToolResult:
     """An error receipt, through the presenter: one with a job keeps its run
     rows behind the job's record, and one with none is sent whole."""
-    reply = present_job_answer(
+    reply = await present_job_answer(
         lambda _rung, _rows: copy.deepcopy(data),
         receipt_parts(),
         tool="run_experiments",
@@ -1606,7 +1606,7 @@ async def _dwell_and_respond(
         return finalize_receipt(data)
 
     return format_response(
-        present_job_answer(
+        await present_job_answer(
             build,
             receipt_parts(run_fields),
             tool="run_experiments",

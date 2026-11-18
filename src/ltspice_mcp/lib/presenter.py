@@ -281,7 +281,7 @@ def _fit(
     to one entry, and the next largest is cut.
     """
     keep = {
-        pointer: max(1, min(len(entries), (caps or {}).get(pointer, len(entries))))
+        pointer: min(len(entries), max(1, (caps or {}).get(pointer, len(entries))))
         for pointer, entries in sources.items()
     }
     if _size(build(keep)) <= target:

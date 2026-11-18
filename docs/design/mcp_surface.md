@@ -1048,8 +1048,8 @@ route as a shorter sentence. The hint then names `jobs(action="status",
 job_id)`, which sends every note in full. A note whose text changed is new and
 is sent in full. Which deliveries shorten is one table: `jobs(action="status")`
 never does; a `wait`, a `run_experiments` receipt and a `resume` do. A new
-session starts with nothing remembered, and the Python API sends every note in
-full. Failures, run rows and their diagnostics and measurement fields,
+session starts with nothing remembered. The Python API sends every note in
+full; `raw_page=True` returns the MCP reply, shortened notes included. Failures, run rows and their diagnostics and measurement fields,
 progress, and every other observation are never shortened.
 
 **Deliveries of one answer.** The run receipt, a `wait` and a `status` are

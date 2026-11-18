@@ -1737,10 +1737,10 @@ async def _present_jobs(
             caps={_LIST_ROWS: page_limit},
         )
     if isinstance(args, JobsRunsInput):
-        return _runs_page(args, evaluation, runs_from, budget.tokens)
+        return await _runs_page(args, evaluation, runs_from, budget.tokens)
     if isinstance(args, (JobsStatusInput, JobsWaitInput, JobsResumeInput)):
         served = frozenset(state.tool_dispatch)
-        return present_job_answer(
+        return await present_job_answer(
             lambda rung, rows: render_jobs_data(
                 evaluation, rung=rung, analysis_rows_cap=rows, served=served
             ),
@@ -1790,10 +1790,11 @@ async def _list_page(args: JobsListInput, state: SessionState) -> dict[str, Any]
         state=state,
         annotate=_say_which_groups,
         cap=page_limit,
+        target=resolve_response_budget(args.budget, state).tokens,
     )
 
 
-def _runs_page(
+async def _runs_page(
     args: JobsRunsInput,
     evaluation: JobsEvaluation,
     runs_from: tuple[str, int] | None,
@@ -1816,7 +1817,7 @@ def _runs_page(
                 f"{data['total']}: pass a cut entry's next unchanged."
             )
             raise InvalidCursorError(refused)
-    return record_page(
+    return await record_page(
         data,
         RUNS_PAGE_ROWS,
         offset,

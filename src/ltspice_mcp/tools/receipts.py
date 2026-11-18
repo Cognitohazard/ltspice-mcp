@@ -589,6 +589,8 @@ def trim_attached_analysis(
     own trimming, in place, and say what it took. ``rows`` is the count the
     analysis was rendered with (None: all). Until that tool moves onto the
     presenter, this is how its envelope is shortened inside a receipt."""
+    if _attached_result(data) is None:
+        return
     emptied = _degrade_receipt(data, rung)
     parts: list[str] = []
     if emptied:
@@ -597,19 +599,11 @@ def trim_attached_analysis(
         parts.append("rendered on its answer channel, without the opt-ins the request set")
     if rows is not None:
         parts.append(f"its rows held to {rows} per list")
-    if not parts:
-        return
-    data.setdefault("observations", []).append(
-        {
-            "code": "budget_truncated",
-            "kind": response_budget.OBSERVATION_KIND,
-            "detail": (
-                f"To fit the reply target of {target} tokens, the attached analysis was "
-                f"{'; '.join(parts)}. analyze_results over job_id {data.get('job_id')} "
-                "returns it, and with include.provenance its source_hashes."
-            ),
-        }
-    )
+    if parts:
+        data["observations"] = [
+            *data.get("observations", []),
+            response_budget.attached_trimmed_observation(target, parts, data.get("job_id")),
+        ]
 
 
 def _say_where_the_runs_are(
@@ -634,21 +628,24 @@ def _say_where_the_runs_are(
             runs["next_cursor"] = entry.next
             if entry.next is None:
                 return
-            left = entry.total - entry.offset - entry.returned
-            read_on = call_to_continue(
-                "jobs", {"action": "runs", "job_id": job_id, "cursor": entry.next}
-            )
-            same = " with the same run_fields" if run_fields else ""
-            sentence = (
-                f"{left} of {entry.total} run rows are not in this reply; read them from "
-                f"the job's record with {read_on}{same}."
-            )
+            sentence = _the_rest_of_the_rows(entry, job_id, run_fields)
             hint = reply.get("hint")
             reply["hint"] = f"{sentence} {hint}" if isinstance(hint, str) and hint else sentence
 
         return annotate
 
     return for_job
+
+
+def _the_rest_of_the_rows(entry: ListCut, job_id: str, run_fields: list[str] | None) -> str:
+    """The one sentence a reply cut short of a job's run rows says of the
+    rest, on a receipt and a runs page alike."""
+    read_on = call_to_continue("jobs", {"action": "runs", "job_id": job_id, "cursor": entry.next})
+    same = " with the same run_fields" if run_fields else ""
+    return (
+        f"{entry.total - entry.offset - entry.returned} of {entry.total} run rows are not "
+        f"in this reply; read them from the job's record with {read_on}{same}."
+    )
 
 
 def receipt_parts(run_fields: list[str] | None = None) -> JobAnswerParts:
@@ -662,6 +659,7 @@ def receipt_parts(run_fields: list[str] | None = None) -> JobAnswerParts:
         record=run_rows_record,
         annotate=_say_where_the_runs_are(run_fields),
         trim_attached=trim_attached_analysis,
+        attached=lambda data: _attached_result(dict(data)) is not None,
         route=measurements_route,
         short_route=_SHORT_MEASUREMENTS_ROUTE,
     )
@@ -1385,7 +1383,8 @@ def snapshot_receipt(
     call.  Outcome and guidance are intentionally absent from that live-read
     interval; renderers derive them only from the returned detached value.
     Native record holders are copied, sharing only their frozen nested facts;
-    large evidence lists are serialized after the renderer selects a page.
+    their evidence is rendered once per projection of the whole table
+    (``ReceiptSnapshot.projected_runs``), off the loop.
 
     ``live_progress`` is ``live_run_progress``'s read, taken off the loop just
     before this call (``snapshot_receipt_live`` pairs the two). An entry joins
@@ -1603,14 +1602,7 @@ def say_which_rows(
         if reply.get("status") not in TERMINAL_STATUSES:
             said.append("A row of a job still running may change between pages.")
         if entry.next is not None:
-            same = " with the same run_fields" if run_fields else ""
-            said.append(
-                f"{entry.total - entry.offset - entry.returned} more; read them with "
-                + call_to_continue(
-                    "jobs", {"action": "runs", "job_id": job_id, "cursor": entry.next}
-                )
-                + f"{same}."
-            )
+            said.append(_the_rest_of_the_rows(entry, job_id, run_fields))
         reply["hint"] = " ".join(said)
 
     return annotate

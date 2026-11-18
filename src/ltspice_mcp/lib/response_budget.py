@@ -43,7 +43,7 @@ from __future__ import annotations
 
 import functools
 import json
-from collections.abc import Awaitable, Callable, Iterable, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -345,6 +345,46 @@ def not_met_observation(rung: Rung, estimate: int) -> dict[str, Any]:
             "ids that reach the rest. Facts are not removed to fit a budget, so this "
             "response is over the budget instead. Narrow the request itself — fewer "
             "sources, recipes or queries per call."
+        ),
+    }
+
+
+def over_target_observation(
+    size: int, target: int, held: Mapping[str, tuple[int, int]]
+) -> dict[str, Any]:
+    """The fact that a reply the presenter cut (``lib/presenter.py``) is
+    still over its target, and what it holds of each list it cut (``held``:
+    by pointer, entries returned and total). Beside :func:`not_met_observation`,
+    which says the same of a ladder's floor: a presenter's reply has no rungs
+    and names its cut instead."""
+    cut = "; ".join(
+        f"{pointer} holds {sent} of {total}" for pointer, (sent, total) in held.items()
+    )
+    return {
+        "code": "budget_not_met",
+        "kind": OBSERVATION_KIND,
+        "detail": (
+            f"This reply is an estimated {size} tokens, over its target of {target}: "
+            "what is never cut (failures, observations, warnings, progress, the "
+            "request's lint and source, and at least one entry of each list cut, "
+            "with every field of it) is larger than the target." + (f" Cut: {cut}." if cut else "")
+        ),
+    }
+
+
+def attached_trimmed_observation(target: int, parts: Sequence[str], job_id: Any) -> dict[str, Any]:
+    """The fact that fitting a receipt to its target took ``parts`` from its
+    attached analysis, which ``analyze_results`` over the job returns. Beside
+    :func:`truncated_observation`, which says it of a whole reply's ladder:
+    here the ladder ran over the attached analysis alone, and the receipt's
+    own rows are named in its ``cut``."""
+    return {
+        "code": "budget_truncated",
+        "kind": OBSERVATION_KIND,
+        "detail": (
+            f"To fit the reply target of {target} tokens, the attached analysis was "
+            f"{'; '.join(parts)}. analyze_results over job_id {job_id} returns it, and "
+            "with include.provenance its source_hashes."
         ),
     }
 

@@ -29,6 +29,7 @@ observation whose code is not in :data:`STANDING_CODES`.
 
 from __future__ import annotations
 
+import threading
 from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -86,17 +87,21 @@ class NotesSent:
     def __init__(self, limit: int = MEMORY_LIMIT) -> None:
         self._limit = limit
         self._sent: OrderedDict[_Key, int] = OrderedDict()
+        # Replies are presented off the loop, so two may read and write at once.
+        self._lock = threading.Lock()
 
     def before(self, key: _Key) -> int:
         """How many replies carried the note before; 0 for a new one."""
-        return self._sent.get(key, 0)
+        with self._lock:
+            return self._sent.get(key, 0)
 
     def carried(self, key: _Key) -> None:
         """Record one more reply carrying the note."""
-        count = self._sent.pop(key, 0)
-        self._sent[key] = count + 1
-        while len(self._sent) > self._limit:
-            self._sent.popitem(last=False)
+        with self._lock:
+            count = self._sent.pop(key, 0)
+            self._sent[key] = count + 1
+            while len(self._sent) > self._limit:
+                self._sent.popitem(last=False)
 
     def __len__(self) -> int:
         return len(self._sent)
@@ -218,8 +223,9 @@ def apply(answer: dict[str, Any], planned: Plan | None) -> int:
     if count:
         repeat = mcp_call("jobs", {"action": "status", "job_id": job_id})
         sentence = (
-            f"{count} note(s) sent in full earlier in this session carry said_before in "
-            f"place of their text; {repeat} sends every note in full."
+            f"{count} standing note(s) sent in full earlier in this session are sent by "
+            f"their code (said_before) or a shorter sentence; {repeat} sends every note "
+            "in full."
         )
         hint = f"{hint} {sentence}" if isinstance(hint, str) and hint else sentence
         answer["hint"] = hint

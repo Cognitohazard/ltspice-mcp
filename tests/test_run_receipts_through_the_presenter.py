@@ -14,17 +14,19 @@ session starts with nothing remembered.
 from __future__ import annotations
 
 import asyncio
+import threading
 from pathlib import Path
 from typing import Any
 
 import jsonschema
 import pytest
 
-from ltspice_mcp.lib import now
+from ltspice_mcp.lib import now, recent
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.said_once import SHORTENS, NotesSent
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools import jobs as jobs_module
 from ltspice_mcp.tools.jobs import JOBS_OUTPUT_SCHEMA, JobsInput, handle_jobs
 from ltspice_mcp.tools.receipts import DELIVERY, RUN_EXPERIMENTS_OUTPUT_SCHEMA
 from tests.conftest import (
@@ -367,14 +369,18 @@ class _HeldRuns:
         finish = ExperimentRunner.submit_netlist
         self.held: list[tuple[Any, tuple[Any, ...], dict[str, Any]]] = []
         self.finish = finish
+        self.launched = threading.Event()
 
         def held(runner: Any, *args: Any, **kwargs: Any) -> object:
             self.held.append((runner, args, kwargs))
+            self.launched.set()
             return object()
 
         monkeypatch.setattr(ExperimentRunner, "submit_netlist", held)
 
-    def release(self) -> None:
+    async def release(self) -> None:
+        """Finish every run launched so far, once at least one was launched."""
+        assert await asyncio.to_thread(self.launched.wait, LIVENESS_S)
         for runner, args, kwargs in self.held:
             self.finish(runner, *args, **kwargs)
         self.held.clear()
@@ -430,7 +436,7 @@ async def test_a_cancelled_wait_leaves_its_job_running(
     monkeypatch.setattr(registry, "wait", waiting)
 
     assert state_with_sim.all_jobs[job_id].status not in TERMINAL_STATUSES
-    runs.release()
+    await runs.release()
     done = await _jobs(state_with_sim, action="wait", job_id=job_id, timeout_s=LIVENESS_S)
     assert done["status"] == "completed"
 
@@ -489,3 +495,50 @@ async def test_no_note_claims_completeness_while_a_cut_is_present(
         for entry in data["cut"].values():
             if "next" in entry:
                 assert entry["next"] in data["hint"], name
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["status", "wait"])
+async def test_a_receipt_with_no_attached_analysis_says_nothing_of_one(
+    state_no_sim: SessionState, action: str
+):
+    """A receipt over an explicit budget whose job attached no analysis is
+    cut by its rows alone: no note says an attached analysis was trimmed."""
+    job = make_experiment_job(state_no_sim, job_id="exp_plain", count=3)
+    job.observations = [
+        {"code": f"note_{index}", "kind": "provenance", "detail": "x" * 200} for index in range(40)
+    ]
+    extra = {"timeout_s": 0} if action == "wait" else {}
+    data = await _jobs(state_no_sim, action=action, job_id=job.job_id, budget=500, **extra)
+
+    assert "analysis" not in data
+    assert _observations(data, "budget_truncated") == []
+    assert len(_observations(data, "budget_not_met")) == 1
+    assert data["runs"]["items"], "at least one run row stays"
+
+
+@pytest.mark.asyncio
+async def test_a_list_page_is_cut_to_the_calls_budget(
+    state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setenv("LTSPICE_MCP_HOME", str(work_dir / "recent-state"))
+    for index in range(3):
+        circuit = work_dir / f"c{index}.cir"
+        circuit.write_text(_GRID_DECK)
+        await asyncio.to_thread(recent.touch, circuit)
+    first = await _jobs(state_no_sim, action="list", limit=1, budget=20_000)
+    targets: list[Any] = []
+    real = jobs_module.stored_page
+
+    async def spy(*args: Any, **kwargs: Any) -> Any:
+        targets.append(kwargs.get("target"))
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(jobs_module, "stored_page", spy)
+    second = await _jobs(
+        state_no_sim, action="list", limit=1, budget=20_000, cursor=first["next_cursor"]
+    )
+
+    assert targets == [20_000]
+    assert second["cut"]["/items"]["offset"] == 1
+    assert second["items"][0] != first["items"][0]
