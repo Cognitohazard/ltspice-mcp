@@ -1,0 +1,1 @@
+The layout check and the render now lay out a value a part takes from its symbol, such as a transistor's NPN or a MOSFET's NMOS when the part gives no value of its own, where LTspice draws it. Such text drawn across a wire, a ground, another part or other text is now reported.
