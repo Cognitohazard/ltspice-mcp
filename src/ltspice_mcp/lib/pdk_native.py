@@ -20,7 +20,7 @@ from typing import Any, Literal
 
 from ltspice_mcp.lib import atomic_write_bytes
 from ltspice_mcp.lib.cursor_codec import canonical_hash, canonical_json
-from ltspice_mcp.lib.deck_staging import sha256_file
+from ltspice_mcp.lib.deck_staging import scan_include_references, sha256_file
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.projection import KeepPlan, project_row
 from ltspice_mcp.lib.simulator import NGSPICE_NO_USER_INIT
@@ -470,11 +470,13 @@ def _validate_controls(
         if capture is None:
             raise NativeCaseError("binding", "active card lacks original capture")
         if active.source == binding.source:
-            binding_tokens = tokenize_body(card.body)
+            # Split as ngspice splits it, by the one splitter of a .lib card.
+            references = scan_include_references([card], Path(capture.identity), family="ngspice")
             if (
-                len(binding_tokens) != 3
-                or binding_tokens[0].text.casefold() != ".lib"
-                or binding_tokens[2].text.strip("\"'").casefold() != binding.section.casefold()
+                len(references) != 1
+                or references[0].head != ".lib"
+                or len(tokenize_body(card.body)) != 3
+                or (references[0].section or "").casefold() != binding.section.casefold()
             ):
                 raise NativeCaseError(
                     "binding", "final library card disagrees with active binding section"

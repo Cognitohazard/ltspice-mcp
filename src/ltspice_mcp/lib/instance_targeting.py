@@ -15,6 +15,7 @@ from typing import Literal
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.component_value import apply_value_to_instance
 from ltspice_mcp.lib.deck_staging import (
+    STAGED_COPY_FAMILY,
     resolve_reference,
     rewrite_staged_references,
     scan_include_references,
@@ -132,8 +133,12 @@ def apply_edit(card: SpiceCard, edit: InstanceEdit) -> set[str]:
     return fields
 
 
-def _captured_inputs(files: Sequence[ClosureFile]) -> dict[Path, CapturedFile]:
-    """Use the shared include scanner with an immutable in-memory existence snapshot."""
+def _captured_inputs(
+    files: Sequence[ClosureFile], profile: SemanticProfile
+) -> dict[Path, CapturedFile]:
+    """Use the shared include scanner with an immutable in-memory existence
+    snapshot, splitting references as ``profile``'s reader does, as hierarchy
+    discovery then reads them (``hierarchy.walk_active``)."""
     by_path = {file.path.resolve(): file for file in files}
     captured = {}
     for file in files:
@@ -147,6 +152,7 @@ def _captured_inputs(files: Sequence[ClosureFile]) -> dict[Path, CapturedFile]:
         refs = scan_include_references(
             parse_hierarchy_cards(file.text.encode(), root=file.index == 0),
             path,
+            family=profile.library_reader.family,
             depth=file.depth,
             exists=exists,
         )
@@ -166,7 +172,7 @@ RECORDING_LINEAGE = "recording where the cards of an edited or recoverable run c
 
 def captured_hierarchy(files: Sequence[ClosureFile], profile: SemanticProfile) -> Hierarchy:
     require_established(profile, "editing a deck by instance")
-    return resolve_hierarchy(files[0].path.resolve(), _captured_inputs(files), profile)
+    return resolve_hierarchy(files[0].path.resolve(), _captured_inputs(files, profile), profile)
 
 
 @dataclass(frozen=True)
@@ -182,7 +188,7 @@ def source_lineage(
 ) -> tuple[SourceLineage, ...]:
     """Map active contexts through ordinary edits that preserve card population."""
     require_established(profile, RECORDING_LINEAGE)
-    captured = _captured_inputs(before)
+    captured = _captured_inputs(before, profile)
     occurrences = walk_active(
         before[0].path.resolve(), lambda path, depth: captured[path], profile
     )
@@ -331,7 +337,11 @@ class TargetEditor:
         copies: dict[Path, Path],
     ) -> None:
         refs = scan_include_references(
-            block, source, depth=1, exists=lambda p: p.resolve() in self.original
+            block,
+            source,
+            family=STAGED_COPY_FAMILY,
+            depth=1,
+            exists=lambda p: p.resolve() in self.original,
         )
         for ref in refs:
             target = resolve_reference(source.parent, ref.raw_path).resolve()

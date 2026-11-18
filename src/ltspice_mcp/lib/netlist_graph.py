@@ -95,9 +95,10 @@ from ltspice_mcp.errors import UnreadableCardError
 from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.deck_nodes import GROUND, settled_node_kind
 from ltspice_mcp.lib.deck_staging import (
+    IncludeReference,
     card_sections,
     closure_depth,
-    in_other_section,
+    library_read,
     resolve_reference,
     scan_include_references,
 )
@@ -930,7 +931,8 @@ def _collect_subckts(
     source: str,
     strict: bool,
     include_resolver: IncludeResolver | None = None,
-    section: str | None = None,
+    reference: IncludeReference | None = None,
+    referrer: str | None = None,
 ) -> bool:
     """Walk ``cards`` in textual order, registering definitions and following
     includes; return whether they define subcircuits and nothing else.
@@ -938,8 +940,11 @@ def _collect_subckts(
     Order is what makes first-wins precedence correct: an include contributes its
     definitions at the position its directive appears, exactly as textual
     substitution would. ``cards`` are the ones a simulator reads, read from
-    ``origin``; ``section`` names the library section a ``.lib <file>
-    <section>`` selected, and a card in any other section is skipped. With
+    ``origin``; ``reference`` is the card that pulled the file in (None for
+    the deck), held in ``referrer`` (None for the deck), and of the file only
+    the cards the reader reads for it are walked
+    (``deck_staging.library_read``): one section's, every card, or none, and
+    then the record of what was not read says why. With
     ``strict`` the caller's own malformed card raises; for an included file
     it is downgraded to a :class:`MissingInclude` record so a third-party library
     cannot break the comparison.
@@ -957,8 +962,13 @@ def _collect_subckts(
             raise error
         sections = card_sections(cards, origin, closure_depth(depth))
         references = {
-            id(reference.card): reference
-            for reference in scan_include_references(cards, origin, depth=closure_depth(depth))
+            id(found.card): found
+            for found in scan_include_references(
+                cards,
+                origin,
+                family=registry.reader.library_reader.family,
+                depth=closure_depth(depth),
+            )
         }
     except SpiceLexError as exc:
         if strict:
@@ -970,13 +980,22 @@ def _collect_subckts(
             MissingInclude(target=source, reason=f"malformed directive: {exc}")
         )
         return False
+    read = library_read(reference, sections, registry.reader.library_reader)
+    if read.unread is not None and reference is not None:
+        registry.missing.append(
+            MissingInclude(
+                reference.raw_path, read.unread, line=reference.card.line_start, source=referrer
+            )
+        )
+        return False
+    section = reference.section if reference is not None else None
     wanted = section.casefold() if section is not None else None
     # A section the file does not declare: what the line brings is not known.
     only_definitions = wanted is None or wanted in {
         name.casefold() for name in sections if name is not None
     }
     for index, (card, card_section) in enumerate(zip(cards, sections, strict=True)):
-        if in_other_section(card_section, section):
+        if not read.reads(card_section):
             continue
         # Every directive here could be split into parts (checked above).
         registry.global_nets.update(name.lower() for name in global_names(card))
@@ -1006,14 +1025,13 @@ def _collect_subckts(
                 )
                 only_definitions = False
             continue
-        reference = references.get(id(card))
-        if reference is None:
+        included = references.get(id(card))
+        if included is None:
             if not card.scope and not _definition_neutral(card):
                 only_definitions = False
             continue
         defines_only = _follow_include(
-            reference.raw_path,
-            section=reference.section,
+            included,
             base_dir=base_dir,
             depth=depth,
             registry=registry,
@@ -1040,9 +1058,8 @@ def _definition_neutral(card: SpiceCard) -> bool:
 
 
 def _follow_include(
-    target: str,
+    reference: IncludeReference,
     *,
-    section: str | None,
     base_dir: Path | None,
     depth: int,
     registry: _SubcktRegistry,
@@ -1051,14 +1068,17 @@ def _follow_include(
     line: int,
     source: str | None,
 ) -> bool:
-    """Load one include target's definitions (only ``section``'s, when the
-    reference selects one), or record why it contributed none; return whether
-    it defines subcircuits and nothing else (False for one not read).
+    """Load the definitions of the file ``reference`` names (those of the
+    cards the reader reads for it, ``deck_staging.library_read``), or record
+    why it contributed none; return whether it defines subcircuits and
+    nothing else (False for one not read).
 
     ``line`` is the line of the directive that names it, and ``source`` the
     included file holding that directive (None for the deck itself), which a
     record of why it contributed nothing carries.
     """
+
+    target, section = reference.raw_path, reference.section
 
     def missing(reason: str) -> bool:
         registry.missing.append(MissingInclude(target, reason, line=line, source=source))
@@ -1092,6 +1112,10 @@ def _follow_include(
         # still being read is taken as doing more, since that is not known yet.
         return registry.files.get(selected, False)
     seen.add(selected)
+    if not path.is_file():
+        # What the reader reads instead, and why it is nothing.
+        why = library_read(reference, None, registry.reader.library_reader).unread
+        return missing(why or "not found")
     try:
         included = lex_deck(read_spice_text(path), title=False)
     except (OSError, UnicodeDecodeError, ValueError) as exc:
@@ -1099,7 +1123,8 @@ def _follow_include(
     registry.files[selected] = _collect_subckts(
         included.cards,
         origin=path,
-        section=section,
+        reference=reference,
+        referrer=source,
         base_dir=path.parent,
         depth=depth + 1,
         registry=registry,

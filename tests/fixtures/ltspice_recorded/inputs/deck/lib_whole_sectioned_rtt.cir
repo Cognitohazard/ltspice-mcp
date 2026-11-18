@@ -1,0 +1,6 @@
+* a .lib with no section, on a file that declares sections: is rtt read
+.lib sections.lib
+I1 0 a 1
+R1 a 0 {rtt}
+.op
+.end
