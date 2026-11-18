@@ -42,7 +42,8 @@ from ltspice_mcp.lib.spice_lex import (
 from ltspice_mcp.lib.spice_lex_ops import (
     MICRO_SIGN_READERS,
     ValueSuffixSite,
-    section_sign_names,
+    exported_names,
+    exported_part,
     value_suffix_sites,
 )
 from ltspice_mcp.lib.spice_lex_views import (
@@ -274,20 +275,24 @@ def _instances(context: _LintContext) -> tuple[frozenset[str], frozenset[str]]:
     file of its staged closure, folded, and the names of those LTspice
     exported with a ``§`` (``X§U1``), both its own (``u1``, as LTspice 26
     names the block in its results) and the export's without the marker
-    (``xu1``): which of them a ``.save`` takes is not recorded."""
+    (``xu1``): which of them a ``.save`` takes is not recorded. Asked of
+    either simulator's copy of an export (``spice_lex_ops.exported_part``),
+    so an ngspice copy, which takes the marker out, answers the same; only an
+    LTspice run's reading (``device_names.deck_signal``) uses the names."""
     names: set[str] = set()
     marked: set[str] = set()
     for file in context.files:
+        exported = exported_names(file.cards)
         for card in file.cards:
             if card.kind != "instance" or card.scope != () or not card.name:
                 continue
-            spellings = section_sign_names(card.name)
-            bare = fold_name(spellings[0] if spellings else card.name)
+            part = exported_part(card.name, exported)
+            bare = fold_name(part.bare if part else card.name)
             if not bare.startswith("x"):
                 continue
             names.add(bare)
-            if spellings:
-                marked.update((bare, fold_name(spellings[1])))
+            if part:
+                marked.update((bare, fold_name(part.own)))
     return frozenset(names), frozenset(marked)
 
 

@@ -522,6 +522,32 @@ def exported_names(cards: Iterable[SpiceCard]) -> dict[str, str]:
     return found
 
 
+@dataclass(frozen=True)
+class ExportedPart:
+    """The names of a part LTspice exported with its ``§``: as exported
+    (``R§Load``), without the marker (``RLoad``, as an ngspice copy and
+    ``verify_circuit`` name it) and its own (``Load``, as LTspice's results
+    do)."""
+
+    exported: str
+    bare: str
+    own: str
+
+    def names(self) -> tuple[str, str, str]:
+        return (self.exported, self.bare, self.own)
+
+
+def exported_part(ref: str, exported: dict[str, str]) -> ExportedPart | None:
+    """The names of the part ``ref`` names in a deck, when LTspice exported
+    it with a ``§``; None otherwise. ``exported`` is the deck's record of the
+    names its ngspice copy changed (``exported_names``; empty in LTspice's
+    copy, whose ``ref`` still holds the marker), so a part answers to the same
+    names on either simulator's copy. The one answer every reader of a deck
+    asks (``section_sign_names`` for a name already holding the marker)."""
+    names = section_sign_names(exported.get(ref.casefold(), ref))
+    return ExportedPart(exported.get(ref.casefold(), ref), *names) if names else None
+
+
 def strip_instance_section_signs(cards: list[SpiceCard]) -> None:
     """Drop ``§`` from every instance name that holds one, wherever it is named.
 

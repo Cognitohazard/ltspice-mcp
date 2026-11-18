@@ -78,8 +78,8 @@ from ltspice_mcp.lib.spice_lex import (
 )
 from ltspice_mcp.lib.spice_lex_ops import (
     exported_names,
+    exported_part,
     fold_micro_suffix_cards,
-    section_sign_names,
 )
 from ltspice_mcp.lib.spice_lex_views import (
     InstanceLine,
@@ -1306,13 +1306,13 @@ def _deck_targets(text: str, source: Path, depth: int) -> _DeckTargets:
 
 def _other_names(ref: str, exported: dict[str, str]) -> tuple[str, ...]:
     """Every other name the part ``ref`` answers to as a target: those of the
-    name LTspice exported it under (``spice_lex_ops.section_sign_names``),
+    name LTspice exported it under (``spice_lex_ops.exported_part``),
     which is ``ref`` itself in LTspice's copy of an export and the name the
     copy records in ngspice's (``spice_lex_ops.exported_names``). ``R§Load``
     answers to ``RLoad`` and ``Load``; ``RLoad`` in ngspice's copy answers to
     ``R§Load`` and ``Load``."""
-    original = exported.get(ref.casefold(), ref)
-    names = (original, *section_sign_names(original))
+    part = exported_part(ref, exported)
+    names = () if part is None else part.names()
     return tuple(name for name in names if name.casefold() != ref.casefold())
 
 

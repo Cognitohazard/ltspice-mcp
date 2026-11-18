@@ -2577,10 +2577,11 @@ def test_options_seed_is_refused_and_draws_repeat_without_it(build: str, tmp_pat
 #: with the reason. A variation asks ``variations._other_names``, which reads
 #: both, so a target answers to the same names on either simulator's copy.
 PART_NAME_ASKERS = {
-    "lib/spice_lex_ops.py:section_sign_names": "the one answer",
+    "lib/spice_lex_ops.py:section_sign_names": "the one answer for a name holding the marker",
     "lib/spice_lex_ops.py:exported_names": "reads the record the copy writes",
-    "lib/variations.py:_other_names": "a variation target's names, on either copy",
+    "lib/spice_lex_ops.py:exported_part": "a part's names on either copy of a deck",
     "lib/variations.py:_deck_targets": "reads the copy's record once per file",
+    "lib/lint_rules.py:_instances": "reads the copy's record once per file",
     "lib/device_names.py:_own": "a result's names (section_sign_spellings), which LTspice writes",
 }
 
@@ -2602,3 +2603,42 @@ def test_only_the_owners_ask_for_a_parts_other_names():
         )
     }
     assert found <= set(PART_NAME_ASKERS), sorted(found - set(PART_NAME_ASKERS))
+
+
+def test_the_lint_reads_a_part_exported_with_a_section_sign_on_either_copy(tmp_path: Path):
+    """The ``.save``/``.meas`` lint asks for a part's other names through the
+    same answer a variation does (``spice_lex_ops.exported_part``). On the
+    LTspice export, ``U1`` is the own name of ``X§U1``, and which instance
+    LTspice reads it as is not recorded. On ngspice's copy, which renamed the
+    part ``XU1``, ngspice's own reading decides: a colon path stores nothing.
+    Read as LTspice would, the copy gives the export's answer, from its
+    record of the name it changed."""
+    from ltspice_mcp.lib.spice_lex_ops import ExportedPart, exported_names, exported_part
+
+    text = (
+        "* sheet\n.subckt blk a\nR1 a n 1k\nR2 n 0 1k\n.ends blk\n"
+        "V1 in 0 1\nX§U1 in blk\n.save V(U1:n) V(in)\n.op\n.end\n"
+    )
+    export = tmp_path / "sheet.net"
+    export.write_text(text, encoding="utf-8")
+    _stem, data = deck_prep._read_export(export, for_ngspice=True)
+    copy = decode_spice_bytes_with_encoding(data)[0]
+
+    def findings(deck: str, dialect: str, simulator: str) -> list[tuple[str, str]]:
+        build = "LTspice 26.1.1 for Windows" if dialect == "ltspice" else "ngspice-42"
+        return [
+            (f["rule_id"], f["subject"])
+            for f in lint_deck(
+                deck, export, dialect, simulator, reader=Producer(dialect, build, None)
+            )
+            if f["rule_id"].startswith("save-")
+        ]
+
+    unestablished = [("save-meas-spelling-unestablished", "V(U1:n)")]
+    assert findings(text, "ltspice", "LTspice") == unestablished
+    assert findings(copy, "ltspice", "LTspice") == unestablished
+    assert findings(copy, "ngspice", "NGspiceSimulator") == [("save-name-not-stored", "V(U1:n)")]
+
+    part = ExportedPart("X§U1", "XU1", "U1")
+    assert exported_part("X§U1", exported_names(lex(text).cards)) == part
+    assert exported_part("XU1", exported_names(lex(copy).cards)) == part
