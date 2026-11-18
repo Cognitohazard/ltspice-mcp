@@ -74,16 +74,6 @@
    "tests/test_edit_schematic.py::test_a_dry_run_reports_a_mismatch_with_the_netlist"
   ]
  },
- "0645ad16881e6983": {
-  "answer": {
-   "reply": "1e3914c0ed1121f6",
-   "sheet": "c064b176635b7503"
-  },
-  "platform": "windows",
-  "tests": [
-   "tests/test_edit_schematic.py::test_a_symbol_saved_beside_the_sheet_is_found_by_the_compare_export[beside]"
-  ]
- },
  "078875ffcb92330e": {
   "answer": {
    "reply": "b764808779f76a17",
@@ -686,6 +676,13 @@
   "tests": [
    "tests/test_recorded_ltspice_schematics.py::test_an_edit_of_a_sources_value_keeps_its_own_parameters_on_a_sheet"
   ]
+ },
+ "2918ecc7caf4ca6c": {
+  "tests": [
+   "tests/test_structural_diff_scopes.py::test_edit_schematic_reference_stage[ltspice17_export_top_level_instance_beside_a_block_s_of_one_name]",
+   "tests/test_structural_diff_scopes.py::test_edit_schematic_reference_stage[ltspice17_export_with_its_blocks_moved_first_is_no_change]"
+  ],
+  "varies": true
  },
  "2a34f41928fc501b": {
   "answer": {
@@ -1438,6 +1435,16 @@
   ],
   "varies": true
  },
+ "5f6fb2a9f3c08420": {
+  "answer": {
+   "reply": "cc07821330ec65a6",
+   "sheet": "4f700298c191ce88"
+  },
+  "platform": "posix",
+  "tests": [
+   "tests/test_edit_schematic.py::test_asc_reference_is_exported_like_the_committed_sheet[structural_diff]"
+  ]
+ },
  "5f7747cb71640096": {
   "answer": {
    "reply": "b09eaf8228cad572",
@@ -1730,16 +1737,6 @@
    "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_detour]"
   ]
  },
- "6d66d0050941af71": {
-  "answer": {
-   "reply": "476136ca19f531d8",
-   "sheet": "4f700298c191ce88"
-  },
-  "platform": "windows",
-  "tests": [
-   "tests/test_edit_schematic.py::test_asc_reference_is_exported_like_the_committed_sheet[structural_diff]"
-  ]
- },
  "6d78df2f4a93c062": {
   "answer": {
    "reply": "76a0f4764b352f70",
@@ -1842,7 +1839,7 @@
  },
  "72c0a0e93ba9ae62": {
   "answer": {
-   "reply": "f81a1372e115ec85",
+   "reply": "3a9e372f2f86559f",
    "sheet": "2f66633286ed1ad2"
   },
   "tests": [
@@ -2467,6 +2464,16 @@
    "tests/test_edit_schematic.py::TestRecordTheEditorCannotRead::test_a_byte_order_mark_on_a_sheet_the_target_loads_names_that_sheet"
   ]
  },
+ "9a5ababd62273080": {
+  "answer": {
+   "reply": "ba38933d9ecd1329",
+   "sheet": "44202d5c22063149"
+  },
+  "platform": "posix",
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_symbol_saved_beside_the_sheet_is_found_by_the_compare_export[in-the-folder-its-name-says]"
+  ]
+ },
  "9ae1f963be6acdc2": {
   "answer": {
    "reply": "4595a1f7c8cd1631",
@@ -2785,6 +2792,16 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_a_value_is_checked_for_the_class_the_parts_own_prefix_gives[source-symbol-as-resistor-set_component_value]"
+  ]
+ },
+ "a9bd3c737f392b88": {
+  "answer": {
+   "reply": "ba38933d9ecd1329",
+   "sheet": "c064b176635b7503"
+  },
+  "platform": "posix",
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_symbol_saved_beside_the_sheet_is_found_by_the_compare_export[beside]"
   ]
  },
  "aa5d7ab0b02d9f4c": {
@@ -3251,16 +3268,6 @@
    "tests/test_edit_schematic.py::test_render_failure_leaves_the_target_and_evicts_the_edited_editor"
   ]
  },
- "c6f24b40036b9874": {
-  "answer": {
-   "reply": "1e3914c0ed1121f6",
-   "sheet": "44202d5c22063149"
-  },
-  "platform": "windows",
-  "tests": [
-   "tests/test_edit_schematic.py::test_a_symbol_saved_beside_the_sheet_is_found_by_the_compare_export[in-the-folder-its-name-says]"
-  ]
- },
  "c77db94b400b78d7": {
   "answer": {
    "reply": "421d80f6201c6374",
@@ -3297,6 +3304,14 @@
   "tests": [
    "tests/test_set_plot_panes.py::test_a_sheet_rename_that_fails_puts_the_old_panes_back[plot/math.plt]"
   ]
+ },
+ "cbc512758f826aca": {
+  "tests": [
+   "tests/test_structural_diff_scopes.py::test_edit_schematic_reference_stage[block_change_is_said_to_be_the_block_s]",
+   "tests/test_structural_diff_scopes.py::test_edit_schematic_reference_stage[block_moved_before_the_top_level_is_no_change]",
+   "tests/test_structural_diff_scopes.py::test_edit_schematic_reference_stage[top_level_change_beside_a_block_of_the_same_reference]"
+  ],
+  "varies": true
  },
  "cc67fe2e6fb86894": {
   "answer": {
@@ -3350,6 +3365,15 @@
   },
   "tests": [
    "tests/test_plot_in_ltspice.py::test_the_call_the_note_of_a_plot_standing_alone_names_is_taken"
+  ]
+ },
+ "d1f96943d66e2dd0": {
+  "answer": {
+   "reply": "da1ac2f9a60d0b7a",
+   "sheet": "5f20d4b74a33ddb4"
+  },
+  "tests": [
+   "tests/test_edit_schematic.py::test_a_spiceline_the_batch_draws_across_a_wire_is_the_batchs"
   ]
  },
  "d26af1693561cee6": {
@@ -3759,6 +3783,16 @@
    "tests/test_edit_schematic.py::test_an_echoed_cursor_returns_its_view_without_a_return_views_entry"
   ]
  },
+ "ef6a28782447d34c": {
+  "answer": {
+   "reply": "c05a17e1a107d570",
+   "sheet": "4f700298c191ce88"
+  },
+  "platform": "posix",
+  "tests": [
+   "tests/test_edit_schematic.py::test_asc_reference_is_exported_like_the_committed_sheet[equivalence]"
+  ]
+ },
  "ef9f7d9a29e38f3b": {
   "answer": {
    "reply": "5d493a30cdf94a4a",
@@ -3767,6 +3801,13 @@
   "tests": [
    "tests/test_circuit_asc.py::TestJudgedOnTheFinishedSheet::test_a_part_moved_onto_a_crossing_is_said_whichever_op_moved_it"
   ]
+ },
+ "f051277d87581753": {
+  "tests": [
+   "tests/test_structural_diff_scopes.py::test_edit_schematic_reference_stage[ltspice26_export_top_level_instance_beside_a_block_s_of_one_name]",
+   "tests/test_structural_diff_scopes.py::test_edit_schematic_reference_stage[ltspice26_export_with_its_blocks_moved_first_is_no_change]"
+  ],
+  "varies": true
  },
  "f15f26e5915d467b": {
   "answer": {

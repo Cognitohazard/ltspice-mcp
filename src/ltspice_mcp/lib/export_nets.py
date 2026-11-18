@@ -10,11 +10,26 @@ nodes in its symbol's SpiceOrder (recorded: ``symbol-orientation``,
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 
 from ltspice_mcp.lib.netlist_graph import canon_ref
 from ltspice_mcp.lib.spice_lex import iter_by_kind, lex_deck
 from ltspice_mcp.lib.spice_lex_views import read_instance
+from ltspice_mcp.lib.trace_names import UNLABELLED_NET_RE
+
+#: The name LTspice's export gives a pin on nothing: ``NC_01``, ``NC_02``, ...
+#: (recorded: ``net-naming``).
+UNCONNECTED_PIN_NET_RE = re.compile(r"nc_\d+", re.IGNORECASE)
+
+
+def named_by_export(net: str) -> bool:
+    """Whether ``net`` is a name LTspice's export gives a net the sheet names
+    nowhere (``N001``, ``NC_01``), which the next export of the sheet may give
+    another net. A net inside a block, ``<instance path>/<net>`` in a
+    flattened netlist, is read by its own name."""
+    name = net.rsplit("/", 1)[-1]
+    return bool(UNLABELLED_NET_RE.fullmatch(name) or UNCONNECTED_PIN_NET_RE.fullmatch(name))
 
 
 def exported_name(reference: str, letter: str) -> str:

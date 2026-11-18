@@ -23,6 +23,7 @@ from ltspice_mcp.errors import NoAxisError, ResultError
 from ltspice_mcp.lib.raw_header import RawPlotHeader
 from ltspice_mcp.lib.result_kinds import (
     Analysis,
+    axis_coordinates,
     header_analysis,
     kind_named,
     plot_analysis,
@@ -292,15 +293,13 @@ def transient_time_offset(header: RawPlotHeader) -> float:
 
 
 def _coordinate_facts(wave: NDArray, boundaries: tuple[int, ...]) -> tuple[bool, Monotonicity]:
-    real = bool(
-        np.all(np.isfinite(wave)) and (not np.iscomplexobj(wave) or np.all(np.imag(wave) == 0))
-    )
-    if not real:
+    coordinates = axis_coordinates(wave)
+    if coordinates is None or not np.all(np.isfinite(coordinates)):
         return False, "unknown"
     # Check within each step, never across the reset between steps.
     increasing, decreasing = True, True
     for start, end in pairwise(boundaries):
-        values = np.real(wave)[start:end]
+        values = coordinates[start:end]
         increasing &= bool(np.all(values[1:] >= values[:-1]))
         decreasing &= bool(np.all(values[1:] <= values[:-1]))
     if increasing and decreasing:

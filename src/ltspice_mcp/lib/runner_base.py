@@ -22,9 +22,11 @@ from spicelib.sim.sim_runner import SimRunner  # noqa: TID251 - this module owns
 from ltspice_mcp.lib import RUN_DECK_SUFFIXES
 from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.deck_staging import (
+    IncludeReference,
+    LibraryReader,
     card_sections,
     closure_depth,
-    in_other_section,
+    library_read,
     resolve_reference,
     scan_include_references,
     unreadable_references,
@@ -47,7 +49,12 @@ from ltspice_mcp.lib.ngspice_mode import ModeCheck, check_run
 from ltspice_mcp.lib.pdk_native import LAUNCH_POLICY, NativeLaunchPolicy
 from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
 from ltspice_mcp.lib.raw_parser import other_raws
-from ltspice_mcp.lib.simulator import NGSPICE_NO_USER_INIT, is_ngspice, run_ngbehavior
+from ltspice_mcp.lib.simulator import (
+    NGSPICE_NO_USER_INIT,
+    is_ngspice,
+    run_ngbehavior,
+    simulator_family,
+)
 from ltspice_mcp.lib.simulator_build import executable_path, reported_build, which_ltspice
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
@@ -169,24 +176,33 @@ class DeckRequirements:
 class _DeckItem(NamedTuple):
     """One thing a file asks for: an analysis, a ``.save``, a ``.control``
     block or a file to pull in, with the library section its card sits in
-    (``card_sections``) and, for a file to pull in, the section it selects."""
+    (``card_sections``) and, for a file to pull in, the card's reference."""
 
     kind: str
     value: str | Path
     owner: str | None = None
-    selects: str | None = None
+    reference: IncludeReference | None = None
 
 
-def _deck_items(path: Path, *, root: bool) -> tuple[_DeckItem, ...]:
+class _DeckFile(NamedTuple):
+    """What one file asks for, and the section of each of its cards
+    (``card_sections``), which ``library_read`` reads."""
+
+    items: tuple[_DeckItem, ...]
+    sections: tuple[str | None, ...]
+
+
+def _deck_items(path: Path, *, root: bool, family: str | None) -> _DeckFile:
     """What the file at ``path`` asks for, in card order: the deck itself when
-    ``root`` (its first line its title), else a file it pulls in. Raises
-    ``OSError`` when the file cannot be read."""
+    ``root`` (its first line its title), else a file it pulls in, its
+    references split as ``family`` reads them. Raises ``OSError`` when the
+    file cannot be read."""
     cards = lex_deck(read_spice_text(path), title=root).cards
     depth = closure_depth(0 if root else 1)
     try:
         references = {
             id(reference.card): reference
-            for reference in scan_include_references(cards, path, depth=depth)
+            for reference in scan_include_references(cards, path, family=family, depth=depth)
         }
         sections = card_sections(cards, path, depth)
     except SpiceLexError:
@@ -207,25 +223,40 @@ def _deck_items(path: Path, *, root: bool) -> tuple[_DeckItem, ...]:
             items.append(_DeckItem("save", "", owner))
         elif (reference := references.get(id(card))) is not None:
             target = resolve_reference(path.parent, reference.raw_path)
-            items.append(_DeckItem("include", target, owner, reference.section))
-    return tuple(items)
+            items.append(_DeckItem("include", target, owner, reference))
+    return _DeckFile(tuple(items), tuple(sections))
 
 
 #: An included file's items, kept while the file is unchanged: every case of a
 #: job pulls in the same libraries, which can run to tens of thousands of lines.
-_INCLUDED_ITEMS: FileCache[tuple[_DeckItem, ...]] = FileCache(maxsize=256)
+#: One cache per family the references are split for: LTspice reads a
+#: ``.lib`` path another way (``scan_include_references``).
+_INCLUDED_ITEMS: dict[str | None, FileCache[_DeckFile]] = {}
 
 
-def deck_requirements(netlist: Path | None) -> DeckRequirements:
+def _included_items(family: str | None) -> FileCache[_DeckFile]:
+    return _INCLUDED_ITEMS.setdefault(family, FileCache(maxsize=256))
+
+
+def library_reader_for(simulator: type | None, mode: str | None) -> LibraryReader:
+    """Who reads a run's ``.lib`` cards: ``simulator``'s family and, for
+    ngspice, ``mode``, the mode the run passes (``simulator.run_ngbehavior``)."""
+    family = simulator_family(simulator)
+    if family == "ngspice":
+        return LibraryReader(family, mode if mode is not None else run_ngbehavior(simulator))
+    return LibraryReader(family)
+
+
+def deck_requirements(netlist: Path | None, *, reader: LibraryReader) -> DeckRequirements:
     """Snapshot requested analyses, ``.save`` and ``.control`` in one walk.
 
     It reads the cards the simulator reads (``spice_lex.lex_deck``): a
     directive continued on a ``+`` line is one card, and neither the deck's
     title nor a card after an ``.END`` counts. The files it follows are the
     ones staging reads the deck to pull in (``scan_include_references``), so
-    a library's own ``.lib section`` line is a section, not a file; and a
-    ``.lib file section`` reads no other section's cards
-    (``deck_staging.in_other_section``).
+    a library's own ``.lib section`` line is a section, not a file; and of
+    each file it reads the cards ``reader`` reads (``deck_staging.library_read``):
+    one section's, the whole file's, or none.
     """
     if netlist is None:
         return DeckRequirements()
@@ -234,7 +265,7 @@ def deck_requirements(netlist: Path | None) -> DeckRequirements:
     has_control = False
     seen: set[tuple[Path, str | None]] = set()
 
-    def scan(path: Path, depth: int, selected: str | None) -> None:
+    def scan(path: Path, depth: int, reference: IncludeReference | None) -> None:
         nonlocal has_save, has_control
         if depth > _MAX_INCLUDE_DEPTH:
             return
@@ -242,19 +273,23 @@ def deck_requirements(netlist: Path | None) -> DeckRequirements:
             key = path.resolve()
         except OSError:
             return
+        selected = reference.section if reference is not None else None
         if (key, selected) in seen:
             return
         seen.add((key, selected))
         try:
-            items = (
-                _deck_items(path, root=True)
+            read_file = (
+                _deck_items(path, root=True, family=reader.family)
                 if depth == 0
-                else _INCLUDED_ITEMS.get(key, lambda _key: _deck_items(path, root=False))
+                else _included_items(reader.family).get(
+                    key, lambda _key: _deck_items(path, root=False, family=reader.family)
+                )
             )
         except OSError:
             return
-        for item in items:
-            if in_other_section(item.owner, selected):
+        read = library_read(reference, read_file.sections, reader)
+        for item in read_file.items:
+            if not read.reads(item.owner):
                 continue
             if item.kind == "control":
                 has_control = True
@@ -264,7 +299,7 @@ def deck_requirements(netlist: Path | None) -> DeckRequirements:
                 if item.value not in analyses:
                     analyses.append(str(item.value))
             else:
-                scan(Path(item.value), depth + 1, item.selects)
+                scan(Path(item.value), depth + 1, item.reference)
 
     scan(netlist, 0, None)
     return DeckRequirements(tuple(analyses), has_save, has_control)
@@ -331,7 +366,7 @@ def _deck_has_sectioned_lib(netlist: Path) -> bool:
     unread = {id(card) for card, _error in unreadable_references(cards)}
     readable = [card for card in cards if id(card) not in unread]
     try:
-        references = scan_include_references(readable, netlist)
+        references = scan_include_references(readable, netlist, family="ngspice")
     except SpiceLexError:
         return False
     return any(reference.section is not None for reference in references)
@@ -650,7 +685,7 @@ def inject_logopinfo(
     if any("logopinfo" in card.body.casefold() for card in deck.read):
         return netlist_path
     # Only a real .op analysis emits the operating-point block; .dc does not.
-    if ".op" not in deck_requirements(netlist_path).analyses:
+    if ".op" not in deck_requirements(netlist_path, reader=LibraryReader("ltspice")).analyses:
         return netlist_path
     if generation is None:
         if observations is not None:
@@ -1064,12 +1099,14 @@ class RunnerBase:
         if native is not None and not is_ngspice(self.simulator_class):
             raise ValueError("native statistical setup requires ngspice")
         electrical_deck = native.input_deck if native else netlist
-        requirements = deck_requirements(electrical_deck)
         simulator = simulator_class or self.simulator_class
         # The mode ngspice is handed and the server reads the deck in: a native
         # setup's driver sets its own, every other run gets the class's -D.
-        # The failure classifier and the mode check both read this one.
+        # The failure classifier, the mode check and the requirements read this one.
         passed_mode = run_ngbehavior(simulator, native.policy.ngbehavior if native else None)
+        requirements = deck_requirements(
+            electrical_deck, reader=library_reader_for(simulator, passed_mode)
+        )
 
         def verify_copied(copied: Path) -> None:
             if native is not None and native.verify_execution is not None:

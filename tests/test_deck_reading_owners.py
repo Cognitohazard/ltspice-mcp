@@ -289,6 +289,9 @@ _CARD_TEXT_READERS: dict[str, str] = {
     "lib/lint_rules.py:_lib_section_ltspice": (
         "display: the card's text shown in a finding, message or record, not read for a fact"
     ),
+    "lib/lint_rules.py:_lib_read_nothing_ngspice": (
+        "display: the card's text shown in a finding, message or record, not read for a fact"
+    ),
     "lib/lint_rules.py:_lib_section_ngspice": (
         "display: the card's text shown in a finding, message or record, not read for a fact"
     ),
@@ -583,3 +586,55 @@ def test_the_probe_pattern_rule_catches_what_it_names():
     missed = [r're.compile(r"\.save\s+(all)")', r're.compile(r"(\w+)\(")']
     assert [_probe_patterns_in(ast.parse(source)) for source in caught] == [True] * 3
     assert [_probe_patterns_in(ast.parse(source)) for source in missed] == [False] * 2
+
+
+# --------------------------------------------------------------------------
+# An instance card is matched by its reference in its scope
+# --------------------------------------------------------------------------
+
+#: The functions that key a lexed card by its reference (``canon_ref`` of its
+#: ``name``), each with what keeps the scope in the key. Two elements of one
+#: reference in two definitions are two elements; a reader that keys every
+#: card of a deck by its bare reference merges them, the last one read
+#: winning, and once answered "no change" for a real one.
+_REFERENCE_KEYS: dict[str, str] = {
+    "lib/netlist_diff.py:read_deck.read": (
+        "reads one scope's cards, by span, into that scope's own table"
+    ),
+    "lib/export_nets.py:exported_pin_nodes": (
+        "reads only the top level's cards (iter_by_kind with scope=())"
+    ),
+}
+
+
+def _keys_a_card_by_reference(function: ast.AST) -> bool:
+    return any(
+        isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id == "canon_ref"
+        and call.args
+        and isinstance(call.args[0], ast.Attribute)
+        and call.args[0].attr in ("name", "instance_ref")
+        for call in ast.walk(function)
+        if call is not function
+    )
+
+
+def test_a_card_keyed_by_its_reference_is_keyed_in_its_scope():
+    found = {
+        f"{path}:{name}"
+        for path, tree in modules().items()
+        for name, function in _functions(tree)
+        if _keys_a_card_by_reference(function)
+        and not any(
+            _keys_a_card_by_reference(inner) for _inner_name, inner in _functions(function)
+        )
+    }
+    assert found <= _REFERENCE_KEYS.keys(), (
+        "A card keyed by its bare reference merges elements of one reference in "
+        "different scopes; key it with its scope (netlist_diff.read_deck), or list "
+        f"it in _REFERENCE_KEYS with what keeps the scope: {sorted(found - _REFERENCE_KEYS.keys())}"
+    )
+    assert _REFERENCE_KEYS.keys() <= found, (
+        f"No longer keys a card by reference: {sorted(_REFERENCE_KEYS.keys() - found)}"
+    )

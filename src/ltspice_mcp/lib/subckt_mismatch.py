@@ -32,7 +32,7 @@ mid-simulation.
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from functools import cache, cached_property, partial
 from pathlib import Path
@@ -40,9 +40,12 @@ from pathlib import Path
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.deck_staging import (
     DEFAULT_INCLUDE_DEPTH,
+    UNDECIDED_READER,
+    IncludeReference,
+    LibraryRead,
     card_sections,
     closure_depth,
-    in_other_section,
+    library_read,
     resolve_existing,
     resolve_reference,
     scan_include_references,
@@ -362,7 +365,7 @@ def closure_from_deck(
         if depth >= max_depth:
             continue
         for reference in scan_include_references(
-            source.lexed().read, source.path, depth=source.depth
+            source.lexed().read, source.path, family=UNDECIDED_READER.family, depth=source.depth
         ):
             resolved = resolve_existing(resolve_reference(source.path.parent, reference.raw_path))
             if resolved is None or resolved in seen:
@@ -387,9 +390,10 @@ class _FileIndex:
     file: ClosureFile
     lexed: EditCards
     sections: list[str | None]
-    # Sections a caller selected for this file, or None when every card is
-    # active (a plain .include, or a library nobody entered by section).
-    active: frozenset[str] | None = None
+    # What each card that entered this file by section reads of it
+    # (``deck_staging.library_read``), or None when every card is active (a
+    # plain .include, or a library nobody entered by section).
+    active: tuple[LibraryRead, ...] | None = None
 
     @property
     def cards(self) -> list[SpiceCard]:
@@ -403,9 +407,7 @@ class _FileIndex:
         if self.active is None:
             return True
         section = self.sections[card_index]
-        return section is None or any(
-            not in_other_section(section, entered) for entered in self.active
-        )
+        return any(read.reads(section) for read in self.active)
 
 
 def _index_files(files: Sequence[ClosureFile]) -> list[_FileIndex]:
@@ -430,20 +432,29 @@ def _mark_active_sections(indexes: list[_FileIndex]) -> None:
     ambiguous.
     """
     by_path = {index.file.path.resolve(): index.file.index for index in indexes}
-    selected: dict[int, set[str]] = {}
+    selected: dict[int, list[IncludeReference]] = {}
     for index in indexes:
         for reference in scan_include_references(
-            index.lexed.read, index.file.path, depth=index.file.depth
+            index.lexed.read,
+            index.file.path,
+            family=UNDECIDED_READER.family,
+            depth=index.file.depth,
         ):
             if reference.section is None:
                 continue
             target = resolve_reference(index.file.path.parent, reference.raw_path).resolve()
             hit = by_path.get(target)
             if hit is not None:
-                selected.setdefault(hit, set()).add(reference.section.casefold())
+                selected.setdefault(hit, []).append(reference)
     for index in indexes:
         chosen = selected.get(index.file.index)
-        index.active = frozenset(chosen) if chosen else None
+        # This plan serves a deck whose reader's reading of a library is not
+        # decided (QSPICE, Xyce): ``UNDECIDED_READER``.
+        index.active = (
+            tuple(library_read(ref, index.sections, UNDECIDED_READER) for ref in chosen)
+            if chosen
+            else None
+        )
 
 
 _OPTION_HEADS = frozenset({".option", ".options", ".opt"})
@@ -569,17 +580,40 @@ def _body_environment(
     body unresolved, with the reason.
     """
     expressions = dict(SubcktCard.from_card(opener).param_defaults)
-    outer = Environment({}, simulator="ngspice")
+    outer = _environment({})
     overrides = {key.casefold(): outer.fact(value) for key, value in x_view.params.items()}
     try:
         for _, card in children:
             if card.kind == "param":
                 expressions.update(param_assignments(card))
     except NetlistError as exc:
-        return Environment(
-            expressions, simulator="ngspice", overrides=overrides, dynamic_reason=str(exc)
-        )
-    return Environment(expressions, simulator="ngspice", overrides=overrides)
+        return _environment(expressions, overrides=overrides, dynamic_reason=str(exc))
+    return _environment(expressions, overrides=overrides)
+
+
+#: The ngspice mode this plan reads an expression in. The plan serves a deck
+#: with no semantic profile (QSPICE, Xyce), whose reading of an expression is
+#: not decided; native ngspice's is the strictest the reader knows, since it
+#: computes a power of a positive base only (``hierarchy_expr._power``).
+EXPRESSION_MODE = ""
+
+
+def _environment(
+    expressions: Mapping[str, str],
+    *,
+    overrides: Mapping[str, NumericFact] | None = None,
+    dynamic_reason: str | None = None,
+) -> Environment:
+    """A scope of this plan's expressions, read as ngspice reads them in
+    ``EXPRESSION_MODE``. The one place this plan names a simulator for the
+    evaluator: which simulator reads a deck with no profile is undecided."""
+    return Environment(
+        expressions,
+        simulator="ngspice",  # the reading of other simulators is undecided
+        ngbehavior=EXPRESSION_MODE,
+        overrides=overrides,
+        dynamic_reason=dynamic_reason,
+    )
 
 
 def _device_multiplier(
@@ -599,7 +633,7 @@ def _device_multiplier(
     x_m, inner_m = x_view.get_param("M"), inner.get_param("M")
     return card_copies(
         None if inner_m is None else body().fact(inner_m),
-        None if x_m is None else Environment({}, simulator="ngspice").fact(x_m),
+        None if x_m is None else _environment({}).fact(x_m),
         multiply=True,
         where=f"the inner device {inner.ref}",
         passed_from=f"the X line {x_view.ref}",
@@ -1067,7 +1101,9 @@ def _render_clone(
     stop = _closer_index(cards, opener_index)
     raw = "".join(line for card in cards[opener_index : stop + 1] for line in card.raw_lines)
     clone_cards = lex(raw).cards
-    if scan_include_references(clone_cards, file.path, depth=file.depth):
+    if scan_include_references(
+        clone_cards, file.path, family=UNDECIDED_READER.family, depth=file.depth
+    ):
         raise MismatchPlanError(
             "clone_include_unsupported",
             f"Subcircuit {cards[opener_index].name!r} pulls in another file from "

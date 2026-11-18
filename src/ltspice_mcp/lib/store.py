@@ -24,6 +24,7 @@ The layout, rooted at the working directory::
     |   `-- staged/{circuit_id}/            the decks it actually ran
     |-- results/
     |   |-- {result_set_id}.json            an immutable analyze_results set
+    |   |-- {stored_answer_id}.json         a complete answer too long to send whole
     |   `-- artifacts/{result_set_id}/      files those results point at
     |-- detached/                           per-job detached owner hand-off
     |   |-- {digest}.request.json           the request one owner was spawned for
@@ -122,6 +123,7 @@ KIND_REQUEST_INDEX = "request-index"
 KIND_CIRCUIT_INDEX = "circuit-index"
 KIND_CANCELLATION = "cancellation"
 KIND_RESULT_SET = "result-set"
+KIND_STORED_ANSWER = "stored-answer"
 KIND_ANALYSIS_SNAPSHOT = "attached-analysis"
 KIND_RECENT = "recent-circuits"
 KIND_RECOVERY_JOURNAL = "recovery-journal"
@@ -854,6 +856,14 @@ class Store:
             self.results_dir,
             f"{_validate_name(result_set_id, 'result_set_id')}.json",
             f"Invalid result_set_id: {result_set_id!r}",
+        )
+
+    def stored_answer(self, answer_id: str) -> Path:
+        """One complete answer too long to send whole (``lib/presenter.py``)."""
+        return _record(
+            self.results_dir,
+            f"{_validate_name(answer_id, 'stored answer id')}.json",
+            f"Invalid stored answer id: {answer_id!r}",
         )
 
     def result_artifacts(self, result_set_id: str) -> Path:

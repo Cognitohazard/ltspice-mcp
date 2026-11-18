@@ -59,7 +59,7 @@ from ltspice_mcp.tools import analyze
 from ltspice_mcp.tools._base import (
     DIAGNOSTICS_COVERAGE_SCHEMA,
     ENVELOPE_ERROR_SCHEMA,
-    FINDING_ROWS_CUT,
+    FINDING_LIST_CUT,
     FINDING_SCHEMA,
     OUTCOME_SCHEMA,
     RUN_DIAGNOSTICS_SCHEMA,
@@ -378,7 +378,7 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "properties": {
                     "circuit": {"type": "string"},
-                    "findings": {"type": "array", "items": FINDING_SCHEMA, CUT: FINDING_ROWS_CUT},
+                    "findings": {"type": "array", "items": FINDING_SCHEMA, CUT: FINDING_LIST_CUT},
                 },
                 "required": ["circuit", "findings"],
             },

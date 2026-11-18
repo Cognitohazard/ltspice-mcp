@@ -2104,11 +2104,14 @@ def test_sheet_directives_reach_the_netlist_as_the_cards_staging_reads(build: st
         ".end",
     ]
     assert "* a comment on the sheet" in rec.export_text(build, "export/directives")
-    references = scan_include_references(cards, rec.recorded(build, "export/directives.net"))
+    references = scan_include_references(
+        cards, rec.recorded(build, "export/directives.net"), family="ltspice"
+    )
+    # LTspice reads the rest of a .lib line as one path (deck/lib_section).
     assert [(ref.raw_path, ref.section) for ref in references] == [
         ("models.lib", None),
         ("mylib.lib", None),
-        ("corners.lib", "tt"),
+        ("corners.lib tt", None),
     ]
 
 

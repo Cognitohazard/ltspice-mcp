@@ -1283,6 +1283,36 @@ async def test_a_value_that_makes_an_overlap_is_the_batchs(asc_state):
     ]
 
 
+async def test_a_spiceline_the_batch_draws_across_a_wire_is_the_batchs(asc_state):
+    """R1 shows its SpiceLine through a window of its own, across a wire, which
+    both builds draw (``draw/attribute_windows``). Giving it a SpiceLine is the
+    batch's, and the reply says that text now crosses the wire."""
+    sheet = Path(asc_state.working_dir) / "spiceline.asc"
+    write_file(
+        sheet,
+        "Version 4\nSHEET 1 880 680\nSYMBOL res 200 200 R0\nWINDOW 39 36 132 Left 2\n"
+        "SYMATTR InstName R1\nSYMATTR Value 1k\nWIRE 276 320 276 360\n",
+    )
+
+    data = await apply_ops(
+        asc_state,
+        sheet,
+        [
+            {
+                "op": "set_component_attribute",
+                "reference": "R1",
+                "attribute": "SpiceLine",
+                "value": "tc=1",
+            }
+        ],
+    )
+
+    assert data["commit_state"] == "committed", data.get("error") or data.get("failures")
+    assert data["warnings"] == [
+        "R1's text 'tc=1' at (236,332) is drawn across wire (276,320)->(276,360)"
+    ]
+
+
 async def test_a_row_carries_every_part_and_point_of_its_finding(asc_state):
     sheet = await _crowded_sheet(asc_state, "crowded-rows")
 

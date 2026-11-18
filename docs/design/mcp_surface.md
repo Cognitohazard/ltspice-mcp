@@ -143,8 +143,9 @@ Codes named after the stage, used where the stage is the more useful fact:
 **Page object.** No tool returns an unbounded collection. Every collection
 that can be large is a page, `{items, total, returned, truncated,
 next_cursor}`, and every tool that returns a page accepts its cursor as input.
-`verify_circuit`'s `findings` is one list with a cap per rule instead: a rule
-cut at the cap has a `findings_omitted` entry with its own cursor (§3.5).
+`verify_circuit` is on the presenter instead (below): its `findings` is cut
+only when its reply is too long to send whole, and then read on from the
+stored answer (§3.5).
 
 An `inspect` item's `page` names the data key its cursor pages in a
 `collections {<data key>: {total, returned, truncated}}` block, which is how
@@ -253,6 +254,48 @@ wherever they appear in its reply, and is the whole exemption:
 
 The list is `ALWAYS_PRESENT` in `tools/_base.py`, and the suite fails any
 reply that carries a silent field not on it.
+
+**A reply too long to send whole.** A tool on the presenter
+(`lib/presenter.py`; `verify_circuit` today, the other tools as they move)
+computes its complete answer and hands it, with its output schema, to one
+function that decides what is sent. The target is the tool's `budget`
+argument where it has one, and `[analysis] default_budget` (4000 estimated
+tokens) where it has none; 0 sends every answer whole.
+
+- An answer within the target is sent exactly as "Fields left out" makes it.
+  It carries neither field below, and nothing is stored.
+- An answer over the target is stored whole, as one JSON file in the store's
+  `results/` folder, under the expiry of `[analysis] result_set_ttl_hours`.
+  Its id is the digest of the answer and of its snapshot, what it was computed
+  from, so the same answer of the same inputs is one file.
+- Then the lists the schema declares `items` or `rows` (`x-cut`,
+  `lib/reply_cuts.py`) are cut from the end, whole entries only, the largest
+  list first, until the reply fits or each holds one entry. A list declared
+  `never` is sent whole, and nothing inside a list's entries is cut apart from
+  its entry: a list inside a row goes with the row. A reply that still does
+  not fit goes out over the target.
+
+A cut reply carries two fields, declared once in `tools/_base.py`:
+
+- `cut`: by the JSON Pointer of each list it cut, `{total, returned, offset?,
+  next?}`. `offset` is the index of the first entry the reply holds, absent
+  for 0; `next` is the cursor for the entries after them, absent on the last.
+- `stored_answer`: `{id, path, snapshot}`. `path` is the stored JSON file,
+  whose `answer` is the complete answer; `snapshot` is what it was computed
+  from, such as a file's `sha256`.
+
+A cursor names the stored answer, the list's pointer and an offset. Reading
+it slices the stored file: nothing is computed again and no request is
+replayed, so a page is never refused as stale. It carries `stored_answer`, so
+the caller compares the snapshot with the file to tell whether the page
+predates a change. A page holds the list it reads from the offset on, cut to
+the target the same way, and the answer's other fields as stored; each other
+cuttable list is named in `cut` with none returned and the cursor that reads
+it from its start. A cursor for an answer that has expired or is missing is
+refused with `invalid_cursor`, saying the stored answer is gone and how to
+compute a fresh one. The tool's `hint` names three ways to read the rest: the
+stored file, the call with the cursor, and the same call through the Python
+API.
 
 
 **Presentation fields.** Fields that control how a receipt is rendered, rather
@@ -1765,8 +1808,8 @@ in_ltspice    also open the file in the LTspice window the user has running,
               in front; default false
 export_to     "managed" (default) | "sidecar"
 findings_cursor
-              a findings_omitted entry's next_cursor: lists that rule's next
-              25 findings in place of its first
+              a cut entry's next: reads the findings after those from the
+              stored answer, without checking again; give the same path
 ```
 
 `compare` (`{reference, anchors, rtol, mode}`) means the same here as in
@@ -1799,7 +1842,19 @@ its own window; asking for it makes the call destructive, as the annotation
 table shows. Both modes report in `diff_vs_prior` what changed since the
 schematic's previous export: `sidecar` against the `.net` it replaces,
 `managed` against the previous managed export of the same schematic, which
-the store keeps.
+the store keeps. It is the `structural_diff` delta below, each part and
+directive in its scope, plus `connections_changed`: each pin of a part both
+exports have that moved onto or off a net both exports name (ground
+included), as `{reference, pin, before, after}`, net names in lower case. The
+pins are read from the wiring comparison `equivalence` runs, with each net
+both exports name the same anchored by its name and a net the exporter
+numbered (`N001`, `NC_01`), which another export may number otherwise,
+matched by the parts on it. A move between two numbered nets is not named,
+since which pin the comparison would report there depends on the order it
+reads the parts; `not_compared` says the wiring differs there, as it does
+when an export cannot be read as a circuit. `diff_vs_prior` holds no
+difference list when nothing changed and is absent when there was no
+previous export.
 
 Rendering uses the project's own SVG-to-PNG renderer; the `render` policy
 sets format, scale, pixel cap, and whether the image is returned inline or as
@@ -1836,17 +1891,28 @@ and whatever each side names it. A definition's own directives are its body's,
 each listed with `(in .subckt NAME)` after it, and the instance that paired
 two definitions of different names. An `.include` or `.lib` line
 is a directive, but one whose file (or section) defines subcircuits and nothing
-else is compared by those definitions instead. So the modes differ: a `.param`
-moved from a body to the top level is a difference here and not in
-`structural_diff`, a definition moved into such an include is one there and not
-here, and a subcircuit the circuit does not call is compared there only.
+else is compared by those definitions instead. Both modes compare a `.param`
+moved from a body to the top level as a difference. They differ where each
+reads the deck: a definition moved into such an include is a difference in
+`structural_diff` and not here, and a subcircuit the circuit does not call is
+compared there only.
 `equivalent` is true only when the wiring, the parts and values and the
 directives all match. Beside a false one, `structurally_equivalent`
 says whether the wiring matched and `directives_equivalent` whether the
 directives did, and `directives_added` and `directives_removed` list the
 directives only this circuit has and those only the reference has.
 `structural_diff` reports the added, removed and changed components and
-directives, and does not compare nodes. The modes differ on a deck they
+directives of the two files as written, each in its scope: the top level, or
+the `.subckt` definition it sits in, paired with the definition of the same
+name in the same scope on the other side, a nested definition a scope of its
+own. An entry inside a definition says which: a string ends in
+`(in .subckt NAME)`, and an object carries `subckt`, nested names joined with
+`/`. So two elements of one reference in two blocks of an exported sheet are
+two elements. It does not compare nodes, and its `not_compared` says so in the
+data; it also names a definition either deck gives more than once in one
+scope, which it does not compare on either side (which of them stands for
+which is not known; `equivalent` is then null), and says that included files'
+cards are not read when a deck includes one. The modes differ on a deck they
 cannot read.
 `equivalence` returns a compare failure with no `comparison` block, while
 `structural_diff` diffs the deck as empty, so the delta is still returned,
@@ -1891,8 +1957,9 @@ component's signature is its model or value plus its instance parameters,
 without nodes (`equivalence` is the mode that compares wiring); a parameter
 given twice contributes both copies, so a second copy counts as a change.
 
-Output: findings in the shared shape, `findings_omitted` for the rules cut
-at the cap (below), a comparison block per mode, a render block `{path,
+Output: findings in the shared shape, `cut`, `stored_answer` and
+`findings_omitted` when the reply was too long to send whole (below), a
+comparison block per mode, a render block `{path,
 sha256, source_sha256, width, height, downscaled, returned_inline, svg?,
 note, …}`, a scene summary, `outcome` and `hint`.
 
@@ -1926,9 +1993,14 @@ another session sharing the working directory may commit between
 the `sha256` `edit_schematic` returned to confirm the image shows that
 revision. The export block's `sha256` is the netlist's.
 
-The layout check reads a part's attribute text where LTspice draws it, with
-its extent estimated from the font's widths rather than measured off its
-glyphs. `attribute_text_overlap` reports text that a wire, a line another
+The layout check reads a part's name, value, Value2, SpiceModel, SpiceLine
+and SpiceLine2 where LTspice draws them, through their windows, with each
+extent estimated from the font's widths rather than measured off its glyphs.
+Any of them but the name written as `""` has no text, and LTspice draws none. A symbol's
+own text, its pin names, an attribute in any other window and a value a part
+takes from its symbol are not read, which the layout check's `observations`
+say, and so does a render's.
+`attribute_text_overlap` reports text that a wire, a line another
 part draws or a ground flag passes through, or that lies over a rectangle or
 circle another part draws or over other text, by more than the estimate's
 slack. A ground flag is taken as the triangle the render draws, turned as
@@ -1941,39 +2013,37 @@ move the part or the item its text crosses. `wire_through_symbol` and `text_in_s
 what a part draws, not its box, so a wire or a text anchor in the empty corner
 beside an amplifier's triangle is not in the part.
 
-A reply lists at most 25 findings of each layout and quality rule, of each
-value-suffix rule (`value_suffix_micro_sign`, `value_suffix_mojibake`,
-`value_suffix_nonascii`) and of `dropped_wire`. A rule with more has an entry
-in `findings_omitted`, keyed by its `rule_id`: `{omitted, total,
-next_cursor}`, where `omitted` counts its findings after the ones listed and
-`total` counts them all. Passing `next_cursor` back as `findings_cursor` lists
-that rule's next 25 findings in place of its first; the entry in that reply
-carries the cursor for the page after, and the last page has none. The rest
-of the reply, `rules_run` included, is the same as without the cursor. The
-`hint` counts every finding, not only those listed, names each rule cut short
-with the check that reports it, so a caller can narrow `checks` to that check
-to skip the others, and on a cursor's page says which findings it lists.
+Findings are sent whole when the reply fits the target, however many a rule
+has; the check returns every finding, in the order the checks found them,
+and that order is their identity. A reply over the target is presented as
+"A reply too long to send whole" (§2) describes, with the snapshot
+`{path, sha256, reference_sha256?}`: the checked file's digest, and the
+reference's when one was compared (of its text when the reference is netlist
+text). `findings` is declared `items`, cut from the end; `observations`,
+`warnings`, `failures`, `checks_run` and `checks_skipped` are `never` lists
+and go out whole. The `hint` counts every finding the check found, not only
+those sent, and names the stored file, the `findings_cursor` call and its
+Python form.
 
-A cursor is bound to every finding of its rule as the call that returned it
-found them, which depends on more than the checked file: the symbols a sheet
-uses, its export, the build that reads a deck. A call that does not run the
-check that reports the rule is refused with `invalid_cursor` before any check
-runs, and the refusal names what to change (add the check to `checks`, or
-leave `render.mode` at `with_checks`). A call whose findings of the rule are
-not the ones the cursor was counted against is refused with `invalid_cursor`
-once they are found, and the refusal says why: the check did not run, with
-its reason; it failed, with its error; or what the findings are read from
-changed. Either refusal says to call again without `findings_cursor`, and
-neither carries the generic cursor hint. A malformed cursor is refused with
-`invalid_cursor` too.
+`findings_cursor` takes a `cut` entry's `next`. The call reads the next
+findings from the stored answer and runs no check; it needs the same `path`,
+and a cursor for another circuit's answer is refused with `invalid_cursor`.
+The page's `hint` says which findings it holds and that they were read from
+the stored answer. `findings_omitted`, keyed by `rule_id`, keeps the shape it
+had while findings were capped per rule, `{omitted, total, next_cursor}`, and
+is filled from the cut: `omitted` counts that rule's findings after the ones
+sent, `total` all of them, and `next_cursor` is the `cut` entry's `next`,
+which continues the whole list rather than that rule alone. It and
+`findings_cursor` go at the next breaking release.
+
 `api.verify_circuit` returns every finding and takes no `findings_cursor`
-unless called with `raw_page=True`.
+unless called with `raw_page=True`, which returns the reply a client reads.
 
 **No `baseline` filter.** `verify_circuit` reports on the whole file. To find
 what changed relative to a copy the caller kept, diff the two finding lists,
-which include `rule_id`, `at` and `subject`. Diff complete lists: follow each
-`findings_omitted` cursor to the end, or diff the findings
-`api.verify_circuit` returns, which are never capped.
+which include `rule_id`, `at` and `subject`. Diff complete lists: the stored
+answer's when the reply was cut, or the findings `api.verify_circuit`
+returns, which are never cut.
 
 ### 3.6 `inspect` — pure read
 
@@ -2337,12 +2407,14 @@ Suppression is per call, and `linter_version` is reported in provenance.
 | `save-pattern-unrecorded` | warning | any `.save` of the deck names signals by a pattern (`V(*)`, `I(R*)`), no `.save` saves all or cannot be read, and a `.meas` reads a signal no `.save` names: which signals a pattern saves is not recorded, so the signal is reported as not checked rather than refused, whichever kind of signal the pattern names |
 | `meas-ngspice-batch` | warning | ngspice: the deck runs and only the top-level `.meas` is skipped, which the run reports when it is read |
 | `meas-trig-degrees` | blocking | LTspice: a `.meas` that calls `sin`, `cos`, `tan`, `asin`, `acos`, `atan` or `atan2`, whose angle LTspice 26 and XVII read in degrees on their default settings where a B source reads radians; `verify_circuit`'s `syntax` check reports the same as `meas_trig_degrees` |
-| `lib-section-ngspice` | blocking | ngspice in a mode it reads with its `lt`, `ps` or `s3` flag set, `kiltpsa` (the default) among them |
+| `lib-section-ngspice` | blocking | ngspice in a mode it reads with its `lt`, `ps` or `s3` flag set, `kiltpsa` (the default) among them: a `.lib <file> <section>` in the deck or any file it reaches |
+| `lib-without-section-ngspice` | blocking | ngspice in a mode that does not read `.lib` as an include (native, `hsa`, any mode with `s3`): a `.lib <file>` that names no section, which ngspice stops on ("unimplemented dot command '.lib'"), or an `.include` of a file that declares sections, whose own section line it stops on. The finding names the fix: a section the file declares, or `.include` for a file with none |
+| `lib-sections-dropped-ngspice` | blocking | ngspice in a mode that reads `.lib` as an include (`lt` or `ps` set, `kiltpsa` among them): a `.lib <file>` with no section, or an `.include`, of a file that declares sections. ngspice reads the file's own `.lib <section>` line as an include of a missing file and reads none of the file's cards; ngspice-42 then runs on without them (a wrong number), ngspice-45 stops. In the deck or any file it reaches |
 | `analysis-count-ltspice` | blocking | refused by LTspice 26 and XVII: two of `.tran`/`.ac`/`.dc`/`.noise` (`.op` may appear with one) |
 | `meas-function-ltspice` | blocking | refused by LTspice 26 and XVII: `vdb()`, `phase()` or `group_delay()` in a `.meas` |
 | `meas-name-ltspice` | blocking | refused by LTspice 26 and XVII: a `.meas` named `e`, `k`, `pi` or `q`, constants of the expression evaluator |
 | `meas-unclosed-paren-ltspice` | blocking | a `.meas` with a parenthesis left open. LTspice 26 refused the recorded one before the run and ran nothing, and XVII ran that deck without the measurement; any such `.meas` is refused, since LTspice 26's error names the parenthesis, not the form. `verify_circuit`'s `syntax` check reports the same as a `directive_syntax` error, and `edit_schematic` refuses to write it |
-| `lib-section-ltspice` | blocking | refused by LTspice 26 and XVII: `.lib file section`, which LTspice reads as one file name |
+| `lib-section-ltspice` | blocking | refused by LTspice 26 and XVII: a `.lib` line of more than one word that names no file. LTspice reads the rest of the line as one path, quoted or not, so `.lib file section` looks for a file named `file section` and stops; a path holding a space that does exist runs |
 | `step-without-values-ltspice` | blocking | refused by LTspice 26 and XVII: a `.step` with nothing after it, or `.step param <name>` with no values. `edit_schematic` refuses to write it and `verify_circuit`'s `syntax` check reports it |
 | `byte-85-ltspice` | warning | LTspice: a byte 0x85 in an 8-bit deck or include with a card after it on the line, which LTspice 24 and later read as a line break and XVII does not; not reported when the session's LTspice is known to be XVII |
 | `node-control-byte-ltspice` | warning | LTspice: a node name in an 8-bit file containing a byte from 0x80 to 0x9F, a control character to LTspice, which LTspice 26 refuses and XVII saves under a name the server spells differently |
@@ -2533,7 +2605,9 @@ where it sits.
 The receipt compares the samples of a `random` or `pdk_native` entry by what
 they computed, one `assign` point at a time. Each produced sample keeps a
 digest of its raw: every plot's variables and points, a complex frequency or
-other sampled axis by its real part, and nothing else of its headers. Where every sample
+other sampled axis by its real part where its imaginary part is one no
+simulator computes as a coordinate (zero, or the subnormal number ngspice 42
+writes) and by both parts otherwise, and nothing else of its headers. Where every sample
 compared at a point computed one result, an `identical_samples` observation
 (`kind: "sampling"`) lists the point in its `evidence.groups` as `circuit`,
 `assigned` (that point's `assign` values, left out when the entry has none)

@@ -30,12 +30,18 @@ from spicelib.simulators.ltspice_simulator import LTspice
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import log_conditions, wsl
 from ltspice_mcp.lib.encoding import read_spice_text
-from ltspice_mcp.lib.log_parser import extract_log_diagnostics
+from ltspice_mcp.lib.log_parser import (
+    classify_failure_code,
+    extract_log_diagnostics,
+    printed_measurements,
+    prints_measurement,
+)
 from ltspice_mcp.lib.services import AnalysisSource, load_logs_sync
 from ltspice_mcp.lib.simulator import detect_simulators
 from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
+from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
 from ltspice_mcp.tools.jobs import JobsInput, handle_jobs
 from tests import _ltspice_recorded as rec
 from tests.conftest import FIXTURES_DIR, SyncApi, stand_in_program, terminal_experiment
@@ -102,7 +108,11 @@ REPORTED = {
 }
 
 
-def _recorded_simulator(work_dir: Path, build: str) -> type:
+def _recorded_simulator(
+    work_dir: Path, build: str, case: str = "unknown_model_param", exit_code: int = 0
+) -> type:
+    """A stand-in for ``build`` that writes the files it recorded for
+    ``log/<case>`` and exits as it did."""
     recorded = rec.recorded(build, "log")
 
     class _Recorded(LTspice):
@@ -120,9 +130,9 @@ def _recorded_simulator(work_dir: Path, build: str) -> type:
             exe_log=False,
         ) -> int:
             netlist = Path(netlist_file)
-            shutil.copy(recorded / "unknown_model_param.log", netlist.with_suffix(".log"))
-            shutil.copy(recorded / "unknown_model_param.raw", netlist.with_suffix(".raw"))
-            return 0
+            shutil.copy(recorded / f"{case}.log", netlist.with_suffix(".log"))
+            shutil.copy(recorded / f"{case}.raw", netlist.with_suffix(".raw"))
+            return exit_code
 
         @classmethod
         def valid_switch(cls, switch: str, path: str = "") -> list:
@@ -243,6 +253,96 @@ async def test_the_recorded_unknown_model_parameter_on_every_path(
     assert _row_diagnostics(api_summary_row["value"]) == expected
 
 
+async def _failed_run_on_every_path(build: str, work_dir: Path) -> dict[str, Any]:
+    """The recorded transient whose time step collapses part way, run through
+    a stand-in of ``build``, as every path reports the failed run."""
+    case = "timestep_collapse_mid"
+    recorded_log = rec.recorded(build, "log") / f"{case}.log"
+    producer = Producer("ltspice", REPORTED[build], PROGRAM[build])
+    exit_code = rec.entry(build, f"log/{case}")["exit_code"]
+    state = _session(work_dir, _recorded_simulator(work_dir, build, case, exit_code))
+    deck = work_dir / f"{case}.cir"
+    shutil.copy(rec.INPUTS / "log" / f"{case}.cir", deck)
+    reply = await terminal_experiment(
+        state,
+        {
+            "request_id": f"collapse-{build}",
+            "circuits": [{"path": str(deck), "id": "dut"}],
+            "execution": {"wait_s": 30},
+            "lint": "off",
+        },
+    )
+    job_id = reply["job_id"]
+    (row,) = reply["runs"]["items"]
+    runs = await handle_jobs(JobsInput.model_validate({"action": "runs", "job_id": job_id}), state)
+    assert runs.structured_content is not None
+    (jobs_row,) = runs.structured_content["items"]
+    inspected = await handle_inspect(
+        InspectInput.model_validate(
+            {"queries": [{"kind": "results", "view": "signals", "job_id": job_id}]}
+        ),
+        state,
+    )
+    assert inspected.structured_content is not None
+    (inspect_result,) = inspected.structured_content["results"]
+    api = SyncApi(state)
+    api_runs = await asyncio.to_thread(api.jobs, action="runs", job_id=job_id)
+    (api_row,) = api_runs["items"]
+    diagnostics = extract_log_diagnostics(recorded_log)
+    return {
+        "reader": log_conditions.run_diagnostics(diagnostics["conditions"], producer),
+        "failure_code": classify_failure_code(diagnostics["errors"])[0],
+        "receipt": reply,
+        "rows": [row, jobs_row, api_row],
+        "inspect": inspect_result,
+    }
+
+
+def _convergence_entry(found: dict[str, Any]) -> dict[str, Any]:
+    (entry,) = [e for e in found.get("diagnostics", ()) if e["code"] == "convergence_failed"]
+    return entry
+
+
+@pytest.mark.asyncio
+async def test_a_time_step_that_collapses_part_way_is_the_same_failure_on_both_builds(
+    work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """LTspice 26 writes the collapse on a line of its own ("Convergence
+    Failure: Time step too small; ..."); XVII writes it after its "Heightened
+    Def Con from 5e-006 +++..." progress on the same line ("...+++Fatal Error:
+    Analysis:  Time step too small; ..."). Both are one failure: every path
+    that reports the run names convergence_failed and carries the error, with
+    the same fields, and XVII's severity is its own word for it."""
+    monkeypatch.setattr(wsl, "is_wsl", lambda: False)
+    found = {
+        build: await _failed_run_on_every_path(build, work_dir / build)
+        for build in ("ltspice26", "ltspice17")
+    }
+    written = {
+        "ltspice26": "Convergence Failure:  Time step too small; time = 5e-06, timestep = "
+        '1.25e-19: trouble with node "a"',
+        "ltspice17": "Fatal Error: Analysis:  Time step too small; time = 5e-006, timestep = "
+        '1.25e-019: trouble with node "a"',
+    }
+    for build, reading in found.items():
+        assert reading["failure_code"] == "convergence_failed", build
+        entries = [_convergence_entry(reading["reader"])] + [
+            _convergence_entry(_row_diagnostics(row)) for row in reading["rows"]
+        ]
+        for entry in entries:
+            assert entry["first_text"] == written[build], (build, entry)
+        assert all(entry == entries[0] for entry in entries), (build, entries)
+        (failure,) = reading["receipt"]["failures"]
+        assert failure["code"] == "convergence_failed", (build, failure)
+        assert failure["hint"] == found["ltspice26"]["receipt"]["failures"][0]["hint"]
+        assert "(convergence_failed)" in reading["inspect"]["error"]["message"], build
+    lt26 = _convergence_entry(found["ltspice26"]["reader"])
+    xvii = _convergence_entry(found["ltspice17"]["reader"])
+    assert xvii.pop("severity") == "Fatal Error"
+    assert set(xvii) == set(lt26)
+    assert xvii["count"] == 1
+
+
 def _recorded_logs(build: str) -> list[Path]:
     return sorted((rec.FIXTURES / build).rglob("*.log"))
 
@@ -258,19 +358,6 @@ def _unclassified(path: Path, rules: str, console: Path | None = None) -> list[d
     ]
 
 
-#: Lines LTspice XVII prints that no rule of the log classifier knows: a
-#: measurement named with a dash, which the measurement reader reads
-#: (log_parser.printed_measurements; spicelib's does not, docs/spicelib_bugs.md,
-#: Bug 44) and the classifier's own result-line rule does not, and the line on which a
-#: time step that collapses after the operating point is reported, which
-#: starts "Heightened Def Con" and ends in the fatal error the convergence
-#: rule reads only at the start of a line.
-UNKNOWN_TO_THE_CLASSIFIER = {
-    "ltspice17/log/meas_name_dash.log": "t-fall: v(out)=0.5 AT 6.9672e-005",
-    "ltspice17/log/timestep_collapse_mid.log": "Heightened Def Con from 5e-006 ",
-}
-
-
 @pytest.mark.parametrize("build", ["ltspice26", "ltspice17"])
 def test_every_recorded_ltspice_line_is_a_known_condition_or_routine(build: str):
     logs = _recorded_logs(build)
@@ -280,12 +367,33 @@ def test_every_recorded_ltspice_line_is_a_known_condition_or_routine(build: str)
         for path in logs
         if (found := _unclassified(path, build))
     }
-    known = {
-        name: text for name, text in UNKNOWN_TO_THE_CLASSIFIER.items() if name.startswith(build)
-    }
-    assert set(leftover) == set(known)
-    for name, found in leftover.items():
-        assert [entry["first_text"][: len(known[name])] for entry in found] == [known[name]]
+    assert leftover == {}
+
+
+@pytest.mark.parametrize("build", ["ltspice26", "ltspice17"])
+def test_the_classifier_reads_a_measurement_line_as_the_measurement_reader_does(build: str):
+    """A line is a printed measurement when the measurement reader reads one
+    from it (log_parser.printed_measurements), and the classifier asks it: on
+    every recorded log, a line the reader reads is routine output or a failed
+    measurement, never unclassified, and a line it does not read, such as a
+    Fourier block's ``N-Period=1``, is not one."""
+    read: list[str] = []
+    for path in _recorded_logs(build):
+        for line in log_conditions.log_lines(read_spice_text(path)):
+            if not printed_measurements(line):
+                continue
+            read.append(line.strip())
+            codes = [entry["code"] for entry in log_conditions.classify({"log": line}, build)]
+            assert set(codes) <= {"measurement_failed"}, (path.name, line, codes)
+    assert len(read) > 50, "no measurement line was read"
+    if build == "ltspice17":
+        assert "t-fall: v(out)=0.5 AT 6.9672e-005" in read
+    fourier = read_spice_text(rec.recorded(build, "log") / "fourier.log")
+    periods = [line for line in fourier.splitlines() if line.startswith("N-Period=")]
+    assert periods
+    for period in periods:
+        assert not printed_measurements(period)
+        assert not prints_measurement(period)
 
 
 def test_every_ngspice_fixture_line_is_a_known_condition_or_routine():

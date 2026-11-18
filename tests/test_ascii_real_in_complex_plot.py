@@ -1,10 +1,9 @@
 """plot_waveform draws a real variable of an ngspice complex text plot.
 
-ngspice 42 writes the frequency of an AC run with a nonzero imaginary part,
-which plot_waveform refuses as a non-real axis, so the live test in
-``test_ngspice_e2e.py`` cannot reach the drawing of the trace. This file has
-ngspice's ASCII shape for ``.save @m1[vth]`` in an AC run (the parameter one
-number a point), with a real frequency.
+This file has ngspice's ASCII shape for ``.save @m1[vth]`` in an AC run (the
+parameter one number a point), with a frequency whose imaginary part is 0, so
+it runs where ngspice is not installed; the live test in
+``test_ngspice_e2e.py`` reads what the installed ngspice writes.
 """
 
 from __future__ import annotations

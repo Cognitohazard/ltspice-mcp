@@ -30,6 +30,7 @@ def _ids(
     codec: str = "cp1252",
     cp1252_reader: str | None = None,
     reader: Producer | None = None,
+    ngbehavior: str | None = None,
 ) -> set[str]:
     # Read as an 8-bit file by default, the one kind that can hold a byte
     # UTF-8 would not.
@@ -42,6 +43,7 @@ def _ids(
         codec=codec,
         cp1252_reader=cp1252_reader,
         reader=reader,
+        ngbehavior=ngbehavior,
     )
     return {finding["rule_id"] for finding in findings}
 
@@ -99,6 +101,18 @@ _SEED_CASES = [
         '* t\n.lib "models.lib" TT\n.op\n.end\n',
         None,
         "LTspice",
+    ),
+    (
+        "lib-without-section-ngspice",
+        "* t\n.lib models.lib\n.op\n.end\n",
+        "ngspice",
+        "NGspiceSimulator",
+    ),
+    (
+        "lib-sections-dropped-ngspice",
+        "* t\n.lib sections.lib\n.op\n.end\n",
+        "ngspice",
+        "NGspiceSimulator",
     ),
     (
         "step-without-values-ltspice",
@@ -229,6 +243,14 @@ _CASE_IDS = [case[0] for case in _SEED_CASES]
 #: (no reader given) has nothing recorded.
 _SEED_READERS = {"subckt-defined-twice": Producer("ltspice", "LTspice 26.1.1 for Windows", None)}
 
+#: The ngspice mode a seed rule is linted in, where it is not the class's
+#: kiltpsa: native ngspice stops on a .lib that names no section.
+_SEED_MODES = {"lib-without-section-ngspice": ""}
+
+#: Files a seed deck reads, beside it: a library that declares a section,
+#: which kiltpsa drops whole when a .lib names none.
+_SEED_FILES = {"lib-sections-dropped-ngspice": {"sections.lib": ".lib tt\n.endl tt\n"}}
+
 
 def test_every_seed_rule_has_a_case():
     assert sorted(_CASE_IDS) == sorted(rule.rule_id for rule in RULES)
@@ -244,6 +266,8 @@ def test_each_seed_rule_fires(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setattr(NGspiceSimulator, "_compatibility_mode", "kiltpsa")
+    for name, text in _SEED_FILES.get(rule_id, {}).items():
+        (tmp_path / name).write_text(text, encoding="utf-8")
 
     assert rule_id in _ids(
         deck,
@@ -251,6 +275,7 @@ def test_each_seed_rule_fires(
         dialect=dialect,
         simulator=simulator,
         reader=_SEED_READERS.get(rule_id),
+        ngbehavior=_SEED_MODES.get(rule_id),
     )
 
 
@@ -603,7 +628,10 @@ def test_sectioned_lib_reference_resolves_through_the_walk(tmp_path: Path):
     library.write_text(".lib TT\n.model DTT D(Is=1e-12)\n.endl TT\n")
     deck = f'* t\n.lib "{library}" TT\nD1 in 0 DTT\nV1 in 0 1\n.op\n.end\n'
 
-    assert "model-missing" not in _ids(deck, tmp_path)
+    # ngspice reads sections; LTspice has none (``deck/lib_section``).
+    assert "model-missing" not in _ids(
+        deck, tmp_path, dialect="ngspice", simulator="NGspiceSimulator", ngbehavior="hsa"
+    )
 
 
 @pytest.mark.parametrize(

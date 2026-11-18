@@ -227,6 +227,8 @@ def load(result_set_id: str, working_dir: Path) -> ResultSet:
     return item
 
 
+# The stored answers beside these sets (lib/presenter.py) are swept by
+# presenter.cleanup: they depend on no job, so they expire by time alone.
 def cleanup(working_dir: Path) -> int:
     """Delete expired raw-only sets and sets whose persisted source job vanished."""
     root = result_root(working_dir)

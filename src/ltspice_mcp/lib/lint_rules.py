@@ -12,16 +12,19 @@ from typing import Any, Literal, NamedTuple
 from ltspice_mcp.lib.deck_nodes import is_ground
 from ltspice_mcp.lib.deck_staging import (
     DEFAULT_INCLUDE_DEPTH,
+    IncludeReference,
+    LibraryRead,
+    LibraryReader,
     card_sections,
-    in_other_section,
     is_absolute_reference,
+    library_read,
     resolve_reference,
     scan_include_references,
     unreadable_references,
 )
 from ltspice_mcp.lib.encoding import latin1_reading, read_spice_text
 from ltspice_mcp.lib.families import DISPLAY
-from ltspice_mcp.lib.ngspice_compat import drops_lib_sections, reads_lib_as_includes
+from ltspice_mcp.lib.ngspice_compat import reads_lib_as_includes
 from ltspice_mcp.lib.simulator import DEFAULT_FAMILY, family_for, run_ngbehavior
 from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.spice_lex import (
@@ -135,6 +138,14 @@ class _LintContext:
         only an LTspice deck is held to it.
         """
         return validate_netlist_arity(self.cards, simulator=DISPLAY[self.family])
+
+    @property
+    def library_reader(self) -> LibraryReader:
+        """Who reads the deck's ``.lib`` cards: its family and, for ngspice,
+        the mode the run passes (``simulator.run_ngbehavior``)."""
+        if self.family == "ngspice":
+            return LibraryReader("ngspice", run_ngbehavior(mode=self.ngbehavior))
+        return LibraryReader(self.family)
 
     @functools.cached_property
     def reached_models(self) -> _ReachedModels:
@@ -422,22 +433,29 @@ def _step_ngspice(
     return findings
 
 
-def _sectioned_libs(context: _LintContext) -> list[tuple[SpiceCard, str]]:
-    """The deck's ``.lib file section`` cards and their sections, as deck
-    staging reads them."""
-    return [
-        (reference.card, reference.section)
-        for reference in scan_include_references(context.cards, context.path)
-        if reference.section is not None
-    ]
-
-
 def _lib_section_ngspice(
     context: _LintContext,
     rule: LintRule,
 ) -> list[LintFinding]:
-    mode = run_ngbehavior(mode=context.ngbehavior)
-    if not drops_lib_sections(mode):
+    """A ``.lib file section`` that brings in nothing in the run's mode
+    (``deck_staging.library_read``): what a named section brings in does not
+    depend on what the file holds, so no file is read for it."""
+    reader = context.library_reader
+    mode = reader.mode or ""
+    # The deck's own cards, and a card in any file the deck reaches, as the
+    # include walk read it.
+    dropped = [
+        (context.path, reference.card, reference.section)
+        for reference in scan_include_references(context.cards, context.path, family="ngspice")
+        if reference.section is not None
+        and library_read(reference, (), reader).rule_id == rule.rule_id
+    ]
+    dropped += [
+        (unread.path, unread.card, unread.section)
+        for unread in context.reached_models.unread_libraries
+        if unread.read.rule_id == rule.rule_id and unread.path != context.path
+    ]
+    if not dropped:
         return []
     cause = (
         "treats a sectioned .lib as plain includes and drops the section, so ngspice "
@@ -446,13 +464,14 @@ def _lib_section_ngspice(
         else "(s3) does not read .lib at all, so the section's names are undefined"
     )
     findings = []
-    for card, section in _sectioned_libs(context):
+    for path, card, section in dropped:
         findings.append(
             _finding(
                 context,
                 rule,
                 line=card.line_start,
-                subject=section,
+                file=path,
+                subject=section or "",
                 evidence={
                     "directive": card.body,
                     "ngbehavior": mode,
@@ -574,29 +593,55 @@ def _lib_section_ltspice(
     context: _LintContext,
     rule: LintRule,
 ) -> list[LintFinding]:
-    """``.lib file section`` selects a section in ngspice. LTspice has no sections:
-    it looks for a file named ``file section`` and stops (recorded on both
-    builds)."""
+    """``.lib file section`` selects a section in ngspice. LTspice has no
+    sections: it reads the rest of the line as one path, quoted or not, and
+    stops when no file by that name exists (recorded on both builds:
+    ``deck/lib_section``), and runs when one does
+    (``deck/lib_path_space_unquoted``). A path of more than one word that
+    names no file is refused, with what LTspice reads
+    (``deck_staging.library_read``)."""
     findings = []
-    for card, section in _sectioned_libs(context):
+    for reference in context.reached_models.unread_libraries:
+        if reference.read.rule_id != rule.rule_id or reference.path != context.path:
+            continue
         findings.append(
             _finding(
                 context,
                 rule,
-                line=card.line_start,
-                subject=section,
-                evidence={
-                    "directive": card.body,
-                    "reason": (
-                        "LTspice has no library sections: it reads the rest of the "
-                        "line as one file name and stops when no such file exists. "
-                        "Include the file the section's models are in, or a copy "
-                        "holding only that section."
-                    ),
-                },
+                line=reference.card.line_start,
+                subject=reference.raw_path,
+                evidence={"directive": reference.card.body, "reason": reference.read.unread},
             )
         )
     return findings
+
+
+def _lib_read_nothing_ngspice(
+    context: _LintContext,
+    rule: LintRule,
+) -> list[LintFinding]:
+    """A ``.lib`` card naming no section from which ngspice, in the run's
+    mode, reads nothing (``deck_staging.library_read``): native and hsa
+    ngspice stop on it, and a mode that reads ``.lib`` as an include drops
+    every card of a file that declares sections, after which some builds run
+    on without them and others stop (``deck_staging.AFTER_A_MISSING_INCLUDE``).
+    In the deck or in any file it reaches."""
+    return [
+        _finding(
+            context,
+            rule,
+            line=reference.card.line_start,
+            file=reference.path,
+            subject=reference.raw_path,
+            evidence={
+                "directive": reference.card.body,
+                "ngbehavior": context.library_reader.mode,
+                "reason": reference.read.unread,
+            },
+        )
+        for reference in context.reached_models.unread_libraries
+        if reference.read.rule_id == rule.rule_id
+    ]
 
 
 def _model_missing(
@@ -643,14 +688,27 @@ def _declared_models(cards: list[SpiceCard]) -> set[str]:
     }
 
 
+class _UnreadLibrary(NamedTuple):
+    """An include or library card from which the deck's reader reads
+    nothing (``deck_staging.library_read``), in the file at ``path``."""
+
+    path: Path
+    card: SpiceCard
+    raw_path: str
+    read: LibraryRead
+    section: str | None = None
+
+
 class _ReachedModels(NamedTuple):
     """The models a deck reaches through its include references; whether
     every include card on the way could be read, so that they are all of
-    them; and those in a live file that could not."""
+    them; those in a live file that could not; and each card from which the
+    reader reads nothing, with why."""
 
     declared: set[str]
     complete: bool
     unread: list[tuple[Path, SpiceCard, SpiceLexError]]
+    unread_libraries: list[_UnreadLibrary]
 
 
 def _models_from_staged_dependencies(context: _LintContext) -> _ReachedModels:
@@ -676,6 +734,8 @@ def _models_from_staged_dependencies(context: _LintContext) -> _ReachedModels:
     declared: set[str] = set()
     complete = True
     unread: list[tuple[Path, SpiceCard, SpiceLexError]] = []
+    unread_libraries: list[_UnreadLibrary] = []
+    reader = context.library_reader
     snapshot: dict[Path, list[SpiceCard]] = {
         file.path.resolve(strict=False): file.cards for file in context.files[1:]
     }
@@ -683,7 +743,12 @@ def _models_from_staged_dependencies(context: _LintContext) -> _ReachedModels:
     visited: set[tuple[Path, str | None]] = set()
 
     def walk(
-        cards: list[SpiceCard], source: Path, depth: int, selected: str | None, *, live: bool
+        cards: list[SpiceCard],
+        source: Path,
+        depth: int,
+        referrer: tuple[Path, IncludeReference] | None,
+        *,
+        live: bool,
     ) -> None:
         nonlocal complete
         if blocked := unreadable_references(cards):
@@ -699,21 +764,24 @@ def _models_from_staged_dependencies(context: _LintContext) -> _ReachedModels:
         # the library-context bit (0 = the deck itself, nonzero = a file
         # reached by following a reference). Keep the two separate.
         context_depth = min(depth, 1)
-        if selected is not None:
-            # ``.lib file section`` reads no other section's cards
-            # (``deck_staging.in_other_section``).
-            sections = card_sections(cards, source, context_depth)
-            cards = [
-                card
-                for card, owner in zip(cards, sections, strict=True)
-                if not in_other_section(owner, selected)
-            ]
+        # What the card that pulls the file in brings in: one section's cards,
+        # the whole file, or nothing (``deck_staging.library_read``).
+        sections = card_sections(cards, source, context_depth)
+        read = library_read(referrer[1] if referrer else None, sections, reader)
+        if read.unread is not None and referrer is not None:
+            path, reference = referrer
+            unread_libraries.append(
+                _UnreadLibrary(path, reference.card, reference.raw_path, read, reference.section)
+            )
+        cards = [card for card, owner in zip(cards, sections, strict=True) if read.reads(owner)]
         declared.update(_declared_models(cards))
         # A file at the limit is read for its own models, as staging stages it,
         # and what it pulls in is not followed.
         if depth >= DEFAULT_INCLUDE_DEPTH:
             return
-        for reference in scan_include_references(cards, source, depth=context_depth):
+        for reference in scan_include_references(
+            cards, source, family=reader.family, depth=context_depth
+        ):
             dependency = resolve_reference(source.parent, reference.raw_path)
             try:
                 resolved = dependency.resolve(strict=False)
@@ -725,15 +793,21 @@ def _models_from_staged_dependencies(context: _LintContext) -> _ReachedModels:
             if resolved in snapshot:
                 # A staged copy is read from its snapshot, never from disk.
                 reached.add(resolved)
-                walk(snapshot[resolved], resolved, depth + 1, reference.section, live=False)
+                walk(snapshot[resolved], resolved, depth + 1, (source, reference), live=False)
                 continue
             if not resolved.is_file():
+                missing = library_read(reference, None, reader)
+                unread_libraries.append(
+                    _UnreadLibrary(
+                        source, reference.card, reference.raw_path, missing, reference.section
+                    )
+                )
                 continue
             try:
                 nested = lex(read_spice_text(resolved)).cards
             except (OSError, UnicodeError, ValueError):
                 continue
-            walk(nested, resolved, depth + 1, reference.section, live=True)
+            walk(nested, resolved, depth + 1, (source, reference), live=True)
 
     walk(context.cards, context.path, 0, None, live=False)
     for staged_path, cards in snapshot.items():
@@ -744,7 +818,7 @@ def _models_from_staged_dependencies(context: _LintContext) -> _ReachedModels:
         # reference nested inside it.
         visited.add((staged_path, None))
         walk(cards, staged_path, 1, None, live=False)
-    return _ReachedModels(declared, complete, unread)
+    return _ReachedModels(declared, complete, unread, unread_libraries)
 
 
 def _arity_check(
@@ -779,7 +853,9 @@ def _include_relative(
     rule: LintRule,
 ) -> list[LintFinding]:
     findings = []
-    for reference in scan_include_references(context.cards, context.path):
+    for reference in scan_include_references(
+        context.cards, context.path, family=context.library_reader.family
+    ):
         if is_absolute_reference(reference.raw_path):
             continue
         findings.append(
@@ -1247,6 +1323,17 @@ RULES: tuple[LintRule, ...] = (
     # in the log, which a warning under the default lint mode does not stop.
     LintRule("meas-trig-degrees", "blocking", _meas_trig_degrees, family="ltspice"),
     LintRule("lib-section-ngspice", "blocking", _lib_section_ngspice, family="ngspice"),
+    # Blocking: native and hsa ngspice stop on a .lib that names no section,
+    # and a mode that reads .lib as an include drops every card of a file
+    # that declares sections. ngspice-42 then runs on without them, a wrong
+    # number with only a missing-include line in the log; ngspice-45 stops on
+    # the missing include. Refused before the run for either build.
+    LintRule(
+        "lib-without-section-ngspice", "blocking", _lib_read_nothing_ngspice, family="ngspice"
+    ),
+    LintRule(
+        "lib-sections-dropped-ngspice", "blocking", _lib_read_nothing_ngspice, family="ngspice"
+    ),
     # Blocking: LTspice refuses each of these decks before it runs, or, on XVII
     # for a .meas function or name, fails the measurement the caller asked for.
     LintRule("analysis-count-ltspice", "blocking", _analysis_count_ltspice, family="ltspice"),

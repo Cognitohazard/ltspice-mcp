@@ -15,6 +15,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+import numpy as np
+from numpy.typing import ArrayLike, NDArray
+
 from ltspice_mcp.lib.raw_header import RawPlotHeader, leading_parameters
 
 Analysis = Literal[
@@ -81,6 +84,45 @@ def sampled_axis(analysis: Analysis, first_type: str) -> tuple[str, str] | None:
         return "frequency", "swept_f1" if analysis == "disto" else "frequency"
     if analysis == "dc":
         return "swept_variable", "sweep"
+    return None
+
+
+def imaginary_not_data(imaginary: ArrayLike) -> bool:
+    """Whether every one of a sampled axis's imaginary parts is one no
+    simulator computed as a coordinate: zero, or a subnormal number, whose
+    exponent field is zero.
+
+    ngspice 42 (the Ubuntu package ``42+ds-3build1`` on Linux x86-64) writes
+    the frequency of every AC plot as a complex number whose imaginary part is
+    about 4.6e-310 at every point, a different value on each run, in binary
+    and in ASCII raw files alike: measured over an RC sweep by decade, an RLC
+    sweep in linear steps, a biased diode by octave, and a linear sweep from 0
+    Hz, whose first point has a real part of 0. The bits are those of a heap
+    address (``0x0000_55xx_xxxx_x104``), read as a double; an address of a
+    64-bit process is below 2**52, so it always reads as a subnormal. Every
+    recorded LTspice 26 and XVII AC and FRA axis holds an imaginary part of
+    exactly 0 (``tests/test_ngspice_ac_axis.py``). Setting a subnormal aside
+    moves a coordinate by less than 2.3e-308, so no reply shows a different
+    number. A normal, infinite or NaN imaginary part can be a coordinate,
+    and is kept.
+    """
+    values = np.asarray(imaginary)
+    dtype = values.dtype if np.issubdtype(values.dtype, np.floating) else np.float64
+    return bool(np.all(np.abs(values) < np.finfo(dtype).tiny))
+
+
+def axis_coordinates(axis: ArrayLike) -> NDArray | None:
+    """The coordinates of a sampled axis as stored: the axis itself when it is
+    real, its real part when every imaginary part is one no simulator computed
+    (:func:`imaginary_not_data`), and None when one can be a coordinate. The
+    one answer to whether an axis is real: the decoder's ``real_coordinates``,
+    every reader of an axis (``raw_parser.real_axis``) and the result digest
+    ask it."""
+    values = np.asarray(axis)
+    if not np.iscomplexobj(values):
+        return values
+    if imaginary_not_data(np.imag(values)):
+        return np.real(values)
     return None
 
 

@@ -175,10 +175,10 @@ returns all of it:
   for every recipe, so `result["results"][key]` never raises for a recipe
   that failed: its rows are empty and a `No rows:` warning names the
   `failures` places that explain it.
-- `verify_circuit` returns every finding for each rule. The MCP tool lists at
-  most 25 findings of a rule and gives a rule with more a `findings_omitted`
-  entry, whose cursor `findings_cursor` takes to list the next ones; the
-  method takes `findings_cursor` only with `raw_page=True`.
+- `verify_circuit` returns every finding. The MCP tool sends them all when
+  its reply fits the reply target, and otherwise stores the complete answer
+  and cuts the findings, read on with `findings_cursor`; the method takes
+  `findings_cursor` only with `raw_page=True`.
 - `edit_schematic` applies the batch once and returns its views whole. The
   views are built inside the edit from the sheet it wrote, whose hash is the
   returned `sha256`, so a later edit by another session cannot appear in them.

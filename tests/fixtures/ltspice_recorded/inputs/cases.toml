@@ -119,7 +119,7 @@ extra = ["connectivity/res.asy"]
 
 [behaviour.net-naming]
 summary = "The name a node gets: a label, ground over a label, one of two labels, labels of one name on separate wires, labels whose names differ only in case, a GND label in any case, N001 for an unlabelled net, NC_01 for an unconnected pin, and a label touching nothing."
-model = ["lib/connectivity.py", "lib/schematic_ops.py", "lib/netlist_graph.py", "lib/pin_legend.py", "lib/trace_names.py"]
+model = ["lib/connectivity.py", "lib/schematic_ops.py", "lib/netlist_graph.py", "lib/pin_legend.py", "lib/trace_names.py", "lib/export_nets.py"]
 inputs = [
     "connectivity/two_labels_zeta_first.asc",
     "connectivity/two_labels_alpha_first.asc",
@@ -228,7 +228,7 @@ extra = ["export/hier_amp.asc", "export/hier_amp.asy", "export/hier_plain.asc", 
 
 [behaviour.block-sheet-search]
 summary = "Where a build finds a hierarchical block's own sheet when it is not beside the block's symbol: beside the sheet exported, beside a block's sheet that places it, in a folder of the symbol search path, or in a folder under one; which it takes when one is beside the sheet exported and another beside the symbol; what it exports when there is none; and whether it finds a symbol in a folder under the search path."
-model = ["lib/symbol_library.py", "lib/schematic_ops.py", "lib/deck_prep.py"]
+model = ["lib/symbol_library.py", "lib/schematic_ops.py", "lib/deck_prep.py", "lib/netlist_diff.py"]
 # Each case exports blocks/top.asc, which places the block blk, or
 # blocks/nest_top.asc, whose block outer places blk on its own sheet, with
 # blk.asy and blk.asc in other places. The symbol search path is the case's
@@ -341,6 +341,10 @@ model = ["lib/schematic_scene.py", "lib/sheet_findings.py", "lib/schematic_rende
 # Each [[case]] of kind "draw" opens its sheet in the window and has the window
 # write an image of it; see drive_draw. Each sheet starts with the two longest
 # wires it holds, which give the scale from the image's units to sheet units.
+
+[behaviour.sheet-drawing-other-text]
+summary = "What else a build draws on a part: SpiceLine, SpiceLine2 and SpiceModel text through visible WINDOW 39, 40 and 38 lines, a window at the symbol's origin and one at size 0, two attributes at one point drawn over each other, a symbol's own value when the part gives none, nothing for a value written as \"\", and a symbol's own TEXT line and its pin names."
+model = ["lib/schematic_scene.py", "lib/sheet.py", "lib/asc_document.py", "lib/sheet_findings.py", "lib/schematic_renderer.py", "tools/verify.py"]
 
 # ---------------------------------------------------------------- decks
 
@@ -570,7 +574,13 @@ inputs = [
 
 [behaviour.deck-includes]
 summary = "How .include and .lib are resolved: a file beside the deck, and a .lib that names a section."
-model = ["lib/deck_staging.py", "lib/lint_rules.py", "lib/runner_base.py"]
+model = [
+    "lib/deck_staging.py",
+    "lib/lint_rules.py",
+    "lib/runner_base.py",
+    "lib/hierarchy.py",
+    "lib/netlist_graph.py",
+]
 inputs = ["deck/lib_section.cir", "deck/include_relative.cir"]
 extra = ["deck/corners.lib", "deck/models.inc"]
 
@@ -1067,7 +1077,7 @@ keep = ["log"]
 
 [behaviour.log-meas-name-punctuation]
 summary = "Whether a .meas named with a dot (t.rise) or a dash (t-fall) is taken, and how the log prints its name."
-model = ["lib/log_parser.py", "lib/spice_lex_views.py"]
+model = ["lib/log_parser.py", "lib/log_conditions.py", "lib/spice_lex_views.py"]
 inputs = ["log/meas_name_dot.cir", "log/meas_name_dash.cir"]
 keep = ["log"]
 
@@ -1091,10 +1101,31 @@ inputs = ["deck/params_no_space.cir"]
 
 [behaviour.lib-path-with-space]
 summary = "Whether a .lib path holding a space is read as one path, unquoted and quoted."
-model = ["lib/deck_staging.py", "lib/lint_rules.py"]
+model = [
+    "lib/deck_staging.py",
+    "lib/lint_rules.py",
+    "lib/runner_base.py",
+    "lib/hierarchy.py",
+    "lib/netlist_graph.py",
+]
 # load.lib holds a 2k subcircuit: 1 A into it gives v(a) 2000 if the file is read.
 inputs = ["deck/lib_path_space_unquoted.cir", "deck/lib_path_space_quoted.cir"]
 extra = ["deck/spaced folder/load.lib"]
+
+[behaviour.lib-whole-sectioned]
+summary = "What a build reads of a file that declares sections, named by a .lib with no section: every card, the cards outside every section, or none."
+model = ["lib/deck_staging.py"]
+# sections.lib sets rout outside every section, rtt in section tt and rff in
+# section ff. Each deck reads one of them through 1 A: v(a) is its value if
+# that card is read, and there is no raw if it is not (or the line is
+# refused). The server reads every card (``deck_staging.library_read``).
+inputs = [
+    "deck/lib_whole_sectioned_rout.cir",
+    "deck/lib_whole_sectioned_rtt.cir",
+    "deck/lib_whole_sectioned_rff.cir",
+]
+extra = ["deck/sections.lib"]
+pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.meas-subckt-node]
 summary = "Whether a .meas reads a node inside a subcircuit instance XAMP, named xamp:mid and amp:mid, on the build's default settings and with subcircuit node voltages saved."
@@ -1730,6 +1761,43 @@ kind = "run"
 source = "export/load_name_tran.asc"
 extra = ["export/res.asy", "benchmark/voltage.asy"]
 keep = ["net", "raw"]
+
+# R1 shows its SpiceLine, SpiceLine2 and SpiceModel through windows of its
+# own, and R2, turned, its SpiceLine.
+[[case]]
+id = "draw/attribute_windows"
+behaviour = "sheet-drawing-other-text"
+kind = "draw"
+source = "draw/attribute_windows.asc"
+extra = ["export/res.asy"]
+
+# Sources with their Value2 and SpiceLine windows at the symbol's origin, as
+# LTspice writes them on most of its own example sheets: V1 at size 2, V2 at
+# size 0, V3 with both attributes written as "", and V4's Value2 at an offset.
+[[case]]
+id = "draw/value2_at_origin"
+behaviour = "sheet-drawing-other-text"
+kind = "draw"
+source = "draw/value2_at_origin.asc"
+extra = ["benchmark/voltage.asy"]
+
+# U1 gives no Value or SpiceModel of its own, so its symbol's LT1001 and
+# DEFMOD are the part's; U2 gives its own Value. R3 writes its Value,
+# SpiceModel and SpiceLine2 as "", each through a visible window.
+[[case]]
+id = "draw/attribute_defaults"
+behaviour = "sheet-drawing-other-text"
+kind = "draw"
+source = "draw/attribute_defaults.asc"
+extra = ["draw/defaulted.asy", "export/res.asy"]
+
+# A cell whose symbol draws a TEXT line, CELL, and names its two pins.
+[[case]]
+id = "draw/symbol_text"
+behaviour = "sheet-drawing-other-text"
+kind = "draw"
+source = "draw/symbol_text.asc"
+extra = ["draw/labelled_cell.asy"]
 
 # A part named without its element letter, on a sheet that runs. The two
 # resistors differ, so each current in the raw says which part it is.

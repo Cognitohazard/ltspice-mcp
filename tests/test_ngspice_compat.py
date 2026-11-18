@@ -26,6 +26,7 @@ from ltspice_mcp.lib.ngspice_compat import (
     drops_lib_sections,
     multiplies_m,
     reads_lib_as_includes,
+    signed_power,
 )
 from ltspice_mcp.lib.ngspice_mode import flags_for, run_batch
 from ltspice_mcp.lib.runner_base import _is_ngspice_lib_section_failure
@@ -138,7 +139,7 @@ def test_every_reader_of_a_mode_reads_a_lib_section_as_ngspice_does(tmp_path: Pa
     classified = _is_ngspice_lib_section_failure(deck, NGspiceSimulator, mode)
     assert (classified is not None) is as_includes
     if drops:
-        with pytest.raises(NetlistError, match="sectioned libraries"):
+        with pytest.raises(NetlistError, match=r"two plain includes|does not read \.lib"):
             load_hierarchy(str(deck), [tmp_path], SemanticProfile("ngspice", mode))
     else:
         load_hierarchy(str(deck), [tmp_path], SemanticProfile("ngspice", mode))
@@ -167,6 +168,39 @@ def test_every_reader_of_a_mode_multiplies_m_as_ngspice_does(tmp_path: Path, mod
     (row,) = [row for row in hierarchy.instances if row.instance == ("XA", "R1")]
     assert row.multiplier is not None
     assert row.multiplier.value == built
+
+
+@needs_ngspice
+@pytest.mark.parametrize("mode", MODES)
+def test_every_reader_of_a_mode_takes_a_power_as_ngspice_does(tmp_path: Path, mode: str):
+    """``(-2)^3`` is -8 where ngspice keeps a negative base's sign, 8 where it
+    takes the power of the magnitude; the evaluator resolves it only in the
+    first case, to ngspice's value."""
+    from ltspice_mcp.lib.hierarchy_expr import evaluate
+
+    log = run_batch(
+        ("ngspice",),
+        mode,
+        b"* power\n.param x={(-2)^3}\nV1 a 0 {x}\nR1 a 0 1\n.op\n"
+        b".control\nop\nprint v(a)\n.endc\n.end\n",
+        cwd=tmp_path,
+        clean_startup=True,
+        timeout=LIVENESS_S,
+    )
+    printed = re.search(r"v\(a\)\s*=\s*(\S+)", log)
+    assert printed is not None, log
+    computed = float(printed[1])
+    assert computed in (8.0, -8.0), log
+    assert signed_power(mode) is (computed == -8.0)
+
+    def no_names(name: str) -> float:
+        raise ValueError(name)
+
+    if signed_power(mode):
+        assert evaluate("(-2)^3", no_names, simulator="ngspice", ngbehavior=mode) == computed
+    else:
+        with pytest.raises(ValueError, match="magnitude"):
+            evaluate("(-2)^3", no_names, simulator="ngspice", ngbehavior=mode)
 
 
 #: The flags a scan can tell in source: ``a`` is too common a string.

@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 
 from ltspice_mcp.lib import runner_base
+from ltspice_mcp.lib.deck_staging import LibraryReader
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.log_decode import LogLimits, decode_logs
 from ltspice_mcp.lib.parser_capture import SourceFiles, capture_inputs
@@ -47,7 +48,7 @@ def test_deck_snapshot_keeps_original_analyses_under_control(tmp_path, kind):
     deck = tmp_path / "test.cir"
     deck.write_text('* t\n.include "analysis.inc"\n.control\nrun\n.endc\n.end\n', encoding="ascii")
 
-    requirements = runner_base.deck_requirements(deck)
+    requirements = runner_base.deck_requirements(deck, reader=LibraryReader("ngspice", "kiltpsa"))
 
     assert requirements.analyses == (f".{kind}",)
     assert requirements.has_save is True
@@ -60,12 +61,15 @@ def test_deck_snapshot_is_frozen_deduplicated_and_stops_at_end(tmp_path):
     deck.write_text(
         "* t\n.TRAN 1u 1m\n.tran 2u 2m\n.op\n.end\n.ac dec 10 1 10\n", encoding="ascii"
     )
-    requirements = runner_base.deck_requirements(deck)
+    requirements = runner_base.deck_requirements(deck, reader=LibraryReader("ngspice", "kiltpsa"))
     assert requirements.analyses == requirements.raw_analyses == (".tran", ".op")
     assert requirements.has_save is requirements.has_control is False
     with pytest.raises(AttributeError):
         requirements.has_control = True  # pyright: ignore[reportAttributeAccessIssue]
-    assert runner_base.deck_requirements(None).analyses == ()
+    assert (
+        runner_base.deck_requirements(None, reader=LibraryReader("ngspice", "kiltpsa")).analyses
+        == ()
+    )
 
 
 def test_classifier_uses_snapshot_after_source_deleted(tmp_path, monkeypatch):

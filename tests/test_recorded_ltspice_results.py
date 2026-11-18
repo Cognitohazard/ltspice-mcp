@@ -3101,22 +3101,19 @@ def test_a_bsim3_device_table_gives_charge_derivatives_not_capacitances(
         assert table[name] == pytest.approx(capacitance, rel=0.01), name
 
 
-#: XVII writes the collapse of a time step after its operating point on one
-#: line, ``Heightened Def Con from <time> ++++...`` followed by its ``Fatal
-#: Error: Analysis: Time step too small``; the server's rule reads that error
-#: only at the start of a line, so it extracts no error from the log.
-DEF_CON_LINE_MISSED_BY_THE_CLASSIFIER = ("execution_failed", None)
-
-
 @pytest.mark.parametrize("build", rec.BUILDS)
 def test_a_time_step_that_collapses_part_way(build: str):
     """LTspice 26 warns that it relaxed its tolerance from 5 us, then fails with
     "Convergence Failure: Time step too small; time = 5e-06" and "Simulation
-    Failed: Iteration limit reached". Both keep the raw up to 5 us."""
+    Failed: Iteration limit reached". XVII writes its fatal error on the line of
+    its "Heightened Def Con" progress, with no line break between them, and the
+    error is read as on a line of its own. Both are a convergence failure, and
+    both keep the raw up to 5 us."""
     case_id = "log/timestep_collapse_mid"
     assert rec.entry(build, case_id)["exit_code"] == 1
     text = read_log_text(rec.recorded(build, f"{case_id}.log"))
     diagnostics = extract_log_diagnostics(rec.recorded(build, f"{case_id}.log"))
+    assert classify_failure_code(diagnostics["errors"])[0] == "convergence_failed"
     if rec.generation(build) == "xvii":
         (line,) = [line for line in text.splitlines() if "Def Con" in line]
         assert re.fullmatch(
@@ -3124,14 +3121,11 @@ def test_a_time_step_that_collapses_part_way(build: str):
             r'time = 5e-006, timestep = 1\.25e-019: trouble with node "a"',
             line,
         ), line
-        assert (
-            classify_failure_code(diagnostics["errors"]) == DEF_CON_LINE_MISSED_BY_THE_CLASSIFIER
-        )
+        assert diagnostics["errors"] == [line[line.index("Fatal Error:") :]]
     else:
         assert "Def Con" not in text
         assert "Simulation tolerance relaxed to achieve convergence from" in text
         assert "Convergence Failure:  Time step too small; time = 5e-06" in text
-        assert classify_failure_code(diagnostics["errors"])[0] == "convergence_failed"
 
 
 #: The device table's name for D1 inside the block placed as U1, by build:

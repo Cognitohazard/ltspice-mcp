@@ -40,6 +40,7 @@ from ltspice_mcp.lib.raw_header import (
 from ltspice_mcp.lib.result_kinds import (
     STEPPED_SWEEP,
     Analysis,
+    axis_coordinates,
     header_analysis,
     sampled_axis,
     stepped_kind,
@@ -399,9 +400,9 @@ def _validated_step_starts(
         previous = None
         for offset in range(start, end, _CHUNK_BYTES):
             block = data[offset : min(offset + _CHUNK_BYTES, end)]
-            if np.iscomplexobj(block) and np.any(np.imag(block) != 0):
+            coordinate = axis_coordinates(block)
+            if coordinate is None:
                 return None
-            coordinate = np.real(block)
             if time_signs:
                 # Validate native LT time ordering on a bounded temporary;
                 # retain stored signs and Offset unchanged in output arrays.
@@ -661,7 +662,14 @@ def _windowed(
     kept_ranges: list[dict[str, Any]] = []
     for part in ranges:
         begin = part["offset"]
-        values = first[begin : begin + part["length"]]
+        values = axis_coordinates(first[begin : begin + part["length"]])
+        if values is None:
+            raise WindowRefusedError(
+                f"window={window.text()} keeps a span of plot {plot.index}'s axis, and the "
+                "axis has an imaginary part that can be a coordinate, so no span of its "
+                "real part is one stretch of it. Read it without window, choosing signals "
+                "if it is too large to read whole."
+            )
         try:
             lo, hi = window_span(values, window.start, window.end, coordinate=coordinate)
         except UnorderedAxisError as exc:
@@ -679,8 +687,8 @@ def _windowed(
             where = f"step {part['step_index']}'s " if stepped else ""
             raise WindowRefusedError(
                 f"window={window.text()} keeps no point of plot {plot.index}: "
-                f"{where}axis runs from {float(np.real(ends[0])):g} to "
-                f"{float(np.real(ends[1])):g}. Choose a window that meets "
+                f"{where}axis runs from {float(ends[0]):g} to "
+                f"{float(ends[1]):g}. Choose a window that meets "
                 f"{'every step' if stepped else 'it'}."
             )
         kept_ranges.append(

@@ -156,12 +156,20 @@ X1 input output myfilter rval=1k cval=1n
   `name=value` after the nodes.
 - `.lib` loading depends on ngspice's compatibility mode, and no single `.lib`
   form works in every mode, so to include a whole file unconditionally use
-  `.include <file>`, which resolves in every mode. If you use `.lib`:
+  `.include <file>`, which resolves in every mode for a file with no
+  `.lib <section>` lines of its own (on a file with sections, native and `hsa`
+  stop and `kiltpsa` drops the file, and `run_experiments` refuses the deck).
+  If you use `.lib`:
   - **ngspice-native modes** (`hsa`, plain default): `.lib <file> <section>`
-    loads only that `.lib section … .endl` block; a bare `.lib <file>` with no
-    section does not load the file's models.
+    loads only that `.lib section … .endl` block, not the cards outside every
+    section; a bare `.lib <file>` with no section stops ngspice
+    ("unimplemented dot command '.lib'"), and `run_experiments` refuses it
+    (lint `lib-without-section-ngspice`).
   - **This server's default `kiltpsa`** (a mixed LTspice/PSPICE-compatibility
-    mode) inverts this. A bare `.lib <file>` loads an unsectioned file, but a
+    mode) inverts this. A bare `.lib <file>` loads an unsectioned file whole;
+    on a file that declares sections it reads none of the file's cards, and
+    depending on the build the run either stops or goes on without them (lint
+    `lib-sections-dropped-ngspice`). A
     sectioned `.lib <file> <section>` (the PDK corner idiom) is split by the
     `lt`/`ps` flags into two plain includes that drop the section.
     `run_experiments` refuses such a deck (lint `lib-section-ngspice`); run
