@@ -2301,6 +2301,10 @@ async def operating_point(
         op_data["device_op_significant_digits"] = DEVICE_OP_TABLE_DIGITS
     # A device inside a subcircuit is named differently in the table and in
     # the raw, and differently on each build: say which names are one device.
+    # The table is read with the raw writer's spelling: both are one run's,
+    # and the raw names its writer. api.device_op_points has the log alone
+    # and reads the build its first line names (device_names.table_naming);
+    # the two differ only for a raw and a log of different runs.
     if names := device_names(table, op_data.get("currents", {}), xvii=xvii):
         op_data["device_names"] = names
 

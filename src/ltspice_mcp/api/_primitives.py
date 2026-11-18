@@ -534,6 +534,8 @@ async def load_device_op_points(
     source = await _log_source(state, job_id, run_index, case_id, log_path)
     logs = await services.load_logs(source, state)
     section = logs.value("device_op")
+    # A log has no raw to name its writer, as the operating-point recipe
+    # reads one (metrics): the job's record, else the log's own first line.
     writer = services.source_producer(source)
     # The banner on the log's own first line, read apart from every decoded
     # section, so the keys never turn on another section's read.
