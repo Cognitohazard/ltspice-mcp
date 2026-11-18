@@ -480,3 +480,17 @@ async def test_diff_vs_prior_names_no_pin_for_a_move_between_numbered_nets(
         line.startswith("connections: the two exports are wired otherwise")
         for line in diff["not_compared"]
     )
+
+
+async def test_diff_vs_prior_does_not_move_a_resistor_whose_card_lists_its_nodes_reversed(
+    config, work_dir, asc_symbols, monkeypatch
+):
+    before = "* d\nV1 en 0 1\nRS N001 en 1k\nD1 N001 N003 DD\nD2 N001 0 DD\nR3 N003 0 1k\n.end\n"
+    after = before.replace("RS N001 en", "RS en N001").replace("D1 N001 N003", "D1 N003 N001")
+    monkeypatch.setattr(vc, "_create_netlist", _exporter_writing([after]))
+    state = _with_ltspice(config)
+    asc = _write(work_dir, "r.asc", _RES_ASC)
+    _write(work_dir, "r.net", before)
+    data = await _run(state, path=str(asc), checks=["export"], export_to="sidecar")
+    moved = data["export"]["diff_vs_prior"].get("connections_changed", [])
+    assert [row["reference"] for row in moved] == []

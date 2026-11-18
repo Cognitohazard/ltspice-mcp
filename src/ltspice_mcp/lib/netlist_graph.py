@@ -147,7 +147,7 @@ _GROUND = GROUND
 # Their pins share one role so a resistor authored "backwards" (b a instead of
 # a b) is still recognized as the same connection. Everything else keeps pin
 # order: a MOSFET's D/G/S/B, a source's +/-, a diode's anode/cathode all matter.
-_SYMMETRIC_TWO_TERMINAL: frozenset[str] = frozenset({"R", "C", "L"})
+SYMMETRIC_TWO_TERMINAL: frozenset[str] = frozenset({"R", "C", "L"})
 
 # How deep the walk follows files that pull in other files. Which file and
 # section a directive names, whether a ``.lib`` inside a library declares a
@@ -660,7 +660,7 @@ def _tokens_equal(a: str, b: str, rtol: float) -> bool:
 def _pin_role(type_letter: str, index: int) -> int:
     """Structural role of a terminal: collapse symmetric passive pins, else keep
     order. Two-terminal R/C/L pins share role 0; every other device is ordered."""
-    if type_letter in _SYMMETRIC_TWO_TERMINAL:
+    if type_letter in SYMMETRIC_TWO_TERMINAL:
         return 0
     return index
 
@@ -1897,7 +1897,7 @@ def _propagate_partition(
         rc, cc = ref_by_ref[key], cand_by_ref[key]
         if len(rc.nodes) != len(cc.nodes):
             continue
-        if rc.type_letter in _SYMMETRIC_TWO_TERMINAL and len(rc.nodes) == 2:
+        if rc.type_letter in SYMMETRIC_TWO_TERMINAL and len(rc.nodes) == 2:
             symmetric.append((rc, cc))
         else:
             ordered.append((rc, cc))

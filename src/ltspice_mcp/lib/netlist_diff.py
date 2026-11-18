@@ -62,6 +62,7 @@ from ltspice_mcp.lib.export_nets import named_by_export
 from ltspice_mcp.lib.format import fold_micro_sign
 from ltspice_mcp.lib.netlist_graph import (
     DIRECTIVE_CARD_KINDS,
+    SYMMETRIC_TWO_TERMINAL,
     FlatCall,
     NetlistGraph,
     canon_ref,
@@ -525,7 +526,7 @@ def structural_delta(baseline: Deck, compared: Deck) -> dict[str, list]:
             sides.setdefault(key, ("/".join((*_names(deck, key[:-1]), name)), []))[1].append(side)
     not_compared = [
         f".subckt {label} is defined more than once in one scope in the "
-        f"{' and '.join(where)} deck, so no definition of that name there was "
+        f"{' and '.join(where)} deck{'s' if len(where) > 1 else ''}, so no definition of that name there was "
         "compared on either side"
         for _key, (label, where) in sorted(sides.items())
     ]
@@ -587,8 +588,9 @@ def connection_delta(
     ``not_compared`` says the wiring differs there. An entry is the part (its
     path in the flattened circuit, ``X1.M2`` inside a block), its pin by
     position on the card, counting from 1, and the net before and after, in
-    lower case as the comparison reads a net name. Parts only one side has
-    are the component delta's.
+    lower case as the comparison reads a net name. A resistor, capacitor or
+    inductor on the same nets with its card's two nodes in the other order
+    has not moved. Parts only one side has are the component delta's.
     """
     named = {
         net for comp in baseline.components for net in comp.nodes if not named_by_export(net)
@@ -600,13 +602,26 @@ def connection_delta(
         for mismatch in comparison.node_partition_mismatches
         for ref, pin, before, after in mismatch.pins
     ]
+    # A part whose two terminals are interchangeable, on the same nets with
+    # its card's node order reversed, has moved nowhere.
+    nets: dict[str, tuple[list[str], list[str]]] = {}
+    for ref, _pin, before, after in rows:
+        nets.setdefault(ref, ([], []))[0].append(before)
+        nets[ref][1].append(after)
+    turned = {
+        ref
+        for ref, (before, after) in nets.items()
+        if canon_ref(ref).rsplit(".", 1)[-1][:1].upper() in SYMMETRIC_TWO_TERMINAL
+        and sorted(before) == sorted(after)
+    }
     moved = {
         (canon_ref(ref), pin): {"reference": ref, "pin": pin, "before": before, "after": after}
         for ref, pin, before, after in rows
-        if before != after and (before in anchored or after in anchored)
+        if before != after and (before in anchored or after in anchored) and ref not in turned
     }
     not_compared: list[str] = []
-    unnamed = len(moved) < len(rows) or (
+    named_rows = [row for row in rows if row[0] not in turned]
+    unnamed = len(moved) < len(named_rows) or (
         not rows
         and not comparison.structurally_equivalent
         and not (comparison.added or comparison.removed or comparison.arity_errors)
