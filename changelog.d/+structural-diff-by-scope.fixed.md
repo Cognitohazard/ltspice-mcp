@@ -1,0 +1,1 @@
+`verify_circuit`'s `structural_diff` mode and the export's `diff_vs_prior` now identify each element and directive by its scope (the top level or the `.subckt` it sits in), so two elements with one reference in different subcircuits are no longer read as one, and the reply says what it did not compare.
