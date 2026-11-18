@@ -18,7 +18,7 @@ from tests.test_process_group_kill import _RECORDER, _signals
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="probe")
 
 _PROBE_WAIT = 4.0
-_ROUNDS = 150
+_ROUNDS = 400
 
 
 def proc_err(proc: subprocess.Popen[bytes]) -> str:
@@ -71,7 +71,12 @@ def _one(tmp: Path, variant: str) -> str | None:
 def test_probe_signal_loss(tmp_path: Path):
     misses: list[str] = []
     counts: Counter[str] = Counter()
+    import time
+
+    stop = time.monotonic() + 200
     for i in range(_ROUNDS):
+        if time.monotonic() > stop:
+            break
         for variant in ("kill+kill", "killpg+kill", "killpg,wait,kill"):
             sub = tmp_path / f"{i}-{variant.replace(',', '_').replace('+', '_')}"
             sub.mkdir()
@@ -80,6 +85,7 @@ def test_probe_signal_loss(tmp_path: Path):
             if miss:
                 misses.append(miss)
     summary = Counter(m.split(":")[0] for m in misses)
+    misses.sort(key=lambda m: m.startswith("spurious"))
     pytest.fail(
         f"PROBE {sys.platform}: rounds={dict(counts)} misses={dict(summary)}\n"
         + "\n".join(misses[:12])
