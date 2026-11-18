@@ -1929,7 +1929,7 @@ revision. The export block's `sha256` is the netlist's.
 The layout check reads a part's name, value, Value2, SpiceModel, SpiceLine
 and SpiceLine2 where LTspice draws them, through their windows, with each
 extent estimated from the font's widths rather than measured off its glyphs.
-An attribute written as `""` has no text, and LTspice draws none. A symbol's
+Any of them but the name written as `""` has no text, and LTspice draws none. A symbol's
 own text, its pin names, an attribute in any other window and a value a part
 takes from its symbol are not read, which the layout check's `observations`
 say, and so does a render's.

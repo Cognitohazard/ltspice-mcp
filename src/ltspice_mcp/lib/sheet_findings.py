@@ -1031,7 +1031,10 @@ def _core(extent: BBox) -> BBox:
 def _attribute_texts_across_drawing(ix: _Index) -> list[Finding]:
     # Where the text lies is LTspice's own layout of it, so a part whose symbol
     # was not found has none to report. Each text is compared with the texts
-    # after it: the other attribute texts, then the sheet's own.
+    # after it: the other attribute texts, then the sheet's own. Two attribute
+    # texts at one point are compared too, unlike sheet_text_overlap's texts:
+    # no other rule reports them, and both builds draw them over each other
+    # (draw/value2_at_origin).
     drawn = [
         (index, part, (x, y), text, _core(extent), attribute)
         for index, part in enumerate(ix.view.parts)
@@ -1096,6 +1099,7 @@ def _attribute_texts_across_drawing(ix: _Index) -> list[Finding]:
 def _sheet_texts_across_each_other(ix: _Index) -> list[Finding]:
     # Text at one anchor is stacked_directive's to say (or, for labels, the
     # net rules'), so only texts placed at different points are compared.
+    # attribute_text_overlap has no such rule beside it and compares them.
     return [
         Finding(
             "sheet_text_overlap",
