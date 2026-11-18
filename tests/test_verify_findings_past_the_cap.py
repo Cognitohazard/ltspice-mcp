@@ -297,15 +297,24 @@ async def test_a_missing_stored_answer_is_refused_with_the_fix(state_no_sim, wor
     assert "hint" not in refusal
 
 
-async def test_an_expired_stored_answer_is_refused_with_the_fix(config, work_dir):
-    config.result_set_ttl_hours = -1.0
-    state = SessionState.create(config, available={})
+def _expire(reply: dict[str, Any]) -> None:
+    """Move the stored answer's expiry into the past, as time would."""
+    path = Path(reply["stored_answer"]["path"])
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record["expires_at"] = "2000-01-01T00:00:00+00:00"
+    path.write_text(json.dumps(record), encoding="utf-8")
+
+
+async def test_an_expired_stored_answer_is_refused_with_the_fix(state_no_sim, work_dir):
+    state = state_no_sim
     deck = _netlist(work_dir, OVER)
     first = await dispatched(state, "verify_circuit", path=str(deck))
+    _expire(first)
 
     refusal = await _refusal(state, deck, first["cut"]["/findings"]["next"])
 
     assert "expired" in refusal["error"]
+    assert "hint" not in refusal
     assert "again without findings_cursor" in refusal["error"]
     assert not _stored_file_exists(first)
 

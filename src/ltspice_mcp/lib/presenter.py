@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any
 
 from ltspice_mcp.errors import InvalidCursorError
-from ltspice_mcp.lib import now, parse_iso_datetime
+from ltspice_mcp.lib import now, parse_iso_datetime, read_text_file
 from ltspice_mcp.lib.cursor_codec import CursorError, canonical_hash
 from ltspice_mcp.lib.cursor_codec import decode_cursor as _decode_body
 from ltspice_mcp.lib.cursor_codec import encode_cursor as _encode_body
@@ -307,7 +307,7 @@ def cleanup(store: Store) -> int:
         return 0
     for path in paths:
         try:
-            data = json.loads(path.read_text(encoding="utf-8"))
+            data = json.loads(read_text_file(path))
             if not isinstance(data, dict) or _expired(data):
                 path.unlink()
                 removed += 1
@@ -408,7 +408,7 @@ def present(
     *,
     target: int | None,
     tool: str,
-    snapshot: dict[str, Any],
+    snapshot: dict[str, Any] | Callable[[], dict[str, Any]],
     store: Store,
     ttl_hours: float,
     annotate: Annotate | None = None,
@@ -417,7 +417,8 @@ def present(
     cut its cuttable lists to fit.
 
     ``answer`` is the reply as ``reply_payload`` makes it. A ``target`` of
-    None sends every answer whole.
+    None sends every answer whole. ``snapshot`` may be a function, called
+    only when the answer is stored, so an answer that fits reads nothing.
     """
     if target is None or _size(answer) <= target:
         return Presented(answer, {}, None)
@@ -428,8 +429,10 @@ def present(
     }
     if not sources:
         return Presented(answer, {}, None)
-    stored = _store_answer(store, tool, answer, snapshot, ttl_hours)
-    shown = _present_lists(
+    stored = _store_answer(
+        store, tool, answer, snapshot() if callable(snapshot) else snapshot, ttl_hours
+    )
+    return _present_lists(
         answer,
         sources,
         {},
@@ -439,13 +442,6 @@ def present(
         annotate=annotate,
         paged=None,
     )
-    if not shown.cut:
-        # Within the target once nothing was cut: nothing to read on, so the
-        # stored file serves no cursor.
-        with contextlib.suppress(OSError):
-            stored.path.unlink()
-        return Presented(answer, {}, None)
-    return shown
 
 
 def present_page(
@@ -487,12 +483,16 @@ def present_page(
     )
 
 
-def open_page(text: str, *, tool: str, store: Store, gone: str) -> tuple[StoredAnswer, str, int]:
+def open_page(
+    text: str, schema: Mapping[str, Any], *, tool: str, store: Store, gone: str
+) -> tuple[StoredAnswer, str, int]:
     """The stored answer a cursor reads, with its list's pointer and offset.
 
     ``InvalidCursorError`` for a cursor this module did not write, one for
-    another tool's answer, and one whose stored answer has expired or is
-    missing, which says so and adds ``gone``: how to get a fresh answer.
+    another tool's answer, one naming a list ``schema`` does not let be cut
+    (the codec's checksum is no secret, so any body decodes), and one whose
+    stored answer has expired or is missing, which says so and adds
+    ``gone``: how to get a fresh answer.
     """
     refused = (
         f"{text[:40]!r} is not a cursor this tool returned: pass a cut entry's next unchanged."
@@ -514,7 +514,7 @@ def open_page(text: str, *, tool: str, store: Store, gone: str) -> tuple[StoredA
     path = store.stored_answer(answer_id)
     missing = f"The stored answer {answer_id} is gone: it expired or was removed. {gone}"
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(read_text_file(path))
     except FileNotFoundError:
         raise InvalidCursorError(missing, show_hint=False) from None
     except (OSError, ValueError) as exc:
@@ -527,12 +527,17 @@ def open_page(text: str, *, tool: str, store: Store, gone: str) -> tuple[StoredA
         with contextlib.suppress(OSError):
             path.unlink()
         raise InvalidCursorError(missing, show_hint=False)
-    if data.get("tool") != tool:
+    answer, snapshot = data.get("answer"), data.get("snapshot")
+    if data.get("tool") != tool or not isinstance(answer, dict):
         raise InvalidCursorError(refused)
     stored = StoredAnswer(
-        answer_id, path, tool, dict(data.get("snapshot") or {}), dict(data["answer"])
+        answer_id, path, tool, dict(snapshot) if isinstance(snapshot, dict) else {}, answer
     )
-    whole = resolve_pointer(stored.answer, pointer, default=None)
-    if not isinstance(whole, list) or offset >= len(whole):
+    whole = resolve_pointer(answer, pointer, default=None)
+    if (
+        pointer not in {listed for listed, _ in cuttable_lists(answer, schema)}
+        or not isinstance(whole, list)
+        or offset >= len(whole)
+    ):
         raise InvalidCursorError(refused)
     return stored, pointer, offset

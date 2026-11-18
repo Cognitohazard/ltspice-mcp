@@ -758,8 +758,11 @@ class ServerConfig:
     """Server-side response budget, in estimated tokens, for a consolidated-profile
     call that sets no ``budget`` of its own. It engages only the ladder's trim rung
     — empty presentation blocks and the identity echo — so it can never cut a fact
-    or revoke a detail the caller explicitly asked for. Set 0 to leave every default
-    response undegraded. ``[analysis] default_budget``."""
+    or revoke a detail the caller explicitly asked for. For a tool with no
+    ``budget`` argument (``verify_circuit``) it is the size a reply is presented
+    to: a longer answer is stored whole and its lists cut (``lib/presenter.py``).
+    Set 0 to leave every default response undegraded and send every answer
+    whole. ``[analysis] default_budget``."""
 
     log_level: str = "WARNING"
     """Stderr logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL).

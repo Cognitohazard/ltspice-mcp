@@ -76,7 +76,7 @@ import re
 import shutil
 import uuid
 from collections import Counter
-from collections.abc import AsyncIterator, Collection, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Literal, NamedTuple, TypeAlias
@@ -2849,7 +2849,12 @@ _CHECK_AGAIN = "Call verify_circuit again without findings_cursor to check the f
 def _answer_snapshot(args: VerifyCircuitInput, state: SessionState) -> dict[str, Any]:
     """What a check's answer is computed from, as a stored answer records it:
     the circuit's path and sha256, and the reference's when one is compared.
-    A file that cannot be read has no digest; the check says why."""
+    A file that cannot be read has no digest; the check says why.
+
+    Read after the check, when the answer is stored: a file written between
+    the check's read and this one is stamped with its new digest. The
+    symbols, includes, libraries and export the findings also depend on are
+    not in it, and a page's hint says so."""
     snapshot: dict[str, Any] = {"path": args.path}
     path = sandboxed(args.path, state)
     if path is not None:
@@ -2902,7 +2907,8 @@ def _say_how_to_read_the_rest(
             f"{paged} entries {entry.offset + 1} to {entry.offset + entry.returned} of "
             f"{entry.total}, read from the answer stored for {stored.snapshot.get('path')}"
             f"{when}; compare stored_answer.snapshot with the file to see whether it changed "
-            "since."
+            "since. The snapshot does not cover the symbols, includes, libraries or "
+            "export the findings also read."
         )
     more = {pointer: _left_out(entry) for pointer, entry in cut.items() if entry.next is not None}
     if more:
@@ -2941,7 +2947,9 @@ def _refuse_another_circuit(stored: StoredAnswer, path: str, state: SessionState
 
 
 async def _present_answer(
-    evaluation: VerifyCircuitEvaluation, snapshot: dict[str, Any], state: SessionState
+    evaluation: VerifyCircuitEvaluation,
+    snapshot: Callable[[], dict[str, Any]],
+    state: SessionState,
 ) -> types.CallToolResult:
     """The reply for a complete answer: whole when it fits the reply target,
     else stored and cut by the presenter."""
@@ -2984,10 +2992,14 @@ async def handle_verify_circuit(
     """
     if args.findings_cursor is not None:
         stored, pointer, offset = await open_stored_page(
-            args.findings_cursor, tool="verify_circuit", state=state, gone=_CHECK_AGAIN
+            args.findings_cursor,
+            tool="verify_circuit",
+            schema=_OUTPUT_SCHEMA,
+            state=state,
+            gone=_CHECK_AGAIN,
         )
         _refuse_another_circuit(stored, args.path, state)
-        return present_stored_page(
+        return await present_stored_page(
             stored,
             pointer,
             offset,
@@ -2995,5 +3007,8 @@ async def handle_verify_circuit(
             state=state,
             annotate=_say_how_to_read_the_rest,
         )
-    snapshot = await asyncio.to_thread(_answer_snapshot, args, state)
-    return await _present_answer(await evaluate_verify_circuit(args, state), snapshot, state)
+    evaluation = await evaluate_verify_circuit(args, state)
+    # Read only when the answer is stored, after the check read the files.
+    return await _present_answer(
+        evaluation, functools.partial(_answer_snapshot, args, state), state
+    )

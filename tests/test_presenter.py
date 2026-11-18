@@ -307,7 +307,9 @@ def test_every_page_in_order_rebuilds_each_list(made_up, tmp_path):
         following: str | None = entry.next
         pages = 0
         while following is not None:
-            stored, at, offset = open_page(following, tool="tool", store=store, gone="gone")
+            stored, at, offset = open_page(
+                following, schema, tool="tool", store=store, gone="gone"
+            )
             assert (at, offset) == (pointer, len(read))
             page = present_page(stored, at, offset, schema, target=target)
             assert page.reply["stored_answer"] == stored.as_reply()
@@ -390,7 +392,9 @@ def test_a_missing_stored_answer_is_refused_with_the_fix(tmp_path):
     shown.stored.path.unlink()
 
     with pytest.raises(InvalidCursorError, match="run it again"):
-        open_page(shown.cut["/rows"].next or "", tool="tool", store=store, gone="run it again")
+        open_page(
+            shown.cut["/rows"].next or "", _SCHEMA, tool="tool", store=store, gone="run it again"
+        )
 
 
 def test_an_expired_stored_answer_is_refused_and_removed(tmp_path):
@@ -407,7 +411,9 @@ def test_an_expired_stored_answer_is_refused_and_removed(tmp_path):
     assert shown.stored is not None
 
     with pytest.raises(InvalidCursorError, match="gone"):
-        open_page(shown.cut["/rows"].next or "", tool="tool", store=store, gone="run it again")
+        open_page(
+            shown.cut["/rows"].next or "", _SCHEMA, tool="tool", store=store, gone="run it again"
+        )
     assert not shown.stored.path.exists()
 
 
@@ -416,13 +422,13 @@ def test_a_cursor_for_another_tool_is_refused(tmp_path):
     shown = _presented(_SCHEMA, _big(), store, 400)
 
     with pytest.raises(InvalidCursorError):
-        open_page(shown.cut["/rows"].next or "", tool="other", store=store, gone="again")
+        open_page(shown.cut["/rows"].next or "", _SCHEMA, tool="other", store=store, gone="again")
 
 
 @pytest.mark.parametrize("text", ["", "o:25", "not base64 !"])
 def test_a_cursor_that_is_not_one_is_refused(tmp_path, text):
     with pytest.raises(InvalidCursorError):
-        open_page(text, tool="tool", store=_store(tmp_path), gone="again")
+        open_page(text, _SCHEMA, tool="tool", store=_store(tmp_path), gone="again")
 
 
 def test_an_annotation_is_measured_with_the_reply(tmp_path):
@@ -456,7 +462,9 @@ def test_the_made_up_answers_exercise_the_cut(tmp_path):
     cut = set()
     for name, schema in _SCHEMAS.items():
         answer = _answer(schema)
-        shown = _presented(schema, answer, _store(tmp_path), estimate_tokens(answer) // 3)
+        shown = _presented(
+            schema, answer, _store(tmp_path), estimate_tokens(answer, as_sent=False) // 3
+        )
         if shown.cut:
             cut.add(name)
     assert "verify.handle_verify_circuit" in cut
@@ -478,3 +486,63 @@ async def test_a_reply_that_fits_is_what_format_response_sends(made_up, config):
         format_response(dict(answer)).structured_content
     )
     assert json.dumps(shown.structured_content) == json.dumps(reply_payload(dict(answer)))
+
+
+def test_a_forged_cursor_for_a_list_sent_whole_is_refused(tmp_path):
+    # The codec's checksum is no secret: a body naming a list declared never,
+    # or a list inside an entry, decodes, and is refused as not a cursor.
+    from ltspice_mcp.lib.cursor_codec import encode_cursor
+
+    store = _store(tmp_path)
+    shown = _presented(_SCHEMA, _big(), store, 400)
+    assert shown.stored is not None
+    for pointer in ("/notes", "/rows/0", "/missing"):
+        forged = encode_cursor({"answer": shown.stored.id, "list": pointer, "offset": 0})
+        with pytest.raises(InvalidCursorError, match="not a cursor"):
+            open_page(forged, _SCHEMA, tool="tool", store=store, gone="again")
+
+
+def test_the_sweep_removes_only_the_expired_stored_answers(tmp_path):
+    from ltspice_mcp.lib.presenter import cleanup
+
+    store = _store(tmp_path)
+    kept = _presented(_SCHEMA, _big(), store, 400)
+    expired = present(
+        _big(), _SCHEMA, target=400, tool="tool", snapshot={}, store=store, ttl_hours=-1.0
+    )
+    assert expired.stored is not None and kept.stored is not None
+
+    assert cleanup(store) == 1
+
+    assert not expired.stored.path.exists()
+    assert kept.stored.path.exists()
+
+
+def test_a_snapshot_function_is_read_only_when_the_answer_is_stored(tmp_path):
+    read: list[int] = []
+
+    def snapshot() -> dict[str, Any]:
+        read.append(1)
+        return {"sha256": "f" * 64}
+
+    whole = present(
+        _big(),
+        _SCHEMA,
+        target=None,
+        tool="tool",
+        snapshot=snapshot,
+        store=_store(tmp_path),
+        ttl_hours=1.0,
+    )
+    assert not read and whole.stored is None
+    cut = present(
+        _big(),
+        _SCHEMA,
+        target=400,
+        tool="tool",
+        snapshot=snapshot,
+        store=_store(tmp_path),
+        ttl_hours=1.0,
+    )
+    assert read == [1]
+    assert cut.stored is not None and cut.stored.snapshot == {"sha256": "f" * 64}

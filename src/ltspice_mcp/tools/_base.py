@@ -214,10 +214,7 @@ def reply_target(state: SessionState) -> int | None:
     argument is presented to: ``[analysis] default_budget``, or None (every
     answer whole) when that is 0, or under the Python API's automatic mode,
     which promises complete results."""
-    if _AUTOMATIC_DOOR.get():
-        return None
-    default = state.config.default_budget
-    return default if default > 0 else None
+    return resolve_response_budget(None, state).tokens
 
 
 async def present_reply(
@@ -225,7 +222,7 @@ async def present_reply(
     *,
     tool: str,
     schema: Mapping[str, Any],
-    snapshot: dict[str, Any],
+    snapshot: dict[str, Any] | Callable[[], dict[str, Any]],
     state: SessionState,
     annotate: presenter.Annotate | None = None,
 ) -> types.CallToolResult:
@@ -252,17 +249,17 @@ async def present_reply(
 
 
 async def open_stored_page(
-    text: str, *, tool: str, state: SessionState, gone: str
+    text: str, *, tool: str, schema: Mapping[str, Any], state: SessionState, gone: str
 ) -> tuple[presenter.StoredAnswer, str, int]:
     """The stored answer, list pointer and offset a presenter cursor names;
     ``InvalidCursorError`` (adding ``gone``, how to get a fresh answer) when
     it is not one or its answer has expired."""
     return await asyncio.to_thread(
-        presenter.open_page, text, tool=tool, store=state.store, gone=gone
+        presenter.open_page, text, schema, tool=tool, store=state.store, gone=gone
     )
 
 
-def present_stored_page(
+async def present_stored_page(
     stored: presenter.StoredAnswer,
     pointer: str,
     offset: int,
@@ -273,8 +270,14 @@ def present_stored_page(
 ) -> types.CallToolResult:
     """One page of a stored answer's list, read from the stored file and cut
     to the reply target. Nothing is computed again."""
-    shown = presenter.present_page(
-        stored, pointer, offset, schema, target=reply_target(state), annotate=annotate
+    shown = await asyncio.to_thread(
+        presenter.present_page,
+        stored,
+        pointer,
+        offset,
+        schema,
+        target=reply_target(state),
+        annotate=annotate,
     )
     return format_response(shown.reply)
 
@@ -1586,9 +1589,9 @@ def resolve_response_budget(explicit: int | None, state: SessionState) -> Respon
     fact and revoke no detail the caller asked for, while rung 1 revokes opt-ins
     — doing that unasked would silently answer a different question.
 
-    Only the four consolidated tools that advertise ``budget`` consult this, so
-    the default reaches exactly the surface it was designed for; ``0`` disables it
-    and restores the fully undegraded default response.
+    The tools that advertise ``budget`` consult this, and so does a tool on the
+    presenter that has none (:func:`reply_target`); ``0`` disables it and
+    restores the fully undegraded default response.
 
     The API's automatic mode gets no default at all. That mode promises complete
     results and refuses ``budget`` outright, so a presentation ladder there would

@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ltspice_mcp.config import ServerConfig
-from ltspice_mcp.lib import result_store
+from ltspice_mcp.lib import presenter, result_store
 from ltspice_mcp.lib.simulator import (
     detect_named_simulators,
     detect_simulators,
@@ -207,6 +207,9 @@ async def _bootstrap(
         symbols=symbols,
     )
     await asyncio.to_thread(result_store.cleanup, state.working_dir)
+    # Stored answers past their expiry, which a session that never cuts
+    # another reply would otherwise keep.
+    await asyncio.to_thread(presenter.cleanup, state.store)
 
     preloaded = 0
     if config.persist_jobs and config.preload_recent_count > 0:
