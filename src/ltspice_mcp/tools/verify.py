@@ -125,7 +125,12 @@ from ltspice_mcp.lib.netlist_graph import (
 )
 from ltspice_mcp.lib.raster import RenderedImage
 from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER
-from ltspice_mcp.lib.schematic_scene import Scene, build_scene, sheet_view
+from ltspice_mcp.lib.schematic_scene import (
+    WINDOW_ATTRIBUTES,
+    Scene,
+    build_scene,
+    sheet_view,
+)
 from ltspice_mcp.lib.services import cp1252_ltspice, session_reader
 from ltspice_mcp.lib.sheet_findings import (
     RULES,
@@ -380,13 +385,25 @@ _RULES_OF_CHECK: dict[str, tuple[str, ...]] = {
     for check in ("symbols", "layout", "quality", "export")
 }
 
+# The attributes the scene lays out, as the notes below name them.
+*_FIRST, _LAST = WINDOW_ATTRIBUTES.values()
+_LAID_OUT = f"{', '.join(_FIRST)} and {_LAST}"
 # Stated inline so an empty findings list is not read as a clean drawing. Kept
 # to the one fact that changes what a caller concludes — the scan's blind spot,
 # not how bounding boxes are built.
 LAYOUT_COVERAGE = (
     "Layout scan checks text by extents estimated from LTspice's font: a part's "
-    "text against what it crosses, and comments, directives and labels against "
-    "each other."
+    f"{_LAID_OUT} text against what it crosses, and comments, directives and "
+    "labels against each other. It does not read a symbol's own text, its pin "
+    "names, an attribute in any other window or a value a part takes from its "
+    "symbol."
+)
+# Stated beside every render, so a word missing from the picture is not read
+# as missing from the sheet.
+RENDER_COVERAGE = (
+    f"The render draws a part's {_LAID_OUT} text, and not a symbol's own text, "
+    "its pin names, an attribute in any other window or a value a part takes "
+    "from its symbol."
 )
 
 
@@ -2294,7 +2311,7 @@ async def _do_render(
         # client reads only the structured payload, so the drawing rides
         # there, once.
         payload["svg"] = image.data.decode("utf-8")
-    return payload, (image if inline and image.is_raster else None), failures, []
+    return payload, (image if inline and image.is_raster else None), failures, [RENDER_COVERAGE]
 
 
 def _render_note(image: RenderedImage, returned_inline: bool) -> str | None:

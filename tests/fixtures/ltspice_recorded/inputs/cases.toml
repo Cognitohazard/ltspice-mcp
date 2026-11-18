@@ -342,6 +342,10 @@ model = ["lib/schematic_scene.py", "lib/sheet_findings.py", "lib/schematic_rende
 # write an image of it; see drive_draw. Each sheet starts with the two longest
 # wires it holds, which give the scale from the image's units to sheet units.
 
+[behaviour.sheet-drawing-other-text]
+summary = "What else a build draws on a part: SpiceLine, SpiceLine2 and SpiceModel text through visible WINDOW 39, 40 and 38 lines, a window at the symbol's origin and one at size 0, two attributes at one point drawn over each other, a symbol's own value when the part gives none, nothing for a value written as \"\", and a symbol's own TEXT line and its pin names."
+model = ["lib/schematic_scene.py", "lib/sheet.py", "lib/asc_document.py", "lib/sheet_findings.py", "lib/schematic_renderer.py", "tools/verify.py"]
+
 # ---------------------------------------------------------------- decks
 
 [behaviour.deck-encoding]
@@ -1730,6 +1734,43 @@ kind = "run"
 source = "export/load_name_tran.asc"
 extra = ["export/res.asy", "benchmark/voltage.asy"]
 keep = ["net", "raw"]
+
+# R1 shows its SpiceLine, SpiceLine2 and SpiceModel through windows of its
+# own, and R2, turned, its SpiceLine.
+[[case]]
+id = "draw/attribute_windows"
+behaviour = "sheet-drawing-other-text"
+kind = "draw"
+source = "draw/attribute_windows.asc"
+extra = ["export/res.asy"]
+
+# Sources with their Value2 and SpiceLine windows at the symbol's origin, as
+# LTspice writes them on most of its own example sheets: V1 at size 2, V2 at
+# size 0, V3 with both attributes written as "", and V4's Value2 at an offset.
+[[case]]
+id = "draw/value2_at_origin"
+behaviour = "sheet-drawing-other-text"
+kind = "draw"
+source = "draw/value2_at_origin.asc"
+extra = ["benchmark/voltage.asy"]
+
+# U1 gives no Value or SpiceModel of its own, so its symbol's LT1001 and
+# DEFMOD are the part's; U2 gives its own Value. R3 writes its Value,
+# SpiceModel and SpiceLine2 as "", each through a visible window.
+[[case]]
+id = "draw/attribute_defaults"
+behaviour = "sheet-drawing-other-text"
+kind = "draw"
+source = "draw/attribute_defaults.asc"
+extra = ["draw/defaulted.asy", "export/res.asy"]
+
+# A cell whose symbol draws a TEXT line, CELL, and names its two pins.
+[[case]]
+id = "draw/symbol_text"
+behaviour = "sheet-drawing-other-text"
+kind = "draw"
+source = "draw/symbol_text.asc"
+extra = ["draw/labelled_cell.asy"]
 
 # A part named without its element letter, on a sheet that runs. The two
 # resistors differ, so each current in the raw says which part it is.
