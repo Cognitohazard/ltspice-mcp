@@ -35,6 +35,7 @@ from ltspice_mcp.lib.deck_staging import (
 from ltspice_mcp.lib.device_names import (
     Naming,
     device_address,
+    fold_name,
     naming_for,
     path_text,
     spelled_name,
@@ -864,7 +865,7 @@ def resolve_hierarchy(
                 raise NetlistError(f"mismatched .ends for {view.name}")
             if view.name.casefold() in definitions:
                 raise NetlistError(f"duplicate active subcircuit {view.name}")
-            if len({p.casefold() for p in view.ports}) != len(view.ports):
+            if len({fold_name(p) for p in view.ports}) != len(view.ports):
                 raise NetlistError(f"duplicate ports in {view.name}")
             body = occurrences[i + 1 : end]
             if any(o.card.kind in {"subckt", "ends"} for o in body):
@@ -910,7 +911,7 @@ def resolve_hierarchy(
             except SpiceLexError as exc:
                 raise unreadable_card(item.card, exc, item.source.path) from exc
             for text in listed:
-                globals_.setdefault(text.casefold(), text)
+                globals_.setdefault(fold_name(text), text)
         if head in {".option", ".options"}:
             values = _assignments(item.card, where=item.source.path)
             if "scale" in values:
@@ -932,7 +933,7 @@ def resolve_hierarchy(
     node_cache: dict[tuple[tuple[str, ...], str], Node] = {}
 
     def node(name: str, scope: tuple[str, ...], ports: Mapping[str, Node]) -> Node:
-        folded = name.casefold()
+        folded = fold_name(name)
         kind = node_kind(
             name,
             ports=ports,
@@ -948,7 +949,7 @@ def resolve_hierarchy(
             scope, name = (), GROUND
         elif kind == "global":
             scope, name = (), globals_[folded]
-        key = (tuple(segment.casefold() for segment in scope), name.casefold())
+        key = (tuple(fold_name(segment) for segment in scope), fold_name(name))
         if key in node_cache:
             return node_cache[key]
         trace = None
@@ -979,7 +980,7 @@ def resolve_hierarchy(
             if item.card.kind != "instance":
                 continue
             view, supported = _shape(item.card, item.source.path)
-            folded = view.ref.casefold()
+            folded = fold_name(view.ref)
             if folded in refs:
                 raise NetlistError(f"duplicate active reference {view.ref} in {scope}")
             refs.add(folded)
@@ -1125,7 +1126,7 @@ def resolve_hierarchy(
                     child.body,
                     path,
                     child_env,
-                    {k.casefold(): v for k, v in mapped},
+                    {fold_name(k): v for k, v in mapped},
                     (*stack, child.view.name.casefold()),
                     child.view.name,
                     child_passed,
@@ -1135,7 +1136,7 @@ def resolve_hierarchy(
     if profile.simulator == "ltspice":
         # Existing operating-point selectors match ancestral suffixes. A suffix
         # that also names another runtime device cannot promise exact selection.
-        paths = {tuple(p.casefold() for p in row.instance) for row in rows}
+        paths = {tuple(fold_name(p) for p in row.instance) for row in rows}
         ambiguous = {path[i:] for path in paths for i in range(1, len(path)) if path[i:] in paths}
         rows = [
             replace(
@@ -1144,11 +1145,11 @@ def resolve_hierarchy(
                 save=None,
                 address_reason="operating_point selector also matches another instance",
             )
-            if tuple(p.casefold() for p in row.instance) in ambiguous
+            if tuple(fold_name(p) for p in row.instance) in ambiguous
             else row
             for row in rows
         ]
-    rows.sort(key=lambda row: tuple(p.casefold() for p in row.instance))
+    rows.sort(key=lambda row: tuple(fold_name(p) for p in row.instance))
     return Hierarchy(
         profile,
         tuple(rows),

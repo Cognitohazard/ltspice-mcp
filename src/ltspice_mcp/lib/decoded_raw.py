@@ -20,6 +20,7 @@ import numpy as np
 from numpy.typing import NDArray
 
 from ltspice_mcp.errors import NoAxisError, ResultError
+from ltspice_mcp.lib.device_names import fold_name
 from ltspice_mcp.lib.raw_header import RawPlotHeader
 from ltspice_mcp.lib.result_kinds import (
     Analysis,
@@ -32,6 +33,7 @@ from ltspice_mcp.lib.result_kinds import (
     stepped_kind,
 )
 from ltspice_mcp.lib.step_values import steps_with
+from ltspice_mcp.lib.trace_names import is_input_noise
 
 if TYPE_CHECKING:
     from ltspice_mcp.lib.decoded_log import DecodedLog
@@ -173,7 +175,7 @@ def _trace_descriptor(
 ) -> TraceDescriptor:
     variable = header.variables[index]
     declared = variable.declared_type.lower()
-    name = variable.name.lower()
+    name = fold_name(variable.name)
     unit = declared_unit(declared)
     evidence = "declared_type" if unit else None
     normalization = None
@@ -199,13 +201,7 @@ def _trace_descriptor(
         unit, evidence = None, None
         if header.dialect == "ngspice":
             normalization = "absolute"
-    elif analysis == "noise" and name in {
-        "inoise",
-        "v(inoise)",
-        "i(inoise)",
-        "inoise_spectrum",
-        "inoise_total",
-    }:
+    elif analysis == "noise" and is_input_noise(variable.name):
         unit, evidence = None, "input_source_unresolved"
     elif (
         analysis == "noise"
@@ -521,7 +517,7 @@ class DecodedPlot:
             return self._traces[trace_ref]
         if isinstance(trace_ref, str):
             for trace in self._traces:
-                if trace.name.lower() == trace_ref.lower():
+                if fold_name(trace.name) == fold_name(trace_ref):
                     return trace
         raise IndexError(f"Unknown trace: {trace_ref}")
 

@@ -102,7 +102,7 @@ from ltspice_mcp.lib.deck_staging import (
     resolve_reference,
     scan_include_references,
 )
-from ltspice_mcp.lib.device_names import path_text
+from ltspice_mcp.lib.device_names import fold_name, path_text
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import (
     SAME_VALUE_RTOL,
@@ -507,7 +507,7 @@ def _instance_port_detail(
         f"{ref} connects {len(nodes)} node(s) ({', '.join(nodes)}) but subcircuit "
         f"{subckt} declares {len(ports)} port(s) ({', '.join(ports)})."
     )
-    repeated = [node for node in nodes if node.casefold() == subckt.casefold()]
+    repeated = [node for node in nodes if fold_name(node) == fold_name(subckt)]
     if repeated:
         detail += (
             f" Node {repeated[0]!r} is the subcircuit's own name, so the card names "
@@ -610,8 +610,8 @@ class GraphComparison:
 def canon_net(name: str, reader: SemanticProfile, ports: Sequence[str] = ()) -> str:
     """Canonicalize a net name as a scope whose ports are ``ports`` reads it
     (none at the top level), to the deck's ``reader``: stripped and
-    lowercased, with ground (``deck_nodes``) as ``0``."""
-    n = name.strip().lower()
+    folded (``device_names.fold_name``), with ground (``deck_nodes``) as ``0``."""
+    n = fold_name(name.strip())
     kind = settled_node_kind(
         n, ports=ports, simulator=reader.simulator, ngbehavior=reader.ngbehavior
     )
@@ -620,8 +620,8 @@ def canon_net(name: str, reader: SemanticProfile, ports: Sequence[str] = ()) -> 
 
 def canon_ref(ref: str) -> str:
     """Canonicalize a reference for matching: drop the ``§`` marker
-    (``without_section_sign``), lowercase."""
-    return without_section_sign(ref).strip().lower()
+    (``without_section_sign``), folded (``device_names.fold_name``)."""
+    return fold_name(without_section_sign(ref).strip())
 
 
 def _normalize_value_text(text: str) -> str:
@@ -1002,7 +1002,7 @@ def _collect_subckts(
         if not read.reads(card_section):
             continue
         # Every directive here could be split into parts (checked above).
-        registry.global_nets.update(name.lower() for name in global_names(card))
+        registry.global_nets.update(fold_name(name) for name in global_names(card))
         if card.kind == "subckt":
             try:
                 registry.register(
@@ -1351,8 +1351,8 @@ def _build_child_net_map(
     net, given a unique ``<prefix>/<net>`` name (prefix lowercased to stay
     consistent with canonical net names).
     """
-    key = f"{prefix.lower()}/"
-    bound = {port.casefold(): bound_ports[i] for i, port in enumerate(sub.ports)}
+    key = f"{fold_name(prefix)}/"
+    bound = {fold_name(port): bound_ports[i] for i, port in enumerate(sub.ports)}
     net_map: dict[str, str] = {}
     for child in sub.components:
         for net in child.nodes:
@@ -1370,7 +1370,7 @@ def _build_child_net_map(
             elif kind == "global":
                 net_map[net] = net
             elif kind == "port":
-                net_map[net] = bound[net.casefold()]
+                net_map[net] = bound[fold_name(net)]
             else:
                 net_map[net] = f"{key}{net}"
     return net_map

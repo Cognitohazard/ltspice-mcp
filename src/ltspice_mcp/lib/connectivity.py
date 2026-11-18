@@ -47,6 +47,7 @@ from collections import defaultdict
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from typing import NamedTuple
 
+from ltspice_mcp.lib.device_names import fold_name
 from ltspice_mcp.lib.nets import (
     DroppedRun,
     LabelAt,
@@ -176,12 +177,12 @@ GROUND = "0"
 
 def fold_case(name: str) -> str:
     """A node name in the form two names are compared in: names that differ
-    only in case are one node (the ``node-name-case`` recording).
+    only in ASCII case are one node (the ``node-name-case`` recording).
 
-    A fixed mapping, the same on every platform, for a sheet's labels and a
-    deck's nodes alike.
+    The sheet's name for the one fold of a name (``device_names.fold_name``),
+    the same on every platform, for a sheet's labels and a deck's nodes alike.
     """
-    return name.lower()
+    return fold_name(name)
 
 
 def is_ground(name: str) -> bool:
