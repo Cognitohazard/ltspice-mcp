@@ -1,0 +1,1 @@
+`run_experiments` refuses a mismatch draw for a device inside a subcircuit on QSPICE and Xyce, whose subcircuit reading the server does not model, instead of returning a spread that could be several times too large. Run such a deck on LTspice or ngspice.
