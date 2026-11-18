@@ -1,0 +1,1 @@
+A run's reply now says what the run did not give: the receipt names each `.meas` that LTspice printed as failed and points to the `measurements` recipe, and an analysis says when a requested `.meas` failed in every run.
