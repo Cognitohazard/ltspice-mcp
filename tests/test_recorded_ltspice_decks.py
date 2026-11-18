@@ -100,6 +100,7 @@ from tests import _ltspice_recorded as rec
 from tests.conftest import LTSPICE_READER, FakeSim
 from tests.ltspice_recorder import INPUTS
 from tests.test_inspect_tools import _run
+from tests.test_names_through_the_resolver import recorded_producer
 
 #: LTspice's reading of a deck's ``.lib`` cards (``deck_staging.library_read``).
 LTSPICE_LIBRARIES = LibraryReader("ltspice")
@@ -2486,7 +2487,7 @@ def test_a_lib_path_holding_a_space_is_one_path(build: str, tmp_path: Path):
 
 #: The spelling of XAMP's node mid each build's ``.meas`` takes when the
 #: settings save subcircuit nodes; on the defaults neither build takes either.
-MEAS_SUBCKT_NODE = {"current": "deck/meas_subckt_node_x", "xvii": "deck/meas_subckt_node_no_x"}
+OWN_MEAS_SPELLING = {"current": "deck/meas_subckt_node_x", "xvii": "deck/meas_subckt_node_no_x"}
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -2494,8 +2495,11 @@ def test_a_measurement_of_a_node_inside_a_subcircuit(build: str):
     """LTspice 26 takes ``V(xamp:mid)`` and XVII ``V(amp:mid)``, each only with
     the subcircuit's nodes saved: on the defaults both fail (LTspice 26
     "Voltage not found.", XVII FAIL'ed), and the other build's spelling fails
-    either way. The checks pass all four decks."""
-    taken = MEAS_SUBCKT_NODE[rec.generation(build)]
+    either way. Linted for the build that runs it, the other build's
+    spelling is refused and the build's own is a warning
+    (``tests/test_names_through_the_resolver.py``); for no known build,
+    neither is refused, as which spelling the run takes is not established."""
+    taken = OWN_MEAS_SPELLING[rec.generation(build)]
     for stem in ("deck/meas_subckt_node_x", "deck/meas_subckt_node_no_x"):
         for suffix in ("", "_saved"):
             data = parse_measurements(rec.recorded(build, f"{stem}{suffix}.log"))
@@ -2504,6 +2508,12 @@ def test_a_measurement_of_a_node_inside_a_subcircuit(build: str):
                 assert values == [0.5]
             else:
                 assert values in ([], [None])
+        refused = {
+            f["rule_id"]
+            for f in lint_input(stem, reader=recorded_producer(build))
+            if f["severity"] == "error"
+        }
+        assert refused == (set() if stem == taken else {"save-meas-coverage"})
         assert refusals(stem) == set()
 
 

@@ -55,6 +55,7 @@ from ltspice_mcp.lib.device_names import (
     current_device,
     device_names,
     device_query,
+    fold_name,
     owner_path,
     parse_device_param,
     path_text,
@@ -147,6 +148,7 @@ from ltspice_mcp.lib.signal_analysis import (
 from ltspice_mcp.lib.simulator_build import reported_build
 from ltspice_mcp.lib.trace_names import (
     find_trace,  # noqa: TID251 - an op-point value's name, read against the .log's names
+    is_input_noise,
     naming_note,
 )
 from ltspice_mcp.state import SessionState
@@ -375,10 +377,11 @@ def unrecognized_matches(warning: str, signal: str) -> bool:
     the signal's name or its ``@dev[param]`` token appearing in the warning. The
     only tell a ``.save``'d variable is bogus is its mention in the log, so this
     is how a read decides whether a 0.0 trace it touched is the real result."""
-    sig_l = signal.lower()
+    sig_l = fold_name(signal)
     parsed = parse_device_param(sig_l)
     at_token = None if parsed is None else device_key(*parsed)
-    return sig_l in warning.lower() or (at_token is not None and at_token in warning.lower())
+    said = fold_name(warning)
+    return sig_l in said or (at_token is not None and at_token in said)
 
 
 async def solve_failures(source: services.AnalysisSource, state: SessionState) -> list[str]:
@@ -872,12 +875,6 @@ def noise_input_source_unit(netlist: Path | None) -> str | None:
     if units == {"A"}:
         return "A"
     return None
-
-
-def is_input_noise(trace: str) -> bool:
-    """Whether a noise-run trace is the input-referred noise (LTspice's
-    ``V(inoise)``, ngspice's ``inoise_spectrum``)."""
-    return "inoise" in trace.lower()
 
 
 def noise_trace_unit(

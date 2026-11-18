@@ -1,0 +1,7 @@
+* node names that differ only in non-ASCII case
+I1 0 Äb 1m
+R1 äb 0 1k
+I2 0 Maß 1m
+R2 MASS 0 1k
+.op
+.end

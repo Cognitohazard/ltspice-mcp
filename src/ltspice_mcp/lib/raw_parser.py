@@ -38,6 +38,7 @@ from ltspice_mcp.lib.decoded_raw import (
     deck_time,
     time_offset,
 )
+from ltspice_mcp.lib.device_names import fold_name
 from ltspice_mcp.lib.format import cap_list
 from ltspice_mcp.lib.log_parser import (
     CardKind,
@@ -438,7 +439,7 @@ def trace_unit(raw: DecodedRaw | DecodedPlot, name: str) -> str | None:
     none — a guess from the name would be a vendor catalog, not a relay.
     """
     for trace in raw.descriptor.traces:
-        if trace.name.lower() == name.lower():
+        if fold_name(trace.name) == fold_name(name):
             return trace.unit
     return None
 

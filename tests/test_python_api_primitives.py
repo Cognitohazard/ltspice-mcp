@@ -433,8 +433,8 @@ def test_device_op_points_group_by_device_and_keep_a_value_the_log_left_out():
         device_key("M1", "Vth"): None,
         device_key("x1:M1", "gm"): 8.64e-4,
     }
-    assert device_op_points_of(section) == {
+    assert device_op_points_of(section, xvii=False) == {
         "m1": {"gm": 5.86e-4, "vth": None},
         "x1.m1": {"gm": 8.64e-4},
     }
-    assert device_op_points_of(None) == {}
+    assert device_op_points_of(None, xvii=False) == {}

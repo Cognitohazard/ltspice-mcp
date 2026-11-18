@@ -571,7 +571,14 @@ ops.observations               # a log reader's dict (LogResult) says the same o
   builds). A device in a subcircuit is keyed by its path (`x1.m1`), where the
   table names it `x1:m1` on LTspice 26 and `m:1:1` on XVII (the device's
   letter, the instance's name without its X, and the device's name without
-  its letter). A value the log did not print as a finite number is `None`.
+  its letter). A block LTspice 26 exports as `X§U1` and XVII as `XU1` is
+  `xu1` on both (`xu1.d1`), where LTspice 26's table writes `u1:d1`. The
+  table's own name for each device is in `.table_names`, by key, for a
+  caller quoting the log. Which build wrote the table is read from the job
+  case's record or, for a bare path, from the build the log's first line
+  names; a log whose first line names none was written by a build before 24,
+  which every log of LTspice 24 and later names. A value the log did not
+  print as a finite number is `None`.
   The result is empty when the log has no table. An ngspice log never has
   one, because ngspice writes the same parameters as traces of its raw; read
   them with `raw.value("@m1[gm]")`.

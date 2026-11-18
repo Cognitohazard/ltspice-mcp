@@ -22,6 +22,7 @@ from ltspice_mcp.lib.deck_staging import (
     scan_include_references,
     unreadable_references,
 )
+from ltspice_mcp.lib.device_names import DeckSignal, deck_signal, fold_name, naming_for
 from ltspice_mcp.lib.encoding import latin1_reading, read_spice_text
 from ltspice_mcp.lib.families import DISPLAY
 from ltspice_mcp.lib.ngspice_compat import reads_lib_as_includes
@@ -38,7 +39,12 @@ from ltspice_mcp.lib.spice_lex import (
     subckt_definitions,
     unreadable_cards,
 )
-from ltspice_mcp.lib.spice_lex_ops import MICRO_SIGN_READERS, ValueSuffixSite, value_suffix_sites
+from ltspice_mcp.lib.spice_lex_ops import (
+    MICRO_SIGN_READERS,
+    ValueSuffixSite,
+    section_sign_names,
+    value_suffix_sites,
+)
 from ltspice_mcp.lib.spice_lex_views import (
     InstanceLine,
     MeasCard,
@@ -103,6 +109,10 @@ class _LintFile(NamedTuple):
     codec: str
 
 
+#: The reader of a deck nothing names.
+_NO_READER = Producer(None, None, None)
+
+
 @dataclass(frozen=True)
 class _LintContext:
     text: str
@@ -129,6 +139,9 @@ class _LintContext:
     # (``spice_lex.definition_rule``); None reads as the family's reader of
     # no known build.
     definitions: DefinitionRule | None = None
+    # Who reads the deck: the run's Producer (``services.deck_producer``), or
+    # the family's reader of no known build.
+    reader: Producer = _NO_READER
 
     @functools.cached_property
     def arity_issues(self) -> list[dict[str, object]]:
@@ -197,7 +210,7 @@ def _finding(
     }
 
 
-def _probe_signals(probe: ProbeRef, context: _LintContext) -> set[str]:
+def _probe_signals(probe: ProbeRef, context: _LintContext) -> list[str]:
     """The signals a probe asks for in a ``.meas``, or saves in a ``.save``.
 
     A voltage between two nodes is its two nodes: both LTspice builds measure
@@ -220,76 +233,170 @@ def _probe_signals(probe: ProbeRef, context: _LintContext) -> set[str]:
             for name in probe.names
         )
     ):
-        return {_normalize_signal(f"V({name})") for name in probe.names}
-    return {_normalize_signal(probe.text)}
+        return [f"V({name})" for name in probe.names]
+    return [probe.text]
+
+
+def _shown(signal: str) -> str:
+    """A signal as a finding lists it: without spaces, folded."""
+    return fold_name(re.sub(r"\s+", "", signal))
+
+
+@dataclass(frozen=True)
+class _Read:
+    """What the run's reader makes of one signal a card names."""
+
+    card: SpiceCard
+    text: str
+    read: DeckSignal
+
+
+class _Coverage(NamedTuple):
+    """What the run's reader stores of a deck's ``.save`` list and reads for
+    its ``.meas`` cards: the one reading of a ``.save``'s coverage every rule
+    below reports.
+
+    ``saves`` is each ``.save`` signal, ``measured`` each ``.meas`` signal, as
+    the reader reads it (``device_names.deck_signal``). ``listed`` says the
+    deck has a ``.save`` list that names its signals one by one; ``patterns``
+    are the ones that name signals by a pattern. Without a list, every signal
+    is saved but the nodes LTspice keeps inside subcircuits only on a setting.
+    """
+
+    saves: list[_Read]
+    measured: list[_Read]
+    listed: bool
+    patterns: list[str]
+
+
+def _instances(cards: Sequence[SpiceCard]) -> tuple[frozenset[str], frozenset[str]]:
+    """The deck's top-level subcircuit instances, folded, and the own names of
+    those LTspice exported with a ``§`` (``U1`` for ``X§U1``)."""
+    names: set[str] = set()
+    marked: set[str] = set()
+    for card in cards:
+        if card.kind != "instance" or card.scope != () or not card.name:
+            continue
+        spellings = section_sign_names(card.name)
+        bare = spellings[0] if spellings else card.name
+        if fold_name(bare).startswith("x"):
+            names.add(fold_name(bare))
+            if spellings:
+                marked.add(fold_name(spellings[1]))
+    return frozenset(names), frozenset(marked)
+
+
+def _coverage(context: _LintContext) -> _Coverage | None:
+    """The deck's ``.save`` and ``.meas`` signals as the run's reader reads
+    them, or None when a ``.save`` saves everything or cannot be read: such
+    a ``.save`` may save any signal, so none is reported on a guess."""
+    saves = save_cards(context.cards)
+    measurements = [card for card in context.cards if card.kind == "meas"]
+    if any(save.saves_all for save in saves) or unreadable_cards(save.card for save in saves):
+        return None
+    naming = naming_for(context.reader)
+    instances, marked = _instances(context.cards)
+
+    def read(card: SpiceCard, text: str, *, saved: bool) -> _Read:
+        signal = deck_signal(text, naming, instances, saved=saved, marked=marked)
+        return _Read(card, text, signal)
+
+    probes = [(save.card, probe) for save in saves for probe in save.probes]
+    return _Coverage(
+        saves=[
+            read(card, text, saved=True)
+            for card, probe in probes
+            if not probe_is_pattern(probe)
+            for text in _probe_signals(probe, context)
+        ],
+        measured=[
+            read(card, text, saved=False)
+            for card in measurements
+            for probe in probe_refs(card)
+            for text in _probe_signals(probe, context)
+        ],
+        listed=bool(saves),
+        patterns=[probe.text for _card, probe in probes if probe_is_pattern(probe)],
+    )
 
 
 class _Unsaved(NamedTuple):
-    """What a ``.meas`` reads that no ``.save`` names: ``missing`` when the
-    ``.save`` list names its signals one by one, ``unchecked`` when it also
+    """What a ``.meas`` reads that the run will not store: ``missing`` when
+    the ``.save`` list names its signals one by one, ``unchecked`` when it also
     names some by a pattern (``V(*)``), since which signals a pattern saves,
-    of either kind, is not recorded."""
+    of either kind, is not recorded. ``reasons`` says why a missing signal is
+    missing where it is not simply left out of the list."""
 
     card: SpiceCard
     missing: list[str]
     unchecked: list[str]
     saved: list[str]
     patterns: list[str]
+    reasons: dict[str, str]
 
 
 def _unsaved(context: _LintContext) -> list[_Unsaved]:
-    """For each ``.meas`` of a deck with a ``.save`` list, what it reads that
-    the list does not name: the one reading of a ``.save``'s coverage both
-    rules below report."""
-    saves = save_cards(context.cards)
-    measurements = [card for card in context.cards if card.kind == "meas"]
-    if not saves or not measurements:
+    """For each ``.meas``, what it reads that the run's reader will not store:
+    a signal it reads none for (another build's spelling), and, under a
+    ``.save`` list, one the list stores none for."""
+    coverage = _coverage(context)
+    if coverage is None:
         return []
-    # A .save no rule could split into parts (``unreadable_cards``) may save
-    # any signal, so none is reported missing on a guess about it.
-    if any(save.saves_all for save in saves) or unreadable_cards(save.card for save in saves):
-        return []
-    probes = [probe for save in saves for probe in save.probes]
-    patterns = [probe for probe in probes if probe_is_pattern(probe)]
-    saved = {
-        signal
-        for probe in probes
-        if not probe_is_pattern(probe)
-        for signal in _probe_signals(probe, context)
+    stored = {
+        entry.read.key for entry in coverage.saves if entry.read.key is not None
     }
-    found = []
-    for card in measurements:
-        required = {
-            signal for probe in probe_refs(card) for signal in _probe_signals(probe, context)
-        }
-        unnamed = sorted(required - saved)
-        missing, unchecked = ([], unnamed) if patterns else (unnamed, [])
-        if unnamed:
-            found.append(
-                _Unsaved(card, missing, unchecked, sorted(saved), [p.text for p in patterns])
-            )
-    return found
+    unsettled = any(not entry.read.established for entry in coverage.saves)
+    saved = sorted({_shown(entry.text) for entry in coverage.saves if entry.read.key})
+    by_card: dict[int, _Unsaved] = {}
+    for entry in coverage.measured:
+        signal = entry.read
+        if not signal.established:
+            continue
+        shown = _shown(entry.text)
+        found = by_card.setdefault(
+            id(entry.card), _Unsaved(entry.card, [], [], saved, coverage.patterns, {})
+        )
+        if signal.key is None:
+            found.missing.append(shown)
+            if signal.why:
+                found.reasons[shown] = signal.why
+        elif coverage.listed and signal.key not in stored:
+            if coverage.patterns or unsettled:
+                found.unchecked.append(shown)
+            else:
+                found.missing.append(shown)
+    return [
+        found._replace(missing=sorted(set(found.missing)), unchecked=sorted(set(found.unchecked)))
+        for found in by_card.values()
+        if found.missing or found.unchecked
+    ]
 
 
 def _save_meas_coverage(
     context: _LintContext,
     rule: LintRule,
 ) -> list[LintFinding]:
-    return [
-        _finding(
-            context,
-            rule,
-            line=unsaved.card.line_start,
-            subject=unsaved.card.name or ".meas",
-            evidence={
-                "missing_signals": unsaved.missing,
-                "saved_signals": unsaved.saved,
-                "directive": unsaved.card.body,
-            },
+    findings = []
+    for unsaved in _unsaved(context):
+        if not unsaved.missing:
+            continue
+        evidence: dict[str, Any] = {
+            "missing_signals": unsaved.missing,
+            "saved_signals": unsaved.saved,
+            "directive": unsaved.card.body,
+        }
+        if unsaved.reasons:
+            evidence["reasons"] = dict(sorted(unsaved.reasons.items()))
+        findings.append(
+            _finding(
+                context,
+                rule,
+                line=unsaved.card.line_start,
+                subject=unsaved.card.name or ".meas",
+                evidence=evidence,
+            )
         )
-        for unsaved in _unsaved(context)
-        if unsaved.missing
-    ]
+    return findings
 
 
 def _save_pattern_unrecorded(
@@ -307,15 +414,95 @@ def _save_pattern_unrecorded(
                 "patterns": unsaved.patterns,
                 "directive": unsaved.card.body,
                 "reason": (
-                    "A .save names signals by a pattern, and which signals a pattern "
-                    "saves is not recorded, so these were not checked. Name them in "
-                    "the .save to have them checked."
+                    "A .save names signals by a pattern, or a name whose reading is not "
+                    "established (save-meas-spelling-unestablished), and which signals "
+                    "it saves is not known, so these were not checked. Name them in "
+                    "the .save, spelled as the run's simulator stores them, to have "
+                    "them checked."
                 ),
             },
         )
         for unsaved in _unsaved(context)
         if unsaved.unchecked
     ]
+
+
+def _save_name_not_stored(context: _LintContext, rule: LintRule) -> list[LintFinding]:
+    """Each ``.save`` name the run's reader stores nothing for: a name inside
+    subcircuit instances spelled otherwise than it stores one."""
+    coverage = _coverage(context)
+    if coverage is None:
+        return []
+    found = []
+    for entry in coverage.saves:
+        signal = entry.read
+        if signal.key is not None or not signal.established:
+            continue
+        evidence: dict[str, Any] = {"directive": entry.card.body, "reason": signal.why}
+        if signal.spelled is not None:
+            evidence["spelled"] = signal.spelled
+        found.append(
+            _finding(
+                context, rule, line=entry.card.line_start, subject=entry.text, evidence=evidence
+            )
+        )
+    return found
+
+
+def _save_meas_spelling_unestablished(
+    context: _LintContext, rule: LintRule
+) -> list[LintFinding]:
+    """Each ``.save`` or ``.meas`` name whose reading by the run's reader is
+    not established, so no rule refuses on it."""
+    coverage = _coverage(context)
+    if coverage is None:
+        return []
+    return [
+        _finding(
+            context,
+            rule,
+            line=entry.card.line_start,
+            subject=entry.text,
+            evidence={"directive": entry.card.body, "reason": entry.read.why},
+        )
+        for entry in [*coverage.saves, *coverage.measured]
+        if not entry.read.established
+    ]
+
+
+def _meas_subckt_node_unsaved_ltspice(
+    context: _LintContext, rule: LintRule
+) -> list[LintFinding]:
+    """A ``.meas`` of a node inside a subcircuit in a deck with no ``.save``
+    list: LTspice keeps such nodes only with "Save subcircuit node voltages"
+    on, which is off by default on both builds (recorded:
+    deck/meas_subckt_node_*), and which the deck does not decide."""
+    coverage = _coverage(context)
+    if coverage is None or coverage.listed:
+        return []
+    found = []
+    for entry in coverage.measured:
+        key = entry.read.key
+        if key is None or len(key[1]) < 2 or fold_name(key[0]) != "v":
+            continue
+        found.append(
+            _finding(
+                context,
+                rule,
+                line=entry.card.line_start,
+                subject=entry.text,
+                evidence={
+                    "directive": entry.card.body,
+                    "reason": (
+                        "LTspice keeps a node inside a subcircuit only when its 'Save "
+                        "subcircuit node voltages' setting is on, which is off by default "
+                        "on LTspice 26 and XVII, and the measurement fails without it. "
+                        f"Name it in a .save ({entry.text.strip()}) to have it kept."
+                    ),
+                },
+            )
+        )
+    return found
 
 
 def _meas_ngspice_batch(
@@ -1301,8 +1488,47 @@ def _node_control_byte_ltspice(context: _LintContext, rule: LintRule) -> list[Li
     return findings
 
 
-def _normalize_signal(value: str) -> str:
-    return re.sub(r"\s+", "", value).casefold()
+def _node_non_ascii_ngspice(context: _LintContext, rule: LintRule) -> list[LintFinding]:
+    """A node name holding a character beyond ASCII, in a deck for ngspice.
+
+    ngspice-42 replaces each byte of such a character with ``_``, so the run
+    saves ``aé`` as ``a__``, and two names that differ only there (``aé``
+    and ``aè``) are one node, shorted with no word in its output (measured).
+    What it makes of a name is not modelled: the name is reported.
+    """
+    findings: list[LintFinding] = []
+    for path, text, cards, _codec in context.files:
+        if text.isascii():
+            continue
+        seen: set[str] = set()
+        for card in cards:
+            if card.kind != "instance" or card.body.isascii():
+                continue
+            line = read_instance(card)
+            for node in line.nodes if line is not None else ():
+                if node.isascii() or node in seen:
+                    continue
+                seen.add(node)
+                findings.append(
+                    _finding(
+                        context,
+                        rule,
+                        line=card.line_start,
+                        subject=node,
+                        file=path,
+                        evidence={
+                            "card": card.body,
+                            "reason": (
+                                f"node {node!r} holds a character beyond ASCII, each byte of "
+                                "which ngspice replaces with '_': the run names the node "
+                                "otherwise than the deck does, and two names that differ "
+                                "only there are one node, shorted without a warning. "
+                                "Rename the node with ASCII."
+                            ),
+                        },
+                    )
+                )
+    return findings
 
 
 _ARITY_DISPOSITION: dict[str, Disposition] = {
@@ -1311,6 +1537,23 @@ _ARITY_DISPOSITION: dict[str, Disposition] = {
 
 RULES: tuple[LintRule, ...] = (
     LintRule("save-meas-coverage", "blocking", _save_meas_coverage),
+    # A warning: the run goes on, but a .save name inside subcircuits spelled
+    # otherwise than the reader stores one saves nothing (recorded for
+    # LTspice, measured on ngspice-42).
+    LintRule("save-name-not-stored", "warning", _save_name_not_stored),
+    # A warning: what the reader makes of the name is not established, so no
+    # rule refuses on it.
+    LintRule("save-meas-spelling-unestablished", "warning", _save_meas_spelling_unestablished),
+    # A warning: whether the node is kept is a per-user setting the deck does
+    # not decide, off by default (recorded: deck/meas_subckt_node_*).
+    LintRule(
+        "meas-subckt-node-unsaved-ltspice",
+        "warning",
+        _meas_subckt_node_unsaved_ltspice,
+        family="ltspice",
+    ),
+    # A warning: the run goes on, under names ngspice changed (measured).
+    LintRule("node-non-ascii-ngspice", "warning", _node_non_ascii_ngspice, family="ngspice"),
     LintRule("save-pattern-unrecorded", "warning", _save_pattern_unrecorded),
     # A warning, not blocking: ngspice runs the deck and skips only the
     # top-level .meas, and reading the run relays ngspice's own notice of the
@@ -1442,6 +1685,7 @@ def lint_deck(
         codec=codec,
         cp1252_reader=cp1252_reader,
         definitions=definition_rule(reader or Producer(family, None, None)),
+        reader=reader or Producer(family, None, None),
     )
     findings: list[LintFinding] = []
     for rule in RULES:

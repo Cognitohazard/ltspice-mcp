@@ -25,6 +25,10 @@ _PICKS_NO_FIELD: dict[str, str] = {
     "tools/analyze.py:_measurement_step_plan": (
         "counts the rows of the tables to pair each with its .step line"
     ),
+    "api/_primitives.py:load_device_op_points": (
+        "reads only the build the log's first line names (printed_by), which the "
+        "decoder keeps with the measurements, to read the device table's names"
+    ),
 }
 
 

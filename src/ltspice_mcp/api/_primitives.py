@@ -21,6 +21,7 @@ from ltspice_mcp.lib.device_names import (
     parse_device_param,
     path_text,
     table_device_path,
+    table_naming,
     trace_key,
     writes_xvii_names,
 )
@@ -474,6 +475,27 @@ class LogResult(dict[str, _V]):
         return copy.deepcopy(list(self._observations))
 
 
+async def _log_source(
+    state: SessionState,
+    job_id: str | None,
+    run_index: int,
+    case_id: str | None,
+    log_path: str | Path | None,
+) -> services.AnalysisSource:
+    """The source whose log a section is read from: the log at ``log_path``,
+    or one experiment case's."""
+    if log_path is not None:
+        return services.resolve_analysis_source(state, log_file=str(log_path))
+    assert job_id is not None
+    job = await services.resolve_job_async(job_id, state)
+    context = services.experiment_run_context(
+        job, state, run_index=run_index, case_id=case_id, require_raw=False
+    )
+    if context.log is None:
+        raise ResultError(f"Experiment case {context.identity['case_id']!r} has no log file")
+    return services.source_for_run(context)
+
+
 async def load_log_section(
     name: LogSectionName,
     *,
@@ -487,23 +509,36 @@ async def load_log_section(
     ``log_path``, or of one experiment case's, and what the read says of it
     (``AnalysisSource.observations``). The section is None when the log has no
     such section."""
-    if log_path is not None:
-        source = services.resolve_analysis_source(state, log_file=str(log_path))
-    else:
-        assert job_id is not None
-        job = await services.resolve_job_async(job_id, state)
-        context = services.experiment_run_context(
-            job, state, run_index=run_index, case_id=case_id, require_raw=False
-        )
-        if context.log is None:
-            raise ResultError(f"Experiment case {context.identity['case_id']!r} has no log file")
-        source = services.source_for_run(context)
+    source = await _log_source(state, job_id, run_index, case_id, log_path)
     logs = await services.load_logs(source, state)
     section = logs.value(name)
     if name == "measurements" and section is not None:
         # Each measurement names the field holding its result.
         section = await services.answer_measurements(source, section)
     return section, source.observations
+
+
+async def load_device_op_points(
+    *,
+    state: SessionState,
+    job_id: str | None,
+    run_index: int,
+    case_id: str | None,
+    log_path: str | Path | None,
+) -> DeviceOpPoints:
+    """The log's device table as ``Api.device_op_points`` returns it, its
+    names read as the build that wrote the log spells them
+    (``device_names.table_naming``): the one the source names, else the one
+    the log's first line names."""
+    source = await _log_source(state, job_id, run_index, case_id, log_path)
+    logs = await services.load_logs(source, state)
+    section = logs.value("device_op")
+    # The decoder keeps the build the log's first line names with the
+    # measurements, whether or not the log printed any.
+    measurements = logs.section("measurements").get("value")
+    printed_by = measurements.get("printed_by") if isinstance(measurements, dict) else None
+    naming = table_naming(services.source_producer(source), printed_by)
+    return device_op_points_of(section, source.observations, xvii=naming.xvii)
 
 
 def measurements_of(section: Any, observations: tuple[dict[str, Any], ...]) -> LogResult[Any]:
@@ -513,17 +548,43 @@ def measurements_of(section: Any, observations: tuple[dict[str, Any], ...]) -> L
     return LogResult(section, observations=observations)
 
 
+class DeviceOpPoints(LogResult[dict[str, float | None]]):
+    """``Api.device_op_points``'s answer: each device's parameters by its
+    path, and in :attr:`table_names` the name the log's table gave it."""
+
+    def __init__(
+        self,
+        data: Mapping[str, dict[str, float | None]],
+        *,
+        table_names: Mapping[str, str],
+        observations: tuple[dict[str, Any], ...] = (),
+    ) -> None:
+        super().__init__(data, observations=observations)
+        self._table_names = dict(table_names)
+
+    @property
+    def table_names(self) -> dict[str, str]:
+        """The name the log's device table gave each device, by its key, as a
+        caller quoting the log writes it: ``u1:d1`` on LTspice 26 and
+        ``d:u1:1`` on XVII for D1 inside the block placed as U1, ``xu1.d1``."""
+        return dict(self._table_names)
+
+
 def device_op_points_of(
-    section: Any, observations: tuple[dict[str, Any], ...] = ()
-) -> LogResult[dict[str, float | None]]:
+    section: Any, observations: tuple[dict[str, Any], ...] = (), *, xvii: bool
+) -> DeviceOpPoints:
     """The ``device_op`` section by device and parameter, as
     ``Api.device_op_points`` returns it: a device inside a subcircuit by its
-    path (``xa.xin.mtail``), however the build that wrote the table names it.
-    A value the log printed as not a finite number is None."""
+    path (``xa.xin.mtail``), whichever build wrote the table, read as ``xvii``
+    says it spells it (``device_names.table_naming``). A value the log printed
+    as not a finite number is None."""
     by_device: dict[str, dict[str, float | None]] = {}
+    table_names: dict[str, str] = {}
     for key, number in (section or {}).items():
         if (parsed := parse_device_param(key)) is None:
             continue
         device, param = parsed
-        by_device.setdefault(path_text(table_device_path(device)), {})[param] = number
-    return LogResult(by_device, observations=observations)
+        name = path_text(table_device_path(device, xvii=xvii))
+        by_device.setdefault(name, {})[param] = number
+        table_names[name] = device
+    return DeviceOpPoints(by_device, table_names=table_names, observations=observations)

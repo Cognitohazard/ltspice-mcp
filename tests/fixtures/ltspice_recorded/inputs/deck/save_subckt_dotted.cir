@@ -1,0 +1,11 @@
+* .save and .meas of a node inside a subcircuit instance, spelled with a dot
+.subckt div top
+R1 top mid 1k
+R2 mid 0 1k
+.ends
+V1 in 0 PULSE(0 1 0 1u 1u 1 2)
+XAMP in div
+.save V(in) V(xamp.mid)
+.tran 0 1m 0 10u
+.meas tran vmid FIND V(xamp.mid) AT 0.5m
+.end
