@@ -1,0 +1,6 @@
+* an RC line whose model is not defined
+I1 0 a 1
+U1 a b 0 URCMOD L=1m
+R1 b 0 1k
+.op
+.end

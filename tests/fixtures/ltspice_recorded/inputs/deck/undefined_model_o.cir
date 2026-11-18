@@ -1,0 +1,6 @@
+* a lossy line whose model is not defined
+I1 0 a 1
+O1 a 0 b 0 LOSSY
+R1 b 0 1k
+.op
+.end

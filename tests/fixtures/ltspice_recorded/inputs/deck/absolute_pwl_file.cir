@@ -1,0 +1,5 @@
+* a PWL source reading a file named by an absolute path
+V1 a 0 PWL file=<dir>\data\level.txt
+R1 a 0 1k
+.tran 10m
+.end

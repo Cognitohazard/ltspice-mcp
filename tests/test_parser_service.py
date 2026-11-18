@@ -508,6 +508,7 @@ def test_absent_log_sections_preserved_but_no_inputs_refuses(state_no_sim, work_
         "warnings": [],
         "errors": [],
         "meas_errors": [],
+        "conditions": {},
     }
     assert logs.section("measurements")["status"] == "absent"
     assert logs.section("measurements")["value"] is None

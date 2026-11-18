@@ -209,6 +209,11 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
                 # reads back to the bytes it was written as.
                 **({"result_digest": case.result_digest} if case.result_digest else {}),
                 **({"assigned": case.assigned} if case.assigned else {}),
+                **(
+                    {"log_diagnostics": case.log_diagnostics}
+                    if case.log_diagnostics is not None
+                    else {}
+                ),
                 "recovery": case.recovery.to_record() if case.recovery is not None else None,
             }
         )
@@ -258,6 +263,7 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
         simulator_executable=(
             job.simulator_executable.to_record() if job.simulator_executable else None
         ),
+        deck_names_xvii=job.deck_names_xvii,
         completeness=asdict(job.completeness),
         cases=cases,
         sources=sources,
@@ -424,6 +430,11 @@ def _case_record(data: dict[str, Any]) -> ExperimentCase:
         simulator_version=_optional_str(data.get("simulator_version")),
         result_digest=_optional_str(data.get("result_digest")),
         assigned=dict(data.get("assigned") or {}),
+        log_diagnostics=(
+            dict(data["log_diagnostics"])
+            if isinstance(data.get("log_diagnostics"), dict)
+            else None
+        ),
         recovery=(
             CaseRecovery.from_record(data["recovery"])
             if data.get("recovery") is not None
@@ -606,6 +617,9 @@ def deserialize_job(
         error=data.get("error"),
         output_folder=_path_or_none(data.get("output_folder")),
         simulator_executable=SimulatorExecutable.from_record(data.get("simulator_executable")),
+        deck_names_xvii=(
+            data.get("deck_names_xvii") if isinstance(data.get("deck_names_xvii"), bool) else None
+        ),
         failures=list(data.get("failures") or []),
         observations=list(data.get("observations") or []),
         artifacts=list(data.get("artifacts") or []),

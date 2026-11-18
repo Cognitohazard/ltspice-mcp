@@ -180,8 +180,9 @@ async def test_every_route_names_the_measurements_ltspice_printed_failed(
     named: dict[str, list[str]] = {}
     rows: dict[str, dict[str, Any]] = {}
 
-    # A log read by its path: the recipe's row and the run's summary. With no
-    # deck to say they are WHENs, the unreadable ones have no number here.
+    # A log read by its path: the recipe's row and the run's summary. The
+    # unreadable ones are WHENs, whose result is the crossing printed after
+    # AT, so they read; only the failed one has no number.
     by_path = await dispatched(
         state_with_sim,
         "analyze_results",
@@ -189,11 +190,8 @@ async def test_every_route_names_the_measurements_ltspice_printed_failed(
         recipes=[_RECIPES[0]],
     )
     rows["recipe row, by path"] = row = _row(by_path, "m")
-    assert {name for name, number in row["measured"].items() if number is None} == {
-        *failed,
-        *unreadable,
-    }
-    assert set(row["unreadable"]) == unreadable
+    assert {name for name, number in row["measured"].items() if number is None} == set(failed)
+    assert "unreadable" not in row
     summary = await dispatched(
         state_with_sim,
         "analyze_results",
@@ -261,7 +259,8 @@ async def test_a_step_ltspice_printed_failed_is_named_on_that_steps_row(
     LTspice 26 prints ``failed`` in the row of that step (the third) of
     ``s_when``'s table. The log's measurements name it failed at that step,
     and so do that step's row, and no other step's, and the row over every
-    step. XVII prints 0 there, which names no failure."""
+    step. XVII prints 0 there, which names no failure: the step's value is
+    not established, so it is null and named as such, not as failed."""
     log = work_dir / "meas_step.log"
     shutil.copyfile(rec.recorded(build, "log/meas_step.log"), log)
     failed = ["s_when"] if rec.generation(build) == "current" else []
@@ -286,7 +285,8 @@ async def test_a_step_ltspice_printed_failed_is_named_on_that_steps_row(
     )
     rows = [row["value"] for row in reply["results"]["m"]["per_run"]["items"]]
     assert [_failed(row) for row in rows] == [[], [], failed]
-    assert [row["measured"]["s_when"] is None for row in rows] == [False, False, bool(failed)]
+    assert [row["measured"]["s_when"] is None for row in rows] == [False, False, True]
+    assert ["not_established" in row for row in rows] == [False, False, not failed]
     assert all("not_finite" not in row for row in rows)
     whole = await dispatched(
         state_no_sim,

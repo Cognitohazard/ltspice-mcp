@@ -1,0 +1,9 @@
+* C:\recording\sheet_part_names.asc
+V1 vdd 0 3
+R1 vdd N001 10k
+XMB1 N001 vdd 0 0 wrapped_nmos
+.op
+.include wrapped_nmos.sub
+XMB2 vdd vdd 0 0 wrapped_nmos
+.backanno
+.end

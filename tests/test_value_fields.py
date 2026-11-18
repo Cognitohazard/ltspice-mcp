@@ -22,6 +22,7 @@ from ltspice_mcp.lib.variations import (
     expand_variations,
     materialize_variants,
 )
+from tests.conftest import LTSPICE_READER
 
 #: A source, its value field, and the same field with a different AC magnitude.
 FIELDS = [("V1", "5V AC 1", "5V AC 2"), ("I1", "1m AC 2", "1m AC 3")]
@@ -50,8 +51,10 @@ def test_a_field_of_several_tokens_is_not_one_value(field: str):
 def test_sources_that_differ_after_the_first_token_are_not_equivalent(
     ref: str, field: str, other: str
 ):
-    assert compare_graphs(_deck(ref, field), _deck(ref, field)).equivalent
-    assert not compare_graphs(_deck(ref, field), _deck(ref, other)).equivalent
+    assert compare_graphs(_deck(ref, field), _deck(ref, field), reader=LTSPICE_READER).equivalent
+    assert not compare_graphs(
+        _deck(ref, field), _deck(ref, other), reader=LTSPICE_READER
+    ).equivalent
 
 
 @pytest.mark.parametrize(("ref", "field", "other"), SAME_FIELDS)
@@ -60,7 +63,7 @@ def test_sources_whose_tokens_hold_the_same_values_are_equivalent(
 ):
     """Each token is compared as a value, so a field is not told apart from
     the same field written another way."""
-    assert compare_graphs(_deck(ref, field), _deck(ref, other)).equivalent
+    assert compare_graphs(_deck(ref, field), _deck(ref, other), reader=LTSPICE_READER).equivalent
 
 
 @pytest.mark.parametrize(("ref", "field"), [(ref, field) for ref, field, _ in FIELDS])

@@ -536,3 +536,50 @@ def test_utf16_line_reader_handles_lf_byte_in_other_code_unit(tmp_path: Path, en
         write_raw(tmp_path, header.encode(encoding) + bytes(32)), limits=LIMITS
     ).plots
     assert dict(plot.fields)["Note"] == "\u0a41\u410a"
+
+
+_AC_VARIABLES = (("frequency", "frequency"), ("i(vd)", "current"), ("v(@m1[vth])", "voltage"))
+
+
+def test_a_real_variable_of_an_ngspice_complex_text_plot_takes_eight_bytes(tmp_path: Path):
+    # The shape ngspice writes for `.save @m1[vth]` in an AC run with an ASCII
+    # raw file (test_ngspice_e2e runs it live): one number a point.
+    header = synthetic_header(
+        kind="Values", flags="complex", plot="AC Analysis", variables=_AC_VARIABLES
+    )
+    body = "0\t\t1e3,0\n\t-6.8e-15,1.7e-11\n\t1.8\n1\t\t1e4,0\n\t-5.3e-15,1.7e-10\n\t1.8\n"
+    path = write_raw(tmp_path, (header + body).encode())
+    result = preflight_raw(path, limits=LIMITS)
+    (plot,) = result.plots
+    assert plot.value_bytes == (16, 16, 8)
+    assert plot.numeric_bytes == result.numeric_bytes == 2 * 40
+
+
+def test_a_variable_real_at_one_point_and_complex_at_another_is_refused(tmp_path: Path):
+    header = synthetic_header(
+        kind="Values", flags="complex", plot="AC Analysis", variables=_AC_VARIABLES
+    )
+    body = "0\t\t1e3,0\n\t1,2\n\t1.8\n1\t\t1e4,0\n\t1,2\n\t1.8,0\n"
+    path = write_raw(tmp_path, (header + body).encode())
+    with pytest.raises(
+        RawHeaderError, match=r"v\(@m1\[vth\]\).*real at point 0 and complex at point 1"
+    ):
+        preflight_raw(path, limits=LIMITS)
+
+
+@pytest.mark.parametrize(
+    ("command", "flags"), [("LTspice", "complex forward log"), ("Xyce", "complex")]
+)
+def test_a_real_variable_of_another_writers_complex_text_plot_is_not_established(
+    tmp_path: Path, command: str, flags: str
+):
+    # No recording shows LTspice (or Xyce) writing one number for a variable of
+    # a complex text plot, so the file is refused rather than read on the
+    # assumption that it means what ngspice's does.
+    header = synthetic_header(
+        kind="Values", flags=flags, plot="AC Analysis", variables=_AC_VARIABLES, command=command
+    )
+    body = "0\t\t1e3,0\n\t1,2\n\t1.8\n1\t\t1e4,0\n\t1,2\n\t1.8\n"
+    path = write_raw(tmp_path, (header + body).encode())
+    with pytest.raises(RawLayoutError, match="established only for ngspice"):
+        preflight_raw(path, limits=LIMITS)

@@ -29,6 +29,7 @@ from ltspice_mcp.lib.device_names import (
     find_trace_by_path,
     parse_device_param,
     parse_shorthand,
+    section_sign_spellings,
     trace_key,
     writes_xvii_command,
 )
@@ -145,6 +146,15 @@ def find_trace(names: Sequence[str], signal: str, *, xvii: bool) -> str | None:
     for cand in candidates:
         if cand in by_lower:
             return by_lower[cand]
+    if spellings := section_sign_spellings(signal):
+        # A part LTspice exported as R§Load is I(Load) in its results and
+        # I(RLoad) in ngspice's: the one trace either reads, never a guess.
+        found = {
+            trace
+            for spelled in spellings
+            if (trace := find_trace(names, spelled, xvii=xvii)) is not None
+        }
+        return found.pop() if len(found) == 1 else None
     return find_trace_by_path(names, signal, xvii=xvii) or device_param_name(names, signal)
 
 
@@ -343,8 +353,55 @@ def naming_note(plot: RawPlotHeader, signal: str) -> str:
     return (
         _pin_note(plot, signal)
         or _instance_x_note(plot, signal)
+        or _element_letter_note(plot, signal)
         or _unlabelled_net_note(plot, signal)
     )
+
+
+#: A current of one top-level device: ``I(RLoad)``, ``Id(M1)``. Only a
+#: device's name carries an element letter; a node's carries none.
+_ONE_NAME_TRACE = re.compile(r"\s*(i[a-z]?)\(\s*([^\s(),.:]+)\s*\)\s*", re.IGNORECASE)
+
+
+def _element_letter_note(plot: RawPlotHeader, signal: str) -> str:
+    """Name the one trace of ``plot`` that ``signal`` reads once the part's
+    element letter is taken off or put on, and why; empty when there is none.
+
+    LTspice exports a part whose name does not start with its element letter
+    with the letter and its ``§`` in front (``R§Load``), and names its
+    current by the part's own name, ``I(Load)``, on both builds (recorded:
+    ``export/load_name_op``). ngspice's copy of the deck, and
+    ``verify_circuit``, name it ``RLoad``. So ``I(RLoad)`` misses LTspice's
+    trace by the letter, and ``I(Load)`` misses one named with it.
+    """
+    match = _ONE_NAME_TRACE.fullmatch(signal)
+    if match is None:
+        return ""
+    function, name = match.group(1).casefold(), match.group(2).casefold()
+    found = [
+        trace
+        for trace in signal_names(plot)
+        if (other := _ONE_NAME_TRACE.fullmatch(trace)) is not None
+        and other.group(1).casefold() == function
+        and (
+            (len(name) > 1 and other.group(2).casefold() == name[1:])
+            or (len(other.group(2)) > 1 and other.group(2).casefold()[1:] == name)
+        )
+    ]
+    if len(found) != 1:
+        return ""
+    (trace,) = found
+    if len(_ONE_NAME_TRACE.fullmatch(trace).group(2)) < len(name):  # type: ignore[union-attr]
+        why = (
+            "LTspice names a part whose name does not start with its element letter by "
+            "its own name: R§Load in the netlist is I(Load) in its results."
+        )
+    else:
+        why = (
+            "This result names the part with its element letter, as ngspice's copy of a "
+            "deck LTspice exported does: R§Load there is RLoad."
+        )
+    return f" {trace} is in this result. {why}"
 
 
 @dataclass(frozen=True)

@@ -18,12 +18,13 @@ from pathlib import Path
 
 import pytest
 
-from ltspice_mcp.lib.deck_nodes import node_kind
+from ltspice_mcp.lib.deck_nodes import is_ground, node_kind, settled_node_kind
+from ltspice_mcp.lib.hierarchy import SemanticProfile
 from ltspice_mcp.lib.netlist_graph import compare_graphs, flatten_graph, parse_netlist_graph
 from ltspice_mcp.lib.spice_lex import lex_deck
-from ltspice_mcp.lib.spice_validator import is_ground_node, validate_netlist_bias_topology
+from ltspice_mcp.lib.spice_validator import validate_netlist_bias_topology
 from ltspice_mcp.lib.trace_names import read_name
-from tests.conftest import LIVENESS_S
+from tests.conftest import LIVENESS_S, LTSPICE_READER
 from tests.test_inspect_tools import _run
 
 #: A body's ``vdd`` is the global ``vdd``.
@@ -89,31 +90,67 @@ async def hierarchy_nodes(
     }
 
 
-def flat_nodes(deck: str) -> dict[str, tuple[str, ...]]:
-    return {c.ref.lower(): c.nodes for c in flatten_graph(parse_netlist_graph(deck)).components}
+#: A deck read by ngspice in its hsa mode, where its reading of every name
+#: here is established.
+NGSPICE_HSA = SemanticProfile("ngspice", "hsa")
+
+
+def flat_nodes(deck: str, reader: SemanticProfile = LTSPICE_READER) -> dict[str, tuple[str, ...]]:
+    graph = parse_netlist_graph(deck, reader=reader)
+    return {c.ref.lower(): c.nodes for c in flatten_graph(graph).components}
 
 
 @pytest.mark.parametrize(
-    ("name", "ports", "global_names", "simulator", "kind"),
+    ("name", "ports", "global_names", "simulator", "mode", "kind"),
     [
-        ("0", (), (), "ltspice", "ground"),
-        ("GND", (), (), "ltspice", "ground"),
-        ("gnd", (), (), "ngspice", "ground"),
-        ("gnd", ("top", "GND"), (), "ltspice", "port"),
-        ("Gnd", ("top", "gnd"), (), "ngspice", "ground"),
-        ("0", ("0",), (), "ltspice", "ground"),
-        ("VDD", ("vdd",), ("vdd",), "ltspice", "port"),
-        ("VDD", ("vdd",), ("vdd",), "ngspice", "global"),
-        ("vdd", ("Vdd",), (), "ltspice", "port"),
-        ("vdd", (), ("VDD",), "ngspice", "global"),
-        ("gnd!", (), (), "ltspice", "local"),
-        ("mid", ("top",), ("vdd",), "ltspice", "local"),
+        ("0", (), (), "ltspice", None, "ground"),
+        ("GND", (), (), "ltspice", None, "ground"),
+        ("gnd", (), (), "ngspice", "hsa", "ground"),
+        ("gnd", (), (), "ngspice", "", "ground"),
+        ("gnd", (), (), "ngspice", "kiltpsa", "unestablished"),
+        ("gnd", ("top", "GND"), (), "ltspice", None, "port"),
+        ("Gnd", ("top", "gnd"), (), "ngspice", "hsa", "ground"),
+        ("Gnd", ("top", "gnd"), (), "ngspice", "kiltpsa", "unestablished"),
+        ("0", ("0",), (), "ltspice", None, "ground"),
+        ("0", (), (), "ngspice", "kiltpsa", "ground"),
+        ("VDD", ("vdd",), ("vdd",), "ltspice", None, "port"),
+        ("VDD", ("vdd",), ("vdd",), "ngspice", "hsa", "global"),
+        ("vdd", ("Vdd",), (), "ltspice", None, "port"),
+        ("vdd", (), ("VDD",), "ngspice", "kiltpsa", "global"),
+        ("gnd!", (), (), "ltspice", None, "local"),
+        ("gnd!", (), (), "ngspice", "kiltpsa", "local"),
+        ("mid", ("top",), ("vdd",), "ltspice", None, "local"),
     ],
 )
 def test_what_a_node_name_stands_for(
-    name: str, ports: tuple[str, ...], global_names: tuple[str, ...], simulator: str, kind: str
+    name: str,
+    ports: tuple[str, ...],
+    global_names: tuple[str, ...],
+    simulator: str,
+    mode: str | None,
+    kind: str,
 ):
-    assert node_kind(name, ports=ports, global_names=global_names, simulator=simulator) == kind
+    found = node_kind(
+        name, ports=ports, global_names=global_names, simulator=simulator, ngbehavior=mode
+    )
+    assert found == kind
+
+
+def test_an_ngspice_reading_names_its_mode():
+    with pytest.raises(ValueError, match="ngbehavior"):
+        node_kind("gnd", simulator="ngspice")
+
+
+def test_where_gnds_reading_is_unestablished_the_readers_that_cannot_refuse_read_it_as_ltspice():
+    """In kiltpsa mode a ``gnd`` is not established for every ngspice version
+    (hierarchy discovery refuses it); the comparison and the netlist checks
+    keep the answer they gave before they were told the reader, LTspice's,
+    until a recording decides."""
+    for ports, kind in (((), "ground"), (("top", "gnd"), "port")):
+        assert settled_node_kind(
+            "gnd", ports=ports, simulator="ngspice", ngbehavior="kiltpsa"
+        ) == (kind)
+        assert settled_node_kind("gnd", ports=ports, simulator="ltspice") == kind
 
 
 def test_ngspice_wires_a_body_name_listed_by_global_to_the_global_net(tmp_path: Path):
@@ -131,29 +168,31 @@ async def test_every_reader_wires_a_body_name_listed_by_global_to_the_global_net
     """The comparison flattens the body's resistor onto the global rail, as
     hierarchy discovery reads it, so the deck matches the one that passes the
     rail as a port and not the one whose body never reaches it."""
-    assert flat_nodes(GLOBAL)["x1.r1"] == ("vdd", "a")
-    assert compare_graphs(GLOBAL, PORTED).structurally_equivalent
-    assert not compare_graphs(GLOBAL, UNTIED).structurally_equivalent
+    for reader in (LTSPICE_READER, NGSPICE_HSA):
+        assert flat_nodes(GLOBAL, reader)["x1.r1"] == ("vdd", "a")
+        assert compare_graphs(GLOBAL, PORTED, reader=reader).structurally_equivalent
+        assert not compare_graphs(GLOBAL, UNTIED, reader=reader).structurally_equivalent
     for simulator in ("ngspice", "ltspice"):
         rows = await hierarchy_nodes(state_no_sim, work_dir, GLOBAL, simulator)
         assert rows[("X1", "R1")][0] == ([], "vdd"), simulator
 
 
-async def test_the_comparison_and_the_netlist_checks_read_a_port_named_like_a_global_as_ltspice_does_where_hierarchy_reads_the_simulator_given(
+async def test_every_reader_reads_a_port_named_like_a_global_as_the_decks_reader_does(
     state_no_sim, work_dir: Path
 ):
     """Inside ``.subckt leg top vdd`` with ``.global vdd``, the body's ``vdd``
     is the port to both LTspice builds (``deck/global_port``) and the global
-    to ngspice 42. The comparison and the floating- and dangling-node checks
-    are told no simulator and read the port, as LTspice does. Hierarchy
-    discovery is told the simulator and reads each one's net."""
+    to ngspice 42. The comparison and hierarchy discovery, told the reader,
+    read each one's net."""
     assert flat_nodes(GLOBAL_PORT)["x2.r1"] == ("c", "mid")
+    assert flat_nodes(GLOBAL_PORT, NGSPICE_HSA)["x2.r1"] == ("c", "vdd")
     rows = await hierarchy_nodes(state_no_sim, work_dir, GLOBAL_PORT, "ltspice")
     assert rows[("X2", "R1")][1] == ([], "mid")
     rows = await hierarchy_nodes(state_no_sim, work_dir, GLOBAL_PORT, "ngspice")
     assert rows[("X2", "R1")][1] == ([], "vdd")
-    # Through the port and R3, c and mid reach ground, so nothing floats.
-    assert validate_netlist_bias_topology(lex_deck(GLOBAL_PORT).cards) == []
+    # Through the port and R3, or the rail, c and mid reach ground: nothing floats.
+    for reader in (LTSPICE_READER, NGSPICE_HSA):
+        assert validate_netlist_bias_topology(lex_deck(GLOBAL_PORT).cards, reader) == []
 
 
 def test_ngspice_reads_gnd_bang_as_a_node_of_its_own(tmp_path: Path):
@@ -163,8 +202,10 @@ def test_ngspice_reads_gnd_bang_as_a_node_of_its_own(tmp_path: Path):
 async def test_every_reader_reads_gnd_bang_as_a_node_of_its_own(state_no_sim, work_dir: Path):
     assert flat_nodes(GND_BANG)["r1"] == ("a", "gnd!")
     to_ground = GND_BANG.replace("R1 a gnd! 1k\nR2 gnd! 0 1k", "R1 a 0 1k")
-    assert not compare_graphs(GND_BANG, to_ground).structurally_equivalent
-    assert not is_ground_node("gnd!")
+    for reader in (LTSPICE_READER, NGSPICE_HSA):
+        assert not compare_graphs(GND_BANG, to_ground, reader=reader).structurally_equivalent
+    assert not is_ground("gnd!", simulator="ltspice")
+    assert not is_ground("gnd!", simulator="ngspice", ngbehavior="kiltpsa")
     rows = await hierarchy_nodes(state_no_sim, work_dir, GND_BANG)
     assert rows[("R1",)][1] == ([], "gnd!")
     # A result's node pair reads the same names as ground: V(a,gnd!) needs
@@ -177,18 +218,20 @@ async def test_every_reader_reads_gnd_bang_as_a_node_of_its_own(state_no_sim, wo
         assert (grounded.refused, grounded.plus, grounded.minus) == (None, "V(a)", None)
 
 
-async def test_the_comparison_and_the_netlist_checks_read_a_port_named_gnd_as_ltspice_does_where_hierarchy_reads_the_simulator_given(
+async def test_every_reader_reads_a_port_named_gnd_as_the_decks_reader_does(
     state_no_sim, work_dir: Path
 ):
-    """The comparison and the floating- and dangling-node checks are told no
-    simulator, and read a deck as LTspice does: inside ``.subckt ported top
-    gnd`` the body's ``gnd`` is the port. Hierarchy discovery is told the
-    simulator, and for ngspice reads that ``gnd`` as ground, as ngspice 42
-    runs it."""
+    """Inside ``.subckt ported top gnd`` the body's ``gnd`` is the port to
+    LTspice and ground to ngspice 42 in its hsa mode. The comparison and
+    hierarchy discovery, told the reader, read each one's net; in kiltpsa
+    mode the comparison keeps LTspice's reading, which hierarchy refuses."""
     deck = (
         "* a port named gnd\n.subckt ported top gnd\nR1 top gnd 1k\n.ends\n"
         "I3 0 c 1\nX2 c mid ported\nR3 mid 0 1k\n.op\n.end\n"
     )
     assert flat_nodes(deck)["x2.r1"] == ("c", "mid")
+    assert flat_nodes(deck, NGSPICE_HSA)["x2.r1"] == ("c", "0")
+    kiltpsa = SemanticProfile("ngspice", "kiltpsa")
+    assert flat_nodes(deck, kiltpsa)["x2.r1"] == ("c", "mid")
     rows = await hierarchy_nodes(state_no_sim, work_dir, deck)
     assert rows[("X2", "R1")][1] == ([], "0")

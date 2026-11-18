@@ -38,7 +38,7 @@ from tests._asc_ops import (
     wire_pins,
 )
 from tests._schematic_fixtures import open_editor, write_file
-from tests.conftest import FIXTURES_DIR
+from tests.conftest import FIXTURES_DIR, LTSPICE_READER
 from tests.test_verify_circuit import _run as run_verify_circuit
 
 
@@ -2922,7 +2922,9 @@ def _exported_nets(stem: str) -> list[set[str]]:
     an element card is pin ``n``.
     """
     nodes: dict[str, set[str]] = {}
-    for comp in parse_netlist_graph(_T_JUNCTIONS / f"{stem}.net").components:
+    for comp in parse_netlist_graph(
+        _T_JUNCTIONS / f"{stem}.net", reader=LTSPICE_READER
+    ).components:
         for order, node in enumerate(comp.nodes, start=1):
             nodes.setdefault(node, set()).add(f"{comp.ref}.{order}")
     return list(nodes.values())

@@ -17,7 +17,7 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 import numpy as np
 
@@ -37,7 +37,12 @@ from ltspice_mcp.lib.experiment_types import (
     partial_raw,
 )
 from ltspice_mcp.lib.job_lifecycle import runs_done
-from ltspice_mcp.lib.log_parser import LogDiagnostics
+from ltspice_mcp.lib.log_parser import (
+    LogDiagnostics,
+    MeasurementsOutput,
+    answered_measurements,  # noqa: TID251 - answer_measurements is the readers' door to it
+    measurement_cards,
+)
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.parser_service import ParserCleanupError, select_raw
 from ltspice_mcp.lib.parser_service import load_artifacts_sync as _parse_artifacts_sync
@@ -57,10 +62,11 @@ from ltspice_mcp.lib.result_observations import (
 )
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name
 from ltspice_mcp.lib.simulator_build import (
+    Producer,
     SimulatorExecutable,
     executable_identity,
-    ltspice_before_24,
     same_executable,
+    which_ltspice,
 )
 from ltspice_mcp.lib.trace_names import (
     NODE_PAIR_RE,
@@ -69,6 +75,9 @@ from ltspice_mcp.lib.trace_names import (
     why_not,
 )
 from ltspice_mcp.state import SessionState
+
+if TYPE_CHECKING:
+    from ltspice_mcp.lib.hierarchy import SemanticProfile
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +173,8 @@ class RunContext:
     #: What a read of this case's results has to say of them: a stopped case's
     #: kept raw ends where its run was stopped (``partial_raw_observation``).
     observations: tuple[dict[str, Any], ...] = ()
+    #: Who wrote the case's log (``run_producer``).
+    producer: Producer | None = None
 
 
 @dataclass(frozen=True)
@@ -191,6 +202,9 @@ class AnalysisSource:
     #: The span ``(start, end)`` of the read plot's axis whose points a read
     #: keeps (``raw_decode.AxisWindow``), an end None for open; None keeps all.
     window: tuple[float | None, float | None] | None = None
+    #: Who wrote the log, for a job's case (``run_producer``); None for a bare
+    #: path, whose producer is what ``source_producer`` says.
+    producer: Producer | None = None
     # Resident facts belong to one evaluation, between fresh drift checks.
     captured: ParsedArtifacts | None = field(default=None, repr=False, compare=False)
 
@@ -241,6 +255,7 @@ def source_for_run(
         console=run.console,
         simulator_version=run.simulator_version,
         observations=run.observations,
+        producer=run.producer,
     )
 
 
@@ -533,6 +548,7 @@ def case_run_context(
         console=console,
         simulator_version=case.simulator_version,
         observations=(partial_raw_observation(case, held),) if held is not None else (),
+        producer=run_producer(job, case),
     )
 
 
@@ -592,6 +608,57 @@ def dialect_for_job(job: ExperimentJob, state: SessionState) -> str | None:
     return None
 
 
+def run_producer(job: ExperimentJob, case: ExperimentCase) -> Producer:
+    """Who wrote a case's log: the simulator the job recorded, the build the
+    case's run named in its own output, and the program the job launched.
+
+    The one answer for a case, so the classification stored on its run row when
+    the run ended and a later read of its log (the ``summary`` recipe) choose the
+    same rules (``log_conditions.rules_for``).
+    """
+    executable = job.simulator_executable
+    return Producer(
+        family=dialect_for_simulator_name(job.simulator) if job.simulator else None,
+        build=case.simulator_version,
+        program=executable.path if executable is not None else None,
+    )
+
+
+def source_producer(
+    source: AnalysisSource, *, read_dialect: str | None = None, reported: str | None = None
+) -> Producer:
+    """Who wrote ``source``'s log: a job case's recorded producer
+    (``run_producer``). For a bare path, the dialect its caller named or, when
+    it named none, the one its raw's header shows (``read_dialect``, only with
+    evidence), and the build its files name (``reported``, from
+    ``reported_build``); a bare path records no program."""
+    if source.producer is not None:
+        return source.producer
+    return Producer(
+        family=source.dialect or source.explicit_dialect or read_dialect,
+        build=source.simulator_version or reported,
+        program=None,
+    )
+
+
+async def answer_measurements(
+    source: AnalysisSource, table: MeasurementsOutput, *, producer: Producer | None = None
+) -> MeasurementsOutput:
+    """``source``'s log measurements ``table`` with the field holding each
+    one's result named (``log_parser.answered_measurements``), from who wrote
+    the log and the run's deck where it is known. Every reader of a
+    measurement reads it through here. ``producer`` is the one a caller has
+    already resolved (the summary's, read with the build its files name);
+    otherwise it is :func:`source_producer`'s, as a log-only reader opens no
+    source file in this process: a bare path then names no build here, and
+    ``answered_measurements`` reads the build the log's own first line names,
+    which the decoder found (``printed_by``); a log that names none is read
+    with every recorded build's rules (``log_conditions.rules_for``), which
+    agree on every recorded form."""
+    cards = await asyncio.to_thread(measurement_cards, source.netlist)
+    return answered_measurements(table, producer or source_producer(source), cards)
+
+
 def reported_version(
     state: SessionState,
     executable: SimulatorExecutable | None,
@@ -631,23 +698,20 @@ def cp1252_ltspice(state: SessionState, executable: SimulatorExecutable | None) 
 
     LTspice XVII and earlier read a deck as cp1252, so a UTF-8 micro sign
     (C2 B5) reaches them as the two characters ``Âµ`` and loses its scale;
-    LTspice 24 and later read the UTF-8 they write. The same builds refuse
-    ``.options logopinfo`` and name subcircuit instances without their X, so
-    every decision about them asks here, or passes the same two facts to
-    ``simulator_build.ltspice_before_24``: the executable's own name
-    (``XVIIx64.exe``), and the build the latest run on it reported, the one
+    LTspice 24 and later read the UTF-8 they write. The answer is
+    ``simulator_build.which_ltspice``'s, from the executable itself and
+    the build the latest run on it reported, the one
     ``inspect(kind="capabilities")`` reports. Neither launches the simulator.
-    Any other simulator answers None. The answer names the evidence, for a
-    finding to cite.
+    Any other simulator, or an LTspice nothing shows to be one before 24,
+    answers None. The answer names the evidence, for a finding to cite.
     """
     if executable is None:
         return None
-    # The name answers without the scan of every recorded run that the
-    # reported build takes.
-    named = ltspice_before_24(executable.path, None)
-    if named is not None:
-        return named
-    return ltspice_before_24(executable.path, reported_build_of(state, executable))
+    # The executable itself answers without the scan of every recorded run.
+    found = which_ltspice(executable.path, None)
+    if found is None or not found.before_24:
+        found = which_ltspice(executable.path, reported_build_of(state, executable))
+    return found.evidence if found is not None and found.before_24 else None
 
 
 def reported_build_of(state: SessionState, executable: SimulatorExecutable | None) -> str | None:
@@ -657,12 +721,69 @@ def reported_build_of(state: SessionState, executable: SimulatorExecutable | Non
     return reported[0] if reported is not None else None
 
 
-def simulator_before_24(state: SessionState, simulator: type | None) -> bool:
-    """``cp1252_ltspice`` for a simulator class: whether it launches an LTspice
-    before 24. Blocking (the executable is identified): call off the loop."""
+def session_reader(state: SessionState) -> SemanticProfile:
+    """Who reads a deck the session checks without running it
+    (``verify_circuit``, ``inspect``'s net query): the family a
+    ``run_experiments`` call with no override would run it on, that family's
+    executable (``deck_producer``), and ngspice's mode. Blocking: call off
+    the loop.
+
+    A family with no reader profile (QSPICE, Xyce), or none detected, is read
+    as LTspice reads a deck, as every deck was before the readers were told
+    who reads it, except for which definition of a subcircuit defined twice
+    is in force: that is the family's own answer (``definitions_of``), which
+    for QSPICE and Xyce is not recorded."""
+    from ltspice_mcp.lib.hierarchy import SUPPORTED_FAMILIES, SemanticProfile
+    from ltspice_mcp.lib.simulator import DEFAULT_FAMILY, family_for, run_ngbehavior
+
+    detected = family_for(None, state.default_simulator)
+    family = detected
+    if family not in SUPPORTED_FAMILIES:
+        family = DEFAULT_FAMILY
+    # The executable a run with no override uses: the default, when it is of
+    # this family, else the session's executable of the family.
+    simulator = (
+        state.default_simulator
+        if family_for(None, state.default_simulator) == family
+        else state.available_simulators.get(family)
+    )
+    return SemanticProfile.of(
+        deck_producer(state, family, simulator),
+        run_ngbehavior(simulator) if family == "ngspice" else None,
+        definitions_of=(
+            deck_producer(state, detected, state.default_simulator)
+            if detected is not None and detected != family
+            else None
+        ),
+    )
+
+
+def deck_producer(state: SessionState, family: str | None, simulator: type | None) -> Producer:
+    """Who will read a deck run on ``simulator`` of ``family``: the family,
+    the build the latest run on the same executable reported
+    (``reported_build_of``), and the program it launches. The one answer for
+    a deck's reader before it runs, which ``hierarchy.SemanticProfile.of``
+    takes, as ``run_producer`` is for a run that ended. With no simulator
+    (an offline query) only the family is known. Blocking (the executable is
+    identified): call off the loop."""
     if simulator is None:
-        return False
-    return cp1252_ltspice(state, executable_identity(simulator)) is not None
+        return Producer(family=family, build=None, program=None)
+    return _producer_of(state, family, executable_identity(simulator))
+
+
+def _producer_of(
+    state: SessionState, family: str | None, identity: SimulatorExecutable | None
+) -> Producer:
+    program = identity.path if identity is not None else None
+    # Only an LTspice's build changes how its names are read; an executable
+    # that itself shows a build before 24 answers without the scan of every
+    # recorded run, and every other one is read with its build's own wording.
+    build = None
+    if family == "ltspice":
+        found = which_ltspice(program, None)
+        if found is None or not found.before_24:
+            build = reported_build_of(state, identity)
+    return Producer(family=family, build=build, program=program)
 
 
 # Absolute worker deadline; the supervisor confirms owned-tree cleanup before

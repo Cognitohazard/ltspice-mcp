@@ -385,9 +385,10 @@ class JobRegistry:
         process's live job is waited on; any other job is re-read from its
         record, which the store reconciles once its owner is gone. Without
         persistence there is no record, so nothing will change it here and it
-        answers at once. A job whose record already says it is done
-        (``finished``) answers at once, live or not, so this wait and every
-        reader of the record agree on when the runs are done.
+        answers at once, not timed out (``wait_cannot_end``). A job whose
+        record already says it is done (``finished``) answers at once, live or
+        not, so this wait and every reader of the record agree on when the runs
+        are done.
 
         A caller who asked for progress is told how many of the job's cases
         have finished as that count grows (``progress.watch``), read from the
@@ -397,6 +398,9 @@ class JobRegistry:
         def cases_finished() -> tuple[int, int, str]:
             return _cases_finished(self.jobs.get(job.job_id, job))
 
+        if self.wait_cannot_end(job, wait_for):
+            # Time did not run out: no wait here could see the job change.
+            return job, False
         live = self.live.get(job.job_id)
         if live is not None:
             if finished(live.job, wait_for):
@@ -405,11 +409,25 @@ class JobRegistry:
             return live.job, not done
         if finished(job, wait_for):
             return job, False
-        if self.persist_enabled:
-            return await progress.watch(
-                self._wait_for_foreign(job, timeout_s, wait_for), cases_finished
-            )
-        return job, True
+        return await progress.watch(
+            self._wait_for_foreign(job, timeout_s, wait_for), cases_finished
+        )
+
+    def wait_cannot_end(self, job: ExperimentJob, wait_for: WaitFor = "all") -> bool:
+        """Whether no wait in this session can see ``job`` finish, or its runs
+        with ``wait_for="runs"``: it is not finished, this session does not run
+        it, and job records are not kept (persistence off), so there is no
+        record to re-read for a process that might.
+
+        ``wait`` then answers at once and not as a timeout, and the reply that
+        reports the wait says why, so a caller that waits until the job ends
+        stops instead of asking again for ever.
+        """
+        return (
+            not self.persist_enabled
+            and job.job_id not in self.live
+            and not finished(job, wait_for)
+        )
 
     def refreshed_jobs(self) -> list[ExperimentJob]:
         """Snapshot of every job, with parallel sessions' live jobs re-read.

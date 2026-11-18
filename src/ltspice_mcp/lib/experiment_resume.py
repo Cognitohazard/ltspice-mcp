@@ -588,6 +588,7 @@ def _make_child(
         case.failure_evidence = None
         case.submitted_at = case.completed_at = None
         case.simulator_version = None
+        case.log_diagnostics = None
         case.result_digest = None
         case.observations = []
         prepare_seeded_driver(case, recovery.execution, store, recovery.root_job_id, simulator)
@@ -638,6 +639,7 @@ async def _start_attempt(
         stage=already_staged,
         job_id=job.job_id,
         simulator_executable=execution.executable,
+        deck_names_xvii=job.deck_names_xvii,
         recoverable=True,
         simulator_seed=execution.simulator_seed,
         max_parallel=execution.max_parallel,

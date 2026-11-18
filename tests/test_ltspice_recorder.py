@@ -319,14 +319,47 @@ class TestCaseList:
             if behaviour.pending:
                 assert CASES.of(key), f"{key} is pending but names no input to record"
 
+    def test_a_source_deck_names_the_case_folder_where_it_writes_dir(self, tmp_path: Path):
+        """A deck can name a file of its own case by an absolute path; the
+        other inputs, and the digest the manifest keeps, are as committed."""
+        case = CASES.case("deck/absolute_pwl_file")
+        data = (INPUTS / case.source).read_bytes()
+        assert b"<dir>" in data
+        run = case.input_in(case.source, data, tmp_path)
+        assert run == data.replace(b"<dir>", str(tmp_path).encode())
+        assert case.input_in("deck/data/level.txt", b"<dir>", tmp_path) == b"<dir>"
+
     def test_every_behaviour_names_the_code_that_models_it(self):
+        """A behaviour recorded before any code models it lists none, and its
+        summary says so."""
         for key, behaviour in CASES.behaviours.items():
-            assert behaviour.model, f"{key} names no code"
+            if not behaviour.model:
+                assert "Nothing in the server models this yet" in behaviour.summary, key
+            assert behaviour.model or behaviour.summary, f"{key} names no code"
             for name in behaviour.model:
                 path = (
                     REPO / name if name.startswith("tests/") else REPO / "src/ltspice_mcp" / name
                 )
                 assert path.exists(), f"{key}: {name} is not in the repository"
+
+    def test_a_case_can_start_the_build_in_a_folder_of_its_own(self, tmp_path: Path):
+        """``cwd`` names a folder under the case's directory, which the
+        recorder starts the build in; one outside it is refused."""
+        assert CASES.case("deck/relative_wavefile").cwd == "run"
+        assert CASES.case("deck/relative_wavefile").copies == {
+            "deck/relative_wavefile.cir": "relative_wavefile.cir",
+            "deck/data/level.wav": "data/level.wav",
+            "deck/run/data/level.wav": "run/data/level.wav",
+        }
+        inputs = tmp_path / "inputs"
+        (inputs / "deck").mkdir(parents=True)
+        (inputs / "deck" / "d.cir").write_text("* d\n.op\n.end\n")
+        (inputs / recorder.CASES_FILE).write_text(
+            '[behaviour.b]\nsummary = "s"\nmodel = ["lib/format.py"]\n'
+            '[[case]]\nid = "deck/d"\nbehaviour = "b"\nsource = "deck/d.cir"\ncwd = "../up"\n'
+        )
+        with pytest.raises(recorder.RecorderError, match="cwd is a folder under"):
+            recorder.load_cases(inputs)
 
     def test_every_input_file_belongs_to_a_case(self):
         used = {name for case in CASES.cases for name in case.copies}

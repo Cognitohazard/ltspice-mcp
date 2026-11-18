@@ -1812,8 +1812,10 @@ build it named.
 `LTspice._default_lib_paths`; `spicelib/sim/simulator.py`,
 `Simulator.get_default_library_paths`).
 **Our workaround:** `src/ltspice_mcp/lib/simulator.py` — `generation_of`
-determines which LTspice a class launches from its program's file name
-(`XVIIx64.exe` is XVII, `LTspice.exe` is 24 and later), and
+determines which LTspice a class launches from the program itself
+(`simulator_build.which_ltspice`: its version resource, the macOS bundle's
+version, or the names XVII and IV install under; `LTspice.exe` alone shows
+nothing, and then every build's directories are kept), and
 `simulator_library_roots` keeps only that generation's directories from
 spicelib's list (`_in_generation`). On WSL, spicelib's list expands against the
 Linux home and finds nothing, so `wsl.get_ltspice_lib_paths(generation)` checks
@@ -3962,7 +3964,11 @@ with the line and the reason, and the `AT` crossing comes from
 `_RE_MEAS_AT_LINE`. The reason quotes the value as the log printed it
 (`printed_measurements`), not as the reader holds it, since the reader cuts
 `vth^2` to `vth`. The measurements check of `lib/log_decode.py` refuses a
-table that lacks a measurement the log printed.
+table that lacks a measurement the log printed. The threshold is the level a
+WHEN with no FIND searched for, and its result is the crossing
+(`log_parser.measurement_answer`), so such a measurement reads on every route
+(`tests/test_measurement_answer.py`, `tests/test_unreadable_measurement.py`).
+Rechecked on spicelib 1.5.1 on 2026-11-13: the line is still skipped.
 
 ### Summary
 
@@ -4535,9 +4541,14 @@ pins that a recoverable run is not affected.
 ngspice-42 on Linux and the official ngspice-47 Windows build.
 **Affected version:** spicelib 1.5.1
 (`spicelib/raw/plot_data.py`, `PlotData._read_ascii_vector`).
-**Our workaround:** none yet. The server's own preflight read
-(`raw_header.py`, `text_payload`) refuses the same file first, with the
-same rule.
+**Our workaround:** the server's preflight read
+(`raw_header.py`, `_Scanner.text_payload`) finds each variable of an
+ngspice complex text plot that holds one number a point and gives it an
+eight-byte real width, and the decoder (`raw_decode.py`, `_WorkerPlot`)
+reads those variables as real before spicelib's `_read_ascii_vector` runs.
+Every reader of the results gets the real values the file holds; no
+imaginary part is added. The same shape from another writer is still
+refused, because no recording shows one writing it.
 
 ### Summary
 
@@ -4622,8 +4633,110 @@ part at that point.
 
 ### Cross-reference
 
+`tests/test_ngspice_e2e.py::test_a_real_variable_of_a_complex_plot_reads_as_each_file_holds_it`
+runs the deck above with ngspice writing a binary and an ASCII raw file and
+reads both through the parser subprocess, the Python API, `analyze_results`,
+`inspect` and `plot_waveform`.
 `tests/test_ngspice_e2e.py::test_an_ac_summary_defaults_to_no_device_parameter`
-runs the deck above with ngspice's ASCII format (`SPICE_ASCIIRAWFILE=1`)
-and as the installed ngspice writes it. It is marked as an expected failure
-(`xfail`, strict) where the file is ASCII, so it fails again once a
-workaround makes it pass.
+runs the summary on both formats. `tests/test_raw_header.py` pins the
+preflight's widths and refusals, and `tests/test_ascii_real_in_complex_plot.py`
+draws the real variable with `plot_waveform`. The override and the
+preflight's eight-byte width go together: the proposed fix above reads the
+value as complex, so with the override removed the decoder would hand a
+complex array to a real slot and refuse the file. Once spicelib reads such a
+file, keep the override as long as the variable is to stay real.
+
+---
+
+## Bug 44 — `LTSpiceLogReader` skips a measurement whose name holds a dot or a dash
+
+**Status:** draft for an upstream spicelib pull request. Observed 2026-11-15.
+**Affected version:** spicelib 1.5.1 (`spicelib/log/ltsteps.py`,
+`LTSpiceLogReader.__init__`, the stepless measurement regex).
+**Our workaround:** `log_parser.printed_measurements`, which finds the
+measurements a log printed so that a line the reader skipped still gets its
+own entry (Bug 38), reads a name as LTspice prints it, a dot or a dash
+included (`_MEAS_NAME` in `src/ltspice_mcp/lib/log_parser.py`).
+`parse_measurements` then reads the skipped line's value from the log's own
+text, and its crossing from `_RE_MEAS_AT_LINE`, which reads the same names.
+
+### Summary
+
+Both LTspice 26 and XVII take a `.meas` named `t.rise`, and XVII one named
+`t-fall` (LTspice 26 refuses that deck with "syntax error"). Each build prints
+the result line with the name as written: `t.rise: V(out)=0.5 AT
+6.98157501917e-05`. The stepless regex reads a name as `\w+`, so a name
+holding `.` or `-` does not match, and the measurement, its value and its
+crossing are missing from the reader's dataset and from
+`get_measure_names()`. Nothing says a line was skipped.
+
+### Affected code
+
+```python
+# ltsteps.py, LTSpiceLogReader.__init__
+regx = re.compile(
+        r"^(?P<name>\w+)(:\s+.*)?=(?P<value>[\d(inf)E+\-\(\)dB,°(-/\w]+)( FROM (?P<from>[\d\.E+-]*) TO (?P<to>[\d\.E+-]*)|( at (?P<at>[\d\.E+-]*)))?",
+        re.IGNORECASE)
+```
+
+`\w+` stops at the `.` of `t.rise`; the optional `:` clause cannot start
+there, and no `=` follows, so `regx.match(line)` is None.
+
+### Reproduction
+
+The log LTspice 26.1.1 wrote for `.meas tran t.rise WHEN V(out)=0.5`
+(recorded as `tests/fixtures/ltspice_recorded/ltspice26/log/meas_name_dot.log`):
+
+```
+t.rise: V(out)=0.5 AT 6.98157501917e-05
+```
+
+```python
+from spicelib.log.ltsteps import LTSpiceLogReader
+reader = LTSpiceLogReader("meas_name_dot.log")
+reader.get_measure_names()   # []
+```
+
+LTspice XVII 17.0.37 prints `t-fall: v(out)=0.5 AT 6.9672e-005` for the
+deck named with a dash (`ltspice17/log/meas_name_dash.log`), with the same
+result.
+
+### Impact
+
+A measurement LTspice took and printed reads as one the deck never asked
+for: no value, no failure, no error.
+
+### Proposed fix
+
+Read the name as the text up to the first `:` or `=` that is not inside it
+(LTspice prints `<name>: ` before the expression):
+
+```python
+regx = re.compile(
+    r"^(?P<name>[^\s:=]+)(:\s+.*?)?=(?P<value>\S+)"
+    r"(\s+FROM\s+(?P<from>[\d\.E+-]*)\s+TO\s+(?P<to>[\d\.E+-]*)"
+    r"|\s+at\s+(?P<at>[\d\.E+-]*))?",
+    re.IGNORECASE)
+```
+
+### Suggested upstream test
+
+```python
+def test_a_measurement_named_with_a_dot_is_read(tmp_path):
+    log = tmp_path / "dot.log"
+    log.write_text(
+        "Circuit: * t\n\nt.rise: V(out)=0.5 AT 6.98157501917e-05\n", encoding="utf-8"
+    )
+    reader = LTSpiceLogReader(str(log))
+    assert reader.dataset["t.rise_at"] == [6.98157501917e-05]
+```
+
+### Cross-reference
+
+`tests/test_recorded_ltspice_results.py::test_a_measurement_named_with_punctuation`
+pins what each build prints and that the server reads the measurement under
+its name, its crossing the result;
+`tests/test_measurement_answer.py::test_every_route_reads_a_measurement_named_with_punctuation`
+reads it on every route. `tests/test_run_diagnostics.py` still lists XVII's
+dashed line among the lines the log classifier does not know: the classifier
+reads a result line with a pattern of its own.

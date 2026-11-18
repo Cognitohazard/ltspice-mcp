@@ -253,7 +253,8 @@ def get_ltspice_lib_paths(generation: str | None = None) -> list[str]:
     ``generation`` (``simulator.generation_of``) picks the build whose
     library is wanted: LTspice XVII keeps its own under
     ``%USERPROFILE%\\Documents\\LTspiceXVII\\lib``, LTspice 24 and later
-    (and None) under ``%LOCALAPPDATA%\\LTspice\\lib``.
+    under ``%LOCALAPPDATA%\\LTspice\\lib``. With the build not established
+    (None) both are probed, as off WSL every build's library is kept.
 
     Returns:
         List of existing library paths (may be empty if not on WSL or
@@ -262,19 +263,18 @@ def get_ltspice_lib_paths(generation: str | None = None) -> list[str]:
     if not is_wsl():
         return []
 
-    if generation == "xvii":
+    libraries: list[Path] = []
+    if generation != "current":
         profile = _resolve_win_env("USERPROFILE")
-        if profile is None:
-            return []
-        lib = profile / "Documents" / "LTspiceXVII" / "lib"
-    else:
+        if profile is not None:
+            libraries.append(profile / "Documents" / "LTspiceXVII" / "lib")
+    if generation != "xvii":
         local_appdata = _resolve_win_env("LOCALAPPDATA")
-        if local_appdata is None:
-            return []
-        lib = local_appdata / "LTspice" / "lib"
+        if local_appdata is not None:
+            libraries.append(local_appdata / "LTspice" / "lib")
 
     # LTspice stores symbols under <lib>/sym
-    candidates = [lib, lib / "sym"]
+    candidates = [path for lib in libraries for path in (lib, lib / "sym")]
 
     found = []
     for candidate in candidates:

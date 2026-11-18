@@ -42,10 +42,12 @@ from ltspice_mcp.lib.deck_staging import (
     DEFAULT_INCLUDE_DEPTH,
     card_sections,
     closure_depth,
+    in_other_section,
     resolve_existing,
     resolve_reference,
     scan_include_references,
 )
+from ltspice_mcp.lib.device_names import path_text
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.hierarchy import ResolvedInstance, param_assignments
 from ltspice_mcp.lib.hierarchy_expr import Environment, NumericFact, card_copies
@@ -58,20 +60,25 @@ from ltspice_mcp.lib.montecarlo import (
     parse_value,
     sample_instance_mismatch,
 )
+from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.spice_lex import (
+    Definition,
+    DefinitionRule,
     EditCards,
     SpiceCard,
     SpiceLexError,
     TokenKind,
+    definition_rule,
     emit,
     find_matching_ends,
     lex,
     lex_for_edit,
+    settle_definitions,
     subckt_children,
     tokenize_body,
 )
 from ltspice_mcp.lib.spice_lex_ops import inject_cards_before_end, rename_subckt
-from ltspice_mcp.lib.spice_lex_views import InstanceLine, ModelCard, SubcktCard
+from ltspice_mcp.lib.spice_lex_views import InstanceLine, ModelCard, SubcktCard, assigned_params
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +225,11 @@ class MismatchClone:
     the deck declares inside the subcircuit body is where process variation
     goes — and a copy taken at plan time would carry the nominal version while
     the instances naming it report the perturbed one.
+
+    ``rank`` is which of the ``of`` definitions of the name in its file and
+    section the plan chose, in card order: the one the deck's reader keeps
+    in force (``spice_lex.DefinitionRule.kept``), the only one when ``of``
+    is 1.
     """
 
     name: str
@@ -226,6 +238,8 @@ class MismatchClone:
     section: str | None
     inner_refs: tuple[str, ...]
     text: str | None = None
+    rank: int = 0
+    of: int = 1
 
 
 @dataclass(frozen=True)
@@ -389,7 +403,9 @@ class _FileIndex:
         if self.active is None:
             return True
         section = self.sections[card_index]
-        return section is None or section.casefold() in self.active
+        return section is None or any(
+            not in_other_section(section, entered) for entered in self.active
+        )
 
 
 def _index_files(files: Sequence[ClosureFile]) -> list[_FileIndex]:
@@ -478,6 +494,53 @@ def _subckt_definitions(indexes: list[_FileIndex]) -> dict[str, list[tuple[int, 
                 continue
             definitions.setdefault(card.name.casefold(), []).append((index.file.index, card_index))
     return definitions
+
+
+def _site_in_force(
+    subckt: str,
+    x_ref: str,
+    sites: list[tuple[int, int]],
+    indexes: list[_FileIndex],
+    rule: DefinitionRule,
+) -> tuple[int, int]:
+    """The definition of ``subckt`` the deck's reader keeps in force among
+    ``sites`` (``spice_lex.settle_definitions``), refused when it keeps none.
+
+    The plan knows each file's cards but not where in the deck each file is
+    read, so where the definitions are in more than one file it cannot give
+    the reader its reading order: it refuses, as it does a name defined in
+    more than one scope (one inside a subcircuit is local to it)."""
+    if len(sites) == 1:
+        return sites[0]
+    where = ", ".join(
+        f"{indexes[f].file.path.name} line {indexes[f].cards[c].line_start}" for f, c in sites
+    )
+    head = (
+        f"Subcircuit {subckt!r} instantiated by {x_ref!r} is defined at {len(sites)} "
+        f"active sites ({where})."
+    )
+    found = [Definition(indexes[f].cards[c].scope, subckt, str(f), f == 0) for f, c in sites]
+    answers = settle_definitions(found, rule)
+    if len(answers) > 1:
+        raise MismatchPlanError(
+            "ambiguous_subckt",
+            f"{head} They are in more than one scope, and the mismatch plan cannot tell "
+            f"which a call reaches. Rename the local definition of {subckt}.",
+        )
+    (answer,) = answers
+    if answer.kept is None:
+        raise MismatchPlanError(
+            "ambiguous_subckt",
+            f"{head} {answer.reason} A section-selected library counts one definition.",
+        )
+    if len({f for f, _ in sites}) > 1:
+        raise MismatchPlanError(
+            "ambiguous_subckt",
+            f"{head} {rule.reader} reads one of them by where each file is read in the "
+            "deck, which the mismatch plan does not follow. Rename or delete all but one "
+            f"definition of {subckt}, or section-select one.",
+        )
+    return sites[answer.kept]
 
 
 def _closer_index(cards: list[SpiceCard], opener_index: int) -> int:
@@ -584,6 +647,7 @@ def build_plan(
     prefix: str | Sequence[str] | None = None,
     selectors: Sequence[str] | None = None,
     exact: bool = False,
+    subckt_rule: DefinitionRule | None = None,
 ) -> MismatchPlan:
     """Resolve which inner MOS devices a selection reaches, and how to reach them.
 
@@ -596,7 +660,12 @@ def build_plan(
     A prefix deliberately does not descend into subcircuit bodies: a foundry
     library is full of internal ``X`` cards, and a set query that swept them
     would perturb the library's own wiring rather than the caller's devices.
+
+    ``subckt_rule`` is which definition of a subcircuit defined more than once
+    the deck's reader keeps (``spice_lex.definition_rule``); None for a reader
+    that is not known, which keeps none, so such a subcircuit is refused.
     """
+    rule = subckt_rule or definition_rule(Producer(None, None, None))
     if (prefix is None) == (selectors is None):
         raise ValueError("build_plan takes exactly one of prefix or selectors")
     require_positional(files)
@@ -643,18 +712,7 @@ def build_plan(
             )
             continue
         sites = _narrow_to_section(sites, indexes, file_index, x_section)
-        if len(sites) > 1:
-            where = ", ".join(
-                f"{indexes[f].file.path.name} line {indexes[f].cards[c].line_start}"
-                for f, c in sites
-            )
-            raise MismatchPlanError(
-                "ambiguous_subckt",
-                f"Subcircuit {subckt!r} instantiated by {x_ref!r} is defined at "
-                f"{len(sites)} active sites ({where}); a mismatch plan has to patch one "
-                "definition, so remove or section-select all but the one this deck means",
-            )
-        def_file, opener_index = sites[0]
+        def_file, opener_index = _site_in_force(subckt, x_ref, sites, indexes, rule)
         def_index = indexes[def_file]
         children = list(subckt_children(def_index.cards, opener_index))
         inner_cards = _instances(children, "M")
@@ -724,14 +782,19 @@ def build_plan(
             draft.name,
             inner_refs,
         )
+        subckt_name = index.cards[draft.opener_index].name or ""
+        section = index.sections[draft.opener_index]
+        siblings = _definitions_in(index.cards, index.sections, subckt_name, section)
         clones.append(
             MismatchClone(
                 name=draft.name,
-                subckt=index.cards[draft.opener_index].name or "",
+                subckt=subckt_name,
                 def_file=draft.def_file,
-                section=index.sections[draft.opener_index],
+                section=section,
                 inner_refs=tuple(inner_refs),
                 text=None if draft.def_file == 0 else emit(clone_cards),
+                rank=siblings.index(draft.opener_index),
+                of=len(siblings),
             )
         )
     for skip in skips:
@@ -764,8 +827,12 @@ def _narrow_to_section(
     same file and the same section as the instance is the one that instance
     means; without that, selecting two corners of one library reads as two
     definitions of the same name and refuses a deck the simulator accepts.
+
+    Only an instance inside a library section is narrowed: of definitions
+    outside every section, the one in force is the reader's answer
+    (``_site_in_force``), never the one beside the instance.
     """
-    if len(sites) < 2:
+    if len(sites) < 2 or x_section is None:
         return sites
     local = [
         (file_index, card_index)
@@ -846,7 +913,7 @@ def _refuse_repeated_instance(
     seen: dict[str, list[str]] = {}
     for x_ref, file_index, card, _section in picked:
         where = indexes[file_index].file.path.name
-        scope = ".".join(card.scope) if card.scope else "top level"
+        scope = path_text(card.scope) if card.scope else "top level"
         seen.setdefault(x_ref.casefold(), []).append(f"{where} ({scope})")
     for folded, places in seen.items():
         if len(places) > 1:
@@ -1052,9 +1119,7 @@ def _declared_params(clone_cards: list[SpiceCard]) -> set[str]:
     depth = len(opener.scope) + 1
     for card in clone_cards:
         if card.kind == "param" and len(card.scope) == depth:
-            for token in tokenize_body(card.body)[1:]:
-                if token.kind == TokenKind.KEY_VALUE and token.key:
-                    declared.add(token.key.casefold())
+            declared.update(name.casefold() for name, _token in assigned_params(card))
     return declared
 
 
@@ -1214,23 +1279,31 @@ def _locate_subckt(cards: list[SpiceCard], source: ClosureFile, clone: MismatchC
     a run rewrites, so cards can have been inserted ahead of it and a position
     that has drifted would silently copy whatever now sits there.
     """
-    folded = clone.subckt.casefold()
     sections = card_sections(cards, source.path, source.depth)
-    matches = [
+    matches = _definitions_in(cards, sections, clone.subckt, clone.section)
+    if len(matches) != clone.of:
+        raise MismatchPlanError(
+            "subckt_unresolved",
+            f"Subcircuit {clone.subckt!r} now has {len(matches)} definitions in "
+            f"{source.path.name} where the plan resolved {clone.of}",
+        )
+    return matches[clone.rank]
+
+
+def _definitions_in(
+    cards: Sequence[SpiceCard], sections: Sequence[str | None], name: str, section: str | None
+) -> list[int]:
+    """The openers of every definition of ``name`` in ``section`` of one file,
+    in card order."""
+    folded = name.casefold()
+    return [
         i
         for i, card in enumerate(cards)
         if card.kind == "subckt"
         and card.name
         and card.name.casefold() == folded
-        and sections[i] == clone.section
+        and sections[i] == section
     ]
-    if len(matches) != 1:
-        raise MismatchPlanError(
-            "subckt_unresolved",
-            f"Subcircuit {clone.subckt!r} now has {len(matches)} definitions in "
-            f"{source.path.name} where the plan resolved one",
-        )
-    return matches[0]
 
 
 # ---------------------------------------------------------------------------

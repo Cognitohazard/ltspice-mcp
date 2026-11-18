@@ -24,7 +24,7 @@ from pydantic import (
     model_validator,
 )
 
-from ltspice_mcp.errors import MultiplierRewriteStop, NetlistError
+from ltspice_mcp.errors import MultiplierRewriteStop, NetlistError, UnreadableCardError
 from ltspice_mcp.lib import RUN_DECK_SUFFIXES, atomic_write_bytes, component_value
 from ltspice_mcp.lib.deck_staging import (
     card_sections,
@@ -32,6 +32,7 @@ from ltspice_mcp.lib.deck_staging import (
     rewrite_staged_reference_cards,
     staged_reference_targets,
 )
+from ltspice_mcp.lib.device_names import path_text
 from ltspice_mcp.lib.encoding import encode_spice_text
 from ltspice_mcp.lib.format import parse_plain_value, parse_spice_value, unique_name  # noqa: TID251 - a written assignment must be a plain or SI value
 from ltspice_mcp.lib.hierarchy import Hierarchy, ResolvedInstance, SemanticProfile, Source
@@ -66,18 +67,24 @@ from ltspice_mcp.lib.montecarlo import MismatchRule as EngineMismatchRule
 from ltspice_mcp.lib.ngspice_compat import multiplies_m
 from ltspice_mcp.lib.ngspice_driver import SEED_MAX, deck_seeds
 from ltspice_mcp.lib.spice_lex import (
+    DefinitionRule,
     EditCards,
     SpiceCard,
     SpiceLexError,
     Token,
-    TokenKind,
     emit,
     lex,
     lex_for_edit,
     tokenize_body,
 )
 from ltspice_mcp.lib.spice_lex_ops import fold_micro_suffix_cards, section_sign_names
-from ltspice_mcp.lib.spice_lex_views import InstanceLine, ModelCard
+from ltspice_mcp.lib.spice_lex_views import (
+    InstanceLine,
+    ModelCard,
+    assigned_params,
+    reading,
+    unreadable_card,
+)
 from ltspice_mcp.lib.subckt_mismatch import (
     MOBILITY_PARAM,
     VTH_PARAM,
@@ -424,6 +431,10 @@ class CircuitDeck:
     record_source_lineage: bool = False
     # The codec a case deck is written in (``StagedDeck.codec``).
     codec: str = "utf-8"
+    # Which definition of a subcircuit defined twice the deck's reader keeps
+    # (``spice_lex.definition_rule``), for a deck with no semantic profile
+    # (QSPICE, Xyce); None for a reader that is not known.
+    definitions: DefinitionRule | None = None
 
 
 @dataclass(frozen=True)
@@ -588,6 +599,7 @@ class _DeckClosure:
     circuit_id: str
     files: tuple[_ClosureFile, ...]
     semantic_profile: SemanticProfile | None = None
+    definitions: DefinitionRule | None = None
     # Mismatch plans built over the UNEDITED closure, keyed by what was
     # selected. One circuit's cases select the same devices and differ only in
     # the values written, and a plan costs a lex of every file in the closure —
@@ -1188,9 +1200,9 @@ _UNREAD_WORD_END = re.compile(r"[\s(){}=,\"';]+")
 class _UnreadDeclaration:
     """A card that cannot be split into parts and may declare a target."""
 
-    line: int
+    card: SpiceCard
+    error: SpiceLexError
     what: str  # "part", ".model" or ".param"
-    reason: str
     name: str = ""  # as the card writes it
 
 
@@ -1211,9 +1223,7 @@ def _unread_declarations(card: SpiceCard) -> tuple[set[str], _UnreadDeclaration]
             names, what = ({card.name or words[0]} if words else set()), "part"
         else:
             names, what = ({card.name or words[1]} if len(words) > 1 else set()), ".model"
-        fix = f" {exc.suggestion[:1].upper()}{exc.suggestion[1:]}." if exc.suggestion else ""
-        reason = f"({exc.message}), so the variation cannot tell which declaration it edits.{fix}"
-        return names, _UnreadDeclaration(card.line_start, what, reason)
+        return names, _UnreadDeclaration(card, exc, what)
     return None
 
 
@@ -1224,7 +1234,9 @@ def _refuse_unread(
     (``_DeckTargets.unread``): the copy that can be read is not known to be
     the one the circuit runs with, and a glob would leave the card out of a
     set it reports whole. ``pattern`` is case-folded; ``kinds`` are the
-    cards that can answer to it."""
+    cards that can answer to it. The refusal is the one for a card that
+    cannot be read (``spice_lex_views.unreadable_card``), saying why the
+    variation needs it."""
     for file in closure.files:
         for name, declarations in file.targets.unread.items():
             names = (name, *section_sign_names(name))
@@ -1234,28 +1246,28 @@ def _refuse_unread(
                 continue
             for declared in declarations:
                 if declared.what in kinds:
-                    raise VariationError(
-                        "ambiguous_target",
-                        f"Circuit {closure.circuit_id!r}: {what} {target!r} may name the "
-                        f"{declared.what} {declared.name!r} on line {declared.line} of "
-                        f"{file.path.name}, which could not be read {declared.reason}",
+                    raise unreadable_card(
+                        declared.card,
+                        declared.error,
+                        file.path.name,
+                        why=(
+                            f"In circuit {closure.circuit_id!r}, the {what} {target!r} may "
+                            f"name the {declared.what} {declared.name!r} it declares, so the "
+                            "variation cannot tell which declaration it edits."
+                        ),
                     )
 
 
 def _param_assignments(card: SpiceCard) -> list[tuple[str, Token]]:
-    """The ``name=value`` parts of a ``.param`` card with their names, or none
-    for a card that cannot be split into parts (``spice_lex.unreadable_cards``):
-    the names it sets are not known, so no variation targets or edits it, and
-    the linter reports it."""
+    """The ``name=value`` parts of a ``.param`` card with their names
+    (``spice_lex_views.assigned_params``), or none for a card that cannot be
+    split into parts (``spice_lex.unreadable_cards``): the names it sets are
+    not known, so no variation targets or edits it; a target it may name is
+    refused (``_refuse_unread``), and the linter reports it."""
     try:
-        tokens = tokenize_body(card.body)
+        return assigned_params(card)
     except SpiceLexError:
         return []
-    return [
-        (token.key, token)
-        for token in tokens[1:]
-        if token.kind == TokenKind.KEY_VALUE and token.key
-    ]
 
 
 def _deck_targets(text: str, source: Path, depth: int) -> _DeckTargets:
@@ -1319,6 +1331,11 @@ def _build_closure(circuit: CircuitDeck) -> _DeckClosure:
         circuit_id=circuit.circuit_id,
         files=tuple(files),
         semantic_profile=circuit.semantic_profile,
+        definitions=(
+            circuit.semantic_profile.subckt_rule
+            if circuit.semantic_profile is not None
+            else circuit.definitions
+        ),
     )
 
 
@@ -1355,7 +1372,7 @@ def _select_target_file(
 
 
 def _site_label(site: _Site) -> str:
-    where = f".subckt {'.'.join(site.scope)}" if site.scope else "top level"
+    where = f".subckt {path_text(site.scope)}" if site.scope else "top level"
     if site.section is not None:
         return f"{where} of section {site.section!r}"
     return where
@@ -1639,7 +1656,13 @@ def _mismatch_plan(
     if unedited and key in closure.plans:
         return closure.plans[key]
     try:
-        plan = build_plan(files, prefix=prefixes, selectors=selectors, exact=exact)
+        plan = build_plan(
+            files,
+            prefix=prefixes,
+            selectors=selectors,
+            exact=exact,
+            subckt_rule=closure.definitions,
+        )
     except MismatchPlanError as exc:
         raise VariationError(exc.code, f"Circuit {closure.circuit_id!r}: {exc}") from exc
     if unedited:
@@ -1966,22 +1989,23 @@ def _set_param_value_on_cards(
     )
 
 
-def _instance_view(card: SpiceCard, ref: str, what: str) -> InstanceLine:
+def _instance_view(card: SpiceCard, ref: str, what: str, source: object = None) -> InstanceLine:
     """Read an instance card, naming the reference when the card will not parse.
 
     A declaration the tokenizer refuses is skipped while the target index is
     built, so the ambiguity guards never see it and cannot tell whether it is a
     second declaration of the reference they cleared. The writer meets it
-    anyway, and has to say which reference it was rather than surface a raw
-    tokenizer fault from underneath a Monte Carlo.
+    anyway, and refuses it as any reader refuses such a card
+    (``spice_lex_views.unreadable_card``), saying which reference it was.
     """
     try:
         return InstanceLine.from_card(card)
-    except ValueError as exc:
-        raise VariationError(
-            "ambiguous_target",
-            f"{what} {ref!r} has a declaration on line {card.line_start} that could not "
-            f"be read ({exc}), so it cannot be resolved to one declaration",
+    except UnreadableCardError as exc:
+        raise unreadable_card(
+            card,
+            exc,
+            source,
+            why=f"The {what.lower()} {ref!r} cannot be resolved to one declaration.",
         ) from exc
 
 
@@ -2161,7 +2185,11 @@ def _closure_model_card(closure: _DeckClosure, texts: dict[int, str], name: str)
             f"{len(found)} declarations ({', '.join(sorted(labels))}); the "
             "nominals a mismatch draw perturbs have to come from one card",
         )
-    _, cards, index = found[0]
+    file, cards, index = found[0]
+    # Read where it is written, so a card that cannot be read is refused by
+    # its own file and line rather than as a copy's first line.
+    with reading(file.path.name):
+        ModelCard.from_card(cards[index])
     return "".join(cards[index].raw_lines)
 
 
@@ -2287,7 +2315,7 @@ def _apply_component_rule(
     for card in lexed.read:
         if card.kind != "instance" or not card.name or card.name.casefold() not in refs:
             continue
-        view = _instance_view(card, card.name, "Random component target")
+        view = _instance_view(card, card.name, "Random component target", file.path.name)
         nominal = parse_value(view.value or "")
         if nominal is None:
             raise VariationError(
@@ -2371,11 +2399,12 @@ def _apply_model_rule(
         file=file,
         what=f"random model target {rule.target!r}",
     )
-    nominals = parse_model_params("".join(cards[chosen].raw_lines))
+    with reading(file.path.name):
+        view = ModelCard.from_card(cards[chosen])
     perturbations = sample_model_perturbation(
         sampler,
         rule.target,
-        nominals,
+        view.numeric_params(),
         {rule.param: _spec(rule)},
     )
     if rule.param not in perturbations:
@@ -2384,7 +2413,6 @@ def _apply_model_rule(
             f"Model {rule.target!r} parameter {rule.param!r} has no plain numeric nominal",
         )
     sampled = perturbations[rule.param]
-    view = ModelCard.from_card(cards[chosen])
     for param, new_value in perturbations.items():
         view.set_param(param, new_value)
     return emit(lexed.cards), {f"random:model:{rule.target}.{rule.param}": sampled}
@@ -2422,10 +2450,11 @@ def _flat_mismatch_files(
     for file in closure.files:
         if not any(ref.startswith(prefixes) for ref in file.targets.components):
             continue
-        refs = [
-            instance.ref
-            for instance in extract_mosfet_instances(texts[file.index], deck=file.is_deck)
-        ]
+        with reading(file.path.name):
+            refs = [
+                instance.ref
+                for instance in extract_mosfet_instances(texts[file.index], deck=file.is_deck)
+            ]
         for position, rule in enumerate(rules):
             if any(matches_prefix(ref, rule.prefix) for ref in refs):
                 hits[position].append(file.index)
@@ -2522,13 +2551,14 @@ def _apply_mismatch_rules(
     draws: dict[str, float] = {}
     for rule, indexes in zip(mismatch_rules, flat, strict=True):
         for index in indexes:
-            text, sampled = _apply_mismatch_rule(
-                texts[index],
-                rule,
-                sampler,
-                model_card=model_card,
-                deck=closure.files[index].is_deck,
-            )
+            with reading(closure.files[index].path.name):
+                text, sampled = _apply_mismatch_rule(
+                    texts[index],
+                    rule,
+                    sampler,
+                    model_card=model_card,
+                    deck=closure.files[index].is_deck,
+                )
             texts[index] = text
             draws.update(sampled)
 
@@ -2696,7 +2726,7 @@ def _legacy_instance_edits(
             continue
         alias = edit.refs[0].casefold()
         matches = [
-            row for row in hierarchy.instances if ".".join(row.instance).casefold() == alias
+            row for row in hierarchy.instances if path_text(row.instance).casefold() == alias
         ]
         if len(matches) != 1:
             raise VariationError(
@@ -2922,7 +2952,7 @@ def _rewrite_change_message(
     written: Mapping[tuple[str, ...], NumericFact | None],
 ) -> str:
     """Why a card no edit writes would build another count, and a fix that keeps it."""
-    card = ".".join(row.instance)
+    card = path_text(row.instance)
     body = row.source.definition or "the top level"
     change = (
         f"{card}, which no edit writes, would build {_copies_text(other.multiplier)} "
@@ -2931,14 +2961,14 @@ def _rewrite_change_message(
     was = (row.source.definition or "").casefold() in as_written.m_rewritten
     now = (other.source.definition or "").casefold() in edited.m_rewritten
     calls = [
-        ".".join(row.instance[:depth])
+        path_text(row.instance[:depth])
         for depth in range(1, len(row.instance))
         if written.get(row.instance[:depth]) is None
     ]
     if was and not now:
         return (
             f"ngspice rewrites {body} for m because one of its callers writes m, but the "
-            f"private copy this case gives {'.'.join(row.instance[:-1])} has no caller "
+            f"private copy this case gives {path_text(row.instance[:-1])} has no caller "
             f"that does, so {change}. Write m=1 on {', '.join(calls) or 'its X line'}: "
             "each card then builds what it does as written, and the copy is rewritten too"
         )
@@ -2979,7 +3009,7 @@ def _path_multiplier(row: ResolvedInstance) -> float:
         why = "is unknown" if multiplier is None else multiplier.reason
         raise VariationError(
             "mismatch_geometry_unresolved",
-            f"multiplier {why}, so the mismatch area of {'.'.join(row.instance)} is unknown",
+            f"multiplier {why}, so the mismatch area of {path_text(row.instance)} is unknown",
         )
     return multiplier.value
 
@@ -3002,7 +3032,7 @@ def _takes_model_copy(row: ResolvedInstance, simulator: str) -> bool:
     if row.model_source is None or len(row.model_family) != 1:
         raise VariationError(
             "model_missing",
-            f"mismatch on {'.'.join(row.instance)} gives it its own copy of its .model "
+            f"mismatch on {path_text(row.instance)} gives it its own copy of its .model "
             "card, which needs one exact model definition; a binned model has one per "
             "size bin",
         )

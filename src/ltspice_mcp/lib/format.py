@@ -140,6 +140,21 @@ def fold_micro_sign(text: str) -> str:
     return text.translate(_MICRO_SIGNS)
 
 
+def plain_number(value: str) -> float | None:
+    """The number a value written as a plain number stands for, as LTspice
+    reads it (``parse_spice_value``), or None for an expression (``{Rd}``,
+    ``table(...)``) or anything else that is not one. The one rule for
+    whether a value is a plain number, which a Monte Carlo nominal and a
+    model's numeric parameters share."""
+    text = value.strip()
+    if not text or "{" in text or "(" in text:
+        return None
+    try:
+        return parse_spice_value(text)
+    except ValueError:
+        return None
+
+
 def parse_spice_value(s: str) -> float:
     """Parse a SPICE value to a float, as LTspice reads it.
 

@@ -88,14 +88,17 @@ Put the row's `address.save` line in the deck, if it has one, run it with
 | a nested resistor's current | `.save @r.xa.xleaf.r1[i]` | `.save I(xa:xleaf:r1)` | `.save I(a:leaf:r1)` |
 
 LTspice needs no line for a MOS, because the server asks LTspice 26 for the
-log's device table on every `.op` run. XVII prints the table for every `.op`
+log's device table on every `.op` run once it knows the build. XVII prints the table for every `.op`
 without being asked, and it stops with an `unrecognized option` error on a deck
 that contains `.options logopinfo`. Each build's `.save` accepts a name inside a
 subcircuit only in the spelling its raw file uses, which on XVII drops the X
 from each instance. The other spelling stores nothing on LTspice 26 and makes
 XVII save everything but the current. `simulator: "ltspice"` gives the
 spelling for the session's LTspice, and `"ltspice:<name>"` the spelling for a
-named build; `profile.xvii_names` reports which spelling applies.
+named build; `profile.xvii_names` reports which spelling applies, and
+`profile.names_read_as` the recorded build it follows. A build with no
+recording (LTspice IV, 24, 25, one after 26, or one no run has named yet) is
+spelled as its nearest recorded build, and `profile.names_note` says so.
 
 Keep the full name, because it distinguishes other instances of the same
 subcircuit. When a row has no address, `address.reason` gives the reason; do

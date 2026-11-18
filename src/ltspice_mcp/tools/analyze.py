@@ -13,7 +13,7 @@ import statistics
 import time
 from collections.abc import Callable, Collection, Iterable, Mapping, MutableMapping, Sequence
 from collections.abc import Set as AbstractSet
-from dataclasses import dataclass, field, fields, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path, PurePath
 from typing import Annotated, Any, Literal, NamedTuple
 from weakref import WeakValueDictionary
@@ -44,6 +44,7 @@ from ltspice_mcp.lib import (
     result_store,
     services,
 )
+from ltspice_mcp.lib.continuation import Unfilled, call_to_continue
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, PlotDescriptor
 from ltspice_mcp.lib.format import cap_note, format_spice_value, held_to_cap, unique_name
@@ -77,15 +78,20 @@ from ltspice_mcp.lib.recipes import (
     WaveformRecipe,
     validate_recipe,  # noqa: TID251 - recipe_of_request, its owner, is in this module
 )
+from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER, rows
 from ltspice_mcp.lib.result_kinds import AC_SHAPED
 from ltspice_mcp.lib.result_observations import (
     coarse_waveform_observation,
 )
 from ltspice_mcp.lib.signal_analysis import downsample_minmax_traces
+from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.step_values import step_axis_key
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
+    DIAGNOSTICS_COVERAGE_SCHEMA,
     HINT_SCHEMA,
+    NOT_ESTABLISHED_SCHEMA,
+    RUN_DIAGNOSTICS_SCHEMA,
     NotedModel,
     OptionalRawSelectionFields,
     OtherRawFields,
@@ -971,7 +977,18 @@ def _serialize_run(run: _ResolvedRun) -> dict[str, Any]:
         "identity": run.source.identity,
         "trusted_job_artifact": run.source.trusted_job_artifact,
         "job_id": run.job_id,
+        "producer": asdict(run.source.producer) if run.source.producer is not None else None,
     }
+
+
+def _stored_producer(data: Any) -> Producer | None:
+    """A resolved run's recorded producer; None for a result set stored before
+    runs recorded one, or a record that is not one, which reads as a bare path's."""
+    if not isinstance(data, dict) or set(data) != {"family", "build", "program"}:
+        return None
+    if not all(value is None or isinstance(value, str) for value in data.values()):
+        return None
+    return Producer(**data)
 
 
 def _deserialize_runs(item: result_store.ResultSet, state: SessionState) -> list[_ResolvedRun]:
@@ -993,6 +1010,7 @@ def _deserialize_runs(item: result_store.ResultSet, state: SessionState) -> list
                     plot_index=data.get("plot_index", 0),
                     identity=dict(data.get("identity") or {}),
                     trusted_job_artifact=bool(data.get("trusted_job_artifact")),
+                    producer=_stored_producer(data.get("producer")),
                 ),
                 job_id=data.get("job_id"),
             )
@@ -2078,8 +2096,10 @@ def _measurements_compact(value: dict[str, Any]) -> dict[str, Any]:
     the point a crossing or ``AT`` reported with it goes under ``at``. A name
     the log holds no number for keeps its key with null, so it never reads as
     a missing name, and the value beside says why, each null in one place:
-    ``failed_measurements`` (LTspice printed it failed) and ``unreadable``
-    (LTspice printed something other than a number) come with the metric's
+    ``failed_measurements`` (LTspice printed it failed), ``unreadable``
+    (LTspice printed something other than a number), ``answer_unknown``
+    (which field holds the result is not known) and ``not_established`` (the
+    printed value is not established as the result) come with the metric's
     value (``metrics.measurement_rows``), and ``not_finite`` names the rest,
     each a number the log decoder holds as null because it is not finite
     (LTspice 26 prints a stepped FRA's gain margin ``infdB``, recorded as
@@ -2098,7 +2118,12 @@ def _measurements_compact(value: dict[str, Any]) -> dict[str, Any]:
     at = {name: entry["at"] for name, entry in stats.items() if "at" in entry}
     if at:
         compact["at"] = at
-    explained = {*value.get("failed_measurements", ()), *value.get("unreadable", {})}
+    explained = {
+        *value.get("failed_measurements", ()),
+        *value.get("unreadable", {}),
+        *value.get("answer_unknown", {}),
+        *value.get("not_established", {}),
+    }
     not_finite = [
         name for name, number in measured.items() if number is None and name not in explained
     ]
@@ -2770,18 +2795,41 @@ def _source_hashes(
     return [{key: manifest.get(key) for key in keys} for manifest in item.source_manifests]
 
 
-def _page_of(item_schema: dict[str, Any]) -> dict[str, Any]:
-    """The shared offset page, with its rows narrowed to ``item_schema``.
+def _page_of(item_schema: dict[str, Any], cut: Any) -> dict[str, Any]:
+    """The shared offset page, with its rows narrowed to ``item_schema`` and
+    cut as ``cut`` declares (``lib/reply_cuts.py``).
 
     Closed to extra keys: a page this tool renders carries the five page keys
     and nothing else, so anything else on it is a schema failure rather than a
     silent pass. A fresh dict per call — the surfaces that share this shape
     each declare their own row type.
     """
-    return {**page_schema({"type": "array", "items": item_schema}), "additionalProperties": False}
+    return {
+        **page_schema({"type": "array", "items": item_schema, CUT: cut}),
+        "additionalProperties": False,
+    }
 
 
-_PAGE_SCHEMA: dict[str, Any] = _page_of({"type": "object"})
+_PAGE_SCHEMA: dict[str, Any] = _page_of({"type": "object"}, ITEMS)
+
+#: The call that continues a partial analysis: the reply's ``next`` is its
+#: ``continue`` argument.
+_CONTINUE_CALL = call_to_continue("analyze_results", {"continue": Unfilled("next")})
+
+#: What a reply says when its page of missing cases is cut.
+_MISSING_CASES_HINT = (
+    "coverage.missing_cases is truncated; read the next page of missing cases with "
+    + call_to_continue(
+        "analyze_results",
+        {
+            "continue": {
+                "result_set_id": Unfilled("result_set_id"),
+                "cursor": Unfilled("coverage.missing_cases.next_cursor"),
+            }
+        },
+    )
+    + " (no work is replayed)."
+)
 
 #: spec.fail_cases: a page with no cursor, because it is worked out in the call
 #: that returns it and never stored. Cut short, its hint names the view that
@@ -2824,16 +2872,21 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
             "type": "object",
             "description": (
                 "The recipe's value. A measurements row whose run holds one value "
-                "per .meas carries 'measured' {name: value} and 'at' {name: reported "
-                "crossing/AT point}. A null in 'measured' is named once by why: "
-                "'failed_measurements' (LTspice printed it failed), 'unreadable' "
-                "{name: {line, reason}} (it printed something other than a number) "
+                "per .meas carries 'measured' {name: value} and 'at' {name: AT point "
+                "printed beside a result that is its value}. A null in 'measured' is "
+                "named once by why: 'failed_measurements' (LTspice printed it failed), "
+                "'unreadable' {name: {line, reason}} (it printed something other than "
+                "a number for the result), 'answer_unknown' {name: reason} (which "
+                "field holds the result is not known), 'not_established' {name: "
+                "{steps, reason}} (what it printed is not established as the result) "
                 "or 'not_finite' (it printed a number that is not finite). Its "
                 "'stats' block is left off the default row and returned by "
                 "include.fields=['value']. A stepped run's row is 'stats', with "
                 "'failed_measurements' and 'unreadable' over all its steps."
             ),
             "properties": {
+                "diagnostics": RUN_DIAGNOSTICS_SCHEMA,
+                "diagnostics_coverage": DIAGNOSTICS_COVERAGE_SCHEMA,
                 "measured": {
                     "type": "object",
                     "additionalProperties": {"type": ["number", "null"]},
@@ -2845,6 +2898,7 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
                 "failed_measurements": {
                     "type": "array",
                     "items": {"type": "string"},
+                    CUT: NEVER,
                     "description": (
                         "The measurements LTspice printed as failed at the step(s) "
                         "the row reads: FAIL'ed, or 'failed' in a stepped table. A "
@@ -2855,6 +2909,7 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
                 "not_finite": {
                     "type": "array",
                     "items": {"type": "string"},
+                    CUT: NEVER,
                     "description": (
                         "The measurements whose 'measured' is null because LTspice "
                         "printed a number that is not finite, such as a gain margin "
@@ -2872,11 +2927,35 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
                         "required": ["reason"],
                     },
                 },
+                "answer_unknown": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                    "description": (
+                        "The measurements whose 'measured' is null because which "
+                        "field of what the log printed holds the result is not "
+                        "known, with why."
+                    ),
+                },
+                "not_established": {
+                    "type": "object",
+                    "additionalProperties": NOT_ESTABLISHED_SCHEMA,
+                    "description": (
+                        "The measurements with a step whose printed value is not "
+                        "established as the result, such as a 0 LTspice XVII prints "
+                        "for a failed step: no number is given for those steps."
+                    ),
+                },
             },
         },
     },
     "additionalProperties": False,
 }
+
+#: How a list of attributed rows is cut: whole rows, each named by the source,
+#: case, run and step it reads, which include.fields may project out.
+_ATTRIBUTED_ROWS_CUT: dict[str, Any] = rows(
+    "source", "case_id", "run_index", "step_index", projected_by="include.fields"
+)
 
 _REDUCED_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -2939,7 +3018,7 @@ _SPEC_SCHEMA: dict[str, Any] = {
             "enum": ["pass", "fail", "indeterminate"],
         },
         "allow_incomplete": {"type": "boolean"},
-        "outliers": {"type": "array", "items": {"type": "object"}},
+        "outliers": {"type": "array", "items": {"type": "object"}, CUT: ITEMS},
     },
     "required": [
         "field",
@@ -2958,13 +3037,13 @@ _RESULT_ENTRY_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "metric": {"type": "string"},
-        "reduced": {"type": "array", "items": _REDUCED_SCHEMA},
-        "groups": {"type": "array", "items": {"type": "object"}},
-        "steps": {"type": "array", "items": {"type": "object"}},
+        "reduced": {"type": "array", "items": _REDUCED_SCHEMA, CUT: rows("field", "stat")},
+        "groups": {"type": "array", "items": {"type": "object"}, CUT: ITEMS},
+        "steps": {"type": "array", "items": {"type": "object"}, CUT: ITEMS},
         "spec": _SPEC_SCHEMA,
-        "per_run": _page_of(_ATTRIBUTED_VALUE_SCHEMA),
-        "values": {"type": "array", "items": _ATTRIBUTED_VALUE_SCHEMA},
-        "warnings": {"type": "array", "items": {"type": "string"}},
+        "per_run": _page_of(_ATTRIBUTED_VALUE_SCHEMA, _ATTRIBUTED_ROWS_CUT),
+        "values": {"type": "array", "items": _ATTRIBUTED_VALUE_SCHEMA, CUT: _ATTRIBUTED_ROWS_CUT},
+        "warnings": {"type": "array", "items": {"type": "string"}, CUT: NEVER},
     },
     "required": ["metric", "reduced", "warnings"],
     "additionalProperties": False,
@@ -2990,6 +3069,7 @@ OUTPUT_SCHEMA: dict[str, Any] = {
         },
         "observations": {
             "type": "array",
+            CUT: NEVER,
             "items": {
                 "type": "object",
                 "properties": {
@@ -3004,6 +3084,7 @@ OUTPUT_SCHEMA: dict[str, Any] = {
         },
         "failures": {
             "type": "array",
+            CUT: NEVER,
             "items": {
                 "type": "object",
                 "properties": {
@@ -3013,7 +3094,7 @@ OUTPUT_SCHEMA: dict[str, Any] = {
                     "message": {"type": "string"},
                     # Present on a row that stands for several failures with one
                     # cause: the distinct places, capped, and the true count.
-                    "wheres": {"type": "array", "items": {"type": "string"}},
+                    "wheres": {"type": "array", "items": {"type": "string"}, CUT: NEVER},
                     "count": {"type": "integer", "minimum": 2},
                 },
                 "required": ["code", "stage", "where", "message"],
@@ -3025,10 +3106,12 @@ OUTPUT_SCHEMA: dict[str, Any] = {
             "additionalProperties": {
                 "type": "array",
                 "items": {"type": "string"},
+                CUT: ITEMS,
             },
         },
         "source_hashes": {
             "type": "array",
+            CUT: ITEMS,
             "items": {
                 "type": "object",
                 "properties": {
@@ -3413,16 +3496,9 @@ def _assemble(
         )
     if next_value is not None:
         reason = "an artifact item was deferred intact" if a.deferred else "the call budget ended"
-        hints.append(
-            f"Analysis is partial because {reason}; call analyze_results with "
-            f"continue={{result_set_id, cursor}} from 'next'."
-        )
+        hints.append(f"Analysis is partial because {reason}; continue with {_CONTINUE_CALL}.")
     if missing_page["next_cursor"] is not None:
-        hints.append(
-            "coverage.missing_cases is truncated; call analyze_results with "
-            "continue={result_set_id, cursor: coverage.missing_cases.next_cursor} "
-            "for the next page of missing cases (no work is replayed)."
-        )
+        hints.append(_MISSING_CASES_HINT)
     hints.extend(a.argument_notes)
     if hints:
         data["hint"] = " ".join(hints)
@@ -3669,8 +3745,7 @@ def render_attached_analysis(
                 response_budget.append_hint(
                     data,
                     "Analysis is partial because the response budget reduced the "
-                    "per_run page; call analyze_results with "
-                    "continue={result_set_id, cursor} from 'next', or read the "
+                    f"per_run page; continue with {_CONTINUE_CALL}, or read the "
                     "complete set through the Python API (ltspice_mcp.api).",
                 )
         if row_limit is not None:
@@ -3711,13 +3786,7 @@ def render_attached_analysis(
                 fields=fields,
             )
             if coverage["missing_cases"]["next_cursor"] is not None:
-                response_budget.append_hint(
-                    data,
-                    "coverage.missing_cases is truncated; call analyze_results with "
-                    "continue={result_set_id, cursor: "
-                    "coverage.missing_cases.next_cursor} for the next page of "
-                    "missing cases (no work is replayed).",
-                )
+                response_budget.append_hint(data, _MISSING_CASES_HINT)
     if answer_channel:
         data.pop("signals_available", None)
         hashes = data.get("source_hashes")
@@ -3733,19 +3802,13 @@ def render_attached_analysis(
             )
             response_budget.append_hint(
                 data,
-                f"Analysis is partial because {reason}; call analyze_results with "
-                "continue={result_set_id, cursor} from 'next', or read the complete "
-                "set through the Python API (ltspice_mcp.api).",
+                f"Analysis is partial because {reason}; continue with {_CONTINUE_CALL}, "
+                "or read the complete set through the Python API (ltspice_mcp.api).",
             )
         coverage = data.get("coverage")
         missing_page = coverage.get("missing_cases") if isinstance(coverage, dict) else None
         if isinstance(missing_page, dict) and missing_page.get("next_cursor") is not None:
-            response_budget.append_hint(
-                data,
-                "coverage.missing_cases is truncated; call analyze_results with "
-                "continue={result_set_id, cursor: coverage.missing_cases.next_cursor} "
-                "for the next page of missing cases (no work is replayed).",
-            )
+            response_budget.append_hint(data, _MISSING_CASES_HINT)
         failures = data.get("failures")
         has_failures = isinstance(failures, list) and bool(failures)
         missing_total = int(missing_page.get("total", 0)) if isinstance(missing_page, dict) else 0
@@ -4031,10 +4094,9 @@ _BUDGET_NOTES = response_budget.Notes(
         "presentation was reduced; every recipe that produced a result "
         "still has one, and its reductions and spec verdict are intact."
     ),
-    route=(
-        "Ask again with a larger 'budget' for the full presentation, or continue "
-        "with continue={result_set_id, cursor}."
-    ),
+    # The ladder holds back room for a route of 160 characters
+    # (response_budget.NOTE_RESERVE_TOKENS).
+    route=f"Ask again with a larger 'budget', or continue with {_CONTINUE_CALL}.",
     default_route=(
         "Each row still names its source by manifest_id and label; "
         "include.provenance keeps source_hashes."

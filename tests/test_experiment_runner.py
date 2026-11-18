@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,6 +32,7 @@ from ltspice_mcp.lib.store import OwnerLiveness
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
 from tests.conftest import (
+    FIXTURES_DIR,
     LIVENESS_S,
     await_until,
     job_done,
@@ -870,12 +872,19 @@ class TestCaseConcurrencyAndTimeouts:
         assert kills == [token, token]
         raw = work_dir / f"{token}.raw"
         raw.write_bytes(b"partial")
-        callbacks[token](RunOutcome(str(raw), str(work_dir / f"{token}.fail"), 0, "killed"))
+        # The late exit's log says something, and is read once the run lands.
+        log = work_dir / f"{token}.log"
+        shutil.copy(FIXTURES_DIR / "ltspice_recorded/ltspice26/log/unknown_model_param.log", log)
+        callbacks[token](RunOutcome(str(raw), str(log), 0, "killed"))
         await runner.settled(receipt.job)
         assert case.case_id not in execution.retained_slots
         assert not raw.exists()
         assert execution.semaphore._value == 1
         assert any(item["code"] == "late_simulator_exit" for item in case.observations)
+        assert case.log_diagnostics is not None
+        assert [entry["code"] for entry in case.log_diagnostics["diagnostics"]] == [
+            "unknown_model_parameter"
+        ]
         assert receipt.job.completeness.failed == 1
 
     async def test_run_timeout_callback_within_grace_releases_capacity(

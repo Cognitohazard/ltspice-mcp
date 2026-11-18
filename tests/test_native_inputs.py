@@ -23,7 +23,7 @@ def test_native_capture_refuses_changed_materialized_bytes(tmp_path: Path, chang
     bench = source / "bench.cir"
     bench.write_text('* bench\n.include "load.inc"\nV1 in 0 1\n.op\n.end\n', encoding="utf-8")
     (source / "load.inc").write_bytes(b"* resistance in \xb5ohm\r\nR1 in 0 100k\r\n")
-    staged = stage_deck(bench, tmp_path / "stage", [source], origin=bench)
+    staged = stage_deck(bench, tmp_path / "stage", [source], origin=bench, dialect=None)
     deck = CircuitDeck(
         "bench",
         staged.staged_deck,
@@ -84,7 +84,7 @@ def test_circuit_original_cache_reuses_pins_and_cards_for_same_capture_set(tmp_p
     monkeypatch.setattr(pdk_native, "lex", counted_lex)
     bench = tmp_path / "bench.cir"
     bench.write_bytes(original.content)
-    staged = stage_deck(bench, tmp_path / "stage", [tmp_path], origin=bench)
+    staged = stage_deck(bench, tmp_path / "stage", [tmp_path], origin=bench, dialect=None)
     validator = NativeCaseValidator(staged, tmp_path / "stage")
     first = validator._verified_originals((original,))
     assert (

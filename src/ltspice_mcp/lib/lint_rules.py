@@ -9,8 +9,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, NamedTuple
 
+from ltspice_mcp.lib.deck_nodes import is_ground
 from ltspice_mcp.lib.deck_staging import (
     DEFAULT_INCLUDE_DEPTH,
+    card_sections,
+    in_other_section,
     is_absolute_reference,
     resolve_reference,
     scan_include_references,
@@ -20,14 +23,16 @@ from ltspice_mcp.lib.encoding import latin1_reading, read_spice_text
 from ltspice_mcp.lib.families import DISPLAY
 from ltspice_mcp.lib.ngspice_compat import drops_lib_sections, reads_lib_as_includes
 from ltspice_mcp.lib.simulator import DEFAULT_FAMILY, family_for, run_ngbehavior
+from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.spice_lex import (
+    DefinitionRule,
     SpiceCard,
     SpiceLexError,
-    TokenKind,
+    definition_rule,
     directive_head,
     lex,
     lex_deck,
-    tokenize_body,
+    subckt_definitions,
     unreadable_cards,
 )
 from ltspice_mcp.lib.spice_lex_ops import MICRO_SIGN_READERS, ValueSuffixSite, value_suffix_sites
@@ -35,6 +40,8 @@ from ltspice_mcp.lib.spice_lex_views import (
     InstanceLine,
     MeasCard,
     ProbeRef,
+    assigned_params,
+    may_connect_nodes,
     probe_is_pattern,
     probe_refs,
     read_instance,
@@ -43,8 +50,6 @@ from ltspice_mcp.lib.spice_lex_views import (
 from ltspice_mcp.lib.spice_validator import (
     ARITY_CHECKS,
     EXCLUSIVE_ANALYSIS_KINDS,
-    is_ground_node,
-    may_connect_nodes,
     meas_functions_refused,
     meas_name_refused,
     meas_unclosed_paren_refused,
@@ -56,7 +61,7 @@ from ltspice_mcp.lib.spice_validator import (
 Disposition = Literal["blocking", "warning", "observation"]
 LintFinding = dict[str, Any]
 
-linter_version = "14"
+linter_version = "15"
 
 # A capital M straight after a number is milli unless the letters after it
 # make it Meg or mil. Other letters do not: LTspice reads 1MHz as a millihertz.
@@ -117,6 +122,10 @@ class _LintContext:
     # An LTspice the session knows reads decks as cp1252 (XVII or earlier),
     # with the evidence; None when nothing shows one.
     cp1252_reader: str | None = None
+    # Which definition of a subcircuit defined twice the deck's reader keeps
+    # (``spice_lex.definition_rule``); None reads as the family's reader of
+    # no known build.
+    definitions: DefinitionRule | None = None
 
     @functools.cached_property
     def arity_issues(self) -> list[dict[str, object]]:
@@ -177,7 +186,7 @@ def _finding(
     }
 
 
-def _probe_signals(probe: ProbeRef) -> set[str]:
+def _probe_signals(probe: ProbeRef, context: _LintContext) -> set[str]:
     """The signals a probe asks for in a ``.meas``, or saves in a ``.save``.
 
     A voltage between two nodes is its two nodes: both LTspice builds measure
@@ -190,7 +199,15 @@ def _probe_signals(probe: ProbeRef) -> set[str]:
     if (
         probe.kind == "V"
         and len(probe.names) == 2
-        and not any(is_ground_node(name) for name in probe.names)
+        and not any(
+            is_ground(
+                name,
+                simulator=context.family,
+                # The mode a run passes, as the other ngspice rules read it.
+                ngbehavior=run_ngbehavior(mode=context.ngbehavior),
+            )
+            for name in probe.names
+        )
     ):
         return {_normalize_signal(f"V({name})") for name in probe.names}
     return {_normalize_signal(probe.text)}
@@ -227,11 +244,13 @@ def _unsaved(context: _LintContext) -> list[_Unsaved]:
         signal
         for probe in probes
         if not probe_is_pattern(probe)
-        for signal in _probe_signals(probe)
+        for signal in _probe_signals(probe, context)
     }
     found = []
     for card in measurements:
-        required = {signal for probe in probe_refs(card) for signal in _probe_signals(probe)}
+        required = {
+            signal for probe in probe_refs(card) for signal in _probe_signals(probe, context)
+        }
         unnamed = sorted(required - saved)
         missing, unchecked = ([], unnamed) if patterns else (unnamed, [])
         if unnamed:
@@ -657,48 +676,74 @@ def _models_from_staged_dependencies(context: _LintContext) -> _ReachedModels:
     declared: set[str] = set()
     complete = True
     unread: list[tuple[Path, SpiceCard, SpiceLexError]] = []
-    snapshot: dict[Path, list[SpiceCard]] = {}
-    for file in context.files[1:]:
-        declared.update(_declared_models(file.cards))
-        snapshot[file.path.resolve(strict=False)] = file.cards
-    visited: set[Path] = set(snapshot)
+    snapshot: dict[Path, list[SpiceCard]] = {
+        file.path.resolve(strict=False): file.cards for file in context.files[1:]
+    }
+    reached: set[Path] = set()
+    visited: set[tuple[Path, str | None]] = set()
 
-    def walk(cards: list[SpiceCard], source: Path, depth: int, *, live: bool) -> None:
+    def walk(
+        cards: list[SpiceCard], source: Path, depth: int, selected: str | None, *, live: bool
+    ) -> None:
         nonlocal complete
-        if depth >= DEFAULT_INCLUDE_DEPTH:
-            return
         if blocked := unreadable_references(cards):
-            complete = False
-            if live:
-                unread.extend((source, card, error) for card, error in blocked)
+            # Which sections it opens is not known, so the file's models are
+            # all counted, as before; what it pulls in is not.
+            declared.update(_declared_models(cards))
+            if depth < DEFAULT_INCLUDE_DEPTH:
+                complete = False
+                if live:
+                    unread.extend((source, card, error) for card, error in blocked)
             return
         # ``depth`` here is the recursion budget; the scanner's parameter is
         # the library-context bit (0 = the deck itself, nonzero = a file
         # reached by following a reference). Keep the two separate.
-        for reference in scan_include_references(cards, source, depth=min(depth, 1)):
+        context_depth = min(depth, 1)
+        if selected is not None:
+            # ``.lib file section`` reads no other section's cards
+            # (``deck_staging.in_other_section``).
+            sections = card_sections(cards, source, context_depth)
+            cards = [
+                card
+                for card, owner in zip(cards, sections, strict=True)
+                if not in_other_section(owner, selected)
+            ]
+        declared.update(_declared_models(cards))
+        # A file at the limit is read for its own models, as staging stages it,
+        # and what it pulls in is not followed.
+        if depth >= DEFAULT_INCLUDE_DEPTH:
+            return
+        for reference in scan_include_references(cards, source, depth=context_depth):
             dependency = resolve_reference(source.parent, reference.raw_path)
             try:
                 resolved = dependency.resolve(strict=False)
             except OSError:
                 continue
-            if resolved in visited:
+            if (resolved, reference.section) in visited:
                 continue
-            visited.add(resolved)
+            visited.add((resolved, reference.section))
+            if resolved in snapshot:
+                # A staged copy is read from its snapshot, never from disk.
+                reached.add(resolved)
+                walk(snapshot[resolved], resolved, depth + 1, reference.section, live=False)
+                continue
             if not resolved.is_file():
                 continue
             try:
                 nested = lex(read_spice_text(resolved)).cards
             except (OSError, UnicodeError, ValueError):
                 continue
-            declared.update(_declared_models(nested))
-            walk(nested, resolved, depth + 1, live=True)
+            walk(nested, resolved, depth + 1, reference.section, live=True)
 
-    walk(context.cards, context.path, 0, live=False)
+    walk(context.cards, context.path, 0, None, live=False)
     for staged_path, cards in snapshot.items():
-        # Scanned from the snapshot, never from disk; the only thing this can
-        # find that the snapshot itself does not carry is a live reference
-        # nested inside a staged file.
-        walk(cards, staged_path, 1, live=False)
+        if staged_path in reached:
+            continue
+        # A staged file no reference here reaches is read whole, as before;
+        # the only thing its scan can find beyond its own models is a live
+        # reference nested inside it.
+        visited.add((staged_path, None))
+        walk(cards, staged_path, 1, None, live=False)
     return _ReachedModels(declared, complete, unread)
 
 
@@ -787,13 +832,10 @@ def _temp_as_param(
         if card.kind != "param":
             continue
         try:
-            tokens = tokenize_body(card.body)
+            names = [name for name, _token in assigned_params(card)]
         except SpiceLexError:
             # The unreadable-card rule reports it; the names it sets are not known.
             continue
-        names = [
-            token.key for token in tokens[1:] if token.kind == TokenKind.KEY_VALUE and token.key
-        ]
         if not any(name.casefold() == "temp" for name in names):
             continue
         findings.append(
@@ -891,6 +933,62 @@ def _unreadable_card(context: _LintContext, rule: LintRule) -> list[LintFinding]
             evidence={"detail": site.detail},
         )
         for path, site in located
+        if site.rule_id == rule.rule_id
+    ]
+
+
+class DefinitionSite(NamedTuple):
+    """A subcircuit name defined more than once in one scope of a deck, of
+    which its reader keeps no definition in force (:func:`definition_sites`)."""
+
+    card: SpiceCard
+    #: ``subckt-defined-twice`` when the reader refuses the deck,
+    #: ``subckt-defined-twice-unrecorded`` when what it does is not recorded.
+    rule_id: str
+    reason: str
+    #: The line of every definition of the name, in card order.
+    lines: tuple[int, ...]
+
+
+def definition_sites(
+    cards: Sequence[SpiceCard], definitions: DefinitionRule
+) -> list[DefinitionSite]:
+    """Each name ``cards`` define more than once in one scope that the reader
+    of ``definitions`` keeps no definition of (``spice_lex.subckt_definitions``),
+    at its first definition: the cards the linter's two rules and
+    ``verify_circuit``'s syntax check report, so both say the same thing. A
+    name the reader settles (ngspice's first, XVII's last of two) is no site:
+    every reader of a body reads the definition in force."""
+    sites: list[DefinitionSite] = []
+    for answer in subckt_definitions(cards, definitions).unsettled.values():
+        assert answer.reason is not None
+        sites.append(
+            DefinitionSite(
+                cards[answer.members[0]],
+                "subckt-defined-twice"
+                if answer.choice == "refused"
+                else "subckt-defined-twice-unrecorded",
+                answer.reason,
+                tuple(cards[index].line_start for index in answer.members),
+            )
+        )
+    return sites
+
+
+def _subckt_defined_twice(context: _LintContext, rule: LintRule) -> list[LintFinding]:
+    """A subcircuit defined more than once in one scope of the deck, which
+    the reader refuses (``subckt-defined-twice``) or keeps a definition of
+    that is not recorded (``subckt-defined-twice-unrecorded``)."""
+    assert context.definitions is not None
+    return [
+        _finding(
+            context,
+            rule,
+            line=site.card.line_start,
+            subject=site.card.name or ".subckt",
+            evidence={"lines": list(site.lines), "reason": site.reason},
+        )
+        for site in definition_sites(context.cards, context.definitions)
         if site.rule_id == rule.rule_id
     ]
 
@@ -1187,6 +1285,12 @@ RULES: tuple[LintRule, ...] = (
     # A warning: the deck runs, but a parameter given twice is read one way or
     # the other, and which is not recorded here.
     LintRule("duplicate-param", "warning", _duplicate_param),
+    # Blocking: LTspice 26 refuses a deck that defines one subcircuit twice
+    # (recorded: deck/subckt_defined_twice), so the run would fail.
+    LintRule("subckt-defined-twice", "blocking", _subckt_defined_twice),
+    # A warning: the deck may run, but which definition the reader runs is
+    # not recorded, so no check here read either body.
+    LintRule("subckt-defined-twice-unrecorded", "warning", _subckt_defined_twice),
     # A warning: a card no rule could split into its parts is checked by
     # none, which a caller must know. What a simulator does with it is not
     # recorded, except for the .meas above, so the deck runs.
@@ -1225,6 +1329,7 @@ def lint_deck(
     ngbehavior: str | None = None,
     codec: str = "utf-8",
     cp1252_reader: str | None = None,
+    reader: Producer | None = None,
 ) -> list[LintFinding]:
     """Run all unsuppressed rules and return fixable findings only.
 
@@ -1234,18 +1339,22 @@ def lint_deck(
     is the one the deck was decoded in, as each snapshot's is
     (``StagedFile.codec``); ``cp1252_reader`` is the evidence that the
     session's LTspice reads decks as cp1252 (``services.cp1252_ltspice``).
+    ``reader`` is who will read the deck (``services.deck_producer``); None
+    reads it as the family's reader of no known build.
     """
     suppressed = set(suppress)
+    family = family_for(dialect, simulator) or DEFAULT_FAMILY
     context = _LintContext(
         text=deck_text,
         path=path,
         cards=lex_deck(deck_text).cards,
         # A deck nothing names is linted as the default family's.
-        family=family_for(dialect, simulator) or DEFAULT_FAMILY,
+        family=family,
         includes=tuple(includes),
         ngbehavior=ngbehavior,
         codec=codec,
         cp1252_reader=cp1252_reader,
+        definitions=definition_rule(reader or Producer(family, None, None)),
     )
     findings: list[LintFinding] = []
     for rule in RULES:

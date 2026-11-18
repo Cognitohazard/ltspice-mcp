@@ -42,8 +42,10 @@
 [security]
 # Sandbox. Every path given to a tool must be inside one of these
 # directories. If unset (the default), there is no sandbox and a path may
-# name any file this process can open. When the list is set, a relative path
-# is resolved against its first entry. The list does not confine run_code,
+# name any file this process can open. A relative entry, such as ".", is taken
+# from the working directory, and so is a relative path given to a tool, or
+# from the first entry when the list leaves the working directory out. The
+# list does not confine run_code,
 # so also set [tools] run_code = false to keep a client inside these
 # directories. The server reads the list again on the next call after you
 # save the file.

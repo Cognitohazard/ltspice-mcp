@@ -157,8 +157,9 @@ from ltspice_mcp.lib.connectivity import (
     name_keys,
     named_labels,
 )
+from ltspice_mcp.lib.continuation import call_to_continue
 from ltspice_mcp.lib.cursor_codec import canonical_hash
-from ltspice_mcp.lib.deck_nodes import global_names, node_kind
+from ltspice_mcp.lib.deck_nodes import settled_node_kind
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, TraceDescriptor
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import cap_note
@@ -189,6 +190,7 @@ from ltspice_mcp.lib.montecarlo import matches_prefix
 from ltspice_mcp.lib.ngspice_compat import mode_as_given
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_pair, paginate_view
 from ltspice_mcp.lib.raster import RasterSupport, raster_support
+from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER, rows
 from ltspice_mcp.lib.routing import segment_json, wires_through
 from ltspice_mcp.lib.schematic_ops import (
     crossing_refused,
@@ -218,8 +220,14 @@ from ltspice_mcp.lib.spice_lex import (
     SpiceLexError,
     directive_head,
     lex_deck,
+    subckt_definitions,
 )
-from ltspice_mcp.lib.spice_lex_views import InstanceLine, SubcktCard, instances_by_ref
+from ltspice_mcp.lib.spice_lex_views import (
+    InstanceLine,
+    SubcktCard,
+    global_names,
+    instances_by_ref,
+)
 from ltspice_mcp.lib.symbol_geometry import compute_placed_geometry, symbol_info_of
 from ltspice_mcp.lib.symbol_library import SymbolResolver
 from ltspice_mcp.state import SessionState
@@ -300,9 +308,10 @@ async def _sheet_of_file(path: Path, state: SessionState) -> tuple[Sheet, str]:
                 "type": "object",
                 "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
             },
-            "labels": {"type": "array", "items": {"type": "string"}},
+            "labels": {"type": "array", "items": {"type": "string"}, CUT: ITEMS},
             "pins": {
                 "type": "array",
+                CUT: ITEMS,
                 "items": {
                     "type": "object",
                     "properties": {
@@ -315,6 +324,7 @@ async def _sheet_of_file(path: Path, state: SessionState) -> tuple[Sheet, str]:
             },
             "coordinates": {
                 "type": "array",
+                CUT: ITEMS,
                 "items": {
                     "type": "object",
                     "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
@@ -1492,6 +1502,7 @@ def _netlist_node_from_at(
     *,
     cards: Sequence[SpiceCard],
     unread: int,
+    reader: SemanticProfile,
 ) -> str:
     """Resolve a netlist ``at`` to a node of the deck's own cards.
 
@@ -1514,7 +1525,7 @@ def _netlist_node_from_at(
         )
     spellings = _node_spellings(nodes_of)
     if at.startswith("net:"):
-        return _deck_node(at[4:], spellings, cards=cards, unread=unread)
+        return _deck_node(at[4:], spellings, cards=cards, unread=unread, reader=reader)
     if "." in at:
         ref, _, term = at.rpartition(".")
         if term.isdigit():
@@ -1537,7 +1548,7 @@ def _netlist_node_from_at(
                 f"{len(nodes)}), or at='net:NAME' for a node",
             )
     # A dotted name whose tail is not a terminal index is a node of that name.
-    return _deck_node(at, spellings, cards=cards, unread=unread)
+    return _deck_node(at, spellings, cards=cards, unread=unread, reader=reader)
 
 
 def _node_spellings(nodes_of: dict[str, list[str]]) -> dict[str, str]:
@@ -1551,7 +1562,12 @@ def _node_spellings(nodes_of: dict[str, list[str]]) -> dict[str, str]:
 
 
 def _deck_node(
-    name: str, spellings: Mapping[str, str], *, cards: Sequence[SpiceCard], unread: int
+    name: str,
+    spellings: Mapping[str, str],
+    *,
+    cards: Sequence[SpiceCard],
+    unread: int,
+    reader: SemanticProfile,
 ) -> str:
     """``name``, when it is ground or one of the deck's own nodes
     (``spellings``, by :func:`_node_spellings`); else the refusal, which names
@@ -1565,17 +1581,18 @@ def _deck_node(
     globals_listed = {fold_case(text) for card in cards for text in _readable_global_names(card)}
     inside = _subcircuits_using(key, cards)
     if key in globals_listed:
-        # A body whose port has the name reads it as that port, as LTspice
-        # does (``deck_nodes``), so only the other bodies are on the global.
-        ports = _subcircuit_ports(cards)
+        # A body whose port has the name reads it as that port to LTspice
+        # (``deck_nodes``), so only the other bodies are on the global there.
+        ports = _subcircuit_ports(cards, reader)
         inside = [
             name
             for name in inside
-            if node_kind(
+            if settled_node_kind(
                 key,
                 ports=ports.get(fold_case(name), ()),
                 global_names=globals_listed,
-                simulator="ltspice",
+                simulator=reader.simulator,
+                ngbehavior=reader.ngbehavior,
             )
             == "global"
         ]
@@ -1620,7 +1637,7 @@ def _deck_node(
 
 
 def _readable_global_names(card: SpiceCard) -> tuple[str, ...]:
-    """The node names a ``.global`` card lists (``deck_nodes``), none for a
+    """The node names a ``.global`` card lists (``spice_lex_views.global_names``), none for a
     card that cannot be split into parts."""
     try:
         return global_names(card)
@@ -1628,13 +1645,16 @@ def _readable_global_names(card: SpiceCard) -> tuple[str, ...]:
         return ()
 
 
-def _subcircuit_ports(cards: Sequence[SpiceCard]) -> dict[str, tuple[str, ...]]:
-    """The ports each subcircuit's header names, by its case-folded name;
-    none for a header that cannot be split into parts."""
+def _subcircuit_ports(
+    cards: Sequence[SpiceCard], reader: SemanticProfile
+) -> dict[str, tuple[str, ...]]:
+    """The ports the header of each subcircuit's definition in force to
+    ``reader`` names (``spice_lex.subckt_definitions``), by its case-folded
+    name; none for a header that cannot be split into parts, or for a name
+    defined more than once of which the reader keeps no definition."""
     ports: dict[str, tuple[str, ...]] = {}
-    for card in cards:
-        if card.kind != "subckt":
-            continue
+    for index in subckt_definitions(cards, reader.subckt_rule).in_force.values():
+        card = cards[index]
         try:
             sub = SubcktCard.from_card(card)
         except SpiceLexError:
@@ -1704,7 +1724,9 @@ _GND_IN_A_DECK = (
 )
 
 
-def _net_netlist_payload(text: str, at: str | list[int]) -> dict[str, Any]:
+def _net_netlist_payload(
+    text: str, at: str | list[int], reader: SemanticProfile
+) -> dict[str, Any]:
     """Card-membership for a node in a netlist — no geometry keys (by contract).
 
     The members are the deck's own cards: a card in a ``.subckt`` body is on
@@ -1727,7 +1749,9 @@ def _net_netlist_payload(text: str, at: str | list[int]) -> dict[str, Any]:
         parsed[ref_lower] = line
         nodes_of[ref_lower] = line.nodes
 
-    node = _netlist_node_from_at(at, nodes_of, cards=lexed.cards, unread=unparseable)
+    node = _netlist_node_from_at(
+        at, nodes_of, cards=lexed.cards, unread=unparseable, reader=reader
+    )
     node_key = name_key(node)
     members: list[dict[str, Any]] = []
     spellings = {node}
@@ -1760,7 +1784,8 @@ async def _do_net(q: NetQuery, state: SessionState, view: _View) -> dict[str, An
         except OSError as exc:
             raise _QueryError("read_error", str(exc)) from exc
         try:
-            payload = await asyncio.to_thread(_net_netlist_payload, text, q.at)
+            reader = await asyncio.to_thread(services.session_reader, state)
+            payload = await asyncio.to_thread(_net_netlist_payload, text, q.at, reader)
         except SpiceLexError as exc:
             raise _QueryError("parse_error", str(exc)) from exc
         members = payload.pop("members")
@@ -1811,9 +1836,14 @@ async def _do_net(q: NetQuery, state: SessionState, view: _View) -> dict[str, An
     if "snapped_to_wire" in tdata:
         data["snapped_to_wire"] = tdata["snapped_to_wire"]
     if page["secondary_truncated"]:
+        again = {
+            **q.model_dump(mode="json", exclude_defaults=True, exclude={"cursor"}),
+            "cursor": page["next_cursor"],
+        }
         data["hint"] = (
             f"{page['secondary_returned']} of {page['secondary_total']} wire-vertex "
-            "coordinates returned; repeat this query with next_cursor for the rest "
+            "coordinates returned; read the rest with "
+            f"{call_to_continue('inspect', {'queries': [again]})} "
             "(one cursor advances pins and coordinates independently)."
         )
     if tdata.get("warnings"):
@@ -2450,10 +2480,9 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
     prefix = _check_prefix(q.prefix)
     family = q.family
     simulator = _hierarchy_simulator(q.simulator, state)
-    profile = SemanticProfile(
-        family,
+    profile = SemanticProfile.of(
+        services.deck_producer(state, family, simulator),
         run_ngbehavior(simulator, q.ngbehavior) if family == "ngspice" else None,
-        xvii_names=family == "ltspice" and services.simulator_before_24(state, simulator),
     )
     sandbox = state.allowed_paths()
     hierarchy = load_hierarchy(
@@ -2495,7 +2524,7 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
     return {
         "data": {
             "instances": [row.row() for row in page["items"]],
-            "profile": identity["profile"],
+            "profile": hierarchy.profile.reply(),
             "inputs": identity["inputs"],
             "ngspice_check": check.payload() if check is not None else None,
             "total": page["total"],
@@ -2626,6 +2655,12 @@ class _LogRows(Sequence[dict[str, Any]]):
                 row[key] = value[ordinal] if isinstance(value, list) else value
             if "unreadable" in metadata:
                 row["unreadable"] = metadata["unreadable"]
+            for key in ("answer", "answer_unknown"):
+                if key in metadata:
+                    row[key] = metadata[key]
+            unset = metadata.get("not_established")
+            if unset is not None and ordinal in unset["steps"]:
+                row["not_established"] = unset["reason"]
             row["failed"] = measurement_failed(self._facts, metadata["measurement"], ordinal)
             return row
         key = "entry" if metadata["layout"] == "scalar_print" else "row"
@@ -2640,6 +2675,9 @@ async def _log_results_page(
     section_name = "measurements" if query.view == "measurements" else "native_tables"
     section = logs.section(section_name)
     facts = logs.value(section_name)
+    if query.view == "measurements" and facts is not None:
+        # Each measurement names the field holding its result.
+        facts = await services.answer_measurements(source, facts)
     rows = _LogRows(facts, query.view, _check_prefix(query.prefix))
     identity = {
         **query.model_dump(exclude={"cursor", "limit"}),
@@ -2806,7 +2844,7 @@ _ERROR_SCHEMA: dict[str, Any] = {
     "properties": {
         "code": {"type": "string"},
         "message": {"type": "string"},
-        "supported": {"type": "array", "items": {"type": "string"}},
+        "supported": {"type": "array", "items": {"type": "string"}, CUT: NEVER},
         "hint": HINT_SCHEMA,
     },
     "required": ["code", "message"],
@@ -2848,7 +2886,7 @@ _REFERENCE_BRANCH_SCHEMA: dict[str, Any] = {
         "name": {"type": "string", "description": "The discriminant value to pass."},
         "summary": {"type": "string"},
         "call": {"type": "string", "description": "How the call carrying this branch is written."},
-        "fields": {"type": "array", "items": _REFERENCE_FIELD_SCHEMA},
+        "fields": {"type": "array", "items": _REFERENCE_FIELD_SCHEMA, CUT: ITEMS},
     },
     "required": ["tool", "family", "name", "summary"],
 }
@@ -2859,12 +2897,14 @@ _REFERENCE_DATA_PROPERTIES: dict[str, Any] = {
     "query": {"type": ["string", "null"]},
     "matches": {
         "type": "array",
+        CUT: ITEMS,
         "items": _REFERENCE_BRANCH_SCHEMA,
         "description": "Best matches first, each with its full field table.",
     },
     "total_matches": {"type": "integer"},
     "contents": {
         "type": "array",
+        CUT: ITEMS,
         "description": "The table of contents, returned when no query was given.",
         "items": {
             "type": "object",
@@ -2873,6 +2913,7 @@ _REFERENCE_DATA_PROPERTIES: dict[str, Any] = {
                 "family": {"type": "string"},
                 "branches": {
                     "type": "array",
+                    CUT: ITEMS,
                     "items": {
                         "type": "object",
                         "properties": {"name": {"type": "string"}, "summary": {"type": "string"}},
@@ -2906,6 +2947,7 @@ _SIMULATOR_DOCS_DATA_PROPERTIES: dict[str, Any] = {
     "source": {"type": "string", "description": "The directory the documents are read from."},
     "docs": {
         "type": "array",
+        CUT: ITEMS,
         "items": {
             "type": "object",
             "properties": {
@@ -2918,6 +2960,7 @@ _SIMULATOR_DOCS_DATA_PROPERTIES: dict[str, Any] = {
     },
     "sections": {
         "type": "array",
+        CUT: ITEMS,
         "description": "The document in order, cut at its second-level headings.",
         "items": {
             "type": "object",
@@ -2957,6 +3000,7 @@ _OPEN_DESIGNS_DATA_PROPERTIES: dict[str, Any] = {
     "total": {"type": "integer", "description": "How many documents they have open in all."},
     "designs": {
         "type": "array",
+        CUT: ITEMS,
         "items": {
             "type": "object",
             "properties": {
@@ -2985,6 +3029,8 @@ _OPEN_DESIGNS_DATA_PROPERTIES: dict[str, Any] = {
 _MEASUREMENTS_DATA_PROPERTIES: dict[str, Any] = {
     "measurements": {
         "type": "array",
+        # A row is cut whole, so its answer, failed and unreadable stay with it.
+        CUT: rows("measurement", "value_index"),
         "items": {
             "type": "object",
             "properties": {
@@ -3008,6 +3054,27 @@ _MEASUREMENTS_DATA_PROPERTIES: dict[str, Any] = {
                     },
                     "required": ["reason"],
                 },
+                "answer": {
+                    "type": "string",
+                    "enum": ["value", "at"],
+                    "description": (
+                        "The field holding the measurement's result: 'at' for a "
+                        "WHEN with no FIND printed on its own line, whose value is "
+                        "the level it searched for; 'value' otherwise."
+                    ),
+                },
+                "answer_unknown": {
+                    "type": "string",
+                    "description": "Why the field holding the result is not known.",
+                },
+                "not_established": {
+                    "type": "string",
+                    "description": (
+                        "Why the value printed in this row is not established as "
+                        "the result, which is then null: LTspice XVII prints 0 in "
+                        "a stepped table for a step whose measurement failed."
+                    ),
+                },
                 "failed": {
                     "type": "boolean",
                     "description": (
@@ -3024,6 +3091,7 @@ _MEASUREMENTS_DATA_PROPERTIES: dict[str, Any] = {
     "failed_measurements": {
         "type": "array",
         "items": {"type": "string"},
+        CUT: NEVER,
         "description": (
             "The measurements LTspice printed as failed at any step; each failed "
             "value's row is marked failed."
@@ -3044,6 +3112,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         "outcome": outcome_schema("complete", "partial"),
         "results": {
             "type": "array",
+            CUT: NEVER,
             "items": {
                 "type": "object",
                 "properties": {
@@ -3066,15 +3135,28 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                             "dialect": {"type": "string"},
                             "analysis": {"type": "string"},
                             "axis": {"type": ["object", "null"]},
-                            "plots": {"type": "array", "items": {"type": "object"}},
-                            "signals": {"type": "array", "items": {"type": "object"}},
-                            "table": {"type": "array", "items": {"type": "object"}},
-                            "native_tables": {"type": "array", "items": {"type": "object"}},
+                            "plots": {"type": "array", "items": {"type": "object"}, CUT: ITEMS},
+                            "signals": {
+                                "type": "array",
+                                "items": {"type": "object"},
+                                CUT: ITEMS,
+                            },
+                            "table": {
+                                "type": "array",
+                                "items": {"type": "object"},
+                                CUT: ITEMS,
+                            },
+                            "native_tables": {
+                                "type": "array",
+                                "items": {"type": "object"},
+                                CUT: ITEMS,
+                            },
                             "capture_facts": {"type": "object"},
                             "scan": {"type": "object"},
                             "observations": {
                                 "type": "array",
                                 "items": {"type": "object"},
+                                CUT: NEVER,
                                 "description": (
                                     "What the results read say of themselves: partial_raw "
                                     "for a stopped case's kept raw."
@@ -3144,6 +3226,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         # own item's 'error' and never surface here.
         "observations": {
             "type": "array",
+            CUT: NEVER,
             "items": {
                 "type": "object",
                 "properties": {

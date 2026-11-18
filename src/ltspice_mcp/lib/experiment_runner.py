@@ -24,6 +24,7 @@ from ltspice_mcp.lib.controlled_ngspice import (
     verify_seeded_driver,
 )
 from ltspice_mcp.lib.deck_staging import sha256_file, verify_staged_manifest
+from ltspice_mcp.lib.device_names import naming_disagreement
 from ltspice_mcp.lib.experiment_inputs import (
     capture_produced_artifacts,
     verify_case_inputs,
@@ -53,6 +54,7 @@ from ltspice_mcp.lib.job_lifecycle import (
     stop_analysis_for_owner,
 )
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
+from ltspice_mcp.lib.log_conditions import decoded_run_diagnostics
 from ltspice_mcp.lib.native_execution import prepare_native_cases
 from ltspice_mcp.lib.ngspice_driver import validate_seed
 from ltspice_mcp.lib.pdk_native import (
@@ -67,6 +69,7 @@ from ltspice_mcp.lib.raw_parser import (
     cut_partial_raw,
     other_raw_path,
     points_reached,
+    raw_writer_command,
     read_partial_raw_progress,
     result_digest,
 )
@@ -391,7 +394,8 @@ def verify_replay_sources(job: ExperimentJob, request_id: str) -> None:
         if live:
             raise IdempotencyConflictError(
                 f"request_id {request_id!r} already ran circuit {source.circuit!r} "
-                f"against live include(s) {', '.join(live)}, whose content was never "
+                f"against file(s) read in place {', '.join(live)} (a live include, "
+                "or a data file named by an absolute path), whose content was never "
                 "digested; this receipt cannot be shown to describe them now. Submit "
                 "under a new request_id to run it again."
             )
@@ -477,6 +481,8 @@ class ExperimentRunRequest:
     #: The program this request's cases will launch, identified before the
     #: request gate. Recorded on a new job and compared against a recorded one.
     simulator_executable: SimulatorExecutable | None = None
+    #: The spelling the request's decks were read with (``ExperimentJob.deck_names_xvii``).
+    deck_names_xvii: bool | None = None
     declared: int | None = None
     canonicalizer_version: int = CANONICALIZER_VERSION
     max_parallel: int | None = None
@@ -577,8 +583,8 @@ class _Execution:
     claimed_cancel_priors: dict[str, str] = field(default_factory=dict)
     persistence_error: Exception | None = None
     #: The build an earlier run on this job's executable reported, read on the
-    #: loop as the job starts: with the executable's name, what tells whether it
-    #: is an LTspice before 24 (``simulator_build.ltspice_before_24``).
+    #: loop as the job starts: the first evidence of which LTspice it is
+    #: (``simulator_build.which_ltspice``).
     reported_build: str | None = None
 
     @property
@@ -718,6 +724,7 @@ class ExperimentRunner(RunnerBase):
             sources=staged.sources,
             simulator=request.simulator,
             simulator_executable=request.simulator_executable,
+            deck_names_xvii=request.deck_names_xvii,
             completeness=completeness,
             # The job's own directory inside the runner's stable output folder,
             # not the folder itself: everything this job wrote is under it, and
@@ -1405,6 +1412,7 @@ class ExperimentRunner(RunnerBase):
                 self.simulator_class,
                 case.run_token,
                 reported=execution.reported_build,
+                observations=case.observations,
             )
             # On ngspice, a `.control` script replaces the raw the simulator would
             # otherwise write, so a scripted deck that never calls write/wrdata
@@ -1580,7 +1588,12 @@ class ExperimentRunner(RunnerBase):
             if stop_reason is not None:
                 await self._stop_active_case(execution, case, future, stop_reason)
             elif outcome is not None:
-                self._apply_outcome(case, outcome)
+                # The simulator has exited: its permit goes to the next case
+                # before the log is read, which waits on the one parser.
+                self._release_slot(execution, case.case_id)
+                outcome = await self._with_logs(execution, outcome)
+                self._apply_outcome(execution.job, case, outcome)
+                await self._check_raw_names(execution, case)
                 if (
                     outcome.error is None
                     and case.raw_file is not None
@@ -1721,10 +1734,13 @@ class ExperimentRunner(RunnerBase):
             self._fail_if_capacity_retained(execution)
             return
 
+        # Read before the stopped case's artifacts are removed below.
+        outcome = await self._with_logs(execution, outcome)
         if execution.job.recovery is not None:
-            self._apply_outcome(case, outcome)
+            self._apply_outcome(execution.job, case, outcome)
+            await self._check_raw_names(execution, case)
         else:
-            self._apply_stopped_outcome(case, outcome)
+            self._apply_stopped_outcome(execution.job, case, outcome)
         kept = await self._record_progress_then_remove(execution, case)
         terminal_status = "cancelled" if reason == "cancelled" else "failed"
         self._mark_case(
@@ -1811,9 +1827,9 @@ class ExperimentRunner(RunnerBase):
         if case is None:
             return
         if execution.job.recovery is not None:
-            self._apply_outcome(case, outcome)
+            self._apply_outcome(execution.job, case, outcome)
         else:
-            self._apply_stopped_outcome(case, outcome)
+            self._apply_stopped_outcome(execution.job, case, outcome)
         case.observations.append(
             {
                 "code": "late_simulator_exit",
@@ -1831,14 +1847,22 @@ class ExperimentRunner(RunnerBase):
         )
         # The permit is free once the process is gone. Read progress off-loop,
         # preserve recovery artifacts, and save the final facts.
-        self._background.spawn(self._retire_late_exit(execution, case), key=job_id, loop=self.loop)
+        self._background.spawn(
+            self._retire_late_exit(execution, case, outcome), key=job_id, loop=self.loop
+        )
         self._release_slot(execution, case_id)
         if execution.live.done and not execution.retained_slots:
             self._executions.pop(job_id, None)
 
-    async def _retire_late_exit(self, execution: _Execution, case: ExperimentCase) -> None:
+    async def _retire_late_exit(
+        self, execution: _Execution, case: ExperimentCase, outcome: RunOutcome
+    ) -> None:
         """Record late-exit progress and persist final artifact facts."""
         try:
+            # Off the loop, as for any run that ended: what its log said.
+            read = await self._with_logs(execution, outcome)
+            if read is not outcome:
+                case.log_diagnostics = self._classified(execution.job, case, read)
             kept = await self._record_progress_then_remove(execution, case)
             case.failure_evidence = _with_partial_raw(case.failure_evidence, kept)
         finally:
@@ -1909,18 +1933,76 @@ class ExperimentRunner(RunnerBase):
         return fact, kept
 
     @staticmethod
-    def _apply_outcome(case: ExperimentCase, outcome: RunOutcome) -> None:
+    async def _with_logs(execution: _Execution, outcome: RunOutcome) -> RunOutcome:
+        """``outcome`` with its log facts, read here when its completion did not
+        read them (a run that produced). Read after the run's time limit has
+        stopped counting, and without the raw, which a log read does not need."""
+        if outcome.logs is not None or outcome.logs_error is not None:
+            return outcome
+        if not outcome.log_file or outcome.log_file == ".":
+            return outcome._replace(logs_error="The run left no log")
+        from ltspice_mcp.lib.services import AnalysisSource, load_logs_sync
+
+        log = Path(outcome.log_file)
+        source = AnalysisSource(
+            raw=None,
+            log=log,
+            console=log.with_suffix(".exe.log"),
+            netlist=None,
+            dialect=dialect_for_simulator_name(execution.job.simulator),
+            identity=None,
+            trusted_job_artifact=True,
+        )
+        try:
+            logs = await asyncio.to_thread(load_logs_sync, source, execution.request.state)
+        except Exception as exc:
+            return outcome._replace(logs_error=f"{type(exc).__name__}: {exc}")
+        return outcome._replace(logs=logs)
+
+    @staticmethod
+    def _classified(job: ExperimentJob, case: ExperimentCase, outcome: RunOutcome) -> dict:
+        """What the simulator said about ``case``'s run, from ``outcome``'s log
+        facts, classified with the build the run named (set on ``case`` first),
+        so a later read of the same log (the summary recipe) chooses the same
+        rules."""
+        return dict(
+            decoded_run_diagnostics(
+                outcome.logs, services.run_producer(job, case), unread=outcome.logs is None
+            )
+        )
+
+    @staticmethod
+    async def _check_raw_names(execution: _Execution, case: ExperimentCase) -> None:
+        """Say on ``case`` when its raw names subcircuit members otherwise than
+        the spelling its deck was read with at submission
+        (``ExperimentJob.deck_names_xvii``), as an LTspice under another name,
+        never run before, can."""
+        expected = execution.job.deck_names_xvii
+        if case.raw_file is None or expected is None:
+            return
+        command = await asyncio.to_thread(raw_writer_command, case.raw_file)
+        disagreement = naming_disagreement(expected, command)
+        if disagreement is not None:
+            case.observations.append(
+                {"code": "raw_names_disagree", "kind": "execution", "detail": disagreement}
+            )
+
+    @staticmethod
+    def _apply_outcome(job: ExperimentJob, case: ExperimentCase, outcome: RunOutcome) -> None:
         case.raw_file = Path(outcome.raw_file) if outcome.raw_file else None
         case.log_file = Path(outcome.log_file) if outcome.log_file else None
         case.other_raws = list(outcome.other_raws)
         case.simulator_version = outcome.simulator_version
+        case.log_diagnostics = ExperimentRunner._classified(job, case, outcome)
         if outcome.observations:
             case.observations.extend(outcome.observations)
 
     @staticmethod
-    def _apply_stopped_outcome(case: ExperimentCase, outcome: RunOutcome) -> None:
+    def _apply_stopped_outcome(
+        job: ExperimentJob, case: ExperimentCase, outcome: RunOutcome
+    ) -> None:
         """Keep post-kill diagnostics without advertising artifacts we remove."""
-        ExperimentRunner._apply_outcome(case, outcome)
+        ExperimentRunner._apply_outcome(job, case, outcome)
         case.raw_file = None
         case.other_raws = []
 

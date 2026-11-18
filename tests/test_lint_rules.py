@@ -9,6 +9,7 @@ import pytest
 from spicelib.simulators.ngspice_simulator import NGspiceSimulator
 
 from ltspice_mcp.lib.lint_rules import RULES, RULES_BY_ID, LintRule, lint_deck, linter_version
+from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.spice_lex import lex_deck
 from ltspice_mcp.lib.spice_lex_views import MeasCard
 from ltspice_mcp.lib.spice_validator import (
@@ -16,7 +17,7 @@ from ltspice_mcp.lib.spice_validator import (
     validate_netlist_dangling_nodes,
     validate_netlist_directive_refs,
 )
-from tests.conftest import FIXTURES_DIR
+from tests.conftest import FIXTURES_DIR, LTSPICE_READER
 
 
 def _ids(
@@ -28,6 +29,7 @@ def _ids(
     suppress=(),
     codec: str = "cp1252",
     cp1252_reader: str | None = None,
+    reader: Producer | None = None,
 ) -> set[str]:
     # Read as an 8-bit file by default, the one kind that can hold a byte
     # UTF-8 would not.
@@ -39,9 +41,16 @@ def _ids(
         suppress=suppress,
         codec=codec,
         cp1252_reader=cp1252_reader,
+        reader=reader,
     )
     return {finding["rule_id"] for finding in findings}
 
+
+#: One subcircuit defined twice at the top level of a deck.
+_DEFINED_TWICE = (
+    "* t\n.subckt amp a b\nR1 a b 1k\n.ends\n.subckt amp a b\nR1 a b 2k\n.ends\n"
+    "I1 0 in 1\nX1 in 0 amp\n.op\n.end\n"
+)
 
 _CLEAN = "V1 in 0 1\nR1 in out 1k\n.model DFAST D(Is=1e-12)\nD1 out 0 DFAST\n.op\n.end\n"
 
@@ -201,8 +210,24 @@ _SEED_CASES = [
         None,
         "LTspice",
     ),
+    (
+        "subckt-defined-twice",
+        _DEFINED_TWICE,
+        None,
+        "LTspice",
+    ),
+    (
+        "subckt-defined-twice-unrecorded",
+        _DEFINED_TWICE,
+        None,
+        "LTspice",
+    ),
 ]
 _CASE_IDS = [case[0] for case in _SEED_CASES]
+#: Who reads a seed rule's deck, where a rule turns on the build: LTspice 26
+#: refuses a subcircuit defined twice, and an LTspice whose build is not known
+#: (no reader given) has nothing recorded.
+_SEED_READERS = {"subckt-defined-twice": Producer("ltspice", "LTspice 26.1.1 for Windows", None)}
 
 
 def test_every_seed_rule_has_a_case():
@@ -225,6 +250,7 @@ def test_each_seed_rule_fires(
         tmp_path,
         dialect=dialect,
         simulator=simulator,
+        reader=_SEED_READERS.get(rule_id),
     )
 
 
@@ -244,7 +270,9 @@ def test_each_seed_rule_stays_quiet_on_clean_deck(
 ):
     monkeypatch.setattr(NGspiceSimulator, "_compatibility_mode", "kiltpsa")
 
-    assert rule_id not in _ids(_CLEAN, tmp_path, dialect=dialect, simulator=simulator)
+    assert rule_id not in _ids(
+        _CLEAN, tmp_path, dialect=dialect, simulator=simulator, reader=_SEED_READERS.get(rule_id)
+    )
 
 
 def test_save_meas_coverage_accepts_saved_signal(tmp_path: Path):
@@ -378,12 +406,14 @@ def test_each_reader_of_a_probe_reads_its_nodes(
     view_names = [name for probe in MeasCard.from_card(meas).signal_refs for name in probe.names]
     assert view_names == names
     dangling = {
-        str(issue["message"]).split("'")[1] for issue in validate_netlist_dangling_nodes(cards)
+        str(issue["message"]).split("'")[1]
+        for issue in validate_netlist_dangling_nodes(cards, reader=LTSPICE_READER)
     }
     assert dangling == {"a", "b"} - {name.casefold() for name in names}
     elsewhere = lex_deck(deck.replace("R1 in a 1k\nR2 in b 1k\n", "R9 in 0 1k\n")).cards
     undefined = [
-        str(issue["message"]).split("'")[1] for issue in validate_netlist_directive_refs(elsewhere)
+        str(issue["message"]).split("'")[1]
+        for issue in validate_netlist_directive_refs(elsewhere, reader=LTSPICE_READER)
     ]
     assert undefined == [name for name in names if ":" not in name]
 

@@ -1014,8 +1014,9 @@ class TestPeriodicMetrics:
 @pytest.mark.asyncio
 class TestMeasurementStats:
     async def test_basic(self, state_no_sim: SessionState, work_dir: Path):
-        # One .MEAS result from a single run reaches the stats block intact.
-        # Multi-step aggregation is covered by
+        # One .MEAS result from a single run reaches the stats block intact: a
+        # WHEN with no FIND, whose result is the crossing printed after AT, not
+        # the level before it. Multi-step aggregation is covered by
         # tests/test_signal_analysis.py::TestComputeMeasurementStats.
         log = work_dir / "meas.log"
         log.write_text(
@@ -1032,10 +1033,9 @@ class TestMeasurementStats:
         assert list(result["stats"]) == ["fc"]
         entry = result["stats"]["fc"]
         assert entry["valid_count"] == 1
-        assert entry["mean"] == pytest.approx(0.707)
-        assert entry["aggregated_field"] == "value"
-        # A single-run AT measurement also echoes where it was taken.
-        assert entry["at"] == pytest.approx(1591.5)
+        assert entry["mean"] == pytest.approx(1591.5)
+        assert entry["aggregated_field"] == "at"
+        assert "at" not in entry  # the point is the result, not echoed beside it
 
     async def test_missing_log_file(self, state_no_sim: SessionState, work_dir: Path):
         with pytest.raises(ResultError):
@@ -1857,7 +1857,7 @@ class TestTraceDeviceFilter:
             "currents": {"Id(M1)": 1e-3, "I(R1)": 2e-3},
             "device_op_points": {"@m1[gm]": 1e-3, "@m2[gm]": 2e-3},
         }
-        assert _filter_operating_point(op, "M1") is True
+        assert _filter_operating_point(op, "M1", xvii=False) is True
         assert op["currents"] == {"Id(M1)": 1e-3}
         assert op["device_op_points"] == {"@m1[gm]": 1e-3}
         # Node voltages are not device-scoped -> dropped from the focused view.
@@ -1865,12 +1865,12 @@ class TestTraceDeviceFilter:
 
     def test_filter_matches_subcircuit_path_suffix(self):
         op = {"voltages": {}, "currents": {}, "device_op_points": {"@m.x1.mn[gm]": 5.0}}
-        assert _filter_operating_point(op, "mn") is True
+        assert _filter_operating_point(op, "mn", xvii=False) is True
         assert op["device_op_points"] == {"@m.x1.mn[gm]": 5.0}
 
     def test_filter_no_match_reports_false(self):
         op = {"voltages": {}, "currents": {"Id(M1)": 1.0}, "device_op_points": {}}
-        assert _filter_operating_point(op, "Q9") is False
+        assert _filter_operating_point(op, "Q9", xvii=False) is False
 
 
 @pytest.mark.asyncio

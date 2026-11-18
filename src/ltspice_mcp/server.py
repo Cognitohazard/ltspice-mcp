@@ -25,13 +25,19 @@ from ltspice_mcp.engine import bootstrap_server_engine
 from ltspice_mcp.errors import LTSpiceMCPError, PathSecurityError
 from ltspice_mcp.lib import CIRCUIT_EXTENSIONS, progress
 from ltspice_mcp.lib.families import DISPLAY
-from ltspice_mcp.lib.observability import configure_stderr_logging, emit_tool_event
+from ltspice_mcp.lib.observability import (
+    capturing_request,
+    configure_stderr_logging,
+    emit_read_event,
+    emit_tool_event,
+)
 from ltspice_mcp.lib.simulator import no_simulator_message
 from ltspice_mcp.lib.simulator_build import executable_path
 from ltspice_mcp.resources import (
     get_resource_templates,
     get_static_resources,
     handle_read_resource,
+    resource_template_of,
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import RegisteredTool, failure_text, recovery_hint
@@ -374,13 +380,33 @@ async def call_tool(
     """Answer a tool call, and log one event for it however it ends, a call
     the client cancels included (``lib/observability.emit_tool_event``)."""
     started = time.monotonic()
-    try:
-        result = await _answer_tool_call(ctx, params)
-    except BaseException as ended:
-        emit_tool_event(params.name, time.monotonic() - started, ended)
-        raise
-    emit_tool_event(params.name, time.monotonic() - started, result)
+    with capturing_request() as request:
+        try:
+            result = await _answer_tool_call(ctx, params)
+        except BaseException as ended:
+            emit_tool_event(
+                _event_tool_name(params.name, ctx),
+                time.monotonic() - started,
+                ended,
+                request[0] if request else None,
+            )
+            raise
+    emit_tool_event(
+        params.name, time.monotonic() - started, result, request[0] if request else None
+    )
     return result
+
+
+def _event_tool_name(name: str, ctx: ServerRequestContext) -> str | None:
+    """``name`` if this server serves a tool by it, else None: an unknown
+    name is the caller's text, which the event does not record. A call that
+    failed before the session state could be read records None too, so the
+    lookup never replaces the call's own exception."""
+    try:
+        served = _get_state(ctx).tool_dispatch
+    except Exception:
+        return None
+    return name if name in served else None
 
 
 async def _answer_tool_call(
@@ -586,6 +612,30 @@ async def read_resource(
             internal-error code when the read raised something unexpected,
             which is a fault in this server rather than in the request.
     """
+    started = time.monotonic()
+    template = resource_template_of(params.uri)
+    outcome, code = "raised", None
+    try:
+        result = await _read_resource(ctx, params)
+    except MCPError as e:
+        data = e.error.data
+        code = data.get("code") if isinstance(data, dict) else None
+        outcome = "error"
+        raise
+    except asyncio.CancelledError:
+        outcome = "cancelled"
+        raise
+    else:
+        outcome = "ok"
+        return result
+    finally:
+        emit_read_event("resource_read", template, time.monotonic() - started, outcome, code)
+
+
+async def _read_resource(
+    ctx: ServerRequestContext, params: types.ReadResourceRequestParams
+) -> types.ReadResourceResult:
+    """Answer one resource read (:func:`read_resource`)."""
     state = _get_state(ctx)
     uri = params.uri
 
@@ -631,7 +681,19 @@ async def get_prompt(
 ) -> types.GetPromptResult:
     """Return a prompt's messages with its arguments interpolated."""
     del ctx
-    return prompts.get_prompt(params.name, params.arguments)
+    started = time.monotonic()
+    name = params.name if params.name in prompts.prompt_names() else None
+    outcome = "raised"
+    try:
+        result = prompts.get_prompt(params.name, params.arguments)
+    except ValueError:
+        outcome = "error"
+        raise
+    else:
+        outcome = "ok"
+        return result
+    finally:
+        emit_read_event("prompt_get", name, time.monotonic() - started, outcome)
 
 
 # The tool, resource and prompt listings are all built once, during lifespan

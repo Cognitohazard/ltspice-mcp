@@ -3278,7 +3278,11 @@ async def test_a_stepped_runs_row_keeps_its_spread(
         include={"per_run": True},
     )
     (row,) = data["results"]["m"]["per_run"]["items"]
-    assert set(row["value"]) == {"stats"}
+    # The log is written by hand, with a WHEN's level beside its crossing in
+    # a stepped table, which no recording shows: tcross reads no field, and
+    # says why, while vfinal keeps its spread.
+    assert set(row["value"]) == {"stats", "answer_unknown"}
+    assert set(row["value"]["answer_unknown"]) == {"tcross"}
     assert row["value"]["stats"]["vfinal"]["total_count"] == 3
 
 

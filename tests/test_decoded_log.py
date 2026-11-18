@@ -346,6 +346,7 @@ def test_a_line_the_reader_does_not_match_fails_only_its_measurement(tmp_path, o
     assert entries["t"] == {
         "values": [None],
         "at": 6.98e-05,
+        "printed_form": "line_AT",
         "unreadable": {
             "line": "t: V(out)={vth} AT 6.98e-05",
             "reason": "the log gives '{vth}' where a number belongs",
@@ -368,6 +369,7 @@ def test_a_value_the_reader_cuts_short_is_quoted_as_the_log_printed_it(tmp_path)
     assert entries["t_x"] == {
         "values": [None],
         "at": 6.98e-05,
+        "printed_form": "line_AT",
         "unreadable": {"line": line, "reason": "the log gives 'vth^2' where a number belongs"},
     }
 

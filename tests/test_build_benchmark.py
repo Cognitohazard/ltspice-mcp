@@ -53,6 +53,7 @@ from tests._build_benchmark import (
 )
 from tests._proposal_record import write_record
 from tests._schematic_fixtures import TESTS, suite_resolver
+from tests.conftest import LTSPICE_READER
 from tests.ltspice_recorder import INPUTS
 from tests.test_circuit_asc import BUILD_ARCHETYPES
 
@@ -389,7 +390,9 @@ def test_every_kept_sheet_is_exported_in_the_recordings():
 def _exported(build: str, case_id: str) -> dict[str, set[tuple[str, int]]]:
     """The pins LTspice put on each node of a recorded export, by node name."""
     nodes: dict[str, set[tuple[str, int]]] = {}
-    for component in parse_netlist_graph(rec.recorded(build, f"{case_id}.net")).components:
+    for component in parse_netlist_graph(
+        rec.recorded(build, f"{case_id}.net"), reader=LTSPICE_READER
+    ).components:
         for order, node in enumerate(component.nodes, start=1):
             nodes.setdefault(node, set()).add((canon_ref(component.ref), order))
     return nodes
@@ -408,7 +411,10 @@ def test_the_scorer_nets_a_sheet_as_ltspice_does(build: str, case_id: str, tmp_p
     assert {pins for pins, _names in mine} == {frozenset(pins) for pins in exported.values()}
     for pins, names in mine:
         node = next(node for node, on in exported.items() if on == pins)
-        assert not names or node in {canon_net(name) for name in names}, (node, names)
+        assert not names or node in {canon_net(name, reader=LTSPICE_READER) for name in names}, (
+            node,
+            names,
+        )
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -436,5 +442,7 @@ def test_a_three_pin_transistor_is_netted_with_the_fourth_node_ltspice_gives_it(
 @pytest.mark.parametrize(("build", "case_id"), list(rec.per_build(_EXPORTS)))
 def test_what_ltspice_exports_is_the_reference_circuit(build: str, case_id: str):
     reference = case_id.removeprefix("benchmark/").rsplit("_", 1)[0]
-    comparison = compare_graphs(CORPUS / f"{reference}.cir", rec.recorded(build, f"{case_id}.net"))
+    comparison = compare_graphs(
+        CORPUS / f"{reference}.cir", rec.recorded(build, f"{case_id}.net"), reader=LTSPICE_READER
+    )
     assert comparison.equivalent, comparison

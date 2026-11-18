@@ -31,6 +31,7 @@ RouteHandler = Callable[[str, dict[str, str], SessionState], types.ReadResourceR
 
 @dataclass(frozen=True)
 class _Route:
+    template: str
     pattern: re.Pattern[str]
     handler: RouteHandler
 
@@ -46,10 +47,24 @@ class ResourceRouter:
         pattern = self._compile_template(template)
 
         def decorator(handler: Callable) -> Callable:
-            self._routes.append(_Route(pattern=pattern, handler=handler))
+            self._routes.append(_Route(template=template, pattern=pattern, handler=handler))
             return handler
 
         return decorator
+
+    def _match(self, uri_str: str) -> tuple[_Route, re.Match[str]] | None:
+        """The first route whose template matches ``uri_str``, with the match."""
+        for route in self._routes:
+            match = route.pattern.fullmatch(uri_str)
+            if match is not None:
+                return route, match
+        return None
+
+    def template_of(self, uri_str: str) -> str | None:
+        """The template of the route :meth:`dispatch` sends ``uri_str`` to, or
+        None when no route matches."""
+        found = self._match(uri_str)
+        return None if found is None else found[0].template
 
     def dispatch(self, uri_str: str, state: SessionState) -> types.ReadResourceResult:
         """Dispatch a URI to the first matching route.
@@ -60,13 +75,12 @@ class ResourceRouter:
         that sends the name unencoded is unaffected — decoding a string with
         nothing to decode returns it unchanged.
         """
-        for route in self._routes:
-            match = route.pattern.fullmatch(uri_str)
-            if match is None:
-                continue
-            params = {k: unquote(v) for k, v in match.groupdict().items()}
-            return route.handler(uri_str, params, state)
-        raise ValueError(f"Unknown resource URI: {uri_str}")
+        found = self._match(uri_str)
+        if found is None:
+            raise ValueError(f"Unknown resource URI: {uri_str}")
+        route, match = found
+        params = {k: unquote(v) for k, v in match.groupdict().items()}
+        return route.handler(uri_str, params, state)
 
     @staticmethod
     def _compile_template(template: str) -> re.Pattern[str]:
@@ -98,7 +112,7 @@ def get_static_resources() -> list[types.Resource]:
             uri="spice://netlists/",
             description=(
                 "List of netlist files in the folder a relative path is read from: "
-                "the working directory, or the first allowed path under a sandbox"
+                "the working directory, or the first allowed path when a sandbox leaves it out"
             ),
             mime_type="application/json",
         ),
@@ -219,6 +233,13 @@ def handle_read_resource(uri_str: str, state: SessionState) -> types.ReadResourc
     return _router.dispatch(uri_str, state)
 
 
+def resource_template_of(uri_str: str) -> str | None:
+    """The URI template a read of ``uri_str`` is served by, or None when this
+    server serves no such URI: what a read's event names in place of the URI,
+    whose path is the caller's."""
+    return _router.template_of(uri_str)
+
+
 def _make_result(
     uri_str: str, text: str, mime: str = "application/json"
 ) -> types.ReadResourceResult:
@@ -320,8 +341,9 @@ def _read_netlists_list(
     """List the netlist files in the folder a relative name is read from.
 
     That folder is the one ``spice://netlists/{filename}`` resolves a name
-    in: the working directory, or the first allowed path when a sandbox is
-    set. Listing any other folder would advertise URIs the read refuses.
+    in (``SessionState.relative_base``): the working directory, or the first
+    allowed path when the sandbox leaves the working directory out. Listing
+    any other folder would advertise URIs the read refuses.
     """
     del params
     folder = state.relative_base()

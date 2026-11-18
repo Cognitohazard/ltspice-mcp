@@ -26,8 +26,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import math
-import re
-from collections.abc import Callable, Collection, Coroutine, Sequence
+from collections.abc import Callable, Collection, Coroutine, Mapping, Sequence
 from pathlib import Path
 from typing import Any, Literal, NoReturn, TypeAlias
 
@@ -67,7 +66,13 @@ from ltspice_mcp.lib.format import (
     parse_spice_value,
     same_value,
 )
-from ltspice_mcp.lib.log_parser import DEVICE_OP_TABLE_DIGITS, device_key
+from ltspice_mcp.lib.log_conditions import decoded_run_diagnostics, reply_fields
+from ltspice_mcp.lib.log_parser import (
+    DEVICE_OP_TABLE_DIGITS,
+    device_key,
+    measurement_cards,
+    result_unreadable,
+)
 from ltspice_mcp.lib.log_types import MeasurementsOutput, measurement_failed, measurement_named
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
@@ -139,7 +144,7 @@ from ltspice_mcp.lib.signal_analysis import (
     window_and_clean,
     window_span,
 )
-from ltspice_mcp.lib.simulator_build import is_cp1252_ltspice_build, reported_build
+from ltspice_mcp.lib.simulator_build import reported_build
 from ltspice_mcp.lib.trace_names import (
     find_trace,  # noqa: TID251 - an op-point value's name, read against the .log's names
     naming_note,
@@ -616,7 +621,7 @@ def signal_stats_defined(analysis: str, *, windowed: bool = False) -> bool:
 OP_BUCKETS = ("voltages", "currents", "device_op_points", "other")
 
 
-def filter_operating_point(op_data: dict, device: str, *, xvii: bool = False) -> bool:
+def filter_operating_point(op_data: dict, device: str, *, xvii: bool) -> bool:
     """Narrow ``op_data`` (in place) to one device's operating-point params +
     terminal currents. Returns whether anything matched.
 
@@ -628,7 +633,8 @@ def filter_operating_point(op_data: dict, device: str, *, xvii: bool = False) ->
     simulator wrote it, or an instance, which keeps everything inside it and
     its port currents.
     """
-    names_device = device_query(device, xvii=xvii)
+    every = [name for bucket in OP_BUCKETS for name in op_data.get(bucket, {})]
+    names_device = device_query(device, xvii=xvii, among=every)
     matched = False
     for bucket in OP_BUCKETS:
         kept = {}
@@ -672,13 +678,6 @@ def operating_point_flat(value: dict[str, Any]) -> dict[str, Any]:
 # .MEAS aggregation helpers
 # ---------------------------------------------------------------------------
 
-_RE_MEAS_WHEN = re.compile(r"\bwhen\b", re.IGNORECASE)
-_RE_MEAS_FIND = re.compile(r"\bfind\b", re.IGNORECASE)
-_RE_MEAS_HEAD = re.compile(
-    r"^\.meas(?:ure)?(?:\s+(?:tran|ac|dc|op|sp|fft|noise))?\s+(?P<name>[A-Za-z0-9_$]+)",
-    re.IGNORECASE,
-)
-
 
 def diagnostics_block(diags: list[str], empty_note: str) -> str:
     """Indent diagnostic lines for an error payload, or fall back to
@@ -688,110 +687,40 @@ def diagnostics_block(diags: list[str], empty_note: str) -> str:
     return "\n".join(f"  {d}" for d in diags)
 
 
-def meas_kinds_from_netlist(netlist: Path | None) -> dict[str, str]:
-    """Operator kind per lowercase .MEAS name, read from the deck itself.
-
-    The log alone cannot distinguish a WHEN crossing search from a FIND...AT
-    probe — both print ``name: expr=value at X`` — so the shape heuristic in
-    :func:`apply_when_axis_swap` has a documented degenerate misread. The deck
-    is ground truth: relay the operator when the netlist is readable. Kinds:
-    ``"when"`` (bare WHEN — value is the constant trigger level, the crossing
-    in ``at`` is the payload) vs ``"value"`` (everything else, including
-    FIND...WHEN, whose FIND result is the payload). Names defined inside
-    includes stay absent and fall back to the heuristic. The deck's cards are
-    the ones the simulator reads (``spice_lex.lex_deck``): a ``.MEAS`` in its
-    title or after ``.END`` is never measured.
-    """
-    if netlist is None:
-        return {}
-    try:
-        from ltspice_mcp.lib.encoding import read_spice_text
-        from ltspice_mcp.lib.spice_lex import lex_deck
-
-        cards = lex_deck(read_spice_text(netlist)).cards
-    except Exception:
-        return {}
-    kinds: dict[str, str] = {}
-    for card in cards:
-        body = card.body
-        m = _RE_MEAS_HEAD.match(body)
-        if not m:
-            continue
-        rest = body[m.end() :]
-        is_bare_when = bool(_RE_MEAS_WHEN.search(rest)) and not _RE_MEAS_FIND.search(rest)
-        kinds[m.group("name").lower()] = "when" if is_bare_when else "value"
-    return kinds
-
-
-def apply_when_axis_swap(
-    flat_values: dict[str, list[float | None]],
-    at_map: dict[str, list[float | None]],
-    kinds: dict[str, str] | None = None,
-) -> dict[str, AggregatedField]:
-    """Pick each .MEAS name's aggregation axis, swapping WHEN-style ones to ``at``.
-
-    For a ``WHEN``/``AT`` .MEAS the per-sample ``values`` are the trigger level
-    (constant by construction) while the interesting axis is the crossing time in
-    ``at``. When the levels are constant (or all-None) and the ``at`` values vary,
-    swap ``flat_values[name]`` to the ``at`` list and mark the axis ``"at"``;
-    otherwise keep ``"value"``. Mutates ``flat_values`` in place for swapped
-    names; returns the axis map.
-
-    ``kinds`` (from :func:`meas_kinds_from_netlist`) relays the directive's
-    real operator and overrides the shape inference: a known non-WHEN never
-    swaps (kills the degenerate misread where a FIND probe constant to 12
-    decimals across runs would aggregate the probe axis), and a known bare
-    WHEN swaps whenever crossings are present. Names not in ``kinds`` fall back
-    to the numeric-shape heuristic. The chosen axis is always reported via
-    ``aggregated_field`` so the consumer can tell.
-    """
-    axis_map: dict[str, AggregatedField] = {}
-    for name, vals in flat_values.items():
-        ats = at_map.get(name) or []
-        valid_vals = [v for v in vals if v is not None]
-        valid_ats = [a for a in ats if a is not None]
-        levels_constant = len({round(v, 12) for v in valid_vals}) <= 1
-        ats_vary = len({round(a, 12) for a in valid_ats}) > 1
-        kind = (kinds or {}).get(name.lower())
-        if kind == "when":
-            # A deck-confirmed bare WHEN aggregates crossing times whenever the
-            # logs carry any — constant crossings (a deterministic batch) are
-            # still the requested quantity, not a reason to fall back to the
-            # constant trigger level.
-            swap = bool(valid_ats)
-        elif kind == "value":
-            swap = False
-        else:
-            swap = levels_constant and ats_vary
-        if swap:
-            flat_values[name] = ats
-            axis_map[name] = "at"
-        else:
-            axis_map[name] = "value"
-    return axis_map
+def _answer_numbers(entry: Mapping[str, Any]) -> list[float | None]:
+    """The numbers of the field an answered measurement entry names
+    (``log_parser.answered_measurements``), one per step; nulls for an entry
+    that names none."""
+    values = list(entry.get("values", []))
+    field = entry.get("answer")
+    if field == "value":
+        return values
+    if field == "at":
+        at = entry.get("at")
+        return list(at) if isinstance(at, list) else [at] * len(values)
+    return [None] * len(values)
 
 
 def aggregate_log_measurements(
     meas_data: MeasurementsOutput,
-    netlist: Path | None = None,
-    *,
-    kinds: dict[str, str] | None = None,
 ) -> tuple[
     dict[str, list[float | None]],
     dict[str, AggregatedField],
     str,
     dict[str, list[float | None]],
 ]:
-    """Aggregate the already decoded .MEAS results of one captured log.
+    """Aggregate the answered .MEAS results of one captured log
+    (``services.answer_measurements``).
 
     The interesting case is a ``.step`` log, where each .MEAS name carries
     one value per step; a plain single-run log yields one value per name
-    (honest n=1 stats).
+    (honest n=1 stats). Each name's numbers are those of the field its entry
+    names as holding the result (``answer``); a name whose entry says that is
+    not known (``answer_unknown``) gets nulls and no axis.
 
     Returns ``(flat_values, axis_map, steps_label, at_map)`` — ``at_map`` is the
-    per-step ``at`` list per name (unswapped), so the caller can echo the
-    reported point for a single-sample read the swap can't classify. ``kinds``
-    is the deck's measurement kinds when the caller has read them already.
+    per-step ``at`` list per name, so the caller can echo the reported point
+    for a single-sample read whose result is its value.
     """
     measurements = meas_data.get("measurements", {})
     if not measurements:
@@ -803,9 +732,12 @@ def aggregate_log_measurements(
         err_block = diagnostics_block(diags, "(log contained no .MEAS results and no diagnostics)")
         raise ResultError(f"No .MEAS results in log:\n{err_block}")
 
-    flat_values = {name: list(entry.get("values", [])) for name, entry in measurements.items()}
-    # Per-step ``at`` (crossing time) list per name, so a stepped WHEN .MEAS swaps
-    # to the ``at`` axis exactly as the batch path does.
+    flat_values = {name: _answer_numbers(entry) for name, entry in measurements.items()}
+    axis_map: dict[str, AggregatedField] = {
+        name: entry["answer"]  # type: ignore[typeddict-item]
+        for name, entry in measurements.items()
+        if entry.get("answer") in ("value", "at")
+    }
     at_map: dict[str, list[float | None]] = {}
     for name, entry in measurements.items():
         at_field = entry.get("at")
@@ -815,9 +747,6 @@ def aggregate_log_measurements(
             at_map[name] = [float(at_field)]
         else:
             at_map[name] = []
-    if kinds is None:
-        kinds = meas_kinds_from_netlist(netlist)
-    axis_map = apply_when_axis_swap(flat_values, at_map, kinds)
     steps_label = f"{meas_data.get('step_count', 1)} step(s)"
     return flat_values, axis_map, steps_label, at_map
 
@@ -859,9 +788,14 @@ def measurements_at_step(meas_data: MeasurementsOutput, step: int) -> Measuremen
 
     one: dict[str, Any] = {}
     for name, entry in meas_data.get("measurements", {}).items():
-        # failed_steps names steps rather than holding a field per step; the
-        # step's own failed_measurements says it of the one step kept.
-        row = {key: at_step(field) for key, field in entry.items() if key != "failed_steps"}
+        # failed_steps and not_established name steps rather than holding a
+        # field per step: the step's own failed_measurements says the one, and
+        # its null value the other (metrics.measurement_rows names it).
+        row = {
+            key: at_step(field)
+            for key, field in entry.items()
+            if key not in ("failed_steps", "not_established")
+        }
         row["values"] = [row["values"]]
         one[name] = row
     failed = [
@@ -891,9 +825,6 @@ def measurement_step_values(
     return step_values
 
 
-_RE_NOISE_HEAD = re.compile(r"^[ \t]*\.noise\s+(?P<out>\S+)\s+(?P<src>\S+)", re.IGNORECASE)
-
-
 def noise_input_source_unit(netlist: Path | None) -> str | None:
     """SI unit implied by a ``.NOISE`` directive's input-source refdes.
 
@@ -921,12 +852,21 @@ def noise_input_source_unit(netlist: Path | None) -> str | None:
         cards = lex_deck(read_spice_text(netlist)).cards
     except Exception:
         return None
+    from ltspice_mcp.lib.spice_lex import SpiceLexError, directive_head
+    from ltspice_mcp.lib.spice_lex_views import directive_args
+
     units: set[str | None] = set()
     for card in cards:
-        m = _RE_NOISE_HEAD.match(card.body)
-        if not m:
+        if card.kind != "directive" or directive_head(card) != ".noise":
             continue
-        prefix = m.group("src")[:1].upper()
+        try:
+            args = directive_args(card)
+        except SpiceLexError:
+            units.add(None)  # which source it names is not known: ambiguous
+            continue
+        if len(args) < 2:
+            continue
+        prefix = args[1][:1].upper()
         units.add("V" if prefix == "V" else "A" if prefix == "I" else None)
     # Resolve only when every .NOISE directive agrees on one recognized type;
     # otherwise it's ambiguous and we let the trace-derived unit stand.
@@ -1038,6 +978,19 @@ async def summary(
         )
 
     logs = await _logs_for_raw(source, state, raw)
+    # What the simulator said about the run, with the rules its run row was
+    # classified with when it ended, so the two answers are one.
+    descriptor = raw.descriptor
+    if source.producer is not None:
+        producer = source.producer
+    else:
+        producer = services.source_producer(
+            source,
+            read_dialect=descriptor.dialect if descriptor.dialect_evidence else None,
+            reported=await asyncio.to_thread(reported_build, source.log, source.raw),
+        )
+    said = reply_fields(decoded_run_diagnostics(logs, producer))
+    cards = await asyncio.to_thread(measurement_cards, source.netlist)
     try:
         # The worker has materialized every array and companion section. This
         # deadline covers resident summary computation; no artifact parser or
@@ -1052,6 +1005,8 @@ async def summary(
                 value_scan=True,
                 requested=requested,
                 source_amplitudes=source_amplitudes,
+                producer=producer,
+                cards=cards,
             ),
         )
     except ResultError:
@@ -1096,7 +1051,7 @@ async def summary(
                     f"{facts['step_count']}; pass step=N for other steps."
                 )
 
-    data = dict(facts)
+    data = {**facts, **said}
     if ac_metrics:
         data["ac_bandwidth_metrics"] = ac_metrics
     if ac_signal_used and ac_signal_used != signal:
@@ -1130,22 +1085,20 @@ async def measurement_rows(
     the run's log: ``None`` aggregates every step, an index reads that step's
     row (:func:`measurements_at_step`). Each names the measurements LTspice
     printed as failed at its steps in ``failed_measurements``, and those it
-    printed as other than a number in ``unreadable``. The deck and the build
-    that wrote the run are read once for all of them."""
+    printed as other than a number in ``unreadable``, and the steps whose
+    printed value is not established as the result in ``not_established``.
+    The deck and the build that wrote the run are read once for all of them."""
     logs = await services.load_logs(source, state)
-    whole = logs.value("measurements")
-    if whole is None or source.log is None:
+    decoded = logs.value("measurements")
+    if decoded is None or source.log is None:
         raise ResultError("source has no log artifact for .MEAS results")
+    whole = await services.answer_measurements(source, decoded)
     tables = [whole if step is None else measurements_at_step(whole, step) for step in steps]
-    netlist = source.netlist
 
     def aggregate_each() -> list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]]:
-        kinds = meas_kinds_from_netlist(netlist)
         rows = []
         for table in tables:
-            flat_values, axis_map, _steps_label, at_map = aggregate_log_measurements(
-                table, kinds=kinds
-            )
+            flat_values, axis_map, _steps_label, at_map = aggregate_log_measurements(table)
             stats = run_compute(
                 compute_measurement_stats,
                 flat_values,
@@ -1157,16 +1110,17 @@ async def measurement_rows(
 
     aggregated = await services.bounded_parse(source.log, aggregate_each)
     values: list[MetricValue] = []
-    for table, (stats, axis_map, at_map) in zip(tables, aggregated, strict=True):
+    for step, table, (stats, axis_map, at_map) in zip(steps, tables, aggregated, strict=True):
         # Surface which field each stat block was computed from so a downstream
         # consumer can tell "this is the level (constant)" from "this is the
         # WHEN-clause crossing frequency".
         for name, entry in stats.items():
-            entry["aggregated_field"] = axis_map.get(name, "value")
-            # n=1 can't trigger the variation-based WHEN swap, so a single-run
-            # .meas with an AT/crossing would report only its value. Echo the
-            # reported ``at`` too — callers use this to "read my .meas", and
-            # the time/frequency is often the answer they want.
+            if name not in axis_map:
+                continue  # its entry says the field is not known: no axis is chosen
+            entry["aggregated_field"] = axis_map[name]
+            # The point a single-run .meas whose result is its value printed
+            # with it (a FIND's AT, a MAX's time): echoed, as callers reading
+            # their .meas often want it too.
             if entry["aggregated_field"] == "value" and entry.get("total_count") == 1:
                 crossings = [a for a in at_map.get(name, []) if a is not None]
                 if crossings:
@@ -1188,77 +1142,37 @@ async def measurement_rows(
         if failed:
             row["failed_measurements"] = failed
         unreadable = {
-            name: entry["unreadable"]
+            name: reason
             for name, entry in whole["measurements"].items()
-            if "unreadable" in entry and name in stats
+            if name in stats and (reason := result_unreadable(entry)) is not None
         }
         if unreadable:
             row["unreadable"] = unreadable
-        values.append(row)
-    zeros = await _zeros_a_failed_step_prints(source, whole, set(values[0]["stats"]))
-    if zeros is not None:
-        build, zero_steps = zeros
-        for step, data in zip(steps, values, strict=True):
-            at_step = {
-                name: [index for index in indices if step in (None, index)]
-                for name, indices in zero_steps.items()
+        # Where the field holding a result is not known, no number is given
+        # for it, and the row says why (log_parser.measurement_answer).
+        unknown = {
+            name: entry["answer_unknown"]
+            for name, entry in whole["measurements"].items()
+            if "answer_unknown" in entry and name in stats
+        }
+        if unknown:
+            row["answer_unknown"] = unknown
+        # The steps whose printed value is not established as the result
+        # (XVII prints 0 for a failed step: log_parser.answered_measurements),
+        # by the run's step, from 0: those this row reads.
+        unset = {
+            name: {
+                "steps": [i for i in entry["not_established"]["steps"] if step in (None, i)],
+                "reason": entry["not_established"]["reason"],
             }
-            at_step = {name: indices for name, indices in at_step.items() if indices}
-            if at_step:
-                data["observations"] = [_zero_or_failed(build, at_step)]
+            for name, entry in whole["measurements"].items()
+            if "not_established" in entry and name in stats
+        }
+        unset = {name: item for name, item in unset.items() if item["steps"]}
+        if unset:
+            row["not_established"] = unset
+        values.append(row)
     return values
-
-
-async def _zeros_a_failed_step_prints(
-    source: services.AnalysisSource, parsed: MeasurementsOutput, names: set[str]
-) -> tuple[str, dict[str, list[int]]] | None:
-    """The build and the steps that read exactly 0, by measurement, when the
-    build prints 0 for a failure; None otherwise.
-
-    In a stepped measurement table LTspice 24 and later print ``failed`` for a
-    step whose measurement could not be taken; LTspice XVII and earlier print
-    ``0``, which the log does not tell apart from a measurement that is 0. The
-    build is the one the run named in its own output: as the job's case
-    recorded it, or for a bare path, read from the head of its log or raw.
-    Every exact zero is named, as a fact for the caller to weigh: a true zero
-    and a failure read the same here.
-    """
-    measurements = parsed.get("measurements") or {}
-    if (parsed.get("step_count") or 0) < 2 or not measurements:
-        return None
-    zeros = {
-        name: [index for index, value in enumerate(entry.get("values") or []) if value == 0]
-        for name, entry in measurements.items()
-        if name in names
-    }
-    zeros = {name: steps for name, steps in zeros.items() if steps}
-    if not zeros:
-        return None
-    build = source.simulator_version or await asyncio.to_thread(
-        reported_build, source.log, source.raw
-    )
-    if build is None or not is_cp1252_ltspice_build(build):
-        return None
-    return build, zeros
-
-
-def _zero_or_failed(build: str, zeros: dict[str, list[int]]) -> dict[str, Any]:
-    """The observation naming the steps that read 0 on a build that prints 0
-    for a failure (:func:`_zeros_a_failed_step_prints`)."""
-    listed = "; ".join(
-        f"{name} at step(s) {', '.join(map(str, steps))}" for name, steps in zeros.items()
-    )
-    return {
-        "code": "measurement_zero_or_failed",
-        "kind": "value",
-        "detail": (
-            f"This run was written by {build}, which prints 0 in a stepped "
-            f"measurement table for a step whose measurement failed, where "
-            f"LTspice 24 and later print 'failed'. These read exactly 0 and "
-            f"may be failures: {listed} (0-based steps)."
-        ),
-        "evidence": {"build": build, "zero_steps": zeros},
-    }
 
 
 async def value(

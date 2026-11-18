@@ -134,7 +134,12 @@ def test_a_stepped_fra_runs_margins_read_as_the_numbers_printed(tmp_path: Path):
     assert table["measurements"]["phasemargin_1"] == {
         "values": [90.6295, 90.1991],
         "at": [15900.4, 8007.62],
+        "printed_form": "table_at",
     }
     # Not a finite number, so held as null and counted.
-    assert table["measurements"]["gainmargin_1"] == {"values": [None, None], "at": None}
+    assert table["measurements"]["gainmargin_1"] == {
+        "values": [None, None],
+        "at": None,
+        "printed_form": "table_at",
+    }
     assert section["nonfinite_count"] == 3

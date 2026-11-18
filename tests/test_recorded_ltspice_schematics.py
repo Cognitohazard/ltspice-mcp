@@ -53,7 +53,7 @@ from tests import _ltspice_recorded as rec
 from tests._asc_ops import _inspect_item as inspect_item
 from tests._asc_ops import apply_ops, inspect_one, inspect_refusal, sha_of, sheet_findings
 from tests._schematic_fixtures import open_editor
-from tests.conftest import FIXTURES_DIR, FakeSim, SyncApi
+from tests.conftest import FIXTURES_DIR, LTSPICE_READER, FakeSim, SyncApi
 from tests.ltspice_recorder import INPUTS
 from tests.test_verify_circuit import _run as run_verify_circuit
 
@@ -193,7 +193,9 @@ def test_the_stand_in_symbols_that_claim_stock_pins_have_them(build: str):
 def exported_groups(build: str, case_id: str) -> set[frozenset[str]]:
     """The pins LTspice put on each node, as ``REF.order`` sets."""
     nodes: dict[str, set[str]] = {}
-    for component in parse_netlist_graph(rec.recorded(build, f"{case_id}.net")).components:
+    for component in parse_netlist_graph(
+        rec.recorded(build, f"{case_id}.net"), reader=LTSPICE_READER
+    ).components:
         for order, node in enumerate(component.nodes, start=1):
             nodes.setdefault(node, set()).add(f"{canon_ref(component.ref)}.{order}")
     return {frozenset(pins) for pins in nodes.values()}
@@ -1664,6 +1666,42 @@ class TestExportEncoding:
         assert f"SYMATTR Value 2{MICRO}\n" in text
         assert data["sha256"] == sha_of(sheet)
 
+    async def test_an_edit_adds_no_mark_to_a_utf16_sheet_that_had_none(
+        self, build: str, state_no_sim, work_dir: Path
+    ):
+        """Both builds export a UTF-16 LE sheet with no byte order mark and
+        neither exports one with a mark, so an edit of a sheet stored without
+        one must not add it."""
+        import codecs
+
+        from ltspice_mcp.tools.schematic_edit import EditSchematicInput, handle_edit_schematic
+        from tests._asc_ops import sha_of
+
+        assert self.value(build, "micro_utf16le") == f"1{MICRO}"
+        assert rec.entry(build, "export/micro_utf16le_bom")["outputs"] == {}
+        sheet = rec.stage_sheet(build, "export/micro_utf16le", work_dir)
+        assert sheet.read_bytes().startswith("Version 4".encode("utf-16-le"))
+        result = await handle_edit_schematic(
+            EditSchematicInput.model_validate(
+                {
+                    "path": str(sheet),
+                    "expected_sha256": sha_of(sheet),
+                    "ops": [
+                        {"op": "set_component_value", "reference": "R1", "value": f"2{MICRO}"}
+                    ],
+                }
+            ),
+            state_no_sim,
+        )
+        data = result.structured_content
+        assert data is not None and data["commit_state"] == "committed"
+        written = sheet.read_bytes()
+        assert not written.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE))
+        text = written.decode("utf-16-le")
+        assert text.startswith("Version 4\n")
+        assert f"SYMATTR Value 2{MICRO}\n" in text
+        assert data["sha256"] == sha_of(sheet)
+
     def test_ltspice_26_reads_a_utf8_sheet_as_cp1252(self, build: str):
         """Neither build reads a sheet as UTF-8. LTspice 26 decodes it as cp1252
         and writes what it saw in UTF-8, so a UTF-8 micro sign comes out as the
@@ -1863,7 +1901,7 @@ class TestExportedNames:
         front of a subcircuit instance pairs as a rename, not as one removed
         part and one added."""
         export = rec.export_text(build, "export/instance_names")
-        result = compare_graphs(self.WRITTEN, export)
+        result = compare_graphs(self.WRITTEN, export, reader=LTSPICE_READER)
         assert (result.added, result.removed) == ([], [])
         # References are compared without the marker, as LTspice 26 names them.
         assert [(r.reference_ref, r.candidate_ref) for r in result.renamed] == [
@@ -2593,3 +2631,90 @@ def test_each_element_is_exported_with_a_node_for_each_pin_and_read_so(build: st
     assert cards["W1"].control == "Vsense"
     pins = exported_pin_nodes(rec.export_text(build, "export/elements"), ELEMENT_PARTS)
     assert len(pins) == sum(len(part_pins) for _ref, _letter, part_pins in ELEMENT_PARTS)
+
+
+# ---------------------------------------------------------------------------
+# Questions the code answered without a recording
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_text_line_spaced_irregularly_is_read(build: str):
+    """``TEXT  32 176<tab>Left  2 !.tran 1m``: both builds export the
+    ``.tran``, and the server's sheet reader reads the line's directive as
+    they do. The schematic editor refuses the sheet, since spicelib's editor
+    skips the line and a save would delete it (docs/spicelib_bugs.md, Bug 36),
+    so a sheet both builds run cannot be edited here."""
+    assert exported_bodies(build, "export/text_irregular_spacing")[1:3] == [
+        ".tran 1m",
+        ".param p=1",
+    ]
+    texts = parse_asc((INPUTS / "export/text_irregular_spacing.asc").read_bytes()).texts
+    assert [(t.kind, t.body) for t in texts] == [("!", ".tran 1m"), ("!", ".param p=1")]
+    with pytest.raises(NetlistError, match="is a TEXT record the schematic editor skips"):
+        make_editor(INPUTS / "export/text_irregular_spacing.asc")
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_value_with_an_inner_space_and_a_spiceline_are_exported_as_written(
+    build: str, tmp_path: Path
+):
+    """``Value 1 k`` is exported ``1 k``, and ``Value 1k`` with ``SpiceLine
+    tol=5`` as ``1k tol=5``; the suite's stand-in exporter writes the same."""
+    exported = {
+        line.split()[0]: line.split(None, 3)[3]
+        for line in rec.export_text(build, "export/value_inner_space").splitlines()
+        if line.startswith("R")
+    }
+    assert exported == {"R1": "1 k", "R2": "1k tol=5"}
+    faked = fake_netlister.netlist_text(
+        rec.stage_sheet(build, "export/value_inner_space", tmp_path)
+    )
+    for reference, tail in exported.items():
+        assert f"{reference} " in faked and faked.split(f"{reference} ", 1)[1].split("\n")[0]
+        assert faked.split(f"{reference} ", 1)[1].split("\n")[0].endswith(tail), reference
+
+
+#: A block's own sheet holds a .param, a .model and a .options. Both builds put
+#: the .param and the .model inside the block's .subckt and leave the .options
+#: out of the export altogether.
+OPTIONS_ON_A_BLOCK_SHEET_DROPPED_BY_LTSPICE = ".options gmin=1e-13"
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_block_sheets_directives_go_inside_its_subcircuit(build: str):
+    case_id = "export/hier_directives_top"
+    cards = rec.export_cards(build, case_id)
+    bodies = exported_bodies(build, case_id)
+    start = bodies.index(".subckt hier_directives IN OUT")
+    end = bodies.index(".ends hier_directives")
+    assert bodies[start + 1 : end] == [
+        "R1 IN OUT {rb}",
+        "R2 OUT 0 1k",
+        ".param rb=2k",
+        ".model DX D(Is=1f)",
+    ]
+    assert OPTIONS_ON_A_BLOCK_SHEET_DROPPED_BY_LTSPICE.split("=")[0] not in "\n".join(bodies)
+    scoped = {
+        card.body: card.scope for card in cards if card.body.startswith((".param", ".model"))
+    }
+    assert set(scoped.values()) == {("hier_directives",)}, scoped
+
+
+#: An A-device's pins that touch nothing: both builds export each as node 0,
+#: with the pin on the ground flag. The server's nets leave each on a net of
+#: its own.
+OPEN_A_DEVICE_PINS_GROUNDED_BY_LTSPICE_ONLY = frozenset({"a1.3", "a1.4", "a1.5", "a1.6", "a1.8"})
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_an_a_device_pin_on_nothing_is_exported_as_ground(build: str, tmp_path: Path):
+    case_id = "export/adevice_open_pin"
+    assert exported_bodies(build, case_id)[0] == "A1 a b 0 0 0 0 y 0 AND"
+    exported = exported_groups(build, case_id)
+    assert OPEN_A_DEVICE_PINS_GROUNDED_BY_LTSPICE_ONLY in exported
+    modelled = modelled_groups(rec.stage_sheet(build, case_id, tmp_path))
+    assert OPEN_A_DEVICE_PINS_GROUNDED_BY_LTSPICE_ONLY not in modelled
+    assert {pin for group in modelled if len(group) == 1 for pin in group} >= (
+        OPEN_A_DEVICE_PINS_GROUNDED_BY_LTSPICE_ONLY
+    )

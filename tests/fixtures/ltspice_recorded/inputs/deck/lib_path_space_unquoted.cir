@@ -1,0 +1,6 @@
+* a .lib path holding a space, unquoted
+.lib spaced folder/load.lib
+I1 0 a 1
+X1 a 0 load
+.op
+.end

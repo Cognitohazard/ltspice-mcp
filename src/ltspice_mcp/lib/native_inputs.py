@@ -34,6 +34,7 @@ from ltspice_mcp.lib.pdk_native import (
     validate_sample,
     verify_originals,
 )
+from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.spice_lex import SpiceCard, TokenKind, lex, tokenize_body
 from ltspice_mcp.lib.variations import ExpandedCase, MaterializedCase
 
@@ -269,7 +270,10 @@ class NativeCaseValidator:
             ) from exc
         try:
             hierarchy = load_hierarchy(
-                str(variant.path), [self.staging_root], SemanticProfile("ngspice", NGBEHAVIOR)
+                str(variant.path),
+                [self.staging_root],
+                # Native statistics run on ngspice only, in the mode the policy pins.
+                SemanticProfile.of(Producer("ngspice", None, None), NGBEHAVIOR),
             )
         except (NetlistError, OSError) as exc:
             raise NativeCaseError("hierarchy", str(exc)) from exc

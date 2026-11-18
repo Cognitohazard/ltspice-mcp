@@ -587,7 +587,7 @@ def real_pdk_cases(tmp_path):
         "XA pa da g block\nXB pb db g block\nVA pa 0 1\nVB pb 0 1\nVDA da 0 .9\nVDB db 0 .9\nVG g 0 .9\n.op\n.end\n",
         encoding="utf-8",
     )
-    staged = stage_deck(source, tmp_path / "staged", [tmp_path, root], origin=source)
+    staged = stage_deck(source, tmp_path / "staged", [tmp_path, root], origin=source, dialect=None)
     circuit = CircuitDeck(
         "real",
         staged.staged_deck,

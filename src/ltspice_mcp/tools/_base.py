@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Literal, NamedTuple, TypedDict, TypeVar, get_args, get_origin
 
 from mcp import types
-from pydantic import Field, PrivateAttr, model_validator
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 from ltspice_mcp.config import SIM_EXECUTABLES_KEY as _SIM_EXECUTABLES_KEY
 from ltspice_mcp.config import SIM_SECTION as _SIM_SECTION
@@ -23,11 +23,14 @@ from ltspice_mcp.lib.format import SAME_VALUE_RTOL, held_to_cap
 
 # Re-exported façade names: the strict Pydantic base lives in ``lib`` (models
 # below the tool layer declare models too), and the tool modules reach it here.
+from ltspice_mcp.lib.log_conditions import COVERAGE as LOG_COVERAGE
 from ltspice_mcp.lib.ltspice_window import Shown, file_difference
 from ltspice_mcp.lib.models import StrictModel as StrictModel
 from ltspice_mcp.lib.netlist_graph import IncludeResolver
+from ltspice_mcp.lib.observability import note_request
 from ltspice_mcp.lib.raster import DEFAULT_SCALE, RenderedImage, render_image
 from ltspice_mcp.lib.raw_parser import OtherRawKind
+from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER, rows
 from ltspice_mcp.lib.reply_fields import (
     Kept,
     active_kept,
@@ -223,7 +226,7 @@ HINT_SCHEMA: dict[str, str] = {"type": "string"}
 
 # Free-text measurement caveats (see the observations-vs-warnings rule in
 # lib/result_observations.py).
-WARNINGS_SCHEMA: dict[str, Any] = {"type": "array", "items": {"type": "string"}}
+WARNINGS_SCHEMA: dict[str, Any] = {"type": "array", "items": {"type": "string"}, CUT: NEVER}
 
 PIN_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -282,6 +285,7 @@ LTSPICE_DIFFERENCE_ENTRIES: dict[str, Any] = {
     "only_in_window": {
         "type": "array",
         "items": {"type": "string"},
+        CUT: ITEMS,
         "description": (
             "Where it differs: what the window has and the file lacks, each a "
             "symbol with its attributes or one other line, as .asc lines. A part "
@@ -291,6 +295,7 @@ LTSPICE_DIFFERENCE_ENTRIES: dict[str, Any] = {
     "only_in_file": {
         "type": "array",
         "items": {"type": "string"},
+        CUT: ITEMS,
         "description": "The same, for what the file has and the window lacks.",
     },
     "difference_omitted": {
@@ -399,6 +404,7 @@ VALIDATION_WARNINGS_SCHEMA: dict[str, Any] = {
             "refs": {
                 "type": "array",
                 "items": {"type": "string"},
+                CUT: NEVER,
                 "description": "Every part the finding names, when it names more than one.",
             },
             "pin": {"type": "string"},
@@ -410,6 +416,7 @@ VALIDATION_WARNINGS_SCHEMA: dict[str, Any] = {
             "y": {"type": "integer"},
             "points": {
                 "type": "array",
+                CUT: NEVER,
                 "items": {
                     "type": "object",
                     "properties": {"x": {"type": "integer"}, "y": {"type": "integer"}},
@@ -445,12 +452,52 @@ MEAS_ERRORS_SCHEMA: dict[str, Any] = {
     },
 }
 
+# What the simulator said about a run (``lib/log_conditions.py``): one entry per
+# condition, the first occurrence as written. The run rows of run_experiments
+# and jobs and the summary recipe carry the same two fields.
+RUN_DIAGNOSTICS_SCHEMA: dict[str, Any] = {
+    "type": "array",
+    # One entry is one condition on one channel: leaving one out would hide
+    # something the simulator said.
+    CUT: NEVER,
+    "description": (
+        "What the simulator said about the run, one entry per condition and channel: 'code' is "
+        "the server's name for it, 'severity' the simulator's own word where it wrote "
+        "one, 'first_text' the first occurrence as written, 'count' how often. A line "
+        "the server does not recognise is counted under 'unclassified'. The run's "
+        "'log' and the summary recipe hold the rest."
+    ),
+    "items": {
+        "type": "object",
+        "properties": {
+            "code": {"type": "string"},
+            "count": {"type": "integer", "minimum": 1},
+            "first_text": {"type": "string"},
+            "channel": {"type": "string", "enum": ["log", "console"]},
+            "severity": {"type": "string"},
+        },
+        "required": ["code", "count", "first_text", "channel"],
+        "additionalProperties": False,
+    },
+}
+DIAGNOSTICS_COVERAGE_SCHEMA: dict[str, Any] = {
+    "type": "string",
+    "enum": list(LOG_COVERAGE),
+    "description": (
+        "Present only when 'diagnostics' is not the reading of the run's own "
+        "simulator and build: "
+        + "; ".join(f"{key}: {text}" for key, text in LOG_COVERAGE.items())
+        + "."
+    ),
+}
+
 # Surfaced result observations — see lib/result_observations.py. A surfacing
 # layer: facts lifted into view for the consuming agent to judge, never a trust
 # verdict. ``severity`` is present only on ``relay`` items (the simulator's own
 # classification); ``value``/``reconciliation``/``coverage`` items omit it.
 OBSERVATIONS_SCHEMA: dict[str, Any] = {
     "type": "array",
+    CUT: NEVER,
     "items": {
         "type": "object",
         "properties": {
@@ -467,13 +514,22 @@ OBSERVATIONS_SCHEMA: dict[str, Any] = {
     },
 }
 
-# Parsed .MEAS results, keyed by measurement name. Shared by run_simulation,
-# check_job, and simulation_summary so the WHEN/AT field semantics are
-# described identically everywhere. For a plain value measurement ``values``
-# holds the scalar(s); for a WHEN/AT point measurement ``values`` is the
-# constant trigger LEVEL and the crossing time/frequency lives in ``at`` —
-# the descriptions below are the only place that distinction is self-evident
-# to a client reading the schema.
+#: The steps of a measurement whose printed value is not established as its
+#: result, from 0, and why (``log_parser.answered_measurements``).
+NOT_ESTABLISHED_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "steps": {"type": "array", "items": {"type": "integer"}, CUT: NEVER},
+        "reason": {"type": "string"},
+    },
+    "required": ["steps", "reason"],
+}
+
+# Parsed .MEAS results, keyed by measurement name. Each entry names the field
+# holding its result in ``answer`` (``log_parser.measurement_answer``): a WHEN
+# with no FIND printed on its own line prints the level it searched for, which
+# ``values`` holds, and the crossing, which ``at`` holds; any other entry's
+# result is in ``values``.
 MEASUREMENTS_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": {
@@ -483,9 +539,8 @@ MEASUREMENTS_SCHEMA: dict[str, Any] = {
                 "type": "array",
                 "items": {"type": ["number", "null"]},
                 "description": (
-                    "Per-.step scalar(s). For a WHEN/AT measurement this is the "
-                    "constant trigger level, not the crossing point; read 'at' "
-                    "for the crossing time/frequency."
+                    "Per-.step value(s) printed after '='. The result unless "
+                    "'answer' is 'at', where it is the level a WHEN searched for."
                 ),
             },
             # Scalar when the bound is constant across .step iterations; list
@@ -502,10 +557,33 @@ MEASUREMENTS_SCHEMA: dict[str, Any] = {
                 "type": ["number", "array", "null"],
                 "items": {"type": ["number", "null"]},
                 "description": (
-                    "Crossing time (.tran) or frequency (.ac) for a WHEN/AT point "
-                    "measurement. This is the answer for a WHEN rise-time/crossing "
-                    "query; 'values' holds the constant level. Null for plain "
-                    "value measurements."
+                    "The point printed after AT: a WHEN's crossing time (.tran) or "
+                    "frequency (.ac), which is its result where 'answer' is 'at', "
+                    "or the point a FIND, DERIV or MAX read at."
+                ),
+            },
+            "answer": {
+                "type": "string",
+                "enum": ["value", "at"],
+                "description": (
+                    "The field holding the result: 'at' for a WHEN with no FIND "
+                    "printed on its own line, 'value' (the 'values' list) otherwise."
+                ),
+            },
+            "answer_unknown": {
+                "type": "string",
+                "description": (
+                    "Why the field holding the result is not known, in place of "
+                    "'answer'; read neither field as the result."
+                ),
+            },
+            "not_established": {
+                **NOT_ESTABLISHED_SCHEMA,
+                "description": (
+                    "The steps, from 0, whose printed value is not established as "
+                    "the result, and why: LTspice XVII prints 0 in a stepped "
+                    "table for a step whose measurement failed. Their 'values' "
+                    "are null."
                 ),
             },
             "unreadable": {
@@ -873,7 +951,7 @@ ENVELOPE_ERROR_SCHEMA: dict[str, Any] = {
 
 def failures_schema(row: dict[str, Any]) -> dict[str, Any]:
     """The ``failures`` channel over one tool's failure-row shape."""
-    return {"type": "array", "items": row}
+    return {"type": "array", "items": row, CUT: NEVER}
 
 
 # One lint/check finding, wherever findings are reported. ``at`` locates it as
@@ -901,6 +979,10 @@ FINDING_SCHEMA: dict[str, Any] = {
     "required": ["rule_id", "severity", "ok", "evidence", "at", "subject"],
 }
 
+#: How a list of findings is cut: whole findings, each named by its rule, what
+#: it is about and where.
+FINDING_ROWS_CUT: dict[str, Any] = rows("rule_id", "subject", "at")
+
 #: The keys every offset page declares — see ``lib/pagination.page``, which
 #: builds them.
 PAGE_REQUIRED: list[str] = ["items", "total", "returned", "truncated", "next_cursor"]
@@ -922,7 +1004,7 @@ def page_schema(
         "properties": {
             "items": items
             if items is not None
-            else {"type": "array", "items": {"type": "object"}},
+            else {"type": "array", "items": {"type": "object"}, CUT: ITEMS},
             "total": {"type": "integer"},
             "returned": {"type": "integer"},
             "truncated": {"type": "boolean"},
@@ -1201,6 +1283,9 @@ class ToolRegistry:
             async def wrapped(arguments: Any, state: SessionState) -> types.CallToolResult:
                 if input_model is not None and not isinstance(arguments, input_model):
                     arguments = input_model.model_validate(arguments or {})
+                if isinstance(arguments, BaseModel):
+                    # The call's event names the fields it set (observability).
+                    note_request(arguments)
                 # Every reply built inside keeps this tool's fields
                 # (ALWAYS_PRESENT), whichever helper builds it.
                 with replying_as(name):

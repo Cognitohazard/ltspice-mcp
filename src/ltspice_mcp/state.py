@@ -227,24 +227,24 @@ class SessionState:
         """``user_path`` resolved, refused when there is a sandbox and it lies
         outside both the sandbox and ``also``.
 
-        With no sandbox a relative path is taken from the working directory;
-        with one, from its first entry (``resolve_safe_path``). ``also`` never
-        creates a sandbox where there is none.
+        A relative path is taken from :meth:`relative_base`. ``also`` never
+        creates a sandbox where there is none, and never moves that base.
         """
         return resolve_safe_path(
             user_path,
             with_roots(self.allowed_paths(), also),
-            relative_to=self.config.working_dir,
+            relative_to=self.relative_base(),
         )
 
     def relative_base(self) -> Path:
-        """The directory a relative path is taken from here, resolved.
+        """The directory a relative path is taken from here, resolved: the
+        working directory, or the first allowed directory when the sandbox
+        leaves the working directory out (``pathutil.relative_base``).
 
         The base :meth:`resolve_path` anchors a relative path on, so a listing
         of what a relative name can reach, or a note saying where relatives
-        go, names the directory a read of that name opens. It follows a base
-        the host declared for the calling context (the Python API declares its
-        ``working_dir``), so it is read in that context.
+        go, names the directory a read of that name opens. The server, the
+        Python API and a ``run_code`` worker answer it alike.
         """
         base = relative_base(self.allowed_paths(), self.config.working_dir)
         return (base if base is not None else self.config.working_dir).resolve()

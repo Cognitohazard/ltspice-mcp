@@ -25,9 +25,11 @@ from mcp import types
 from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib import response_budget, services
 from ltspice_mcp.lib.asc_document import is_asc
+from ltspice_mcp.lib.continuation import Unfilled, call_to_continue
 from ltspice_mcp.lib.experiment_runner import live_run_progress
 from ltspice_mcp.lib.experiment_types import (
     ACTIVE_CASE_STATUSES,
+    TERMINAL_CASE_STATUSES,
     Completeness,
     ExperimentCase,
     ExperimentCaseStatus,
@@ -38,6 +40,7 @@ from ltspice_mcp.lib.experiment_types import (
     sample_index,
 )
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
+from ltspice_mcp.lib.log_conditions import reply_fields
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.pagination import page_of
@@ -48,14 +51,18 @@ from ltspice_mcp.lib.projection import (
     resolve_field_paths,
 )
 from ltspice_mcp.lib.raw_parser import other_raw_path
+from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER, rows
 from ltspice_mcp.lib.sheet_results import run_by_ltspice, sheets_reported
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze
 from ltspice_mcp.tools._base import (
+    DIAGNOSTICS_COVERAGE_SCHEMA,
     ENVELOPE_ERROR_SCHEMA,
+    FINDING_ROWS_CUT,
     FINDING_SCHEMA,
     OUTCOME_SCHEMA,
+    RUN_DIAGNOSTICS_SCHEMA,
     CallOutcome,
     ResponseBudget,
     failures_schema,
@@ -106,7 +113,7 @@ CASE_FAILURE_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "case_id": {"type": "string"},
-        "case_ids": {"type": "array", "items": {"type": "string"}},
+        "case_ids": {"type": "array", "items": {"type": "string"}, CUT: NEVER},
         "count": {"type": "integer"},
         "code": {"type": "string"},
         "message": {"type": "string"},
@@ -210,6 +217,8 @@ RUN_RECORD_SCHEMA: dict[str, Any] = {
         "log": {"type": ["string", "null"]},
         "other_raws": {"type": "object", "additionalProperties": {"type": "string"}},
         "simulator_version": {"type": ["string", "null"]},
+        "diagnostics": RUN_DIAGNOSTICS_SCHEMA,
+        "diagnostics_coverage": DIAGNOSTICS_COVERAGE_SCHEMA,
         "attempt": {
             "type": "object",
             "properties": {
@@ -226,7 +235,13 @@ RUN_RECORD_SCHEMA: dict[str, Any] = {
     # deliberately requires none of them.
 }
 
-RUNS_PAGE_SCHEMA: dict[str, Any] = page_schema({"type": "array", "items": RUN_RECORD_SCHEMA})
+#: How a list of run rows is cut: whole rows, each named by its case and run,
+#: which ``run_fields`` may project out of the reply.
+RUN_ROWS_CUT: dict[str, Any] = rows("case_id", "run_index", projected_by="run_fields")
+
+RUNS_PAGE_SCHEMA: dict[str, Any] = page_schema(
+    {"type": "array", "items": RUN_RECORD_SCHEMA, CUT: RUN_ROWS_CUT}
+)
 
 #: Every top-level key a run row can carry, read off its schema: the roots a
 #: ``run_fields`` path may start at.
@@ -315,6 +330,7 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
         "outcome": OUTCOME_SCHEMA,
         "source": {
             "type": "array",
+            CUT: ITEMS,
             "items": {
                 "type": "object",
                 "properties": {
@@ -322,7 +338,7 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
                     "path": {"type": "string"},
                     "sha256": {"type": "string"},
                     "staged_deck": {"type": "string"},
-                    "manifest": {"type": "array", "items": _MANIFEST_SCHEMA},
+                    "manifest": {"type": "array", "items": _MANIFEST_SCHEMA, CUT: ITEMS},
                     "linter_version": {"type": "string"},
                     "simulator": {"type": "string"},
                     "dialect": {"type": ["string", "null"]},
@@ -357,11 +373,12 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
         "progress": _PROGRESS_SCHEMA,
         "lint": {
             "type": "array",
+            CUT: rows("circuit"),
             "items": {
                 "type": "object",
                 "properties": {
                     "circuit": {"type": "string"},
-                    "findings": {"type": "array", "items": FINDING_SCHEMA},
+                    "findings": {"type": "array", "items": FINDING_SCHEMA, CUT: FINDING_ROWS_CUT},
                 },
                 "required": ["circuit", "findings"],
             },
@@ -377,6 +394,7 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
                 "observations": {
                     "type": "array",
                     "items": OBSERVATION_SCHEMA,
+                    CUT: NEVER,
                 },
             },
             # "request" is the caller's own input replayed back — emitted
@@ -389,9 +407,9 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
             ],
         },
         "failures": failures_schema(CASE_FAILURE_SCHEMA),
-        "observations": {"type": "array", "items": OBSERVATION_SCHEMA},
-        "warnings": {"type": "array", "items": {"type": "string"}},
-        "artifacts": {"type": "array", "items": _ARTIFACT_SCHEMA},
+        "observations": {"type": "array", "items": OBSERVATION_SCHEMA, CUT: NEVER},
+        "warnings": {"type": "array", "items": {"type": "string"}, CUT: NEVER},
+        "artifacts": {"type": "array", "items": _ARTIFACT_SCHEMA, CUT: ITEMS},
         "hint": {"type": "string"},
         "error": ENVELOPE_ERROR_SCHEMA,
     },
@@ -982,6 +1000,25 @@ def _manifest_payload(entry: ManifestEntry) -> dict[str, Any]:
     }
 
 
+def run_row_diagnostics(case: ExperimentCase) -> dict[str, Any]:
+    """What the simulator said about ``case``'s run, as its row carries it:
+    ``diagnostics`` and, when that is not the reading of the run's own simulator
+    and build, ``diagnostics_coverage``. A case that never launched, or whose run
+    has not ended, says nothing; one that ended before the server classified
+    logs says its log was not classified."""
+    ran = (
+        case.submitted_at is not None
+        and case.status in TERMINAL_CASE_STATUSES
+        and case.failure_code != "submission_failed"
+    )
+    if not ran:
+        return {}
+    found = case.log_diagnostics
+    if found is None:
+        return {"diagnostics_coverage": "not_classified"}
+    return reply_fields(found)
+
+
 def _run_item(case: ExperimentCase) -> dict[str, Any]:
     row: dict[str, Any] = {
         "case_id": case.case_id,
@@ -997,6 +1034,7 @@ def _run_item(case: ExperimentCase) -> dict[str, Any]:
             else {}
         ),
         "simulator_version": case.simulator_version,
+        **run_row_diagnostics(case),
     }
     if case.recovery is not None:
         attempt = case.recovery.attempt
@@ -1357,8 +1395,16 @@ def _jobs_receipt_hint(snapshot: ReceiptSnapshot, data: dict[str, Any]) -> str:
     if data["runs"]["truncated"]:
         return " ".join(
             [
-                f"Run records are paged; continue with jobs(action='runs', "
-                f"job_id='{snapshot.job_id}', cursor={data['runs']['next_cursor']!r}).",
+                "Run records are paged; read the rest with "
+                + call_to_continue(
+                    "jobs",
+                    {
+                        "action": "runs",
+                        "job_id": snapshot.job_id,
+                        "cursor": data["runs"]["next_cursor"],
+                    },
+                )
+                + ".",
                 *_recovery_routes(snapshot),
             ]
         )
@@ -1399,7 +1445,13 @@ def render_runs_envelope(
         "warnings": run_warnings,
         "failures": [],
         "hint": (
-            "Use next_cursor to continue the run page."
+            "Run records are paged; read the rest with "
+            + call_to_continue(
+                "jobs",
+                {"action": "runs", "job_id": snapshot.job_id, "cursor": Unfilled("next_cursor")},
+            )
+            # The cursor is an offset: the projection is the call's to repeat.
+            + (", with the same run_fields." if run_fields else ".")
             if page["truncated"]
             else f"Returned all recorded runs for job {snapshot.job_id}."
         ),

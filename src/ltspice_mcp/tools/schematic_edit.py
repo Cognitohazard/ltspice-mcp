@@ -2206,7 +2206,8 @@ def _commit_codec(loaded_as: str, original: bytes | None, text: str) -> str:
     A UTF-16 sheet that starts with a byte order mark is written as UTF-16 LE
     without it. Neither LTspice build reads a sheet that starts with one, and
     both read UTF-16 LE without it (``export/micro_utf16le_bom`` and
-    ``export/micro_utf16le``).
+    ``export/micro_utf16le``). A UTF-16 LE sheet stored without a mark keeps
+    none: the loader names it ``utf_16_le``, whose encoder writes no mark.
     """
     if leading_byte_order_mark(original or b"") in ("utf-16-le", "utf-16-be"):
         return "utf-16-le"

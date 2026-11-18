@@ -45,6 +45,7 @@ from ltspice_mcp.lib.spice_lex_views import (
     iter_models,
     read_source_text,
 )
+from tests.conftest import LTSPICE_READER
 
 # ---------------------------------------------------------------------------
 # Layer 3: body tokenizer
@@ -1735,8 +1736,8 @@ class TestASourceCardReadByTheSourceRule:
         before = "* t\nV1 a 0 DC 0 AC 1 SIN(0 1 1k)\nR1 a 0 1k\n.end\n"
         after = "* t\nV1 a 0 DC 0 SIN(0 1 1k) AC 1\nR1 a 0 1k\n.end\n"
         delta = structural_delta(read_deck(before), read_deck(after))
-        assert compare_graphs(before, before).equivalent
-        assert not compare_graphs(before, after).equivalent
+        assert compare_graphs(before, before, reader=LTSPICE_READER).equivalent
+        assert not compare_graphs(before, after, reader=LTSPICE_READER).equivalent
         assert delta["components_changed"]
 
     def test_a_value_edit_on_a_continued_card_keeps_its_own_parameters(self) -> None:

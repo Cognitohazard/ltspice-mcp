@@ -27,7 +27,7 @@ from typing import Any, Literal
 from ltspice_mcp.api._exceptions import ApiCallError, ApiInternalError, ApiValidationError
 from ltspice_mcp.lib import atomic_write_json
 from ltspice_mcp.lib.experiment_runner import REQUEST_GATE_TIMEOUT_S
-from ltspice_mcp.lib.proc_kill import kill_process_group
+from ltspice_mcp.lib.proc_kill import child_start_marker, kill_process_group
 from ltspice_mcp.lib.store import (
     KIND_DETACHED_RECEIPT,
     KIND_DETACHED_REQUEST,
@@ -391,10 +391,10 @@ def _stop_owner(process: subprocess.Popen[bytes]) -> None:
             process.terminate()
             raise
         return
-    if kill_process_group(process.pid, signal.SIGTERM):
+    if kill_process_group(process.pid, child_start_marker(process), signal.SIGTERM):
         return
-    # Windows, or the group is already gone: a plain terminate is still the
-    # right thing to try.
+    # The owner was reaped or its group is gone: a terminate through the
+    # handle signals only an owner not yet reaped.
     process.terminate()
 
 

@@ -73,9 +73,11 @@ version included, is refused (`recovery_startup_unsupported`).
 A recoverable request is refused before submission, with an error code that
 names the reason, when a deck reads an include in place at run time
 (`allow_live_includes`, `recovery_live_dependency`), has a source that reads a
-data file, such as a PWL with `file=` or a source that plays a .wav file with
-`wavefile=`, quoted or not (`recovery_external_reader`: recovery saves the
-files a deck includes, not the files its sources read), has a `.control` block
+data file the server does not stage, such as an `sfile=` or `pwlfile=`, or
+one named by an absolute path, which is read in place
+(`recovery_external_reader`, `recovery_live_dependency`; a relative LTspice
+`wavefile=` or PWL `file=` and an ngspice `filesource` `file=` are staged and
+saved with the deck), has a `.control` block
 (`recovery_control_unsupported`), loads an external module with `.load`,
 `.osdi` and the like or has an `A` device (`recovery_external_module`), or
 calls one of the random functions `rand`, `random`, `gauss`, `agauss`, `unif`,
@@ -171,7 +173,13 @@ lint blocks a mismatch. A case that produced nothing is counted in
   cancelled it, `interrupted` when the process running it stopped (a crash, a
   server shutdown or a closed `Api`) before its runs finished. Each run row's
   `status` describes its case (`produced` when it ran; `failed`, `cancelled`
-  or `skipped` when it did not).
+  or `skipped` when it did not). A row's `diagnostics` is what the simulator
+  said about that run, one entry per `code` and `channel` with the first line as written: a
+  `produced` run can still carry `unknown_model_parameter`, whose numbers come
+  from a model missing that parameter. Lines the server does not recognise
+  are counted under `unclassified`; read the row's `log` for the rest.
+  `diagnostics_coverage` says when the reading was not the run's own
+  simulator and build.
 - `analyze_results`: the default reply contains `results`, `coverage`,
   `observations` and `failures`; ask for more under `include` (`fields`,
   `per_run`, `outliers`, `signals_available`). Each failure row is one reason.

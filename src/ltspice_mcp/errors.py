@@ -6,6 +6,9 @@ from typing import Any, ClassVar
 
 from pydantic import ValidationError
 
+from ltspice_mcp.lib.continuation import Unfilled, call_to_continue
+from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError
+
 _MAX_VALIDATION_ERRORS = 6
 
 
@@ -278,6 +281,45 @@ class NetlistError(LTSpiceMCPError):
     code = "netlist_invalid"
 
 
+class UnreadableCardError(NetlistError, SpiceLexError):
+    """A card that a reading needs cannot be split into its parts: a quote,
+    brace or parenthesis left open, or a closer with nothing open.
+
+    Every reader of a card raises this one type, built by
+    ``spice_lex_views.unreadable_card``, so the refusal names the file, the
+    line, the card as written, what is wrong and the fix whichever tool met
+    the card. It is a ``SpiceLexError`` too, carrying the tokenizer's
+    category, position and suggestion, so a reader that answers for an
+    unreadable card in its own way still catches it. The message says the
+    fix, so the netlist family's hint is not added."""
+
+    code = "card_unreadable"
+    takes_family_hint = False
+
+    def __init__(
+        self,
+        message: str,
+        error: SpiceLexError,
+        *,
+        card: SpiceCard,
+        source: str | None,
+    ):
+        Exception.__init__(self, message)
+        self.suggestions = []
+        self.show_hint = True
+        self.python_route = False
+        self.category = error.category
+        self.position = error.position
+        self.body = error.body
+        self.suggestion = error.suggestion
+        self.message = error.message
+        self.card = card
+        self.source = source
+
+    def __str__(self) -> str:
+        return str(self.args[0])
+
+
 class MultiplierRewriteStop(NetlistError):
     """ngspice stops on a deck: the ``m`` it appends to an ``X`` line in a
     subcircuit it rewrote reaches a subcircuit that takes no parameters
@@ -448,8 +490,11 @@ ERROR_HINTS: dict[type[LTSpiceMCPError], str] = {
     ),
     InvalidCursorError: (
         "Send back, unchanged, the cursor this tool's own previous page returned "
-        "(next_cursor; for analyze_results also the next block's cursor), or leave "
-        "it out to start from the first page."
+        "(next_cursor), or leave it out to start from the first page. An "
+        "analyze_results cursor goes in continue with its result_set_id, as the "
+        "reply's next holds them: "
+        + call_to_continue("analyze_results", {"continue": Unfilled("next")})
+        + "."
     ),
 }
 
@@ -517,3 +562,20 @@ def caller_message(exc: BaseException, served: Collection[str]) -> str:
     if getattr(exc, "python_route", False):
         return f"{message} {python_route_text(served)}"
     return message
+
+
+def reply_error_code(reply: Mapping[str, Any] | None) -> str | None:
+    """The error code a tool's reply carried, in either shape a failure takes.
+
+    A failure a tool raises, or arguments refused before it runs, is
+    ``{error: <message>, code}``; a failure an enveloped tool reports is the
+    envelope's ``error: {code, message, ...}``
+    (``docs/design/mcp_surface.md``, "Shared conventions"). Every reader of a
+    reply's code asks here: the per-call event and ``ApiCallError``. None when
+    the reply carries no code.
+    """
+    if not reply:
+        return None
+    error = reply.get("error")
+    code = (error if isinstance(error, Mapping) else reply).get("code")
+    return code if isinstance(code, str) else None

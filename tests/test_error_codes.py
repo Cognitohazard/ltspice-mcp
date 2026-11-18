@@ -35,7 +35,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
 from ltspice_mcp.tools.jobs import _jobs_error_details
-from tests.conftest import FIXTURES_DIR
+from tests.conftest import FIXTURES_DIR, LTSPICE_READER
 
 
 def _copy_raw(work_dir: Path, name: str) -> Path:
@@ -295,7 +295,8 @@ class TestPortArityIsTyped:
     def test_flatten_raises_the_arity_type(self):
         graph = parse_netlist_graph(
             "Vin in 0 5\nXU1 in out THREEPORT\n.subckt THREEPORT a b c\n"
-            "R1 a b 1k\n.ends THREEPORT\n.end\n"
+            "R1 a b 1k\n.ends THREEPORT\n.end\n",
+            reader=LTSPICE_READER,
         )
         with pytest.raises(PortArityMismatch):
             flatten_graph(graph)
@@ -481,6 +482,7 @@ FROZEN_ERROR_CODES = (
     "cancel_not_authorized",
     "cancel_unavailable",
     "cancelled",
+    "card_unreadable",
     "case_cap",
     "case_cap_exceeded",
     "case_id_required",
@@ -496,6 +498,11 @@ FROZEN_ERROR_CODES = (
     "control_write_injected",
     "copy_failed",
     "dangling_request_index_replaced",
+    "data_file_missing",
+    "data_file_outside_allowed_paths",
+    "data_file_unestablished",
+    "data_file_unstaged",
+    "data_path_unrecorded",
     "deadline",
     "deck_sets_simulator_seed",
     "detached_owner",
@@ -543,13 +550,14 @@ FROZEN_ERROR_CODES = (
     "lf_integrator",
     "library_error",
     "lint_blocked",
+    "live_data_file",
     "live_include",
     "log_error",
     "log_unread",
+    "logopinfo_withheld",
     "max_points_not_applied",
     "meas_batch_abort",
     "meas_parse_error",
-    "measurement_zero_or_failed",
     "memory_limit",
     "merged_corners",
     "micro_sign_folded",
@@ -605,6 +613,7 @@ FROZEN_ERROR_CODES = (
     "random_nominal_unavailable",
     "raster_unavailable",
     "rational_fit",
+    "raw_names_disagree",
     "raw_not_produced",
     "read_error",
     "receipt_failed",

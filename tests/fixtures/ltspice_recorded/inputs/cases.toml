@@ -58,6 +58,7 @@ inputs = [
     "connectivity/diagonal_wire_interior.asc",
     "connectivity/diagonal_wire_end.asc",
     "connectivity/two_instance_wire.asc",
+    "connectivity/diagonal_end_on_wire_interior.asc",
 ]
 extra = ["connectivity/res.asy"]
 
@@ -106,6 +107,7 @@ inputs = [
     "connectivity/same_instance_overlap_from_first_pin.asc",
     "connectivity/same_instance_overlap_from_second_pin.asc",
     "connectivity/same_instance_overlap_within.asc",
+    "connectivity/same_instance_run_past_second_pin.asc",
 ]
 extra = ["connectivity/res.asy"]
 
@@ -241,7 +243,10 @@ model = ["lib/symbol_library.py", "lib/schematic_ops.py", "lib/deck_prep.py"]
 [behaviour.sheet-part-trace-names]
 summary = "What a run of a sheet names the device inside a part whose symbol is given a Prefix of X and a reference that does not start with X, beside the same subcircuit called with X from a directive on the sheet, and the net the sheet leaves unlabelled."
 model = ["lib/trace_names.py"]
-pending = "Written where no LTspice runs. Record it on Windows with uv run python scripts/record_ltspice_fixtures.py --only 'export/sheet_part_names', then remove this key."
+
+[behaviour.section-sign-trace-tran]
+summary = "What a transient run of a sheet names the current of a part exported as R§Load, which plot_waveform charts: the name the operating point gives it (I(Load)) or another."
+model = ["lib/trace_names.py", "lib/device_names.py", "tools/analysis.py"]
 
 [behaviour.export-instance-prefix]
 summary = "What an instance's own Prefix attribute does on export: the element letter it gives the card and how the instance name is then written, in either case of the letter, before or after InstName, on a library-style symbol, a stock symbol and a block symbol."
@@ -331,7 +336,7 @@ summary = "The bytes a build writes when it saves a sheet from its window: its e
 model = ["lib/asc_document.py", "lib/encoding.py", "lib/schematic_scene.py"]
 
 [behaviour.sheet-drawing]
-summary = "What a build draws for a sheet: the triangle of a ground flag in each orientation and alone, where a part's name and value land at each of the eight placements and how big they are, that a Value2 attribute is drawn only with a visible WINDOW 123 line, and that a value's u is drawn as a micro sign. The text and the triangle both follow the SchFontSize setting."
+summary = "What a build draws for a sheet: the triangle of a ground flag in each orientation and alone, where a part's name and value land at each of the eight placements and how big they are, that a Value2 attribute is drawn only with a visible WINDOW 123 line, and that a value's u is drawn as a micro sign, a window justified Invisible and one moved, a flag named GND drawn as a ground, a net label in the middle of a level and an upright wire and at a corner, and a port drawn as an outline around its name. The text and the triangle both follow the SchFontSize setting."
 model = ["lib/schematic_scene.py", "lib/sheet_findings.py", "lib/schematic_renderer.py"]
 # Each [[case]] of kind "draw" opens its sheet in the window and has the window
 # write an image of it; see drive_draw. Each sheet starts with the two longest
@@ -376,6 +381,7 @@ inputs = [
 summary = "How a deck's lines are read: the title line, ; and $ comments, a $ inside a node name and at its start, + continuations, a ; comment on a line the card is continued past, inside a .model card's parentheses and outside them, cards after .end, a missing .end, CRLF line endings, case, and whether gnd is ground."
 model = [
     "lib/spice_lex.py",
+    "lib/spice_lex_views.py",
     "lib/spice_validator.py",
     "lib/lint_rules.py",
     "lib/hierarchy.py",
@@ -421,7 +427,7 @@ inputs = ["deck/gnd_bang.cir", "deck/global_port.cir"]
 
 [behaviour.deck-forms]
 summary = "Card forms the lint and arity rules accept or refuse: B-source R= and P=, a spaced B expression, comma-separated IC= values, Q= and Flux=, a value keyed as R=, C= or L=, params: on a subcircuit, trailing area factors, device type names as models, .tran shorthands, two analyses in one deck."
-model = ["lib/spice_validator.py", "lib/lint_rules.py", "lib/spice_lex_views.py", "lib/spice_lex.py", "lib/component_value.py", "lib/netlist_graph.py"]
+model = ["lib/spice_validator.py", "lib/lint_rules.py", "lib/spice_lex_views.py", "lib/spice_lex.py", "lib/component_value.py", "lib/netlist_graph.py", "lib/result_observations.py"]
 inputs = [
     "deck/bsource_r.cir",
     "deck/bsource_p.cir",
@@ -543,7 +549,6 @@ inputs = [
     "deck/save_pattern_i.cir",
     "deck/save_pattern_prefix.cir",
 ]
-pending = "Written where no LTspice runs. Record it on Windows with uv run python scripts/record_ltspice_fixtures.py --only 'deck/save_pattern_v' --only 'deck/save_pattern_i' --only 'deck/save_pattern_prefix', then remove this key."
 
 [behaviour.deck-semantics]
 summary = "What a deck means where the simulators differ: a parameter named temp, the caret operator, a subcircuit's header default against a .param in its body."
@@ -687,7 +692,6 @@ inputs = ["raw/step_tran.cir", "raw/step_ac.cir", "raw/step_op.cir", "raw/step_d
 summary = "How many significant digits a log's .step lines print a stepped value with: values the deck writes to seventeen digits, and two that differ only in the sixth."
 model = ["lib/step_values.py", "lib/log_parser.py"]
 inputs = ["raw/step_digits.cir"]
-pending = "Written where no LTspice runs. Record it on Windows with uv run python scripts/record_ltspice_fixtures.py --only 'raw/step_digits', then remove this key."
 
 [behaviour.raw-transfer-function]
 summary = "A .tf run: the Transfer Function plot and what the log says; and a stepped .tf, how its one point a step is stored."
@@ -732,8 +736,14 @@ evidence = "every recorded log; a stepped temperature writes the one non-ASCII c
 
 [behaviour.log-meas]
 summary = "How each .meas form is printed: MAX/MIN/PP/AVG/RMS/INTEG with FROM and TO, FIND AT, WHEN, TRIG/TARG, PARAM, complex AC results, the tables of a stepped run, and a stepped .op, whose log has no .step lines and which neither build prints a table for."
-model = ["lib/log_parser.py", "lib/log_types.py", "lib/metrics.py", "lib/log_decode.py", "lib/result_observations.py", "lib/raw_parser.py", "tools/analyze.py", "tools/inspect_tools.py"]
+model = ["lib/log_parser.py", "lib/log_types.py", "lib/metrics.py", "lib/log_decode.py", "lib/result_observations.py", "lib/raw_parser.py", "lib/services.py", "lib/spice_lex_views.py", "api/_primitives.py", "tools/analyze.py", "tools/inspect_tools.py"]
 inputs = ["log/meas_forms.cir", "log/meas_ac.cir", "log/meas_step.cir", "log/meas_step_op.cir"]
+keep = ["log"]
+
+[behaviour.log-meas-deriv-when]
+summary = "How a DERIV ... WHEN measurement is printed, alone and stepped: whether its point follows an uppercase AT, as a WHEN with no FIND's crossing does, or a lowercase at, as a DERIV ... AT's does. Both builds print a lowercase at, so its result is the derivative printed after =."
+model = ["lib/log_parser.py", "lib/spice_lex_views.py"]
+inputs = ["log/meas_deriv_when.cir", "log/meas_deriv_when_step.cir"]
 keep = ["log"]
 
 [behaviour.log-meas-failed]
@@ -811,7 +821,7 @@ inputs = ["log/subckt_names.cir", "log/subckt_names_off.cir", "raw/subckt_names_
 
 [behaviour.save-subckt-names]
 summary = "Which spelling of a device current and a node inside nested subcircuit instances each build's .save accepts, with and without the instances' X, and what the raw then holds."
-model = ["lib/hierarchy.py"]
+model = ["lib/hierarchy.py", "lib/device_names.py"]
 inputs = ["raw/save_subckt_names.cir", "raw/save_subckt_names_no_x.cir"]
 
 [behaviour.log-device-op-precision]
@@ -821,7 +831,7 @@ inputs = ["log/device_op_numdgt.cir", "log/device_op_numdgt_off.cir", "raw/op_sa
 
 [behaviour.log-diagnostics]
 summary = "What a failed or doubtful run writes: an unknown directive, a bad card, a missing include or library, an undefined model, subcircuit or parameter, a floating node, a source loop, a duplicate name, no analysis, braces around a voltage, a model parameter the device does not know."
-model = ["lib/log_parser.py", "lib/services.py", "lib/runner_base.py", "lib/result_observations.py"]
+model = ["lib/log_parser.py", "lib/log_conditions.py", "lib/services.py", "lib/runner_base.py", "lib/result_observations.py"]
 inputs = [
     "log/err_unknown_directive.cir",
     "log/err_bad_card.cir",
@@ -842,7 +852,7 @@ inputs = [
 
 [behaviour.log-convergence]
 summary = "What the log says when a solve struggles: a transient whose time step collapses, and an operating point found only by stepping."
-model = ["lib/log_parser.py", "lib/services.py"]
+model = ["lib/log_parser.py", "lib/log_conditions.py", "lib/services.py"]
 inputs = ["log/err_timestep.cir", "log/op_stepping.cir"]
 
 [behaviour.log-native-tables]
@@ -947,6 +957,222 @@ model = ["lib/plot_settings.py", "lib/schematic_ops.py", "tools/schematic_edit.p
 # The file is beside the sheet under the sheet's name when the sheet runs,
 # which is where edit_schematic writes it; the build saves straight away, so
 # what it writes is what it read.
+
+# ---------------------------------------------------------------- queued questions
+
+[behaviour.subckt-defined-twice]
+summary = "Which body runs when a deck defines one subcircuit twice, or whether the build refuses the deck."
+model = [
+    "lib/spice_lex.py",
+    "lib/netlist_graph.py",
+    "tools/inspect_tools.py",
+    "lib/spice_validator.py",
+    "lib/hierarchy.py",
+    "lib/subckt_mismatch.py",
+    "lib/lint_rules.py",
+    "tools/verify.py",
+]
+# The first body's R1 is 1k and the second's 2k; 1 A into in gives v(in)
+# 1000 if the first body runs, 2000 if the second does, and no raw if the
+# build refuses the deck.
+inputs = ["deck/subckt_defined_twice.cir"]
+
+[behaviour.data-file-relative-path]
+summary = "What a relative path in a source that reads a data file (wavefile= and PWL file=) is relative to: the deck's folder or the folder the build was started in, as when a staged run starts the build away from the data."
+model = ["lib/deck_staging.py", "lib/experiment_inputs.py"]
+# Each deck plays data/level.wav or reads data/level.txt into 1k. The build is
+# started in the folder run below the deck's (a [[case]] table at the end).
+# The copy beside the deck holds 0.5 and the copy under run holds 0.75, so
+# v(a) is 0.5 if the path is relative to the deck, 0.75 if it is relative to
+# the folder the build started in, and missing if neither is found. The
+# _cwd_only cases have only the copy under run.
+
+[behaviour.data-file-absolute-path]
+summary = "Whether a build reads a data file named by an absolute path (wavefile= and PWL file=), as a staged deck names the staged copy of each data file it reads."
+model = ["lib/deck_staging.py"]
+# Each deck names data/level.wav or data/level.txt beside it by its absolute
+# path (<dir> is the case's folder, written in when the case runs). The copy
+# holds 0.5, so v(a) is 0.5 if the build reads the file and missing if not.
+# The _quoted decks name a copy in a folder whose name holds a space, in
+# quotes, as staging writes a path with a space.
+inputs = [
+    "deck/absolute_wavefile.cir",
+    "deck/absolute_pwl_file.cir",
+    "deck/absolute_quoted_wavefile.cir",
+    "deck/absolute_quoted_pwl_file.cir",
+]
+extra = [
+    "deck/data/level.wav",
+    "deck/data/level.txt",
+    "deck/data with space/level.wav",
+    "deck/data with space/level.txt",
+]
+pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
+
+[behaviour.data-file-relative-path-in-include]
+summary = "Which folder a build reads a relative data path from on a card in an included file in another folder: the deck's or the included file's."
+model = ["lib/deck_staging.py"]
+# The deck includes run/pwl_source.inc, whose PWL source reads data/level.txt.
+# The copy beside the deck holds 0.5 and the copy beside the included file
+# 0.75, so v(a) is 0.5 if the path is relative to the deck's folder and 0.75
+# if it is relative to the included file's.
+inputs = ["deck/included_relative_pwl_file.cir"]
+extra = ["deck/run/pwl_source.inc", "deck/data/level.txt", "deck/run/data/level.txt"]
+pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
+
+[behaviour.wavefile-without-equals]
+summary = "Whether a source written wavefile level.wav, with no =, plays the file."
+model = ["lib/spice_lex_views.py", "lib/experiment_inputs.py"]
+# level.wav holds half of full scale, so v(a) is 0.5 if the source plays it.
+inputs = ["deck/wavefile_no_equals.cir"]
+extra = ["deck/level.wav"]
+
+[behaviour.directive-spellings]
+summary = "Whether a build reads .opt as .options, .params as .param, .function as .func and .fourier as .four."
+model = ["lib/netlist_diff.py", "lib/subckt_mismatch.py", "lib/result_observations.py"]
+# directive_opt: 1 A through 1k with tc1=0.01 is 1230 V at 50 degrees and
+# 1000 at 27. directive_params: 2000 if rv is read, a refusal if not.
+# directive_function: 2000 if dbl is defined. directive_fourier: a Fourier
+# block in the log if the directive is read.
+inputs = [
+    "deck/directive_opt.cir",
+    "deck/directive_params.cir",
+    "deck/directive_function.cir",
+    "deck/directive_fourier.cir",
+]
+
+[behaviour.save-in-include]
+summary = "Whether a .save in an included file is read: alone, against a .meas on a node it does not name, and as part of a list split between the deck and the file."
+model = ["lib/lint_rules.py"]
+# save_in_include: the raw holds V(in) alone and the .meas of V(out) fails if
+# the include's .save is read; the raw holds every node and the .meas reads
+# 0.993 if it is not. save_split_include: V(in) and V(out) if both .save
+# lines are read, V(in) alone if only the deck's is.
+inputs = ["deck/save_in_include.cir", "deck/save_split_include.cir"]
+extra = ["deck/probes.inc", "deck/probes_out.inc"]
+
+[behaviour.global-inside-body]
+summary = "Whether a .global net named inside a subcircuit body that does not have it as a port is the global net."
+model = ["lib/deck_nodes.py", "lib/netlist_graph.py", "lib/spice_validator.py", "lib/hierarchy.py"]
+# 1 mA from c through the body's R1 to vdd: v(c) is 6 if vdd is the global 5 V
+# rail, and the run fails or v(c) floats if vdd is a node of the body's own.
+inputs = ["deck/global_in_body.cir"]
+
+[behaviour.undefined-element-models]
+summary = "What a build does with a Z, O or U card naming a model no deck defines, run with .op: whether the run fails, and the message."
+model = ["lib/log_parser.py", "lib/log_conditions.py", "lib/lint_rules.py"]
+inputs = ["deck/undefined_model_z.cir", "deck/undefined_model_o.cir", "deck/undefined_model_u.cir"]
+
+[behaviour.log-meas-when-step-table]
+summary = "Whether the table of a stepped WHEN ever prints a level column beside an at column: with RISE, FALL, CROSS=LAST and TD, a WHEN of an expression, a FIND ... WHEN, and a WHEN crossed in only one step, whose other step XVII prints as 0, as it prints a crossing at 0 s."
+model = ["lib/log_parser.py", "lib/log_decode.py", "lib/services.py", "lib/metrics.py", "tools/analyze.py", "tools/inspect_tools.py"]
+inputs = ["log/meas_when_step_forms.cir", "log/meas_when_step_fails.cir"]
+keep = ["log"]
+
+[behaviour.log-meas-name-punctuation]
+summary = "Whether a .meas named with a dot (t.rise) or a dash (t-fall) is taken, and how the log prints its name."
+model = ["lib/log_parser.py", "lib/spice_lex_views.py"]
+inputs = ["log/meas_name_dot.cir", "log/meas_name_dash.cir"]
+keep = ["log"]
+
+[behaviour.step-temp-upper-case]
+summary = "How the log and the raw name a temperature stepped as TEMP in upper case, beside raw/step_temp, which writes temp."
+model = ["lib/log_parser.py", "lib/step_values.py"]
+inputs = ["raw/step_temp_upper.cir"]
+
+[behaviour.ohm-sign-value]
+summary = "What a value written 10 followed by an ohm sign runs as, in UTF-8, in UTF-16 with a byte order mark, and in cp1253, a code page that has the sign (cp1252 has none)."
+model = ["lib/format.py", "lib/lint_rules.py", "lib/encoding.py"]
+# 1 A into R1, so v(a) is the resistance read.
+inputs = ["deck/ohm_utf8.cir", "deck/ohm_utf16le_bom.cir", "deck/ohm_cp1253.cir"]
+
+[behaviour.params-without-space]
+summary = "Whether an X line's params:g=3, with no space after the colon, passes g."
+model = ["lib/spice_lex_views.py", "lib/hierarchy.py"]
+# 1 A through the body's g*1k: v(a) is 3000 if g=3 is passed, 1000 if the
+# default is kept, and no raw if the line is refused.
+inputs = ["deck/params_no_space.cir"]
+
+[behaviour.lib-path-with-space]
+summary = "Whether a .lib path holding a space is read as one path, unquoted and quoted."
+model = ["lib/deck_staging.py", "lib/lint_rules.py"]
+# load.lib holds a 2k subcircuit: 1 A into it gives v(a) 2000 if the file is read.
+inputs = ["deck/lib_path_space_unquoted.cir", "deck/lib_path_space_quoted.cir"]
+extra = ["deck/spaced folder/load.lib"]
+
+[behaviour.meas-subckt-node]
+summary = "Whether a .meas reads a node inside a subcircuit instance XAMP, named xamp:mid and amp:mid, on the build's default settings and with subcircuit node voltages saved."
+model = ["lib/lint_rules.py", "lib/device_names.py", "lib/hierarchy.py"]
+# mid is the middle of a 1k/1k divider on a 1 V step, so the .meas reads 0.5
+# where it reads the node at all.
+inputs = ["deck/meas_subckt_node_x.cir", "deck/meas_subckt_node_no_x.cir"]
+
+[behaviour.mos-charge-capacitances]
+summary = "What the .op device table prints of a charge-model (BSIM3) MOSFET's capacitances, beside the capacitances an AC run of the same bias shows at its terminals."
+model = ["lib/log_parser.py", "lib/runner_base.py"]
+# In the AC run the gate is driven by 1 V and the other terminals held by 0 V
+# sources, so each source's current at 1 MHz is j*2*pi*f times the
+# capacitance between the gate and its terminal.
+# LTspice XVII refuses .options logopinfo, so mos_charges_op_plain is the same
+# deck without it.
+inputs = ["log/mos_charges_op.cir", "log/mos_charges_op_plain.cir", "log/mos_charges_ac.cir"]
+
+[behaviour.log-timestep-collapse]
+summary = "What each build prints when a transient's time step collapses after its operating point is found: the wording, whether it repeats, and where in the log."
+model = ["lib/log_conditions.py", "lib/log_parser.py"]
+inputs = ["log/timestep_collapse_mid.cir"]
+
+[behaviour.random-seed]
+summary = "Whether .options seed=N makes mc(), gauss() and flat() repeat across runs, and change with N, against two runs with no seed."
+model = ["lib/experiment_inputs.py", "lib/montecarlo.py"]
+# The _again cases run the same deck a second time, so the two operating
+# points are equal only if the draw repeats.
+inputs = ["deck/seed_7.cir", "deck/seed_8.cir", "deck/seed_none.cir"]
+
+[behaviour.text-spacing]
+summary = "Whether a TEXT line spaced other than as LTspice writes one (two spaces after TEXT, a tab before the justification, two spaces before the size) is read: whether its directive is exported."
+model = ["lib/asc_document.py"]
+# The .param on a line spaced as LTspice writes it says the export ran; the
+# .tran is in the export only if the irregular line was read.
+inputs = ["export/text_irregular_spacing.asc"]
+extra = ["export/res.asy"]
+
+[behaviour.value-inner-space]
+summary = "The card each build exports for a Value written 1 k, with a space inside it, and for a Value of 1k beside a SpiceLine of tol=5."
+model = ["lib/sheet.py", "lib/component_value.py", "lib/schematic_ops.py"]
+inputs = ["export/value_inner_space.asc"]
+extra = ["export/res.asy"]
+
+[behaviour.block-sheet-directives]
+summary = "Where an export puts the directives on a hierarchical block's own sheet (.param, .model, .options): inside the block's subcircuit or at the top of the deck. Nothing in the server models this yet: it reads a sheet's directives from the sheet itself and a block sheet's through LTspice's export."
+model = []
+inputs = ["export/hier_directives_top.asc"]
+extra = ["export/hier_directives.asc", "export/hier_directives.asy"]
+
+[behaviour.a-device-open-pin]
+summary = "What an export writes for the pins of an A-device (a digital gate) that nothing is connected to."
+model = ["lib/connectivity.py", "lib/nets.py", "lib/export_nets.py"]
+# A1's pins 1, 2 and 7 are labelled a, b and y, pin 5 is on ground, and pins
+# 3, 4, 6 and 8 touch nothing.
+inputs = ["export/adevice_open_pin.asc"]
+extra = ["export/a8.asy"]
+
+[behaviour.block-device-op-name]
+summary = "How the .op device table names a device inside a hierarchical block placed under a name that does not start with X (U1), when the sheet is run: with .options logopinfo, which LTspice 26 needs to print the table, and without it, which LTspice XVII needs, since it refuses the option."
+model = ["lib/log_parser.py", "lib/device_names.py", "api/_primitives.py"]
+# U1 places hier_device, whose own sheet holds R1 and D1 between its ports; the
+# top sheet drives it from 3 V into a 10k load. The [[case]] tables at the end
+# run each top sheet and keep its netlist, log and raw.
+
+[behaviour.rerun-identity]
+summary = "That running one deck twice on one build writes the same results: the raw files differ only in the header's Date line, and on LTspice 26 in the Title line, which names the folder the deck ran in."
+model = ["lib/experiment_runner.py", "lib/experiment_store.py"]
+evidence = "every recording: re-recording a case with --check compares the new files with the committed ones after the recorder removes dates and paths, and reports no difference for the same build. Without that removal, raw/tran, raw/ac and log/meas_forms were each run twice on LTspice 26.1.1 and XVII 17.0.37 into two folders: every byte of each raw after its header matched, and the headers differed in Date and, on LTspice 26, in Title alone."
+
+[behaviour.recovery-startup-profile]
+summary = "What a build does at startup with the settings file a recoverable run gives it: whether an identifier, an analytics choice and a recent update check let it run the deck without a prompt, and how old the check may be. lib/controlled_ltspice.py takes this from an audit of one LTspice 26 executable and checks the keys UUID, CaptureAnalytics and LastWebUpdateQuery."
+model = ["lib/controlled_ltspice.py"]
+unrecordable = "A recording would start each build with an old or missing update check, on which a build may start its updater, and XVII has updated itself that way on this machine; a recording must not change the build it records. It was looked at instead. The LTspice 26.1.1 recorded here (its digest is in the manifest) is not the audited executable, so recovery refuses it by digest. Its settings file holds UUID (20 digits), CaptureAnalytics and LastWebUpdateTime, and no LastWebUpdateQuery, the key the server checks, so recovery would refuse its profile too. XVII 17.0.37's file holds both LastWebUpdateQuery and LastWebUpdateTime. Every case here ran on a copy of the recording user's settings whose update time was about 40 days old, with -ini after the deck, and no build stopped on a prompt. Adopting 26.1.1 needs its startup audited as the earlier build's was: which update key it reads, in what form, and after how long it prompts or starts its updater, found by reading the executable or on a machine where its updater can do no harm."
 
 # ---------------------------------------------------------------- cases an input path cannot describe
 
@@ -1500,6 +1726,15 @@ kind = "draw"
 source = "draw/value2.asc"
 extra = ["export/res.asy", "benchmark/voltage.asy"]
 
+# The same sheet run as a transient, for a reader that charts a waveform.
+[[case]]
+id = "export/load_name_tran"
+behaviour = "section-sign-trace-tran"
+kind = "run"
+source = "export/load_name_tran.asc"
+extra = ["export/res.asy", "benchmark/voltage.asy"]
+keep = ["net", "raw"]
+
 # R1 shows its SpiceLine, SpiceLine2 and SpiceModel through windows of its
 # own, and R2, turned, its SpiceLine.
 [[case]]
@@ -1661,3 +1896,108 @@ source = "blocks/nest_top.asc"
 extra = ["blocks/lib/outer.asy", "blocks/lib/outer.asc", "blocks/blk.asy", "blocks/lib/blk.asc", "blocks/blk.asc"]
 ini = { SymbolSearchPath = '<dir>\lib' }
 note = "One sheet beside the inner block's symbol and another beside the sheet placing it."
+
+# Relative data paths: the build is started in the folder run below the
+# deck's, with the data beside the deck and under run, or under run alone.
+[[case]]
+id = "deck/relative_wavefile"
+behaviour = "data-file-relative-path"
+source = "deck/relative_wavefile.cir"
+extra = ["deck/data/level.wav", "deck/run/data/level.wav"]
+cwd = "run"
+
+[[case]]
+id = "deck/relative_wavefile_cwd_only"
+behaviour = "data-file-relative-path"
+source = "deck/relative_wavefile.cir"
+extra = ["deck/run/data/level.wav"]
+cwd = "run"
+
+[[case]]
+id = "deck/relative_pwl_file"
+behaviour = "data-file-relative-path"
+source = "deck/relative_pwl_file.cir"
+extra = ["deck/data/level.txt", "deck/run/data/level.txt"]
+cwd = "run"
+
+[[case]]
+id = "deck/relative_pwl_file_cwd_only"
+behaviour = "data-file-relative-path"
+source = "deck/relative_pwl_file.cir"
+extra = ["deck/run/data/level.txt"]
+cwd = "run"
+
+# A node inside a subcircuit with the settings that save such nodes.
+[[case]]
+id = "deck/meas_subckt_node_x_saved"
+behaviour = "meas-subckt-node"
+source = "deck/meas_subckt_node_x.cir"
+ini = { SaveSubcircuitNodeVoltages = "true", SaveSubcircuitDeviceCurrents = "true" }
+
+[[case]]
+id = "deck/meas_subckt_node_no_x_saved"
+behaviour = "meas-subckt-node"
+source = "deck/meas_subckt_node_no_x.cir"
+ini = { SaveSubcircuitNodeVoltages = "true", SaveSubcircuitDeviceCurrents = "true" }
+
+# The same random decks run a second time.
+[[case]]
+id = "deck/seed_7_again"
+behaviour = "random-seed"
+source = "deck/seed_7.cir"
+
+[[case]]
+id = "deck/seed_none_again"
+behaviour = "random-seed"
+source = "deck/seed_none.cir"
+
+# A port of each direction touching nothing, and an input port at the end of a
+# wire: where each build draws the port's outline and its name.
+[[case]]
+id = "draw/port_outlines"
+behaviour = "sheet-drawing"
+kind = "draw"
+source = "draw/port_outlines.asc"
+
+# R1 as the symbol places its text; R2 with its name's window justified
+# Invisible, the spelling LTspice saves for a hidden window, R3 its value's,
+# R4 both; R5 with both moved to the left of the body; R6 with them moved and
+# given another justification and size.
+[[case]]
+id = "draw/windows_hidden_moved"
+behaviour = "sheet-drawing"
+kind = "draw"
+source = "draw/windows_hidden_moved.asc"
+extra = ["export/res.asy"]
+
+# A flag named 0 and a flag named GND, each at the foot of a wire.
+[[case]]
+id = "draw/gnd_and_zero_flags"
+behaviour = "sheet-drawing"
+kind = "draw"
+source = "draw/gnd_and_zero_flags.asc"
+
+# A net label in the middle of a level wire and of an upright one, and one at
+# the corner of two wires.
+[[case]]
+id = "draw/label_mid_span_and_corner"
+behaviour = "sheet-drawing"
+kind = "draw"
+source = "draw/label_mid_span_and_corner.asc"
+
+# A block placed as U1, run from the sheet, with and without logopinfo.
+[[case]]
+id = "export/hier_device_logopinfo"
+behaviour = "block-device-op-name"
+kind = "run"
+source = "export/hier_device_logopinfo.asc"
+extra = ["export/hier_device.asc", "export/hier_device.asy"]
+keep = ["net", "log", "raw"]
+
+[[case]]
+id = "export/hier_device_plain"
+behaviour = "block-device-op-name"
+kind = "run"
+source = "export/hier_device_plain.asc"
+extra = ["export/hier_device.asc", "export/hier_device.asy"]
+keep = ["net", "log", "raw"]

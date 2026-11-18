@@ -1,0 +1,40 @@
+Circuit: * DERIV of a transient where a condition is met (stepped)
+
+.OP point found by inspection.
+.step rv=1000
+.step rv=2000
+
+
+Measurement: d_when
+  step	D(v(out))	at
+     1	5273.21	6.98893e-005
+     2	2428.86	0.000139536
+
+Measurement: d_at
+  step	D(v(out))	at
+     1	3482.49	0.0001
+     2	3117.74	0.0001
+
+Measurement: t_when
+  step	v(out)=0.5
+     1	6.98893e-005
+     2	0.000139536
+
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = modified trap
+totiter = 2042
+traniter = 2042
+tranpoints = 1022
+accept = 1022
+rejected = 0
+matrix size = 3
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)
+

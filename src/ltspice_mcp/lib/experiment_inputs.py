@@ -7,6 +7,7 @@ so no second recursive include or hierarchy walker is needed.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import re
@@ -19,6 +20,8 @@ from ltspice_mcp.lib import atomic_write_bytes, capabilities, now
 from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.deck_staging import (
     card_sections,
+    resolve_reference,
+    scan_data_references,
     sha256_file,
     staged_card_reference_targets,
 )
@@ -40,6 +43,7 @@ from ltspice_mcp.lib.spice_lex import (
     SpiceLexError,
     Token,
     TokenKind,
+    directive_head,
     lex_for_edit,
     tokenize_body,
 )
@@ -180,11 +184,15 @@ _DIRECTIVES = frozenset(
     }
 )
 _MODULE_DIRECTIVES = frozenset({".load", ".hdl", ".verilog", ".osdi", ".pre_osdi"})
-#: The keywords whose value names a file a card reads when it runs, which
-#: staging does not copy (it follows include and library cards only): a PWL
-#: source's ``file=``, the ``sfile=`` and ``pwlfile=`` other dialects spell,
-#: and a V or I source's ``wavefile=``, whose file both LTspice builds play
-#: named in quotes or not (``deck/wavefile_nodes``, ``deck/wavefile_unquoted``).
+#: The keywords whose value names a file a card reads when it runs, for a card
+#: the one reader of data cards (``deck_staging.scan_data_references``) does
+#: not read: that reader's cards are staged and frozen like an include, and
+#: checked against the frozen inventory instead (``_verify_inputs``). This
+#: refusal is the fallback for every other spelling, and for a simulator whose
+#: data cards that reader does not know: a PWL source's ``file=``, the
+#: ``sfile=`` and ``pwlfile=`` other dialects spell, and a V or I source's
+#: ``wavefile=``. It reads text, not a dialect's cards, so it refuses more than
+#: the simulator reads, which is the safe side for a recoverable run.
 _FILE_KEYWORDS = frozenset({"file", "sfile", "pwlfile", WAVEFILE})
 # Each keyword as a whole word, so ``profile=`` names no file, then a PWL
 # whose parenthesized points hold a quoted name. It reads the text of every
@@ -426,9 +434,13 @@ def _card_text(card: SpiceCard) -> str:
 
 
 def _refused_constructs(
-    card: SpiceCard, functions: set[str], *, native: bool, seeded: bool
+    card: SpiceCard, functions: set[str], *, native: bool, seeded: bool, reads_data: bool
 ) -> _Construct | None:
-    """The first check ``card`` fails, or None."""
+    """The first check ``card`` fails, or None.
+
+    ``reads_data`` says the card is one ``scan_data_references`` reads: the
+    file it names is checked against the frozen inventory, not refused here.
+    """
     if card.kind == "control":
         return _Construct("recovery_control_unsupported", "a `.control` block")
     try:
@@ -457,11 +469,12 @@ def _refused_constructs(
     if head in INCLUDE_HEADS:
         return None
     text = " ".join(token.text for token in tokens)
-    reader = _FILE_READER.search(text)
+    reader = None if reads_data else _FILE_READER.search(text)
     if reader:
         return _Construct("recovery_external_reader", f"`{reader.group(0)}`, which reads a file")
     if (
-        card.kind == "instance"
+        not reads_data
+        and card.kind == "instance"
         and any(token.kind == TokenKind.QUOTED for token in tokens)
         and not _quoted_passive_value(card, tokens)
     ):
@@ -500,10 +513,16 @@ def _names(names: set[str]) -> str:
 
 
 def _validate_cards(
-    cards: list[SpiceCard], functions: set[str], *, native: bool, seeded: bool
+    cards: list[SpiceCard],
+    functions: set[str],
+    *,
+    native: bool,
+    seeded: bool,
+    dialect: str | None,
 ) -> list[tuple[SpiceCard, _Construct]]:
     """Every card that fails a check, with the first check it fails."""
     refused: list[tuple[SpiceCard, _Construct]] = []
+    data_cards = {id(reference.card) for reference in scan_data_references(cards, dialect)}
     previous: SpiceCard | None = None
     for card in cards:
         if card.kind in {"comment", "blank"}:
@@ -512,7 +531,9 @@ def _validate_cards(
         # once, at the line that opens it.
         opens = card.kind != "control" or previous is None or previous.kind != "control"
         previous = card
-        found = _refused_constructs(card, functions, native=native, seeded=seeded)
+        found = _refused_constructs(
+            card, functions, native=native, seeded=seeded, reads_data=id(card) in data_cards
+        )
         if found is not None and opens:
             refused.append((card, found))
     return refused
@@ -625,19 +646,54 @@ def _verify_inputs(
     # Every construct the inputs cannot be recovered with, so one refusal names
     # them all (``_refusal`` says in which order).
     refused: list[_Refused] = []
-    for artifact in inputs.files:
-        path = artifact.path
-        if path in native_setups:
-            continue
-        key = (artifact.sha256, path in roots)
-        file_keys[path] = key
-        if key in cards_by_content:
-            continue
-        content = contents[artifact.sha256]
+    by_digest = {item.path.resolve(): item.sha256 for item in inputs.files}
+
+    def lexed(path: Path, sha256: str) -> EditCards:
         # A card after a file's end marker is not read, nor a root deck's
         # line 1, its title (lex_for_edit). Every card is still classified, so
         # the warnings and the constructs of an unread card refuse as well.
-        parsed = lex_for_edit(decode_spice_bytes(content), deck=path in roots)
+        key = (sha256, path in roots)
+        if key not in cards_by_content:
+            cards_by_content[key] = lex_for_edit(
+                decode_spice_bytes(contents[sha256]), deck=path in roots
+            )
+        return cards_by_content[key]
+
+    # The frozen data files (a played .wav, a PWL's points): the files the
+    # decks' data cards name (``scan_data_references``), found by following
+    # each deck's includes from the root. They are digested like every input
+    # and never read as SPICE, which a sample's bytes are not.
+    spice: set[Path] = set()
+    data: set[Path] = set()
+    walk = [path for path in roots if path not in native_setups]
+    while walk:
+        path = walk.pop()
+        resolved = path.resolve()
+        if resolved in spice or resolved not in by_digest:
+            continue
+        spice.add(resolved)
+        cards = lexed(path, by_digest[resolved]).read
+        depth = 0 if path in roots else 1
+        # A target that cannot be resolved is refused below, where the
+        # closure is checked.
+        with contextlib.suppress(ValueError, OSError):
+            walk.extend(staged_card_reference_targets(cards, path, depth=depth))
+        data.update(
+            resolve_reference(path.parent, reference.raw_path).resolve()
+            for reference in scan_data_references(cards, dialect)
+        )
+    data -= spice
+    warned: set[tuple[str, bool]] = set()
+    for artifact in inputs.files:
+        path = artifact.path
+        if path in native_setups or path.resolve() in data:
+            continue
+        key = (artifact.sha256, path in roots)
+        file_keys[path] = key
+        if key in warned:
+            continue
+        warned.add(key)
+        parsed = lexed(path, artifact.sha256)
         for warning in parsed.warnings:
             found = _WARNING_LINE.match(warning)
             refused.append(
@@ -649,7 +705,6 @@ def _verify_inputs(
                     warning[found.end() :].strip() if found else warning,
                 )
             )
-        cards_by_content[key] = parsed
     functions = {
         match.group(1).casefold()
         for parsed in cards_by_content.values()
@@ -667,8 +722,7 @@ def _verify_inputs(
             for key in file_keys.values()
             for card in cards_by_content[key].read
             if card.kind == "directive"
-            if (head := card.body.split(maxsplit=1)[0].casefold())
-            in {".op", ".ac", ".dc", ".tran", ".noise", ".step"}
+            if (head := directive_head(card)) in {".op", ".ac", ".dc", ".tran", ".noise", ".step"}
         ]
         if len(analyses) != 1 or analyses[0] not in {".op", ".ac", ".dc", ".tran"}:
             refused.append(
@@ -721,9 +775,27 @@ def _verify_inputs(
                     functions,
                     native=native,
                     seeded=seeded or seeded_itself,
+                    dialect=dialect,
                 )
             )
             validated.add(key)
+    # The data files staging copied: each card names its copy by an absolute
+    # path, which must be a frozen file too. A job frozen before staging
+    # copied them names a file it did not save, and is refused here.
+    for path, key in file_keys.items():
+        for reference in scan_data_references(cards_by_content[key].read, dialect):
+            target = resolve_reference(path.parent, reference.raw_path).resolve()
+            if target not in inventory:
+                refused.append(
+                    _Refused(
+                        "recovery_external_reader",
+                        f"`{reference.keyword.strip()}`, which reads a file the server "
+                        "did not save",
+                        path,
+                        reference.card.line_start,
+                        _card_text(reference.card),
+                    )
+                )
     # A seed is offered only on ngspice, where one admits the five functions.
     # A deck whose own seed options leave the draws unfixed blocks both
     # routes (simulator_seed is overridden by them, and a deck seed must be

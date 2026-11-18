@@ -1,0 +1,5 @@
+* a source playing a .wav file named by a quoted absolute path with a space
+V1 a 0 wavefile="<dir>\data with space\level.wav"
+R1 a 0 1k
+.tran 10m
+.end

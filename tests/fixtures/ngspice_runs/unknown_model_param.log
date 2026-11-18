@@ -1,0 +1,32 @@
+
+Note: Compatibility modes selected: ps lt ki a
+
+
+Circuit: * unknown model parameter
+
+Warning: Model issue on line 5 :
+  .model dx d(is=1e-14 bogus=3) ...
+unrecognized parameter (bogus) - ignored
+
+binary raw file "/tmp/run/unknown_model_param.raw"
+Doing analysis at TEMP = 27.000000 and TNOM = 27.000000
+
+Using SPARSE 1.3 as Direct Linear Solver
+No. of Data Columns : 3  
+
+No. of Data Rows : 1
+
+Total analysis time (seconds) = 0
+
+Total elapsed time (seconds) = 0.002 
+
+Total DRAM available = 16086.020 MB.
+DRAM currently available = 15373.027 MB.
+Maximum ngspice program size =   21.426 MB.
+Current ngspice program size =   14.285 MB.
+
+Shared ngspice pages =   12.219 MB.
+Text (code) pages =    6.156 MB.
+Stack = 0 bytes.
+Library pages =    2.168 MB.
+

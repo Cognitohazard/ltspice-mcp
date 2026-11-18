@@ -182,12 +182,12 @@ class TestFilterByDevice:
             "currents": {},
             "device_op_points": {"@m1[gm]": 1e-3, "@m1[vth]": 0.7, "@m2[gm]": 2e-3},
         }
-        assert _filter_operating_point(op_data, "M1")  # case-insensitive
+        assert _filter_operating_point(op_data, "M1", xvii=False)  # case-insensitive
         assert set(op_data["device_op_points"]) == {"@m1[gm]", "@m1[vth]"}
 
     def test_filter_no_match_returns_false(self):
         op_data = {"device_op_points": {"@m1[gm]": 1e-3}, "voltages": {}, "currents": {}}
-        assert not _filter_operating_point(op_data, "q99")
+        assert not _filter_operating_point(op_data, "q99", xvii=False)
 
 
 @pytest.mark.parametrize(

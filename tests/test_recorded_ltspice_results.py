@@ -39,9 +39,11 @@ from ltspice_mcp.lib.experiment_types import PARTIAL_RAW_KEY
 from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.lint_rules import lint_deck
 from ltspice_mcp.lib.log_parser import (
+    answered_measurements,
     classify_failure_code,
     count_op_iterations,
     extract_log_diagnostics,
+    measurement_cards,
     parse_measurements,
     parse_step_iterations,
     parse_temperatures,
@@ -65,6 +67,7 @@ from ltspice_mcp.lib.recipes import (
     ValueRecipe,
 )
 from ltspice_mcp.lib.result_observations import coarse_compressed_waveform, deck_tran_max_step
+from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analysis, inspect_tools
@@ -1365,6 +1368,14 @@ def test_the_temperature_lines_are_read(build: str):
     assert parse_temperatures(text=hot) == (50.0, 27.0)
 
 
+def answered(build: str, data: Any, deck: Path) -> Any:
+    """A recorded log's measurement table as every reader returns it, each
+    entry naming the field holding its result, read with the build's own
+    rules and the case's deck."""
+    producer = Producer("ltspice", rec.manifest(build)["reported_build"], None)
+    return answered_measurements(data, producer, measurement_cards(deck))
+
+
 def first_values(build: str, case_id: str) -> dict[str, float]:
     """The first value of each measurement in a recorded log, by name."""
     data = cast(dict[str, Any], parse_measurements(rec.recorded(build, f"{case_id}.log")))
@@ -1406,7 +1417,9 @@ class TestMeasurements:
         """A WHEN measurement prints the level it looked for and the time it
         found it; the time is the result."""
         data = parse_measurements(rec.recorded(build, "log/meas_forms.log"))
-        flat, _, _, _ = aggregate_log_measurements(data, INPUTS / "log/meas_forms.cir")
+        flat, _, _, _ = aggregate_log_measurements(
+            answered(build, data, INPUTS / "log/meas_forms.cir")
+        )
         assert flat["m_when"][0] == pytest.approx(100e-6 * math.log(2), abs=3e-6)
         assert data["measurements"]["m_when"]["values"] == [0.5]
 
@@ -1437,7 +1450,9 @@ class TestMeasurements:
             "t_meas": "v(out)=vmax/2",
         }
         data = parse_measurements(rec.recorded(build, f"{case_id}.log"))
-        flat, _, _, _ = aggregate_log_measurements(data, INPUTS / f"{case_id}.cir")
+        flat, _, _, _ = aggregate_log_measurements(
+            answered(build, data, INPUTS / f"{case_id}.cir")
+        )
         crossing, half_max = flat["t_number"][0], flat["t_meas"][0]
         assert crossing is not None and half_max is not None
         assert crossing == pytest.approx(100e-6 * math.log(2), abs=3e-6)
@@ -1513,7 +1528,9 @@ class TestMeasurements:
         assert list(data["measurements"]) == [
             "t_number", "t_param", "t_expr", "t_braced", "vmax", "t_meas",
         ]  # fmt: skip
-        flat, _, _, _ = aggregate_log_measurements(data, INPUTS / f"{case_id}.cir")
+        flat, _, _, _ = aggregate_log_measurements(
+            answered(build, data, INPUTS / f"{case_id}.cir")
+        )
         assert flat["t_braced"] == flat["t_param"] == flat["t_number"]
 
     def test_only_xvii_fails_an_ac_when_against_a_parameter(self, build: str):
@@ -1527,7 +1544,11 @@ class TestMeasurements:
             )
         case_id = "log/meas_when_threshold_ac"
         flat, _, _, _ = aggregate_log_measurements(
-            parse_measurements(rec.recorded(build, f"{case_id}.log")), INPUTS / f"{case_id}.cir"
+            answered(
+                build,
+                parse_measurements(rec.recorded(build, f"{case_id}.log")),
+                INPUTS / f"{case_id}.cir",
+            )
         )
         assert flat["f_number"][0] == pytest.approx(1000.0, rel=1e-3)
         assert flat["f_param"] == ([None] if xvii else flat["f_number"])
@@ -1648,52 +1669,54 @@ class TestMeasurements:
         )
         assert crossing[2] == (0.0 if rec.generation(build) == "xvii" else None)
 
-    async def test_a_zero_xvii_may_have_printed_for_a_failure_is_named(
+    async def test_a_zero_xvii_may_have_printed_for_a_failure_is_not_an_answer(
         self, build: str, state_no_sim: SessionState, work_dir: Path
     ):
-        """The measurements recipe names the steps that read exactly 0 when the
-        run's own output says XVII wrote it, and stays silent for LTspice 26,
-        which prints ``failed``. The raw beside the log is one the same build
-        wrote; XVII names itself only in a raw's ``Command:`` line."""
+        """The measurements recipe gives no number for a step whose row XVII
+        printed 0, and names the step as not established; LTspice 26, which
+        prints ``failed``, has its failure counted. A bare log path names no
+        build, so it may be XVII's: its zero is not established either."""
         log = work_dir / "meas_step.log"
         log.write_bytes(rec.recorded(build, "log/meas_step.log").read_bytes())
-        raw = log.with_suffix(".raw")
-        raw.write_bytes(rec.recorded(build, "deck/after_end.raw").read_bytes())
         result = await metrics.measurements(
-            services.source_for_raw_path(raw, state_no_sim),
+            services.resolve_analysis_source(state_no_sim, log_file=str(log)),
             MeasurementsRecipe(key="meas", metric="measurements"),
             None,
             state_no_sim,
         )
+        assert "observations" not in result
+        stats = result["stats"]["s_when"]
+        assert stats["failure_count"] == 1
+        assert stats["valid_count"] == 2
+        assert stats["min"] > 0
         if rec.generation(build) == "xvii":
-            (observation,) = result["observations"]
-            assert observation["code"] == "measurement_zero_or_failed"
-            assert observation["evidence"]["zero_steps"] == {"s_when": [2]}
+            assert result["not_established"]["s_when"]["steps"] == [2]
+            assert "failed_measurements" not in result
         else:
-            assert "observations" not in result
-            assert result["stats"]["s_when"]["failure_count"] == 1
+            assert "not_established" not in result
+            assert result["failed_measurements"] == ["s_when"]
 
-    async def test_a_jobs_recorded_build_names_the_zeros_without_a_raw(
+    async def test_a_jobs_recorded_build_decides_whether_a_zero_is_an_answer(
         self, build: str, state_no_sim: SessionState, work_dir: Path
     ):
-        """A job's case records the build its run named, so the zeros are named
-        from that record when no artifact read here names XVII, over every step
-        and on the row of the step that read 0."""
+        """A job's case records the build its run named: on XVII the step that
+        read 0 is not established, over every step and on that step's row,
+        and the row of a step that measured names nothing."""
         if rec.generation(build) != "xvii":
             pytest.skip("only XVII prints 0 for a failed step")
         log = rec.stage_run(build, "log/meas_step", work_dir).with_suffix(".log")
         source = services.resolve_analysis_source(state_no_sim, log_file=str(log))
         recipe = MeasurementsRecipe(key="meas", metric="measurements")
-        unnamed = await metrics.measurements(source, recipe, None, state_no_sim)
-        assert "observations" not in unnamed  # an XVII log names no build
         recorded = replace(source, simulator_version=rec.manifest(build)["reported_build"])
         whole, first, last = await metrics.measurement_rows(
             recorded, recipe, [None, 0, 2], state_no_sim
         )
         for result in (whole, last):
-            (observation,) = result["observations"]
-            assert observation["evidence"]["zero_steps"] == {"s_when": [2]}
-        assert "observations" not in first
+            assert result["not_established"]["s_when"]["steps"] == [2]
+            assert "observations" not in result
+        assert last["stats"]["s_when"]["valid_count"] == 0
+        assert "not_established" not in first
+        assert first["stats"]["s_when"]["valid_count"] == 1
 
     def read_steps(self, log: Path, state: SessionState, **selection: Any) -> dict[str, Any]:
         """The measurements recipe's reply over a log, steps chosen."""
@@ -1720,8 +1743,10 @@ class TestMeasurements:
             assert row["value"]["measured"]["s_rise"] == table["s_rise"]["values"][index]
         failed = rows[2]["value"]
         if rec.generation(build) == "xvii":
-            # XVII prints 0 for the crossing it never found; the row names it.
-            assert failed["measured"]["s_when"] == 0
+            # XVII prints 0 for the crossing it never found, as it prints a
+            # crossing at 0 s: the row gives no number and names the step.
+            assert failed["measured"]["s_when"] is None
+            assert failed["not_established"]["s_when"]["steps"] == [2]
             assert "failed_measurements" not in failed
         else:
             assert failed["measured"]["s_when"] is None
@@ -2232,7 +2257,9 @@ class TestSaveInsideSubcircuits:
         that will run it stores it."""
         xvii = rec.generation(build) == "xvii"
         deck = INPUTS / f"{_SAVE_SPELLINGS[True]}.cir"
-        hierarchy = load_hierarchy(str(deck), None, SemanticProfile("ltspice", xvii_names=xvii))
+        program = f"C:/install/{rec.manifest(build)['executable']['name']}"
+        profile = SemanticProfile.of(Producer("ltspice", None, program), None)
+        hierarchy = load_hierarchy(str(deck), None, profile)
         rows = {"/".join(row.instance).casefold(): row for row in hierarchy.instances}
         stored = {name.casefold() for name in self._stored(build, with_x=not xvii)}
         for path in ("xa/xin/rin", "xa/rd"):
@@ -2915,3 +2942,239 @@ class TestCompareRuns:
         assert plain.compare(stepped, other_step=0)["signals"]
         with pytest.raises(ResultError, match="Not a signal of both results: V\\(nowhere\\)"):
             plain.compare(stepped, other_step=0, signals=["V(nowhere)"])
+
+
+# --------------------------------------------------------------------------
+# Questions the code answered without a recording
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+@pytest.mark.parametrize("case_id", ["log/meas_deriv_when", "log/meas_deriv_when_step"])
+def test_a_deriv_when_prints_the_derivative_and_its_point(build: str, case_id: str):
+    """RC is 100 us charging to 1 V, so where V(out) crosses 0.5 its slope is
+    5000 V/s, at 69 us. LTspice 26 labels the line ``V(out)=``, XVII
+    ``D(v(out))=``. Both print the derivative after ``=`` and the point after
+    a lowercase ``at``, as they print a DERIV ... AT, alone and in a stepped
+    table's ``at`` column: the derivative is the result, with the deck known
+    or not."""
+    data = cast(dict[str, Any], parse_measurements(rec.recorded(build, f"{case_id}.log")))
+    entries = data["measurements"]
+    when, at = entries["d_when"], entries["d_at"]
+    stepped = case_id.endswith("_step")
+    assert when["printed_form"] == at["printed_form"] == ("table_at" if stepped else "line_at")
+    assert when["values"][0] == pytest.approx(5000, rel=0.06)
+    point = when["at"][0] if stepped else when["at"]
+    assert point == pytest.approx(100e-6 * math.log(2), rel=0.01)
+    producer = Producer("ltspice", rec.manifest(build)["reported_build"], None)
+    reads: list[dict[str, Any]] = [
+        answered(build, data, INPUTS / f"{case_id}.cir")["measurements"],
+        cast(Any, answered_measurements(cast(Any, data), producer))["measurements"],
+        cast(Any, answered_measurements(cast(Any, data), Producer(None, None, None)))[
+            "measurements"
+        ],
+    ]
+    for read in reads:
+        assert read["d_at"]["answer"] == "value"
+        assert read["d_when"]["answer"] == "value"
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_stepped_when_table_never_prints_a_level_beside_a_point(build: str):
+    """RISE, FALL, CROSS=LAST, TD and a WHEN of an expression each print the
+    crossing alone under a heading of ``expr=level``; a FIND ... WHEN prints
+    its value beside an ``at`` column. No table has a level column beside an
+    ``at`` column."""
+    data = cast(
+        dict[str, Any], parse_measurements(rec.recorded(build, "log/meas_when_step_forms.log"))
+    )
+    forms = {name: entry["printed_form"] for name, entry in data["measurements"].items()}
+    assert forms == {
+        "w_rise": "table_level",
+        "w_fall": "table_level",
+        "w_last": "table_level",
+        "w_td": "table_level",
+        "w_expr": "table_level",
+        "w_find": "table_at",
+    }
+    text = read_log_text(rec.recorded(build, "log/meas_when_step_forms.log"))
+    headings = re.findall(r"^  step\t(.*)$", text, re.M)
+    assert all(not (h.count("\t") and "=" in h.split("\t")[0]) for h in headings), headings
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_step_where_a_when_finds_no_crossing(build: str):
+    """LTspice 26 prints ``failed`` in the row of a step where a stepped WHEN
+    finds no crossing. XVII prints ``0``, as it would print a crossing at
+    0 s, so the log does not tell the two apart: the step's result is not
+    established, and no reader gives 0 as the answer. It is not listed as
+    failed, which means LTspice printed ``failed``."""
+    data = cast(
+        dict[str, Any], parse_measurements(rec.recorded(build, "log/meas_when_step_fails.log"))
+    )
+    first, second = data["measurements"]["w_one"]["values"]
+    assert first == pytest.approx(100e-6 * math.log(2), rel=0.01)
+    deck = INPUTS / "log/meas_when_step_fails.cir"
+    read = answered(build, data, deck)
+    entry = read["measurements"]["w_one"]
+    assert entry["answer"] == "value"
+    if rec.generation(build) == "xvii":
+        assert second == 0.0  # what XVII printed
+        assert entry["values"] == [first, None]
+        assert entry["not_established"]["steps"] == [1]
+        assert "XVII" in entry["not_established"]["reason"]
+        assert read["failed_measurements"] == []
+    else:
+        assert second is None
+        assert entry["values"] == [first, None]
+        assert "not_established" not in entry
+        assert read["failed_measurements"] == ["w_one"]
+    # A log read with no producer known may be XVII's: its 0 is not taken.
+    unknown = cast(Any, answered_measurements(cast(Any, data), Producer(None, None, None)))[
+        "measurements"
+    ]["w_one"]
+    assert unknown["values"] == [first, None]
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_measurement_named_with_punctuation(build: str):
+    """A measurement named with a dot (both builds) or a dash (XVII; LTspice
+    26 refuses the deck with "syntax error"): the log prints the name as
+    written and the crossing after AT, and the measurement reads under that
+    name, its crossing the result."""
+    taken = ["log/meas_name_dot"]
+    if rec.generation(build) == "xvii":
+        taken.append("log/meas_name_dash")
+    else:
+        assert rec.entry(build, "log/meas_name_dash")["exit_code"] == 1
+        assert "syntax error" in read_log_text(rec.recorded(build, "log/meas_name_dash.log"))
+    for case_id in taken:
+        text = read_log_text(rec.recorded(build, f"{case_id}.log"))
+        (name,) = re.findall(r"^(t[.-]\w+): v\(out\)=0\.5 AT ", text, re.M | re.I)
+        data = cast(dict[str, Any], parse_measurements(rec.recorded(build, f"{case_id}.log")))
+        entry = data["measurements"][name]
+        assert entry["values"] == [0.5]
+        assert entry["at"] == pytest.approx(100e-6 * math.log(2), rel=0.01)
+        read = answered(build, data, INPUTS / f"{case_id}.cir")
+        assert read["measurements"][name]["answer"] == "at"
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_temperature_stepped_in_upper_case_reads_as_temp(build: str, tmp_path: Path):
+    """``.step TEMP list`` logs ``.step temp=...`` as ``.step temp list``
+    does, so the run reads the same steps."""
+    upper = rec.decode(build, "raw/step_temp_upper", tmp_path / "upper").raw.descriptor.steps
+    lower = rec.decode(build, "raw/step_temp", tmp_path / "lower").raw.descriptor.steps
+    assert [dict(s.parameters) for s in upper] == [dict(s.parameters) for s in lower]
+    assert [dict(s.parameters) for s in upper] == [{"temp": t} for t in (-40.0, 27.0, 125.0)]
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_bsim3_device_table_gives_charge_derivatives_not_capacitances(
+    build: str, tmp_path: Path
+):
+    """LTspice 26 prints the device table of an ``.op`` only under
+    ``.options logopinfo``; XVII prints it without and refuses the option.
+    For a BSIM3 device both print the overlap capacitances and the charge
+    derivatives dQ/dV, and no Cgs, Cgd or Cgb. The derivatives with respect
+    to the gate are the capacitances an AC run measures at the terminals:
+    ``dQgdVgb`` the gate's to everything, ``-dQddVgb`` the drain's and
+    ``-dQbdVgb`` the bulk's, at 1 MHz from the 0 V sources' currents."""
+    case_id = (
+        "log/mos_charges_op"
+        if rec.generation(build) == "current"
+        else ("log/mos_charges_op_plain")
+    )
+    other = "log/mos_charges_op_plain" if case_id == "log/mos_charges_op" else "log/mos_charges_op"
+    assert read_device_op_points(rec.recorded(build, f"{other}.log")) == {}
+    table = read_device_op_points(rec.recorded(build, f"{case_id}.log"))
+    assert not {"@m1[cgs]", "@m1[cgd]", "@m1[cgb]"} & set(table)
+    raw = rec.decode(build, "log/mos_charges_ac", tmp_path).raw
+    currents = {name.lower(): complex(raw.get_wave(name, 0)[0]) for name in raw.get_trace_names()}
+    omega = 2 * math.pi * 1e6
+    measured = {
+        "@m1[dqgdvgb]": -currents["i(vg)"].imag / omega,
+        "@m1[dqddvgb]": -currents["i(vd)"].imag / omega,
+        "@m1[dqbdvgb]": -currents["i(vb)"].imag / omega,
+    }
+    for name, capacitance in measured.items():
+        assert table[name] == pytest.approx(capacitance, rel=0.01), name
+
+
+#: XVII writes the collapse of a time step after its operating point on one
+#: line, ``Heightened Def Con from <time> ++++...`` followed by its ``Fatal
+#: Error: Analysis: Time step too small``; the server's rule reads that error
+#: only at the start of a line, so it extracts no error from the log.
+DEF_CON_LINE_MISSED_BY_THE_CLASSIFIER = ("execution_failed", None)
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_time_step_that_collapses_part_way(build: str):
+    """LTspice 26 warns that it relaxed its tolerance from 5 us, then fails with
+    "Convergence Failure: Time step too small; time = 5e-06" and "Simulation
+    Failed: Iteration limit reached". Both keep the raw up to 5 us."""
+    case_id = "log/timestep_collapse_mid"
+    assert rec.entry(build, case_id)["exit_code"] == 1
+    text = read_log_text(rec.recorded(build, f"{case_id}.log"))
+    diagnostics = extract_log_diagnostics(rec.recorded(build, f"{case_id}.log"))
+    if rec.generation(build) == "xvii":
+        (line,) = [line for line in text.splitlines() if "Def Con" in line]
+        assert re.fullmatch(
+            r"Heightened Def Con from 5e-006 \++Fatal Error: Analysis:  Time step too small; "
+            r'time = 5e-006, timestep = 1\.25e-019: trouble with node "a"',
+            line,
+        ), line
+        assert (
+            classify_failure_code(diagnostics["errors"]) == DEF_CON_LINE_MISSED_BY_THE_CLASSIFIER
+        )
+    else:
+        assert "Def Con" not in text
+        assert "Simulation tolerance relaxed to achieve convergence from" in text
+        assert "Convergence Failure:  Time step too small; time = 5e-06" in text
+        assert classify_failure_code(diagnostics["errors"])[0] == "convergence_failed"
+
+
+#: The device table's name for D1 inside the block placed as U1, by build:
+#: LTspice 26 writes the path (U1 without the X the export gives it), XVII the
+#: element letter, the instance and the device's name without its letter.
+BLOCK_DEVICE_IN_THE_TABLE = {"current": "@u1:d1[id]", "xvii": "@d:u1:1[id]"}
+
+
+#: What ``api.device_op_points`` calls that device: a deck instance X1's M1 is
+#: ``x1.m1`` on both builds, and this one has no name the two builds share.
+BLOCK_DEVICE_NAMED_BY_THE_API_UNLIKE_ON_THE_OTHER_BUILD = {"current": "u1d1", "xvii": "xu1.d1"}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_device_inside_a_block_not_named_with_x(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """LTspice 26 prints the table only under ``.options logopinfo``, which
+    XVII refuses ("unrecognized option") and prints the table without. Both
+    exports name the block X§U1 (26) or XU1 (XVII). The API reads the device
+    by a name of its own on each build: on LTspice 26 the path's two words
+    run together, and on XVII the path with the X the export gives U1, so
+    one device is asked for by two names."""
+    generation = rec.generation(build)
+    shown = (
+        "export/hier_device_logopinfo" if generation == "current" else "export/hier_device_plain"
+    )
+    other = (
+        "export/hier_device_plain"
+        if shown == "export/hier_device_logopinfo"
+        else ("export/hier_device_logopinfo")
+    )
+    if generation == "xvii":
+        assert rec.entry(build, other)["exit_code"] == 1
+    else:
+        assert read_device_op_points(rec.recorded(build, f"{other}.log")) == {}
+    points = read_device_op_points(rec.recorded(build, f"{shown}.log"))
+    assert points == {
+        BLOCK_DEVICE_IN_THE_TABLE[generation].replace("[id]", f"[{p}]"): v
+        for p, v in (("id", 2.26e-3), ("vd", 0.676), ("req", 11.5), ("cap", 0.0))
+    }
+    log = work_dir / "hier_device.log"
+    log.write_bytes(rec.recorded(build, f"{shown}.log").read_bytes())
+    by_device = SyncApi(state_no_sim).device_op_points(log)
+    name = BLOCK_DEVICE_NAMED_BY_THE_API_UNLIKE_ON_THE_OTHER_BUILD[generation]
+    assert by_device == {name: {"id": 2.26e-3, "vd": 0.676, "req": 11.5, "cap": 0.0}}

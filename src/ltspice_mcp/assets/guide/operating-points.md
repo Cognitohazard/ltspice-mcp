@@ -26,8 +26,13 @@ Run it with `run_experiments`, then read
 vdsat, the caps and the terminal currents at that bias. On LTspice these come
 from the log's *Semiconductor Device Operating Points* block, which LTspice
 writes only for `.op`. LTspice 26 writes it only under `.options logopinfo`,
-which the server adds to every `.op` run. XVII writes it without the option and
-stops with an `unrecognized option` error on a deck that contains it. The block
+which the server adds to every `.op` run on a build it knows to be 24 or
+later. XVII writes it without the option and stops with an `unrecognized
+option` error on a deck that contains it. The server knows the build from an
+earlier run on the executable, its version resource, or the name XVII installs
+under; when none shows it, the run goes without the option and says so in
+`observations` (`logopinfo_withheld`), and from the next run on the build is
+known. The block
 prints every value to three significant digits (`4.66e-05`), which rounds it by
 up to 0.5%, and `analyze_results` reports this in `observations`
 (`device_op_log_precision`). Neither build gives more digits.

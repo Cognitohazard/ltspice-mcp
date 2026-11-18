@@ -1,0 +1,17 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\mos_charges_op_plain.cir
+Start Time: Thu Jan 15 00:00:00 2026
+solver = Normal
+Maximum thread count: 1
+tnom = 27
+temp = 27
+method = trap
+Warning: Pd = 0 is less than W.
+Warning: Ps = 0 is less than W.
+Direct Newton iteration succeeded in finding operating point.
+Total elapsed time: 0.000 seconds.
+Total iterations: 5
+
+Files loaded:
+C:\recording\mos_charges_op_plain.cir
+

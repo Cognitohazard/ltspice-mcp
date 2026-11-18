@@ -1,0 +1,39 @@
+Circuit: * .fourier as a .four
+
+.OP point found by inspection.
+N-Period=1
+Fourier components of V(a)
+DC component:2.62339e-005
+
+Harmonic	Frequency	 Fourier 	Normalized	 Phase  	Normalized
+ Number 	  [Hz]   	Component	 Component	[degree]	Phase [deg]
+    1   	1.000e+03	1.000e+00	1.000e+00	   -0.01°	    0.00°
+    2   	2.000e+03	6.927e-05	6.926e-05	  -17.27°	  -17.27°
+    3   	3.000e+03	3.959e-04	3.958e-04	   46.99°	   47.00°
+    4   	4.000e+03	1.231e-04	1.230e-04	 -145.12°	 -145.12°
+    5   	5.000e+03	3.902e-04	3.902e-04	 -146.34°	 -146.33°
+    6   	6.000e+03	1.553e-04	1.553e-04	   66.64°	   66.65°
+    7   	7.000e+03	7.095e-04	7.094e-04	   -5.42°	   -5.42°
+    8   	8.000e+03	8.057e-05	8.056e-05	  -36.80°	  -36.79°
+    9   	9.000e+03	5.623e-04	5.622e-04	  160.79°	  160.80°
+Total Harmonic Distortion: 0.108573%(0.121046%)
+
+
+
+Date: Thu Jan 15 00:00:00 2026
+Total elapsed time: 0.000 seconds.
+
+tnom = 27
+temp = 27
+method = modified trap
+totiter = 4034
+traniter = 4034
+tranpoints = 2018
+accept = 2018
+rejected = 0
+matrix size = 2
+fillins = 0
+solver = Normal
+Matrix Compiler1: (timing-dependent)
+Matrix Compiler2: (timing-dependent)
+

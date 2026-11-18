@@ -92,14 +92,17 @@ from ltspice_mcp.lib import (
     capabilities,
 )
 from ltspice_mcp.lib.asc_document import is_asc
+from ltspice_mcp.lib.continuation import Unfilled, call_to_continue
 from ltspice_mcp.lib.cursor_codec import CursorError, decode_cursor, encode_cursor
 from ltspice_mcp.lib.deck_prep import asc_export_lock, stage_sheet_copy
 from ltspice_mcp.lib.encoding import read_spice_text_with_encoding, refused_sheet_mark_note
 from ltspice_mcp.lib.families import DISPLAY
 from ltspice_mcp.lib.filelock import circuit_file_lock, path_lock
+from ltspice_mcp.lib.hierarchy import SemanticProfile
 from ltspice_mcp.lib.lint_rules import (
     MEAS_ANGLE_REASON,
     deck_generator,
+    definition_sites,
     export_writer,
     meas_angle_sites,
     rule_severity,
@@ -121,13 +124,14 @@ from ltspice_mcp.lib.netlist_graph import (
     parse_netlist_graph,
 )
 from ltspice_mcp.lib.raster import RenderedImage
+from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER
 from ltspice_mcp.lib.schematic_scene import (
     WINDOW_ATTRIBUTES,
     Scene,
     build_scene,
     sheet_view,
 )
-from ltspice_mcp.lib.services import cp1252_ltspice
+from ltspice_mcp.lib.services import cp1252_ltspice, session_reader
 from ltspice_mcp.lib.sheet_findings import (
     RULES,
     Finding,
@@ -137,7 +141,7 @@ from ltspice_mcp.lib.sheet_findings import (
 )
 from ltspice_mcp.lib.simulator import DEFAULT_FAMILY, family_for
 from ltspice_mcp.lib.simulator_build import executable_identity, is_cp1252_ltspice_build
-from ltspice_mcp.lib.spice_lex import SpiceCard, SpiceLexError, lex_deck
+from ltspice_mcp.lib.spice_lex import DefinitionRule, SpiceCard, SpiceLexError, lex_deck
 from ltspice_mcp.lib.spice_lex_ops import (
     MICRO_SIGN_READERS,
     ValueSuffixSite,
@@ -153,6 +157,7 @@ from ltspice_mcp.lib.spice_validator import (
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
+    FINDING_ROWS_CUT,
     FINDING_SCHEMA,
     HINT_SCHEMA,
     LTSPICE_SHOWN_PROPERTIES,
@@ -198,16 +203,19 @@ from ltspice_mcp.tools._base import (
 STRUCTURAL_DELTA_PROPS: dict[str, Any] = {
     "components_added": {
         "type": "array",
+        CUT: ITEMS,
         "items": {"type": "string"},
         "description": "References present in the compared deck but absent from the baseline.",
     },
     "components_removed": {
         "type": "array",
+        CUT: ITEMS,
         "items": {"type": "string"},
         "description": "References present in the baseline but absent from the compared deck.",
     },
     "components_renamed": {
         "type": "array",
+        CUT: ITEMS,
         "items": {
             "type": "object",
             "properties": {
@@ -223,6 +231,7 @@ STRUCTURAL_DELTA_PROPS: dict[str, Any] = {
     },
     "components_changed": {
         "type": "array",
+        CUT: ITEMS,
         "items": {
             "type": "object",
             "properties": {
@@ -238,6 +247,7 @@ STRUCTURAL_DELTA_PROPS: dict[str, Any] = {
     },
     "directives_added": {
         "type": "array",
+        CUT: ITEMS,
         "items": {"type": "string"},
         "description": (
             "SPICE directives in the compared deck and not the baseline, each "
@@ -247,6 +257,7 @@ STRUCTURAL_DELTA_PROPS: dict[str, Any] = {
     },
     "directives_removed": {
         "type": "array",
+        CUT: ITEMS,
         "items": {"type": "string"},
         "description": "SPICE directives in the baseline and not the compared deck.",
     },
@@ -482,7 +493,7 @@ _SCENE_SCHEMA: dict[str, Any] = {
         "wires": {"type": "integer"},
         "flags": {"type": "integer"},
         "directives": {"type": "integer"},
-        "bbox": {"type": ["array", "null"], "items": {"type": "integer"}},
+        "bbox": {"type": ["array", "null"], "items": {"type": "integer"}, CUT: NEVER},
     },
 }
 
@@ -579,16 +590,19 @@ _NODE_PARTITION_DIFF_SCHEMA: dict[str, Any] = {
     "properties": {
         "reference_nets": {
             "type": "array",
+            CUT: ITEMS,
             "items": {"type": "string"},
             "description": "The reference-side nets in the collision.",
         },
         "candidate_nets": {
             "type": "array",
+            CUT: ITEMS,
             "items": {"type": "string"},
             "description": "The candidate-side nets they could not be reconciled with.",
         },
         "involved": {
             "type": "array",
+            CUT: ITEMS,
             "items": {"type": "string"},
             "description": "Device pins ('R1.2') that witness the constraint.",
         },
@@ -651,6 +665,7 @@ _UNRESOLVED_SUBCKT_SCHEMA: dict[str, Any] = {
         },
         "missing_includes": {
             "type": "array",
+            CUT: ITEMS,
             "items": {"type": "string"},
             "description": (
                 "That side's unusable include targets — empty means the library was "
@@ -664,19 +679,31 @@ _UNRESOLVED_SUBCKT_SCHEMA: dict[str, Any] = {
 _DUPLICATE_SUBCKT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "description": (
-        "A subcircuit defined more than once; SPICE keeps the first in textual "
-        "order. A fact, not a difference: it does not change 'equivalent'."
+        "A subcircuit defined more than once, read as the session's simulator "
+        "reads it: ngspice keeps the first, LTspice XVII the last of two in one deck. "
+        "A fact, not a difference: it does not change 'equivalent'."
     ),
     "properties": {
         "name": {"type": "string", "description": "The duplicated subcircuit name."},
-        "used": {"type": "string", "description": "The source whose definition won."},
+        "used": {
+            "type": "string",
+            "description": "The source whose definition is read; absent when none is.",
+        },
         "ignored": {
             "type": "array",
+            CUT: ITEMS,
             "items": {"type": "string"},
-            "description": "The sources whose definitions were discarded.",
+            "description": "The sources whose definitions were not read.",
+        },
+        "reason": {
+            "type": "string",
+            "description": (
+                "Why no definition was read, its instances compared as black boxes: "
+                "the simulator refuses the deck, or what it does is not recorded."
+            ),
         },
     },
-    "required": ["name", "used", "ignored"],
+    "required": ["name", "ignored"],
 }
 
 _DUPLICATE_PARAM_SCHEMA: dict[str, Any] = {
@@ -696,6 +723,7 @@ _DUPLICATE_PARAM_SCHEMA: dict[str, Any] = {
         "key": {"type": "string", "description": "The parameter, case-folded."},
         "values": {
             "type": "array",
+            CUT: ITEMS,
             "items": {"type": "string"},
             "description": "Every copy, in card order.",
         },
@@ -751,16 +779,19 @@ COMPARISON_SCHEMA: dict[str, Any] = {
         },
         "added": {
             "type": "array",
+            CUT: ITEMS,
             "items": _COMPONENT_DELTA_SCHEMA,
             "description": "equivalence: components present only in this circuit.",
         },
         "removed": {
             "type": "array",
+            CUT: ITEMS,
             "items": _COMPONENT_DELTA_SCHEMA,
             "description": "equivalence: components present only in the reference.",
         },
         "renamed": {
             "type": "array",
+            CUT: ITEMS,
             "items": _RENAMED_INSTANCE_SCHEMA,
             "description": (
                 "equivalence: subcircuit instances matched across the X LTspice puts "
@@ -770,16 +801,19 @@ COMPARISON_SCHEMA: dict[str, Any] = {
         },
         "retyped": {
             "type": "array",
+            CUT: ITEMS,
             "items": _RETYPE_DIFF_SCHEMA,
             "description": "equivalence: matched components whose type or model changed.",
         },
         "value_mismatches": {
             "type": "array",
+            CUT: ITEMS,
             "items": _VALUE_DIFF_SCHEMA,
             "description": "equivalence: matched components whose value differs beyond rtol.",
         },
         "param_mismatches": {
             "type": "array",
+            CUT: ITEMS,
             "items": _PARAM_DIFF_SCHEMA,
             "description": (
                 "equivalence: matched components, subcircuit instances among them, "
@@ -789,31 +823,37 @@ COMPARISON_SCHEMA: dict[str, Any] = {
         },
         "node_partition_mismatches": {
             "type": "array",
+            CUT: ITEMS,
             "items": _NODE_PARTITION_DIFF_SCHEMA,
             "description": "equivalence: the wiring collisions — where a miswire shows up.",
         },
         "anchor_violations": {
             "type": "array",
+            CUT: ITEMS,
             "items": _ANCHOR_VIOLATION_SCHEMA,
             "description": "equivalence: anchor nets not in corresponding positions.",
         },
         "arity_errors": {
             "type": "array",
+            CUT: ITEMS,
             "items": _ARITY_ERROR_SCHEMA,
             "description": "equivalence: matched components whose terminal count differs.",
         },
         "unresolved_subckts": {
             "type": "array",
+            CUT: ITEMS,
             "items": _UNRESOLVED_SUBCKT_SCHEMA,
             "description": "equivalence: subcircuits left as black boxes on either side.",
         },
         "duplicate_subckts": {
             "type": "array",
+            CUT: ITEMS,
             "items": _DUPLICATE_SUBCKT_SCHEMA,
             "description": "equivalence: subcircuits defined more than once.",
         },
         "duplicate_params": {
             "type": "array",
+            CUT: ITEMS,
             "items": _DUPLICATE_PARAM_SCHEMA,
             "description": "equivalence: cards that give a parameter more than once.",
         },
@@ -828,10 +868,10 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         "path": {"type": "string"},
         "kind": {"type": "string"},
         "outcome": outcome_schema("complete", "partial", "failed"),
-        "checks_run": {"type": "array", "items": {"type": "string"}},
+        "checks_run": {"type": "array", "items": {"type": "string"}, CUT: NEVER},
         "rules_run": RULES_RUN_SCHEMA,
-        "checks_skipped": {"type": "array", "items": _CHECK_SKIPPED_SCHEMA},
-        "findings": {"type": "array", "items": FINDING_SCHEMA},
+        "checks_skipped": {"type": "array", "items": _CHECK_SKIPPED_SCHEMA, CUT: NEVER},
+        "findings": {"type": "array", "items": FINDING_SCHEMA, CUT: FINDING_ROWS_CUT},
         "findings_omitted": FINDINGS_OMITTED_SCHEMA,
         "comparison": COMPARISON_SCHEMA,
         "export": _EXPORT_SCHEMA,
@@ -1372,9 +1412,10 @@ def _syntax_findings(
     *,
     cp1252_reader: str | None,
     family: str,
+    definitions: DefinitionRule,
 ) -> list[dict[str, Any]]:
-    """Directive, unreadable-card, element-arity, value-suffix and .meas angle
-    findings in a netlist.
+    """Directive, unreadable-card, element-arity, value-suffix, .meas angle
+    and subcircuit-defined-twice findings in a netlist.
 
     Everything here changes what the simulator reads, or what it computes from
     it: LTspice takes a trig function's angle in a .meas in degrees. A finding
@@ -1384,7 +1425,8 @@ def _syntax_findings(
     ``_value_suffix_findings``).
     ``family`` is the simulator family the session runs decks on, ``ltspice``
     or ``ngspice``: some directive and element forms are a fault for one and
-    valid for the other. The facts that are legal-but-notable live in the
+    valid for the other. ``definitions`` is which definition of a subcircuit
+    defined twice the session's reader keeps (``services.session_reader``). The facts that are legal-but-notable live in the
     quality check.
     """
     simulator = DISPLAY[family]
@@ -1432,6 +1474,18 @@ def _syntax_findings(
     )
     if simulator == "LTspice":
         findings.extend(_meas_angle_findings(deck.cards, path))
+    # The linter's subckt-defined-twice rules: the same sites, severity and
+    # reason, so both surfaces say the same thing.
+    findings.extend(
+        _finding(
+            rule_id=site.rule_id.replace("-", "_"),
+            severity=rule_severity(site.rule_id),
+            at={"file": str(path), "line": site.card.line_start},
+            subject=site.card.name or ".subckt",
+            evidence={"lines": list(site.lines), "reason": site.reason},
+        )
+        for site in definition_sites(deck.cards, definitions)
+    )
     return findings
 
 
@@ -1471,11 +1525,17 @@ _NETLIST_QUALITY_RULES: tuple[tuple[str, str, Any], ...] = (
     ("dangling_node", "observation", validate_netlist_dangling_nodes),
     ("undefined_reference", "warning", validate_netlist_directive_refs),
     ("floating_net", "warning", validate_netlist_bias_topology),
-    ("duplicate_parameter", "observation", validate_netlist_duplicate_params),
+    (
+        "duplicate_parameter",
+        "observation",
+        lambda cards, _reader: validate_netlist_duplicate_params(cards),
+    ),
 )
 
 
-def _netlist_quality_findings(path: Path, deck: _LexedDeck) -> list[dict[str, Any]]:
+def _netlist_quality_findings(
+    path: Path, deck: _LexedDeck, reader: SemanticProfile
+) -> list[dict[str, Any]]:
     """Quality findings over a lexed netlist: nodes wired to one terminal,
     directives naming something that exists nowhere, nets with no DC path to
     ground, and instances giving a parameter more than once."""
@@ -1483,7 +1543,7 @@ def _netlist_quality_findings(path: Path, deck: _LexedDeck) -> list[dict[str, An
     for rule_id, severity, validate in _NETLIST_QUALITY_RULES:
         findings.extend(
             _rule_finding(issue, path, rule_id=rule_id, severity=severity)
-            for issue in validate(deck.cards)
+            for issue in validate(deck.cards, reader)
         )
     return findings
 
@@ -1635,10 +1695,11 @@ def _export_if_written(simulator_cls: Any, asc_path: Path, timeout: float) -> Pa
     return net_path if net_path.exists() else None
 
 
-def _netlist_counts(net_path: Path) -> tuple[int | None, int | None]:
-    """Component and net counts of an exported netlist, or ``(None, None)``."""
+def _netlist_counts(net_path: Path, reader: SemanticProfile) -> tuple[int | None, int | None]:
+    """Component and net counts of an exported netlist as ``reader`` reads
+    it, or ``(None, None)``."""
     try:
-        graph = parse_netlist_graph(net_path)
+        graph = parse_netlist_graph(net_path, reader=reader)
     except (NetlistGraphError, OSError, SpiceLexError):
         return (None, None)
     nets = {node for comp in graph.components for node in comp.nodes}
@@ -1697,7 +1758,9 @@ class _MeasuredNetlist(NamedTuple):
     findings: list[dict[str, Any]]
 
 
-def _measure_netlist(net_path: Path, *, cp1252_reader: str | None) -> _MeasuredNetlist | None:
+def _measure_netlist(
+    net_path: Path, *, cp1252_reader: str | None, reader: SemanticProfile
+) -> _MeasuredNetlist | None:
     """Component count, net count, digest and value-suffix findings of a
     just-exported netlist.
 
@@ -1712,7 +1775,7 @@ def _measure_netlist(net_path: Path, *, cp1252_reader: str | None) -> _MeasuredN
     """
     if not net_path.exists():
         return None
-    components, nets = _netlist_counts(net_path)
+    components, nets = _netlist_counts(net_path, reader)
     return _MeasuredNetlist(
         components,
         nets,
@@ -1760,6 +1823,9 @@ async def _run_export(
     observations: list[str] = []
     warnings: list[str] = []
     timeout = state.config.default_timeout
+    # The export's nets are counted as the deck's reader reads them, the one
+    # the compare and quality checks of the same call ask.
+    reader = await asyncio.to_thread(session_reader, state)
     payload: dict[str, Any] = {
         "ok": False,
         "netlist": None,
@@ -1786,7 +1852,7 @@ async def _run_export(
                     warnings.extend(diff_warnings)
                 net_path = new_path
                 measured = await asyncio.to_thread(
-                    _measure_netlist, net_path, cp1252_reader=cp1252_reader
+                    _measure_netlist, net_path, cp1252_reader=cp1252_reader, reader=reader
                 )
         else:
             scratch = (
@@ -1800,7 +1866,7 @@ async def _run_export(
                     _create_netlist, simulator_cls, staged_asc, timeout
                 )
                 measured = await asyncio.to_thread(
-                    _measure_netlist, net_path, cp1252_reader=cp1252_reader
+                    _measure_netlist, net_path, cp1252_reader=cp1252_reader, reader=reader
                 )
                 if measured is not None:
                     payload["diff_vs_prior"], diff_warnings = await _diff_vs_last_managed(
@@ -1965,6 +2031,7 @@ def _parse_side_or_fail(
     where: Path,
     resolver: IncludeResolver,
     *,
+    reader: SemanticProfile,
     base_dir: Path | None = None,
 ) -> tuple[NetlistGraph | None, dict[str, Any] | None]:
     """Parse one side of an equivalence compare, or produce a ``compare`` failure.
@@ -1974,7 +2041,9 @@ def _parse_side_or_fail(
     ``where``. The graph holds each scope's directives beside its wiring.
     """
     try:
-        graph = parse_netlist_graph(source, base_dir=base_dir, include_resolver=resolver)
+        graph = parse_netlist_graph(
+            source, reader=reader, base_dir=base_dir, include_resolver=resolver
+        )
     except (NetlistGraphError, SpiceLexError, OSError) as exc:
         return None, _failure(
             "compare", f"the {label} could not be parsed: {exc}", where=str(where)
@@ -2003,6 +2072,7 @@ def compare_equivalence(
     *,
     denied_hint: str,
     ref_base_dir: Path | None,
+    reader: SemanticProfile,
 ) -> CompareResult:
     """Graph-compare candidate against reference through the safe_path resolver,
     and compare their directives scope by scope (``circuit_directive_delta``).
@@ -2012,23 +2082,29 @@ def compare_equivalence(
     candidate's relative includes resolve in its directory, not in the store
     scratch an export was made in. ``ref_base_dir`` is the reference's
     (``ReferenceNetlist.base_dir``). ``denied_hint`` is the sandbox guidance
-    each refused include's finding carries.
+    each refused include's finding carries. ``reader`` is who reads both
+    decks (``services.session_reader``).
     """
     findings: list[dict[str, Any]] = []
     ref_graph, failure = _parse_side_or_fail(
-        reference, "reference netlist", ref_source, resolver, base_dir=ref_base_dir
+        reference, "reference netlist", ref_source, resolver, reader=reader, base_dir=ref_base_dir
     )
     if failure is not None:
         return None, findings, failure, []
     cand_graph, failure = _parse_side_or_fail(
-        candidate, "netlist under test", cand_source, resolver, base_dir=cand_source.parent
+        candidate,
+        "netlist under test",
+        cand_source,
+        resolver,
+        reader=reader,
+        base_dir=cand_source.parent,
     )
     if failure is not None:
         return None, findings, failure, []
     assert ref_graph is not None and cand_graph is not None  # failure is None ⇒ both parsed
     findings.extend(_denied_include_findings(ref_graph, ref_source, denied_hint))
     findings.extend(_denied_include_findings(cand_graph, cand_source, denied_hint))
-    comparison = compare_graphs(ref_graph, cand_graph, anchors=anchors, rtol=rtol)
+    comparison = compare_graphs(ref_graph, cand_graph, reader=None, anchors=anchors, rtol=rtol)
     added, removed = circuit_directive_delta(ref_graph, cand_graph, comparison.calls)
     directives_equivalent = not added and not removed
     payload: dict[str, Any] = {
@@ -2138,6 +2214,7 @@ def compare_netlists(
         make_include_resolver(state),
         denied_hint=state.sandbox_guidance(),
         ref_base_dir=ref_base_dir,
+        reader=session_reader(state),
     )
 
 
@@ -2393,10 +2470,17 @@ def _with_the_cut(headline: str, data: Mapping[str, Any], listing: str | None) -
         f"{entry['omitted']} more {rule} ({check_reporting(rule, data['kind'])} check)"
         for rule, entry in omitted.items()
     )
+    again = call_to_continue(
+        "verify_circuit",
+        {
+            "path": data["path"],
+            "checks": [Unfilled("its check")],
+            "findings_cursor": Unfilled("its findings_omitted next_cursor"),
+        },
+    )
     return (
-        f"{headline.rstrip('.')}. Not listed: {more}; pass a rule's findings_omitted "
-        "next_cursor as findings_cursor to list them, with checks set to its check "
-        "alone to skip the others."
+        f"{headline.rstrip('.')}. Not listed: {more}; list a rule's next findings with "
+        f"{again}, keeping this call's other arguments."
     )
 
 
@@ -2640,7 +2724,8 @@ async def evaluate_verify_circuit(
     ltspice = state.available_simulators.get("ltspice")
     if ltspice is not None and (wanted.get("syntax") or wanted.get("export")):
         executable = await asyncio.to_thread(executable_identity, ltspice)
-        cp1252_reader = cp1252_ltspice(state, executable)
+        # Off the loop: it may read the program file (its version resource).
+        cp1252_reader = await asyncio.to_thread(cp1252_ltspice, state, executable)
 
     if wanted.get("syntax") and decoded is not None and deck is not None:
         text, encoding = decoded
@@ -2659,6 +2744,7 @@ async def evaluate_verify_circuit(
         gap = capabilities.gap_reason(family, "validator_rules")
         if gap is not None:
             observations.append(f"syntax: {gap}")
+        reader = await asyncio.to_thread(session_reader, state)
         findings.extend(
             await asyncio.to_thread(
                 _syntax_findings,
@@ -2668,12 +2754,14 @@ async def evaluate_verify_circuit(
                 encoding,
                 cp1252_reader=cp1252_reader,
                 family=family,
+                definitions=reader.subckt_rule,
             )
         )
         checks_run.append("syntax")
 
     if wanted.get("quality") and deck is not None and kind == "netlist":
-        findings.extend(await asyncio.to_thread(_netlist_quality_findings, path, deck))
+        reader = await asyncio.to_thread(session_reader, state)
+        findings.extend(await asyncio.to_thread(_netlist_quality_findings, path, deck, reader))
         checks_run.append("quality")
 
     # --- scene-derived checks (symbols, layout, quality, dropped wires) -----

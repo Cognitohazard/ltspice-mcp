@@ -18,6 +18,25 @@
    "tests/test_edit_schematic.py::test_an_edit_reports_what_it_introduced_and_counts_the_rest"
   ]
  },
+ "0288ad349ee9895b": {
+  "answer": {
+   "reply": "d7a56fc64302254b",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_observability.py::TestEventNamesWhatACallSet::test_no_argument_value_reaches_the_record"
+  ]
+ },
+ "02e26d0eb5e4fed0": {
+  "answer": {
+   "reply": "2037b98b20f1090f",
+   "sheet": "509ddb679e8bfe03"
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::TestExportEncoding::test_an_edit_adds_no_mark_to_a_utf16_sheet_that_had_none[ltspice17]",
+   "tests/test_recorded_ltspice_schematics.py::TestExportEncoding::test_an_edit_adds_no_mark_to_a_utf16_sheet_that_had_none[ltspice26]"
+  ]
+ },
  "03826ee7b8917926": {
   "answer": {
    "reply": "df68aef58088fbe1",
@@ -770,6 +789,15 @@
    "tests/test_edit_open_window.py::test_a_save_is_a_call_of_its_own[other0]"
   ]
  },
+ "313f8a8661b5aaf6": {
+  "answer": {
+   "reply": "4dd8aee9d5ab2678",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_reported_behaviours.py::test_a_failed_edit_names_the_op_by_index_and_writes_nothing"
+  ]
+ },
  "3248fff8be3f58cb": {
   "answer": {
    "reply": "c588ab478b776fd4",
@@ -1091,6 +1119,15 @@
   },
   "tests": [
    "tests/test_edit_schematic.py::test_a_move_reply_says_what_moved"
+  ]
+ },
+ "482d0ed7532927c5": {
+  "answer": {
+   "reply": "f5bf79f28a1ce845",
+   "sheet": "f8927d08d258a7b1"
+  },
+  "tests": [
+   "tests/test_reported_behaviours.py::test_one_batch_removes_a_comment_rewrites_a_directive_and_checks_equivalence"
   ]
  },
  "48934a41d8835fa0": {
@@ -2005,6 +2042,16 @@
    "tests/test_recorded_ltspice_schematics.py::TestTheServerFindsASymbolWhereEitherBuildDoes::test_every_tool[holding the symbol-search/named_subfolder]"
   ]
  },
+ "80b4107abe321451": {
+  "answer": {
+   "reply": "f8594d8918f2232f",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/same_instance_run_past_second_pin]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/same_instance_run_past_second_pin]"
+  ]
+ },
  "817a0848ec20b7af": {
   "answer": {
    "reply": "2860b10fb5108aed",
@@ -2104,6 +2151,15 @@
   },
   "tests": [
    "tests/test_post_op_warnings.py::TestReadabilityWarnings::test_wiring_profile_counts_wired_pins"
+  ]
+ },
+ "8745bfb504716d09": {
+  "answer": {
+   "reply": "56671e749019be71",
+   "sheet": "7dfcf23530068657"
+  },
+  "tests": [
+   "tests/test_reported_behaviours.py::test_an_edit_that_changes_model_lines_compares_equivalent_with_its_reference"
   ]
  },
  "880866ff6f0f7bba": {
@@ -2777,6 +2833,15 @@
    "tests/test_edit_schematic.py::test_reference_export_failure_is_a_partial_outcome"
   ]
  },
+ "ad1f02bdb03a100e": {
+  "answer": {
+   "reply": "66c7b43fabc1882e",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_observability.py::TestEventNamesWhatACallSet::test_jobs_action_and_edit_ops"
+  ]
+ },
  "ad7106870a07d3bc": {
   "answer": {
    "reply": "23772e223af55556",
@@ -2796,6 +2861,16 @@
    "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[voltage-AC 1-set_component_value]",
    "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[voltage-PULSE(0 1 0 1n 1n 5n 10n)-set_component_attribute]",
    "tests/test_edit_schematic.py::test_a_value_with_spaces_its_class_reads_whole_is_written_by_every_writer[voltage-PULSE(0 1 0 1n 1n 5n 10n)-set_component_value]"
+  ]
+ },
+ "ad9346fab102d573": {
+  "answer": {
+   "reply": "77ae185b828e53de",
+   "sheet": null
+  },
+  "tests": [
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice17-connectivity/diagonal_end_on_wire_interior]",
+   "tests/test_recorded_ltspice_schematics.py::test_the_pin_legend_names_each_net_as_ltspice_exports_it[ltspice26-connectivity/diagonal_end_on_wire_interior]"
   ]
  },
  "ade6f222eb6bdc68": {

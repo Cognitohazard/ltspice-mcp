@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, fields
-from typing import Any, Literal, get_args
+from typing import Any, Literal, NotRequired, get_args
 
 from typing_extensions import TypedDict
 
@@ -172,12 +172,26 @@ class MeasErrorEntry(TypedDict):
     suggestion: str | None
 
 
+class LogCondition(TypedDict):
+    """One condition a run's output named, counted under one set of rules
+    (``log_conditions``)."""
+
+    code: str
+    count: int
+    first_text: str
+    channel: Literal["log", "console"]
+    severity: NotRequired[str]
+
+
 class LogDiagnostics(TypedDict):
     """Return shape of :func:`extract_log_diagnostics`."""
 
     warnings: list[str]
     errors: list[str]
     meas_errors: list[MeasErrorEntry]
+    #: What the log and console say under each set of rules that found
+    #: anything, by the set's name (``log_conditions.classify_channels``).
+    conditions: dict[str, list[LogCondition]]
 
 
 class UnreadableValue(TypedDict):
@@ -185,6 +199,14 @@ class UnreadableValue(TypedDict):
     printed it (None where no line names it) and the reason."""
 
     line: str | None
+    reason: str
+
+
+class NotEstablished(TypedDict):
+    """The steps of a measurement whose printed value is not established as
+    its result, from 0, and why."""
+
+    steps: list[int]
     reason: str
 
 
@@ -202,6 +224,20 @@ class _MeasurementMetadata(TypedDict, total=False):
     at: float | list[float | None] | None
     unreadable: UnreadableValue
     failed_steps: list[int]
+    #: How the log printed the measurement (``log_parser.PrintedForm``), as the
+    #: decoder found it; a reader turns it into ``answer`` or
+    #: ``answer_unknown`` (``log_parser.answered_measurements``) and never
+    #: passes it on.
+    printed_form: str
+    #: The field holding the measurement's result, ``"value"`` (its
+    #: ``values``) or ``"at"``, as ``log_parser.measurement_answer`` decides.
+    answer: str
+    #: Why the field holding the result is not known, where it is not.
+    answer_unknown: str
+    #: The steps, from 0, whose printed value is not established as the
+    #: result, and why (``log_parser.answered_measurements``): their values
+    #: are null.
+    not_established: NotEstablished
 
 
 class MeasurementEntry(_MeasurementMetadata):
@@ -217,7 +253,13 @@ class MeasurementEntry(_MeasurementMetadata):
     threshold written as a parameter or an expression: the value is null, and
     only this entry fails. ``failed_steps`` lists the steps, from 0, whose row
     of a stepped table LTspice printed ``failed``; their values are null
-    (:func:`measurement_failed`).
+    (:func:`measurement_failed`). ``answer`` names the field holding the
+    result: ``at`` for a WHEN with no FIND printed on its own line, whose
+    ``values`` hold the level it searched for, and ``value`` otherwise;
+    ``answer_unknown`` says why it is not known in its place.
+    ``not_established`` names the steps whose printed value is not
+    established as the result (XVII prints 0 for a failed step), null in
+    ``values``.
     """
 
     values: list[float | None]
@@ -262,6 +304,11 @@ class MeasurementsOutput(TypedDict):
     errors: list[str] | None
     warnings: list[str] | None
     failed_measurements: list[str]
+    #: The LTspice build the log's first line names, as the decoder found it
+    #: (``simulator_build.log_banner_build``); a reader turns it into the
+    #: producer its entries are answered for
+    #: (``log_parser.answered_measurements``) and never passes it on.
+    printed_by: NotRequired[str]
 
 
 def measurement_failed(table: Mapping[str, Any], name: str, step: int | None = None) -> bool:

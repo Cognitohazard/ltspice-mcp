@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import copy
 import functools
 import inspect
@@ -38,6 +39,8 @@ from ltspice_mcp.api._primitives import (
 )
 from ltspice_mcp.errors import InvalidCursorError, PathSecurityError
 from ltspice_mcp.lib import experiment_store, parser_service, services
+from ltspice_mcp.lib.continuation import is_paging_argument
+from ltspice_mcp.lib.device_names import path_text
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.log_types import LogSectionName
@@ -45,7 +48,6 @@ from ltspice_mcp.lib.model_fields import (
     field_name,
     models_in,
 )
-from ltspice_mcp.lib.pathutil import relative_paths_from
 from ltspice_mcp.lib.raw_parser import OTHER_RAW_KINDS, OtherRawKind
 from ltspice_mcp.state import SessionState
 
@@ -121,6 +123,55 @@ def _validate(
         raise _validation_error(operation, exc, state) from None
 
 
+def _note_caller_request(model: type[BaseModel], arguments: Mapping[str, Any]) -> None:
+    """Give the operation's event the request as the caller wrote it.
+
+    Validated here, before the operation rewrites its arguments: the
+    automatic mode drops presentation controls the caller sent and submits
+    with ``execution.wait_s=0`` the caller did not, and the event names what
+    the caller set. Validated only when the event would be written; arguments
+    that do not validate leave the event's names null, as a refused tool call's
+    are, and the operation reports them itself.
+    """
+    from ltspice_mcp.lib.observability import events_enabled, note_request
+
+    if not events_enabled():
+        return
+    try:
+        request = model.model_validate(copy.deepcopy(dict(arguments)))
+    except Exception:
+        return
+    note_request(request)
+
+
+#: Set while an operation call runs, and while a method that is no operation
+#: of its own (``wait``) runs operations for its caller: an operation called
+#: inside it writes no event, so one call of the caller's is counted once.
+_INSIDE_OPERATION: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "api_inside_operation", default=False
+)
+
+
+@contextlib.contextmanager
+def _inside_operation() -> Iterator[None]:
+    token = _INSIDE_OPERATION.set(True)
+    try:
+        yield
+    finally:
+        _INSIDE_OPERATION.reset(token)
+
+
+def _counted_by_caller(method: Callable[_P, _R]) -> Callable[_P, _R]:
+    """Run ``method`` with the operations it calls writing no event."""
+
+    @functools.wraps(method)
+    def counted(*args: _P.args, **kwargs: _P.kwargs) -> _R:
+        with _inside_operation():
+            return method(*args, **kwargs)
+
+    return counted
+
+
 def _walk_fields(
     value: Any, path: tuple[str, ...] = (), holders: frozenset[int] = frozenset()
 ) -> Iterator[tuple[str, ...]]:
@@ -164,10 +215,6 @@ _DOOR_REMEDIES: dict[str, str] = {
 _DROPPED_CLASSES = frozenset({"budget", "dwell"})
 
 
-#: Field names that page a reply rather than say what to compute.
-_PAGING_NAMES = frozenset({"cursor", "continuation", "continue", "view_cursors"})
-
-
 def _control_class(path: tuple[str, ...]) -> str | None:
     """Which refusal class a field of an operation's model falls in, if any."""
     key = path[-1]
@@ -175,7 +222,7 @@ def _control_class(path: tuple[str, ...]) -> str | None:
         return "budget"
     if path == ("execution", "wait_s"):
         return "dwell"
-    if key in _PAGING_NAMES or key.endswith(("_cursor", "_cursors")):
+    if is_paging_argument(key):
         return "paging"
     return None
 
@@ -226,9 +273,9 @@ def _enforce_auto_door(arguments: Any, model: type[BaseModel]) -> list[str]:
             continue
         if kind in _DROPPED_CLASSES:
             _remove_field(arguments, path)
-            dropped.append(f"{'.'.join(path)}: {_DOOR_REMEDIES[kind]}")
+            dropped.append(f"{path_text(path)}: {_DOOR_REMEDIES[kind]}")
         else:
-            rejected.setdefault(kind, []).append(".".join(path))
+            rejected.setdefault(kind, []).append(path_text(path))
     if rejected:
         parts = [
             f"{', '.join(dict.fromkeys(fields))}: {_DOOR_REMEDIES[kind]}"
@@ -256,17 +303,6 @@ def _with_warnings(payload: dict[str, Any], warnings: list[str]) -> dict[str, An
         existing = payload.get("warnings")
         payload["warnings"] = [*existing, *warnings] if isinstance(existing, list) else warnings
     return payload
-
-
-async def _anchored_on(base: Path, coroutine: Coroutine[Any, Any, _T]) -> _T:
-    """Run one call with its relative path arguments taken from ``base``.
-
-    Applied inside the coroutine for the same reason the automatic-mode flag is:
-    the path chokepoint reads the base from the session loop's task context, and
-    a set on the calling thread would never reach it.
-    """
-    with relative_paths_from(base):
-        return await coroutine
 
 
 async def _through_auto_door(coroutine: Coroutine[Any, Any, _T], tool: str) -> _T:
@@ -690,6 +726,11 @@ _P = ParamSpec("_P")
 _R = TypeVar("_R")
 
 
+#: The options of the API's own that an operation takes beside the tool's
+#: arguments, with their defaults: an operation's event names those a call set.
+_API_CONTROLS: dict[str, bool] = {"raw_page": False, "wait": True, "detach": False}
+
+
 class _CataloguedMethod:
     # A method whose docstring and signature come from the catalogue on first
     # read. Rendering them needs the tool models (0.7 s and the mcp import the
@@ -713,15 +754,67 @@ class _CataloguedMethod:
         (``lib/reply_fields.py``), so a script and a tool call read one shape.
         This is the one place the API applies the rule; a raw page already is a
         sent reply."""
-        if kwargs.get("raw_page"):
-            return self.__func__(*args, **kwargs)
+        from ltspice_mcp.lib.observability import capturing_request, emit_api_event
         from ltspice_mcp.tools._base import as_sent  # an operation call pays the import anyway
 
+        if _INSIDE_OPERATION.get():
+            # Its own holder, which nothing reads: the request this call
+            # validates must not fill the record of the call it runs inside.
+            with capturing_request():
+                return self._run(as_sent, args, kwargs)
+        with _inside_operation():
+            return self._counted(as_sent, emit_api_event, capturing_request, args, kwargs)
+
+    def _run(self, as_sent: Callable[..., Any], args: Any, kwargs: dict[str, Any]) -> Any:
+        if kwargs.get("raw_page"):
+            return self.__func__(*args, **kwargs)
         try:
             return as_sent(self.__func__(*args, **kwargs), self.__name__)
         except ApiCallError as exc:
             exc.payload = as_sent(exc.payload, self.__name__)
             raise
+
+    def _counted(
+        self,
+        as_sent: Callable[..., Any],
+        emit_api_event: Callable[..., None],
+        capturing_request: Callable[[], contextlib.AbstractContextManager[list[BaseModel]]],
+        args: Any,
+        kwargs: dict[str, Any],
+    ) -> Any:
+        """Run the operation and write its one event (``lib/observability``)."""
+        started = time.monotonic()
+        outcome: Literal["ok", "error", "cancelled", "raised"] = "raised"
+        code: str | None = None
+        with capturing_request() as request:
+            try:
+                result = self._run(as_sent, args, kwargs)
+            except ApiCallError as exc:
+                outcome, code = "error", exc.code
+                raise
+            except ApiValidationError:
+                # What a tool call answers ``invalid_arguments`` for.
+                outcome, code = "error", "invalid_arguments"
+                raise
+            except KeyboardInterrupt:
+                outcome = "cancelled"
+                raise
+            else:
+                outcome = "ok"
+                return result
+            finally:
+                emit_api_event(
+                    self.__name__,
+                    time.monotonic() - started,
+                    outcome,
+                    code,
+                    request[0] if request else None,
+                    (
+                        name
+                        for name, default in _API_CONTROLS.items()
+                        if isinstance(kwargs.get(name), bool) and kwargs[name] is not default
+                    ),
+                )
 
     @property
     def __signature__(self) -> inspect.Signature:  # type: ignore[override]
@@ -825,31 +918,27 @@ class ApiMethodsMixin(ABC):
         cancel_on_interrupt: bool = False,
         preserve_interrupt: bool = False,
     ) -> _T:
-        """Marshal one call with relative paths anchored on the working dir.
+        """Marshal one call into the session.
 
-        The Python API lets the caller name a working directory that is not their
-        cwd, so ``Api(working_dir=D)`` plus a bare ``"opamp2.asc"`` — the idiom
-        the contract documents — has to look in ``D``. Anchoring here rather
-        than per path field means every op, and every path field a future op
-        adds, inherits it: they all pass through this one call.
+        A relative path argument is taken where a tool call takes it
+        (``SessionState.relative_base``): ``ServerConfig`` anchored the working
+        directory and the sandbox when the session opened, so
+        ``Api(working_dir=D)`` plus a bare ``"opamp2.asc"`` names
+        ``D/opamp2.asc`` without a rule of the API's own.
 
         A refused path gets the same guidance a tool call's does, as a note
         on the exception: a script, or a ``run_code`` snippet, sees it in the
         traceback, and the exception's type and message stay what they were.
-        The note is written under the same anchor as the call, so the folder
-        it says relative paths are taken from is the one this door used.
         """
-        base = self._state.config.working_dir
         try:
             return self._call(
-                _anchored_on(base, coroutine),
+                coroutine,
                 cancelable=cancelable,
                 cancel_on_interrupt=cancel_on_interrupt,
                 preserve_interrupt=preserve_interrupt,
             )
         except PathSecurityError as exc:
-            with relative_paths_from(base):
-                exc.add_note(self._state.sandbox_guidance())
+            exc.add_note(self._state.sandbox_guidance())
             raise
 
     def _dispatch(
@@ -870,6 +959,7 @@ class ApiMethodsMixin(ABC):
         is also what admits the wire-only controls the automatic mode rejects.
         """
         self._check_process_and_thread()
+        _note_caller_request(model, arguments)
         dropped = [] if raw_page else _enforce_auto_door(arguments, model)
         request = _validate(name, model, arguments, self._state)
         coroutine = (
@@ -899,6 +989,7 @@ class ApiMethodsMixin(ABC):
             raise ApiValidationError("wait must be a bool")
         if not isinstance(detach, bool):
             raise ApiValidationError("detach must be a bool")
+        _note_caller_request(experiments.RunExperimentsInput, arguments)
         if detach:
             if wait:
                 raise ApiValidationError(
@@ -1022,6 +1113,7 @@ class ApiMethodsMixin(ABC):
                 raise ApiValidationError("detach=True cannot be combined with raw_page=True.")
             if not self._state.config.persist_jobs:
                 raise ApiValidationError("detach=True needs persisted job records (persist_jobs).")
+            _note_caller_request(jobs.JobsInput, arguments)
             return self._resume_detached(arguments)
         return self._dispatch(
             "jobs",
@@ -1100,6 +1192,7 @@ class ApiMethodsMixin(ABC):
                 raise ApiCallError(data["error"]["message"], payload=data) from exc
         return _with_warnings(handoff.receipt, dropped)
 
+    @_counted_by_caller
     def wait(
         self,
         job_id: str,

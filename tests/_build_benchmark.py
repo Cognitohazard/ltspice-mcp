@@ -41,6 +41,7 @@ from ltspice_mcp.lib.sheet_findings import findings
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.schematic_edit import EditSchematicInput, handle_edit_schematic
 from tests._schematic_fixtures import TESTS
+from tests.conftest import LTSPICE_READER
 
 CORPUS = TESTS / "fixtures" / "build_benchmark"
 
@@ -101,7 +102,7 @@ def read_circuit(path: Path) -> Circuit:
         if line.startswith("* names:"):
             names = tuple(line.removeprefix("* names:").split())
     cards = []
-    for component in parse_netlist_graph(path).components:
+    for component in parse_netlist_graph(path, reader=LTSPICE_READER).components:
         tokens = lines[component.line - 1].split()
         assert canon_ref(tokens[0]) == canon_ref(component.ref), (path.name, component)
         cards.append(

@@ -17,17 +17,25 @@ from typing import Any, Literal, get_args
 
 from ltspice_mcp.errors import MultiplierRewriteStop, NetlistError
 from ltspice_mcp.lib import NETLIST_SUFFIX_TEXT, NETLIST_SUFFIXES
-from ltspice_mcp.lib.deck_nodes import GROUND, global_names, node_kind
+from ltspice_mcp.lib.deck_nodes import GROUND, node_kind
+from ltspice_mcp.lib.deck_nodes import unestablished_reason as _unestablished_node
 from ltspice_mcp.lib.deck_staging import (
     DEFAULT_INCLUDE_DEPTH,
     card_sections,
+    in_other_section,
     resolve_existing,
     resolve_reference,
     scan_include_references,
     unquote,
     unreadable_references,
 )
-from ltspice_mcp.lib.device_names import raw_name
+from ltspice_mcp.lib.device_names import (
+    Naming,
+    device_address,
+    naming_for,
+    path_text,
+    spelled_name,
+)
 from ltspice_mcp.lib.encoding import decode_spice_bytes
 from ltspice_mcp.lib.hierarchy_expr import (
     NGSPICE_M_EXEMPT,
@@ -40,17 +48,28 @@ from ltspice_mcp.lib.hierarchy_expr import (
 )
 from ltspice_mcp.lib.ngspice_compat import drops_lib_sections, multiplies_m
 from ltspice_mcp.lib.pathutil import resolve_safe_path, with_roots
+from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.spice_lex import (
+    Definition,
+    DefinitionRule,
     SpiceCard,
     SpiceLexError,
-    Token,
     TokenKind,
+    definition_rule,
     directive_head,
     find_matching_ends,
+    is_orphan_continuation,
     lex_deck,
-    tokenize_body,
+    settle_definitions,
 )
-from ltspice_mcp.lib.spice_lex_views import InstanceLine, ModelCard, SubcktCard
+from ltspice_mcp.lib.spice_lex_views import (
+    InstanceLine,
+    ModelCard,
+    SubcktCard,
+    card_tokens,
+    global_names,
+    unreadable_card,
+)
 
 MAX_BYTES = 16 * 1024 * 1024
 MAX_CARDS = 100_000
@@ -86,24 +105,102 @@ def established_modes() -> str:
 
 @dataclass(frozen=True)
 class SemanticProfile:
+    """Who reads the deck a hierarchy is resolved for: the simulator family,
+    ngspice's compatibility mode, the spelling of names inside subcircuit
+    instances (``naming``, which ``device_names.naming_for`` derives from the
+    reader's ``Producer``), and which definition of a subcircuit defined
+    twice it keeps (``definitions``, which ``spice_lex.definition_rule``
+    derives from the same ``Producer``). Built for a run or a query by
+    :meth:`of`; built with a family alone, it reads as that family's reader
+    of no known build does."""
+
     simulator: Family
     ngbehavior: str | None = None
     evaluation_context: str = "initial_deck"
-    #: The LTspice is XVII (or IV), which spells a node or device inside a
-    #: subcircuit without each instance's X, as its raw names it.
-    xvii_names: bool = False
+    naming: Naming | None = None
+    definitions: DefinitionRule | None = None
 
     def __post_init__(self) -> None:
         if self.simulator not in SUPPORTED_FAMILIES:
             raise NetlistError("hierarchy supports ltspice or ngspice")
         if self.simulator == "ltspice" and self.ngbehavior is not None:
             raise NetlistError("ngbehavior is only valid for ngspice")
-        if self.simulator != "ltspice" and self.xvii_names:
-            raise NetlistError("xvii_names is only valid for ltspice")
         if self.simulator == "ngspice" and self.ngbehavior is None:
             raise NetlistError("ngspice hierarchy requires its effective ngbehavior")
         if self.evaluation_context != "initial_deck":
             raise NetlistError("hierarchy supports only initial_deck evaluation context")
+        if self.naming is None:
+            object.__setattr__(self, "naming", naming_for(Producer(self.simulator, None, None)))
+        elif self.naming.family != self.simulator:
+            raise NetlistError("a profile's naming is its own simulator's")
+        if self.definitions is None:
+            object.__setattr__(
+                self, "definitions", definition_rule(Producer(self.simulator, None, None))
+            )
+
+    @classmethod
+    def of(
+        cls,
+        producer: Producer,
+        ngbehavior: str | None,
+        *,
+        definitions_of: Producer | None = None,
+    ) -> SemanticProfile:
+        """The profile of a deck ``producer`` reads, in ngspice's
+        ``ngbehavior`` mode (None for any other simulator): the one
+        constructor a run or a query builds its profile with.
+
+        ``definitions_of`` is the simulator that will read the deck when a
+        family with no profile of its own (QSPICE, Xyce) is read through
+        ``producer``'s: which definition of a subcircuit defined twice is in
+        force is that simulator's answer, never ``producer``'s."""
+        if producer.family not in SUPPORTED_FAMILIES:
+            raise NetlistError("hierarchy supports ltspice or ngspice")
+        family: Family = "ngspice" if producer.family == "ngspice" else "ltspice"
+        return cls(
+            family,
+            ngbehavior if family == "ngspice" else None,
+            naming=naming_for(producer),
+            definitions=definition_rule(definitions_of or producer),
+        )
+
+    @property
+    def subckt_rule(self) -> DefinitionRule:
+        """``definitions``, set by the time a profile exists."""
+        assert self.definitions is not None
+        return self.definitions
+
+    @property
+    def names(self) -> Naming:
+        """``naming``, set by the time a profile exists."""
+        assert self.naming is not None
+        return self.naming
+
+    @property
+    def xvii_names(self) -> bool:
+        """The LTspice is XVII (or IV), which spells a node or device inside a
+        subcircuit without each instance's X, as its raw names it."""
+        return self.names.xvii
+
+    def record(self) -> dict[str, Any]:
+        """The profile as a cursor binding and a native record's digest hold
+        it: what decides the answer, and nothing that changes when it does not
+        (the note on an unrecorded build goes once a run names the build)."""
+        return {
+            "simulator": self.simulator,
+            "ngbehavior": self.ngbehavior,
+            "evaluation_context": self.evaluation_context,
+            "xvii_names": self.xvii_names,
+        }
+
+    def reply(self) -> dict[str, Any]:
+        """The profile as a reply carries it: :meth:`record`, and which
+        recorded build the names are spelled as, and why when it is another's."""
+        return {
+            **self.record(),
+            "names_read_as": self.names.read_as,
+            "names_note": self.names.note,
+        }
 
     @property
     def established(self) -> bool:
@@ -242,7 +339,7 @@ class Hierarchy:
 
     def binding(self) -> dict[str, Any]:
         return {
-            "profile": asdict(self.profile),
+            "profile": self.profile.record(),
             "inputs": [
                 {
                     "path": str(f.path),
@@ -286,47 +383,22 @@ class _Definition:
     closer: Source
 
 
-def _unreadable(card: SpiceCard, error: SpiceLexError, where: object = None) -> NetlistError:
-    """The refusal of a card the hierarchy needs but cannot split into its
-    parts (``spice_lex.unreadable_cards``), with its line and the fix."""
-    at = f"{where}:{card.line_start}" if where is not None else f"line {card.line_start}"
-    fix = f" {error.suggestion[:1].upper()}{error.suggestion[1:]}." if error.suggestion else ""
-    return NetlistError(f"cannot split the card at {at} into its parts: {error.message}.{fix}")
-
-
 def _refuse_unreadable_references(cards: list[SpiceCard], path: Path) -> None:
     """Refuse an include or library card that cannot be split into parts,
     before the include and section readers raise on it: which file or
     section it opens is not known."""
     for card, error in unreadable_references(cards):
-        raise _unreadable(card, error, path)
-
-
-def _tokens(card: SpiceCard, where: str | None = None) -> list[Token]:
-    """A card's parts, or its refusal by ``where`` (its file) and line."""
-    try:
-        tokens = tokenize_body(card.body)
-    except SpiceLexError as exc:
-        raise _unreadable(card, exc, where) from exc
-    return [t for t in tokens if t.kind != TokenKind.COMMENT_TRAIL]
+        raise unreadable_card(card, error, path)
 
 
 def _assignments(
     card: SpiceCard, *, only: bool = False, where: str | None = None
 ) -> dict[str, str]:
     result: dict[str, str] = {}
-    tokens = _tokens(card, where)[1:]
+    tokens = card_tokens(card, where)[1:]
     if card.kind == "model":
-        try:
-            tokens = [
-                inner
-                for token in tokens
-                for inner in (
-                    tokenize_body(token.text[1:-1]) if token.kind == TokenKind.PARENED else [token]
-                )
-            ]
-        except SpiceLexError as exc:  # inside its parameter list: D(is={1e-14)
-            raise _unreadable(card, exc, where) from exc
+        # Its parameter list's own parts, as the model view reads them.
+        tokens = ModelCard.from_card(card).param_tokens()
     for token in tokens:
         if token.kind == TokenKind.KEY_VALUE:
             assert token.key is not None and token.value is not None
@@ -399,7 +471,7 @@ def walk_active(
             # walk does not need (``.tran 0 1m )``) cannot stop it.
             head = directive_head(card)
             if head == ".lib" and id(card) not in refs:
-                tokens = _tokens(card, str(path))
+                tokens = card_tokens(card, path)
                 if len(tokens) != 2 or opened is not None:
                     raise NetlistError(f"malformed library section at {path}:{card.line_start}")
                 opened = unquote(tokens[1].text).casefold()
@@ -408,7 +480,7 @@ def walk_active(
                 declared.add(opened)
                 continue
             if head == ".endl":
-                tokens = _tokens(card, str(path))
+                tokens = card_tokens(card, path)
                 if (
                     opened is None
                     or len(tokens) > 2
@@ -417,16 +489,17 @@ def walk_active(
                     raise NetlistError(f"malformed .endl at {path}:{card.line_start}")
                 opened = None
                 continue
-            active = (
-                owner is None
-                if section is None
-                else owner is not None and owner.casefold() == section.casefold()
-            )
-            if not active:
+            if in_other_section(owner, section):
                 continue
-            if card.kind == "comment" and any(
-                line.lstrip().startswith("+") for line in card.raw_lines
-            ):
+            # Hierarchy discovery also leaves out the cards outside every
+            # section of a file pulled in for one, and the cards inside the
+            # sections of a file pulled in for none. No recording decides
+            # either, and the other readers of a library read them
+            # (``deck_staging.in_other_section``; pinned in
+            # tests/test_library_section_read.py).
+            if (owner is None) != (section is None):
+                continue
+            if is_orphan_continuation(card):
                 raise NetlistError(f"orphan continuation at {path}:{card.line_start}")
             if card.kind == "end":
                 break
@@ -640,14 +713,14 @@ def _card_multiplier(
             None, reason=f"whether ngspice appends m to {kind} cards is not measured"
         )
     return card_copies(
-        own, passed, multiply=multiply, where=".".join(path), passed_from=".".join(scope)
+        own, passed, multiply=multiply, where=path_text(path), passed_from=path_text(scope)
     )
 
 
 def _shape(card: SpiceCard, where: str | None = None) -> tuple[InstanceLine, bool]:
     _assignments(card, where=where)  # first, so a card it cannot split is refused by its line
     view = InstanceLine.from_card(card)
-    tokens = _tokens(card)[1:]
+    tokens = card_tokens(card)[1:]
     if view.source is not None:
         # A V or I source: the source rule reads every word after its nodes as
         # its value or one of its own parameters, a PWL's ``TIME_SCALE_FACTOR=``
@@ -683,20 +756,52 @@ def _address(
 ) -> tuple[str | None, str | None, str | None]:
     if kind not in "RM" or not all(len(p) > 1 and _SAFE_NAME.fullmatch(p) for p in path):
         return None, None, "backend address unavailable for this element or spelling"
+    device = device_address(path, profile.names)
     if profile.simulator == "ngspice":
-        device = ".".join(p.lower() for p in path)
-        if len(path) > 1:
-            device = kind.lower() + "." + device
         parameter = "gm" if kind == "M" else "i"
         return device, f".save @{device}[{parameter}]", None
-    # The operating_point selector reads the device by its path on either build.
-    device = ":".join(p.lower() for p in path)
     if kind == "M":
         # No directive: the server asks LTspice 24 and later for the device
         # table on every .op run, and XVII prints it unasked and ends the run
         # on .options logopinfo (recorded: log/subckt_names*).
         return device, None, None
-    return device, f".save I({raw_name(path[:-1], path[-1], xvii=profile.xvii_names)})", None
+    return device, f".save I({spelled_name(path[:-1], path[-1], profile.names)})", None
+
+
+def _definitions_read(
+    occurrences: Sequence[_Occurrence], profile: SemanticProfile, root: Path
+) -> tuple[_Occurrence, ...]:
+    """The occurrences ``profile``'s reader reads: of a top-level subcircuit
+    name defined more than once, in the deck or in the files it includes,
+    only the definition the reader keeps in force
+    (``spice_lex.settle_definitions``, told the walk's reading order);
+    refused, with the reason and the fix, when it keeps none. A definition
+    inside a subcircuit is refused by discovery whatever its name."""
+    cards = [o.card for o in occurrences]
+    openers = [
+        i
+        for i, item in enumerate(occurrences)
+        if item.card.kind == "subckt" and item.card.name and item.source.definition is None
+    ]
+    found = [
+        Definition(
+            (),
+            cards[i].name or "",
+            occurrences[i].source.path,
+            occurrences[i].source.path == str(root),
+        )
+        for i in openers
+    ]
+    aside: set[int] = set()
+    for answer in settle_definitions(found, profile.subckt_rule):
+        if answer.kept is None:
+            raise NetlistError(f"duplicate active subcircuit {answer.name}: {answer.reason}")
+        for member in answer.members:
+            if member != answer.kept:
+                i = openers[member]
+                end = find_matching_ends(cards, i)
+                aside.update(range(i, len(cards) if end is None else end + 1))
+    return tuple(item for i, item in enumerate(occurrences) if i not in aside)
 
 
 def resolve_hierarchy(
@@ -718,7 +823,11 @@ def resolve_hierarchy(
 
     library_bindings: list[LibraryBinding] = []
     include_bindings: list[IncludeBinding] = []
-    occurrences = walk_active(root, active_file, profile, library_bindings, include_bindings)
+    occurrences = _definitions_read(
+        walk_active(root, active_file, profile, library_bindings, include_bindings),
+        profile,
+        root,
+    )
     definitions: dict[str, _Definition] = {}
     models: dict[str | None, dict[str, ModelDefinition]] = {None: {}}
     top: list[_Occurrence] = []
@@ -731,7 +840,7 @@ def resolve_hierarchy(
             _assignments(card, where=item.source.path)
             view = SubcktCard.from_card(card)
             parameters_started = False
-            for token in _tokens(card)[2:]:
+            for token in card_tokens(card)[2:]:
                 if token.kind == TokenKind.KEY_VALUE or token.text.casefold() == "params:":
                     parameters_started = True
                 elif parameters_started or token.kind != TokenKind.BARE:
@@ -740,7 +849,7 @@ def resolve_hierarchy(
             if end is None:
                 raise NetlistError(f"unclosed subcircuit {view.name}")
             closer = cards[end]
-            if len(_tokens(closer, occurrences[end].source.path)) > 2:
+            if len(card_tokens(closer, occurrences[end].source.path)) > 2:
                 raise NetlistError(f"malformed .ends for {view.name}")
             if closer.name and closer.name.casefold() != view.name.casefold():
                 raise NetlistError(f"mismatched .ends for {view.name}")
@@ -790,7 +899,7 @@ def resolve_hierarchy(
             try:
                 listed = global_names(item.card)
             except SpiceLexError as exc:
-                raise _unreadable(item.card, exc, item.source.path) from exc
+                raise unreadable_card(item.card, exc, item.source.path) from exc
             for text in listed:
                 globals_.setdefault(text.casefold(), text)
         if head in {".option", ".options"}:
@@ -812,24 +921,15 @@ def resolve_hierarchy(
 
     def node(name: str, scope: tuple[str, ...], ports: Mapping[str, Node]) -> Node:
         folded = name.casefold()
-        # Ground is established for native and hsa mode only; kiltpsa's
-        # reading differs across ngspice versions, and no other mode's is
-        # recorded, so those refuse rather than guess.
-        if (
-            folded == "gnd"
-            and profile.simulator == "ngspice"
-            and profile.ngbehavior not in ("", "hsa")
-        ):
-            reading = (
-                "version-dependent"
-                if profile.ngbehavior == "kiltpsa"
-                else "unrecorded reading of the"
-            )
-            raise NetlistError(
-                f"{reading} ground alias 'gnd' in {profile.ngbehavior} mode; "
-                "use explicit node 0 or inspect a supported native/hsa deck"
-            )
-        kind = node_kind(name, ports=ports, global_names=globals_, simulator=profile.simulator)
+        kind = node_kind(
+            name,
+            ports=ports,
+            global_names=globals_,
+            simulator=profile.simulator,
+            ngbehavior=profile.ngbehavior,
+        )
+        if kind == "unestablished":
+            raise NetlistError(_unestablished_node(name, profile.ngbehavior))
         if kind == "port":
             return ports[folded]
         if kind == "ground":
@@ -842,10 +942,7 @@ def resolve_hierarchy(
         trace = None
         reason = None
         if all(_SAFE_NAME.fullmatch(p) for p in scope) and _SAFE_NODE.fullmatch(name):
-            if profile.simulator == "ltspice":
-                trace = f"V({raw_name(scope, name, xvii=profile.xvii_names)})"
-            else:
-                trace = "V(" + ".".join((*[p.lower() for p in scope], name.lower())) + ")"
+            trace = f"V({spelled_name(scope, name, profile.names)})"
         else:
             reason = "backend node spelling unavailable"
         resolved = Node(scope, name, trace, reason)
@@ -928,7 +1025,7 @@ def resolve_hierarchy(
                     overrides["m"] = multiplier
                     if not rewrites and not defaults and not local:
                         raise MultiplierRewriteStop(
-                            f"ngspice stops on this deck: {'.'.join(path)} calls "
+                            f"ngspice stops on this deck: {path_text(path)} calls "
                             f"{child.view.name}, which takes no parameters, with the m ngspice "
                             f"appends to every card of {enclosing} ('Mismatch: 0 formal but 1 "
                             f"actual params'). To pass that m on to {child.view.name}'s cards, "

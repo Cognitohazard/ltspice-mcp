@@ -22,9 +22,12 @@ from spicelib.sim.sim_runner import SimRunner  # noqa: TID251 - this module owns
 from ltspice_mcp.lib import RUN_DECK_SUFFIXES
 from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.deck_staging import (
+    card_sections,
     closure_depth,
+    in_other_section,
     resolve_reference,
     scan_include_references,
+    unreadable_references,
 )
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.encoding import (
@@ -45,16 +48,16 @@ from ltspice_mcp.lib.pdk_native import LAUNCH_POLICY, NativeLaunchPolicy
 from ltspice_mcp.lib.proc_kill import kill_simulator_by_token, simulator_executable_names
 from ltspice_mcp.lib.raw_parser import other_raws
 from ltspice_mcp.lib.simulator import NGSPICE_NO_USER_INIT, is_ngspice, run_ngbehavior
-from ltspice_mcp.lib.simulator_build import executable_path, ltspice_before_24, reported_build
+from ltspice_mcp.lib.simulator_build import executable_path, reported_build, which_ltspice
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
     SpiceLexError,
     control_blocks,
+    directive_head,
     emit,
     lex_deck,
     lex_for_edit,
     line_break,
-    tokenize_body,
 )
 from ltspice_mcp.lib.spice_lex_ops import inject_card_before_end
 from ltspice_mcp.lib.spice_validator import ANALYSIS_KINDS
@@ -131,6 +134,12 @@ class RunOutcome(NamedTuple):
     simulator_version: str | None = None
     # The kinds of other raw the run wrote beside its raw (``other_raws``).
     other_raws: tuple[str, ...] = ()
+    # The log facts the completion read for a run that did not produce, and
+    # why they could not be read; what the simulator said about the run is
+    # classified from these (``log_conditions``). Both None when the
+    # completion read no log, as for a run that produced.
+    logs: DecodedLog | None = None
+    logs_error: str | None = None
 
 
 _REQUESTED_ANALYSES: frozenset[str] = frozenset(f".{kind}" for kind in ANALYSIS_KINDS) | {
@@ -157,7 +166,15 @@ class DeckRequirements:
 
 #: What one file of a deck asks for, card by card: an analysis directive's head,
 #: ``.save``, a ``.control`` block, or another file it pulls in (resolved).
-_DeckItem = tuple[str, str | Path]
+class _DeckItem(NamedTuple):
+    """One thing a file asks for: an analysis, a ``.save``, a ``.control``
+    block or a file to pull in, with the library section its card sits in
+    (``card_sections``) and, for a file to pull in, the section it selects."""
+
+    kind: str
+    value: str | Path
+    owner: str | None = None
+    selects: str | None = None
 
 
 def _deck_items(path: Path, *, root: bool) -> tuple[_DeckItem, ...]:
@@ -165,30 +182,32 @@ def _deck_items(path: Path, *, root: bool) -> tuple[_DeckItem, ...]:
     ``root`` (its first line its title), else a file it pulls in. Raises
     ``OSError`` when the file cannot be read."""
     cards = lex_deck(read_spice_text(path), title=root).cards
+    depth = closure_depth(0 if root else 1)
     try:
         references = {
             id(reference.card): reference
-            for reference in scan_include_references(
-                cards, path, depth=closure_depth(0 if root else 1)
-            )
+            for reference in scan_include_references(cards, path, depth=depth)
         }
+        sections = card_sections(cards, path, depth)
     except SpiceLexError:
-        references = {}  # a malformed directive: the simulator's to report
+        # A malformed include or library card: the simulator's to report.
+        references = {}
+        sections = [None] * len(cards)
     items: list[_DeckItem] = []
-    for card in cards:
+    for card, owner in zip(cards, sections, strict=True):
         if card.kind == "control":
-            items.append(("control", ""))
+            items.append(_DeckItem("control", "", owner))
             continue
-        parts = card.body.split(None, 1)
-        if card.kind != "directive" or not parts:
+        if card.kind != "directive":
             continue
-        head = parts[0].lower()
+        head = directive_head(card)
         if head in _REQUESTED_ANALYSES:
-            items.append(("analysis", head))
+            items.append(_DeckItem("analysis", head, owner))
         elif head == ".save":
-            items.append(("save", ""))
+            items.append(_DeckItem("save", "", owner))
         elif (reference := references.get(id(card))) is not None:
-            items.append(("include", resolve_reference(path.parent, reference.raw_path)))
+            target = resolve_reference(path.parent, reference.raw_path)
+            items.append(_DeckItem("include", target, owner, reference.section))
     return tuple(items)
 
 
@@ -204,16 +223,18 @@ def deck_requirements(netlist: Path | None) -> DeckRequirements:
     directive continued on a ``+`` line is one card, and neither the deck's
     title nor a card after an ``.END`` counts. The files it follows are the
     ones staging reads the deck to pull in (``scan_include_references``), so
-    a library's own ``.lib section`` line is a section, not a file.
+    a library's own ``.lib section`` line is a section, not a file; and a
+    ``.lib file section`` reads no other section's cards
+    (``deck_staging.in_other_section``).
     """
     if netlist is None:
         return DeckRequirements()
     analyses: list[str] = []
     has_save = False
     has_control = False
-    seen: set[Path] = set()
+    seen: set[tuple[Path, str | None]] = set()
 
-    def scan(path: Path, depth: int) -> None:
+    def scan(path: Path, depth: int, selected: str | None) -> None:
         nonlocal has_save, has_control
         if depth > _MAX_INCLUDE_DEPTH:
             return
@@ -221,9 +242,9 @@ def deck_requirements(netlist: Path | None) -> DeckRequirements:
             key = path.resolve()
         except OSError:
             return
-        if key in seen:
+        if (key, selected) in seen:
             return
-        seen.add(key)
+        seen.add((key, selected))
         try:
             items = (
                 _deck_items(path, root=True)
@@ -232,18 +253,20 @@ def deck_requirements(netlist: Path | None) -> DeckRequirements:
             )
         except OSError:
             return
-        for kind, value in items:
-            if kind == "control":
+        for item in items:
+            if in_other_section(item.owner, selected):
+                continue
+            if item.kind == "control":
                 has_control = True
-            elif kind == "save":
+            elif item.kind == "save":
                 has_save = True
-            elif kind == "analysis":
-                if value not in analyses:
-                    analyses.append(str(value))
+            elif item.kind == "analysis":
+                if item.value not in analyses:
+                    analyses.append(str(item.value))
             else:
-                scan(Path(value), depth + 1)
+                scan(Path(item.value), depth + 1, item.selects)
 
-    scan(netlist, 0)
+    scan(netlist, 0, None)
     return DeckRequirements(tuple(analyses), has_save, has_control)
 
 
@@ -303,16 +326,15 @@ def _deck_has_sectioned_lib(netlist: Path) -> bool:
         cards = lex_deck(read_spice_text(netlist)).cards
     except (OSError, ValueError, SpiceLexError):
         return False
-    for card in cards:
-        if card.kind != "directive":
-            continue
-        try:
-            tokens = tokenize_body(card.body)
-        except SpiceLexError:
-            continue
-        if len(tokens) >= 3 and tokens[0].text.lower() == ".lib":
-            return True
-    return False
+    # An include or library card that cannot be read names no section; the
+    # others are read as staging reads them, as the lint rule reads them.
+    unread = {id(card) for card, _error in unreadable_references(cards)}
+    readable = [card for card in cards if id(card) not in unread]
+    try:
+        references = scan_include_references(readable, netlist)
+    except SpiceLexError:
+        return False
+    return any(reference.section is not None for reference in references)
 
 
 def _is_ngspice_lib_section_failure(
@@ -557,7 +579,12 @@ def collect_run_outcome(
 
 
 def inject_logopinfo(
-    netlist_path: Path, simulator: type, job_id: str, *, reported: str | None = None
+    netlist_path: Path,
+    simulator: type,
+    job_id: str,
+    *,
+    reported: str | None = None,
+    observations: list[dict[str, Any]] | None = None,
 ) -> Path:
     """Return a runnable netlist with ``.options logopinfo`` added, for LTspice ``.op`` runs.
 
@@ -587,14 +614,21 @@ def inject_logopinfo(
     deck is rewritten in its own encoding, and the option's line ends with
     the deck's own line break, so every byte the option does not add is the
     caller's.
+
+    The option goes in only when the LTspice is shown to be 24 or later
+    (``simulator_build.which_ltspice``, which ``reported``, the build an
+    earlier run on this executable named, feeds). When which LTspice it is is
+    not established, an ``.op`` deck runs without it, since on an XVII the
+    option would end the run, and ``observations`` gets a
+    ``logopinfo_withheld`` entry saying so.
     """
     from spicelib.simulators.ltspice_simulator import LTspice
 
     if not (isinstance(simulator, type) and issubclass(simulator, LTspice)):
         return netlist_path
-    # ``reported`` is the build an earlier run on this executable named
-    # (``services.reported_build_of``): an LTspice before 24 under another name.
-    if ltspice_before_24(executable_path(simulator), reported):
+    program = executable_path(simulator)
+    generation = which_ltspice(program, reported)
+    if generation is not None and generation.before_24:
         return netlist_path
     if netlist_path.suffix.lower() not in RUN_DECK_SUFFIXES:
         return netlist_path
@@ -618,6 +652,10 @@ def inject_logopinfo(
     # Only a real .op analysis emits the operating-point block; .dc does not.
     if ".op" not in deck_requirements(netlist_path).analyses:
         return netlist_path
+    if generation is None:
+        if observations is not None:
+            observations.append(_logopinfo_withheld(program))
+        return netlist_path
 
     inject_card_before_end(deck.cards, ".options logopinfo\n")
     try:
@@ -633,6 +671,21 @@ def inject_logopinfo(
     except OSError:
         return netlist_path
     return run_path
+
+
+def _logopinfo_withheld(program: str | None) -> dict[str, Any]:
+    return {
+        "code": "logopinfo_withheld",
+        "kind": "execution",
+        "detail": (
+            f"Which LTspice {program or 'this'} is is not established: no run on it "
+            "has named its build yet, and neither its version resource nor its file "
+            "name shows it. LTspice XVII ends a run on '.options logopinfo', so the "
+            "option was not added, and the log may hold no per-device operating "
+            "point (gm, vth, vdsat) for this run. The run names the build, and a "
+            "later .op run on an LTspice 24 or later gets the option."
+        ),
+    }
 
 
 # A ``write``/``wrdata`` command starting a line ngspice reads, anywhere in the
@@ -1034,14 +1087,18 @@ class RunnerBase:
             task = threading.current_thread()
             exit_code = getattr(task, "retcode", None)
             simulator_exception = getattr(task, "exception_text", None)
+            # The cold path's log facts, kept on the outcome so what the
+            # simulator said is classified from the read that judged the run.
+            # A run that produced is read by its caller after the outcome lands
+            # (``ExperimentRunner``), outside the run's time limit.
+            logs: DecodedLog | None = None
+            logs_error: str | None = None
             try:
                 # Read here, before the callback: a stopped case's artifacts
                 # are removed once it lands. Both outcomes below carry it.
                 version = reported_build(log_file, raw_file)
                 outcome = _raw_completion_outcome(raw_name, log_name)
                 if outcome is None:
-                    logs = None
-                    logs_error = None
                     if completion_logs is None:
                         logs_error = "No completion log loader was supplied"
                     else:
@@ -1063,7 +1120,7 @@ class RunnerBase:
                         simulator_exception=simulator_exception,
                         logs=logs,
                         logs_error=logs_error,
-                    )
+                    )._replace(logs=logs, logs_error=logs_error)
                 outcome = outcome._replace(simulator_version=version)
                 if is_ngspice(simulator):
                     log_path = Path(log_name) if log_name not in ("", ".") else None
@@ -1080,7 +1137,7 @@ class RunnerBase:
                     logs_error=f"Outcome collection: {type(exc).__name__}: {exc}",
                     exit_code=exit_code,
                     simulator_exception=simulator_exception,
-                )._replace(simulator_version=version)
+                )._replace(simulator_version=version, logs=logs, logs_error=logs_error)
             self._bridge(callback, outcome, context=f"run {run_filename}")
 
         self._retire_finished_runners()

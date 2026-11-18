@@ -14,6 +14,7 @@ from ltspice_mcp.lib.spice_validator import (
     validate_netlist_dangling_nodes,
     validate_netlist_directive_refs,
 )
+from tests.conftest import LTSPICE_READER
 
 
 class TestVdbInMeas:
@@ -344,8 +345,8 @@ class TestControlBlockIsOpaque:
 
     def test_no_dangling_or_reference_issues_from_control_commands(self):
         cards = lex(self.DECK).cards
-        assert validate_netlist_dangling_nodes(cards) == []
-        assert validate_netlist_directive_refs(cards) == []
+        assert validate_netlist_dangling_nodes(cards, reader=LTSPICE_READER) == []
+        assert validate_netlist_directive_refs(cards, reader=LTSPICE_READER) == []
 
     def test_real_cards_outside_the_block_are_still_checked(self):
         text = self.DECK.replace("R1 in out 1k\n", "R1 in 1k\n")
@@ -361,7 +362,7 @@ class TestDanglingNodes:
     Legal in deliberately unterminated fragments, hence never an error."""
 
     def _dangling(self, text: str):
-        return validate_netlist_dangling_nodes(lex(text + "\n").cards)
+        return validate_netlist_dangling_nodes(lex(text + "\n").cards, reader=LTSPICE_READER)
 
     def test_meas_probe_node_not_flagged_dangling(self):
         # ``tp`` connects to only one element terminal, but a .meas probes it —
@@ -520,7 +521,7 @@ class TestDirectiveRefs:
     the known set means it can only fire on a genuinely-absent name."""
 
     def _refs(self, text: str):
-        return validate_netlist_directive_refs(lex(text + "\n").cards)
+        return validate_netlist_directive_refs(lex(text + "\n").cards, reader=LTSPICE_READER)
 
     def test_reserved_noise_traces_not_flagged(self):
         # V(onoise)/V(inoise) are simulator-synthesized .noise outputs, not nodes
@@ -612,7 +613,7 @@ class TestBiasTopology:
     degree-1 nodes belong to the dangling pass, not this one."""
 
     def _bias(self, text: str):
-        return validate_netlist_bias_topology(lex(text + "\n").cards)
+        return validate_netlist_bias_topology(lex(text + "\n").cards, reader=LTSPICE_READER)
 
     # --- must FIRE: true degeneracies ---
 

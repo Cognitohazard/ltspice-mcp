@@ -29,6 +29,7 @@ from pathlib import Path
 import psutil
 import pytest
 
+from ltspice_mcp.api import Api
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import experiment_store
 from ltspice_mcp.lib import filelock as filelock_module
@@ -404,6 +405,39 @@ class TestOwnerPidLiveness:
         loaded = experiment_store.load_job(job.job_id, work_dir)
         assert loaded is not None
         assert loaded.status == "interrupted"
+
+    @pytest.mark.parametrize("status", ["queued", "running"])
+    @pytest.mark.parametrize("reader", ["store", "jobs_status", "jobs_wait", "api_wait"])
+    def test_job_whose_owner_died_reads_interrupted_on_every_path(
+        self, work_dir: Path, status: str, reader: str
+    ):
+        """An owner can die before its "running" transition reaches the record
+        (it is persisted off the owner's event loop), leaving "queued" on disk.
+        That record has no owner either, and every reader must say so.
+
+        One reader per record: the first to load it writes the reconciliation
+        back, and a later reader would then only be reading that."""
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        proc.wait()  # pid is now dead
+        job = _running_experiment(work_dir, f"exp_dead_{status}", proc.pid)
+        job.status = status  # type: ignore[assignment]
+        experiment_store.save_job(job)
+
+        if reader == "store":
+            loaded = experiment_store.load_job(job.job_id, work_dir)
+            assert loaded is not None
+            read = loaded.status
+        else:
+            with Api(working_dir=work_dir, allowed_paths=[work_dir]) as api:
+                if reader == "jobs_status":
+                    read = api.jobs(action="status", job_id=job.job_id)["status"]
+                elif reader == "jobs_wait":
+                    read = api.jobs(action="wait", job_id=job.job_id, timeout_s=LIVENESS_S)[
+                        "status"
+                    ]
+                else:
+                    read = api.wait(job.job_id, timeout_s=LIVENESS_S)["status"]
+        assert read == "interrupted"
 
     @pytest.mark.asyncio
     async def test_shutdown_stops_only_own_jobs(self, work_dir: Path, live_peer_pid: int):

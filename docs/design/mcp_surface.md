@@ -109,6 +109,7 @@ Codes by kind of failure:
 | `path_denied` | a sandbox (`allowed_paths`) is set and the path resolves outside it, or the path cannot be resolved; a `hint` describes the change to make (for a sandbox, the config file and key that widen it), returned as an item's `error.hint`, a finding's `evidence.hint`, a failure or coverage row's `hint`, or the envelope's `hint` for a call-level refusal |
 | `invalid_arguments` | the call's arguments failed validation before the tool ran |
 | `netlist_invalid` | the netlist, or a component reference in it, could not be read |
+| `card_unreadable` | a card the call needs cannot be split into its parts (a quote, brace or parenthesis left open, or a closer with nothing open); the message names the file, the line, the card as written, what is wrong and the fix, whichever tool met it |
 | `symbol_unresolved` | the schematic opened, but a symbol it, or a hierarchical block's own sheet, places was not found |
 | `simulation_failed` | the simulator could not be started, or the run failed |
 | `result_unreadable` | a `.raw` or `.log` could not be read |
@@ -577,8 +578,9 @@ timestamp or a consent choice itself and does not answer LTspice's dialogs.
 Recoverable execution refuses includes read in place
 (`allow_live_includes`), `.control` blocks, external simulator modules
 (`.osdi`, `.pre_osdi`, `.load`, `.hdl`, `.verilog`, XSPICE `A` devices), file
-readers (`file=`, `sfile=`, `pwlfile=`, a source's `wavefile=` quoted or not,
-a PWL that names a file), directives
+readers the server does not stage (`sfile=`, `pwlfile=`, a PWL that names a
+file in its points, and every file reader on a simulator whose data cards it
+does not read), a data file read in place (`recovery_live_dependency`), directives
 outside the supported set, functions the server does not know, and random
 functions with no seed the server records, because a resumed case could not
 be relied on to run them the same way. Every card of the deck and of each file
@@ -745,6 +747,20 @@ always does, at its line, since which file it names is not known. With
 marks them `live: true`, and an observation reports the weaker provenance.
 Every live reference is listed.
 
+The data files a deck reads are staged with it: on LTspice a source's
+`wavefile=` (or `wavefile` with no `=`) and a PWL's `file=`, on ngspice a
+`filesource` model's `file=`. A relative path is read from the deck's folder,
+as both simulators read it, for a card in an included file too on ngspice; on
+LTspice such a card in an included file is refused (`data_file_unestablished`),
+since which folder LTspice reads it from is not recorded. The file is copied
+byte for byte and the staged card names the copy by its absolute path, which
+an LTspice run reports as not recorded (`data_path_unrecorded`). A data file
+named by an absolute path is read where it is: the manifest marks it `live:
+true` and an observation (`live_data_file`) reports it. A data file that does
+not exist (`data_file_missing`) or lies outside `[security] allowed_paths`
+(`data_file_outside_allowed_paths`) fails that circuit's submission before it
+runs, naming the card, its line and where the file was looked for.
+
 Provenance in the response is opt-in. Digests, staged paths, the full
 manifest, the linter version and the job's `simulator_executable` are returned
 only with `provenance: true` on `run_experiments`, or `include.provenance:
@@ -882,7 +898,8 @@ finish without it. Left false, it is not part of the request's identity.
 
 **RunRecord** is a schema fragment shared by `run_experiments` and `jobs`:
 `{case_id?, run_index?, circuit?, assignments?, status?, raw?, log?,
-other_raws?, simulator_version?, attempt?}`. Every key is optional because a
+other_raws?, simulator_version?, diagnostics?, diagnostics_coverage?,
+attempt?}`. Every key is optional because a
 run-field projection can remove any of them. `status` is the case's own
 status, which uses a separate vocabulary from the job's `status` on the
 receipt. It is `produced` once the simulator wrote its output, `failed`,
@@ -908,7 +925,18 @@ the run reported in its own output. It is read from the LTspice log banner
 (`ngspice-42, Creation Date: ...`), or the raw header's `Command:` when there
 is none of those (LTspice XVII, QSPICE). It is absent when the output names no
 build. It is recorded per case, so an executable replaced during a job shows
-as two builds. Runs are rendered as `items: [RunRecord]`, each row an object
+as two builds. `diagnostics` is what the simulator said about the run, read
+from its log and console capture when the run ended: one entry per condition
+and channel,
+`{code, count, first_text, channel, severity?}`, with `severity` only where
+the simulator wrote one, and lines the server does not recognise counted under
+`unclassified` (`docs/DESIGN.md`, "Diagnostics"). It does not change the
+case's `status`: a run the simulator warned about and finished is still
+`produced`. `diagnostics_coverage` is present only when that reading is not
+the run's own simulator and build: `build_unrecorded`, `producer_unknown`,
+`unverified`, `log_unread`, or `not_classified` for a case recorded before
+logs were classified. The `summary` recipe carries the same two fields for
+the same run. Runs are rendered as `items: [RunRecord]`, each row an object
 with the same keys at every budget.
 
 Under a `budget`, receipts keep the common envelope and step down the
@@ -1142,19 +1170,35 @@ changed RAW.
 When a run has one value per `.meas` (each case of a sweep with no `.step`
 does), its `measurements` row contains `measured: {name: value}`, the number a
 reduction or spec reads for that name, and `at: {name: point}` where the log
-printed a crossing or `AT` point with it. A name the log holds no number for
-has a null `measured` entry, not an absent one, and the row names it in one
-of three places, by why:
+printed an `AT` point beside a result that is its value. A name the log holds
+no number for has a null `measured` entry, not an absent one, and the row
+names it in one of five places, by why:
 
 - `failed_measurements: [name]`: LTspice printed it as failed at the step the
   row reads, as `Measurement "name" FAIL'ed` or as `failed` in that step's row
-  of a stepped table (LTspice 24 and later; XVII prints 0 there, which the
-  `measurement_zero_or_failed` observation names).
+  of a stepped table (LTspice 24 and later; XVII prints 0 there, see
+  `not_established`).
 - `unreadable: {name: {line, reason}}`: LTspice printed something other than
-  a number, such as a WHEN threshold written as a parameter, an expression or
-  (on LTspice 26) a braced expression. The entry gives the log line and what
+  a number where the result belongs. The entry gives the log line and what
   it printed; only that entry fails, and every other measurement of the log
-  reads.
+  reads. A WHEN threshold written as a parameter, an expression or (on
+  LTspice 26) a braced expression is not one: it is the level a WHEN with no
+  FIND searched for, and its result is the crossing.
+- `answer_unknown: {name: reason}`: which field of what the log printed holds
+  the result is not known, for a form or a simulator no recording shows, or
+  a deck card the printed form contradicts.
+- `not_established: {name: {steps, reason}}`: what the log printed at those
+  steps (from 0) is not established as the result. LTspice XVII prints `0` in
+  a stepped table both for a step whose measurement failed and for a crossing
+  at 0 s (recorded: `log/meas_when_step_fails`, `log/meas_when_step_forms`),
+  so a `0` in a stepped WHEN's table a build that may be XVII wrote is not
+  taken. No recording shows how XVII prints a failed step of any other
+  table, so a `0` there is not taken either, with a reason that says so.
+  LTspice 24 and later print `failed` for a failure, so their `0` is a
+  result. The summary's
+  entries and the Python API's `measurements()` carry the same
+  `not_established` with those steps null in `values`, and an `inspect`
+  measurements row carries its reason.
 - `not_finite: [name]`: LTspice printed a number that is not finite, such as
   a stepped FRA's gain margin of `infdB`, which the log decoder holds as null.
 
@@ -1171,10 +1215,36 @@ does not name it and the summary beside it does. `inspect` marks each value
 LTspice printed as failed with `failed: true` on its row, so a failed value
 reads apart from one that is null for another reason. Every measurement the
 log printed has an entry; a log whose measurements cannot all be given one
-fails the measurements read, naming the ones it lacks. The same `unreadable {line,
+fails the measurements read, naming the ones it lacks.
+
+Which field of a printed measurement holds its result is decided once, by
+`log_parser.measurement_answer`, from the printed form, the producer and
+build that wrote the log, and the run's deck card where it is known; every
+reply reads it from there. LTspice 26 and XVII (recorded) print a WHEN with
+no FIND, unstepped, as `name: expr=level AT point`, and its result is the
+point; a FIND, a DERIV ... AT and a FIND ... WHEN print the result after `=`
+and their point after a lowercase `at`; a stepped table prints each step's
+result in its first column, a WHEN's crossing included. The measurements
+recipe aggregates the field so named (`aggregated_field`). Each entry of the
+summary's `measurements`, the Python API's `measurements()` and each row of
+`inspect(kind="results", view="measurements")` names it in `answer` (`value`
+or `at`), or says why it is not known in `answer_unknown`, and then the recipe
+gives that name no number and no `aggregated_field`. A bare path is read
+with the build its log's first line names (LTspice 24 and later open a log
+with a banner); the summary also reads the build a raw's `Command:` names. A
+log that names no build, as XVII's does not, is read with every recorded
+LTspice build's rules, which agree on every recorded form, and may be XVII's,
+so a `0` in its stepped tables is `not_established`. A DERIV ... WHEN prints its derivative after `=` and its point
+after a lowercase `at`, as a DERIV ... AT does (recorded:
+`log/meas_deriv_when`), so its result is its value with the deck known or
+not. The same `unreadable {line,
 reason}` is on the entry in the summary's `measurements`, in
 `inspect(kind="results", view="measurements")` rows and in the Python API's
-`measurements`. The default row omits the per-name `stats` block;
+`measurements`, where it says the entry's `values` were printed as other than
+a number. An entry whose `answer` is `at` (a WHEN whose threshold is written
+as a parameter or an expression) carries it beside a crossing that reads, so
+the recipe's row, which names why a result is null, does not list it
+(`log_parser.result_unreadable`). The default row omits the per-name `stats` block;
 `include.fields=["value"]` returns it, and reductions and specs read it either
 way. A stepped run's row has `stats`, with `failed_measurements` and
 `unreadable` over all its steps.
@@ -1195,7 +1265,8 @@ continuation replays them.
   `include.fields` the same way, and `run_fields` on `run_experiments` and
   `jobs(runs)` follows the same rules over a run row's keys (`case_id`,
   `run_index`, `circuit`, `assignments`, `native_statistics`, `status`,
-  `raw`, `log`, `other_raws`, `simulator_version`, `attempt`), with no bare
+  `raw`, `log`, `other_raws`, `simulator_version`, `diagnostics`,
+  `diagnostics_coverage`, `attempt`), with no bare
   names. A path that no row on the page reaches is reported in `warnings`
   with the keys that are there.
 - `include.fields` changes only the row view. Every cursor records the
@@ -1801,8 +1872,15 @@ than diffing a schematic's attributes against a netlist's cards. Both modes
 read the cards the simulator reads: line 1 of a deck is its title and is not
 read, nor is a card after `.end`. `equivalence` follows includes as staging
 reads them, so `.lib <file> <section>` brings in that section's definitions
-only, and of two definitions of one subcircuit name the first is the body
-compared, the others listed in `duplicate_subckts`. `structural_diff` lexes
+only, and of two definitions of one subcircuit name the body compared is the
+one the session's simulator keeps in force (ngspice the first, LTspice XVII the
+last of two in one deck), the others listed in `duplicate_subckts`; where the
+simulator keeps none (LTspice 26 refuses the deck) or what it does is not
+recorded (any other build or place, QSPICE, Xyce), no body is read, the
+instances are compared as black boxes, and the entry's `reason` says why. A
+name defined both inside a subcircuit (local to it) and elsewhere is read
+neither way, since the comparison keys definitions by name, and the entry
+says so. `structural_diff` lexes
 both decks, so a `+` continuation belongs to the card it continues, and
 compares directives as parsed rather than as text, so spacing, case, comma
 separators and assignment order in `.model`/`.param` are ignored. It ignores
@@ -1980,7 +2058,8 @@ cursors where listed:
     each instance's own reference (the last segment), so a one-letter
     prefix still selects an element type. LTspice names are spelled for the
     session's LTspice, or the named build, as its raw names them
-    (`profile.xvii_names`)
+    (`profile.xvii_names`; `profile.names_read_as` and `names_note` say
+    which recorded build the spelling follows when the build has none)
 {kind: "model", mode: "search"|"enumerate", query?, libs?, cursor?}
     search requires query and fuzzy-matches it; enumerate requires libs and,
     given a query, lists the names containing it (case-insensitive). A
@@ -2175,13 +2254,62 @@ in the tool result.
 
 At `INFO`, the `ltspice_mcp.events` logger writes one record for each tool call,
 with a structured payload on the record's `ltspice_event` attribute:
-`event: "tool_call"`, `tool`, `duration_s`, `outcome`, the error's `code`, and
-`reply_chars`, the length of the result as sent. `outcome` is `ok` or `error`
-for a call that returned a result, `cancelled` for one the client cancelled,
-and `raised` for one answered with a protocol error, such as an unknown tool
-name; those two have no `code` or `reply_chars`. The call's arguments are not
-logged. A call through the Python API is not a tool call over MCP and writes
-none. The same logger writes a job's lifecycle events.
+`event: "tool_call"`, `door`, `tool`, `duration_s`, `outcome`, the error's
+`code`, `reply_chars`, the length of the result as sent, `fields` and
+`choices`. `door` is `mcp`. `outcome` is `ok` or `error` for a call that
+returned a result, `cancelled` for one the client cancelled, and `raised` for
+one answered with a protocol error, such as an unknown tool name; those two
+have no `code` or `reply_chars`. A tool name the server does not serve is
+recorded as null.
+
+`fields` lists the argument fields the call set, as sorted dotted paths, each
+once: nested fields count, list positions and mapping keys are dropped, and a
+field left out or sent at its default value is not set. The fields of an item
+tagged as one member of a union are named under its tag, so a call that
+batches several kinds says which set what: `queries[kind=hierarchy].cursor`,
+`recipes[metric=value].spec.allow_incomplete`, `ops[op=add_component].x`. An
+item the handler refuses on its own (one `inspect` query, one recipe) is still
+named, by its tag and those of its keys its member declares. `choices` lists,
+as `path=word`, each value that picked a word of the server's own vocabulary,
+a `Literal` or enum of the field's type: `action=wait`,
+`queries.kind=simulator_docs`, `recipes.metric=plot`,
+`recipes[metric=value].reduce=mean`, `ops.op=add_component`. A call refused
+before its arguments validated has both null.
+
+The record carries no argument value: no path, file name, label, signal,
+expression, number, cursor, job or result-set id, mapping key or free text,
+and no part of the reply. Results the reply reports, such as an
+`indeterminate` spec verdict or a cut `fail_cases` list, are not recorded;
+what the call asked for to reach them is (`spec.allow_incomplete`,
+`include.per_run`). A field typed as free text records its name only, even
+when its value happens to be a word the server also uses (`group_by`).
+
+A resource read writes `event: "resource_read"` with the URI `template` it
+matched (`spice://results/{job_id}/signals`, `spice://config`), never the URI
+itself, and a prompt get writes `event: "prompt_get"` with the `prompt` name,
+never its arguments; each has `duration_s`, `outcome` (`ok`, `error` for a
+read or get answered with a protocol error, `cancelled`, `raised`) and the
+error's `code`. A URI or prompt name the server does not serve is null.
+
+A Python API operation (`run_experiments`, `jobs`, `analyze_results`,
+`inspect`, `edit_schematic`, `verify_circuit`, also what a `run_code` snippet
+calls) writes the same `tool_call` record with `door: "python_api"`, the
+names in the arguments as the caller wrote them (before the automatic mode
+drops a presentation control or submits with `execution.wait_s` of 0),
+`reply_chars` null, and `controls`, the API's own options it set (`raw_page`,
+`wait`, `detach`). An operation the API runs for its caller, such as the
+polls of `wait` or of `run_experiments` waiting for its job, writes none.
+A call the automatic mode refuses (one that sends a paging control) still
+names what the caller set, since the names are read before that check. An
+API error that carries a tool's error payload is `error` with that payload's
+`code`, a refused argument is `error` with `invalid_arguments`, and an
+interrupt is `cancelled`. The API's other methods (`wait`, `load_raw`,
+`measurements`, `device_op_points`, `reference`, `guide`) write none. A
+`run_code` snippet's records reach the server's stderr through its worker,
+which logs at the server's level. A detached run (`detach=True`) is submitted
+again by the process spawned to own it, an ordinary API caller, so its log
+holds a second `run_experiments` record for the same job.
+The same logger writes a job's lifecycle events.
 
 ---
 
@@ -2233,6 +2361,8 @@ Suppression is per call, and `linter_version` is reported in provenance.
 | `step-ngspice` | warning | ngspice: a `.step`, which ngspice ignores in batch mode, so the deck runs once at the base value |
 | `temp-as-param` | blocking | a deck that sweeps temperature as a parameter (§3.1) |
 | `duplicate-param` | warning | an instance, `.model` or `.subckt` card giving one parameter more than once, in any case; which copy the simulator reads is not known, and `verify_circuit` reports the same as `duplicate_parameter` |
+| `subckt-defined-twice` | blocking | a subcircuit name defined more than once at the top level of the deck, which the reader refuses: LTspice 26 (recorded). `verify_circuit`'s `syntax` check reports the same as `subckt_defined_twice`. ngspice (the first) and LTspice XVII (the last of two) run a definition, which every check reads, and get no finding |
+| `subckt-defined-twice-unrecorded` | warning | a subcircuit name defined more than once in one scope, where what the reader does is not recorded: an LTspice build other than 26 and XVII, one whose build is not known yet, QSPICE, Xyce, or for LTspice two definitions inside one subcircuit or more than two of one name. No check reads any of the bodies; `verify_circuit` reports the same as `subckt_defined_twice_unrecorded`. A definition repeated across the deck and an include is not linted |
 | `unreadable-card` | warning | a card no rule can split into its parts: an unclosed quote, brace or parenthesis, or a closer with nothing open. The other rules leave it out. On a part, `.subckt` header or `.global` its words count as connected and defined nodes and names, so no rule reports something on a guess about it; a variation or random rule on a part, `.model` or `.param` name a card like it may declare is refused (`ambiguous_target`). It covers the deck and its staged includes, and an include card in a live include, for which `model-missing` then says nothing. What a simulator does with such a card is recorded only for the `.meas` of `meas-unclosed-paren-ltspice`; `verify_circuit` reports the same as `unreadable_card` |
 | `value-suffix-mojibake` | blocking | a suffix showing the file was decoded in an encoding it was not written in, such as the `Âµ` a UTF-8 `µ` becomes under cp1252; the simulator reads the bare number, off by a factor of 1e6 |
 | `value-suffix-nonascii` | warning | any other symbol after a number, such as `10Ω` or `25°C`, read as the bare number, which is usually the intended value. Staging spells a `µ`/`μ` as `u` before the deck is linted; for a deck run elsewhere `verify_circuit` reports it as one observation per file, or as a warning per value when a reader the server knows of (LTspice XVII) would decode the file differently |
@@ -2772,8 +2902,12 @@ subcircuit defined at top level may be called from inside another, but a
 a `.subckt` is allowed and is used there before a top-level model of the same
 name. Recursive subcircuit calls; a missing include, `.lib` section or called
 subcircuit; an include cycle; a malformed `.subckt`/`.ends` or `.lib`/`.endl`
-pair; and a subcircuit, model or reference defined twice among the cards in
-use fail the query. A binned model (`nch.1`, `nch.2`, ...) is reported with
+pair; and a model or reference defined twice among the cards in use fail
+the query. Of a subcircuit defined twice at the top level, the definition the
+reader keeps is read (ngspice the first, LTspice XVII the last of two in one
+deck); the query fails, saying why, where the reader refuses the deck
+(LTspice 26) or what it does is not recorded (any other LTspice build, more
+than two definitions, or a definition in an included file). A binned model (`nch.1`, `nch.2`, ...) is reported with
 every bin under `model.family` and a reason that the bin is not selected,
 rather than as one model. Cards after the root `.end` are ignored.
 
@@ -2807,8 +2941,9 @@ with Api(working_dir=project) as api:
 For a supported nested MOS, ngspice gives `device: "m.xa.xleaf.m0"`
 and `.save @m.xa.xleaf.m0[gm]`; LTspice gives
 `device: "xa:xleaf:m0"` and no directive, since the server asks LTspice 26
-for the device table on every `.op` run and XVII prints it unasked and stops
-on `.options logopinfo`. Add any directive given to the deck before
+for the device table on every `.op` run (once it knows the build, see
+`logopinfo_withheld`) and XVII prints it unasked and stops on
+`.options logopinfo`. Add any directive given to the deck before
 `run_experiments`, then pass `address.device` to the `analyze_results`
 `operating_point` recipe. On LTspice, that selector also matches any longer
 path that ends with it, so an instance whose whole path is the end of another

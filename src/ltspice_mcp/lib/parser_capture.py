@@ -21,7 +21,7 @@ _CHUNK_BYTES = 1024 * 1024
 #: The name each captured file has in the parser's directory, by its role: the
 #: one table capture and every decoder of a capture read.
 CAPTURED_NAMES = {"raw": "input.raw", "log": "input.log", "console": "input.exe.log"}
-PARSER_REVISION = "artifacts-materialize-3"
+PARSER_REVISION = "artifacts-materialize-4"
 
 
 class CaptureError(ValueError):

@@ -35,7 +35,7 @@ class TestManifestWalk:
         _write(root / "b.inc", '.include "c.inc"\n')
         _write(root / "c.inc", ".param x=1\n")
 
-        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck, dialect=None)
 
         assert {entry.path.name for entry in staged.manifest} == {
             "deck.cir",
@@ -55,7 +55,7 @@ class TestManifestWalk:
         schematic = _write(root / "amp.asc", "Version 4\nSYMATTR Value 1k\n")
         deck = _write(root / "amp.net", "V1 in 0 1\nR1 in 0 1k\n.op\n.end\n")
 
-        staged = stage_deck(deck, tmp_path / "stage", [root], origin=schematic)
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=schematic, dialect=None)
 
         entry = next(item for item in staged.manifest if item.path == schematic.resolve())
         assert entry.staged and not entry.live
@@ -77,7 +77,7 @@ class TestManifestWalk:
         root = tmp_path / "root"
         deck = _write(root / "deck.cir", ".op\n.end\n")
 
-        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck, dialect=None)
 
         assert [entry.path for entry in staged.manifest] == [deck.resolve()]
         assert staged.origin_sha256 == staged.sha256
@@ -88,7 +88,7 @@ class TestManifestWalk:
         deck = _write(root / "deck.cir", f'* deck\n.include "{outside}"\n.op\n.end\n')
 
         with pytest.raises(DeckStagingError, match="outside allowed roots"):
-            stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+            stage_deck(deck, tmp_path / "stage", [root], origin=deck, dialect=None)
 
     def test_with_no_sandbox_every_file_the_deck_reaches_is_staged(self, tmp_path: Path):
         """A library beside the deck's folder, one reached through it, and one
@@ -103,7 +103,7 @@ class TestManifestWalk:
             f'V1 a 0 1\n.include ../models/top.lib\n.include "{other}"\n.op\n.end\n',
         )
 
-        staged = stage_deck(deck, tmp_path / "stage", None, origin=deck)
+        staged = stage_deck(deck, tmp_path / "stage", None, origin=deck, dialect=None)
 
         by_source = {entry.path: entry for entry in staged.manifest}
         for source in (deck, top, sub, other):
@@ -129,6 +129,7 @@ class TestManifestWalk:
             tmp_path / "stage",
             [root],
             origin=deck,
+            dialect=None,
             allow_live_includes=True,
         )
 
@@ -150,7 +151,7 @@ class TestManifestWalk:
         _write(root / "models" / "device.lib", '.include "params.inc"\n.model DFAST D\n')
         _write(root / "models" / "params.inc", ".param x=1\n")
 
-        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck, dialect=None)
 
         staged_lib = staged.staged_deck.parent / "models" / "device.lib"
         assert staged_lib.is_file()
@@ -169,7 +170,7 @@ class TestManifestWalk:
         deck = _write(root / "deck.cir", '* deck\n.lib "models.lib" TT\n.op\n.end\n')
         _write(root / "models.lib", ".lib TT\n.model DFAST D\n.endl TT\n")
 
-        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck, dialect=None)
 
         assert any(
             entry.path.name == "models.lib" and entry.section == "TT" for entry in staged.manifest
@@ -180,7 +181,7 @@ class TestManifestWalk:
         deck = _write(root / "deck.cir", '* deck\n.include "a.inc"\n.op\n.end\n')
         _write(root / "a.inc", '.include "deck.cir"\n')
 
-        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck, dialect=None)
 
         assert [entry.path.name for entry in staged.manifest].count("deck.cir") == 1
         assert [entry.path.name for entry in staged.manifest].count("a.inc") == 1
@@ -193,7 +194,7 @@ class TestManifestWalk:
         deck = _write(root / "deck.cir", '* deck\n.include "escape.inc"\n.op\n.end\n')
 
         with pytest.raises(DeckStagingError, match="outside allowed roots"):
-            stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+            stage_deck(deck, tmp_path / "stage", [root], origin=deck, dialect=None)
 
     def test_duplicate_includes_copy_once(self, tmp_path: Path):
         root = tmp_path / "root"
@@ -203,7 +204,7 @@ class TestManifestWalk:
         )
         shared = _write(root / "shared.inc", ".param x=1\n")
 
-        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck, dialect=None)
 
         assert sum(entry.path == shared.resolve() for entry in staged.manifest) == 1
 
@@ -231,7 +232,7 @@ class TestManifestWalk:
 
         monkeypatch.setattr(deck_staging, "resolve_reference", resolve)
 
-        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck, dialect=None)
 
         assert {quoted.resolve(), windows.resolve()} <= {entry.path for entry in staged.manifest}
 
@@ -241,7 +242,7 @@ class TestManifestWalk:
         included = _write(root / "value.inc", ".param x=1\n")
         original_deck = deck.read_bytes()
         original_include = included.read_bytes()
-        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck, dialect=None)
         staged_include = next(
             entry.staged_path for entry in staged.manifest if entry.path == included.resolve()
         )
@@ -344,7 +345,7 @@ class TestFoundryPdkShapes:
         pdk, lib = self._pdk(tmp_path)
         deck = _write(root / "deck.cir", f'* deck\n.lib "{lib}" tt\nM1 d g s b nfet\n.op\n.end\n')
 
-        staged = stage_deck(deck, tmp_path / "stage", [root, pdk], origin=deck)
+        staged = stage_deck(deck, tmp_path / "stage", [root, pdk], origin=deck, dialect=None)
 
         names = {entry.path.name for entry in staged.manifest}
         assert "models.lib.spice" in names
@@ -359,7 +360,7 @@ class TestFoundryPdkShapes:
         pdk, lib = self._pdk(tmp_path)
         deck = _write(root / "deck.cir", f'* deck\n.lib "{lib}" tt\n.op\n.end\n')
 
-        staged = stage_deck(deck, tmp_path / "stage", [root, pdk], origin=deck)
+        staged = stage_deck(deck, tmp_path / "stage", [root, pdk], origin=deck, dialect=None)
 
         text = staged.staged_deck.read_text()
         reference = text.splitlines()[1].split()[1].strip('"')
@@ -383,12 +384,14 @@ class TestFoundryPdkShapes:
         pdk, lib = self._pdk(tmp_path)
         deck = _write(root / "deck.cir", f'* deck\n.lib "{lib}" tt\n.op\n.end\n')
 
-        staged = stage_deck(deck, tmp_path / "stage", [root, pdk], origin=deck)
+        staged = stage_deck(deck, tmp_path / "stage", [root, pdk], origin=deck, dialect=None)
 
         assert "nfet.pm3.spice" in {entry.path.name for entry in staged.manifest}
 
         with pytest.raises(DeckStagingError, match="exceeds depth 3"):
-            stage_deck(deck, tmp_path / "shallow", [root, pdk], max_depth=3, origin=deck)
+            stage_deck(
+                deck, tmp_path / "shallow", [root, pdk], max_depth=3, origin=deck, dialect=None
+            )
 
 
 class TestRootDeckSurvivesTheRun:
@@ -402,7 +405,7 @@ class TestRootDeckSurvivesTheRun:
         _write(root / "core.inc", "R1 in out 1k\n")
         deck = _write(root / "tb.cir", "V1 in 0 1\n.include core.inc\n.op\n.end\n")
 
-        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck, dialect=None)
 
         reference = staged.staged_deck.read_text().splitlines()[1].split()[1].strip('"')
         assert Path(reference).is_absolute(), (
@@ -436,7 +439,9 @@ class TestRootDeckSurvivesTheRun:
         _write(root / "core.inc", "R1 in out 1k\n")
         deck = _write(root / "tb.cir", "V1 in 0 1\n.include core.inc\n.op\n.end\n")
 
-        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck, windows_paths=True)
+        staged = stage_deck(
+            deck, tmp_path / "stage", [root], origin=deck, dialect=None, windows_paths=True
+        )
 
         reference = staged.staged_deck.read_text().splitlines()[1].split()[1].strip('"')
         included = next(item for item in staged.includes if item.source.name == "core.inc")
@@ -450,7 +455,7 @@ class TestRootDeckSurvivesTheRun:
         _write(root / "core.inc", "R1 in out 1k\n")
         deck = _write(root / "tb.cir", "V1 in 0 1\n.include core.inc\n.op\n.end\n")
 
-        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck, dialect=None)
 
         reference = staged.staged_deck.read_text().splitlines()[1].split()[1].strip('"')
         included = next(item for item in staged.includes if item.source.name == "core.inc")
@@ -481,6 +486,7 @@ class TestSimulatorLibraryRoots:
             tmp_path / "stage",
             [root],
             origin=schematic,
+            dialect=None,
             simulator_roots=[install],
         )
 
@@ -525,6 +531,7 @@ class TestSimulatorLibraryRoots:
                 tmp_path / "stage",
                 [root],
                 origin=deck,
+                dialect=None,
                 simulator_roots=[install],
             )
 
@@ -539,7 +546,7 @@ class TestSimulatorLibraryRoots:
         deck = _write(root / "deck.cir", '* deck\n.include "absent.inc"\n.op\n.end\n')
 
         with pytest.raises(DeckStagingError) as excinfo:
-            stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+            stage_deck(deck, tmp_path / "stage", [root], origin=deck, dialect=None)
 
         message = str(excinfo.value)
         assert "does not exist" in message
@@ -558,6 +565,7 @@ class TestSimulatorLibraryRoots:
                 tmp_path / "stage",
                 [root],
                 origin=deck,
+                dialect=None,
                 simulator_roots=[install],
             )
 
@@ -606,7 +614,7 @@ class TestMicroSuffixStaging:
         schematic = root / "bench.asc"
         schematic.write_bytes("Version 4\nSYMATTR Value 23µ\n".encode(codec))
 
-        staged = stage_deck(deck, tmp_path / "stage", [root], origin=schematic)
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=schematic, dialect=None)
 
         assert b".param tau=4.7u\n" in staged.staged_deck.read_bytes()
         assert ".param tau=4.7u\n" in staged.text
@@ -633,7 +641,9 @@ class TestMicroSuffixStaging:
         deck.write_bytes('* bench\n.include "core.inc"\n.param tau=4.7µ\n.end\n'.encode())
         reader = "C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe"
 
-        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck, cp1252_reader=reader)
+        staged = stage_deck(
+            deck, tmp_path / "stage", [root], origin=deck, dialect=None, cp1252_reader=reader
+        )
 
         folded = [item for item in staged.observations if item["code"] == "micro_sign_folded"]
         assert {Path(item["evidence"]["file"]).name for item in folded} == {
@@ -659,7 +669,7 @@ class TestMicroSuffixStaging:
             '* bench\n.include "core.inc"\nR§Load out 0 1k\n.op\n.end\n'.encode(codec)
         )
 
-        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck, dialect=None)
 
         assert '.include "core.inc"' not in staged.text, "the reference is rewritten"
         assert staged.codec == codec
@@ -685,7 +695,7 @@ class TestMicroSuffixStaging:
         deck = root / "bench.cir"
         deck.write_bytes(b'* bench\n.include "core.inc"\n' + comment + b"R1 out 0 1k\n.op\n.end\n")
 
-        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck, dialect=None)
 
         assert '.include "core.inc"' not in staged.text, "the reference is rewritten"
         assert comment in staged.staged_deck.read_bytes()
@@ -700,7 +710,7 @@ class TestMicroSuffixStaging:
         deck = root / "bench.cir"
         deck.write_bytes('* bench\n.include "core.inc"\nR§1 out 0 1k\n.end\n'.encode("utf-16"))
 
-        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck, dialect=None)
 
         assert staged.codec == "utf-8"
         assert "R§1 out 0 1k\n" in staged.staged_deck.read_bytes().decode("utf-8")
@@ -712,7 +722,7 @@ class TestMicroSuffixStaging:
         core.write_bytes(b"* 23\xb5 was the old value\r\nC1 out 0 1n\r\n")
         deck = _write(root / "bench.cir", '* bench\n.include "core.inc"\n.op\n.end\n')
 
-        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+        staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck, dialect=None)
 
         (staged_core,) = staged.includes
         assert staged_core.staged_path.read_bytes() == core.read_bytes()
@@ -730,7 +740,7 @@ def test_staged_include_digest_describes_exact_written_bytes(tmp_path, rewrite):
         include = root / "parent.inc"
         include.write_text(f'.include "{leaf.as_posix()}"\n', encoding="utf-8")
     deck = _write(root / "bench.cir", f'* bench\n.include "{include.name}"\n.op\n.end\n')
-    staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck)
+    staged = stage_deck(deck, tmp_path / "stage", [root], origin=deck, dialect=None)
     for item in staged.includes:
         assert item.sha256 == deck_staging.sha256_file(item.staged_path)
     staged_leaf = next(item for item in staged.includes if item.source == leaf)
@@ -754,6 +764,7 @@ def test_compact_staging_keeps_colliding_names_and_library_sections(tmp_path):
         staging_root,
         [source],
         origin=bench,
+        dialect=None,
         compact_digests={deck_staging.sha256_file(first), deck_staging.sha256_file(second)},
     )
     assert all(
@@ -794,6 +805,7 @@ def test_compact_filename_collision_refuses_overwrite(tmp_path, monkeypatch):
             tmp_path / "stage",
             [tmp_path / "source"],
             origin=bench,
+            dialect=None,
             compact_digests={deck_staging.sha256_file(first), deck_staging.sha256_file(second)},
         )
     assert caught.value.code == "staging_collision"

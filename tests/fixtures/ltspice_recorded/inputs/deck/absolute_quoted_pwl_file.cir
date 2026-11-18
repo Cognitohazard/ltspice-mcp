@@ -1,0 +1,5 @@
+* a PWL source reading a file named by a quoted absolute path with a space
+V1 a 0 PWL file="<dir>\data with space\level.txt"
+R1 a 0 1k
+.tran 10m
+.end

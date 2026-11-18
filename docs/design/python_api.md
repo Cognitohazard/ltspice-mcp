@@ -60,7 +60,10 @@ new `Api` with the directory added to `allowed_paths`, rather than to edit the
 config file.
 
 The API does not configure logging. It never calls `logging.basicConfig` and
-writes only through module loggers.
+writes only through module loggers. Each operation call writes one record on
+`ltspice_mcp.events` at `INFO`, the tool call's with `door: "python_api"`:
+the names of the argument fields it set, never their values (`mcp_surface.md`,
+"Server logging").
 
 ## 4. The `Api` object
 
@@ -394,9 +397,12 @@ Each of the six methods has its `reference()` text as its `__doc__`, so
 
 **Relative path arguments resolve from `working_dir`**, not the process CWD,
 as does any relative entry in `allowed_paths` (such as a config file's
-`allowed_paths = ["."]`). The MCP server resolves a relative path from the
-first allowed directory when there is a sandbox, and from its working
-directory otherwise; its `spice://netlists/` resource lists that same folder.
+`allowed_paths = ["."]`). When a sandbox leaves `working_dir` out, a relative
+path resolves from its first allowed directory instead. The MCP server, a
+`run_code` snippet and a detached job's owner follow the same rule, with
+`LTSPICE_MCP_WORKING_DIR` as the server's working directory (taken from the
+folder the server was started in when it is relative); the server's
+`spice://netlists/` resource lists that same folder.
 
 ## 6. Errors
 
@@ -407,8 +413,8 @@ directory otherwise; its `spice://netlists/` resource lists that same folder.
   `PathSecurityError` gets one note (PEP 678) with the same guidance as a tool
   call's `hint`, so the traceback shows what to change (with a sandbox, the
   setting that defines it); its type and message are not changed. The note
-  names `working_dir` as the folder a relative path is taken from, since that
-  is where the API takes it from.
+  names the folder a relative path is taken from: `working_dir`, or the first
+  allowed directory when the sandbox leaves `working_dir` out.
 - A result with `isError=True` raises `ApiCallError`, which contains the
   complete structured payload and has the attributes `code`, `commit_state`,
   `job_id` and `control_token`. When the error comes after a job was submitted
@@ -622,18 +628,30 @@ class.
 The `measurements` recipe's rows are the MCP rows, rendered by the same code.
 For a run with one value per `.meas`, such as one case of a sweep, the value
 is `row["value"]["measured"][name]`. It is null where the log holds no number
-for that name, and the name is then in one of three places, by why.
+for that name, and the name is then in one of five places, by why.
 `row["value"]["failed_measurements"]` lists it where LTspice printed it as
 failed at the step the row reads (`FAIL'ed`, or `failed` in a stepped
 table), which is what `failed_measurements` means wherever it appears,
 `measurements()` included. Where the log printed something other
-than a number for it (a WHEN threshold written as a parameter, an
-expression or, on LTspice 26, a braced expression),
-`row["value"]["unreadable"][name]` gives the log line and the
-reason, as `measurements()` does on the entry; only that name fails. Where it
+than a number for its result, `row["value"]["unreadable"][name]` gives
+the log line and the reason, as `measurements()` does on the entry; only
+that name fails. A WHEN threshold written as a parameter, an expression
+or, on LTspice 26, a braced expression is the level a WHEN with no FIND
+searched for, not its result: `measurements()` marks the entry
+`unreadable`, and the row reads the crossing. Where it
 printed a number that is not finite (a gain margin of `infdB`),
-`row["value"]["not_finite"]` lists it. Any crossing or `AT` point the log
-printed is under `row["value"]["at"][name]`. The per-name `stats` block is left
+`row["value"]["not_finite"]` lists it. Where which field holds the result
+is not known, `row["value"]["answer_unknown"][name]` says why. Where what it
+printed is not established as the result (LTspice XVII prints `0` in a
+stepped table both for a failed step and for a crossing at 0 s),
+`row["value"]["not_established"][name]` gives the steps and the reason, and
+`measurements()` gives the same on the entry, those steps null in
+`values`. Any `AT`
+point the log printed beside a result that is its value is under
+`row["value"]["at"][name]`; a WHEN with no FIND's result is its crossing, so
+that is its `measured` value. Each entry of `measurements()` names the field
+holding its result in `answer` (`"value"` or `"at"`), or why it is not known
+in `answer_unknown`. The per-name `stats` block is left
 off the default row; `include={"fields": ["value"]}` returns it. A stepped
 run's row contains `stats`, with `failed_measurements` and `unreadable` over
 all its steps; `measurements()` gives an entry whose stepped table printed

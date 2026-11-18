@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
+from ltspice_mcp.errors import UnreadableCardError
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.hierarchy import SemanticProfile
 from ltspice_mcp.lib.instance_targeting import canonical_target
@@ -1295,15 +1296,15 @@ class TestRulesReadWhatEarlierRulesWrote:
         )
         variation = _random_rule({"rule": "component", "target": "R*", "tolerance": 0.1})
 
-        with pytest.raises(VariationError, match="R1") as excinfo:
+        with pytest.raises(UnreadableCardError, match="R1") as excinfo:
             materialize_variants(
                 circuit,
                 expand_variations([circuit], [variation]),
                 tmp_path / "out",
             )
 
-        assert excinfo.value.code == "ambiguous_target"
-        assert "could not be read" in str(excinfo.value)
+        assert excinfo.value.code == "card_unreadable"
+        assert "'R1 in out \"1k'" in str(excinfo.value)
 
 
 class TestStructuredWriteConflicts:
@@ -2161,14 +2162,14 @@ def test_a_target_a_card_that_cannot_be_read_may_declare_is_refused_by_its_line(
     path.write_text(deck_text)
     deck = CircuitDeck("dut", path, deck_text)
 
-    with pytest.raises(VariationError) as excinfo:
+    with pytest.raises(UnreadableCardError) as excinfo:
         materialize_variants(deck, expand_variations([deck], [variation]), tmp_path / "out")
 
-    assert excinfo.value.code == "ambiguous_target"
+    assert excinfo.value.code == "card_unreadable"
     line = deck_text.splitlines().index(card) + 1
     message = str(excinfo.value)
     assert f"may name the {what} " in message, message
-    assert f"on line {line} of d.cir, which could not be read" in message, message
+    assert f"on line {line} of d.cir, {card!r}: " in message, message
     assert "Check for a missing" in message, message
 
 

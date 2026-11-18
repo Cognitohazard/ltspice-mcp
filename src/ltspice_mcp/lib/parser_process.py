@@ -516,11 +516,13 @@ class ParserTree:
 
     def _kill_unconfirmed(self) -> bool:
         if sys.platform == "linux":
-            from ltspice_mcp.lib.proc_kill import kill_process_group
+            from ltspice_mcp.lib.proc_kill import child_start_marker, kill_process_group
 
+            # Only while the guardian, not yet reaped, is still the worker's
+            # parent: once it reaped the worker, the pid may name another process.
             worker = self.worker_pid or (_worker_pid(self.control) if self.control else None)
             if worker:
-                kill_process_group(worker)
+                kill_process_group(worker, child_start_marker(self.process, worker))
         with contextlib.suppress(OSError):
             self.process.kill()
         with contextlib.suppress(subprocess.TimeoutExpired):

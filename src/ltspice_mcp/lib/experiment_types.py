@@ -109,6 +109,11 @@ class ExperimentCase:
     #: ``random`` or ``pdk_native`` entry added to ``assignments``: the corner
     #: a sample was drawn at.
     assigned: dict[str, Any] = field(default_factory=dict)
+    #: What the simulator said about the run, read from its log when it ended
+    #: (``log_conditions.RunDiagnostics``): ``{}`` for nothing to report. None
+    #: for a run that has not ended, and for one recorded before the server
+    #: classified logs.
+    log_diagnostics: dict[str, Any] | None = None
 
 
 def sample_index(case: ExperimentCase) -> int | None:
@@ -332,6 +337,12 @@ class ExperimentJob:
     #: request would launch now is a different build. None when the simulator
     #: named no program, and on a record written before it was recorded.
     simulator_executable: SimulatorExecutable | None = None
+    #: Whether the job's decks were read with each subcircuit instance spelled
+    #: without its X (LTspice XVII and IV, ``device_names.naming_for``), as
+    #: their hierarchy profile was built at submission: what each run's raw is
+    #: held to. None for a deck read by no LTspice, and on a record written
+    #: before it was recorded.
+    deck_names_xvii: bool | None = None
     failures: list[dict[str, Any]] = field(default_factory=list)
     observations: list[dict[str, Any]] = field(default_factory=list)
     artifacts: list[dict[str, Any]] = field(default_factory=list)

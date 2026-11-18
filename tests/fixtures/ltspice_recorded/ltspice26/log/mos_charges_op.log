@@ -1,0 +1,47 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\mos_charges_op.cir
+Start Time: Thu Jan 15 00:00:00 2026
+Options:logopinfo
+solver = Normal
+Maximum thread count: 1
+tnom = 27
+temp = 27
+method = trap
+Warning: Pd = 0 is less than W.
+Warning: Ps = 0 is less than W.
+Direct Newton iteration succeeded in finding operating point.
+Semiconductor Device Operating Points:
+                        --- BSIM3 MOSFETS ---
+Name:         M1
+Model:       nch
+Id:        3.50e-04
+Vgs:       1.50e+00
+Vds:       2.00e+00
+Vbs:       0.00e+00
+Vth:       6.49e-01
+Vdsat:     4.96e-01
+Gm:        6.81e-04
+Gds:       8.33e-06
+Gmb        2.86e-04
+Cbd:       0.00e+00
+Cbs:       0.00e+00
+Cgsov:     3.92e-15
+Cgdov:     3.92e-15
+Cgbov:     0.00e+00
+dQgdVgb:   3.52e-14
+dQgdVdb:  -3.92e-15
+dQgdVsb:  -2.65e-14
+dQddVgb:  -1.27e-14
+dQddVdb:   3.92e-15
+dQddVsb:   1.28e-14
+dQbdVgb:  -5.42e-15
+dQbdVdb:   2.96e-19
+dQbdVsb:  -9.51e-15
+
+
+Total elapsed time: 0.000 seconds.
+Total iterations: 5
+
+Files loaded:
+C:\recording\mos_charges_op.cir
+

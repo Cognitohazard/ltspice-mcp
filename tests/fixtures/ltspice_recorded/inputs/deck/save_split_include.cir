@@ -1,0 +1,9 @@
+* a .save list split between the deck and an included file
+.include probes_out.inc
+.save V(in)
+V1 in 0 PULSE(0 1 0 1u 1u 1 2)
+R1 in mid 1k
+R2 mid out 1k
+C1 out 0 100n
+.tran 0 1m 0 1u
+.end

@@ -192,8 +192,8 @@ class Build:
 
     ``label`` names the directory its recordings live in: ``ltspice`` and the
     major version (``ltspice26``; XVII is ``ltspice17``). ``generation`` is the
-    server's own split (``lib/simulator.py:generation_of``): ``xvii`` keeps its
-    settings and library in other places than every later build does.
+    server's own answer (``simulator_build.which_ltspice``): ``xvii`` keeps
+    its settings and library in other places than every later build does.
     """
 
     exe: Path
@@ -260,8 +260,23 @@ def identify_build(exe: Path, label: str | None = None) -> Build:
     exe = Path(exe)
     if not exe.is_file():
         raise RecorderError(f"not an executable file: {exe.name}")
-    generation = "xvii" if "xvii" in exe.name.casefold() else "current"
+    from ltspice_mcp.lib.simulator_build import (
+        executable_file_version,
+        which_ltspice,
+    )
+
     version = file_version(exe)
+    # The server reads the version resource from the file on every platform;
+    # here, on Windows, it must read what Windows reads.
+    read = executable_file_version(str(exe))
+    if version is not None and read is not None and ".".join(map(str, read)) != version:
+        raise RecorderError(
+            f"the server reads {exe.name}'s version as {read}, Windows as {version}"
+        )
+    found = which_ltspice(str(exe), None)
+    if found is None or found.generation == "iv":
+        raise RecorderError(f"cannot tell which LTspice {exe.name} is")
+    generation = found.generation
     if label is None:
         if version is None:
             raise RecorderError(
@@ -350,6 +365,11 @@ class Case:
     the deck under the deck's name so the waveform window reads it, and the
     ``steps`` the window is driven through before it saves: each
     ``("trace", expression)`` or ``("command", menu label)``.
+
+    ``cwd`` names a folder under the case's directory to start the build in,
+    so a case can ask what a relative path in a deck is relative to: the
+    deck's folder or the folder the build was started in. By default the
+    build starts in the deck's folder.
     """
 
     case_id: str
@@ -368,6 +388,7 @@ class Case:
     note: str = ""
     plot: str = ""
     steps: tuple[tuple[str, str], ...] = ()
+    cwd: str = ""
 
     @property
     def copies(self) -> dict[str, str]:
@@ -401,6 +422,15 @@ class Case:
 
     def applies_to(self, build: Build) -> bool:
         return not self.builds or build.generation in self.builds or build.label in self.builds
+
+    def input_in(self, name: str, data: bytes, work: Path) -> bytes:
+        """The bytes of input ``name`` as the case's run reads them: in its
+        source deck, ``<dir>`` is the folder the case runs in, so a deck can
+        name one of its files by an absolute path. The manifest keeps the
+        digest of the input as committed."""
+        if name != self.source:
+            return data
+        return data.replace(CASE_DIR.encode("ascii"), str(work).encode("utf-8"))
 
     def settings_in(self, work: Path) -> dict[str, str]:
         """The case's settings for a run in ``work``: ``<dir>`` in a value is
@@ -494,6 +524,7 @@ def load_cases(inputs: Path = INPUTS) -> CaseFile:
                 note=entry.get("note", ""),
                 plot=entry.get("plot", ""),
                 steps=tuple(_step(entry["id"], step) for step in entry.get("steps", ())),
+                cwd=entry.get("cwd", ""),
             )
         )
     seen: set[str] = set()
@@ -509,6 +540,10 @@ def load_cases(inputs: Path = INPUTS) -> CaseFile:
             raise RecorderError(f"{case.case_id}: unknown behaviour {case.behaviour!r}")
         if case.kind != "plot" and (case.plot or case.steps):
             raise RecorderError(f"{case.case_id}: only a plot case has plot settings or steps")
+        if case.cwd and (
+            PurePosixPath(case.cwd).is_absolute() or ".." in PurePosixPath(case.cwd).parts
+        ):
+            raise RecorderError(f"{case.case_id}: cwd is a folder under the case's directory")
         if case.kind == "plot" and not (case.plot or case.steps):
             raise RecorderError(f"{case.case_id}: a plot case reads plot settings or makes them")
         for name in case.copies:
@@ -1651,14 +1686,16 @@ def run_case(
     for name, target in case.copies.items():
         data = (inputs / name).read_bytes()
         (work / target).parent.mkdir(parents=True, exist_ok=True)
-        (work / target).write_bytes(data)
+        (work / target).write_bytes(case.input_in(name, data, work))
         digests[name] = sha256_bytes(data)
     # Outside the case directory, so nothing the build writes can pick it up.
     ini = work.parent / f"{work.name}.ini"
     ini.write_bytes(neutral_settings(settings.read_bytes(), case.settings_in(work)))
     deck = work / case.work_name
     command = _command(build, case, deck, ini)
-    ended = _launch(desktop, command, work, case, deck, timeout, build)
+    started_in = work / case.cwd if case.cwd else work
+    started_in.mkdir(parents=True, exist_ok=True)
+    ended = _launch(desktop, command, started_in, case, deck, timeout, build)
     if case.kind == "fastaccess" and not ended.stopped:
         raw = deck.with_suffix(".raw").as_posix()
         convert = [str(build.exe), "-FastAccess", raw, "-ini", str(ini)]
@@ -1698,6 +1735,8 @@ def run_case(
         },
         "reported_build": _reported_build(work, case),
     }
+    if case.cwd:
+        entry["cwd"] = case.cwd
     if case.ini:
         entry["settings"] = dict(case.ini)
     if not case.settings:

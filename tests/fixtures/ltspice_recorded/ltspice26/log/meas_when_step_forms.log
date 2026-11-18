@@ -1,0 +1,52 @@
+LTspice 26.1.1 for Windows
+Circuit: C:\recording\meas_when_step_forms.cir
+Start Time: Thu Jan 15 00:00:00 2026
+
+.step rv=1000
+solver = Normal
+Maximum thread count: 1
+tnom = 27
+temp = 27
+method = trap
+.OP point found by inspection.
+.OP point found by inspection.
+
+.step rv=2000
+.OP point found by inspection.
+.OP point found by inspection.
+Total elapsed time: 0.000 seconds.
+Total iterations: 2040
+
+Files loaded:
+C:\recording\meas_when_step_forms.cir
+
+
+Measurement: w_rise
+  step	V(out)=0.5
+     1	6.98157501917e-05
+     2	0.000139129964054
+
+Measurement: w_fall
+  step	V(out)=0.5
+     1	0.000468985568625
+     2	0.000511203794129
+
+Measurement: w_last
+  step	V(out)=0.5
+     1	0.000468985568625
+     2	0.000511203794129
+
+Measurement: w_td
+  step	V(out)=0.5
+     1	0.000468985568625
+     2	0.000139129964054
+
+Measurement: w_expr
+  step	V(out)-0.5*V(in)=0
+     1	0
+     2	0
+
+Measurement: w_find
+  step	V(in)	at
+     1	1	6.98157501917e-05
+     2	1	0.000139129964054
