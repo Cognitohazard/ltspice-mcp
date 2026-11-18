@@ -24,7 +24,7 @@ from ltspice_mcp.lib.asc_document import (
     Record,
     Symbol,
     parse_asc_text,
-    shown_value,
+    shown_value,  # noqa: TID251 - the one reader of an attribute's shown text
     window_read_past,
 )
 from ltspice_mcp.lib.connectivity import NamedNets, fold_case, nets_by_ltspice
