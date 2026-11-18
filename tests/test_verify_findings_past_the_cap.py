@@ -25,16 +25,22 @@ from typing import Any
 
 import pytest
 
+from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib.response_budget import estimate_tokens
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import verify
 from tests.conftest import SyncApi, dispatch, dispatched
 
-#: More findings of one rule than the old cap of 25 listed, few enough that a
-#: reply holding them all fits the default target: a value-suffix finding of a
-#: deck weighs about 105 tokens, a dangling label of a sheet about 60.
-FITTING_DECK = 28
+#: More findings of one rule than the old cap of 25 listed.
+FITTING_DECK = 30
 FITTING_SHEET = 50
+
+#: A reply target those findings fit on every platform. Each finding carries
+#: the checked file's path, which is longer on Windows and JSON-escaped there,
+#: so how many fit the 4000-token default depends on the machine: a deck's
+#: value-suffix finding weighs about 105 tokens on Linux, a sheet's dangling
+#: label about 60, and more under a Windows temp folder.
+ROOMY = 20_000
 
 #: Enough findings that a reply holding them all is over the default target.
 OVER = 400
@@ -107,8 +113,22 @@ async def _read_on(
 # ---------------------------------------------------------------------------
 
 
-async def test_findings_that_fit_all_go_out_past_25_a_rule(state_no_sim, work_dir):
+def _roomy(config: ServerConfig) -> SessionState:
+    """A session whose reply target the fitting findings fit on any machine."""
+    config.default_budget = ROOMY
+    return SessionState.create(config, available={})
+
+
+def _assert_fits(complete: list[dict[str, Any]]) -> None:
+    """The test's premise: the complete findings are within the target, so a
+    reply that cuts them cuts by something else than size."""
+    assert estimate_tokens(complete, as_sent=False) < ROOMY // 2
+
+
+async def test_findings_that_fit_all_go_out_past_25_a_rule(config, work_dir):
+    state_no_sim = _roomy(config)
     deck = _netlist(work_dir, FITTING_DECK)
+    _assert_fits(await _complete(state_no_sim, deck))
 
     data = await dispatched(state_no_sim, "verify_circuit", path=str(deck))
 
@@ -120,8 +140,10 @@ async def test_findings_that_fit_all_go_out_past_25_a_rule(state_no_sim, work_di
     assert not list(state_no_sim.store.results_dir.glob("sa_*.json"))
 
 
-async def test_a_sheet_rule_that_fits_goes_out_whole(state_no_sim, work_dir):
+async def test_a_sheet_rule_that_fits_goes_out_whole(config, work_dir):
+    state_no_sim = _roomy(config)
     sheet = _sheet(work_dir, FITTING_SHEET)
+    _assert_fits(await _complete(state_no_sim, sheet, checks=["layout"]))
 
     data = await dispatched(state_no_sim, "verify_circuit", path=str(sheet), checks=["layout"])
 
