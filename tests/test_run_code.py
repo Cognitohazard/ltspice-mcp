@@ -737,3 +737,20 @@ def test_the_numpy_names_the_guide_says_fail_do_fail_and_their_replacements_work
         with pytest.raises(AttributeError):
             eval(old if old.endswith(")") else f"{old}(a)", scope)
         eval(new if new.endswith(")") else f"{new}(a, a)", scope)
+
+
+def test_the_description_and_the_timeout_field_say_the_same_of_a_timeout():
+    """A wait on a run ends before ``timeout_s`` and the job keeps running
+    (``Api._waits_ending_at``); a timeout elsewhere interrupts the snippet and
+    kills the worker, with its jobs, on Windows or past the grace
+    (``RunCodeWorker._interrupt``, ``_lost``)."""
+    from ltspice_mcp.tools import registry
+    from ltspice_mcp.tools.run_code import INTERRUPT_GRACE_S, RunCodeInput
+
+    defs, _ = registry.get_tools()
+    description = next(d for d in defs if d.name == "run_code").description or ""
+    field = RunCodeInput.model_fields["timeout_s"].description or ""
+    for text in (description, field):
+        assert "ends just before it, naming the job, which keeps running" in text, text
+    assert "cancels a run" not in description
+    assert f"on Windows or when it does not stop within {INTERRUPT_GRACE_S:g} s" in description
