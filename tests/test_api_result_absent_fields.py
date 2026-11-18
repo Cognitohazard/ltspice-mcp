@@ -10,7 +10,9 @@ as the sent dict does.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
+import pickle
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -20,10 +22,10 @@ import pytest
 from ltspice_mcp.api import ApiCallError
 from ltspice_mcp.api._methods import ApiMethodsMixin, _CataloguedMethod
 from ltspice_mcp.api._result import SentResult, sent_result
-from ltspice_mcp.lib.reply_fields import IMPLIED
+from ltspice_mcp.lib.reply_fields import omit_silent
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import get_tools
-from ltspice_mcp.tools._base import as_sent
+from ltspice_mcp.tools._base import ALWAYS_PRESENT, as_sent
 from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
 from tests.conftest import LIVENESS_S, SyncApi, fake_simulator
 
@@ -165,12 +167,16 @@ def _kinds(parts: list[dict[str, Any]]) -> set[str]:
     return kinds - {"null"}
 
 
-def _expected_empty(kinds: set[str]) -> Any:
-    return {
-        frozenset({"array"}): [],
-        frozenset({"object"}): {},
-        frozenset({"boolean"}): False,
-    }.get(frozenset(kinds))
+def _of_kind(value: Any, kinds: set[str]) -> bool:
+    """Whether ``value`` is of the one kind the schema declares, or None where
+    it declares none or several."""
+    kind = {frozenset({"array"}): list, frozenset({"object"}): dict, frozenset({"boolean"}): bool}
+    expected = kind.get(frozenset(kinds))
+    return (
+        value is None
+        if expected is None
+        else type(value) is expected or (expected is dict and isinstance(value, dict))
+    )
 
 
 def _nested(path: tuple[str | None, ...]) -> Any:
@@ -190,23 +196,31 @@ def _at(value: Any, path: tuple[str | None, ...]) -> Any:
 def _check_node(
     tool: str, path: tuple[str | None, ...], parts: list[dict[str, Any]], depth: int
 ) -> int:
-    """Every field declared at ``path`` answers its declared empty value when
-    left out; returns how many fields were checked."""
+    """Every field declared at ``path`` answers, when left out, a value of its
+    declared kind that the reply rule itself leaves out, and a kept field
+    raises; returns how many fields were checked."""
+    kept = ALWAYS_PRESENT[tool]
     node = _at(sent_result(_nested(path), tool), path)
     assert isinstance(node, SentResult), (tool, path)
     checked = 0
     for name, subs in _declared(parts).items():
         sub_parts = _parts(subs)
         kinds = _kinds(sub_parts)
-        expected = _expected_empty(kinds)
-        if name in IMPLIED:
-            # Its overall answer is absent here, so it answers its own type's empty.
-            assert kinds == {"boolean"}, (tool, path, name)
         assert name not in node
-        assert node[name] == expected, (tool, path, name)
-        assert type(node[name]) is type(expected) or isinstance(node[name], dict)
-        assert node.get(name) == expected, (tool, path, name)
         checked += 1
+        if name in kept:
+            # The rule never leaves a kept field out: its absence means
+            # something else, so it is not answered.
+            with pytest.raises(KeyError):
+                node[name]
+            assert node.get(name) is None
+            if kept[name].data:
+                continue
+        else:
+            value = node[name]
+            assert omit_silent({name: value}, kept) == {}, (tool, path, name, value)
+            assert _of_kind(value, kinds), (tool, path, name, value)
+            assert node.get(name) == value, (tool, path, name)
         if depth == 0:
             continue
         if kinds == {"object"}:
@@ -260,7 +274,45 @@ async def test_an_implied_sub_answer_reads_as_the_answer_that_implies_it():
         assert node["directives_equivalent"] is True
         _at(value, path)["equivalent"] = False
         node = _at(sent_result(value, "verify_circuit"), path)
-        assert node["structurally_equivalent"] is False
+        # Kept beside any other verdict, so its absence there is not answered.
+        with pytest.raises(KeyError):
+            node["structurally_equivalent"]
+        # The rule leaves the sub-answer out only beside ``equivalent: true``
+        # itself, not beside a value equal to it.
+        _at(value, path)["equivalent"] = 1
+        node = _at(sent_result(value, "verify_circuit"), path)
+        with pytest.raises(KeyError):
+            node["structurally_equivalent"]
+
+
+async def test_an_implied_sub_answer_is_answered_only_where_it_is_declared():
+    schema = get_tools()[1]["run_experiments"].definition.output_schema
+    assert schema is not None
+    assert "structurally_equivalent" not in schema["properties"]
+    with pytest.raises(KeyError):
+        sent_result({"equivalent": True}, "run_experiments")["structurally_equivalent"]
+
+
+async def test_a_kept_field_left_out_is_not_answered():
+    """``export.diff_vs_prior`` is kept: empty says nothing changed, absent says
+    there was no previous export. An absent one must not read as "nothing
+    changed"."""
+    assert "diff_vs_prior" in ALWAYS_PRESENT["verify_circuit"]
+    export = sent_result({"export": {"path": "x.net"}}, "verify_circuit")["export"]
+    with pytest.raises(KeyError):
+        export["diff_vs_prior"]
+    assert export.get("diff_vs_prior") is None
+    assert export.get("diff_vs_prior", "no prior") == "no prior"
+
+
+async def test_pickle_and_deepcopy_give_plain_dicts():
+    result = sent_result({"runs": {"items": [{"case_id": "a"}]}}, "run_experiments")
+    for copied in (copy.deepcopy(result), pickle.loads(pickle.dumps(result, protocol=0))):
+        assert copied == result
+        assert type(copied) is dict
+        assert type(copied["runs"]) is dict
+        assert type(copied["runs"]["items"][0]) is dict
+    assert type(copy.copy(result)) is dict
 
 
 def _object_nodes(

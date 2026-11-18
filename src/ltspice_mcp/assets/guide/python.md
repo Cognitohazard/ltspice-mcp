@@ -77,7 +77,8 @@ starting a session.
   attached `analyze`. A result leaves out a field that says nothing, as a
   reply does, and reading a left-out field gives its empty value (`[]`, `{}`,
   `False` or `None`), so `row["assignments"]` is `{}` for an unswept run; `in`
-  still tells whether the reply carried it, and a misspelt key raises. A row's status describes its case. A case that ran is
+  still tells whether the reply carried it, and a misspelt key or a left-out
+  field the tool always keeps raises `KeyError`. A row's status describes its case. A case that ran is
   `"produced"` while the job is `"completed"`, so select rows on `"produced"`.
 - `wait=False` returns the receipt at once; `api.wait(job_id, timeout_s=None)`
   blocks until the job is terminal. A timeout returns the current snapshot with

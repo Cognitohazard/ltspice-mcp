@@ -770,7 +770,7 @@ class _CataloguedMethod:
         # Every result and error payload leaves here as a SentResult, which
         # answers a declared field the reply left out with its empty value
         # (api/_result.py). A raw page already is a sent reply.
-        from ltspice_mcp.api._result import sent_result
+        from ltspice_mcp.api._result import sent_result  # noqa: TID251 - the one place a result is wrapped
 
         sent = (lambda value, _tool: value) if kwargs.get("raw_page") else as_sent
         try:

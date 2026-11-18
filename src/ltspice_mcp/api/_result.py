@@ -3,25 +3,28 @@
 A reply leaves out every field that says nothing (``lib/reply_fields.py``), and
 the Python API returns the reply's shape. :class:`SentResult` is that dict, as
 sent, plus one answer: reading a field the operation's output schema declares,
-and the reply left out, gives the field's empty value instead of a
-``KeyError``. The empty value is what the reply rule left out: an empty list
-for an array, an empty object for an object, ``False`` for a flag, ``None`` for
-anything else, and, for a sub-answer the overall answer beside it implies
-(``IMPLIED``), the implied value. A key the schema does not declare raises as a
-plain dict's does, so a misspelt name still fails.
+and the reply left out, gives the value the rule left out
+(``reply_fields.left_out_value``, which answers that question): an empty list
+for an array, an empty object for an object, ``False`` for a flag, the implied
+value of an implied sub-answer, ``None`` for anything else, a field whose
+schema names no type among them. A key the schema does not declare, and a
+field the tool keeps (``ALWAYS_PRESENT``), whose absence means something else,
+raise ``KeyError`` as a plain dict's do, so a misspelt name still fails.
 
 Everything else is the dict as sent: ``in``, ``len``, iteration, equality,
 ``repr`` and ``json.dumps`` see only the fields the reply carried, so ``in``
-still tells whether a field was sent. ``dict(result)`` and ``result.copy()``
-give plain dicts.
+still tells whether a field was sent. ``dict(result)``, ``result.copy()`` and
+``copy.copy`` give a plain dict at the top level; ``copy.deepcopy`` and pickle
+give plain dicts throughout.
 
 Nested objects and the rows of a list answer the same way, each by its own part
 of the schema. Where a schema has branches (``oneOf``, ``anyOf``, ``allOf``), a
 field declared in any branch counts as declared; a field the branches declare
-with different kinds of value answers ``None``.
+with different kinds of value answers ``None``. A field kept as data
+(``Kept.data``) is handed back as it is, since the rule left nothing out of it.
 
 ``_CataloguedMethod._run`` (``api/_methods.py``) is the one place a result is
-wrapped.
+wrapped; ``pyproject.toml`` bans the names everywhere else.
 """
 
 from __future__ import annotations
@@ -29,10 +32,11 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
-from ltspice_mcp.lib.reply_fields import IMPLIED
+from ltspice_mcp.lib.reply_fields import Kept, left_out_value
 
 _BRANCHES = ("oneOf", "anyOf", "allOf")
 _NO_DEFAULT: Any = object()
+_UNREAD: Any = object()
 
 
 def _expanded(parts: Iterable[Mapping[str, Any]]) -> tuple[Mapping[str, Any], ...]:
@@ -48,15 +52,17 @@ def _expanded(parts: Iterable[Mapping[str, Any]]) -> tuple[Mapping[str, Any], ..
 
 
 class _Shape:
-    """What one value of a result is declared as: the schema parts it answers by."""
+    """What one value of a result is declared as: the schema parts it answers by,
+    and the replying tool's kept fields."""
 
-    __slots__ = ("_extra", "_fields", "_items", "_parts")
+    __slots__ = ("_extra", "_fields", "_items", "_parts", "kept")
 
-    def __init__(self, parts: Iterable[Mapping[str, Any]]) -> None:
+    def __init__(self, parts: Iterable[Mapping[str, Any]], kept: Mapping[str, Kept]) -> None:
         self._parts = _expanded(parts)
+        self.kept = kept
         self._fields: dict[str, _Shape] | None = None
-        self._extra: _Shape | bool | None = False
-        self._items: _Shape | bool | None = False
+        self._extra: Any = _UNREAD
+        self._items: Any = _UNREAD
 
     def field(self, name: str) -> _Shape | None:
         """The shape of a declared field, or None where no part declares it."""
@@ -68,7 +74,7 @@ class _Shape:
                     for key, sub in properties.items():
                         if isinstance(sub, Mapping):
                             grouped.setdefault(key, []).append(sub)
-            self._fields = {key: _Shape(subs) for key, subs in grouped.items()}
+            self._fields = {key: _Shape(subs, self.kept) for key, subs in grouped.items()}
         return self._fields.get(name)
 
     def value_of(self, name: str) -> _Shape | None:
@@ -76,28 +82,26 @@ class _Shape:
         declared = self.field(name)
         if declared is not None:
             return declared
-        if self._extra is False:
+        if self._extra is _UNREAD:
             extra = [
                 part["additionalProperties"]
                 for part in self._parts
                 if isinstance(part.get("additionalProperties"), Mapping)
             ]
-            self._extra = _Shape(extra) if extra else None
-        assert not isinstance(self._extra, bool)
+            self._extra = _Shape(extra, self.kept) if extra else None
         return self._extra
 
     def items(self) -> _Shape | None:
         """The shape of a list's rows, or None where no part declares one."""
-        if self._items is False:
+        if self._items is _UNREAD:
             rows = [
                 part["items"] for part in self._parts if isinstance(part.get("items"), Mapping)
             ]
-            self._items = _Shape(rows) if rows else None
-        assert not isinstance(self._items, bool)
+            self._items = _Shape(rows, self.kept) if rows else None
         return self._items
 
-    def empty(self) -> Any:
-        """The value the reply rule leaves out for this field."""
+    def kinds(self) -> set[str]:
+        """The JSON Schema types the parts declare."""
         kinds: set[str] = set()
         for part in self._parts:
             declared = part.get("type")
@@ -105,14 +109,7 @@ class _Shape:
                 kinds.add(declared)
             elif isinstance(declared, list):
                 kinds.update(kind for kind in declared if isinstance(kind, str))
-        kinds.discard("null")
-        if kinds == {"array"}:
-            return []
-        if kinds == {"object"}:
-            return SentResult({}, self)
-        if kinds == {"boolean"}:
-            return False
-        return None
+        return kinds
 
     def shaped(self, value: Any) -> Any:
         """``value`` with each object in it answering by its part of the schema."""
@@ -126,7 +123,8 @@ class _Shape:
 
 
 class SentResult(dict[str, Any]):
-    """A sent reply that answers a declared, left-out field with its empty value."""
+    """A sent reply that answers a declared field it left out with the value
+    the reply rule left out."""
 
     __slots__ = ("_shape",)
 
@@ -134,18 +132,16 @@ class SentResult(dict[str, Any]):
         super().__init__()
         self._shape = shape
         for key, item in value.items():
-            inner = shape.value_of(key) if isinstance(key, str) else None
+            rule = shape.kept.get(key) if isinstance(key, str) else None
+            inner = None if rule is not None and rule.data else shape.value_of(key)
             dict.__setitem__(self, key, item if inner is None else inner.shaped(item))
 
     def _absent(self, key: Any) -> Any:
-        if key in IMPLIED:
-            overall, implied = IMPLIED[key]
-            if dict.get(self, overall, _NO_DEFAULT) == implied:
-                return implied
         field = self._shape.field(key) if isinstance(key, str) else None
         if field is None:
             raise KeyError(key)
-        return field.empty()
+        value = left_out_value(key, field.kinds(), self, self._shape.kept)
+        return SentResult(value, field) if isinstance(value, dict) else value
 
     def __missing__(self, key: Any) -> Any:
         return self._absent(key)
@@ -160,6 +156,11 @@ class SentResult(dict[str, Any]):
         except KeyError:
             return None
 
+    def __reduce__(self) -> tuple[Any, ...]:
+        # Pickled and deep-copied as the plain dict it holds: the schema it
+        # reads by stays with the operation that sent it.
+        return (dict, (dict(self),))
+
 
 _SHAPES: dict[str, _Shape] = {}
 
@@ -173,9 +174,10 @@ def sent_result(value: Any, tool: str) -> Any:
     shape = _SHAPES.get(tool)
     if shape is None:
         from ltspice_mcp.tools import get_tools
+        from ltspice_mcp.tools._base import ALWAYS_PRESENT
 
         schema = get_tools()[1][tool].definition.output_schema
         if schema is None:
             raise LookupError(f"{tool!r} declares no output schema")
-        shape = _SHAPES[tool] = _Shape([schema])
+        shape = _SHAPES[tool] = _Shape([schema], ALWAYS_PRESENT[tool])
     return SentResult(value, shape)
