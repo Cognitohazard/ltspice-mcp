@@ -204,7 +204,7 @@ its jobs run:
 
 | trigger | tier | jobs that run |
 |-|-|-|
-| the release gate in `publish.yml` | release | `static`, `audit`, `check (3.11)`, `check (3.12)`, `check (3.13)`, `check-windows`, `check-macos` |
+| the release gate in `publish.yml`; a run of `ci.yml` started by hand | release | `static`, `audit`, `check (3.11)`, `check (3.12)`, `check (3.13)`, `check-windows`, `check-macos` |
 | push to `master`; a pull request whose title starts with `Rollup` or that carries the `full-ci` label | full | `static`, `changelog` (pull requests only), `audit`, `check (3.11)`, `check (3.12)`, `check (3.13)`, `check-windows` |
 | a pull request that changes only documentation | docs | `static`, `changelog`, `check (3.12)` |
 | any other pull request | pr | `static`, `changelog`, `audit`, `check (3.12)`, `check-windows` |
@@ -221,8 +221,10 @@ full from its next push, or at once if it is labelled `full-ci`.
 
 A landing is held to Linux and Windows; macOS is checked at release. No
 tier that `ci.yml` picks runs `check-macos`, so a macOS regression first shows
-when a release is cut, and holds the release until it is fixed; run the
-release tier with a TestPyPI dry run (above) to check macOS before then.
+when a release is cut, and holds the release until it is fixed. To run the
+release tier on a branch before then, start CI by hand on it: the Actions
+tab, the CI workflow, "Run workflow", or `gh workflow run ci.yml --ref
+<branch>`.
 
 A job a tier leaves out is skipped by its own condition, so it reports as
 skipped under the same name it has in a release run, and a required check of

@@ -5,7 +5,8 @@ name: Checks
 #
 # The `tier` input chooses which jobs run; ci.yml picks it per run, and
 # docs/TESTING.md ("CI tiers") lists the jobs of each.
-#   release: every job. The default; publish.yml's release gate passes it.
+#   release: every job. The default; publish.yml's release gate passes it,
+#            and ci.yml picks it for a run started by hand.
 #   full:    every job but macOS: a landing is held to Linux and Windows, and
 #            macOS is checked at release.
 #   pr:      static, changelog, audit, the Linux suite on Python 3.12, Windows.

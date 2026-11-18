@@ -1,9 +1,11 @@
 name: CI
 
 # Runs the reusable checks (checks.yml) at the tier the trigger calls for.
-# No tier here runs the macOS job: a landing is held to Linux and Windows,
-# and macOS is checked at release (publish.yml, tier `release`).
+# No tier a landing gets runs the macOS job: a landing is held to Linux and
+# Windows, and macOS is checked at release (publish.yml, tier `release`).
 #
+#   release  a run started by hand (workflow_dispatch) on any branch: the
+#            release gate's jobs, macOS included, without tagging a release.
 #   full  every push to master; a pull request whose title starts with
 #         "Rollup"; a pull request labelled `full-ci`.
 #   docs  a pull request whose every changed file is under docs/ or
@@ -24,12 +26,15 @@ on:
   pull_request:
     branches: [master]
     types: [opened, synchronize, reopened, labeled]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && format('-label-{0}', github.run_id) || '' }}
+  # A run started by hand has its own group, so it never displaces a pending
+  # run of the same branch's pushes.
+  group: ci-${{ github.workflow }}-${{ github.ref }}${{ github.event_name == 'workflow_dispatch' && format('-dispatch-{0}', github.run_id) || '' }}${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && format('-label-{0}', github.run_id) || '' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -58,6 +63,9 @@ jobs:
           FULL_CI_LABEL: ${{ contains(github.event.pull_request.labels.*.name, 'full-ci') }}
         run: |
           pick() {
+            if [ "$EVENT" = workflow_dispatch ]; then
+              echo "release: a run started by hand"; tier=release; return
+            fi
             if [ "$EVENT" != pull_request ]; then
               echo "full: a $EVENT event"; tier=full; return
             fi
