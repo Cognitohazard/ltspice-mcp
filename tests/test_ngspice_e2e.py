@@ -25,7 +25,7 @@ import pytest
 from ltspice_mcp.api._primitives import load_raw_result
 from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.errors import ResultError
-from ltspice_mcp.lib import services
+from ltspice_mcp.lib import result_kinds, services
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner, live_run_progress
 from ltspice_mcp.lib.native_execution import observe_simulator
 from ltspice_mcp.lib.parser_service import load_artifacts_sync
@@ -721,17 +721,89 @@ async def test_a_real_variable_of_a_complex_plot_reads_as_each_file_holds_it(
     assert [s.pop("representation") for s in binary_signals] == ["complex"] * 3
     assert text_signals == binary_signals
 
-    # plot_waveform answers the same for both files. Its answer is a refusal
-    # where this ngspice writes a nonzero imaginary part for the frequency, which
-    # it does for every AC run on some builds; that refusal is about the axis,
-    # which both files hold alike, and not about reading the parameter.
-    assert "Failed to parse" not in text["plotted"].get("refused", ""), text["plotted"]
-    assert text["plotted"].keys() == binary["plotted"].keys()
-    if "refused" in binary["plotted"]:
-        assert text["plotted"] == binary["plotted"]
-    else:
-        [drawn] = text["plotted"]["traces"]
-        assert drawn["max"] == vth, drawn
+    # plot_waveform draws the parameter from both files, as each holds it: the
+    # ASCII file's real values in volts, the binary file's complex ones as a
+    # magnitude in dB. The frequency ngspice 42 writes with a subnormal
+    # imaginary part is read as its real part (result_kinds.axis_coordinates).
+    for reading in (binary, text):
+        assert "refused" not in reading["plotted"], reading["plotted"]
+    [drawn] = text["plotted"]["traces"]
+    assert (drawn["unit"], drawn["max"]) == ("V", vth), drawn
+    [drawn] = binary["plotted"]["traces"]
+    assert drawn["unit"] == "dB", drawn
+    assert drawn["max"] == pytest.approx(20 * math.log10(1.815172031040211)), drawn
+
+
+_AC_DECKS = {
+    "rc_by_decade": (
+        "* rc low-pass\nV1 in 0 AC 1\nR1 in out 1k\nC1 out 0 1u\n.ac dec 10 1 1meg\n.end\n"
+    ),
+    "rlc_linear": (
+        "* series rlc\nV1 in 0 DC 0 AC 1\nR1 in a 10\nL1 a out 1m\nC1 out 0 1n\n"
+        ".ac lin 50 100k 300k\n.end\n"
+    ),
+}
+
+
+@pytest.mark.parametrize("raw_format", ["installed", "ascii"])
+@pytest.mark.parametrize("deck", sorted(_AC_DECKS))
+async def test_every_reader_of_an_ac_run_reads_its_frequency_axis(
+    ngspice_state: SessionState,
+    work_dir: Path,
+    raw_format: str,
+    deck: str,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Whatever imaginary part the installed ngspice writes for an AC plot's
+    frequency (ngspice 42 a subnormal number at every point, in binary and in
+    ASCII files), it is one no simulator computed as a coordinate, so
+    plot_waveform draws the run, and analyze_results, inspect and the Python
+    API read its axis as the frequencies swept."""
+    _write_raw_as(raw_format, monkeypatch)
+    net = _write(work_dir, f"{deck}_{raw_format}.cir", _AC_DECKS[deck])
+    receipt = await _run_one(ngspice_state, f"ng-ac-axis-{deck}-{raw_format}", net)
+    job_id = receipt["job_id"]
+    loaded = await load_raw_result(
+        state=ngspice_state, raw_path=None, job_id=job_id, run_index=0, case_id=None
+    )
+    stored = np.asarray(loaded._raw.get_axis(step=0))
+    # What this build wrote: a complex frequency whose imaginary part is no
+    # coordinate. A build that writes another will fail here, not further on.
+    assert np.iscomplexobj(stored)
+    assert result_kinds.imaginary_not_data(np.imag(stored)), np.imag(stored)[:3]
+    axis = loaded.axis()
+    np.testing.assert_array_equal(axis, np.real(stored))
+    assert np.all(np.diff(axis) > 0)
+
+    reply = await handle_plot_waveform(
+        PlotWaveformInput.model_validate({"job_id": job_id, "signals": ["v(out)"], "open": False}),
+        ngspice_state,
+    )
+    assert reply.structured_content is not None
+    [drawn] = reply.structured_content["traces"]
+    assert drawn["signal"] == "v(out)"
+
+    data = await _analyze(
+        ngspice_state,
+        job_id,
+        [
+            {"key": "filter", "metric": "bode_filter", "signal": "v(out)"},
+            {"key": "at", "metric": "value", "expr": "v(out)", "at": str(float(axis[1]))},
+        ],
+    )
+    assert "failures" not in data, data["failures"]
+    [at] = data["results"]["at"]["values"]
+    assert at["value"]["actual_x"] == pytest.approx(axis[1])
+
+    inspected = await handle_inspect(
+        InspectInput.model_validate(
+            {"queries": [{"kind": "results", "view": "signals", "job_id": job_id}]}
+        ),
+        ngspice_state,
+    )
+    assert inspected.structured_content is not None
+    [signals] = inspected.structured_content["results"]
+    assert signals["ok"], signals
 
 
 async def test_mosfet_dc_sweep_internal_reachable_by_shorthand(
