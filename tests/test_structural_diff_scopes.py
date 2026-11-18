@@ -494,3 +494,23 @@ async def test_diff_vs_prior_does_not_move_a_resistor_whose_card_lists_its_nodes
     data = await _run(state, path=str(asc), checks=["export"], export_to="sidecar")
     moved = data["export"]["diff_vs_prior"].get("connections_changed", [])
     assert [row["reference"] for row in moved] == []
+
+
+async def test_diff_vs_prior_says_a_reversed_card_on_numbered_nets_may_have_moved(
+    config, work_dir, asc_symbols, monkeypatch
+):
+    """R1 moves its numbered end from C1's net to D1's, which the new export
+    numbers as C1's was, and its card is written reversed: the same names,
+    another net. The delta must not read that as no change."""
+    before = "* d\nV1 en 0 1\nR1 N001 en 1k\nC1 N001 0 1n\nD1 N002 0 DD\nR2 en N002 1k\n.end\n"
+    after = "* d\nV1 en 0 1\nR1 en N001 1k\nC1 N002 0 1n\nD1 N001 0 DD\nR2 en N001 1k\n.end\n"
+    monkeypatch.setattr(vc, "_create_netlist", _exporter_writing([after]))
+    state = _with_ltspice(config)
+    asc = _write(work_dir, "m.asc", _RES_ASC)
+    _write(work_dir, "m.net", before)
+    data = await _run(state, path=str(asc), checks=["export"], export_to="sidecar")
+    diff = data["export"]["diff_vs_prior"]
+    assert any(
+        line.startswith("connections: the two exports are wired otherwise")
+        for line in diff.get("not_compared", [])
+    )

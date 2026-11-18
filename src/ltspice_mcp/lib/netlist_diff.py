@@ -589,8 +589,9 @@ def connection_delta(
     path in the flattened circuit, ``X1.M2`` inside a block), its pin by
     position on the card, counting from 1, and the net before and after, in
     lower case as the comparison reads a net name. A resistor, capacitor or
-    inductor on the same nets with its card's two nodes in the other order
-    has not moved. Parts only one side has are the component delta's.
+    inductor on the same named nets with its card's two nodes in the other
+    order has not moved; on a numbered net, it may have, and
+    ``not_compared`` says the wiring differs there. Parts only one side has are the component delta's.
     """
     named = {
         net for comp in baseline.components for net in comp.nodes if not named_by_export(net)
@@ -620,9 +621,11 @@ def connection_delta(
         if before != after and (before in anchored or after in anchored) and ref not in turned
     }
     not_compared: list[str] = []
-    named_rows = [row for row in rows if row[0] not in turned]
-    unnamed = len(moved) < len(named_rows) or (
-        not rows
+    # Only a turned part whose nets are all named is known to have moved
+    # nowhere; one on a numbered net may have moved between such nets.
+    certain = {ref for ref in turned if all(net in anchored for net in nets[ref][0])}
+    unnamed = len(moved) < len([row for row in rows if row[0] not in certain]) or (
+        not moved
         and not comparison.structurally_equivalent
         and not (comparison.added or comparison.removed or comparison.arity_errors)
     )
