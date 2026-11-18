@@ -138,6 +138,7 @@ from ltspice_mcp.tools._base import (
     failure_text,
     format_response,
     outcome_of,
+    present_job_answer,
     registry,
     resolve_response_budget,
     resolve_run_simulator,
@@ -151,8 +152,8 @@ from ltspice_mcp.tools.analyze import (
 from ltspice_mcp.tools.receipts import (
     RUN_EXPERIMENTS_OUTPUT_SCHEMA,
     finalize_receipt,
+    receipt_parts,
     render_receipt_snapshot,
-    render_run_receipt,
     resolve_run_fields,
     runs_page,
     snapshot_receipt,
@@ -775,9 +776,7 @@ async def handle_run_experiments(
                 simulator,
             )
         except DeckStagingError as exc:
-            return await _routing_failure_response(
-                args, circuit_inputs, exc, projected, budget=budget
-            )
+            return _routing_failure_response(args, circuit_inputs, exc, projected)
         await asyncio.to_thread(route.output_folder.mkdir, parents=True, exist_ok=True)
 
         # Staging runs inside the coordinator's request gate, not here: a second
@@ -1032,12 +1031,24 @@ async def handle_run_experiments(
 async def _render_static_run_receipt(
     data: dict[str, Any],
     budget: ResponseBudget,
+    state: SessionState,
     *,
     is_error: bool = False,
 ) -> types.CallToolResult:
-    return await render_run_receipt(
-        budget, lambda _limit, _rung: copy.deepcopy(data), is_error=is_error
+    """An error receipt, through the presenter: one with a job keeps its run
+    rows behind the job's record, and one with none is sent whole."""
+    reply = present_job_answer(
+        lambda _rung, _rows: copy.deepcopy(data),
+        receipt_parts(),
+        tool="run_experiments",
+        schema=RUN_EXPERIMENTS_OUTPUT_SCHEMA,
+        budget=budget,
+        state=state,
+        delivery="run",
     )
+    result = format_response(reply)
+    result.is_error = is_error
+    return result
 
 
 def _job_reader(
@@ -1578,16 +1589,15 @@ async def _dwell_and_respond(
         lint_by_circuit=lint_by_circuit,
     )
 
-    def build(limit: int, rung: response_budget.Rung | None) -> dict[str, Any]:
+    def build(rung: response_budget.Rung | None, rows: int | None) -> dict[str, Any]:
         data = render_receipt_snapshot(
             snapshot,
             control_token=receipt.control_token,
             provenance=provenance,
             run_fields=run_fields,
-            runs_cap=limit,
             analysis_fields=analysis_fields,
             analysis_answer_channel=rung is not None and rung.answer_channel,
-            analysis_rows_cap=limit if rung is not None and rung.shrink else None,
+            analysis_rows_cap=rows,
             analysis_served=frozenset(state.tool_dispatch),
         )
         data["replayed"] = receipt.replayed
@@ -1595,7 +1605,17 @@ async def _dwell_and_respond(
             data["warnings"] = [*warnings, *data.get("warnings", [])]
         return finalize_receipt(data)
 
-    return await render_run_receipt(budget, build)
+    return format_response(
+        present_job_answer(
+            build,
+            receipt_parts(run_fields),
+            tool="run_experiments",
+            schema=RUN_EXPERIMENTS_OUTPUT_SCHEMA,
+            budget=budget,
+            state=state,
+            delivery="run",
+        )
+    )
 
 
 def _append_terminal_cases(
@@ -1661,13 +1681,11 @@ def _circuit_error(exc: Exception, source_path: Path) -> tuple[str, str]:
     return "submission_failed", str(exc)
 
 
-async def _routing_failure_response(
+def _routing_failure_response(
     args: RunExperimentsInput,
     circuits: list[CircuitDeck],
     exc: DeckStagingError,
     projected: int,
-    *,
-    budget: ResponseBudget,
 ) -> types.CallToolResult:
     cases: list[ExperimentCase] = []
     for circuit in circuits:
@@ -1711,16 +1729,11 @@ async def _routing_failure_response(
             ),
         }
     )
+    data["runs"] = runs_page(cases, args.run_fields, warnings=data["warnings"])
     finalize_receipt(data)
-
-    def build(limit: int, _rung: response_budget.Rung | None) -> dict[str, Any]:
-        rendered = copy.deepcopy(data)
-        rendered["runs"] = runs_page(
-            cases, args.run_fields, cap=limit, warnings=rendered["warnings"]
-        )
-        return rendered
-
-    return await render_run_receipt(budget, build)
+    # No job holds these cases, so there is no record to read rows back from:
+    # the receipt is sent whole, its failures naming every case.
+    return format_response(data)
 
 
 def submission_error_payload(
@@ -1780,7 +1793,7 @@ async def _error_response(
         commit_state=commit_state,
         hint=failure_text(failure, state),
     )
-    return await _render_static_run_receipt(data, budget, is_error=True)
+    return await _render_static_run_receipt(data, budget, state, is_error=True)
 
 
 async def _post_submit_error_response(
@@ -1858,7 +1871,7 @@ async def _post_submit_error_response(
     }
     finalize_receipt(data)
     try:
-        return await _render_static_run_receipt(data, budget, is_error=True)
+        return await _render_static_run_receipt(data, budget, state, is_error=True)
     except Exception as render_exc:
         # Non-recursive rescue boundary: no renderer or full payload builder is
         # called again after it fails. The minimum durable handles survive.

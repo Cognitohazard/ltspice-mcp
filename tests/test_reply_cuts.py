@@ -364,6 +364,16 @@ NEVER_BOUNDS: dict[tuple[str, str], str] = {
         "the values the refused argument accepts"
     ),
     ("jobs.handle_jobs", "files"): "one per file the run wrote beside its results",
+    # What a job's request named, which a standing note's said_before shortens.
+    **{
+        (handler, path): bound
+        for handler in ("experiments.handle_run_experiments", "jobs.handle_jobs")
+        for path, bound in (
+            ("source", "one per circuit the request names"),
+            ("lint", "one per circuit the request names"),
+            ("artifacts", "one per artifact the job recorded beside its runs"),
+        )
+    },
     # A sheet finding's own parts, in edit_schematic's preexisting view.
     ("schematic_edit.handle_edit_schematic", "views.preexisting.items[].refs"): _UNBOUNDED,
     ("schematic_edit.handle_edit_schematic", "views.preexisting.items[].points"): _UNBOUNDED,
@@ -670,32 +680,6 @@ REPLY_SIZE_SITES: dict[str, str] = {
     "tools/analyze.py:_resolve_drive_start": "analyze_results",
     "tools/analyze.py:handle_analyze_results": "analyze_results",
     "lib/result_store.py:<module>": "analyze_results",
-    "tools/experiments.py:<module>": "run_experiments",
-    "tools/experiments.py:AnalysisPerRun": "run_experiments",
-    "tools/experiments.py:RunExperimentsInput": "run_experiments",
-    "tools/experiments.py:handle_run_experiments": "run_experiments",
-    "tools/experiments.py:_render_static_run_receipt": "run_experiments",
-    "tools/experiments.py:_dwell_and_respond": "run_experiments",
-    "tools/experiments.py:_dwell_and_respond.build": "run_experiments",
-    "tools/experiments.py:_routing_failure_response": "run_experiments",
-    "tools/experiments.py:_routing_failure_response.build": "run_experiments",
-    "tools/experiments.py:_error_response": "run_experiments",
-    "tools/experiments.py:_post_submit_error_response": "run_experiments",
-    "tools/receipts.py:<module>": "run_experiments",
-    "tools/receipts.py:_degrade_receipt": "run_experiments",
-    "tools/receipts.py:negotiate_receipt": "run_experiments",
-    "tools/receipts.py:negotiate_receipt.candidate": "run_experiments",
-    "tools/receipts.py:negotiate_receipt.render": "run_experiments",
-    "tools/receipts.py:render_run_receipt": "run_experiments",
-    "tools/jobs.py:<module>": "jobs",
-    "tools/jobs.py:JobsInput": "jobs",
-    "tools/jobs.py:JobsListInput": "jobs",
-    "tools/jobs.py:JobsRunsInput": "jobs",
-    "tools/jobs.py:_jobs_page_schema": "jobs",
-    "tools/jobs.py:_decode_jobs_cursor": "jobs",
-    "tools/jobs.py:_negotiate_jobs": "jobs",
-    "tools/jobs.py:render_jobs_data": "jobs",
-    "tools/jobs.py:handle_jobs": "jobs",
     "tools/schematic_edit.py:<module>": "edit_schematic",
     "tools/schematic_edit.py:EditSchematicInput": "edit_schematic",
     "tools/schematic_edit.py:_preexisting_block": "edit_schematic",
@@ -707,9 +691,75 @@ REPLY_SIZE_SITES: dict[str, str] = {
 }
 
 
-#: Each function of a tool already on the presenter that still names a cursor,
-#: with why. Each goes at the next breaking release.
+_BUDGET_ARGUMENT = (
+    "the budget argument, which now sets the presenter's target; kept until the "
+    "next breaking release"
+)
+_HANDS_BUDGET_ON = (
+    "hands the call's budget to the reply layer (tools/_base.present_job_answer); "
+    "kept with the argument until the next breaking release"
+)
+_ATTACHED_ANALYSIS = (
+    "the attached analysis keeps analyze_results' own trimming (response_budget's "
+    "rungs) until analyze_results moves onto the presenter"
+)
+
+#: Each function of a tool already on the presenter that still names a cursor
+#: or a budget, with why. Each goes at the next breaking release, or, for the
+#: attached analysis, when analyze_results moves onto the presenter.
 KEPT_UNTIL_BREAKING: dict[str, str] = {
+    "tools/experiments.py:<module>": (
+        "imports the budget argument's type and resolver, and the rungs the attached "
+        "analysis is trimmed at; " + _ATTACHED_ANALYSIS
+    ),
+    "tools/experiments.py:AnalysisPerRun": (
+        "the attached analysis's per_run cursor, which is analyze_results'; "
+        + _ATTACHED_ANALYSIS
+    ),
+    "tools/experiments.py:RunExperimentsInput": _BUDGET_ARGUMENT,
+    "tools/experiments.py:handle_run_experiments": _HANDS_BUDGET_ON,
+    "tools/experiments.py:_dwell_and_respond": _HANDS_BUDGET_ON,
+    "tools/experiments.py:_dwell_and_respond.build": (
+        "renders the attached analysis at a rung; " + _ATTACHED_ANALYSIS
+    ),
+    "tools/experiments.py:_render_static_run_receipt": _HANDS_BUDGET_ON,
+    "tools/experiments.py:_error_response": _HANDS_BUDGET_ON,
+    "tools/experiments.py:_post_submit_error_response": _HANDS_BUDGET_ON,
+    "tools/receipts.py:<module>": (
+        "the run rows' record and the shared page schema of the runs block, which "
+        "keeps its page fields until the next breaking release; " + _ATTACHED_ANALYSIS
+    ),
+    "tools/receipts.py:_degrade_receipt": _ATTACHED_ANALYSIS,
+    "tools/receipts.py:trim_attached_analysis": _ATTACHED_ANALYSIS,
+    "tools/jobs.py:<module>": (
+        "the record cursor of the runs action and the list's stored pages, and the "
+        "page schema of its page fields; kept until the next breaking release"
+    ),
+    "tools/jobs.py:JobsInput": _BUDGET_ARGUMENT,
+    "tools/jobs.py:JobsListInput": (
+        "the cursor argument, which now takes the presenter's cursor; kept until the "
+        "next breaking release"
+    ),
+    "tools/jobs.py:JobsRunsInput": (
+        "the cursor argument, which now takes the record cursor of the job's run "
+        "rows; kept until the next breaking release"
+    ),
+    "tools/jobs.py:_jobs_page_schema": (
+        "the page fields of the list, runs and cancel replies; kept until the next "
+        "breaking release"
+    ),
+    "tools/jobs.py:handle_jobs": (
+        "opens the runs cursor before any job is read; kept with the argument until "
+        "the next breaking release"
+    ),
+    "tools/jobs.py:_list_page": (
+        "hands the list cursor to the presenter's page reader; kept with the argument "
+        "until the next breaking release"
+    ),
+    "tools/jobs.py:_present_jobs": _HANDS_BUDGET_ON,
+    "tools/jobs.py:render_jobs_data": (
+        "renders the attached analysis at a rung; " + _ATTACHED_ANALYSIS
+    ),
     "tools/verify.py:VerifyCircuitInput": (
         "the findings_cursor argument, which now takes the presenter's cursor; "
         "kept until the next breaking release"
@@ -744,7 +794,7 @@ def test_each_allowed_site_waits_for_an_operation():
 
 
 def test_a_tool_on_the_presenter_waits_for_no_move():
-    moved = {"verify_circuit"}
+    moved = {"verify_circuit", "run_experiments", "jobs"}
     assert not moved & set(REPLY_SIZE_SITES.values())
     assert not set(KEPT_UNTIL_BREAKING) & set(REPLY_SIZE_SITES)
 
@@ -753,6 +803,19 @@ def test_the_check_returns_its_whole_answer():
     # The evaluation knows no cursor and no budget: what a reply holds of it
     # is the presenter's to decide.
     assert not any(site.startswith("tools/verify.py:evaluate_verify_circuit") for site in _sites())
+
+
+def test_a_job_answer_is_computed_whole():
+    # One function gives a job's complete answer at a moment, every run row
+    # in it; it knows no cursor, no budget and no wait.
+    whole = (
+        "tools/receipts.py:render_receipt_snapshot",
+        "tools/receipts.py:snapshot_receipt",
+        "tools/receipts.py:project_receipt_runs",
+        "tools/receipts.py:render_runs_envelope",
+        "tools/jobs.py:evaluate_jobs",
+    )
+    assert not [site for site in _sites() if site.startswith(whole)]
 
 
 def test_nothing_outside_the_presenter_cuts_a_verify_circuit_list():

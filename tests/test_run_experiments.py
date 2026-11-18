@@ -562,10 +562,10 @@ class TestReceiptThenDwell:
     ):
         fake_simulator(monkeypatch)
 
-        async def exploding_renderer(*_args, **_kwargs):
+        def exploding_renderer(*_args, **_kwargs):
             raise RuntimeError("budget renderer exploded")
 
-        monkeypatch.setattr(experiments_mod, "render_run_receipt", exploding_renderer)
+        monkeypatch.setattr(experiments_mod, "present_job_answer", exploding_renderer)
         deck = _deck(work_dir / "budget-render-fail.cir")
 
         result = await handle_run_experiments(
@@ -632,10 +632,14 @@ class TestTerminalReceiptHint:
             )
         )
         assert data["completeness"]["expanded"] == 55
-        assert data["runs"]["truncated"] is True
-        assert data["hint"] == (
-            f"The inline run page is truncated; use jobs(runs) with job_id "
-            f"{data['job_id']} for the remaining cases."
+        runs = data["runs"]
+        assert runs["truncated"] is True
+        cut = data["cut"]["/runs/items"]
+        assert cut["returned"] == runs["returned"] >= 1
+        assert data["hint"].startswith(
+            f"{55 - runs['returned']} of 55 run rows are not in this reply; read them "
+            f'from the job\'s record with jobs(action="runs", job_id="{data["job_id"]}", '
+            f'cursor="{cut["next"]}")'
         )
 
 
@@ -3503,7 +3507,7 @@ class TestAttachedAnalysis:
         note = next(
             item for item in answer["observations"] if item.get("code") == "budget_truncated"
         )
-        assert "(answer)" in note["detail"]
+        assert "answer channel" in note["detail"]
         answer_result = answer["analysis"]["result"]
         entry = answer_result["results"]["vout"]
         assert entry["values"] == expected

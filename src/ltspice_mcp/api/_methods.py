@@ -383,12 +383,11 @@ async def _complete_run_receipt(
         control_token=control_token if isinstance(control_token, str) else None,
         provenance=request.provenance,
         run_fields=request.run_fields,
-        runs_cap=max(1, len(snapshot.runs_by_key)),
         analysis_fields=analysis_fields,
     )
-    # The complete receipt is re-rendered from the record, which knows only
-    # what happened to it. Whether THIS call replayed is on the handler's
-    # receipt and nowhere else, so it is carried across rather than re-derived.
+    # The job's complete answer, every run row, read from the record, which
+    # knows only what happened to it. Whether THIS call replayed is on the
+    # handler's receipt and nowhere else, so it is carried across.
     data["replayed"] = bool(receipt.get("replayed"))
     return experiments.finalize_receipt(data)
 

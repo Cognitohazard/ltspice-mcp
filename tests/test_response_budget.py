@@ -22,11 +22,7 @@ from ltspice_mcp.lib import response_budget
 from ltspice_mcp.lib.response_budget import Rung
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
-from ltspice_mcp.tools import experiments as exp_mod
 from ltspice_mcp.tools import inspect_tools as insp
-from ltspice_mcp.tools import jobs as jobs_mod
-from ltspice_mcp.tools import receipts as receipts_mod
-from ltspice_mcp.tools._base import ResponseBudget
 from ltspice_mcp.tools.analyze import (
     OUTPUT_SCHEMA,
     AnalyzeResultsInput,
@@ -678,68 +674,35 @@ class TestAnalysisBudget:
             )
 
 
-def _run_rows(count: int) -> list[dict[str, Any]]:
-    """``count`` produced run records — the row surface a receipt budget shrinks."""
-    return [
-        {
-            "case_id": f"case-{index:03d}",
-            "run_index": index,
-            "circuit": "dut",
-            "assignments": {"R1": f"{index + 1}k"},
-            "status": "produced",
-            "raw": f"/tmp/run-{index:03d}.raw",
-            "log": f"/tmp/run-{index:03d}.log",
-        }
-        for index in range(count)
-    ]
-
-
-def _run_receipt_build(rows: list[dict[str, Any]]) -> receipts_mod.ReceiptBuild:
-    """A receipt builder over ``rows``, paging to whatever limit a rung asks for."""
-
-    def build(limit: int, _rung: Rung | None) -> dict[str, Any]:
-        data = exp_mod._empty_payload("budgeted-runs")
-        selected = rows[:limit]
-        data.update(
-            {
-                "status": "completed",
-                "outcome": "complete",
-                "runs": {
-                    "items": selected,
-                    "total": len(rows),
-                    "returned": len(selected),
-                    "truncated": len(selected) < len(rows),
-                    "next_cursor": f"o:{len(selected)}" if len(selected) < len(rows) else None,
-                },
-            }
-        )
-        return receipts_mod.finalize_receipt(data)
-
-    return build
-
-
 @pytest.mark.asyncio
-async def test_run_receipt_shrink_cursor_starts_after_the_selected_candidate():
-    rows = _run_rows(80)
-
-    result = await receipts_mod.render_run_receipt(
-        ResponseBudget(response_budget.BUDGET_MIN_TOKENS),
-        _run_receipt_build(rows),
+async def test_a_receipts_cursor_starts_after_the_rows_it_holds(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """The cut's cursor reads the job's record from the first row the reply
+    left out: a status under the floor budget, then the runs it names."""
+    job = make_experiment_job(state_no_sim, job_id="b_cursor", count=80, status="completed")
+    data = await _jobs(
+        state_no_sim,
+        action="status",
+        job_id=job.job_id,
+        budget=response_budget.BUDGET_MIN_TOKENS,
     )
-    data = result.structured_content
-    assert data is not None
-    jsonschema.Draft202012Validator(receipts_mod.RUN_EXPERIMENTS_OUTPUT_SCHEMA).validate(data)
     page = data["runs"]
-    assert 0 < page["returned"] < 50
-    assert page["next_cursor"] is not None
-    offset = jobs_mod._decode_jobs_cursor(page["next_cursor"])
-    assert offset == page["returned"]
-    rendered_rows = page["items"]
-    assert all("raw" in row and "log" in row for row in rendered_rows)
-    assert [item["case_id"] for item in rendered_rows] == [
-        item["case_id"] for item in rows[:offset]
+    cut = data["cut"]["/runs/items"]
+    assert 1 <= page["returned"] == cut["returned"] < 80
+    assert page["next_cursor"] == cut["next"]
+    assert [row["case_id"] for row in page["items"]] == [
+        case.case_id for case in job.cases[: page["returned"]]
     ]
-    assert rows[offset]["case_id"] == f"case-{offset:03d}"
+    follow = await _jobs(
+        state_no_sim,
+        action="runs",
+        job_id=job.job_id,
+        cursor=cut["next"],
+        budget=response_budget.BUDGET_MIN_TOKENS,
+    )
+    assert follow["cut"]["/items"]["offset"] == page["returned"]
+    assert follow["items"][0]["case_id"] == job.cases[page["returned"]].case_id
 
 
 # ---------------------------------------------------------------------------
@@ -947,27 +910,6 @@ class TestWaveformSamplesFitTheBudget:
 
 @pytest.mark.asyncio
 class TestJobsBudget:
-    async def test_answer_rung_rebuilds_a_receipt_at_the_same_page_limit(self):
-        built_for: list[bool] = []
-
-        def build(_limit: int, rung: Rung | None):
-            answer_channel = rung is not None and rung.answer_channel
-            built_for.append(answer_channel)
-            return {
-                "analysis": {
-                    "view": "answer" if answer_channel else "detail",
-                    "payload": "" if answer_channel else "x" * 4_000,
-                },
-                "observations": [],
-                "warnings": [],
-                "failures": [],
-            }
-
-        data = await jobs_mod._negotiate_jobs(ResponseBudget(600), build, 50)
-
-        assert built_for == [False, True]
-        assert data["analysis"]["view"] == "answer"
-
     async def test_a_met_budget_changes_nothing(self, state_no_sim: SessionState, work_dir: Path):
         job = _batch_with_runs(state_no_sim, 60)
         # As above: 'no budget' has to mean no budget for this comparison.
@@ -1038,7 +980,10 @@ class TestJobsBudget:
         assert "failures" not in data
         assert data["job_id"] == job.job_id
         assert data["status"] == job.status
-        assert _observation(data, "budget_truncated") is not None
+        # The cut says what the page holds; no note claims nothing was cut.
+        cut = data["cut"]["/items"]
+        assert cut["total"] == 60 and 1 <= cut["returned"] < 60
+        assert _observation(data, "budget_truncated") is None
 
 
 # ---------------------------------------------------------------------------
@@ -1120,8 +1065,8 @@ class TestReceiptFloor:
     the job ran many cases. A floor that carried a row per case — a run row, an
     attributed value per recipe, an identity echo per run — grew with exactly
     the number that made the caller reach for a budget, so a big grid came back
-    over any budget it could set. At the floor the per-case rows are counted
-    rather than carried, and the cursor and ``jobs(runs)`` reach every one.
+    over any budget it could set. At the floor one run row stays, the rest are
+    counted in ``cut``, and its cursor reads every one from the job's record.
     """
 
     async def test_the_floor_does_not_grow_with_the_case_count(
@@ -1143,17 +1088,17 @@ class TestReceiptFloor:
         _assert_floor_flat(receipts[4], receipts[64])
         _assert_floor_flat(statuses[4], statuses[64])
         large = receipts[64]
-        # Counted, not carried: completeness and the page's total say how many
-        # runs there are; no row and no per-run echo is inline.
+        # Counted, not carried: completeness and the cut say how many runs
+        # there are; one row stays, and no per-run echo is inline.
         assert large["completeness"]["expanded"] == large["runs"]["total"] == 64
-        assert large["runs"]["returned"] == 0
+        assert large["runs"]["returned"] == large["cut"]["/runs/items"]["returned"] >= 1
         assert "source_hashes" not in large["analysis"]["result"]
         assert large["analysis"]["result"]["coverage"]["runs_analyzed"] == 64
         assert _observation(large, "budget_truncated") is not None
-        assert "jobs(runs)" in large["hint"]
+        assert 'jobs(action="runs"' in large["hint"]
 
         # The cursor is the route back to every row, in order.
-        seen: list[str] = []
+        seen = [row["case_id"] for row in large["runs"]["items"]]
         cursor = large["runs"].get("next_cursor")
         while cursor is not None:
             page = await _jobs(
@@ -1254,20 +1199,22 @@ class TestReceiptFloor:
         self, state_with_sim: SessionState, grid_deck: Path
     ):
         """Rung 0 empties the identity echo, the attached analysis's included,
-        and the note under the default says where it still is."""
+        and the note under the default says where it still is. The run rows
+        are the presenter's: cut as rows, at least one kept."""
         state_with_sim.config.default_budget = response_budget.BUDGET_MIN_TOKENS
 
         data = await _grid_receipt(state_with_sim, grid_deck, 4, None, recipes=_GRID_RECIPES[:1])
 
         attached = data["analysis"]["result"]
         assert "source_hashes" not in attached
-        # The default stops at rung 0: the rows the caller would read stand.
+        # The default stops at rung 0: the analysis rows the caller would read stand.
         assert len(attached["results"]["v_100u"]["values"]) == 4
-        assert data["runs"]["returned"] == 4
+        assert 1 <= data["runs"]["returned"] == data["cut"]["/runs/items"]["returned"] < 4
         note = _observation(data, "budget_truncated")
         assert note is not None
-        assert "Emptied: analysis.result.source_hashes." in note["detail"]
-        assert note["detail"].endswith(receipts_mod.RECEIPT_DEFAULT_ROUTE)
+        assert "emptied analysis.result.source_hashes" in note["detail"]
+        assert "include.provenance" in note["detail"]
+        assert "budget'" not in note["detail"]
 
 
 # ---------------------------------------------------------------------------
@@ -1538,17 +1485,21 @@ class TestRowsKeepTheirShape:
                 where=f"fail_cases budget={budget}",
             )
 
-    async def test_run_receipt_rows_stay_objects(self):
-        rows = _run_rows(80)
-        result = await receipts_mod.render_run_receipt(
-            ResponseBudget(response_budget.BUDGET_MIN_TOKENS),
-            _run_receipt_build(rows),
+    async def test_run_receipt_rows_stay_objects(self, state_no_sim: SessionState):
+        job = make_experiment_job(state_no_sim, job_id="b_objects", count=80)
+        state_no_sim.config.default_budget = 0
+        plain = await _jobs(state_no_sim, action="status", job_id=job.job_id)
+        data = await _jobs(
+            state_no_sim,
+            action="status",
+            job_id=job.job_id,
+            budget=response_budget.BUDGET_MIN_TOKENS,
         )
-        data = result.structured_content
-        assert data is not None
-        jsonschema.Draft202012Validator(receipts_mod.RUN_EXPERIMENTS_OUTPUT_SCHEMA).validate(data)
+        assert data["runs"]["returned"] < 80, "this budget is supposed to cut the rows"
         assert _columns_siblings(data) == []
-        _assert_object_rows(data["runs"]["items"], set(rows[0]), where="receipt runs")
+        _assert_object_rows(
+            data["runs"]["items"], set(plain["runs"]["items"][0]), where="receipt runs"
+        )
 
     async def test_jobs_run_page_rows_stay_objects(
         self, state_no_sim: SessionState, work_dir: Path

@@ -145,6 +145,13 @@ async def test_a_run_row_names_the_measurements_ltspice_printed_failed(
         for row in rows:
             assert _measured(row) == {"failed_measurements": ["never", "depends"]}, route
     for route, data in (await _every_receipt(state_with_sim, receipt)).items():
+        if route == "jobs wait":
+            # The route is a standing note: this session's first receipt sent
+            # it in full, so a wait names it by code and the call that repeats
+            # it; status, and the Python API, send it in full.
+            assert "measurements recipe" in data["hint"], (route, data["hint"])
+            assert 'jobs(action="status"' in data["hint"], (route, data["hint"])
+            continue
         assert _ROUTE in data["hint"], (route, data["hint"])
         assert "api.analyze_results" in data["hint"], route
 

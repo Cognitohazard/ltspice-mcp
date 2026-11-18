@@ -18,6 +18,13 @@ snapshot). :func:`present` decides what is sent:
   list. The reply then carries ``cut``, by each cut list's JSON Pointer, and
   ``stored_answer``.
 
+A list the server already keeps elsewhere, such as the run rows a job's own
+record holds, is a second kind of source (:class:`Record`): when it is cut, its
+cursor names the record and an offset, nothing is stored for it, and a page is
+read from the record when asked (:func:`open_record`, :func:`present_record_page`),
+so it carries the record as it stands then. A reply whose cut lists are all
+records writes no file.
+
 A cursor names a stored answer, a list's pointer and an offset.
 :func:`open_page` reads the stored file it names and :func:`present_page`
 presents the entries of that list from the offset on, cut to the target the
@@ -38,7 +45,7 @@ import logging
 import re
 import sys
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -100,18 +107,43 @@ class StoredAnswer:
 
 
 @dataclass(frozen=True)
+class Record:
+    """A list the server already keeps, named by the kind of record and its
+    key (a job's run rows: the kind ``job_runs`` and the job's id): a cut of
+    it is read back from the record, not from a stored copy."""
+
+    kind: str
+    key: str
+
+
+@dataclass(frozen=True)
 class Presented:
-    """The reply to send, the lists it cut, and the stored answer behind it."""
+    """The reply to send, the lists it cut, the stored answer behind it, and
+    its size against the target it was presented to."""
 
     reply: dict[str, Any]
     cut: dict[str, ListCut]
     stored: StoredAnswer | None
+    size: int = 0
+    target: int | None = None
+
+    @property
+    def met(self) -> bool:
+        """Whether the reply is within its target (always, with no target)."""
+        return self.target is None or self.size <= self.target
 
 
 #: Adds the tool's own words about a cut to a reply: ``(reply, cut, stored,
-#: paged)``, where ``paged`` is the pointer of the list a page reads, or None
-#: on a first reply. Called on each candidate, so what it adds is measured.
-Annotate = Callable[[dict[str, Any], Mapping[str, ListCut], StoredAnswer, str | None], None]
+#: paged)``, where ``stored`` is None when every cut list is a record, and
+#: ``paged`` is the pointer of the list a page reads, or None on a first
+#: reply. Called on each candidate, so what it adds is measured.
+Annotate = Callable[
+    [dict[str, Any], Mapping[str, ListCut], StoredAnswer | None, str | None], None
+]
+
+#: Says, once, that a reply went out over its target: ``(reply, size, target)``.
+#: Called on the reply sent, after the cut, only when it is still over.
+Over = Callable[[dict[str, Any], int, int], None]
 
 
 # ---------------------------------------------------------------------------
@@ -241,14 +273,19 @@ def _fit(
     sources: Mapping[str, list[Any]],
     build: Callable[[Mapping[str, int]], dict[str, Any]],
     target: int,
+    caps: Mapping[str, int] | None = None,
 ) -> dict[str, int]:
     """How many entries of each list in ``sources`` the reply keeps.
 
-    The largest list still holding more than one entry is cut first, to the
-    most entries that let the reply fit; when none does, to one entry, and the
-    next largest is cut.
+    A list starts at its cap, when ``caps`` names one (a count the caller set,
+    such as a page size). The largest list still holding more than one entry
+    is cut first, to the most entries that let the reply fit; when none does,
+    to one entry, and the next largest is cut.
     """
-    keep = {pointer: len(entries) for pointer, entries in sources.items()}
+    keep = {
+        pointer: max(1, min(len(entries), (caps or {}).get(pointer, len(entries))))
+        for pointer, entries in sources.items()
+    }
     if _size(build(keep)) <= target:
         return keep
     while True:
@@ -319,36 +356,33 @@ def cleanup(store: Store) -> int:
     return removed
 
 
-def _store_answer(
-    store: Store,
-    tool: str,
-    answer: dict[str, Any],
-    snapshot: dict[str, Any],
-    ttl_hours: float,
-) -> StoredAnswer:
+def _store_answer(store: Store, stored: StoredAnswer, ttl_hours: float) -> None:
+    """Write ``stored`` to its file, sweeping the expired ones first."""
     cleanup(store)
-    answer_id = _answer_id(tool, answer, snapshot)
-    path = store.stored_answer(answer_id)
     created = now()
     store.ensure_root()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    stored.path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(
-        path,
+        stored.path,
         envelope(
             KIND_STORED_ANSWER,
-            id=answer_id,
-            tool=tool,
+            id=stored.id,
+            tool=stored.tool,
             created_at=created.isoformat(),
             expires_at=(created + timedelta(hours=ttl_hours)).isoformat(),
-            snapshot=snapshot,
-            answer=answer,
+            snapshot=stored.snapshot,
+            answer=stored.answer,
         ),
     )
-    return StoredAnswer(answer_id, path, tool, snapshot, answer)
 
 
 def _cursor(answer_id: str, pointer: str, offset: int) -> str:
     return _encode_body({"answer": answer_id, "list": pointer, "offset": offset})
+
+
+def record_cursor(record: Record, offset: int) -> str:
+    """The cursor that reads ``record``'s list from ``offset``."""
+    return _encode_body({"record": record.kind, "key": record.key, "offset": offset})
 
 
 # ---------------------------------------------------------------------------
@@ -361,17 +395,28 @@ def _present_lists(
     sources: Mapping[str, list[Any]],
     offsets: Mapping[str, int],
     totals: Mapping[str, int],
-    stored: StoredAnswer,
+    stored: StoredAnswer | None,
     *,
     target: int,
     annotate: Annotate | None,
     paged: str | None,
     fixed: Mapping[str, ListCut] | None = None,
+    records: Mapping[str, Record] | None = None,
+    caps: Mapping[str, int] | None = None,
+    over: Over | None = None,
 ) -> Presented:
     """``base`` with each list of ``sources`` cut to fit ``target``. A list
     is named in ``cut`` when the reply holds less than all of it, or when it
     is the list a page reads (``paged``); ``fixed`` names lists the reply
-    leaves out whole."""
+    leaves out whole. A list in ``records`` continues by a record cursor;
+    every other by a cursor into ``stored``."""
+    records = records or {}
+
+    def next_cursor(pointer: str, end: int) -> str:
+        if pointer in records:
+            return record_cursor(records[pointer], end)
+        assert stored is not None, f"{pointer} is cut and is neither stored nor a record"
+        return _cursor(stored.id, pointer, end)
 
     def cuts(keep: Mapping[str, int]) -> dict[str, ListCut]:
         made: dict[str, ListCut] = {}
@@ -384,7 +429,7 @@ def _present_lists(
                 total=total,
                 returned=keep[pointer],
                 offset=offset,
-                next=_cursor(stored.id, pointer, end) if end < total else None,
+                next=next_cursor(pointer, end) if end < total else None,
             )
         made.update(fixed or {})
         return made
@@ -396,13 +441,18 @@ def _present_lists(
         )
         made = cuts(keep)
         reply["cut"] = {pointer: entry.as_reply() for pointer, entry in made.items()}
-        reply["stored_answer"] = stored.as_reply()
+        if stored is not None:
+            reply["stored_answer"] = stored.as_reply()
         if annotate is not None:
             annotate(reply, made, stored, paged)
         return reply
 
-    keep = _fit(sources, build, target)
-    return Presented(build(keep), cuts(keep), stored)
+    keep = _fit(sources, build, target, caps)
+    reply = build(keep)
+    size = _size(reply)
+    if size > target and over is not None:
+        over(reply, size, target)
+    return Presented(reply, cuts(keep), stored, size, target)
 
 
 def present(
@@ -415,36 +465,79 @@ def present(
     store: Store,
     ttl_hours: float,
     annotate: Annotate | None = None,
+    records: Mapping[str, Record] | None = None,
+    caps: Mapping[str, int] | None = None,
+    over: Over | None = None,
 ) -> Presented:
-    """Send ``answer`` whole when it fits ``target`` tokens, or store it and
-    cut its cuttable lists to fit.
+    """Send ``answer`` whole when it fits ``target`` tokens, or cut its
+    cuttable lists to fit, storing it when a list that is not a record is cut.
 
     ``answer`` is the reply as ``reply_payload`` makes it. A ``target`` of
     None sends every answer whole. ``snapshot`` may be a function, called
     only when the answer is stored, so an answer that fits reads nothing.
+    ``records`` names, by pointer, the lists the server already keeps, which
+    continue from their record and are never stored. ``caps`` names, by
+    pointer, the most entries a list may send, whatever the target. ``over``
+    says, once, that the reply sent is still over the target.
     """
-    if target is None or _size(answer) <= target:
-        return Presented(answer, {}, None)
+    caps = caps or {}
+    records = records or {}
+    capped = any(
+        len(entries) > caps[pointer]
+        for pointer in caps
+        if isinstance(entries := resolve_pointer(answer, pointer, default=None), list)
+    )
+    size = _size(answer) if target is not None else 0
+    if (target is None or size <= target) and not capped:
+        return Presented(answer, {}, None, size, target)
     sources = {
         pointer: resolve_pointer(answer, pointer)
         for pointer, _ in cuttable_lists(answer, schema)
         if len(resolve_pointer(answer, pointer)) > 1
     }
     if not sources:
-        return Presented(answer, {}, None)
-    stored = _store_answer(
-        store, tool, answer, snapshot() if callable(snapshot) else snapshot, ttl_hours
-    )
-    return _present_lists(
+        if target is not None and size > target and over is not None:
+            answer = dict(answer)
+            over(answer, size, target)
+        return Presented(answer, {}, None, size, target)
+    stored: StoredAnswer | None = None
+    if any(pointer not in records for pointer in sources):
+        taken = snapshot() if callable(snapshot) else snapshot
+        answer_id = _answer_id(tool, answer, taken)
+        stored = StoredAnswer(answer_id, store.stored_answer(answer_id), tool, taken, answer)
+    shown = _present_lists(
         answer,
         sources,
         {},
         {pointer: len(entries) for pointer, entries in sources.items()},
         stored,
-        target=target,
+        target=sys.maxsize if target is None else target,
         annotate=annotate,
         paged=None,
+        records=records,
+        caps=caps,
+        over=over,
     )
+    if stored is not None and any(
+        entry.next is not None for pointer, entry in shown.cut.items() if pointer not in records
+    ):
+        _store_answer(store, stored, ttl_hours)
+    elif stored is not None:
+        # Every list that is not a record went out whole: nothing to store.
+        shown = _present_lists(
+            answer,
+            sources,
+            {},
+            {pointer: len(entries) for pointer, entries in sources.items()},
+            None,
+            target=sys.maxsize if target is None else target,
+            annotate=annotate,
+            paged=None,
+            records=records,
+            caps=caps,
+            over=over,
+        )
+    return replace(shown, target=target)
 
 
 def present_page(
@@ -455,9 +548,10 @@ def present_page(
     *,
     target: int | None,
     annotate: Annotate | None = None,
+    cap: int | None = None,
 ) -> Presented:
     """The entries of the list at ``pointer`` from ``offset`` on, read from
-    ``stored`` and cut to fit ``target``.
+    ``stored`` and cut to fit ``target``, and to ``cap`` entries when given.
 
     The page carries the stored answer's other fields as they are, but none of
     its other cuttable lists: each is named in ``cut`` with none returned and
@@ -483,7 +577,73 @@ def present_page(
             other: ListCut(total=len(entries), returned=0, next=_cursor(stored.id, other, 0))
             for other, entries in others.items()
         },
+        caps={} if cap is None else {pointer: cap},
     )
+
+
+def present_record_page(
+    answer: dict[str, Any],
+    pointer: str,
+    offset: int,
+    record: Record,
+    *,
+    target: int | None,
+    annotate: Annotate | None = None,
+    over: Over | None = None,
+) -> Presented:
+    """The entries of the record's list at ``pointer`` from ``offset`` on, cut
+    to fit ``target``.
+
+    ``answer`` is the complete answer read from the record now, as the tool
+    makes it, so a page carries the record as it stands when it is read.
+    Nothing is stored. Every other field of ``answer`` is sent as it is. Read
+    from the start, an answer that fits is sent whole, as :func:`present`
+    sends it.
+    """
+    if offset == 0:
+        size = _size(answer) if target is not None else 0
+        if target is None or size <= target:
+            return Presented(answer, {}, None, size, target)
+    whole = resolve_pointer(answer, pointer)
+    return _present_lists(
+        answer,
+        {pointer: whole[offset:]},
+        {pointer: offset},
+        {pointer: len(whole)},
+        None,
+        target=sys.maxsize if target is None else target,
+        annotate=annotate,
+        paged=pointer,
+        records={pointer: record},
+        over=over,
+    )
+
+
+def open_record(text: str, *, kind: str) -> tuple[str, int]:
+    """The key and offset a record cursor of ``kind`` names.
+
+    ``InvalidCursorError`` for anything else: a cursor this module did not
+    write, a stored answer's cursor, or a cursor for another kind of record.
+    Whether the offset still names an entry is the reader's to check, since
+    only it reads the record.
+    """
+    refused = (
+        f"{text[:40]!r} is not a cursor this action returned: pass a cut entry's next unchanged."
+    )
+    try:
+        body = _decode_body(text)
+    except CursorError:
+        raise InvalidCursorError(refused) from None
+    key, offset = body.get("key"), body.get("offset")
+    if not (
+        body.get("record") == kind
+        and isinstance(key, str)
+        and key
+        and type(offset) is int
+        and offset >= 0
+    ):
+        raise InvalidCursorError(refused)
+    return key, offset
 
 
 def open_page(
