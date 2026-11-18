@@ -495,8 +495,11 @@ async def test_a_build_an_xvii_run_reported_is_a_known_reader(config, work_dir):
     )
 
 
-async def test_micro_sign_warnings_are_capped_like_every_repeating_rule(config, work_dir):
-    """60 values spelled with µ are 25 findings and an entry counting the rest."""
+async def test_micro_sign_warnings_past_the_reply_target_are_cut_like_every_finding(
+    config, work_dir
+):
+    """60 values spelled with µ are over the reply target: the reply holds the
+    findings that fit and an entry counting the rest."""
     state = SessionState.create(config, available={"ltspice": FakeXVII})
     cards = "".join(f"C{i} n{i} 0 {i + 1}µ\n" for i in range(60))
     deck = work_dir / "many.net"
@@ -505,10 +508,10 @@ async def test_micro_sign_warnings_are_capped_like_every_repeating_rule(config, 
     data = await _run(state, path=str(deck), checks=["syntax"])
 
     shown = [f for f in data.get("findings", []) if f["rule_id"] == "value_suffix_micro_sign"]
-    assert len(shown) == vc.FINDING_RULE_CAP
+    assert 1 <= len(shown) == data["cut"]["/findings"]["returned"] < 60
     omitted = data["findings_omitted"]["value_suffix_micro_sign"]
-    assert (omitted["omitted"], omitted["total"]) == (60 - vc.FINDING_RULE_CAP, 60)
-    # The hint counts what the check found, not the capped list it shows.
+    assert (omitted["omitted"], omitted["total"]) == (60 - len(shown), 60)
+    # The hint counts what the check found, not the cut list it shows.
     assert "60 warning(s): value_suffix_micro_sign" in data["hint"]
 
 
@@ -941,7 +944,7 @@ async def test_quality_reports_a_part_giving_a_parameter_twice(
     assert quality["rules_run"]["duplicate_parameter"] == 1
 
 
-async def test_neutral_findings_are_uncapped_and_mcp_reapplies_rule_cap(
+async def test_the_complete_answer_holds_every_finding_and_a_reply_that_fits_sends_them(
     state_no_sim,
     work_dir,
     monkeypatch,
@@ -954,7 +957,7 @@ async def test_neutral_findings_are_uncapped_and_mcp_reapplies_rule_cap(
             refs=(f"R{index}.1",),
             points=((index * 16, 0),),
         )
-        for index in range(vc.FINDING_RULE_CAP + 7)
+        for index in range(32)
     ]
 
     def crowded_scene(path, _state, *, checks):
@@ -965,19 +968,17 @@ async def test_neutral_findings_are_uncapped_and_mcp_reapplies_rule_cap(
     args = VerifyCircuitInput(path=str(asc), checks=["layout"])
     neutral = await evaluate_verify_circuit(args, state_no_sim)
     full = [f for f in neutral.data["findings"] if f["rule_id"] == "floating_pin"]
-    assert len(full) == vc.FINDING_RULE_CAP + 7
+    assert len(full) == 32
     assert "findings_omitted" not in neutral.data
-    assert neutral.data["rules_run"]["floating_pin"] == vc.FINDING_RULE_CAP + 7
+    assert neutral.data["rules_run"]["floating_pin"] == 32
 
     mcp = await handle_verify_circuit(args, state_no_sim)
     data = _assert_schema(mcp)
     shown = [finding for finding in data["findings"] if finding["rule_id"] == "floating_pin"]
-    assert shown == full[: vc.FINDING_RULE_CAP]
-    assert len(full) - len(shown) == 7
-    # The count of a rule is of what it found, not of what the reply shows.
+    # More than the 25 a rule a reply once listed, and the reply fits.
+    assert shown == full
     assert data["rules_run"]["floating_pin"] == len(full)
-    omitted = data["findings_omitted"]["floating_pin"]
-    assert (omitted["omitted"], omitted["total"]) == (7, len(full))
+    assert "findings_omitted" not in data
 
 
 # ---------------------------------------------------------------------------
