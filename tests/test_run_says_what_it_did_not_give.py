@@ -60,6 +60,7 @@ def _measured(row: dict[str, Any]) -> dict[str, Any]:
             "failed_measurements",
             "failed_measurement_steps",
             "measurements_not_established",
+            "measurements_not_printed",
             "measurements_coverage",
         )
         if key in row
@@ -173,9 +174,8 @@ async def test_a_run_row_names_the_steps_a_stepped_measurement_did_not_give(
 async def test_a_run_with_no_failed_measurement_says_nothing_of_them(
     state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """``log/meas_failed``'s neighbours on LTspice 26 print every value:
-    ``log/meas_step`` at its first two steps is not this; a log whose every
-    measurement printed a number leaves the row and the hint silent."""
+    """``log/meas_when_threshold_tran`` on LTspice 26 prints a value for every
+    requested ``.meas``, so the run rows and the hint say nothing of them."""
     deck, raw, log = _recorded_run(
         "ltspice26", "log/meas_when_threshold_tran", "raw/tran_uncompressed", work_dir
     )
@@ -289,20 +289,26 @@ async def test_a_measurement_that_failed_in_every_run_is_said_once(
         assert "every requested" not in observation["detail"], route
 
 
+@pytest.mark.parametrize("build", rec.BUILDS)
 async def test_every_requested_measurement_failed_in_every_run_is_said(
-    state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    build: str, state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """``deck/save_omits_meas`` on XVII: the deck's one ``.meas`` reads a
-    node its ``.save`` leaves out, and XVII prints it FAIL'ed. Run as three
-    cases, every requested ``.meas`` failed in every run, and the receipt and
-    the analysis say so."""
-    deck, raw, log = _recorded_run(
-        "ltspice17", "deck/save_omits_meas", "deck/save_omits_meas", work_dir
-    )
+    """``deck/save_omits_meas``: the deck's one ``.meas`` reads a node its
+    ``.save`` leaves out. XVII prints it FAIL'ed; LTspice 26 prints an error
+    and no measurement at all. Run as three cases, each row names it, as
+    failed or as not printed, and the receipt and the analysis say every
+    requested ``.meas`` gave no value in any run."""
+    deck, raw, log = _recorded_run(build, "deck/save_omits_meas", "deck/save_omits_meas", work_dir)
     replaying_simulator(monkeypatch, raw, log)
     receipt = await _run(
         state_with_sim, deck, "meas-all-failed", analyze={"recipes": [_MEASUREMENTS]}
     )
+    row_field = (
+        "failed_measurements" if rec.generation(build) == "xvii" else "measurements_not_printed"
+    )
+    for route, rows in (await _every_row(state_with_sim, receipt)).items():
+        assert [_measured(row) for row in rows] == [{row_field: ["vfinal"]}] * 3, route
+    assert _ROUTE in receipt["hint"]
     for observations in (
         receipt.get("observations", []),
         receipt["analysis"]["result"].get("observations", []),
@@ -557,6 +563,8 @@ async def test_a_raw_with_no_node_inside_the_decks_subcircuits_says_so(
         assert len(said) == 1, (route, observations)
         (observation,) = said
         assert observation["evidence"]["example"] == example, route
+        assert observation["evidence"]["circuit"] == deck.stem, route
+        assert deck.stem in observation["detail"], route
         assert "Save subcircuit node voltages" in observation["detail"], route
         saves = deck_case.startswith("raw/save_")
         assert observation["evidence"].get("saves", False) is saves, route
@@ -779,3 +787,15 @@ def test_each_observation_of_what_a_raw_holds_is_built_in_one_place(
     assert built == {"lib/result_observations.py"}
     assert called == callers
     assert decides == {"lib/services.py", "tools/analyze.py"}
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_read_by_path_of_a_compressed_xvii_transient_says_so(
+    build: str, state_no_sim: SessionState, work_dir: Path
+):
+    """``raw/tran`` read by its path, with no job to name its producer: the
+    build is the one its files name, and XVII's compressed raw says so while
+    LTspice 26's says nothing."""
+    raw = SyncApi(state_no_sim).load_raw(_recorded_pair(build, "tran", work_dir))
+    expected = ["compressed_transient"] if rec.generation(build) == "xvii" else []
+    assert _compression(list(raw.observations)) == expected

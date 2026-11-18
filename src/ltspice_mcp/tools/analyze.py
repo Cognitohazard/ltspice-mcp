@@ -49,7 +49,7 @@ from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, PlotDescriptor
 from ltspice_mcp.lib.format import cap_note, format_spice_value, held_to_cap, unique_name
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
-from ltspice_mcp.lib.log_types import measurement_failed, measurement_named
+from ltspice_mcp.lib.log_types import given_no_value, measurement_named, run_measurement_facts
 from ltspice_mcp.lib.pagination import retotal_page
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.projection import (
@@ -1305,7 +1305,7 @@ def _coarse_waveform_observations(
 def _measurements_failed_everywhere(
     runs: list[_ResolvedRun], captured_logs: Mapping[str, DecodedLog]
 ) -> list[Observation]:
-    """The ``.meas`` that failed in every run this analysis read
+    """The ``.meas`` that gave no value in any run this analysis read
     (``result_observations.measurements_failed_in_every_run``), for each
     set of runs whose decks request the same names. A run whose log's
     measurements could not be read is not counted; ``_relay_solve_failures``
@@ -1318,20 +1318,15 @@ def _measurements_failed_everywhere(
         section = logs.section("measurements")
         if section["status"] == "error":
             continue
-        table = section["value"] or {}
-        failed = [
-            name
-            for name in table.get("failed_measurements") or ()
-            if measurement_failed(table, name)
-        ]
         requested = (
             deck_observation_inputs(run.source.netlist)[0]
             if run.source.netlist is not None
             else None
         )
         key = tuple(requested["meas"]) if requested is not None else None
+        facts = run_measurement_facts(section["value"] or {}, key)
         read, circuits = groups.setdefault(key, ([], set()))
-        read.append(failed)
+        read.append(given_no_value(facts))
         circuits.add(str((run.source.identity or {}).get("circuit") or run.label))
     observations: list[Observation] = []
     for key, (read, circuits) in groups.items():

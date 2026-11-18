@@ -42,6 +42,7 @@ from ltspice_mcp.lib.experiment_types import (
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.log_conditions import reply_fields
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
+from ltspice_mcp.lib.log_types import given_no_value
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.pagination import page_of
 from ltspice_mcp.lib.projection import (
@@ -252,6 +253,16 @@ RUN_RECORD_SCHEMA: dict[str, Any] = {
                 "Steps, from 0, at which a .meas's printed value is not established "
                 "as its result (LTspice XVII prints 0 for a step whose measurement "
                 "failed); the measurements recipe reads them as null."
+            ),
+        },
+        "measurements_not_printed": {
+            "type": "array",
+            "items": {"type": "string"},
+            # One name per .meas the deck requests: the deck bounds it.
+            CUT: NEVER,
+            "description": (
+                "The .meas the deck requests that the run's log printed nothing for, "
+                "not even a failure."
             ),
         },
         "measurements_coverage": {
@@ -781,10 +792,9 @@ def _sample_observations(cases: Sequence[ExperimentCase]) -> list[dict[str, Any]
 
 
 def _measurement_observations(cases: Sequence[ExperimentCase]) -> list[dict[str, Any]]:
-    """Each circuit's ``.meas`` that failed in every run whose measurements
-    were read (``result_observations.measurements_failed_in_every_run``),
-    from what each case kept when its run ended. A name that failed at some
-    steps of a run only was given at the others, so it is not counted there."""
+    """Each circuit's ``.meas`` that gave no value in any run whose
+    measurements were read (``result_observations.measurements_failed_in_every_run``),
+    from what each case kept when its run ended (``log_types.given_no_value``)."""
     by_circuit: dict[str, list[dict[str, Any]]] = {}
     for case in cases:
         facts = case.measurement_facts
@@ -792,10 +802,7 @@ def _measurement_observations(cases: Sequence[ExperimentCase]) -> list[dict[str,
             by_circuit.setdefault(case.circuit, []).append(facts)
     observations: list[dict[str, Any]] = []
     for circuit, read in by_circuit.items():
-        failed = [
-            [name for name in facts.get("failed", ()) if name not in facts.get("failed_steps", {})]
-            for facts in read
-        ]
+        failed = [given_no_value(facts) for facts in read]
         requested = next((facts["requested"] for facts in read if "requested" in facts), None)
         found = measurements_failed_in_every_run(
             failed, requested, circuit=circuit if len(by_circuit) > 1 else None
@@ -1090,6 +1097,7 @@ _MEASUREMENT_ROW_FIELDS = {
     "failed": "failed_measurements",
     "failed_steps": "failed_measurement_steps",
     "not_established": "measurements_not_established",
+    "not_printed": "measurements_not_printed",
     "coverage": "measurements_coverage",
 }
 
@@ -1306,12 +1314,18 @@ def _recovery_routes(snapshot: ReceiptSnapshot) -> list[str]:
     if snapshot.failures:
         routes.append("Inspect failures and lint findings before retrying omitted cases.")
     if any(
-        "failed_measurements" in row or "measurements_not_established" in row
+        key in row
         for row in snapshot.runs_by_key.values()
+        for key in (
+            "failed_measurements",
+            "measurements_not_established",
+            "measurements_not_printed",
+        )
     ):
         routes.append(
             "A run row names a .meas that gave no value (failed_measurements, "
-            "measurements_not_established); read every value with analyze_results("
+            "measurements_not_established, measurements_not_printed); read every value "
+            "with analyze_results("
             f'sources=[{{"job_id": "{snapshot.job_id}"}}], recipes=[{{"metric": '
             '"measurements"}]), or api.analyze_results in Python.'
         )

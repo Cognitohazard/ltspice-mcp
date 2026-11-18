@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Collection, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, fields
 from typing import Any, Literal, NotRequired, get_args
 
@@ -332,15 +332,26 @@ def measurement_failed(table: Mapping[str, Any], name: str, step: int | None = N
     return set(range(len(entry.get("values") or ()))) <= set(steps)
 
 
-def run_measurement_facts(table: Mapping[str, Any]) -> dict[str, Any]:
-    """What one run's answered measurement ``table`` (``log_parser.answered_measurements``)
-    says the run did not give, as a run keeps it: ``failed``, the names
-    LTspice printed as failed (:func:`measurement_failed`), in the order the
-    log printed them; ``failed_steps``, for a name that failed at some steps
-    of a stepped run only, those steps from 0; and ``not_established``, for
-    a name whose printed value is not established as its result at some
-    steps (XVII prints 0 for a failed step), those steps. Each only when it
-    names something, so ``{}`` says every measurement printed was given."""
+def run_measurement_facts(
+    table: Mapping[str, Any], requested: Sequence[str] | None
+) -> dict[str, Any]:
+    """What one run's measurement ``table`` (the log's, answered by
+    ``log_parser.answered_measurements`` where it was) says the run did not
+    give of the ``.meas`` its deck requests (``requested``, from
+    ``result_observations.parse_requested_outputs``; None where the deck was
+    not read), as a run keeps it.
+
+    ``failed``: the names LTspice printed as failed (:func:`measurement_failed`),
+    in the order the log printed them. ``failed_steps``: for a name that
+    failed at some steps of a stepped run only, those steps from 0.
+    ``not_established``: for a name whose printed value is not established as
+    its result at some steps (XVII prints 0 for a failed step), those steps.
+    ``not_printed``: each requested name the log printed nothing for, not
+    even a failure (LTspice 26 on ``deck/save_omits_meas``; ngspice skips a
+    top-level ``.meas`` in batch mode). Each only when it names something, so
+    ``{}`` says every requested ``.meas`` was given. ``requested`` is kept
+    beside any of the first or the last, for :func:`given_no_value`'s
+    callers to say whether that is every one the deck's own text requests."""
     facts: dict[str, Any] = {}
     failed = list(table.get("failed_measurements") or ())
     entries = table.get("measurements") or {}
@@ -360,4 +371,20 @@ def run_measurement_facts(table: Mapping[str, Any]) -> dict[str, Any]:
     }
     if unestablished:
         facts["not_established"] = unestablished
+    printed = list(entries)
+    missing = [name for name in requested or () if measurement_named(name, printed) is None]
+    if missing:
+        facts["not_printed"] = missing
+    if requested is not None and (failed or missing):
+        facts["requested"] = list(requested)
     return facts
+
+
+def given_no_value(facts: Mapping[str, Any]) -> list[str]:
+    """The names a run's :func:`run_measurement_facts` say it gave no value
+    for at any step: printed failed at every step, or not printed at all."""
+    partly = facts.get("failed_steps") or {}
+    return [
+        *(name for name in facts.get("failed") or () if name not in partly),
+        *(facts.get("not_printed") or ()),
+    ]

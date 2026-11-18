@@ -473,7 +473,7 @@ raw.plots; raw.descriptor; raw.plot_index  # inventory and selected plot facts
 raw.table(step=0)              # native table rows; complex values use real/imag
 raw.compare(other, signals=None, step=0, other_step=None)  # per-signal differences
 raw.analysis_type; raw.dialect; raw.source          # provenance
-raw.observations               # [{code, kind, detail, evidence}]; partial_raw, coarse_compressed_waveform
+raw.observations               # [{code, kind, detail, evidence}]; partial_raw, coarse_compressed_waveform, compressed_transient, subcircuit_nodes_not_saved
 api.measurements(job_id=..., run_index=0, case_id=None)
 api.measurements("result.log")  # XOR: path | job_id; RAW is optional
 api.device_op_points(job_id=..., case_id=None)  # {"m1": {"gm": ...}}; same sources
@@ -521,8 +521,11 @@ ops.observations               # a log reader's dict (LogResult) says the same o
   `partial_raw` for a stopped case's raw kept with
   `execution.keep_partial_raw`, whose values end where the run was stopped,
   and `coarse_compressed_waveform` for an LTspice transient that waveform
-  compression left with few points, as `analyze_results` reports it. It is
-  empty for a whole result. `measurements` and `device_op_points` return a
+  compression left with few points, as `analyze_results` reports it,
+  `compressed_transient` for a transient LTspice XVII saved with compression
+  on that is not that coarse, and `subcircuit_nodes_not_saved` for a job's run
+  whose raw holds no node inside the deck's subcircuits. It is empty for a
+  whole result. `measurements` and `device_op_points` return a
   `LogResult`, a plain `dict` that has the same `observations` for the log it
   read.
 - `step_count` counts a plot's steps as the tools count them, 1 for a run that

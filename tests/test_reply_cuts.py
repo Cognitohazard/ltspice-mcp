@@ -322,6 +322,7 @@ NEVER_BOUNDS: dict[tuple[str, str], str] = {
             ("failed_measurements", _MEASUREMENT_NAMES),
             ("failed_measurement_steps.*", _STEP_INDICES),
             ("measurements_not_established.*", _STEP_INDICES),
+            ("measurements_not_printed", _MEASUREMENT_NAMES),
         )
     },
     (

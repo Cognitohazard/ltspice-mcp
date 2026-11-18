@@ -2001,8 +2001,11 @@ class ExperimentRunner(RunnerBase):
         if section is None or section["status"] == "error":
             case.measurement_facts = {"coverage": "log_unread"}
             return
+        requested, _ = await asyncio.to_thread(deck_observation_inputs, case.staged_deck)
+        names = requested["meas"] if requested is not None else None
         if section["status"] != "parsed":
-            case.measurement_facts = {}
+            # The log printed no measurement: each the deck requests gave none.
+            case.measurement_facts = run_measurement_facts({}, names)
             return
         source = services.AnalysisSource(
             raw=None,
@@ -2016,13 +2019,7 @@ class ExperimentRunner(RunnerBase):
         table = await services.answer_measurements(
             source, section["value"], producer=services.run_producer(job, case)
         )
-        facts = run_measurement_facts(table)
-        # The names the deck asks for, so a receipt can say a .meas failed in
-        # every run covers them all without reading a deck on the loop.
-        requested, _ = await asyncio.to_thread(deck_observation_inputs, case.staged_deck)
-        if facts.get("failed") and requested is not None:
-            facts["requested"] = requested["meas"]
-        case.measurement_facts = facts
+        case.measurement_facts = run_measurement_facts(table, names)
 
     async def _check_subcircuit_nodes(self, execution: _Execution, case: ExperimentCase) -> None:
         """Say on ``case`` when its raw holds no node inside the deck's
@@ -2036,6 +2033,7 @@ class ExperimentRunner(RunnerBase):
             case.staged_deck,
             services.run_producer(execution.job, case),
             run_ngbehavior(self.simulator_class) if is_ngspice(self.simulator_class) else None,
+            case.circuit,
         )
         if found is not None:
             case.observations.append(dict(found))
@@ -2605,7 +2603,7 @@ def _read_live_progress(
 
 
 def _subcircuit_nodes_observation(
-    raw: Path, deck: Path, producer: Producer, ngbehavior: str | None
+    raw: Path, deck: Path, producer: Producer, ngbehavior: str | None, circuit: str
 ) -> Observation | None:
     """``subcircuit_nodes_not_saved`` for a run: the traces its raw's header
     holds, and the deck flattened as ``producer`` reads it, with whether it
@@ -2633,4 +2631,4 @@ def _subcircuit_nodes_observation(
     except (NetlistError, NetlistGraphError, SpiceLexError, OSError, ValueError):
         return None
     saves = any(directive_head(card) == ".save" for card in graph.directives)
-    return subcircuit_nodes_not_saved(flat, traces, profile.names, saves=saves)
+    return subcircuit_nodes_not_saved(flat, traces, profile.names, saves=saves, circuit=circuit)

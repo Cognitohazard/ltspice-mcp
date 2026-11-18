@@ -192,8 +192,8 @@ LTspice XVII compresses a transient's waveform by default. It stored a 1 mV
 RC charge over 5 ms in 13 points, even with a 50 us maximum step. Its own
 `.meas` results read points that raw does not hold: they came within 0.25% of
 the uncompressed run's, while a trapezoid over the 13 stored points was 0.41%
-below its `AVG` and interpolation at 1 ms 1.15% below its `FIND`. On XVII,
-trust such a `.meas` over a value read from the compressed samples. LTspice 26
+below its `AVG` and interpolation at 1 ms 1.15% below its `FIND`. In that
+recording, XVII's `.meas` was the closer value. LTspice 26
 stored every point of the same run with compression on, though its raw's flags
 also say compression was on. When a recipe or a read takes samples from a
 compressed XVII transient, the reply says so in `observations`

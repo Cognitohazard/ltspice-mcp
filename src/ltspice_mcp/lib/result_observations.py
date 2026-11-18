@@ -446,9 +446,9 @@ def coarse_compressed_waveform(
 #: transient, by build (``raw/compress_1mv`` and ``raw/compress_1mv_off``).
 _XVII_MEAS = (
     "LTspice XVII's own .meas results read points its raw does not hold: in a recorded "
-    "RC charge they came within 0.25% of the uncompressed run's, where values read "
-    "from the 13 stored points were up to 1.15% off. LTspice 26 stored every point of "
-    "the same run."
+    "RC charge they came within 0.25% of the uncompressed run's, while a trapezoid "
+    "average over the 13 stored points was 0.41%, and interpolation at 1 ms 1.15%, "
+    "below them. LTspice 26 stored every point of the same run."
 )
 
 
@@ -462,9 +462,9 @@ def compressed_xvii_observation(labels: Sequence[str], *, run_cap: int) -> Obser
         kind="value",
         detail=(
             f"{len(labels)} LTspice XVII transient run(s) read here were saved with "
-            "waveform compression on, which on XVII stores fewer points than it "
-            "computed, so a value read from the samples is interpolated across points "
-            f"the raw does not hold. {_XVII_MEAS} '.options plotwinsize=0' stores every "
+            "waveform compression on, which in every recorded XVII run stored fewer "
+            "points than it computed, so a value read from the samples is interpolated "
+            f"across points the raw does not hold. {_XVII_MEAS} '.options plotwinsize=0' stores every "
             "point."
         ),
         evidence={"runs": list(labels[:run_cap]), "run_count": len(labels)},
@@ -587,6 +587,7 @@ def subcircuit_nodes_not_saved(
     naming: Naming,
     *,
     saves: bool,
+    circuit: str,
 ) -> Observation | None:
     """Say that a run's raw holds no node inside the deck's subcircuits, or
     None.
@@ -633,9 +634,9 @@ def subcircuit_nodes_not_saved(
             "in the build's own spelling"
         )
     detail = (
-        f"The raw holds no node voltage inside the deck's subcircuit instances, whose "
-        f"bodies have nets of their own ({example} among them), so a read of such a "
-        "node finds no trace."
+        f"The raw of {circuit} holds no node voltage inside the deck's subcircuit "
+        f"instances, whose bodies have nets of their own ({example} among them), so a "
+        "read of such a node finds no trace."
     )
     if causes:
         detail += " What decides it: " + "; and ".join(causes) + "."
@@ -644,6 +645,7 @@ def subcircuit_nodes_not_saved(
         kind="coverage",
         detail=detail,
         evidence={
+            "circuit": circuit,
             "example": example,
             "instances": len({path for path, _ in inner}),
             "inner_nets": len(inner),
@@ -658,17 +660,18 @@ def measurements_failed_in_every_run(
     *,
     circuit: str | None = None,
 ) -> Observation | None:
-    """The ``.meas`` that failed in every run read, or None for none.
+    """The ``.meas`` that gave no value in any run read, or None for none.
 
     ``failed_by_run`` holds, for each run whose measurements were read, the
-    names LTspice printed as failed at every step of that run
-    (``log_types.measurement_failed``); ``requested`` the names the deck asks
-    for (:func:`parse_requested_outputs`), or None where the deck was not
-    read. A name is matched as the log reader holds it
-    (``log_types.measurement_named``). The one answer to "which measurements
-    did no run give": the analysis and the job receipt both ask it, each over
-    the runs it read. When the names cover every requested ``.meas``, the
-    detail says so: no run gave a measured value."""
+    names it gave no value for at any step (``log_types.given_no_value``:
+    printed failed at every step, or not printed at all); ``requested`` the
+    names the deck's own text asks for (:func:`parse_requested_outputs`), or
+    None where the deck was not read. A name is matched as the log reader
+    holds it (``log_types.measurement_named``). The one answer to "which
+    measurements did no run give": the analysis and the job receipt both ask
+    it, each over the runs it read. When the names cover every requested
+    ``.meas``, the detail says so, and that a ``.meas`` in an included file
+    is not counted among them."""
     runs = [list(names) for names in failed_by_run]
     if not runs:
         return None
@@ -688,11 +691,17 @@ def measurements_failed_in_every_run(
     )
     where = f" of {circuit}" if circuit is not None else ""
     detail = (
-        f".meas {', '.join(names)} failed in every one of the {len(runs)} run(s){where} "
-        "read, so no run gave a value for "
-        + ("it" if len(names) == 1 else "them")
-        + (": that is every requested .meas of the deck." if every else ".")
-        + " Each run row's failed_measurements and the measurements recipe name them."
+        f".meas {', '.join(names)} gave no value in any of the {len(runs)} run(s){where} "
+        "read: the simulator printed "
+        + ("it" if len(names) == 1 else "each")
+        + " as failed, or printed nothing for it"
+        + (
+            ". That is every requested .meas the deck's own text holds (one in an "
+            "included file is not counted)."
+            if every
+            else "."
+        )
+        + " The measurements recipe reads each run's values."
     )
     evidence: dict[str, Any] = {"measurements": names, "runs": len(runs)}
     if asked is not None:
