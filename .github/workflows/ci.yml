@@ -1,6 +1,8 @@
 name: CI
 
-# Runs the reusable checks (checks.yml) at the tier the trigger calls for:
+# Runs the reusable checks (checks.yml) at the tier the trigger calls for.
+# No tier here runs the macOS job: a landing is held to Linux and Windows,
+# and macOS is checked at release (publish.yml, tier `release`).
 #
 #   full  every push to master; a pull request whose title starts with
 #         "Rollup"; a pull request labelled `full-ci`.

@@ -105,7 +105,7 @@ for the parser or starts a process, and the parser's entry module
 its first request or imports any decoding code; `test_parser_process.py`
 checks both. Its checks that set `sys.platform` to another value run anywhere
 and test only the refusal. The `test_native_macos_bootstrap_*` checks need a
-native macOS interpreter, run in CI's macOS job (full tier only) and skip
+native macOS interpreter, run in CI's macOS job (release tier only) and skip
 elsewhere; a pass there also shows only the refusal and does not show a working macOS parser.
 Supporting macOS needs
 native tests there of the hard memory limit, applied before any decoding code
@@ -113,7 +113,8 @@ is imported, and of the parser's cleanup after a deadline, after repeated
 cancellation and after the server process dies, including a child process
 that tries to break away from the parser's process tree.
 
-Both CI tiers (*CI tiers* below) run the suite on a native Windows runner
+Every CI tier but docs (*CI tiers* below), so every landing that changes code
+and every release, runs the suite on a native Windows runner
 (`check-windows` in `.github/workflows/checks.yml`): Python 3.12, one xdist
 worker per core, no coverage gate, and the official Windows build of ngspice,
 the one users install, pinned by version and SHA-256, unpacked to
@@ -125,8 +126,8 @@ suite runs unless ngspice reads it. The runner's code page is cp1252 and its
 paths have no spaces, so a run on a user's machine still covers what this job
 cannot.
 
-CI's full tier also runs the suite on a native macOS
-runner (`check-macos` in `.github/workflows/checks.yml`): Python 3.12,
+The release gate in `publish.yml`, and no landing, also runs the suite on a
+native macOS runner (`check-macos` in `.github/workflows/checks.yml`): Python 3.12,
 ngspice and Cairo from Homebrew, one xdist worker per core, and no coverage gate. Because the server
 refuses to parse there, a test that reads a result fails there for that reason
 alone, and `tests/parser_refusal.py` reports it as skipped, with the refusal as
@@ -203,7 +204,8 @@ its jobs run:
 
 | trigger | tier | jobs that run |
 |-|-|-|
-| push to `master`; the release gate in `publish.yml`; a pull request whose title starts with `Rollup` or that carries the `full-ci` label | full | `static`, `changelog` (pull requests only), `audit`, `check (3.11)`, `check (3.12)`, `check (3.13)`, `check-windows`, `check-macos` |
+| the release gate in `publish.yml` | release | `static`, `audit`, `check (3.11)`, `check (3.12)`, `check (3.13)`, `check-windows`, `check-macos` |
+| push to `master`; a pull request whose title starts with `Rollup` or that carries the `full-ci` label | full | `static`, `changelog` (pull requests only), `audit`, `check (3.11)`, `check (3.12)`, `check (3.13)`, `check-windows` |
 | a pull request that changes only documentation | docs | `static`, `changelog`, `check (3.12)` |
 | any other pull request | pr | `static`, `changelog`, `audit`, `check (3.12)`, `check-windows` |
 
@@ -217,17 +219,22 @@ push to it runs full again while the label stays. Adding any other label
 starts a run that skips every check and cancels nothing. A pull request retitled to `Rollup…` after it was opened runs
 full from its next push, or at once if it is labelled `full-ci`.
 
+A landing is held to Linux and Windows; macOS is checked at release. No
+tier that `ci.yml` picks runs `check-macos`, so a macOS regression first shows
+when a release is cut, and holds the release until it is fixed; run the
+release tier with a TestPyPI dry run (above) to check macOS before then.
+
 A job a tier leaves out is skipped by its own condition, so it reports as
-skipped under the same name it has in a full run, and a required check of
+skipped under the same name it has in a release run, and a required check of
 that name still passes. That is why the Linux suite is three jobs with fixed
 names, `check (3.11)`, `check (3.12)` and `check (3.13)`, which share one list
 of steps, instead of a matrix: a matrix job skipped by its condition reports
 once, under a name that is not any leg's.
 
 A pull request therefore proves Windows and Linux on 3.12 only. A failure
-only on 3.11, 3.13 or macOS first shows on the push to `master`, or on a
-rollup; label a pull request `full-ci` when it touches code whose behaviour
-depends on the interpreter version or on macOS.
+only on 3.11 or 3.13 first shows on the push to `master`, or on a rollup;
+label a pull request `full-ci` when it touches code whose behaviour depends on
+the interpreter version.
 
 ## Code paths that answer one question
 
