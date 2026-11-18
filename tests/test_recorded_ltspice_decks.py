@@ -967,7 +967,11 @@ def as_ltspice_reads(text: str) -> str:
 
 
 def no_structural_change(delta: dict[str, list]) -> bool:
-    return not any(changes for key, changes in delta.items() if key != "components_renamed")
+    return not any(
+        changes
+        for key, changes in delta.items()
+        if key not in ("components_renamed", "not_compared")
+    )
 
 
 @pytest.mark.parametrize("case_id", UNREAD_CARD_DECKS)

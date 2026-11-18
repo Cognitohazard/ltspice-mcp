@@ -1801,14 +1801,17 @@ schematic's previous export: `sidecar` against the `.net` it replaces,
 `managed` against the previous managed export of the same schematic, which
 the store keeps. It is the `structural_diff` delta below, each part and
 directive in its scope, plus `connections_changed`: each pin of a part both
-exports have that is on a net not corresponding to its previous one, as
-`{reference, pin, before, after}`. The pins are read from the wiring
-comparison `equivalence` runs, with each net both exports name the same
-anchored by its name and a net the exporter numbered (`N001`, `NC_01`), which
-another export may number otherwise, matched by the parts on it. Where the
-exports cannot be read as circuits, or the wiring differs and no pin can be
-named, `not_compared` says so. `diff_vs_prior` is empty when nothing changed
-and absent when there was no previous export.
+exports have that moved onto or off a net both exports name (ground
+included), as `{reference, pin, before, after}`, net names in lower case. The
+pins are read from the wiring comparison `equivalence` runs, with each net
+both exports name the same anchored by its name and a net the exporter
+numbered (`N001`, `NC_01`), which another export may number otherwise,
+matched by the parts on it. A move between two numbered nets is not named,
+since which pin the comparison would report there depends on the order it
+reads the parts; `not_compared` says the wiring differs there, as it does
+when an export cannot be read as a circuit. `diff_vs_prior` holds no
+difference list when nothing changed and is absent when there was no
+previous export.
 
 Rendering uses the project's own SVG-to-PNG renderer; the `render` policy
 sets format, scale, pixel cap, and whether the image is returned inline or as

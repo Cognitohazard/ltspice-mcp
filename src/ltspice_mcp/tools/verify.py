@@ -291,15 +291,22 @@ STRUCTURAL_DELTA_PROPS: dict[str, Any] = {
                     "type": "integer",
                     "description": "The pin's position on the part's card, from 1.",
                 },
-                "before": {"type": "string", "description": "Its net in the previous export."},
-                "after": {"type": "string", "description": "Its net in this export."},
+                "before": {
+                    "type": "string",
+                    "description": "Its net in the previous export, in lower case.",
+                },
+                "after": {
+                    "type": "string",
+                    "description": "Its net in this export, in lower case.",
+                },
             },
             "required": ["reference", "pin", "before", "after"],
         },
         "description": (
-            "diff_vs_prior only: each pin of a part both exports have that is on a net "
-            "not corresponding to its previous one. Nets the exporter numbers (N001) "
-            "are matched by the parts on them, not by name."
+            "diff_vs_prior only: each pin of a part both exports have that moved onto or "
+            "off a net both exports name (ground included). Nets the exporter numbers "
+            "(N001) are matched by the parts on them; a move between two of them is "
+            "stated in not_compared, not named."
         ),
     },
     "not_compared": {
@@ -489,7 +496,7 @@ _EXPORT_SCHEMA: dict[str, Any] = {
         "nets": {"type": ["integer", "null"]},
         "destination": {"type": "string"},
         "diff_vs_prior": {
-            "type": ["object", "null"],
+            "type": "object",
             "properties": dict(STRUCTURAL_DELTA_PROPS),
             "required": list(_STRUCTURAL_DELTA_REQUIRED),
             "description": (
@@ -498,7 +505,8 @@ _EXPORT_SCHEMA: dict[str, Any] = {
                 "mode the previous managed export, which the server keeps. Parts and "
                 "directives each in its scope, and each pin moved to another net "
                 "(connections_changed); not_compared says what it did not compare. "
-                "Empty when nothing changed; absent when there was no previous export."
+                "No difference lists when nothing changed; absent when there was no "
+                "previous export."
             ),
         },
     },
@@ -2064,7 +2072,7 @@ def _connections_since(
             for path in (prior_path, new_path)
         )
         return connection_delta(prior, fresh)
-    except (NetlistGraphError, SpiceLexError, OSError, ValueError) as exc:
+    except Exception as exc:  # the export stands; what was not compared is said
         return [], [
             f"{CONNECTIONS_NOT_COMPARED}: an export could not be read as a circuit ({exc})"
         ]
@@ -2278,6 +2286,13 @@ def compare_structural(reference: str | Path, candidate: str | Path) -> CompareR
         else None
     )
     diff["not_compared"] = [CONNECTIONS_NOT_COMPARED, *diff["not_compared"]]
+    if both_parsed and unread:
+        warnings = [
+            *warnings,
+            "A subcircuit is defined more than once in one scope, so its definitions "
+            "were not compared and 'equivalent' is null; comparison.not_compared "
+            "names it. Rename or delete all but one definition to compare it.",
+        ]
     return {"mode": "structural_diff", "equivalent": equivalent, **diff}, [], None, warnings
 
 

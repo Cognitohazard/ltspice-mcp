@@ -421,3 +421,62 @@ async def test_diff_vs_prior_reads_renumbered_nets_as_the_same(
     diff = data["export"]["diff_vs_prior"]
     assert "connections_changed" not in diff
     assert not any(line.startswith("connections") for line in diff.get("not_compared", []))
+
+
+async def test_a_name_defined_twice_on_one_side_only_is_compared_on_neither(
+    state_no_sim, work_dir
+):
+    """The baseline's one BLK is not reported removed for want of a pair."""
+    ref = _write(work_dir, "ref.cir", _deck())
+    twice = _deck().replace(".end\n", _BLK.format(inner="1") + ".end\n")
+    cand = _write(work_dir, "cand.cir", twice)
+    data = await _run(
+        state_no_sim, path=str(cand), reference=str(ref), compare_mode="structural_diff"
+    )
+    comparison = data["comparison"]
+    assert comparison["equivalent"] is None
+    for key in ("components_added", "components_removed", "directives_added"):
+        assert key not in comparison
+    assert "directives_removed" not in comparison
+    assert [line for line in comparison["not_compared"] if "BLK" in line] == [
+        ".subckt BLK is defined more than once in one scope in the compared deck, so "
+        "no definition of that name there was compared on either side"
+    ]
+    assert any("not_compared" in warning for warning in data["warnings"])
+
+
+async def test_a_subckt_with_no_name_is_still_compared(state_no_sim, work_dir):
+    def deck(value: str) -> str:
+        return f"* t\nV1 a 0 1\n.subckt\nR5 p q {value}\n.ends\nR9 a 0 1k\n.end\n"
+
+    ref = _write(work_dir, "ref.cir", deck("1k"))
+    cand = _write(work_dir, "cand.cir", deck("2k"))
+    comparison = (
+        await _run(
+            state_no_sim, path=str(cand), reference=str(ref), compare_mode="structural_diff"
+        )
+    )["comparison"]
+    assert comparison["components_changed"] == [
+        {"reference": "R5", "subckt": "<anon>", "before": "1k", "after": "2k"}
+    ]
+
+
+async def test_diff_vs_prior_names_no_pin_for_a_move_between_numbered_nets(
+    config, work_dir, asc_symbols, monkeypatch
+):
+    """Which pin the correspondence reports between two nets the exporter
+    numbered depends on the order it reads the parts, so none is named, and
+    the delta says the wiring differs there."""
+    before = "* d\nV1 N002 0 1\nRS N002 N001 1k\nD1 N001 0 DD\nD2 N001 0 DD\nD3 N001 0 DD\n.end\n"
+    after = before.replace("D1 N001 0 DD", "D1 N002 0 DD")
+    monkeypatch.setattr(vc, "_create_netlist", _exporter_writing([after]))
+    state = _with_ltspice(config)
+    asc = _write(work_dir, "d.asc", _RES_ASC)
+    _write(work_dir, "d.net", before)
+    data = await _run(state, path=str(asc), checks=["export"], export_to="sidecar")
+    diff = data["export"]["diff_vs_prior"]
+    assert "connections_changed" not in diff
+    assert any(
+        line.startswith("connections: the two exports are wired otherwise")
+        for line in diff["not_compared"]
+    )
