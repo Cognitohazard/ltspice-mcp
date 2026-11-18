@@ -367,8 +367,9 @@ def get_step_count(raw: RawData) -> int:
 #: and what reads the plot instead.
 NON_REAL_AXIS = (
     "The selected plot has non-real coordinates: its axis has an imaginary part "
-    "that can be a coordinate, so it is not read as its real part. Read its "
-    "values through inspect(kind='results', view='table') or api.load_raw(...).table()."
+    "that can be a coordinate, so it is not read as its real part. Read the "
+    "values as stored, the axis's included, with run_code and "
+    "api.load_raw(...).trace(name), which reads a trace without its axis."
 )
 
 

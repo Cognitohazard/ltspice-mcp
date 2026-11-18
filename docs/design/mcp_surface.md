@@ -2533,7 +2533,9 @@ where it sits.
 The receipt compares the samples of a `random` or `pdk_native` entry by what
 they computed, one `assign` point at a time. Each produced sample keeps a
 digest of its raw: every plot's variables and points, a complex frequency or
-other sampled axis by its real part, and nothing else of its headers. Where every sample
+other sampled axis by its real part where its imaginary part is one no
+simulator computes as a coordinate (zero, or the subnormal number ngspice 42
+writes) and by both parts otherwise, and nothing else of its headers. Where every sample
 compared at a point computed one result, an `identical_samples` observation
 (`kind: "sampling"`) lists the point in its `evidence.groups` as `circuit`,
 `assigned` (that point's `assign` values, left out when the entry has none)

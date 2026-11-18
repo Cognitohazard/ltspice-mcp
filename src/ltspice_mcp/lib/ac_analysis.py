@@ -29,10 +29,11 @@ from typing import Literal, NotRequired, TypedDict
 
 import numpy as np
 
+from ltspice_mcp.lib.raw_parser import NON_REAL_AXIS
+
 # Re-exported as ``magnitude_db`` for readability in the AC domain; the
 # implementation lives in raw_parser so AC and transient tools share the
 # same clamped-log10 behavior.
-from ltspice_mcp.lib.raw_parser import NON_REAL_AXIS
 from ltspice_mcp.lib.raw_parser import safe_magnitude_db as magnitude_db
 from ltspice_mcp.lib.result_kinds import axis_coordinates
 from ltspice_mcp.lib.signal_analysis import level_crossings

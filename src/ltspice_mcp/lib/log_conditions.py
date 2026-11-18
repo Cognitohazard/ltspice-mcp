@@ -193,14 +193,19 @@ def _step_line(lines: Sequence[str], index: int) -> bool:
     return read_step_line(lines[index]) is not None
 
 
+_PRINTS_MEASUREMENT: list[Callable[[str], bool]] = []
+
+
 def _printed_measurement(lines: Sequence[str], index: int) -> bool:
     """A line the measurement reader reads a measurement from
     (``log_parser.prints_measurement``), as written: the classifier keeps no
     pattern of its own for one."""
-    # Imported here: the log parser imports this module.
-    from ltspice_mcp.lib.log_parser import prints_measurement
+    if not _PRINTS_MEASUREMENT:
+        # Imported on first use: the log parser imports this module.
+        from ltspice_mcp.lib.log_parser import prints_measurement
 
-    return prints_measurement(lines[index])
+        _PRINTS_MEASUREMENT.append(prints_measurement)
+    return _PRINTS_MEASUREMENT[0](lines[index])
 
 
 def _native_print_header(lines: Sequence[str], index: int) -> bool:

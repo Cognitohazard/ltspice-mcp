@@ -126,26 +126,54 @@ async def test_ngspice_42s_ac_axis_reads_as_its_frequencies_on_every_path(
     assert readings["inspect"]["ok"], readings["inspect"]["error"]["message"]
 
 
-def _truly_complex(tmp_path: Path) -> Path:
-    """ngspice 42's ASCII file with the imaginary part of the fourth frequency
-    one that can be a coordinate."""
-    text = (_RERUN / "a_ascii.raw").read_text(encoding="ascii")
-    lines = text.split("\n")
-    (index,) = [i for i, line in enumerate(lines) if line.startswith("3\t\t")]
-    lines[index] = re.sub(r",\S+$", ",1.000000000000000e+02", lines[index])
-    path = tmp_path / "complex_axis.raw"
-    path.write_text("\n".join(lines), encoding="ascii")
-    return path
+def _with_imaginary(name: str, out: Path, point: int, imaginary: float) -> Path:
+    """ngspice 42's file ``name`` with the imaginary part of frequency number
+    ``point`` set to ``imaginary``, in the file's own layout."""
+    data = (_RERUN / name).read_bytes()
+    marker = b"Binary:\n"
+    if marker in data:
+        record = 16 * 4  # the frequency and three complex values
+        at = data.index(marker) + len(marker) + point * record + 8
+        data = data[:at] + struct.pack("<d", imaginary) + data[at + 8 :]
+    else:
+        lines = data.decode("ascii").split("\n")
+        (index,) = [i for i, line in enumerate(lines) if line.startswith(f"{point}\t\t")]
+        lines[index] = re.sub(r",\S+$", f",{imaginary:.15e}", lines[index])
+        data = "\n".join(lines).encode("ascii")
+    out.write_bytes(data)
+    return out
+
+
+def _truly_complex(directory: Path, name: str = "a_ascii.raw") -> Path:
+    """ngspice 42's file with the imaginary part of the fourth frequency one
+    that can be a coordinate."""
+    return _with_imaginary(name, directory / f"complex_{name}", 3, 100.0)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["a.raw", "a_ascii.raw"])
 async def test_an_axis_whose_imaginary_part_can_be_a_coordinate_is_refused_on_every_path(
-    state_no_sim: SessionState, work_dir: Path
+    name: str, state_no_sim: SessionState, work_dir: Path
 ):
-    readings = await _every_reading(state_no_sim, _truly_complex(work_dir))
+    raw = _truly_complex(work_dir, name)
+    readings = await _every_reading(state_no_sim, raw)
     assert readings["real_coordinates"] is False
     assert "non-real coordinates" in readings["api"]
     assert "non-real coordinates" in readings["plot"]
+    # inspect lists the signals, which need no axis.
+    assert readings["inspect"]["ok"], readings["inspect"]
+    # The refusal's route reads the stored values, the axis's included.
+    assert "api.load_raw(...).trace(name)" in readings["plot"]
+    api = SyncApi(state_no_sim)
+    loaded = await asyncio.to_thread(api.load_raw, str(raw), dialect="ngspice")
+    stored = loaded.trace("frequency")
+    assert stored[3] == pytest.approx(_FREQUENCIES[3] + 100j)
+    assert len(loaded.trace("v(out)")) == 16
+    # A window of the axis is refused too, rather than kept by its real part.
+    with pytest.raises(ResultError, match="imaginary part that can be a coordinate"):
+        await asyncio.to_thread(
+            api.load_raw, str(raw), dialect="ngspice", window=(2e3, 2e4)
+        )
     failures = readings["analyzed"]["failures"]
     assert sorted(f["where"] for f in failures) == ["ac:0", "ac:0"]
     for failure in failures:
@@ -177,26 +205,36 @@ def test_the_rule_sets_aside_only_an_imaginary_part_that_cannot_have_been_data()
     np.testing.assert_array_equal(freqs, [1e3, 2e3, 3e3])
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "case_id",
-    ["raw/ac", "raw/ac_as_text", "raw/step_ac", "raw/fra.fra_1", "raw/fra_step.fra_1"],
-)
-async def test_a_recorded_ltspice_frequency_axis_holds_no_imaginary_part(
-    case_id: str, tmp_path: Path
-):
-    """The rule leaves LTspice's reading as it was: each recorded AC and FRA
-    axis holds an imaginary part of exactly 0 at every point."""
+def _recorded_frequency_raws() -> list[tuple[str, str]]:
+    """Every recorded LTspice raw of an AC, FRA or noise run, by build and case id."""
+    found = []
     for build in rec.BUILDS:
-        if not rec.recorded(build, f"{case_id}.raw").is_file():
-            continue
-        raw = rec.decode(build, case_id, tmp_path / build).raw
-        assert raw.descriptor.axis is not None
-        assert raw.descriptor.axis.real_coordinates
+        for raw in sorted((rec.FIXTURES / build).rglob("*.raw")):
+            case_id = raw.relative_to(rec.FIXTURES / build).with_suffix("").as_posix()
+            if any(word in case_id for word in ("ac", "fra", "noise")):
+                found.append((build, case_id))
+    return found
+
+
+def test_every_recorded_ltspice_frequency_axis_holds_no_imaginary_part(tmp_path: Path):
+    """The rule leaves LTspice's reading as it was: every recorded AC and FRA
+    axis is complex with an imaginary part of exactly 0 at every point, and
+    every noise axis is real."""
+    complex_axes = 0
+    for build, case_id in _recorded_frequency_raws():
+        try:
+            raw = rec.decode(build, case_id, tmp_path / build).raw
+        except Exception:
+            continue  # a run that left no plot to read, such as a refused deck
+        if raw.descriptor.axis is None:
+            continue  # one point a step: its first variable is a step's parameter
+        assert raw.descriptor.axis.real_coordinates, (build, case_id)
         for step in range(max(1, len(raw.descriptor.steps))):
             axis = np.asarray(raw.get_axis(step=step))
-            assert np.iscomplexobj(axis)
-            assert np.all(np.imag(axis) == 0)
+            if np.iscomplexobj(axis):
+                complex_axes += 1
+                assert np.all(np.imag(axis) == 0), (build, case_id)
+    assert complex_axes >= 20
 
 
 def test_two_reruns_whose_axes_differ_only_in_a_coordinate_are_not_the_same_result(
@@ -204,26 +242,12 @@ def test_two_reruns_whose_axes_differ_only_in_a_coordinate_are_not_the_same_resu
 ):
     """The result digest sets aside only an imaginary part that cannot be a
     coordinate: ngspice 42's reruns digest alike, a changed coordinate does not."""
-    first = raw_parser.result_digest(_RERUN / "a_ascii.raw", "ngspice")
-    assert first is not None
-    assert raw_parser.result_digest(_RERUN / "b_ascii.raw", "ngspice") == first
-    assert raw_parser.result_digest(_truly_complex(tmp_path), "ngspice") != first
-
-
-def _last_point_imaginary(path: Path, out: Path, imaginary: float) -> Path:
-    """``path`` with the imaginary part of its last frequency set to ``imaginary``."""
-    data = path.read_bytes()
-    if b"Binary:\n" in data:
-        record = 16 * 4  # the frequency and three complex values
-        at = len(data) - record + 8
-        data = data[:at] + struct.pack("<d", imaginary) + data[at + 8 :]
-    else:
-        lines = data.decode("ascii").split("\n")
-        (index,) = [i for i, line in enumerate(lines) if line.startswith("15\t\t")]
-        lines[index] = re.sub(r",\S+$", f",{imaginary:.15e}", lines[index])
-        data = "\n".join(lines).encode("ascii")
-    out.write_bytes(data)
-    return out
+    for first_name, second_name in (("a_ascii.raw", "b_ascii.raw"), ("a.raw", "b.raw")):
+        first = raw_parser.result_digest(_RERUN / first_name, "ngspice")
+        assert first is not None
+        assert raw_parser.result_digest(_RERUN / second_name, "ngspice") == first
+        changed = _truly_complex(tmp_path, first_name)
+        assert raw_parser.result_digest(changed, "ngspice") != first
 
 
 @pytest.mark.parametrize("name", ["a.raw", "a_ascii.raw"])
@@ -236,7 +260,7 @@ def test_a_runs_progress_names_its_last_frequency_only_when_the_axis_is_real(
     progress = raw_parser.read_partial_raw_progress(_RERUN / name, "ngspice")
     assert progress is not None
     assert progress.last_axis_value == pytest.approx(1e6)
-    changed = _last_point_imaginary(_RERUN / name, tmp_path / name, 3.0)
+    changed = _with_imaginary(name, tmp_path / name, 15, 3.0)
     progress = raw_parser.read_partial_raw_progress(changed, "ngspice")
     assert progress is not None
     assert progress.points == 16

@@ -25,7 +25,7 @@ from ltspice_mcp.lib.device_names import (
     writes_xvii_names,
 )
 from ltspice_mcp.lib.log_types import LogSectionName
-from ltspice_mcp.lib.raw_parser import OtherRawKind, get_step_count
+from ltspice_mcp.lib.raw_parser import OtherRawKind, get_step_count, real_axis
 from ltspice_mcp.lib.step_values import StepValues, listed_steps, step_values_text, step_with
 from ltspice_mcp.state import SessionState
 
@@ -121,12 +121,11 @@ class RawResult:
     def axis(self, *, step: int = 0) -> np.ndarray:
         """Return the selected plot's real sampled coordinates as a detached array."""
         self._validate_step(step)
-        descriptor = self._raw.descriptor.axis
-        if descriptor is not None and not descriptor.real_coordinates:
-            raise ResultError("The selected plot's axis has non-real coordinates.")
-        axis = np.array(self._raw.get_axis(step=step), copy=True)
-        if np.iscomplexobj(axis):
-            return np.real(axis).copy()
+        # Read as every tool reads an axis, a step at a time
+        # (raw_parser.real_axis, which asks result_kinds.axis_coordinates).
+        axis = np.array(real_axis(np.asarray(self._raw.get_axis(step=step))), copy=True)
+        if not np.all(np.isfinite(axis)):
+            raise ResultError("The selected plot's axis has coordinates that are not finite.")
         return axis
 
     def _validate_step(self, step: int) -> None:
