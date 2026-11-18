@@ -358,7 +358,10 @@ MEAS_ANGLE_REASON = (
     "'Use radian measure in waveform expressions' (RadianMeasure), so the deck "
     "does not decide it. Compute the expression in a B source and measure its "
     "node (B1 x 0 V=V(out)*cos(2*pi*f*time), then .meas tran r INTEG V(x)), or "
-    "combine the measured values after the run."
+    "combine the measured values after the run. A deck written for degrees runs "
+    'with run_experiments\' suppress: ["meas-trig-degrees"], and its .meas is '
+    "right only where that setting is left at its default (off), on the machine "
+    "that runs it."
 )
 
 

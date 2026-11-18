@@ -684,6 +684,9 @@ async def test_syntax_flags_trig_in_a_measurement_on_ltspice(state_no_sim, work_
     ]
     assert {f["severity"] for f in found} == {"error"}
     assert found[0]["evidence"]["reason"] == MEAS_ANGLE_REASON
+    # verify_circuit has no suppress: the reason names run_experiments' own.
+    assert 'run_experiments\' suppress: ["meas-trig-degrees"]' in MEAS_ANGLE_REASON
+    assert "left at its default (off)" in MEAS_ANGLE_REASON
 
 
 def _export_writing_a_micro_sign(_cls, asc_path, timeout=0):
