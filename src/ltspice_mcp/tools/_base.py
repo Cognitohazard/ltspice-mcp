@@ -762,7 +762,17 @@ ALWAYS_PRESENT: dict[str, dict[str, Kept]] = {
         ),
     },
     "edit_schematic": {**_OUTCOME, **_FINDING_OK, **_COMPARISON, **_SHOWN},
-    "verify_circuit": {**_OUTCOME, **_FINDING_OK, **_COMPARISON, **_SHOWN},
+    "verify_circuit": {
+        **_OUTCOME,
+        **_FINDING_OK,
+        **_COMPARISON,
+        **_SHOWN,
+        "diff_vs_prior": Kept(
+            "An export's delta from the previous one: empty is the answer that "
+            "nothing changed, where an absent field means there was no previous "
+            "export to compare with."
+        ),
+    },
     "plot_waveform": {
         **_SHOWN,
         "tied": Kept(

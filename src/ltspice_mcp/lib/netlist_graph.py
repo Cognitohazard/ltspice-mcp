@@ -467,6 +467,10 @@ class NodePartitionDiff:
     reference_nets: tuple[str, ...]
     candidate_nets: tuple[str, ...]
     involved: tuple[str, ...]
+    #: Each pin in ``involved`` as ``(reference, pin number, its reference
+    #: net, its candidate net)``: the pin on one net that the correspondence
+    #: puts on another. Not part of the reply's mismatch row.
+    pins: tuple[tuple[str, int, str, str], ...] = field(default=(), compare=False)
 
 
 @dataclass(frozen=True)
@@ -1855,6 +1859,8 @@ def _propagate_partition(
     fan_out: dict[str, tuple[set[str], set[str]]] = {}
     # shorts: candidate net -> (reference nets merged onto it, witnessing pins)
     shorts: dict[str, tuple[set[str], set[str]]] = {}
+    # Each witnessing pin's two nets, for NodePartitionDiff.pins.
+    pin_nets: dict[str, tuple[str, int, str, str]] = {}
 
     def equate(rnet: str, cnet: str, pin_ref: str, pin_idx: int) -> None:
         pin = f"{pin_ref}.{pin_idx + 1}"
@@ -1863,6 +1869,7 @@ def _propagate_partition(
             cand_nets, involved = fan_out.setdefault(rnet, (set(), set()))
             cand_nets.update({existing, cnet})
             involved.add(pin)
+            pin_nets[pin] = (pin_ref, pin_idx + 1, rnet, cnet)
             return
         other = bwd.get(cnet)
         if other is not None and other != rnet:
@@ -1871,6 +1878,7 @@ def _propagate_partition(
             ref_nets, involved = shorts.setdefault(cnet, (set(), set()))
             ref_nets.update({other, rnet})
             involved.add(pin)
+            pin_nets[pin] = (pin_ref, pin_idx + 1, rnet, cnet)
             return
         fwd[rnet] = cnet
         bwd[cnet] = rnet
@@ -1884,7 +1892,8 @@ def _propagate_partition(
     # resolved iteratively once one of their two nets is pinned down.
     ordered: list[tuple[FlatComponent, FlatComponent]] = []
     symmetric: list[tuple[FlatComponent, FlatComponent]] = []
-    for key in shared:
+    # In a fixed order, so which pins witness a mismatch is the same each time.
+    for key in sorted(shared):
         rc, cc = ref_by_ref[key], cand_by_ref[key]
         if len(rc.nodes) != len(cc.nodes):
             continue
@@ -1930,6 +1939,7 @@ def _propagate_partition(
             reference_nets=(rnet,),
             candidate_nets=tuple(sorted(cand_nets)),
             involved=tuple(sorted(involved)),
+            pins=tuple(pin_nets[pin] for pin in sorted(involved)),
         )
         for rnet, (cand_nets, involved) in sorted(fan_out.items())
     ]
@@ -1938,6 +1948,7 @@ def _propagate_partition(
             reference_nets=tuple(sorted(ref_nets)),
             candidate_nets=(cnet,),
             involved=tuple(sorted(involved)),
+            pins=tuple(pin_nets[pin] for pin in sorted(involved)),
         )
         for cnet, (ref_nets, involved) in sorted(shorts.items())
     ]

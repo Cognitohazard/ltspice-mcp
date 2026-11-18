@@ -258,7 +258,17 @@ _CASE_FAILURES = (
 )
 _CASE_IDS = "receipts._FAILURE_CASE_ID_CAP (10), with count the true number"
 
+_NOT_COMPARED = (
+    "one line for connections, one for included files, and one per name a deck "
+    "defines more than once in one scope (netlist_diff.structural_delta)"
+)
+
 NEVER_BOUNDS: dict[tuple[str, str], str] = {
+    ("verify.handle_verify_circuit", "comparison.not_compared"): _NOT_COMPARED,
+    ("verify.handle_verify_circuit", "export.diff_vs_prior.not_compared"): _NOT_COMPARED,
+    ("schematic_edit.handle_edit_schematic", "verification.comparison.not_compared"): (
+        _NOT_COMPARED
+    ),
     **{
         (handler, path): _UNBOUNDED
         for handler in (

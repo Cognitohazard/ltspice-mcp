@@ -1799,7 +1799,16 @@ its own window; asking for it makes the call destructive, as the annotation
 table shows. Both modes report in `diff_vs_prior` what changed since the
 schematic's previous export: `sidecar` against the `.net` it replaces,
 `managed` against the previous managed export of the same schematic, which
-the store keeps.
+the store keeps. It is the `structural_diff` delta below, each part and
+directive in its scope, plus `connections_changed`: each pin of a part both
+exports have that is on a net not corresponding to its previous one, as
+`{reference, pin, before, after}`. The pins are read from the wiring
+comparison `equivalence` runs, with each net both exports name the same
+anchored by its name and a net the exporter numbered (`N001`, `NC_01`), which
+another export may number otherwise, matched by the parts on it. Where the
+exports cannot be read as circuits, or the wiring differs and no pin can be
+named, `not_compared` says so. `diff_vs_prior` is empty when nothing changed
+and absent when there was no previous export.
 
 Rendering uses the project's own SVG-to-PNG renderer; the `render` policy
 sets format, scale, pixel cap, and whether the image is returned inline or as
@@ -1836,17 +1845,28 @@ and whatever each side names it. A definition's own directives are its body's,
 each listed with `(in .subckt NAME)` after it, and the instance that paired
 two definitions of different names. An `.include` or `.lib` line
 is a directive, but one whose file (or section) defines subcircuits and nothing
-else is compared by those definitions instead. So the modes differ: a `.param`
-moved from a body to the top level is a difference here and not in
-`structural_diff`, a definition moved into such an include is one there and not
-here, and a subcircuit the circuit does not call is compared there only.
+else is compared by those definitions instead. Both modes compare a `.param`
+moved from a body to the top level as a difference. They differ where each
+reads the deck: a definition moved into such an include is a difference in
+`structural_diff` and not here, and a subcircuit the circuit does not call is
+compared there only.
 `equivalent` is true only when the wiring, the parts and values and the
 directives all match. Beside a false one, `structurally_equivalent`
 says whether the wiring matched and `directives_equivalent` whether the
 directives did, and `directives_added` and `directives_removed` list the
 directives only this circuit has and those only the reference has.
 `structural_diff` reports the added, removed and changed components and
-directives, and does not compare nodes. The modes differ on a deck they
+directives of the two files as written, each in its scope: the top level, or
+the `.subckt` definition it sits in, paired with the definition of the same
+name in the same scope on the other side, a nested definition a scope of its
+own. An entry inside a definition says which: a string ends in
+`(in .subckt NAME)`, and an object carries `subckt`, nested names joined with
+`/`. So two elements of one reference in two blocks of an exported sheet are
+two elements. It does not compare nodes, and its `not_compared` says so in the
+data; it also names a definition either deck gives more than once in one
+scope, which it does not compare on either side (which of them stands for
+which is not known; `equivalent` is then null), and says that included files'
+cards are not read when a deck includes one. The modes differ on a deck they
 cannot read.
 `equivalence` returns a compare failure with no `comparison` block, while
 `structural_diff` diffs the deck as empty, so the delta is still returned,

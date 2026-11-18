@@ -75,8 +75,12 @@ class Case:
 
 def _cases() -> Iterator[Any]:
     yield pytest.param(
-        Case(_deck(), _deck(top="6"), [{"reference": "VPRE", "before": "5", "after": "6"}],
-             [("VPRE", "5", "6")]),
+        Case(
+            _deck(),
+            _deck(top="6"),
+            [{"reference": "VPRE", "before": "5", "after": "6"}],
+            [("VPRE", "5", "6")],
+        ),
         id="top_level_change_beside_a_block_of_the_same_reference",
     )
     yield pytest.param(
@@ -202,9 +206,7 @@ async def test_diff_vs_prior_sidecar(config, work_dir, asc_symbols, monkeypatch,
 
 @pytest.mark.parametrize("case", CASES)
 async def test_diff_vs_prior_managed(config, work_dir, asc_symbols, monkeypatch, case: Case):
-    monkeypatch.setattr(
-        vc, "_create_netlist", _exporter_writing([case.baseline, case.compared])
-    )
+    monkeypatch.setattr(vc, "_create_netlist", _exporter_writing([case.baseline, case.compared]))
     state = _with_ltspice(config)
     asc = _write(work_dir, "m.asc", _RES_ASC)
     await _run(state, path=str(asc), checks=["export"])
@@ -243,16 +245,18 @@ _AMP_BODY = ".subckt AMP a b\n{body}R1 a b {{g*1k}}\n.ends AMP\n"
 
 
 def _amp(body: str = ".param g=2\n", top: str = "") -> str:
-    return "* amp\nV1 a 0 1\nX1 a b AMP\nR9 b 0 1k\n" + top + _AMP_BODY.format(body=body) + ".end\n"
+    return (
+        "* amp\nV1 a 0 1\nX1 a b AMP\nR9 b 0 1k\n" + top + _AMP_BODY.format(body=body) + ".end\n"
+    )
 
 
-async def test_a_param_moved_from_a_body_to_the_top_level_is_a_difference(
-    state_no_sim, work_dir
-):
+async def test_a_param_moved_from_a_body_to_the_top_level_is_a_difference(state_no_sim, work_dir):
     ref = _write(work_dir, "ref.cir", _amp())
     deck = _write(work_dir, "cand.cir", _amp("", top=".param g=2\n"))
     comparison = (
-        await _run(state_no_sim, path=str(deck), reference=str(ref), compare_mode="structural_diff")
+        await _run(
+            state_no_sim, path=str(deck), reference=str(ref), compare_mode="structural_diff"
+        )
     )["comparison"]
     assert comparison["equivalent"] is False
     assert comparison["directives_added"] == [".param g=2"]
@@ -263,7 +267,9 @@ async def test_a_directive_in_a_body_is_said_to_be_the_body_s(state_no_sim, work
     ref = _write(work_dir, "ref.cir", _amp())
     deck = _write(work_dir, "cand.cir", _amp(".param g=3\n"))
     comparison = (
-        await _run(state_no_sim, path=str(deck), reference=str(ref), compare_mode="structural_diff")
+        await _run(
+            state_no_sim, path=str(deck), reference=str(ref), compare_mode="structural_diff"
+        )
     )["comparison"]
     assert comparison["directives_added"] == [".param g=3 (in .subckt AMP)"]
     assert comparison["directives_removed"] == [".param g=2 (in .subckt AMP)"]
@@ -282,7 +288,9 @@ async def test_an_element_in_a_nested_definition_names_the_definitions_around_it
     ref = _write(work_dir, "ref.cir", deck("1k"))
     cand = _write(work_dir, "cand.cir", deck("2k"))
     comparison = (
-        await _run(state_no_sim, path=str(cand), reference=str(ref), compare_mode="structural_diff")
+        await _run(
+            state_no_sim, path=str(cand), reference=str(ref), compare_mode="structural_diff"
+        )
     )["comparison"]
     assert comparison["components_changed"] == [
         {"reference": "R1", "subckt": "OUTER/INNER", "before": "1k", "after": "2k"}
@@ -293,7 +301,9 @@ async def test_an_element_only_one_side_has_is_named_with_its_scope(state_no_sim
     ref = _write(work_dir, "ref.cir", _deck())
     cand = _write(work_dir, "cand.cir", _deck().replace("R2 p b 1k\n", ""))
     comparison = (
-        await _run(state_no_sim, path=str(cand), reference=str(ref), compare_mode="structural_diff")
+        await _run(
+            state_no_sim, path=str(cand), reference=str(ref), compare_mode="structural_diff"
+        )
     )["comparison"]
     assert comparison["components_removed"] == ["R2 (in .subckt BLK)"]
 
@@ -308,7 +318,9 @@ async def test_a_name_defined_twice_in_one_scope_is_said_not_compared(state_no_s
     ref = _write(work_dir, "ref.cir", twice)
     cand = _write(work_dir, "cand.cir", twice.replace("VPRE p 0 1", "VPRE p 0 7", 1))
     comparison = (
-        await _run(state_no_sim, path=str(cand), reference=str(ref), compare_mode="structural_diff")
+        await _run(
+            state_no_sim, path=str(cand), reference=str(ref), compare_mode="structural_diff"
+        )
     )["comparison"]
     assert comparison["equivalent"] is None
     assert not comparison.get("components_changed")
@@ -328,7 +340,9 @@ async def test_definitions_of_one_name_in_two_scopes_are_kept_apart(state_no_sim
     ref = _write(work_dir, "ref.cir", deck("5k"))
     cand = _write(work_dir, "cand.cir", deck("6k"))
     comparison = (
-        await _run(state_no_sim, path=str(cand), reference=str(ref), compare_mode="structural_diff")
+        await _run(
+            state_no_sim, path=str(cand), reference=str(ref), compare_mode="structural_diff"
+        )
     )["comparison"]
     assert comparison["components_changed"] == [
         {"reference": "R1", "subckt": "OUTER/BLK", "before": "5k", "after": "6k"}
@@ -340,13 +354,13 @@ async def test_definitions_of_one_name_in_two_scopes_are_kept_apart(state_no_sim
 # ---------------------------------------------------------------------------
 
 
-async def test_structural_diff_mode_says_it_did_not_compare_connections(
-    state_no_sim, work_dir
-):
+async def test_structural_diff_mode_says_it_did_not_compare_connections(state_no_sim, work_dir):
     ref = _write(work_dir, "ref.cir", "* d\nV1 in 0 5\nR1 in out 1k\nR2 out 0 2k\n.end\n")
     cand = _write(work_dir, "cand.cir", "* d\nV1 in 0 5\nR1 in out 1k\nR2 in 0 2k\n.end\n")
     comparison = (
-        await _run(state_no_sim, path=str(cand), reference=str(ref), compare_mode="structural_diff")
+        await _run(
+            state_no_sim, path=str(cand), reference=str(ref), compare_mode="structural_diff"
+        )
     )["comparison"]
     assert comparison["equivalent"] is True
     assert any(line.startswith("connections") for line in comparison["not_compared"])
