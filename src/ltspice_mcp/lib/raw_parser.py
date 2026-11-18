@@ -1076,11 +1076,35 @@ def raw_writer_command(path: Path) -> str | None:
     return (fields or {}).get("command") or None
 
 
+def first_plot_traces(path: Path) -> list[tuple[str, str]] | None:
+    """The traces the first plot of the raw at ``path`` holds, each with the
+    type its header declares, read from the header alone; None when the file
+    is not a raw or cannot be read."""
+    try:
+        with path.open("rb") as handle:
+            magic = handle.read(len(_RAW_HEADER_UTF16[0]))
+            if magic.startswith(_RAW_HEADER_UTF16):
+                width = 2
+            elif magic.startswith(_RAW_HEADER_ASCII):
+                width = 1
+            else:
+                return None
+            header = _read_plot_header(handle, 0, width)
+    except OSError:
+        return None
+    return list(zip(header.variables, header.types, strict=True))
+
+
 def may_hold_compressed_transient(path: Path) -> bool:
     """Whether the first plot of the raw at ``path`` may be a transient that
     waveform compression thinned: its header names a transient and its flags
     do not say ``nocompression``. True when the header cannot be read, so a
-    caller that must know decodes the file to find out."""
+    caller that must know decodes the file to find out.
+
+    A pre-check, on purpose apart from ``result_observations.compressed_transient``,
+    which answers for a decoded plot: this one reads the first header alone,
+    before anything is decoded, and errs toward True, so a recipe that reads
+    only the log decodes the raw only where it may need to."""
     fields = _first_header_fields(path)
     if fields is None:
         return True
@@ -1164,10 +1188,15 @@ class _Cut:
 class _PlotHeader:
     fields: dict[str, str]
     variables: list[str]
-    #: The first variable's declared type: what says whether it is an axis.
-    first_type: str
+    #: Each variable's declared type, in the order of ``variables``.
+    types: list[str]
     data_start: int | None
     data_kind: str | None
+
+    @property
+    def first_type(self) -> str:
+        """The first variable's declared type: what says whether it is an axis."""
+        return self.types[0] if self.types else ""
 
 
 def read_partial_raw_progress(path: Path, dialect: str | None = None) -> PartialRawProgress | None:
@@ -1428,28 +1457,27 @@ def _read_plot_header(handle: Any, offset: int, width: int) -> _PlotHeader:
         match = _RE_DATA_START.search(text, max(0, searched - 16))
         if match is not None:
             prefix = text[: match.end()].encode(codec, errors="surrogatepass")
-            fields, variables, first_type = _parse_plot_header(text[: match.start()])
+            fields, variables, types = _parse_plot_header(text[: match.start()])
             return _PlotHeader(
-                fields, variables, first_type, offset + len(prefix), match.group(1).lower()
+                fields, variables, types, offset + len(prefix), match.group(1).lower()
             )
-    fields, variables, first_type = _parse_plot_header(text)
-    return _PlotHeader(fields, variables, first_type, None, None)
+    fields, variables, types = _parse_plot_header(text)
+    return _PlotHeader(fields, variables, types, None, None)
 
 
-def _parse_plot_header(text: str) -> tuple[dict[str, str], list[str], str]:
+def _parse_plot_header(text: str) -> tuple[dict[str, str], list[str], list[str]]:
     """Header fields keyed in lower case, the variable names in order, and
-    the first variable's declared type."""
+    each one's declared type (empty where the line declares none)."""
     fields: dict[str, str] = {}
     variables: list[str] = []
-    first_type = ""
+    types: list[str] = []
     in_variables = False
     for line in text.split("\n"):
         line = line.rstrip("\r")
         if in_variables:
             parts = line.lstrip().split("\t")
             if len(parts) >= 2:
-                if not variables and len(parts) >= 3:
-                    first_type = parts[2]
+                types.append(parts[2] if len(parts) >= 3 else "")
                 variables.append(parts[1])
             continue
         key, sep, value = line.partition(":")
@@ -1460,7 +1488,7 @@ def _parse_plot_header(text: str) -> tuple[dict[str, str], list[str], str]:
             in_variables = True
             continue
         fields.setdefault(key, value.strip())
-    return fields, variables, first_type
+    return fields, variables, types
 
 
 def _int_field(fields: dict[str, str], key: str) -> int:

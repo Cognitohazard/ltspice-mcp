@@ -52,6 +52,7 @@ from ltspice_mcp.lib.projection import (
 )
 from ltspice_mcp.lib.raw_parser import other_raw_path
 from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER, rows
+from ltspice_mcp.lib.result_observations import measurements_failed_in_every_run
 from ltspice_mcp.lib.sheet_results import run_by_ltspice, sheets_reported
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable
 from ltspice_mcp.state import SessionState
@@ -196,6 +197,12 @@ _ARTIFACT_SCHEMA: dict[str, Any] = {
     "required": ["path", "content_type", "sha256", "bytes"],
 }
 
+#: Why a run row's measurement fields were not read (``measurements_coverage``).
+MEASUREMENTS_COVERAGE = ("not_read", "log_unread")
+
+#: A list of steps of one measurement: the run's step count bounds it.
+_STEPS_SCHEMA: dict[str, Any] = {"type": "array", "items": {"type": "integer"}, CUT: NEVER}
+
 RUN_RECORD_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -219,6 +226,44 @@ RUN_RECORD_SCHEMA: dict[str, Any] = {
         "simulator_version": {"type": ["string", "null"]},
         "diagnostics": RUN_DIAGNOSTICS_SCHEMA,
         "diagnostics_coverage": DIAGNOSTICS_COVERAGE_SCHEMA,
+        "failed_measurements": {
+            "type": "array",
+            "items": {"type": "string"},
+            # One name per .meas the run printed failed: the deck bounds it,
+            # and leaving one out would read as taken.
+            CUT: NEVER,
+            "description": (
+                "The .meas LTspice printed as failed in this run, by name in the log's "
+                "order. The measurements recipe reads the values."
+            ),
+        },
+        "failed_measurement_steps": {
+            "type": "object",
+            "additionalProperties": _STEPS_SCHEMA,
+            "description": (
+                "For a failed_measurements name that failed at some steps of a stepped "
+                "run only: those steps, from 0. A name not here failed at every step."
+            ),
+        },
+        "measurements_not_established": {
+            "type": "object",
+            "additionalProperties": _STEPS_SCHEMA,
+            "description": (
+                "Steps, from 0, at which a .meas's printed value is not established "
+                "as its result (LTspice XVII prints 0 for a step whose measurement "
+                "failed); the measurements recipe reads them as null."
+            ),
+        },
+        "measurements_coverage": {
+            "type": "string",
+            "enum": list(MEASUREMENTS_COVERAGE),
+            "description": (
+                "Present when the row's failed_measurements were not read: "
+                "'not_read', a run recorded before the server kept them; "
+                "'log_unread', the log's measurements could not be read. Read them "
+                "with the measurements recipe."
+            ),
+        },
         "attempt": {
             "type": "object",
             "properties": {
@@ -735,6 +780,31 @@ def _sample_observations(cases: Sequence[ExperimentCase]) -> list[dict[str, Any]
     return observations
 
 
+def _measurement_observations(cases: Sequence[ExperimentCase]) -> list[dict[str, Any]]:
+    """Each circuit's ``.meas`` that failed in every run whose measurements
+    were read (``result_observations.measurements_failed_in_every_run``),
+    from what each case kept when its run ended. A name that failed at some
+    steps of a run only was given at the others, so it is not counted there."""
+    by_circuit: dict[str, list[dict[str, Any]]] = {}
+    for case in cases:
+        facts = case.measurement_facts
+        if _ran(case) and facts is not None and "coverage" not in facts:
+            by_circuit.setdefault(case.circuit, []).append(facts)
+    observations: list[dict[str, Any]] = []
+    for circuit, read in by_circuit.items():
+        failed = [
+            [name for name in facts.get("failed", ()) if name not in facts.get("failed_steps", {})]
+            for facts in read
+        ]
+        requested = next((facts["requested"] for facts in read if "requested" in facts), None)
+        found = measurements_failed_in_every_run(
+            failed, requested, circuit=circuit if len(by_circuit) > 1 else None
+        )
+        if found is not None:
+            observations.append(dict(found))
+    return observations
+
+
 def _results_in_the_job_folder(job_id: str, sheets: list[str]) -> dict[str, Any]:
     """Say that a sheet's run left its results in the job folder, not beside
     the sheet, where LTspice's own window opens a sheet's results."""
@@ -1006,17 +1076,48 @@ def run_row_diagnostics(case: ExperimentCase) -> dict[str, Any]:
     and build, ``diagnostics_coverage``. A case that never launched, or whose run
     has not ended, says nothing; one that ended before the server classified
     logs says its log was not classified."""
-    ran = (
-        case.submitted_at is not None
-        and case.status in TERMINAL_CASE_STATUSES
-        and case.failure_code != "submission_failed"
-    )
-    if not ran:
+    if not _ran(case):
         return {}
     found = case.log_diagnostics
     if found is None:
         return {"diagnostics_coverage": "not_classified"}
     return reply_fields(found)
+
+
+#: A case's measurement facts (``ExperimentCase.measurement_facts``) by the
+#: run-row field each is sent as.
+_MEASUREMENT_ROW_FIELDS = {
+    "failed": "failed_measurements",
+    "failed_steps": "failed_measurement_steps",
+    "not_established": "measurements_not_established",
+    "coverage": "measurements_coverage",
+}
+
+
+def run_row_measurements(case: ExperimentCase) -> dict[str, Any]:
+    """What ``case``'s run did not give of its measurements, as its row
+    carries it. A case that never launched, or whose run has not ended, says
+    nothing; one that ended before the server kept its measurements says they
+    were not read, so its silence never reads as "none failed"."""
+    if not _ran(case):
+        return {}
+    facts = case.measurement_facts
+    if facts is None:
+        return {"measurements_coverage": "not_read"}
+    return {
+        _MEASUREMENT_ROW_FIELDS[key]: value
+        for key, value in facts.items()
+        if key in _MEASUREMENT_ROW_FIELDS
+    }
+
+
+def _ran(case: ExperimentCase) -> bool:
+    """Whether ``case``'s simulator was launched and its run has ended."""
+    return (
+        case.submitted_at is not None
+        and case.status in TERMINAL_CASE_STATUSES
+        and case.failure_code != "submission_failed"
+    )
 
 
 def _run_item(case: ExperimentCase) -> dict[str, Any]:
@@ -1035,6 +1136,7 @@ def _run_item(case: ExperimentCase) -> dict[str, Any]:
         ),
         "simulator_version": case.simulator_version,
         **run_row_diagnostics(case),
+        **run_row_measurements(case),
     }
     if case.recovery is not None:
         attempt = case.recovery.attempt
@@ -1203,6 +1305,16 @@ def _recovery_routes(snapshot: ReceiptSnapshot) -> list[str]:
         )
     if snapshot.failures:
         routes.append("Inspect failures and lint findings before retrying omitted cases.")
+    if any(
+        "failed_measurements" in row or "measurements_not_established" in row
+        for row in snapshot.runs_by_key.values()
+    ):
+        routes.append(
+            "A run row names a .meas that gave no value (failed_measurements, "
+            "measurements_not_established); read every value with analyze_results("
+            f'sources=[{{"job_id": "{snapshot.job_id}"}}], recipes=[{{"metric": '
+            '"measurements"}]), or api.analyze_results in Python.'
+        )
     return routes
 
 
@@ -1274,6 +1386,7 @@ def snapshot_receipt(
     if sheets and run_by_ltspice(job.simulator):
         observations.append(_results_in_the_job_folder(job.job_id, sheets))
     observations.extend(_sample_observations(job.cases))
+    observations.extend(_measurement_observations(job.cases))
 
     analysis = job.analysis
     return ReceiptSnapshot(

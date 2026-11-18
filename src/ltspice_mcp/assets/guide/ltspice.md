@@ -189,13 +189,18 @@ branch) instead of trusting `status: completed`.
 | `plotwinsize=0` | Store every computed point of a transient (no waveform compression) |
 
 LTspice XVII compresses a transient's waveform by default. It stored a 1 mV
-RC charge over 5 ms in 13 points, even with a 50 us maximum step, and the
-compression changed its own `.meas` results. LTspice 26 stored every point of
-the same run. When a recipe reads a compressed transient's samples,
-`analyze_results` reports it in `observations` (`coarse_compressed_waveform`)
-if the widest gap between stored points spans more than 5% of the transient's
-duration and is wider than the maximum step a job's deck gives `.tran`. Add
-`.options plotwinsize=0` before measuring a small or slow signal.
+RC charge over 5 ms in 13 points, even with a 50 us maximum step. Its own
+`.meas` results read points that raw does not hold: they came within 0.25% of
+the uncompressed run's, while a trapezoid over the 13 stored points was 0.41%
+below its `AVG` and interpolation at 1 ms 1.15% below its `FIND`. On XVII,
+trust such a `.meas` over a value read from the compressed samples. LTspice 26
+stored every point of the same run with compression on, though its raw's flags
+also say compression was on. When a recipe or a read takes samples from a
+compressed XVII transient, the reply says so in `observations`
+(`compressed_transient`). On either build, `coarse_compressed_waveform` says
+when the widest gap between stored points spans more than 5% of the
+transient's duration and is wider than the maximum step a job's deck gives
+`.tran`. Add `.options plotwinsize=0` before measuring a small or slow signal.
 
 ## Subcircuits
 

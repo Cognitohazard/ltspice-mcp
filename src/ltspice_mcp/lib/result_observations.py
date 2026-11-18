@@ -61,6 +61,7 @@ import numpy as np
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.cache import FileCache
+from ltspice_mcp.lib.device_names import DevicePath, path_text, spelled_name, split_path, trace_key
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.log_types import measurement_failed, measurement_named
@@ -71,6 +72,8 @@ from ltspice_mcp.lib.trace_names import is_node_voltage
 
 if TYPE_CHECKING:
     from ltspice_mcp.lib.decoded_raw import DecodedRaw
+    from ltspice_mcp.lib.device_names import Naming
+    from ltspice_mcp.lib.netlist_graph import FlatNetlist
     from ltspice_mcp.lib.result_kinds import Analysis
 
 # Salience threshold for lifting a node value into view. The gmin/floating-node
@@ -387,7 +390,15 @@ def compressed_transient(raw: DecodedRaw) -> bool:
     """Whether ``raw`` is an LTspice transient saved with waveform compression
     on, the plot ``coarse_compressed_waveform`` judges. LTspice adds
     ``nocompression`` to a transient's flags when compression is off
-    (``raw/compress_*``)."""
+    (``raw/compress_*``). The flag shows the setting, not that points were
+    dropped: LTspice 26 stores every point of ``raw/compress_1mv`` with it on.
+
+    It reads the decoded plot, its dialect established, so it answers for the
+    plot a read holds. ``raw_parser.may_hold_compressed_transient`` asks the
+    same of the header alone, before anything is decoded, and answers True
+    where it cannot tell, so a recipe that reads only the log decodes the raw
+    only when it may need to. The two differ on purpose: one is a cheap,
+    conservative pre-check, this is the answer."""
     descriptor = raw.descriptor
     return (
         descriptor.dialect == "ltspice"
@@ -431,6 +442,35 @@ def coarse_compressed_waveform(
     return None
 
 
+#: What the recordings show of LTspice's own ``.meas`` on a compressed
+#: transient, by build (``raw/compress_1mv`` and ``raw/compress_1mv_off``).
+_XVII_MEAS = (
+    "LTspice XVII's own .meas results read points its raw does not hold: in a recorded "
+    "RC charge they came within 0.25% of the uncompressed run's, where values read "
+    "from the 13 stored points were up to 1.15% off. LTspice 26 stored every point of "
+    "the same run."
+)
+
+
+def compressed_xvii_observation(labels: Sequence[str], *, run_cap: int) -> Observation:
+    """The observation for LTspice XVII transient runs, each by its label,
+    whose samples a read took from a raw saved with waveform compression on
+    (``services.compression_drops_points``) and not already said to be coarse
+    (``coarse_waveform_observation``)."""
+    return Observation(
+        code="compressed_transient",
+        kind="value",
+        detail=(
+            f"{len(labels)} LTspice XVII transient run(s) read here were saved with "
+            "waveform compression on, which on XVII stores fewer points than it "
+            "computed, so a value read from the samples is interpolated across points "
+            f"the raw does not hold. {_XVII_MEAS} '.options plotwinsize=0' stores every "
+            "point."
+        ),
+        evidence={"runs": list(labels[:run_cap]), "run_count": len(labels)},
+    )
+
+
 def coarse_waveform_observation(
     coarse: Sequence[tuple[str, Mapping[str, float]]], *, run_cap: int
 ) -> Observation:
@@ -450,9 +490,8 @@ def coarse_waveform_observation(
             f"{first['points']:.0f} points span {span:.3g} s, and the widest gap "
             f"between two, from {first['gap_from_s']:.3g} s to "
             f"{first['gap_to_s']:.3g} s, is {gap / span:.0%} of that time. A value "
-            "read between stored points is interpolated across the gap, and "
-            "LTspice's own .meas results can differ from an uncompressed run's "
-            "too. '.options plotwinsize=0' stores every point."
+            f"read between stored points is interpolated across the gap. {_XVII_MEAS} "
+            "'.options plotwinsize=0' stores every point."
         ),
         evidence={
             "run": label,
@@ -534,6 +573,138 @@ def relay_observations(summary: dict) -> list[Observation]:
             }
         )
     return obs
+
+
+#: The codes of what a run's case observed that every read of its results by
+#: job repeats (``services.experiment_run_context``): facts about what the
+#: raw holds, which a read of one signal would otherwise not see.
+READ_BY_JOB = frozenset({"subcircuit_nodes_not_saved"})
+
+
+def subcircuit_nodes_not_saved(
+    flat: FlatNetlist,
+    traces: Sequence[tuple[str, str | None]],
+    naming: Naming,
+    *,
+    saves: bool,
+) -> Observation | None:
+    """Say that a run's raw holds no node inside the deck's subcircuits, or
+    None.
+
+    It applies where the deck calls a subcircuit whose body has a net that is
+    not a port (``flat``, from ``netlist_graph.flatten_graph``, names such a
+    net ``<instance path>/<net>``) and no trace of ``traces`` (the raw's first
+    plot, as ``raw_parser.first_plot_traces`` reads it) is a node voltage
+    inside any instance it calls, its path read as ``naming`` writes a raw
+    (``device_names.trace_key``). A deck whose subcircuits have only ports
+    (``raw/op_subckt``) is never said to miss one.
+
+    The causes are the recorded ones: what the deck's ``.save`` cards name
+    (``saves``), and, on LTspice, the "Save subcircuit node voltages"
+    setting, off by default (``raw/subckt_names_tran`` and its ``_saved``
+    recording, on LTspice 26 and XVII). Whether a deck can turn the setting
+    on, or a ``.save`` with a wildcard saves one instance's nodes, is not
+    recorded, and the detail claims neither."""
+    calls = [split_path(call.ref) for call in flat.calls]
+    inner: list[tuple[DevicePath, str]] = []
+    for path in calls:
+        prefix = f"{path_text(path)}/"
+        inner.extend(
+            (path, net[len(prefix) :]) for net in sorted(flat.nets) if net.startswith(prefix)
+        )
+    if not inner:
+        return None
+    instances = set(calls)
+    for name, declared in traces:
+        if not is_node_voltage(name, declared or None):
+            continue
+        _, path = trace_key(name, xvii=naming.xvii)
+        if len(path) > 1 and path[:-1] in instances:
+            return None
+    scope, net = inner[0]
+    example = f"V({spelled_name(scope, net, naming)})"
+    causes = []
+    if saves:
+        causes.append("the deck's .save cards, which leave out every such node")
+    if naming.family == "ltspice":
+        causes.append(
+            "LTspice's 'Save subcircuit node voltages' setting, off by default, without "
+            "which LTspice stores a subcircuit's inner node only where a .save names it "
+            "in the build's own spelling"
+        )
+    detail = (
+        f"The raw holds no node voltage inside the deck's subcircuit instances, whose "
+        f"bodies have nets of their own ({example} among them), so a read of such a "
+        "node finds no trace."
+    )
+    if causes:
+        detail += " What decides it: " + "; and ".join(causes) + "."
+    return Observation(
+        code="subcircuit_nodes_not_saved",
+        kind="coverage",
+        detail=detail,
+        evidence={
+            "example": example,
+            "instances": len({path for path, _ in inner}),
+            "inner_nets": len(inner),
+            "saves": saves,
+        },
+    )
+
+
+def measurements_failed_in_every_run(
+    failed_by_run: Sequence[Collection[str]],
+    requested: Collection[str] | None,
+    *,
+    circuit: str | None = None,
+) -> Observation | None:
+    """The ``.meas`` that failed in every run read, or None for none.
+
+    ``failed_by_run`` holds, for each run whose measurements were read, the
+    names LTspice printed as failed at every step of that run
+    (``log_types.measurement_failed``); ``requested`` the names the deck asks
+    for (:func:`parse_requested_outputs`), or None where the deck was not
+    read. A name is matched as the log reader holds it
+    (``log_types.measurement_named``). The one answer to "which measurements
+    did no run give": the analysis and the job receipt both ask it, each over
+    the runs it read. When the names cover every requested ``.meas``, the
+    detail says so: no run gave a measured value."""
+    runs = [list(names) for names in failed_by_run]
+    if not runs:
+        return None
+    common = [
+        name
+        for name in runs[0]
+        if all(measurement_named(name, others) is not None for others in runs[1:])
+    ]
+    if not common:
+        return None
+    asked = list(requested) if requested is not None else None
+    # Named as the deck spells them where it asks for them.
+    names = [name for name in asked or () if measurement_named(name, common) is not None]
+    names += [name for name in common if measurement_named(name, names) is None]
+    every = bool(asked) and all(
+        measurement_named(name, common) is not None for name in asked or ()
+    )
+    where = f" of {circuit}" if circuit is not None else ""
+    detail = (
+        f".meas {', '.join(names)} failed in every one of the {len(runs)} run(s){where} "
+        "read, so no run gave a value for "
+        + ("it" if len(names) == 1 else "them")
+        + (": that is every requested .meas of the deck." if every else ".")
+        + " Each run row's failed_measurements and the measurements recipe name them."
+    )
+    evidence: dict[str, Any] = {"measurements": names, "runs": len(runs)}
+    if asked is not None:
+        evidence["requested"] = len(asked)
+    if circuit is not None:
+        evidence["circuit"] = circuit
+    return Observation(
+        code="meas_failed_in_every_run",
+        kind="reconciliation",
+        detail=detail,
+        evidence=evidence,
+    )
 
 
 def reconciliation_observations(

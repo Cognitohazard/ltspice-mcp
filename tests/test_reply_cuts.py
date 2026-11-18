@@ -311,6 +311,19 @@ NEVER_BOUNDS: dict[tuple[str, str], str] = {
         _MEASUREMENT_NAMES
     ),
     ("inspect_tools.handle_inspect", "results[].data.failed_measurements"): _MEASUREMENT_NAMES,
+    **{
+        (handler, f"{rows}.{field}"): bound
+        for handler, rows in (
+            ("experiments.handle_run_experiments", "runs.items[]"),
+            ("jobs.handle_jobs", "runs.items[]"),
+            ("jobs.handle_jobs", "items[]"),
+        )
+        for field, bound in (
+            ("failed_measurements", _MEASUREMENT_NAMES),
+            ("failed_measurement_steps.*", _STEP_INDICES),
+            ("measurements_not_established.*", _STEP_INDICES),
+        )
+    },
     (
         "analyze.handle_analyze_results",
         "results.*.per_run.items[].value.not_established.*.steps",

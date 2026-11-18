@@ -208,6 +208,21 @@ def _printed_measurement(lines: Sequence[str], index: int) -> bool:
     return _PRINTS_MEASUREMENT[0](lines[index])
 
 
+_FAILED_MEASUREMENT: list[Callable[[str], str | None]] = []
+
+
+def _failed_measurement(lines: Sequence[str], index: int) -> bool:
+    """A line that says a measurement failed, as the measurement reader reads
+    one (``log_parser.failed_measurement_on``): the classifier keeps no
+    pattern of its own for it."""
+    if not _FAILED_MEASUREMENT:
+        # Imported on first use: the log parser imports this module.
+        from ltspice_mcp.lib.log_parser import failed_measurement_on
+
+        _FAILED_MEASUREMENT.append(failed_measurement_on)
+    return _FAILED_MEASUREMENT[0](lines[index]) is not None
+
+
 def _native_print_header(lines: Sequence[str], index: int) -> bool:
     """The head of an ngspice ``print`` table: two title lines over a ruled
     ``Index`` header."""
@@ -319,7 +334,7 @@ _RULES: tuple[_Rule, ...] = (
         _next(_re(r"^Error: ")),
         needs_follow=True,
     ),
-    _Rule("measurement_failed", _re(r"^Measurement \".*\" FAIL'ed$"), _BOTH_LT),
+    _Rule("measurement_failed", _failed_measurement, _BOTH_LT),
     _Rule("floating_node", _re(r"^ERROR: Node \S+ is floating and connected to "), _BOTH_LT),
     _Rule(
         "singular_matrix",

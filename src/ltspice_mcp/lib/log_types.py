@@ -330,3 +330,34 @@ def measurement_failed(table: Mapping[str, Any], name: str, step: int | None = N
     if step is not None:
         return step in steps
     return set(range(len(entry.get("values") or ()))) <= set(steps)
+
+
+def run_measurement_facts(table: Mapping[str, Any]) -> dict[str, Any]:
+    """What one run's answered measurement ``table`` (``log_parser.answered_measurements``)
+    says the run did not give, as a run keeps it: ``failed``, the names
+    LTspice printed as failed (:func:`measurement_failed`), in the order the
+    log printed them; ``failed_steps``, for a name that failed at some steps
+    of a stepped run only, those steps from 0; and ``not_established``, for
+    a name whose printed value is not established as its result at some
+    steps (XVII prints 0 for a failed step), those steps. Each only when it
+    names something, so ``{}`` says every measurement printed was given."""
+    facts: dict[str, Any] = {}
+    failed = list(table.get("failed_measurements") or ())
+    entries = table.get("measurements") or {}
+    if failed:
+        facts["failed"] = failed
+        partly = {
+            name: list(entries[name]["failed_steps"])
+            for name in failed
+            if not measurement_failed(table, name)
+        }
+        if partly:
+            facts["failed_steps"] = partly
+    unestablished = {
+        name: list(entry["not_established"]["steps"])
+        for name, entry in entries.items()
+        if isinstance(entry, Mapping) and entry.get("not_established")
+    }
+    if unestablished:
+        facts["not_established"] = unestablished
+    return facts
