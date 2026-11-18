@@ -27,8 +27,8 @@ sandbox set an in-deck include that escapes it is denied and never read), and
 compares each scope's directives (the top level's, and those of each subcircuit
 definition an instance both circuits have calls) with ``structural_diff``'s
 reader; ``structural_diff`` lexes both decks and reports an added/removed/changed
-delta over the parsed cards, leaving out the boilerplate LTspice's netlister adds
-to every export. Both modes compare netlists: an ``.asc`` under test is compared
+delta over the parsed cards, each in its scope (``netlist_diff``), leaving out
+the boilerplate LTspice's netlister adds to every export. Both modes compare netlists: an ``.asc`` under test is compared
 as its export, so an ``.asc`` reference is exported the same way, and with no
 exporter the compare fails rather than diff a schematic's attributes against a
 netlist's cards.
@@ -110,8 +110,11 @@ from ltspice_mcp.lib.lint_rules import (
 )
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
 from ltspice_mcp.lib.netlist_diff import (
+    CONNECTIONS_NOT_COMPARED,
     Deck,
     circuit_directive_delta,
+    connection_delta,
+    definitions_unread,
     read_deck,
     structural_delta,
 )
@@ -206,18 +209,33 @@ from ltspice_mcp.tools._base import (
 #
 # "baseline" is the first deck given (verify's reference, the prior sidecar);
 # "compared" is the second (the circuit under test, the fresh export).
+_SCOPE_FIELD: dict[str, Any] = {
+    "type": "string",
+    "description": (
+        "The .subckt definition it is in, nested ones joined with '/' "
+        "('OUTER/INNER'); absent at the top level."
+    ),
+}
+
 STRUCTURAL_DELTA_PROPS: dict[str, Any] = {
     "components_added": {
         "type": "array",
         CUT: ITEMS,
         "items": {"type": "string"},
-        "description": "References present in the compared deck but absent from the baseline.",
+        "description": (
+            "References present in the compared deck but absent from the baseline, "
+            "each in its scope: one inside a definition is followed by "
+            "'(in .subckt NAME)'."
+        ),
     },
     "components_removed": {
         "type": "array",
         CUT: ITEMS,
         "items": {"type": "string"},
-        "description": "References present in the baseline but absent from the compared deck.",
+        "description": (
+            "References present in the baseline but absent from the compared deck, "
+            "each in its scope, as components_added."
+        ),
     },
     "components_renamed": {
         "type": "array",
@@ -227,6 +245,7 @@ STRUCTURAL_DELTA_PROPS: dict[str, Any] = {
             "properties": {
                 "before": {"type": "string", "description": "Its reference in the baseline."},
                 "after": {"type": "string", "description": "Its reference in the compared deck."},
+                "subckt": _SCOPE_FIELD,
             },
             "required": ["before", "after"],
         },
@@ -242,13 +261,15 @@ STRUCTURAL_DELTA_PROPS: dict[str, Any] = {
             "type": "object",
             "properties": {
                 "reference": {"type": "string", "description": "Component reference, e.g. 'R1'."},
+                "subckt": _SCOPE_FIELD,
                 "before": {"type": "string", "description": "Its signature in the baseline."},
                 "after": {"type": "string", "description": "Its signature in the compared deck."},
             },
             "required": ["reference", "before", "after"],
         },
         "description": (
-            "References in both decks whose model/value or instance parameters differ."
+            "Components in the same scope of both decks whose model/value or instance "
+            "parameters differ."
         ),
     },
     "directives_added": {
@@ -257,8 +278,8 @@ STRUCTURAL_DELTA_PROPS: dict[str, Any] = {
         "items": {"type": "string"},
         "description": (
             "SPICE directives in the compared deck and not the baseline, each "
-            "with its continuation lines joined. In equivalence mode, one in a "
-            "subcircuit's definition is followed by '(in .subckt NAME)'."
+            "with its continuation lines joined and compared in its scope: one in "
+            "a subcircuit's definition is followed by '(in .subckt NAME)'."
         ),
     },
     "directives_removed": {
@@ -267,7 +288,60 @@ STRUCTURAL_DELTA_PROPS: dict[str, Any] = {
         "items": {"type": "string"},
         "description": "SPICE directives in the baseline and not the compared deck.",
     },
+    "connections_changed": {
+        "type": "array",
+        CUT: ITEMS,
+        "items": {
+            "type": "object",
+            "properties": {
+                "reference": {
+                    "type": "string",
+                    "description": "The part, by its path in the circuit ('X1.M2' inside a block).",
+                },
+                "pin": {
+                    "type": "integer",
+                    "description": "The pin's position on the part's card, from 1.",
+                },
+                "before": {
+                    "type": "string",
+                    "description": "Its net in the previous export, in lower case.",
+                },
+                "after": {
+                    "type": "string",
+                    "description": "Its net in this export, in lower case.",
+                },
+            },
+            "required": ["reference", "pin", "before", "after"],
+        },
+        "description": (
+            "diff_vs_prior only: each pin of a part both exports have that moved onto or "
+            "off a net both exports name (ground included). Nets the exporter numbers "
+            "(N001) are matched by the parts on them; a move between two of them is "
+            "stated in not_compared, not named."
+        ),
+    },
+    "not_compared": {
+        "type": "array",
+        CUT: NEVER,
+        "items": {"type": "string"},
+        "description": (
+            "What the delta did not compare, so an empty list above says nothing "
+            "about it: connections (always, in structural_diff mode), a definition "
+            "a deck gives more than once in one scope, included files' cards."
+        ),
+    },
 }
+
+#: The delta's lists a structural diff always fills in; the rest are present
+#: only where they say something.
+_STRUCTURAL_DELTA_REQUIRED = [
+    "components_added",
+    "components_removed",
+    "components_renamed",
+    "components_changed",
+    "directives_added",
+    "directives_removed",
+]
 
 
 def parse_failure_warnings(pairs: Sequence[tuple[str, str | None]]) -> list[str]:
@@ -389,14 +463,17 @@ _EXPORT_SCHEMA: dict[str, Any] = {
         "nets": {"type": ["integer", "null"]},
         "destination": {"type": "string"},
         "diff_vs_prior": {
-            "type": ["object", "null"],
+            "type": "object",
             "properties": dict(STRUCTURAL_DELTA_PROPS),
-            "required": list(STRUCTURAL_DELTA_PROPS),
+            "required": list(_STRUCTURAL_DELTA_REQUIRED),
             "description": (
-                "The structural delta from the previous export of this schematic: "
-                "in sidecar mode the .net it replaced beside the schematic, in "
-                "managed mode the previous managed export, which the server keeps. "
-                "Absent when there was no previous export."
+                "What changed since the previous export of this schematic: in "
+                "sidecar mode the .net it replaced beside the schematic, in managed "
+                "mode the previous managed export, which the server keeps. Parts and "
+                "directives each in its scope, and each pin moved to another net "
+                "(connections_changed); not_compared says what it did not compare. "
+                "No difference lists when nothing changed; absent when there was no "
+                "previous export."
             ),
         },
     },
@@ -459,7 +536,7 @@ _REF: dict[str, Any] = {
 
 # The delta's lists that are differences; ``components_renamed`` is a fact.
 STRUCTURAL_DIFFERENCE_KEYS: tuple[str, ...] = tuple(
-    key for key in STRUCTURAL_DELTA_PROPS if key != "components_renamed"
+    key for key in STRUCTURAL_DELTA_PROPS if key not in ("components_renamed", "not_compared")
 )
 
 _COMPONENT_DELTA_SCHEMA: dict[str, Any] = {
@@ -700,7 +777,8 @@ COMPARISON_SCHEMA: dict[str, Any] = {
                 "(structurally_equivalent, added/removed/retyped, the mismatch lists, "
                 "the subckt and parameter facts) and the directive keys "
                 "(directives_equivalent, directives_added/removed); 'structural_diff' "
-                "populates the components_*/directives_* delta."
+                "populates the components_*/directives_* delta, each element and "
+                "directive in its scope, and not_compared."
             ),
         },
         "equivalent": {
@@ -708,7 +786,9 @@ COMPARISON_SCHEMA: dict[str, Any] = {
             "description": (
                 "The overall verdict. In equivalence mode: structurally isomorphic, "
                 "no component, value, parameter, anchor or arity difference, and the "
-                "same directives. In structural_diff mode: the delta is empty."
+                "same directives. In structural_diff mode: the delta is empty; null "
+                "when a deck could not be parsed or a definition was not compared "
+                "(not_compared), and never a statement about connections."
             ),
         },
         "structurally_equivalent": {
@@ -1785,7 +1865,6 @@ async def _run_export(
         "components": None,
         "nets": None,
         "destination": export_to,
-        "diff_vs_prior": None,
     }
 
     measured: _MeasuredNetlist | None = None
@@ -1821,9 +1900,9 @@ async def _run_export(
                     _measure_netlist, net_path, cp1252_reader=cp1252_reader, reader=reader
                 )
                 if measured is not None:
-                    payload["diff_vs_prior"], diff_warnings = await _diff_vs_last_managed(
-                        asc_path, net_path, state
-                    )
+                    delta, diff_warnings = await _diff_vs_last_managed(asc_path, net_path, state)
+                    if delta is not None:
+                        payload["diff_vs_prior"] = delta
                     warnings.extend(diff_warnings)
     except Exception as exc:  # the simulator is a subprocess; any failure is data
         return _ExportOutcome(
@@ -1930,11 +2009,42 @@ def _diff_vs_prior(
     prior_path = scratch / f"prior-{new_path.stem}.{stamp}.net"
     prior_path.write_bytes(prior_bytes)
     try:
-        delta, warnings, _both_parsed = _structural_diff(prior_path, new_path)
+        delta, warnings, _both_parsed, _unread = _structural_diff(prior_path, new_path)
+        moved, not_compared = _connections_since(prior_path, new_path, state)
+        delta["connections_changed"] = moved
+        delta["not_compared"] = [*not_compared, *delta["not_compared"]]
         return delta, warnings
     finally:
         with contextlib.suppress(OSError):
             prior_path.unlink()
+
+
+def _connections_since(
+    prior_path: Path, new_path: Path, state: SessionState
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Each pin the fresh export puts on another net than the previous one
+    did, and what about connections was not compared (``connection_delta``).
+
+    Both exports are read as the session's reader reads a deck, their
+    includes resolved beside the fresh export, where the sheet's own files
+    are, so the two read the same files and differ only in what the sheet
+    wrote. One that cannot be read as a circuit leaves connections not
+    compared, and the reply says so.
+    """
+    resolver = make_include_resolver(state)
+    reader = session_reader(state)
+    try:
+        prior, fresh = (
+            parse_netlist_graph(
+                path, reader=reader, base_dir=new_path.parent, include_resolver=resolver
+            )
+            for path in (prior_path, new_path)
+        )
+        return connection_delta(prior, fresh)
+    except Exception as exc:  # the export stands; what was not compared is said
+        return [], [
+            f"{CONNECTIONS_NOT_COMPARED}: an export could not be read as a circuit ({exc})"
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -2086,22 +2196,25 @@ def _read_side(source: str | Path, label: str) -> tuple[str, Deck, str | None]:
 
 def _structural_diff(
     reference: str | Path, candidate: str | Path
-) -> tuple[dict[str, Any], list[str], bool]:
+) -> tuple[dict[str, Any], list[str], bool, bool]:
     """Added/removed/changed component and directive delta between two netlists.
 
-    Returns ``(delta, warnings, both_parsed)``. A deck that could not be parsed is
+    Returns ``(delta, warnings, both_parsed, definitions_unread)``. A deck that could not be parsed is
     diffed as an empty circuit, which makes every component of the other side look
     added or removed — so the caveat rides out as a warning rather than inside the
     delta, where the caller browsing the difference lists would never look for it.
 
     ``both_parsed`` is reported separately rather than inferred from an empty
     ``warnings`` list, so a future warning of some other kind cannot silently be
-    read as a parse failure.
+    read as a parse failure. ``definitions_unread`` is whether a definition
+    either deck gives twice in one scope was left out (``read_deck``), which
+    the delta's ``not_compared`` states.
     """
     name_a, ref, err_a = _read_side(reference, "the reference netlist text")
     name_b, cand, err_b = _read_side(candidate, "the netlist under test")
     warnings = parse_failure_warnings([(name_a, err_a), (name_b, err_b)])
-    return structural_delta(ref, cand), warnings, err_a is None and err_b is None
+    both_parsed = err_a is None and err_b is None
+    return structural_delta(ref, cand), warnings, both_parsed, definitions_unread(ref, cand)
 
 
 def compare_structural(reference: str | Path, candidate: str | Path) -> CompareResult:
@@ -2120,7 +2233,7 @@ def compare_structural(reference: str | Path, candidate: str | Path) -> CompareR
             )
             return None, [], _failure("compare", error, where=str(side)), []
     try:
-        diff, warnings, both_parsed = _structural_diff(reference, candidate)
+        diff, warnings, both_parsed, unread = _structural_diff(reference, candidate)
     except (OSError, ValueError) as exc:
         where = str(candidate) if isinstance(candidate, Path) else None
         return None, [], _failure("compare", f"structural diff failed: {exc}", where=where), []
@@ -2132,7 +2245,23 @@ def compare_structural(reference: str | Path, candidate: str | Path) -> CompareR
     #
     # Keyed on the delta's own difference lists rather than ``any(diff.values())``:
     # a fact the delta carries, such as a rename, must not read as a difference.
-    equivalent = not any(diff[key] for key in STRUCTURAL_DIFFERENCE_KEYS) if both_parsed else None
+    #
+    # Likewise a definition left out of both sides was compared with nothing,
+    # so an empty delta does not say it matches. Connections are never
+    # compared here, and the reply's not_compared says so.
+    equivalent = (
+        not any(diff.get(key) for key in STRUCTURAL_DIFFERENCE_KEYS)
+        if both_parsed and not unread
+        else None
+    )
+    diff["not_compared"] = [CONNECTIONS_NOT_COMPARED, *diff["not_compared"]]
+    if both_parsed and unread:
+        warnings = [
+            *warnings,
+            "A subcircuit is defined more than once in one scope, so its definitions "
+            "were not compared and 'equivalent' is null; comparison.not_compared "
+            "names it. Rename or delete all but one definition to compare it.",
+        ]
     return {"mode": "structural_diff", "equivalent": equivalent, **diff}, [], None, warnings
 
 

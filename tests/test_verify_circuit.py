@@ -1340,7 +1340,7 @@ async def test_equivalence_compares_each_subcircuit_s_own_directives(
     ("reference", "candidate", "files", "equivalence_says", "structural_diff_says"),
     [
         (_amp(), _amp(".param g=3\n"), {}, False, False),
-        (_amp(), _amp("", top=".param g=2\n"), {}, False, True),
+        (_amp(), _amp("", top=".param g=2\n"), {}, False, False),
         (
             "* t\nV1 in 0 5\nX1 in 0 DIV\n.subckt DIV a b\nR1 a b 1k\n.ends DIV\n.end\n",
             "* t\nV1 in 0 5\nX1 in 0 DIV\n.include div.lib\n.end\n",
@@ -1360,7 +1360,7 @@ async def test_equivalence_compares_each_subcircuit_s_own_directives(
     ],
     ids=[
         "both_tell_a_body_s_param_apart",
-        "a_param_moved_from_a_body_to_the_top_differs_in_equivalence_only",
+        "a_param_moved_from_a_body_to_the_top_differs_in_both",
         "a_definition_moved_into_an_include_differs_in_structural_diff_only",
         "an_uncalled_subcircuit_differs_in_structural_diff_only",
     ],
@@ -1635,7 +1635,7 @@ def test_two_unparseable_decks_are_not_equivalent(work_dir):
     )
     assert failure is None
     assert comparison is not None
-    assert not any(comparison[key] for key in STRUCTURAL_DELTA_PROPS), (
+    assert not any(comparison.get(key) for key in _DELTA_LISTS), (
         "precondition: the delta really is empty, the shape that read as a match"
     )
     assert comparison["equivalent"] is None
@@ -1706,13 +1706,17 @@ _AMP_BY_HAND = (
 )
 
 
+#: The delta's lists of what it found; not_compared says what it did not look at.
+_DELTA_LISTS = tuple(key for key in STRUCTURAL_DELTA_PROPS if key != "not_compared")
+
+
 def _empty_delta() -> dict[str, list]:
-    return {key: [] for key in STRUCTURAL_DELTA_PROPS}
+    return {key: [] for key in _DELTA_LISTS}
 
 
 def _delta(comparison: dict) -> dict[str, list]:
     # An empty list of changes is left out of the reply, so it reads as empty here.
-    return {key: comparison.get(key, []) for key in STRUCTURAL_DELTA_PROPS}
+    return {key: comparison.get(key, []) for key in _DELTA_LISTS}
 
 
 @pytest.fixture

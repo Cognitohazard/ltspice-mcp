@@ -119,7 +119,7 @@ extra = ["connectivity/res.asy"]
 
 [behaviour.net-naming]
 summary = "The name a node gets: a label, ground over a label, one of two labels, labels of one name on separate wires, labels whose names differ only in case, a GND label in any case, N001 for an unlabelled net, NC_01 for an unconnected pin, and a label touching nothing."
-model = ["lib/connectivity.py", "lib/schematic_ops.py", "lib/netlist_graph.py", "lib/pin_legend.py", "lib/trace_names.py"]
+model = ["lib/connectivity.py", "lib/schematic_ops.py", "lib/netlist_graph.py", "lib/pin_legend.py", "lib/trace_names.py", "lib/export_nets.py"]
 inputs = [
     "connectivity/two_labels_zeta_first.asc",
     "connectivity/two_labels_alpha_first.asc",
@@ -228,7 +228,7 @@ extra = ["export/hier_amp.asc", "export/hier_amp.asy", "export/hier_plain.asc", 
 
 [behaviour.block-sheet-search]
 summary = "Where a build finds a hierarchical block's own sheet when it is not beside the block's symbol: beside the sheet exported, beside a block's sheet that places it, in a folder of the symbol search path, or in a folder under one; which it takes when one is beside the sheet exported and another beside the symbol; what it exports when there is none; and whether it finds a symbol in a folder under the search path."
-model = ["lib/symbol_library.py", "lib/schematic_ops.py", "lib/deck_prep.py"]
+model = ["lib/symbol_library.py", "lib/schematic_ops.py", "lib/deck_prep.py", "lib/netlist_diff.py"]
 # Each case exports blocks/top.asc, which places the block blk, or
 # blocks/nest_top.asc, whose block outer places blk on its own sheet, with
 # blk.asy and blk.asc in other places. The symbol search path is the case's
