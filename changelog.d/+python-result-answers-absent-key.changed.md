@@ -1,0 +1,1 @@
+A result of the Python API now answers a field it left out with that field's empty value (an empty list or object, `False`, or `None`), so `result["failures"]` no longer raises `KeyError` on a result with none. A key the operation never declares still raises, `in` still tells whether the reply carried a field, and the result serialises exactly as before.
