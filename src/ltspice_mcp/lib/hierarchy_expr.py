@@ -10,6 +10,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 
 from ltspice_mcp.lib.format import parse_spice_value
+from ltspice_mcp.lib.ngspice_compat import signed_power
 
 MAX_EXPRESSION_LENGTH = 2048
 MAX_EXPRESSION_NODES = 128
@@ -48,14 +49,6 @@ def references_sibling(expression: str, siblings: set[str]) -> bool:
     return any(name.casefold() in siblings for name in names)
 
 
-#: The ngspice modes in which a negative base raised to an integer computes
-#: as Python computes it, signed: ``(-2)^3`` is -8 and ``(-2)^-1`` -0.5
-#: (measured on ngspice-42, ``tests/test_power_operator.py``). In native mode
-#: ngspice takes the power of the base's magnitude instead (8), and no other
-#: mode was measured.
-_SIGNED_POWER_MODES = frozenset({"hsa", "kiltpsa"})
-
-
 def _require_mode(simulator: str, ngbehavior: str | None) -> None:
     """Refuse to read an ngspice expression with no mode: what a power gives
     there depends on it."""
@@ -75,8 +68,11 @@ def _power(base: float, exponent: float, simulator: str, ngbehavior: str | None)
     exponent differs by mode (``0^0`` is 0 under hsa and 1 otherwise, and
     ``0^-1`` stops native and kiltpsa ngspice where hsa gives 0), and a
     negative base with a fractional exponent gives a different number in
-    each mode, none of them a real power; both are declined. ngspice's own
-    arithmetic is not modelled.
+    each mode, none of them a real power; both are declined. A negative base
+    with an integer exponent keeps its sign only where ngspice gives it one
+    (``ngspice_compat.signed_power``), and is declined elsewhere: ngspice
+    takes the power of its magnitude there. ngspice's own arithmetic is not
+    modelled.
     """
     if base > 0 or (base == 0 and exponent > 0):
         return base**exponent
@@ -85,22 +81,23 @@ def _power(base: float, exponent: float, simulator: str, ngbehavior: str | None)
             "a zero base with a zero or negative exponent is not resolved: ngspice "
             "computes it differently in each mode (0^0 is 0 under hsa and 1 otherwise)"
         )
-    if simulator == "ngspice" and (ngbehavior or "") == "":
+    if simulator == "ngspice" and not signed_power(ngbehavior):
         raise ValueError(
-            "a negative base is not resolved in ngspice's native mode, where ngspice "
-            "takes the power of its magnitude ((-2)^3 is 8 there)"
+            f"a negative base is not resolved in ngspice mode {ngbehavior!r}, where "
+            "ngspice takes the power of its magnitude ((-2)^3 is 8 there)"
         )
     if not float(exponent).is_integer():
         raise ValueError(
             "a negative base with a fractional exponent is not resolved: it has no "
             "real power, and ngspice gives a different number in each mode"
         )
-    if simulator == "ngspice" and ngbehavior not in _SIGNED_POWER_MODES:
-        raise ValueError(
-            f"the power of a negative base is not established in ngspice mode "
-            f"{ngbehavior!r}; it is for hsa and kiltpsa"
-        )
     return base**exponent
+
+
+#: A power operator followed straight by a negated name (``3^-b``), which
+#: ngspice-42 refuses in every mode ("wrongly determined negation"); a negated
+#: number (``3^-1``) and a parenthesised name (``3^(-b)``) it computes.
+_NEGATED_NAME_EXPONENT = re.compile(r"(?:\^|\*\*)\s*-\s*[A-Za-z_]")
 
 
 def evaluate(
@@ -137,6 +134,11 @@ def evaluate(
         text = text[1:-1].strip()
     if re.search(r"[^\w\s.()+*/^µμ-]", text):
         raise ValueError("unsupported expression characters")
+    if simulator == "ngspice" and _NEGATED_NAME_EXPONENT.search(text):
+        raise ValueError(
+            "ngspice refuses a negated name straight after a power operator (3^-b: "
+            "'wrongly determined negation'); write 3^(-b)"
+        )
     if len(re.findall(r"\^|\*\*", text)) > 1:
         raise ValueError("multiple power operators have unsupported associativity")
     text = _NUMBER.sub(_number, text)

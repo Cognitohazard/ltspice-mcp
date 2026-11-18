@@ -442,11 +442,18 @@ def _lib_section_ngspice(
     depend on what the file holds, so no file is read for it."""
     reader = context.library_reader
     mode = reader.mode or ""
+    # The deck's own cards, and a card in any file the deck reaches, as the
+    # include walk read it.
     dropped = [
-        reference
+        (context.path, reference.card, reference.section)
         for reference in scan_include_references(context.cards, context.path, family="ngspice")
         if reference.section is not None
         and library_read(reference, (), reader).rule_id == rule.rule_id
+    ]
+    dropped += [
+        (unread.path, unread.card, unread.section)
+        for unread in context.reached_models.unread_libraries
+        if unread.read.rule_id == rule.rule_id and unread.path != context.path
     ]
     if not dropped:
         return []
@@ -457,16 +464,16 @@ def _lib_section_ngspice(
         else "(s3) does not read .lib at all, so the section's names are undefined"
     )
     findings = []
-    for reference in dropped:
-        assert reference.section is not None
+    for path, card, section in dropped:
         findings.append(
             _finding(
                 context,
                 rule,
-                line=reference.card.line_start,
-                subject=reference.section,
+                line=card.line_start,
+                file=path,
+                subject=section or "",
                 evidence={
-                    "directive": reference.card.body,
+                    "directive": card.body,
                     "ngbehavior": mode,
                     "reason": (
                         f"this compatibility mode {cause}. Set [simulator] "
@@ -688,6 +695,7 @@ class _UnreadLibrary(NamedTuple):
     card: SpiceCard
     raw_path: str
     read: LibraryRead
+    section: str | None = None
 
 
 class _ReachedModels(NamedTuple):
@@ -761,7 +769,9 @@ def _models_from_staged_dependencies(context: _LintContext) -> _ReachedModels:
         read = library_read(referrer[1] if referrer else None, sections, reader)
         if read.unread is not None and referrer is not None:
             path, reference = referrer
-            unread_libraries.append(_UnreadLibrary(path, reference.card, reference.raw_path, read))
+            unread_libraries.append(
+                _UnreadLibrary(path, reference.card, reference.raw_path, read, reference.section)
+            )
         cards = [card for card, owner in zip(cards, sections, strict=True) if read.reads(owner)]
         declared.update(_declared_models(cards))
         # A file at the limit is read for its own models, as staging stages it,
@@ -787,7 +797,9 @@ def _models_from_staged_dependencies(context: _LintContext) -> _ReachedModels:
             if not resolved.is_file():
                 missing = library_read(reference, None, reader)
                 unread_libraries.append(
-                    _UnreadLibrary(source, reference.card, reference.raw_path, missing)
+                    _UnreadLibrary(
+                        source, reference.card, reference.raw_path, missing, reference.section
+                    )
                 )
                 continue
             try:

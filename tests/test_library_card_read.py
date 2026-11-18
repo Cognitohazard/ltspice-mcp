@@ -32,11 +32,23 @@ from pathlib import Path
 import pytest
 
 from ltspice_mcp.errors import NetlistError
-from ltspice_mcp.lib.deck_staging import LibraryReader, stage_deck
+from ltspice_mcp.lib.deck_staging import (
+    LibraryRead,
+    LibraryReader,
+    card_sections,
+    library_read,
+    resolve_existing,
+    resolve_reference,
+    scan_include_references,
+    stage_deck,
+)
+from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.lint_rules import lint_deck
 from ltspice_mcp.lib.netlist_graph import compare_graphs, parse_netlist_graph
 from ltspice_mcp.lib.runner_base import deck_requirements
+from ltspice_mcp.lib.simulator_build import Producer
+from ltspice_mcp.lib.spice_lex import lex_deck
 from tests.ltspice_recorder import INPUTS
 
 needs_ngspice = pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH")
@@ -148,6 +160,59 @@ def test_native_and_hsa_fail_on_a_lib_card_with_no_section(
     assert "unimplemented" in missing.reason
 
 
+@pytest.mark.parametrize(
+    ("mode", "rule"),
+    [
+        ("kiltpsa", "lib-sections-dropped-ngspice"),
+        ("hsa", "lib-without-section-ngspice"),
+        ("", "lib-without-section-ngspice"),
+    ],
+)
+def test_an_include_of_a_file_that_declares_sections_reads_nothing(
+    mode: str, rule: str, tmp_path: Path
+):
+    """ngspice reads the included file's own ``.lib tt`` as it reads one in a
+    deck: kiltpsa drops every card of the file, native and hsa stop on it."""
+    deck = _deck(tmp_path, ".include sect.lib", "V1 a 0 1\nX1 a amp\n")
+    (refusal,) = _lint(deck, mode)[rule]
+    assert "section line of sect.lib" in refusal["evidence"]["reason"]
+    assert ".lib sect.lib tt" in refusal["evidence"]["reason"]
+    with pytest.raises(NetlistError, match="section line"):
+        load_hierarchy(str(deck), [tmp_path], SemanticProfile("ngspice", mode))
+    graph = parse_netlist_graph(deck, reader=SemanticProfile("ngspice", mode))
+    assert "amp" not in graph.subckts
+    assert deck_requirements(deck, reader=LibraryReader("ngspice", mode)).analyses == (".op",)
+    # A file with no sections is still read whole.
+    plain = _deck(tmp_path, ".include plain.lib", "V1 a 0 1\nM1 a a 0 0 nplain\n")
+    assert _lint(plain, mode) == {}
+
+
+def test_a_section_selected_in_an_included_file_is_refused_in_kiltpsa(tmp_path: Path):
+    """kiltpsa reads ``.lib sect.lib tt`` as two includes wherever it sits;
+    one in a file the deck includes was not refused."""
+    _deck(tmp_path, ".op")
+    _write(tmp_path, "wrap.inc", ".lib sect.lib tt\n")
+    deck = _write(tmp_path, "w.cir", "* deck\n.include wrap.inc\nV1 a 0 1\n.op\n.end\n")
+    (refusal,) = _lint(deck, "kiltpsa")["lib-section-ngspice"]
+    assert refusal["at"]["file"] == str(tmp_path / "wrap.inc")
+    assert refusal["subject"] == "tt"
+    assert _lint(deck, "hsa") == {}
+
+
+def test_a_profile_standing_in_for_another_family_reads_a_library_as_before(tmp_path: Path):
+    """A session whose simulator has no profile of its own (QSPICE, Xyce)
+    reads a deck through an LTspice profile; whose reading of a library is
+    not decided, so the comparison reads it as before: the section named."""
+    _write(tmp_path, "corners.lib", ".lib tt\n.subckt load p\nR1 p 0 2k\n.ends load\n.endl tt\n")
+    deck = _write(tmp_path, "s.cir", "* deck\n.lib corners.lib tt\nX1 a load\n.op\n.end\n")
+    reader = SemanticProfile.of(
+        Producer("ltspice", None, None), None, definitions_of=Producer("qspice", None, None)
+    )
+    graph = parse_netlist_graph(deck, reader=reader)
+    assert graph.missing_includes == ()
+    assert "load" in graph.subckts
+
+
 # --------------------------------------------------------------------------
 # .lib file tt: section tt only, not the cards outside every section
 # --------------------------------------------------------------------------
@@ -236,6 +301,22 @@ def test_ltspice_reads_a_section_name_as_part_of_the_path(tmp_path: Path):
 # --------------------------------------------------------------------------
 
 
+def _library_reads_of(deck: Path, reader: LibraryReader) -> list[LibraryRead]:
+    """What each include and library card of the deck brings in for
+    ``reader``, as every reader of a library asks it (``library_read``)."""
+    cards = lex_deck(read_spice_text(deck)).cards
+    reads = []
+    for reference in scan_include_references(cards, deck, family=reader.family):
+        target = resolve_existing(resolve_reference(deck.parent, reference.raw_path))
+        sections = (
+            None
+            if target is None
+            else card_sections(lex_deck(read_spice_text(target), title=False).cards, target, 1)
+        )
+        reads.append(library_read(reference, sections, reader))
+    return reads
+
+
 def _ngspice_version() -> str:
     out = subprocess.run(
         ["ngspice", "-v"], capture_output=True, text=True, timeout=60, check=False
@@ -284,6 +365,13 @@ LIVE_TABLE = {
     (".lib plain.lib", ""): "unimplemented",
     (".lib plain.lib", "hsa"): "unimplemented",
     (".lib plain.lib", "kiltpsa"): 3,
+    # An include reads the file's own section lines as the deck's.
+    (".include sect.lib", ""): "unimplemented",
+    (".include sect.lib", "hsa"): "unimplemented",
+    (".include sect.lib", "kiltpsa"): 1000,
+    (".include plain.lib", ""): 3,
+    (".include plain.lib", "hsa"): 3,
+    (".include plain.lib", "kiltpsa"): 3,
     # Modes outside the three the reader models, read by their flags
     # (``ngspice_compat``): lt reads .lib as an include as kiltpsa does, and
     # s3 stops on every .lib card.
@@ -315,9 +403,7 @@ def test_ngspice_reads_a_lib_card_as_the_table_says(card: str, mode: str, tmp_pa
     else:
         assert measured == pytest.approx(_VALUE[expected], rel=1e-5)
     # The one answer says the same: what it reads, or that it reads nothing.
-    from ltspice_mcp.lib.deck_staging import library_reads_of
-
-    reads = library_reads_of(deck, LibraryReader("ngspice", mode))
+    reads = _library_reads_of(deck, LibraryReader("ngspice", mode))
     (read,) = reads
     if expected == 2:
         assert read.selected == "tt" and not read.outside and read.unread is None

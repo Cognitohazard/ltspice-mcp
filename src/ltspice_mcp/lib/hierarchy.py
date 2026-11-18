@@ -21,6 +21,7 @@ from ltspice_mcp.lib.deck_nodes import GROUND, node_kind
 from ltspice_mcp.lib.deck_nodes import unestablished_reason as _unestablished_node
 from ltspice_mcp.lib.deck_staging import (
     DEFAULT_INCLUDE_DEPTH,
+    UNDECIDED_READER,
     IncludeReference,
     LibraryReader,
     card_sections,
@@ -121,6 +122,10 @@ class SemanticProfile:
     evaluation_context: str = "initial_deck"
     naming: Naming | None = None
     definitions: DefinitionRule | None = None
+    #: The profile stands in for a family with no profile of its own (QSPICE,
+    #: Xyce, or none detected; ``of``'s ``definitions_of``), whose reading of
+    #: a library is not decided (``library_reader``).
+    stands_in: bool = False
 
     def __post_init__(self) -> None:
         if self.simulator not in SUPPORTED_FAMILIES:
@@ -164,6 +169,7 @@ class SemanticProfile:
             ngbehavior if family == "ngspice" else None,
             naming=naming_for(producer),
             definitions=definition_rule(definitions_of or producer),
+            stands_in=definitions_of is not None and definitions_of.family != producer.family,
         )
 
     @property
@@ -174,7 +180,11 @@ class SemanticProfile:
 
     @property
     def library_reader(self) -> LibraryReader:
-        """Who reads the deck's ``.lib`` cards (``deck_staging.library_read``)."""
+        """Who reads the deck's ``.lib`` cards (``deck_staging.library_read``):
+        for a profile that stands in for another family, the reader whose
+        reading is not decided (``UNDECIDED_READER``), as before."""
+        if self.stands_in:
+            return UNDECIDED_READER
         return LibraryReader(self.simulator, self.ngbehavior)
 
     @property

@@ -964,7 +964,10 @@ def _collect_subckts(
         references = {
             id(found.card): found
             for found in scan_include_references(
-                cards, origin, family=registry.reader.simulator, depth=closure_depth(depth)
+                cards,
+                origin,
+                family=registry.reader.library_reader.family,
+                depth=closure_depth(depth),
             )
         }
     except SpiceLexError as exc:

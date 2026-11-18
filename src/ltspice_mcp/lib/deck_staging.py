@@ -15,7 +15,6 @@ from ltspice_mcp.lib import atomic_write_bytes, wsl
 from ltspice_mcp.lib.encoding import (
     decode_spice_bytes_with_encoding,
     encode_spice_text,
-    read_spice_text,
     rewrite_codec,
 )
 from ltspice_mcp.lib.experiment_types import ManifestEntry
@@ -29,7 +28,6 @@ from ltspice_mcp.lib.spice_lex import (
     TokenKind,
     directive_head,
     emit,
-    lex_deck,
     lex_for_edit,
     tokenize_body,
     unreadable_cards,
@@ -1275,7 +1273,10 @@ def library_read(
       section, and nothing when it does: the file's own ``.lib tt`` is read as
       an include of a file ``tt``, and every card of the file is dropped
       while the run goes on. In any other mode ngspice stops on the card
-      ("unimplemented dot command '.lib'").
+      ("unimplemented dot command '.lib'"). An include of a file that
+      declares sections reads its section lines as the deck's own: a mode
+      that reads ``.lib`` as an include drops every card of the file, and
+      any other stops on the first one.
     - Any other simulator's reading is not decided: a section named reads
       that section and the cards outside every section, and none reads the
       whole file, as before.
@@ -1285,12 +1286,42 @@ def library_read(
     missing = LibraryRead(
         unread=_no_file(reference, reader), rule_id=_missing_rule(reference, reader)
     )
-    if reference.head != ".lib" or reader.family != "ngspice":
+    if reader.family != "ngspice":
         if sections is None:
             return missing
         if reference.head != ".lib" or reader.family == "ltspice":
             return WHOLE_FILE
         return LibraryRead(selected=reference.section) if reference.section else WHOLE_FILE
+    if reference.head != ".lib":
+        # ngspice reads an include's own section lines as it reads them in a
+        # deck: a mode that reads .lib as an include drops every card of the
+        # file, and any other stops on the line (measured on ngspice-42).
+        if sections is None:
+            return missing
+        named = sorted({owner for owner in sections if owner is not None}, key=str.casefold)
+        if not named:
+            return WHOLE_FILE
+        mode = reader.mode or ""
+        fix = f"Read one section with .lib {reference.raw_path} {named[0]} (sections: " + (
+            f"{', '.join(named)})"
+        )
+        if reads_lib_as_includes(mode):
+            return LibraryRead(
+                unread=(
+                    f"ngspice in mode {mode!r} reads the section line of {reference.raw_path} "
+                    f"(.lib {named[0]}) as an include of a file that does not exist, so it "
+                    "drops every card of the file and runs on without them. "
+                    f'{fix}, in a mode that reads sections ([simulator] ngbehavior = "hsa")'
+                ),
+                rule_id="lib-sections-dropped-ngspice",
+            )
+        return LibraryRead(
+            unread=(
+                f"ngspice in mode {mode!r} stops on the section line of {reference.raw_path} "
+                f"(.lib {named[0]}: \"unimplemented dot command '.lib'\"). {fix}"
+            ),
+            rule_id="lib-without-section-ngspice",
+        )
     # ngspice. What a named section, or a .lib in a mode that does not read
     # .lib as an include, brings in does not depend on what the file holds.
     mode = reader.mode or ""
@@ -1360,26 +1391,13 @@ def _no_file(reference: IncludeReference, reader: LibraryReader) -> str:
 
 
 def _missing_rule(reference: IncludeReference, reader: LibraryReader) -> str | None:
-    if reader.family == "ltspice" and any(char.isspace() for char in reference.raw_path):
+    if (
+        reader.family == "ltspice"
+        and reference.head == ".lib"
+        and any(char.isspace() for char in reference.raw_path)
+    ):
         return "lib-section-ltspice"
     return None
-
-
-def library_reads_of(deck: Path, reader: LibraryReader) -> list[LibraryRead]:
-    """What each include and library card of the deck at ``deck`` brings in
-    for ``reader``, in card order: ``library_read`` over the deck's own
-    references."""
-    cards = lex_deck(read_spice_text(deck)).cards
-    reads = []
-    for reference in scan_include_references(cards, deck, family=reader.family):
-        target = resolve_existing(resolve_reference(deck.parent, reference.raw_path))
-        sections = (
-            None
-            if target is None or not target.is_file()
-            else card_sections(lex_deck(read_spice_text(target), title=False).cards, target, 1)
-        )
-        reads.append(library_read(reference, sections, reader))
-    return reads
 
 
 def looks_like_section_declaration(

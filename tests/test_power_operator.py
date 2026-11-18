@@ -73,6 +73,22 @@ def test_the_reader_computes_a_power_only_where_its_value_is_pinned(expression: 
         evaluate(expression, _no_names, simulator="ngspice", ngbehavior=mode)
 
 
+def test_a_negated_name_straight_after_the_operator_is_declined():
+    """ngspice-42 refuses ``3^-b`` in every mode ("wrongly determined
+    negation") and computes ``3^(-b)`` and ``3^-1``."""
+
+    def lookup(name: str) -> float:
+        return -2.0
+
+    for mode in ("", "hsa", "kiltpsa"):
+        with pytest.raises(ValueError, match="negated name"):
+            evaluate("3^-b", lookup, simulator="ngspice", ngbehavior=mode)
+        with pytest.raises(ValueError, match="negated name"):
+            evaluate("3**-b", lookup, simulator="ngspice", ngbehavior=mode)
+        assert evaluate("3^(-b)", lookup, simulator="ngspice", ngbehavior=mode) == 9.0
+        assert evaluate("3^-1", lookup, simulator="ngspice", ngbehavior=mode) == 1 / 3
+
+
 def test_ngspice_needs_its_mode():
     with pytest.raises(ValueError, match="mode"):
         evaluate("2^3", _no_names, simulator="ngspice", ngbehavior=None)
@@ -143,13 +159,16 @@ def test_a_run_draws_no_mismatch_from_a_multiplier_ngspice_reads_otherwise(tmp_p
     assert "zero" in str(exc.value)
 
 
-def test_the_mismatch_plan_reads_a_power_as_native_ngspice(tmp_path: Path):
+def test_the_mismatch_plan_reads_a_power_as_native_ngspice():
     """The plan for a deck with no semantic profile (QSPICE, Xyce) reads an
     expression in ngspice's native mode, the strictest: it computes a power
-    of a positive base only."""
-    from ltspice_mcp.lib import subckt_mismatch
+    of a positive base, and leaves a negative one unresolved."""
+    from ltspice_mcp.lib.subckt_mismatch import _environment
 
-    assert subckt_mismatch.EXPRESSION_MODE == ""
+    scope = _environment({"p": "(-2)^3", "q": "2^3"})
+    assert scope.fact("p").value is None
+    assert "magnitude" in (scope.fact("p").reason or "")
+    assert scope.fact("q").value == 8.0
 
 
 # --------------------------------------------------------------------------
@@ -166,6 +185,8 @@ LIVE_TABLE = {
     "0.5^-1": {"": 2.0, "kiltpsa": 2.0, "hsa": 2.0},
     "(-2)^2": {"": 4.0, "kiltpsa": 4.0, "hsa": 4.0},
     "2^3^2": {"": 64.0, "kiltpsa": 64.0, "hsa": 64.0},
+    "3^-y": {"": None, "kiltpsa": None, "hsa": None},
+    "3^(-y)": {"": 9.0, "kiltpsa": 9.0, "hsa": 9.0},
     "0^2": {"": 0.0, "kiltpsa": 0.0, "hsa": 0.0},
     "(-2)^(-1)": {"": 0.5, "kiltpsa": -0.5, "hsa": -0.5},
 }
@@ -186,7 +207,7 @@ def test_ngspice_computes_a_power_as_the_table_says(expression: str, mode: str, 
     print(f"ngspice that ran: {_ngspice_version()}")
     deck = tmp_path / "power.cir"
     deck.write_text(
-        f"* power\n.param x={{{expression}}}\nV1 a 0 {{x}}\nR1 a 0 1\n.op\n"
+        f"* power\n.param y=-2\n.param x={{{expression}}}\nV1 a 0 {{x}}\nR1 a 0 1\n.op\n"
         ".control\nop\nprint v(a)\n.endc\n.end\n",
         encoding="utf-8",
     )
@@ -203,7 +224,7 @@ def test_ngspice_computes_a_power_as_the_table_says(expression: str, mode: str, 
         assert measured == pytest.approx(expected, rel=1e-5, abs=1e-12)
     # The reader agrees where it answers, and declines everywhere else.
     try:
-        value = evaluate(expression, _no_names, simulator="ngspice", ngbehavior=mode)
+        value = evaluate(expression, lambda name: -2.0, simulator="ngspice", ngbehavior=mode)
     except ValueError:
         return
     assert measured is not None and value == pytest.approx(measured, rel=1e-5, abs=1e-12)

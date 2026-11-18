@@ -156,7 +156,10 @@ X1 input output myfilter rval=1k cval=1n
   `name=value` after the nodes.
 - `.lib` loading depends on ngspice's compatibility mode, and no single `.lib`
   form works in every mode, so to include a whole file unconditionally use
-  `.include <file>`, which resolves in every mode. If you use `.lib`:
+  `.include <file>`, which resolves in every mode for a file with no
+  `.lib <section>` lines of its own (on a file with sections, native and `hsa`
+  stop and `kiltpsa` drops the file, and `run_experiments` refuses the deck).
+  If you use `.lib`:
   - **ngspice-native modes** (`hsa`, plain default): `.lib <file> <section>`
     loads only that `.lib section … .endl` block, not the cards outside every
     section; a bare `.lib <file>` with no section stops ngspice
