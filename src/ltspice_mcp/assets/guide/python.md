@@ -19,8 +19,10 @@ core has an example that reads a sweep back in one loop.
 process the server starts once and keeps for the session, with `api` already
 open on the server's working directory. The snippet also has
 `np`, `load_raw`, `measurements`, `reference`, `window_and_clean`,
-`compute_signal_stats` and `time_weighted_quantiles` in scope. `print()`
-output and the repr of a trailing expression are returned, so print the result
+`compute_signal_stats` and `time_weighted_quantiles` in scope. `np` is
+NumPy 2, so a name it removed fails: write `np.trapezoid` (or
+`compute_signal_stats`) for `np.trapz`, `np.ptp(a)` for `a.ptp()` and
+`np.isin` for `np.in1d`. `print()` output and the repr of a trailing expression are returned, so print the result
 you need, such as the crossing or the worst corner, rather than the whole
 table. Each call gets a fresh namespace around the same `api`, so keep state
 on disk, in a file or in a job you can find again by its `request_id`. A

@@ -717,3 +717,23 @@ class TestWorkerProcess:
             [sys.executable, "-c", probe], capture_output=True, text=True, check=True
         )
         assert out.stdout.strip() == "[]"
+
+
+def test_the_numpy_names_the_guide_says_fail_do_fail_and_their_replacements_work():
+    """The Python guide names NumPy 1 spellings a snippet's ``np`` lacks, each
+    with what to write; each is checked against the NumPy this package runs."""
+    import re
+    from importlib.resources import files
+
+    import numpy as np
+
+    guide = files("ltspice_mcp") / "assets" / "guide" / "python.md"
+    text = " ".join(guide.read_text(encoding="utf-8").split())
+    pairs = re.findall(r"`([^`]+)`(?: \(or `[^`]+`\))? for `([^`]+)`", text)
+    assert {old for _new, old in pairs} == {"np.trapz", "a.ptp()", "np.in1d"}, pairs
+    a = np.arange(4.0)
+    scope = {"np": np, "a": a}
+    for new, old in pairs:
+        with pytest.raises(AttributeError):
+            eval(old if old.endswith(")") else f"{old}(a)", scope)
+        eval(new if new.endswith(")") else f"{new}(a, a)", scope)
