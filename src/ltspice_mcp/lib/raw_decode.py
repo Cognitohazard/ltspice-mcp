@@ -40,6 +40,7 @@ from ltspice_mcp.lib.raw_header import (
 from ltspice_mcp.lib.result_kinds import (
     STEPPED_SWEEP,
     Analysis,
+    axis_coordinates,
     header_analysis,
     sampled_axis,
     stepped_kind,
@@ -399,9 +400,9 @@ def _validated_step_starts(
         previous = None
         for offset in range(start, end, _CHUNK_BYTES):
             block = data[offset : min(offset + _CHUNK_BYTES, end)]
-            if np.iscomplexobj(block) and np.any(np.imag(block) != 0):
+            coordinate = axis_coordinates(block)
+            if coordinate is None:
                 return None
-            coordinate = np.real(block)
             if time_signs:
                 # Validate native LT time ordering on a bounded temporary;
                 # retain stored signs and Offset unchanged in output arrays.

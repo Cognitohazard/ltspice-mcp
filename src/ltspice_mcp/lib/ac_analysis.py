@@ -32,7 +32,9 @@ import numpy as np
 # Re-exported as ``magnitude_db`` for readability in the AC domain; the
 # implementation lives in raw_parser so AC and transient tools share the
 # same clamped-log10 behavior.
+from ltspice_mcp.lib.raw_parser import NON_REAL_AXIS
 from ltspice_mcp.lib.raw_parser import safe_magnitude_db as magnitude_db
+from ltspice_mcp.lib.result_kinds import axis_coordinates
 from ltspice_mcp.lib.signal_analysis import level_crossings
 
 # Phase sample step above which we warn about possible unwrap errors — if the
@@ -98,7 +100,9 @@ def prepare_ac_arrays(freqs_raw: np.ndarray, H_raw: np.ndarray) -> tuple[np.ndar
     """Coerce a raw-file axis and trace into clean (freqs, H) arrays.
 
     - Frequency axis is made real-valued (LTspice stores it as complex with
-      zero imaginary part) and must be strictly increasing — the whole
+      zero imaginary part, ngspice 42 with a subnormal one) as
+      ``result_kinds.axis_coordinates`` reads it, refusing one whose imaginary
+      part can be a coordinate, and must be strictly increasing — the whole
       module assumes that.
     - Trace must be complex (transient traces are rejected — that's the
       caller's job on the happy path, but we also check here so unit tests
@@ -116,9 +120,9 @@ def prepare_ac_arrays(freqs_raw: np.ndarray, H_raw: np.ndarray) -> tuple[np.ndar
             "values rather than an AC response, or name a node voltage or branch current"
         )
 
-    freqs = np.asarray(freqs_raw)
-    if np.iscomplexobj(freqs):
-        freqs = np.real(freqs)
+    freqs = axis_coordinates(freqs_raw)
+    if freqs is None:
+        raise ValueError(NON_REAL_AXIS)
     freqs = np.asarray(freqs, dtype=float)
     H = np.asarray(H_raw, dtype=np.complex128)
 

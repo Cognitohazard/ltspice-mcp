@@ -28,7 +28,7 @@ import numpy as np
 from spicelib.raw.raw_classes import SpiceReadException
 from spicelib.raw.raw_read import RawRead
 
-from ltspice_mcp.errors import NoAxisError
+from ltspice_mcp.errors import NoAxisError, ResultError
 from ltspice_mcp.lib import atomic_write
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import (
@@ -46,7 +46,13 @@ from ltspice_mcp.lib.log_parser import (
 )
 from ltspice_mcp.lib.log_types import LogSectionName
 from ltspice_mcp.lib.raw_header import STEPPED_TEMPERATURE, RawDialectError, command_writer
-from ltspice_mcp.lib.result_kinds import AC_SHAPED, plot_analysis, sampled_axis
+from ltspice_mcp.lib.result_kinds import (
+    AC_SHAPED,
+    axis_coordinates,
+    imaginary_not_data,
+    plot_analysis,
+    sampled_axis,
+)
 from ltspice_mcp.lib.result_observations import surface_observations
 from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.trace_names import TraceQuantity, is_node_voltage, trace_quantity
@@ -357,12 +363,24 @@ def get_step_count(raw: RawData) -> int:
     return len(raw.get_steps())
 
 
+#: Why an axis with an imaginary part that can be a coordinate is not read,
+#: and what reads the plot instead.
+NON_REAL_AXIS = (
+    "The selected plot has non-real coordinates: its axis has an imaginary part "
+    "that can be a coordinate, so it is not read as its real part. Read its "
+    "values through inspect(kind='results', view='table') or api.load_raw(...).table()."
+)
+
+
 def real_axis(axis: np.ndarray) -> np.ndarray:
-    """Return the real part of a SPICE axis. AC frequency axes are stored
-    as ``complex(freq, 0)`` by spicelib — strip the imaginary tag for
-    ordering / nearest-neighbour lookups. Real axes pass through unchanged.
-    """
-    return np.real(axis) if np.iscomplexobj(axis) else axis
+    """The coordinates of a sampled axis (``result_kinds.axis_coordinates``):
+    an AC axis stored as complex numbers is read as its real part when no
+    imaginary part can be a coordinate, and refused otherwise. A real axis
+    passes through unchanged."""
+    coordinates = axis_coordinates(axis)
+    if coordinates is None:
+        raise ResultError(NON_REAL_AXIS)
+    return coordinates
 
 
 def _nearest_ascending(axis: np.ndarray, target: float) -> int:
@@ -786,6 +804,12 @@ def build_simulation_summary(
             point_count = len(axis)
     except _RAW_ACCESS_ERRORS as exc:
         warnings.append(_parse_failure("axis (range, point_count)", exc))
+    if axis is not None:
+        try:
+            axis = real_axis(np.asarray(axis))
+        except ResultError as exc:
+            axis = None
+            warnings.append(f"No range: {exc}")
 
     range_info: dict = {}
     if axis is not None and point_count > 0:
@@ -800,12 +824,8 @@ def build_simulation_summary(
                 and descriptor.axis.real_coordinates
             )
         ):
-            # AC and noise both sweep over frequency. Axis values may be
-            # complex (frequency + j0); take real part.
-            range_info = {
-                "freq_start": float(axis[0].real),
-                "freq_end": float(axis[-1].real),
-            }
+            # AC and noise both sweep over frequency, read as real_axis reads it.
+            range_info = {"freq_start": float(axis[0]), "freq_end": float(axis[-1])}
         elif is_dc_analysis(raw):
             range_info = {"sweep_start": float(axis[0]), "sweep_end": float(axis[-1])}
         # Operating Point has no range (single point)
@@ -1207,11 +1227,13 @@ def result_digest(path: Path, dialect: str | None = None) -> str | None:
 
     Two runs whose results are the same numbers digest the same, though each
     header carries the date it was written (one per plot in an ngspice file)
-    and the deck's path. A complex axis keeps its real part only: ngspice-42
-    writes the imaginary part of an AC frequency from memory it never set, so
-    two runs of one deck differ there (recorded:
-    ``tests/fixtures/ngspice_ac_rerun``, ``.ac`` and ``.sp``); a ``.pz`` plot's first variable is
-    a pole, not an axis, and keeps both parts. None when the file is not a raw
+    and the deck's path. A complex axis keeps its real part only where its
+    imaginary part is one no simulator computed
+    (``result_kinds.imaginary_not_data``): ngspice-42 writes the imaginary part
+    of an AC frequency from memory it never set, so two runs of one deck
+    differ there (recorded: ``tests/fixtures/ngspice_ac_rerun``, ``.ac`` and
+    ``.sp``); an axis whose imaginary part can be a coordinate keeps both
+    parts, and so does a ``.pz`` plot's first variable, a pole, not an axis. None when the file is not a raw
     this reader can walk to its end: a plot whose point count was never
     written (ngspice writes it when the plot ends), a plot cut short, bytes
     after the last plot that start no plot, or an ASCII plot in a UTF-16 file.
@@ -1297,7 +1319,7 @@ def _digest_binary_points(
         axis = handle.read(points * axis_size)
         if len(axis) != points * axis_size:
             return None
-        if imaginary_axis:
+        if imaginary_axis and imaginary_not_data(np.frombuffer(axis, dtype="<f8")[1::2]):
             axis = np.frombuffer(axis, dtype=np.uint8).reshape(points, 16)[:, :8].tobytes()
         digest.update(axis)
         remaining = points * (record - axis_size)
@@ -1317,17 +1339,31 @@ def _digest_binary_points(
             return None
         if imaginary_axis:
             rows = np.frombuffer(chunk, dtype=np.uint8).reshape(count, record)
-            chunk = np.concatenate((rows[:, :8], rows[:, 16:]), axis=1).tobytes()
+            if imaginary_not_data(rows[:, 8:16].copy().view("<f8")):
+                chunk = np.concatenate((rows[:, :8], rows[:, 16:]), axis=1).tobytes()
         digest.update(chunk)
         left -= count
     return header.data_start + points * record
 
 
+def _digested_axis(token: bytes) -> bytes:
+    """An ASCII point's axis value as the digest reads it: its real part when
+    its imaginary part is one no simulator computed
+    (``result_kinds.imaginary_not_data``), and whole otherwise."""
+    real, comma, imaginary = token.partition(b",")
+    try:
+        if comma and imaginary_not_data(float(imaginary)):
+            return real
+    except ValueError:
+        pass
+    return token
+
+
 def _digest_ascii_points(
     handle: Any, header: _PlotHeader, width: int, points: int, n_vars: int, digest: Any
 ) -> int | None:
-    """Feed a ``Values:`` plot's points to ``digest``, a complex axis by its
-    real part; where its data ends, or None when it ends early."""
+    """Feed a ``Values:`` plot's points to ``digest``, a complex axis as
+    :func:`_digested_axis` reads it; where its data ends, or None when it ends early."""
     if width != 1 or header.data_start is None:
         return None
     axis_only = _has_sampled_axis(header)
@@ -1337,7 +1373,7 @@ def _digest_ascii_points(
         index, tab, axis = line.partition(b"\t")
         if not tab or not index.strip() or not line.endswith(b"\n"):
             return None
-        digest.update((axis.split(b",", 1)[0] if axis_only else axis).strip() + b"\n")
+        digest.update((_digested_axis(axis) if axis_only else axis).strip() + b"\n")
         for _ in range(n_vars - 1):
             line = handle.readline()
             if not line.strip() or not line.endswith(b"\n"):
@@ -1551,20 +1587,29 @@ def _progress_of_plot(
         kept = min(declared, points) if writer == "ltspice" else points
         if kept > 0 and writer in ("ltspice", "ngspice"):
             handle.seek(header.data_start + (kept - 1) * record)
-            stored = handle.read(8)
+            stored = handle.read(axis_size)
             kept_last = (
-                _deck_axis_value(struct.unpack("<d", stored)[0], header)
-                if axis and len(stored) == 8
+                _deck_axis_value(_stored_axis_value(stored), header)
+                if axis and len(stored) == axis_size
                 else None
             )
             end = header.data_start + kept * record
             cut = _Cut(width, offset, header.data_start, end, kept, kept_last)
     handle.seek(at)
-    value = handle.read(8)
-    if len(value) < 8:
+    value = handle.read(axis_size)
+    if len(value) < axis_size:
         return progress(None, None)
-    # A complex axis stores its real part first.
-    return progress(points, struct.unpack("<d", value)[0], cut)
+    return progress(points, _stored_axis_value(value), cut)
+
+
+def _stored_axis_value(stored: bytes) -> float | None:
+    """One stored axis value: a double, or a complex one, its real part first,
+    read as ``result_kinds.axis_coordinates`` reads an axis; None for one whose
+    imaginary part can be a coordinate."""
+    if len(stored) == 16:
+        real, imaginary = struct.unpack("<dd", stored)
+        return real if imaginary_not_data(imaginary) else None
+    return struct.unpack("<d", stored[:8])[0]
 
 
 #: The header line that declares a plot's point count, and its value field.
@@ -1721,17 +1766,26 @@ def _last_complete_ascii_point(lines: list[str], n_vars: int) -> tuple[int, floa
             continue
         if len(tokens) >= 2 and tokens[0].isdigit():
             if values_after == n_vars - 1:
-                try:
-                    axis_value: float | None = float(tokens[1].split(",")[0])
-                except ValueError:
-                    axis_value = None
-                return int(tokens[0]) + 1, axis_value
+                return int(tokens[0]) + 1, _ascii_axis_value(tokens[1])
             values_after = 0
             continue
         if len(tokens) != 1:
             raise ValueError(f"not a raw value line: {line[:80]!r}")
         values_after += 1
     return None
+
+
+def _ascii_axis_value(token: str) -> float | None:
+    """An ASCII point's axis value, ``real`` or ``real,imaginary``, read as
+    ``result_kinds.axis_coordinates`` reads an axis; None for one that is not
+    a number or whose imaginary part can be a coordinate."""
+    real, comma, imaginary = token.partition(",")
+    try:
+        if comma and not imaginary_not_data(float(imaginary)):
+            return None
+        return float(real)
+    except ValueError:
+        return None
 
 
 def _deck_axis_value(value: float | None, header: _PlotHeader) -> float | None:

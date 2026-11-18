@@ -293,16 +293,13 @@ def _no_axis_error(raw: DecodedRaw | DecodedPlot) -> NoAxisError:
 
 
 def guarded_axis(raw: DecodedRaw | DecodedPlot, step: int) -> np.ndarray:
-    """Real-valued sweep axis for ``step``, or a clean error for a plot with
-    no sampled axis (an operating point, a table) naming what reads it."""
+    """Real-valued sweep axis for ``step`` (``raw_parser.real_axis``, which
+    refuses an axis whose imaginary part can be a coordinate), or a clean
+    error for a plot with no sampled axis (an operating point, a table) naming
+    what reads it."""
     if raw.descriptor.axis is None:
         raise _no_axis_error(raw)
-    axis = np.asarray(raw.get_axis(step=step))
-    if np.iscomplexobj(axis) and np.any(np.imag(axis) != 0):
-        raise ResultError(
-            "The selected plot has non-real coordinates; a real sampled axis is required."
-        )
-    return real_axis(axis)
+    return real_axis(np.asarray(raw.get_axis(step=step)))
 
 
 def window_indices(axis: np.ndarray, ts: float | None, te: float | None) -> tuple[int, int]:
