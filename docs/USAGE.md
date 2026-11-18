@@ -331,7 +331,10 @@ Sweeps and Monte Carlo are set in the `variations` argument of
   it sets `combine: "zip"`, which steps them together. Corners are run by
   swapping models.
 - `random` adds Monte Carlo runs with component tolerances, `.param` and
-  `.MODEL` parameter spread, and Pelgrom W·L device mismatch.
+  `.MODEL` parameter spread, and Pelgrom W·L device mismatch. Mismatch for a
+  transistor inside a subcircuit, and `X1:delvto`, run on LTspice and ngspice
+  only: on QSPICE and Xyce they are refused, because the server does not model
+  how those simulators read a subcircuit body.
 
 Variations do not set the temperature. Set it in the deck with `.temp`,
 `.step temp` or `.options temp=`. A `.param TEMP` is rejected, because SPICE

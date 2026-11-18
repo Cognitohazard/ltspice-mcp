@@ -29,7 +29,7 @@ import pytest
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.format import parse_spice_value
-from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
+from ltspice_mcp.lib.hierarchy import SUPPORTED_FAMILIES, SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.lint_rules import lint_deck
 from ltspice_mcp.lib.netlist_graph import compare_graphs, flatten_graph, parse_netlist_graph
 from ltspice_mcp.lib.simulator import NGSPICE_NO_USER_INIT
@@ -39,16 +39,15 @@ from ltspice_mcp.lib.spice_validator import (
     validate_netlist_bias_topology,
     validate_netlist_dangling_nodes,
 )
-from ltspice_mcp.lib.subckt_mismatch import (
-    ClosureFile,
-    MismatchPlanError,
-    MismatchValues,
-    build_plan,
-    render,
+from ltspice_mcp.lib.variations import (
+    CircuitDeck,
+    RandomVariation,
+    VariationError,
+    expand_variations,
+    materialize_variants,
 )
 from ltspice_mcp.tools.inspect_tools import _subcircuit_ports
 from ltspice_mcp.tools.verify import _LexedDeck, _syntax_findings
-from tests._mismatch_fixtures import clone_body
 from tests.conftest import LIVENESS_S
 from tests.ltspice_recorder import INPUTS
 
@@ -225,26 +224,54 @@ MISMATCH_DECK = (
         (Producer("ltspice", "LTspice 26.1.1 for Windows", None), None),
         (Producer("qspice", None, None), None),
         (Producer("xyce", None, None), None),
-        (Producer(None, None, None), None),
     ],
 )
-def test_the_mismatch_plan(producer: Producer, inner: str | None):
-    """The mismatch draw patches the definition in force, and refuses a
-    subcircuit whose reader keeps none, saying why."""
-    files = [ClosureFile(index=0, path=Path("/deck/deck.cir"), text=MISMATCH_DECK)]
-    rule = definition_rule(producer)
+def test_the_mismatch_draw(producer: Producer, inner: str | None, tmp_path: Path):
+    """The mismatch draw reaches the device of the definition in force, and
+    refuses a subcircuit whose reader keeps none, or whose reading of a body
+    the server does not model, saying why."""
+    path = tmp_path / "deck.cir"
+    path.write_text(MISMATCH_DECK, encoding="utf-8")
+    family = producer.family
+    assert family is not None
+    profile = (
+        SemanticProfile.of(producer, "hsa" if family == "ngspice" else None)
+        if family in SUPPORTED_FAMILIES
+        else None
+    )
+    circuit = CircuitDeck("dut", path, MISMATCH_DECK, semantic_profile=profile, family=family)
+    variation = RandomVariation.model_validate(
+        {
+            "kind": "random",
+            "runs": 1,
+            "seed": 3,
+            "rules": [
+                {
+                    "rule": "mismatch",
+                    "prefix": "XN",
+                    "AVT": 3e-3,
+                    "vth_param": "VTH0",
+                    "k_param": "U0",
+                }
+            ],
+        }
+    )
     if inner is None:
-        with pytest.raises(MismatchPlanError, match="Rename or delete all but one") as exc:
-            build_plan(files, prefix="XN", subckt_rule=rule)
-        assert exc.value.code == "ambiguous_subckt"
+        with pytest.raises((VariationError, NetlistError)) as exc:
+            materialize_variants(
+                circuit, expand_variations([circuit], [variation]), tmp_path / "out"
+            )
+        if profile is None:
+            assert isinstance(exc.value, VariationError)
+            assert exc.value.code == "mismatch_inside_subcircuit_unmodelled"
+        else:
+            assert "Rename or delete all but one" in str(exc.value)
         return
-    plan = build_plan(files, prefix="XN", subckt_rule=rule)
-    (target,) = plan.targets
-    assert target.inner_ref.casefold() == inner
-    # Each run copies the definition the plan chose out of the deck again.
-    out = render(files, plan, {target.ref: MismatchValues(delvto=-0.01)})
-    clone = clone_body(out[0], plan.clones[0].name)
-    assert f"\n{inner} " in clone.casefold()
+    (case,) = materialize_variants(
+        circuit, expand_variations([circuit], [variation]), tmp_path / "out"
+    )
+    drawn = {key for key in case.assignments if key.startswith("instance:")}
+    assert drawn and all(f'"xn0","{inner}"' in key for key in drawn)
 
 
 @pytest.mark.parametrize("family", ["qspice", "xyce"])
@@ -351,33 +378,6 @@ def test_one_name_in_two_scopes_is_two_definitions(reader: str):
     assert "fet" not in graph.subckts
     (record,) = graph.duplicate_subckts
     assert record.reason is not None and "more than one scope" in record.reason
-
-
-@pytest.mark.parametrize("reader", ["ngspice", "xvii"])
-def test_the_mismatch_plan_refuses_what_it_cannot_order(reader: str):
-    """The plan knows each file's cards but not where each file is read, so
-    of definitions in two files it patches neither; nor of one name in two
-    scopes."""
-    include_first = [
-        ClosureFile(
-            index=0,
-            path=Path("/deck/deck.cir"),
-            text=(
-                "* m\n.include lib.lib\n" + _FET.format(n="ROOT") + "XN0 d g 0 0 fet W=1 L=0.15\n"
-                "V1 d 0 0.9\nVg g 0 0.9\n.op\n.end\n"
-            ),
-        ),
-        ClosureFile(index=1, path=Path("/deck/lib.lib"), text=_FET.format(n="LIB")),
-    ]
-    with pytest.raises(MismatchPlanError) as exc:
-        build_plan(include_first, prefix="XN", subckt_rule=_profile(reader).subckt_rule)
-    assert exc.value.code == "ambiguous_subckt"
-    apart = MISMATCH_DECK.replace(
-        _FET.format(n="1"), ".subckt wrap p\n" + _FET.format(n="1") + ".ends wrap\n", 1
-    )
-    files = [ClosureFile(index=0, path=Path("/deck/deck.cir"), text=apart)]
-    with pytest.raises(MismatchPlanError, match="more than one scope"):
-        build_plan(files, prefix="XN", subckt_rule=_profile(reader).subckt_rule)
 
 
 @pytest.mark.parametrize("reader", ["xvii", "ltspice26"])

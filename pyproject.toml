@@ -27,7 +27,8 @@ dependencies = [
     # No [cli] extra: nothing here imports typer or rich, and that extra pulls
     # both into every install for the `mcp` command-line tool we never invoke.
     "mcp>=2.3,<3.0",
-    "numpy>=1.26,<3.0",
+    # 2.0: np.trapezoid, which the signal, AC and loop-structure readers call.
+    "numpy>=2.0,<3.0",
     # Direct use (scoped simulator kill, job owner-pid liveness); also a
     # spicelib transitive, so this adds no new install weight.
     "psutil>=5.9,<8.0",
@@ -134,6 +135,7 @@ select = [
     "PERF",  # performance anti-patterns
     "PT",    # pytest style
     "TID251", # banned names (see banned-api below)
+    "NPY201", # names NumPy 2 removed, which the numpy floor no longer has
 ]
 ignore = [
     "E501",    # line length (handled by formatter)

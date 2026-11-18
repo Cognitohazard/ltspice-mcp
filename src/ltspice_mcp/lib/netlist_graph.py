@@ -1203,7 +1203,8 @@ def _flatten(
 ) -> tuple[FlatNetlist, list[ArityError]]:
     """``flatten_graph``, or with ``arity`` a list, the lenient flattening
     ``compare_graphs`` falls back to, which records each port-arity mismatch
-    there and keeps that instance as a black box (see ``_expand``)."""
+    there and keeps that instance as a black box (see ``_expand``). A
+    recursive definition raises in either mode."""
     leaves: list[FlatComponent] = []
     calls: list[FlatCall] = []
     unresolved: set[str] = set()
@@ -1253,9 +1254,9 @@ def _expand(
     internal-net keys). ``unresolved`` collects the names of subcircuits an ``X``
     asked for but nothing defined.
 
-    With ``arity`` None a port-arity mismatch raises :class:`PortArityMismatch`
-    and a recursive definition raises; with a list, the mismatch is recorded
-    there, and the instance, or one that recurses, is kept as a black-box leaf.
+    With ``arity`` None a port-arity mismatch raises :class:`PortArityMismatch`;
+    with a list, the mismatch is recorded there and the instance is kept as a
+    black-box leaf. A recursive definition raises in either mode.
     """
 
     def resolve(net: str) -> str:
@@ -1294,10 +1295,12 @@ def _expand(
             )
             is_expandable = False
         elif model_key in stack:
-            if arity is None:
-                chain = " -> ".join((*stack, model_key))
-                raise NetlistGraphError(f"recursive .SUBCKT definition: {chain}")
-            is_expandable = False
+            # Raised in both modes: a black box here would leave the part of the
+            # circuit under it uncompared with nothing to say so, and whether a
+            # recursive definition is an error would depend on whether an arity
+            # mismatch came first.
+            chain = " -> ".join((*stack, model_key))
+            raise NetlistGraphError(f"recursive .SUBCKT definition: {chain}")
 
     if not is_expandable:
         out.append(

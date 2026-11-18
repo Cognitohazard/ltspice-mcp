@@ -1146,7 +1146,10 @@ async def _run_reference_stage(
             for f in findings
         )
         if failure is not None:
-            verification["compare_error"] = failure["error"]
+            remedy = failure.get("remedy")
+            verification["compare_error"] = (
+                f"{failure['error']}. {remedy}" if remedy else failure["error"]
+            )
             verification["equivalent"] = None
             return verification
         assert payload is not None  # a compare without a failure carries its payload

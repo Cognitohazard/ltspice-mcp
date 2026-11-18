@@ -4502,3 +4502,43 @@ class TestReceiptWeight:
         assert str(anomalous.path) in kept, "an unexplained un-staged entry must survive"
         assert str(ordinary.path) not in kept, "an ordinary staged entry is bulk"
         assert lean["staged_files"] == 2, "the count still covers every entry"
+
+
+@pytest.mark.asyncio
+async def test_a_meas_in_degrees_is_refused_naming_suppress_and_runs_with_it(
+    config: ServerConfig, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """On LTspice a trig function inside a .meas reads degrees, by a per-user
+    setting (recorded: ``log-meas-angle-unit``). The refusal says how to run a
+    deck written for degrees anyway, and on which machines it is right; the
+    suppress it names lets the deck run."""
+    from ltspice_mcp.lib.lint_rules import MEAS_ANGLE_REASON
+
+    state = SessionState.create(config, available={"ltspice": type("LTspice", (FakeSim,), {})})
+    submissions: list[str] = []
+    fake_simulator(monkeypatch, submissions)
+    deck = _deck(
+        work_dir / "trig.cir",
+        "* trig\nV1 out 0 SIN(0 1 1k)\n.meas tran p PARAM atan2(1,1)\n.tran 2m\n.end\n",
+    )
+
+    data = _assert_schema(await handle_run_experiments(_args(deck, "trig-block"), state))
+    assert submissions == []
+    assert data["failures"][0]["code"] == "lint_blocked"
+    (finding,) = [
+        f
+        for block in data["lint"]
+        for f in block["findings"]
+        if f["rule_id"] == "meas-trig-degrees"
+    ]
+    reason = finding["evidence"]["reason"]
+    assert reason == MEAS_ANGLE_REASON
+    assert 'suppress: ["meas-trig-degrees"]' in reason
+    assert "left at its default" in reason
+
+    data = _assert_schema(
+        await handle_run_experiments(
+            _args(deck, "trig-suppressed", suppress=["meas-trig-degrees"]), state
+        )
+    )
+    assert len(submissions) == 1, data
