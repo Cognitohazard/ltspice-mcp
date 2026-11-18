@@ -75,17 +75,18 @@ _OUTSIDE = (
 )
 
 
-def test_hierarchy_alone_leaves_out_the_cards_outside_every_section(tmp_path: Path):
-    """No recording decides whether ``.lib file tt`` reads a card outside
-    every section of the file. Hierarchy discovery leaves it out; the linter
-    reads it, as before (``deck_staging.in_other_section``)."""
+def test_no_reader_reads_the_cards_outside_every_section(tmp_path: Path):
+    """ngspice reads only section ``tt`` for ``.lib file tt``, not the cards
+    outside every section of the file (measured on ngspice-42,
+    ``tests/test_library_card_read.py``). The linter read them, so a model
+    declared only there counted as present."""
     (tmp_path / "corners.lib").write_text(_OUTSIDE, encoding="utf-8")
     deck = tmp_path / "d.cir"
     deck.write_text(
         "* t\n.lib corners.lib tt\nM1 d g 0 0 nout W=1u L=1u\nV1 d 0 1\nV2 g 0 1\n.op\n.end\n",
         encoding="utf-8",
     )
-    assert _model_missing(deck) == []
+    assert _model_missing(deck) == ["M1"]
     hierarchy = load_hierarchy(str(deck), [tmp_path], SemanticProfile("ngspice", "hsa"))
     (fet,) = [row for row in hierarchy.instances if row.reference.upper() == "M1"]
     assert fet.model_family == ()

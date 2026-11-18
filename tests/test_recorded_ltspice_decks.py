@@ -2464,20 +2464,14 @@ def test_params_with_no_space_after_the_colon_is_passed(build: str, tmp_path: Pa
     assert refusals("deck/params_no_space") == set()
 
 
-#: An unquoted ``.lib`` path holding a space: both builds read it as one path,
-#: and the server reads the word after the space as a section name, so it
-#: refuses the deck LTspice runs.
-ONE_PATH_TO_LTSPICE_AND_A_SECTION_TO_THE_SERVER = {"lib-section-ltspice", "model-missing"}
-
-
 @pytest.mark.parametrize("build", rec.BUILDS)
 def test_a_lib_path_holding_a_space_is_one_path(build: str, tmp_path: Path):
     for stem in ("lib_path_space_unquoted", "lib_path_space_quoted"):
         assert rec.operating_point(build, f"deck/{stem}", tmp_path / stem)["v(a)"] == 2000.0
+    # Both builds read an unquoted path holding a space as one path, and so
+    # does the server (``deck_staging.scan_include_references``).
     assert refusals("deck/lib_path_space_quoted") == set()
-    assert refusals("deck/lib_path_space_unquoted") == (
-        ONE_PATH_TO_LTSPICE_AND_A_SECTION_TO_THE_SERVER
-    )
+    assert refusals("deck/lib_path_space_unquoted") == set()
 
 
 #: The spelling of XAMP's node mid each build's ``.meas`` takes when the
