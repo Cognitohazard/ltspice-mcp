@@ -214,6 +214,11 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
                     if case.log_diagnostics is not None
                     else {}
                 ),
+                **(
+                    {"measurement_facts": case.measurement_facts}
+                    if case.measurement_facts is not None
+                    else {}
+                ),
                 "recovery": case.recovery.to_record() if case.recovery is not None else None,
             }
         )
@@ -433,6 +438,11 @@ def _case_record(data: dict[str, Any]) -> ExperimentCase:
         log_diagnostics=(
             dict(data["log_diagnostics"])
             if isinstance(data.get("log_diagnostics"), dict)
+            else None
+        ),
+        measurement_facts=(
+            dict(data["measurement_facts"])
+            if isinstance(data.get("measurement_facts"), dict)
             else None
         ),
         recovery=(

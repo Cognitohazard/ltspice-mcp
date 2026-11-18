@@ -473,7 +473,7 @@ raw.plots; raw.descriptor; raw.plot_index  # inventory and selected plot facts
 raw.table(step=0)              # native table rows; complex values use real/imag
 raw.compare(other, signals=None, step=0, other_step=None)  # per-signal differences
 raw.analysis_type; raw.dialect; raw.source          # provenance
-raw.observations               # [{code, kind, detail, evidence}]; partial_raw, coarse_compressed_waveform
+raw.observations               # [{code, kind, detail, evidence}]; partial_raw, coarse_compressed_waveform, compressed_transient, subcircuit_nodes_not_saved
 api.measurements(job_id=..., run_index=0, case_id=None)
 api.measurements("result.log")  # XOR: path | job_id; RAW is optional
 api.device_op_points(job_id=..., case_id=None)  # {"m1": {"gm": ...}}; same sources
@@ -521,8 +521,11 @@ ops.observations               # a log reader's dict (LogResult) says the same o
   `partial_raw` for a stopped case's raw kept with
   `execution.keep_partial_raw`, whose values end where the run was stopped,
   and `coarse_compressed_waveform` for an LTspice transient that waveform
-  compression left with few points, as `analyze_results` reports it. It is
-  empty for a whole result. `measurements` and `device_op_points` return a
+  compression left with few points, as `analyze_results` reports it,
+  `compressed_transient` for a transient LTspice XVII saved with compression
+  on that is not that coarse, and `subcircuit_nodes_not_saved` for a job's run
+  whose raw holds no node inside the deck's subcircuits. It is empty for a
+  whole result. `measurements` and `device_op_points` return a
   `LogResult`, a plain `dict` that has the same `observations` for the log it
   read.
 - `step_count` counts a plot's steps as the tools count them, 1 for a run that
@@ -571,7 +574,15 @@ ops.observations               # a log reader's dict (LogResult) says the same o
   builds). A device in a subcircuit is keyed by its path (`x1.m1`), where the
   table names it `x1:m1` on LTspice 26 and `m:1:1` on XVII (the device's
   letter, the instance's name without its X, and the device's name without
-  its letter). A value the log did not print as a finite number is `None`.
+  its letter). A block LTspice 26 exports as `X§U1` and XVII as `XU1` is
+  `xu1` on both (`xu1.d1`), where LTspice 26's table writes `u1:d1`. The
+  table's own name for each device is in `.table_names` (the result is a
+  `DeviceOpPoints`, a `LogResult` that adds it), by key, for a
+  caller quoting the log. Which build wrote the table is read from the job
+  case's record or, for a bare path, from the build the log's first line
+  names; a log whose first line names none was written by a build before 24,
+  which every log of LTspice 24 and later names. A value the log did not
+  print as a finite number is `None`.
   The result is empty when the log has no table. An ngspice log never has
   one, because ngspice writes the same parameters as traces of its raw; read
   them with `raw.value("@m1[gm]")`.
@@ -721,7 +732,8 @@ are the shapes the MCP tools return, so they change only when the tools'
 outputs change and are versioned with them. The docstrings of the §8
 functions fix their signatures, units and array conventions.
 
-`__all__` contains `Api`, `RawResult`, the exception types, the §8 functions,
+`__all__` contains `Api`, `RawResult`, `LogResult`, `DeviceOpPoints`, the
+exception types, the §8 functions,
 and these typing names:
 
 - aliases: `Quantity`, `SearchDirection`, `CrossingDirection` (defined

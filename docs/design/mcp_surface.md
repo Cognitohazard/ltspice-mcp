@@ -942,7 +942,8 @@ finish without it. Left false, it is not part of the request's identity.
 **RunRecord** is a schema fragment shared by `run_experiments` and `jobs`:
 `{case_id?, run_index?, circuit?, assignments?, status?, raw?, log?,
 other_raws?, simulator_version?, diagnostics?, diagnostics_coverage?,
-attempt?}`. Every key is optional because a
+failed_measurements?, failed_measurement_steps?, measurements_not_established?,
+measurements_not_printed?, measurements_coverage?, attempt?}`. Every key is optional because a
 run-field projection can remove any of them. `status` is the case's own
 status, which uses a separate vocabulary from the job's `status` on the
 receipt. It is `produced` once the simulator wrote its output, `failed`,
@@ -979,7 +980,20 @@ case's `status`: a run the simulator warned about and finished is still
 the run's own simulator and build: `build_unrecorded`, `producer_unknown`,
 `unverified`, `log_unread`, or `not_classified` for a case recorded before
 logs were classified. The `summary` recipe carries the same two fields for
-the same run. Runs are rendered as `items: [RunRecord]`, each row an object
+the same run. The measurement fields say what the run did not give of the
+`.meas` its deck requests, read from its log when it ended:
+`failed_measurements` names those LTspice printed as failed,
+`failed_measurement_steps` gives the steps (from 0) of one that failed at some
+steps of a stepped run only, `measurements_not_established` the steps whose
+printed value is not established as the result (LTspice XVII prints 0 for a
+failed step), and `measurements_not_printed` the requested ones the log
+printed nothing for. `measurements_coverage` is `not_read` for a case recorded
+before these were kept, `log_unread` when the log's measurements could not
+be read, and `simulator_unsupported` for a QSPICE or Xyce run, whose measure
+output the server does not read; the fields left out otherwise mean every
+requested `.meas` gave a value. When a row names one, the receipt's hint names the `measurements`
+recipe, and a `meas_failed_in_every_run` observation names each `.meas` that
+gave no value in any run. Runs are rendered as `items: [RunRecord]`, each row an object
 with the same keys at every budget.
 
 Under a `budget`, receipts keep the common envelope and step down the
@@ -2403,8 +2417,11 @@ Suppression is per call, and `linter_version` is reported in provenance.
 
 | rule | disposition | condition |
 |-|-|-|
-| `save-meas-coverage` | blocking | the deck has a `.save`, no `.save` saves all (`all`, `*`), names a signal by a pattern or cannot be read, and a `.meas` reads a signal no `.save` names. A voltage between two nodes, `V(a,b)`, is its two nodes in both (both builds measure it from a saved `V(a)` and `V(b)`, and `.save V(a,b)` saves both); a voltage against ground, `V(a,0)`, stands as written, since neither build measures it with only `V(a)` saved |
+| `save-meas-coverage` | blocking | a `.meas` reads a signal the run's simulator will not store, as the build that runs it reads names (`device_names.deck_signal`). Under a `.save` list (no `.save` saves all (`all`, `*`), names a signal by a pattern, or cannot be read): a signal no `.save` stores. A voltage between two nodes, `V(a,b)`, is its two nodes in both (both builds measure it from a saved `V(a)` and `V(b)`, and `.save V(a,b)` saves both); a voltage against ground, `V(a,0)`, stands as written, since neither build measures it with only `V(a)` saved. A name inside subcircuit instances is stored only in the build's own spelling: LTspice 26 with each instance's X (`xa:xin:mid`), XVII without (`a:in:mid`), ngspice with dots (`xa.xin.mid`); with or without a `.save` list, a `.meas` of a name LTspice spells otherwise, or whose first instance names no instance in either spelling, reads nothing on either build. Names are compared in ASCII case only. Where the build's spelling is not established, the signal is reported by `save-meas-spelling-unestablished` instead |
 | `save-pattern-unrecorded` | warning | any `.save` of the deck names signals by a pattern (`V(*)`, `I(R*)`), no `.save` saves all or cannot be read, and a `.meas` reads a signal no `.save` names: which signals a pattern saves is not recorded, so the signal is reported as not checked rather than refused, whichever kind of signal the pattern names |
+| `save-name-not-stored` | warning | a `.save` name the run's simulator stores nothing for: inside subcircuit instances, LTspice's other build's spelling, a first instance that names no instance in either spelling, or on ngspice a path spelled with colons, which ngspice-42 drops without a word. The finding gives the simulator's own spelling where it is known |
+| `save-meas-spelling-unestablished` | warning | a `.save` or `.meas` name inside subcircuit instances whose reading by the run's simulator is not established, so no rule refuses on it: a dotted path in an LTspice deck, a deck for an LTspice build whose spelling is not recorded or not known, or a first segment that names an instance in both spellings or one exported with a `§` |
+| `meas-subckt-node-unsaved-ltspice` | warning | LTspice, a deck with no `.save` list: a `.meas` of a node inside a subcircuit, spelled as the build stores it, which LTspice keeps only with its "Save subcircuit node voltages" setting, off by default on both builds; the measurement fails without it |
 | `meas-ngspice-batch` | warning | ngspice: the deck runs and only the top-level `.meas` is skipped, which the run reports when it is read |
 | `meas-trig-degrees` | blocking | LTspice: a `.meas` that calls `sin`, `cos`, `tan`, `asin`, `acos`, `atan` or `atan2`, whose angle LTspice 26 and XVII read in degrees on their default settings where a B source reads radians; `verify_circuit`'s `syntax` check reports the same as `meas_trig_degrees` |
 | `lib-section-ngspice` | blocking | ngspice in a mode it reads with its `lt`, `ps` or `s3` flag set, `kiltpsa` (the default) among them: a `.lib <file> <section>` in the deck or any file it reaches |
@@ -2426,6 +2443,7 @@ Suppression is per call, and `linter_version` is reported in provenance.
 | `include-relative` | warning | an include or library reference with a relative path, which depends on where the deck is placed |
 | `suffix-mega-milli` | warning | a number followed by an upper-case `M` that does not start `Meg` or `Mil`, which SPICE reads as milli |
 | `step-ngspice` | warning | ngspice: a `.step`, which ngspice ignores in batch mode, so the deck runs once at the base value |
+| `node-non-ascii-ngspice` | warning | ngspice: a node name holding a character beyond ASCII, each byte of which ngspice-42 replaces with `_`, so two names that differ only there are one node, shorted with no word in its output |
 | `temp-as-param` | blocking | a deck that sweeps temperature as a parameter (§3.1) |
 | `duplicate-param` | warning | an instance, `.model` or `.subckt` card giving one parameter more than once, in any case; which copy the simulator reads is not known, and `verify_circuit` reports the same as `duplicate_parameter` |
 | `subckt-defined-twice` | blocking | a subcircuit name defined more than once at the top level of the deck, which the reader refuses: LTspice 26 (recorded). `verify_circuit`'s `syntax` check reports the same as `subckt_defined_twice`. ngspice (the first) and LTspice XVII (the last of two) run a definition, which every check reads, and get no finding |

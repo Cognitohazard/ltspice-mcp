@@ -20,6 +20,7 @@ from spicelib.log.ltsteps import LTSpiceLogReader
 from spicelib.log.semi_dev_op_reader import opLogReader
 
 from ltspice_mcp.errors import ResultError
+from ltspice_mcp.lib.device_names import fold_name
 from ltspice_mcp.lib.encoding import decode_spice_bytes, read_spice_text
 from ltspice_mcp.lib.log_conditions import classify_channels, log_lines, rules_for
 from ltspice_mcp.lib.log_types import LogDiagnostics as LogDiagnostics
@@ -507,8 +508,8 @@ def read_device_op_points(
 
 def device_key(device: str, param: str) -> str:
     """The key ``read_device_op_points`` files a device parameter under:
-    ``@m1[gm]``, lowercased."""
-    return f"@{device.lower()}[{param.lower()}]"
+    ``@m1[gm]``, folded (``device_names.fold_name``)."""
+    return f"@{fold_name(device)}[{fold_name(param)}]"
 
 
 def _resolve_log_text(log_path: Path | None, text: str | None) -> str:
@@ -1261,6 +1262,15 @@ def prints_measurement(line: str) -> bool:
     return _printed_on(line) is not None
 
 
+def failed_measurement_on(line: str) -> str | None:
+    """The measurement a log's ``line`` says LTspice could not take, as
+    printed (``Measurement "name" FAIL'ed``), or None. The one reading of
+    such a line: :func:`printed_measurements` and the log classifier
+    (``log_conditions``) both ask it."""
+    failed = _RE_MEAS_FAILED.search(line)
+    return failed[1] if failed is not None else None
+
+
 def printed_measurements(text: str) -> dict[str, PrintedMeasurement]:
     """Every measurement a log printed, by name in lower case, in the order
     printed: each result line of a run with no ``.step``, each table heading
@@ -1285,8 +1295,8 @@ def printed_measurements(text: str) -> dict[str, PrintedMeasurement]:
                     found = PrintedMeasurement(
                         found.line, columns=tuple(columns["columns"].split("\t"))
                     )
-        elif (failed := _RE_MEAS_FAILED.search(line)) is not None:
-            name, found = failed[1], PrintedMeasurement(line.strip())
+        elif (failed := failed_measurement_on(line)) is not None:
+            name, found = failed, PrintedMeasurement(line.strip())
         else:
             continue
         measurements.setdefault(name.lower(), found)

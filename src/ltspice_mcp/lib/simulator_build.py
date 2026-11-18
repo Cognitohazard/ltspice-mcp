@@ -407,6 +407,13 @@ def log_banner_build(text: str) -> str | None:
     return _clean(first_line) if _LTSPICE_BANNER.fullmatch(first_line) else None
 
 
+def log_head_build(log_file: Path) -> str | None:
+    """The LTspice build ``log_file`` names on its first line
+    (:func:`log_banner_build`), read from its head alone; None when it names
+    none or cannot be read."""
+    return log_banner_build(_head_text(log_file))
+
+
 def reported_build(log_file: Path | None, raw_file: Path | None = None) -> str | None:
     """The build a run named in its own output, or None when it named none.
 

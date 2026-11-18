@@ -2295,7 +2295,9 @@ class TestSubcircuitDeviceNames:
             assert names == ["m:a:drv", "m:a:in:tail", "m:b:drv", "m:b:in:tail"]
         else:
             assert names == ["xa:mdrv", "xa:xin:mtail", "xb:mdrv", "xb:xin:mtail"]
-        assert sorted(path_text(table_device_path(n)) for n in names) == _NESTED_MOSFETS
+        xvii = rec.generation(build) == "xvii"
+        paths = sorted(path_text(table_device_path(n, xvii=xvii)) for n in names)
+        assert paths == _NESTED_MOSFETS
 
     def test_the_api_keys_each_device_by_its_path_on_either_build(
         self, build: str, state_no_sim: SessionState, work_dir: Path
@@ -3134,9 +3136,9 @@ def test_a_time_step_that_collapses_part_way(build: str):
 BLOCK_DEVICE_IN_THE_TABLE = {"current": "@u1:d1[id]", "xvii": "@d:u1:1[id]"}
 
 
-#: What ``api.device_op_points`` calls that device: a deck instance X1's M1 is
-#: ``x1.m1`` on both builds, and this one has no name the two builds share.
-BLOCK_DEVICE_NAMED_BY_THE_API_UNLIKE_ON_THE_OTHER_BUILD = {"current": "u1d1", "xvii": "xu1.d1"}
+#: What ``api.device_op_points`` calls that device on both builds: the
+#: instance as the export names it without the ``§`` (``XU1``), then D1.
+BLOCK_DEVICE_NAMED_BY_THE_API = "xu1.d1"
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -3146,9 +3148,8 @@ def test_a_device_inside_a_block_not_named_with_x(
     """LTspice 26 prints the table only under ``.options logopinfo``, which
     XVII refuses ("unrecognized option") and prints the table without. Both
     exports name the block X§U1 (26) or XU1 (XVII). The API reads the device
-    by a name of its own on each build: on LTspice 26 the path's two words
-    run together, and on XVII the path with the X the export gives U1, so
-    one device is asked for by two names."""
+    by one name on both builds, the path with the X the export gives U1, and
+    keeps the table's own name beside it."""
     generation = rec.generation(build)
     shown = (
         "export/hier_device_logopinfo" if generation == "current" else "export/hier_device_plain"
@@ -3170,5 +3171,6 @@ def test_a_device_inside_a_block_not_named_with_x(
     log = work_dir / "hier_device.log"
     log.write_bytes(rec.recorded(build, f"{shown}.log").read_bytes())
     by_device = SyncApi(state_no_sim).device_op_points(log)
-    name = BLOCK_DEVICE_NAMED_BY_THE_API_UNLIKE_ON_THE_OTHER_BUILD[generation]
+    name = BLOCK_DEVICE_NAMED_BY_THE_API
     assert by_device == {name: {"id": 2.26e-3, "vd": 0.676, "req": 11.5, "cap": 0.0}}
+    assert by_device.table_names == {name: BLOCK_DEVICE_IN_THE_TABLE[generation][1:-4]}

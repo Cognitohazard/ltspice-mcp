@@ -19,7 +19,7 @@ if TYPE_CHECKING:
         ApiSessionError,
         ApiValidationError,
     )
-    from ltspice_mcp.api._primitives import LogResult, RawResult
+    from ltspice_mcp.api._primitives import DeviceOpPoints, LogResult, RawResult
     from ltspice_mcp.api._session import Api
     from ltspice_mcp.lib.ac_analysis import (
         CrossingDirection,
@@ -92,6 +92,7 @@ __all__ = [  # noqa: RUF022 - grouped in the contract's published order
     "Api",
     "RawResult",
     "LogResult",
+    "DeviceOpPoints",
     "ApiError",
     "ApiCallError",
     "ApiSessionError",
@@ -181,7 +182,7 @@ _SOURCES: dict[str, str] = {
                 "ApiValidationError",
             ),
         ),
-        ("ltspice_mcp.api._primitives", ("LogResult", "RawResult")),
+        ("ltspice_mcp.api._primitives", ("DeviceOpPoints", "LogResult", "RawResult")),
         ("ltspice_mcp.api._session", ("Api",)),
         (
             "ltspice_mcp.lib.ac_analysis",

@@ -114,6 +114,13 @@ class ExperimentCase:
     #: for a run that has not ended, and for one recorded before the server
     #: classified logs.
     log_diagnostics: dict[str, Any] | None = None
+    #: What the run's log says its measurements did not give, read when the
+    #: run ended (``log_types.run_measurement_facts``): ``{}`` for nothing to
+    #: report, ``{"coverage": "log_unread"}`` for a log whose measurements
+    #: could not be read; beside a ``failed`` list, ``requested`` holds the
+    #: ``.meas`` names the deck asks for, where it was read. None for a run
+    #: that has not ended, and for one recorded before the server kept them.
+    measurement_facts: dict[str, Any] | None = None
 
 
 def sample_index(case: ExperimentCase) -> int | None:
