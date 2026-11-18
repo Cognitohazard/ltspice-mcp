@@ -1,0 +1,1 @@
+`analyze_results`: the `tone` recipe reads a ratio `A/B` and takes its frequency from each run's own parameter, and every recipe that reads a signal accepts `1/A` and `-1/A`. `stability` on a frequency response analysis compares its margin with the one LTspice printed and says when they differ.
