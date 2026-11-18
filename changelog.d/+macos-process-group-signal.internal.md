@@ -1,0 +1,1 @@
+The process-group signalling test explains, when its recorder never logs a signal, whether the recorder is alive, what it wrote to stderr, and whether the group was signalled or which start markers it compared.
