@@ -108,6 +108,11 @@ async def test_diff_vs_prior_says_the_connections_were_not_compared(
 
 
 @pytest.mark.asyncio
+@pytest.mark.edit_reply_per_platform(
+    "the export's .lib line names a Windows install path, which Windows reads as "
+    "absolute and outside the sandbox, so the comparison notes it denied; WSL reads "
+    "it through its /mnt mount and other Linux as a relative name"
+)
 async def test_edit_schematic_reference_stage_states_the_failure(
     asc_state: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
