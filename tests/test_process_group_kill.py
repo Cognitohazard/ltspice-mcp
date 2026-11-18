@@ -33,19 +33,21 @@ from tests.conftest import wait_until, written
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="Windows has no process groups")
 
 #: Logs each SIGUSR1 and SIGUSR2 it gets, one name per line, after writing
-#: ``ready`` once both are blocked. It takes them one at a time with
-#: ``sigwait``, which returns a signal already pending before one sent later,
-#: so the log is in the order they arrived (a Python handler can be interrupted
-#: by the next one and log after it).
+#: ``ready`` once both are blocked. It keeps both blocked and takes the pending
+#: ones one at a time, lowest number first, by unblocking that one signal so its
+#: handler logs it (``pthread_sigmask`` runs the handler before it returns).
+#: SIGUSR1 is the lower number on every platform, so a SIGUSR1 pending when a
+#: SIGUSR2 is sent is logged before that SIGUSR2.
 #:
-#: On macOS, libc's ``sigwait`` reports an interrupted wait as success without
-#: storing a signal number, and Python returns whatever the variable held: a
-#: number that names no signal. No signal was taken then, so the recorder notes
-#: it on stderr and waits again; logging it as a signal killed the recorder.
+#: It does not use ``signal.sigwait``. On macOS, when two signals reach a
+#: process waiting in ``sigwait`` before it runs again, the first is lost: of
+#: fifty such pairs on a GitHub macOS runner, forty-nine logged only the second.
+#: It can also return a number that names no signal (its wait was interrupted
+#: and nothing was stored). Polling the pending set loses neither.
 #: After ``ready`` it writes how it found each signal's disposition and mask,
 #: which it inherited, for a failure to show.
 _RECORDER = """
-import pathlib, signal, sys, threading
+import pathlib, signal, sys, threading, time
 log = pathlib.Path(sys.argv[1])
 wanted = {signal.SIGUSR1, signal.SIGUSR2}
 inherited = signal.pthread_sigmask(signal.SIG_BLOCK, wanted)
@@ -53,16 +55,22 @@ found = " ".join(
     f"{s.name}={signal.getsignal(s)!r}{'(blocked)' if s in inherited else ''}"
     for s in sorted(wanted)
 )
+def record(number, frame):
+    with log.open("a", encoding="utf-8") as stream:
+        stream.write(signal.Signals(number).name + "\\n")
+for number in wanted:
+    signal.signal(number, record)
 pathlib.Path(sys.argv[2]).write_text(
     f"ready {found} threads={threading.active_count()}", encoding="utf-8"
 )
 while True:
-    number = signal.sigwait(wanted)
-    if number not in wanted:
-        print(f"sigwait returned {number}, which is no signal waited for", file=sys.stderr)
+    pending = signal.sigpending() & wanted
+    if not pending:
+        time.sleep(0.005)
         continue
-    with log.open("a", encoding="utf-8") as stream:
-        stream.write(signal.Signals(number).name + "\\n")
+    first = min(pending)
+    signal.pthread_sigmask(signal.SIG_UNBLOCK, {first})
+    signal.pthread_sigmask(signal.SIG_BLOCK, {first})
 """
 
 

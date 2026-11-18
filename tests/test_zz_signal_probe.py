@@ -15,7 +15,7 @@ import pytest
 from tests.conftest import wait_until, written
 from tests.test_process_group_kill import _RECORDER, _signals
 
-pytestmark = pytest.mark.skipif(os.name != "posix", reason="probe")
+pytestmark = pytest.mark.skipif(sys.platform != "darwin", reason="probe of macOS only")
 
 _PROBE_WAIT = 4.0
 _ROUNDS = 400
@@ -53,9 +53,12 @@ def _one(tmp: Path, variant: str) -> str | None:
             os.kill(proc.pid, signal.SIGUSR2)
         try:
             wait_until(lambda: len(_signals(log)) >= 2, timeout_s=_PROBE_WAIT, what="both")
+            seen = _signals(log)
             proc.kill()
             proc.wait()
             err = proc_err(proc)
+            if seen != ["SIGUSR1", "SIGUSR2"]:
+                return f"order {variant}: {seen}"
             return f"spurious {variant}: {err!r}" if err else None
         except pytest.fail.Exception:
             return (
