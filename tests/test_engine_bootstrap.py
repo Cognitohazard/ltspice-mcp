@@ -242,3 +242,47 @@ def test_every_library_override_name_is_a_config_field() -> None:
     config_fields = {field.name for field in dataclasses.fields(ServerConfig)}
     stranded = sorted(engine._LIBRARY_OVERRIDE_NAMES - config_fields)
     assert not stranded, f"override name(s) with no ServerConfig field: {', '.join(stranded)}"
+
+
+_RUN_CODE_WARNING = "run_code is served, and allowed_paths does not confine it"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("toml", "warned"),
+    [
+        ('[security]\nallowed_paths = ["."]\n', True),
+        ('[security]\nallowed_paths = ["."]\n[tools]\nrun_code = false\n', False),
+        ("", False),
+    ],
+    ids=["served-with-a-sandbox", "not-served", "no-sandbox"],
+)
+async def test_startup_warns_once_when_run_code_is_served_with_a_sandbox(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    toml: str,
+    warned: bool,
+) -> None:
+    """A snippet has the process's own file access, which the sandbox does not
+    confine, so a sandboxed server that serves run_code says so once."""
+    monkeypatch.delenv("LTSPICE_MCP_ALLOWED_PATHS", raising=False)
+    monkeypatch.delenv("LTSPICE_MCP_RUN_CODE", raising=False)
+    working_dir = tmp_path / "project"
+    working_dir.mkdir()
+    (working_dir / "ltspice-mcp.toml").write_text(toml, encoding="utf-8")
+    monkeypatch.chdir(working_dir)
+    monkeypatch.setenv("LTSPICE_MCP_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(engine, "detect_simulators", _detect_without_simulators)
+    monkeypatch.setattr(AscEditor, "custom_lib_paths", [])
+
+    with (
+        patch("ltspice_mcp.server.logging.basicConfig"),
+        caplog.at_level(logging.INFO, logger="ltspice_mcp.server"),
+    ):
+        async with server_lifespan(server):
+            pass
+
+    warnings = [r for r in caplog.records if _RUN_CODE_WARNING in r.getMessage()]
+    assert len(warnings) == (1 if warned else 0), [r.getMessage() for r in caplog.records]
+    assert all(r.levelno == logging.WARNING for r in warnings)

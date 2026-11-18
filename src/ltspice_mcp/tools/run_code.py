@@ -12,9 +12,10 @@ Windows workers belong to a Job Object held by their supervisor. Reset,
 timeout, worker exit and supervisor death stop ordinary descendants too;
 explicitly detached experiment owners leave that job before supervising work.
 
-Advertised only when ``[tools] run_code = true``: the snippet runs with the
+Advertised unless ``[tools] run_code = false``: the snippet runs with the
 server process's own file and process authority, which ``allowed_paths``
-does not confine, and turning that on is the operator's decision.
+does not confine, so the server warns at startup when it serves this tool
+with a sandbox set, and turning it off is the operator's decision.
 """
 
 from __future__ import annotations
