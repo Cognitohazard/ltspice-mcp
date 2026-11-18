@@ -1,1 +1,1 @@
-The process-group signalling test explains, when its recorder never logs a signal, whether the recorder is alive, what it wrote to stderr, and whether the group was signalled or which start markers it compared.
+The process-group signalling test no longer loses signals on macOS: its recorder process takes them without `sigwait`, which on macOS drops the first of two signals that arrive together. A failed wait in the test now says whether the recorder is alive, what it wrote to stderr, and which start markers each group signal compared.
