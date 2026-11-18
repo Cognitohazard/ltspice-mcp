@@ -27,6 +27,7 @@ from ltspice_mcp.lib.deck_nodes import GROUND_NAMES
 from ltspice_mcp.lib.device_names import (
     device_param_name,
     find_trace_by_path,
+    fold_name,
     parse_device_param,
     parse_shorthand,
     section_sign_spellings,
@@ -98,9 +99,26 @@ def trace_quantity(name: str, declared: str | None, *, axis: bool = False) -> Tr
         return "device_parameter"
     if declared:
         return _QUANTITY_BY_TYPE.get(declared.strip().lower(), "other")
-    if name[:2].lower() == "v(":
+    if fold_name(name[:2]) == "v(":
         return "node_voltage"
     return "current" if _CURRENT_NAME.match(name) else "other"
+
+
+#: The traces of a noise run that hold the input-referred noise: LTspice's
+#: ``V(inoise)`` (``I(inoise)`` where it refers it to a current) and the bare
+#: ``inoise``, ngspice's ``inoise_spectrum`` and ``inoise_total``, folded. A
+#: device's contribution is named after the device (``V(Rinoise)``), so no
+#: other name is one, whatever it holds.
+INPUT_NOISE_TRACES = frozenset(
+    {"inoise", "v(inoise)", "i(inoise)", "inoise_spectrum", "inoise_total"}
+)
+
+
+def is_input_noise(trace: str) -> bool:
+    """Whether a noise run's trace ``trace`` holds the input-referred noise,
+    by its whole name (:data:`INPUT_NOISE_TRACES`): the one answer for the
+    unit a trace is labelled with and the unit a recipe refers it to."""
+    return fold_name(trace.strip()) in INPUT_NOISE_TRACES
 
 
 def is_node_voltage(name: str, declared: str | None, *, axis: bool = False) -> bool:
@@ -122,8 +140,8 @@ def find_trace(names: Sequence[str], signal: str, *, xvii: bool) -> str | None:
     """
     if signal in names:
         return signal
-    sig_lower = signal.lower()
-    by_lower = {name.lower(): name for name in names}
+    sig_lower = fold_name(signal)
+    by_lower = {fold_name(name): name for name in names}
     if sig_lower in by_lower:
         return by_lower[sig_lower]
 
@@ -155,7 +173,7 @@ def find_trace(names: Sequence[str], signal: str, *, xvii: bool) -> str | None:
             if (trace := find_trace(names, spelled, xvii=xvii)) is not None
         }
         return found.pop() if len(found) == 1 else None
-    return find_trace_by_path(names, signal, xvii=xvii) or device_param_name(names, signal)
+    return find_trace_by_path(names, signal, xvii=xvii) or device_param_name(names, signal, xvii=xvii)
 
 
 Refusal = Literal["missing", "expression", "step_value", "ground_twice", "noise_pair"]
@@ -223,7 +241,7 @@ def read_name(
         return _node_pair(names, signal, pair.group(1), pair.group(2), xvii=xvii, noise=noise)
     if looks_like_expression(signal):
         return NameRead(signal, refused="expression")
-    if signal.lower() in {name.lower() for name in step_values}:
+    if fold_name(signal) in {fold_name(name) for name in step_values}:
         return NameRead(signal, refused="step_value")
     return NameRead(signal, refused="missing", absent=signal)
 
@@ -236,7 +254,7 @@ def _node_pair(
     carries no voltage for contributes nothing, so ``V(a,0)`` is ``V(a)``."""
     traces = {node: find_trace(names, f"V({node})", xvii=xvii) for node in (plus_node, minus_node)}
     grounded = {
-        node for node, trace in traces.items() if trace is None and node.casefold() in GROUND_NAMES
+        node for node, trace in traces.items() if trace is None and fold_name(node) in GROUND_NAMES
     }
     if minus_node not in grounded and noise:
         return NameRead(signal, refused="noise_pair")
@@ -318,7 +336,7 @@ def _missing_note(plot: RawPlotHeader, signal: str) -> str:
 
     if note := naming_note(plot, signal):
         return note
-    lowered = signal.lower()
+    lowered = fold_name(signal)
     device = parse_shorthand(lowered)
     if device or "@" in lowered:
         save_target = device_key(*device) if device else signal
@@ -342,8 +360,8 @@ def naming_note(plot: RawPlotHeader, signal: str) -> str:
     (``_unlabelled_net_note``). A device's parameter (``V(@m1[vth])``) names
     no node or instance, so only the noise names can be its answer here.
     """
-    lowered = signal.lower()
-    traces = {name.lower() for name in signal_names(plot)}
+    lowered = fold_name(signal)
+    traces = {fold_name(name) for name in signal_names(plot)}
     if lowered in ("v(onoise)", "v(inoise)") and traces & {"onoise_spectrum", "inoise_spectrum"}:
         return " (ngspice names noise signals 'onoise_spectrum'/'inoise_spectrum')"
     if lowered in ("onoise_spectrum", "inoise_spectrum") and traces & {"v(onoise)", "v(inoise)"}:
@@ -377,15 +395,15 @@ def _element_letter_note(plot: RawPlotHeader, signal: str) -> str:
     match = _ONE_NAME_TRACE.fullmatch(signal)
     if match is None:
         return ""
-    function, name = match.group(1).casefold(), match.group(2).casefold()
+    function, name = fold_name(match.group(1)), fold_name(match.group(2))
     found = [
         trace
         for trace in signal_names(plot)
         if (other := _ONE_NAME_TRACE.fullmatch(trace)) is not None
-        and other.group(1).casefold() == function
+        and fold_name(other.group(1)) == function
         and (
-            (len(name) > 1 and other.group(2).casefold() == name[1:])
-            or (len(other.group(2)) > 1 and other.group(2).casefold()[1:] == name)
+            (len(name) > 1 and fold_name(other.group(2)) == name[1:])
+            or (len(other.group(2)) > 1 and fold_name(other.group(2))[1:] == name)
         )
     ]
     if len(found) != 1:
@@ -504,7 +522,7 @@ def _unlabelled_net_note(plot: RawPlotHeader, signal: str) -> str:
     if match is None:
         return ""
     node = match.group(1).strip()
-    if re.search(r"[\s:.,]", node) or node.casefold() in GROUND_NAMES:
+    if re.search(r"[\s:.,]", node) or fold_name(node) in GROUND_NAMES:
         return ""
     if not from_schematic(plot):
         return ""
@@ -585,7 +603,7 @@ def _pin_note(plot: RawPlotHeader, signal: str) -> str:
         # XVII reads a deck's spelling (xx1 for its x1); its Backannotation
         # line names the instance as the result does.
         pins = _instance_pins(plot, _current_instance(current))
-    if current is None and pin.lower() not in (p.lower() for p in pins):
+    if current is None and fold_name(pin) not in (fold_name(p) for p in pins):
         return ""
     hint = (
         f" '{pin}' is a pin of subcircuit instance {instance}, and a result holds no "
@@ -616,7 +634,7 @@ def _instance_pins(plot: RawPlotHeader, instance: str) -> list[str]:
         if key.casefold() != "backannotation":
             continue
         name, *pins = value.split()
-        if name.lower() == instance.lower():
+        if fold_name(name) == fold_name(instance):
             return pins
     return []
 

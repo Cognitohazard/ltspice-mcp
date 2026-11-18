@@ -57,6 +57,7 @@ from itertools import takewhile
 from pathlib import Path
 
 from ltspice_mcp.lib.deck_nodes import GROUND
+from ltspice_mcp.lib.device_names import fold_name
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.export_nets import named_by_export
 from ltspice_mcp.lib.format import fold_micro_sign
@@ -109,9 +110,10 @@ _DIRECTIVE_KINDS = (DIRECTIVE_CARD_KINDS - {"control"}) | {"subckt", "ends"}
 
 
 def comparable(text: str) -> str:
-    """The equality form of a signature or directive: SPICE is case-insensitive,
-    and the micro signs mean the same ``u`` suffix."""
-    return fold_micro_sign(text).casefold()
+    """The equality form of a signature or directive: SPICE is case-insensitive
+    in ASCII (``device_names.fold_name``), and the micro signs mean the same
+    ``u`` suffix."""
+    return fold_name(fold_micro_sign(text))
 
 
 def instance_signature(card: SpiceCard) -> str:

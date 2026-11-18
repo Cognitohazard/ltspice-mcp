@@ -27,7 +27,8 @@ builds, and the raw then holds only the instances' port currents.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+import string
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -38,6 +39,24 @@ if TYPE_CHECKING:
     from ltspice_mcp.lib.simulator_build import Producer
 
 DevicePath = tuple[str, ...]
+
+#: ASCII capitals to small letters, and nothing else.
+_ASCII_FOLD = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
+
+
+def fold_name(name: str) -> str:
+    """A node, net, trace or device name in the form two names are compared
+    in: the one fold of a name, for the deck, the sheet and the result alike.
+
+    Names that differ only in ASCII case are one name to both simulators
+    (recorded: ``node-name-case``, ``deck/case_insensitive``), and that is all
+    it folds. What LTspice does with names that differ beyond ASCII case
+    (``Maß`` and ``MASS``, ``É`` and ``é``) is not recorded, so they compare
+    exactly. ngspice-42 replaces each non-ASCII byte of a node name with
+    ``_``, so two such names can be one node; that is reported by the lint
+    (``node-non-ascii-ngspice``) and not modelled here.
+    """
+    return name.translate(_ASCII_FOLD)
 
 #: A ``@device[param]`` name, bare or as ngspice wraps it (``v(@m1[vth])``).
 _DEVICE_PARAM = re.compile(r"@([^\[\]()]+)\[([^\]]*)\]")
@@ -165,7 +184,7 @@ def writes_xvii_command(fields: Mapping[str, object]) -> bool:
 
 def split_path(text: str) -> DevicePath:
     """A device path as a caller writes it, by dots or colons: ``xa.xin.mtail``."""
-    return tuple(segment for segment in re.split(r"[.:]", text.casefold()) if segment)
+    return tuple(segment for segment in re.split(r"[.:]", fold_name(text)) if segment)
 
 
 def _instances(segments: Iterable[str], *, xvii: bool) -> DevicePath:
@@ -173,27 +192,64 @@ def _instances(segments: Iterable[str], *, xvii: bool) -> DevicePath:
     return tuple(f"x{segment}" for segment in segments) if xvii else tuple(segments)
 
 
-def table_device_path(name: str) -> DevicePath:
+def table_device_path(name: str, *, xvii: bool) -> DevicePath:
     """The device a name in the log's device table (or an ngspice ``@`` trace)
-    belongs to: ``xa:xin:mtail`` and ``m:a:in:tail`` are both
+    belongs to, read as the build that wrote it spells the table (``xvii``,
+    :func:`table_naming`): ``xa:xin:mtail`` and ``m:a:in:tail`` are both
     ``("xa", "xin", "mtail")``, ngspice's ``m.xa.xin.mtail`` too.
 
-    Each name says which build wrote it: LTspice 26 starts with the outermost
-    instance, whose name starts with X, and XVII with the device's letter,
-    as its table lists no instance."""
-    low = name.casefold()
+    LTspice 26 writes the path of instance names, then the device's own name;
+    XVII the device's letter, each instance without its X, then the rest of
+    the device's name. LTspice 26 writes a block placed as U1, which its
+    export names ``X§U1``, as ``u1`` (recorded: ``export/hier_device_logopinfo``,
+    ``u1:D1``), where XVII exports it ``XU1`` and writes ``d:u1:1``: both are
+    the instance ``xu1``, the export's name without the ``§``, as every
+    instance of a deck starts with X."""
+    low = fold_name(name)
     if ":" not in low:
         segments = [segment for segment in low.split(".") if segment]
         # ngspice writes the device's class letter first: m.x1.mn.
         if len(segments) > 1 and len(segments[0]) == 1:
             segments = segments[1:]
         return tuple(segments)
-    first, *rest = low.split(":")
-    if first.startswith("x"):
-        return (first, *rest)
-    # XVII writes the device's letter first and drops it from its name.
-    *instances, last = rest
-    return (*_instances(instances, xvii=True), first + last)
+    if xvii:
+        # XVII writes the device's letter first and drops it from its name.
+        first, *instances, last = low.split(":")
+        return (*_instances(instances, xvii=True), first + last)
+    *instances, last = low.split(":")
+    return (*(i if i.startswith("x") else f"x{i}" for i in instances), last)
+
+
+def table_naming(writer: Producer, printed_by: str | None) -> Naming:
+    """The spelling of the names in an LTspice log's device table, written by
+    ``writer`` (a job case's producer, or what a bare path names) whose log
+    opens with ``printed_by`` (``simulator_build.log_banner_build``), None
+    when its first line names no build.
+
+    The build ``writer`` names, else the one the banner names; a log with a
+    device table, no banner and nothing else naming its build was written by
+    an LTspice before 24, as 24 and later open the log of every run they
+    start with the banner (every LTspice 26 recording of a run does; only a
+    deck refused before its run lacks it, and prints no table; no XVII
+    recording has one), and is read as XVII writes it.
+    """
+    # Here, not at the top: the raw parser reads device names through this
+    # module, and simulator_build reads a raw's writer through the raw parser.
+    from ltspice_mcp.lib.simulator_build import Producer, which_ltspice
+
+    if writer.build is None and printed_by is not None:
+        writer = Producer(writer.family or "ltspice", printed_by, writer.program)
+    if writer.family not in (None, "ltspice") or which_ltspice(writer.program, writer.build):
+        return naming_for(writer)
+    return Naming(
+        "ltspice",
+        xvii=True,
+        read_as="LTspice XVII",
+        note=(
+            "the log's first line names no build, as every log of LTspice 24 and later "
+            "does, so its device table is read as LTspice XVII writes one"
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -221,11 +277,11 @@ def parse_device_param(name: str) -> tuple[str, str] | None:
 def parse_shorthand(signal: str) -> tuple[str, str] | None:
     """The device and parameter a caller's ``dev.param`` shorthand names,
     lowercased: ``("x1.mn", "gm")`` for ``X1.MN.gm``. None for another name."""
-    match = _SHORTHAND.fullmatch(signal.lower())
+    match = _SHORTHAND.fullmatch(fold_name(signal))
     return None if match is None else (match.group(1), match.group(2))
 
 
-def device_param_name(names: Iterable[str], signal: str) -> str | None:
+def device_param_name(names: Iterable[str], signal: str, *, xvii: bool) -> str | None:
     """The one name among ``names`` a ``dev.param`` shorthand addresses, or None.
 
     Its literal forms first: ngspice writes a device parameter bare
@@ -241,32 +297,33 @@ def device_param_name(names: Iterable[str], signal: str) -> str | None:
     if parsed is None:
         return None
     dev, param = parsed
-    by_lower = {name.lower(): name for name in names}
+    by_lower = {fold_name(name): name for name in names}
     for form in (f"@{dev}[{param}]", f"v(@{dev}[{param}])", f"i(@{dev}[{param}])"):
         if form in by_lower:
             return by_lower[form]
-    return find_device_param(by_lower.values(), *parsed)
+    return find_device_param(by_lower.values(), *parsed, xvii=xvii)
 
 
-def _param_owner(name: str) -> _Owner | None:
+def _param_owner(name: str, *, xvii: bool) -> _Owner | None:
     """The device a ``@device[param]`` name holds a parameter of, as the log's
-    table or ngspice spells it; None for any other name."""
+    table, written as ``xvii`` says (:func:`table_device_path`), or ngspice
+    spells it; None for any other name."""
     parsed = parse_device_param(name)
     if parsed is None:
         return None
     device, param = parsed
-    return _Owner(device, table_device_path(device), param=param)
+    return _Owner(device, table_device_path(device, xvii=xvii), param=param)
 
 
 def _owner(name: str, *, xvii: bool) -> _Owner | None:
-    if (owner := _param_owner(name)) is not None:
+    if (owner := _param_owner(name, xvii=xvii)) is not None:
         return owner
     current = _CURRENT.match(name)
     if current is None:
         return None
     text = current.group(2)
     path = _raw_path(text, xvii=xvii)
-    if current.group(1).casefold() == "ix" and len(path) > 1:
+    if fold_name(current.group(1)) == "ix" and len(path) > 1:
         # The port's name follows the instance's path.
         return _Owner(text, path[:-1], port=True)
     return _Owner(text, path)
@@ -278,7 +335,7 @@ def _raw_path(text: str, *, xvii: bool) -> DevicePath:
     XVII."""
     if ":" not in text:
         return split_path(text)
-    *instances, last = text.casefold().split(":")
+    *instances, last = fold_name(text).split(":")
     return (*_instances(instances, xvii=xvii), last)
 
 
@@ -288,8 +345,8 @@ def raw_name(scope: Iterable[str], name: str, *, xvii: bool) -> str:
     instances as written on LTspice 26 (``xa:xin:mid``), each without its X on
     XVII (``a:in:mid``). Each build's ``.save`` takes only its own spelling
     (recorded: ``raw/save_subckt_names*``)."""
-    instances = (segment.lower()[1:] if xvii else segment.lower() for segment in scope)
-    return ":".join((*instances, name.lower()))
+    instances = (fold_name(segment)[1:] if xvii else fold_name(segment) for segment in scope)
+    return ":".join((*instances, fold_name(name)))
 
 
 def spelled_name(scope: Iterable[str], name: str, naming: Naming) -> str:
@@ -297,7 +354,7 @@ def spelled_name(scope: Iterable[str], name: str, naming: Naming) -> str:
     spells it in a trace and a ``.save``: LTspice's :func:`raw_name`, or
     ngspice's dotted path (``xa.xin.mid``). The one speller of a path."""
     if naming.family == "ngspice":
-        return ".".join((*(segment.lower() for segment in scope), name.lower()))
+        return ".".join((*(fold_name(segment) for segment in scope), fold_name(name)))
     return raw_name(scope, name, xvii=naming.xvii)
 
 
@@ -307,7 +364,7 @@ def device_address(path: Sequence[str], naming: Naming) -> str:
     path (``m.xa.mn``, ``m1`` at the top); for LTspice the path as the
     ``operating_point`` selector reads it on either build (``xa:mn``,
     :func:`device_query`)."""
-    lowered = [segment.lower() for segment in path]
+    lowered = [fold_name(segment) for segment in path]
     if naming.family == "ngspice":
         device = ".".join(lowered)
         return f"{lowered[-1][0]}.{device}" if len(lowered) > 1 else device
@@ -325,8 +382,8 @@ def trace_key(name: str, *, xvii: bool) -> TraceKey:
     ``("v", ("xa", "xin", "mid"))``. A name of another form is its own key."""
     match = _TRACE.match(name.strip())
     if match is None:
-        return "", (name.strip().casefold(),)
-    return match.group(1).casefold(), _raw_path(match.group(2), xvii=xvii)
+        return "", (fold_name(name.strip()),)
+    return fold_name(match.group(1)), _raw_path(match.group(2), xvii=xvii)
 
 
 def owner_path(name: str, *, xvii: bool) -> DevicePath | None:
@@ -388,13 +445,13 @@ def device_query(wanted: str, *, xvii: bool, among: Iterable[str]) -> Callable[[
     names = list(among)
 
     def query(spelled: str) -> Callable[[str], bool]:
-        literal = spelled.strip().casefold()
+        literal = fold_name(spelled.strip())
         want = split_path(spelled)
 
         def belongs(name: str) -> bool:
             owner = _owner(name, xvii=xvii)
             return owner is not None and (
-                owner.text.casefold() == literal or _within(owner.path, want)
+                fold_name(owner.text) == literal or _within(owner.path, want)
             )
 
         return belongs
@@ -406,26 +463,176 @@ def device_query(wanted: str, *, xvii: bool, among: Iterable[str]) -> Callable[[
     return found[0] if len(found) == 1 else (lambda _name: False)
 
 
-def find_device_param(names: Iterable[str], device: str, param: str) -> str | None:
+def find_device_param(names: Iterable[str], device: str, param: str, *, xvii: bool) -> str | None:
     """The one name among ``names`` that holds ``param`` of ``device``: the
     device as the simulator spells it, or the end of its path (``x1.mn`` for
     ``MN`` inside ``X1``, wherever ``X1`` is), whichever build or simulator
     wrote it. None when there is not exactly one."""
     asked = (device, *section_sign_spellings(device))
-    literals = {spelled.casefold() for spelled in asked}
+    literals = {fold_name(spelled) for spelled in asked}
     wants = [want for spelled in asked if (want := split_path(spelled))]
     found = [
         name
         for name in names
-        if (owner := _param_owner(name)) is not None
+        if (owner := _param_owner(name, xvii=xvii)) is not None
         and owner.param is not None
-        and owner.param.casefold() == param.casefold()
+        and fold_name(owner.param) == fold_name(param)
         and (
-            owner.text.casefold() in literals
+            fold_name(owner.text) in literals
             or any(owner.path[-len(want) :] == want for want in wants)
         )
     ]
     return found[0] if len(found) == 1 else None
+
+
+@dataclass(frozen=True)
+class DeckSignal:
+    """What a run's reader makes of a signal a deck names in a ``.save`` or a
+    ``.meas`` (:func:`deck_signal`).
+
+    ``key`` is the trace it stores or reads (:func:`trace_key`), None when
+    it stores or reads none; ``why`` says why it is None, or why the reading
+    is not established, in which case ``established`` is False and ``key``
+    is None too. ``spelled`` is the name as the reader spells it, where the
+    deck spelled it otherwise and the reader's spelling is known.
+    """
+
+    key: TraceKey | None
+    why: str | None = None
+    established: bool = True
+    spelled: str | None = None
+    #: The reader refuses the whole ``.save`` that names it and saves every
+    #: signal instead, as XVII does.
+    voids_save: bool = False
+
+
+#: Where each LTspice build's spelling of a name inside subcircuit instances
+#: is recorded, for a ``.save`` and a ``.meas``.
+_SPELLING_RECORDED = (
+    "recorded: raw/save_subckt_names*, deck/meas_subckt_node_*: LTspice 26 "
+    "stores and measures a node inside instances only spelled with each "
+    "instance's X (xa:xin:mid), XVII only without it (a:in:mid)"
+)
+
+
+def deck_signal(
+    text: str,
+    naming: Naming,
+    instances: Collection[str],
+    *,
+    saved: bool,
+    marked: Collection[str] = (),
+) -> DeckSignal:
+    """What ``naming``'s reader stores for ``text`` named in a ``.save``
+    (``saved``), or reads for it named in a ``.meas``, in a deck whose
+    top-level subcircuit instances are ``instances``, folded
+    (:func:`fold_name`), with the own names of those LTspice exported with a
+    ``§`` in ``marked`` (``U1`` for ``X§U1``, whose name in ``instances`` is
+    ``xu1``).
+
+    A name outside every subcircuit is stored and read as written, in any
+    ASCII case. A path through instances:
+
+    - ngspice stores a path spelled with dots; a ``.save`` of one spelled
+      with colons stores nothing (ngspice-42, measured). A ``.meas`` of a
+      colon path is read as the dotted path the run stores, as every reader
+      of the result reads it; ngspice's own ``.meas`` does not parse it
+      ("can't parse 'x1:mid': ignored", measured), but a run in batch mode
+      with a raw evaluates no top-level ``.meas`` (lint
+      ``meas-ngspice-batch``), so the server's reading is the one that counts.
+    - Each LTspice build stores and measures a path only in its own spelling
+      (:data:`_SPELLING_RECORDED`), whose first segment must name an instance
+      of the deck. Otherwise LTspice 26 stores and reads nothing for it, and
+      XVII reads nothing for it in a ``.meas`` and refuses the whole ``.save``
+      that names it, saving every signal instead ("Invalid .save command.
+      Just saving everything...", ``voids_save``). Which spelling a build of
+      no known spelling takes, a dotted path in an LTspice deck, and a
+      segment that names an instance in both spellings or one exported with
+      a ``§`` are not recorded: the reading is not established.
+    """
+    # A probe's spaces are no part of its name: ``v( a )`` is ``v(a)``.
+    text = re.sub(r"\s+", "", text)
+    match = _TRACE.match(text)
+    if match is None:
+        return DeckSignal(trace_key(text, xvii=naming.xvii))
+    function, node = match.group(1), match.group(2).strip()
+    if ":" not in node and "." not in node:
+        return DeckSignal(trace_key(text, xvii=naming.xvii))
+    if naming.family == "ngspice":
+        if ":" in node and saved:
+            dotted = f"{function}({node.replace(':', '.')})"
+            return DeckSignal(
+                None,
+                "ngspice stores a name inside subcircuit instances only spelled with dots: "
+                f"a .save of {text.strip()} stores nothing (ngspice-42, measured)",
+                spelled=dotted,
+            )
+        return DeckSignal(trace_key(text, xvii=False))
+    if naming.family != "ltspice":
+        return DeckSignal(
+            None,
+            f"how {naming.family or 'this simulator'} spells a name inside subcircuit "
+            "instances is not modelled",
+            established=False,
+        )
+    if ":" not in node:
+        return DeckSignal(
+            None,
+            "whether LTspice reads a name inside subcircuit instances spelled with dots "
+            "as one spelled with colons is not recorded",
+            established=False,
+        )
+    first = fold_name(node.split(":", 1)[0])
+    with_x = first in instances
+    without_x = f"x{first}" in instances
+    if first in {fold_name(name) for name in marked} or (with_x and without_x):
+        return DeckSignal(
+            None,
+            f"{first!r} names more than one instance of the deck as LTspice spells it, "
+            "or one exported with a §, and which one it reads is not recorded",
+            established=False,
+        )
+    if not with_x and not without_x and not saved:
+        # The same on both builds: neither measures a path through no instance.
+        return DeckSignal(
+            None,
+            f"{text} names no instance of the deck ({first!r} or {('x' + first)!r}), "
+            f"so neither LTspice build measures it ({_SPELLING_RECORDED})",
+        )
+    if naming.note is not None:
+        return DeckSignal(
+            None,
+            f"which spelling the build that runs the deck takes is not established "
+            f"({naming.note}; {_SPELLING_RECORDED})",
+            established=False,
+        )
+    if (with_x if not naming.xvii else without_x):
+        return DeckSignal(trace_key(text, xvii=naming.xvii))
+    spelled = None
+    if with_x or without_x:
+        key = trace_key(text, xvii=not naming.xvii)
+        *scope, name = key[1]
+        spelled = f"{function}({spelled_name(scope, name, naming)})"
+    names = (
+        f"names nothing; it is spelled {spelled}"
+        if spelled is not None
+        else f"names no instance of the deck ({first!r} as {naming.read_as} spells it)"
+    )
+    if naming.xvii and saved:
+        return DeckSignal(
+            None,
+            f"to {naming.read_as} {text} {names}, so it refuses the whole .save "
+            "(\"Invalid .save command. Just saving everything...\") and saves every "
+            f"signal outside subcircuits instead ({_SPELLING_RECORDED})",
+            spelled=spelled,
+            voids_save=True,
+        )
+    return DeckSignal(
+        None,
+        f"to {naming.read_as} {text} {names}, and it stores and measures nothing for it "
+        f"({_SPELLING_RECORDED})",
+        spelled=spelled,
+    )
 
 
 def find_trace_by_path(names: Iterable[str], signal: str, *, xvii: bool) -> str | None:
@@ -445,7 +652,7 @@ def find_trace_by_path(names: Iterable[str], signal: str, *, xvii: bool) -> str 
     found = [
         name
         for name in names
-        if name.casefold().endswith(tail) and trace_key(name, xvii=xvii) == want
+        if fold_name(name).endswith(tail) and trace_key(name, xvii=xvii) == want
     ]
     return found[0] if len(found) == 1 else None
 
@@ -470,7 +677,7 @@ def device_names(
     names: dict[str, dict[str, str | None]] = {}
     for name in table_names:
         entry = names.setdefault(
-            path_text(table_device_path(name)), {"op_table": None, "raw": None}
+            path_text(table_device_path(name, xvii=xvii)), {"op_table": None, "raw": None}
         )
         entry["op_table"] = name
     for trace in raw_traces:

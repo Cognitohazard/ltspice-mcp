@@ -27,6 +27,7 @@ from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.parser_protocol import read_parsed_artifacts
 from ltspice_mcp.lib.parser_worker import parse_request
 from ltspice_mcp.lib.raw_header import RawLimits
+from ltspice_mcp.lib.simulator_build import Producer, reported_build
 from ltspice_mcp.lib.spice_lex import SpiceCard, cards_from_path
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, read_instance
 from tests._stand_in_pe import stand_in_windows_program
@@ -323,3 +324,12 @@ def stage_sheet(build: str, case_id: str, directory: Path) -> Path:
         if not target.exists():
             target.write_text(_stock_symbol(name, facts), encoding="utf-8", newline="\n")
     return sheet
+
+
+def producer(build: str) -> Producer:
+    """Who ran the recorded ``build``, as its own output names it: the banner
+    on LTspice 26's log, the writer in XVII's raw header."""
+    case = "raw/save_subckt_names"
+    reported = reported_build(recorded(build, f"{case}.log"), recorded(build, f"{case}.raw"))
+    assert reported is not None
+    return Producer("ltspice", reported, None)

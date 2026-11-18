@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 from ltspice_mcp.lib.deck_nodes import settled_node_kind
+from ltspice_mcp.lib.device_names import fold_name
 from ltspice_mcp.lib.format import parse_spice_value
 from ltspice_mcp.lib.spice_lex import (
     SpiceCard,
@@ -630,7 +631,7 @@ def _scan_global_nodes(cards: list[SpiceCard]) -> set[str]:
     nodes: set[str] = set()
     for card in cards:
         try:
-            nodes.update(name.lower() for name in global_names(card))
+            nodes.update(fold_name(name) for name in global_names(card))
         except SpiceLexError:
             continue
     return nodes
@@ -723,7 +724,7 @@ def validate_netlist_dangling_nodes(
     ) -> None:
         if _shared(node, scope_ports.get(scope, ()), global_nodes, reader):
             return
-        key = node.lower()
+        key = fold_name(node)
         nodes = occurrences.setdefault(scope, {})
         use = nodes.get(key)
         if use is None:
@@ -756,15 +757,15 @@ def validate_netlist_dangling_nodes(
                 if set(node) & _NON_NODE_CHARS:
                     continue
                 record(card.scope, node, inst.ref, card)
-            suppressed.update(tok.lower() for tok in rest)
+            suppressed.update(fold_name(tok) for tok in rest)
             # Probed identifiers in an expression (a B/E/G body, a behavioural
             # parameter) are connections too: they feed the suppressor set,
             # never a terminal count.
-            suppressed.update(name.lower() for probe in probe_refs(card) for name in probe.names)
+            suppressed.update(fold_name(name) for probe in probe_refs(card) for name in probe.names)
         elif card.kind in ("directive", "meas"):
             # A node that exists only to be probed by a .meas/.print/.plot/.save
             # is intentional, not dangling — suppress it like instance probe refs.
-            suppressed.update(name.lower() for probe in probe_refs(card) for name in probe.names)
+            suppressed.update(fold_name(name) for probe in probe_refs(card) for name in probe.names)
 
     issues: list[dict[str, object]] = []
     for scope, nodes in occurrences.items():
@@ -848,16 +849,16 @@ def _known_names(cards: list[SpiceCard]) -> set[str]:
             except SpiceLexError:
                 continue
             known.add(sub.name.lower())
-            known.update(p.lower() for p in sub.ports)
+            known.update(fold_name(p) for p in sub.ports)
         elif card.kind == "instance":
             try:
                 inst = InstanceLine.from_card(card)
             except SpiceLexError:
                 continue
-            known.add(inst.ref.lower())
+            known.add(fold_name(inst.ref))
             terminals, rest = _instance_terminals(inst)
-            known.update(t.lower() for t in terminals)
-            known.update(r.lower() for r in rest)
+            known.update(fold_name(t) for t in terminals)
+            known.update(fold_name(r) for r in rest)
     return known
 
 
@@ -895,7 +896,7 @@ def validate_netlist_directive_refs(
             for name in probe.names:
                 if not _PLAIN_REF_RE.fullmatch(name):
                     continue
-                key = name.lower()
+                key = fold_name(name)
                 if key in known or key in seen or _kind(name, (), set(), reader) == "ground":
                     continue
                 seen.add(key)
@@ -1030,12 +1031,12 @@ def _apply_instance_edges(
     b_dc_open = prefix == "B" and _b_source_is_dc_open(inst)
     for a, b in _dc_edges(prefix, terminals, b_dc_open=b_dc_open):
         if _NON_NODE_CHARS.isdisjoint(a) and _NON_NODE_CHARS.isdisjoint(b):
-            dsu.union(a.lower(), b.lower())
+            dsu.union(fold_name(a), fold_name(b))
     if prefix == "X" and inst.model:
         nested = subckt_grounds.get(inst.model.lower(), frozenset())
         if nested is _EVERY_PORT:
-            return [terminal.lower() for terminal in terminals]
-        return [terminals[i].lower() for i in nested if i < len(terminals)]
+            return [fold_name(terminal) for terminal in terminals]
+        return [fold_name(terminals[i]) for i in nested if i < len(terminals)]
     return []
 
 
@@ -1123,7 +1124,7 @@ def _subckt_internal_grounds(
             unread.add(sub.name.lower())
             continue
         body = [(inst, terminals) for _c, inst, terminals in _iter_instances(body_cards)]
-        defs[sub.name.lower()] = ([p.lower() for p in sub.ports], body)
+        defs[sub.name.lower()] = ([fold_name(p) for p in sub.ports], body)
     for name in unread:
         defs.pop(name, None)
 
@@ -1135,7 +1136,7 @@ def _subckt_internal_grounds(
             dsu = _DSU()
             # Ground and the globals, and a port named like either where the
             # reader reads the name so (ngspice) rather than as the port.
-            named = {*ports, *(t.lower() for _inst, terminals in body for t in terminals)}
+            named = {*ports, *(fold_name(t) for _inst, terminals in body for t in terminals)}
             for sink in named | global_nodes:
                 if _shared(sink, tuple(ports), global_nodes, reader):
                     dsu.union(_GROUND_SINK, sink)
@@ -1175,12 +1176,12 @@ def _qualify(
     real node name, so a namespaced local can never collide with a bare
     global or the ground sentinel.
     """
-    key = node.lower()
+    key = fold_name(node)
     if _kind(node, ports, global_nodes, reader) == "ground":
         return _GROUND_SINK
     if _shared(node, ports, global_nodes, reader):
         return key
-    return "\x00".join(s.lower() for s in scope) + "\x01" + key
+    return "\x00".join(fold_name(s) for s in scope) + "\x01" + key
 
 
 def _grounded_globals(
@@ -1258,7 +1259,7 @@ def validate_netlist_bias_topology(
         except SpiceLexError:
             continue
         body_graph = graphs.setdefault((*card.scope, sub.name), _BiasGraph())
-        body_graph.sinks.update(port.lower() for port in sub.ports)
+        body_graph.sinks.update(fold_name(port) for port in sub.ports)
 
     # A card no rule could read may connect any word on it, to ground among
     # them, so in keeping with the over-connection each of its words is a
@@ -1281,7 +1282,7 @@ def validate_netlist_bias_topology(
         for idx, node in enumerate(terminals):
             if not _NON_NODE_CHARS.isdisjoint(node):
                 continue
-            key = node.lower()
+            key = fold_name(node)
             cleaned.append(key)
             graph.display.setdefault(key, node)
             graph.first_card.setdefault(key, card)

@@ -203,3 +203,129 @@ def test_only_the_owners_answer_what_a_name_stands_for():
 def test_the_allow_list_holds_only_sites_that_remain():
     stale = sorted(ALLOWED.keys() - _sites())
     assert stale == [], stale
+
+
+# --- One fold for names ------------------------------------------------------
+
+#: The modules that read a node, net, trace or device name of a deck or a
+#: result. In them a name is folded only by ``device_names.fold_name``.
+NAME_MODULES = frozenset(
+    {
+        "lib/connectivity.py",
+        "lib/deck_nodes.py",
+        "lib/decoded_raw.py",
+        "lib/device_names.py",
+        "lib/hierarchy.py",
+        "lib/lint_rules.py",
+        "lib/log_parser.py",
+        "lib/metrics.py",
+        "lib/netlist_graph.py",
+        "lib/raw_parser.py",
+        "lib/spice_lex_views.py",
+        "lib/spice_validator.py",
+        "lib/trace_names.py",
+    }
+)
+
+#: Words that mark what a fold is applied to as a node, net, trace or device
+#: name.
+_NAME_WORDS = (
+    "node",
+    "net",
+    "port",
+    "terminal",
+    "trace",
+    "signal",
+    "sig",
+    "probe",
+    "global",
+    "instance",
+    "segment",
+    "pin",
+    "label",
+    "device",
+    "variable.name",
+    "ref",
+)
+
+#: Each ``lower()``/``casefold()`` in a name module whose operand reads as a
+#: name but is not one, as (module, scope, operand), with its reason.
+FOLD_ALLOWED: dict[tuple[str, str, str], str] = {
+    # A model or subcircuit an instance calls is not a node, net or trace:
+    # how a reader matches a model's name is not this rule's question.
+    (
+        "lib/hierarchy.py",
+        "_rewritten_for_m.callee",
+        "InstanceLine.from_card(item.card).model or ''",
+    ): ("the subcircuit an instance calls"),
+    ("lib/lint_rules.py", "_model_missing", "instance.model"): "the model an instance names",
+    ("lib/netlist_graph.py", "_diff_matched_pair", "_type_signature(cc)"): (
+        "a component's letter and model, compared between two decks"
+    ),
+    ("lib/netlist_graph.py", "_diff_matched_pair", "_type_signature(rc)"): (
+        "a component's letter and model, compared between two decks"
+    ),
+}
+
+
+def _fold_sites() -> set[tuple[str, str, str]]:
+    found: set[tuple[str, str, str]] = set()
+    for module, tree in modules().items():
+        if module not in NAME_MODULES:
+            continue
+        for scope, nodes in scopes(tree):
+            for node in nodes:
+                if not (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in ("lower", "casefold")
+                    and not node.args
+                ):
+                    continue
+                operand = ast.unparse(node.func.value)
+                if any(word in operand.casefold() for word in _NAME_WORDS):
+                    found.add((module, scope, operand))
+    return found
+
+
+def test_a_name_is_folded_only_by_the_one_fold():
+    """``device_names.fold_name`` folds ASCII letters and nothing more, as
+    the recordings establish; ``lower()`` and ``casefold()`` fold more and
+    differ from each other on names such as ``maß`` and ``mass``."""
+    unlisted = sorted(_fold_sites() - FOLD_ALLOWED.keys())
+    assert unlisted == [], unlisted
+
+
+def test_the_fold_allow_list_holds_only_sites_that_remain():
+    stale = sorted(FOLD_ALLOWED.keys() - _fold_sites())
+    assert stale == [], stale
+
+
+def test_no_second_reader_of_a_signal_is_left():
+    """The lint's own normalizer of a signal name is gone: it reads names
+    through ``device_names.deck_signal``."""
+    defined = {
+        node.name
+        for tree in modules().values()
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assert "_normalize_signal" not in defined
+
+
+def test_no_code_reads_input_noise_from_part_of_a_name():
+    """Whether a trace is input-referred noise is ``trace_names.is_input_noise``,
+    by the whole name: a device named ``Rinoise`` contributes ``V(Rinoise)``."""
+    found = []
+    for module, tree in modules().items():
+        for scope, nodes in scopes(tree):
+            for node in nodes:
+                if (
+                    isinstance(node, ast.Compare)
+                    and any(isinstance(op, (ast.In, ast.NotIn)) for op in node.ops)
+                    and isinstance(node.left, ast.Constant)
+                    and isinstance(node.left.value, str)
+                    and "noise" in node.left.value.casefold()
+                ):
+                    found.append((module, scope, ast.unparse(node)))
+    assert found == [], found

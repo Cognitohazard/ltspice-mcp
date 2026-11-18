@@ -30,9 +30,10 @@ from ltspice_mcp.api._exceptions import (
     ApiValidationError,
 )
 from ltspice_mcp.api._primitives import (
+    DeviceOpPoints,
     LogResult,
     RawResult,
-    device_op_points_of,
+    load_device_op_points,
     load_log_section,
     load_raw_result,
     measurements_of,
@@ -1411,7 +1412,7 @@ class ApiMethodsMixin(ABC):
         run_index: int = 0,
         case_id: str | None = None,
         log_path: str | Path | None = None,
-    ) -> LogResult[dict[str, float | None]]:
+    ) -> DeviceOpPoints:
         """Return the semiconductor operating points of a log or one experiment
         case, by device and parameter: ``ops["m1"]["gm"]``, with what the read
         says of them in ``ops.observations``.
@@ -1420,14 +1421,26 @@ class ApiMethodsMixin(ABC):
         digits whatever ``.options numdgt`` says: LTspice 26 under ``.options
         logopinfo``, LTspice XVII always. A device inside a subcircuit is keyed
         by its path (``ops["xa.xin.mtail"]``), whichever build named it in the
-        table. Empty when the log has no such table, as an ngspice log never
+        table, with the name the table gave it in ``ops.table_names``
+        (``u1:d1`` on LTspice 26, ``d:u1:1`` on XVII, for ``ops["xu1.d1"]``).
+        Empty when the log has no such table, as an ngspice log never
         does: ngspice's are traces of its raw, read with
         ``load_raw(...).value("@m1[gm]")``. ``log_path`` is the older
         spelling of ``path``, still accepted.
         """
         path = _older_spelling(path, "log_path", log_path)
-        return device_op_points_of(
-            *self._log_section("device_op", path, job_id, run_index, case_id)
+        self._check_process_and_thread()
+        _one_source(path, job_id, run_index, case_id)
+        return self._marshal(
+            load_device_op_points(
+                state=self._state,
+                log_path=path,
+                job_id=job_id,
+                run_index=run_index,
+                case_id=case_id,
+            ),
+            cancelable=True,
+            cancel_on_interrupt=True,
         )
 
     def _log_section(

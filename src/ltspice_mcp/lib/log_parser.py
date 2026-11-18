@@ -20,6 +20,7 @@ from spicelib.log.ltsteps import LTSpiceLogReader
 from spicelib.log.semi_dev_op_reader import opLogReader
 
 from ltspice_mcp.errors import ResultError
+from ltspice_mcp.lib.device_names import fold_name
 from ltspice_mcp.lib.encoding import decode_spice_bytes, read_spice_text
 from ltspice_mcp.lib.log_conditions import classify_channels, log_lines, rules_for
 from ltspice_mcp.lib.log_types import LogDiagnostics as LogDiagnostics
@@ -507,8 +508,8 @@ def read_device_op_points(
 
 def device_key(device: str, param: str) -> str:
     """The key ``read_device_op_points`` files a device parameter under:
-    ``@m1[gm]``, lowercased."""
-    return f"@{device.lower()}[{param.lower()}]"
+    ``@m1[gm]``, folded (``device_names.fold_name``)."""
+    return f"@{fold_name(device)}[{fold_name(param)}]"
 
 
 def _resolve_log_text(log_path: Path | None, text: str | None) -> str:

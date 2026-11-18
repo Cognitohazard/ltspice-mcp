@@ -1134,6 +1134,22 @@ model = ["lib/lint_rules.py", "lib/device_names.py", "lib/hierarchy.py"]
 # where it reads the node at all.
 inputs = ["deck/meas_subckt_node_x.cir", "deck/meas_subckt_node_no_x.cir"]
 
+[behaviour.save-subckt-dotted]
+summary = "Whether a .save and a .meas read a node inside a subcircuit instance spelled with a dot (xamp.mid), as ngspice spells it, as the build's own spelling with a colon."
+model = ["lib/device_names.py", "lib/lint_rules.py"]
+# mid is the middle of a 1k/1k divider on a 1 V step: the raw holds V(xamp:mid)
+# (or V(amp:mid)) and the .meas reads 0.5 if the dot is read as a colon.
+inputs = ["deck/save_subckt_dotted.cir"]
+pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
+
+[behaviour.node-name-nonascii-case]
+summary = "Whether two node names that differ only in case beyond ASCII (Äb and äb, Maß and MASS) are one node when a deck runs."
+model = ["lib/device_names.py", "lib/connectivity.py"]
+# Each current source drives its own name and each resistor sits on the other
+# spelling: I(R1) and I(R2) are 1 mA only if the two spellings are one node.
+inputs = ["deck/node_name_nonascii_case.cir"]
+pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
+
 [behaviour.mos-charge-capacitances]
 summary = "What the .op device table prints of a charge-model (BSIM3) MOSFET's capacitances, beside the capacitances an AC run of the same bias shows at its terminals."
 model = ["lib/log_parser.py", "lib/runner_base.py"]
