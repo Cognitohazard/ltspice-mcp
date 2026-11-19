@@ -1,1 +1,1 @@
-Two more grids of recorded LTspice inputs: how a results file is laid out, and how a trace is named, with each cell either recorded or counted as not recorded.
+The recorded LTspice behaviour of two more questions is indexed as grids in `cases.toml`: how a results file is laid out, and which trace a name reads. Tests read every recorded cell through every route that answers each question, pin the cells no recording fills yet, and pin the routes that answer otherwise; decks for the unrecorded cells wait for the next recording run.
