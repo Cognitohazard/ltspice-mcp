@@ -43,6 +43,20 @@ of its own: `{"kind": "assign", "assign": {"SU": [0], "TLON": ["1n"]}}`
 multiplies the grid by one, and every case records the value in its
 assignments.
 
+## Case ids and the order of cases
+
+A case's id is `<circuit id>-case-<number>`: the number counts that
+circuit's cases from 0, padded to four digits (`dut-case-0007`; wider past
+9999), and names its staged deck (`case-0007` and the deck's own extension). The circuit id is the
+circuit's `id`, else its file stem made valid. A run row's `run_index` counts
+the whole job's cases from 0, circuits in the order given. Cases follow the
+entries in the order given, the last entry changing fastest; inside a grid
+entry the last target changes fastest, and a `random` or `pdk_native`
+entry's samples change fastest of all, wherever the entry stands. So
+`[{"kind": "assign", "assign": {"R1": ["1k", "2k"]}}, {"kind": "assign", "assign": {"C1": ["1n", "2n"]}}]` on
+circuit `dut` runs `dut-case-0000` R1=1k C1=1n, `-0001` 1k/2n, `-0002` 2k/1n,
+`-0003` 2k/2n. A resume keeps each case's id, run index and order.
+
 ## Monte Carlo: `random` rules
 
 A `random` variation draws values without editing the deck. Its `rules` list

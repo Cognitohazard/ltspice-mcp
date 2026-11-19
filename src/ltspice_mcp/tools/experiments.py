@@ -588,7 +588,7 @@ class RunExperimentsInput(ToolInput):
             "holds a target fixed. At most one "
             "'random' entry adds Monte Carlo runs. Cases run in parallel — ask "
             "for the whole grid in one call. Empty runs each circuit as "
-            "authored."
+            "authored. Case ids and order: guide section 'variations'."
         ),
     )
     execution: ExperimentExecution = Field(

@@ -248,6 +248,7 @@ def test_lists_of_one_series_sit_in_one_object():
 # ---------------------------------------------------------------------------
 
 _UNBOUNDED = "unbounded: no cap where it is made"
+_STEP_PARAMETERS = "one per .step parameter of the case's deck"
 
 #: Each list declared ``never``, by handler and path (union branches left out),
 #: with what bounds it where it is made. A list with no bound says so; it is
@@ -395,6 +396,9 @@ NEVER_BOUNDS: dict[tuple[str, str], str] = {
         "at most _UNMATCHED_NAMED (5), the total in the row's count"
     ),
     ("analysis.handle_plot_waveform", "signals_not_in_cases"): "one per signal drawn",
+    ("experiments.handle_run_experiments", "runs.items[].steps.parameters"): _STEP_PARAMETERS,
+    ("jobs.handle_jobs", "items[].steps.parameters"): _STEP_PARAMETERS,
+    ("jobs.handle_jobs", "runs.items[].steps.parameters"): _STEP_PARAMETERS,
     ("analysis.handle_plot_waveform", "signals_not_in_cases[].case_ids"): (
         "one per case drawn, bounded by the job's cases"
     ),

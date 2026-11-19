@@ -672,7 +672,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # ngspice per sample so the deck's own random functions, a PDK's
     # statistical models among them, vary from sample to sample, and lets an
     # entry's rules be empty. Measured 17,527.
-    "run_experiments": 17540,
+    # Raised by about 50 characters for a pointer from variations to the guide
+    # section that states a case's id and the order of cases, which a caller
+    # may write ids against before the job runs. Measured 17,587.
+    "run_experiments": 17590,
     # Five actions, each advertised as its own branch: one flat property list
     # could not say which action takes which field, so it said nothing and the
     # server decided after the fact. Stating it costs roughly 2.3 KB more.

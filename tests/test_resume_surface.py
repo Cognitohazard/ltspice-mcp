@@ -240,6 +240,9 @@ async def test_resume_child_reuses_success_and_replays_after_source_deletion(
     assert rows[0]["attempt"]["reused"] is True
     assert rows[1]["attempt"]["execution_job_id"] == child["job_id"]
     assert rows[0]["run_index"] == 0 and rows[1]["run_index"] == 1
+    # A resume copies the job's cases: each keeps its id, its run index and
+    # its place in the order (guide section 'variations').
+    assert [row["case_id"] for row in rows] == [case.case_id for case in parent.cases]
     assert state.all_jobs[child["job_id"]].cases[0].raw_file == original_raw
     assert original_raw.read_bytes() == original_bytes
     replay = _data(
