@@ -3,8 +3,9 @@
 One answer to "what did the simulator say about this run", for every reader:
 the run rows of ``run_experiments`` and ``jobs``, the ``summary`` recipe and
 the Python API. A diagnostic is data, ``{code, count, first_text, channel}``,
-plus ``severity`` only where the simulator wrote one: ``code`` is the server's
-name for the condition, ``severity`` the simulator's own word, kept apart
+plus ``severity`` only where the simulator wrote one and ``severity_text`` where
+it wrote it on a later occurrence: ``code`` is the server's name for the
+condition, ``severity`` the simulator's own word, kept apart
 because LTspice XVII calls an ignored model parameter an error on a run that
 finished.
 

@@ -108,8 +108,10 @@ _WARNING_WORDS = {"warning"}
 
 
 def _texts(row: dict[str, Any], words: set[str]) -> set[str]:
+    from ltspice_mcp.lib.log_conditions import said_text
+
     return {
-        d.get("severity_text") or d["first_text"]
+        said_text(d)
         for d in row.get("diagnostics", [])
         if d.get("severity", "").casefold() in words
     }
