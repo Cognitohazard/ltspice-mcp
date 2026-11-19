@@ -796,6 +796,8 @@ def classify(channels: Mapping[Channel, str], rules_name: str) -> list[LogCondit
                 left_out.setdefault((code, channel), set()).add(text)
     for key, texts in left_out.items():
         entries[key]["written_left_out"] = len(texts)
+    # The line classifier's readings were for this log only.
+    _READINGS.__dict__.clear()
     return list(entries.values())
 
 
@@ -900,16 +902,17 @@ _SAID_AS: dict[str, Literal["error", "warning"]] = {
 
 def said_as(condition: Mapping[str, Any]) -> Literal["error", "warning"] | None:
     """Whether ``condition`` (a :class:`LogCondition`, or one of its
-    :func:`said_lines`) is an error or a warning: by the word the simulator
-    wrote on it, else, for a simulator with no recorded wording, by the line
-    classifier's reading (``read_as``); None for neither. Every reader that
-    lists a run's errors or warnings asks this, so none decides it otherwise."""
-    severity = condition.get("severity")
-    said = _SAID_AS.get(severity.casefold()) if isinstance(severity, str) else None
-    if said is not None:
-        return said
+    :func:`said_lines`) is an error or a warning: for a simulator with no
+    recorded wording, by the line classifier's reading (``read_as``), which
+    stands as it did before there were recordings (it lists a ``Warning:``
+    convergence failure as an error); otherwise by the word the simulator
+    wrote on it. None for neither. Every reader that lists a run's errors or
+    warnings asks this, so none decides it otherwise."""
     read_as = condition.get("read_as")
-    return read_as if read_as in ("error", "warning") else None
+    if read_as in ("error", "warning"):
+        return read_as
+    severity = condition.get("severity")
+    return _SAID_AS.get(severity.casefold()) if isinstance(severity, str) else None
 
 
 #: The keys of a condition that hold its worded lines, kept off a run row.

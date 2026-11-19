@@ -448,6 +448,15 @@ def _line_classifier_examples() -> list[str]:
         lines.extend(f"{phrase} at the end" for phrase in getattr(log_parser, name))
     # The stepping rungs, read through is_op_stepping_failure.
     lines.extend(f"{p} here" for p in log_parser._OP_STEPPING_FAILURE_PHRASES)
+    # A convergence failure behind a ``Warning:`` prefix, which the classifier
+    # lists as an error whatever the prefix says.
+    lines.extend(
+        f"Warning: {p}"
+        for p in (
+            *log_parser._OP_STEPPING_FAILURE_PHRASES,
+            *log_parser._CONVERGENCE_FAILURE_PHRASES,
+        )
+    )
     return lines
 
 
