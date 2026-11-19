@@ -1461,7 +1461,8 @@ def _work_items(recipes: list[Any]) -> list[dict[str, Any]]:
 
 
 def _request_inputs(args: AnalyzeResultsInput) -> dict[str, Any]:
-    """The request as a result set stores it: what a continuation replays.
+    """The request as a result set records it, and what a request's
+    identity is read from (:func:`_request_digest`).
 
     ``work`` is the recipes as work items, and the per_run cursor is cleared,
     since it is a position in the result rather than part of the request.

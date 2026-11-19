@@ -1489,8 +1489,8 @@ way. A stepped run's row has `stats`, with `failed_measurements` and
 
 `step` and `all_steps` apply to the whole call, so every recipe reads the same
 iteration. `run_experiments`' attached `analyze` block takes
-the same two arguments (§3.1). Both are stored in the result set, so a
-continuation replays them.
+the same two arguments (§3.1). Both are part of the request a stored answer
+answers, so a page reads the steps its first reply read.
 
 - `include.fields` paths root at one of `source`, `case_id`, `run_index`,
   `step_index`, `step_values`, `assignments`, `circuit`, `deck_sha256`,
