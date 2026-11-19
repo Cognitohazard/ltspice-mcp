@@ -202,6 +202,11 @@ async def server_lifespan(server: Server) -> AsyncIterator[dict]:
             logger.info("Sandbox ([security] allowed_paths):")
             for allowed_path in sandbox:
                 logger.info(f"  - {allowed_path.resolve()}")
+            if "run_code" in state.tool_dispatch:
+                logger.warning(
+                    "run_code is served, and allowed_paths does not confine it: a snippet "
+                    "has this process's file access ([tools] run_code = false turns it off)"
+                )
 
         if boot.preloaded_circuits:
             logger.info(

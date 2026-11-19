@@ -19,10 +19,6 @@ from tests._source_scan import modules, scopes
 #: the reason.
 SECTION_COMPARERS = {
     "lib/deck_staging.py:LibraryRead.reads": "the one answer",
-    "lib/subckt_mismatch.py:_definitions_in": (
-        "finds a definition the plan chose by the section it sits in, an identity "
-        "of a card, not what a .lib card brings in"
-    ),
 }
 
 #: The scopes that may read the words of a ``.lib`` card by position. Only
@@ -37,12 +33,7 @@ LIB_WORD_READERS = {
 
 #: Calls of ``evaluate`` or ``Environment`` that may name a simulator as a
 #: literal, with the reason.
-LITERAL_SIMULATOR_CALLS = {
-    "lib/subckt_mismatch.py:_environment": (
-        "the mismatch plan serves a deck with no semantic profile (QSPICE, Xyce), "
-        "whose reading of an expression is undecided; it reads as native ngspice"
-    ),
-}
+LITERAL_SIMULATOR_CALLS: dict[str, str] = {}
 
 
 def _strip_casefold(node: ast.AST) -> ast.AST:

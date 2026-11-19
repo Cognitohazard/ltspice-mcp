@@ -766,12 +766,16 @@ class _CataloguedMethod:
             return self._counted(as_sent, emit_api_event, capturing_request, args, kwargs)
 
     def _run(self, as_sent: Callable[..., Any], args: Any, kwargs: dict[str, Any]) -> Any:
-        if kwargs.get("raw_page"):
-            return self.__func__(*args, **kwargs)
+        # Every result and error payload leaves here as a SentResult, which
+        # answers a declared field the reply left out with its empty value
+        # (api/_result.py). A raw page already is a sent reply.
+        from ltspice_mcp.api._result import sent_result  # noqa: TID251 - the one place a result is wrapped
+
+        sent = (lambda value, _tool: value) if kwargs.get("raw_page") else as_sent
         try:
-            return as_sent(self.__func__(*args, **kwargs), self.__name__)
+            return sent_result(sent(self.__func__(*args, **kwargs), self.__name__), self.__name__)
         except ApiCallError as exc:
-            exc.payload = as_sent(exc.payload, self.__name__)
+            exc.payload = sent_result(sent(exc.payload, self.__name__), self.__name__)
             raise
 
     def _counted(

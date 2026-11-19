@@ -12,9 +12,10 @@ Windows workers belong to a Job Object held by their supervisor. Reset,
 timeout, worker exit and supervisor death stop ordinary descendants too;
 explicitly detached experiment owners leave that job before supervising work.
 
-Advertised only when ``[tools] run_code = true``: the snippet runs with the
+Advertised unless ``[tools] run_code = false``: the snippet runs with the
 server process's own file and process authority, which ``allowed_paths``
-does not confine, and turning that on is the operator's decision.
+does not confine, so the server warns at startup when it serves this tool
+with a sandbox set, and turning it off is the operator's decision.
 """
 
 from __future__ import annotations
@@ -737,7 +738,10 @@ def worker_for(state: SessionState) -> CodeWorker:
         f"{STDOUT_TAIL_CHARS} characters of print() output, stderr its last "
         f"{STDERR_TAIL_CHARS}, result the repr of a trailing expression "
         f"({RESULT_CHARS}). Bound: timeout_s, default 60 (max {RUN_CODE_TIMEOUT_CAP_S:g}); "
-        "a timeout interrupts the snippet and cancels a run it waits on. The worker is "
+        "a wait on a run ends just before it, naming the job, which keeps running; a "
+        "timeout elsewhere interrupts the snippet, and kills the worker, with the jobs "
+        f"it started, on Windows or when it does not stop within {INTERRUPT_GRACE_S:g} s. "
+        "The worker is "
         "stopped if it holds more memory than [tools] run_code_memory_mb (default half "
         "the machine's). One snippet at a time: a call during another is answered busy, "
         "not queued."

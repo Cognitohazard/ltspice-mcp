@@ -161,11 +161,7 @@ recorded LTspice results and the parser itself.
 
 The optional Sky130 integration tests find a `sky130A` root containing
 `libs.ref` and `libs.tech` through `LTSPICE_MCP_TEST_PDK_ROOT`, and need
-console ngspice. `TestOpenPdkDevice` in `test_subckt_mismatch.py` gives two
-instances of one Sky130 transistor different threshold shifts (`delvto`) and
-checks that the server passes each shift to its own instance as a parameter
-on the subcircuit (`X`) line, and that ngspice reports exactly that shift.
-`test_nested_targeting.py` changes the width and threshold of a transistor
+console ngspice. `test_nested_targeting.py` changes the width and threshold of a transistor
 inside one subcircuit instance and checks with ngspice that only that
 instance changes, then reads that transistor's operating point through
 `analyze_results`.

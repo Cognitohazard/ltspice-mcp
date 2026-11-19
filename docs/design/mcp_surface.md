@@ -2540,7 +2540,8 @@ each tool's `inputSchema`.
        ngspice-compatible BSIM3/4 devices through exactly one X -> M wrapper
        level as this convenience spelling. Use an ordered `instances` selector
        for arbitrary supported depth; never construct a selector by joining
-       segments with punctuation.
+       segments with punctuation. Refused on QSPICE and Xyce
+       (`mismatch_inside_subcircuit_unmodelled`).
   Otherwise, a declared .param name -> parameter substitution;
   else a component reference        -> value substitution;
   else                              -> ambiguous_target.
@@ -2601,7 +2602,10 @@ of the same name inside a `.subckt` body is another device and is left as
 it is. A
 `rule: "mismatch"` can also select a MOS inside subcircuits by its exact
 instance list, or every MOS inside a subcircuit instance by that instance's
-list. On ngspice such a device gets its draw as `delvto` and `mulu0` instance
+list. On QSPICE and Xyce, whose reading of a subcircuit body the server does
+not model, such a rule (an `instance` list, or a `prefix` that names an `X`
+instance) is refused with `mismatch_inside_subcircuit_unmodelled` before any
+case runs; run the deck on LTspice or ngspice. On ngspice such a device gets its draw as `delvto` and `mulu0` instance
 parameters, which needs its model to resolve to a BSIM3 or BSIM4 model.
 LTspice takes neither `mulu0` nor `delvto` on BSIM3, so there the device gets
 its own copy of its `.model` inside a private copy of its subcircuit, as a

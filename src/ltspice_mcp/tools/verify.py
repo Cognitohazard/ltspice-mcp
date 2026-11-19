@@ -2166,7 +2166,22 @@ def compare_equivalence(
     assert ref_graph is not None and cand_graph is not None  # failure is None ⇒ both parsed
     findings.extend(_denied_include_findings(ref_graph, ref_source, denied_hint))
     findings.extend(_denied_include_findings(cand_graph, cand_source, denied_hint))
-    comparison = compare_graphs(ref_graph, cand_graph, reader=None, anchors=anchors, rtol=rtol)
+    try:
+        comparison = compare_graphs(ref_graph, cand_graph, reader=None, anchors=anchors, rtol=rtol)
+    except NetlistGraphError as exc:  # a recursive subcircuit: nothing to flatten
+        return (
+            None,
+            findings,
+            _failure(
+                "compare",
+                f"the netlists could not be compared: {exc}",
+                remedy=(
+                    "A subcircuit that calls itself, directly or through another, has "
+                    "no circuit to flatten: remove the call that closes the loop."
+                ),
+            ),
+            [],
+        )
     added, removed = circuit_directive_delta(ref_graph, cand_graph, comparison.calls)
     directives_equivalent = not added and not removed
     payload: dict[str, Any] = {

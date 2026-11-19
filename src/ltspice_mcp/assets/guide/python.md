@@ -19,8 +19,10 @@ core has an example that reads a sweep back in one loop.
 process the server starts once and keeps for the session, with `api` already
 open on the server's working directory. The snippet also has
 `np`, `load_raw`, `measurements`, `reference`, `window_and_clean`,
-`compute_signal_stats` and `time_weighted_quantiles` in scope. `print()`
-output and the repr of a trailing expression are returned, so print the result
+`compute_signal_stats` and `time_weighted_quantiles` in scope. `np` is
+NumPy 2, which removed or deprecates some NumPy 1 names: write `np.trapezoid` (or
+`compute_signal_stats`) for `np.trapz`, `np.ptp(a)` for `a.ptp()` and
+`np.isin` for `np.in1d`. `print()` output and the repr of a trailing expression are returned, so print the result
 you need, such as the crossing or the worst corner, rather than the whole
 table. Each call gets a fresh namespace around the same `api`, so keep state
 on disk, in a file or in a job you can find again by its `request_id`. A
@@ -75,7 +77,10 @@ starting a session.
   variation set something, and the case's `status`), `failures` and
   `observations` when there are any, and the `analysis` block when you
   attached `analyze`. A result leaves out a field that says nothing, as a
-  reply does, so read one that may be empty with `.get`. A row's status describes its case. A case that ran is
+  reply does, and reading a left-out field gives its empty value (`[]`, `{}`,
+  `False` or `None`), so `row["assignments"]` is `{}` for an unswept run; `in`
+  still tells whether the reply carried it, and a misspelt key or a left-out
+  field the tool always keeps raises `KeyError`. A row's status describes its case. A case that ran is
   `"produced"` while the job is `"completed"`, so select rows on `"produced"`.
 - `wait=False` returns the receipt at once; `api.wait(job_id, timeout_s=None)`
   blocks until the job is terminal. A timeout returns the current snapshot with
