@@ -43,6 +43,11 @@ _SOURCE_SPAWNS: dict[str, tuple[int, str]] = {
         1,
         "the cancel wait is awaited, then cancelled, in the same function",
     ),
+    "ltspice_mcp/lib/experiment_runner.py:ExperimentRunner._read_steps": (
+        2,
+        "the steps read and the cancel wait are awaited, then cancelled and awaited, "
+        "in the same function",
+    ),
     "ltspice_mcp/lib/experiment_runner.py:ExperimentRunner._run_analysis": (
         2,
         "the analysis and the cancel wait are awaited in the same function",

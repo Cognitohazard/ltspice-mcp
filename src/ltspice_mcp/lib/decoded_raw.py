@@ -21,6 +21,7 @@ from numpy.typing import NDArray
 
 from ltspice_mcp.errors import NoAxisError, ResultError
 from ltspice_mcp.lib.device_names import fold_name
+from ltspice_mcp.lib.experiment_types import CaseSteps
 from ltspice_mcp.lib.raw_header import RawPlotHeader
 from ltspice_mcp.lib.result_kinds import (
     Analysis,
@@ -314,6 +315,51 @@ def unresolved_steps_reason(stepped: str | None) -> str:
             "an operating point at each step, run .op under the same .step."
         )
     return "Step boundaries are unresolved; this plot supports inventory only"
+
+
+def steps_held(descriptor: PlotDescriptor) -> CaseSteps:
+    """How the plot ``descriptor`` describes is stepped, as a case's record
+    keeps it (``ExperimentCase.steps``): the raw reader's own reading of the
+    raw's stepped flag against the log's ``.step`` lines (``step_status``),
+    made once when the case's run ends. The one place a case's stepping is
+    decided; every reader asks the record."""
+    kind = kind_named(descriptor.stepped_kind)
+    if descriptor.step_status == "unstepped":
+        return CaseSteps(count=1)
+    if descriptor.step_status == "mismatch":
+        return CaseSteps(
+            count=None,
+            kind=descriptor.stepped_kind,
+            not_established=(
+                "Its raw's header marks its results stepped, and the steps the raw "
+                "holds do not match the .step lines of its log, so how many steps it "
+                "holds was not established."
+            ),
+        )
+    if descriptor.step_status == "unresolved":
+        return CaseSteps(
+            count=None,
+            kind=descriptor.stepped_kind,
+            not_established=(
+                "Its raw's header marks its results stepped, and where each step "
+                "starts could not be read from the raw and its log."
+            ),
+        )
+    names: dict[str, None] = {}
+    for step in descriptor.steps:
+        names.update(dict.fromkeys(name for name, _ in step.parameters))
+    values_from = kind.step_values if kind is not None else "log"
+    return CaseSteps(
+        count=len(descriptor.steps),
+        parameters=tuple(names),
+        values_from=values_from if names and values_from in ("raw", "log") else None,
+        kind=descriptor.stepped_kind,
+        not_established=(
+            None
+            if names
+            else "Where each step starts was read, and no step's stepped values were."
+        ),
+    )
 
 
 @dataclass(frozen=True)

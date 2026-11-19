@@ -30,9 +30,10 @@ from ltspice_mcp.errors import (
 )
 from ltspice_mcp.lib import recent
 from ltspice_mcp.lib.decoded_log import DecodedLog
-from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, RawData
+from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, RawData, steps_held
 from ltspice_mcp.lib.experiment_types import (
     TERMINAL_CASE_STATUSES,
+    CaseSteps,
     ExperimentCase,
     ExperimentJob,
     failure_summary,
@@ -52,6 +53,7 @@ from ltspice_mcp.lib.parser_service import load_logs_sync as _parse_logs_sync
 from ltspice_mcp.lib.parser_service import load_raw_sync as _parse_raw_sync
 from ltspice_mcp.lib.raw_parser import (
     OtherRawKind,
+    first_plot_traces,
     get_step_count,
     other_raw_path,
     points_reached,
@@ -963,8 +965,6 @@ def case_run_context(
         "assignments": dict(case.assignments),
         "circuit": case.circuit,
         "deck_sha256": case.deck_sha256,
-        "step_index": case.step_index,
-        "step_values": dict(case.step_values),
     }
     if case.native_statistics is not None:
         identity["native_statistics"] = case.native_statistics.public()
@@ -1502,6 +1502,44 @@ def load_raw_sync(source: AnalysisSource, state: SessionState) -> DecodedRaw:
     if captured is not None:
         return select_raw(captured, source.plot_index)
     return _parse_raw_sync(source, state, deadline=deadline)
+
+
+async def read_steps(
+    job: ExperimentJob, case: ExperimentCase, state: SessionState
+) -> CaseSteps | None:
+    """How ``case``'s results are stepped (``decoded_raw.steps_held``), read
+    once when its run ends (``ExperimentRunner._end_of_run``) and kept on its
+    record. The raw is read through the parse service for its first plot's
+    last trace alone, which keeps its axis and step parameters too (the name
+    is read off the header's first bytes; a header too long to read there is
+    read whole), with its log's ``.step`` lines.
+
+    None, and nothing recorded, for a run that left no raw and for a raw that
+    could not be read: a failed read says nothing of how the results are
+    stepped, and the case's row says its steps were not recorded. As for the
+    log read at the end of a run (``ExperimentRunner._with_logs``, which keeps
+    the failure as ``logs_error``), a file still locked when the read is made,
+    as on Windows for a moment after the simulator exits, is not read again.
+    A cancel of the read (the job stopped, the process shutting down) ends
+    its parse through the parse service's cancel."""
+    if case.raw_file is None:
+        return None
+    traces = await asyncio.to_thread(first_plot_traces, case.raw_file)
+    source = AnalysisSource(
+        raw=case.raw_file,
+        log=case.log_file,
+        netlist=None,
+        dialect=dialect_for_job(job, state),
+        identity=None,
+        trusted_job_artifact=True,
+        console=(case.log_file or case.raw_file).with_suffix(".exe.log"),
+        signals=(traces[-1][0],) if traces else None,
+    )
+    try:
+        raw = await load_raw(source, state)
+    except ResultError:
+        return None
+    return steps_held(raw.descriptor)
 
 
 async def load_logs(source: AnalysisSource, state: SessionState) -> DecodedLog:
