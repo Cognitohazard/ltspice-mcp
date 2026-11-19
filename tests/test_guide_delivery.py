@@ -130,6 +130,68 @@ class TestGuideStructure:
             guide.read("nope")
         assert caught.value.known == guide.names()
 
+    def test_a_heading_is_its_part_of_the_section(self):
+        """A heading's text runs from its line to the next heading of the same
+        or a higher level, so a subheading comes with it and a sibling does not."""
+        whole = guide.read("tools")
+        part = guide.read("tools", heading="A sweep in one call")
+        assert part.startswith("## A sweep in one call\n")
+        assert part.strip() in whole
+        assert "## Notes per tool" not in part
+        assert len(part) < len(whole)
+        # A third-level heading stops at its sibling.
+        offsets = guide.read("schematics", heading="Common symbol pin offsets (at R0)")
+        assert offsets.startswith("### Common symbol pin offsets (at R0)\n")
+        assert "### MOSFET orientation conventions" not in offsets
+        # A second-level heading keeps its subheadings.
+        building = guide.read("schematics", heading="Building and editing a sheet")
+        assert "### MOSFET orientation conventions" in building
+
+    def test_a_heading_matches_whatever_its_case(self):
+        assert guide.read("tools", heading="a SWEEP in one CALL") == guide.read(
+            "tools", heading="A sweep in one call"
+        )
+
+    @pytest.mark.parametrize("name", guide.SECTION_ORDER)
+    def test_the_headings_partition_no_code(self, name: str):
+        """A ``#`` line inside a fenced block is code, not a heading, and every
+        heading is named once in its section, so a name picks one part."""
+        listed = guide.headings(name)
+        keys = [heading.name.casefold() for heading in listed]
+        assert len(keys) == len(set(keys)), name
+        body = guide.read(name)
+        for heading in listed:
+            assert heading.text.startswith("#" * heading.level + " " + heading.name)
+            assert heading.text.strip() in body
+
+    def test_a_hash_line_in_a_code_fence_is_no_heading(self):
+        body = (
+            "# Title\n\n## One\n\n```python\n## not a heading\n~~~\n## still code\n```\n"
+            "text\n\n~~~~\n## code\n```\n~~~ not a close\n~~~~\n\n## Two #\n\n## C#\n"
+        )
+        listed = guide.split_headings(body)
+        assert [(h.name, h.level) for h in listed] == [("One", 2), ("Two", 2), ("C#", 2)]
+        assert "## still code" in listed[0].text and "## code" in listed[0].text
+
+    def test_a_part_ends_at_a_heading_of_its_level_or_higher(self):
+        body = "# T\n\n## A\n\n### B\n\nb\n\n#### C\n\nc\n\n## D\n\nd\n\n# E\n\ne\n"
+        parts = {h.name: h.text for h in guide.split_headings(body)}
+        assert set(parts) == {"A", "B", "C", "D"}
+        assert parts["A"] == "## A\n\n### B\n\nb\n\n#### C\n\nc\n"
+        assert parts["B"] == "### B\n\nb\n\n#### C\n\nc\n"
+        # A first-level heading ends a part too, though it is no part itself.
+        assert parts["D"] == "## D\n\nd\n"
+
+    def test_an_unknown_heading_lists_the_sections_headings(self):
+        with pytest.raises(guide.UnknownGuideHeading) as caught:
+            guide.read("schematics", heading="nope")
+        assert caught.value.known == tuple(h.name for h in guide.headings("schematics"))
+        assert caught.value.section == "schematics"
+
+    def test_a_heading_needs_a_section(self):
+        with pytest.raises(ValueError, match="section"):
+            guide.read(heading="A sweep in one call")
+
     def test_a_path_names_no_section(self):
         """Sections are names, never paths: nothing outside the guide's own
         files can be read through it."""
@@ -151,23 +213,66 @@ _POINTER_SOURCES = (
 _POINTER_PATTERNS = (
     r"guide section\s+'([^'<]+)'",
     r'"section":\s*"([^"<]+)"',
-    r"""guide\(["']([^"'<]+)["']\)""",
+    r"""guide\(["']([^"'<]+)["']""",
 )
+
+#: The ways a text names one heading of a section: the prose pointer and the
+#: query that reads it.
+_HEADING_POINTER_PATTERNS = (
+    r"guide section\s+'([^'<]+)',\s*heading\s+'([^'<]+)'",
+    r'"section":\s*"([^"<]+)",\s*"heading":\s*"([^"<]+)"',
+    r"""guide\(["']([^"'<]+)["'],\s*heading=["']([^"'<]+)["']\)""",
+)
+
+
+def _dangling_pointers(text: str) -> list[str]:
+    """Every pointer in ``text`` naming a section, or a heading of a section,
+    that the guide does not have."""
+    text = " ".join(text.split())
+    known = set(guide.names())
+    dangling = [
+        repr(name)
+        for pattern in _POINTER_PATTERNS
+        for name in re.findall(pattern, text)
+        if name not in known
+    ]
+    for pattern in _HEADING_POINTER_PATTERNS:
+        for name, heading in re.findall(pattern, text):
+            if name not in known:
+                continue  # already reported as a section
+            try:
+                guide.read(name, heading=heading)
+            except guide.UnknownGuideHeading:
+                dangling.append(f"{name!r}, heading {heading!r}")
+    return dangling
 
 
 def test_every_section_pointer_resolves():
     """A pointer is how descriptions, hints, the sections themselves and the
-    plugin's skill send a reader on; one naming no section is a dead end the
-    reader cannot recover from."""
-    names = set(guide.names())
-    dangling = []
-    for path in _POINTER_SOURCES:
-        text = " ".join(path.read_text(encoding="utf-8").split())
-        for pattern in _POINTER_PATTERNS:
-            for name in re.findall(pattern, text):
-                if name not in names:
-                    dangling.append(f"{path.relative_to(ROOT)}: {name!r}")
+    plugin's skill send a reader on; one naming no section, or a heading its
+    section does not have, is a dead end the reader cannot recover from."""
+    dangling = [
+        f"{path.relative_to(ROOT)}: {pointer}"
+        for path in _POINTER_SOURCES
+        for pointer in _dangling_pointers(path.read_text(encoding="utf-8"))
+    ]
     assert not dangling, "pointers to sections the guide does not have:\n" + "\n".join(dangling)
+
+
+def test_a_pointer_to_a_heading_resolves_the_heading_too():
+    """The scan reads the heading a pointer names: one its section has passes,
+    in any case, and one it does not have is reported."""
+    heading = guide.headings("schematics")[0].name
+    good = f"see guide section 'schematics', heading '{heading.upper()}'."
+    assert _dangling_pointers(good) == []
+    assert _dangling_pointers('{"section": "tools", "heading": "A sweep in one call"}') == []
+    bad = "see guide section 'schematics',\n heading 'No such heading'."
+    assert _dangling_pointers(bad) == ["'schematics', heading 'No such heading'"]
+    assert _dangling_pointers('{"section": "tools", "heading": "Nope"}') == [
+        "'tools', heading 'Nope'"
+    ]
+    assert _dangling_pointers("api.guide('tools', heading='The response budget')") == []
+    assert _dangling_pointers('api.guide("tools", heading="Nope")') == ["'tools', heading 'Nope'"]
 
 
 def _config_keys() -> set[str]:
@@ -370,10 +475,14 @@ def _resource_text(uri: str, state: SessionState) -> str:
     return contents.text
 
 
-async def _inspect_guide(state: SessionState, section: str | None = None) -> dict:
+async def _inspect_guide(
+    state: SessionState, section: str | None = None, heading: str | None = None
+) -> dict:
     query: dict = {"kind": "guide"}
     if section is not None:
         query["section"] = section
+    if heading is not None:
+        query["heading"] = heading
     result = await call_tool(
         fake_request_context(state), call_tool_params("inspect", {"queries": [query]})
     )
@@ -396,6 +505,56 @@ class TestTheDoorsAgree:
             section is not None
         )
         assert data["title"] == guide.title_of(section)
+
+    @pytest.mark.parametrize(
+        ("section", "heading"),
+        [
+            ("schematics", "MOSFET orientation conventions"),
+            ("schematics", "schematic layout BEST practices"),
+            ("tools", "The response budget"),
+            ("ngspice", ".control / .endc Blocks"),
+        ],
+    )
+    async def test_inspect_and_api_serve_one_heading(
+        self, work_dir: Path, section: str, heading: str
+    ):
+        state = _state(work_dir)
+        data = (await _inspect_guide(state, section, heading))["results"][0]["data"]
+        assert data["text"] == Api.guide(section, heading=heading)
+        assert data["text"] == guide.read(section, heading=heading)
+        assert data["text"] != guide.read(section)
+        assert data["section"] == section
+        # The reply names the heading as the section spells it.
+        assert data["heading"].casefold() == heading.casefold()
+        assert data["heading"] in {h.name for h in guide.headings(section)}
+        assert data["title"] == guide.title_of(section)
+        # A heading read is a guide read.
+        assert state.guide_read
+
+    async def test_an_unknown_heading_fails_only_its_item(self, work_dir: Path):
+        state = _state(work_dir)
+        result = await call_tool(
+            fake_request_context(state),
+            call_tool_params(
+                "inspect",
+                {
+                    "queries": [
+                        {"kind": "guide", "section": "schematics", "heading": "nope"},
+                        {"kind": "guide", "heading": "nope"},
+                        {"kind": "guide", "section": "tools"},
+                    ]
+                },
+            ),
+        )
+        assert result.structured_content is not None
+        bad, headless, good = result.structured_content["results"]
+        assert bad["ok"] is False and bad["error"]["code"] == "unknown_heading"
+        assert bad["error"]["supported"] == [h.name for h in guide.headings("schematics")]
+        assert headless["ok"] is False and headless["error"]["code"] == "invalid_query"
+        assert "section" in headless["error"]["message"]
+        assert good["ok"] is True and "heading" not in good["data"]
+        with pytest.raises(guide.UnknownGuideHeading):
+            Api.guide("schematics", heading="nope")
 
     async def test_an_unknown_section_fails_only_its_item(self, work_dir: Path):
         state = _state(work_dir)

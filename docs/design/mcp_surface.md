@@ -2228,8 +2228,11 @@ cursors where listed:
     the symbol names the libraries resolve, and resolution order; `path` adds
     the sheet's own folder, where only a symbol directly in it is found by its
     bare name, to the reported precedence
-{kind: "symbol", name, path?}
-    pins per rotation, bbox, origin
+{kind: "symbol", name, path?, rotation?}
+    pins per rotation, bbox, origin; a `rotation` (one of R0, R90, R180, R270,
+    M0, M90, M180, M270, as edit_schematic names them) gives `pins_by_rotation`
+    and `bbox_by_rotation` that rotation alone, and omitted gives all eight. Any
+    other value fails the item as `invalid_query`, naming the eight
 {kind: "net", path, at: "REF.PIN" | "net:NAME" | "NAME" | [x, y], cursor?}
     .asc gives a geometric trace; an [x, y] on a wire's interior traces that
     wire, reported as snapped_to_wire; a netlist gives the membership of the
@@ -2314,11 +2317,18 @@ cursors where listed:
     branches — recipes, ops, variation kinds, query kinds, checks and job
     actions. A plain-words `query` returns the closest entries with their full
     field tables; no `query` returns the table of contents, one line per entry
-{kind: "guide", section?}
+{kind: "guide", section?, heading?}
     the packaged guide: no `section` returns the core a
     session reads first, ending in an index of the topic sections and task
     playbooks; a `section` from that index returns that section. An unknown name
-    fails the item as `unknown_section`, listing the names that exist
+    fails the item as `unknown_section`, listing the names that exist. A
+    `heading` with the `section` returns that heading's part of it, down to the
+    next heading of the same or a higher level, matched by its text whatever its
+    case, and the reply's `heading` names it as the section spells it. A heading
+    the section does not have fails the item as `unknown_heading`, listing the
+    section's headings under `supported`; a `heading` with no `section` fails
+    as `invalid_query`. A pointer in a reply may name a heading:
+    "guide section 'schematics', heading '...'"
 {kind: "simulator_docs", name?, cursor?}
     the reference documents the simulator's vendor installs with it; for
     LTspice 26.1 and later, about fifteen Markdown files about the program

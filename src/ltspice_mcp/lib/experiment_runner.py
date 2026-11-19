@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import contextlib
+import contextvars
+import functools
 import hashlib
 import json
 import logging
@@ -13,7 +16,7 @@ import threading
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 from ltspice_mcp.errors import ResultError, SimulationError
 from ltspice_mcp.lib import experiment_store, now, services
@@ -159,6 +162,39 @@ _DRIFT_REASONS = {
     "source_modified_after_staging": "content changed",
     "source_unavailable_after_staging": "no longer readable",
 }
+
+_T = TypeVar("_T")
+
+#: The threads that launch a case (``_submit_case_under_cancel_gate``). The rule
+#: for every thread that waits on the event loop: it is never a thread of the
+#: loop's default pool, because the loop answers it with work that runs on that
+#: pool, and a pool whose every thread waited so would never run that work. A
+#: recoverable case's launch waits on the loop for its launch record, a write
+#: that runs on the default pool (``JobRegistry.persist_strict``), so launches
+#: run here. The loop never needs one of these threads to finish anything, so a
+#: launch past this many waits for a thread and nothing waits for ever.
+_LAUNCH_THREADS = concurrent.futures.ThreadPoolExecutor(thread_name_prefix="experiment-launch")
+
+
+async def _in_launch_thread(work: Callable[..., _T], *args: Any) -> _T:
+    """``work(*args)`` on one of ``_LAUNCH_THREADS``, awaited."""
+    loop = asyncio.get_running_loop()
+    # As ``asyncio.to_thread`` does, so the launch sees this request's context.
+    context = contextvars.copy_context()
+    return await loop.run_in_executor(_LAUNCH_THREADS, functools.partial(context.run, work, *args))
+
+
+def _launch_stopped(exc: BaseException) -> bool:
+    """Whether ``exc`` is a launch refused because its job was stopped while
+    the launch was being recorded (``ExperimentRunner._record_launch``)."""
+    cause = exc.__cause__ if isinstance(exc, NativePrelaunchRefused) else exc
+    return isinstance(cause, RecoveryError) and cause.code == "recovery_launch_cancelled"
+
+
+def _retrieve(task: asyncio.Task[None]) -> None:
+    """Mark a finished task's outcome read, for a write nobody awaits any more."""
+    if not task.cancelled():
+        task.exception()
 
 
 def cancel_receipt_row(
@@ -1323,12 +1359,44 @@ class ExperimentRunner(RunnerBase):
             adaptation,
         )
         case.recovery = replace(case.recovery, attempt=replace(attempt, launch=intent))
-        # The loop remains free for cancellation and the ordered registry lock;
-        # only this worker waits. Never hold launch_lock across this barrier.
-        asyncio.run_coroutine_threadsafe(self._persist_job(execution), self.loop).result()
+        # Only this launch thread waits; the loop stays free for a cancel and the
+        # ordered registry lock. Never hold launch_lock across this wait. This is a
+        # thread of ``_LAUNCH_THREADS``, never of the default pool the write runs
+        # on (see there), and a stop of the job ends the wait (``_record_launch``).
+        asyncio.run_coroutine_threadsafe(self._record_launch(execution), self.loop).result()
         self._verify_executed_copy(execution, case)
         if execution.cancel_event.is_set():
             raise RecoveryError("recovery_launch_cancelled", "Cancelled before simulator spawn")
+
+    async def _record_launch(self, execution: _Execution) -> None:
+        """Write the record of a launch that a launch thread waits for, unless
+        the job is stopped first.
+
+        Every stop of a job (a cancel, its deadline, the process stopping) sets
+        ``cancel_event`` through ``_request_stop``, so a stop ends the launch's
+        wait even while the write cannot get a thread. The write itself goes on
+        under the registry's per-job order and is this runner's to settle. A
+        launch that stops here was refused before spicelib created its run, so
+        no simulator starts, and the record it may leave (a launch intent with
+        no outputs) is the one a crash between the record and the start leaves.
+        """
+        job_id = execution.job.job_id
+        write = self._background.spawn(self._persist_job(execution), key=job_id)
+        stopped = self.loop.create_task(execution.cancel_event.wait())
+        try:
+            await asyncio.wait({write, stopped}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            stopped.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stopped
+            if not write.done():
+                # ``_persist_job`` keeps a failure as ``persistence_error``;
+                # nobody else awaits this write now.
+                write.add_done_callback(_retrieve)
+        if write.done():
+            write.result()
+            return
+        raise RecoveryError("recovery_launch_cancelled", "Cancelled before simulator spawn")
 
     def _verify_executed_copy(self, execution: _Execution, case: ExperimentCase) -> None:
         root = self._verify_recovery_case(execution, case)
@@ -1566,7 +1634,7 @@ class ExperimentRunner(RunnerBase):
                     except Exception as exc:
                         execution.persistence_error = exc
                         raise
-                submitted = await asyncio.to_thread(
+                submitted = await _in_launch_thread(
                     self._submit_case_under_cancel_gate,
                     execution,
                     case,
@@ -1586,13 +1654,20 @@ class ExperimentRunner(RunnerBase):
                 case.status = "running"
                 self._checkpoint_case_transition(execution)
             except Exception as exc:
-                self._mark_case(
-                    execution,
-                    case,
-                    "failed",
-                    code="submission_failed",
-                    error=f"Submission failed: {exc}",
-                )
+                if _launch_stopped(exc):
+                    # A stop of the job refused the launch before its simulator
+                    # started: the case is stopped, as one still queued is.
+                    self._terminalize_stopped_case(execution, case)
+                else:
+                    # A failed launch record is a failed submission even when a
+                    # stop lands at the same moment: the write's error wins.
+                    self._mark_case(
+                        execution,
+                        case,
+                        "failed",
+                        code="submission_failed",
+                        error=f"Submission failed: {exc}",
+                    )
                 self._release_slot(execution, case.case_id)
                 return
 
@@ -2208,7 +2283,17 @@ class ExperimentRunner(RunnerBase):
         # which is guarded on "not terminal" alone. Say which one happened
         # rather than assume the case never started: an accounting message that
         # can be false is how a completed run gets read as one that never ran.
-        launched = case.submitted_at is not None
+        # A case still ``submitted`` was stamped but its launch never returned:
+        # a recoverable launch a stop refused while its record was written. It
+        # keeps its stamp (the record may hold its launch intent), and it counts
+        # as submitted, but no simulator started. A case whose launch returned
+        # is ``running`` by the time anything can stop it.
+        if case.submitted_at is None:
+            stage = "unsubmitted"
+        elif case.status == "submitted":
+            stage = "launching"
+        else:
+            stage = "launched"
         if execution.stop_reason == OWNER_STOPPED:
             # The words a reader of the record writes when the process died
             # (``stop_for_owner``), which cannot tell a launched case from one
@@ -2222,11 +2307,14 @@ class ExperimentRunner(RunnerBase):
                 case,
                 "failed",
                 code="job_deadline",
-                error=(
-                    "The experiment deadline elapsed while this case was running"
-                    if launched
-                    else "The experiment deadline elapsed before this case was submitted"
-                ),
+                error={
+                    "launched": "The experiment deadline elapsed while this case was running",
+                    "launching": (
+                        "The experiment deadline elapsed while this case's launch was "
+                        "being recorded; its simulator was not started"
+                    ),
+                    "unsubmitted": "The experiment deadline elapsed before this case was submitted",
+                }[stage],
             )
         else:
             self._mark_case(
@@ -2234,11 +2322,14 @@ class ExperimentRunner(RunnerBase):
                 case,
                 "cancelled",
                 code="cancelled",
-                error=(
-                    "Cancelled after the simulator was launched"
-                    if launched
-                    else "Cancelled before submission"
-                ),
+                error={
+                    "launched": "Cancelled after the simulator was launched",
+                    "launching": (
+                        "Cancelled while its launch was being recorded; its simulator "
+                        "was not started"
+                    ),
+                    "unsubmitted": "Cancelled before submission",
+                }[stage],
             )
 
     def _reconcile_unfinished_cases(self, execution: _Execution) -> None:
