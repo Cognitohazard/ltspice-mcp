@@ -1,0 +1,1 @@
+A job run with `execution.recoverable` no longer hangs, together with every other read the server hands to a worker thread, when its parallel launches fill the thread pool while each waits for its launch to be recorded.
