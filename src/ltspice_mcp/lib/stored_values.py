@@ -44,7 +44,11 @@ from ltspice_mcp.lib.encoding import (
 from ltspice_mcp.lib.format import cap_note, fold_micro_sign, parse_spice_value
 from ltspice_mcp.lib.reply_cuts import CUT, NEVER
 from ltspice_mcp.lib.spice_lex import LexResult, SpiceCard, lex_deck
-from ltspice_mcp.lib.spice_lex_ops import ValueSuffixSite, value_suffix_sites
+from ltspice_mcp.lib.spice_lex_ops import (
+    ValueSuffixSite,
+    section_sign_names,
+    value_suffix_sites,
+)
 from ltspice_mcp.lib.spice_lex_views import read_instance
 
 #: The code every statement of a reading carries.
@@ -595,7 +599,9 @@ def _sheet_line(site: ValueSuffixSite, texts: Sequence[_SheetText]) -> int | Non
     ``u``, which an export may spell as a micro sign)."""
     name = site.card.name or ""
     if site.card.kind == "instance":
-        names = {name.casefold(), name[1:].lstrip("§").casefold()}
+        # Every name the exported part answers to, the sheet's own among them
+        # (``R§Load`` is ``Load`` on the sheet): spice_lex_ops' answer.
+        names = {n.casefold() for n in (name, *section_sign_names(name))}
         candidates = [
             t for t in texts if t.reference is not None and t.reference.casefold() in names
         ]
