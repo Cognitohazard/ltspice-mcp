@@ -50,7 +50,14 @@ def canonical(path: Path) -> Path:
     names expanded for the folders that exist. Made the same way whether or
     not another thread creates, removes or replaces a part of it meanwhile:
     it never carries a ``\\\\?\\`` prefix the input did not have. A path that
-    cannot be resolved (a link loop) is made absolute by its spelling."""
+    cannot be resolved (a link loop) is made absolute by its spelling.
+
+    One case differs from ``ntpath.realpath``: it keeps the prefix on purpose
+    for a path the plain spelling cannot open (longer than 260 characters on
+    a system without long-path support), and this removes it, so such a path
+    is spelled here in a form that cannot be opened there. A store that deep
+    fails without long-path support anyway, through the unresolved paths the
+    store also builds."""
     try:
         resolved = path.resolve()
     except (OSError, RuntimeError):
@@ -74,18 +81,14 @@ def _one(first: os.stat_result, second: os.stat_result) -> bool:
 
 
 def _root_among(path: Path, root: Path) -> tuple[Path, tuple[str, ...]] | None:
-    """The shallowest folder of ``path`` that is ``root`` by identity, and the
-    parts of ``path`` below it; ``None`` when none is."""
-    try:
-        root_info = os.stat(root)
-    except OSError:
-        return None
+    """The shallowest folder of ``path`` whose one spelling (``canonical``) is
+    ``root``'s, and the parts of ``path`` below it; ``None`` when none is.
+    Spellings, not identities, so a root that does not exist yet is found
+    too: a link, a short name or a substituted drive above it is followed the
+    same way on both sides."""
+    target = canonical(root)
     for folder in [*reversed(path.parents), path]:
-        try:
-            info = os.stat(folder)
-        except OSError:
-            return None
-        if _one(info, root_info):
+        if canonical(folder) == target:
             return folder, path.relative_to(folder).parts
     return None
 
@@ -107,8 +110,10 @@ def redirect_below(path: Path, root: Path) -> Path | None:
 
     ``root`` itself, and whatever lies above it, may redirect: a store kept
     behind a link is still the store. ``path`` is taken below ``root`` by its
-    spelling, and when it is spelled another way (a short name, a substituted
-    drive), from the shallowest of its folders that is ``root`` by identity. A
+    spelling, and when it is spelled another way (through a link above the
+    root, a short name, a substituted drive), from the shallowest of its
+    folders whose one spelling is ``root``'s, whether or not ``root`` exists
+    yet. A
     path with a ``..`` part, or one that does not lie under ``root``, is
     answered with ``path`` itself, as a redirect is.
     """

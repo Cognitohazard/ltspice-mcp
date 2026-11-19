@@ -839,9 +839,136 @@ def test_no_check_compares_the_text_of_a_resolved_path():
     the same function (by an assignment, a tuple unpacking or ``:=``).
 
     A scan cannot see a resolved value that reaches the comparison through a
-    function's result, an attribute or a property. Those are kept safe by
+    function's result, an attribute or a property; nor ``realpath`` under an
+    alias, a value bound by a ``for`` loop, ``relative_to``, ``startswith`` on
+    the text, a dictionary lookup, ``getattr(p, "resolve")()`` or a helper
+    outside its list (``file_key``, ``lineage_run_dir``). Those are kept safe by
     taking every store folder's spelling from ``redirect.canonical``, which
     gives one spelling whatever a peer creates or removes meanwhile, and by
     asking ``redirect_below`` and ``same_location`` instead of comparing.
     ``redirect.py`` itself is not scanned: it is where these answers live."""
     assert _resolved_comparisons() == set(_RESOLVED_COMPARISONS_ALLOWED)
+
+
+# -- a store reached through a link ------------------------------------------
+#
+# A case records its lineage folder as the store spells it (``Store.run_dir``),
+# and the checks below compare it with the folder ``lineage_run_dir`` gives,
+# spelled by ``canonical``. Through a link the two spellings differ; they are
+# one folder.
+
+
+def _linked_store(tmp_path: Path) -> Path:
+    """A working directory reached through a symbolic link."""
+    real = tmp_path / "real"
+    real.mkdir()
+    working = tmp_path / "linked"
+    symlink_or_skip(working, real, target_is_directory=True)
+    return working
+
+
+@needs_controlled_startup
+@pytest.mark.parametrize("run_folder", ["absent", "present"])
+def test_ngspice_startup_of_a_store_reached_through_a_link(tmp_path: Path, run_folder: str):
+    from ltspice_mcp.lib.experiment_inputs import prepare_startup
+
+    store = Store(_linked_store(tmp_path))
+    if run_folder == "present":
+        store.run_dir("exp_root").mkdir(parents=True)
+
+    policy = prepare_startup(store, "exp_root")
+
+    assert policy.spinit is not None
+    assert same_location(policy.spinit.path, store.recovery_spinit("exp_root"))
+
+
+def _linked_recovery_job(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, module: object
+) -> tuple[Path, ExperimentJob]:
+    """A recoverable job of a store reached through a link, with the startup
+    file its lineage froze. The recorded executable is taken for the one this
+    machine runs: the test is about the lineage folder, not the build."""
+    from dataclasses import replace
+
+    from ltspice_mcp.lib.experiment_inputs import prepare_startup
+    from tests.test_recovery_records import recovery_job
+
+    working = _linked_store(tmp_path)
+    job = recovery_job(working)
+    assert job.recovery is not None
+    policy = prepare_startup(Store(working), job.job_id)
+    job.recovery = replace(job.recovery, execution=replace(job.recovery.execution, startup=policy))
+    monkeypatch.setattr(module, "verify_execution_policy", lambda execution, simulator: None)
+    return working, job
+
+
+@needs_controlled_startup
+def test_a_resumed_case_of_a_store_reached_through_a_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from spicelib.simulators.ngspice_simulator import NGspiceSimulator
+
+    from ltspice_mcp.lib import experiment_resume
+
+    working, job = _linked_recovery_job(tmp_path, monkeypatch, experiment_resume)
+
+    experiment_resume._verify_execution(job, Store(working), NGspiceSimulator)
+
+
+@needs_controlled_startup
+def test_a_relaunched_case_of_a_store_reached_through_a_link(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from types import SimpleNamespace
+
+    from spicelib.simulators.ngspice_simulator import NGspiceSimulator
+
+    from ltspice_mcp.lib import experiment_runner
+
+    working, job = _linked_recovery_job(tmp_path, monkeypatch, experiment_runner)
+    execution = SimpleNamespace(
+        persistence_error=None,
+        job=job,
+        request=SimpleNamespace(state=SimpleNamespace(working_dir=working)),
+    )
+    runner = SimpleNamespace(simulator_class=NGspiceSimulator)
+
+    root = experiment_runner.ExperimentRunner._verify_recovery_case(
+        runner,  # pyright: ignore[reportArgumentType]
+        execution,  # pyright: ignore[reportArgumentType]
+        job.cases[0],
+    )
+
+    assert same_location(root, Store(working).run_dir(job.job_id))
+
+
+def test_the_store_spells_its_folders_only_through_canonical():
+    """``store.py`` resolves a path nowhere but through ``redirect.canonical``,
+    so its folders, file keys and index keys keep one spelling."""
+    tree = modules()["lib/store.py"]
+    resolving = [
+        ast.unparse(node)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and (
+            (isinstance(node.func, ast.Attribute) and node.func.attr in {"resolve", "realpath"})
+            or (isinstance(node.func, ast.Name) and node.func.id == "realpath")
+        )
+    ]
+    assert resolving == []
+
+
+@windows_only
+def test_a_file_key_while_the_file_is_replaced(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Two writers of one results file take one lock, whatever the file goes
+    through while its key is made."""
+    from ltspice_mcp.lib.store import file_key
+
+    results = tmp_path / "deck.results.json"
+    results.write_bytes(b"{}")
+    quiet = file_key(results)
+
+    with _between_lookups(monkeypatch, results.name, found=True, change=results.unlink):
+        raced = file_key(results)
+
+    assert raced == quiet
