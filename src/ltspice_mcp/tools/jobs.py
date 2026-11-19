@@ -1004,7 +1004,7 @@ async def _place_case_beside_sheet(
     checked placement (``sheet_results.place_checked``).
 
     Refused where they could not stand as the circuit's own
-    (``sheet_results.check_case`` and ``place_case`` say which), and while the
+    (``sheet_results.check_case`` and ``check_placement`` say which), and while the
     job's runs are not all done, as every read of a job's runs is
     (``services.runs_unready``).
     """

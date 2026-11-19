@@ -27,6 +27,7 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import filelock as filelock_mod
 from ltspice_mcp.lib import wsl as wsl_mod
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
+from ltspice_mcp.lib.ltspice_window import OpenWindows
 from ltspice_mcp.lib.sheet_results import place_job_beside_sheets
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
@@ -64,8 +65,15 @@ async def plot(state: SessionState, job_id: str = "placed") -> dict[str, Any]:
     return result.structured_content
 
 
-def holding(sheet: Path) -> dict[str, Any]:
-    return a_window({str(sheet): as_ltspice_reads(sheet)})
+def with_its_plot_open(sheet: Path) -> dict[str, Any]:
+    """A window that has ``sheet`` open and the results beside it opened from it."""
+    results = str(sheet.with_suffix(".raw"))
+    return a_window(
+        {str(sheet): as_ltspice_reads(sheet)},
+        panes=[results],
+        tied=[results],
+        with_results=[str(sheet)],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +106,72 @@ async def test_plot_waveform_does_not_give_a_changed_sheet_its_runs_results(
     window = read_world(world)["windows"][0]
     assert window["shown"] == [str(raw)]
     assert "commands" not in window
+
+
+async def test_plot_waveform_says_a_gone_sheet_was_not_given_its_runs_results(
+    state_no_sim: SessionState, work_dir: Path, tmp_path: Path
+):
+    sheet = copied_sheet(work_dir)
+    raw = job_that_ran(state_no_sim, sheet, work_dir)
+    sheet.unlink()
+    put_windows(state_no_sim, tmp_path / "world.json", [a_window()])
+
+    shown = (await plot(state_no_sim))["ltspice"]
+
+    assert shown["not_placed"]["code"] == "sheet_missing"
+    assert shown["shown"] is True and shown["results"] == str(raw)
+    assert not sheet.with_suffix(".raw").exists()
+
+
+async def test_a_placement_refused_after_the_window_closed_a_plot_says_so(
+    state_no_sim: SessionState, work_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The sheet changes between the check before the window is asked and the
+    check under the locks: the window has already closed the plot of the
+    sheet's results by then. Nothing is copied, the run opens on its own, and
+    the reply says that plot was closed."""
+    sheet = copied_sheet(work_dir)
+    raw = job_that_ran(state_no_sim, sheet, work_dir)
+    sheet.with_suffix(".raw").write_bytes(EARLIER)
+    world = tmp_path / "world.json"
+    put_windows(state_no_sim, world, [with_its_plot_open(sheet)])
+    close = OpenWindows._close_results
+
+    def close_then_edit(self: OpenWindows, *args: Any) -> bool:
+        closed = close(self, *args)
+        sheet.write_bytes(sheet.read_bytes() + EDIT)
+        return closed
+
+    monkeypatch.setattr(OpenWindows, "_close_results", close_then_edit)
+
+    shown = (await plot(state_no_sim))["ltspice"]
+
+    assert shown["not_placed"]["code"] == "sheet_changed"
+    assert sheet.with_suffix(".raw").read_bytes() == EARLIER
+    assert shown["results"] == str(raw) and "sheet" not in shown
+    assert "was closed to make way for these" in shown["note"]
+    window = read_world(world)["windows"][0]
+    assert window["closed"] == [str(sheet.with_suffix(".raw"))]
+    assert window["shown"] == [str(raw)]
+
+
+async def test_a_sheet_another_process_holds_opens_the_run_on_its_own(
+    state_no_sim: SessionState, work_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The placement's lock wait runs out: nothing is copied, and the run opens
+    on its own with the reason, as a refusal does."""
+    sheet = copied_sheet(work_dir)
+    raw = job_that_ran(state_no_sim, sheet, work_dir)
+    put_windows(state_no_sim, tmp_path / "world.json", [a_window()])
+    # timing: the wait running out is the case under test; the holder never lets go
+    monkeypatch.setattr(filelock_mod, "DEFAULT_TIMEOUT", 0.2)
+    target = await asyncio.to_thread(Store.circuit_lock, sheet)
+    with filelock_mod.file_lock(target):
+        shown = (await plot(state_no_sim))["ltspice"]
+    assert shown["not_placed"]["code"] == "sheet_locked"
+    assert "another ltspice-mcp process" in shown["not_placed"]["message"]
+    assert shown["results"] == str(raw)
+    assert not sheet.with_suffix(".raw").exists()
 
 
 async def test_two_plot_waveform_placements_at_one_sheet_do_not_interleave(

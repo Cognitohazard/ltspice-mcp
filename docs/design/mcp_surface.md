@@ -36,9 +36,12 @@ observation. With `in_ltspice`, a job's run of a sheet is put beside the sheet
 by the copy `jobs(action="place_beside_sheet")` makes, with its checks and
 locks, and opened from the sheet; the `ltspice` block then carries that copy's
 `not_checked` and `left_in_place`. Where the copy is refused (the sheet changed
-since the run, is gone, or its results file is another circuit's), nothing is
-put beside the sheet, the run opens on its own as a netlist's run does, and
-the block's `not_placed` gives the refusal's `code` and `message`.
+since the run or is gone, the case's results are not there, or the run was
+not LTspice's), or another server process held the sheet past the lock's wait
+(`sheet_locked`), nothing is put beside the sheet, the run opens on its own as
+a netlist's run does, and the block's `not_placed` gives the `code` and
+`message`. If LTspice's window had already closed a plot of the sheet's
+results for the copy, the `note` says so.
 
 An eighth tool, `run_code`, is always registered and is served unless the
 operator sets `[tools] run_code = false`. It runs a Python snippet in a warm

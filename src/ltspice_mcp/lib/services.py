@@ -519,8 +519,18 @@ def experiment_run_context(
     as its run row's ``other_raws`` lists it, and raises
     :class:`OtherRawNotWritten` when the run wrote none.
     """
-    job_id = job.job_id
-    # Per-case readiness is still gated case by case below.
+    case = experiment_case(job, run_index=run_index, case_id=case_id)
+    return case_run_context(job, case, state, require_raw=require_raw, other_raw=other_raw)
+
+
+def experiment_case(
+    job: ExperimentJob, *, run_index: int | None = None, case_id: str | None = None
+) -> ExperimentCase:
+    """The case of ``job`` that ``case_id``, else ``run_index`` (default 0),
+    names, once the job's runs can be read (``runs_unready``); the selection
+    ``experiment_run_context`` reads. Raises ``ResultError``.
+    """
+    # Per-case readiness is gated case by case by ``case_run_context``.
     unready = runs_unready(job)
     if unready is not None:
         raise ResultError(unready)
@@ -534,8 +544,8 @@ def experiment_run_context(
     ]
     if not matches:
         selector = f"case_id={case_id!r}" if case_id is not None else f"run_index={run_index}"
-        raise ResultError(f"Experiment job {job_id!r} has no case matching {selector}")
-    return case_run_context(job, matches[0], state, require_raw=require_raw, other_raw=other_raw)
+        raise ResultError(f"Experiment job {job.job_id!r} has no case matching {selector}")
+    return matches[0]
 
 
 def case_run_context(

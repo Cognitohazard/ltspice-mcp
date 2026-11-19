@@ -25,8 +25,11 @@ return derived metrics. Organized by what the tool answers:
 """
 
 import asyncio
+import concurrent.futures
 import contextlib
+import contextvars
 import csv
+import functools
 import json
 import math
 import os
@@ -35,7 +38,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Any, Literal, NotRequired
+from typing import Annotated, Any, Literal, NotRequired, TypeVar
 
 import numpy as np
 from pydantic import Field, model_validator
@@ -162,9 +165,9 @@ async def _experiment_case(
     state: SessionState,
     *,
     other_raw: OtherRawKind | None = None,
-) -> tuple[ExperimentJob, services.RunContext] | None:
-    """The job a ``job_id`` names and its case, when it is a run_experiments
-    job, else ``None``.
+) -> tuple[ExperimentJob, ExperimentCase, services.RunContext] | None:
+    """The job a ``job_id`` names, its case, and what a read of the case takes,
+    when it is a run_experiments job, else ``None``.
 
     Experiment runs are addressed by case, never through ``resolve_run`` — the
     same split ``Api.load_raw`` makes. ``run_index``, ``case_id`` and
@@ -179,9 +182,8 @@ async def _experiment_case(
         else None
     )
     if job is not None:
-        return job, services.experiment_run_context(
-            job, state, run_index=run_index, case_id=case_id, other_raw=other_raw
-        )
+        case = services.experiment_case(job, run_index=run_index, case_id=case_id)
+        return job, case, services.case_run_context(job, case, state, other_raw=other_raw)
     if (
         path is not None
         and job_id is None
@@ -1135,10 +1137,36 @@ _REOPENED_NOTE = (
     "LTspice already had a plot of these results open; it was closed and reopened to "
     "show the current results, and traces added to it by hand were lost."
 )
+_CLOSED_FOR_NOTHING_NOTE = (
+    "LTspice had a plot of the results beside {sheet} open, which was closed to make "
+    "way for these before their placement was refused: traces added to it by hand "
+    "were lost, and opened from the sheet again it shows the results still there."
+)
 _SHEET_REOPENED_NOTE = (
     "LTspice opened the sheet before it had results and only looks for results when "
     "it opens a sheet, so the sheet was closed and reopened."
 )
+
+
+_T = TypeVar("_T")
+
+#: The threads that talk to LTspice's window for ``plot_waveform``. Not the
+#: default pool: a placement from one of them (``_JobRun.place``) waits on the
+#: loop for work that runs on the default pool, and a pool whose every thread
+#: waited so would never run it. A call past this many waits for a thread.
+_WINDOW_THREADS = concurrent.futures.ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="ltspice-window"
+)
+
+
+async def _in_window_thread(work: Callable[..., _T], *args: Any) -> _T:
+    """``work(*args)`` on one of ``_WINDOW_THREADS``, awaited."""
+    loop = asyncio.get_running_loop()
+    # As ``asyncio.to_thread`` does, so the work sees this request's context.
+    context = contextvars.copy_context()
+    return await loop.run_in_executor(
+        _WINDOW_THREADS, functools.partial(context.run, work, *args)
+    )
 
 
 @dataclass(frozen=True)
@@ -1154,7 +1182,14 @@ class _JobRun:
         """Put the case's results beside ``sheet`` by the one checked
         placement, from a worker thread. Blocking; raises ``NotPlaced``."""
         placing = place_checked(self.job, self.case, sheet)
-        return asyncio.run_coroutine_threadsafe(placing, self.loop).result()
+        try:
+            future = asyncio.run_coroutine_threadsafe(placing, self.loop)
+        except RuntimeError:  # the loop is closed: the server is stopping
+            placing.close()
+            raise
+        # Never on the default pool's threads, which the placement needs
+        # (``_WINDOW_THREADS``), so this wait cannot starve it.
+        return future.result()
 
 
 def _show_in_ltspice(
@@ -1198,7 +1233,7 @@ def _show_in_ltspice(
         # The placement asks again under the locks.
         check_placement(run.job, run.case, sheet)
     except NotPlaced as refusal:
-        _say_not_placed(report, refusal)
+        _say_not_placed(report, refusal.code, str(refusal))
         _show_alone(windows, report, results, plot_name, panes)
         return report
     _show_from_sheet(windows, report, sheet, results, run, plot_name, panes)
@@ -1208,11 +1243,11 @@ def _show_in_ltspice(
 def _sheet_to_tie(circuit: Path, state: SessionState) -> Path | None:
     """The sheet a plot of a case that ran ``circuit`` can be tied to in
     LTspice, or None: the circuit, when it is a sheet the sandbox admits,
-    since its results and plot settings are written beside it."""
+    since its results and plot settings are written beside it. Whether it is
+    still there is the placement's to say (``sheet_missing``)."""
     if not is_asc(circuit):
         return None
-    sheet = sandboxed(str(circuit), state)
-    return sheet if sheet is not None and sheet.is_file() else None
+    return sandboxed(str(circuit), state)
 
 
 def _sheet_of_results(results: Path, state: SessionState) -> Path | None:
@@ -1220,7 +1255,7 @@ def _sheet_of_results(results: Path, state: SessionState) -> Path | None:
     None. Nothing is copied for it: the results are already where LTspice
     keeps that sheet's."""
     sheet = _sheet_to_tie(results.with_suffix(".asc"), state)
-    if sheet is None:
+    if sheet is None or not sheet.is_file():
         return None
     beside = files_beside(sheet).raw
     try:
@@ -1229,10 +1264,10 @@ def _sheet_of_results(results: Path, state: SessionState) -> Path | None:
         return None
 
 
-def _say_not_placed(report: dict[str, Any], refusal: NotPlaced) -> None:
+def _say_not_placed(report: dict[str, Any], code: str, message: str) -> None:
     """Why a run's results were not put beside its sheet: the placement's
     refusal, with its code and the fix it names."""
-    report["not_placed"] = {"code": refusal.code, "message": str(refusal)}
+    report["not_placed"] = {"code": code, "message": message}
 
 
 def _write_panes(
@@ -1356,8 +1391,11 @@ def _show_from_sheet(
     beside = files_beside(sheet).raw
     left_alone: str | None = None
 
-    def place() -> None:
-        nonlocal left_alone
+    closed = False
+
+    def place(reopened: bool) -> None:
+        nonlocal left_alone, closed
+        closed = reopened
         if run is not None:
             placement = run.place(sheet)
             report.update(
@@ -1374,13 +1412,16 @@ def _show_from_sheet(
         if "sheet" in report:
             report["note"] = _BY_HAND_NOTE
         return
-    except NotPlaced as refusal:
-        _say_not_placed(report, refusal)
+    except (NotPlaced, NetlistError) as refusal:
+        # Refused under the locks (the sheet changed since the check before
+        # the window was asked), or another server process held the sheet or
+        # its results file past the wait, as the run option reports it.
+        code = refusal.code if isinstance(refusal, NotPlaced) else "sheet_locked"
+        _say_not_placed(report, code, str(refusal))
         _show_alone(windows, report, results, plot_name, panes)
-        return
-    except NetlistError as error:
-        # Another server process held the sheet or its results file past the wait.
-        report["reason"] = f"the run's results were not put beside {sheet.name}: {error}"
+        if closed:
+            lost = _CLOSED_FOR_NOTHING_NOTE.format(sheet=sheet.name)
+            report["note"] = f"{report['note']} {lost}" if report.get("note") else lost
         return
     except OSError as error:
         report["reason"] = f"the run's results could not be put beside {sheet.name} ({error})"
@@ -1422,7 +1463,7 @@ async def _show_without_chart(
     it is not recorded, which the reply says.
     """
     assert source.raw is not None
-    shown = await asyncio.to_thread(
+    shown = await _in_window_thread(
         _show_in_ltspice,
         state,
         source.raw,
@@ -1690,7 +1731,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     ran = await _experiment_case(
         args.path, args.job_id, args.run_index, args.case_id, state, other_raw=args.other_raw
     )
-    case = None if ran is None else ran[1]
+    case = None if ran is None else ran[2]
     if case is not None:
         source = services.source_for_run(
             case, plot_index=args.plot_index or 0, dialect=args.dialect
@@ -1716,12 +1757,8 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
     # An other raw is not the case's results: shown on its own, as its path
     # would be, never as the results beside the case's sheet.
     placing = (
-        _JobRun(
-            ran[0],
-            next(c for c in ran[0].cases if c.case_id == case.identity["case_id"]),
-            asyncio.get_running_loop(),
-        )
-        if ran is not None and case is not None and args.other_raw is None
+        _JobRun(ran[0], ran[1], asyncio.get_running_loop())
+        if ran is not None and args.other_raw is None
         else None
     )
     sampled = raw.descriptor.axis
@@ -1878,7 +1915,7 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
 
     shown_in_ltspice: dict[str, Any] | None = None
     if args.in_ltspice:
-        shown_in_ltspice = await asyncio.to_thread(
+        shown_in_ltspice = await _in_window_thread(
             _show_in_ltspice,
             state,
             raw_path,
