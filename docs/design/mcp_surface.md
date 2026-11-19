@@ -32,7 +32,16 @@ point, a `.tf`, or a stepped `.op` or one-frequency `.ac`, which hold one point
 a step) has no chart: it is refused with `no_axis`, which says what the plot
 holds and where its values are read, and with `in_ltspice` it is opened in
 LTspice without a chart, with no traces named for it and a `no_chart`
-observation.
+observation. With `in_ltspice`, a job's run of a sheet is put beside the sheet
+by the copy `jobs(action="place_beside_sheet")` makes, with its checks and
+locks, and opened from the sheet; the `ltspice` block then carries that copy's
+`not_checked` and `left_in_place`. Where the copy is refused (the sheet changed
+since the run or is gone, the case's results are not there, or the run was
+not LTspice's), or another server process held the sheet past the lock's wait
+(`sheet_locked`), nothing is put beside the sheet, the run opens on its own as
+a netlist's run does, and the block's `not_placed` gives the `code` and
+`message`. If LTspice's window had already closed a plot of the sheet's
+results for the copy, the `note` says so.
 
 An eighth tool, `run_code`, is always registered and is served unless the
 operator sets `[tools] run_code = false`. It runs a Python snippet in a warm
@@ -1094,13 +1103,22 @@ the echoed `action`:
   sheet or netlist, under its name, where LTspice keeps them
   (`sheet_results.files_beside`): the raw, the log, and each other raw the run
   wrote (`<name>.op.raw`). It returns `{case_id, sheet, files, assignments,
-  not_checked}`, `sheet` naming the circuit and `not_checked` what the copy did
-  not check, with
+  not_checked, left_in_place}`, `sheet` naming the circuit and `not_checked`
+  what the copy did not check, with
   one `{from, to, replaced}` per file copied; `assignments` is what the
-  case's variations set, which the sheet does not show. `case_id` may be left
+  case's variations set, which the sheet does not show. `not_checked` always
+  says that the files the circuit includes or uses were not compared with the
+  ones the run read, since only the circuit file is. `left_in_place` names
+  each of the circuit's result files beside it that this run did not write
+  (an `.op.raw` an earlier run left, say): it is not removed, and
+  `not_checked` says that what LTspice's window does with it is not recorded.
+  `case_id` may be left
   out of a job that ran one case (otherwise `case_id_required`). The copy is
-  made under the circuit's lock and then the results file's, and the job
-  keeps its own. A case that
+  made under the circuit's lock and then the results file's, held until the
+  copy has ended even when the call is cancelled, and the job
+  keeps its own. Every placement takes this one path
+  (`sheet_results.place_checked`): this action, `execution.results_beside_sheet`
+  and `plot_waveform` with `in_ltspice`. A case that
   produced no results (`case_not_produced`) or whose results are no longer
   there (`results_missing`), a case of a job whose runs are not all terminal
   yet (`job_not_terminal`, as every read of a job's runs is refused until

@@ -364,7 +364,20 @@ NEVER_BOUNDS: dict[tuple[str, str], str] = {
         "the values the refused argument accepts"
     ),
     ("jobs.handle_jobs", "files"): "one per file the run wrote beside its results",
-    ("jobs.handle_jobs", "not_checked"): "at most two: the digest not compared, a netlist's window",
+    ("jobs.handle_jobs", "not_checked"): (
+        "at most four: the digest or the included files not compared, a netlist's "
+        "window, a dotted netlist's name, the files left in place"
+    ),
+    ("jobs.handle_jobs", "left_in_place"): (
+        "at most one per file beside a circuit its run goes to (sheet_results.ResultFiles.every)"
+    ),
+    ("analysis.handle_plot_waveform", "ltspice.not_checked"): (
+        "a sheet's placement: at most two, the digest or the included files not "
+        "compared, and the files left in place"
+    ),
+    ("analysis.handle_plot_waveform", "ltspice.left_in_place"): (
+        "at most one per file beside a sheet its run goes to (sheet_results.ResultFiles.every)"
+    ),
     # A sheet finding's own parts, in edit_schematic's preexisting view.
     ("schematic_edit.handle_edit_schematic", "views.preexisting.items[].refs"): _UNBOUNDED,
     ("schematic_edit.handle_edit_schematic", "views.preexisting.items[].points"): _UNBOUNDED,

@@ -420,7 +420,8 @@ async def test_a_netlists_run_leaves_its_results_beside_it(
     (placed,) = _observed(receipt, "results_placed_beside_sheet")
     assert placed["evidence"]["sheet"] == str(netlist)
     assert [Path(f["to"]).name for f in placed["evidence"]["files"]] == ["rc.raw", "rc.log"]
-    (unchecked,) = placed["evidence"]["not_checked"]
+    (included, unchecked) = placed["evidence"]["not_checked"]
+    assert "rc.cir includes or uses" in included
     assert "What LTspice's window does with results put beside a netlist" in unchecked
     assert "where LTspice writes a netlist's own results and log" in placed["detail"]
     assert "click" not in placed["detail"]
@@ -438,7 +439,8 @@ async def test_the_jobs_action_places_a_netlists_results(
     assert placed["sheet"] == str(netlist)
     assert [Path(f["to"]).name for f in placed["files"]] == ["rc.raw", "rc.log"]
     assert (work_dir / "rc.raw").read_bytes() == raw.read_bytes()
-    (unchecked,) = placed["not_checked"]
+    (included, unchecked) = placed["not_checked"]
+    assert "rc.cir includes or uses" in included
     assert "What LTspice's window does with results put beside a netlist" in unchecked
     assert "rc.cir" in placed["hint"] and "click" not in placed["hint"]
     assert "LTspice writes a netlist's own results and log" in placed["hint"]
@@ -488,7 +490,8 @@ async def test_a_sheet_and_a_netlist_of_other_names_are_both_placed(
     for circuit in (sheet, netlist):
         assert circuit.with_suffix(".raw").is_file() and circuit.with_suffix(".log").is_file()
     (from_sheet,) = [o for o in placed if o["evidence"]["sheet"] == str(sheet)]
-    assert "not_checked" not in from_sheet["evidence"]
+    (included,) = from_sheet["evidence"]["not_checked"]
+    assert included.startswith("The files amp.asc includes or uses")
 
 
 async def test_two_circuits_of_one_results_file_are_refused_naming_both(
