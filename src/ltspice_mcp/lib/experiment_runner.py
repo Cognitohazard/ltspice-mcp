@@ -99,6 +99,7 @@ from ltspice_mcp.lib.simulator import (
     is_ngspice,
     raw_extension_for,
     run_ngbehavior,
+    simulator_selector,
 )
 from ltspice_mcp.lib.simulator_build import (
     Producer,
@@ -772,6 +773,11 @@ class ExperimentRunner(RunnerBase):
             sources=staged.sources,
             simulator=request.simulator,
             simulator_executable=request.simulator_executable,
+            # The selector of the class this runner launches: the one the
+            # request resolved to, or the default's when it named none.
+            simulator_selector=simulator_selector(
+                self.simulator_class, request.state.offered_simulators
+            ),
             deck_names_xvii=request.deck_names_xvii,
             completeness=completeness,
             # The job's own directory inside the runner's stable output folder,

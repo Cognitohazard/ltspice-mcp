@@ -209,6 +209,7 @@ from ltspice_mcp.lib.simulator import (
     simulator_family,
     simulator_library_roots,
     simulator_remediation,
+    simulator_selector,
 )
 from ltspice_mcp.lib.simulator_build import (
     SimulatorExecutable,
@@ -1317,8 +1318,10 @@ def _do_capabilities(
         "python": _python_runtime_facts(),
         "simulators": simulators,
         "named_executables": named_executables,
-        "default_simulator": (
-            state.default_simulator.__name__ if state.default_simulator else None
+        # As the selector a run names it by, beside the keys of simulators
+        # (families) and named_executables (selectors).
+        "default_simulator": simulator_selector(
+            state.default_simulator, state.offered_simulators
         ),
         # The .asc → LTspice netlist exporter needs LTspice itself.
         "exporter_available": "ltspice" in state.available_simulators,

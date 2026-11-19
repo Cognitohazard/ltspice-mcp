@@ -5,8 +5,9 @@ import os
 import platform
 import re
 import sys
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path, PureWindowsPath
+from typing import Final
 
 from spicelib.simulators.ltspice_simulator import LTspice
 from spicelib.simulators.ngspice_simulator import NGspiceSimulator
@@ -79,6 +80,9 @@ _FAMILY_BASES: dict[str, type] = {**SIMULATORS, "ltspice": LTspice}
 _FAMILY_BY_CLASS_NAME: dict[str, str] = {
     cls.__name__: family for family, cls in (*SIMULATORS.items(), *_FAMILY_BASES.items())
 }
+# A record written on WSL names its class LTspiceWSL, and is read on every
+# host (``lib/ltspice_wsl.py``; Windows' own class keeps the name LTspice).
+_FAMILY_BY_CLASS_NAME.setdefault("LTspiceWSL", "ltspice")
 # The class each of those names is, for what a recorded name needs the class for.
 _CLASS_BY_NAME: dict[str, type] = {
     cls.__name__: cls for cls in (*SIMULATORS.values(), *_FAMILY_BASES.values())
@@ -262,6 +266,35 @@ def _apply_simulator_exe(config: ServerConfig, diagnostics: list[str] | None = N
         return False
 
 
+#: The attribute a class bound to a named executable declares its selector in
+#: (``bind_named_executable``). Read by :func:`simulator_selector` only.
+SELECTOR_ATTRIBUTE: Final = "named_selector"
+
+
+def simulator_selector(
+    simulator: type | None, offered: Mapping[str, type] | None = None
+) -> str | None:
+    """The selector a run names ``simulator`` by in ``execution.simulator``:
+    ``family:name`` for a class bound to a named executable, else the key the
+    session holds it under in ``offered`` (``SessionState.offered_simulators``),
+    else its family. None for a class outside all of them.
+
+    The one answer to "which simulator is this, in words a caller can pass
+    back": ``resolve_run_simulator`` resolves a selector through the same
+    tables, so every selector a session offers comes back as itself. A
+    detected simulator is held under its family (``detect_simulators``), so
+    the key and the family agree for every real class. The bound selector is
+    read from the class's own namespace: a subclass never inherits a name.
+    """
+    if not isinstance(simulator, type):
+        return None
+    named = vars(simulator).get(SELECTOR_ATTRIBUTE)
+    if isinstance(named, str):
+        return named
+    held = next((key for key, cls in (offered or {}).items() if cls is simulator), None)
+    return held or simulator_family(simulator)
+
+
 def bind_named_executable(base: type, selector: str, exe_path: Path) -> type:
     """A subclass of the family's ``base`` launching ``exe_path``.
 
@@ -269,13 +302,19 @@ def bind_named_executable(base: type, selector: str, exe_path: Path) -> type:
     (``docs/spicelib_bugs.md``, Bug 18), so it is called on a subclass: binding
     to ``base`` itself would retarget every runner holding it. The subclass
     keeps ``base.__name__``, which records, the raw dialect and the linter key
-    on; a job's ``simulator_executable`` is what tells two builds apart.
+    on; a job's ``simulator_executable`` is what tells two builds apart. The
+    selector it is bound to is declared on it (:data:`SELECTOR_ATTRIBUTE`),
+    which :func:`simulator_selector` reads.
     """
     cls = type(
         base.__name__,
         (base,),
-        # Only for reading a traceback: the selector this class is bound to.
-        {"__module__": __name__, "__qualname__": f"{base.__qualname__}[{selector}]"},
+        {
+            "__module__": __name__,
+            # Only for reading a traceback.
+            "__qualname__": f"{base.__qualname__}[{selector}]",
+            SELECTOR_ATTRIBUTE: selector,
+        },
     )
     cls.create_from(exe_path)
     return cls

@@ -513,9 +513,29 @@ selector appears twice; a run naming a left-out entry is refused with a list
 of the accepted names. `inspect(kind="capabilities")` lists the accepted
 entries under `named_executables`.
 
-A named build is recorded, parsed and linted as its family, so a record's
-`simulator` is the family and `simulator_executable` distinguishes two
-builds. Each build has its own limit on concurrent runs, so each gets the
+A named build is parsed and linted as its family. A job records the
+selector its run resolved to (`simulator_selector`; the default's selector
+when the request named none), beside the class name it ran (`simulator`, which
+resume reads) and the executable's identity (`simulator_executable`, which
+tells two builds apart byte for byte). Every reply that names a job names its
+simulator once, at the level of the job, as `simulator`, and the value is the
+selector: `"ltspice"`, or `"ltspice:xvii"` for a named build. Passed back as
+`execution.simulator` in the same session, it runs the same executable. The
+selector is a name in the configuration of the session that ran the job, and
+is the same on Windows, WSL and Wine for the same configuration. A reply adds
+`simulator_notes` when there is something to say about it:
+`simulator_not_in_session` when the session answering has no simulator under
+that name (a run naming it would be refused here); and, for a record written
+before the selector was recorded, `simulator_build_not_recorded`, with the
+recorded `executable`, when its executable is the path of none of the
+session's simulators of its family, so only the family is given. Such a
+record whose executable is the path of the family's own simulator, or of a
+named one, replies with that simulator's selector. The notes are lookups in
+the session's tables: no reply reads or hashes an executable to decide them,
+and `provenance` carries `simulator_executable` for a caller that needs the
+exact build. `inspect(kind="capabilities")` gives `default_simulator` as a
+selector too, beside `simulators` (keyed by family) and `named_executables`
+(keyed by selector). Each build has its own limit on concurrent runs, so each gets the
 full `[simulation] max_parallel` (`limits.max_parallel_sims` in
 `inspect(kind="capabilities")`), as each family does. A named LTspice build
 exports a `.asc` with its own executable, and with a sandbox set, a deck run
@@ -637,7 +657,9 @@ all four. A name is accepted when it is detected (for a named executable,
 when its entry was accepted at startup) and this host can run its family.
 `inspect(kind="capabilities")` reports this per simulator and per named
 executable as `selectable`, with a `refusal` giving the reason when it is
-false. An undetected family gets a "not available" error naming what was
+false, and names the default by its selector (`default_simulator`). A job's
+replies name the simulator it ran with as that same selector (`simulator`;
+"Selecting a build" above). An undetected family gets a "not available" error naming what was
 detected, and a detected family this host cannot run gets the reason. QSPICE
 is the only such family, because it runs only when the server itself runs on
 Windows, and not under WSL or Wine. Both refusals happen before anything is
@@ -877,7 +899,7 @@ Provenance in the response is opt-in. Digests, staged paths, the full
 manifest, the linter version and the job's `simulator_executable` are returned
 only with `provenance: true` on `run_experiments`, or `include.provenance:
 true` on `analyze_results` (which omits the executable). The lean receipt
-keeps `{circuit, path, simulator, dialect, staged_files}` and every manifest
+keeps `{circuit, path, dialect, staged_files}` and every manifest
 entry that is live, has a reason, or is otherwise not an ordinary staged
 reference. An analysis's `source_hashes` has one row per source,
 `{manifest_id, label, plot_index, dialect, snapshot_id}` by default; the
@@ -1167,9 +1189,13 @@ the same excerpt. `count` is the number of failures merged, and `case_ids`
 lists at most 10 of their case ids.
 
 Output: `job_id, request_id, control_token, job_type, status,
-analysis_status, dialect, outcome, source[], completeness, progress, lint
+analysis_status, simulator, simulator_notes?, dialect, outcome, source[],
+completeness, progress, lint
 findings (per circuit), runs (a page of RunRecords), analysis?, failures[],
-observations[], artifacts[], hint, cut?`.
+observations[], artifacts[], hint, cut?`. `simulator` is the selector the job
+ran with, given once for the job: neither a `source[]` entry nor a run row
+repeats it ("Selecting a build" above; the source record keeps the class name
+on disk).
 
 ### 3.2 `jobs` — job status and control
 
@@ -1214,10 +1240,11 @@ the echoed `action`:
   recent_jobs, recent_jobs_total}`; with no filter, the recently touched
   circuits. `interrupted_job_ids` lists the circuit's jobs with status
   `interrupted`. `recent_jobs` gives at most 5 of the circuit's jobs, newest
-  activity first, each `{job_id, status, request_id, finished_at}`, and
-  `recent_jobs_total` counts them all.
+  activity first, each `{job_id, status, request_id, simulator,
+  simulator_notes?, finished_at}`, and `recent_jobs_total` counts them all.
 - `runs` returns the job's `RunRecord` rows, read from its record when the
-  call is made, with the job's `status` and `progress` at that moment. They
+  call is made, with the job's `status`, `progress` and `simulator` (with any
+  `simulator_notes`) at that moment. They
   are cut as rows to the target like a receipt's, at least one kept; `cut`
   names `/items` with its `offset`, and `next` is the cursor for the rows
   after. A receipt's `cut` cursor for `/runs/items` is the same kind of
