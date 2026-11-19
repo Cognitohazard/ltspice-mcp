@@ -77,7 +77,7 @@ except (ImportError, AttributeError):  # spicelib < 1.6 (the currently pinned ra
     _SchematicComponentClass = SchematicComponent
 
 from ltspice_mcp.errors import NetlistError, SymbolResolutionError
-from ltspice_mcp.lib.asc_document import is_asc, parse_asc, window_read_past
+from ltspice_mcp.lib.asc_document import Rotation, is_asc, parse_asc, window_read_past
 from ltspice_mcp.lib.component_value import POSITIONAL_KINDS, edited_source
 from ltspice_mcp.lib.connectivity import (
     NamedNets,
@@ -2377,7 +2377,7 @@ def blank_sheet(width: int = 880, height: int = 680) -> str:
 # ---------------------------------------------------------------------------
 
 
-_RotationLiteral = Literal["R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270"]
+_RotationLiteral = Rotation
 
 # Shared op-field descriptions. The op models are published in three profiles
 # (full, agentic and the consolidated edit_schematic), so each string is paid

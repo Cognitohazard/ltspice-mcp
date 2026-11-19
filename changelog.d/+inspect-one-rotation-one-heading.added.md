@@ -1,0 +1,1 @@
+`inspect(kind="symbol")` takes `rotation` and then returns the pins and bounding box at that one placement instead of all eight. `inspect(kind="guide")` and `Api.guide()` take `heading` beside `section` and return that heading's part of the section, matched in any case. An unknown heading fails its entry as `unknown_heading` and lists the section's headings.

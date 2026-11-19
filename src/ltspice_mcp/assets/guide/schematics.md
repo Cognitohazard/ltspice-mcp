@@ -20,7 +20,8 @@ so batch a whole build into one call. Place components with the
 nets, and `warnings` reports any overlap. A pin on a net that no label names
 has no `net`; with a `compare`, it has `net_export`, the name LTspice's
 export gives it (`N001`). `inspect(kind="symbol")` previews the same geometry
-before you place anything, and lists every attribute the symbol has
+before you place anything (pass `rotation` when you know the placement, to get
+that one instead of all eight), and lists every attribute the symbol has
 (`Prefix`, `SpiceModel`, `Value`, `SpiceLine`, `ModelFile`). These attributes
 hold the model name and parameters that an instance is netlisted with.
 Change a directive or comment with `replace_directive`, which keeps its place
@@ -203,8 +204,8 @@ with a level-1 model as having its bulk at the source. A three-node
   toward Vinn).
 - For PMOS current mirrors: M4a at R180 (gate right, toward center), M4b at
   M180 (gate left, toward center) — gates face each other.
-- Use `inspect(kind="symbol")` and read the pins for the intended rotation to
-  verify pin directions before placing.
+- Use `inspect(kind="symbol", rotation=...)` with the intended rotation and
+  read its pins to verify pin directions before placing.
 
 ### Schematic layout best practices
 
