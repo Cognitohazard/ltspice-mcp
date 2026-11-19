@@ -97,7 +97,7 @@ def test_ngspice_stores_a_dotted_save_the_server_reads_by_its_colon_name(tmp_pat
     deck = f"* dotted save\n{DIVIDER}.save v(in) v(x1.mid)\n.meas tran vmid FIND v(x1:mid) AT=0.5m\n.end\n"
     traces, _ = ngspice_run(tmp_path, "dotted", deck)
     assert [t.casefold() for t in traces] == ["v(in)", "v(x1.mid)"]
-    assert find_trace(traces, "v(x1:mid)", xvii=False) == "v(x1.mid)"
+    assert find_trace(traces, "v(x1:mid)", xvii=False, schematic=False) == "v(x1.mid)"
     found = lint(deck, tmp_path / "dotted_lint.cir", ngspice_producer(), ngbehavior="")
     assert "save-meas-coverage" not in found, found
 
@@ -109,7 +109,7 @@ def test_ngspice_ignores_a_colon_name_in_a_save(tmp_path: Path):
     deck = f"* colon save\n{DIVIDER}.save v(in) v(x1:mid)\n.meas tran vmid FIND v(x1.mid) AT=0.5m\n.end\n"
     traces, _ = ngspice_run(tmp_path, "colon", deck)
     assert [t.casefold() for t in traces] == ["v(in)"]
-    assert find_trace(traces, "v(x1.mid)", xvii=False) is None
+    assert find_trace(traces, "v(x1.mid)", xvii=False, schematic=False) is None
     found = lint(deck, tmp_path / "colon_lint.cir", ngspice_producer(), ngbehavior="")
     (coverage,) = found["save-meas-coverage"]
     assert coverage["evidence"]["missing_signals"] == ["v(x1.mid)"]
@@ -356,7 +356,7 @@ def test_the_lint_reads_mass_and_eszett_as_the_trace_reader_does(tmp_path: Path)
         "* eszett\nV1 maß 0 PULSE(0 1 0 1u 1u 1 2)\nR1 maß 0 1k\n.save V(maß)\n"
         ".tran 1m\n.meas tran x FIND V(mass) AT=0.5m\n.end\n"
     )
-    assert find_trace(["V(maß)"], "V(mass)", xvii=False) is None
+    assert find_trace(["V(maß)"], "V(mass)", xvii=False, schematic=False) is None
     for build in rec.BUILDS:
         found = lint(deck, tmp_path / "eszett.cir", rec.producer(build))
         (coverage,) = found["save-meas-coverage"]

@@ -15,6 +15,7 @@ result is not paired.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 from pathlib import Path
 from typing import Any
@@ -142,13 +143,12 @@ def test_a_trace_that_meets_two_traces_is_not_paired():
     """LTspice 26 can hold both ``mb1`` (a part MB1, exported ``X§MB1``) and
     ``xmb1`` (a card ``XMB1``); XVII's ``mb1`` of a schematic's run could be
     either, so it is paired with neither, and the pairing names both."""
-    here = [trace_keys("Ix(mb1:D)", xvii=True, schematic=True)]
+    here = [("Ix(mb1:D)", trace_keys("Ix(mb1:D)", xvii=True, schematic=True))]
     there = [
-        trace_keys("Ix(mb1:d)", xvii=False, schematic=True),
-        trace_keys("Ix(xmb1:d)", xvii=False, schematic=True),
-        trace_keys("V(out)", xvii=False, schematic=True),
+        (name, trace_keys(name, xvii=False, schematic=False))
+        for name in ("Ix(mb1:d)", "Ix(xmb1:d)", "V(out)")
     ]
-    pairing = pair_traces(here, there)
+    pairing = pair_traces(here, there, same_spelling=False)
     assert pairing.pairs == ()
     assert pairing.ambiguous == {0: (0, 1)}
     assert pairing.ambiguous_there == {0: (0,), 1: (0,)}
@@ -275,3 +275,212 @@ async def test_compare_of_chosen_signals_still_names_a_trace_that_could_be_two(
     result = await asyncio.to_thread(compared)
     assert list(result["signals"]) == ["Ix(r1:A)"]
     assert result.get("ambiguous") == {"Ix(mb1:D)": ["Ix(mb1:d)", "Ix(xmb1:d)"]}, result
+
+
+#: The scopes that read a trace's keys, each with why: a deck's names, read
+#: with no schematic, have one key, which a scope may take as the key.
+_KEY_READERS = {
+    ("lib/device_names.py", "_deck_key"): "a deck's own names: one reading",
+    ("lib/result_observations.py", "saves_not_stored"): "a deck's .save names: one reading",
+    ("lib/result_observations.py", "subcircuit_nodes_not_saved"): "a deck's cards: one reading",
+    ("lib/trace_names.py", "_respelled"): "names read literally, then told apart by an X",
+    ("api/_primitives.py", "RawResult._keyed_traces"): "every key, for pair_traces",
+}
+#: The scopes that pair two results' traces.
+_PAIRERS = {("api/_primitives.py", "RawResult.compare"): "the Python API's compare"}
+#: The scopes that read a name's instances (``instance_readings``).
+_READERS = {
+    ("lib/device_names.py", "_param_owner"): "a device-table name",
+    ("lib/device_names.py", "_trace_paths"): "a trace's or a current's name",
+}
+
+
+def test_one_place_reads_a_names_instances_and_one_pairs_two_results():
+    """Which instances a name stands for is read only by ``instance_readings``
+    and its two readers; ``trace_keys`` is called only by the scopes named,
+    and only with no schematic where a scope takes one key; two results'
+    traces are paired only by ``pair_traces``. A caller that took the first
+    of several keys, or paired traces by name itself, is how a trace comes to
+    name another instance in silence."""
+    from tests._source_scan import modules, scopes
+
+    calls: dict[str, set[tuple[str, str]]] = {
+        "trace_keys": set(),
+        "pair_traces": set(),
+        "instance_readings": set(),
+    }
+    single: set[tuple[str, str]] = set()
+    for path, tree in modules().items():
+        for scope, nodes in scopes(tree):
+            for node in nodes:
+                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+                    continue
+                if node.func.id in calls:
+                    calls[node.func.id].add((path, scope))
+                if node.func.id == "trace_keys":
+                    schematic = next(k.value for k in node.keywords if k.arg == "schematic")
+                    if not (isinstance(schematic, ast.Constant) and schematic.value is False):
+                        single.add((path, scope))
+    assert calls["trace_keys"] <= set(_KEY_READERS), sorted(
+        calls["trace_keys"] - set(_KEY_READERS)
+    )
+    assert calls["pair_traces"] <= set(_PAIRERS), sorted(calls["pair_traces"])
+    assert calls["instance_readings"] <= set(_READERS), sorted(calls["instance_readings"])
+    # Only the pairing's own reader reads a result's names with their schematic
+    # flag; every other caller reads a deck's names, which have one key.
+    assert single <= {("api/_primitives.py", "RawResult._keyed_traces")}, sorted(single)
+    for path, scope in _KEY_READERS:
+        tree = modules()[path]
+        (nodes,) = [n for s, n in scopes(tree) if s == scope]
+        for node in nodes:
+            if (
+                isinstance(node, ast.Subscript)
+                and isinstance(node.value, ast.Call)
+                and isinstance(node.value.func, ast.Name)
+                and node.value.func.id == "trace_keys"
+            ):
+                pytest.fail(f"{path}:{node.lineno} takes one of trace_keys' keys")
+
+
+# One instance a name, never two ----------------------------------------------
+
+#: An XVII schematic run's raw with a block X1 (written x1) beside a card X1
+#: a directive writes (written 1), a pair no recording holds: built by hand.
+_COLLIDING = ["V(n001)", "Id(x1:M1)", "Id(1:M1)", "Ix(x1:D)", "Ix(1:D)"]
+
+
+def _xvii_schematic_op(path: Path, traces: list[str]) -> Path:
+    lines = [
+        "Title: * C:\\x\\sheet.asc",
+        "Date: Thu Jan 15 00:00:00 2026",
+        "Plotname: Operating Point",
+        "Flags: real",
+        f"No. Variables: {len(traces)}",
+        "No. Points: 1",
+        "Command: Linear Technology Corporation LTspice XVII",
+        "Variables:",
+        *(
+            f"\t{i}\t{name}\t"
+            + (
+                "voltage"
+                if name.startswith("V(")
+                else "subckt_current"
+                if name.startswith("Ix(")
+                else "device_current"
+            )
+            for i, name in enumerate(traces)
+        ),
+        "Values:",
+        "0" + "".join(f"\t{i + 1}e-3\n" for i in range(len(traces))),
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+async def _bias(state: SessionState, raw: Path, **recipe: Any) -> dict[str, Any]:
+    from tests.conftest import dispatched
+
+    return await dispatched(
+        state,
+        "analyze_results",
+        sources=[{"path": str(raw), "label": "dut"}],
+        recipes=[{"key": "k", "metric": "operating_point", **recipe}],
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_device_named_as_the_result_writes_it_selects_that_instance_alone(
+    state_no_sim: SessionState, tmp_path: Path
+):
+    """``x1`` is the block the result writes ``x1``, not also the card it
+    writes ``1``: a name the result writes stands for that instance first."""
+    raw = _xvii_schematic_op(tmp_path / "sheet.raw", _COLLIDING)
+    for device, held in (
+        ("x1", {"Id(x1:M1)", "Ix(x1:D)"}),
+        ("x1:m1", {"Id(x1:M1)"}),
+        ("1", {"Id(1:M1)", "Ix(1:D)"}),
+    ):
+        reply = await _bias(state_no_sim, raw, device=device)
+        assert not reply.get("failures"), (device, reply)
+        (value,) = [entry["value"] for entry in reply["results"]["k"]["values"]]
+        assert set(value["currents"]) == held, (device, value["currents"])
+
+
+@pytest.mark.asyncio
+async def test_a_device_whose_readings_reach_two_instances_is_refused_with_both(
+    state_no_sim: SessionState, tmp_path: Path
+):
+    """``x1`` names nothing the result writes; read with an X put back, it
+    is both the card written ``1`` and the one written ``1`` inside ``b``:
+    refused, and both named, never merged."""
+    raw = _xvii_schematic_op(tmp_path / "sheet.raw", ["V(n001)", "Id(1:M1)", "Id(b:1:M1)"])
+    reply = await _bias(state_no_sim, raw, device="x1")
+    (failure,) = reply["failures"]
+    assert "1, b:1" in failure["message"], failure
+
+
+@pytest.mark.asyncio
+async def test_compare_of_one_schematic_run_with_itself_pairs_every_trace_by_its_name(
+    state_no_sim: SessionState, tmp_path: Path
+):
+    """Two results of one build and one kind of run name an instance alike:
+    each trace pairs with the trace of its own name, the block's and the
+    card's apart."""
+    here = _xvii_schematic_op(tmp_path / "a.raw", _COLLIDING)
+    there = _xvii_schematic_op(tmp_path / "b.raw", _COLLIDING)
+    result = await _compare(state_no_sim, here, there)
+    assert sorted(result["signals"]) == sorted(_COLLIDING)
+    assert all(entry["max_abs"] == 0 for entry in result["signals"].values()), result
+    assert not result.get("ambiguous") and not result.get("only_here"), result
+
+
+_SHORTHAND_CASES = [
+    ("ltspice17", "export/sheet_part_names", ["mb1.m1.gm", "xmb1.m1.gm"], "@m:mb1:1[gm]"),
+    ("ltspice17", "export/hier_device_plain", ["u1.d1.id", "xu1.d1.id"], "@d:u1:1[id]"),
+    ("ltspice26", "export/hier_device_logopinfo", ["u1.d1.id", "xu1.d1.id"], "@u1:d1[id]"),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("build", "case_id", "spellings", "table"), _SHORTHAND_CASES)
+async def test_a_devices_parameter_is_read_by_either_reading_of_its_block_on_a_sheet_run(
+    build: str,
+    case_id: str,
+    spellings: list[str],
+    table: str,
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """The ``dev.param`` shorthand reads a part's device-table value by the
+    sheet's name and by its card, as the device selector does: one reading
+    of the instances for both (``device_names.instance_readings``)."""
+    from tests.conftest import dispatched
+
+    raw = rec.stage_run(build, case_id, work_dir / "run")
+    for expr in spellings:
+        reply = await dispatched(
+            state_no_sim,
+            "analyze_results",
+            sources=[{"path": str(raw), "label": "dut"}],
+            recipes=[{"key": "k", "metric": "value", "expr": expr}],
+        )
+        assert not reply.get("failures"), (expr, reply)
+        (value,) = reply["results"]["k"]["values"]
+        assert value["value"]["signal"].lower() == table, (expr, value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("device", ["u1", "xu1"])
+async def test_a_block_on_an_ltspice_26_sheet_selects_its_table_values_and_its_currents(
+    device: str, state_no_sim: SessionState, work_dir: Path
+):
+    """LTspice 26 writes block U1 (exported ``X§U1``) ``u1`` in its device
+    table and its raw alike (``export/hier_device_logopinfo``): a name that
+    selects D1's table values selects U1's port currents too, by the sheet's
+    name or the card's."""
+    raw = rec.stage_run("ltspice26", "export/hier_device_logopinfo", work_dir / "run")
+    reply = await _bias(state_no_sim, raw, device=device)
+    assert not reply.get("failures"), reply
+    (value,) = [entry["value"] for entry in reply["results"]["k"]["values"]]
+    assert set(value["currents"]) == {"Ix(u1:in)", "Ix(u1:out)"}, value
+    assert {name.lower() for name in value["device_op_points"]} >= {"@u1:d1[id]"}, value

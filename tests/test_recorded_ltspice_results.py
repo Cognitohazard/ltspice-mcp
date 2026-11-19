@@ -59,6 +59,7 @@ from ltspice_mcp.lib.raw_parser import (
     may_hold_compressed_transient,
     raw_writer_command,
     read_partial_raw_progress,
+    run_log_path,
 )
 from ltspice_mcp.lib.recipes import (
     MeasurementsRecipe,
@@ -940,20 +941,15 @@ def test_every_reader_names_a_schematic_part_by_its_reference(
 ):
     """``export/hier_plain_top_run`` places block X1 on a sheet. Its netlist
     line calls it ``X§X1`` on LTspice 26 and ``XX1`` on XVII, and each build's
-    raw names it by its reference, ``Ix(x1:in)``. XVII names every instance
-    without its X, so the netlist's spelling ``Ix(xx1:in)`` reads that trace
-    there. On LTspice 26 it reads none, and every reader names the trace and
-    says why."""
+    raw names it by its reference, ``Ix(x1:in)``. The netlist's spelling
+    ``Ix(xx1:in)`` names nothing as the result writes it, so on either build
+    it reads the part's trace (``device_names.instance_readings``)."""
     raw = rec.stage_run(build, "export/hier_plain_top_run", work_dir)
-    if rec.generation(build) == "xvii":
-        api = SyncApi(state_no_sim)
-        loaded = api.load_raw(path=raw)
-        assert loaded.trace("Ix(xx1:in)") == pytest.approx(loaded.trace("Ix(x1:IN)"))
-        assert "Ix(x1:IN)" in api.load_raw(path=raw, signals=["Ix(xx1:in)"]).signals
-        return
-    for text in refusals_of(state_no_sim, raw, "Ix(xx1:in)"):
-        assert "Ix(x1:in) is in this result, which names 'xx1' as 'x1'." in text, text
-        assert SCHEMATIC_REFERENCE in text, text
+    api = SyncApi(state_no_sim)
+    loaded = api.load_raw(path=raw)
+    (written,) = [name for name in loaded.signals if name.lower() == "ix(x1:in)"]
+    assert loaded.trace("Ix(xx1:in)") == pytest.approx(loaded.trace(written))
+    assert written in api.load_raw(path=raw, signals=["Ix(xx1:in)"]).signals
 
 
 #: Names that miss a trace of ``raw/subckt_names_tran_saved`` only by the X of
@@ -1047,7 +1043,7 @@ def test_the_reason_for_an_instances_x_is_the_rule_of_the_results_source(
 #: refusal is the plain pin note under the name as asked.
 X_SPELLED_PINS: dict[tuple[str, str], dict[str, tuple[str, str, str | None, str, str]]] = {
     ("export/hier_plain_top_run", "V(xx1:in)"): {
-        "current": ("x1", "Ix(x1:in)", "in, out", "'xx1' as 'x1'", SCHEMATIC_REFERENCE),
+        "current": ("xx1", "Ix(x1:in)", "in, out", "", ""),
         "xvii": ("xx1", "Ix(x1:IN)", "in, out", "", ""),
     },
     ("raw/subckt_names_tran_saved", "V(a:out)"): {
@@ -1124,21 +1120,17 @@ def test_a_device_inside_a_schematic_part_is_named_under_its_reference(
     as MB1, running a subcircuit that wraps an NMOS card M1, and calls the
     same subcircuit from a directive as XMB2. LTspice 26 names the device
     inside the part by the part's reference and the one inside the deck's
-    instance with its X, so the netlist's spelling of the part's device
-    reads nothing and the refusal names the trace. XVII names both without
-    the X and reads that spelling."""
+    instance with its X; XVII names both without the X. On either build the
+    netlist's spelling of the part's device names nothing as written, and
+    reads it (``device_names.instance_readings``)."""
     if not rec.has(build, "export/sheet_part_names.raw"):
         pytest.skip(rec.CASES.behaviours["sheet-part-trace-names"].pending)
     raw = rec.stage_run(build, "export/sheet_part_names", work_dir)
-    names = SyncApi(state_no_sim).load_raw(path=raw).signals
-    if rec.generation(build) == "xvii":
-        assert {"Id(mb1:M1)", "Id(mb2:M1)"} <= set(names), names
-        assert SyncApi(state_no_sim).load_raw(path=raw).trace("Id(xmb1:M1)").size == 1
-        return
-    assert {"Id(mb1:M1)", "Id(xmb2:M1)"} <= set(names), names
-    for text in refusals_of(state_no_sim, raw, "Id(xmb1:M1)"):
-        assert "Id(mb1:M1) is in this result, which names 'xmb1' as 'mb1'." in text, text
-        assert SCHEMATIC_REFERENCE in text, text
+    loaded = SyncApi(state_no_sim).load_raw(path=raw)
+    names = loaded.signals
+    deck = "Id(mb2:M1)" if rec.generation(build) == "xvii" else "Id(xmb2:M1)"
+    assert {"Id(mb1:M1)", deck} <= set(names), names
+    assert loaded.trace("Id(xmb1:M1)") == pytest.approx(loaded.trace("Id(mb1:M1)"))
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -1200,7 +1192,12 @@ def _step_count_reply(state: SessionState, raw: Path) -> dict[str, Any]:
 def _steps_refused(state: SessionState, raw: Path, decoded: DecodedRaw) -> str:
     """The reason every reader of how many steps ``raw`` has gives for not
     counting them: the tools' step count, the API's ``step_count`` and
-    ``steps``, and ``analyze_results``. Each gives the same one."""
+    ``steps``, and ``analyze_results``. Each gives the same one: the
+    decoder's, naming the log a reader of the path looked for where there is
+    none (``raw_parser.run_log_path``)."""
+    log = run_log_path(raw)
+    if not log.is_file():
+        decoded = decoded.without_log(log.name)
     with pytest.raises(ResultError) as counted:
         get_step_count(decoded)
     reason = str(counted.value)
@@ -2336,7 +2333,7 @@ class TestSubcircuitDeviceNames:
         devices = {
             path_text(path)
             for name in saved
-            if name.startswith("Id(") and (path := owner_path(name, xvii=xvii))
+            if name.startswith("Id(") and (path := owner_path(name, xvii=xvii, schematic=False))
         }
         assert sorted(devices) == _NESTED_MOSFETS
         # The only MOSFETs are inside the subcircuits, and they are found there.
@@ -2344,7 +2341,7 @@ class TestSubcircuitDeviceNames:
         ports = {
             path_text(path)
             for name in saved
-            if name.startswith("Ix(") and (path := owner_path(name, xvii=xvii))
+            if name.startswith("Ix(") and (path := owner_path(name, xvii=xvii, schematic=False))
         }
         assert ports == {"xa", "xb", "xa.xin", "xb.xin"}
 

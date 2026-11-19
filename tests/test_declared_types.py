@@ -203,29 +203,62 @@ def test_an_ngspice_transient_holds_no_port_current_and_only_known_types(tmp_pat
     assert not unknown, unknown
 
 
-#: The declared types only an LTspice or ngspice raw names: what one holds
-#: is the table's to say.
-_TYPE_WORDS = frozenset({"device_current", "subckt_current", "voltage-density", "current-density"})
-
-
-#: Modules that name such a type for another question than what it holds.
+#: The scopes outside the table that name two or more declared types in one
+#: collection, each with the other question it answers.
 _NOT_A_TABLE = {
-    "lib/trace_names.py": "the table",
-    "lib/raw_header.py": "an ngspice header declares voltage-density, which tells its dialect",
+    ("lib/raw_header.py", "leading_parameters"): "which variables hold a step's stepped values",
+    ("lib/result_kinds.py", "plot_analysis"): "which analysis a plot's axis says it is",
+    ("lib/result_kinds.py", "sampled_axis"): "whether a plot has a sampled axis",
+    ("lib/spice_validator.py", "<module>"): "the words a deck's analysis card sweeps",
+}
+
+#: The scopes outside the table that test a trace's declared type against a
+#: type's name, each with the other question it answers.
+_NOT_A_QUANTITY = {
+    (
+        "lib/decoded_raw.py",
+        "_trace_descriptor",
+    ): "a .tf plot's impedance, which the analysis overrides",
+    ("lib/raw_header.py", "leading_parameters"): "which variables hold a step's stepped values",
+    ("lib/raw_header.py", "_resolve_dialect"): "which simulator wrote a header",
+    ("lib/raw_header.py", "step_parameter_name"): "how a stepped temperature is named",
+    ("lib/raw_parser.py", "_has_sampled_axis"): "whether a plot has a sampled axis",
+    ("lib/result_kinds.py", "sampled_axis"): "whether a plot has a sampled axis",
 }
 
 
-def test_only_the_table_of_declared_types_names_one():
-    """No module but ``trace_names`` maps a declared type to what it holds or
-    its unit: a second table is how one reader comes to know a type the
+def test_only_the_table_of_declared_types_says_what_a_type_holds():
+    """No scope but ``trace_names`` maps declared types to what a trace holds
+    or its unit: neither a collection of two or more of them nor a test of a
+    trace's declared type against one, but where it answers another question,
+    named here. A second table is how one reader comes to know a type the
     other does not."""
-    from tests._source_scan import modules
+    from tests._source_scan import modules, scopes
 
-    found = sorted(
-        f"{path}:{node.lineno}"
-        for path, tree in modules().items()
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Constant) and node.value in _TYPE_WORDS
-        if path not in _NOT_A_TABLE
-    )
-    assert not found, found
+    def declared_word(node: ast.AST) -> bool:
+        return (
+            isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and node.value.lower() in DECLARED_TYPES
+        )
+
+    collections: set[tuple[str, str]] = set()
+    tests: set[tuple[str, str]] = set()
+    for path, tree in modules().items():
+        if path == "lib/trace_names.py":
+            continue
+        for scope, nodes in scopes(tree):
+            where = (path, scope)
+            for node in nodes:
+                if isinstance(node, (ast.Dict, ast.Set, ast.Tuple, ast.List)):
+                    elements = node.keys if isinstance(node, ast.Dict) else node.elts
+                    if sum(1 for e in elements if e is not None and declared_word(e)) >= 2:
+                        collections.add(where)
+                if (
+                    isinstance(node, ast.Compare)
+                    and "declared" in ast.unparse(node.left).lower()
+                    and any(declared_word(c) for c in ast.walk(node))
+                ):
+                    tests.add(where)
+    assert collections <= set(_NOT_A_TABLE), sorted(collections - set(_NOT_A_TABLE))
+    assert tests <= set(_NOT_A_QUANTITY), sorted(tests - set(_NOT_A_QUANTITY))

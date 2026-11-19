@@ -124,11 +124,12 @@ async def test_a_stepped_frequency_response_read_by_its_path_reads_its_steps_on_
 
 
 @pytest.mark.asyncio
-async def test_without_the_runs_log_the_reply_says_the_steps_cannot_be_told_apart(
+async def test_without_the_runs_log_the_refusal_names_the_log_it_looked_for(
     state_no_sim: SessionState, work_dir: Path
 ):
-    """With no log beside it, the ``.fra_1.raw`` is refused as before: its
-    steps cannot be told apart, and the source names the log it looked for."""
+    """With no log beside it, the ``.fra_1.raw`` is refused on every path
+    route, and the refusal names the log looked for beside it and says the
+    steps cannot be told apart without it."""
     build, case_id = "ltspice26", "raw/fra_step"
     if not rec.has(build, f"{case_id}.fra_1.raw"):
         pytest.skip("raw/fra_step is not recorded on LTspice 26")
@@ -136,6 +137,10 @@ async def test_without_the_runs_log_the_reply_says_the_steps_cannot_be_told_apar
     fra.parent.mkdir(parents=True)
     shutil.copyfile(rec.recorded(build, f"{case_id}.fra_1.raw"), fra)
     assert services.source_for_raw_path(fra, state_no_sim).log == fra.parent / "fra_step.log"
+
+    def says(text: str) -> None:
+        assert "fra_step.log" in text and "cannot be told apart" in text, text
+
     reply = await dispatched(
         state_no_sim,
         "analyze_results",
@@ -143,7 +148,22 @@ async def test_without_the_runs_log_the_reply_says_the_steps_cannot_be_told_apar
         recipes=[{"key": "k", "metric": "signal_stats", "signal": "gain_1"}],
         all_steps=True,
     )
-    assert "Step boundaries are unresolved" in str(reply), reply
+    (failure,) = reply["failures"]
+    says(failure["message"])
+    plotted = await dispatched(
+        state_no_sim, "plot_waveform", path=str(fra), signals=["gain_1"], open=False
+    )
+    says(str(plotted.get("error") or plotted))
+
+    def api_read() -> str:
+        loaded = SyncApi(state_no_sim).load_raw(fra)
+        try:
+            loaded.trace("gain_1", step=1)
+        except Exception as refused:
+            return str(refused)
+        return "read"
+
+    says(await asyncio.to_thread(api_read))
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -168,21 +188,40 @@ def test_an_operating_point_raw_beside_a_stepped_run_reads_as_before_with_the_ru
     )
 
 
-#: The scopes that name a log by another file's name, each with what that
-#: file is: none of them a results file.
+#: The scopes that name a file ``<something>.log``, each with what that log
+#: is: none of them the log of a results file read by its path, which only
+#: ``run_log_path`` names.
 _LOG_NAMERS = {
     ("lib/raw_parser.py", "run_log_path"): "the one answer for a results file",
     ("lib/ngspice_mode.py", "run_batch"): "a probe deck's own log",
-    ("lib/controlled_ngspice.py", "run"): "a deck's own log",
+    ("lib/controlled_ngspice.py", "controlled_ngspice.ControlledNGspice.run"): "a deck's own log",
     ("lib/sheet_results.py", "files_beside"): "a circuit's own log",
+    ("lib/experiment_inputs.py", "_native_setup"): "the log a job's run writes under its token",
+    ("lib/experiment_runner.py", "ExperimentRunner._verify_executed_copy"): (
+        "the log a job's run writes under its token"
+    ),
+    ("lib/experiment_store.py", "_produced_artifacts"): "a job case's log under its token",
+    (
+        "lib/native_execution.py",
+        "prepare_native_cases",
+    ): "the log a job's run writes under its token",
+    (
+        "lib/native_execution.py",
+        "prepare_native_retry",
+    ): "the log a job's run writes under its token",
+    ("lib/pdk_native.py", "validate_paths"): "the suffix a native run's log must have",
+    ("lib/log_parser.py", "normalized_log"): "a temporary copy of a log",
+    ("lib/store.py", "Store.detached_log"): "a detached owner's console output",
+    ("lib/parser_capture.py", "<module>"): "the name the parser worker gives its captured log",
+    ("tools/analyze.py", "_names_a_log"): "whether a caller's path is a log read alone",
 }
 
 
 def test_only_run_log_path_names_the_log_of_a_results_file():
-    """Every place that names a log after another file is the one answer for
-    a results file or names a deck's or a circuit's log: a second pairing of
-    a results file with a log is how ``.fra_1.raw`` came to be read with a
-    log no build writes."""
+    """Every place that names a file ``<something>.log`` (a suffix, a name
+    or a format of one) is the one answer for a results file or names
+    another log, named here: a second pairing of a results file with a log
+    is how ``.fra_1.raw`` came to be read with a log no build writes."""
     from tests._source_scan import modules, scopes
 
     found: set[tuple[str, str]] = set()
@@ -190,29 +229,40 @@ def test_only_run_log_path_names_the_log_of_a_results_file():
         for scope, nodes in scopes(tree):
             for node in nodes:
                 if (
-                    isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Attribute)
-                    and node.func.attr in ("with_suffix", "with_name")
-                    and any(
-                        isinstance(part, ast.Constant)
-                        and isinstance(part.value, str)
-                        and part.value.endswith(".log")
-                        and not part.value.endswith(".exe.log")
-                        for arg in node.args
-                        for part in ast.walk(arg)
-                    )
+                    isinstance(node, ast.Constant)
+                    and isinstance(node.value, str)
+                    and node.value.endswith(".log")
+                    and not node.value.endswith(".exe.log")
+                    and "*" not in node.value
+                    and not node.value.startswith("fixture:")
                 ):
-                    found.add((path, scope.rsplit(".", 1)[-1]))
+                    found.add((path, scope))
     assert found <= set(_LOG_NAMERS), sorted(found - set(_LOG_NAMERS))
 
 
-def test_a_log_of_the_files_own_name_is_its_runs(tmp_path: Path):
-    """A circuit named ``amp.op`` writes ``amp.op.raw`` and ``amp.op.log``: its
-    own-named log is its run's, not ``amp.log`` of another circuit beside it.
-    No run writes a log of an other raw's own name, so one that is there
-    belongs to that file's run."""
-    for name in ("amp.op.raw", "amp.op.log", "amp.raw", "amp.log"):
-        (tmp_path / name).write_bytes(b"")
-    assert run_log_path(tmp_path / "amp.op.raw") == tmp_path / "amp.op.log"
-    (tmp_path / "amp.op.log").unlink()
-    assert run_log_path(tmp_path / "amp.op.raw") == tmp_path / "amp.log"
+def test_no_coroutine_resolves_a_results_path_on_the_event_loop():
+    """``source_for_raw_path`` looks for a log on disk (``run_log_path``), so a
+    coroutine hands it, and ``resolve_analysis_source`` which calls it, to a
+    thread: a direct call in an ``async def`` would stat files on the loop
+    every request shares."""
+    from tests._source_scan import modules
+
+    resolvers = {"source_for_raw_path", "resolve_analysis_source"}
+    found: list[str] = []
+    for path, tree in modules().items():
+        for function in ast.walk(tree):
+            if not isinstance(function, ast.AsyncFunctionDef):
+                continue
+            for node in ast.walk(function):
+                if not isinstance(node, ast.Call):
+                    continue
+                name = (
+                    node.func.attr
+                    if isinstance(node.func, ast.Attribute)
+                    else node.func.id
+                    if isinstance(node.func, ast.Name)
+                    else None
+                )
+                if name in resolvers:
+                    found.append(f"{path}:{node.lineno}")
+    assert not found, found

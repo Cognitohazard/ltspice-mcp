@@ -236,7 +236,7 @@ async def _every_route(
         "naming_for xvii": xvii,
         "raw header xvii": writes_xvii_command(dict(plot.fields)),
     }
-    found = find_trace(names, user, xvii=xvii)
+    found = find_trace(names, user, xvii=xvii, schematic=from_schematic(plot))
     routes["find_trace"] = found
     trace = _trace(cell, build)
     if cell.coordinates["form"] == "section_sign" or _NAME.fullmatch(user) is None:
@@ -439,9 +439,9 @@ def test_every_recorded_trace_is_found_under_the_name_a_user_writes(build: str):
             if what == "step_value":
                 continue
             user = named.get(variable.name, user_spelling(variable.name, build))
-            if find_trace(names, user, xvii=xvii) != variable.name:
+            if find_trace(names, user, xvii=xvii, schematic=from_schematic(plot)) != variable.name:
                 missed.append(
-                    f"{case_id}: {user!r} -> {find_trace(names, user, xvii=xvii)!r}, not {variable.name!r}"
+                    f"{case_id}: {user!r} -> {find_trace(names, user, xvii=xvii, schematic=from_schematic(plot))!r}, not {variable.name!r}"
                 )
     assert not missed, missed
     assert unnamed == UNNAMED[build], sorted(unnamed)
@@ -469,7 +469,7 @@ def test_ngspice_names_a_node_at_every_depth_as_a_user_writes_it(analysis: str, 
     names = [variable.name for variable in plot.variables]
     decoded = rec.decode_file(raw, tmp_path, producing="ngspice").raw
     for user in _NGSPICE_NAMES:
-        found = find_trace(names, user, xvii=False)
+        found = find_trace(names, user, xvii=False, schematic=False)
         assert found is not None, (user, names)
         assert trace_keys(user, xvii=False, schematic=False) == trace_keys(
             found, xvii=False, schematic=False

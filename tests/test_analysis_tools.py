@@ -1844,13 +1844,13 @@ class TestTraceDeviceFilter:
     """Pure helpers behind operating_point's device= filter."""
 
     def test_the_owner_of_each_name(self):
-        assert owner_path("@m1[gm]", xvii=False) == ("m1",)
-        assert owner_path("v(@m1[vth])", xvii=False) == ("m1",)
-        assert owner_path("i(@m1[id])", xvii=False) == ("m1",)
-        assert owner_path("Id(M1)", xvii=False) == ("m1",)
-        assert owner_path("Ic(Q2)", xvii=False) == ("q2",)
-        assert owner_path("I(R1)", xvii=False) == ("r1",)
-        assert owner_path("V(out)", xvii=False) is None
+        assert owner_path("@m1[gm]", xvii=False, schematic=False) == ("m1",)
+        assert owner_path("v(@m1[vth])", xvii=False, schematic=False) == ("m1",)
+        assert owner_path("i(@m1[id])", xvii=False, schematic=False) == ("m1",)
+        assert owner_path("Id(M1)", xvii=False, schematic=False) == ("m1",)
+        assert owner_path("Ic(Q2)", xvii=False, schematic=False) == ("q2",)
+        assert owner_path("I(R1)", xvii=False, schematic=False) == ("r1",)
+        assert owner_path("V(out)", xvii=False, schematic=False) is None
 
     def test_filter_narrows_to_device(self):
         op = {
