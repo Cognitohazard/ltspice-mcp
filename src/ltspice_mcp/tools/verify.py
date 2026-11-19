@@ -157,6 +157,12 @@ from ltspice_mcp.lib.spice_validator import (
     validate_netlist_directive_refs,
     validate_netlist_duplicate_params,
 )
+from ltspice_mcp.lib.stored_values import (
+    CP1252_BUILD,
+    STATEMENTS_SCHEMA,
+    readings_of_sites,
+    statements,
+)
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     CUT_SCHEMA,
@@ -769,6 +775,7 @@ COMPARISON_SCHEMA: dict[str, Any] = {
         "which keys are present."
     ),
     "properties": {
+        "values_read_otherwise": {**STATEMENTS_SCHEMA, CUT: NEVER},
         "mode": {
             "type": "string",
             "enum": ["equivalence", "structural_diff"],
@@ -1390,7 +1397,9 @@ def _value_suffix_findings(
     was written in. It is a warning per value only when a reader this server
     knows of decodes it otherwise: an LTspice XVII the session drives
     (``cp1252_reader``, from ``services.cp1252_ltspice``) or the one the deck
-    shows exported it (``export_writer``), reading a file that is not cp1252. Otherwise
+    shows exported it (``export_writer``), where ``stored_values`` says that
+    build reads the value otherwise or that no recording shows how it reads
+    it. Otherwise
     the file's micro signs are one observation, with their count and lines,
     which leaves the outcome alone, except in an ``exported`` netlist: both
     builds write a part's ``u`` suffix as a micro sign there whatever the
@@ -1405,18 +1414,32 @@ def _value_suffix_findings(
     writer = export_writer(text)
     if cp1252_reader is None and writer and is_cp1252_ltspice_build(writer):
         cp1252_reader = writer
-    misread = cp1252_reader is not None and encoding != "cp1252"
+    # Which micro signs the cp1252 reader reads otherwise is stored_values'
+    # answer, from the recordings of LTspice XVII.
+    misread = (
+        {}
+        if cp1252_reader is None
+        else {
+            (reading.line, reading.value): reading
+            for reading in readings_of_sites(
+                [site for site in sites if site.micro], encoding, file=path
+            )
+            if reading.build == CP1252_BUILD
+        }
+    )
     findings: list[dict[str, Any]] = []
     micro: list[ValueSuffixSite] = []
     for site in sites:
-        if site.micro and not misread:
+        reading = misread.get((site.line, site.token)) if site.micro else None
+        if site.micro and reading is None:
             micro.append(site)
             continue
         evidence = value_suffix_evidence(site, generated_by=generated_by)
         evidence["card"] = site.card.body
         evidence["encoding"] = encoding
-        if site.micro:
+        if reading is not None:
             evidence["reader"] = cp1252_reader
+            evidence["read_otherwise"] = reading.statement()
             rule_id, severity = "value_suffix_micro_sign", "warning"
         elif site.mojibake:
             rule_id, severity = "value_suffix_mojibake", rule_severity("value-suffix-mojibake")
@@ -2191,6 +2214,7 @@ def compare_equivalence(
         "directives_equivalent": directives_equivalent,
         "directives_added": added,
         "directives_removed": removed,
+        "values_read_otherwise": statements((*ref_graph.readings, *cand_graph.readings)),
     }
     return payload, findings, None, []
 
@@ -2229,7 +2253,11 @@ def _structural_diff(
     name_b, cand, err_b = _read_side(candidate, "the netlist under test")
     warnings = parse_failure_warnings([(name_a, err_a), (name_b, err_b)])
     both_parsed = err_a is None and err_b is None
-    return structural_delta(ref, cand), warnings, both_parsed, definitions_unread(ref, cand)
+    delta = {
+        **structural_delta(ref, cand),
+        "values_read_otherwise": statements((*ref.readings, *cand.readings)),
+    }
+    return delta, warnings, both_parsed, definitions_unread(ref, cand)
 
 
 def compare_structural(reference: str | Path, candidate: str | Path) -> CompareResult:
@@ -2926,11 +2954,10 @@ async def evaluate_verify_circuit(
             else:
                 assert compare is not None  # guarded by `reference is not None`
                 ref_source = reference if isinstance(reference, Path) else path
-                # Reuse the netlist text already read for syntax, so the candidate is
-                # not read+lexed a second time; the export path has no such text.
-                cand_input: str | Path = (
-                    text if kind == "netlist" and text is not None else candidate
-                )
+                # The candidate is read from its file, as the reference is, so the
+                # comparison knows its stored bytes and states each value a
+                # recorded build reads otherwise (stored_values).
+                cand_input: str | Path = candidate
                 compared: CompareResult
                 async with reference_netlist(reference, state) as ref_netlist:
                     observations.extend(ref_netlist.observations)

@@ -56,7 +56,12 @@ SHORTENS: Final[Mapping[Delivery, bool]] = {
 #: The observations that describe the job or its request and do not change
 #: between replies about it.
 STANDING_CODES: Final = frozenset(
-    {"micro_sign_folded", "ngspice_mode_unverified", "results_not_beside_sheet"}
+    {
+        "micro_sign_folded",
+        "ngspice_mode_unverified",
+        "results_not_beside_sheet",
+        "value_read_otherwise",
+    }
 )
 
 #: The code the request's lint findings for one circuit are remembered by.

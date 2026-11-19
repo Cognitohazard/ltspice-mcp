@@ -103,7 +103,6 @@ from ltspice_mcp.lib.deck_staging import (
     scan_include_references,
 )
 from ltspice_mcp.lib.device_names import fold_name, path_text
-from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import (
     SAME_VALUE_RTOL,
     fold_micro_sign,
@@ -112,7 +111,6 @@ from ltspice_mcp.lib.format import (
 )
 from ltspice_mcp.lib.spice_lex import (
     Definition,
-    LexResult,
     SpiceCard,
     SpiceLexError,
     copies_by_name,
@@ -125,6 +123,7 @@ from ltspice_mcp.lib.spice_lex import (
 )
 from ltspice_mcp.lib.spice_lex_ops import without_added_x, without_section_sign
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, SubcktCard, global_names
+from ltspice_mcp.lib.stored_values import OtherReading, StoredDeck, read_stored_deck
 
 if TYPE_CHECKING:
     from ltspice_mcp.lib.hierarchy import SemanticProfile
@@ -345,6 +344,9 @@ class NetlistGraph:
     #: definitions' whose file (or section) defines subcircuits and nothing
     #: else, so what each brings is those definitions.
     definition_includes: tuple[SpiceCard, ...] = ()
+    #: Each value of the files read that a recorded LTspice build reads as
+    #: another number than the graph holds (``stored_values``).
+    readings: tuple[OtherReading, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -671,7 +673,7 @@ def _pin_role(type_letter: str, index: int) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _load_cards(path_or_text: str | Path) -> tuple[LexResult, Path | None]:
+def _load_cards(path_or_text: str | Path) -> tuple[StoredDeck, Path | None]:
     """The cards a simulator reads from a netlist given as a filesystem path or
     as raw text (``spice_lex.lex_deck``: not its title line, nor a card after
     ``.END``).
@@ -679,7 +681,8 @@ def _load_cards(path_or_text: str | Path) -> tuple[LexResult, Path | None]:
     A :class:`~pathlib.Path` is always read as a file. A ``str`` is treated as
     raw netlist text when it spans multiple lines or is long; otherwise, if it
     names an existing file, it is read — else it is lexed as text. The second
-    element is the file read (``None`` for bare text).
+    element is the file read (``None`` for bare text); text has no stored
+    bytes, so no reading of its values by another build.
 
     An ``.asc`` schematic is refused: lexed as SPICE, its ``SYMBOL``/``WIRE``
     lines read as element cards and the graph describes nothing. Its LTspice
@@ -695,15 +698,15 @@ def _load_cards(path_or_text: str | Path) -> tuple[LexResult, Path | None]:
                 return _cards_from_netlist_path(candidate), candidate
         except OSError:
             pass
-    return lex_deck(text), None
+    return StoredDeck(text, "text", lex_deck(text), ()), None
 
 
-def _cards_from_netlist_path(path: Path) -> LexResult:
+def _cards_from_netlist_path(path: Path) -> StoredDeck:
     if is_asc(path):
         raise NetlistGraphError(
             f"{path.name} is an .asc schematic, not a netlist; compare its LTspice export"
         )
-    return lex_deck(read_spice_text(path))
+    return read_stored_deck(path)
 
 
 # Lex warnings that indicate the netlist structure itself is broken (as opposed
@@ -753,7 +756,8 @@ def parse_netlist_graph(
     ``.global`` net is its reading (``deck_nodes``), and which definition of
     a name defined twice it keeps in force.
     """
-    result, source = _load_cards(path_or_text)
+    stored, source = _load_cards(path_or_text)
+    result = stored.lexed
     cards = result.cards
 
     structural = [
@@ -764,7 +768,7 @@ def parse_netlist_graph(
     if structural:
         raise NetlistGraphError("malformed netlist: " + "; ".join(structural))
 
-    registry = _SubcktRegistry(reader=reader)
+    registry = _SubcktRegistry(reader=reader, readings=list(stored.readings))
     directory = base_dir if base_dir is not None else source.parent if source else None
     _collect_subckts(
         cards,
@@ -803,6 +807,7 @@ def parse_netlist_graph(
         global_nets=frozenset(registry.global_nets),
         directives=directives,
         definition_includes=tuple(card for card in registry.definitions_only if id(card) in held),
+        readings=tuple(registry.readings),
     )
 
 
@@ -830,6 +835,8 @@ class _SubcktRegistry:
     #: section) read so far does.
     definitions_only: list[SpiceCard] = field(default_factory=list)
     files: dict[tuple[Path, str | None], bool] = field(default_factory=dict)
+    #: The readings of the values of every file read (``stored_values``).
+    readings: list[OtherReading] = field(default_factory=list)
 
     def register(self, definition: SubcktDef, source: str, scope: tuple[str, ...]) -> None:
         self.candidates.append((definition, source, scope))
@@ -1121,9 +1128,11 @@ def _follow_include(
         why = library_read(reference, None, registry.reader.library_reader).unread
         return missing(why or "not found")
     try:
-        included = lex_deck(read_spice_text(path), title=False)
+        stored = read_stored_deck(path, root=False)
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         return missing(f"unreadable: {exc}")
+    included = stored.lexed
+    registry.readings.extend(stored.readings)
     registry.files[selected] = _collect_subckts(
         included.cards,
         origin=path,

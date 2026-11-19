@@ -146,6 +146,7 @@ from ltspice_mcp.lib import (
     response_budget,
     services,
     simulator_docs,
+    stored_values,
 )
 from ltspice_mcp.lib import file_stamp as stamps
 from ltspice_mcp.lib import simulator as simulator_mod
@@ -2559,6 +2560,8 @@ def _hierarchy_page(q: HierarchyQuery, state: SessionState, view: _View) -> dict
             "profile": hierarchy.profile.reply(),
             "inputs": identity["inputs"],
             "ngspice_check": check.payload() if check is not None else None,
+            # Deck-level, so on every page, the first included.
+            "values_read_otherwise": stored_values.statements(hierarchy.readings),
             "total": page["total"],
             "returned": page["returned"],
         },
@@ -3165,6 +3168,10 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
                             **_SIMULATOR_DOCS_DATA_PROPERTIES,
                             **_OPEN_DESIGNS_DATA_PROPERTIES,
                             **_MEASUREMENTS_DATA_PROPERTIES,
+                            "values_read_otherwise": {
+                                **stored_values.STATEMENTS_SCHEMA,
+                                CUT: NEVER,
+                            },
                             "plot_index": {"type": "integer", "minimum": 0},
                             "snapshot_id": {"type": "string"},
                             "dialect": {"type": "string"},

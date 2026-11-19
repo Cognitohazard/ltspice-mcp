@@ -38,6 +38,8 @@ from ltspice_mcp.lib.spice_lex_ops import (
     fold_micro_suffix_cards,
 )
 from ltspice_mcp.lib.spice_lex_views import WAVEFILE
+from ltspice_mcp.lib.stored_values import CODE as READ_OTHERWISE
+from ltspice_mcp.lib.stored_values import OtherReading, readings_of_cards, statements
 
 # Sized for real foundry PDKs, which fan out further than a hand-written deck:
 # sky130 reaches a device model five levels down (deck -> sky130.lib.spice ->
@@ -163,6 +165,24 @@ def _micro_fold_observation(
             "lines": [site.line for site in folded],
             "reader": reader,
         },
+    }
+
+
+def _read_otherwise_observation(path: Path, readings: Sequence[OtherReading]) -> dict[str, Any]:
+    """The values of a source file that a recorded LTspice build reads as
+    another number than the run uses (``stored_values``): the run reads each
+    as the server does, whatever the simulator, but the file opened in that
+    build is another circuit, and a number drawn or checked from it here
+    (a Monte Carlo nominal, a device's size) is not the one that build reads."""
+    stated = statements(readings)
+    return {
+        "code": READ_OTHERWISE,
+        "kind": "provenance",
+        "detail": (
+            f"{len(stated)} value(s) of {path.name} are read as another number by a "
+            "recorded LTspice build than by this run; each names the build and its number."
+        ),
+        "evidence": {"file": str(path), "values": stated},
     }
 
 
@@ -552,6 +572,10 @@ def stage_deck(
             # is spelled 'u', which every simulator in every encoding reads as
             # micro: a UTF-8 µ reaches LTspice XVII as the two cp1252
             # characters 'Âµ' and silently loses its scale.
+            # Read before the fold, which spells the signs the readings name.
+            readings = readings_of_cards(parsed.read, encoding, file=resolved)
+            if readings:
+                observations.append(_read_otherwise_observation(resolved, readings))
             folded = fold_micro_suffix_cards(parsed.read)
             if folded:
                 changed = True

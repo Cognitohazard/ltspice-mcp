@@ -1145,7 +1145,8 @@ to fewer rows at the shrink rung, down to none; `analyze_results` over the
 
 **Standing notes, said once.** Some notes describe the job or the request and
 read the same on every reply about it: the `micro_sign_folded`,
-`ngspice_mode_unverified` and `results_not_beside_sheet` observations, each
+`ngspice_mode_unverified`, `results_not_beside_sheet` and
+`value_read_otherwise` observations, each
 `lint` entry and `source` entry, and the hint's route to the `measurements`
 recipe (when a row names a `.meas` that gave no value, or, on a terminal
 receipt, when the deck has `.meas` cards, the request did not attach the
@@ -2140,6 +2141,10 @@ directives all match. Beside a false one, `structurally_equivalent`
 says whether the wiring matched and `directives_equivalent` whether the
 directives did, and `directives_added` and `directives_removed` list the
 directives only this circuit has and those only the reference has.
+In either mode `values_read_otherwise` lists each value of a side read from a
+file that a recorded LTspice build reads as another number than the
+comparison does (see `inspect(kind="hierarchy")`); a side given as text has
+no stored bytes and lists none.
 `structural_diff` reports the added, removed and changed components and
 directives of the two files as written, each in its scope: the top level, or
 the `.subckt` definition it sits in, paired with the definition of the same
@@ -3170,6 +3175,23 @@ to use the mode the server runs ngspice with; setting it changes only how this
 query reads the deck, so configure simulation to use the same mode. The
 reader's rules were established against ngspice for `hsa`, `kiltpsa` and the
 empty string (native SPICE mode).
+
+`data.values_read_otherwise` lists each value of the files read that a
+recorded LTspice build reads as another number than the reply gives
+(`lib/stored_values.py`), on every page. The server reads a micro sign or a
+Greek mu at a value's suffix as micro, as a run through it does (staging spells
+it `u`). LTspice XVII decodes a deck stored as UTF-8, with or without a byte
+order mark, as cp1252, so it reads such a sign as two letters that are no
+scale and takes the bare number (`deck/micro_utf8`, `deck/micro_utf8_bom`,
+`deck/greek_mu_utf8`). Each entry (code `value_read_otherwise`) names the
+value, its file and line, the codec the server decoded it as, the build, the
+text that build reads (`build_reads`) and the number it takes
+(`build_number`). A sign in an encoding no recording shows for a build (a
+Greek mu in UTF-16, UTF-16 big-endian, UTF-32) is listed with
+`established: false` for that build, and so is the number a build takes from
+such letters inside braces or in a directive, which no recording shows. The
+same list rides on `verify_circuit`'s and `edit_schematic`'s `comparison`, and
+on a run's receipt as a `value_read_otherwise` observation.
 
 When an ngspice executable is available, `data.ngspice_check` reports how the
 values discovery resolved compare with the ones ngspice reads

@@ -58,7 +58,6 @@ from pathlib import Path
 
 from ltspice_mcp.lib.deck_nodes import GROUND
 from ltspice_mcp.lib.device_names import fold_name
-from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.export_nets import named_by_export
 from ltspice_mcp.lib.format import fold_micro_sign
 from ltspice_mcp.lib.netlist_graph import (
@@ -86,6 +85,7 @@ from ltspice_mcp.lib.spice_lex import (
     tokenize_body,
 )
 from ltspice_mcp.lib.spice_lex_views import ModelCard, read_instance
+from ltspice_mcp.lib.stored_values import OtherReading, read_stored_deck
 
 # Directive cards whose assignments are a set: ``.param a=1 b=2`` and
 # ``.param b=2 a=1`` define the same thing. (A ``.model`` is read through its
@@ -262,6 +262,9 @@ class Deck:
     scopes: dict[ScopeKey, Scope] = field(default_factory=lambda: {(): Scope()})
     unread: tuple[tuple[ScopeKey, str], ...] = ()
     includes: bool = False
+    #: Each value of the file that a recorded LTspice build reads as another
+    #: number than the diff compares (``stored_values``).
+    readings: tuple[OtherReading, ...] = ()
 
 
 #: A rule for :func:`spice_lex.settle_definitions` that keeps no definition
@@ -275,11 +278,15 @@ _AS_WRITTEN = DefinitionRule(
 _NAMELESS = "<anon>"
 
 
-def _cards(source: str | Path) -> list[SpiceCard]:
+def _cards(source: str | Path) -> tuple[list[SpiceCard], tuple[OtherReading, ...]]:
     """The cards a simulator reads of a netlist, a path or its text
-    (``spice_lex.lex_deck``): not its title line, nor a card after ``.END``."""
-    text = read_spice_text(source) if isinstance(source, Path) else source
-    return lex_deck(text).cards
+    (``spice_lex.lex_deck``): not its title line, nor a card after ``.END``;
+    and, for a file, the readings of its values another build makes
+    (``stored_values``). Text has no stored bytes, so none."""
+    if isinstance(source, Path):
+        stored = read_stored_deck(source)
+        return stored.lexed.cards, stored.readings
+    return lex_deck(source).cards, ()
 
 
 def _directive_of(card: SpiceCard) -> Directive | None:
@@ -312,7 +319,7 @@ def read_deck(source: str | Path) -> Deck:
     Raises what reading the file raises; a caller decides what an unreadable
     deck means for its comparison.
     """
-    cards = _cards(source)
+    cards, readings = _cards(source)
     openers = [(i, card) for i, card in enumerate(cards) if card.kind == "subckt"]
     # Which definitions share a scope and a name: settle_definitions' groups.
     settled = settle_definitions(
@@ -357,7 +364,7 @@ def read_deck(source: str | Path) -> Deck:
         for path, name in paths.items()
         if not any(path[:depth] in paths for depth in range(1, len(path)))
     )
-    return Deck(scopes, unread, includes)
+    return Deck(scopes, unread, includes, readings)
 
 
 def circuit_directive_delta(
