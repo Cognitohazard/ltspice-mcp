@@ -219,18 +219,24 @@ async def test_a_runs_page_reads_the_facts_of_every_row_off_the_loop(
     assert read_on and loop_thread not in read_on
 
 
-def test_a_count_that_fits_below_the_counts_tried_first_is_found(tmp_path):
-    """Many small rows, and a note near its reserve for every count the
-    fallback tries first: a smaller count that fits whole is still found, and
-    the reply does not say it is over its target."""
+def test_a_band_of_counts_that_fit_below_the_largest_is_found(tmp_path):
+    """The note shrinks as rows are kept, as ``runs_not_shown`` does: large
+    below 60 rows, a middle size from 60 on. Then only a band in the middle
+    fits whole (60 to 90 rows), below the counts that fit without the note
+    and away from one row. The largest of that band is kept, and the reply
+    does not say it is over its target."""
     rows = [f"r{index:04d}" for index in range(300)]
-    big = ["fact " + "z" * 40] * 300
-    reserve = estimate_tokens({"left_out": big})
+    huge = ["fact " + "z" * 40] * 300
+    reserve = estimate_tokens({"left_out": huge})
+    middle: list[str] = []
 
     def annotate(reply: dict[str, Any], cut: Any, _stored: Any, _paged: Any) -> None:
         entry = cut.get("/rows")
-        if entry is not None and entry.returned > 100:
-            reply["left_out"] = big
+        if entry is None:
+            return
+        note = huge if entry.returned < 60 else middle
+        if note:
+            reply["left_out"] = note
 
     def presented(target: int, cap: int | None = None) -> Any:
         return present(
@@ -247,17 +253,20 @@ def test_a_count_that_fits_below_the_counts_tried_first_is_found(tmp_path):
             apart={"left_out": reserve},
         )
 
-    def bare(count: int) -> int:
-        reply = presented(10**9, cap=count).reply
-        return estimate_tokens({k: v for k, v in reply.items() if k != "left_out"}, as_sent=False)
+    def size(count: int) -> int:
+        return estimate_tokens(presented(10**9, cap=count).reply, as_sent=False)
 
-    # 250 rows fit without the note, no count fits beside the reserve, and
-    # every count from 250 down past the first 64 carries the note.
-    target = bare(250)
+    target = size(250)  # no note above 60 yet: 250 rows fit without it
+    while size(90) <= target:  # the middle note grows until 90 rows just fit
+        middle.append("zzzz")
+    middle.pop()
+    fits = [count for count in range(1, 301) if size(count) <= target]
+    assert fits[0] >= 60 and fits[-1] == 90, fits
     assert reserve > target and estimate_tokens({"rows": rows}, as_sent=False) > target
+
     shown = presented(target)
     assert shown.met
-    assert len(shown.reply["rows"]) >= 100
+    assert len(shown.reply["rows"]) == 90
 
 
 # ---------------------------------------------------------------------------

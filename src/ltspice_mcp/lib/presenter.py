@@ -286,9 +286,8 @@ def _fit(
     entries left out, which shrinks as more are kept. The entries are sized
     against the target less those bounds, without those fields, so the size
     grows with every entry kept and a binary search is right. Where that finds
-    no count, the counts that fit without the reserve are tried whole, from
-    the largest, and then searched whole below those, so a reply does not say
-    it is over its target while a count down to one entry fits.
+    no count, every count that fits without the reserve is tried whole, from
+    the largest, so a reply never says it is over its target while one fits.
     """
     apart = apart or {}
     reserve = sum(apart.values())
@@ -322,27 +321,22 @@ def _fit(
             most = _largest(
                 lambda count, at=largest: bare({**keep, at: count}) <= target, keep[largest] - 1
             )
-            tried = range(most or 0, 0, -1)[:_WHOLE_TRIES]
+            # The note shrinks as entries are kept, so the counts that fit
+            # whole can be a band away from both ends: every count is tried,
+            # from the largest. This runs only when no count fits beside the
+            # reserve, a target near the reserve, so the counts are few.
             best = next(
-                (count for count in tried if whole({**keep, largest: count}) <= target),
+                (
+                    count
+                    for count in range(most or 0, 0, -1)
+                    if whole({**keep, largest: count}) <= target
+                ),
                 None,
             )
-            if best is None and tried and tried[-1] > 1:
-                # Below the counts tried, a search over whole replies: it
-                # reaches one entry when nothing above fits, so a count that
-                # fits whole is found even where the note does not shrink.
-                best = _largest(
-                    lambda count, at=largest: whole({**keep, at: count}) <= target,
-                    tried[-1] - 1,
-                )
         if best is not None:
             keep[largest] = best
             return keep
         keep[largest] = 1
-
-
-#: How many counts the fallback of :func:`_fit` sizes whole, from the largest.
-_WHOLE_TRIES = 64
 
 
 def _largest(fits: Callable[[int], bool], most: int) -> int | None:
