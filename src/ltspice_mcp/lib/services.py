@@ -1501,17 +1501,27 @@ def load_raw_sync(source: AnalysisSource, state: SessionState) -> DecodedRaw:
     return _parse_raw_sync(source, state, deadline=deadline)
 
 
-def read_steps(job: ExperimentJob, case: ExperimentCase, state: SessionState) -> CaseSteps | None:
+async def read_steps(
+    job: ExperimentJob, case: ExperimentCase, state: SessionState
+) -> CaseSteps | None:
     """How ``case``'s results are stepped (``decoded_raw.steps_held``), read
     once when its run ends (``ExperimentRunner._end_of_run``) and kept on its
-    record; None for a run that left no raw. The raw is read through the parse
-    service for its first plot's axis and step parameters alone (``signals``
-    names its last trace, never a step parameter, read off the header's first
-    bytes; a header too long to read there is read whole), with its log's
-    ``.step`` lines. A raw that cannot be read gives a record that says so."""
+    record. The raw is read through the parse service for its first plot's
+    last trace alone, which keeps its axis and step parameters too (the name
+    is read off the header's first bytes; a header too long to read there is
+    read whole), with its log's ``.step`` lines.
+
+    None, and nothing recorded, for a run that left no raw and for a raw that
+    could not be read: a failed read says nothing of how the results are
+    stepped, and the case's row says its steps were not recorded. As for the
+    log read at the end of a run (``ExperimentRunner._with_logs``, which keeps
+    the failure as ``logs_error``), a file still locked when the read is made,
+    as on Windows for a moment after the simulator exits, is not read again.
+    A cancel of the read (the job stopped, the process shutting down) ends
+    its parse through the parse service's cancel."""
     if case.raw_file is None:
         return None
-    traces = first_plot_traces(case.raw_file)
+    traces = await asyncio.to_thread(first_plot_traces, case.raw_file)
     source = AnalysisSource(
         raw=case.raw_file,
         log=case.log_file,
@@ -1523,11 +1533,9 @@ def read_steps(job: ExperimentJob, case: ExperimentCase, state: SessionState) ->
         signals=(traces[-1][0],) if traces else None,
     )
     try:
-        raw = load_raw_sync(source, state)
-    except ResultError as exc:
-        return CaseSteps(
-            count=None, not_established=f"Its raw could not be read when its run ended: {exc}"
-        )
+        raw = await load_raw(source, state)
+    except ResultError:
+        return None
     return steps_held(raw.descriptor)
 
 

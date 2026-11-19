@@ -56,8 +56,9 @@ apart, or more than three differ, the case id stands in for them. One function
 writes that label (`points.point_label`), and a chart of one case keeps its
 labels. Each trace summary names its `case_id` and `run_index`, the reply's
 `cases` lists each case drawn with its `assignments` and `n_steps`, the
-number of steps its record keeps (the run row's `steps`; `steps` in its place
-says why it is not established), and `cases_not_drawn` names each case
+number of steps of the plot it drew (a `steps_not_as_recorded` observation
+names a case whose run row's `steps` says otherwise: its results file was
+rewritten after the run, or its record is wrong), and `cases_not_drawn` names each case
 selected and not drawn, at most 20 rows with the total in
 `cases_not_drawn_truncated`: `case_not_found` and `run_not_found` as
 `analyze_results` names them (one row per code, with their count and the
@@ -168,7 +169,7 @@ Codes by kind of failure:
 | `run_not_finished` | a read named a case of a job whose run has not finished (queued, running, or its end-of-run checks not yet made); the message names the case, what its simulator has written so far and the wait. The job's finished cases are read meanwhile |
 | `result_file_not_found` | no file is at a `.raw` or `.log` path the caller named; the `hint` says to check the path, or to read a run of this server's by its `job_id` |
 | `analysis_deadline` | a result read ran past its wall-clock bound and was abandoned |
-| `plot_not_found` | a read named a `plot_index` its results file does not hold; the message says how many plots it holds. The file is readable: the request does not fit it |
+| `plot_not_found` | a read named a `plot_index` its results file does not hold; the message says how many plots it holds. The file is readable: the request does not fit it. Given by `inspect(kind="results")` and `plot_waveform`; `analyze_results` gives such a recipe's failure the code `recipe_failed`, with this message |
 | `no_axis` | the selected plot is a table (an operating point, `.tf` or `.pz` result), so it has no sweep axis to query at |
 | `job_not_found` | no job with that `job_id` or `request_id` |
 | `invalid_cursor` | a page cursor did not decode, or was minted for another listing, view or request, or for a file that has changed since; the `hint` says to send back the cursor the same tool returned, or the message names the argument to change |
@@ -1139,13 +1140,18 @@ as `ExperimentCase.steps`). Where the raw and the log disagree, or where each
 step starts cannot be read, `steps` is `{not_established}` with the reason and
 no number. A case whose results are not stepped carries no `steps`; a case
 with a raw whose steps were not recorded when its run ended (recorded before
-the server kept them, recovered after its server stopped, or stopped with its
-partial raw kept) carries `{not_recorded: true}`, which `runs_not_shown` does
-not count. The kinds a record names are `result_kinds.STEPPED_KINDS`, each
+the server kept them, recovered after its server stopped, stopped with its
+partial raw kept, one whose raw could not be read when its run ended, or one
+whose end-of-run checks are still being made) carries `{not_recorded: true}`,
+which `runs_not_shown` does not count. A failed read records nothing: like the
+log read at the end of a run, which keeps the failure as `logs_error`, it is
+not made again, so a file still locked for a moment after the simulator exits
+(as on Windows) leaves its case not recorded. A stop of the job (a cancel,
+its deadline, the process shutting down) ends the read at once, with nothing
+recorded. The kinds a record names are `result_kinds.STEPPED_KINDS`, each
 established by the recordings it lists, per LTspice build. ngspice has no
 `.step`: its runs record one step. A chart of several cases gives each case's
-`n_steps` from the same record (`steps` in its place where the number is not
-established).
+`n_steps` from the plot it drew, and compares it with this record (above).
 
 **What the rows left out carry.** When run rows are left out, `runs_not_shown`
 states the facts on the rows after the ones sent, from the job's whole table

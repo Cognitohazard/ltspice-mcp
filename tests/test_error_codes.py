@@ -703,6 +703,7 @@ FROZEN_ERROR_CODES = (
     "startup_policy",
     "step_not_found",
     "step_value_unavailable",
+    "steps_not_as_recorded",
     "subcircuit_nodes_not_saved",
     "submission_committed",
     "submission_failed",

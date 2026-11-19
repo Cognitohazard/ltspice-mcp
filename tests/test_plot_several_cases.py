@@ -39,7 +39,7 @@ class _Case:
     status: str = "produced"
 
 
-def _job(state: SessionState, work_dir: Path, job_id: str, cases: list[_Case]) -> ExperimentJob:
+async def _job(state: SessionState, work_dir: Path, job_id: str, cases: list[_Case]) -> ExperimentJob:
     """A finished experiment job whose cases read the recorded fixtures named,
     each staged in a folder of its own; a case with no fixture produced no raw."""
     deck = state.working_dir / f"{job_id}.cir"
@@ -92,7 +92,7 @@ def _job(state: SessionState, work_dir: Path, job_id: str, cases: list[_Case]) -
     # How each case's results are stepped, recorded as its run's end records
     # it (ExperimentRunner._end_of_run).
     for case in job.cases:
-        case.steps = services.read_steps(job, case, state)
+        case.steps = await services.read_steps(job, case, state)
     state.add_experiment_job(job, already_persisted=True)
     return job
 
@@ -111,8 +111,8 @@ def _labels(data: dict) -> list[str]:
     return [series["label"] for panel in blob["panels"] for series in panel["series"]]
 
 
-def _three_rc(state: SessionState, work_dir: Path, job_id: str = "sweep") -> ExperimentJob:
-    return _job(
+async def _three_rc(state: SessionState, work_dir: Path, job_id: str = "sweep") -> ExperimentJob:
+    return await _job(
         state,
         work_dir,
         job_id,
@@ -129,7 +129,7 @@ class TestSeveralCases:
     async def test_three_cases_are_three_series_labelled_by_what_differs(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        _three_rc(state_no_sim, work_dir)
+        await _three_rc(state_no_sim, work_dir)
         data = await _plot(state_no_sim, job_id="sweep", runs="all", signals=["V(out)"])
 
         assert data["series_count"] == 3
@@ -154,7 +154,7 @@ class TestSeveralCases:
     async def test_a_list_of_run_indices_and_case_ids_select_the_same_cases(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        _three_rc(state_no_sim, work_dir)
+        await _three_rc(state_no_sim, work_dir)
         by_index = await _plot(state_no_sim, job_id="sweep", runs=[0, 2], signals=["V(out)"])
         by_id = await _plot(
             state_no_sim,
@@ -168,7 +168,7 @@ class TestSeveralCases:
     async def test_a_stepped_case_is_labelled_by_its_assignment_and_its_step(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        _job(
+        await _job(
             state_no_sim,
             work_dir,
             "mixed",
@@ -196,7 +196,7 @@ class TestSeveralCases:
     async def test_cases_with_the_same_assignments_are_labelled_by_their_case_id(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        _job(
+        await _job(
             state_no_sim,
             work_dir,
             "same",
@@ -208,7 +208,7 @@ class TestSeveralCases:
     async def test_a_step_applies_to_every_case_and_a_case_without_it_is_named(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        _job(
+        await _job(
             state_no_sim,
             work_dir,
             "steps",
@@ -233,7 +233,7 @@ class TestSeveralCases:
     async def test_a_failed_case_is_named_and_the_others_are_drawn(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        _job(
+        await _job(
             state_no_sim,
             work_dir,
             "partial",
@@ -255,7 +255,7 @@ class TestSeveralCases:
     async def test_a_case_not_yet_run_is_named_and_the_finished_are_drawn(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        job = _job(
+        job = await _job(
             state_no_sim,
             work_dir,
             "running",
@@ -279,7 +279,7 @@ class TestSeveralCases:
     async def test_a_raw_that_cannot_be_read_costs_only_its_case(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        job = _three_rc(state_no_sim, work_dir, "broken")
+        job = await _three_rc(state_no_sim, work_dir, "broken")
         broken = job.cases[1].raw_file
         assert broken is not None
         whole = broken.read_bytes()
@@ -302,7 +302,7 @@ class TestSeveralCases:
         import ltspice_mcp.tools.analysis as mod
 
         monkeypatch.setattr(mod, "_TRACE_SUMMARY_MAX", 1)
-        _three_rc(state_no_sim, work_dir, "short")
+        await _three_rc(state_no_sim, work_dir, "short")
         data = await _plot(
             state_no_sim, job_id="short", runs=list(range(3000)), signals=["V(out)"]
         )
@@ -319,7 +319,7 @@ class TestSeveralCases:
         cases = [_Case("ltspice_tran_rc", {"R1": 1})] + [
             _Case(None, {"R1": i}, status="failed") for i in range(2, 42)
         ]
-        _job(state_no_sim, work_dir, "wide", cases)
+        await _job(state_no_sim, work_dir, "wide", cases)
         data = await _plot(state_no_sim, job_id="wide", runs=list(range(5000)), signals=["V(out)"])
         assert len(data["cases_not_drawn"]) == 20
         # 40 failed cases, and one row for the 4959 runs the job does not hold.
@@ -327,7 +327,7 @@ class TestSeveralCases:
         assert "coverage.missing_cases" in data["hint"]
         assert len(json.dumps(data)) < 12_000
 
-        _job(
+        await _job(
             state_no_sim, work_dir, "dead_wide", [_Case(None, status="failed") for _ in range(40)]
         )
         with pytest.raises(ResultError) as refused:
@@ -340,7 +340,7 @@ class TestSeveralCases:
     async def test_a_selection_with_nothing_to_draw_is_refused(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        _job(
+        await _job(
             state_no_sim,
             work_dir,
             "dead",
@@ -352,7 +352,7 @@ class TestSeveralCases:
     async def test_a_refusal_of_many_cases_names_a_few_and_counts_the_rest(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        _job(state_no_sim, work_dir, "many", [_Case(None, status="failed") for _ in range(9)])
+        await _job(state_no_sim, work_dir, "many", [_Case(None, status="failed") for _ in range(9)])
         with pytest.raises(ResultError) as refused:
             await _plot(state_no_sim, job_id="many", runs="all", signals=["V(out)"])
         message = str(refused.value)
@@ -363,7 +363,7 @@ class TestSeveralCases:
     async def test_cases_of_different_analyses_are_refused_by_name(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        _job(
+        await _job(
             state_no_sim,
             work_dir,
             "kinds",
@@ -381,7 +381,7 @@ class TestSeveralCases:
         import ltspice_mcp.tools.analysis as mod
 
         monkeypatch.setattr(mod, "_TRACE_SUMMARY_MAX", 2)
-        _three_rc(state_no_sim, work_dir)
+        await _three_rc(state_no_sim, work_dir)
         data = await _plot(state_no_sim, job_id="sweep", runs="all", signals=["V(out)"])
 
         assert len(data["traces"]) == 2
@@ -397,7 +397,7 @@ class TestSeveralCases:
     ):
         import ltspice_mcp.tools.analysis as mod
 
-        _three_rc(state_no_sim, work_dir)
+        await _three_rc(state_no_sim, work_dir)
         one = await _plot(state_no_sim, job_id="sweep", run_index=0, signals=["V(out)"])
         points = one["points_per_series"][0]
         # One case draws 2 rows (axis and one series); three cases draw 4.
@@ -409,7 +409,7 @@ class TestSeveralCases:
     async def test_in_ltspice_with_two_cases_is_refused(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        _three_rc(state_no_sim, work_dir)
+        await _three_rc(state_no_sim, work_dir)
         with pytest.raises(ResultError, match="one case"):
             await _plot(
                 state_no_sim, job_id="sweep", runs=[0, 1], signals=["V(out)"], in_ltspice=True
@@ -428,7 +428,7 @@ class TestSeveralCases:
     async def test_one_case_selected_by_runs_reads_as_a_plot_of_that_case(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        _three_rc(state_no_sim, work_dir)
+        await _three_rc(state_no_sim, work_dir)
         alone = await _plot(state_no_sim, job_id="sweep", run_index=1, signals=["V(out)"])
         selected = await _plot(state_no_sim, job_id="sweep", runs=[1], signals=["V(out)"])
         for data in (alone, selected):
@@ -440,7 +440,7 @@ class TestSeveralCases:
     ):
         """1000 and 1000.0 differ as values but a label writes both as 1000;
         a case that assigns none of the names that differ has nothing to show."""
-        _job(
+        await _job(
             state_no_sim,
             work_dir,
             "alike",
@@ -462,7 +462,7 @@ class TestSeveralCases:
     async def test_a_case_the_window_leaves_empty_is_named_not_drawn(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        _job(
+        await _job(
             state_no_sim,
             work_dir,
             "window",
@@ -485,7 +485,7 @@ class TestSeveralCases:
     async def test_a_signal_some_cases_lack_is_drawn_where_it_exists(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        _job(
+        await _job(
             state_no_sim,
             work_dir,
             "lack",
@@ -502,7 +502,7 @@ class TestSeveralCases:
     async def test_ac_cases_draw_magnitude_and_phase_for_each_case(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        _job(
+        await _job(
             state_no_sim,
             work_dir,
             "bode",
@@ -552,7 +552,7 @@ class TestOneSelection:
     async def test_the_two_tools_resolve_one_selection_to_the_same_cases(
         self, state_no_sim: SessionState, work_dir: Path, runs: Any
     ):
-        _job(
+        await _job(
             state_no_sim,
             work_dir,
             "both",
@@ -621,7 +621,7 @@ async def test_a_case_with_a_log_and_no_raw_is_read_by_analysis_and_not_drawn(
     """services.read_selected_case answers both tools; they differ only in
     require_raw. analyze_results reads a produced case's log without a raw
     (a log recipe needs none), and a chart, which draws a raw, names it."""
-    job = _three_rc(state_no_sim, work_dir, "noraw")
+    job = await _three_rc(state_no_sim, work_dir, "noraw")
     job.cases[1].raw_file = None
     result = await handle_analyze_results(
         AnalyzeResultsInput.model_validate(

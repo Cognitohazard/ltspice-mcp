@@ -35,7 +35,7 @@ import math
 import os
 import re
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal, NotRequired, TypeVar
@@ -81,10 +81,8 @@ from ltspice_mcp.lib.plot_html import (
 )
 from ltspice_mcp.lib.plot_svg import render_plot_svg
 from ltspice_mcp.lib.points import (
-    STEPS_SCHEMA,
     label_assignments,
     point_label,
-    steps_shown,
     values_text,
 )
 from ltspice_mcp.lib.raster import RasterSupport, RenderedImage, raster_support, render_image
@@ -1852,9 +1850,9 @@ def _steps_named(args: PlotWaveformInput, raw: Any, step_dicts: list[dict[str, A
                 CUT: ITEMS,
                 "description": (
                     "With runs naming several cases: each case drawn, with its "
-                    "assignments and its number of steps (n_steps), read from its "
-                    "record as its run row's steps is; steps in its place says why "
-                    "that number is not established."
+                    "assignments and the number of steps of the plot drawn (n_steps); "
+                    "a steps_not_as_recorded observation names a case whose run row "
+                    "says otherwise."
                 ),
                 "items": {
                     "type": "object",
@@ -1863,9 +1861,8 @@ def _steps_named(args: PlotWaveformInput, raw: Any, step_dicts: list[dict[str, A
                         "run_index": {"type": "integer"},
                         "assignments": {"type": "object"},
                         "n_steps": {"type": "integer"},
-                        "steps": STEPS_SCHEMA,
                     },
-                    "required": ["case_id", "run_index"],
+                    "required": ["case_id", "run_index", "n_steps"],
                 },
             },
             "cases_not_drawn": {
@@ -2399,6 +2396,45 @@ def _units_across(
     return units, unverified
 
 
+def _steps_not_as_recorded(
+    drawn: list[tuple[ExperimentCase, DecodedRaw]], plot_index: int
+) -> list[dict[str, Any]]:
+    """The cases drawn whose record (``ExperimentCase.steps``, of the first
+    plot) gives another number of steps than the plot loaded holds: the
+    results file is not the one the run wrote, or the record was wrong. Each
+    case's ``n_steps`` is the plot drawn; this says where the record differs,
+    so the difference is never silent. A record of another plot than the one
+    drawn, or one with no number, is not compared."""
+    if plot_index != 0:
+        return []
+    differs = [
+        {"case_id": case.case_id, "recorded": case.steps.count, "loaded": loaded}
+        for case, raw in drawn
+        if case.steps is not None
+        and case.steps.count is not None
+        and case.steps.count != (loaded := get_step_count(raw))
+    ]
+    if not differs:
+        return []
+    named = ", ".join(
+        f"{item['case_id']} ({item['recorded']} recorded, {item['loaded']} loaded)"
+        for item in differs
+    )
+    return [
+        {
+            "code": "steps_not_as_recorded",
+            "kind": "reconciliation",
+            "detail": (
+                f"The results file of {named} holds another number of steps than its "
+                "run's record says: the file was rewritten after the run (a re-run "
+                "of the deck writes over it), or the record is wrong. n_steps and the "
+                "traces are the file's; the run row's steps is the record's."
+            ),
+            "evidence": {"cases": differs},
+        }
+    ]
+
+
 def _analyses_differ(by_analysis: dict[str, list[str]]) -> ResultError:
     """The refusal of cases whose plots differ in analysis, named by analysis."""
     kinds = "; ".join(f"{kind}: {', '.join(ids)}" for kind, ids in by_analysis.items())
@@ -2758,18 +2794,17 @@ async def _plot_several(args: PlotWaveformInput, state: SessionState, chosen: _S
                         "case_id": case.case_id,
                         "run_index": case.run_index,
                         "assignments": dict(case.assignments),
-                        # The case's record, as its run row says it.
-                        **(
-                            {"n_steps": case.steps.count}
-                            if case.steps is not None and case.steps.count is not None
-                            else steps_shown(case)
-                        ),
+                        # The plot drawn decides; its record is compared below.
+                        "n_steps": get_step_count(raw),
                     }
-                    for case, _, _, _ in stepped
+                    for case, _, raw, _ in stepped
                 ],
                 "signals": [sig.name for sig in cols],
             },
             not_drawn=not_drawn,
+            notes=_steps_not_as_recorded(
+                [(case, raw) for case, _, raw, _ in stepped], args.plot_index or 0
+            ),
             show=None,
             rest=lambda: _rest_of_summary(
                 args,
@@ -2802,6 +2837,9 @@ class _Chart:
     rest: Callable[[], str]
     #: With several cases: each selected case not drawn, with why.
     not_drawn: list[dict[str, Any]] | None = None
+    #: Observations of the cases drawn that the read of their files does not
+    #: make (``_steps_not_as_recorded``).
+    notes: list[dict[str, Any]] = field(default_factory=list)
 
 
 async def _deliver(args: PlotWaveformInput, state: SessionState, chart: _Chart):
@@ -3001,6 +3039,7 @@ async def _deliver(args: PlotWaveformInput, state: SessionState, chart: _Chart):
                 ),
             }
         )
+    observations.extend(chart.notes)
     if image_problem is not None:
         observations.append(
             {"code": "image_unavailable", "kind": "coverage", "detail": image_problem}

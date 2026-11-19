@@ -350,8 +350,7 @@ def steps_held(descriptor: PlotDescriptor) -> CaseSteps:
             kind=descriptor.stepped_kind,
             not_established=(
                 "Its raw's header marks its results stepped, and where each step "
-                "starts could not be read from the raw and its log. "
-                + unresolved_steps_reason(descriptor.stepped_kind)
+                "starts could not be read from the raw and its log."
             ),
         )
     names: dict[str, None] = {}

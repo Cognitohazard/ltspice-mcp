@@ -108,3 +108,36 @@ async def test_run_index_counts_the_whole_job_and_the_case_number_each_circuit(
         ("filt-case-0002", 5),
     ]
     assert [case.assignments["r"] for case in job.cases] == ["1k", "2k", "3k"] * 2
+
+
+def test_every_request_example_of_the_variations_guide_validates():
+    """Each example the guide's variations section gives of a variation, in a
+    fenced json block or inline, is one run_experiments takes: a fragment that
+    parses as JSON and names a kind of variation is validated as the
+    variations argument (an entry alone, or a list of them)."""
+    import json
+    import re
+    from importlib.resources import files
+
+    text = (files("ltspice_mcp") / "assets" / "guide" / "variations.md").read_text(
+        encoding="utf-8"
+    )
+    fenced = re.findall(r"```json\n(.*?)```", text, re.S)
+    inline = re.findall(r"`([\[{][^`]*)`", text)
+    examples = []
+    for snippet in [*fenced, *inline]:
+        try:
+            value = json.loads(snippet)
+        except ValueError:
+            continue
+        entries = value if isinstance(value, list) else [value]
+        if entries and all(
+            isinstance(e, dict) and ("assign" in e or "rules" in e) for e in entries
+        ):
+            examples.append(entries)
+    assert len(examples) >= 6
+    deck = {"path": "dut.cir", "id": "dut"}
+    for entries in examples:
+        RunExperimentsInput.model_validate(
+            {"request_id": "x", "circuits": [deck], "variations": entries}
+        )

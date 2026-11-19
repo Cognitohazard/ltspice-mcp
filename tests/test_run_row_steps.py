@@ -254,26 +254,124 @@ async def test_a_chart_over_its_cell_limit_is_refused_without_loading_every_file
 
 
 @pytest.mark.asyncio
-async def test_a_charts_n_steps_and_a_rows_steps_are_the_one_record_field(
+async def test_a_charts_n_steps_is_the_file_it_drew_and_a_record_that_differs_is_said(
     state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    """The record decides the run row; once a case's file is loaded, the plot
+    loaded decides its n_steps in the chart. Where the record and the loaded
+    first plot disagree (the file is not the one the run wrote, or the record
+    was wrong), the reply names the case with a code; a case with no record
+    takes its n_steps from the file."""
     from ltspice_mcp.lib.experiment_types import CaseSteps
     from ltspice_mcp.tools.analysis import PlotWaveformInput, handle_plot_waveform
 
     raw, log = _recorded("ltspice26", "step_tran")
-    receipt = await _ran(state_with_sim, monkeypatch, work_dir, raw, log, "same", count=2)
+    receipt = await _ran(state_with_sim, monkeypatch, work_dir, raw, log, "same", count=3)
     job = state_with_sim.all_jobs[receipt["job_id"]]
-    # The record is the answer: what it says, both replies say.
     job.cases[1].steps = CaseSteps(count=7, parameters=("q",), values_from="log")
+    job.cases[2].steps = None  # recorded before steps were kept
     chart = await handle_plot_waveform(
         PlotWaveformInput(job_id=job.job_id, runs="all", signals=["V(out)"], open=False),
         state_with_sim,
     )
-    assert chart.structured_content is not None
-    rows = _rows(await _jobs(state_with_sim, action="runs", job_id=job.job_id))
-    for drawn, row in zip(chart.structured_content["cases"], rows, strict=True):
-        assert drawn["n_steps"] == row["steps"]["count"]
-    assert chart.structured_content["cases"][1]["n_steps"] == 7
+    data = chart.structured_content
+    assert data is not None
+    assert [case["n_steps"] for case in data["cases"]] == [3, 3, 3]
+    assert all("steps" not in case for case in data["cases"])
+    (differs,) = [
+        item for item in data.get("observations", []) if item["code"] == "steps_not_as_recorded"
+    ]
+    assert job.cases[1].case_id in differs["detail"]
+    assert differs["evidence"] == {
+        "cases": [{"case_id": job.cases[1].case_id, "recorded": 7, "loaded": 3}]
+    }
+    assert "plot_waveform" not in json.dumps(data["cases"])
+
+
+@pytest.mark.asyncio
+async def test_a_raw_that_cannot_be_read_when_its_run_ends_records_no_steps(
+    state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A failed read says nothing of how the results are stepped: the record
+    keeps none and the row says not_recorded, never a reason built from the
+    parser's error."""
+    raw, log = _recorded("ltspice17", "tran_killed")
+    receipt = await _ran(state_with_sim, monkeypatch, work_dir, raw, log, "killed")
+    job = state_with_sim.all_jobs[receipt["job_id"]]
+    (case,) = job.cases
+    assert case.raw_file is not None
+    assert case.steps is None
+    for route, rows in (await _every_route(state_with_sim, receipt)).items():
+        (row,) = rows
+        assert row["steps"] == {"not_recorded": True}, (route, row)
+
+
+@pytest.mark.asyncio
+async def test_a_cancel_ends_the_steps_read_at_once(
+    state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The steps read at the end of a run is held in the real parse service;
+    a cancel of the job ends it at once, and the case keeps its results with
+    no steps recorded."""
+    import threading
+
+    from ltspice_mcp.lib import parser_service
+    from tests.conftest import LIVENESS_S, await_until
+
+    raw, log = _recorded("ltspice26", "step_tran")
+    replaying_simulator(monkeypatch, raw, log)
+    entered = threading.Event()
+    cancelled_parse = threading.Event()
+    uncancellable: list[bool] = []
+    run = parser_service.run_parser_sync
+
+    def held(request, **kwargs):
+        if '"chosen": {' in json.dumps(request):
+            cancel = kwargs.get("cancel")
+            if cancel is None:
+                # A read no stop can reach: it is let through, and said.
+                uncancellable.append(True)
+                return run(request, **kwargs)
+            entered.set()
+            # Held until the call is cancelled, then run as the real parse is.
+            if cancel.wait(LIVENESS_S):
+                cancelled_parse.set()
+        return run(request, **kwargs)
+
+    monkeypatch.setattr(parser_service, "run_parser_sync", held)
+    deck = work_dir / "held.cir"
+    deck.write_text("* rc\nV1 in 0 1\nR1 in out 1k\nC1 out 0 1n\n.tran 1m\n.end\n")
+    result = await handle_run_experiments(
+        RunExperimentsInput.model_validate(
+            {
+                "request_id": "held-steps",
+                "circuits": [{"path": str(deck), "id": "dut"}],
+                "execution": {"wait_s": 0},
+                "lint": "off",
+            }
+        ),
+        state_with_sim,
+    )
+    receipt = result.structured_content
+    assert receipt is not None
+    await await_until(entered.is_set, what="the steps read to start")
+    cancelled = await asyncio.wait_for(
+        _jobs(
+            state_with_sim,
+            action="cancel",
+            job_id=receipt["job_id"],
+            control_token=receipt["control_token"],
+        ),
+        LIVENESS_S,
+    )
+    assert cancelled.get("outcome") != "error", cancelled
+    job = state_with_sim.all_jobs[receipt["job_id"]]
+    await _jobs(state_with_sim, action="wait", job_id=job.job_id, timeout_s=LIVENESS_S)
+    assert uncancellable == []
+    assert cancelled_parse.is_set()
+    (case,) = job.cases
+    assert case.raw_file is not None
+    assert case.steps is None
 
 
 def test_no_reply_builder_reads_a_step_from_a_case_record():

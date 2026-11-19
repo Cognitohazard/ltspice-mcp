@@ -185,8 +185,9 @@ STEPS_SCHEMA: dict[str, Any] = {
             "description": (
                 "How its results are stepped was not recorded when its run ended (a "
                 "case recorded before the server kept it, recovered after its server "
-                "stopped, or stopped with its partial raw kept), or is not yet: its run's "
-                "end-of-run checks are still being made. A read of its results "
+                "stopped, stopped with its partial raw kept, or whose raw could not be "
+                "read then), or is not yet: its run's end-of-run checks are still being "
+                "made. A read of its results "
                 "gives their steps: inspect(kind='results', view='plots') or "
                 "plot_waveform with its case_id."
             ),

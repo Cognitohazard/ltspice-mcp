@@ -53,7 +53,7 @@ the whole job's cases from 0, circuits in the order given. Cases follow the
 entries in the order given, the last entry changing fastest; inside a grid
 entry the last target changes fastest, and a `random` or `pdk_native`
 entry's samples change fastest of all, wherever the entry stands. So
-`[{"assign": {"R1": ["1k", "2k"]}}, {"assign": {"C1": ["1n", "2n"]}}]` on
+`[{"kind": "assign", "assign": {"R1": ["1k", "2k"]}}, {"kind": "assign", "assign": {"C1": ["1n", "2n"]}}]` on
 circuit `dut` runs `dut-case-0000` R1=1k C1=1n, `-0001` 1k/2n, `-0002` 2k/1n,
 `-0003` 2k/2n. A resume keeps each case's id, run index and order.
 
