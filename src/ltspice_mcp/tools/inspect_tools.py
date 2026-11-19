@@ -671,10 +671,7 @@ class SymbolQuery(StrictModel):
     )
     rotation: Rotation | None = Field(
         default=None,
-        description=(
-            "The placement to report pins and bounding box for, as edit_schematic names it; "
-            "omit it for all eight."
-        ),
+        description="One placement, as edit_schematic names it; omit it for all eight.",
     )
 
 
@@ -907,10 +904,7 @@ class GuideQuery(StrictModel):
     heading: str | None = Field(
         default=None,
         min_length=1,
-        description=(
-            "One heading of the section, matched by its text in any case: returns that "
-            "part, down to the next heading of its level. Needs section."
-        ),
+        description="One heading of the section, in any case: returns that part alone.",
     )
 
     @model_validator(mode="after")
@@ -3293,7 +3287,7 @@ INSPECT_DESCRIPTION = (
     "described on its branch of the query schema. 'reference' searches every tool's "
     "recipes, ops, checks and their fields in plain words ('phase margin'). 'guide' "
     "returns the guide's core, one 'section' its index names, or one 'heading' of it; "
-    "'symbol' takes a 'rotation' for one placement's pins. A "
+    "'symbol' every rotation or one 'rotation'. A "
     "denied path, a stale cursor, an unknown kind, or a malformed query fails "
     "only that item; every other query still returns, and paginated kinds resume "
     "via 'cursor'. It is the only tool on this surface that never writes."
