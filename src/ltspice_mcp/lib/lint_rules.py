@@ -29,6 +29,7 @@ from ltspice_mcp.lib.ngspice_compat import reads_lib_as_includes
 from ltspice_mcp.lib.simulator import DEFAULT_FAMILY, family_for, run_ngbehavior
 from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.spice_lex import (
+    INCLUDE_HEADS,
     DefinitionRule,
     SpiceCard,
     SpiceLexError,
@@ -1720,7 +1721,7 @@ def save_list(
     return SaveList(
         tuple((entry.text, entry.read) for entry in coverage.saves),
         tuple(coverage.patterns),
-        includes=any(directive_head(card) in {".include", ".inc", ".lib"} for card in cards),
+        includes=any(directive_head(card) in INCLUDE_HEADS for card in cards),
     )
 
 

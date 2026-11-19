@@ -670,6 +670,7 @@ FROZEN_ERROR_CODES = (
     "run_not_found",
     "run_progress",
     "samples_not_compared",
+    "saves_not_stored",
     "search_error",
     "selector_conflict",
     "semantic_profile_required",
