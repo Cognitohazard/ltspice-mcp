@@ -1,0 +1,1 @@
+A recoverable run whose simulator exits after its kill grace now makes the same end-of-run checks as a run that ended any other way, so a raw that holds no node inside the deck's subcircuits, or that spells their members otherwise than the deck was read, is said on that run too.

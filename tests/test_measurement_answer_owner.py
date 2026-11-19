@@ -31,6 +31,12 @@ _PICKS_NO_FIELD: dict[str, str] = {
     "lib/services.py:measurements_unread": (
         "reads only whether the section was decoded, never a value"
     ),
+    "lib/services.py:_unread_detail": (
+        "reads only the decoder's error for a section it could not decode, never a value"
+    ),
+    "lib/services.py:read_measurements": (
+        "hands the decoded section, or why it was not read, to a reader that answers it"
+    ),
 }
 
 

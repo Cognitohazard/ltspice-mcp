@@ -17,7 +17,7 @@ first, then bare names:
 | Target | Meaning |
 |-|-|
 | `"M1@model"`, glob `"M*@model"` | swap the instance's model card — the corner idiom, `{"M*@model": ["NTT", "NSS", "NFF"]}` |
-| `"X1:delvto"`, `"X1:mulu0"` | per-instance mismatch delta on the FET inside subckt instance X1 (ngspice BSIM3/4, through exactly one X→M level; a multi-FET body needs the qualified `"X1.M0:delvto"`; refused on QSPICE and Xyce) |
+| `"X1:delvto"`, `"X1:mulu0"` | per-instance mismatch delta on the FET inside subckt instance X1 (ngspice BSIM3/4; LTspice `delvto` on a level 54 BSIM4 model only; through exactly one X→M level; a multi-FET body needs the qualified `"X1.M0:delvto"`; refused on QSPICE and Xyce) |
 | a declared `.param` name | substitute that parameter |
 | a component reference (`R1`, `C2`) | substitute that component's value |
 
@@ -156,7 +156,10 @@ applies to the model card's `VTO`/`KP`:
   `mismatch_inside_subcircuit_unmodelled`: the server does not model how those
   simulators read a subcircuit body, so it cannot tell the device's W, L and m.
   Run the deck on LTspice or ngspice. A rule on top-level `M` cards runs there,
-  reading literal W, L, m and model parameters.
+  reading literal W, L, m and model parameters; a rule that reaches a card
+  whose W, L or m is an expression or missing is refused with
+  `mismatch_geometry_unresolved`, naming the card: write them as numbers, or
+  narrow the prefix.
 
 ## Explicit per-instance values
 
@@ -171,3 +174,12 @@ When you choose the offsets yourself (worst-case corners, a measured die), use
 `X1:delvto` selects the FET only when the subckt body contains exactly one; a
 multi-FET body needs the qualified form `X1.M0:delvto`. These targets work
 only in `assign`. In `random` rules, mismatch uses the Pelgrom rule above.
+
+On LTspice, `X1:delvto` runs only on a level 54 (BSIM4) model, where both
+builds are recorded to take it. LTspice 26 stops on `delvto` on BSIM3 and on
+`mulu0` on BSIM3 and BSIM4, and XVII ignores them, so those are refused with
+`instance_parameter_not_taken`; on any other level whether LTspice applies
+them is not recorded, and they are refused with
+`instance_parameter_unestablished`. A `mismatch` rule with an `instance` list
+gives the device its own model copy instead. On ngspice they need a BSIM3 or
+BSIM4 model (`unsupported_model` otherwise).
