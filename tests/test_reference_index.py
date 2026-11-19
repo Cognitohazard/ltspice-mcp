@@ -248,6 +248,7 @@ RECIPE_SEARCH_PHRASES: dict[str, str] = {
     "transient_response": "overshoot and settling time",
     "thd": "distortion",
     "tone": "amplitude and phase at one frequency",
+    "time_steps": "which run collapsed its time step",
     "bode_filter": "cutoff frequency",
     "bode_point": "gain at a frequency",
     "bode_crossing": "0 db crossing",
