@@ -161,6 +161,7 @@ from ltspice_mcp.lib.stored_values import (
     CP1252_BUILD,
     NOT_CHECKED_SCHEMA,
     SHEET_NOT_CHECKED,
+    SHEET_TEXT_NOT_CHECKED,
     STATEMENTS_SCHEMA,
     OtherReading,
     holds_micro_sign,
@@ -2359,7 +2360,7 @@ def compare_netlists(
         # has no stored bytes to check. A reference given as text is the
         # caller's own text, with no file behind it: nothing to check.
         comparison["values_read_otherwise_not_checked"] = (
-            [{"file": str(cand_source), "reason": SHEET_NOT_CHECKED}]
+            [{"file": str(cand_source), "reason": SHEET_TEXT_NOT_CHECKED}]
             if isinstance(candidate, str) and is_asc(cand_source) and holds_micro_sign(candidate)
             else []
         )

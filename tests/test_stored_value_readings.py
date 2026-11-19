@@ -363,3 +363,5 @@ def test_a_sheets_export_handed_over_as_text_is_said_not_checked(
         assert failure is None and comparison is not None
         listed = comparison["values_read_otherwise_not_checked"]
         assert [entry["file"] for entry in listed] == expected
+        # No bytes, so no claim that a build reads them otherwise.
+        assert all("reads otherwise" not in entry["reason"] for entry in listed)

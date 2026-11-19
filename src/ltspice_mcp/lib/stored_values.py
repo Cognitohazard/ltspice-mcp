@@ -344,6 +344,15 @@ SHEET_NOT_CHECKED = (
     "not checked. Write 'u' for micro in the sheet: every build reads it alike."
 )
 
+#: Why a sheet compared as its export's text is not checked: the text has no
+#: stored bytes, so no build's reading of them is known.
+SHEET_TEXT_NOT_CHECKED = (
+    "compared as the text of the server's export of the sheet, which holds a micro "
+    "sign; with no stored bytes, how a recorded build reads the values stored in the "
+    "sheet itself was not checked. Write 'u' for micro in the sheet: every build "
+    "reads it alike."
+)
+
 #: A reply's list of stored files whose values were not checked, sent whole:
 #: one entry per sheet a reply reads as its export.
 NOT_CHECKED_SCHEMA: dict[str, Any] = {
