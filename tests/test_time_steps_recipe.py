@@ -221,6 +221,33 @@ async def test_interp_stores_the_print_step_and_says_so(
     assert "interp" in observation["detail"]
 
 
+@needs_ngspice
+async def test_ngspice_under_interp_declares_the_print_step_and_logs_it(
+    ngspice_state: SessionState, work_dir: Path
+):
+    """What interp_option rests on: under '.options interp' ngspice logs that
+    the raw holds interpolated data and declares the print step's points,
+    10u / 10n + 1 of them, in the raw's header."""
+    await _ramp_job(ngspice_state, work_dir, options=".options interp\n")
+    found = await asyncio.to_thread(_interp_facts, work_dir)
+    assert len(found) == 3
+    assert all(declared == 1001 and logged for declared, logged in found)
+
+
+def _interp_facts(work_dir: Path) -> list[tuple[int, bool]]:
+    """Each ngspice raw's declared point count under ``work_dir``, and whether
+    its log says the data was interpolated."""
+    facts = []
+    for raw in sorted(work_dir.rglob("*.raw")):
+        head = raw.read_bytes()[:2048].decode("ascii", errors="replace")
+        declared = re.search(r"No\. Points:\s*(\d+)", head)
+        log = raw.with_suffix(".log")
+        text = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
+        if declared is not None:
+            facts.append((int(declared[1]), "Interpolated raw file data" in text))
+    return facts
+
+
 @ROUTES
 async def test_stored_points_at_one_time_are_counted_apart(
     read: Reader, state_no_sim: SessionState, work_dir: Path
@@ -554,6 +581,11 @@ def _sources(family: str, work_dir: Path) -> list[tuple[str, services.AnalysisSo
     deck.write_text(f"{_RC}.tran 1n 12n 5n\n.end\n", encoding="utf-8")
     saved_late = dataclasses.replace(_bare(later, "ngspice"), producer=producer, netlist=deck)
     found.append((f"{family}:saved from a start time", saved_late, "not_checked"))
+    interp_deck = work_dir / f"{family}_later_interp.cir"
+    interp_deck.write_text(f"{_RC}.options interp\n.tran 1n 12n 5n\n.end\n", encoding="utf-8")
+    interp_late = dataclasses.replace(saved_late, netlist=interp_deck)
+    expected = "print_step" if family == "ngspice" else "not_checked"
+    found.append((f"{family}:interp, saved from a start time", interp_late, expected))
     return found
 
 

@@ -117,6 +117,9 @@ def read_option_cards(files: Sequence[EditCards]) -> list[tuple[int, SpiceCard]]
     file, so a subcircuit called only from an uncalled one still counts, and a
     card in a ``.lib`` section counts whichever section the deck selects
     (kiltpsa reads every section): the answer errs towards a card being read.
+    A call that sits only in a ``.lib`` section the deck does not select still
+    counts, so a reader for which a card read is the definite answer (interp)
+    errs towards it in that case too.
     """
     called = {
         view.model.casefold()

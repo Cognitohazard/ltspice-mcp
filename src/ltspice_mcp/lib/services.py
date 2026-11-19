@@ -350,8 +350,9 @@ def stored_time_points(source: AnalysisSource, raw: DecodedRaw) -> TimePointsSto
     """Which of its solver's time points the transient ``raw`` from ``source``
     holds. The one answer every reader of a transient's steps asks.
 
-    - A run that stores from a start time after zero holds none of the points
-      before it, so no answer but ``reduced`` is given as complete for it.
+    - A run whose first stored point is after zero (a ``.tran`` start time)
+      holds none of the points before it: every answer says so, and one that
+      would be ``accepted`` is ``not_checked``.
     - LTspice: XVII with waveform compression on stores fewer than it accepted
       (:func:`compression_drops_points`). XVII with it off stores as many as
       its log counts as accepted (``raw/compress_1mv_off``,
@@ -366,16 +367,19 @@ def stored_time_points(source: AnalysisSource, raw: DecodedRaw) -> TimePointsSto
 
     Blocking: it may read the run's deck, log and raw headers."""
     found = _stored_points_by_simulator(source, raw)
-    start = None if found.stored == "reduced" else _saved_from(raw)
+    start = _saved_from(raw)
     if start is None:
         return found
-    return TimePointsStored(
-        "not_checked",
-        f"This run stores its results from t = {start:.6g} s, the start time its .tran "
-        "names, so the points its solver accepted before then are not in the file, and "
-        "whether it holds every accepted point after it is not checked. Steps before that "
-        "time are not read.",
+    late = (
+        f"This run's first stored point is at t = {start:.6g} s, as a .tran start time "
+        "leaves it, so no point before then is in the file and no step before it is read."
     )
+    if found.stored == "accepted":
+        return TimePointsStored(
+            "not_checked",
+            f"{late} Whether it holds every point its solver accepted after it is not checked.",
+        )
+    return TimePointsStored(found.stored, f"{found.why} {late}")
 
 
 def _stored_points_by_simulator(source: AnalysisSource, raw: DecodedRaw) -> TimePointsStored:
