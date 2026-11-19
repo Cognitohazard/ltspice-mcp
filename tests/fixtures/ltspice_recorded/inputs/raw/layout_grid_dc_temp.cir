@@ -1,0 +1,7 @@
+* resistive divider swept over three temperatures
+V1 in 0 0
+R1 in out 1k tc1=0.01
+R2 out 0 1k
+.step temp list -40 27 125
+.dc V1 0 5 1
+.end

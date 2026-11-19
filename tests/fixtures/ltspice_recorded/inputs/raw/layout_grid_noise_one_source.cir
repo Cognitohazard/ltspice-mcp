@@ -1,0 +1,8 @@
+* noise of a biased diode at one frequency over three bias voltages, stepped by the bias source's own name
+V1 in 0 1 AC 1
+R1 in out 1k
+D1 out 0 DM
+.model DM D(Is=1e-14)
+.step V1 list 1 2 3
+.noise V(out) V1 lin 1 1k 1k
+.end

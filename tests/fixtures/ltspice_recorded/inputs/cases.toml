@@ -211,13 +211,13 @@ extra = ["export/res.asy"]
 
 [behaviour.export-instance-names]
 summary = "How an instance is named in the netlist when its name does not start with its element letter, on a library-style symbol and on a block symbol that has no sheet of its own, and what a run's raw calls such a resistor's current."
-model = ["lib/schematic_ops.py", "lib/netlist_graph.py", "lib/spice_lex_ops.py", "lib/deck_prep.py", "lib/trace_names.py"]
+model = ["lib/schematic_ops.py", "lib/netlist_graph.py", "lib/spice_lex_ops.py", "lib/deck_prep.py", "lib/trace_names.py", "lib/trace_names.py:find_trace"]
 inputs = ["export/instance_names.asc", "export/block_symbol.asc"]
 extra = ["export/res.asy", "export/probe4.asy", "export/cell4.asy"]
 
 [behaviour.export-hierarchical-block]
 summary = "A sheet that places a hierarchical block whose own sheet and symbol sit beside it, the symbol drawn as LTspice draws one or given a Prefix of X: the netlist each build exports for it, and what a build writes when it runs the sheet."
-model = ["lib/deck_prep.py", "lib/schematic_ops.py", "lib/symbol_library.py", "lib/trace_names.py"]
+model = ["lib/deck_prep.py", "lib/schematic_ops.py", "lib/symbol_library.py", "lib/trace_names.py", "lib/trace_names.py:find_trace"]
 # hier_plain.asy is a block symbol with pins IN and OUT and no attribute, as
 # LTspice makes one for a sheet; hier_amp.asy is the same block with
 # SYMATTR Prefix X. Each block's own sheet (hier_plain.asc, hier_amp.asc) is
@@ -242,11 +242,20 @@ model = ["lib/symbol_library.py", "lib/schematic_ops.py", "lib/deck_prep.py", "l
 
 [behaviour.sheet-part-trace-names]
 summary = "What a run of a sheet names the device inside a part whose symbol is given a Prefix of X and a reference that does not start with X, beside the same subcircuit called with X from a directive on the sheet, and the net the sheet leaves unlabelled."
-model = ["lib/trace_names.py"]
+model = ["lib/trace_names.py", "lib/device_names.py", "lib/device_names.py:trace_key", "lib/trace_names.py:find_trace"]
 
 [behaviour.section-sign-trace-tran]
 summary = "What a transient run of a sheet names the current of a part exported as R§Load, which plot_waveform charts: the name the operating point gives it (I(Load)) or another."
-model = ["lib/trace_names.py", "lib/device_names.py", "tools/analysis.py"]
+model = ["lib/trace_names.py", "lib/device_names.py", "tools/analysis.py", "lib/trace_names.py:find_trace"]
+
+[behaviour.trace-name-grid]
+summary = "The cells of the trace-name grid (at the end of this file) that no other recording fills: a node voltage, a two-terminal current, a terminal current and a port current at the top, in a block and in a block in a block, in a transient, an AC sweep, a DC sweep and an operating point, with subcircuit voltages and currents saved; the noise contribution of a resistor at each depth; and the current of a part named with a section sign in an AC sweep, a DC sweep and a noise run. What a cell declares where no recording shows its form is a prediction, which the recording settles."
+model = ["lib/trace_names.py", "lib/device_names.py", "lib/raw_parser.py", "lib/decoded_raw.py", "lib/device_names.py:naming_for", "lib/device_names.py:trace_key", "lib/trace_names.py:find_trace", "lib/trace_names.py:trace_quantity", "lib/raw_parser.py:node_voltages", "lib/decoded_raw.py:declared_unit"]
+# The four decks of every kind of trace, and the noise deck, run with both
+# subcircuit settings on, as cases at the end; the section-sign decks are
+# written in UTF-8, which every build reads a section sign in (deck-encoding).
+inputs = ["raw/trace_grid_section_ac.cir", "raw/trace_grid_section_dc.cir", "raw/trace_grid_section_noise.cir"]
+pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.export-instance-prefix]
 summary = "What an instance's own Prefix attribute does on export: the element letter it gives the card and how the instance name is then written, in either case of the letter, before or after InstName, on a library-style symbol, a stock symbol and a block symbol."
@@ -643,7 +652,7 @@ unrecordable = "What such a run shows is the settings of the person recording, w
 
 [behaviour.raw-transient]
 summary = "A transient raw: UTF-16LE header, 8-byte time axis, 4-byte traces; the same run uncompressed and in double precision."
-model = ["lib/raw_header.py", "lib/raw_decode.py", "lib/decoded_raw.py", "lib/raw_parser.py"]
+model = ["lib/raw_header.py", "lib/raw_decode.py", "lib/decoded_raw.py", "lib/raw_parser.py", "lib/result_kinds.py", "lib/raw_header.py:_resolve_dialect", "lib/raw_header.py:_layout", "lib/raw_parser.py:_binary_layout", "lib/result_kinds.py:plot_analysis"]
 inputs = ["raw/tran.cir", "raw/tran_uncompressed.cir", "raw/tran_double.cir"]
 
 [behaviour.results-beside-a-netlist]
@@ -677,22 +686,22 @@ inputs = ["raw/tran_window.cir"]
 
 [behaviour.raw-ac]
 summary = "An AC raw: complex samples, a frequency axis stored complex; and the same sweep, and a stepped one at one frequency, under .options numdgt above 6, which writes the double flag and changes no width."
-model = ["lib/raw_header.py", "lib/raw_decode.py", "lib/raw_parser.py", "lib/ac_analysis.py"]
+model = ["lib/raw_header.py", "lib/raw_decode.py", "lib/raw_parser.py", "lib/ac_analysis.py", "lib/result_kinds.py", "lib/raw_header.py:_layout", "lib/raw_parser.py:_binary_layout", "lib/result_kinds.py:plot_analysis", "lib/result_kinds.py:sampled_axis"]
 inputs = ["raw/ac.cir", "raw/ac_numdgt7.cir", "raw/ac_numdgt15.cir", "raw/step_ac_one_freq_numdgt7.cir"]
 
 [behaviour.raw-dc]
 summary = "A DC sweep raw: the swept source as the axis."
-model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/trace_names.py"]
+model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/trace_names.py", "lib/result_kinds.py", "lib/result_kinds.py:plot_analysis", "lib/result_kinds.py:sampled_axis"]
 inputs = ["raw/dc.cir"]
 
 [behaviour.raw-noise]
 summary = "A noise raw: its plot name, the gain trace, and the onoise and inoise traces; and a noise analysis at one frequency, plain and stepped, which may store no frequency and one point a step; the same frequency named by a list, plain here and stepped under raw-stepped."
-model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/decoded_raw.py", "lib/trace_names.py", "lib/metrics.py"]
+model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/decoded_raw.py", "lib/trace_names.py", "lib/metrics.py", "lib/result_kinds.py", "lib/result_kinds.py:plot_analysis", "lib/result_kinds.py:sampled_axis", "lib/trace_names.py:find_trace", "lib/trace_names.py:trace_quantity", "lib/raw_parser.py:node_voltages", "lib/decoded_raw.py:declared_unit"]
 inputs = ["raw/noise.cir", "raw/noise_one_freq.cir", "raw/step_noise_one_freq.cir", "raw/noise_list_one_freq.cir"]
 
 [behaviour.raw-op]
 summary = "An operating-point raw: one point, no axis; the Backannotation header line LTspice 26 adds per subcircuit instance; and the .op.raw a transient leaves beside its own raw."
-model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/decoded_raw.py"]
+model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/decoded_raw.py", "lib/result_kinds.py", "lib/result_kinds.py:plot_analysis", "lib/result_kinds.py:stepped_kind"]
 inputs = ["raw/op.cir", "raw/op_one_subckt.cir", "raw/op_subckt.cir"]
 
 [behaviour.mos-multiplier]
@@ -708,7 +717,7 @@ inputs = ["raw/mos_multiplier.cir", "raw/subckt_multiplier.cir", "deck/subckt_mu
 
 [behaviour.raw-stepped]
 summary = "Stepped runs: the stepped flag, where one step ends and the next begins, the .step lines of the log (a temperature among them), what a stepped .op (over a parameter and over temperature) and a stepped .dc store, the .op.raw a stepped .tran and a stepped .ac leave, a stepped .noise sweep, a stepped .ac at one frequency, which stores no frequency and one point a step, and a stepped .noise at one frequency named by a list, which does the same."
-model = ["lib/raw_decode.py", "lib/raw_parser.py", "lib/log_parser.py", "lib/trace_names.py", "lib/metrics.py", "lib/step_values.py", "lib/recipes.py", "lib/log_parser.py:read_step_line", "lib/raw_decode.py:_step_facts", "lib/step_values.py:step_axis_key", "lib/step_values.py:same_step_value", "lib/step_values.py:steps_with", "lib/step_values.py:step_with", "lib/recipes.py:StepSelector"]
+model = ["lib/raw_decode.py", "lib/raw_parser.py", "lib/log_parser.py", "lib/trace_names.py", "lib/metrics.py", "lib/step_values.py", "lib/recipes.py", "lib/raw_header.py", "lib/result_kinds.py", "lib/log_parser.py:read_step_line", "lib/raw_decode.py:_step_facts", "lib/step_values.py:step_axis_key", "lib/step_values.py:same_step_value", "lib/step_values.py:steps_with", "lib/step_values.py:step_with", "lib/recipes.py:StepSelector", "lib/raw_header.py:leading_parameters", "lib/result_kinds.py:sampled_axis", "lib/result_kinds.py:stepped_kind"]
 inputs = ["raw/step_tran.cir", "raw/step_ac.cir", "raw/step_op.cir", "raw/step_dc.cir", "raw/step_temp.cir", "raw/step_temp_op.cir", "raw/step_ac_one_freq.cir", "raw/step_noise.cir", "raw/step_noise_list_one_freq.cir"]
 
 [behaviour.step-value-digits]
@@ -718,12 +727,12 @@ inputs = ["raw/step_digits.cir"]
 
 [behaviour.raw-transfer-function]
 summary = "A .tf run: the Transfer Function plot and what the log says; and a stepped .tf, how its one point a step is stored."
-model = ["lib/raw_header.py", "lib/decoded_raw.py", "lib/raw_parser.py"]
+model = ["lib/raw_header.py", "lib/decoded_raw.py", "lib/raw_parser.py", "lib/result_kinds.py", "lib/result_kinds.py:plot_analysis", "lib/result_kinds.py:stepped_kind"]
 inputs = ["raw/tf.cir", "raw/tf_step.cir"]
 
 [behaviour.raw-fra]
 summary = "A frequency response analysis (.fra): the results file a build writes beside the transient raw, its name, header and layout, plain, stepped and under .options numdgt=7, the crossover and phase margin an unstepped run prints on one line per analyzer (FRA Instance @1: ...), and the loop margins a stepped run prints as measurements in its log, an infinite one as infdB."
-model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/log_parser.py", "lib/metrics.py", "tools/analyze.py"]
+model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/log_parser.py", "lib/metrics.py", "tools/analyze.py", "lib/result_kinds.py", "lib/raw_header.py:_layout", "lib/result_kinds.py:plot_analysis"]
 # One loop: an amplifier of gain 100 (an E source), a single RC pole, and the
 # analyzer @1 in series between the amplifier's output and the pole. Four
 # frequencies an octave apart and a short settling time keep the run, and the
@@ -746,15 +755,55 @@ pending = "Written where no LTspice runs: record on Windows with scripts/record_
 
 [behaviour.raw-ascii]
 summary = "A raw written as text (Values:): 8-bit with CRLF line ends, header included, where every other raw has a UTF-16 header."
-model = ["lib/raw_header.py", "lib/raw_decode.py"]
+model = ["lib/raw_header.py", "lib/raw_decode.py", "lib/raw_header.py:_layout"]
 
 [behaviour.raw-fastaccess]
 summary = "A raw converted to Fast Access layout: the fastaccess flag and samples stored trace by trace."
-model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/raw_decode.py"]
+model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/raw_decode.py", "lib/raw_header.py:_layout"]
 
 [behaviour.raw-partial]
 summary = "The raw a run leaves when it is stopped part way: a point count in the header that lags the samples after it, and, on LTspice XVII, samples past the count that go back in time."
 model = ["lib/raw_parser.py", "lib/experiment_runner.py"]
+
+[behaviour.results-layout-grid]
+summary = "The cells of the results-layout grid (at the end of this file) that no other recording fills: each analysis stepped over the temperature, a source and a model parameter, and written as text, stepped or not; a frequency or DC sweep of one point, plain and stepped each way; dc, noise and tf under numdgt above 6; each analysis converted to Fast Access; and the .op.raw a transient stepped over the temperature, a source and a model parameter leaves. What a cell declares where no recording shows its form is a prediction, which the recording settles."
+model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/result_kinds.py", "lib/raw_header.py:_resolve_dialect", "lib/raw_header.py:_layout", "lib/raw_header.py:leading_parameters", "lib/raw_parser.py:_binary_layout", "lib/result_kinds.py:plot_analysis", "lib/result_kinds.py:sampled_axis", "lib/result_kinds.py:stepped_kind"]
+# Each deck runs one analysis with one stepping, since a raw holds one plot.
+# The text cases run a deck of this behaviour or of raw-* with -ascii, on the
+# recording user's own settings, as raw/tran_as_text does; the fastaccess
+# cases convert raw/ac, raw/dc, raw/noise, raw/op and raw/tf. See the
+# [[case]] tables at the end. XVII refuses every deck that runs .fra.
+inputs = [
+    "raw/layout_grid_ac_temp.cir",
+    "raw/layout_grid_ac_source.cir",
+    "raw/layout_grid_ac_model.cir",
+    "raw/layout_grid_dc_temp.cir",
+    "raw/layout_grid_dc_source.cir",
+    "raw/layout_grid_dc_model.cir",
+    "raw/layout_grid_noise_temp.cir",
+    "raw/layout_grid_noise_source.cir",
+    "raw/layout_grid_noise_model.cir",
+    "raw/layout_grid_op_source.cir",
+    "raw/layout_grid_op_model.cir",
+    "raw/layout_grid_tf_temp.cir",
+    "raw/layout_grid_tf_source.cir",
+    "raw/layout_grid_tf_model.cir",
+    "raw/layout_grid_ac_one_temp.cir",
+    "raw/layout_grid_ac_one_source.cir",
+    "raw/layout_grid_ac_one_model.cir",
+    "raw/layout_grid_noise_one_temp.cir",
+    "raw/layout_grid_noise_one_source.cir",
+    "raw/layout_grid_noise_one_model.cir",
+    "raw/layout_grid_dc_one.cir",
+    "raw/layout_grid_dc_one_param.cir",
+    "raw/layout_grid_dc_one_temp.cir",
+    "raw/layout_grid_dc_one_source.cir",
+    "raw/layout_grid_dc_one_model.cir",
+    "raw/layout_grid_dc_numdgt7.cir",
+    "raw/layout_grid_noise_numdgt7.cir",
+    "raw/layout_grid_tf_numdgt7.cir",
+]
+pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 # ---------------------------------------------------------------- logs
 
@@ -850,12 +899,12 @@ keep = ["log"]
 
 [behaviour.subckt-device-names]
 summary = "How each build names a device, a node and a port current inside named and nested subcircuit instances: in the .op device table with and without logopinfo, in an operating-point raw, and in a transient's raw, stepped and not."
-model = ["lib/device_names.py", "lib/trace_names.py", "lib/metrics.py", "lib/log_parser.py", "lib/result_observations.py", "lib/experiment_runner.py"]
+model = ["lib/device_names.py", "lib/trace_names.py", "lib/metrics.py", "lib/log_parser.py", "lib/result_observations.py", "lib/experiment_runner.py", "lib/device_names.py:naming_for", "lib/device_names.py:trace_key", "lib/trace_names.py:find_trace"]
 inputs = ["log/subckt_names.cir", "log/subckt_names_off.cir", "raw/subckt_names_tran.cir", "raw/subckt_names_step.cir"]
 
 [behaviour.save-subckt-names]
 summary = "Which spelling of a device current and a node inside nested subcircuit instances each build's .save accepts, with and without the instances' X, and what the raw then holds."
-model = ["lib/hierarchy.py", "lib/device_names.py", "lib/result_observations.py", "lib/experiment_runner.py"]
+model = ["lib/hierarchy.py", "lib/device_names.py", "lib/result_observations.py", "lib/experiment_runner.py", "lib/trace_names.py", "lib/device_names.py:trace_key", "lib/trace_names.py:find_trace"]
 inputs = ["raw/save_subckt_names.cir", "raw/save_subckt_names_no_x.cir"]
 
 [behaviour.log-device-op-precision]
@@ -2256,6 +2305,375 @@ kind = "run"
 source = "export/hier_device_plain.asc"
 extra = ["export/hier_device.asc", "export/hier_device.asy"]
 keep = ["net", "log", "raw"]
+
+# The cases of the results-layout grid's own decks and of its text and Fast
+# Access forms (behaviour results-layout-grid), and of the trace-name grid's
+# decks run with the subcircuit settings on (behaviour trace-name-grid).
+[[case]]
+id = "raw/layout_grid_tran_source"
+behaviour = "results-layout-grid"
+source = "raw/layout_grid_tran_source.cir"
+keep = ["log", "raw", "op.raw"]
+
+[[case]]
+id = "raw/layout_grid_tran_model"
+behaviour = "results-layout-grid"
+source = "raw/layout_grid_tran_model.cir"
+keep = ["log", "raw", "op.raw"]
+
+[[case]]
+id = "raw/layout_grid_fra_temp"
+behaviour = "results-layout-grid"
+source = "raw/layout_grid_fra_temp.cir"
+keep = ["log", "raw", "fra_1.raw"]
+
+[[case]]
+id = "raw/layout_grid_fra_source"
+behaviour = "results-layout-grid"
+source = "raw/layout_grid_fra_source.cir"
+keep = ["log", "raw", "fra_1.raw"]
+
+[[case]]
+id = "raw/layout_grid_fra_model"
+behaviour = "results-layout-grid"
+source = "raw/layout_grid_fra_model.cir"
+keep = ["log", "raw", "fra_1.raw"]
+
+[[case]]
+id = "raw/layout_grid_step_temp_op_raw"
+behaviour = "results-layout-grid"
+source = "raw/step_temp.cir"
+keep = ["op.raw"]
+note = "The operating-point raw a transient stepped over the temperature leaves beside its own."
+
+[[case]]
+id = "raw/layout_grid_text_tran_param"
+behaviour = "results-layout-grid"
+source = "raw/step_tran.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_tran_temp"
+behaviour = "results-layout-grid"
+source = "raw/step_temp.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_tran_source"
+behaviour = "results-layout-grid"
+source = "raw/layout_grid_tran_source.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_tran_model"
+behaviour = "results-layout-grid"
+source = "raw/layout_grid_tran_model.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_ac_param"
+behaviour = "results-layout-grid"
+source = "raw/step_ac.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_ac_temp"
+behaviour = "results-layout-grid"
+source = "raw/layout_grid_ac_temp.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_ac_source"
+behaviour = "results-layout-grid"
+source = "raw/layout_grid_ac_source.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_ac_model"
+behaviour = "results-layout-grid"
+source = "raw/layout_grid_ac_model.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_dc_no"
+behaviour = "results-layout-grid"
+source = "raw/dc.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_dc_param"
+behaviour = "results-layout-grid"
+source = "raw/step_dc.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_dc_temp"
+behaviour = "results-layout-grid"
+source = "raw/layout_grid_dc_temp.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_dc_source"
+behaviour = "results-layout-grid"
+source = "raw/layout_grid_dc_source.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_dc_model"
+behaviour = "results-layout-grid"
+source = "raw/layout_grid_dc_model.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_noise_no"
+behaviour = "results-layout-grid"
+source = "raw/noise.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_noise_param"
+behaviour = "results-layout-grid"
+source = "raw/step_noise.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_noise_temp"
+behaviour = "results-layout-grid"
+source = "raw/layout_grid_noise_temp.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_noise_source"
+behaviour = "results-layout-grid"
+source = "raw/layout_grid_noise_source.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_noise_model"
+behaviour = "results-layout-grid"
+source = "raw/layout_grid_noise_model.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_op_no"
+behaviour = "results-layout-grid"
+source = "raw/op.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_op_param"
+behaviour = "results-layout-grid"
+source = "raw/step_op.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_op_temp"
+behaviour = "results-layout-grid"
+source = "raw/step_temp_op.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_op_source"
+behaviour = "results-layout-grid"
+source = "raw/layout_grid_op_source.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_op_model"
+behaviour = "results-layout-grid"
+source = "raw/layout_grid_op_model.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_tf_no"
+behaviour = "results-layout-grid"
+source = "raw/tf.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_tf_param"
+behaviour = "results-layout-grid"
+source = "raw/tf_step.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_tf_temp"
+behaviour = "results-layout-grid"
+source = "raw/layout_grid_tf_temp.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_tf_source"
+behaviour = "results-layout-grid"
+source = "raw/layout_grid_tf_source.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_tf_model"
+behaviour = "results-layout-grid"
+source = "raw/layout_grid_tf_model.cir"
+switches = ["-ascii"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_fra_no"
+behaviour = "results-layout-grid"
+source = "raw/fra.cir"
+switches = ["-ascii"]
+keep = ["log", "raw", "fra_1.raw"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_fra_param"
+behaviour = "results-layout-grid"
+source = "raw/fra_step.cir"
+switches = ["-ascii"]
+keep = ["log", "raw", "fra_1.raw"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_fra_temp"
+behaviour = "results-layout-grid"
+source = "raw/layout_grid_fra_temp.cir"
+switches = ["-ascii"]
+keep = ["log", "raw", "fra_1.raw"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_fra_source"
+behaviour = "results-layout-grid"
+source = "raw/layout_grid_fra_source.cir"
+switches = ["-ascii"]
+keep = ["log", "raw", "fra_1.raw"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_text_fra_model"
+behaviour = "results-layout-grid"
+source = "raw/layout_grid_fra_model.cir"
+switches = ["-ascii"]
+keep = ["log", "raw", "fra_1.raw"]
+settings = false
+volatile = true
+
+[[case]]
+id = "raw/layout_grid_fastaccess_ac"
+behaviour = "results-layout-grid"
+kind = "fastaccess"
+source = "raw/ac.cir"
+
+[[case]]
+id = "raw/layout_grid_fastaccess_dc"
+behaviour = "results-layout-grid"
+kind = "fastaccess"
+source = "raw/dc.cir"
+
+[[case]]
+id = "raw/layout_grid_fastaccess_noise"
+behaviour = "results-layout-grid"
+kind = "fastaccess"
+source = "raw/noise.cir"
+
+[[case]]
+id = "raw/layout_grid_fastaccess_op"
+behaviour = "results-layout-grid"
+kind = "fastaccess"
+source = "raw/op.cir"
+
+[[case]]
+id = "raw/layout_grid_fastaccess_tf"
+behaviour = "results-layout-grid"
+kind = "fastaccess"
+source = "raw/tf.cir"
+
+[[case]]
+id = "raw/trace_grid_tran"
+behaviour = "trace-name-grid"
+source = "raw/trace_grid_tran.cir"
+ini = { SaveSubcircuitNodeVoltages = "true", SaveSubcircuitDeviceCurrents = "true" }
+
+[[case]]
+id = "raw/trace_grid_ac"
+behaviour = "trace-name-grid"
+source = "raw/trace_grid_ac.cir"
+ini = { SaveSubcircuitNodeVoltages = "true", SaveSubcircuitDeviceCurrents = "true" }
+
+[[case]]
+id = "raw/trace_grid_dc"
+behaviour = "trace-name-grid"
+source = "raw/trace_grid_dc.cir"
+ini = { SaveSubcircuitNodeVoltages = "true", SaveSubcircuitDeviceCurrents = "true" }
+
+[[case]]
+id = "raw/trace_grid_op"
+behaviour = "trace-name-grid"
+source = "raw/trace_grid_op.cir"
+ini = { SaveSubcircuitNodeVoltages = "true", SaveSubcircuitDeviceCurrents = "true" }
+
+[[case]]
+id = "raw/trace_grid_noise"
+behaviour = "trace-name-grid"
+source = "raw/trace_grid_noise.cir"
+ini = { SaveSubcircuitNodeVoltages = "true", SaveSubcircuitDeviceCurrents = "true" }
 
 # ---------------------------------------------------------------------- grids
 #
@@ -4581,3 +4999,1142 @@ at = { nesting = "1", kept = "raw" }
 "v=-1" = { sweep = "list", stepped = "param", value = "negative", name_case = "lower", axis = "v", step_value = "-1", steps = [1] }
 "v=0" = { sweep = "list", stepped = "param", value = "zero", name_case = "lower", axis = "v", step_value = "0", steps = [2] }
 "v=1.2345678" = { sweep = "list", stepped = "param", value = "many_digits", name_case = "lower", axis = "v", step_value = "1.2345678", steps = [3] }
+
+# ---------------------------------------------------------------- grid: how a results file is laid out
+
+[grid.results-layout]
+question = "How a results file is laid out, and what its plot is."
+# The writer the header names (_resolve_dialect), the byte layout of each
+# value and the order the values are stored in (_layout, and the run row's own
+# reading of a binary record, raw_parser._binary_layout), the analysis
+# (plot_analysis), whether the plot opens with a sampled axis or with the
+# stepped values (sampled_axis, leading_parameters), and the kind of stepped
+# result (stepped_kind).
+functions = [
+    "lib/raw_header.py:_resolve_dialect",
+    "lib/raw_header.py:_layout",
+    "lib/raw_header.py:leading_parameters",
+    "lib/raw_parser.py:_binary_layout",
+    "lib/result_kinds.py:plot_analysis",
+    "lib/result_kinds.py:sampled_axis",
+    "lib/result_kinds.py:stepped_kind",
+]
+item_axis = "analysis"
+# Keys of a cell beside its coordinates: steps, how many steps the deck's .step
+# cards give it (1 when it names none; a build's count where the recording of
+# an .op.raw beside a stepped run shows one); kind, the stepped kind a build's
+# recording shows where the form alone does not say (the .op.raw a stepped run
+# leaves); not_established, for a form no recording shows, why what the cell
+# declares is a prediction; differs, a route that answers otherwise, with the
+# reason.
+item_keys = ["steps", "kind", "not_established", "differs"]
+behaviours = ["raw-transient", "raw-ac", "raw-dc", "raw-noise", "raw-op", "raw-stepped", "raw-transfer-function", "raw-fra", "raw-ascii", "raw-fastaccess", "results-layout-grid"]
+groups = [
+    ["analysis", "storage", "stepped"],
+    ["analysis", "points", "stepped"],
+    ["analysis", "numdgt"],
+    ["compression"],
+    ["analysis", "order"],
+    ["file", "stepped"],
+]
+
+[grid.results-layout.axis]
+# The analysis the plot holds, read off its name (plot_analysis); an .fra run's
+# transient raw is a tran, its .fra_1.raw an fra.
+analysis = { values = ["tran", "ac", "dc", "noise", "op", "tf", "fra"] }
+# Binary values, or text (Values:), which _Scanner.text_payload reads.
+storage = { values = ["binary", "text"], default = "binary" }
+# What the run steps: nothing, a .param, the temperature (a leading variable
+# of type temperature, leading_parameters), a source by its own name, or a
+# model parameter. The type a build gives the leading variable of a source or
+# a model parameter is what leading_parameters reads.
+stepped = { values = ["no", "param", "temp", "source", "model"], default = "no" }
+# A frequency or DC sweep over many points, or one: a stepped one-frequency
+# plot opens with the stepped values, not a frequency (sampled_axis).
+points = { values = ["swept", "one"], default = "" }
+# .options numdgt above 6, which writes the double flag (_layout).
+numdgt = { values = ["default", "above_6"], default = "default" }
+# Waveform compression of a transient, off writing the nocompression flag.
+compression = { values = ["on", "off"], default = "" }
+# Values stored point by point, or trace by trace after -FastAccess (_layout's
+# storage order).
+order = { values = ["point", "trace"], default = "point" }
+# The run's own results file, or the .op.raw a transient or an AC run leaves
+# beside it, whose stepped kind stepped_kind tells by its one point.
+file = { values = ["own", "op_beside"], default = "own" }
+
+[[grid.results-layout.exclude]]
+at = { analysis = ["tran", "op", "tf", "fra"], points = ["swept", "one"] }
+reason = "A transient and a frequency response analysis always sweep, and an operating point and a transfer function are one point: only a frequency sweep and a DC sweep can be one point or many."
+
+[[grid.results-layout.exclude]]
+at = { analysis = ["fra"], order = ["trace"] }
+reason = "Not recordable as the recorder stands: a fastaccess case converts the run's own <case>.raw with -FastAccess, which for a frequency response analysis is its transient, not the .fra_1.raw. Recording it needs a case kind that converts another file the run wrote."
+
+# Recorded cells and the cells of results-layout-grid ------------------------
+
+[[grid.results-layout.cell]]
+cases = ["raw/tran"]
+at = { compression = "on" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tran" }
+
+[[grid.results-layout.cell]]
+cases = ["raw/tran_as_text", "raw/tran_as_text_setting"]
+at = { compression = "on", storage = "text" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tran" }
+
+[[grid.results-layout.cell]]
+cases = ["raw/tran_uncompressed"]
+at = { compression = "off" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tran" }
+
+[[grid.results-layout.cell]]
+cases = ["raw/tran_double"]
+at = { compression = "on", numdgt = "above_6" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tran" }
+
+[[grid.results-layout.cell]]
+cases = ["raw/tran_fastaccess"]
+at = { compression = "on", order = "trace" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tran" }
+
+[[grid.results-layout.cell]]
+cases = ["raw/ac"]
+at = { points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "ac" }
+
+[[grid.results-layout.cell]]
+cases = ["raw/ac_as_text"]
+at = { points = "swept", storage = "text" }
+[grid.results-layout.cell.items]
+raw = { analysis = "ac" }
+
+[[grid.results-layout.cell]]
+cases = ["raw/ac_numdgt7", "raw/ac_numdgt15"]
+at = { points = "swept", numdgt = "above_6" }
+[grid.results-layout.cell.items]
+raw = { analysis = "ac" }
+
+[[grid.results-layout.cell]]
+cases = ["raw/step_ac_one_freq_numdgt7"]
+at = { points = "one", numdgt = "above_6", stepped = "param" }
+[grid.results-layout.cell.items]
+raw = { analysis = "ac", steps = 3 }
+
+[[grid.results-layout.cell]]
+cases = ["deck/source_ac"]
+at = { points = "one" }
+[grid.results-layout.cell.items]
+raw = { analysis = "ac", differs = [
+    { build = "ltspice26", route = "plot_waveform charted", reason = "plot_waveform refuses a frequency sweep of one point as a corrupt or truncated raw (it wants three points), though the file is whole and a noise sweep of one point is charted (raw/noise_one_freq)" },
+    { build = "ltspice17", route = "plot_waveform charted", reason = "plot_waveform refuses a frequency sweep of one point as a corrupt or truncated raw (it wants three points), though the file is whole and a noise sweep of one point is charted (raw/noise_one_freq)" },
+] }
+
+[[grid.results-layout.cell]]
+cases = ["raw/dc"]
+at = { points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "dc" }
+
+[[grid.results-layout.cell]]
+cases = ["raw/noise"]
+at = { points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "noise" }
+
+[[grid.results-layout.cell]]
+cases = ["raw/noise_one_freq", "raw/noise_list_one_freq"]
+at = { points = "one" }
+[grid.results-layout.cell.items]
+raw = { analysis = "noise" }
+
+[[grid.results-layout.cell]]
+cases = ["raw/step_noise_one_freq", "raw/step_noise_list_one_freq"]
+at = { points = "one", stepped = "param" }
+[grid.results-layout.cell.items]
+raw = { analysis = "noise", steps = 3 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/op", "raw/op_one_subckt", "raw/op_subckt"]
+[grid.results-layout.cell.items]
+raw = { analysis = "op" }
+
+[[grid.results-layout.cell]]
+cases = ["log/device_op_numdgt_off"]
+at = { numdgt = "above_6" }
+[grid.results-layout.cell.items]
+raw = { analysis = "op" }
+
+[[grid.results-layout.cell]]
+cases = ["raw/step_tran"]
+at = { compression = "on", stepped = "param" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tran", steps = 3 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/step_temp"]
+at = { compression = "on", stepped = "temp" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tran", steps = 3 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/step_ac"]
+at = { points = "swept", stepped = "param" }
+[grid.results-layout.cell.items]
+raw = { analysis = "ac", steps = 3 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/step_ac_one_freq"]
+at = { points = "one", stepped = "param" }
+[grid.results-layout.cell.items]
+raw = { analysis = "ac", steps = 3 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/step_dc"]
+at = { points = "swept", stepped = "param" }
+[grid.results-layout.cell.items]
+raw = { analysis = "dc", steps = 2 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/step_noise"]
+at = { points = "swept", stepped = "param" }
+[grid.results-layout.cell.items]
+raw = { analysis = "noise", steps = 3 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/step_op"]
+at = { stepped = "param" }
+[grid.results-layout.cell.items]
+raw = { analysis = "op", steps = 3 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/step_temp_op"]
+at = { stepped = "temp" }
+[grid.results-layout.cell.items]
+raw = { analysis = "op", steps = 3 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/tf"]
+[grid.results-layout.cell.items]
+raw = { analysis = "tf" }
+
+[[grid.results-layout.cell]]
+cases = ["raw/tf_step"]
+at = { stepped = "param" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tf", steps = 3 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/tran_op_raw"]
+[grid.results-layout.cell.items]
+"op.raw" = { analysis = "op", file = "op_beside" }
+
+[[grid.results-layout.cell]]
+cases = ["raw/step_tran_op_raw"]
+at = { stepped = "param" }
+[grid.results-layout.cell.items]
+"op.raw" = { analysis = "op", file = "op_beside", kind = { ltspice26 = "stepped_run_op", ltspice17 = "stepped_op" }, steps = { ltspice26 = 0, ltspice17 = 1 } }
+
+[[grid.results-layout.cell]]
+cases = ["raw/step_ac_op_raw"]
+at = { stepped = "param" }
+[grid.results-layout.cell.items]
+"op.raw" = { analysis = "op", file = "op_beside", kind = { ltspice26 = "stepped_run_op" }, steps = { ltspice26 = 0 }, refused = { ltspice17 = "XVII writes no .op.raw beside a stepped .ac: its run of raw/step_ac_op_raw leaves none" } }
+
+[[grid.results-layout.cell]]
+cases = ["raw/fra"]
+refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tran", compression = "on" }
+"fra_1.raw" = { analysis = "fra", refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" } }
+
+[[grid.results-layout.cell]]
+cases = ["raw/fra_step"]
+at = { stepped = "param" }
+refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tran", compression = "on", steps = 2 }
+"fra_1.raw" = { analysis = "fra", steps = 2, refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }, differs = [
+    { build = "ltspice26", route = "analyze_results rows", reason = "Read by its path, an .fra_1.raw is paired with <case>.fra_1.log (services.source_for_raw_path), which no build writes. Without the run's own log (<case>.log) the steps of its sweeps cannot be told apart, so the route refuses the plot as unresolved; the decoder given the run's log reads both steps." },
+    { build = "ltspice26", route = "plot_waveform charted", reason = "Read by its path, an .fra_1.raw is paired with <case>.fra_1.log (services.source_for_raw_path), which no build writes. Without the run's own log (<case>.log) the steps of its sweeps cannot be told apart, so the route refuses the plot as unresolved; the decoder given the run's log reads both steps." },
+] }
+
+[[grid.results-layout.cell]]
+cases = ["raw/fra_numdgt7"]
+at = { numdgt = "above_6" }
+refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tran", compression = "on" }
+"fra_1.raw" = { analysis = "fra", refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" } }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_tran_source"]
+at = { stepped = "source" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tran", compression = "on", steps = 2, not_established = "No recording shows a tran stepped over a source; the recording settles the layout, the kind and the steps declared here." }
+"op.raw" = { analysis = "op", file = "op_beside", kind = { ltspice26 = "stepped_run_op", ltspice17 = "stepped_op" }, steps = { ltspice26 = 0, ltspice17 = 1 }, not_established = "No recording shows the .op.raw a transient stepped over a source leaves; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_tran_model"]
+at = { stepped = "model" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tran", compression = "on", steps = 2, not_established = "No recording shows a tran stepped over a model parameter; the recording settles the layout, the kind and the steps declared here." }
+"op.raw" = { analysis = "op", file = "op_beside", kind = { ltspice26 = "stepped_run_op", ltspice17 = "stepped_op" }, steps = { ltspice26 = 0, ltspice17 = 1 }, not_established = "No recording shows the .op.raw a transient stepped over a model parameter leaves; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_ac_temp"]
+at = { stepped = "temp", points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "ac", steps = 3, not_established = "No recording shows a ac stepped over the temperature; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_ac_source"]
+at = { stepped = "source", points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "ac", steps = 3, not_established = "No recording shows a ac stepped over a source; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_ac_model"]
+at = { stepped = "model", points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "ac", steps = 2, not_established = "No recording shows a ac stepped over a model parameter; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_dc_temp"]
+at = { stepped = "temp", points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "dc", steps = 3, not_established = "No recording shows a dc stepped over the temperature; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_dc_source"]
+at = { stepped = "source", points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "dc", steps = 2, not_established = "No recording shows a dc stepped over a source; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_dc_model"]
+at = { stepped = "model", points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "dc", steps = 2, not_established = "No recording shows a dc stepped over a model parameter; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_noise_temp"]
+at = { stepped = "temp", points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "noise", steps = 3, not_established = "No recording shows a noise stepped over the temperature; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_noise_source"]
+at = { stepped = "source", points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "noise", steps = 3, not_established = "No recording shows a noise stepped over a source; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_noise_model"]
+at = { stepped = "model", points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "noise", steps = 2, not_established = "No recording shows a noise stepped over a model parameter; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_op_source"]
+at = { stepped = "source" }
+[grid.results-layout.cell.items]
+raw = { analysis = "op", steps = 3, not_established = "No recording shows a op stepped over a source; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_op_model"]
+at = { stepped = "model" }
+[grid.results-layout.cell.items]
+raw = { analysis = "op", steps = 2, not_established = "No recording shows a op stepped over a model parameter; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_tf_temp"]
+at = { stepped = "temp" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tf", steps = 3, not_established = "No recording shows a tf stepped over the temperature; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_tf_source"]
+at = { stepped = "source" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tf", steps = 3, not_established = "No recording shows a tf stepped over a source; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_tf_model"]
+at = { stepped = "model" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tf", steps = 2, not_established = "No recording shows a tf stepped over a model parameter; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_fra_temp"]
+at = { stepped = "temp" }
+refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tran", steps = 2, not_established = "No recording shows a fra stepped over the temperature; the recording settles the layout, the kind and the steps declared here.", compression = "on" }
+"fra_1.raw" = { analysis = "fra", steps = 2, not_established = "No recording shows a fra stepped over the temperature; the recording settles the layout, the kind and the steps declared here.", refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" } }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_fra_source"]
+at = { stepped = "source" }
+refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tran", steps = 2, not_established = "No recording shows a fra stepped over a source; the recording settles the layout, the kind and the steps declared here.", compression = "on" }
+"fra_1.raw" = { analysis = "fra", steps = 2, not_established = "No recording shows a fra stepped over a source; the recording settles the layout, the kind and the steps declared here.", refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" } }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_fra_model"]
+at = { stepped = "model" }
+refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tran", steps = 2, not_established = "No recording shows a fra stepped over a model parameter; the recording settles the layout, the kind and the steps declared here.", compression = "on" }
+"fra_1.raw" = { analysis = "fra", steps = 2, not_established = "No recording shows a fra stepped over a model parameter; the recording settles the layout, the kind and the steps declared here.", refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" } }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_ac_one_temp"]
+at = { stepped = "temp", points = "one" }
+[grid.results-layout.cell.items]
+raw = { analysis = "ac", steps = 3, not_established = "No recording shows a ac at one point stepped over the temperature; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_ac_one_source"]
+at = { stepped = "source", points = "one" }
+[grid.results-layout.cell.items]
+raw = { analysis = "ac", steps = 3, not_established = "No recording shows a ac at one point stepped over a source; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_ac_one_model"]
+at = { stepped = "model", points = "one" }
+[grid.results-layout.cell.items]
+raw = { analysis = "ac", steps = 2, not_established = "No recording shows a ac at one point stepped over a model parameter; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_noise_one_temp"]
+at = { stepped = "temp", points = "one" }
+[grid.results-layout.cell.items]
+raw = { analysis = "noise", steps = 3, not_established = "No recording shows a noise at one point stepped over the temperature; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_noise_one_source"]
+at = { stepped = "source", points = "one" }
+[grid.results-layout.cell.items]
+raw = { analysis = "noise", steps = 3, not_established = "No recording shows a noise at one point stepped over a source; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_noise_one_model"]
+at = { stepped = "model", points = "one" }
+[grid.results-layout.cell.items]
+raw = { analysis = "noise", steps = 2, not_established = "No recording shows a noise at one point stepped over a model parameter; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_dc_one"]
+at = { stepped = "no", points = "one" }
+[grid.results-layout.cell.items]
+raw = { analysis = "dc", not_established = "No recording shows a dc at one point; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_dc_one_param"]
+at = { stepped = "param", points = "one" }
+[grid.results-layout.cell.items]
+raw = { analysis = "dc", steps = 3, not_established = "No recording shows a dc at one point stepped over a parameter; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_dc_one_temp"]
+at = { stepped = "temp", points = "one" }
+[grid.results-layout.cell.items]
+raw = { analysis = "dc", steps = 3, not_established = "No recording shows a dc at one point stepped over the temperature; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_dc_one_source"]
+at = { stepped = "source", points = "one" }
+[grid.results-layout.cell.items]
+raw = { analysis = "dc", steps = 3, not_established = "No recording shows a dc at one point stepped over a source; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_dc_one_model"]
+at = { stepped = "model", points = "one" }
+[grid.results-layout.cell.items]
+raw = { analysis = "dc", steps = 2, not_established = "No recording shows a dc at one point stepped over a model parameter; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_dc_numdgt7"]
+at = { stepped = "no", points = "swept", numdgt = "above_6" }
+[grid.results-layout.cell.items]
+raw = { analysis = "dc", not_established = "No recording shows a dc  under numdgt above 6; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_noise_numdgt7"]
+at = { stepped = "no", points = "swept", numdgt = "above_6" }
+[grid.results-layout.cell.items]
+raw = { analysis = "noise", not_established = "No recording shows a noise  under numdgt above 6; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_tf_numdgt7"]
+at = { stepped = "no", numdgt = "above_6" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tf", not_established = "No recording shows a tf  under numdgt above 6; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_step_temp_op_raw"]
+at = { stepped = "temp" }
+[grid.results-layout.cell.items]
+"op.raw" = { analysis = "op", file = "op_beside", kind = { ltspice26 = "stepped_run_op", ltspice17 = "stepped_op" }, steps = { ltspice26 = 0, ltspice17 = 1 }, not_established = "No recording shows the .op.raw a transient stepped over the temperature leaves; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_tran_param"]
+at = { storage = "text", stepped = "param", compression = "on" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tran", not_established = "No recording shows a tran stepped (param) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_tran_temp"]
+at = { storage = "text", stepped = "temp", compression = "on" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tran", not_established = "No recording shows a tran stepped (temp) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_tran_source"]
+at = { storage = "text", stepped = "source", compression = "on" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tran", not_established = "No recording shows a tran stepped (source) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_tran_model"]
+at = { storage = "text", stepped = "model", compression = "on" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tran", not_established = "No recording shows a tran stepped (model) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_ac_param"]
+at = { storage = "text", stepped = "param", points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "ac", not_established = "No recording shows a ac stepped (param) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_ac_temp"]
+at = { storage = "text", stepped = "temp", points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "ac", not_established = "No recording shows a ac stepped (temp) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_ac_source"]
+at = { storage = "text", stepped = "source", points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "ac", not_established = "No recording shows a ac stepped (source) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_ac_model"]
+at = { storage = "text", stepped = "model", points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "ac", not_established = "No recording shows a ac stepped (model) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_dc_no"]
+at = { storage = "text", stepped = "no", points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "dc", not_established = "No recording shows a dc written as text; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_dc_param"]
+at = { storage = "text", stepped = "param", points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "dc", not_established = "No recording shows a dc stepped (param) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_dc_temp"]
+at = { storage = "text", stepped = "temp", points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "dc", not_established = "No recording shows a dc stepped (temp) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_dc_source"]
+at = { storage = "text", stepped = "source", points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "dc", not_established = "No recording shows a dc stepped (source) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_dc_model"]
+at = { storage = "text", stepped = "model", points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "dc", not_established = "No recording shows a dc stepped (model) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_noise_no"]
+at = { storage = "text", stepped = "no", points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "noise", not_established = "No recording shows a noise written as text; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_noise_param"]
+at = { storage = "text", stepped = "param", points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "noise", not_established = "No recording shows a noise stepped (param) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_noise_temp"]
+at = { storage = "text", stepped = "temp", points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "noise", not_established = "No recording shows a noise stepped (temp) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_noise_source"]
+at = { storage = "text", stepped = "source", points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "noise", not_established = "No recording shows a noise stepped (source) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_noise_model"]
+at = { storage = "text", stepped = "model", points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "noise", not_established = "No recording shows a noise stepped (model) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_op_no"]
+at = { storage = "text", stepped = "no" }
+[grid.results-layout.cell.items]
+raw = { analysis = "op", not_established = "No recording shows a op written as text; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_op_param"]
+at = { storage = "text", stepped = "param" }
+[grid.results-layout.cell.items]
+raw = { analysis = "op", not_established = "No recording shows a op stepped (param) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_op_temp"]
+at = { storage = "text", stepped = "temp" }
+[grid.results-layout.cell.items]
+raw = { analysis = "op", not_established = "No recording shows a op stepped (temp) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_op_source"]
+at = { storage = "text", stepped = "source" }
+[grid.results-layout.cell.items]
+raw = { analysis = "op", not_established = "No recording shows a op stepped (source) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_op_model"]
+at = { storage = "text", stepped = "model" }
+[grid.results-layout.cell.items]
+raw = { analysis = "op", not_established = "No recording shows a op stepped (model) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_tf_no"]
+at = { storage = "text", stepped = "no" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tf", not_established = "No recording shows a tf written as text; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_tf_param"]
+at = { storage = "text", stepped = "param" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tf", not_established = "No recording shows a tf stepped (param) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_tf_temp"]
+at = { storage = "text", stepped = "temp" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tf", not_established = "No recording shows a tf stepped (temp) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_tf_source"]
+at = { storage = "text", stepped = "source" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tf", not_established = "No recording shows a tf stepped (source) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 3 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_tf_model"]
+at = { storage = "text", stepped = "model" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tf", not_established = "No recording shows a tf stepped (model) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2 }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_fra_no"]
+at = { storage = "text", stepped = "no" }
+refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tran", not_established = "No recording shows a fra written as text; the recording settles the layout, the kind and the steps declared here.", compression = "on" }
+"fra_1.raw" = { analysis = "fra", not_established = "No recording shows a fra written as text; the recording settles the layout, the kind and the steps declared here.", refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" } }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_fra_param"]
+at = { storage = "text", stepped = "param" }
+refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tran", not_established = "No recording shows a fra stepped (param) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2, compression = "on" }
+"fra_1.raw" = { analysis = "fra", not_established = "No recording shows a fra stepped (param) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2, refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" } }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_fra_temp"]
+at = { storage = "text", stepped = "temp" }
+refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tran", not_established = "No recording shows a fra stepped (temp) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2, compression = "on" }
+"fra_1.raw" = { analysis = "fra", not_established = "No recording shows a fra stepped (temp) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2, refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" } }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_fra_source"]
+at = { storage = "text", stepped = "source" }
+refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tran", not_established = "No recording shows a fra stepped (source) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2, compression = "on" }
+"fra_1.raw" = { analysis = "fra", not_established = "No recording shows a fra stepped (source) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2, refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" } }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_text_fra_model"]
+at = { storage = "text", stepped = "model" }
+refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tran", not_established = "No recording shows a fra stepped (model) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2, compression = "on" }
+"fra_1.raw" = { analysis = "fra", not_established = "No recording shows a fra stepped (model) written as text; the recording settles the layout, the kind and the steps declared here.", steps = 2, refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" } }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_fastaccess_ac"]
+at = { order = "trace", points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "ac", not_established = "No recording shows a ac raw converted to Fast Access; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_fastaccess_dc"]
+at = { order = "trace", points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "dc", not_established = "No recording shows a dc raw converted to Fast Access; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_fastaccess_noise"]
+at = { order = "trace", points = "swept" }
+[grid.results-layout.cell.items]
+raw = { analysis = "noise", not_established = "No recording shows a noise raw converted to Fast Access; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_fastaccess_op"]
+at = { order = "trace" }
+[grid.results-layout.cell.items]
+raw = { analysis = "op", not_established = "No recording shows a op raw converted to Fast Access; the recording settles the layout, the kind and the steps declared here." }
+
+[[grid.results-layout.cell]]
+cases = ["raw/layout_grid_fastaccess_tf"]
+at = { order = "trace" }
+[grid.results-layout.cell.items]
+raw = { analysis = "tf", not_established = "No recording shows a tf raw converted to Fast Access; the recording settles the layout, the kind and the steps declared here." }
+
+# ---------------------------------------------------------------- grid: how a trace is named
+
+[grid.trace-name]
+question = "Which trace of a result a signal name reads, and what that trace holds."
+# How a build spells a name inside subcircuit instances (naming_for), the key
+# two spellings of one trace share (trace_key), the trace a name finds
+# (find_trace), and what it holds: by its name and declared type
+# (trace_quantity), by its plot (node_voltages, which counts no trace of a
+# noise plot a node voltage) and by its unit (declared_unit).
+functions = [
+    "lib/device_names.py:naming_for",
+    "lib/device_names.py:trace_key",
+    "lib/trace_names.py:find_trace",
+    "lib/trace_names.py:trace_quantity",
+    "lib/raw_parser.py:node_voltages",
+    "lib/decoded_raw.py:declared_unit",
+]
+item_axis = "what"
+# Keys of a cell beside its coordinates: the cell's item is the name a user
+# writes (LTspice 26's spelling, each instance with its X); trace, the trace
+# each build wrote for it, from the recording, or the build's spelling as the
+# recorded ones spell it where none is recorded (with not_established);
+# not_established, why that is a prediction; differs, a route that answers
+# otherwise, with the reason.
+item_keys = ["trace", "not_established", "differs"]
+behaviours = ["net-naming", "subckt-device-names", "export-instance-names", "export-hierarchical-block", "save-subckt-names", "raw-noise", "sheet-part-trace-names", "section-sign-trace-tran", "trace-name-grid"]
+groups = [
+    ["what", "depth", "analysis"],
+    ["form", "analysis"],
+]
+
+[grid.trace-name.outside]
+"connectivity/two_labels_zeta_first" = "An export: it names the nets of a sheet, which no run of it records as traces."
+"connectivity/two_labels_alpha_first" = "An export: it names the nets of a sheet, which no run of it records as traces."
+"connectivity/two_labels_later_on_left" = "An export: it names the nets of a sheet, which no run of it records as traces."
+"connectivity/two_labels_corner" = "An export: it names the nets of a sheet, which no run of it records as traces."
+"connectivity/label_and_ground" = "An export: it names the nets of a sheet, which no run of it records as traces."
+"connectivity/floating_label" = "An export: it names the nets of a sheet, which no run of it records as traces."
+"connectivity/same_name_labels" = "An export: it names the nets of a sheet, which no run of it records as traces."
+"connectivity/unconnected_pins" = "An export: it names the nets of a sheet, which no run of it records as traces."
+"connectivity/unlabelled_nets" = "An export: it names the nets of a sheet, which no run of it records as traces."
+"connectivity/label_case_separate_wires" = "An export: it names the nets of a sheet, which no run of it records as traces."
+"connectivity/label_case_one_wire" = "An export: it names the nets of a sheet, which no run of it records as traces."
+"connectivity/label_case_second_name" = "An export: it names the nets of a sheet, which no run of it records as traces."
+"connectivity/gnd_label" = "An export: it names the nets of a sheet, which no run of it records as traces."
+"connectivity/gnd_label_lower_case" = "An export: it names the nets of a sheet, which no run of it records as traces."
+"export/instance_names" = "An export: it names the instances on a card, which no run of it records as traces."
+"export/block_symbol" = "An export: it names the instances on a card, which no run of it records as traces."
+"export/hier_top" = "An export: it names the cards of a block, which no run of it records as traces."
+"export/hier_plain_top" = "An export: it names the cards of a block, which no run of it records as traces."
+"export/hier_top_run" = "The run of a block symbol given a Prefix of X fails on both builds and leaves no plot (export-hierarchical-block), so it names no trace."
+
+[grid.trace-name.axis]
+# What the trace holds: a node voltage, a two-terminal device's current, one
+# terminal's current of a device of more terminals (Id, Ic), a block's port
+# current (Ix, declared subckt_current), a noise density (the output and
+# input noise, a device's contribution), the noise run's gain, or the plot's
+# sampled axis (trace_quantity's axis).
+what = { values = ["node_voltage", "current", "terminal_current", "port_current", "noise", "gain", "axis"] }
+# How deep in subcircuit instances the trace is: at the top, in a block, or
+# in a block in a block (trace_key's path; XVII drops each instance's X).
+depth = { values = ["top", "block", "nested"] }
+# The analysis of the run.
+analysis = { values = ["tran", "ac", "dc", "noise", "op"] }
+# The form of the name the user writes: as written, with the section sign of
+# an exported part (R§Load, which a run names I(Load); section_sign_spellings),
+# or in another case than the trace (fold_name).
+form = { values = ["plain", "section_sign", "mixed_case"], default = "plain" }
+
+[[grid.trace-name.exclude]]
+at = { analysis = ["noise"], what = ["node_voltage", "current", "terminal_current", "port_current"] }
+reason = "A noise run's raw holds its frequency, its gain, the output and input noise and each device's contribution, and no node voltage or current (raw/noise)."
+
+[[grid.trace-name.exclude]]
+at = { analysis = ["tran", "ac", "dc", "op"], what = ["noise", "gain"] }
+reason = "Only a noise analysis writes a noise density or a gain."
+
+[[grid.trace-name.exclude]]
+at = { what = ["gain", "axis"], depth = ["block", "nested"] }
+reason = "A run has one gain and one axis, its own, not a block's."
+
+[[grid.trace-name.exclude]]
+at = { what = ["axis"], analysis = ["op"] }
+reason = "An operating point has no sampled axis."
+
+[[grid.trace-name.exclude]]
+at = { what = ["port_current"], depth = ["top"] }
+reason = "A port current names a port of a block instance, so it is inside one block at least."
+
+# Recorded cells and the cells of trace-name-grid -----------------------------
+
+[[grid.trace-name.cell]]
+cases = ["raw/subckt_names_tran_saved"]
+at = { analysis = "tran" }
+[grid.trace-name.cell.items]
+"time" = { what = "axis", depth = "top", trace = "time" }
+"V(outa)" = { what = "node_voltage", depth = "top", trace = "V(outa)" }
+"V(xa:xin:mid)" = { what = "node_voltage", depth = "nested", trace = { ltspice26 = "V(xa:xin:mid)", ltspice17 = "V(a:in:mid)" } }
+"I(V1)" = { what = "current", depth = "top", trace = "I(V1)" }
+"I(xa:Rd)" = { what = "current", depth = "block", trace = { ltspice26 = "I(xa:Rd)", ltspice17 = "I(a:Rd)" } }
+"I(xa:xin:Rin)" = { what = "current", depth = "nested", trace = { ltspice26 = "I(xa:xin:Rin)", ltspice17 = "I(a:in:Rin)" } }
+"Id(xa:Mdrv)" = { what = "terminal_current", depth = "block", trace = { ltspice26 = "Id(xa:Mdrv)", ltspice17 = "Id(a:Mdrv)" } }
+"Id(xa:xin:Mtail)" = { what = "terminal_current", depth = "nested", trace = { ltspice26 = "Id(xa:xin:Mtail)", ltspice17 = "Id(a:in:Mtail)" } }
+"Ix(xa:out)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:out)", ltspice17 = "Ix(a:OUT)" }, differs = [
+    { build = "ltspice17", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice17", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice17", route = "plot_waveform unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice26", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice26", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice26", route = "plot_waveform unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+] }
+"Ix(xa:xin:p)" = { what = "port_current", depth = "nested", trace = { ltspice26 = "Ix(xa:xin:p)", ltspice17 = "Ix(a:in:P)" }, differs = [
+    { build = "ltspice17", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice17", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice17", route = "plot_waveform unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice26", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice26", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice26", route = "plot_waveform unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+] }
+"v(OUTA)" = { what = "node_voltage", depth = "top", trace = "V(outa)", form = "mixed_case" }
+
+[[grid.trace-name.cell]]
+cases = ["raw/subckt_names_tran", "raw/subckt_names_step"]
+at = { analysis = "tran" }
+[grid.trace-name.cell.items]
+"time" = { what = "axis", depth = "top", trace = "time" }
+"V(outa)" = { what = "node_voltage", depth = "top", trace = "V(outa)" }
+"I(V1)" = { what = "current", depth = "top", trace = "I(V1)" }
+"Ix(xa:out)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:out)", ltspice17 = "Ix(a:OUT)" }, differs = [
+    { build = "ltspice17", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice17", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice17", route = "plot_waveform unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice26", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice26", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice26", route = "plot_waveform unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+] }
+"v(OUTA)" = { what = "node_voltage", depth = "top", trace = "V(outa)", form = "mixed_case" }
+
+[[grid.trace-name.cell]]
+cases = ["log/subckt_names_off"]
+at = { analysis = "op" }
+[grid.trace-name.cell.items]
+"V(outa)" = { what = "node_voltage", depth = "top", trace = "V(outa)" }
+"I(V1)" = { what = "current", depth = "top", trace = "I(V1)" }
+"Ix(xa:top)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:top)", ltspice17 = "Ix(a:TOP)" }, differs = [
+    { build = "ltspice17", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice17", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice26", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice26", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+] }
+"v(OUTA)" = { what = "node_voltage", depth = "top", trace = "V(outa)", form = "mixed_case" }
+
+[[grid.trace-name.cell]]
+cases = ["log/subckt_names"]
+at = { analysis = "op" }
+refused = { ltspice17 = "XVII refuses the deck for its .options logopinfo, and writes no raw (subckt-device-names)" }
+[grid.trace-name.cell.items]
+"V(outa)" = { what = "node_voltage", depth = "top", trace = "V(outa)" }
+"I(V1)" = { what = "current", depth = "top", trace = "I(V1)" }
+"Ix(xa:top)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:top)", ltspice17 = "Ix(a:TOP)" }, differs = [
+    { build = "ltspice26", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice26", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+] }
+"v(OUTA)" = { what = "node_voltage", depth = "top", trace = "V(outa)", form = "mixed_case" }
+
+[[grid.trace-name.cell]]
+cases = ["log/subckt_names_off_saved"]
+at = { analysis = "op" }
+[grid.trace-name.cell.items]
+"V(outa)" = { what = "node_voltage", depth = "top", trace = "V(outa)" }
+"V(xa:xin:mid)" = { what = "node_voltage", depth = "nested", trace = { ltspice26 = "V(xa:xin:mid)", ltspice17 = "V(a:in:mid)" } }
+"I(V1)" = { what = "current", depth = "top", trace = "I(V1)" }
+"I(xa:Rd)" = { what = "current", depth = "block", trace = { ltspice26 = "I(xa:Rd)", ltspice17 = "I(a:Rd)" } }
+"I(xa:xin:Rin)" = { what = "current", depth = "nested", trace = { ltspice26 = "I(xa:xin:Rin)", ltspice17 = "I(a:in:Rin)" } }
+"Id(xa:Mdrv)" = { what = "terminal_current", depth = "block", trace = { ltspice26 = "Id(xa:Mdrv)", ltspice17 = "Id(a:Mdrv)" } }
+"Id(xa:xin:Mtail)" = { what = "terminal_current", depth = "nested", trace = { ltspice26 = "Id(xa:xin:Mtail)", ltspice17 = "Id(a:in:Mtail)" } }
+"Ix(xa:out)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:out)", ltspice17 = "Ix(a:OUT)" }, differs = [
+    { build = "ltspice17", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice17", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice26", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice26", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+] }
+"Ix(xa:xin:n)" = { what = "port_current", depth = "nested", trace = { ltspice26 = "Ix(xa:xin:n)", ltspice17 = "Ix(a:in:N)" }, differs = [
+    { build = "ltspice17", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice17", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice26", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice26", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+] }
+
+[[grid.trace-name.cell]]
+cases = ["log/subckt_names_saved"]
+at = { analysis = "op" }
+refused = { ltspice17 = "XVII refuses the deck for its .options logopinfo, and writes no raw (subckt-device-names)" }
+[grid.trace-name.cell.items]
+"V(outa)" = { what = "node_voltage", depth = "top", trace = "V(outa)" }
+"V(xa:xin:mid)" = { what = "node_voltage", depth = "nested", trace = { ltspice26 = "V(xa:xin:mid)", ltspice17 = "V(a:in:mid)" } }
+"I(V1)" = { what = "current", depth = "top", trace = "I(V1)" }
+"I(xa:Rd)" = { what = "current", depth = "block", trace = { ltspice26 = "I(xa:Rd)", ltspice17 = "I(a:Rd)" } }
+"I(xa:xin:Rin)" = { what = "current", depth = "nested", trace = { ltspice26 = "I(xa:xin:Rin)", ltspice17 = "I(a:in:Rin)" } }
+"Id(xa:Mdrv)" = { what = "terminal_current", depth = "block", trace = { ltspice26 = "Id(xa:Mdrv)", ltspice17 = "Id(a:Mdrv)" } }
+"Id(xa:xin:Mtail)" = { what = "terminal_current", depth = "nested", trace = { ltspice26 = "Id(xa:xin:Mtail)", ltspice17 = "Id(a:in:Mtail)" } }
+"Ix(xa:out)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:out)", ltspice17 = "Ix(a:OUT)" }, differs = [
+    { build = "ltspice26", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice26", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+] }
+"Ix(xa:xin:n)" = { what = "port_current", depth = "nested", trace = { ltspice26 = "Ix(xa:xin:n)", ltspice17 = "Ix(a:in:N)" }, differs = [
+    { build = "ltspice26", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice26", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+] }
+
+[[grid.trace-name.cell]]
+cases = ["raw/save_subckt_names"]
+at = { analysis = "tran" }
+[grid.trace-name.cell.items]
+"time" = { what = "axis", depth = "top", trace = "time" }
+"V(xa:xin:mid)" = { what = "node_voltage", depth = "nested", trace = "V(xa:xin:mid)", refused = { ltspice17 = "The deck's .save spells each instance with its X, which XVII's .save does not take: XVII saves nothing it names (save-subckt-names)" } }
+"I(xa:Rd)" = { what = "current", depth = "block", trace = "I(xa:Rd)", refused = { ltspice17 = "The deck's .save spells each instance with its X, which XVII's .save does not take: XVII saves nothing it names (save-subckt-names)" } }
+"I(xa:xin:Rin)" = { what = "current", depth = "nested", trace = "I(xa:xin:Rin)", refused = { ltspice17 = "The deck's .save spells each instance with its X, which XVII's .save does not take: XVII saves nothing it names (save-subckt-names)" } }
+
+[[grid.trace-name.cell]]
+cases = ["raw/save_subckt_names_no_x"]
+at = { analysis = "tran" }
+[grid.trace-name.cell.items]
+"time" = { what = "axis", depth = "top", trace = "time" }
+"V(xa:xin:mid)" = { what = "node_voltage", depth = "nested", trace = "V(a:in:mid)", refused = { ltspice26 = "The deck's .save spells each instance without its X, which LTspice 26's .save does not take: it saves nothing it names (save-subckt-names)" } }
+"I(xa:Rd)" = { what = "current", depth = "block", trace = "I(a:Rd)", refused = { ltspice26 = "The deck's .save spells each instance without its X, which LTspice 26's .save does not take: it saves nothing it names (save-subckt-names)" } }
+"I(xa:xin:Rin)" = { what = "current", depth = "nested", trace = "I(a:in:Rin)", refused = { ltspice26 = "The deck's .save spells each instance without its X, which LTspice 26's .save does not take: it saves nothing it names (save-subckt-names)" } }
+
+[[grid.trace-name.cell]]
+cases = ["raw/noise", "raw/noise_one_freq", "raw/noise_list_one_freq"]
+at = { analysis = "noise" }
+[grid.trace-name.cell.items]
+"frequency" = { what = "axis", depth = "top", trace = "frequency" }
+"gain" = { what = "gain", depth = "top", trace = "gain" }
+"V(onoise)" = { what = "noise", depth = "top", trace = { ltspice26 = "v(onoise)", ltspice17 = "V(onoise)" } }
+"V(inoise)" = { what = "noise", depth = "top", trace = { ltspice26 = "v(inoise)", ltspice17 = "V(inoise)" } }
+"V(R1)" = { what = "noise", depth = "top", trace = { ltspice26 = "v(R1)", ltspice17 = "V(r1)" } }
+"onoise" = { what = "noise", depth = "top", trace = { ltspice26 = "v(onoise)", ltspice17 = "V(onoise)" }, form = "mixed_case" }
+
+[[grid.trace-name.cell]]
+cases = ["raw/step_noise_one_freq"]
+at = { analysis = "noise" }
+[grid.trace-name.cell.items]
+"gain" = { what = "gain", depth = "top", trace = "gain" }
+"V(onoise)" = { what = "noise", depth = "top", trace = { ltspice26 = "v(onoise)", ltspice17 = "V(onoise)" } }
+"V(inoise)" = { what = "noise", depth = "top", trace = { ltspice26 = "v(inoise)", ltspice17 = "V(inoise)" } }
+"V(R1)" = { what = "noise", depth = "top", trace = { ltspice26 = "v(R1)", ltspice17 = "V(r1)" } }
+"onoise" = { what = "noise", depth = "top", trace = { ltspice26 = "v(onoise)", ltspice17 = "V(onoise)" }, form = "mixed_case" }
+
+[[grid.trace-name.cell]]
+cases = ["export/load_name_op", "deck/section_sign_utf8", "deck/section_sign_cp1252"]
+at = { analysis = "op" }
+[grid.trace-name.cell.items]
+"I(R§Load)" = { what = "current", depth = "top", trace = "I(Load)", form = "section_sign" }
+
+[[grid.trace-name.cell]]
+cases = ["export/load_name_tran"]
+at = { analysis = "tran" }
+[grid.trace-name.cell.items]
+"I(R§Load)" = { what = "current", depth = "top", trace = "I(Load)", form = "section_sign" }
+"time" = { what = "axis", depth = "top", trace = "time" }
+"V(in)" = { what = "node_voltage", depth = "top", trace = "V(in)" }
+
+[[grid.trace-name.cell]]
+cases = ["export/hier_plain_top_run"]
+at = { analysis = "op" }
+[grid.trace-name.cell.items]
+"V(out)" = { what = "node_voltage", depth = "top", trace = "V(out)" }
+"I(R3)" = { what = "current", depth = "top", trace = "I(R3)" }
+"Ix(x1:in)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(x1:in)", ltspice17 = "Ix(x1:IN)" }, differs = [
+    { build = "ltspice17", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice17", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice17", route = "trace_key", reason = "XVII writes this instance as the sheet names it (x1, mb1), not without an X as it writes a deck's X instance (raw/op_subckt: Ix(1:TOP)); trace_key reads every instance in an XVII name as one whose X was dropped and puts an X back, so the key names another instance (xx1, xmb1)" },
+    { build = "ltspice26", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice26", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+] }
+
+[[grid.trace-name.cell]]
+cases = ["export/sheet_part_names"]
+at = { analysis = "op" }
+[grid.trace-name.cell.items]
+"V(n001)" = { what = "node_voltage", depth = "top", trace = "V(n001)" }
+"I(R1)" = { what = "current", depth = "top", trace = "I(R1)" }
+"Id(mb1:M1)" = { what = "terminal_current", depth = "block", trace = "Id(mb1:M1)", differs = [
+    { build = "ltspice17", route = "trace_key", reason = "XVII writes this instance as the sheet names it (x1, mb1), not without an X as it writes a deck's X instance (raw/op_subckt: Ix(1:TOP)); trace_key reads every instance in an XVII name as one whose X was dropped and puts an X back, so the key names another instance (xx1, xmb1)" },
+] }
+"Id(xmb2:M1)" = { what = "terminal_current", depth = "block", trace = { ltspice26 = "Id(xmb2:M1)", ltspice17 = "Id(mb2:M1)" } }
+"Ix(mb1:d)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(mb1:d)", ltspice17 = "Ix(mb1:D)" }, differs = [
+    { build = "ltspice17", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice17", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice17", route = "trace_key", reason = "XVII writes this instance as the sheet names it (x1, mb1), not without an X as it writes a deck's X instance (raw/op_subckt: Ix(1:TOP)); trace_key reads every instance in an XVII name as one whose X was dropped and puts an X back, so the key names another instance (xx1, xmb1)" },
+    { build = "ltspice26", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+    { build = "ltspice26", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
+] }
+
+[[grid.trace-name.cell]]
+cases = ["raw/ac"]
+at = { analysis = "ac" }
+[grid.trace-name.cell.items]
+"frequency" = { what = "axis", depth = "top", trace = "frequency" }
+"V(out)" = { what = "node_voltage", depth = "top", trace = "V(out)" }
+"I(R1)" = { what = "current", depth = "top", trace = "I(R1)" }
+"v(OUT)" = { what = "node_voltage", depth = "top", trace = "V(out)", form = "mixed_case" }
+
+[[grid.trace-name.cell]]
+cases = ["raw/dc"]
+at = { analysis = "dc" }
+[grid.trace-name.cell.items]
+"V1" = { what = "axis", depth = "top", trace = { ltspice26 = "V1", ltspice17 = "v1" } }
+"V(out)" = { what = "node_voltage", depth = "top", trace = "V(out)" }
+"I(R1)" = { what = "current", depth = "top", trace = "I(R1)" }
+"v(OUT)" = { what = "node_voltage", depth = "top", trace = "V(out)", form = "mixed_case" }
+
+[[grid.trace-name.cell]]
+cases = ["raw/trace_grid_tran"]
+at = { analysis = "tran" }
+[grid.trace-name.cell.items]
+"time" = { what = "axis", depth = "top", trace = "time", not_established = "No recording shows the names of every kind of trace at each depth in a tran run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"V(top)" = { what = "node_voltage", depth = "top", trace = "V(top)", not_established = "No recording shows the names of every kind of trace at each depth in a tran run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"V(xa:n1)" = { what = "node_voltage", depth = "block", trace = { ltspice26 = "V(xa:n1)", ltspice17 = "V(a:n1)" }, not_established = "No recording shows the names of every kind of trace at each depth in a tran run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"V(xa:xin:mid)" = { what = "node_voltage", depth = "nested", trace = { ltspice26 = "V(xa:xin:mid)", ltspice17 = "V(a:in:mid)" }, not_established = "No recording shows the names of every kind of trace at each depth in a tran run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"I(R1)" = { what = "current", depth = "top", trace = "I(R1)", not_established = "No recording shows the names of every kind of trace at each depth in a tran run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"I(xa:Rd)" = { what = "current", depth = "block", trace = { ltspice26 = "I(xa:Rd)", ltspice17 = "I(a:Rd)" }, not_established = "No recording shows the names of every kind of trace at each depth in a tran run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"I(xa:xin:Rin)" = { what = "current", depth = "nested", trace = { ltspice26 = "I(xa:xin:Rin)", ltspice17 = "I(a:in:Rin)" }, not_established = "No recording shows the names of every kind of trace at each depth in a tran run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"Id(M1)" = { what = "terminal_current", depth = "top", trace = "Id(M1)", not_established = "No recording shows the names of every kind of trace at each depth in a tran run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"Id(xa:Mdrv)" = { what = "terminal_current", depth = "block", trace = { ltspice26 = "Id(xa:Mdrv)", ltspice17 = "Id(a:Mdrv)" }, not_established = "No recording shows the names of every kind of trace at each depth in a tran run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"Id(xa:xin:Mtail)" = { what = "terminal_current", depth = "nested", trace = { ltspice26 = "Id(xa:xin:Mtail)", ltspice17 = "Id(a:in:Mtail)" }, not_established = "No recording shows the names of every kind of trace at each depth in a tran run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"Ix(xa:out)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:out)", ltspice17 = "Ix(a:OUT)" }, not_established = "No recording shows the names of every kind of trace at each depth in a tran run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"Ix(xa:xin:p)" = { what = "port_current", depth = "nested", trace = { ltspice26 = "Ix(xa:xin:p)", ltspice17 = "Ix(a:in:P)" }, not_established = "No recording shows the names of every kind of trace at each depth in a tran run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"v(TOP)" = { what = "node_voltage", depth = "top", trace = "V(top)", form = "mixed_case", not_established = "No recording shows the names of every kind of trace at each depth in a tran run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+
+[[grid.trace-name.cell]]
+cases = ["raw/trace_grid_ac"]
+at = { analysis = "ac" }
+[grid.trace-name.cell.items]
+"frequency" = { what = "axis", depth = "top", trace = "frequency", not_established = "No recording shows the names of every kind of trace at each depth in a ac run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"V(top)" = { what = "node_voltage", depth = "top", trace = "V(top)", not_established = "No recording shows the names of every kind of trace at each depth in a ac run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"V(xa:n1)" = { what = "node_voltage", depth = "block", trace = { ltspice26 = "V(xa:n1)", ltspice17 = "V(a:n1)" }, not_established = "No recording shows the names of every kind of trace at each depth in a ac run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"V(xa:xin:mid)" = { what = "node_voltage", depth = "nested", trace = { ltspice26 = "V(xa:xin:mid)", ltspice17 = "V(a:in:mid)" }, not_established = "No recording shows the names of every kind of trace at each depth in a ac run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"I(R1)" = { what = "current", depth = "top", trace = "I(R1)", not_established = "No recording shows the names of every kind of trace at each depth in a ac run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"I(xa:Rd)" = { what = "current", depth = "block", trace = { ltspice26 = "I(xa:Rd)", ltspice17 = "I(a:Rd)" }, not_established = "No recording shows the names of every kind of trace at each depth in a ac run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"I(xa:xin:Rin)" = { what = "current", depth = "nested", trace = { ltspice26 = "I(xa:xin:Rin)", ltspice17 = "I(a:in:Rin)" }, not_established = "No recording shows the names of every kind of trace at each depth in a ac run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"Id(M1)" = { what = "terminal_current", depth = "top", trace = "Id(M1)", not_established = "No recording shows the names of every kind of trace at each depth in a ac run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"Id(xa:Mdrv)" = { what = "terminal_current", depth = "block", trace = { ltspice26 = "Id(xa:Mdrv)", ltspice17 = "Id(a:Mdrv)" }, not_established = "No recording shows the names of every kind of trace at each depth in a ac run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"Id(xa:xin:Mtail)" = { what = "terminal_current", depth = "nested", trace = { ltspice26 = "Id(xa:xin:Mtail)", ltspice17 = "Id(a:in:Mtail)" }, not_established = "No recording shows the names of every kind of trace at each depth in a ac run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"Ix(xa:out)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:out)", ltspice17 = "Ix(a:OUT)" }, not_established = "No recording shows the names of every kind of trace at each depth in a ac run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"Ix(xa:xin:p)" = { what = "port_current", depth = "nested", trace = { ltspice26 = "Ix(xa:xin:p)", ltspice17 = "Ix(a:in:P)" }, not_established = "No recording shows the names of every kind of trace at each depth in a ac run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"v(TOP)" = { what = "node_voltage", depth = "top", trace = "V(top)", form = "mixed_case", not_established = "No recording shows the names of every kind of trace at each depth in a ac run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+
+[[grid.trace-name.cell]]
+cases = ["raw/trace_grid_dc"]
+at = { analysis = "dc" }
+[grid.trace-name.cell.items]
+"V1" = { what = "axis", depth = "top", trace = { ltspice26 = "V1", ltspice17 = "v1" }, not_established = "No recording shows the names of every kind of trace at each depth in a dc run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"V(top)" = { what = "node_voltage", depth = "top", trace = "V(top)", not_established = "No recording shows the names of every kind of trace at each depth in a dc run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"V(xa:n1)" = { what = "node_voltage", depth = "block", trace = { ltspice26 = "V(xa:n1)", ltspice17 = "V(a:n1)" }, not_established = "No recording shows the names of every kind of trace at each depth in a dc run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"V(xa:xin:mid)" = { what = "node_voltage", depth = "nested", trace = { ltspice26 = "V(xa:xin:mid)", ltspice17 = "V(a:in:mid)" }, not_established = "No recording shows the names of every kind of trace at each depth in a dc run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"I(R1)" = { what = "current", depth = "top", trace = "I(R1)", not_established = "No recording shows the names of every kind of trace at each depth in a dc run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"I(xa:Rd)" = { what = "current", depth = "block", trace = { ltspice26 = "I(xa:Rd)", ltspice17 = "I(a:Rd)" }, not_established = "No recording shows the names of every kind of trace at each depth in a dc run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"I(xa:xin:Rin)" = { what = "current", depth = "nested", trace = { ltspice26 = "I(xa:xin:Rin)", ltspice17 = "I(a:in:Rin)" }, not_established = "No recording shows the names of every kind of trace at each depth in a dc run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"Id(M1)" = { what = "terminal_current", depth = "top", trace = "Id(M1)", not_established = "No recording shows the names of every kind of trace at each depth in a dc run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"Id(xa:Mdrv)" = { what = "terminal_current", depth = "block", trace = { ltspice26 = "Id(xa:Mdrv)", ltspice17 = "Id(a:Mdrv)" }, not_established = "No recording shows the names of every kind of trace at each depth in a dc run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"Id(xa:xin:Mtail)" = { what = "terminal_current", depth = "nested", trace = { ltspice26 = "Id(xa:xin:Mtail)", ltspice17 = "Id(a:in:Mtail)" }, not_established = "No recording shows the names of every kind of trace at each depth in a dc run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"Ix(xa:out)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:out)", ltspice17 = "Ix(a:OUT)" }, not_established = "No recording shows the names of every kind of trace at each depth in a dc run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"Ix(xa:xin:p)" = { what = "port_current", depth = "nested", trace = { ltspice26 = "Ix(xa:xin:p)", ltspice17 = "Ix(a:in:P)" }, not_established = "No recording shows the names of every kind of trace at each depth in a dc run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"v(TOP)" = { what = "node_voltage", depth = "top", trace = "V(top)", form = "mixed_case", not_established = "No recording shows the names of every kind of trace at each depth in a dc run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+
+[[grid.trace-name.cell]]
+cases = ["raw/trace_grid_op"]
+at = { analysis = "op" }
+[grid.trace-name.cell.items]
+"V(top)" = { what = "node_voltage", depth = "top", trace = "V(top)", not_established = "No recording shows the names of every kind of trace at each depth in a op run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"V(xa:n1)" = { what = "node_voltage", depth = "block", trace = { ltspice26 = "V(xa:n1)", ltspice17 = "V(a:n1)" }, not_established = "No recording shows the names of every kind of trace at each depth in a op run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"V(xa:xin:mid)" = { what = "node_voltage", depth = "nested", trace = { ltspice26 = "V(xa:xin:mid)", ltspice17 = "V(a:in:mid)" }, not_established = "No recording shows the names of every kind of trace at each depth in a op run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"I(R1)" = { what = "current", depth = "top", trace = "I(R1)", not_established = "No recording shows the names of every kind of trace at each depth in a op run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"I(xa:Rd)" = { what = "current", depth = "block", trace = { ltspice26 = "I(xa:Rd)", ltspice17 = "I(a:Rd)" }, not_established = "No recording shows the names of every kind of trace at each depth in a op run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"I(xa:xin:Rin)" = { what = "current", depth = "nested", trace = { ltspice26 = "I(xa:xin:Rin)", ltspice17 = "I(a:in:Rin)" }, not_established = "No recording shows the names of every kind of trace at each depth in a op run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"Id(M1)" = { what = "terminal_current", depth = "top", trace = "Id(M1)", not_established = "No recording shows the names of every kind of trace at each depth in a op run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"Id(xa:Mdrv)" = { what = "terminal_current", depth = "block", trace = { ltspice26 = "Id(xa:Mdrv)", ltspice17 = "Id(a:Mdrv)" }, not_established = "No recording shows the names of every kind of trace at each depth in a op run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"Id(xa:xin:Mtail)" = { what = "terminal_current", depth = "nested", trace = { ltspice26 = "Id(xa:xin:Mtail)", ltspice17 = "Id(a:in:Mtail)" }, not_established = "No recording shows the names of every kind of trace at each depth in a op run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"Ix(xa:out)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:out)", ltspice17 = "Ix(a:OUT)" }, not_established = "No recording shows the names of every kind of trace at each depth in a op run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"Ix(xa:xin:p)" = { what = "port_current", depth = "nested", trace = { ltspice26 = "Ix(xa:xin:p)", ltspice17 = "Ix(a:in:P)" }, not_established = "No recording shows the names of every kind of trace at each depth in a op run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+"v(TOP)" = { what = "node_voltage", depth = "top", trace = "V(top)", form = "mixed_case", not_established = "No recording shows the names of every kind of trace at each depth in a op run with subcircuit voltages and currents saved; the recording settles the names declared here." }
+
+[[grid.trace-name.cell]]
+cases = ["raw/trace_grid_noise"]
+at = { analysis = "noise" }
+[grid.trace-name.cell.items]
+"frequency" = { what = "axis", depth = "top", trace = "frequency", not_established = "No recording shows whether a noise run names the contribution of a resistor inside a block, and how; the recording settles the names declared here." }
+"gain" = { what = "gain", depth = "top", trace = "gain", not_established = "No recording shows whether a noise run names the contribution of a resistor inside a block, and how; the recording settles the names declared here." }
+"V(onoise)" = { what = "noise", depth = "top", trace = { ltspice26 = "v(onoise)", ltspice17 = "V(onoise)" }, not_established = "No recording shows whether a noise run names the contribution of a resistor inside a block, and how; the recording settles the names declared here." }
+"V(inoise)" = { what = "noise", depth = "top", trace = { ltspice26 = "v(inoise)", ltspice17 = "V(inoise)" }, not_established = "No recording shows whether a noise run names the contribution of a resistor inside a block, and how; the recording settles the names declared here." }
+"V(R1)" = { what = "noise", depth = "top", trace = { ltspice26 = "v(R1)", ltspice17 = "V(r1)" }, not_established = "No recording shows whether a noise run names the contribution of a resistor inside a block, and how; the recording settles the names declared here." }
+"V(xa:Rd)" = { what = "noise", depth = "block", trace = { ltspice26 = "v(xa:Rd)", ltspice17 = "V(a:rd)" }, not_established = "No recording shows whether a noise run names the contribution of a resistor inside a block, and how; the recording settles the names declared here." }
+"V(xa:xin:Rin)" = { what = "noise", depth = "nested", trace = { ltspice26 = "v(xa:xin:Rin)", ltspice17 = "V(a:in:rin)" }, not_established = "No recording shows whether a noise run names the contribution of a resistor inside a block, and how; the recording settles the names declared here." }
+
+[[grid.trace-name.cell]]
+cases = ["raw/trace_grid_section_ac"]
+at = { analysis = "ac" }
+[grid.trace-name.cell.items]
+"I(R§Load)" = { what = "current", depth = "top", trace = "I(Load)", form = "section_sign", not_established = "No recording shows the current of a part named with a section sign in an AC run; the recording settles the names declared here." }
+"frequency" = { what = "axis", depth = "top", trace = "frequency", not_established = "No recording shows the current of a part named with a section sign in an AC run; the recording settles the names declared here." }
+
+[[grid.trace-name.cell]]
+cases = ["raw/trace_grid_section_dc"]
+at = { analysis = "dc" }
+[grid.trace-name.cell.items]
+"I(R§Load)" = { what = "current", depth = "top", trace = "I(Load)", form = "section_sign", not_established = "No recording shows the current of a part named with a section sign in a DC sweep; the recording settles the names declared here." }
+"I1" = { what = "axis", depth = "top", trace = { ltspice26 = "I1", ltspice17 = "i1" }, not_established = "No recording shows the current of a part named with a section sign in a DC sweep; the recording settles the names declared here." }
+
+[[grid.trace-name.cell]]
+cases = ["raw/trace_grid_section_noise"]
+at = { analysis = "noise" }
+[grid.trace-name.cell.items]
+"V(R§Load)" = { what = "noise", depth = "top", trace = { ltspice26 = "v(Load)", ltspice17 = "V(load)" }, form = "section_sign", not_established = "No recording shows the noise contribution of a part named with a section sign; the recording settles the names declared here." }

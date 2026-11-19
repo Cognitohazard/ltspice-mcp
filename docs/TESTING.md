@@ -359,6 +359,8 @@ These tests run on any machine, without LTspice:
 |`test_build_benchmark.py`|the benchmark's net reading of every sheet it builds, pin by pin; the fourth node of a transistor drawn with three pins; and that each export matches the benchmark's reference circuit|
 |`test_log_condition_grid.py`|which condition each recorded log line states, through the rules of its build, the reader, the decoded log, the summary by path and by job, the run rows and the Python API, the rules a producer with no recording reads with, and `classify_line`; every rule a recording matches is a cell's; and the same routes live on ngspice|
 |`test_step_value_grid.py`|which step each recorded `.step` value names, through the log's step rows, the decoded raw, `steps_with`, the step selector of `analyze_results`, `plot_waveform` and `run_experiments`, and the Python API|
+|`test_results_layout_grid.py`|how each recorded results file is laid out and what its plot is (writer, analysis, storage, order, value widths, precision, stepped kind, steps, axis), through the header reader, the run row's reader, the decoder, `inspect`, `analyze_results`, `plot_waveform` and the Python API; every stepped kind and LTspice analysis the code declares is shown on each build or counted; and the layout of ngspice raws live|
+|`test_trace_name_grid.py`|which trace each name a user writes reads, and what it holds, through `naming_for`, `find_trace`, `trace_key`, `read_in_plot`, `trace_quantity`, `node_voltages`, the unit, `inspect`, `analyze_results`, `plot_waveform` and the Python API; every recorded trace of the grid's cases is found under the name a user writes; and ngspice's dotted names live|
 |`test_recorded_ltspice_grids.py`|the grids' index: every cell names a case and an item of it with the coordinates its deck has, every coordinate has a cell, the functions a grid names exist and a behaviour names them, and the count of coordinates not yet recorded only falls|
 |`test_ltspice_recorder.py`|the recorder, and the tree: every listed file is present with its recorded digest, every input matches the one that was run, and every behaviour is recorded on every build or has a reason|
 
@@ -422,7 +424,10 @@ its question: for the printed-measurement grid,
 `test_measurement_answer.py::test_every_recorded_cell_of_the_grid_reads_as_its_form_means`;
 for the log-condition grid (which condition a log line states),
 `test_log_condition_grid.py`; for the step-value grid (which step a value
-belongs to), `test_step_value_grid.py`.
+belongs to), `test_step_value_grid.py`; for the results-layout grid (how a
+results file is laid out, and what its plot is), `test_results_layout_grid.py`;
+for the trace-name grid (which trace a name reads, and what it holds),
+`test_trace_name_grid.py`.
 A cell where the server answers differently from the recording is pinned there
 under a name that states the difference, until a fix lands.
 
