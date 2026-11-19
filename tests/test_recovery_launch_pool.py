@@ -82,7 +82,12 @@ async def default_pool():
 
 
 def _recoverable_job(
-    state: SessionState, *, job_id: str, request_id: str, cases: int
+    state: SessionState,
+    *,
+    job_id: str,
+    request_id: str,
+    cases: int,
+    job_deadline_s: float = 2 * LIVENESS_S,
 ) -> tuple[ExperimentJob, ExperimentRunRequest]:
     """A committed recoverable ngspice job of ``cases`` cases that may all run
     at once, with its root journal and record written, as admission leaves it."""
@@ -114,7 +119,7 @@ def _recoverable_job(
         LIVENESS_S,
         "server_default",
         cases,
-        2 * LIVENESS_S,
+        job_deadline_s,
         LIVENESS_S,
         (sys.executable,),
         identity,
