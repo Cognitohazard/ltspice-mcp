@@ -1856,7 +1856,10 @@ async def _runs_page(
                 f"{data['total']}: pass a cut entry's next unchanged."
             )
             raise InvalidCursorError(refused)
-    annotate, apart = say_which_rows(evaluation.snapshot, args.run_fields, offset)
+    # The facts of every row are read off the loop: a job can hold many rows.
+    annotate, apart = await asyncio.to_thread(
+        say_which_rows, evaluation.snapshot, args.run_fields, offset
+    )
     return await record_page(
         data,
         RUNS_PAGE_ROWS,

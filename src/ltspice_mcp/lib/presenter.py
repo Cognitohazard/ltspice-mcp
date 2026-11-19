@@ -287,7 +287,8 @@ def _fit(
     against the target less those bounds, without those fields, so the size
     grows with every entry kept and a binary search is right. Where that finds
     no count, the counts that fit without the reserve are tried whole, from
-    the largest, so a reply never says it is over its target while one fits.
+    the largest, and then searched whole below those, so a reply does not say
+    it is over its target while a count down to one entry fits.
     """
     apart = apart or {}
     reserve = sum(apart.values())
@@ -321,14 +322,19 @@ def _fit(
             most = _largest(
                 lambda count, at=largest: bare({**keep, at: count}) <= target, keep[largest] - 1
             )
+            tried = range(most or 0, 0, -1)[:_WHOLE_TRIES]
             best = next(
-                (
-                    count
-                    for count in range(most or 0, 0, -1)[:_WHOLE_TRIES]
-                    if whole({**keep, largest: count}) <= target
-                ),
+                (count for count in tried if whole({**keep, largest: count}) <= target),
                 None,
             )
+            if best is None and tried and tried[-1] > 1:
+                # Below the counts tried, a search over whole replies: it
+                # reaches one entry when nothing above fits, so a count that
+                # fits whole is found even where the note does not shrink.
+                best = _largest(
+                    lambda count, at=largest: whole({**keep, at: count}) <= target,
+                    tried[-1] - 1,
+                )
         if best is not None:
             keep[largest] = best
             return keep

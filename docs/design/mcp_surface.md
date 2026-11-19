@@ -1078,7 +1078,10 @@ read the same on every reply about it: the `micro_sign_folded`,
 `lint` entry and `source` entry, and the hint's route to the `measurements`
 recipe (when a row names a `.meas` that gave no value, or, on a terminal
 receipt, when the deck has `.meas` cards, the request did not attach the
-recipe and the simulator's measure output is read). The session remembers each one it has sent, by job, code and a digest
+recipe and the simulator's measure output is read). Whether the deck has
+`.meas` cards is read from the facts the job keeps for each run, never from
+the deck file; a job recorded by an earlier release kept them only beside a
+`.meas` that gave no value, so its receipt names the route only then. The session remembers each one it has sent, by job, code and a digest
 of its text (`lib/said_once.py`; bounded, never written to disk). A reply that
 repeats one sends it as its code and `said_before`, the number of replies that
 carried it before, in place of its text: an observation as `{code, kind,

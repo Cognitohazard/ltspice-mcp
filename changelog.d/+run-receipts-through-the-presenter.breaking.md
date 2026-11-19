@@ -22,5 +22,6 @@
 Also: a `jobs(action="runs")` page shows the job's `status` and `progress` as
 it stands when read; `jobs(action="list")` is stored and cut by circuit
 groups; a receipt carries `job_type`, `analysis_status` and `dialect`; a
-receipt for a deck with `.meas` cards names the `measurements` recipe; and the
+receipt for a deck with `.meas` cards names the `measurements` recipe (for a
+job recorded by an earlier release, only when a `.meas` gave no value); and the
 route for a thinned attached waveform names `max_points` and the CSV format.

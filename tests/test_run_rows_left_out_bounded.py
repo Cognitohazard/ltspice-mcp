@@ -10,6 +10,7 @@ sized against what that part leaves of the target.
 from __future__ import annotations
 
 import random
+import threading
 from typing import Any
 
 import jsonschema
@@ -195,6 +196,68 @@ def test_the_search_keeps_every_row_that_fits_beside_the_reserved_note(tmp_path,
         assert not [c for c in full if size[c] <= target], "a count that fits was missed"
     else:
         assert kept == count or bare[kept + 1] + reserve > target or size[kept + 1] > target
+
+
+@pytest.mark.asyncio
+async def test_a_runs_page_reads_the_facts_of_every_row_off_the_loop(
+    state_no_sim: SessionState, monkeypatch: pytest.MonkeyPatch
+):
+    """The facts of a job's whole table are read for every page: a job of
+    many rows would hold up every other request if that ran on the loop."""
+    job = _job(state_no_sim, "exp_runs_off_loop", 40)
+    loop_thread = threading.get_ident()
+    read_on: list[int] = []
+    real = receipts.RowFacts.of.__func__
+
+    def recording(cls: Any, rows: Any) -> Any:
+        read_on.append(threading.get_ident())
+        return real(cls, rows)
+
+    monkeypatch.setattr(receipts.RowFacts, "of", classmethod(recording))
+    data = await _jobs(state_no_sim, action="runs", job_id=job.job_id, budget=500)
+    assert data["items"]
+    assert read_on and loop_thread not in read_on
+
+
+def test_a_count_that_fits_below_the_counts_tried_first_is_found(tmp_path):
+    """Many small rows, and a note near its reserve for every count the
+    fallback tries first: a smaller count that fits whole is still found, and
+    the reply does not say it is over its target."""
+    rows = [f"r{index:04d}" for index in range(300)]
+    big = ["fact " + "z" * 40] * 300
+    reserve = estimate_tokens({"left_out": big})
+
+    def annotate(reply: dict[str, Any], cut: Any, _stored: Any, _paged: Any) -> None:
+        entry = cut.get("/rows")
+        if entry is not None and entry.returned > 100:
+            reply["left_out"] = big
+
+    def presented(target: int, cap: int | None = None) -> Any:
+        return present(
+            {"rows": rows},
+            _SCHEMA,
+            target=target,
+            tool="tool",
+            snapshot={},
+            store=Store(tmp_path),
+            ttl_hours=1.0,
+            annotate=annotate,
+            records={"/rows": Record("rows", "r")},
+            caps=None if cap is None else {"/rows": cap},
+            apart={"left_out": reserve},
+        )
+
+    def bare(count: int) -> int:
+        reply = presented(10**9, cap=count).reply
+        return estimate_tokens({k: v for k, v in reply.items() if k != "left_out"}, as_sent=False)
+
+    # 250 rows fit without the note, no count fits beside the reserve, and
+    # every count from 250 down past the first 64 carries the note.
+    target = bare(250)
+    assert reserve > target and estimate_tokens({"rows": rows}, as_sent=False) > target
+    shown = presented(target)
+    assert shown.met
+    assert len(shown.reply["rows"]) >= 100
 
 
 # ---------------------------------------------------------------------------
