@@ -1,0 +1,12 @@
+* three nested .step cards, read for which step each value belongs to
+Vin in 0 1
+R1 in out {rv}
+C1 out 0 {c}
+D1 out 0 DM
+.model DM D(Is=1e-14)
+.param rv=1k c=100n
+.step D DM(Is) 1e-14 2e-14 1e-14
+.step VIN 1 2 1
+.step dec param rv 1k 10k 1
+.tran 0 100u 0 5u
+.end

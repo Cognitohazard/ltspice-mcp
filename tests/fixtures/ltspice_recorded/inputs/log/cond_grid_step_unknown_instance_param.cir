@@ -1,0 +1,9 @@
+* a parameter a MOSFET instance does not take, over two steps
+Vdd vdd 0 1.8
+Vg g 0 {vg}
+V1 vdd d1 0
+M1 d1 g 0 0 N W=1u L=1u mulu0=1.2
+.model N NMOS level=54 vth0=0.5 u0=0.04
+.step param vg list 1 1.2
+.op
+.end

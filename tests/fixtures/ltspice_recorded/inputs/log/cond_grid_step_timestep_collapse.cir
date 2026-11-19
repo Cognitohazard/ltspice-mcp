@@ -1,0 +1,7 @@
+* a transient whose time step collapses part way (the circuit of log/timestep_collapse_mid), over two steps
+V1 in 0 PULSE(0 1 1u 1n 1n 1 2)
+R1 in a {r}
+B1 a 0 V=if(time>5u, if(V(a)>0.5,0,1), 0)
+.step param r list 1k 2k
+.tran 0 10u 0 10n
+.end
