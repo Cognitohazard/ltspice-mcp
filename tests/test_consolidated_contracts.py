@@ -792,7 +792,11 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # cursor: where a window's copy of a sheet differs from the file in more
     # than 25 entries a side, the listing counted the rest and no call read
     # them. Most of it is the three fields' structure. Measured 12,134.
-    "inspect": 12140,
+    # Raised by about 400 characters for the symbol query's rotation (its
+    # eight-name enum) and the guide query's heading, which ask for one
+    # placement's pins or one heading's part instead of all eight or the whole
+    # section. Measured 12,540.
+    "inspect": 12545,
     # The typed op union — twelve ops, each its own branch — plus the compare
     # object, in its one spelling. Rendering lives on verify_circuit, whose
     # policy is the more capable one, so no render argument is advertised here.

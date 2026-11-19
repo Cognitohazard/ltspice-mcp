@@ -707,6 +707,7 @@ FROZEN_ERROR_CODES = (
     "trace_unit_unknown",
     "transport_delay",
     "unknown_document",
+    "unknown_heading",
     "unknown_section",
     "unmet_request",
     "unpersisted_runs_recovered",
