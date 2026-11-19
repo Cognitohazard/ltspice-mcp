@@ -102,13 +102,12 @@ def runs_done(job: ExperimentJob) -> bool:
     True at a status that guarantees it (``runs_terminal``), and also once every
     case has a terminal status: the coordinator records the last case before it
     changes the job's status, and another process reads that record in between.
-    A terminal case is never changed again, so nothing a reader takes from it
-    can move under it.
 
-    The one answer to "can this job's runs be read now?": ``jobs(wait,
-    wait_for="runs")`` returns on it, and every reader of a job's runs
-    (``services.runs_unready``) refuses until it holds, so a wait that returns
-    is never followed by a refusal.
+    The one answer to "are this job's runs done?": ``jobs(wait,
+    wait_for="runs")`` returns on it, and a placement of a case beside its
+    circuit waits for it (``sheet_results.check_case``). Whether a case can be
+    read is the case's own answer (``services.case_unreadable``), which does
+    not ask it.
     """
     return runs_terminal(job.status) or all(
         case.status in TERMINAL_CASE_STATUSES for case in job.cases

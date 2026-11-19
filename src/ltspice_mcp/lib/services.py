@@ -688,8 +688,9 @@ class CaseUnreadable:
     """Why a case of a job cannot be read now (``case_unreadable``).
 
     ``run_not_finished``: its run has not ended, so wait for it.
-    ``raw_not_produced``: its run ended without results a read takes, and never
-    will have them; ``detail`` is its failure summary. ``evidence`` is what a
+    ``raw_not_produced``: its run ended without results a read takes;
+    ``detail`` is its failure summary. Only a case whose simulator's exit was
+    not confirmed may have them later, and its detail says so. ``evidence`` is what a
     running case's simulator has written so far (``run_progress``' fields),
     when ``case_refusal`` read it."""
 
@@ -736,7 +737,16 @@ def case_unreadable(job: ExperimentJob, case: ExperimentCase) -> CaseUnreadable 
         )
     if case.status == "produced" or partial_raw(case) is not None:
         return None
-    return CaseUnreadable(code="raw_not_produced", detail=failure_summary(case))
+    detail = failure_summary(case)
+    if case.failure_code == "kill_unconfirmed" and not any(
+        item.get("code") == "late_simulator_exit" for item in case.observations
+    ):
+        detail += (
+            ". Its simulator's exit was not confirmed: if the run keeps a stopped "
+            "case's raw (execution.keep_partial_raw), the case is read once the "
+            "simulator exits"
+        )
+    return CaseUnreadable(code="raw_not_produced", detail=detail)
 
 
 async def case_refusal(job: ExperimentJob, case: ExperimentCase) -> CaseUnreadable | None:

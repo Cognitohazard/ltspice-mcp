@@ -169,24 +169,20 @@ async def test_inspect_refuses_the_running_case_with_its_own_reason(
 
 
 async def test_plot_waveform_draws_the_finished_case(one_case_running: _Running):
-    from ltspice_mcp.tools import analysis
-
     run = one_case_running
-    response = await analysis.handle_plot_waveform(
-        analysis.PlotWaveformInput(
-            job_id=run.job.job_id, case_id=run.done.case_id, signals=["V(out)"], open=False
-        ),
+    data = await dispatched(
         run.state,
+        "plot_waveform",
+        job_id=run.job.job_id,
+        case_id=run.done.case_id,
+        signals=["V(out)"],
+        open=False,
     )
-    assert not response.is_error, response.structured_content
-    data = response.structured_content
-    assert data is not None
+    assert "error" not in data, data
     assert await asyncio.to_thread(Path(data["path"]).is_file)
 
 
 async def test_plot_waveform_refuses_the_running_case(one_case_running: _Running):
-    from ltspice_mcp.tools import analysis
-
     run = one_case_running
     data = await dispatched(
         run.state,
@@ -198,7 +194,6 @@ async def test_plot_waveform_refuses_the_running_case(one_case_running: _Running
     )
     assert data["code"] == "run_not_finished", data
     assert run.running.case_id in data["error"]
-    del analysis
 
 
 async def test_analyze_results_reads_the_finished_case_and_lists_only_the_running_one(
@@ -292,36 +287,43 @@ _CASE_READS = frozenset(
         "source_for_run",
     }
 )
-#: What answers a job's question, not a case's: whether its runs are done, or
-#: what its status is.
+#: What answers a job's question, not a case's: whether its runs are done.
 _JOB_READINESS = frozenset(
-    {"runs_done", "runs_terminal", "finished", "TERMINAL_STATUSES", "NON_TERMINAL_LIVE_STATUSES"}
+    {"runs_done", "runs_terminal", "TERMINAL_STATUSES", "NON_TERMINAL_LIVE_STATUSES"}
 )
 #: The one place that decides whether a case can be read, and the wording of
 #: its refusal.
 _OWNERS = frozenset({"case_unreadable", "case_refusal", "_not_finished"})
+#: Functions that ask the job's question on purpose, called from a scope that
+#: also reads a case, each with why its answer is not a read's.
+_JOB_QUESTIONS = {
+    # A placement waits for the job's own copy of its cases beside their
+    # circuits, which a job run with execution.results_beside_sheet makes
+    # once its runs end; the read made in the same call does not.
+    "check_case": "placement",
+}
 
 
-def _called(nodes: list) -> set[str]:
+def _called(nodes: list) -> dict[str, int]:
     import ast
 
-    names: set[str] = set()
+    names: dict[str, int] = {}
     for node in nodes:
         if isinstance(node, ast.Call):
             func = node.func
             if isinstance(func, ast.Name):
-                names.add(func.id)
+                names.setdefault(func.id, node.lineno)
             elif isinstance(func, ast.Attribute):
-                names.add(func.attr)
+                names.setdefault(func.attr, node.lineno)
     return names
 
 
-def _reads_job_readiness(nodes: list) -> list[str]:
+def _reads_job_readiness(nodes: list, *, status: bool) -> list[str]:
     import ast
 
     found: list[str] = []
     for node in nodes:
-        if isinstance(node, ast.Attribute) and node.attr == "status":
+        if status and isinstance(node, ast.Attribute) and node.attr == "status":
             found.append(f"line {node.lineno}: .status")
         elif isinstance(node, ast.Name) and node.id in _JOB_READINESS:
             found.append(f"line {node.lineno}: {node.id}")
@@ -335,22 +337,38 @@ def test_no_reader_of_a_case_decides_by_a_status_outside_the_one_answer():
 
     No tool, no API method and no function of ``services`` on the way to a
     case's results reads a status, a job's or a case's, or asks whether a
-    job's runs are done, in a scope that reads a case: a second answer there
-    would bring back the job-wide gate, or a rule of its own.
+    job's runs are done, in a scope that reads a case; nor does it call a
+    function of the package that asks whether a job's runs are done (the
+    job-wide gate this replaced sat behind such a helper). A second answer
+    there would bring back the job-wide gate, or a rule of its own.
     """
+    trees = modules()
+    # Every function of the package that asks the job's question itself.
+    asks_job: set[str] = set()
+    for tree in trees.values():
+        for name, nodes in scopes(tree):
+            short = name.rsplit(".", 1)[-1]
+            if short not in _OWNERS and _reads_job_readiness(nodes, status=False):
+                asks_job.add(short)
     offenders: list[str] = []
-    for module, tree in modules().items():
-        reading_module = module.startswith(("tools/", "api/")) or module == "lib/services.py"
-        if not reading_module:
+    for module, tree in trees.items():
+        if not (module.startswith(("tools/", "api/")) or module == "lib/services.py"):
             continue
         for name, nodes in scopes(tree):
             if name.rsplit(".", 1)[-1] in _OWNERS:
                 continue
-            reads_case = bool(_called(nodes) & _CASE_READS) or (
+            called = _called(nodes)
+            reads_case = bool(called.keys() & _CASE_READS) or (
                 module == "lib/services.py" and name in _CASE_READS
             )
-            if reads_case:
-                offenders.extend(
-                    f"{module}:{name} {where}" for where in _reads_job_readiness(nodes)
-                )
+            if not reads_case:
+                continue
+            offenders.extend(
+                f"{module}:{name} {where}" for where in _reads_job_readiness(nodes, status=True)
+            )
+            offenders.extend(
+                f"{module}:{name} line {line}: calls {helper}, which asks the job's question"
+                for helper, line in called.items()
+                if helper in asks_job and helper not in _JOB_QUESTIONS
+            )
     assert offenders == []

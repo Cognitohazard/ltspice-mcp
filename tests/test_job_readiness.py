@@ -3,12 +3,14 @@ one to "are this job's runs done?" from the wait.
 
 The reads by job (``services.experiment_run_context``, behind ``inspect``,
 ``plot_waveform`` and the Python API, and ``analyze_results``' source
-resolution) and ``jobs(place_beside_sheet)`` each ask the case
-(``services.case_unreadable``), whatever its job's status or its siblings:
-a produced case is read on every route at every status, and a case still
-running is refused on every route with ``run_not_finished``.
-``jobs(wait, wait_for="runs")`` answers the job's question
-(``job_lifecycle.runs_done``). Whether a status means the runs are done
+resolution) each ask the case (``services.case_unreadable``), whatever its
+job's status or its siblings: a produced case is read on every route at every
+status, and a case still running is refused on every route with
+``run_not_finished``. ``jobs(wait, wait_for="runs")`` and
+``jobs(place_beside_sheet)`` answer the job's question
+(``job_lifecycle.runs_done``): a placement waits for the copy a job run with
+``execution.results_beside_sheet`` makes when its runs end
+(``sheet_results.check_case``). Whether a status means the runs are done
 (``job_lifecycle.runs_terminal``) and ``runs_done`` itself are banned outside
 their owners in ``pyproject.toml``.
 """
@@ -73,6 +75,23 @@ def _job(work_dir: Path, status: str, mix: str) -> ExperimentJob:
 async def _read_answers(job: ExperimentJob, case_id: str, state: SessionState) -> dict[str, str]:
     """What each route that reads a case answers for ``case_id`` now: ``read``,
     or the code it refuses with."""
+    answers = await _reads(job, case_id, state)
+    return answers
+
+
+async def _place_answer(job: ExperimentJob, case_id: str, state: SessionState) -> str:
+    """What ``jobs(place_beside_sheet)`` answers for ``case_id`` now."""
+    placed = _assert_jobs_schema(
+        await handle_jobs(_args("place_beside_sheet", job_id=job.job_id, case_id=case_id), state)
+    )
+    # A case it may place goes on to be refused as a run of a simulator whose
+    # results are not put beside a circuit, which an LTspice run's would not
+    # be; one of a job still running is refused before that.
+    code = placed["error"]["code"]
+    return "placed" if code == "not_ltspice" else code
+
+
+async def _reads(job: ExperimentJob, case_id: str, state: SessionState) -> dict[str, str]:
     answers: dict[str, str] = {}
     try:
         await services.experiment_run_context(job, state, case_id=case_id)
@@ -84,14 +103,6 @@ async def _read_answers(job: ExperimentJob, case_id: str, state: SessionState) -
     )
     _, missing, _, _ = await analyze._resolve_sources([source], state)
     answers["analyze_results"] = missing[0]["code"] if missing else "read"
-    placed = _assert_jobs_schema(
-        await handle_jobs(_args("place_beside_sheet", job_id=job.job_id, case_id=case_id), state)
-    )
-    # A case it may read goes on to be refused as a run of a simulator whose
-    # results are not put beside a circuit, which an LTspice run's would not
-    # be; one still running is refused before that.
-    code = placed["error"]["code"]
-    answers["place_beside_sheet"] = "read" if code == "not_ltspice" else code
     return answers
 
 
@@ -102,8 +113,11 @@ async def _check(job: ExperimentJob, state: SessionState, status: str, mix: str)
     if mix == "sibling_running":
         refused = await _read_answers(job, sibling.case_id, state)
         assert refused == dict.fromkeys(refused, "run_not_finished"), refused
+    done = _runs_done(status, mix)
+    placed = "placed" if done else "job_not_terminal"
+    assert await _place_answer(job, produced.case_id, state) == placed
     _, timed_out = await state.job_registry.wait(job, 0, wait_for="runs")
-    assert (not timed_out) is _runs_done(status, mix)
+    assert (not timed_out) is done
 
 
 @pytest.mark.asyncio

@@ -537,6 +537,7 @@ FROZEN_ERROR_CODES = (
     "invalid_resume_request",
     "job_deadline",
     "job_not_found",
+    "job_not_terminal",
     "jobs_failed",
     "kill_attempt_failed",
     "kill_unconfirmed",

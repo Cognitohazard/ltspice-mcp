@@ -1220,9 +1220,10 @@ the echoed `action`:
   (`sheet_results.place_checked`): this action, `execution.results_beside_sheet`
   and `plot_waveform` with `in_ltspice`. A case that
   produced no results (`case_not_produced`) or whose results are no longer
-  there (`results_missing`), a case whose run has not finished
-  (`run_not_finished`, as every read of a case is refused until then),
-  another simulator's run (`not_ltspice`), a netlist whose results
+  there (`results_missing`), a case of a job whose runs are not all terminal
+  yet (`job_not_terminal`: a job run with `execution.results_beside_sheet`
+  copies its cases then, so a placement waits for it, although a read of a
+  finished case does not), another simulator's run (`not_ltspice`), a netlist whose results
   file is a sheet's (`results_belong_to_sheet`), and a circuit that is missing
   (`sheet_missing`) or changed since the job read it (`sheet_changed`) are
   refused, and nothing is written. The sheet's `.plt` is left as it is.
