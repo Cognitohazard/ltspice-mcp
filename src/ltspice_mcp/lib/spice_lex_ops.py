@@ -363,6 +363,12 @@ class ValueSuffixSite:
         return before.count("{") > before.count("}")
 
     @property
+    def after_equals(self) -> bool:
+        """The number is the right-hand side of an assignment (``Rser=1µ``)."""
+        start = self.offset - len(self.number)
+        return self.card.body[:start].rstrip().endswith("=")
+
+    @property
     def micro(self) -> bool:
         """The character is a micro sign, so a reader that knows it reads 1e-6."""
         return self.suffix in MICRO_SIGNS

@@ -160,6 +160,7 @@ from ltspice_mcp.lib.spice_validator import (
 from ltspice_mcp.lib.stored_values import (
     CP1252_BUILD,
     STATEMENTS_SCHEMA,
+    OtherReading,
     readings_of_sites,
     statements,
 )
@@ -1347,10 +1348,11 @@ def _micro_sign_observation(
 ) -> dict[str, Any]:
     """One file's micro-sign suffixes as a single fact, for a reader known to read them."""
     readers = (
-        # cp1252 spells it as the one byte B5, which LTspice XVII reads as micro.
-        "In cp1252 it is the one byte LTspice XVII reads as micro, and 'u' is micro "
-        "in every encoding and to every simulator."
-        if encoding == "cp1252"
+        # Every recorded build reads these signs as micro (stored_values), as
+        # LTspice XVII does a cp1252 B5 or a UTF-16 sign.
+        f"Every recorded LTspice build reads them as micro in {encoding}, and 'u' is "
+        "micro in every encoding and to every simulator."
+        if not readings_of_sites(sites, encoding)
         else MICRO_SIGN_READERS
     )
     evidence: dict[str, Any] = {
@@ -2032,7 +2034,7 @@ def _diff_vs_prior(
     prior_path = scratch / f"prior-{new_path.stem}.{stamp}.net"
     prior_path.write_bytes(prior_bytes)
     try:
-        delta, warnings, _both_parsed, _unread = _structural_diff(prior_path, new_path)
+        delta, warnings, _both_parsed, _unread, _readings = _structural_diff(prior_path, new_path)
         moved, not_compared = _connections_since(prior_path, new_path, state)
         delta["connections_changed"] = moved
         delta["not_compared"] = [*not_compared, *delta["not_compared"]]
@@ -2235,10 +2237,11 @@ def _read_side(source: str | Path, label: str) -> tuple[str, Deck, str | None]:
 
 def _structural_diff(
     reference: str | Path, candidate: str | Path
-) -> tuple[dict[str, Any], list[str], bool, bool]:
+) -> tuple[dict[str, Any], list[str], bool, bool, tuple[OtherReading, ...]]:
     """Added/removed/changed component and directive delta between two netlists.
 
-    Returns ``(delta, warnings, both_parsed, definitions_unread)``. A deck that could not be parsed is
+    Returns ``(delta, warnings, both_parsed, definitions_unread, readings)``,
+    ``readings`` being each side's ``Deck.readings`` (``stored_values``). A deck that could not be parsed is
     diffed as an empty circuit, which makes every component of the other side look
     added or removed — so the caveat rides out as a warning rather than inside the
     delta, where the caller browsing the difference lists would never look for it.
@@ -2253,11 +2256,13 @@ def _structural_diff(
     name_b, cand, err_b = _read_side(candidate, "the netlist under test")
     warnings = parse_failure_warnings([(name_a, err_a), (name_b, err_b)])
     both_parsed = err_a is None and err_b is None
-    delta = {
-        **structural_delta(ref, cand),
-        "values_read_otherwise": statements((*ref.readings, *cand.readings)),
-    }
-    return delta, warnings, both_parsed, definitions_unread(ref, cand)
+    return (
+        structural_delta(ref, cand),
+        warnings,
+        both_parsed,
+        definitions_unread(ref, cand),
+        (*ref.readings, *cand.readings),
+    )
 
 
 def compare_structural(reference: str | Path, candidate: str | Path) -> CompareResult:
@@ -2276,7 +2281,10 @@ def compare_structural(reference: str | Path, candidate: str | Path) -> CompareR
             )
             return None, [], _failure("compare", error, where=str(side)), []
     try:
-        diff, warnings, both_parsed, unread = _structural_diff(reference, candidate)
+        diff, warnings, both_parsed, unread, readings = _structural_diff(reference, candidate)
+        # The readings of the two sides' stored bytes (a side given as text has
+        # none); a re-export's diff_vs_prior compares server exports, no deck.
+        diff["values_read_otherwise"] = statements(readings)
     except (OSError, ValueError) as exc:
         where = str(candidate) if isinstance(candidate, Path) else None
         return None, [], _failure("compare", f"structural diff failed: {exc}", where=where), []
@@ -2327,19 +2335,37 @@ def compare_netlists(
     resolve; a structural diff opens no includes.
     """
     if spec.mode == "structural_diff":
-        return compare_structural(reference, candidate)
-    return compare_equivalence(
-        reference,
-        candidate,
-        ref_source,
-        cand_source,
-        spec.anchors,
-        spec.rtol,
-        make_include_resolver(state),
-        denied_hint=state.sandbox_guidance(),
-        ref_base_dir=ref_base_dir,
-        reader=session_reader(state),
-    )
+        compared = compare_structural(reference, candidate)
+    else:
+        compared = compare_equivalence(
+            reference,
+            candidate,
+            ref_source,
+            cand_source,
+            spec.anchors,
+            spec.rtol,
+            make_include_resolver(state),
+            denied_hint=state.sandbox_guidance(),
+            ref_base_dir=ref_base_dir,
+            reader=session_reader(state),
+        )
+    comparison = compared[0]
+    if comparison is not None and comparison.get("values_read_otherwise"):
+        # A side compared as the server's export of a sheet is not a file the
+        # caller stored: what a build makes of the export's bytes says nothing
+        # of how it reads the sheet, so only the files the caller stored are
+        # stated (an export's includes are the caller's own files).
+        exports = {
+            str(side)
+            for side, own in ((reference, ref_source), (candidate, cand_source))
+            if isinstance(side, Path) and side != own
+        }
+        comparison["values_read_otherwise"] = [
+            statement
+            for statement in comparison["values_read_otherwise"]
+            if statement.get("file") not in exports
+        ]
+    return compared
 
 
 # ---------------------------------------------------------------------------

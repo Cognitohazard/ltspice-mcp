@@ -3253,9 +3253,13 @@ text that build reads (`build_reads`) and the number it takes
 (`build_number`). A sign in an encoding no recording shows for a build (a
 Greek mu in UTF-16, UTF-16 big-endian, UTF-32) is listed with
 `established: false` for that build, and so is the number a build takes from
-such letters inside braces or in a directive, which no recording shows. The
-same list rides on `verify_circuit`'s and `edit_schematic`'s `comparison`, and
-on a run's receipt as a `value_read_otherwise` observation.
+such letters anywhere but an instance's own value (inside braces, in an
+instance parameter or a source function, in a directive), which no recording
+shows. The same list rides on `verify_circuit`'s and `edit_schematic`'s
+`comparison`, and on a run's receipt as a `value_read_otherwise` observation.
+Only files the caller stored are stated: the server's export of a sheet is
+not, since how a build reads the export's bytes says nothing of how it reads
+the sheet.
 
 When an ngspice executable is available, `data.ngspice_check` reports how the
 values discovery resolved compare with the ones ngspice reads

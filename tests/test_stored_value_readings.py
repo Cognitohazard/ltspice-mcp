@@ -249,3 +249,63 @@ def test_a_reading_no_recording_shows_is_stated_as_not_established():
         ("LTspice XVII", None, False),
     ]
     assert all(not r.statement()["established"] for r in (*braces, *utf16))
+
+
+def test_a_sign_outside_an_instances_own_value_is_not_established():
+    """The bare number is recorded for an instance's own value; a parameter or
+    a source function's argument is a position no recording shows."""
+    from ltspice_mcp.lib.stored_values import readings_of_bytes
+
+    deck = "* t\nC1 a 0 1µ Rser=1µ\nV1 a 0 SIN(0 1 1µ)\n.end\n".encode()
+    assert [(r.line, r.offset, r.build_number) for r in readings_of_bytes(deck, root=True)] == [
+        (2, 8, 1.0),
+        (2, 16, None),
+        (3, 16, None),
+    ]
+
+
+@pytest.mark.parametrize("mode", ["equivalence", "structural_diff"])
+def test_a_comparison_states_no_reading_of_the_servers_export_of_a_sheet(
+    mode: str, work_dir: Path, state_no_sim: SessionState
+):
+    """A side compared as the export of a sheet is the server's file, not one
+    the caller stored, so how a build reads its bytes is not stated; the
+    stored reference beside it is."""
+    from ltspice_mcp.tools.verify import VerifyCompareSpec, compare_netlists
+
+    export = work_dir / "sheet.net"
+    export.write_bytes(_source("deck/micro_utf8").read_bytes())
+    reference = work_dir / "reference.cir"
+    reference.write_bytes(_source("deck/micro_utf8").read_bytes())
+    sheet = work_dir / "sheet.asc"
+
+    spec = VerifyCompareSpec(reference=str(reference), mode=mode)  # type: ignore[arg-type]
+    comparison, _findings, failure, _warnings = compare_netlists(
+        spec, reference, export, reference, sheet, state_no_sim, ref_base_dir=work_dir
+    )
+
+    assert failure is None and comparison is not None
+    assert [(s["file"], s["build"]) for s in comparison["values_read_otherwise"]] == [
+        (str(reference), "LTspice XVII")
+    ]
+
+
+def test_a_comparison_states_only_the_sections_of_a_library_the_deck_reads(work_dir: Path):
+    """The comparison's graph and the hierarchy state the same values: those
+    of the cards the reader reads, not those of a library section it does not
+    (ngspice reads sections; LTspice has none)."""
+    from ltspice_mcp.lib.netlist_graph import parse_netlist_graph
+
+    (work_dir / "parts.lib").write_bytes(
+        ".lib used\n.subckt cap a b\nC1 a b 2µ\n.ends\n.endl used\n"
+        ".lib unused\n.subckt big a b\nC1 a b 3µ\n.ends\n.endl unused\n".encode()
+    )
+    deck = work_dir / "deck.cir"
+    deck.write_bytes(b"* t\n.lib parts.lib used\nX1 a 0 cap\nR1 a 0 1k\n.op\n.end\n")
+    reader = SemanticProfile("ngspice", "hsa")
+
+    graph = parse_netlist_graph(deck, reader=reader)
+    hierarchy = load_hierarchy(str(deck), None, reader)
+
+    compared = {(r.value, r.build) for r in graph.readings}
+    assert compared == {(r.value, r.build) for r in hierarchy.readings} == {("2µ", "LTspice XVII")}

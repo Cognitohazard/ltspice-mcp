@@ -123,7 +123,12 @@ from ltspice_mcp.lib.spice_lex import (
 )
 from ltspice_mcp.lib.spice_lex_ops import without_added_x, without_section_sign
 from ltspice_mcp.lib.spice_lex_views import InstanceLine, SubcktCard, global_names
-from ltspice_mcp.lib.stored_values import OtherReading, StoredDeck, read_stored_deck
+from ltspice_mcp.lib.stored_values import (
+    OtherReading,
+    StoredDeck,
+    read_stored_deck,
+    readings_of_cards,
+)
 
 if TYPE_CHECKING:
     from ltspice_mcp.lib.hierarchy import SemanticProfile
@@ -768,7 +773,7 @@ def parse_netlist_graph(
     if structural:
         raise NetlistGraphError("malformed netlist: " + "; ".join(structural))
 
-    registry = _SubcktRegistry(reader=reader, readings=list(stored.readings))
+    registry = _SubcktRegistry(reader=reader)
     directory = base_dir if base_dir is not None else source.parent if source else None
     _collect_subckts(
         cards,
@@ -780,6 +785,7 @@ def parse_netlist_graph(
         source=_DECK_SOURCE,
         strict=True,
         include_resolver=include_resolver,
+        encoding=stored.encoding if source is not None else None,
     )
     registry.settle()
 
@@ -944,6 +950,7 @@ def _collect_subckts(
     include_resolver: IncludeResolver | None = None,
     reference: IncludeReference | None = None,
     referrer: str | None = None,
+    encoding: str | None = None,
 ) -> bool:
     """Walk ``cards`` in textual order, registering definitions and following
     includes; return whether they define subcircuits and nothing else.
@@ -999,6 +1006,16 @@ def _collect_subckts(
             )
         )
         return False
+    if encoding is not None:
+        # The values of the cards the reader reads, from a file with stored
+        # bytes (``encoding``, the codec it decoded as; None for text).
+        registry.readings.extend(
+            readings_of_cards(
+                [card for card, at in zip(cards, sections, strict=True) if read.reads(at)],
+                encoding,
+                file=origin,
+            )
+        )
     section = reference.section if reference is not None else None
     wanted = section.casefold() if section is not None else None
     # A section the file does not declare: what the line brings is not known.
@@ -1132,7 +1149,6 @@ def _follow_include(
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         return missing(f"unreadable: {exc}")
     included = stored.lexed
-    registry.readings.extend(stored.readings)
     registry.files[selected] = _collect_subckts(
         included.cards,
         origin=path,
@@ -1145,6 +1161,7 @@ def _follow_include(
         source=str(path),
         strict=False,
         include_resolver=include_resolver,
+        encoding=stored.encoding,
     )
     return registry.files[selected]
 

@@ -433,6 +433,7 @@ async def test_a_utf16_micro_sign_read_by_xvii_stays_an_observation(config, work
 
     (finding,) = [f for f in data.get("findings", []) if f["rule_id"] == "value_suffix_micro_sign"]
     assert finding["severity"] == "observation"
+    assert "Every recorded LTspice build reads them as micro" in finding["evidence"]["reason"]
     assert data["outcome"] == "complete"
 
 

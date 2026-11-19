@@ -37,6 +37,7 @@ from ltspice_mcp.lib.format import fold_micro_sign, parse_spice_value
 from ltspice_mcp.lib.reply_cuts import CUT, NEVER
 from ltspice_mcp.lib.spice_lex import LexResult, SpiceCard, lex_deck
 from ltspice_mcp.lib.spice_lex_ops import ValueSuffixSite, value_suffix_sites
+from ltspice_mcp.lib.spice_lex_views import read_instance
 
 #: The code every statement of a reading carries.
 CODE = "value_read_otherwise"
@@ -103,6 +104,9 @@ class OtherReading:
     build_reads: str | None
     build_number: float | None
     evidence: tuple[str, ...]
+    #: Where on its card the value's sign sits, which tells two values of
+    #: one line apart.
+    offset: int = 0
 
     @property
     def established(self) -> bool:
@@ -131,7 +135,11 @@ class OtherReading:
         return stated
 
     def _detail(self) -> str:
-        server = "" if self.server_number is None else f" (the server reads {self.server_number:g})"
+        server = (
+            " (the server reads no number from it)"
+            if self.server_number is None
+            else f" (the server reads {self.server_number:g})"
+        )
         ascii_spelling = fold_micro_sign(self.value)
         if self.build_number is not None:
             return (
@@ -190,6 +198,15 @@ STATEMENTS_SCHEMA: dict[str, Any] = {
 }
 
 
+def _is_the_value(site: ValueSuffixSite) -> bool:
+    """The site is an instance's own value, written alone outside braces: the
+    position the recordings show a build's bare number for."""
+    if site.card.kind != "instance" or site.in_braces or site.after_equals:
+        return False
+    line = read_instance(site.card)
+    return line is not None and line.value == site.token
+
+
 def _server_number(site: ValueSuffixSite) -> float | None:
     try:
         return parse_spice_value(fold_micro_sign(site.token))
@@ -207,6 +224,7 @@ def _reading(
         "encoding": encoding,
         "server_number": _server_number(site),
         "build": build,
+        "offset": site.offset,
     }
     recorded = _RECORDED.get((site.suffix, encoding), {}).get(build)
     if recorded is None:
@@ -218,10 +236,10 @@ def _reading(
     if decoding == "same":
         return None
     reads = decode_windows_1252(site.token.encode("utf-8"))
-    if site.card.kind != "instance" or site.in_braces:
-        # The bare number is recorded for an instance's value outside braces;
-        # in an expression or a directive no recording shows what the build
-        # makes of the letters.
+    if not _is_the_value(site):
+        # The bare number is recorded for an instance's own value outside
+        # braces; in an instance parameter, a source function, an expression
+        # or a directive no recording shows what the build makes of the letters.
         return OtherReading(build_reads=reads, build_number=None, evidence=evidence, **common)
     return OtherReading(
         build_reads=reads,
@@ -302,7 +320,7 @@ def statements(readings: Sequence[OtherReading]) -> list[dict[str, Any]]:
     seen: set[tuple[Any, ...]] = set()
     stated: list[dict[str, Any]] = []
     for reading in readings:
-        key = (reading.file, reading.line, reading.value, reading.build)
+        key = (reading.file, reading.line, reading.offset, reading.value, reading.build)
         if key not in seen:
             seen.add(key)
             stated.append(reading.statement())

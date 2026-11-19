@@ -38,7 +38,12 @@ from ltspice_mcp.lib.spice_lex_ops import (
     fold_micro_suffix_cards,
 )
 from ltspice_mcp.lib.spice_lex_views import WAVEFILE
-from ltspice_mcp.lib.stored_values import OtherReading, readings_of_cards, statements
+from ltspice_mcp.lib.stored_values import (
+    CP1252_BUILD,
+    OtherReading,
+    readings_of_cards,
+    statements,
+)
 
 # Sized for real foundry PDKs, which fan out further than a hand-written deck:
 # sky130 reaches a device model five levels down (deck -> sky130.lib.spice ->
@@ -301,8 +306,10 @@ def stage_deck(
     had to be rewritten is written in its source's encoding, so the characters
     it did not rewrite keep their bytes. ``cp1252_reader`` names the target
     simulator when it decodes decks as cp1252 (``services.cp1252_ltspice``):
-    only then does the fold change what a value means to the simulator, and
-    only then is it reported, as a ``micro_sign_folded`` observation.
+    only then, and only for a file whose signs that build reads otherwise
+    (``stored_values``: UTF-8, not cp1252 or UTF-16), does the fold change what
+    a value means to the simulator, and only then is it reported, as a
+    ``micro_sign_folded`` observation.
     """
     if max_depth < 0:
         raise ValueError("max_depth must be non-negative")
@@ -572,13 +579,19 @@ def stage_deck(
             # micro: a UTF-8 µ reaches LTspice XVII as the two cp1252
             # characters 'Âµ' and silently loses its scale.
             # Read before the fold, which spells the signs the readings name.
+            # A sheet's export is the server's file, not one the caller stored:
+            # how a build reads its bytes says nothing of how it reads the sheet.
             readings = readings_of_cards(parsed.read, encoding, file=resolved)
-            if readings:
+            if readings and not (exported and resolved == source):
                 observations.append(_read_otherwise_observation(resolved, readings))
             folded = fold_micro_suffix_cards(parsed.read)
             if folded:
                 changed = True
-                if cp1252_reader is not None:
+                # The fold changes what a value means only where the cp1252
+                # reader reads the file's sign otherwise (stored_values).
+                if cp1252_reader is not None and any(
+                    reading.build == CP1252_BUILD for reading in readings
+                ):
                     observations.append(_micro_fold_observation(resolved, folded, cp1252_reader))
             codec = rewrite_codec(encoding)
             staged_text = emit(parsed.cards) if changed else text
