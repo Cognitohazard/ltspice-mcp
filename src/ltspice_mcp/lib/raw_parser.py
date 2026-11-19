@@ -41,7 +41,7 @@ from ltspice_mcp.lib.decoded_raw import (
 from ltspice_mcp.lib.device_names import fold_name
 from ltspice_mcp.lib.families import DISPLAY
 from ltspice_mcp.lib.format import cap_list
-from ltspice_mcp.lib.log_conditions import run_diagnostics, said_as, said_text
+from ltspice_mcp.lib.log_conditions import rules_for, run_diagnostics, said_as, said_lines
 from ltspice_mcp.lib.log_parser import (
     CardKind,
     answered_measurements,  # noqa: TID251 - the summary is built off the loop, handed its producer and cards
@@ -736,14 +736,14 @@ def _step_temperature(
     return True, None
 
 
-def _meas_error(condition: Mapping[str, Any], family: str | None) -> dict[str, Any] | None:
-    """A ``meas_errors`` entry for an error ``condition`` whose text names a
+def _meas_error(text: str, family: str | None) -> dict[str, Any] | None:
+    """A ``meas_errors`` entry for an error line ``text`` that names a
     ``.meas`` card, with the fix the pre-flight rules suggest for it; None for
     one that names none."""
     directive = next(
         (
             line.strip()
-            for line in said_text(condition).splitlines()
+            for line in text.splitlines()
             if line.strip().casefold().startswith(".meas")
         ),
         None,
@@ -753,7 +753,7 @@ def _meas_error(condition: Mapping[str, Any], family: str | None) -> dict[str, A
     found = validate_directive(directive, simulator=DISPLAY.get(family or "", "LTspice"))
     return {
         "directive": directive,
-        "raw_block": said_text(condition),
+        "raw_block": text,
         "suggestion": found.suggestion if found is not None else None,
     }
 
@@ -943,21 +943,31 @@ def build_simulation_summary(
             # diagnostics. A line is an error or a warning where the simulator
             # wrote that word on it (log_conditions.said_as), and neither where
             # it wrote none; the summary's diagnostics carry every condition.
+            # Each distinct line the simulator gave a word is listed, by that
+            # word (log_conditions.said_lines); lines past a condition's bound
+            # are counted in lines_left_out, never dropped unsaid.
             found = run_diagnostics(
-                diagnostics["conditions"], producer or Producer(None, None, None)
+                diagnostics["conditions"], producer or Producer(None, None, None), lines=True
             )
             said = list(found.get("diagnostics") or [])
-            error_conditions = [c for c in said if said_as(c) == "error"]
-            warnings.extend(said_text(c) for c in said if said_as(c) == "warning")
-            if error_conditions:
-                summary["errors"] = [said_text(c) for c in error_conditions]
+            worded = [line for c in said for line in said_lines(c)]
+            error_lines = [line["text"] for line in worded if said_as(line) == "error"]
+            warnings.extend(line["text"] for line in worded if said_as(line) == "warning")
+            if error_lines:
+                summary["errors"] = error_lines
             meas_errors = [
                 entry
-                for c in error_conditions
-                if (entry := _meas_error(c, (producer.family if producer else None))) is not None
+                for text in error_lines
+                if (entry := _meas_error(text, (producer.family if producer else None)))
+                is not None
             ]
             if meas_errors:
                 summary["meas_errors"] = meas_errors
+            left_out = {
+                str(c["code"]): int(c["written_left_out"]) for c in said if c.get("written_left_out")
+            }
+            if left_out:
+                summary["lines_left_out"] = left_out
 
         # How many bias-point solves the log records — each OP-solve block opens
         # with a "Direct Newton iteration" line (whether it converges or fails).
@@ -993,7 +1003,12 @@ def build_simulation_summary(
         # did, on a run whose raw holds finite data, found the point after all.
         errs = summary.get("errors")
         if errs:
-            fallback = {said_text(c) for c in said if c["code"] == "operating_point_fallback"}
+            fallback = {
+                line["text"]
+                for c in said
+                if c["code"] == "operating_point_fallback"
+                for line in said_lines(c)
+            }
             demoted = [e for e in errs if e in fallback]
             if (
                 demoted
@@ -1086,6 +1101,7 @@ def build_simulation_summary(
         node_voltages=None if value_traces is None else node_voltages(raw),
         measurements_unread=measurements_unread,
         said=said,
+        reading=rules_for(producer or Producer(None, None, None))[0],
     )
 
     return summary

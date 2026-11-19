@@ -379,14 +379,14 @@ the run ends, and puts what the simulator said on the run: each run row of
 one entry per condition and channel, so the agent learns from the reply that a run which
 finished was still warned about, without searching a log. An entry is
 `{code, count, first_text, channel}`, plus `severity` only where the
-simulator wrote one, and `severity_text` where it wrote it on a later
-occurrence than the first: `code` is the server's name for the condition (one code
+simulator wrote one: `code` is the server's name for the condition (one code
 for every build's wording of it), `severity` the simulator's own word, kept
 apart because LTspice XVII calls an ignored model parameter an error on a run
 that finished. A condition's `severity` is the strongest word over its
-occurrences, and a reader that lists it as an error or a warning lists the
-line that word was written on (`log_conditions.said_text`), never a line that
-does not carry it. `first_text` is the first occurrence as written, `channel`
+occurrences. A reader that lists a run's errors or warnings (the `summary`
+recipe) lists each distinct line the simulator gave a word, by that word
+(`log_conditions.said_lines`), never a line that does not carry it; those
+lines are read from the log, not kept on the row. `first_text` is the first occurrence as written, `channel`
 says whether it came from the log or the console, and the run's `log` holds
 the rest.
 
@@ -397,9 +397,8 @@ settings, timing, step lines, solver statistics, and the result blocks other
 readers decode) is counted under `unclassified` with the first one as
 written, never dropped. `diagnostics_coverage` says when the reading is not
 the producer's own: the build has no recordings, the producer is not known,
-the simulator has no recordings at all (QSPICE and Xyce, where only a line
-the simulator starts with `Error:` or `Warning:` is told apart and every other
-line is counted as unclassified), the log could not be read, or the run was recorded
+the simulator has no recordings at all (QSPICE and Xyce, whose lines are read
+with the generic patterns the server used before it had recordings), the log could not be read, or the run was recorded
 before logs were classified. A run with nothing to report carries neither
 field.
 
@@ -422,9 +421,11 @@ that the result is correct.
 
 LTspice and ngspice get full diagnostics, with ngspice's console output read
 alongside its log. For QSPICE and Xyce, whose log wording has no
-recordings, `diagnostics` tell apart only a line the simulator starts with
-`Error:` or `Warning:` and count every other line as `unclassified`; the
-summary's `errors` and `warnings` list those two kinds.
+recordings, there is no word of the simulator's own to prefer, so a line is
+read as an error or a warning by the generic patterns the server used before
+it had recordings (`log_parser.classify_line`): `diagnostics` count those under
+`read_as_error` and `read_as_warning`, every other line under `unclassified`,
+and the summary's `errors` and `warnings` list them as before.
 
 ## Non-goals
 

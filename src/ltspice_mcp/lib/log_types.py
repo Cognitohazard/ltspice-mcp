@@ -182,8 +182,20 @@ class LogCondition(TypedDict):
     first_text: str
     channel: Literal["log", "console"]
     severity: NotRequired[str]
-    #: The occurrence ``severity`` was written on, where that is not the first.
-    severity_text: NotRequired[str]
+    #: Each distinct occurrence that carries a word, with its word, in order,
+    #: at most ``log_conditions.WRITTEN_KEPT``; ``written_left_out`` counts the
+    #: rest. Kept on the decoded log for the summary, never on a run row
+    #: (``log_conditions.run_diagnostics``).
+    written: NotRequired[list[WrittenLine]]
+    written_left_out: NotRequired[int]
+
+
+class WrittenLine(TypedDict):
+    """One distinct occurrence of a condition that carries a word: its text as
+    written and the word (``LogCondition.written``)."""
+
+    text: str
+    severity: str
 
 
 class LogDiagnostics(TypedDict):

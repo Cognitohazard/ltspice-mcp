@@ -1218,8 +1218,8 @@ class TestBuildSimulationSummary:
         assert "warnings" not in summary
 
     def test_summary_with_log_warnings(self, work_dir: Path):
-        """Summary includes warnings from log file: one per condition the
-        simulator called a warning, as the run row's diagnostics count it."""
+        """Summary includes warnings from log file: each distinct line the
+        simulator called a warning, though both are one condition."""
         axis = np.linspace(0, 0.01, 100)
         raw = make_raw_mock(
             ["time", "V(out)"],
@@ -1237,8 +1237,10 @@ class TestBuildSimulationSummary:
 
         summary = build_simulation_summary(raw, captured_log_facts(work_dir, log))
 
-        # Both lines are one condition (simulator_warning), counted twice.
-        assert summary["warnings"] == ["Warning: node N001 is floating"]
+        assert summary["warnings"] == [
+            "Warning: node N001 is floating",
+            "Warning: less than 2 connections to node VCC",
+        ]
         (said,) = [
             c
             for c in captured_log_facts(work_dir, log).value("diagnostics")["conditions"][

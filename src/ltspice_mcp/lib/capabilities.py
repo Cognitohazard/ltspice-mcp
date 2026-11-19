@@ -379,9 +379,9 @@ ENTRIES: tuple[Entry, ...] = (
         _UNMODELLED,
         "diagnostics",
         "unverified",
-        "Only a line the simulator starts with 'Error:' or 'Warning:' is told apart, and "
-        "every other line of the log is counted as unclassified; no recording of "
-        "{display}'s wording exists.",
+        "Errors and warnings are read with the generic patterns the server used before it "
+        "had recordings, and every other line of the log is counted as unclassified; no "
+        "recording of {display}'s wording exists.",
     ),
     # --- results -----------------------------------------------------------
     Entry(

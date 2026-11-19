@@ -438,6 +438,7 @@ def test_log_and_console_lines_keep_their_channel():
         "first_text": "Error: something only the console said",
         "channel": "console",
         "severity": "Error",
+        "written": [{"text": "Error: something only the console said", "severity": "Error"}],
     }
 
 
@@ -455,20 +456,22 @@ def test_the_producer_chooses_the_rules_and_says_when_they_are_not_its_own():
     unknown = log_conditions.run_diagnostics(conditions, Producer(None, None, None))
     assert unknown["coverage"] == "producer_unknown"
     assert [entry["code"] for entry in unknown["diagnostics"]] == ["unknown_model_parameter"]
-    # A simulator with no recordings has every line counted as unclassified,
-    # but one it starts with its own ``Error:`` or ``Warning:``.
+    # A simulator with no recordings is read by the line classifier's
+    # patterns: what it lists as an error or a warning is counted under
+    # read_as_error or read_as_warning, every other line as unclassified.
     xyce = log_conditions.run_diagnostics(conditions, Producer("xyce", None, None))
     assert xyce["coverage"] == "unverified"
-    ((entry),) = xyce["diagnostics"]
-    assert entry["code"] == "unclassified"
-    assert entry["count"] == sum(1 for line in read_spice_text(log).splitlines() if line.strip())
+    by_code = {entry["code"]: entry for entry in xyce["diagnostics"]}
+    assert set(by_code) == {"read_as_error", "unclassified"}
+    assert by_code["read_as_error"]["first_text"].endswith("^^^^"), by_code
     said = log_conditions.classify(
-        {"log": "Xyce run\nError: no such model\nWarning: a note\n"}, "unverified"
+        {"log": "Xyce run\nError: no such model\nWarning: a note\ntime step too small\n"},
+        "unverified",
     )
-    assert [(c["code"], c.get("severity")) for c in said] == [
-        ("unclassified", None),
-        ("simulator_error", "Error"),
-        ("simulator_warning", "Warning"),
+    assert [(c["code"], c.get("severity"), c["count"]) for c in said] == [
+        ("unclassified", None, 1),
+        ("read_as_error", "Error", 2),
+        ("read_as_warning", "Warning", 1),
     ]
     # A log that was not read says so.
     assert log_conditions.run_diagnostics(None, Producer("ltspice", None, None)) == {

@@ -508,7 +508,12 @@ class TestSurfaceObservations:
         abort = [o for o in obs if o["code"] == "meas_batch_abort"]
         assert len(abort) == 1
         assert abort[0]["kind"] == "reconciliation"
-        assert "earlier" in abort[0]["detail"]
+        # No recording shows a build leaving the others unmeasured because one
+        # failed: the observation says so, and names what would settle it.
+        assert "is not established" in abort[0]["detail"]
+        assert "skips" not in abort[0]["detail"] and "abandon" not in abort[0]["detail"]
+        assert abort[0]["evidence"]["established"] is False
+        assert "settled_by" in abort[0]["evidence"]
         assert ".meas tran bad MAX I(Qnope)" in abort[0]["evidence"]["failed_directives"]
         assert set(abort[0]["evidence"]["missing"]) >= {"aaa_good", "zzz_good"}
 
@@ -549,6 +554,30 @@ class TestSurfaceObservations:
         said = [{"code": "measurement_error", "first_text": block, "severity": "Error"}]
         relayed = [o for o in surface_observations(summary, said=said) if o["kind"] == "relay"]
         assert [(o["code"], o.get("severity")) for o in relayed] == [("meas_parse_error", "Error")]
+
+    def test_an_ltspice_26_refusal_says_what_is_recorded(self):
+        # LTspice 26 refuses log/meas_bad_syntax with a deck message naming the
+        # card, with no word (a measurement_error condition): the observation
+        # says the deck was refused, which the recording establishes.
+        said = [
+            {
+                "code": "measurement_error",
+                "count": 1,
+                "first_text": 'x.cir(7): Expected ")" here.\n.meas tran broken FIND V(out AT 0.5m\n ^^^',
+                "channel": "log",
+            }
+        ]
+        obs = surface_observations(
+            {"measurements": {}},
+            requested={"meas": ["before", "broken", "after"], "four": []},
+            said=said,
+            reading="ltspice26",
+        )
+        (abort,) = [o for o in obs if o["code"] == "meas_batch_abort"]
+        assert "LTspice 26 refuses a deck" in abort["detail"]
+        assert abort["evidence"]["established"] is True
+        assert abort["evidence"]["failed_directives"] == [".meas tran broken FIND V(out AT 0.5m"]
+        assert abort["evidence"]["missing"] == ["before", "after"]
 
     def test_no_abort_link_without_parse_error(self):
         obs = surface_observations({"measurements": {}}, requested={"meas": ["vpp"], "four": []})

@@ -12,6 +12,7 @@ is in neither list (it is in ``diagnostics``). Each case runs through
 from __future__ import annotations
 
 import asyncio
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -101,20 +102,29 @@ def _recorded(work_dir: Path, case: str) -> Path:
     return deck
 
 
-#: The words the simulator writes on a line that the summary reads as an error,
-#: and as a warning.
-_ERROR_WORDS = {"fatal error", "error"}
-_WARNING_WORDS = {"warning"}
+#: A line on which the simulator wrote how severe it is, stated here apart from
+#: the classifier: ``Fatal Error``/``Error``/``ERROR`` make it an error,
+#: ``Warning``/``WARNING`` a warning.
+_WORD = re.compile(r"^(Fatal Error|Error|ERROR|Warning|WARNING)\b")
 
 
-def _texts(row: dict[str, Any], words: set[str]) -> set[str]:
-    from ltspice_mcp.lib.log_conditions import said_text
+def _word(line: str) -> str | None:
+    """``"error"``, ``"warning"`` or None for one line, by the word on it."""
+    found = _WORD.match(line.strip())
+    if found is None:
+        return None
+    return "warning" if found[1].casefold() == "warning" else "error"
 
-    return {
-        said_text(d)
-        for d in row.get("diagnostics", [])
-        if d.get("severity", "").casefold() in words
-    }
+
+def _worded_lines(text: str) -> list[tuple[str, str]]:
+    """Each line of a log that carries an error or a warning word, with it."""
+    return [
+        (line.strip(), word) for line in text.splitlines() if (word := _word(line)) is not None
+    ]
+
+
+def _entry_words(entry: str) -> set[str]:
+    return {word for line in entry.splitlines() if (word := _word(line)) is not None}
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
@@ -122,10 +132,11 @@ async def test_the_summary_says_what_the_run_row_says_the_simulator_said(
     build: str, config: ServerConfig, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """``log/meas_bad_syntax``: each build prints an error for the ``.meas``
-    it cannot evaluate, and the run produces. The summary's errors are the
-    row's conditions the simulator called errors, its warnings those it
-    called warnings, and each relayed observation carries the severity the
-    simulator wrote or none."""
+    it cannot evaluate, and the run produces. Every line of the summary's
+    errors carries an error word and every warning a warning word, each row
+    condition the simulator called an error has its line among the errors,
+    and each relayed observation carries the severity the simulator wrote or
+    none."""
     deck = _recorded(work_dir, "log/meas_bad_syntax")
     row, found = await _row_and_summaries(
         _ltspice(config),
@@ -135,9 +146,25 @@ async def test_the_summary_says_what_the_run_row_says_the_simulator_said(
         monkeypatch,
     )
     written = {d["severity"] for d in row.get("diagnostics", []) if "severity" in d}
+    called_errors = [
+        d
+        for d in row.get("diagnostics", [])
+        if d.get("severity", "").casefold() in ("error", "fatal error")
+    ]
     for route, (value, observations) in found.items():
-        assert set(value.get("errors", [])) == _texts(row, _ERROR_WORDS), (route, value, row)
-        assert _texts(row, _WARNING_WORDS) <= set(value.get("warnings", [])), route
+        errors = value.get("errors", [])
+        assert all("error" in _entry_words(e) for e in errors), (route, errors)
+        assert all(
+            _entry_words(w) == {"warning"} for w in value.get("warnings", []) if _entry_words(w)
+        ), route
+        for condition in called_errors:
+            assert any(
+                e in condition["first_text"] or condition["first_text"] in e for e in errors
+            ), (
+                route,
+                condition,
+                errors,
+            )
         for item in observations:
             if item.get("kind") == "relay" and "severity" in item:
                 assert item["severity"] in written, (route, item)
@@ -234,7 +261,7 @@ def test_a_condition_is_as_severe_as_the_strongest_word_the_simulator_wrote_on_i
         else:
             (said,) = [e for e in errors if expected in e]
             assert said.startswith("Fatal Error:") and 'node "a"' in said, (build, errors)
-            assert condition["severity_text"] == said, (build, condition)
+            assert condition["first_text"] not in errors, (build, errors)
 
 
 async def test_an_operating_point_found_by_stepping_is_no_error_and_says_no_demotion(
@@ -268,32 +295,147 @@ async def test_an_operating_point_found_by_stepping_is_no_error_and_says_no_demo
         )
 
 
-@pytest.mark.parametrize("family", ["xyce", "qspice"])
-def test_a_simulator_with_no_recordings_keeps_the_errors_and_warnings_it_wrote(
-    family: str, tmp_path: Path
-):
-    """A simulator whose log wording the server has no recordings of is still
-    read for the lines it starts with ``Error:`` or ``Warning:``: the run row
-    names them, and the summary lists them, as it did before it read the row."""
+def _summary_of_log(text: str, producer: Any, tmp_path: Path) -> dict[str, Any]:
+    """The summary of a run whose log is ``text``, written by ``producer``."""
     import numpy as np
 
-    from ltspice_mcp.lib.log_conditions import run_diagnostics
     from ltspice_mcp.lib.raw_parser import build_simulation_summary
-    from ltspice_mcp.lib.simulator_build import Producer
     from tests._ltspice_recorded import _decode_paths
     from tests.conftest import make_raw_mock
 
     log = tmp_path / "run.log"
-    log.write_text("A run\nError: no model named qx\nWarning: a default was used\n")
+    log.write_text(text, encoding="utf-8")
+    family = producer.family or "ltspice"
     logs = _decode_paths(None, log, tmp_path / "decoded", producing=family).logs
-    producer = Producer(family, None, None)
-    said = run_diagnostics(logs.value("diagnostics")["conditions"], producer)
-    assert said["coverage"] == "unverified"
     axis = np.linspace(0.0, 1e-3, 5)
     raw = make_raw_mock(["time", "V(out)"], axis, {"time": axis, "V(out)": np.ones(5)})
-    summary = build_simulation_summary(raw, logs, producer=producer)
-    assert summary["errors"] == ["Error: no model named qx"]
-    assert "Warning: a default was used" in summary["warnings"]
+    return build_simulation_summary(raw, logs, producer=producer)
+
+
+def test_two_different_error_lines_of_one_condition_are_both_listed(tmp_path: Path):
+    """LTspice XVII writes two different ``Error:`` lines, which fall under one
+    code (``simulator_error``): both are in ``errors``, the run row counts
+    them as one condition of count 3, and a repeated identical line is one
+    entry."""
+    from ltspice_mcp.lib.log_conditions import classify
+
+    text = "Circuit: * two errors\n\nError: first thing\nError: second thing\nError: first thing\n"
+    summary = _summary_of_log(text, _producer("ltspice17"), tmp_path)
+    assert summary["errors"] == ["Error: first thing", "Error: second thing"]
+    (row,) = [c for c in classify({"log": text}, "ltspice17") if c["code"] == "simulator_error"]
+    assert row["count"] == 3
+
+
+def test_two_broken_measurements_on_xvii_are_both_meas_errors(tmp_path: Path):
+    """LTspice XVII writes each ``.meas`` it cannot take with its ``Error:``
+    line (recorded: log/meas_bad_syntax); two of them are one
+    ``measurement_error`` condition, and both are in ``meas_errors``."""
+    from ltspice_mcp.lib.encoding import read_spice_text
+
+    recorded = read_spice_text(rec.recorded("ltspice17", "log/meas_bad_syntax.log"))
+    first = ".meas tran broken find v(out at 0.5m"
+    assert first in recorded
+    block = recorded[recorded.index(first) :].split("\n\n", 1)[0]
+    second = block.replace("broken", "broken2")
+    text = recorded.replace(block, block + "\n" + second)
+    summary = _summary_of_log(text, _producer("ltspice17"), tmp_path)
+    assert [e["directive"] for e in summary["meas_errors"]] == [
+        first,
+        first.replace("broken", "broken2"),
+    ]
+
+
+def test_lines_past_a_conditions_bound_are_counted(tmp_path: Path):
+    """Past :data:`log_conditions.WRITTEN_KEPT` distinct worded lines of one
+    condition, the summary lists the bound and says how many it left out."""
+    from ltspice_mcp.lib.log_conditions import WRITTEN_KEPT
+
+    extra = 3
+    text = "".join(f"Error: thing {n}\n" for n in range(WRITTEN_KEPT + extra))
+    summary = _summary_of_log(text, _producer("ltspice17"), tmp_path)
+    assert len(summary["errors"]) == WRITTEN_KEPT
+    assert summary["lines_left_out"] == {"simulator_error": extra}
+
+
+def _line_classifier_examples() -> list[str]:
+    """One line for every pattern the line classifier
+    (``log_parser.classify_line``) reads an error or a warning by, taken from
+    where each is defined: a phrase list gives each phrase, and a pattern has
+    the example beside its name here. A pattern the classifier reads that has
+    no example fails the test that uses these."""
+    import ast
+    import inspect
+
+    from ltspice_mcp.lib import log_parser
+
+    examples = {
+        "_RE_FILE_ERROR": 'deck.cir(7): Expected ")" here.',
+        "_RE_FATAL": "Fatal Error: Unknown subcircuit called in: X1",
+        "_RE_LINE_ERROR": "Error on line 4 : r1 a b r",
+        "_RE_ERROR": "ERROR: Node a is floating.",
+        "_RE_WARNING": "Warning -- a default was used",
+        "_RE_COMPONENT_REFUSAL": "R1: Resistance must not be zero.",
+        "_RE_UNSOLVABLE_MATRIX": "V1 and L1 form a loop: matrix is singular",
+        "_RE_NGSPICE_MEAS_BLOCKED": "No .measure possible in batch mode (-b) with -r rawfile set!",
+        "_RE_NGSPICE_FOUR_BLOCKED": ".fourier line ignored since rawfile was produced.",
+        "_RE_NGSPICE_UNIMPLEMENTED": "unimplemented dot command '.backanno'",
+        "_RE_NGSPICE_NOTE": "Note: v1 has no value, DC 0 assumed",
+    }
+    # Not a pattern a line is listed by: the caret under a file-line block,
+    # and the notes the classifier leaves out.
+    not_listing = {"_RE_CARET", "_NGSPICE_NOTE_SKIP"}
+    tree = ast.parse(inspect.getsource(log_parser.classify_line))
+    used = {
+        node.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Name) and re.fullmatch(r"_[A-Z][A-Z0-9_]*", node.id)
+    }
+    phrases = {name for name in used if name.endswith("_PHRASES")}
+    unknown = used - phrases - set(examples) - not_listing
+    assert not unknown, f"no example line for {sorted(unknown)}"
+    lines = list(examples.values())
+    for name in sorted(phrases):
+        lines.extend(f"{phrase} at the end" for phrase in getattr(log_parser, name))
+    # The stepping rungs, read through is_op_stepping_failure.
+    lines.extend(f"{p} here" for p in log_parser._OP_STEPPING_FAILURE_PHRASES)
+    return lines
+
+
+@pytest.mark.parametrize("family", ["xyce", "qspice"])
+async def test_a_simulator_with_no_recordings_keeps_the_lines_the_line_classifier_listed(
+    family: str, config: ServerConfig, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """For a simulator whose log wording has no recordings there is no word of
+    its own to prefer, so the line classifier's reading stands: each line it
+    lists as an error or a warning (one per pattern it knows) is in the same
+    list of the summary, through ``analyze_results`` and the Python API."""
+    from ltspice_mcp.lib.log_parser import extract_log_diagnostics
+    from ltspice_mcp.lib.simulator import SIMULATORS
+    from tests.test_replies_name_what_they_left_out import _XYCE_TRAN_RAW, _qspice_ac_qraw
+
+    examples = _line_classifier_examples()
+    log = work_dir / f"{family}.log"
+    log.write_text("\n\n".join(examples) + "\n", encoding="utf-8")
+    before = extract_log_diagnostics(log)
+    raw = work_dir / f"{family}.raw"
+    raw.write_bytes(_qspice_ac_qraw() if family == "qspice" else _XYCE_TRAN_RAW)
+    deck = _recorded(work_dir, "log/meas_failed")
+    state = SessionState.create(
+        config, available={family: type(SIMULATORS[family].__name__, (FakeSim,), {})}
+    )
+    row, found = await _row_and_summaries(state, deck, raw, log, monkeypatch)
+    assert row.get("diagnostics_coverage") == "unverified", row
+    for example in examples:
+        first = example.splitlines()[0]
+        listed = [name for name in ("errors", "warnings") if any(first in e for e in before[name])]
+        assert listed, f"the line classifier lists no {example!r}"
+        for route, (value, _observations_found) in found.items():
+            now = [
+                name
+                for name in ("errors", "warnings")
+                if any(first in e for e in value.get(name, []))
+            ]
+            assert now == listed, (route, example, now, listed)
 
 
 # --------------------------------------------------------------------------
@@ -398,35 +540,46 @@ def _recorded_logs() -> list[tuple[str, str]]:
         folder = rec.recorded(build, "log")
         for log in sorted(Path(folder).glob("*.log")):
             found.append((build, f"log/{log.stem}"))
+    for log in sorted((FIXTURES_DIR / "ngspice_runs").glob("*.log")):
+        found.append(("ngspice", log.stem))
     return found
 
 
 @pytest.mark.parametrize(("build", "case"), _recorded_logs())
-def test_every_recorded_log_gives_the_summary_the_run_rows_errors_and_warnings(
+def test_every_line_the_simulator_gave_a_word_is_in_the_summary(
     build: str, case: str, tmp_path: Path
 ):
-    """On every recorded log of both builds, the summary's errors are the
-    run's conditions the simulator called errors, its log warnings those it
-    called warnings, each listed by the line the word was written on, and no
-    other line is either."""
+    """On every recorded log of both LTspice builds, and every ngspice run's
+    log, each line on which the simulator wrote an error word is in the
+    summary's ``errors``, each with a warning word in ``errors`` or
+    ``warnings``, unless the summary counts lines it left out; and no entry of
+    either list lacks a word. The words are read off the log's own lines here,
+    not by the classifier."""
     import numpy as np
 
-    from ltspice_mcp.lib.log_conditions import run_diagnostics, said_as, said_text
+    from ltspice_mcp.lib.log_parser import read_log_text
     from ltspice_mcp.lib.raw_parser import build_simulation_summary
+    from ltspice_mcp.lib.simulator_build import Producer
+    from tests._ltspice_recorded import _decode_paths
     from tests.conftest import make_raw_mock
 
-    producer = _producer(build)
-    logs = rec.decode_log(build, case, tmp_path)
+    if build == "ngspice":
+        path = FIXTURES_DIR / "ngspice_runs" / f"{case}.log"
+        producer = Producer("ngspice", None, None)
+        logs = _decode_paths(None, path, tmp_path / "decoded", producing="ngspice").logs
+    else:
+        path = rec.recorded(build, f"{case}.log")
+        producer = _producer(build)
+        logs = rec.decode_log(build, case, tmp_path)
     axis = np.linspace(0.0, 1e-3, 5)
     raw = make_raw_mock(["time", "V(out)"], axis, {"time": axis, "V(out)": np.ones(5)})
     summary = build_simulation_summary(raw, logs, producer=producer)
-    section = logs.value("diagnostics")
-    said = (run_diagnostics(section["conditions"], producer) if section else {}).get(
-        "diagnostics", []
-    )
-    errors = [said_text(c) for c in said if said_as(c) == "error"]
-    warnings = [said_text(c) for c in said if said_as(c) == "warning"]
-    assert summary.get("errors", []) == errors
-    assert [
-        w for w in summary.get("warnings", []) if w in {said_text(c) for c in said}
-    ] == warnings
+    errors, warnings = summary.get("errors", []), summary.get("warnings", [])
+    for entry in errors:
+        assert "error" in _entry_words(entry), entry
+    text = read_log_text(path)
+    if summary.get("lines_left_out"):
+        return
+    for line, word in _worded_lines(text):
+        lists = errors if word == "error" else errors + warnings
+        assert any(line in entry for entry in lists), (line, word, errors, warnings)

@@ -1019,10 +1019,9 @@ build. It is recorded per case, so an executable replaced during a job shows
 as two builds. `diagnostics` is what the simulator said about the run, read
 from its log and console capture when the run ended: one entry per condition
 and channel,
-`{code, count, first_text, channel, severity?, severity_text?}`, with
-`severity` only where the simulator wrote one (the strongest word over the
-condition's occurrences), `severity_text` the occurrence it was written on
-where that is not the first, and lines the server does not recognise counted under
+`{code, count, first_text, channel, severity?}`, with `severity` only where
+the simulator wrote one (the strongest word over the condition's
+occurrences), and lines the server does not recognise counted under
 `unclassified` (`docs/DESIGN.md`, "Diagnostics"). It does not change the
 case's `status`: a run the simulator warned about and finished is still
 `produced`. `diagnostics_coverage` is present only when that reading is not
@@ -2811,7 +2810,7 @@ it, and reported when the caller names it.
 
 | discriminant | run type | own required fields | notes |
 |-|-|-|-|
-| `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics. Fourier is each `.four` table as the build printed it, phase included; LTspice 26 and XVII print phase in different conventions. What the log says (measurements, `failed_measurements`, Fourier, diagnostics) is the whole run's at any `step`; the step selects the range, `point_count`, `temp_c` and AC bandwidth. `errors`, `warnings` and `meas_errors` are built from `diagnostics`, the run row's conditions: a condition is an error or a warning only where the simulator wrote that word on its line (`log_conditions.said_as`), and a relayed line carries that word as its `severity`, or none |
+| `summary` | any | — | full summary payload: sim type, ranges, signals, measurements, Fourier, AC bandwidth, diagnostics. Fourier is each `.four` table as the build printed it, phase included; LTspice 26 and XVII print phase in different conventions. What the log says (measurements, `failed_measurements`, Fourier, diagnostics) is the whole run's at any `step`; the step selects the range, `point_count`, `temp_c` and AC bandwidth. `errors`, `warnings` and `meas_errors` are built from the run's conditions, the source of `diagnostics`: each distinct line the simulator wrote an error or a warning word on is listed by that word (`log_conditions.said_lines`, `said_as`), a line with no word is in neither list, and a relayed line carries that word as its `severity`, or none. Past 50 distinct lines of one condition, `lines_left_out` gives how many more there were, by code. For QSPICE and Xyce, with no recorded wording, a line is read by the generic patterns the server used before it had recordings (`read_as_error`, `read_as_warning`) |
 | `measurements` | any | — | `names?`, `histogram_bins?` (0 = none); per run, `stats` for each `.meas` name, keyed lower-cased as the log reader holds it. A name in `names` or `field` is matched in any case, and one the log does not hold fails the run with the names it holds. A run with one value per name also has `measured` {name: value} and `at`, and a null there is named under `failed_measurements` (LTspice printed it failed), `unreadable` or `not_finite`; its default row shows only those (§3.3) |
 | `value` | any | `expr` — one trace or node pair, not arithmetic | `at`, required when the axis has more than one sample; reads the nearest sample, no interpolation; a bias-point run is read by name; step-aware |
 | `signal_stats` | tran, dc, ac, noise | `signal` | `window?`, on tran and dc only; `quantiles?`, tran only — levels in [0, 1], weighted by time, not by sample; each adds `q<percent>` (0.99 is `q99`, 0.999 is `q99_9`) and two or more add `quantile_peak_to_peak`, all reducible. `min`/`max`/`peak_to_peak` stay the sample extremes. An AC or FRA run gives the magnitude in dB and the phase; a noise run has no `mean`. `metrics.signal_stats_defined` decides which runs it reads, over a window or whole |
