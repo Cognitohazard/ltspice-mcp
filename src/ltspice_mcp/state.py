@@ -149,6 +149,13 @@ class SessionState:
         return Store(self.working_dir)
 
     @property
+    def offered_simulators(self) -> dict[str, type]:
+        """Every selector ``execution.simulator`` resolves to a class in this
+        session (``resolve_run_simulator``): each detected family, then each
+        named executable."""
+        return {**self.available_simulators, **self.named_simulators}
+
+    @property
     def raw_dialect(self) -> str | None:
         """Recorded dialect of the default producing simulator, when known."""
         return simulator_dialect(self.default_simulator)

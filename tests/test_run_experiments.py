@@ -4217,7 +4217,9 @@ class TestReceiptWeight:
         assert source["staged_files"] >= 1
         # What the caller acts on is untouched.
         assert source["circuit"] == "dut"
-        assert source["simulator"]
+        # The job names its simulator once, at its own level.
+        assert lean["simulator"] == "fake"  # the key the session holds it under
+        assert "simulator" not in source
 
         full = _assert_schema(
             await handle_run_experiments(_args(deck, "full-1", provenance=True), state_with_sim)

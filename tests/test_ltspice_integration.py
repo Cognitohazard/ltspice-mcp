@@ -140,7 +140,7 @@ async def _run_deck(state: SessionState, request_id: str, netlist: str) -> dict:
     )
     assert receipt["status"] == "completed", receipt.get("failures")
     # The point of this tier: a real LTspice binary produced this run.
-    assert receipt["source"][0]["simulator"].startswith("LTspice")
+    assert receipt["simulator"] == "ltspice"
     return receipt
 
 
@@ -396,7 +396,7 @@ class TestSweepIntegration:
         )
         assert receipt["status"] == "completed", receipt.get("failures")
         # The point of this tier: a real LTspice binary produced these runs.
-        assert receipt["source"][0]["simulator"].startswith("LTspice")
+        assert receipt["simulator"] == "ltspice"
         counts = receipt["completeness"]
         assert counts["expanded"] == counts["produced"] == 3
         assert counts["failed"] == counts["cancelled"] == counts["skipped"] == 0
