@@ -306,6 +306,20 @@ async def test_a_measurement_printed_failed_is_counted_as_a_failure(
             assert _grid_item("log/meas_failed", name).at(build)["outcome"] == "failed"
             assert name in _FAIL_LINE.findall(text)
             assert _counts(value["stats"][name]) == _expect(1, 0, failed=1), (route, name)
+    # The default lean row of a run with one value per name leaves its stats
+    # out (``measured`` carries every number): the null names its reason.
+    lean = _value(
+        await dispatched(
+            state_no_sim,
+            "analyze_results",
+            sources=[{"path": str(log), "label": "log"}],
+            recipes=_RECIPE,
+        )
+    )
+    assert "stats" not in lean
+    for name in ("never", "depends"):
+        assert lean["measured"][name] is None
+        assert name in lean["failed_measurements"]
 
 
 @pytest.mark.parametrize("build", rec.BUILDS)
