@@ -1,0 +1,1 @@
+The launches of one job run with `execution.recoverable` no longer take turns while each waits for its launch record to be written, and a slow write no longer fails another healthy case with `submission_failed` or holds a cancel back.
