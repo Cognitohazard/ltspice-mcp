@@ -185,8 +185,10 @@ async def _experiment_case(
         else None
     )
     if job is not None:
-        case = services.experiment_case(job, run_index=run_index, case_id=case_id)
-        return job, case, services.case_run_context(job, case, state, other_raw=other_raw)
+        case, context = await services.readable_case(
+            job, state, run_index=run_index, case_id=case_id, other_raw=other_raw
+        )
+        return job, case, context
     if (
         path is not None
         and job_id is None
@@ -1334,9 +1336,7 @@ async def _in_window_thread(work: Callable[..., _T], *args: Any) -> _T:
     loop = asyncio.get_running_loop()
     # As ``asyncio.to_thread`` does, so the work sees this request's context.
     context = contextvars.copy_context()
-    return await loop.run_in_executor(
-        _WINDOW_THREADS, functools.partial(context.run, work, *args)
-    )
+    return await loop.run_in_executor(_WINDOW_THREADS, functools.partial(context.run, work, *args))
 
 
 @dataclass(frozen=True)
@@ -1568,9 +1568,7 @@ def _show_from_sheet(
         closed = reopened
         if run is not None:
             placement = run.place(sheet)
-            report.update(
-                not_checked=placement.not_checked, left_in_place=placement.left_in_place
-            )
+            report.update(not_checked=placement.not_checked, left_in_place=placement.left_in_place)
         report.update(results=str(beside), sheet=str(sheet))
         left_alone = _write_panes(report, beside, plot_name, panes, of_a_sheet=True)
 
@@ -2196,13 +2194,13 @@ async def _cases_chosen(
     cannot be drawn is named with why."""
     assert args.job_id is not None and args.runs is not None
     job = await services.resolve_job_async(args.job_id, state)
-    unready = services.runs_unready(job)
-    if unready is not None:
-        raise ResultError(unready)
     selected, unmatched = services.select_cases(job, args.runs)
     if len(selected) == 1 and not unmatched:
         (case,) = selected
-        return job, case, services.case_run_context(job, case, state, other_raw=args.other_raw)
+        _, context = await services.readable_case(
+            job, state, case_id=case.case_id, other_raw=args.other_raw
+        )
+        return job, case, context
     if args.in_ltspice:
         raise ResultError(_IN_LTSPICE_ONE_CASE, show_hint=False)
     not_drawn: list[dict[str, Any]] = [
@@ -2210,7 +2208,7 @@ async def _cases_chosen(
     ]
     readable: list[tuple[ExperimentCase, services.RunContext]] = []
     for case in selected:
-        ctx = services.read_selected_case(
+        ctx = await services.read_selected_case(
             job, case, state, require_raw=True, other_raw=args.other_raw
         )
         if isinstance(ctx, services.CaseUnread):
@@ -2221,6 +2219,7 @@ async def _cases_chosen(
                     "status": case.status,
                     "code": ctx.code,
                     "detail": ctx.detail,
+                    **({"evidence": ctx.evidence} if ctx.evidence is not None else {}),
                 }
             )
             continue

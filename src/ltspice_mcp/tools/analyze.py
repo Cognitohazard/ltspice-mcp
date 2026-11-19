@@ -1076,19 +1076,8 @@ async def _resolve_sources(
         record = job.store_path
         source_jobs[job.job_id] = str(record) if record.is_file() else None
 
-        # Per-case readiness is gated below, not here.
-        unready = services.runs_unready(job)
-        if unready is not None:
-            missing.append(
-                {
-                    "label": source_input.label,
-                    "case_id": None,
-                    "run_index": None,
-                    "code": "job_not_terminal",
-                    "detail": unready,
-                }
-            )
-            continue
+        # Whether each case can be read is its own answer (``case_refusal``),
+        # whatever the job's status: a case still running costs only itself.
         selected, unmatched = services.select_cases(job, source_input.runs)
         missing.extend(
             {
@@ -1100,19 +1089,20 @@ async def _resolve_sources(
             for run in unmatched
         )
         for case in selected:
-            ctx = services.read_selected_case(
+            ctx = await services.read_selected_case(
                 job, case, state, require_raw=False, other_raw=source_input.other_raw
             )
             if isinstance(ctx, services.CaseUnread):
-                missing.append(
-                    {
-                        "label": source_input.label,
-                        "case_id": case.case_id,
-                        "run_index": case.run_index,
-                        "code": ctx.code,
-                        "detail": ctx.detail,
-                    }
-                )
+                row: dict[str, Any] = {
+                    "label": source_input.label,
+                    "case_id": case.case_id,
+                    "run_index": case.run_index,
+                    "code": ctx.code,
+                    "detail": ctx.detail,
+                }
+                if ctx.evidence is not None:
+                    row["evidence"] = ctx.evidence
+                missing.append(row)
                 continue
             resolved = services.source_for_run(
                 ctx, plot_index=source_input.plot_index or 0, dialect=source_input.dialect
@@ -3148,6 +3138,9 @@ OUTPUT_SCHEMA: dict[str, Any] = {
             "properties": {
                 "runs_requested": {"type": "integer"},
                 "runs_analyzed": {"type": "integer"},
+                # How many of the runs requested have not finished: a value
+                # over the runs analyzed is not the job's result yet.
+                "runs_running": {"type": "integer", "minimum": 1},
                 "missing_cases": _PAGE_SCHEMA,
             },
             "required": ["runs_requested", "runs_analyzed", "missing_cases"],
@@ -3555,11 +3548,16 @@ def _assemble(
             missing_offset=missing_next,
             view_fields=a.include.fields,
         )
-    coverage = {
+    coverage: dict[str, Any] = {
         "runs_requested": runs_requested,
         "runs_analyzed": len(analyzed_identities),
         "missing_cases": missing_page,
     }
+    # Counted over every missing row, not this page of them: the one statement
+    # that a value over the runs read is not yet the result of the runs asked.
+    running = sum(row.get("code") == "run_not_finished" for row in a.missing)
+    if running:
+        coverage["runs_running"] = running
     data: dict[str, Any] = {
         "outcome": outcome,
         "coverage": coverage,

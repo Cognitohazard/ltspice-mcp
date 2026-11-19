@@ -150,6 +150,7 @@ Codes by kind of failure:
 | `symbol_unresolved` | the schematic opened, but a symbol it, or a hierarchical block's own sheet, places was not found |
 | `simulation_failed` | the simulator could not be started, or the run failed |
 | `result_unreadable` | a `.raw` or `.log` could not be read |
+| `run_not_finished` | a read named a case of a job whose run has not finished (queued, running, or its end-of-run checks not yet made); the message names the case, what its simulator has written so far and the wait. The job's finished cases are read meanwhile |
 | `result_file_not_found` | no file is at a `.raw` or `.log` path the caller named; the `hint` says to check the path, or to read a run of this server's by its `job_id` |
 | `analysis_deadline` | a result read ran past its wall-clock bound and was abandoned |
 | `no_axis` | the selected plot is a table (an operating point, `.tf` or `.pz` result), so it has no sweep axis to query at |
@@ -829,7 +830,11 @@ record names, which another process may have taken since.
 The dwell and `jobs(wait)` wait for full terminality by default;
 `jobs(wait, wait_for: "runs")` returns once the runs are terminal: once every
 case's status is terminal, which can be just before the job's status changes.
-From then on every read of the job's runs accepts it. Cancelling
+A read does not wait for the job: each case is read once its own run has
+finished, its status set after the checks made when its run ends
+(`services.case_unreadable`), whatever its siblings are doing. A case still
+running is refused with `run_not_finished`, naming what its simulator has
+written so far. Cancelling
 during analysis cancels the stage and keeps the run artifacts. An analysis
 failure puts the job in `completed_with_failures` with an `analysis_error`; a
 new `analyze_results` call can still analyze the runs. An analysis stage the
@@ -1245,8 +1250,9 @@ the echoed `action`:
   and `plot_waveform` with `in_ltspice`. A case that
   produced no results (`case_not_produced`) or whose results are no longer
   there (`results_missing`), a case of a job whose runs are not all terminal
-  yet (`job_not_terminal`, as every read of a job's runs is refused until
-  then), another simulator's run (`not_ltspice`), a netlist whose results
+  yet (`job_not_terminal`: a job run with `execution.results_beside_sheet`
+  copies its cases then, so a placement waits for it, although a read of a
+  finished case does not), another simulator's run (`not_ltspice`), a netlist whose results
   file is a sheet's (`results_belong_to_sheet`), and a circuit that is missing
   (`sheet_missing`) or changed since the job read it (`sheet_changed`) are
   refused, and nothing is written. The sheet's `.plt` is left as it is.
@@ -1575,10 +1581,16 @@ continuation replays them.
   writer whose filesystem clock runs more than that tick behind this
   machine's. A deadline never lets a changed source pass; the source is read
   again or reported.
-- A job's runs are read once they are all terminal, as `jobs(wait, wait_for:
-  "runs")` reports them, and a case is read when it produced results or kept
-  a partial raw when it was stopped. Until then the source is a
-  `coverage.missing_cases` row with code `job_not_terminal`.
+- Each case of a job is read once its own run has finished, whatever the job's
+  status: when it produced results, or kept a partial raw when it was
+  stopped. A case still queued or running is a `coverage.missing_cases` row
+  with code `run_not_finished`, whose `detail` names what its simulator has
+  written so far and whose `evidence` carries `run_progress`' fields; a case
+  that ended without results is a row with code `raw_not_produced`. One such
+  row costs only its own case. `coverage.runs_running` counts the runs asked
+  for that have not finished, so a value over the runs analyzed is not taken
+  for the result of a job that has not ended; it is left out when every run
+  asked for has finished.
 - A source that names nothing is a `coverage.missing_cases` row coded as
   every tool reports the same failure, with that failure's `hint`: an unknown
   `job_id` is `job_not_found`, and a `path` with no file is
@@ -1604,7 +1616,7 @@ continuation replays them.
   `imag`. A 32-bit trace's samples are written in their shortest 32-bit
   form, which reads back as the same 32-bit value.
 
-Output: `outcome, coverage {runs_requested, runs_analyzed, missing_cases: Page},
+Output: `outcome, coverage {runs_requested, runs_analyzed, runs_running?, missing_cases: Page},
 results {key -> {metric, units, reduced[], groups?, steps?, spec?,
 per_run?: Page, warnings}}, observations[],
 failures[] {code, stage, where, message, wheres?, count?}, signals_available?,

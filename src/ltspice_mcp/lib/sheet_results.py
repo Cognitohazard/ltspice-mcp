@@ -40,6 +40,7 @@ from ltspice_mcp.lib.capabilities import entry
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.experiment_types import OWNER_STOPPED, ExperimentCase, ExperimentJob
 from ltspice_mcp.lib.filelock import async_file_lock, circuit_file_lock
+from ltspice_mcp.lib.job_lifecycle import runs_done  # noqa: TID251 - a placement waits for the job's own copy
 from ltspice_mcp.lib.ltspice_window import results_beside  # noqa: TID251 - the one caller
 from ltspice_mcp.lib.raw_parser import OTHER_RAW_KINDS, other_raw_path
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name, simulator_family
@@ -297,7 +298,25 @@ def check_request(circuits: Sequence[tuple[Path, int]], simulator: str) -> None:
 def check_case(job: ExperimentJob, case: ExperimentCase) -> None:
     """Refuse, from the job's record alone, a case whose results cannot be put
     beside its circuit: a case with no results, and a run on a simulator whose
-    results the server does not put there (``places_results``)."""
+    results the server does not put there (``places_results``), and any case
+    of a job whose runs have not all ended.
+
+    The last is the job's, not the case's: a job run with
+    ``execution.results_beside_sheet`` copies each produced case beside its
+    circuit once its runs have all ended (``place_job_beside_sheets``), and
+    its record does not say whether it was asked to. A placement made while
+    its runs go on would be copied over then, and on Windows that copy fails
+    while LTspice holds the first one open. Reading a case does not wait for
+    the job (``services.case_unreadable``); placing it does.
+    """
+    if not runs_done(job):
+        raise NotPlaced(
+            "job_not_terminal",
+            f"Case {case.case_id} of job {job.job_id} is placed beside its circuit once "
+            "the job's runs have all ended, since a job that copies its results there "
+            "itself does so then; wait for them with jobs(action='wait', "
+            f"job_id='{job.job_id}', wait_for='runs').",
+        )
     if case.status != "produced" or case.raw_file is None:
         raise NotPlaced(
             "case_not_produced",

@@ -1351,14 +1351,17 @@ async def test_raw_path_run_selection_reports_nonzero_outer_runs_missing(
 
 
 @pytest.mark.asyncio
-async def test_noncompleted_experiment_keeps_the_terminal_only_gate(
+async def test_a_case_not_finished_is_not_read_even_with_a_raw_on_disk(
     state_no_sim: SessionState,
     work_dir: Path,
 ):
-    """A job still running is not readable, even when a raw is already on disk.
+    """A case whose run has not finished is not read, even when a raw is
+    already on disk at its path.
 
-    Half a sweep's artifacts exist long before the job is done; analyzing them
-    as if they were the whole answer is the failure this gate exists for.
+    A running case's raw exists long before its run ends; analyzing it as
+    though it were the case's result is the failure this refusal exists for.
+    The refusal is the case's own, and the coverage says how many of the runs
+    asked for have not finished.
     """
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     job = make_experiment_job(state_no_sim, job_id="exp_running", status="running", raw=raw)
@@ -1372,9 +1375,11 @@ async def test_noncompleted_experiment_keeps_the_terminal_only_gate(
     data = result.structured_content
     assert data is not None
     assert data["coverage"]["runs_analyzed"] == 0
+    assert data["coverage"]["runs_running"] == 1
     (missing,) = data["coverage"]["missing_cases"]["items"]
-    assert missing["code"] == "job_not_terminal"
-    assert "no readable runs yet" in missing["detail"]
+    assert missing["code"] == "run_not_finished"
+    assert missing["case_id"] == job.cases[0].case_id
+    assert "has not started yet" in missing["detail"]
 
 
 _UNVERIFIED_INOISE_UNIT = "Could not verify the input-referred noise unit"

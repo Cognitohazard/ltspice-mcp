@@ -436,7 +436,7 @@ async def load_raw_result(
     else:
         assert job_id is not None
         job = await services.resolve_job_async(job_id, state)
-        context = services.experiment_run_context(
+        context = await services.experiment_run_context(
             job, state, run_index=run_index, case_id=case_id, other_raw=other_raw
         )
         source = services.source_for_run(context, plot_index=plot_index, dialect=dialect)
@@ -492,7 +492,7 @@ async def _log_source(
         return services.resolve_analysis_source(state, log_file=str(log_path))
     assert job_id is not None
     job = await services.resolve_job_async(job_id, state)
-    context = services.experiment_run_context(
+    context = await services.experiment_run_context(
         job, state, run_index=run_index, case_id=case_id, require_raw=False
     )
     if context.log is None and require_log:
