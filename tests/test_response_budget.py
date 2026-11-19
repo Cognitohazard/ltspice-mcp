@@ -593,11 +593,12 @@ class TestAnalysisBudget:
         assert spec["fail_count"] == wide["fail_count"], "a count is a fact, not a page"
         assert spec["verdict"] == wide["verdict"]
 
-    async def test_a_grouped_call_shrinks_its_groups_and_says_so(
+    async def test_a_grouped_call_leaves_groups_whole_that_a_cut_would_not_shorten(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        """A group list is cut like any list, and its cut names the cursor
-        that reads the groups left out of the stored answer."""
+        """A group list is cut like any list, but three short groups cost
+        less than the ``cut`` entry that would replace two of them: the reply
+        sends them whole and cuts what does shorten it."""
         state_no_sim.config.default_budget = 0
         raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
         plain = await _analysis(state_no_sim, raw, group_by=["r"])
@@ -608,10 +609,8 @@ class TestAnalysisBudget:
             state_no_sim, raw, group_by=["r"], budget=response_budget.BUDGET_MIN_TOKENS
         )
         entry = data["results"]["loop"]
-        assert len(entry["groups"]) < len(every_group)
-        cut = data["cut"]["/results/loop/groups"]
-        assert (cut["total"], cut["returned"]) == (len(every_group), len(entry["groups"]))
-        assert cut["next"]
+        assert entry["groups"] == every_group
+        assert "/results/loop/groups" not in data.get("cut", {})
 
     async def test_several_row_surfaces_share_the_budget_instead_of_each_taking_it(
         self, state_no_sim: SessionState, work_dir: Path
@@ -1173,7 +1172,7 @@ class TestReceiptFloor:
             receipt["runs"]["returned"],
         )
 
-    async def test_the_server_default_cuts_the_attached_analysis_beside_the_rows(
+    async def test_the_server_default_cuts_the_receipt_beside_its_attached_analysis(
         self, state_with_sim: SessionState, grid_deck: Path
     ):
         """The attached analysis is cut under the receipt's target like its
@@ -1186,7 +1185,9 @@ class TestReceiptFloor:
         attached = data["analysis"]["result"]
         assert attached["source_hashes"]
         assert attached["results"]["v_100u"]["values"]
-        assert any("next" in entry for entry in attached["cut"].values())
+        # A list of the analysis is cut where that shortens the reply, and
+        # each cut it names reads on.
+        assert all("next" in entry for entry in attached.get("cut", {}).values())
         assert 1 <= data["runs"]["returned"] == data["cut"]["/runs/items"]["returned"] <= 4
         assert _observation(data, "budget_truncated") is None
 

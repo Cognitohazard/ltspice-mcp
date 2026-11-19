@@ -353,6 +353,10 @@ NEVER_BOUNDS: dict[tuple[str, str], str] = {
     ("analyze.handle_analyze_results", "failures[].wheres"): (
         "analyze._FAILURE_WHERE_CAP (10), with count the true number"
     ),
+    ("analyze.handle_analyze_results", "signals_available[].signals"): (
+        "the traces one raw file holds: the file bounds them, and the list of "
+        "sources they sit in is cut"
+    ),
     ("analyze.handle_analyze_results", "results.*.reduced"): (
         "one row per field and statistic the recipe asks for; never cut, so a "
         "summary is never missing while its rows are shown"

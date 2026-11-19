@@ -33,6 +33,7 @@ from ltspice_mcp.lib.projection import keep_plan, project_row
 from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
+from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools import experiments as experiments_module
 from ltspice_mcp.tools import get_tools
 from ltspice_mcp.tools import jobs as jobs_module
@@ -928,6 +929,7 @@ class TestReceiptSnapshotCoherence:
             request={"recipes": []},
             result=analysis_snapshot.envelope(
                 {
+                    "answer_version": analyze_mod.ANSWER_VERSION,
                     "answer": {
                         "rows": [
                             {"case_id": produced.case_id, "status": produced.status},
@@ -1614,7 +1616,9 @@ class TestListAndRunsPagination:
 
         assert page_one["total"] == 2
         assert page_one["returned"] == page_two["returned"] == 1
-        observations = [*page_one["observations"], *page_two["observations"]]
+        # The first page names it; a page after it leaves the reply's notes to it.
+        observations = page_one["observations"]
+        assert "observations" not in page_two
         assert any(item["code"] == "experiment_index_invalid" for item in observations)
 
     async def test_a_list_limit_past_the_page_cap_is_held_to_it_and_says_so(

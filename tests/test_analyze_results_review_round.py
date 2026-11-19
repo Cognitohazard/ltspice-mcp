@@ -114,6 +114,7 @@ def test_the_python_api_gets_an_attached_analysis_with_every_failure(
         request={"recipes": []},
         result=analysis_snapshot.envelope(
             {
+                "answer_version": analyze_mod.ANSWER_VERSION,
                 "answer": {
                     "outcome": "partial",
                     "results": {},

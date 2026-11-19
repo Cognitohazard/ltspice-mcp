@@ -1809,20 +1809,17 @@ async def test_each_cut_lists_cursor_reads_its_own_list(
     rest = by_coverage["coverage"]["missing_cases"]
     assert rest["items"][0]["run_index"] == 101
     assert "truncated" not in rest
-    rows = by_coverage["results"]["values"]["per_run"]
-    assert (rows["returned"], rows["truncated"]) == (0, True)
+    # A page holds its own list only: the rows are the first reply's to give.
+    assert by_coverage["page_of"] == "/coverage/missing_cases/items"
+    assert "results" not in by_coverage
+    assert set(by_coverage["cut"]) == {"/coverage/missing_cases/items"}
 
     by_rows = await _analyze_request(
         state_no_sim, {"continue": {"result_set_id": result_set_id, "cursor": rows_cursor}}
     )
     assert by_rows["results"]["values"]["per_run"]["items"][0]["step_index"] == 1
-    missing = by_rows["coverage"]["missing_cases"]
-    assert (missing["returned"], missing["truncated"]) == (0, True)
-    again = await _analyze_request(
-        state_no_sim,
-        {"continue": {"result_set_id": result_set_id, "cursor": missing["next_cursor"]}},
-    )
-    assert again["coverage"]["missing_cases"]["items"][0]["run_index"] == 1
+    assert by_rows["page_of"] == "/results/values/per_run/items"
+    assert "missing_cases" not in by_rows.get("coverage", {})
 
 
 @pytest.mark.asyncio

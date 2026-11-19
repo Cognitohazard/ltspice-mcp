@@ -274,9 +274,12 @@ async def test_a_page_after_the_file_changed_reads_the_older_snapshot(state_no_s
     assert "compare stored_answer.snapshot" in page["hint"]
 
 
-async def test_a_page_holds_only_the_list_it_reads_and_the_lists_sent_whole(
+async def test_a_page_holds_only_the_list_it_reads_and_what_names_the_reply(
     state_no_sim, work_dir
 ):
+    """A page holds its list, what names the page (``page_of``, ``cut`` and
+    ``stored_answer``) and the reply's text fields; the lists the first reply
+    sent whole are that reply's to give (``presenter.page_skeleton``)."""
     deck = _netlist(work_dir, OVER)
     first = await dispatched(state_no_sim, "verify_circuit", path=str(deck))
 
@@ -287,8 +290,12 @@ async def test_a_page_holds_only_the_list_it_reads_and_the_lists_sent_whole(
         findings_cursor=first["cut"]["/findings"]["next"],
     )
 
-    for field in ("path", "kind", "outcome", "checks_run", "rules_run", "observations"):
+    for field in ("path", "kind", "outcome"):
         assert page.get(field) == first.get(field), field
+    assert page["page_of"] == "/findings"
+    assert set(page["cut"]) == {"/findings"}
+    for field in ("checks_run", "rules_run", "observations"):
+        assert field not in page, field
 
 
 # ---------------------------------------------------------------------------
