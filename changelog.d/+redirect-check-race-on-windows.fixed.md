@@ -1,0 +1,1 @@
+On Windows, a case no longer fails now and then with "Parser directory must not redirect to another location" when several cases start to read their results at once in a fresh store. The check that refuses a path that redirects elsewhere no longer compares the text of a resolved path that does not exist yet; it looks at the folders that do exist.
