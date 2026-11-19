@@ -726,6 +726,7 @@ FROZEN_ERROR_CODES = (
     "unsupported_model",
     "unsupported_variant",
     "unwrap_warning",
+    "value_read_otherwise",
     "widget_unavailable",
     "window_chosen",
     "window_empty",

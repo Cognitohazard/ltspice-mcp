@@ -40,7 +40,7 @@ from ltspice_mcp.lib.device_names import (
     path_text,
     spelled_name,
 )
-from ltspice_mcp.lib.encoding import decode_spice_bytes
+from ltspice_mcp.lib.encoding import decode_spice_bytes, decode_spice_bytes_with_encoding
 from ltspice_mcp.lib.hierarchy_expr import (
     NGSPICE_M_EXEMPT,
     NGSPICE_M_TAKERS,
@@ -74,6 +74,7 @@ from ltspice_mcp.lib.spice_lex_views import (
     global_names,
     unreadable_card,
 )
+from ltspice_mcp.lib.stored_values import OtherReading, readings_of_cards
 
 MAX_BYTES = 16 * 1024 * 1024
 MAX_CARDS = 100_000
@@ -354,6 +355,9 @@ class Hierarchy:
     m_rewritten: frozenset[str] = frozenset()
     #: The deck the hierarchy was read from.
     root: Path | None = None
+    #: Each value of an active card that a recorded LTspice build reads as
+    #: another number than this hierarchy gives (``stored_values``).
+    readings: tuple[OtherReading, ...] = ()
 
     def binding(self) -> dict[str, Any]:
         return {
@@ -1161,4 +1165,24 @@ def resolve_hierarchy(
         tuple(include_bindings),
         rewritten,
         root,
+        _readings(occurrences, active),
+    )
+
+
+def _readings(
+    occurrences: Sequence[_Occurrence], files: Mapping[Path, CapturedFile]
+) -> tuple[OtherReading, ...]:
+    """The values of the active cards a recorded build reads otherwise, each
+    file's cards read in the codec the server decoded that file as."""
+    codecs = {
+        str(path): decode_spice_bytes_with_encoding(captured.content)[1]
+        for path, captured in files.items()
+    }
+    by_file: dict[str, list[SpiceCard]] = {}
+    for item in occurrences:
+        by_file.setdefault(item.source.path, []).append(item.card)
+    return tuple(
+        reading
+        for path, cards in by_file.items()
+        for reading in readings_of_cards(cards, codecs[path], file=path)
     )

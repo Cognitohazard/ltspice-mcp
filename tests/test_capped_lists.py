@@ -77,6 +77,11 @@ _NOT_REPLY_LISTS: dict[str, str] = {
 #: Functions that slice or bound by a cap without the shared note, and why
 #: that is right for them.
 _ALLOWED: dict[str, str] = {
+    "lib/stored_values.py:_file_entry": (
+        "a file's examples of the values another build reads otherwise: its count is "
+        "the true number, the summary's rule names every one, and its listed_by, where "
+        "a call does, lists them all"
+    ),
     "api/_detach.py:_prune_handoff_logs": "prunes old handoff logs on disk, not a reply",
     "errors.py:compact_validation_error": (
         "a refusal's sample of validation errors, ending in 'and N more'"

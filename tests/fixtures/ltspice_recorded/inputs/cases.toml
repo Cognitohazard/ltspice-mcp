@@ -359,7 +359,7 @@ model = ["lib/schematic_scene.py", "lib/sheet.py", "lib/asc_document.py", "lib/s
 
 [behaviour.deck-encoding]
 summary = "How each build decodes a deck's bytes: a micro sign stored as cp1252, UTF-8 (with and without a byte order mark) and UTF-16, a Greek mu, a section sign in an instance name, the bytes cp1252 leaves undefined in a title and in node names, and byte 85 in a comment."
-model = ["lib/encoding.py", "lib/spice_lex_ops.py", "lib/deck_staging.py", "lib/variations.py", "lib/simulator_build.py", "lib/services.py", "lib/lint_rules.py", "lib/format.py", "lib/spice_lex.py", "lib/format.py:parse_spice_value", "lib/spice_lex.py:lex_deck"]
+model = ["lib/encoding.py", "lib/stored_values.py", "lib/spice_lex_ops.py", "lib/deck_staging.py", "lib/variations.py", "lib/simulator_build.py", "lib/services.py", "lib/lint_rules.py", "lib/format.py", "lib/spice_lex.py", "lib/format.py:parse_spice_value", "lib/spice_lex.py:lex_deck"]
 inputs = [
     "deck/micro_utf8.cir",
     "deck/micro_cp1252.cir",
@@ -6276,8 +6276,10 @@ item_axis = "form"
 # recording, or predicted from the recorded rules where none is recorded (one
 # number, or one a build); not_established, why a cell's number is a
 # prediction no recording shows the rule of, or why it has none; differs, a
-# route that answers otherwise, with the reason.
-item_keys = ["node", "number", "not_established", "differs"]
+# route that answers otherwise, with the reason; decoded, a build that reads
+# other text than the server from the stored file (reads), which every route
+# that starts from the file states and no route that reads text is held to.
+item_keys = ["node", "number", "not_established", "differs", "decoded"]
 behaviours = ["value-suffixes", "ohm-sign-value", "deck-encoding", "number-grid"]
 groups = [
     ["suffix", "case", "tail"],
@@ -6445,7 +6447,7 @@ cases = ["deck/ohm_cp1253"]
 [[grid.value-number.cell]]
 cases = ["deck/micro_utf8"]
 [grid.value-number.cell.items]
-"1µ" = { node = "a", mantissa = "whole", suffix = "micro_sign", case = "lower", tail = "none", after = "suffix", sign = "micro_sign", encoding = "utf8", number = { ltspice26 = 1e-06, ltspice17 = 1.0 }, differs = [{ build = "ltspice17", routes = ["api inspect", "api window bound", "evaluate", "inspect", "leading_numeric_tokens", "load_hierarchy", "montecarlo.parse_value", "parse_freq", "parse_plain_value", "parse_spice_value", "parse_time", "plain_number", "step_number", "values_equal"], reason = "LTspice XVII decodes a deck as cp1252 and reads a micro sign stored as UTF-8 as two letters, which it skips, so it took 1; every route reads the deck as UTF-8 and takes 1e-6. A run through the server is not affected (staging folds the sign to u for XVII, and the lint warns, value-suffix-nonascii), but inspect(kind=\"hierarchy\") and every other reading of the deck answer 1e-6 with no warning." }] }
+"1µ" = { node = "a", mantissa = "whole", suffix = "micro_sign", case = "lower", tail = "none", after = "suffix", sign = "micro_sign", encoding = "utf8", number = { ltspice26 = 1e-06, ltspice17 = 1.0 }, decoded = [{ build = "ltspice17", reads = "1Âµ", reason = "LTspice XVII decodes a UTF-8 deck as cp1252, so it reads the stored bytes of the sign as two letters that are no scale and took 1; the server, and LTspice 26, read the sign. The difference is the decoding of the stored file, not a reading of the text: every route that starts from the stored file states it (stored_values), and a route that reads text is not held to a number read from other text." }] }
 
 [[grid.value-number.cell]]
 cases = ["deck/micro_cp1252"]
@@ -6455,7 +6457,7 @@ cases = ["deck/micro_cp1252"]
 [[grid.value-number.cell]]
 cases = ["deck/micro_utf8_bom"]
 [grid.value-number.cell.items]
-"1µ" = { node = "a", mantissa = "whole", suffix = "micro_sign", case = "lower", tail = "none", after = "suffix", sign = "micro_sign", encoding = "utf8_bom", number = { ltspice26 = 1e-06, ltspice17 = 1.0 }, differs = [{ build = "ltspice17", routes = ["api inspect", "api window bound", "evaluate", "inspect", "leading_numeric_tokens", "load_hierarchy", "montecarlo.parse_value", "parse_freq", "parse_plain_value", "parse_spice_value", "parse_time", "plain_number", "step_number", "values_equal"], reason = "LTspice XVII decodes a deck as cp1252 and reads a micro sign stored as UTF-8 as two letters, which it skips, so it took 1; every route reads the deck as UTF-8 and takes 1e-6. A run through the server is not affected (staging folds the sign to u for XVII, and the lint warns, value-suffix-nonascii), but inspect(kind=\"hierarchy\") and every other reading of the deck answer 1e-6 with no warning." }] }
+"1µ" = { node = "a", mantissa = "whole", suffix = "micro_sign", case = "lower", tail = "none", after = "suffix", sign = "micro_sign", encoding = "utf8_bom", number = { ltspice26 = 1e-06, ltspice17 = 1.0 }, decoded = [{ build = "ltspice17", reads = "1Âµ", reason = "LTspice XVII decodes a UTF-8 deck as cp1252, so it reads the stored bytes of the sign as two letters that are no scale and took 1; the server, and LTspice 26, read the sign. The difference is the decoding of the stored file, not a reading of the text: every route that starts from the stored file states it (stored_values), and a route that reads text is not held to a number read from other text." }] }
 
 [[grid.value-number.cell]]
 cases = ["deck/micro_utf16le_bom"]
@@ -6470,7 +6472,7 @@ cases = ["deck/micro_utf16le"]
 [[grid.value-number.cell]]
 cases = ["deck/greek_mu_utf8"]
 [grid.value-number.cell.items]
-"1μ" = { node = "a", mantissa = "whole", suffix = "greek_mu", case = "lower", tail = "none", after = "suffix", sign = "greek_mu", encoding = "utf8", number = { ltspice26 = 1e-06, ltspice17 = 1.0 }, differs = [{ build = "ltspice17", routes = ["api inspect", "api window bound", "evaluate", "inspect", "leading_numeric_tokens", "load_hierarchy", "montecarlo.parse_value", "parse_freq", "parse_plain_value", "parse_spice_value", "parse_time", "plain_number", "step_number", "values_equal"], reason = "LTspice XVII decodes a deck as cp1252 and reads a micro sign stored as UTF-8 as two letters, which it skips, so it took 1; every route reads the deck as UTF-8 and takes 1e-6. A run through the server is not affected (staging folds the sign to u for XVII, and the lint warns, value-suffix-nonascii), but inspect(kind=\"hierarchy\") and every other reading of the deck answer 1e-6 with no warning." }] }
+"1μ" = { node = "a", mantissa = "whole", suffix = "greek_mu", case = "lower", tail = "none", after = "suffix", sign = "greek_mu", encoding = "utf8", number = { ltspice26 = 1e-06, ltspice17 = 1.0 }, decoded = [{ build = "ltspice17", reads = "1Î¼", reason = "LTspice XVII decodes a UTF-8 deck as cp1252, so it reads the stored bytes of the sign as two letters that are no scale and took 1; the server, and LTspice 26, read the sign. The difference is the decoding of the stored file, not a reading of the text: every route that starts from the stored file states it (stored_values), and a route that reads text is not held to a number read from other text." }] }
 
 # Cells of number-grid ------------------------------------------------------
 

@@ -723,6 +723,7 @@ NOT_READ_BY_JOB: Mapping[str, str] = {
     # Where the deck came from; the staged copy is what ran.
     "circuit_id_derived": "how the circuit was named, not what its run wrote",
     "micro_sign_folded": "how the staged deck spells a suffix, not what its run wrote",
+    "value_read_otherwise": "how another build reads the source, not what its run wrote",
     "live_include": "which input the run read live, not what its run wrote",
     "live_data_file": "which input the run read live, not what its run wrote",
     "data_path_unrecorded": "how the staged deck names a data file, not what its run wrote",
