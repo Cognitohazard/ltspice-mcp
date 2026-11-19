@@ -959,7 +959,10 @@ class ExperimentRunner(RunnerBase):
         registry = request.state.job_registry
         before = set(registry.pending_writes(candidate.job_id))
         registry.persist_job(candidate)
-        await asyncio.gather(*(set(registry.pending_writes(candidate.job_id)) - before))
+        # ``wait``, not ``gather``: a cancelled waiter must not cancel the
+        # registry's own write, which holds the job's write lock.
+        if note := set(registry.pending_writes(candidate.job_id)) - before:
+            await asyncio.wait(note)
 
     def discard_staged_run_dir(self, request: ExperimentRunRequest, working_dir: Path) -> None:
         """Remove the run tree of a submission that staged and then failed.
