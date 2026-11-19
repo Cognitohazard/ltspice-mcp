@@ -80,6 +80,9 @@ _FAMILY_BASES: dict[str, type] = {**SIMULATORS, "ltspice": LTspice}
 _FAMILY_BY_CLASS_NAME: dict[str, str] = {
     cls.__name__: family for family, cls in (*SIMULATORS.items(), *_FAMILY_BASES.items())
 }
+# A record written on WSL names its class LTspiceWSL, and is read on every
+# host (``lib/ltspice_wsl.py``; Windows' own class keeps the name LTspice).
+_FAMILY_BY_CLASS_NAME.setdefault("LTspiceWSL", "ltspice")
 # The class each of those names is, for what a recorded name needs the class for.
 _CLASS_BY_NAME: dict[str, type] = {
     cls.__name__: cls for cls in (*SIMULATORS.values(), *_FAMILY_BASES.values())

@@ -20,6 +20,7 @@ here (``provenance`` carries the executable's identity for that).
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
@@ -42,6 +43,26 @@ NOT_IN_SESSION: Final = "simulator_not_in_session"
 
 #: Every code a ``simulator_notes`` entry carries.
 NOTE_CODES: Final = (BUILD_NOT_RECORDED, SIMULATOR_NOT_RECORDED, NOT_IN_SESSION)
+
+
+#: The program each launch command resolves to, by command: a bare command
+#: name is searched for on PATH once per process, not once per reply.
+_LAUNCHED: dict[tuple[str, ...], str | None] = {}
+
+
+def _launched(simulator: type) -> str | None:
+    """The program ``simulator`` launches (``executable_path``), remembered
+    by its launch command, which a session's classes keep from startup."""
+    command = tuple(str(part) for part in getattr(simulator, "spice_exe", None) or ())
+    if command not in _LAUNCHED:
+        _LAUNCHED[command] = executable_path(simulator)
+    return _LAUNCHED[command]
+
+
+def _same_path(current: str | None, recorded: str) -> bool:
+    """Whether two paths name one file as the platform compares them: on
+    Windows, without regard to case."""
+    return current is not None and os.path.normcase(current) == os.path.normcase(recorded)
 
 
 @dataclass(frozen=True)
@@ -93,16 +114,15 @@ def _legacy_selector(job: ExperimentJob, state: SessionState | None) -> JobSimul
         ordered = [family] if family in offered else []
         ordered += sorted(key for key in offered if key.startswith(f"{family}:"))
         for key in ordered:
-            if executable_path(offered[key]) == recorded:
+            if _same_path(_launched(offered[key]), recorded):
                 return JobSimulator(key)
-    where = f" It ran {recorded}." if recorded else ""
     note = {
         "code": BUILD_NOT_RECORDED,
         "detail": (
             f"This job's record was written before a job recorded the selector it ran "
             f"with, and its executable is none of this session's {family} simulators, "
             f"so which {family} build it named is not recorded; '{family}' is its "
-            f"family.{where}"
+            "family."
         ),
     }
     if recorded:

@@ -205,7 +205,7 @@ class TestEveryRoute:
         state = _state(config, builds)
         receipt = await terminal_experiment(state, _payload(deck, "platform", "ltspice:xvii"))
         path = store.Store(state.working_dir).job_record(receipt["job_id"])
-        for class_name in ("LTspice", "LTspiceWSL", "LTspiceOffDesktop"):
+        for class_name in ("LTspice", "LTspiceWSL"):
             data = json.loads(path.read_text())
             data["simulator"] = class_name
             path.write_text(json.dumps(data))
@@ -419,3 +419,94 @@ def test_no_reply_builder_names_a_simulator_by_its_class():
     found = _uses()
     assert not found - _ALLOWED.keys(), sorted(found - _ALLOWED.keys())
     assert not _ALLOWED.keys() - found, f"no longer used: {sorted(_ALLOWED.keys() - found)}"
+
+
+# ---------------------------------------------------------------------------
+# Records written by an earlier version still load and reply
+# ---------------------------------------------------------------------------
+
+
+def _drop_key(value: Any, key: str) -> int:
+    """Remove ``key`` from every object in ``value``; how many it removed."""
+    if isinstance(value, dict):
+        removed = int(value.pop(key, None) is not None or False)
+        return removed + sum(_drop_key(item, key) for item in value.values())
+    if isinstance(value, list):
+        return sum(_drop_key(item, key) for item in value)
+    return 0
+
+
+def test_a_recovery_journal_written_before_the_selector_still_loads(state_no_sim: SessionState):
+    """A journal's prepared candidate must re-serialize to exactly its own
+    keys. One written before the selector was recorded has no such key, and
+    still loads, so its resume and replay keep their answers."""
+    from ltspice_mcp.lib.recovery_journal import load_journal
+    from ltspice_mcp.lib.store import Store
+    from tests.test_recovery_launch_pool import _recoverable_job
+
+    job, _request = _recoverable_job(
+        state_no_sim, job_id="exp_earlier_journal", request_id="earlier-journal", cases=1
+    )
+    store_ = Store(state_no_sim.working_dir)
+    path = store_.recovery_journal(job.request_id)
+    data = json.loads(path.read_text(encoding="utf-8"))
+    # As the earlier version wrote it: whatever this one wrote, no selector.
+    _drop_key(data, "simulator_selector")
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    journal = load_journal(store_, job.request_id)
+    assert journal is not None
+    assert journal.head_job_id == job.job_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("class_name", ["LTspice", "LTspiceWSL"])
+async def test_an_earlier_record_is_named_the_same_whatever_its_platform_class(
+    config: ServerConfig,
+    deck: Path,
+    builds: dict[str, Path],
+    recording_families: None,
+    class_name: str,
+):
+    """The family of a record written before the selector comes from its class
+    name, which differs by platform (Windows' own class keeps the name
+    ``LTspice``; WSL's is ``LTspiceWSL``); the reply does not."""
+    from ltspice_mcp.lib.ltspice_windows import LTspice as OffDesktop
+
+    assert OffDesktop.__name__ == "LTspice" and LTspiceWSL.__name__ == "LTspiceWSL"
+    state = _state(config, builds)
+    receipt = await terminal_experiment(state, _payload(deck, "earlier-class", "ltspice:xvii"))
+    await state.job_registry.drain_pending()
+    _forget_selector(state, receipt["job_id"])
+    path = store.Store(state.working_dir).job_record(receipt["job_id"])
+    data = json.loads(path.read_text())
+    data["simulator"] = class_name
+    path.write_text(json.dumps(data))
+
+    status = await _jobs(_state(config, builds), action="status", job_id=receipt["job_id"])
+    assert status["simulator"] == "ltspice:xvii", status
+    assert "simulator_notes" not in status, status["simulator_notes"]
+
+
+@pytest.mark.asyncio
+async def test_an_earlier_record_matches_its_build_as_the_platform_compares_paths(
+    config: ServerConfig,
+    deck: Path,
+    builds: dict[str, Path],
+    recording_families: None,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Windows compares paths without regard to case: a record that wrote
+    the build's path in other case still names that build there."""
+    import os
+
+    import ltspice_mcp.lib.job_simulator as job_simulator_mod
+
+    state = _state(config, builds)
+    receipt = await terminal_experiment(state, _payload(deck, "earlier-case", "ltspice:xvii"))
+    await state.job_registry.drain_pending()
+    _forget_selector(state, receipt["job_id"], path=str(builds["xvii"]).upper())
+    monkeypatch.setattr(job_simulator_mod.os.path, "normcase", lambda p: os.fspath(p).lower())
+
+    status = await _jobs(_state(config, builds), action="status", job_id=receipt["job_id"])
+    assert status["simulator"] == "ltspice:xvii", status

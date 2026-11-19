@@ -260,7 +260,9 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
         pid=job.owner_pid,
         owner_start=owner_start_record(job.owner_pid, job.owner_start),
         simulator=job.simulator,
-        simulator_selector=job.simulator_selector,
+        # Written only when recorded: a record from before the field, a
+        # recovery candidate among them, re-serializes to its own keys.
+        **({"simulator_selector": job.simulator_selector} if job.simulator_selector else {}),
         status=job.status,
         started_at=job.started_at.isoformat(),
         completed_at=job.completed_at.isoformat() if job.completed_at else None,
