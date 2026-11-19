@@ -1,0 +1,5 @@
+* the expression grid: each source's value is what LTspice computed, as the voltage of its node
+.param lpos=6 lneg=-6 lzero=0 rpos=4 rneg=-4 rzero=0 bpos=2 bneg=-2 bzero=0 ewhole=3 eneg=-2 ezero=0 efrac=0.5
+V1 e01 0 {{lpos+rpos}}
+.op
+.end

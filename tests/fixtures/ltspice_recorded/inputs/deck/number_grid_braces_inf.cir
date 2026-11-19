@@ -1,0 +1,4 @@
+* the number grid: each source's value is the number LTspice read, as the voltage of its node
+V1 n01 0 {inf}
+.op
+.end
