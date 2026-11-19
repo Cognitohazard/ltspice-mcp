@@ -27,7 +27,7 @@ from ltspice_mcp.tools import receipts as receipts_mod
 from ltspice_mcp.tools.analyze import (
     OUTPUT_SCHEMA,
     AnalyzeResultsInput,
-    _request_hash,
+    _request_digest,
     handle_analyze_results,
 )
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
@@ -388,19 +388,21 @@ class TestAnalysisBudget:
         """The budget lives outside the hash a cursor is checked against, so two
         budgets over one analysis are the same request and share its cursors."""
         raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
-        plain = _request_hash(_wide_args(raw))
-        budgeted = _request_hash(_wide_args(raw, budget=600))
+        plain = _request_digest(_wide_args(raw))
+        budgeted = _request_digest(_wide_args(raw, budget=600))
         assert budgeted == plain
 
-    async def test_fields_view_is_not_part_of_per_run_request_identity(self, work_dir: Path):
+    async def test_the_row_view_is_part_of_the_request_a_cursor_reads(self, work_dir: Path):
+        """A stored answer holds rows in one view, so a cursor reads them only
+        for the request that gave it, include.fields included."""
         raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
-        first = _request_hash(
+        first = _request_digest(
             _wide_args(raw, include={"per_run": {"limit": 5}, "fields": ["value"]})
         )
-        second = _request_hash(
+        second = _request_digest(
             _wide_args(raw, include={"per_run": {"limit": 5}, "fields": ["case_id"]})
         )
-        assert first == second
+        assert first != second
 
     async def test_a_cursor_minted_under_a_budget_resumes_without_one(
         self, state_no_sim: SessionState, work_dir: Path

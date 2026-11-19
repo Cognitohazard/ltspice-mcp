@@ -12,12 +12,13 @@ The part holds one or more groups, each the entries left out of one list.
 It has one stated overall bound, in estimated tokens:
 
 - every kind keeps its count, in each group;
-- at most :data:`NAMED` entries are named over all groups, the first entry of
-  each of the first kinds that not every entry of its list carries, each for
-  at most :data:`KINDS_PER_ENTRY` kinds; a kind every entry carries is given
-  by its count alone;
+- at most :data:`NAMED` kinds are named over all groups, each by the first
+  entry left out that carries it and that not every entry of its list
+  carries, one entry for at most :data:`KINDS_PER_ENTRY` kinds; a kind every
+  entry carries is given by its count alone;
 - named entries come off from the last while the part is over its bound,
-  then groups from the last are summed into one group under :data:`FOLDED`.
+  then groups from the last are summed into one group under :data:`FOLDED`
+  (starred again when a group is already named so).
 
 The caller computes the bound from the worst part its vocabulary allows
 (:func:`worst_bound`), and the presenter measures the whole reply at the
@@ -32,7 +33,7 @@ from typing import Any, Final
 
 from ltspice_mcp.lib.response_budget import estimate_tokens
 
-#: How many entries the part names, over all groups and kinds.
+#: How many kinds the part names an entry for, over all groups.
 NAMED: Final = 3
 
 #: How many kinds one named entry is named for.
@@ -98,7 +99,7 @@ def not_shown(
     tokens when ``bound`` is :func:`worst_bound` for its vocabulary."""
     part: dict[str, dict[str, Any]] = {}
     named_kinds: dict[str, set[str]] = {}
-    named = 0
+    named = 0  # kinds named, over all groups
     for group, left in groups.items():
         counts: dict[str, int] = {}
         listed: list[dict[str, Any]] = []
@@ -112,9 +113,9 @@ def not_shown(
             fresh = [kind for kind in kept if kind not in left.facts.every and kind not in seen]
             room = NAMED - named
             if fresh and room > 0:
-                fresh = fresh[:KINDS_PER_ENTRY]
+                fresh = fresh[: min(room, KINDS_PER_ENTRY)]
                 seen.update(fresh)
-                named += 1
+                named += len(fresh)
                 entry: dict[str, Any] = {**identity, "kinds": fresh}
                 cursor = left.cursor(index)
                 if cursor is not None:
@@ -139,16 +140,20 @@ def _bounded(
             part[group][entries].pop()
             if not part[group][entries]:
                 part[group].pop(entries)
+    # The folded group's name, starred again past any group named so.
+    into = FOLDED
+    while into in part:
+        into += FOLDED
     while size() > bound:
-        groups = [group for group in part if group != FOLDED]
+        groups = [group for group in part if group != into]
         if len(groups) <= 1:
             break
         folded = part.pop(groups[-1])
-        summed = part.pop(FOLDED, {"counts": {}, "groups": 0})
+        summed = part.pop(into, {"counts": {}, "groups": 0})
         summed["groups"] += 1
         for kind, count in folded["counts"].items():
             summed["counts"][kind] = summed["counts"].get(kind, 0) + count
-        part[FOLDED] = summed
+        part[into] = summed
     return part
 
 

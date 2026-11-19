@@ -866,13 +866,15 @@ def present_many(
             )
     full_target = sys.maxsize if target is None else target
 
+    totals = {pointer: len(resolve_pointer(reply, pointer)) for pointer in pointers}
+
     def presented(document: dict[str, Any], thinned: Mapping[str, ListCut]) -> Presented:
         sources = {pointer: resolve_pointer(document, pointer) for pointer in pointers}
         return _present_lists(
             document,
             sources,
             {},
-            {pointer: len(entries) for pointer, entries in sources.items()},
+            totals,
             placed,
             target=full_target,
             paged=None,
@@ -886,7 +888,7 @@ def present_many(
             document,
             sources,
             {},
-            {pointer: len(entries) for pointer, entries in sources.items()},
+            totals,
             placed,
             target=sys.maxsize,
             paged=None,
@@ -900,6 +902,19 @@ def present_many(
             over(document, size, target)
         return Presented(document, {}, None, size, target)
     shown = presented(document, thinned)
+    if thinned:
+        # The series were thinned for every entry; draw them again for the
+        # entries the reply keeps, so an entry left out neither thins those
+        # shown nor is named in cut.
+        kept = {
+            pointer: entry.returned for pointer, entry in shown.cut.items() if pointer in totals
+        }
+        if kept:
+            sliced = _with_lists(
+                reply, {p: resolve_pointer(reply, p)[:count] or None for p, count in kept.items()}
+            )
+            document, thinned = _thin(sliced, placed, series, target, measured)
+            shown = presented(document, thinned)
     redo = False
     for part in placed:
         if part.stored is None:
@@ -974,10 +989,20 @@ def present_page(
             over=said,
         )
 
-    base, thinned = _thin(
-        base, placed, series, target, lambda doc, cuts: page(doc, cuts, sys.maxsize, None).size
-    )
-    return page(base, thinned, sys.maxsize if target is None else target, over)
+    aim = sys.maxsize if target is None else target
+
+    def measured(doc: dict[str, Any], cuts: Mapping[str, ListCut]) -> int:
+        return page(doc, cuts, sys.maxsize, None).size
+
+    document, thinned = _thin(base, placed, series, target, measured)
+    shown = page(document, thinned, aim, over)
+    entry = shown.cut.get(pointer)
+    if thinned and entry is not None and entry.returned < len(whole) - offset:
+        # Drawn again for the entries the page keeps (as present_many does).
+        sliced = _with_lists(base, {pointer: whole[offset : offset + entry.returned]})
+        document, thinned = _thin(sliced, placed, series, target, measured)
+        shown = page(document, thinned, aim, over)
+    return shown
 
 
 def present_record_page(

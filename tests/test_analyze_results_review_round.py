@@ -15,10 +15,11 @@ from typing import Any
 
 import pytest
 
-from ltspice_mcp.lib import not_shown
+from ltspice_mcp.lib import analysis_snapshot, not_shown
+from ltspice_mcp.lib.experiment_types import AnalysisStage
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
-from ltspice_mcp.tools._base import automatic_door
+from tests.conftest import SyncApi, make_experiment_job
 from tests.test_analyze_results_through_the_presenter import _analyze, _job
 
 
@@ -36,18 +37,27 @@ async def test_following_next_from_page_to_page_ends_and_reads_every_list(
         "include": {"per_run": {"limit": 100}},
         "budget": 1500,
     }
-    reply = await _analyze(state_no_sim, request)
+    first = await _analyze(state_no_sim, request)
     seen: dict[str, list[Any]] = {
-        key: list(reply["results"][key]["per_run"].get("items", [])) for key in ("a", "b")
+        key: list(first["results"][key]["per_run"].get("items", [])) for key in ("a", "b")
     }
-    for _ in range(200):
-        if "next" not in reply:
-            break
-        reply = await _analyze(state_no_sim, {"continue": reply["next"]})
-        for key in ("a", "b"):
+    # The reply's next reads on in one list and ends with it; each other cut
+    # list reads on from its own cut entry.
+    starts = {
+        key: first["cut"].get(f"/results/{key}/per_run/items", {}).get("next") for key in seen
+    }
+    for key, cursor in starts.items():
+        reply = (
+            {"next": {"result_set_id": first["result_set_id"], "cursor": cursor}} if cursor else {}
+        )
+        for _ in range(200):
+            if "next" not in reply:
+                break
+            reply = await _analyze(state_no_sim, {"continue": reply["next"]})
             seen[key].extend(reply["results"][key]["per_run"].get("items", []))
-    else:
-        pytest.fail("following next never ended")
+        else:
+            pytest.fail("following next never ended")
+    assert first["next"]["cursor"] == starts["a"]
     whole = await asyncio.to_thread(
         lambda: (
             __import__("tests.conftest", fromlist=["SyncApi"])
@@ -85,34 +95,41 @@ async def test_a_series_is_thinned_for_the_rows_the_reply_shows(
         if pointer.endswith("/value/x"):
             index = int(pointer.split("/")[-3])
             assert index < len(shown), pointer
-    # Rows the reply leaves out do not thin the rows it shows below what the
-    # same rows get when nothing is left out.
-    if len(shown) <= len(few["results"]["w"]["per_run"]["items"]):
-        assert (
-            len(shown[0]["value"]["x"])
-            >= len(few["results"]["w"]["per_run"]["items"][0]["value"]["x"]) * 0.8
-        )
-
-
-def test_the_python_api_gets_an_attached_analysis_with_every_failure():
-    stored = analyze_mod.analysis_snapshot.envelope(
-        {
-            "answer": {
-                "results": {},
-                "observations": [],
-                "failures": [
-                    {"code": "x", "stage": "s", "where": f"run-{index}", "message": "same"}
-                    for index in range(3)
-                ],
-            },
-            "snapshot": {},
-            "request": {},
-        }
+    # Rows the reply leaves out do not hold the rows it shows at the floor:
+    # drawn for 30 rows, every row was at 32 points.
+    assert len(shown[0]["value"]["x"]) > analyze_mod.THIN_FLOOR_POINTS
+    assert len(few["results"]["w"]["per_run"]["items"][0]["value"]["x"]) >= len(
+        shown[0]["value"]["x"]
     )
-    with automatic_door():
-        served = analyze_mod.attached_served(frozenset({"run_code"}))
-    shown = analyze_mod.render_attached_analysis(stored, served=served)
-    assert len(shown["failures"]) == 3
+
+
+def test_the_python_api_gets_an_attached_analysis_with_every_failure(
+    state_no_sim: SessionState,
+):
+    """Through the Python API's own door: the attached analysis is the
+    complete answer, every failure one per place, as analyze_results gives it."""
+    job = make_experiment_job(state_no_sim, job_id="exp_attached_failures", count=1)
+    job.analysis = AnalysisStage(
+        status="completed",
+        request={"recipes": []},
+        result=analysis_snapshot.envelope(
+            {
+                "answer": {
+                    "outcome": "partial",
+                    "results": {},
+                    "observations": [],
+                    "failures": [
+                        {"code": "x", "stage": "s", "where": f"run-{index}", "message": "same"}
+                        for index in range(3)
+                    ],
+                },
+                "snapshot": {},
+                "request": {},
+            }
+        ),
+    )
+    status = SyncApi(state_no_sim).jobs(action="status", job_id=job.job_id)
+    assert len(status["analysis"]["result"]["failures"]) == 3
 
 
 def test_the_part_on_rows_left_out_names_at_most_three_kinds():
@@ -145,3 +162,36 @@ def test_a_recipe_keyed_like_the_folded_group_is_not_folded_into_it():
     part = not_shown.not_shown(groups, bound=300, field="f", entries="rows")
     assert part["*"]["counts"] == {f"k{index}": 1 for index in range(40)}
     assert "groups" not in part["*"]
+
+
+def test_an_observations_rows_follow_the_rows_kept_after_a_source_drifted():
+    def record(manifest: str) -> analyze_mod.Record:
+        return analyze_mod.Record(
+            manifest_id=manifest, source=manifest, identity=analyze_mod.RowIdentity(), value={}
+        )
+
+    observation = analyze_mod.Observation(
+        code="c",
+        kind="value",
+        detail="d",
+        evidence={
+            "recipe": "k",
+            "rows": [{"source": "A", "index": 0}, {"source": "A", "index": 2}],
+        },
+    )
+    unit = analyze_mod.WorkUnit(
+        key="k",
+        recipe=analyze_mod.validate_recipe({"key": "k", "metric": "summary"}),
+        records=[record("A"), record("B"), record("A")],
+        failures=[],
+        pending=[],
+        eligible_ids={"A", "B"},
+        position=0,
+        observations=[observation],
+    )
+    analyze_mod._discard_drifted(  # pyright: ignore[reportPrivateUsage]
+        [unit], [], {"B": analyze_mod.SourceFault("source_drift")}
+    )
+    assert [r.manifest_id for r in unit.records] == ["A", "A"]
+    assert observation.evidence is not None
+    assert [row["index"] for row in observation.evidence["rows"]] == [0, 1]

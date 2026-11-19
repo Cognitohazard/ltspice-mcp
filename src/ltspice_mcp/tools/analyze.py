@@ -723,14 +723,13 @@ class AnalyzeResultsInput(StepSelectionFields, ToolInput, NotedModel):
 
     @model_validator(mode="after")
     def _new_or_continue(self) -> AnalyzeResultsInput:
-        # A continuation replays the execution request stored in the result set
-        # and takes its presentation view from the cursor. Fields sent with it
-        # are normalized like a new request's here and compared with that
-        # stored request once it is loaded (_continuation_echo_mismatch): an
-        # echo of the original call is accepted, and a change is refused rather
-        # than dropped, because raising include.per_run.limit on resume is the
-        # obvious thing to try and ignoring it hands back a page the caller did
-        # not ask for.
+        # A continuation reads a page of a stored answer. Fields sent with it
+        # are normalized like a new request's here and, when sent, compared
+        # with the request the stored answer answers (_read_on): an echo of the
+        # original call is accepted, and a change is refused rather than
+        # dropped, because raising include.per_run.limit on a page is the
+        # obvious thing to try and ignoring it hands back a page the caller
+        # did not ask for.
         if self.continuation is None and (not self.sources or not self.recipes):
             raise ValueError("a new analysis requires non-empty sources and recipes")
         sources = self.sources or []
@@ -1479,19 +1478,6 @@ def _request_inputs(args: AnalyzeResultsInput) -> dict[str, Any]:
     }
 
 
-def _request_hash(args: AnalyzeResultsInput) -> str:
-    """The identity a per_run cursor is checked against.
-
-    The row view (``include.fields``) is left out: the cursor carries its own
-    view, so changing the projection is a different page of the same request,
-    not a different request.
-    """
-    assert args.sources is not None and args.recipes is not None
-    request = _request_inputs(args)
-    request["include"].pop("fields", None)
-    return result_store.canonical_hash(request)
-
-
 async def _create_result_set(args: AnalyzeResultsInput, state: SessionState, deadline: float):
     assert args.sources is not None and args.recipes is not None
     loop = asyncio.get_running_loop()
@@ -1553,7 +1539,7 @@ async def _create_result_set(args: AnalyzeResultsInput, state: SessionState, dea
     inputs = {
         "working_dir": str(state.working_dir),
         **request,
-        "request_hash": _request_hash(args),
+        "request_hash": _request_digest(args),
         "resolved_runs": [_serialize_run(run) for run in runs],
         "missing": missing,
         "observations": [observation.wire() for observation in observations],
@@ -3836,12 +3822,18 @@ def say_what_was_cut(
         reply: dict[str, Any],
         cut: Mapping[str, ListCut],
         stored: StoredAnswer | None,
-        _paged: str | None,
+        paged: str | None,
     ) -> None:
+        # The reply's next: on a page, the cursor that reads on in the list it
+        # reads, absent on its last page, so following it ends; on a first
+        # reply, the first cut list's.
         read_on: str | None = None
+        if paged is not None:
+            entry = cut.get(paged)
+            read_on = entry.next if entry is not None else None
+        else:
+            read_on = next((entry.next for entry in cut.values() if entry.next), None)
         for pointer, entry in cut.items():
-            if entry.next is not None and read_on is None:
-                read_on = entry.next
             keys = split_pointer(pointer)
             holder = join_pointer(keys[:-1])
             if pointer.endswith(_PAGED):
@@ -4162,6 +4154,24 @@ def _discard_drifted(
         }
         if not relevant:
             continue
+        # An observation names its rows by their position in the unit's rows
+        # (_value_observations), so the positions follow the rows kept.
+        positions = {
+            old: new
+            for new, old in enumerate(
+                index
+                for index, record in enumerate(unit.records)
+                if record.manifest_id not in failed_ids
+            )
+        }
+        for observation in unit.observations:
+            evidence = observation.evidence
+            if isinstance(evidence, dict) and isinstance(evidence.get("rows"), list):
+                evidence["rows"] = [
+                    {**row, "index": positions[row["index"]]}
+                    for row in evidence["rows"]
+                    if isinstance(row, dict) and row.get("index") in positions
+                ]
         unit.records = [record for record in unit.records if record.manifest_id not in failed_ids]
         unit.failures.extend(
             Failure(
@@ -4471,8 +4481,13 @@ async def _read_on(args: AnalyzeResultsInput, state: SessionState) -> types.Call
                 "or send this one without a cursor to evaluate it."
             )
     target = resolve_response_budget(args.budget, state).tokens
-    annotate, apart = say_what_was_cut(stored.answer)
-    caps = answer_caps(stored.answer, stored.snapshot, target=target)
+    # Read over the whole stored answer, off the loop.
+    (annotate, apart), caps = await asyncio.to_thread(
+        lambda: (
+            say_what_was_cut(stored.answer),
+            answer_caps(stored.answer, stored.snapshot, target=target),
+        )
+    )
     reply = await stored_page(
         stored,
         pointer,
@@ -4548,12 +4563,15 @@ async def handle_analyze_results(
             evaluation,
             argument_notes=(*evaluation.argument_notes, f"include.per_run.{held}"),
         )
-    answer = for_session(
-        await asyncio.to_thread(_assemble, evaluation), frozenset(state.tool_dispatch)
-    )
     target = resolve_response_budget(args.budget, state).tokens
-    annotate, apart = say_what_was_cut(answer)
-    snapshot = evaluation.snapshot()
+    served = frozenset(state.tool_dispatch)
+
+    def delivered() -> tuple[dict[str, Any], tuple[Annotate, dict[str, int]], dict[str, Any]]:
+        # Work over the whole answer: off the loop.
+        answer = for_session(_assemble(evaluation), served)
+        return answer, say_what_was_cut(answer), evaluation.snapshot()
+
+    answer, (annotate, apart), snapshot = await asyncio.to_thread(delivered)
     reply = await presented(
         answer,
         tool=TOOL,

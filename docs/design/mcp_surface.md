@@ -298,7 +298,8 @@ Python API's automatic mode returns every row.
   inline waveform's axis `x` and its `series`) are redrawn at the most points
   that let the reply fit, by a function the tool supplies, every list of the
   series at the same points and never below 32 points drawn. A thinned series
-  is not paged and has no cursor: its `cut` entry, at the pointer of its axis,
+  is drawn for the entries the reply keeps, is not paged and has no cursor:
+  its `cut` entry, at the pointer of its axis,
   gives the points the answer holds (`total`) and those sent (`returned`), and
   the tool's words name how to get more (`max_points`, the CSV format). The
   stored answer holds the series as computed, and a page thins its own.
@@ -1523,8 +1524,10 @@ continuation replays them.
   answer expired (`[analysis] result_set_ttl_hours`, default 24), is refused
   with `invalid_cursor` and the way to start again: the same request without
   the cursor.
-- A cut reply's `next` and `cursor` name the first cut list's cursor, and
-  each page object (a recipe's `per_run`, `spec.fail_cases`,
+- A first reply's `next` and `cursor` name the first cut list's cursor; a
+  page's name the cursor that reads on in the list the page reads, and are
+  absent on its last page, so following them ends. Every other cut list reads
+  on from its own `cut` entry. Each page object (a recipe's `per_run`, `spec.fail_cases`,
   `coverage.missing_cases`) says what the cut holds of it in `returned`,
   `truncated` and `next_cursor` (`spec.fail_cases` in a `hint`). These keep
   their shapes until the next breaking release.
@@ -1532,12 +1535,13 @@ continuation replays them.
   names them, by recipe key: `{counts, rows?}`, built by `lib/not_shown.py`
   as `runs_not_shown` is. `counts` gives every kind's number of rows
   (`failed_measurements`, `unreadable`, `diagnostics.<code>`, ...); `rows`
-  names at most 3 rows over all recipes, each by `source`, `case_id`,
-  `run_index` and `step_index` with a cursor that starts at it; a kind every
-  row of its recipe carries is given by its count alone. The whole part is
-  held to `analyze.ROWS_NOT_SHOWN_BOUND_TOKENS` (965 estimated tokens): named
-  rows come off from the last, then the recipes after the first are summed
-  under `*`. It is never cut.
+  names the first row of each of at most 3 kinds over all recipes, each by
+  `source`, `case_id`, `run_index` and `step_index` with a cursor that starts
+  at it; a kind every row of its recipe carries is given by its count alone.
+  The whole part is held to `analyze.ROWS_NOT_SHOWN_BOUND_TOKENS` (965
+  estimated tokens): named rows come off from the last, then the recipes
+  after the first are summed under `*` (starred again if a recipe is keyed
+  so). It is never cut.
 - A repeated run index, `case_ids` entry, `group_by` dimension or
   `include.fields` path is read once, and the `hint` reports the duplicate. A
   source without a `label` is labelled with its job_id or its raw file's stem,
