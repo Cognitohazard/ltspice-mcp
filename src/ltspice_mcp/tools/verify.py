@@ -133,7 +133,7 @@ from ltspice_mcp.lib.schematic_scene import (
     build_scene,
     sheet_view,
 )
-from ltspice_mcp.lib.services import cp1252_ltspice, session_reader
+from ltspice_mcp.lib.services import cp1252_ltspice, session_ltspice_builds, session_reader
 from ltspice_mcp.lib.sheet_findings import (
     RULES,
     Finding,
@@ -160,13 +160,14 @@ from ltspice_mcp.lib.spice_validator import (
 from ltspice_mcp.lib.stored_values import (
     CP1252_BUILD,
     NOT_CHECKED_SCHEMA,
-    SHEET_NOT_CHECKED,
-    SHEET_TEXT_NOT_CHECKED,
-    STATEMENTS_SCHEMA,
+    SHEET_UNREAD,
+    SUMMARIES_SCHEMA,
     OtherReading,
-    holds_micro_sign,
+    StoredDeck,
+    read_stored_deck,
+    readings_of_sheet,
     readings_of_sites,
-    statements,
+    summaries,
 )
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
@@ -780,7 +781,7 @@ COMPARISON_SCHEMA: dict[str, Any] = {
         "which keys are present."
     ),
     "properties": {
-        "values_read_otherwise": STATEMENTS_SCHEMA,
+        "values_read_otherwise": SUMMARIES_SCHEMA,
         "values_read_otherwise_not_checked": NOT_CHECKED_SCHEMA,
         "mode": {
             "type": "string",
@@ -1427,7 +1428,7 @@ def _value_suffix_findings(
         {}
         if cp1252_reader is None
         else {
-            (reading.line, reading.value): reading
+            (reading.line, reading.offset): reading
             for reading in readings_of_sites(
                 [site for site in sites if site.micro], encoding, file=path
             )
@@ -1437,7 +1438,7 @@ def _value_suffix_findings(
     findings: list[dict[str, Any]] = []
     micro: list[ValueSuffixSite] = []
     for site in sites:
-        reading = misread.get((site.line, site.token)) if site.micro else None
+        reading = misread.get((site.line, site.offset)) if site.micro else None
         if site.micro and reading is None:
             micro.append(site)
             continue
@@ -1446,7 +1447,12 @@ def _value_suffix_findings(
         evidence["encoding"] = encoding
         if reading is not None:
             evidence["reader"] = cp1252_reader
-            evidence["read_otherwise"] = reading.statement()
+            evidence["read_otherwise"] = {
+                **reading.example(),
+                "build": reading.build,
+                "reading": "established" if reading.established else "not_established",
+                "evidence": list(reading.evidence),
+            }
             rule_id, severity = "value_suffix_micro_sign", "warning"
         elif site.mojibake:
             rule_id, severity = "value_suffix_mojibake", rule_severity("value-suffix-mojibake")
@@ -2118,7 +2124,7 @@ def _denied_include_findings(graph: NetlistGraph, source: Path, hint: str) -> li
 
 
 def _parse_side_or_fail(
-    source: str | Path,
+    source: str | Path | StoredDeck,
     label: str,
     where: Path,
     resolver: IncludeResolver,
@@ -2155,7 +2161,7 @@ CompareResult = tuple[
 
 def compare_equivalence(
     reference: str | Path,
-    candidate: str | Path,
+    candidate: str | Path | StoredDeck,
     ref_source: Path,
     cand_source: Path,
     anchors: list[str] | None,
@@ -2165,6 +2171,7 @@ def compare_equivalence(
     denied_hint: str,
     ref_base_dir: Path | None,
     reader: SemanticProfile,
+    readings_out: list[OtherReading] | None = None,
 ) -> CompareResult:
     """Graph-compare candidate against reference through the safe_path resolver,
     and compare their directives scope by scope (``circuit_directive_delta``).
@@ -2221,19 +2228,21 @@ def compare_equivalence(
         "directives_equivalent": directives_equivalent,
         "directives_added": added,
         "directives_removed": removed,
-        "values_read_otherwise": statements((*ref_graph.readings, *cand_graph.readings)),
     }
+    if readings_out is not None:
+        readings_out.extend((*ref_graph.readings, *cand_graph.readings))
     return payload, findings, None, []
 
 
-def _read_side(source: str | Path, label: str) -> tuple[str, Deck, str | None]:
+def _read_side(source: str | Path | StoredDeck, label: str) -> tuple[str, Deck, str | None]:
     """``(name, deck, parse_error)`` for one side of a structural diff.
 
     ``label`` names a side given as text. An unreadable side is an empty deck and
     a short message, so the diff can flag it rather than treat it as an empty
     circuit (which would report every component of the other side as a removal).
     """
-    name = source.name if isinstance(source, Path) else label
+    where = source.path if isinstance(source, StoredDeck) else source
+    name = where.name if isinstance(where, Path) else label
     try:
         return name, read_deck(source), None
     except Exception as e:  # unreadable for any reason: reported, never raised
@@ -2241,7 +2250,7 @@ def _read_side(source: str | Path, label: str) -> tuple[str, Deck, str | None]:
 
 
 def _structural_diff(
-    reference: str | Path, candidate: str | Path
+    reference: str | Path | StoredDeck, candidate: str | Path | StoredDeck
 ) -> tuple[dict[str, Any], list[str], bool, bool, tuple[OtherReading, ...]]:
     """Added/removed/changed component and directive delta between two netlists.
 
@@ -2270,7 +2279,12 @@ def _structural_diff(
     )
 
 
-def compare_structural(reference: str | Path, candidate: str | Path) -> CompareResult:
+def compare_structural(
+    reference: str | Path | StoredDeck,
+    candidate: str | Path | StoredDeck,
+    *,
+    readings_out: list[OtherReading] | None = None,
+) -> CompareResult:
     """structural_diff mode over two netlists, each given as a path or as text.
 
     A schematic path is refused rather than read: its attributes and TEXT blocks
@@ -2288,8 +2302,10 @@ def compare_structural(reference: str | Path, candidate: str | Path) -> CompareR
     try:
         diff, warnings, both_parsed, unread, readings = _structural_diff(reference, candidate)
         # The readings of the two sides' stored bytes (a side given as text has
-        # none); a re-export's diff_vs_prior compares server exports, no deck.
-        diff["values_read_otherwise"] = statements(readings)
+        # none), for the caller to state; diff_vs_prior compares server
+        # exports and states none.
+        if readings_out is not None:
+            readings_out.extend(readings)
     except (OSError, ValueError) as exc:
         where = str(candidate) if isinstance(candidate, Path) else None
         return None, [], _failure("compare", f"structural diff failed: {exc}", where=where), []
@@ -2324,7 +2340,7 @@ def compare_structural(reference: str | Path, candidate: str | Path) -> CompareR
 def compare_netlists(
     spec: VerifyCompareSpec,
     reference: str | Path,
-    candidate: str | Path,
+    candidate: str | Path | StoredDeck,
     ref_source: Path,
     cand_source: Path,
     state: SessionState,
@@ -2333,14 +2349,21 @@ def compare_netlists(
 ) -> CompareResult:
     """Compare two netlists the way ``spec`` asks (blocking CPU/IO).
 
-    ``reference`` and ``candidate`` are netlist text or paths; ``ref_source`` and
+    ``reference`` and ``candidate`` are netlist text or paths, or for the
+    candidate the deck already read (``StoredDeck``); ``ref_source`` and
     ``cand_source`` are where a finding about each side points (the caller's own
     file, even when what was compared is its export). ``cand_source``'s
     directory and ``ref_base_dir`` are where each side's relative includes
     resolve; a structural diff opens no includes.
+
+    The comparison states each value of a stored file that an LTspice build
+    the session runs reads as another number (``stored_values``): a side's own
+    files as read, and a side compared as the server's export of a sheet by
+    the sheet's own bytes, since the export is not a file the caller stored.
     """
+    readings: list[OtherReading] = []
     if spec.mode == "structural_diff":
-        compared = compare_structural(reference, candidate)
+        compared = compare_structural(reference, candidate, readings_out=readings)
     else:
         compared = compare_equivalence(
             reference,
@@ -2353,38 +2376,62 @@ def compare_netlists(
             denied_hint=state.sandbox_guidance(),
             ref_base_dir=ref_base_dir,
             reader=session_reader(state),
+            readings_out=readings,
         )
     comparison = compared[0]
     if comparison is not None:
-        # A candidate sheet's export handed over as text (edit_schematic's)
-        # has no stored bytes to check. A reference given as text is the
-        # caller's own text, with no file behind it: nothing to check.
-        comparison["values_read_otherwise_not_checked"] = (
-            [{"file": str(cand_source), "reason": SHEET_TEXT_NOT_CHECKED}]
-            if isinstance(candidate, str) and is_asc(cand_source) and holds_micro_sign(candidate)
-            else []
+        stated, unchecked = _sheet_readings(
+            readings, reference, candidate, ref_source, cand_source
         )
-    if comparison is not None and comparison.get("values_read_otherwise"):
-        # A side compared as the server's export of a sheet is not a file the
-        # caller stored: what a build makes of the export's bytes says nothing
-        # of how it reads the sheet, so only the files the caller stored are
-        # stated (an export's includes are the caller's own files).
-        exports = {
-            str(side): own
-            for side, own in ((reference, ref_source), (candidate, cand_source))
-            if isinstance(side, Path) and side != own
-        }
-        stated = comparison["values_read_otherwise"]
-        comparison["values_read_otherwise"] = [
-            statement for statement in stated if statement.get("file") not in exports
-        ]
-        # Not checked is said, since an absent statement reads as checked.
-        comparison["values_read_otherwise_not_checked"] += [
-            {"file": str(own), "reason": SHEET_NOT_CHECKED}
-            for export, own in exports.items()
-            if any(statement.get("file") == export for statement in stated)
-        ]
+        comparison["values_read_otherwise"] = summaries(
+            stated, session_ltspice_builds(state)
+        )
+        comparison["values_read_otherwise_not_checked"] = unchecked
     return compared
+
+
+def _sheet_readings(
+    readings: list[OtherReading],
+    reference: str | Path,
+    candidate: str | Path | StoredDeck,
+    ref_source: Path,
+    cand_source: Path,
+) -> tuple[list[OtherReading], list[dict[str, str]]]:
+    """A comparison's readings with each side compared as the server's export
+    of a sheet read by the sheet's own bytes (``stored_values.readings_of_sheet``),
+    and the sheets that could not be read.
+
+    A side is such an export where it is a file other than its own source,
+    and the candidate also where it is text standing for a sheet (the edited
+    sheet ``edit_schematic`` compares). A reference given as text is the
+    caller's own text, with no file behind it.
+    """
+    exports: list[tuple[str | Path, Path]] = []
+    if isinstance(reference, Path) and reference != ref_source:
+        exports.append((reference, ref_source))
+    where = candidate.path if isinstance(candidate, StoredDeck) else candidate
+    if (isinstance(where, Path) and where != cand_source) or (
+        isinstance(where, str) and is_asc(cand_source)
+    ):
+        exports.append((where, cand_source))
+    exported = {str(side) for side, _sheet in exports if isinstance(side, Path)}
+    stated = [reading for reading in readings if reading.file not in exported]
+    unchecked: list[dict[str, str]] = []
+    for side, sheet in exports:
+        try:
+            cards = (
+                read_stored_deck(side).lexed.cards
+                if isinstance(side, Path)
+                else lex_deck(side).cards
+            )
+        except OSError:
+            cards = []
+        found = readings_of_sheet(cards, sheet)
+        if found is None:
+            unchecked.append({"file": str(sheet), "reason": SHEET_UNREAD})
+        else:
+            stated.extend(found)
+    return stated, unchecked
 
 
 # ---------------------------------------------------------------------------
@@ -2835,13 +2882,18 @@ async def evaluate_verify_circuit(
     # --- netlist text (syntax, quality) -------------------------------------
     # The text and the codec it decoded as, which the syntax check reports.
     decoded: tuple[str, str] | None = None
+    # The candidate as read, which the comparison is given so that both read
+    # the same bytes.
+    stored: StoredDeck | None = None
     if kind == "netlist" and (
         wanted.get("syntax") or wanted.get("quality") or wanted.get("compare")
     ):
         try:
-            decoded = await asyncio.to_thread(read_spice_text_with_encoding, path)
+            stored = await asyncio.to_thread(read_stored_deck, path)
         except OSError as exc:
             failures.append(_failure("read", str(exc), where=str(path)))
+        else:
+            decoded = (stored.text, stored.encoding)
     text = decoded[0] if decoded is not None else None
 
     # One lex serves both text-deck checks, and its notes are relayed once
@@ -3002,7 +3054,7 @@ async def evaluate_verify_circuit(
                 # The candidate is read from its file, as the reference is, so the
                 # comparison knows its stored bytes and states each value a
                 # recorded build reads otherwise (stored_values).
-                cand_input: str | Path = candidate
+                cand_input: Path | StoredDeck = stored if stored is not None else candidate
                 compared: CompareResult
                 async with reference_netlist(reference, state) as ref_netlist:
                     observations.extend(ref_netlist.observations)

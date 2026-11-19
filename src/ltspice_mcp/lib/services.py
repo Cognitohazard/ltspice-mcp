@@ -28,7 +28,7 @@ from ltspice_mcp.errors import (
     ResultError,
     RunNotFinishedError,
 )
-from ltspice_mcp.lib import recent
+from ltspice_mcp.lib import recent, stored_values
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, RawData, steps_held
 from ltspice_mcp.lib.experiment_types import (
@@ -1280,6 +1280,30 @@ def cp1252_ltspice(state: SessionState, executable: SimulatorExecutable | None) 
     if found is None or not found.before_24:
         found = which_ltspice(executable.path, reported_build_of(state, executable))
     return found.evidence if found is not None and found.before_24 else None
+
+
+def session_ltspice_builds(state: SessionState) -> frozenset[str]:
+    """The recorded LTspice builds this session's LTspice executables stand
+    for, by the name ``stored_values`` gives them: its detected LTspice and
+    each named executable of the LTspice family. One that reads decks as
+    cp1252 (``cp1252_ltspice``) is read as LTspice XVII; any other as
+    LTspice 26, the recorded build of 24 and later. A session with no LTspice
+    runs none, so a reply states no build's reading to it.
+
+    Blocking: identifying an executable may read its program file."""
+    builds: set[str] = set()
+    # Keyed by family, and a named executable by its selector (ltspice:xvii),
+    # as every other reader of the session's LTspice keys them.
+    for selector, simulator in state.offered_simulators.items():
+        if selector.partition(":")[0] != "ltspice":
+            continue
+        executable = executable_identity(simulator)
+        builds.add(
+            stored_values.CP1252_BUILD
+            if cp1252_ltspice(state, executable) is not None
+            else "LTspice 26"
+        )
+    return frozenset(builds)
 
 
 def reported_build_of(state: SessionState, executable: SimulatorExecutable | None) -> str | None:

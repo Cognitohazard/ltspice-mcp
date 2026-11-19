@@ -70,8 +70,9 @@ defaults to the configured mode. A deck with a sectioned
 as `hsa` (guide section 'ngspice' explains why); a mode set in this query does
 not change later runs. A value written with a micro sign in a deck stored as
 UTF-8 is micro here and in LTspice 26, but LTspice XVII reads the bare number;
-the reply's `values_read_otherwise` names each such value and the number that
-build takes. With ngspice installed, the reply's `ngspice_check`
+when the session runs XVII, the reply's `values_read_otherwise` counts such
+values per file, names a few with the number XVII takes, and gives the call
+that lists them all. With ngspice installed, the reply's `ngspice_check`
 compares the values discovery resolved (a resistor's value, a MOSFET's W and
 L, and the copies ngspice builds of either) with the ones ngspice reads, and
 lists any that differ. The reader's rules were established for `hsa`,

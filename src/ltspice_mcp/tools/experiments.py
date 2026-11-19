@@ -93,7 +93,7 @@ from ltspice_mcp.lib.recipes import (
 )
 from ltspice_mcp.lib.recovery_records import CaseAttempt, CaseRecovery, RecoveryError
 from ltspice_mcp.lib.said_once import Delivery
-from ltspice_mcp.lib.services import cp1252_ltspice, deck_producer
+from ltspice_mcp.lib.services import cp1252_ltspice, deck_producer, session_ltspice_builds
 from ltspice_mcp.lib.sheet_results import NotPlaced, check_request
 from ltspice_mcp.lib.simulator import (
     SIMULATOR_SELECTOR_PATTERN,
@@ -1148,6 +1148,7 @@ async def _prepare_circuit(
             # job uses.
             simulator_roots=await asyncio.to_thread(simulator_library_roots, simulator),
             cp1252_reader=cp1252_reader,
+            stated_builds=await asyncio.to_thread(session_ltspice_builds, state),
         )
         findings = (
             []

@@ -85,7 +85,7 @@ from ltspice_mcp.lib.spice_lex import (
     tokenize_body,
 )
 from ltspice_mcp.lib.spice_lex_views import ModelCard, read_instance
-from ltspice_mcp.lib.stored_values import OtherReading, read_stored_deck
+from ltspice_mcp.lib.stored_values import OtherReading, StoredDeck, read_stored_deck
 
 # Directive cards whose assignments are a set: ``.param a=1 b=2`` and
 # ``.param b=2 a=1`` define the same thing. (A ``.model`` is read through its
@@ -278,11 +278,15 @@ _AS_WRITTEN = DefinitionRule(
 _NAMELESS = "<anon>"
 
 
-def _cards(source: str | Path) -> tuple[list[SpiceCard], tuple[OtherReading, ...]]:
+def _cards(
+    source: str | Path | StoredDeck,
+) -> tuple[list[SpiceCard], tuple[OtherReading, ...]]:
     """The cards a simulator reads of a netlist, a path or its text
     (``spice_lex.lex_deck``): not its title line, nor a card after ``.END``;
     and, for a file, the readings of its values another build makes
     (``stored_values``). Text has no stored bytes, so none."""
+    if isinstance(source, StoredDeck):
+        return source.lexed.cards, source.readings
     if isinstance(source, Path):
         stored = read_stored_deck(source)
         return stored.lexed.cards, stored.readings
@@ -302,7 +306,7 @@ def _directive_of(card: SpiceCard) -> Directive | None:
     return None
 
 
-def read_deck(source: str | Path) -> Deck:
+def read_deck(source: str | Path | StoredDeck) -> Deck:
     """Read a netlist (a path, or its text) for a structural diff: the cards a
     simulator reads (``spice_lex.lex_deck``), so not its title line, nor a
     card after ``.END``, each in its scope.

@@ -27,14 +27,18 @@ absent reading means the build reads the server's text.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
-from dataclasses import dataclass
+from collections.abc import Collection, Iterable, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
-from ltspice_mcp.lib.encoding import decode_spice_bytes_with_encoding, decode_windows_1252
+from ltspice_mcp.lib.encoding import (
+    decode_spice_bytes_with_encoding,
+    decode_windows_1252,
+    latin1_reading,
+)
 from ltspice_mcp.lib.format import fold_micro_sign, parse_spice_value
-from ltspice_mcp.lib.reply_cuts import CUT, NEVER
+from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER
 from ltspice_mcp.lib.spice_lex import LexResult, SpiceCard, lex_deck
 from ltspice_mcp.lib.spice_lex_ops import ValueSuffixSite, value_suffix_sites
 from ltspice_mcp.lib.spice_lex_views import read_instance
@@ -112,89 +116,94 @@ class OtherReading:
     def established(self) -> bool:
         return self.build_number is not None
 
-    def statement(self) -> dict[str, Any]:
-        """The reading as a reply states it, under :data:`CODE`."""
-        stated: dict[str, Any] = {
-            "code": CODE,
-            "value": self.value,
-            "line": self.line,
-            "encoding": self.encoding,
-            "build": self.build,
-            "established": self.established,
-            "evidence": list(self.evidence),
-        }
-        if self.file is not None:
-            stated["file"] = self.file
+    def example(self) -> dict[str, Any]:
+        """The value as a summary's example names it."""
+        named: dict[str, Any] = {"value": self.value, "line": self.line}
         if self.server_number is not None:
-            stated["server_number"] = self.server_number
+            named["server_number"] = self.server_number
         if self.build_reads is not None:
-            stated["build_reads"] = self.build_reads
+            named["build_reads"] = self.build_reads
         if self.build_number is not None:
-            stated["build_number"] = self.build_number
-        stated["detail"] = self._detail()
-        return stated
-
-    def _detail(self) -> str:
-        server = (
-            " (the server reads no number from it)"
-            if self.server_number is None
-            else f" (the server reads {self.server_number:g})"
-        )
-        ascii_spelling = fold_micro_sign(self.value)
-        if self.build_number is not None:
-            return (
-                f"{self.build} reads the stored bytes of {self.value}{server} in this "
-                f"{self.encoding} file as {self.build_reads!s} and takes "
-                f"{self.build_number:g}. Write {ascii_spelling}: 'u' is micro to every build."
-            )
-        if self.build_reads is not None:
-            return (
-                f"{self.build} reads the stored bytes of {self.value}{server} in this "
-                f"{self.encoding} file as {self.build_reads}; no recording shows the number "
-                f"it takes there. Write {ascii_spelling}: 'u' is micro to every build."
-            )
-        return (
-            f"No recording shows how {self.build} reads {self.value}{server} stored as "
-            f"{self.encoding}, so the number it takes is not established. Write "
-            f"{ascii_spelling}: 'u' is micro to every build."
-        )
+            named["build_number"] = self.build_number
+        return named
 
 
-#: The JSON Schema of one statement, for a reply's output schema.
-STATEMENT_SCHEMA: dict[str, Any] = {
+#: How many values a summary names; ``count`` says how many there are.
+EXAMPLES = 3
+
+_EXAMPLE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "value": {"type": "string", "description": "The value as the server reads it."},
+        "line": {"type": "integer"},
+        "server_number": {"type": "number"},
+        "build_reads": {"type": "string", "description": "The text the build reads instead."},
+        "build_number": {"type": "number", "description": "The number the build takes."},
+    },
+    "required": ["value", "line"],
+}
+
+#: The JSON Schema of one summary, for a reply's output schema.
+SUMMARY_SCHEMA: dict[str, Any] = {
     "type": "object",
     "description": (
-        "A value read from a stored file that a recorded LTspice build reads as "
-        "another number than the server does, or whose reading by that build no "
-        "recording establishes (established false)."
+        "The values of one stored file that one LTspice build this session runs reads as "
+        "another number than the server does (reading established), or whose number no "
+        "recording establishes for that build (reading not_established)."
     ),
     "properties": {
         "code": {"type": "string", "const": CODE},
-        "value": {"type": "string", "description": "The value as the server reads it."},
         "file": {"type": "string"},
-        "line": {"type": "integer"},
         "encoding": {"type": "string", "description": "The codec the server decoded the file as."},
-        "server_number": {"type": "number"},
         "build": {"type": "string"},
-        "build_reads": {"type": "string", "description": "The text the build reads instead."},
-        "build_number": {"type": "number", "description": "The number the build takes."},
-        "established": {"type": "boolean"},
+        "reading": {
+            "type": "string",
+            "enum": ["established", "not_established"],
+            "description": (
+                "established: the recordings show the number the build takes; "
+                "not_established: no recording shows it, so it is not claimed."
+            ),
+        },
+        "count": {"type": "integer", "description": "How many values this summary covers."},
+        "examples": {
+            "type": "array",
+            "items": _EXAMPLE_SCHEMA,
+            CUT: NEVER,
+            "description": f"At most {EXAMPLES} of the values, in file order.",
+        },
         "evidence": {"type": "array", "items": {"type": "string"}, CUT: NEVER},
         "detail": {"type": "string"},
+        "listed_by": {
+            "type": "object",
+            "description": "The call that lists every value this summary counts.",
+            "properties": {"tool": {"type": "string"}, "arguments": {"type": "object"}},
+            "required": ["tool", "arguments"],
+        },
     },
-    "required": ["code", "value", "line", "encoding", "build", "established", "detail"],
+    "required": [
+        "code",
+        "file",
+        "encoding",
+        "build",
+        "reading",
+        "count",
+        "examples",
+        "evidence",
+        "detail",
+        "listed_by",
+    ],
 }
 
-#: A reply's list of statements, sent whole: a statement left out would read
-#: as a value every build reads alike.
-STATEMENTS_SCHEMA: dict[str, Any] = {
+#: A reply's list of summaries: one per file, build and kind of reading, so
+#: its length does not grow with the number of values.
+SUMMARIES_SCHEMA: dict[str, Any] = {
     "type": "array",
-    CUT: NEVER,
+    CUT: ITEMS,
     "description": (
-        "Each value read from a stored file that a recorded LTspice build reads as another "
-        "number than this reply gives. Absent when every value read is read alike."
+        "Per stored file and LTspice build this session runs, the values that build reads "
+        "as another number than this reply gives. Absent when every value read is read alike."
     ),
-    "items": STATEMENT_SCHEMA,
+    "items": SUMMARY_SCHEMA,
 }
 
 
@@ -213,6 +222,12 @@ def _is_the_value(site: ValueSuffixSite) -> bool:
         return False
     line = read_instance(site.card)
     return line is not None and line.value == site.token
+
+
+def _as_8_bit(token: str) -> str:
+    """``token``'s UTF-8 bytes as a build that reads 8-bit text reads them
+    (``encoding.latin1_reading``, the one answer to how a build reads them)."""
+    return latin1_reading(decode_windows_1252(token.encode("utf-8")))
 
 
 def _server_number(site: ValueSuffixSite) -> float | None:
@@ -236,14 +251,12 @@ def _reading(
     }
     recorded = _RECORDED.get((site.suffix, encoding), {}).get(build)
     if recorded is None:
-        settle = (
-            f"a deck holding {site.suffix} stored as {encoding}, recorded on {build}",
-        )
+        settle = (f"a deck holding {site.suffix} stored as {encoding}, recorded on {build}",)
         return OtherReading(build_reads=None, build_number=None, evidence=settle, **common)
     decoding, evidence = recorded
     if decoding == "same":
         return None
-    reads = decode_windows_1252(site.token.encode("utf-8"))
+    reads = _as_8_bit(site.token)
     if not _is_the_value(site):
         # The bare number is recorded for an instance's own value outside
         # braces; in an instance parameter, a source function, an expression
@@ -294,11 +307,11 @@ class StoredDeck:
     encoding: str
     lexed: LexResult
     readings: tuple[OtherReading, ...]
+    #: The file read; None for bytes with no file.
+    path: Path | None = None
 
 
-def read_stored_bytes(
-    content: bytes, *, root: bool, file: str | Path | None = None
-) -> StoredDeck:
+def read_stored_bytes(content: bytes, *, root: bool, file: str | Path | None = None) -> StoredDeck:
     """A stored file's bytes read as a deck (``root``, whose first line is its
     title) or as an included file, with the readings of its values."""
     text, encoding = decode_spice_bytes_with_encoding(content)
@@ -308,7 +321,7 @@ def read_stored_bytes(
 
 def read_stored_deck(path: Path, *, root: bool = True) -> StoredDeck:
     """:func:`read_stored_bytes` for the file at ``path``."""
-    return read_stored_bytes(path.read_bytes(), root=root, file=path)
+    return replace(read_stored_bytes(path.read_bytes(), root=root, file=path), path=path)
 
 
 def readings_of_bytes(
@@ -323,44 +336,174 @@ def readings_of_file(path: Path, *, root: bool = True) -> tuple[OtherReading, ..
     return read_stored_deck(path, root=root).readings
 
 
-def statements(readings: Sequence[OtherReading]) -> list[dict[str, Any]]:
-    """Each reading as a reply states it, in order, once."""
+def _detail(group: Sequence[OtherReading]) -> str:
+    first = group[0]
+    sign = next((c for c in first.value if c in "µμ"), "µ")
+    advice = "Write 'u' for micro: every build reads it alike."
+    if first.build_number is not None:
+        server = (
+            ""
+            if first.server_number is None
+            else f" where the server reads {first.server_number:g}"
+        )
+        return (
+            f"{first.build} reads {len(group)} value(s) of this {first.encoding} file as "
+            f"letters that are no scale and takes the bare number: {first.value} as "
+            f"{first.build_reads}, {first.build_number:g}{server}. {advice}"
+        )
+    if first.build_reads is not None:
+        return (
+            f"{first.build} reads {len(group)} value(s) of this {first.encoding} file as "
+            f"letters that are no scale ({first.value} as {first.build_reads}); no recording "
+            f"shows the number it takes where they stand. {advice}"
+        )
+    return (
+        f"No recording shows how {first.build} reads a {sign} stored as {first.encoding}, so "
+        f"the number it takes for {len(group)} value(s) is not established. {advice}"
+    )
+
+
+def _listed_by(file: str) -> dict[str, Any]:
+    if file.casefold().endswith(".asc"):
+        return {
+            "tool": "inspect",
+            "arguments": {"queries": [{"kind": "components", "path": file}]},
+        }
+    return {"tool": "verify_circuit", "arguments": {"path": file, "checks": ["syntax"]}}
+
+
+def summaries(readings: Iterable[OtherReading], builds: Collection[str]) -> list[dict[str, Any]]:
+    """The readings of the LTspice ``builds`` a session runs, as a reply
+    states them: one summary per file, build and kind of reading (established
+    or not), with the count, at most :data:`EXAMPLES` of the values, and the
+    call that lists every one. A reading by a build the session does not run
+    is not stated: it is no number that session's user meets."""
+    groups: dict[tuple[str, str, str, bool], list[OtherReading]] = {}
     seen: set[tuple[Any, ...]] = set()
-    stated: list[dict[str, Any]] = []
     for reading in readings:
         key = (reading.file, reading.line, reading.offset, reading.value, reading.build)
-        if key not in seen:
-            seen.add(key)
-            stated.append(reading.statement())
+        if reading.build not in builds or key in seen or reading.file is None:
+            continue
+        seen.add(key)
+        group = (reading.file, reading.encoding, reading.build, reading.established)
+        groups.setdefault(group, []).append(reading)
+    stated: list[dict[str, Any]] = []
+    for (file, encoding, build, established), group in groups.items():
+        stated.append(
+            {
+                "code": CODE,
+                "file": file,
+                "encoding": encoding,
+                "build": build,
+                "reading": "established" if established else "not_established",
+                "count": len(group),
+                "examples": [reading.example() for reading in group[:EXAMPLES]],
+                "evidence": sorted({item for reading in group for item in reading.evidence}),
+                "detail": _detail(group),
+                "listed_by": _listed_by(file),
+            }
+        )
     return stated
 
 
-#: Why a sheet read as the server's export of it is not checked: a build's
-#: reading of the export's bytes is not its reading of the sheet's, and no
-#: reply here reads the sheet's own value bytes.
-SHEET_NOT_CHECKED = (
-    "read as the server's export of the sheet, whose micro signs a recorded build "
-    "reads otherwise; how a build reads the values stored in the sheet itself was "
-    "not checked. Write 'u' for micro in the sheet: every build reads it alike."
-)
+# Sheets -----------------------------------------------------------------------
 
-#: Why a sheet compared as its export's text is not checked: the text has no
-#: stored bytes, so no build's reading of them is known.
-SHEET_TEXT_NOT_CHECKED = (
-    "compared as the text of the server's export of the sheet, which holds a micro "
-    "sign; with no stored bytes, how a recorded build reads the values stored in the "
-    "sheet itself was not checked. Write 'u' for micro in the sheet: every build "
-    "reads it alike."
-)
+#: How a build reads a sign stored in a sheet (``.asc``) of a codec, from its
+#: export (``export-encoding`` in the recordings): ``same`` (the sign), or
+#: ``cp1252`` (each byte of the stored UTF-8 as its own character). Unlike a
+#: deck, both builds read a UTF-8 sheet byte by byte: LTspice 26's export of
+#: ``export/micro_utf8`` writes ``1Âµ``, XVII's writes the two bytes back.
+_SHEET_RECORDED: dict[tuple[str, str], dict[str, tuple[_Decoding, tuple[str, ...]]]] = {
+    ("µ", "cp1252"): {
+        build: ("same", ("export/micro_cp1252", "export/micro_cp1252_v41")) for build in BUILDS
+    },
+    ("µ", "utf-8"): {
+        build: ("cp1252", ("export/micro_utf8", "export/micro_utf8_v41")) for build in BUILDS
+    },
+    ("µ", "utf-16-le"): {build: ("same", ("export/micro_utf16le",)) for build in BUILDS},
+    ("μ", "utf-8"): {build: ("cp1252", ("export/greek_mu_utf8",)) for build in BUILDS},
+}
+
+#: The number a build takes from a sheet value it reads as letters: shown
+#: only for LTspice XVII, which reads its own export's bytes as a deck of
+#: those letters (``deck/micro_utf8``); no recording shows LTspice 26 running
+#: such letters.
+_SHEET_BARE_NUMBER = {"LTspice XVII": ("deck/micro_utf8", "deck/suffix_unknown")}
+
+
+def readings_of_sheet(
+    export_cards: Iterable[SpiceCard], sheet: Path
+) -> tuple[OtherReading, ...] | None:
+    """The readings of a sheet's values, for a reply that read the sheet as
+    the server's export of it (``export_cards``, as the server decoded them).
+
+    A value counts where the server read the export's sign as micro and the
+    sheet itself holds that value with the sign: an export can spell a
+    sheet's ``u`` as a micro sign, which says nothing of the sheet. Each such
+    value is read as the recordings show each build reads the sheet's stored
+    bytes. None when the sheet cannot be read, which the caller states."""
+    micro = [site for site in value_suffix_sites(export_cards) if site.micro]
+    if not micro:
+        # The server read no value as micro: every build reads it alike.
+        return ()
+    try:
+        text, encoding = decode_spice_bytes_with_encoding(sheet.read_bytes())
+    except OSError:
+        return None
+    lines = text.split("\n")
+    found: list[OtherReading] = []
+    for site in micro:
+        if site.token not in text:
+            continue
+        line = next((i for i, written in enumerate(lines, 1) if site.token in written), 1)
+        for build in BUILDS:
+            recorded = _SHEET_RECORDED.get((site.suffix, encoding), {}).get(build)
+            common: dict[str, Any] = {
+                "file": str(sheet),
+                "line": line,
+                "value": site.token,
+                "encoding": encoding,
+                "server_number": _server_number(site),
+                "build": build,
+                "offset": site.offset,
+            }
+            if recorded is None:
+                settle = (
+                    f"a sheet holding {site.suffix} stored as {encoding}, exported by {build}",
+                )
+                found.append(
+                    OtherReading(build_reads=None, build_number=None, evidence=settle, **common)
+                )
+                continue
+            decoding, evidence = recorded
+            if decoding == "same":
+                continue
+            bare = _SHEET_BARE_NUMBER.get(build)
+            number = float(site.number) if bare is not None and _is_the_value(site) else None
+            found.append(
+                OtherReading(
+                    build_reads=_as_8_bit(site.token),
+                    build_number=number,
+                    evidence=tuple(dict.fromkeys((*evidence, *(bare or ()))))
+                    if number is not None
+                    else evidence,
+                    **common,
+                )
+            )
+    return tuple(found)
+
+
+#: Why a sheet's values were not checked: the sheet could not be read.
+SHEET_UNREAD = "the sheet could not be read, so how a build reads its values was not checked"
 
 #: A reply's list of stored files whose values were not checked, sent whole:
-#: one entry per sheet a reply reads as its export.
+#: one entry per side a reply reads.
 NOT_CHECKED_SCHEMA: dict[str, Any] = {
     "type": "array",
     CUT: NEVER,
     "description": (
-        "Each sheet read as the server's export of it whose values were not checked "
-        "for another build's reading; absent when every file read was checked."
+        "Each stored file whose values were not checked for another build's reading, "
+        "with why; absent when every file read was checked."
     ),
     "items": {
         "type": "object",
@@ -368,10 +511,3 @@ NOT_CHECKED_SCHEMA: dict[str, Any] = {
         "required": ["file", "reason"],
     },
 }
-
-
-def holds_micro_sign(text: str) -> bool:
-    """Whether ``text``, a deck with no stored bytes here (a sheet's export
-    handed over as text), holds a micro sign at a value's suffix: a value
-    whose reading by another build this module cannot check without the bytes."""
-    return any(site.micro for site in value_suffix_sites(lex_deck(text).cards))

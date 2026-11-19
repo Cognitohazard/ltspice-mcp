@@ -678,7 +678,7 @@ def _pin_role(type_letter: str, index: int) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _load_cards(path_or_text: str | Path) -> tuple[StoredDeck, Path | None]:
+def _load_cards(path_or_text: str | Path | StoredDeck) -> tuple[StoredDeck, Path | None]:
     """The cards a simulator reads from a netlist given as a filesystem path or
     as raw text (``spice_lex.lex_deck``: not its title line, nor a card after
     ``.END``).
@@ -693,6 +693,9 @@ def _load_cards(path_or_text: str | Path) -> tuple[StoredDeck, Path | None]:
     lines read as element cards and the graph describes nothing. Its LTspice
     export is the netlist to compare.
     """
+    if isinstance(path_or_text, StoredDeck):
+        # A deck its caller already read, so both read the same bytes.
+        return path_or_text, path_or_text.path
     if isinstance(path_or_text, Path):
         return _cards_from_netlist_path(path_or_text), path_or_text
     text = path_or_text
@@ -721,7 +724,7 @@ _STRUCTURAL_WARNING_MARKERS = ("unclosed", ".ends", "no preceding card")
 
 
 def parse_netlist_graph(
-    path_or_text: str | Path,
+    path_or_text: str | Path | StoredDeck,
     *,
     reader: SemanticProfile,
     base_dir: Path | None = None,

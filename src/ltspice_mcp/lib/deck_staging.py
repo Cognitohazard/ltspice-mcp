@@ -40,10 +40,11 @@ from ltspice_mcp.lib.spice_lex_ops import (
 from ltspice_mcp.lib.spice_lex_views import WAVEFILE
 from ltspice_mcp.lib.stored_values import (
     CP1252_BUILD,
-    SHEET_NOT_CHECKED,
+    SHEET_UNREAD,
     OtherReading,
     readings_of_cards,
-    statements,
+    readings_of_sheet,
+    summaries,
 )
 
 # Sized for real foundry PDKs, which fan out further than a hand-written deck:
@@ -173,32 +174,36 @@ def _micro_fold_observation(
     }
 
 
-def _read_otherwise_observation(path: Path, readings: Sequence[OtherReading]) -> dict[str, Any]:
-    """The values of a source file that a recorded LTspice build reads as
-    another number than the run uses (``stored_values``): the run reads each
+def _read_otherwise_observations(
+    readings: Sequence[OtherReading], builds: Collection[str]
+) -> list[dict[str, Any]]:
+    """The values of the run's source files that an LTspice build the session
+    runs reads as another number than the run uses (``stored_values``): one
+    observation per file, build and kind of reading. The run reads each value
     as the server does, whatever the simulator, but the file opened in that
-    build is another circuit, and a number drawn or checked from it here
-    (a Monte Carlo nominal, a device's size) is not the one that build reads."""
-    stated = statements(readings)
+    build is another circuit, and a number drawn or checked from it here (a
+    Monte Carlo nominal, a device's size) is not the one that build reads."""
+    return [
+        {
+            "code": summary["code"],
+            "kind": "provenance",
+            "detail": summary["detail"],
+            "evidence": {
+                key: value for key, value in summary.items() if key not in ("code", "detail")
+            },
+        }
+        for summary in summaries(readings, builds)
+    ]
+
+
+def _sheet_unread_observation(sheet: Path) -> dict[str, Any]:
+    """That a sheet run as the server's export could not be read, so how a
+    build reads its own values was not checked."""
     return {
         "code": "value_read_otherwise",  # stored_values.CODE
         "kind": "provenance",
-        "detail": (
-            f"{len(stated)} value(s) of {path.name} are read as another number by a "
-            "recorded LTspice build than by this run; each names the build and its number."
-        ),
-        "evidence": {"file": str(path), "values": stated},
-    }
-
-
-def _sheet_not_checked_observation(sheet: Path) -> dict[str, Any]:
-    """That a sheet run as the server's export was not checked for another
-    build's reading of its values (``stored_values.SHEET_NOT_CHECKED``)."""
-    return {
-        "code": "value_read_otherwise",  # stored_values.CODE
-        "kind": "provenance",
-        "detail": f"{sheet.name} was {SHEET_NOT_CHECKED}",
-        "evidence": {"file": str(sheet), "not_checked": SHEET_NOT_CHECKED},
+        "detail": f"{sheet.name}: {SHEET_UNREAD}.",
+        "evidence": {"file": str(sheet), "not_checked": SHEET_UNREAD},
     }
 
 
@@ -257,6 +262,7 @@ def stage_deck(
     simulator_roots: Sequence[Path] = (),
     compact_digests: Collection[str] = (),
     cp1252_reader: str | None = None,
+    stated_builds: Collection[str] = (),
 ) -> StagedDeck:
     """Copy a primary deck, its include/lib closure and the data files it
     reads into ``staging_root``.
@@ -321,7 +327,10 @@ def stage_deck(
     only then, and only for a file whose signs that build reads otherwise
     (``stored_values``: UTF-8, not cp1252 or UTF-16), does the fold change what
     a value means to the simulator, and only then is it reported, as a
-    ``micro_sign_folded`` observation.
+    ``micro_sign_folded`` observation. ``stated_builds`` are the LTspice
+    builds the session runs (``services.session_ltspice_builds``): a value of
+    a source that one of them reads as another number is reported as a
+    ``value_read_otherwise`` observation.
     """
     if max_depth < 0:
         raise ValueError("max_depth must be non-negative")
@@ -594,10 +603,16 @@ def stage_deck(
             # A sheet's export is the server's file, not one the caller stored:
             # how a build reads its bytes says nothing of how it reads the sheet.
             readings = readings_of_cards(parsed.read, encoding, file=resolved)
-            if readings and exported and resolved == source:
-                observations.append(_sheet_not_checked_observation(authored))
-            elif readings:
-                observations.append(_read_otherwise_observation(resolved, readings))
+            if exported and resolved == source:
+                # A sheet's export is the server's file, not one the caller
+                # stored: the sheet's own bytes are what a build reads.
+                of_sheet = readings_of_sheet(parsed.read, authored)
+                if of_sheet is None:
+                    observations.append(_sheet_unread_observation(authored))
+                else:
+                    observations.extend(_read_otherwise_observations(of_sheet, stated_builds))
+            else:
+                observations.extend(_read_otherwise_observations(readings, stated_builds))
             folded = fold_micro_suffix_cards(parsed.read)
             if folded:
                 changed = True
