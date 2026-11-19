@@ -72,7 +72,23 @@ GRIDS = grids()
 #: DC sweep, a node voltage in a block and a terminal current at the top in
 #: a transient and an operating point, a noise contribution inside a block,
 #: and a section-sign part in an AC sweep, a DC sweep and a noise run.
+#:
+#: value-number: the decks of behaviour number-grid fill every coordinate no
+#: recording does: each suffix with an ohm sign after it and most with unit
+#: letters, each one-letter suffix in upper case and R, every mantissa but
+#: the recorded whole, decimal, dotted and exponent forms before a suffix,
+#: digits after a suffix behind any but a whole mantissa, a Greek mu in every
+#: encoding but UTF-8, the ohm sign in UTF-8 with a byte order mark and in
+#: UTF-16 with none, the micro sign in cp1253, and every form inside braces.
+#:
+#: expression-value: the decks of behaviour expression-grid fill every
+#: coordinate but the four of deck/caret_power: every operator over every
+#: sign of its operands, every base and exponent of ** and the caret, the
+#: unary operators, the chains but two powers, every wrap but braces, and an
+#: expression of parameters.
 UNRECORDED: dict[str, dict[str, int]] = {
+    "value-number": {"ltspice26": 162, "ltspice17": 162},
+    "expression-value": {"ltspice26": 76, "ltspice17": 76},
     "printed-measurement": {"ltspice26": 416, "ltspice17": 415},
     "log-condition": {"ltspice26": 20, "ltspice17": 21},
     "step-value": {"ltspice26": 56, "ltspice17": 56},
