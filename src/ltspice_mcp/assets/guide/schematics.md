@@ -54,7 +54,12 @@ When they want to plot nets by clicking the sheet in LTspice, show them a run
 of the sheet with `plot_waveform(job_id=..., signals=[...], in_ltspice=true)`
 on a job that ran an `.asc`. The run's results are written beside the sheet
 under its name, replacing any results there, and opened from the sheet, which
-makes LTspice tie the plot to the sheet. The reply's `ltspice` block then
+makes LTspice tie the plot to the sheet. The copy is the one
+`jobs(action="place_beside_sheet")` makes: a sheet changed since the run is
+not given its results, the run opens on its own instead, and the block's
+`not_placed` says why and what to do (run the sheet again). The block's
+`not_checked` and `left_in_place` say what the copy did not check and which
+of the sheet's result files from another run it left beside it. The reply's `ltspice` block then
 names the `sheet` and has `tied: true`, and a click on a net in the sheet
 plots it. Results already beside a sheet under its name, as a run in LTspice
 leaves them, open the same way when you pass them as `path`. LTspice reads

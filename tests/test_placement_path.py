@@ -233,7 +233,9 @@ async def test_a_placement_says_the_files_a_circuit_includes_were_not_compared(
     sheet = copied_sheet(work_dir)
     job_that_ran(state_no_sim, sheet, work_dir)
     placed = await place(state_no_sim)
-    assert any("includes were not compared" in line for line in placed["not_checked"])
+    assert any(
+        "were not compared with the ones the run read" in line for line in placed["not_checked"]
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -376,4 +378,6 @@ async def test_every_caller_of_the_placement_gives_one_answer(
     else:
         assert first[0] == "placed"
         assert any("amp.op.raw" in line for line in first[1:]), first
-        assert any("includes were not compared" in line for line in first[1:]), first
+        assert any("were not compared with the ones the run read" in line for line in first[1:]), (
+            first
+        )

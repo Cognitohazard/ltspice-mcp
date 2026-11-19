@@ -59,10 +59,8 @@ from ltspice_mcp.lib.recovery_records import RecoveryError
 from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER, rows
 from ltspice_mcp.lib.sheet_results import (
     NotPlaced,
-    Placement,
     check_case,
-    place_case,
-    placement_lock,
+    place_checked,
     where_placed,
 )
 from ltspice_mcp.state import SessionState
@@ -698,6 +696,16 @@ _PLACE_BESIDE_SHEET_SCHEMA: dict[str, Any] = {
             "description": "What the copy did not check, each said in full.",
             "items": {"type": "string"},
         },
+        "left_in_place": {
+            "type": "array",
+            # What a write left: leaving one out would pass it off as this run's.
+            CUT: NEVER,
+            "description": (
+                "Each of the circuit's result files beside it that this run did not "
+                "write: another run's, left where it was."
+            ),
+            "items": {"type": "string"},
+        },
     },
     "required": [
         *_JOBS_COMMON_REQUIRED,
@@ -992,9 +1000,8 @@ async def _await_foreign_experiment_cancellation(
 async def _place_case_beside_sheet(
     job: ExperimentJob, case_id: str | None, state: SessionState
 ) -> dict[str, Any]:
-    """Copy one finished case's results beside the circuit it ran
-    (``sheet_results.place_case``), under the circuit's and its results
-    file's locks (``sheet_results.placement_lock``).
+    """Copy one finished case's results beside the circuit it ran, by the one
+    checked placement (``sheet_results.place_checked``).
 
     Refused where they could not stand as the circuit's own
     (``sheet_results.check_case`` and ``place_case`` say which), and while the
@@ -1016,23 +1023,17 @@ async def _place_case_beside_sheet(
     except NotPlaced as exc:
         raise _JobsActionError(exc.code, str(exc), stage="resolution") from None
     sheet = await asyncio.to_thread(safe_path, str(case.circuit_path), state)
-
-    def place() -> Placement:
-        try:
-            return place_case(job, case, sheet)
-        except NotPlaced as exc:
-            raise _JobsActionError(exc.code, str(exc), stage="resolution") from None
-
-    async with placement_lock(sheet):
-        # The check and the copy are one unit off the loop, shielded so a
-        # cancelled call cannot leave a circuit with some of a run's files.
-        placement = await asyncio.shield(asyncio.to_thread(place))
+    try:
+        placement = await place_checked(job, case, sheet)
+    except NotPlaced as exc:
+        raise _JobsActionError(exc.code, str(exc), stage="resolution") from None
     return {
         "case_id": case.case_id,
         "sheet": str(sheet),
         "files": placement.files,
         "assignments": dict(case.assignments),
         "not_checked": placement.not_checked,
+        "left_in_place": placement.left_in_place,
     }
 
 

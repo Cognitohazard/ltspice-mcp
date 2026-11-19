@@ -512,6 +512,14 @@ def a_job_of(state: SessionState, sheet: Path, work_dir: Path) -> Path:
     return raw
 
 
+def includes_not_compared(sheet: Path) -> str:
+    """What a placement says it did not compare, for a sheet compared by its digest."""
+    return (
+        f"The files {sheet.name} includes or uses (libraries, models, symbols) were not "
+        f"compared with the ones the run read: only {sheet.name} itself was."
+    )
+
+
 def ran(job: ExperimentJob, sheet: Path) -> None:
     """Make ``job``'s one case a run of ``sheet`` as it is now."""
     job.cases[0].circuit_path = sheet
@@ -549,6 +557,7 @@ async def test_a_sheets_run_is_opened_from_the_sheet(
         "pid": PID,
         "version": "26.1.1",
         "note": TIED,
+        "not_checked": [includes_not_compared(sheet)],
     }
     # The job's results and log are the sheet's now, and its own are as they were.
     assert read(sheet.with_suffix(".raw")) == read(raw)
@@ -850,6 +859,8 @@ async def test_a_sheet_with_changes_nobody_saved_is_left_open_and_the_plot_stand
     # Saved there, the window holds what the file does, and the next showing
     # ties the plot: the pane that stood alone is closed for it.
     write(sheet, held.encode("cp1252"))
+    # Run again: the earlier run's results are not the saved sheet's.
+    ran(state_no_sim.all_jobs["shown"], sheet)
     put_windows(
         state_no_sim,
         world,
@@ -1231,6 +1242,7 @@ async def test_a_sheets_stepped_operating_point_is_opened_from_the_sheet_without
         "pid": PID,
         "version": "26.1.1",
         "note": f"{TIED} {NO_TRACES_NAMED}",
+        "not_checked": [includes_not_compared(sheet)],
     }
     assert read(sheet.with_suffix(".raw")) == read(raw)
     assert read(sheet.with_suffix(".log")) == read(raw.with_suffix(".log"))
