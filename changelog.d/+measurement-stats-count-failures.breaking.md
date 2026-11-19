@@ -1,0 +1,1 @@
+In the statistics of a `.MEAS` measurement, `failure_count` counts only the steps the simulator printed as failed. A step with no number for another reason is counted under that reason, not as a failure.
