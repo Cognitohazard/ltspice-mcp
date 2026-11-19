@@ -26,7 +26,7 @@ import pytest
 from ltspice_mcp.lib import device_names, trace_names
 from ltspice_mcp.lib.connectivity import fold_case
 from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw
-from ltspice_mcp.lib.device_names import trace_key
+from ltspice_mcp.lib.device_names import trace_keys
 from ltspice_mcp.lib.lint_rules import lint_deck
 from ltspice_mcp.lib.metrics import noise_trace_unit
 from ltspice_mcp.lib.raw_header import preflight_raw
@@ -318,7 +318,9 @@ def test_one_fold_folds_ascii_letters_only():
     assert device_names.fold_name("MASS") != device_names.fold_name("maß")
     assert device_names.fold_name("É") == "É"
     assert fold_case("Maß") == device_names.fold_name("Maß")
-    assert trace_key("V(Maß)", xvii=False) != trace_key("V(mass)", xvii=False)
+    assert trace_keys("V(Maß)", xvii=False, schematic=False) != trace_keys(
+        "V(mass)", xvii=False, schematic=False
+    )
 
 
 MASS_PORT = "* a port\n.subckt sub maß b\nR1 mass b 1k\n.ends\nX1 a b sub\nV1 a 0 1\nR2 b 0 1k\n.op\n.end\n"

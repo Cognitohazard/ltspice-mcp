@@ -242,7 +242,7 @@ model = ["lib/symbol_library.py", "lib/schematic_ops.py", "lib/deck_prep.py", "l
 
 [behaviour.sheet-part-trace-names]
 summary = "What a run of a sheet names the device inside a part whose symbol is given a Prefix of X and a reference that does not start with X, beside the same subcircuit called with X from a directive on the sheet, and the net the sheet leaves unlabelled."
-model = ["lib/trace_names.py", "lib/device_names.py", "lib/device_names.py:trace_key", "lib/trace_names.py:find_trace"]
+model = ["lib/trace_names.py", "lib/device_names.py", "lib/device_names.py:trace_keys", "lib/trace_names.py:find_trace"]
 
 [behaviour.section-sign-trace-tran]
 summary = "What a transient run of a sheet names the current of a part exported as R§Load, which plot_waveform charts: the name the operating point gives it (I(Load)) or another."
@@ -250,7 +250,7 @@ model = ["lib/trace_names.py", "lib/device_names.py", "tools/analysis.py", "lib/
 
 [behaviour.trace-name-grid]
 summary = "The cells of the trace-name grid (at the end of this file) that no other recording fills: a node voltage, a two-terminal current, a terminal current and a port current at the top, in a block and in a block in a block, in a transient, an AC sweep, a DC sweep and an operating point, with subcircuit voltages and currents saved; the noise contribution of a resistor at each depth; and the current of a part named with a section sign in an AC sweep, a DC sweep and a noise run. What a cell declares where no recording shows its form is a prediction, which the recording settles."
-model = ["lib/trace_names.py", "lib/device_names.py", "lib/raw_parser.py", "lib/decoded_raw.py", "lib/device_names.py:naming_for", "lib/device_names.py:trace_key", "lib/trace_names.py:find_trace", "lib/trace_names.py:trace_quantity", "lib/raw_parser.py:node_voltages", "lib/decoded_raw.py:declared_unit"]
+model = ["lib/trace_names.py", "lib/device_names.py", "lib/raw_parser.py", "lib/decoded_raw.py", "lib/device_names.py:naming_for", "lib/device_names.py:trace_keys", "lib/trace_names.py:find_trace", "lib/trace_names.py:trace_quantity", "lib/raw_parser.py:node_voltages", "lib/decoded_raw.py:declared_unit"]
 # The four decks of every kind of trace, and the noise deck, run with both
 # subcircuit settings on, as cases at the end; the section-sign decks are
 # written in UTF-8, which every build reads a section sign in (deck-encoding).
@@ -899,12 +899,12 @@ keep = ["log"]
 
 [behaviour.subckt-device-names]
 summary = "How each build names a device, a node and a port current inside named and nested subcircuit instances: in the .op device table with and without logopinfo, in an operating-point raw, and in a transient's raw, stepped and not."
-model = ["lib/device_names.py", "lib/trace_names.py", "lib/metrics.py", "lib/log_parser.py", "lib/result_observations.py", "lib/experiment_runner.py", "lib/device_names.py:naming_for", "lib/device_names.py:trace_key", "lib/trace_names.py:find_trace"]
+model = ["lib/device_names.py", "lib/trace_names.py", "lib/metrics.py", "lib/log_parser.py", "lib/result_observations.py", "lib/experiment_runner.py", "lib/device_names.py:naming_for", "lib/device_names.py:trace_keys", "lib/trace_names.py:find_trace"]
 inputs = ["log/subckt_names.cir", "log/subckt_names_off.cir", "raw/subckt_names_tran.cir", "raw/subckt_names_step.cir"]
 
 [behaviour.save-subckt-names]
 summary = "Which spelling of a device current and a node inside nested subcircuit instances each build's .save accepts, with and without the instances' X, and what the raw then holds."
-model = ["lib/hierarchy.py", "lib/device_names.py", "lib/result_observations.py", "lib/experiment_runner.py", "lib/trace_names.py", "lib/device_names.py:trace_key", "lib/trace_names.py:find_trace"]
+model = ["lib/hierarchy.py", "lib/device_names.py", "lib/result_observations.py", "lib/experiment_runner.py", "lib/trace_names.py", "lib/device_names.py:trace_keys", "lib/trace_names.py:find_trace"]
 inputs = ["raw/save_subckt_names.cir", "raw/save_subckt_names_no_x.cir"]
 
 [behaviour.log-device-op-precision]
@@ -5260,10 +5260,7 @@ at = { stepped = "param" }
 refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }
 [grid.results-layout.cell.items]
 raw = { analysis = "tran", compression = "on", steps = 2 }
-"fra_1.raw" = { analysis = "fra", steps = 2, refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" }, differs = [
-    { build = "ltspice26", route = "analyze_results rows", reason = "Read by its path, an .fra_1.raw is paired with <case>.fra_1.log (services.source_for_raw_path), which no build writes. Without the run's own log (<case>.log) the steps of its sweeps cannot be told apart, so the route refuses the plot as unresolved; the decoder given the run's log reads both steps." },
-    { build = "ltspice26", route = "plot_waveform charted", reason = "Read by its path, an .fra_1.raw is paired with <case>.fra_1.log (services.source_for_raw_path), which no build writes. Without the run's own log (<case>.log) the steps of its sweeps cannot be told apart, so the route refuses the plot as unresolved; the decoder given the run's log reads both steps." },
-] }
+"fra_1.raw" = { analysis = "fra", steps = 2, refused = { ltspice17 = "XVII 17.0.37 has no .fra (raw/fra: it refuses the deck)" } }
 
 [[grid.results-layout.cell]]
 cases = ["raw/fra_numdgt7"]
@@ -5728,13 +5725,13 @@ raw = { analysis = "tf", not_established = "No recording shows a tf raw converte
 [grid.trace-name]
 question = "Which trace of a result a signal name reads, and what that trace holds."
 # How a build spells a name inside subcircuit instances (naming_for), the key
-# two spellings of one trace share (trace_key), the trace a name finds
+# two spellings of one trace share (trace_keys), the trace a name finds
 # (find_trace), and what it holds: by its name and declared type
 # (trace_quantity), by its plot (node_voltages, which counts no trace of a
 # noise plot a node voltage) and by its unit (declared_unit).
 functions = [
     "lib/device_names.py:naming_for",
-    "lib/device_names.py:trace_key",
+    "lib/device_names.py:trace_keys",
     "lib/trace_names.py:find_trace",
     "lib/trace_names.py:trace_quantity",
     "lib/raw_parser.py:node_voltages",
@@ -5783,7 +5780,7 @@ groups = [
 # sampled axis (trace_quantity's axis).
 what = { values = ["node_voltage", "current", "terminal_current", "port_current", "noise", "gain", "axis"] }
 # How deep in subcircuit instances the trace is: at the top, in a block, or
-# in a block in a block (trace_key's path; XVII drops each instance's X).
+# in a block in a block (trace_keys's path; XVII drops each instance's X).
 depth = { values = ["top", "block", "nested"] }
 # The analysis of the run.
 analysis = { values = ["tran", "ac", "dc", "noise", "op"] }
@@ -5826,22 +5823,8 @@ at = { analysis = "tran" }
 "I(xa:xin:Rin)" = { what = "current", depth = "nested", trace = { ltspice26 = "I(xa:xin:Rin)", ltspice17 = "I(a:in:Rin)" } }
 "Id(xa:Mdrv)" = { what = "terminal_current", depth = "block", trace = { ltspice26 = "Id(xa:Mdrv)", ltspice17 = "Id(a:Mdrv)" } }
 "Id(xa:xin:Mtail)" = { what = "terminal_current", depth = "nested", trace = { ltspice26 = "Id(xa:xin:Mtail)", ltspice17 = "Id(a:in:Mtail)" } }
-"Ix(xa:out)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:out)", ltspice17 = "Ix(a:OUT)" }, differs = [
-    { build = "ltspice17", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice17", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice17", route = "plot_waveform unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice26", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice26", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice26", route = "plot_waveform unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-] }
-"Ix(xa:xin:p)" = { what = "port_current", depth = "nested", trace = { ltspice26 = "Ix(xa:xin:p)", ltspice17 = "Ix(a:in:P)" }, differs = [
-    { build = "ltspice17", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice17", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice17", route = "plot_waveform unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice26", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice26", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice26", route = "plot_waveform unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-] }
+"Ix(xa:out)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:out)", ltspice17 = "Ix(a:OUT)" } }
+"Ix(xa:xin:p)" = { what = "port_current", depth = "nested", trace = { ltspice26 = "Ix(xa:xin:p)", ltspice17 = "Ix(a:in:P)" } }
 "v(OUTA)" = { what = "node_voltage", depth = "top", trace = "V(outa)", form = "mixed_case" }
 
 [[grid.trace-name.cell]]
@@ -5851,14 +5834,7 @@ at = { analysis = "tran" }
 "time" = { what = "axis", depth = "top", trace = "time" }
 "V(outa)" = { what = "node_voltage", depth = "top", trace = "V(outa)" }
 "I(V1)" = { what = "current", depth = "top", trace = "I(V1)" }
-"Ix(xa:out)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:out)", ltspice17 = "Ix(a:OUT)" }, differs = [
-    { build = "ltspice17", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice17", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice17", route = "plot_waveform unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice26", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice26", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice26", route = "plot_waveform unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-] }
+"Ix(xa:out)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:out)", ltspice17 = "Ix(a:OUT)" } }
 "v(OUTA)" = { what = "node_voltage", depth = "top", trace = "V(outa)", form = "mixed_case" }
 
 [[grid.trace-name.cell]]
@@ -5867,12 +5843,7 @@ at = { analysis = "op" }
 [grid.trace-name.cell.items]
 "V(outa)" = { what = "node_voltage", depth = "top", trace = "V(outa)" }
 "I(V1)" = { what = "current", depth = "top", trace = "I(V1)" }
-"Ix(xa:top)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:top)", ltspice17 = "Ix(a:TOP)" }, differs = [
-    { build = "ltspice17", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice17", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice26", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice26", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-] }
+"Ix(xa:top)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:top)", ltspice17 = "Ix(a:TOP)" } }
 "v(OUTA)" = { what = "node_voltage", depth = "top", trace = "V(outa)", form = "mixed_case" }
 
 [[grid.trace-name.cell]]
@@ -5882,10 +5853,7 @@ refused = { ltspice17 = "XVII refuses the deck for its .options logopinfo, and w
 [grid.trace-name.cell.items]
 "V(outa)" = { what = "node_voltage", depth = "top", trace = "V(outa)" }
 "I(V1)" = { what = "current", depth = "top", trace = "I(V1)" }
-"Ix(xa:top)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:top)", ltspice17 = "Ix(a:TOP)" }, differs = [
-    { build = "ltspice26", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice26", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-] }
+"Ix(xa:top)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:top)", ltspice17 = "Ix(a:TOP)" } }
 "v(OUTA)" = { what = "node_voltage", depth = "top", trace = "V(outa)", form = "mixed_case" }
 
 [[grid.trace-name.cell]]
@@ -5899,18 +5867,8 @@ at = { analysis = "op" }
 "I(xa:xin:Rin)" = { what = "current", depth = "nested", trace = { ltspice26 = "I(xa:xin:Rin)", ltspice17 = "I(a:in:Rin)" } }
 "Id(xa:Mdrv)" = { what = "terminal_current", depth = "block", trace = { ltspice26 = "Id(xa:Mdrv)", ltspice17 = "Id(a:Mdrv)" } }
 "Id(xa:xin:Mtail)" = { what = "terminal_current", depth = "nested", trace = { ltspice26 = "Id(xa:xin:Mtail)", ltspice17 = "Id(a:in:Mtail)" } }
-"Ix(xa:out)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:out)", ltspice17 = "Ix(a:OUT)" }, differs = [
-    { build = "ltspice17", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice17", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice26", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice26", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-] }
-"Ix(xa:xin:n)" = { what = "port_current", depth = "nested", trace = { ltspice26 = "Ix(xa:xin:n)", ltspice17 = "Ix(a:in:N)" }, differs = [
-    { build = "ltspice17", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice17", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice26", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice26", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-] }
+"Ix(xa:out)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:out)", ltspice17 = "Ix(a:OUT)" } }
+"Ix(xa:xin:n)" = { what = "port_current", depth = "nested", trace = { ltspice26 = "Ix(xa:xin:n)", ltspice17 = "Ix(a:in:N)" } }
 
 [[grid.trace-name.cell]]
 cases = ["log/subckt_names_saved"]
@@ -5924,14 +5882,8 @@ refused = { ltspice17 = "XVII refuses the deck for its .options logopinfo, and w
 "I(xa:xin:Rin)" = { what = "current", depth = "nested", trace = { ltspice26 = "I(xa:xin:Rin)", ltspice17 = "I(a:in:Rin)" } }
 "Id(xa:Mdrv)" = { what = "terminal_current", depth = "block", trace = { ltspice26 = "Id(xa:Mdrv)", ltspice17 = "Id(a:Mdrv)" } }
 "Id(xa:xin:Mtail)" = { what = "terminal_current", depth = "nested", trace = { ltspice26 = "Id(xa:xin:Mtail)", ltspice17 = "Id(a:in:Mtail)" } }
-"Ix(xa:out)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:out)", ltspice17 = "Ix(a:OUT)" }, differs = [
-    { build = "ltspice26", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice26", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-] }
-"Ix(xa:xin:n)" = { what = "port_current", depth = "nested", trace = { ltspice26 = "Ix(xa:xin:n)", ltspice17 = "Ix(a:in:N)" }, differs = [
-    { build = "ltspice26", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice26", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-] }
+"Ix(xa:out)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(xa:out)", ltspice17 = "Ix(a:OUT)" } }
+"Ix(xa:xin:n)" = { what = "port_current", depth = "nested", trace = { ltspice26 = "Ix(xa:xin:n)", ltspice17 = "Ix(a:in:N)" } }
 
 [[grid.trace-name.cell]]
 cases = ["raw/save_subckt_names"]
@@ -5992,13 +5944,7 @@ at = { analysis = "op" }
 [grid.trace-name.cell.items]
 "V(out)" = { what = "node_voltage", depth = "top", trace = "V(out)" }
 "I(R3)" = { what = "current", depth = "top", trace = "I(R3)" }
-"Ix(x1:in)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(x1:in)", ltspice17 = "Ix(x1:IN)" }, differs = [
-    { build = "ltspice17", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice17", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice17", route = "trace_key", reason = "XVII writes this instance as the sheet names it (x1, mb1), not without an X as it writes a deck's X instance (raw/op_subckt: Ix(1:TOP)); trace_key reads every instance in an XVII name as one whose X was dropped and puts an X back, so the key names another instance (xx1, xmb1)" },
-    { build = "ltspice26", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice26", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-] }
+"Ix(x1:in)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(x1:in)", ltspice17 = "Ix(x1:IN)" } }
 
 [[grid.trace-name.cell]]
 cases = ["export/sheet_part_names"]
@@ -6006,17 +5952,9 @@ at = { analysis = "op" }
 [grid.trace-name.cell.items]
 "V(n001)" = { what = "node_voltage", depth = "top", trace = "V(n001)" }
 "I(R1)" = { what = "current", depth = "top", trace = "I(R1)" }
-"Id(mb1:M1)" = { what = "terminal_current", depth = "block", trace = "Id(mb1:M1)", differs = [
-    { build = "ltspice17", route = "trace_key", reason = "XVII writes this instance as the sheet names it (x1, mb1), not without an X as it writes a deck's X instance (raw/op_subckt: Ix(1:TOP)); trace_key reads every instance in an XVII name as one whose X was dropped and puts an X back, so the key names another instance (xx1, xmb1)" },
-] }
+"Id(mb1:M1)" = { what = "terminal_current", depth = "block", trace = "Id(mb1:M1)" }
 "Id(xmb2:M1)" = { what = "terminal_current", depth = "block", trace = { ltspice26 = "Id(xmb2:M1)", ltspice17 = "Id(mb2:M1)" } }
-"Ix(mb1:d)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(mb1:d)", ltspice17 = "Ix(mb1:D)" }, differs = [
-    { build = "ltspice17", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice17", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice17", route = "trace_key", reason = "XVII writes this instance as the sheet names it (x1, mb1), not without an X as it writes a deck's X instance (raw/op_subckt: Ix(1:TOP)); trace_key reads every instance in an XVII name as one whose X was dropped and puts an X back, so the key names another instance (xx1, xmb1)" },
-    { build = "ltspice26", route = "trace_quantity", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-    { build = "ltspice26", route = "unit", reason = "LTspice declares a port current subckt_current, a type trace_quantity and declared_unit do not know: the trace is read as holding another quantity, with no unit, though it is a current in amperes" },
-] }
+"Ix(mb1:d)" = { what = "port_current", depth = "block", trace = { ltspice26 = "Ix(mb1:d)", ltspice17 = "Ix(mb1:D)" } }
 
 [[grid.trace-name.cell]]
 cases = ["raw/ac"]

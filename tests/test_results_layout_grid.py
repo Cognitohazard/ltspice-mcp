@@ -51,7 +51,7 @@ GRID = grid("results-layout")
 #: How many routes answer otherwise than a cell, per build, each declared on
 #: its cell (``differs``, with the route and the reason). A count may only
 #: fall: a fix lowers it here in the same change.
-KNOWN_DIFFERENCES: dict[str, int] = {"ltspice26": 3, "ltspice17": 1}
+KNOWN_DIFFERENCES: dict[str, int] = {"ltspice26": 1, "ltspice17": 1}
 
 #: The analysis each coordinate names, as ``plot_analysis`` spells it.
 ANALYSES = {
