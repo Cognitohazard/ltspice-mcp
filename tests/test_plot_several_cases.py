@@ -353,7 +353,7 @@ class TestSeveralCases:
             await _plot(state_no_sim, job_id="many", runs="all", signals=["V(out)"])
         message = str(refused.value)
         assert "case-0004" in message and "case-0005" not in message
-        assert "showing 5 of 9 cases" in message
+        assert "showing 5 of 9 rows" in message
         assert 'runs="all"' in message and "coverage.missing_cases" in message
 
     async def test_cases_of_different_analyses_are_refused_by_name(
