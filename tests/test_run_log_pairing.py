@@ -97,7 +97,8 @@ async def test_a_stepped_frequency_response_read_by_its_path_reads_its_steps_on_
     fra = other_raw_path(raw, "fra_1")
     shutil.copyfile(rec.recorded(build, f"{case_id}.fra_1.raw"), fra)
     source = services.source_for_raw_path(fra, state_no_sim)
-    assert source.log == raw.with_suffix(".log") and source.log.is_file()
+    assert source.log == raw.with_suffix(".log")
+    assert source.log is not None and source.log.is_file()
     assert source.console == raw.with_suffix(".exe.log")
 
     loaded = await asyncio.to_thread(SyncApi(state_no_sim).load_raw, fra)
