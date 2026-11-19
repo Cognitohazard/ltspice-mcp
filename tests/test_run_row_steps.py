@@ -568,3 +568,100 @@ async def test_a_chart_the_loaded_cases_fit_is_drawn_whatever_the_headers_say(
     assert data["series_count"] == 4
     (unread,) = data["cases_not_drawn"]
     assert (unread["case_id"], unread["code"]) == (job.cases[4].case_id, "result_unreadable")
+
+
+def _steps_differ(reply: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        item for item in reply.get("observations", []) if item["code"] == "steps_not_as_recorded"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_every_chart_of_a_jobs_case_says_a_file_that_differs_from_its_record(
+    state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """One rule for a chart of one case and of several: the file loaded
+    decides n_steps, and a record that gives another number is said with the
+    same code. The input: a 3-step job whose second case's results are
+    rewritten after the run with a file of 1 step. A chart by path names no
+    case, so it has no record to compare."""
+    from ltspice_mcp.tools.analysis import PlotWaveformInput, handle_plot_waveform
+
+    raw, log = _recorded("ltspice26", "step_tran")
+    receipt = await _ran(state_with_sim, monkeypatch, work_dir, raw, log, "rewritten", count=3)
+    job = state_with_sim.all_jobs[receipt["job_id"]]
+    case = job.cases[1]
+    assert case.steps is not None and case.steps.count == 3
+    assert case.raw_file is not None and case.log_file is not None
+    one_raw, one_log = _recorded("ltspice26", "tran")
+    shutil.copy(one_raw, case.raw_file)
+    shutil.copy(one_log, case.log_file)
+    expected = {"cases": [{"case_id": case.case_id, "recorded": 3, "loaded": 1}]}
+
+    async def chart(**arguments: Any) -> dict[str, Any]:
+        result = await handle_plot_waveform(
+            PlotWaveformInput(signals=["V(out)"], open=False, **arguments), state_with_sim
+        )
+        assert result.structured_content is not None, result.content
+        return result.structured_content
+
+    for one in (
+        {"job_id": job.job_id, "run_index": case.run_index},
+        {"job_id": job.job_id, "case_id": case.case_id},
+        {"job_id": job.job_id, "runs": [case.run_index]},
+    ):
+        reply = await chart(**one)
+        assert reply["n_steps"] == 1, one
+        (differs,) = _steps_differ(reply)
+        assert differs["evidence"] == expected, one
+
+    several = await chart(job_id=job.job_id, runs="all")
+    assert [item["n_steps"] for item in several["cases"]] == [3, 1, 3]
+    (differs,) = _steps_differ(several)
+    assert differs["evidence"] == expected
+
+    by_path = await chart(path=str(case.raw_file))
+    assert by_path["n_steps"] == 1
+    assert _steps_differ(by_path) == []
+
+
+@pytest.mark.asyncio
+async def test_a_chart_of_a_cases_other_raw_is_not_compared_with_its_record(
+    state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The record gives the steps of the case's own results. The input: cases
+    whose results are a 3-step transient and whose other raw (fra_1) is an
+    unstepped frequency response; a chart of that other raw draws 1 step a
+    case and says nothing of the record, which is not about that file."""
+    from ltspice_mcp.lib.raw_parser import other_raw_path
+    from ltspice_mcp.tools.analysis import PlotWaveformInput, handle_plot_waveform
+
+    raw, log = _recorded("ltspice26", "step_tran")
+    receipt = await _ran(state_with_sim, monkeypatch, work_dir, raw, log, "other", count=2)
+    job = state_with_sim.all_jobs[receipt["job_id"]]
+    fra = RECORDED / "ltspice26" / "raw" / "fra.fra_1.raw"
+    for case in job.cases:
+        assert case.steps is not None and case.steps.count == 3
+        assert case.raw_file is not None
+        shutil.copy(fra, other_raw_path(Path(case.raw_file), "fra_1"))
+        # What a run's completion lists of the other raws it finds beside its
+        # raw (``raw_parser.other_raws``); the stand-in writes none itself.
+        case.other_raws = ["fra_1"]
+
+    for arguments in (
+        {"runs": "all"},
+        {"run_index": 0},
+    ):
+        result = await handle_plot_waveform(
+            PlotWaveformInput(
+                job_id=job.job_id, other_raw="fra_1", signals="all", open=False, **arguments
+            ),
+            state_with_sim,
+        )
+        reply = result.structured_content
+        assert reply is not None and not result.is_error, result.content
+        counts = (
+            [item["n_steps"] for item in reply["cases"]] if "cases" in reply else [reply["n_steps"]]
+        )
+        assert set(counts) == {1}, arguments
+        assert _steps_differ(reply) == [], arguments

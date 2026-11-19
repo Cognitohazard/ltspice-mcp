@@ -1150,8 +1150,14 @@ not made again, so a file still locked for a moment after the simulator exits
 its deadline, the process shutting down) ends the read at once, with nothing
 recorded. The kinds a record names are `result_kinds.STEPPED_KINDS`, each
 established by the recordings it lists, per LTspice build. ngspice has no
-`.step`: its runs record one step. A chart of several cases gives each case's
-`n_steps` from the plot it drew, and compares it with this record (above).
+`.step`: its runs record one step. Every chart of a job's case, of one case
+(`run_index`, `case_id`, or `runs` naming one) or of several, gives `n_steps`
+from the plot it drew, and where this record gives another number a
+`steps_not_as_recorded` observation names the case with both
+(`tools/analysis._steps_not_as_recorded`, the one comparison). A chart by
+`path` names no case and has no record; a chart of a `plot_index` past the
+first or of an `other_raw` draws a plot this record does not describe, so
+neither is compared.
 
 **What the rows left out carry.** When run rows are left out, `runs_not_shown`
 states the facts on the rows after the ones sent, from the job's whole table

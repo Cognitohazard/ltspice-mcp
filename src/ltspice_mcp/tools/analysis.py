@@ -2225,6 +2225,8 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
                 "n_steps": n_steps,
                 "steps_plotted": len(steps_to_plot),
             },
+            # A chart by path has no record to compare.
+            notes=[] if ran is None else _steps_not_as_recorded([(ran[1], raw)], args),
             show=show if args.in_ltspice else None,
             rest=lambda: _rest_of_summary(
                 args, analysis_type, n_steps=n_steps, run_index=run_index
@@ -2397,16 +2399,17 @@ def _units_across(
 
 
 def _steps_not_as_recorded(
-    drawn: list[tuple[ExperimentCase, DecodedRaw]], plot_index: int
+    drawn: list[tuple[ExperimentCase, DecodedRaw]], args: PlotWaveformInput
 ) -> list[dict[str, Any]]:
     """The cases drawn whose record (``ExperimentCase.steps``, of the first
     plot) gives another number of steps than the plot loaded holds: the
     results file is not the one the run wrote, or the record was wrong. Each
     case's ``n_steps`` is the plot drawn; this says where the record differs,
-    so the difference is never silent. A record of another plot than the one
-    drawn (a plot_index past the first, or another raw of the case's), or one
-    with no number, is not compared."""
-    if plot_index != 0:
+    so the difference is never silent. Every chart of a job's cases asks
+    here, of one case or of several; a chart by path has no record. A record
+    of another plot than the one drawn (a plot_index past the first, or
+    another raw of the case's), or one with no number, is not compared."""
+    if (args.plot_index or 0) != 0 or args.other_raw is not None:
         return []
     differs = [
         {"case_id": case.case_id, "recorded": case.steps.count, "loaded": loaded}
@@ -2803,13 +2806,7 @@ async def _plot_several(args: PlotWaveformInput, state: SessionState, chosen: _S
                 "signals": [sig.name for sig in cols],
             },
             not_drawn=not_drawn,
-            notes=(
-                _steps_not_as_recorded(
-                    [(case, raw) for case, _, raw, _ in stepped], args.plot_index or 0
-                )
-                if args.other_raw is None
-                else []
-            ),
+            notes=_steps_not_as_recorded([(case, raw) for case, _, raw, _ in stepped], args),
             show=None,
             rest=lambda: _rest_of_summary(
                 args,
@@ -2842,8 +2839,8 @@ class _Chart:
     rest: Callable[[], str]
     #: With several cases: each selected case not drawn, with why.
     not_drawn: list[dict[str, Any]] | None = None
-    #: Observations of the cases drawn that the read of their files does not
-    #: make (``_steps_not_as_recorded``).
+    #: Observations of the job's cases drawn, of one case or of several, that
+    #: the read of their files does not make (``_steps_not_as_recorded``).
     notes: list[dict[str, Any]] = field(default_factory=list)
 
 
