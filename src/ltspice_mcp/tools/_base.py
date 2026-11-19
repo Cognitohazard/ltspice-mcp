@@ -4,6 +4,7 @@ import asyncio
 import base64
 import contextlib
 import contextvars
+import functools
 import hashlib
 import logging
 import math
@@ -295,6 +296,7 @@ async def stored_page(
     annotate: presenter.Annotate | None = None,
     cap: int | None = None,
     target: int | Literal["default"] | None = "default",
+    over: presenter.Over | None = None,
 ) -> dict[str, Any]:
     """One page of a stored answer's list as the reply to send, read from the
     stored file and cut to ``target`` (the call's own, else
@@ -309,6 +311,7 @@ async def stored_page(
         target=reply_target(state) if target == "default" else target,
         annotate=annotate,
         cap=cap,
+        over=over,
     )
     return shown.reply
 
@@ -343,6 +346,7 @@ async def record_page(
     ``data`` is the complete answer read from the record now, cut from
     ``offset`` to ``target``. Nothing is stored; sizing a large table is slow,
     so it runs off the loop."""
+    cap = ROWS_WITHOUT_TARGET if target is None and not in_automatic_door() else None
     shown = await asyncio.to_thread(
         presenter.present_record_page,
         reply_payload(data),
@@ -352,8 +356,37 @@ async def record_page(
         target=target,
         annotate=annotate,
         over=over,
+        cap=cap,
     )
     return shown.reply
+
+
+#: The most run rows an MCP reply about a job holds when it has no target
+#: (``[analysis] default_budget = 0`` and no ``budget``), as pages held before
+#: replies were cut by size. The Python API's automatic mode holds them all.
+ROWS_WITHOUT_TARGET = 50
+
+#: What a reply over the server's default target adds when it has an attached
+#: analysis: the default runs only the trim rung on it.
+_ANALYSIS_TRIMMED_ONLY = (
+    "Only the trim rung ran on the attached analysis; an explicit budget reduces it further."
+)
+
+_NOTES_IN_FULL: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "notes_in_full", default=False
+)
+
+
+@contextlib.contextmanager
+def notes_in_full() -> Iterator[None]:
+    """Present the replies inside with every standing note in full, and
+    remember none of them: for a call the server makes on its own behalf, such
+    as the Python API's polling wait, whose reply no caller reads."""
+    token = _NOTES_IN_FULL.set(True)
+    try:
+        yield
+    finally:
+        _NOTES_IN_FULL.reset(token)
 
 
 #: Builds one job's complete answer at a moment, with its attached part (a
@@ -371,21 +404,22 @@ class JobAnswerParts:
     rows: str
     #: The record a job's run rows are read back from, by job id.
     record: Callable[[str], presenter.Record]
-    #: The words a cut of the run rows adds, by job id.
-    annotate: Callable[[str], presenter.Annotate]
+    #: The words a cut of the run rows adds, by job id (None for an answer that
+    #: names no job) and the complete answer before the cut.
+    annotate: Callable[[str | None, Mapping[str, Any]], presenter.Annotate]
     #: Fits the attached part to a rung, in place: ``(answer, rung, rows, target)``.
     trim_attached: Callable[[dict[str, Any], response_budget.Rung, int | None, int], None]
     #: Whether an answer carries an attached part to fit at all.
     attached: Callable[[Mapping[str, Any]], bool]
-    #: The sentence of the hint that is a standing note, by job id.
-    route: Callable[[str], str]
+    #: The sentences of the hint that are standing notes, by job id.
+    route: Callable[[str], tuple[str, ...]]
     #: That sentence once the session was sent it in full.
     short_route: str
 
 
-def say_over_target(reply: dict[str, Any], size: int, target: int) -> None:
-    """Say once that a reply went out over its target, and what it cut
-    (``response_budget.over_target_observation``). The reply's
+def say_over_target(reply: dict[str, Any], size: int, target: int, *, more: str = "") -> None:
+    """Say once that a reply went out over its target, what it cut, and
+    ``more`` (``response_budget.over_target_observation``). The reply's
     ``observations`` list is replaced, not extended, so the answer it was cut
     from keeps its own."""
     cut = reply.get("cut")
@@ -400,7 +434,7 @@ def say_over_target(reply: dict[str, Any], size: int, target: int) -> None:
     )
     reply["observations"] = [
         *reply.get("observations", []),
-        response_budget.over_target_observation(size, target, held),
+        response_budget.over_target_observation(size, target, held, more=more),
     ]
 
 
@@ -485,9 +519,13 @@ async def present_job_answer(
     loop: the snapshot behind ``build`` is detached, and the session's note
     memory takes its own lock.
     """
-    memory = None if in_automatic_door() else state.notes_sent
+    whole = in_automatic_door()
+    memory = None if whole or _NOTES_IN_FULL.get() else state.notes_sent
+    # With no target an MCP reply still holds a bounded number of run rows;
+    # the Python API's automatic mode returns them all.
+    caps = {parts.rows: ROWS_WITHOUT_TARGET} if budget.tokens is None and not whole else None
     reply, planned = await asyncio.to_thread(
-        _present_job_answer, build, parts, tool, schema, budget, state, delivery, memory
+        _present_job_answer, build, parts, tool, schema, budget, state, delivery, memory, caps
     )
     # Remembered on the loop, once the reply is in hand: a call cancelled
     # while the thread ran records nothing it did not send.
@@ -504,6 +542,7 @@ def _present_job_answer(
     state: SessionState,
     delivery: said_once.Delivery,
     memory: said_once.NotesSent | None,
+    caps: Mapping[str, int] | None,
 ) -> tuple[dict[str, Any], said_once.Plan | None]:
     """The reply, and the plan of standing notes it carries, which the caller
     commits to the memory."""
@@ -520,7 +559,7 @@ def _present_job_answer(
                 data,
                 memory=memory,
                 delivery=delivery,
-                route=parts.route(job_id) if isinstance(job_id, str) else None,
+                routes=parts.route(job_id) if isinstance(job_id, str) else (),
                 short_route=parts.short_route,
             )
             planned_once = True
@@ -532,17 +571,24 @@ def _present_job_answer(
         shown = presenter.present(
             reply_payload(data),
             schema,
-            target=budget.tokens if named else None,
+            target=budget.tokens,
             tool=tool,
-            snapshot={},
+            snapshot={"request_id": data.get("request_id")},
             store=state.store,
             ttl_hours=state.config.result_set_ttl_hours,
-            annotate=parts.annotate(job_id) if isinstance(job_id, str) else None,
-            records={parts.rows: parts.record(job_id)} if isinstance(job_id, str) else None,
-            over=say_over_target,
+            annotate=parts.annotate(job_id if named else None, data),
+            records={parts.rows: parts.record(job_id)} if named else None,
+            caps=caps,
+            over=functools.partial(
+                say_over_target,
+                more=_ANALYSIS_TRIMMED_ONLY
+                if attached and budget.max_rung < response_budget.RUNG_SHRINK
+                else "",
+            ),
         )
-        # Every list a job's answer may cut is its run rows, read from the record.
-        assert shown.stored is None, "a job's answer cut a list that is not a record"
+        # Every list a job's answer may cut is its run rows, read from the
+        # record; an answer that names no job has none, so its rows are stored.
+        assert shown.stored is None or not named, "a job's answer cut a list not a record"
         return shown
 
     shown = candidate(None, None)

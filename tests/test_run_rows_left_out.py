@@ -18,7 +18,6 @@ import jsonschema
 import pytest
 
 from ltspice_mcp.lib import experiment_runner, now
-from ltspice_mcp.lib.said_once import NotesSent
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import experiments as experiments_module
 from ltspice_mcp.tools.jobs import JOBS_OUTPUT_SCHEMA, JobsInput, handle_jobs
@@ -233,9 +232,9 @@ async def test_a_run_receipt_with_no_target_keeps_a_cap_of_50_rows(
 
 
 @pytest.mark.asyncio
-async def test_a_replay_sends_every_note_in_full_and_records_none(
-    state_with_sim: SessionState, grid_deck: Path
-):
+async def test_a_replay_sends_every_note_in_full(state_with_sim: SessionState, grid_deck: Path):
+    """A replay by request_id is how a caller recovers a reply it lost, so it
+    sends every standing note in full, whatever the session sent before."""
     payload = _grid(grid_deck, 4, "replayed-notes")
     _is_error, first = await submit_experiment(state_with_sim, payload)
     assert "path" in first["source"][0]
@@ -244,11 +243,9 @@ async def test_a_replay_sends_every_note_in_full_and_records_none(
     assert replay["replayed"] is True
     assert "path" in replay["source"][0], "a replay recovers a lost reply: in full"
 
-    state_with_sim.notes_sent = NotesSent()
-    _is_error, again = await submit_experiment(state_with_sim, payload)
+    # What it sent in full counts as sent: the next wait sends it by code.
     waited = await _jobs(state_with_sim, action="wait", job_id=first["job_id"], timeout_s=0)
-    assert again["replayed"] is True
-    assert "path" in waited["source"][0], "a replay records nothing as sent"
+    assert waited["source"][0]["said_before"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -279,3 +276,28 @@ async def test_a_routing_failure_receipt_is_presented_like_every_receipt(
     assert (cut["total"], cut["returned"]) == (120, 50)
     assert data["stored_answer"]["path"] in data["hint"]
     assert experiment_runner is not None
+
+
+@pytest.mark.asyncio
+async def test_an_offset_cursor_of_an_earlier_release_says_how_to_start_again(
+    state_no_sim: SessionState,
+):
+    job = make_experiment_job(state_no_sim, job_id="exp_old_cursor", count=3)
+    for action in ("runs", "list"):
+        extra = {"job_id": job.job_id} if action == "runs" else {}
+        data = await _jobs(state_no_sim, action=action, cursor="o:50", **extra)
+        assert data["error"]["code"] == "invalid_cursor"
+        assert "no cursor starts again" in data["error"]["message"], action
+
+
+@pytest.mark.asyncio
+async def test_the_python_apis_own_wait_remembers_no_note(
+    state_no_sim: SessionState,
+):
+    """The Python API polls a wait for its own use: that page reaches no
+    caller, so the session's note memory keeps nothing from it."""
+    job = make_experiment_job(state_no_sim, job_id="exp_api_poll", count=2)
+    await asyncio.to_thread(lambda: SyncApi(state_no_sim).wait(job.job_id))
+    assert len(state_no_sim.notes_sent) == 0
+    data = await _jobs(state_no_sim, action="wait", job_id=job.job_id, timeout_s=0)
+    assert "path" in data["source"][0]

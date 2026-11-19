@@ -304,8 +304,9 @@ reduces every field.
 `run_experiments`, `jobs`, `analyze_results` and `inspect` take a `budget` in
 estimated tokens (compact characters / 4, minimum 500). It is the reply's
 target. If you omit it, the server's default (`[analysis] default_budget`,
-4000 tokens) is the target; set the config value to `0` to send every reply
-whole.
+4000 tokens) is the target. With the config value set to `0` and no `budget`
+there is no target: a reply is sent whole, except that a reply about a job
+holds at most 50 run rows. The Python API returns every row.
 
 `run_experiments` and `jobs` cut a reply over its target by run rows, whole
 rows from the end, keeping at least one. The reply's `cut` names what it left
@@ -314,17 +315,22 @@ out (`"/runs/items": {total, returned, next}`), and its hint gives
 record; pass `run_fields` again with each cursor. A page read later shows the
 job as it stands then, with its `status` and `progress`. `jobs(action="list")`
 is cut by circuit groups the same way, and its `cursor` reads on.
-`failures`, `observations`, `warnings`, `completeness`, `progress` and each
-kept row's diagnostics and measurement fields are never cut: a target too
-small for them still returns them in full, with one `budget_not_met`
-observation saying the reply is over its target.
+A row is sent whole or not at all. For the rows left out, `runs_not_shown`
+names, per kind (`diagnostics.<code>`, `failed_measurements`,
+`measurements_not_established`, `measurements_not_printed`, a coverage that
+says something was not read, `status.failed`), how many runs carry it and up to
+5 of them, each with a cursor that reads its row. `failures`, `observations`,
+`warnings`, `completeness`, `progress`, the rows sent and `runs_not_shown` are
+never cut: a target too small for them still returns them in full, with one
+`budget_not_met` observation saying the reply is over its target.
 
 A note that describes the job or your request (a micro sign read as micro, an
 ngspice mode that could not be checked, results left in the job folder, the
 request's `lint` and `source`, the route to the `measurements` recipe) is sent
 in full once per session. After that it comes back as its code with
 `said_before` in place of its text, and the hint names
-`jobs(action="status", job_id)`, which always sends every note in full.
+`jobs(action="status", job_id)`, which always sends every note in full, as
+does repeating a `run_experiments` call with the same `request_id`.
 
 `analyze_results`, `inspect` and a receipt's attached analysis apply the rungs
 of a fixed reduction ladder in order until the reply fits:

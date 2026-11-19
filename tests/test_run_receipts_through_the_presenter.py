@@ -14,6 +14,8 @@ session starts with nothing remembered.
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 import threading
 from pathlib import Path
 from typing import Any
@@ -24,7 +26,7 @@ import pytest
 from ltspice_mcp.lib import now, recent
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
-from ltspice_mcp.lib.said_once import SHORTENS, NotesSent
+from ltspice_mcp.lib.said_once import SHORTENS
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import jobs as jobs_module
 from ltspice_mcp.tools.jobs import JOBS_OUTPUT_SCHEMA, JobsInput, handle_jobs
@@ -147,9 +149,9 @@ async def test_every_page_of_run_rows_rebuilds_the_jobs_table(
 ):
     receipt = await _grid_receipt(state_with_sim, grid_deck, 64, 600)
     job_id = receipt["job_id"]
-    state_with_sim.config.default_budget = 0
-    whole = await _jobs(state_with_sim, action="runs", job_id=job_id)
-    assert "cut" not in whole, "with no target the table is sent whole"
+    # A target that holds every row: with no target an MCP reply holds 50.
+    whole = await _jobs(state_with_sim, action="runs", job_id=job_id, budget=10**6)
+    assert "cut" not in whole, "a target that holds the table sends it whole"
     assert len(whole["items"]) == 64
 
     rows = list(receipt["runs"]["items"])
@@ -287,7 +289,13 @@ async def test_the_route_to_the_measurements_recipe_is_said_once(state_no_sim: S
 
 def test_status_sends_in_full_and_a_wait_and_a_run_shorten():
     """The one table of which deliveries shorten a note sent before."""
-    assert dict(SHORTENS) == {"status": False, "wait": True, "run": True, "resume": True}
+    assert dict(SHORTENS) == {
+        "status": False,
+        "replay": False,
+        "wait": True,
+        "run": True,
+        "resume": True,
+    }
 
 
 @pytest.mark.asyncio
@@ -340,24 +348,69 @@ def _delivery_fields() -> set[str]:
 async def test_a_finished_jobs_deliveries_carry_one_answer(
     state_with_sim: SessionState, grid_deck: Path
 ):
-    """The run receipt, the last wait and a status of a finished job are
-    deliveries of one answer: set aside the fields the schemas mark as the
-    delivery's, and they are the same. Each is read as a session's first
-    reply, so every standing note is in full."""
-    assert _delivery_fields() == {"action", "timed_out", "replayed"}
-    receipt = await _grid_receipt(state_with_sim, grid_deck, 4, None)
-    state_with_sim.notes_sent = NotesSent()
-    waited = await _jobs(
-        state_with_sim, action="wait", job_id=receipt["job_id"], timeout_s=LIVENESS_S
-    )
-    state_with_sim.notes_sent = NotesSent()
-    status = await _jobs(state_with_sim, action="status", job_id=receipt["job_id"])
+    """The run receipt (here its replay), the last wait and a status of a
+    finished job are deliveries of one answer: set aside the fields the
+    schemas mark as the delivery's, and they are the same, both whole and cut
+    to a target, standing note, ``cut`` and ``runs_not_shown`` included. Each
+    is a new session's first reply about the job, so no note was sent before."""
+    assert _delivery_fields() == {
+        "action",
+        "timed_out",
+        "replayed",
+        "resumed",
+        "resume_request_id",
+        "addressed_parent_job_id",
+        "head_job_id",
+    }
+    receipt = await _grid_receipt(state_with_sim, grid_deck, 16, 600)
+    job = state_with_sim.all_jobs[receipt["job_id"]]
+    job.observations = [*job.observations, dict(_STANDING[2])]
+    job.cases[13].log_diagnostics = dict(_DIAGNOSED)
+    payload = {
+        "request_id": receipt["request_id"],
+        "circuits": [{"path": str(grid_deck), "id": "dut"}],
+        "execution": {"wait_s": LIVENESS_S},
+        "variations": [
+            {
+                "kind": "assign",
+                "assign": {"R1": ["1k", "2k", "3k", "4k"], "C1": ["1u", "2u"], "V1": ["1", "2"]},
+            }
+        ],
+        "analyze": {"recipes": _GRID_RECIPES},
+    }
 
-    answers = [
-        {key: value for key, value in data.items() if key not in _delivery_fields()}
-        for data in (receipt, waited, status)
-    ]
-    assert answers[0] == answers[1] == answers[2]
+    def session() -> SessionState:
+        fresh = SessionState.create(
+            state_with_sim.config, dict(state_with_sim.available_simulators)
+        )
+        fresh.add_experiment_job(job, already_persisted=True)
+        return fresh
+
+    for budget in (600, 10**6):
+        _is_error, replay = await submit_experiment(session(), {**payload, "budget": budget})
+        waited = await _jobs(
+            session(), action="wait", job_id=job.job_id, timeout_s=LIVENESS_S, budget=budget
+        )
+        status = await _jobs(session(), action="status", job_id=job.job_id, budget=budget)
+        assert replay["replayed"] is True
+        # A budget_not_met note measures the reply that carries it, delivery
+        # fields included, so its estimate is the delivery's too.
+        answers = [
+            json.loads(
+                re.sub(
+                    r"estimated \d+ tokens",
+                    "estimated N tokens",
+                    json.dumps({k: v for k, v in data.items() if k not in _delivery_fields()}),
+                )
+            )
+            for data in (replay, waited, status)
+        ]
+        assert answers[0] == answers[1] == answers[2], budget
+        whole = budget == 10**6
+        assert ("cut" in answers[0]) is not whole
+        assert ("runs_not_shown" in answers[0]) is not whole
+        (placement,) = _observations(answers[0], "results_not_beside_sheet")
+        assert placement["detail"] == _STANDING[2]["detail"]
 
 
 class _HeldRuns:
@@ -542,3 +595,38 @@ async def test_a_list_page_is_cut_to_the_calls_budget(
     assert targets == [20_000]
     assert second["cut"]["/items"]["offset"] == 1
     assert second["items"][0] != first["items"][0]
+
+
+def test_a_presenters_over_target_note_names_its_cut_where_a_ladders_names_none():
+    """Two writers of budget_not_met: the presenter's reply names what it
+    cut; a ladder's reply has a floor and no cut, so it names none."""
+    from ltspice_mcp.lib import response_budget as rb
+
+    cut = rb.over_target_observation(900, 600, {"/runs/items": (1, 16)})
+    floor = rb.not_met_observation(rb.Rung(level=rb.RUNG_SHRINK, budget=600, measured=900), 900)
+    assert cut["code"] == floor["code"] == "budget_not_met"
+    assert "/runs/items holds 1 of 16" in cut["detail"]
+    assert "Cut:" not in floor["detail"] and "fully degraded" in floor["detail"]
+
+
+def test_an_attached_trim_note_speaks_of_the_analysis_where_a_ladders_names_its_rung():
+    """Two writers of budget_truncated: a receipt's ladder runs over its
+    attached analysis alone, a tool's over its whole reply."""
+    from ltspice_mcp.lib import response_budget as rb
+
+    attached = rb.attached_trimmed_observation(600, ["emptied analysis.result.x"], "exp_1")
+    rung = rb.Rung(level=rb.RUNG_TRIM, budget=600, measured=900, cut=["x"])
+    whole = rb.truncated_observation(rung, 900, cut="rows", route="")
+    assert attached["code"] == whole["code"] == "budget_truncated"
+    assert "attached analysis" in attached["detail"] and "rung" not in attached["detail"]
+    assert "rung 0" in whole["detail"] and "attached analysis" not in whole["detail"]
+
+
+@pytest.mark.asyncio
+async def test_a_receipt_over_the_default_says_an_explicit_budget_reduces_its_analysis(
+    state_with_sim: SessionState, grid_deck: Path
+):
+    receipt = await _grid_receipt(state_with_sim, grid_deck, 16, None)
+    (note,) = _observations(receipt, "budget_not_met")
+    assert "Only the trim rung ran on the attached analysis" in note["detail"]
+    assert "an explicit budget reduces it further" in note["detail"]

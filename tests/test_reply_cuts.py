@@ -364,6 +364,12 @@ NEVER_BOUNDS: dict[tuple[str, str], str] = {
         "the values the refused argument accepts"
     ),
     ("jobs.handle_jobs", "files"): "one per file the run wrote beside its results",
+    **{
+        (handler, "runs_not_shown.*.runs"): (
+            "receipts.NOT_SHOWN_CAP (5) per kind of fact, with count the true number"
+        )
+        for handler in ("experiments.handle_run_experiments", "jobs.handle_jobs")
+    },
     # What a job's request named, which a standing note's said_before shortens.
     **{
         (handler, path): bound
@@ -723,6 +729,7 @@ KEPT_UNTIL_BREAKING: dict[str, str] = {
     ),
     "tools/experiments.py:_render_static_run_receipt": _HANDS_BUDGET_ON,
     "tools/experiments.py:_error_response": _HANDS_BUDGET_ON,
+    "tools/experiments.py:_routing_failure_response": _HANDS_BUDGET_ON,
     "tools/experiments.py:_post_submit_error_response": _HANDS_BUDGET_ON,
     "tools/receipts.py:<module>": (
         "the run rows' record and the shared page schema of the runs block, which "

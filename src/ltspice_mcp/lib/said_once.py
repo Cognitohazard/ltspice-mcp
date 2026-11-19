@@ -39,13 +39,15 @@ from ltspice_mcp.lib.continuation import mcp_call
 from ltspice_mcp.lib.cursor_codec import canonical_hash
 
 #: How a job's answer is delivered.
-Delivery = Literal["status", "wait", "run", "resume"]
+Delivery = Literal["status", "wait", "run", "replay", "resume"]
 
 #: Which deliveries send a note already sent in full by its code. A status
 #: call sends every note in full, so a caller that lost its context reads
-#: them there.
+#: them there; so does a replay by ``request_id``, which is how a caller
+#: recovers a reply it lost.
 SHORTENS: Final[Mapping[Delivery, bool]] = {
     "status": False,
+    "replay": False,
     "wait": True,
     "run": True,
     "resume": True,
@@ -127,15 +129,11 @@ class Plan:
     job_id: str
     seen: tuple[_Key, ...]
     short: Mapping[_Key, int]
-    route: str | None = None
+    routes: tuple[str, ...] = ()
     short_route: str = ""
 
-    @property
-    def shortens(self) -> bool:
-        return bool(self.short)
 
-
-def _notes(answer: Mapping[str, Any], job_id: str, route: str | None) -> list[_Key]:
+def _notes(answer: Mapping[str, Any], job_id: str, routes: tuple[str, ...]) -> list[_Key]:
     keys: list[_Key] = []
     for item in answer.get("observations") or ():
         if isinstance(item, dict) and item.get("code") in STANDING_CODES:
@@ -145,8 +143,9 @@ def _notes(answer: Mapping[str, Any], job_id: str, route: str | None) -> list[_K
             if isinstance(entry, dict) and "circuit" in entry:
                 keys.append((job_id, code, digest(entry)))
     hint = answer.get("hint")
-    if route and isinstance(hint, str) and route in hint:
-        keys.append((job_id, MEASUREMENTS_ROUTE_CODE, digest(route)))
+    for route in routes:
+        if isinstance(hint, str) and route in hint:
+            keys.append((job_id, MEASUREMENTS_ROUTE_CODE, digest(route)))
     return keys
 
 
@@ -155,23 +154,24 @@ def plan(
     *,
     memory: NotesSent | None,
     delivery: Delivery,
-    route: str | None = None,
+    routes: tuple[str, ...] = (),
     short_route: str = "",
 ) -> Plan | None:
     """Which standing notes of ``answer`` this delivery sends by code. None
     for an answer that names no job, or with no memory.
 
-    ``route`` is the sentence of the answer's hint that routes to the
-    ``measurements`` recipe, replaced by ``short_route`` when shortened.
+    ``routes`` are the sentences the answer's hint may route to the
+    ``measurements`` recipe with, each replaced by ``short_route`` when
+    shortened.
     """
     job_id = answer.get("job_id")
     if not isinstance(job_id, str) or memory is None:
         return None
-    seen = tuple(dict.fromkeys(_notes(answer, job_id, route)))
+    seen = tuple(dict.fromkeys(_notes(answer, job_id, routes)))
     short = {
         key: before for key in seen if (before := shortened(memory, delivery, key)) is not None
     }
-    return Plan(job_id, seen, short, route, short_route)
+    return Plan(job_id, seen, short, routes, short_route)
 
 
 def apply(answer: dict[str, Any], planned: Plan | None) -> int:
@@ -212,14 +212,13 @@ def apply(answer: dict[str, Any], planned: Plan | None) -> int:
             rendered.append(entry)
         answer[field] = rendered
     hint = answer.get("hint")
-    route = planned.route
-    if (
-        route
-        and isinstance(hint, str)
-        and route in hint
-        and said(MEASUREMENTS_ROUTE_CODE, route) is not None
-    ):
-        hint = hint.replace(route, planned.short_route)
+    for route in planned.routes:
+        if (
+            isinstance(hint, str)
+            and route in hint
+            and said(MEASUREMENTS_ROUTE_CODE, route) is not None
+        ):
+            hint = hint.replace(route, planned.short_route)
     if count:
         repeat = mcp_call("jobs", {"action": "status", "job_id": job_id})
         sentence = (

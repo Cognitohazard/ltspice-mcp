@@ -95,6 +95,7 @@ from ltspice_mcp.tools.receipts import (
     RUN_EXPERIMENTS_OUTPUT_SCHEMA,
     RUN_RECORD_SCHEMA,
     RUN_ROWS_CUT,
+    RUNS_NOT_SHOWN_SCHEMA,
     RUNS_PAGE_ROWS,
     RUNS_PAGE_SCHEMA,
     ReceiptSnapshot,
@@ -508,6 +509,7 @@ _JOBS_RECEIPT_PROPERTIES: dict[str, Any] = {
     "analysis": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["analysis"],
     "artifacts": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["artifacts"],
     "lineage": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["lineage"],
+    "runs_not_shown": RUNS_NOT_SHOWN_SCHEMA,
 }
 
 _JOBS_RECEIPT_REQUIRED = [
@@ -607,13 +609,14 @@ def _jobs_receipt_schema(action: Literal["status", "wait", "resume"]) -> dict[st
         properties["timed_out"] = {"type": "boolean", DELIVERY: True}
         required.append("timed_out")
     if action == "resume":
+        # What the resume call did, not what the job is: the delivery's.
         properties.update(
             {
-                "resumed": {"type": "boolean"},
-                "replayed": {"type": "boolean"},
-                "resume_request_id": {"type": "string"},
-                "addressed_parent_job_id": {"type": "string"},
-                "head_job_id": {"type": ["string", "null"]},
+                "resumed": {"type": "boolean", DELIVERY: True},
+                "replayed": {"type": "boolean", DELIVERY: True},
+                "resume_request_id": {"type": "string", DELIVERY: True},
+                "addressed_parent_job_id": {"type": "string", DELIVERY: True},
+                "head_job_id": {"type": ["string", "null"], DELIVERY: True},
                 "control_token": {"type": "string"},
             }
         )
@@ -657,6 +660,7 @@ def _jobs_page_schema(
         properties["dialect"] = {"type": ["string", "null"]}
         # The job as it stood when this page was read from its record.
         properties["progress"] = RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["progress"]
+        properties["runs_not_shown"] = RUNS_NOT_SHOWN_SCHEMA
         required.append("dialect")
     return {
         "type": "object",
@@ -1735,6 +1739,7 @@ async def _present_jobs(
             annotate=_say_which_groups,
             target=budget.tokens,
             caps={_LIST_ROWS: page_limit},
+            over=say_over_target,
         )
     if isinstance(args, JobsRunsInput):
         return await _runs_page(args, evaluation, runs_from, budget.tokens)
@@ -1744,7 +1749,7 @@ async def _present_jobs(
             lambda rung, rows: render_jobs_data(
                 evaluation, rung=rung, analysis_rows_cap=rows, served=served
             ),
-            receipt_parts(),
+            receipt_parts(snapshot=evaluation.snapshot),
             tool="jobs",
             schema=JOBS_OUTPUT_SCHEMA,
             budget=budget,
@@ -1791,6 +1796,7 @@ async def _list_page(args: JobsListInput, state: SessionState) -> dict[str, Any]
         annotate=_say_which_groups,
         cap=page_limit,
         target=resolve_response_budget(args.budget, state).tokens,
+        over=say_over_target,
     )
 
 
@@ -1823,6 +1829,6 @@ async def _runs_page(
         offset,
         run_rows_record(job_id),
         target=target,
-        annotate=say_which_rows(job_id, args.run_fields),
+        annotate=say_which_rows(evaluation.snapshot, args.run_fields),
         over=say_over_target,
     )

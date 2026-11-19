@@ -318,7 +318,9 @@ def truncated_observation(rung: Rung, estimate: int, cut: str, route: str) -> di
     """The fact that a budget degraded this response, and how to get it back.
 
     ``rung.cut`` names the blocks the trim emptied; ``route`` may be empty when
-    there is nothing to go back for.
+    there is nothing to go back for. Beside :func:`attached_trimmed_observation`,
+    which says it of a receipt's attached analysis alone: this one speaks of a
+    whole reply walked down the ladder, and names its rung.
     """
     emptied = f" Emptied: {', '.join(rung.cut)}." if rung.cut else ""
     return {
@@ -334,7 +336,12 @@ def truncated_observation(rung: Rung, estimate: int, cut: str, route: str) -> di
 
 
 def not_met_observation(rung: Rung, estimate: int) -> dict[str, Any]:
-    """The fact that the floor is bigger than the budget — stated, not hidden."""
+    """The fact that the floor is bigger than the budget — stated, not hidden.
+
+    Beside :func:`over_target_observation`, which says it of a reply the
+    presenter cut: a ladder's reply has a floor and no ``cut``, so this one
+    names no list.
+    """
     return {
         "code": "budget_not_met",
         "kind": OBSERVATION_KIND,
@@ -350,7 +357,7 @@ def not_met_observation(rung: Rung, estimate: int) -> dict[str, Any]:
 
 
 def over_target_observation(
-    size: int, target: int, held: Mapping[str, tuple[int, int]]
+    size: int, target: int, held: Mapping[str, tuple[int, int]], *, more: str = ""
 ) -> dict[str, Any]:
     """The fact that a reply the presenter cut (``lib/presenter.py``) is
     still over its target, and what it holds of each list it cut (``held``:
@@ -367,7 +374,9 @@ def over_target_observation(
             f"This reply is an estimated {size} tokens, over its target of {target}: "
             "what is never cut (failures, observations, warnings, progress, the "
             "request's lint and source, and at least one entry of each list cut, "
-            "with every field of it) is larger than the target." + (f" Cut: {cut}." if cut else "")
+            "with every field of it) is larger than the target."
+            + (f" Cut: {cut}." if cut else "")
+            + (f" {more}" if more else "")
         ),
     }
 

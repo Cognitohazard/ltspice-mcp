@@ -23,6 +23,7 @@ from ltspice_mcp.lib.response_budget import Rung
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools import inspect_tools as insp
+from ltspice_mcp.tools import receipts as receipts_mod
 from ltspice_mcp.tools.analyze import (
     OUTPUT_SCHEMA,
     AnalyzeResultsInput,
@@ -912,8 +913,9 @@ class TestWaveformSamplesFitTheBudget:
 class TestJobsBudget:
     async def test_a_met_budget_changes_nothing(self, state_no_sim: SessionState, work_dir: Path):
         job = _batch_with_runs(state_no_sim, 60)
-        # As above: 'no budget' has to mean no budget for this comparison.
-        state_no_sim.config.default_budget = 0
+        # The same target, once from the server's default and once from the
+        # call: with no target at all an MCP reply holds 50 run rows.
+        state_no_sim.config.default_budget = 1_000_000
         plain = await _jobs(state_no_sim, action="runs", job_id=job.job_id)
         met = await _jobs(state_no_sim, action="runs", job_id=job.job_id, budget=1_000_000)
         assert _stable(met) == _stable(plain)
@@ -1052,8 +1054,14 @@ async def _grid_receipt(
 
 
 def _assert_floor_flat(small: dict[str, Any], large: dict[str, Any]) -> None:
-    """Two floors that differ by the digits of their counts, nothing per case."""
-    sizes = (response_budget.estimate_tokens(small), response_budget.estimate_tokens(large))
+    """Two floors that differ by the digits of their counts, nothing per case.
+    ``runs_not_shown`` names at most ``NOT_SHOWN_CAP`` runs per kind of fact,
+    so it is bounded on its own and measured apart."""
+    for floor in (small, large):
+        for entry in floor.get("runs_not_shown", {}).values():
+            assert len(entry["runs"]) <= receipts_mod.NOT_SHOWN_CAP
+    lean = [{k: v for k, v in floor.items() if k != "runs_not_shown"} for floor in (small, large)]
+    sizes = (response_budget.estimate_tokens(lean[0]), response_budget.estimate_tokens(lean[1]))
     assert sizes[1] - sizes[0] <= _FLOOR_DIGIT_SLACK, sizes
 
 

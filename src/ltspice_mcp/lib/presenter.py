@@ -547,6 +547,7 @@ def present_page(
     target: int | None,
     annotate: Annotate | None = None,
     cap: int | None = None,
+    over: Over | None = None,
 ) -> Presented:
     """The entries of the list at ``pointer`` from ``offset`` on, read from
     ``stored`` and cut to fit ``target``, and to ``cap`` entries when given.
@@ -576,6 +577,7 @@ def present_page(
             for other, entries in others.items()
         },
         caps={} if cap is None else {pointer: cap},
+        over=over,
     )
 
 
@@ -588,9 +590,10 @@ def present_record_page(
     target: int | None,
     annotate: Annotate | None = None,
     over: Over | None = None,
+    cap: int | None = None,
 ) -> Presented:
     """The entries of the record's list at ``pointer`` from ``offset`` on, cut
-    to fit ``target``.
+    to fit ``target``, and to ``cap`` entries when given.
 
     ``answer`` is the complete answer read from the record now, as the tool
     makes it, so a page carries the record as it stands when it is read.
@@ -598,11 +601,11 @@ def present_record_page(
     from the start, an answer that fits is sent whole, as :func:`present`
     sends it.
     """
-    if offset == 0:
+    whole = resolve_pointer(answer, pointer)
+    if offset == 0 and (cap is None or len(whole) <= cap):
         size = _size(answer) if target is not None else 0
         if target is None or size <= target:
             return Presented(answer, {}, None, size, target)
-    whole = resolve_pointer(answer, pointer)
     return _present_lists(
         answer,
         {pointer: whole[offset:]},
@@ -614,6 +617,7 @@ def present_record_page(
         paged=pointer,
         records={pointer: record},
         over=over,
+        caps={} if cap is None else {pointer: cap},
     )
 
 
@@ -625,9 +629,7 @@ def open_record(text: str, *, kind: str) -> tuple[str, int]:
     Whether the offset still names an entry is the reader's to check, since
     only it reads the record.
     """
-    refused = (
-        f"{text[:40]!r} is not a cursor this action returned: pass a cut entry's next unchanged."
-    )
+    refused = _refusal(text, "this action")
     try:
         body = _decode_body(text)
     except CursorError:
@@ -644,6 +646,20 @@ def open_record(text: str, *, kind: str) -> tuple[str, int]:
     return key, offset
 
 
+def _refusal(text: str, returned_by: str) -> str:
+    """Why ``text`` is refused as a cursor. An offset cursor of an earlier
+    release (``o:<offset>``) is named as one, with the way to start again."""
+    said = (
+        f"{text[:40]!r} is not a cursor {returned_by} returned: pass a cut entry's next unchanged."
+    )
+    if text.startswith("o:"):
+        said += (
+            " Offset cursors from earlier releases are not read; the same call with no "
+            "cursor starts again from the first entry."
+        )
+    return said
+
+
 def open_page(
     text: str, schema: Mapping[str, Any], *, tool: str, store: Store, gone: str
 ) -> tuple[StoredAnswer, str, int]:
@@ -655,9 +671,7 @@ def open_page(
     stored answer has expired or is missing, which says so and adds
     ``gone``: how to get a fresh answer.
     """
-    refused = (
-        f"{text[:40]!r} is not a cursor this tool returned: pass a cut entry's next unchanged."
-    )
+    refused = _refusal(text, "this tool")
     try:
         body = _decode_body(text)
     except CursorError:

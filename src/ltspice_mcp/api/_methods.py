@@ -343,6 +343,15 @@ def _unwrap(result: types.CallToolResult) -> dict[str, Any]:
     return payload
 
 
+async def _polling_wait(request: Any, state: SessionState) -> Any:
+    """A ``jobs`` wait as the API's own polling calls it: no caller reads the
+    page, so it sends every standing note in full and remembers none."""
+    from ltspice_mcp.tools._base import notes_in_full
+
+    with notes_in_full():
+        return await jobs.handle_jobs(request, state)
+
+
 async def _handler_page(
     handler: Any,
     model: BaseModel,
@@ -1239,11 +1248,15 @@ class ApiMethodsMixin(ABC):
             # timed_out, and rendering a complete receipt per dwell would pay
             # for the whole wait in receipts nobody reads.
             try:
-                page = self.jobs(
+                page = self._dispatch(
+                    "jobs",
+                    jobs.JobsInput,
+                    _polling_wait,
+                    _collect_jobs,
                     raw_page=True,
-                    action="wait",
-                    job_id=job_id,
-                    timeout_s=dwell,
+                    arguments={"action": "wait", "job_id": job_id, "timeout_s": dwell},
+                    cancelable=True,
+                    cancel_on_interrupt=True,
                 )
                 if not page.get("timed_out"):
                     return self.jobs(action="wait", job_id=job_id, timeout_s=0)

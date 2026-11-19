@@ -13,6 +13,7 @@ needs, without ever observing a later job transition.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import functools
 import json
@@ -43,7 +44,7 @@ from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
 from ltspice_mcp.lib.log_types import given_no_value
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.pagination import page_of
-from ltspice_mcp.lib.presenter import ListCut, Record
+from ltspice_mcp.lib.presenter import ListCut, Record, record_cursor
 from ltspice_mcp.lib.projection import (
     absent_path_warnings,
     keep_plan,
@@ -52,7 +53,10 @@ from ltspice_mcp.lib.projection import (
 )
 from ltspice_mcp.lib.raw_parser import other_raw_path
 from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER, rows
-from ltspice_mcp.lib.result_observations import measurements_failed_in_every_run
+from ltspice_mcp.lib.result_observations import (
+    deck_observation_inputs,
+    measurements_failed_in_every_run,
+)
 from ltspice_mcp.lib.sheet_results import run_by_ltspice, sheets_reported
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable
 from ltspice_mcp.state import SessionState
@@ -109,18 +113,38 @@ SAID_BEFORE_SCHEMA: dict[str, Any] = {
     ),
 }
 
-OBSERVATION_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "properties": {
-        "code": {"type": "string"},
-        "kind": {"type": "string"},
-        "detail": {"type": "string"},
-        "evidence": {},
-        "said_before": SAID_BEFORE_SCHEMA,
+
+def said_before_or_whole(whole: dict[str, Any], *names: str) -> dict[str, Any]:
+    """An entry that is either ``whole``, with no ``said_before``, or a
+    standing note already sent in full: ``names`` (its identity) and
+    ``said_before``, and nothing else. Two branches, so a whole entry still
+    has to carry every field ``whole`` requires."""
+    short = {
+        "type": "object",
+        "properties": {
+            **{name: whole["properties"][name] for name in names},
+            "said_before": SAID_BEFORE_SCHEMA,
+        },
+        "required": [*names, "said_before"],
+        "additionalProperties": False,
+    }
+    return {"anyOf": [{**whole, "not": {"required": ["said_before"]}}, short]}
+
+
+OBSERVATION_SCHEMA: dict[str, Any] = said_before_or_whole(
+    {
+        "type": "object",
+        "properties": {
+            "code": {"type": "string"},
+            "kind": {"type": "string"},
+            "detail": {"type": "string"},
+            "evidence": {},
+        },
+        "required": ["code", "kind", "detail"],
     },
-    # A standing note sent before carries said_before in place of detail.
-    "required": ["code", "kind"],
-}
+    "code",
+    "kind",
+)
 
 #: A receipt failure names the case that failed, not a stage (see Envelope).
 CASE_FAILURE_SCHEMA: dict[str, Any] = {
@@ -392,6 +416,46 @@ LINEAGE_SCHEMA: dict[str, Any] = {
 }
 
 
+#: How many runs ``runs_not_shown`` names for one kind of fact; ``count`` is
+#: the true number.
+NOT_SHOWN_CAP = 5
+
+#: The schema of ``runs_not_shown``: never cut and never shortened.
+RUNS_NOT_SHOWN_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "description": (
+        "Present when run rows were left out and some of them carry a fact about "
+        "their run's outcome: per kind ('diagnostics.<code>', 'failed_measurements', "
+        "'measurements_not_established', 'measurements_not_printed', "
+        "'measurements_coverage.<value>', 'diagnostics_coverage.<value>', "
+        "'status.<status>'), how many of the runs after the rows sent carry it, up to "
+        f"{NOT_SHOWN_CAP} of them with the cursor that reads that run's row, and how "
+        "many more."
+    ),
+    "additionalProperties": {
+        "type": "object",
+        "properties": {
+            "count": {"type": "integer", "minimum": 1},
+            "runs": {
+                "type": "array",
+                CUT: NEVER,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "case_id": {"type": "string"},
+                        "run_index": {"type": "integer"},
+                        "cursor": {"type": "string"},
+                    },
+                    "required": ["case_id", "run_index"],
+                },
+            },
+            "more": {"type": "integer", "minimum": 1},
+        },
+        "required": ["count", "runs"],
+    },
+}
+
+
 RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -413,27 +477,29 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
             "type": "array",
             # One entry per circuit the request names: the request bounds it.
             CUT: NEVER,
-            "items": {
-                "type": "object",
-                "properties": {
-                    "circuit": {"type": "string"},
-                    "path": {"type": "string"},
-                    "sha256": {"type": "string"},
-                    "staged_deck": {"type": "string"},
-                    "manifest": {"type": "array", "items": _MANIFEST_SCHEMA, CUT: ITEMS},
-                    "linter_version": {"type": "string"},
-                    "simulator": {"type": "string"},
-                    "dialect": {"type": ["string", "null"]},
-                    "staged_files": {"type": "integer"},
-                    "said_before": SAID_BEFORE_SCHEMA,
+            "items": said_before_or_whole(
+                {
+                    "type": "object",
+                    "properties": {
+                        "circuit": {"type": "string"},
+                        "path": {"type": "string"},
+                        "sha256": {"type": "string"},
+                        "staged_deck": {"type": "string"},
+                        "manifest": {"type": "array", "items": _MANIFEST_SCHEMA, CUT: ITEMS},
+                        "linter_version": {"type": "string"},
+                        "simulator": {"type": "string"},
+                        "dialect": {"type": ["string", "null"]},
+                        "staged_files": {"type": "integer"},
+                    },
+                    # Only the fields every receipt carries are required. The
+                    # digests, staging paths and full manifest are provenance:
+                    # they are emitted when 'provenance' is set, and otherwise
+                    # omitted, because they are a third of a receipt's bytes
+                    # and name files the caller does not open.
+                    "required": ["circuit", "path", "simulator", "dialect"],
                 },
-                # Only the circuit is required: the digests, staging paths and
-                # full manifest are provenance, emitted when 'provenance' is
-                # set, and an entry this session was already sent in full is
-                # sent as its circuit and said_before. Otherwise every entry
-                # carries circuit, path, simulator and dialect.
-                "required": ["circuit"],
-            },
+                "circuit",
+            ),
         },
         # The program the job's cases launched, as identified at submission.
         # Provenance: emitted under 'provenance' only.
@@ -453,16 +519,21 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
             "type": "array",
             # One entry per circuit the request names: the request bounds it.
             CUT: NEVER,
-            "items": {
-                "type": "object",
-                "properties": {
-                    "circuit": {"type": "string"},
-                    "findings": {"type": "array", "items": FINDING_SCHEMA, CUT: FINDING_LIST_CUT},
-                    "said_before": SAID_BEFORE_SCHEMA,
+            "items": said_before_or_whole(
+                {
+                    "type": "object",
+                    "properties": {
+                        "circuit": {"type": "string"},
+                        "findings": {
+                            "type": "array",
+                            "items": FINDING_SCHEMA,
+                            CUT: FINDING_LIST_CUT,
+                        },
+                    },
+                    "required": ["circuit", "findings"],
                 },
-                # An entry already sent in full is its circuit and said_before.
-                "required": ["circuit"],
-            },
+                "circuit",
+            ),
         },
         "runs": RUNS_PAGE_SCHEMA,
         "analysis": {
@@ -495,6 +566,7 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
         "hint": {"type": "string"},
         "error": ENVELOPE_ERROR_SCHEMA,
         "cut": CUT_SCHEMA,
+        "runs_not_shown": RUNS_NOT_SHOWN_SCHEMA,
     },
     "required": [
         "job_id",
@@ -606,18 +678,107 @@ def trim_attached_analysis(
         ]
 
 
+#: The statuses of a run that ended without its output, which a run row says
+#: and a reply that leaves the row out names.
+_ENDED_WITHOUT_OUTPUT = ("failed", "cancelled", "skipped")
+
+
+def row_facts(row: Mapping[str, Any]) -> list[str]:
+    """The facts about a run's outcome its row carries, by kind: each
+    diagnostic's code, each measurement field that names a ``.meas`` that gave
+    no value, what of its log was not read, and a status that ended without
+    output. What a reply that leaves the row out names (``runs_not_shown``)."""
+    kinds = [f"diagnostics.{entry['code']}" for entry in row.get("diagnostics") or ()]
+    if row.get("diagnostics_coverage"):
+        kinds.append(f"diagnostics_coverage.{row['diagnostics_coverage']}")
+    kinds.extend(
+        field
+        for field in (
+            "failed_measurements",
+            "measurements_not_established",
+            "measurements_not_printed",
+        )
+        if row.get(field)
+    )
+    if row.get("measurements_coverage"):
+        kinds.append(f"measurements_coverage.{row['measurements_coverage']}")
+    if row.get("status") in _ENDED_WITHOUT_OUTPUT:
+        kinds.append(f"status.{row['status']}")
+    return list(dict.fromkeys(kinds))
+
+
+#: Each row of a job's table that carries a fact, by its index in the table:
+#: ``(index, case_id, run_index, kinds)``.
+FactIndex = tuple[tuple[int, str, int, tuple[str, ...]], ...]
+
+
+def fact_index(rows: Sequence[Mapping[str, Any]]) -> FactIndex:
+    """The rows of a job's whole table that carry a fact (:func:`row_facts`),
+    read from rows no ``run_fields`` projected."""
+    return tuple(
+        (index, str(row.get("case_id")), int(row.get("run_index", index)), tuple(kinds))
+        for index, row in enumerate(rows)
+        if (kinds := row_facts(row))
+    )
+
+
+def runs_not_shown(
+    facts: FactIndex, start: int, record: Record | None
+) -> dict[str, dict[str, Any]]:
+    """Per kind of fact, the runs from ``start`` on that carry it: the count,
+    up to :data:`NOT_SHOWN_CAP` of them by ``case_id`` and ``run_index`` with a
+    record cursor that starts at that run's row, and how many more. Rows keep
+    their order, so a cursor names a row by its index."""
+    found: dict[str, dict[str, Any]] = {}
+    for index, case_id, run_index, kinds in facts:
+        if index < start:
+            continue
+        for kind in kinds:
+            entry = found.setdefault(kind, {"count": 0, "runs": []})
+            entry["count"] += 1
+            if len(entry["runs"]) < NOT_SHOWN_CAP:
+                run: dict[str, Any] = {"case_id": case_id, "run_index": run_index}
+                if record is not None:
+                    run["cursor"] = record_cursor(record, index)
+                entry["runs"].append(run)
+    for entry in found.values():
+        if entry["count"] > len(entry["runs"]):
+            entry["more"] = entry["count"] - len(entry["runs"])
+    return found
+
+
+#: Names the facts on the rows a reply left out.
+_NOT_SHOWN_SENTENCE = (
+    "runs_not_shown names the runs after these that carry a diagnostic, a "
+    "measurement that gave no value or was not read, or a status other than "
+    "produced, each with a cursor that reads its row."
+)
+
+
 def _say_where_the_runs_are(
-    run_fields: list[str] | None,
-) -> Callable[[str], Callable[[dict[str, Any], Mapping[str, ListCut], Any, str | None], None]]:
+    run_fields: list[str] | None, facts: FactIndex | None
+) -> Callable[
+    [str | None, Mapping[str, Any]],
+    Callable[[dict[str, Any], Mapping[str, ListCut], Any, str | None], None],
+]:
     """The words a receipt adds when its run rows are cut: its ``runs`` page
-    fields set from the cut, and the call that reads the rest, first in its
-    hint."""
+    fields set from the cut, what the rows left out carry (``runs_not_shown``)
+    and the way to read the rest, first in its hint. ``facts`` is the job's
+    whole table's (:func:`fact_index`); without it, the answer's own rows are
+    read, which no ``run_fields`` projected."""
 
     def for_job(
-        job_id: str,
+        job_id: str | None, answer: Mapping[str, Any]
     ) -> Callable[[dict[str, Any], Mapping[str, ListCut], Any, str | None], None]:
+        index = facts
+        if index is None:
+            runs = answer.get("runs")
+            items = runs.get("items") if isinstance(runs, Mapping) else None
+            index = fact_index(items if isinstance(items, list) else [])
+        record = run_rows_record(job_id) if job_id is not None else None
+
         def annotate(
-            reply: dict[str, Any], cut: Mapping[str, ListCut], _stored: Any, _paged: str | None
+            reply: dict[str, Any], cut: Mapping[str, ListCut], stored: Any, _paged: str | None
         ) -> None:
             entry = cut.get(RUN_ROWS)
             if entry is None:
@@ -628,39 +789,55 @@ def _say_where_the_runs_are(
             runs["next_cursor"] = entry.next
             if entry.next is None:
                 return
-            sentence = _the_rest_of_the_rows(entry, job_id, run_fields)
+            said = [_the_rest_of_the_rows(entry, job_id, run_fields, stored)]
+            left_out = runs_not_shown(index, entry.offset + entry.returned, record)
+            if left_out:
+                reply["runs_not_shown"] = left_out
+                said.append(_NOT_SHOWN_SENTENCE)
             hint = reply.get("hint")
-            reply["hint"] = f"{sentence} {hint}" if isinstance(hint, str) and hint else sentence
+            if isinstance(hint, str) and hint:
+                said.append(hint)
+            reply["hint"] = " ".join(said)
 
         return annotate
 
     return for_job
 
 
-def _the_rest_of_the_rows(entry: ListCut, job_id: str, run_fields: list[str] | None) -> str:
+def _the_rest_of_the_rows(
+    entry: ListCut, job_id: str | None, run_fields: list[str] | None, stored: Any = None
+) -> str:
     """The one sentence a reply cut short of a job's run rows says of the
-    rest, on a receipt and a runs page alike."""
+    rest, on a receipt and a runs page alike. An answer that names no job has
+    no record: its rest is in the stored answer."""
+    left = f"{entry.total - entry.offset - entry.returned} of {entry.total} run rows are not in this reply"
+    if job_id is None:
+        where = f" in {stored.path}" if stored is not None else ""
+        return f"{left}; the complete receipt is{where} under 'answer'."
     read_on = call_to_continue("jobs", {"action": "runs", "job_id": job_id, "cursor": entry.next})
     same = " with the same run_fields" if run_fields else ""
-    return (
-        f"{entry.total - entry.offset - entry.returned} of {entry.total} run rows are not "
-        f"in this reply; read them from the job's record with {read_on}{same}."
-    )
+    return f"{left}; read them from the job's record with {read_on}{same}."
 
 
-def receipt_parts(run_fields: list[str] | None = None) -> JobAnswerParts:
+def receipt_parts(
+    run_fields: list[str] | None = None, snapshot: ReceiptSnapshot | None = None
+) -> JobAnswerParts:
     """What the reply layer needs to deliver a job's answer
     (``tools/_base.present_job_answer``): where its run rows are and the
     record they are read back from, the words a cut of them adds, the
-    attached analysis's own trimming, and the measurements route, which is a
-    standing note."""
+    attached analysis's own trimming, and the measurements routes, which are
+    standing notes. ``snapshot`` gives the facts on every row whatever
+    ``run_fields`` keeps."""
+    # The rows as the job holds them, before any projection or native
+    # evidence is rendered: every fact a row carries is on them.
+    facts = None if snapshot is None else fact_index(list(snapshot.runs_by_key.values()))
     return JobAnswerParts(
         rows=RUN_ROWS,
         record=run_rows_record,
-        annotate=_say_where_the_runs_are(run_fields),
+        annotate=_say_where_the_runs_are(run_fields, facts),
         trim_attached=trim_attached_analysis,
         attached=lambda data: _attached_result(dict(data)) is not None,
-        route=measurements_route,
+        route=measurements_routes,
         short_route=_SHORT_MEASUREMENTS_ROUTE,
     )
 
@@ -910,6 +1087,9 @@ class ReceiptSnapshot:
     analysis_request: dict[str, Any] | None
     simulator_executable: SimulatorExecutable | None = None
     lineage: dict[str, Any] | None = None
+    measures: bool = False
+    """Whether a deck the job ran requests a ``.meas`` (read off the loop by
+    :func:`snapshot_receipt_live`; False where it was not read)."""
     path_denied_hint: str | None = None
     """The session's sandbox guidance, which a ``path_denied`` failure row
     carries as its hint. Not a job fact: the remedy is the sandbox setting as
@@ -1346,7 +1526,41 @@ def _recovery_routes(snapshot: ReceiptSnapshot) -> list[str]:
         )
     ):
         routes.append(measurements_route(snapshot.job_id))
+    elif (
+        snapshot.measures
+        and not _attaches_measurements(snapshot.analysis_request)
+        # A simulator whose measure output the server does not read: the
+        # recipe could not read the values either.
+        and not any(
+            row.get("measurements_coverage") == "simulator_unsupported"
+            for row in snapshot.runs_by_key.values()
+        )
+    ):
+        routes.append(measurements_cards_route(snapshot.job_id))
     return routes
+
+
+def _attaches_measurements(request: Mapping[str, Any] | None) -> bool:
+    """Whether the request already attached the ``measurements`` recipe."""
+    recipes = (request or {}).get("recipes") or ()
+    return any(isinstance(r, Mapping) and r.get("metric") == "measurements" for r in recipes)
+
+
+def measurements_cards_route(job_id: str) -> str:
+    """The sentence of a receipt's hint that routes a deck's ``.meas`` cards
+    to the ``measurements`` recipe: a standing note, said in full once per
+    session (``lib/said_once.py``)."""
+    return (
+        "The deck has .meas cards; read their values with analyze_results("
+        f'sources=[{{"job_id": "{job_id}"}}], recipes=[{{"metric": "measurements"}}]), '
+        "or api.analyze_results in Python."
+    )
+
+
+def measurements_routes(job_id: str) -> tuple[str, ...]:
+    """Every sentence a receipt's hint may route to the ``measurements``
+    recipe with, which said-once shortens alike."""
+    return (measurements_route(job_id), measurements_cards_route(job_id))
 
 
 def measurements_route(job_id: str) -> str:
@@ -1364,8 +1578,7 @@ def measurements_route(job_id: str) -> str:
 
 #: The measurements route once this session was sent it in full.
 _SHORT_MEASUREMENTS_ROUTE = (
-    "A run row names a .meas that gave no value; the measurements recipe over this "
-    "job reads every value (said before)."
+    "The measurements recipe over this job reads every .meas value (said before)."
 )
 
 
@@ -1376,6 +1589,7 @@ def snapshot_receipt(
     control_token: str | None = None,
     lint_by_circuit: dict[str, list[dict[str, Any]]] | None = None,
     live_progress: Mapping[str, dict[str, Any]] | None = None,
+    measures: bool = False,
 ) -> ReceiptSnapshot:
     """Copy a job's complete receipt state without suspending the event loop.
 
@@ -1469,6 +1683,7 @@ def snapshot_receipt(
         analysis_observations=tuple(copy.deepcopy(analysis.observations)),
         analysis_request=copy.deepcopy(analysis.request),
         simulator_executable=job.simulator_executable,
+        measures=measures,
         lineage=(
             {
                 "root_job_id": job.recovery.root_job_id,
@@ -1500,13 +1715,27 @@ async def snapshot_receipt_live(
     does not. Every receipt that reports on a job in flight is taken here.
     """
     live_progress = await live_run_progress(job)
+    measures = await asyncio.to_thread(_requests_measures, job)
     return snapshot_receipt(
         job,
         state,
         control_token=control_token,
         lint_by_circuit=lint_by_circuit,
         live_progress=live_progress,
+        measures=measures,
     )
+
+
+def _requests_measures(job: ExperimentJob) -> bool:
+    """Whether a deck a finished case of ``job`` ran requests a ``.meas``,
+    read as every reader of a deck's requested outputs reads it
+    (``result_observations.deck_observation_inputs``, kept per deck)."""
+    decks = {case.staged_deck for case in list(job.cases) if case.status == "produced"}
+    for deck in decks:
+        requested, _ = deck_observation_inputs(deck)
+        if requested and requested.get("meas"):
+            return True
+    return False
 
 
 def render_jobs_receipt_snapshot(
@@ -1579,11 +1808,14 @@ RUNS_PAGE_ROWS = "/items"
 
 
 def say_which_rows(
-    job_id: str, run_fields: list[str] | None
+    snapshot: ReceiptSnapshot, run_fields: list[str] | None
 ) -> Callable[[dict[str, Any], Mapping[str, ListCut], Any, str | None], None]:
     """The words a ``jobs(action="runs")`` reply carries when its rows are
     cut: its page fields set from the cut, which rows it holds, that they were
-    read from the job's record as it stands now, and the call that reads on."""
+    read from the job's record as it stands now, what the rows after it carry
+    (``runs_not_shown``), and the call that reads on."""
+    job_id = snapshot.job_id
+    facts = fact_index(list(snapshot.runs_by_key.values()))
 
     def annotate(
         reply: dict[str, Any], cut: Mapping[str, ListCut], _stored: Any, _paged: str | None
@@ -1603,6 +1835,12 @@ def say_which_rows(
             said.append("A row of a job still running may change between pages.")
         if entry.next is not None:
             said.append(_the_rest_of_the_rows(entry, job_id, run_fields))
+            left_out = runs_not_shown(
+                facts, entry.offset + entry.returned, run_rows_record(job_id)
+            )
+            if left_out:
+                reply["runs_not_shown"] = left_out
+                said.append(_NOT_SHOWN_SENTENCE)
         reply["hint"] = " ".join(said)
 
     return annotate

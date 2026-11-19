@@ -263,8 +263,11 @@ reply that carries a silent field not on it.
 hands it, with its output schema, to one function that decides what is sent.
 The target is one number: the tool's `budget` argument where it has one
 (at least 500 estimated tokens; a smaller one is refused), else
-`[analysis] default_budget` (4000 estimated tokens); a default of 0 sends
-every answer whole.
+`[analysis] default_budget` (4000 estimated tokens). A default of 0 and no
+`budget` is no target: every answer is sent whole, except a list read from a
+record (a job's run rows), which an MCP reply still caps at 50 entries, named
+in `cut` and continued by its cursor, so no reply carries an unbounded
+collection. The Python API's automatic mode returns every row.
 
 - An answer within the target is sent exactly as "Fields left out" makes it.
   It carries neither field below, and nothing is stored.
@@ -1027,8 +1030,22 @@ rows are the one list the presenter cuts; `source`, `lint`, `artifacts`,
 reply's `cut` names `/runs/items` with `{total, returned, next}`, the `runs`
 block's `returned`, `truncated` and `next_cursor` say the same, and the hint
 names `jobs(action="runs", job_id, cursor)`, which reads the rest from the
-job's record. At least one run row always stays, with its diagnostics and
-measurement fields. Fact channels, completeness, progress, verdicts and the
+job's record. At least one run row always stays, and a row is sent whole or
+not at all.
+
+**What the rows left out carry.** When run rows are left out, `runs_not_shown`
+states the facts on the rows after the ones sent, from the job's whole table
+whatever `run_fields` keeps: per kind (`diagnostics.<code>`,
+`diagnostics_coverage.<value>`, `failed_measurements`,
+`measurements_not_established`, `measurements_not_printed`,
+`measurements_coverage.<value>`, and `status.<status>` for a run that ended
+`failed`, `cancelled` or `skipped`), `{count, runs, more?}`, where `runs`
+names at most 5 runs by `case_id` and `run_index`, each with a record cursor
+that starts at its row, and `more` counts the rest. Rows keep their order,
+so a cursor names a row by its index. It is absent when no row is left out or
+none left out carries such a fact, and it is never cut and never shortened.
+A receipt with no job (a routing failure) has no record: its cut rows are
+stored, and the hint names the stored file. Fact channels, completeness, progress, verdicts and the
 ids, token and cursors a caller needs to continue are never cut. If they and
 one run row exceed the target, the reply goes out over it with one
 `budget_not_met` observation. The attached analysis's row surfaces may be held
@@ -1039,7 +1056,9 @@ to fewer rows at the shrink rung, down to none; `analyze_results` over the
 read the same on every reply about it: the `micro_sign_folded`,
 `ngspice_mode_unverified` and `results_not_beside_sheet` observations, each
 `lint` entry and `source` entry, and the hint's route to the `measurements`
-recipe. The session remembers each one it has sent, by job, code and a digest
+recipe (when a row names a `.meas` that gave no value, or, on a terminal
+receipt, when the deck has `.meas` cards, the request did not attach the
+recipe and the simulator's measure output is read). The session remembers each one it has sent, by job, code and a digest
 of its text (`lib/said_once.py`; bounded, never written to disk). A reply that
 repeats one sends it as its code and `said_before`, the number of replies that
 carried it before, in place of its text: an observation as `{code, kind,
@@ -1047,7 +1066,10 @@ said_before}`, a `lint` or `source` entry as `{circuit, said_before}`, and the
 route as a shorter sentence. The hint then names `jobs(action="status",
 job_id)`, which sends every note in full. A note whose text changed is new and
 is sent in full. Which deliveries shorten is one table: `jobs(action="status")`
-never does; a `wait`, a `run_experiments` receipt and a `resume` do. A new
+and a replay by `request_id` never do; a `wait`, a `run_experiments` receipt
+and a `resume` do. Each note's schema has two branches: the whole entry, with
+every field it always carries, and the short one, with `said_before` and
+nothing of its text. A new
 session starts with nothing remembered. The Python API sends every note in
 full; `raw_page=True` returns the MCP reply, shortened notes included. Failures, run rows and their diagnostics and measurement fields,
 progress, and every other observation are never shortened.
@@ -1055,7 +1077,8 @@ progress, and every other observation are never shortened.
 **Deliveries of one answer.** The run receipt, a `wait` and a `status` are
 deliveries of one job's answer. What a delivery adds is marked in the output
 schema with `x-delivery`: `replayed` on a run receipt, `action` on a `jobs`
-reply, and `timed_out` on a wait. Set those aside, and the run receipt, the
+reply, `timed_out` on a wait, and on a resume `resumed`, `replayed`,
+`resume_request_id`, `addressed_parent_job_id` and `head_job_id`. Set those aside, and the run receipt, the
 last wait and a status of a finished job carry the same answer, read in a
 session that has sent none of its standing notes. A wait holds nothing that
 can stop its job: a cancelled wait leaves the job running.

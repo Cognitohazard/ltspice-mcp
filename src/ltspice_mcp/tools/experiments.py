@@ -92,6 +92,7 @@ from ltspice_mcp.lib.recipes import (
     StepSelectionFields,
 )
 from ltspice_mcp.lib.recovery_records import CaseAttempt, CaseRecovery, RecoveryError
+from ltspice_mcp.lib.said_once import Delivery
 from ltspice_mcp.lib.services import cp1252_ltspice, deck_producer
 from ltspice_mcp.lib.sheet_results import NotPlaced, check_request
 from ltspice_mcp.lib.simulator import (
@@ -775,7 +776,9 @@ async def handle_run_experiments(
                 simulator,
             )
         except DeckStagingError as exc:
-            return _routing_failure_response(args, circuit_inputs, exc, projected)
+            return await _routing_failure_response(
+                args, circuit_inputs, exc, projected, budget=budget, state=state
+            )
         await asyncio.to_thread(route.output_folder.mkdir, parents=True, exist_ok=True)
 
         # Staging runs inside the coordinator's request gate, not here: a second
@@ -1033,17 +1036,20 @@ async def _render_static_run_receipt(
     state: SessionState,
     *,
     is_error: bool = False,
+    run_fields: list[str] | None = None,
+    delivery: Delivery = "run",
 ) -> types.CallToolResult:
-    """An error receipt, through the presenter: one with a job keeps its run
-    rows behind the job's record, and one with none is sent whole."""
+    """A receipt built without a snapshot (a failure's), through the
+    presenter: one with a job keeps its run rows behind the job's record, and
+    one with none stores its cut rows."""
     reply = await present_job_answer(
         lambda _rung, _rows: copy.deepcopy(data),
-        receipt_parts(),
+        receipt_parts(run_fields),
         tool="run_experiments",
         schema=RUN_EXPERIMENTS_OUTPUT_SCHEMA,
         budget=budget,
         state=state,
-        delivery="run",
+        delivery=delivery,
     )
     result = format_response(reply)
     result.is_error = is_error
@@ -1607,12 +1613,13 @@ async def _dwell_and_respond(
     return format_response(
         await present_job_answer(
             build,
-            receipt_parts(run_fields),
+            receipt_parts(run_fields, snapshot),
             tool="run_experiments",
             schema=RUN_EXPERIMENTS_OUTPUT_SCHEMA,
             budget=budget,
             state=state,
-            delivery="run",
+            # A replay is how a caller recovers a reply it lost: sent in full.
+            delivery="replay" if receipt.replayed else "run",
         )
     )
 
@@ -1680,11 +1687,14 @@ def _circuit_error(exc: Exception, source_path: Path) -> tuple[str, str]:
     return "submission_failed", str(exc)
 
 
-def _routing_failure_response(
+async def _routing_failure_response(
     args: RunExperimentsInput,
     circuits: list[CircuitDeck],
     exc: DeckStagingError,
     projected: int,
+    *,
+    budget: ResponseBudget,
+    state: SessionState,
 ) -> types.CallToolResult:
     cases: list[ExperimentCase] = []
     for circuit in circuits:
@@ -1730,9 +1740,9 @@ def _routing_failure_response(
     )
     data["runs"] = runs_page(cases, args.run_fields, warnings=data["warnings"])
     finalize_receipt(data)
-    # No job holds these cases, so there is no record to read rows back from:
-    # the receipt is sent whole, its failures naming every case.
-    return format_response(data)
+    # No job holds these cases, so a cut of their rows is stored and named by
+    # its file, as every receipt is presented.
+    return await _render_static_run_receipt(data, budget, state, run_fields=args.run_fields)
 
 
 def submission_error_payload(
@@ -1870,7 +1880,13 @@ async def _post_submit_error_response(
     }
     finalize_receipt(data)
     try:
-        return await _render_static_run_receipt(data, budget, state, is_error=True)
+        return await _render_static_run_receipt(
+            data,
+            budget,
+            state,
+            is_error=True,
+            delivery="replay" if receipt.replayed else "run",
+        )
     except Exception as render_exc:
         # Non-recursive rescue boundary: no renderer or full payload builder is
         # called again after it fails. The minimum durable handles survive.
