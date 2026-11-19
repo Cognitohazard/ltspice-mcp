@@ -328,7 +328,9 @@ All files are under `tests/fixtures/ltspice_recorded/`.
   manifest field, the files of other cases, or the bridge recordings), or
   gives in an `unrecordable` key the reason it cannot be recorded. A behaviour
   whose inputs were written where no LTspice runs carries a `pending` key
-  saying how to record them. The tree checks excuse it from having a
+  saying how to record them. One that only a window shows, with no input here,
+  carries a `pending` key naming the recorder that asks a window
+  (`tests/ltspice_bridge_recorder.py`) and what it has yet to ask. The tree checks excuse it from having a
   recording and fail once it has one, so the key comes out with the
   recording, and a test that reads the recording skips while it is pending.
 - `ltspice26/` and `ltspice17/` hold each build's output, one file per output,

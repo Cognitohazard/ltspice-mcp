@@ -232,8 +232,8 @@ class ExperimentExecution(StrictModel):
         default=False,
         strict=True,
         description=(
-            "When the runs finish, copy each sheet's results beside it, under its name, "
-            "for LTspice to open. One case per sheet; LTspice only; not with recoverable."
+            "When the runs finish, copy each sheet's or netlist's results beside it, under "
+            "its name. One case per results file; LTspice only; not with recoverable."
         ),
     )
 
@@ -752,12 +752,13 @@ async def handle_run_experiments(
         )
         check_case_cap(projected, state.config.max_experiment_cases)
         if args.execution.results_beside_sheet:
-            check_request(
+            await asyncio.to_thread(
+                check_request,
                 [
                     (circuit.path, projected_case_count(circuit.circuit_id, args.variations))
                     for circuit in circuit_inputs
                 ],
-                simulator.__name__,
+                simulator,
             )
         if args.analyze is not None:
             _validate_attached_analysis(args.analyze)

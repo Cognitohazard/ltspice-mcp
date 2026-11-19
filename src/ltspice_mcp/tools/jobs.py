@@ -35,6 +35,7 @@ from ltspice_mcp.errors import (
     PathSecurityError,
 )
 from ltspice_mcp.lib import experiment_store, recent, response_budget, services
+from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.continuation import Unfilled, call_to_continue
 from ltspice_mcp.lib.experiment_runner import (
     ExperimentCancellationError,
@@ -49,7 +50,6 @@ from ltspice_mcp.lib.experiment_types import (
     ExperimentCase,
     ExperimentJob,
 )
-from ltspice_mcp.lib.filelock import circuit_file_lock
 from ltspice_mcp.lib.format import held_to_cap
 from ltspice_mcp.lib.job_lifecycle import WaitFor
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
@@ -57,7 +57,14 @@ from ltspice_mcp.lib.pagination import decode_offset, unpaged
 from ltspice_mcp.lib.pagination import page as _page
 from ltspice_mcp.lib.recovery_records import RecoveryError
 from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER, rows
-from ltspice_mcp.lib.sheet_results import NotPlaced, check_case, place_case
+from ltspice_mcp.lib.sheet_results import (
+    NotPlaced,
+    Placement,
+    check_case,
+    place_case,
+    placement_lock,
+    where_placed,
+)
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import experiments
 from ltspice_mcp.tools._base import (
@@ -114,7 +121,7 @@ class JobsInput(ToolInput):
             "timeout_s elapses; 'cancel' stops it; 'list' pages recent "
             "circuits; 'runs' pages one job's runs; 'resume' retries eligible "
             "cases of a recoverable job; 'place_beside_sheet' copies a case's "
-            "results beside its sheet. Each action takes only its own fields, "
+            "results beside its sheet or netlist. Each action takes only its own fields, "
             "listed in the tool's description."
         ),
     )
@@ -316,7 +323,7 @@ class JobsRunsInput(_AddressedJobsInput):
 
 
 class JobsPlaceBesideSheetInput(_AddressedJobsInput):
-    """Copy a finished case's results beside its sheet, where LTspice opens a sheet's."""
+    """Copy a finished case's results beside its sheet or netlist, where LTspice keeps them."""
 
     action: Literal["place_beside_sheet"]  # pyright: ignore[reportIncompatibleVariableOverride]
     case_id: str | None = Field(
@@ -659,12 +666,17 @@ _PLACE_BESIDE_SHEET_SCHEMA: dict[str, Any] = {
         "request_id": {"type": ["string", "null"]},
         "status": JOB_STATUS_SCHEMA,
         "case_id": {"type": "string"},
-        "sheet": {"type": "string"},
+        "sheet": {
+            "type": "string",
+            "description": "The circuit file, sheet or netlist, the results were copied beside.",
+        },
         "files": {
             "type": "array",
             # What a write did: leaving one out would hide a file it replaced.
             CUT: NEVER,
-            "description": "Each file copied beside the sheet, and whether it replaced one there.",
+            "description": (
+                "Each file copied beside the circuit, and whether it replaced one there."
+            ),
             "items": {
                 "type": "object",
                 "properties": {
@@ -677,7 +689,14 @@ _PLACE_BESIDE_SHEET_SCHEMA: dict[str, Any] = {
         },
         "assignments": {
             "type": "object",
-            "description": "What the case's variations set, which the sheet does not show.",
+            "description": "What the case's variations set, which the circuit does not show.",
+        },
+        "not_checked": {
+            "type": "array",
+            # Each is a check the reply would otherwise imply was made.
+            CUT: NEVER,
+            "description": "What the copy did not check, each said in full.",
+            "items": {"type": "string"},
         },
     },
     "required": [
@@ -973,10 +992,11 @@ async def _await_foreign_experiment_cancellation(
 async def _place_case_beside_sheet(
     job: ExperimentJob, case_id: str | None, state: SessionState
 ) -> dict[str, Any]:
-    """Copy one finished case's results beside the sheet it ran
-    (``sheet_results.place_case``), under the sheet's lock.
+    """Copy one finished case's results beside the circuit it ran
+    (``sheet_results.place_case``), under the circuit's and its results
+    file's locks (``sheet_results.placement_lock``).
 
-    Refused where LTspice's window could not take them as the sheet's own
+    Refused where they could not stand as the circuit's own
     (``sheet_results.check_case`` and ``place_case`` say which), and while the
     job's runs are not all done, as every read of a job's runs is
     (``services.runs_unready``).
@@ -997,21 +1017,22 @@ async def _place_case_beside_sheet(
         raise _JobsActionError(exc.code, str(exc), stage="resolution") from None
     sheet = await asyncio.to_thread(safe_path, str(case.circuit_path), state)
 
-    def place() -> list[dict[str, Any]]:
+    def place() -> Placement:
         try:
             return place_case(job, case, sheet)
         except NotPlaced as exc:
             raise _JobsActionError(exc.code, str(exc), stage="resolution") from None
 
-    async with circuit_file_lock(sheet):
+    async with placement_lock(sheet):
         # The check and the copy are one unit off the loop, shielded so a
-        # cancelled call cannot leave a sheet with some of a run's files.
-        files = await asyncio.shield(asyncio.to_thread(place))
+        # cancelled call cannot leave a circuit with some of a run's files.
+        placement = await asyncio.shield(asyncio.to_thread(place))
     return {
         "case_id": case.case_id,
         "sheet": str(sheet),
-        "files": files,
+        "files": placement.files,
         "assignments": dict(case.assignments),
+        "not_checked": placement.not_checked,
     }
 
 
@@ -1039,16 +1060,23 @@ def _case_to_place(job: ExperimentJob, case_id: str | None) -> ExperimentCase:
 
 
 def _placed_hint(placed: dict[str, Any]) -> str:
-    """What the caller needs to know after results are placed beside a sheet."""
-    hint = (
-        f"LTspice opens {Path(placed['sheet']).name}'s results from beside it; a click on a "
-        "net in the sheet plots it once they are opened from the sheet. LTspice reads "
-        "results only when it opens them, so a plot of the earlier ones already open "
-        "shows them until it is opened again; plot_waveform(in_ltspice=true) reopens it."
-    )
+    """What the caller needs to know after results are placed beside a circuit."""
+    circuit = Path(placed["sheet"])
+    if is_asc(circuit):
+        hint = (
+            f"LTspice opens {circuit.name}'s results from beside it; a click on a "
+            "net in the sheet plots it once they are opened from the sheet. LTspice reads "
+            "results only when it opens them, so a plot of the earlier ones already open "
+            "shows them until it is opened again; plot_waveform(in_ltspice=true) reopens it."
+        )
+    else:
+        hint = (
+            f"The results are beside {circuit.name}, under its name, "
+            f"{where_placed(circuit)}; not_checked says what was not checked."
+        )
     if placed["assignments"]:
         hint += (
-            " This case ran with values its variations set, which the sheet does not "
+            " This case ran with values its variations set, which the circuit does not "
             "show: see assignments."
         )
     return hint
@@ -1650,8 +1678,8 @@ def complete_jobs_data(evaluation: JobsEvaluation) -> dict[str, Any]:
         "work from an earlier session."
         " 'resume' creates a child of a terminal recoverable head, preserving "
         "produced cases; use a new resume_request_id for each retry. "
-        "'place_beside_sheet' copies a case's results beside the .asc it ran, "
-        "where LTspice's window opens them. " + jobs_fields_by_action()
+        "'place_beside_sheet' copies a case's results beside the sheet or netlist it "
+        "ran. " + jobs_fields_by_action()
     ),
     input_model=JobsInput,
     annotations=REPEATABLE_CHANGE_ANNOTATIONS,

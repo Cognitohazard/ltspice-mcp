@@ -646,6 +646,19 @@ summary = "A transient raw: UTF-16LE header, 8-byte time axis, 4-byte traces; th
 model = ["lib/raw_header.py", "lib/raw_decode.py", "lib/decoded_raw.py", "lib/raw_parser.py"]
 inputs = ["raw/tran.cir", "raw/tran_uncompressed.cir", "raw/tran_double.cir"]
 
+[behaviour.results-beside-a-netlist]
+summary = "That a netlist's batch run leaves its results and log beside it, under its name: <name>.raw and <name>.log, and <name>.op.raw or <name>.fra_1.raw where the run wrote one."
+model = ["lib/sheet_results.py"]
+evidence = "the written list of every case under raw/ in ltspice26/manifest.json and ltspice17/manifest.json: each netlist is run with -Run -b in a folder of its own, and what it wrote stands beside it under its name"
+
+[behaviour.results-beside-a-netlist-two-dots]
+summary = "Where a batch run of a netlist with two dots in its name (two.dots.cir) writes its results and log: under the whole name before the last dot (two.dots.raw), as sheet_results.files_beside assumes, or under another."
+model = ["lib/sheet_results.py"]
+# The recorder lists what a run wrote under the case's own name (two.dots.*).
+# A written list without .raw and .log says the build named them otherwise.
+inputs = ["beside/two.dots.cir"]
+pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
+
 [behaviour.raw-compression]
 summary = "What waveform compression keeps of a transient: a 1 mV RC charge compressed, uncompressed, with a maximum step and with a maximum step of a fifth of the run, the same charge at 1 V, and what a .meas reads from each."
 model = ["lib/raw_parser.py", "lib/result_observations.py", "lib/services.py", "tools/analyze.py"]
@@ -920,6 +933,11 @@ evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26/conversation.json: 
 summary = "What the window's frame shows and what a sheet's Visible Traces command does: panes are titled with their files' names; the command opens the results beside a sheet that had them when it was opened and not ones put there afterwards; with those results open it shows a dialog to pick traces from; the number the build's sheet menu gives the command; and what a results pane does: it goes on holding the run it read when its file is replaced, closes without a question and without saving plot settings when told to, a trace added by hand or not, and holds the file as it is now once opened again from the sheet; that of two panes of one title, the first the frame lists is the one in front, for results files and for sheets; and that the sheet menu's Visible Traces item is turned off while the sheet in front knows of no results."
 model = ["lib/ltspice_frame.py", "lib/ltspice_window.py", "tools/analysis.py"]
 evidence = "tests/fixtures/ltspice_bridge_recorded/ltspice26: conversation.json, the facts noted after 'a results file that is not there', made by asking the frame of a window on a desktop of its own; manifest.json, sheet_commands. LTspice XVII is not recorded: it has no bridge to find the window through."
+
+[behaviour.results-beside-a-netlist-in-window]
+summary = "What LTspice's window does with results beside a netlist: a netlist opened with results already beside it (which commands are enabled and what they open); results put beside a netlist that is already open; whether a plot opened from a netlist is tied to it; and the plot settings file beside it. And sheet-results-command on LTspice XVII. Until recorded, a reply that put results beside a netlist says these were not checked (sheet_results.NETLIST_WINDOW_UNCHECKED), and no code assumes them."
+model = ["lib/sheet_results.py"]
+pending = "Needs a window: tests/ltspice_bridge_recorder.py records it once it asks these questions of a netlist on LTspice 26. LTspice XVII has no bridge to find the window through, so its part needs another way to ask its window."
 
 [behaviour.sheet-closed-from-outside]
 summary = "What a sheet does when its pane is told to close: one nobody changed closes without a question, with the plot opened from it, and opened again opens results put beside it while it was open; one the bridge handed new text is asked about in a box (its words recorded) even when the text is back to the file's, the frame takes no input while it asks, the bridge still reads the sheet, Cancel leaves it open as it was, and No closes it without writing the file. One whose window copy differs from the file is asked about the same way, No closes it with the file as it was, and opened again the window holds the file."

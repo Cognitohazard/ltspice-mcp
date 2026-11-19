@@ -259,6 +259,10 @@ _OUTSIDE_THE_STORE: dict[str, str] = {
     "circuit_lock": (
         "per user: every session editing the file contends on it, whatever its working directory"
     ),
+    "results_file_lock": (
+        "per user: every session copying to the results file contends on it, whatever its "
+        "working directory"
+    ),
     "renders_dir": (
         "per user: a drawing is a view of a sheet, not a record of the server's working directory"
     ),
