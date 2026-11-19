@@ -500,7 +500,8 @@ async def test_a_value_printed_as_not_finite_is_not_named_failed(
 ):
     """``raw/fra_step``: LTspice 26 prints each step's gain margin as
     ``infdB``, at ``inf``, a margin that is infinite and was taken. No route
-    names it failed; a step's row names it ``not_finite``."""
+    names it failed; a step's row says what the log printed, under
+    ``unreadable``."""
     if not rec.has("ltspice26", "raw/fra_step.log"):
         pytest.skip("LTspice 26 recorded no stepped FRA run")
     log = work_dir / "fra_step.log"
@@ -525,7 +526,8 @@ async def test_a_value_printed_as_not_finite_is_not_named_failed(
         assert value["measured"]["gainmargin_1"] is None
         assert value["measured"]["phasemargin_1"] is not None
         assert "failed_measurements" not in value
-        assert value["not_finite"] == ["gainmargin_1"]
+        assert "'infdB'" in value["unreadable"]["gainmargin_1"]["reason"]
+        assert set(value["unreadable"]) == {"gainmargin_1"}
 
 
 @pytest.mark.parametrize("recorded", _measurement_logs())

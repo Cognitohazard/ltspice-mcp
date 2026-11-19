@@ -672,8 +672,13 @@ that name fails. A WHEN threshold written as a parameter, an expression
 or, on LTspice 26, a braced expression is the level a WHEN with no FIND
 searched for, not its result: `measurements()` marks the entry
 `unreadable`, and the row reads the crossing. Where it
-printed a number that is not finite (a gain margin of `infdB`),
-`row["value"]["not_finite"]` lists it. Where which field holds the result
+printed a number that is not finite (a gain margin of `infdB`), the value is
+null and `unreadable` quotes what it printed, on the row and on the entry,
+with the steps it concerns where that is not every step. Where the log
+printed a value once for a run of several steps (a stepped `.op`),
+`row["value"]["printed_once"][name]` and the entry's `printed_once` give how
+many steps the run had, the step whose value it is where that is
+established, and how to read the others. Where which field holds the result
 is not known, `row["value"]["answer_unknown"][name]` says why. Where what it
 printed is not established as the result (LTspice XVII prints `0` in a
 stepped table both for a failed step and for a crossing at 0 s),

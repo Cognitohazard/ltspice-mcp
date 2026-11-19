@@ -1215,13 +1215,28 @@ async def measurement_rows(
         failed = [name for name in table["failed_measurements"] if name in stats]
         if failed:
             row["failed_measurements"] = failed
+        # Why a value this row reads is null where the log printed other than
+        # a number (log_parser.parse_measurements): a statement that names its
+        # steps concerns those alone.
         unreadable = {
             name: reason
             for name, entry in whole["measurements"].items()
-            if name in stats and (reason := result_unreadable(entry)) is not None
+            if name in stats
+            and (reason := result_unreadable(entry)) is not None
+            and (step is None or step in reason.get("steps", (step,)))
         }
         if unreadable:
             row["unreadable"] = unreadable
+        # A value the log printed once for a run of several steps: how many,
+        # and which step's it is where that is established
+        # (log_parser.answered_measurements).
+        once = {
+            name: entry["printed_once"]
+            for name, entry in whole["measurements"].items()
+            if "printed_once" in entry and name in stats
+        }
+        if once:
+            row["printed_once"] = once
         # Where the field holding a result is not known, no number is given
         # for it, and the row says why (log_parser.measurement_answer).
         unknown = {
@@ -1336,13 +1351,15 @@ async def _value_from_operating_point(
         present = ", ".join(sorted(flat)[:8])
         if len(flat) > 8:
             present += f", ... ({len(flat)} total)"
+        unread = op.get("device_table_unread")
+        why = f" {unread['detail']}" if unread is not None else ""
         raise ResultError(
             f"{recipe.expr!r} is not present in this operating-point "
             f"result.{naming_note(raw.header, recipe.expr)} Address a value by the name it "
             "carries (e.g. "
             "'@m1[gm]', 'V(out)') or a device parameter by the device's path "
             "and the parameter ('m1.gm', 'x1.m1.gm' for M1 inside X1). "
-            f"Present here: {present}"
+            f"Present here: {present}.{why}"
         ) from None
     name, item = match
     data: MetricValue = {
@@ -2795,7 +2812,24 @@ async def operating_point(
     # (LTspice exposes those), or when the run is ngspice — whose bare .op shows
     # no device traces, so a saved-nothing run is indistinguishable from a
     # passive one. raw_dialect only gates here, never picks the wording.
-    if not op_data.get("device_op_points") and (
+    #
+    # Where the log's table is empty for another reason than the circuit having
+    # no such device (the run was made without the option that prints it, or
+    # a log read by its path cannot say whether it asked), that reason is the
+    # answer (services.device_table_unread), whatever devices the run holds:
+    # the analyze path relays it as an observation, and a device parameter's
+    # value names it in its refusal.
+    unread = (
+        await services.device_table_unread(source, family=raw_dialect)
+        if not op_data.get("device_op_points")
+        and raw_dialect != "ngspice"
+        and has_active_device(op_data.get("currents", {}))
+        else None
+    )
+    if unread is not None:
+        op_data["device_table_unread"] = unread
+        op_data["warnings"].append(unread["detail"])
+    elif not op_data.get("device_op_points") and (
         has_active_device(op_data.get("currents", {})) or raw_dialect == "ngspice"
     ):
         op_data["warnings"].append(NO_DEVICE_OP_POINTS_NOTE)

@@ -69,6 +69,7 @@ from ltspice_mcp.lib.simulator_build import (
     Producer,
     SimulatorExecutable,
     executable_identity,
+    log_head_build,
     reported_build,
     same_executable,
     which_ltspice,
@@ -180,6 +181,10 @@ class RunContext:
     observations: tuple[dict[str, Any], ...] = ()
     #: Who wrote the case's log (``run_producer``).
     producer: Producer | None = None
+    #: The case's ``logopinfo_withheld`` observation, where its run was made
+    #: without the option that prints the log's device table: a read of that
+    #: table gives it (:func:`device_table_unread`), not every read.
+    device_table_withheld: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -210,6 +215,9 @@ class AnalysisSource:
     #: Who wrote the log, for a job's case (``run_producer``); None for a bare
     #: path, whose producer is what ``source_producer`` says.
     producer: Producer | None = None
+    #: The case's ``logopinfo_withheld`` observation (``RunContext``); None for
+    #: a bare path, and for a case whose run was not made without the option.
+    device_table_withheld: dict[str, Any] | None = None
     # Resident facts belong to one evaluation, between fresh drift checks.
     captured: ParsedArtifacts | None = field(default=None, repr=False, compare=False)
 
@@ -261,6 +269,7 @@ def source_for_run(
         simulator_version=run.simulator_version,
         observations=run.observations,
         producer=run.producer,
+        device_table_withheld=run.device_table_withheld,
     )
 
 
@@ -802,6 +811,10 @@ def case_run_context(
             *(item for item in case.observations if item.get("code") in READ_BY_JOB),
         ),
         producer=run_producer(job, case),
+        device_table_withheld=next(
+            (item for item in case.observations if item.get("code") == "logopinfo_withheld"),
+            None,
+        ),
     )
 
 
@@ -892,6 +905,54 @@ def source_producer(
         build=source.simulator_version or reported,
         program=None,
     )
+
+
+#: What a read of a log's device table by path says of an empty one.
+DEVICE_TABLE_REQUEST_UNKNOWN = (
+    "The log holds no device operating-point table (gm, vth, vdsat of each "
+    "semiconductor). LTspice 24 and later print it for an .op run only under "
+    "'.options logopinfo', and it is not known whether this run asked for it: a log "
+    "read by its path has no job record that says so, so an empty table here is not "
+    "evidence that the circuit has no semiconductor devices. Read the run by its "
+    "job_id, which says whether the option was withheld, or rerun it with the "
+    "option. On LTspice add '.options logopinfo' to the deck (run_experiments adds "
+    "it to an .op run on a build it knows to be LTspice 24 or later); on ngspice "
+    ".save them, e.g. '.save all @m1[gm] @m1[gds] @m1[id]'."
+)
+
+
+async def device_table_unread(
+    source: AnalysisSource, *, family: str | None
+) -> dict[str, Any] | None:
+    """Why a read of ``source``'s log found its device operating-point table
+    empty, where the reason is not "the circuit has no such device"; None
+    where an empty table means that, or no table was ever to be printed.
+
+    The one answer every route that reads the table gives with an empty one
+    (the operating-point recipe, a device parameter's value, the Python API's
+    ``device_op_points``). LTspice 24 and later print the table only under
+    ``.options logopinfo``, and LTspice XVII always (recorded:
+    log/device_op_numdgt_off). By job, the case's run says whether the server
+    withheld the option (``logopinfo_withheld``, relayed as the run gave it);
+    a case without it was given the option, or ran on a build that needs none.
+    By path no job record says whether the run asked for the table, so that
+    is said, unless the log was written by a simulator that never prints it
+    (``family``, an ngspice run's are traces of its raw) or by XVII, as the
+    log's first line names it."""
+    if source.trusted_job_artifact:
+        withheld = source.device_table_withheld
+        return dict(withheld) if withheld is not None else None
+    if family not in (None, "ltspice"):
+        return None
+    build = await asyncio.to_thread(log_head_build, source.log) if source.log is not None else None
+    found = which_ltspice(None, build)
+    if found is not None and found.generation == "xvii":
+        return None
+    return {
+        "code": "device_table_request_unknown",
+        "kind": "coverage",
+        "detail": DEVICE_TABLE_REQUEST_UNKNOWN,
+    }
 
 
 async def answer_measurements(

@@ -984,6 +984,37 @@ NOT_ESTABLISHED_SCHEMA: dict[str, Any] = {
     "required": ["steps", "reason"],
 }
 
+#: Why a measurement's printed value is null where the log printed other than
+#: a finite number (``log_parser.parse_measurements``): the line, the reason
+#: quoting what was printed, and the steps it concerns where not every step.
+UNREADABLE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "line": {"type": ["string", "null"]},
+        "reason": {"type": "string"},
+        "steps": {"type": "array", "items": {"type": "integer"}, CUT: NEVER},
+    },
+    "required": ["reason"],
+}
+
+#: A value the log printed once for a run of several steps
+#: (``log_parser.answered_measurements``).
+PRINTED_ONCE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "step_count": {"type": "integer"},
+        "step": {"type": "integer"},
+        "reason": {"type": "string"},
+    },
+    "required": ["step_count", "reason"],
+    "description": (
+        "The log printed this value once for a run of several steps (a stepped "
+        ".op): how many steps the run had, the step, from 0, whose value it is "
+        "where a recording establishes it, and how to read the other steps' "
+        "values, which are not in the log."
+    ),
+}
+
 # Parsed .MEAS results, keyed by measurement name. Each entry names the field
 # holding its result in ``answer`` (``log_parser.measurement_answer``): a WHEN
 # with no FIND printed on its own line prints the level it searched for, which
@@ -1046,19 +1077,17 @@ MEASUREMENTS_SCHEMA: dict[str, Any] = {
                 ),
             },
             "unreadable": {
-                "type": "object",
-                "properties": {
-                    "line": {"type": ["string", "null"]},
-                    "reason": {"type": "string"},
-                },
-                "required": ["reason"],
+                **UNREADABLE_SCHEMA,
                 "description": (
-                    "Present when the log printed something other than a number for "
-                    "this value, such as a WHEN threshold written as a parameter or "
-                    "an expression: 'values' is null, 'line' is the log line and "
-                    "'reason' says what was printed. Only this entry fails."
+                    "Present when the log printed something other than a finite "
+                    "number for this value, such as a WHEN threshold written as a "
+                    "parameter or an expression, or a gain margin of infdB: 'values' "
+                    "is null, 'line' is the log line, 'reason' quotes what was "
+                    "printed, and 'steps' names the steps it concerns where not "
+                    "every step. Only this entry fails."
                 ),
             },
+            "printed_once": PRINTED_ONCE_SCHEMA,
         },
         "required": ["values"],
     },

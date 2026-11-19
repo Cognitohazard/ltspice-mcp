@@ -77,8 +77,7 @@ def _said(reply: dict[str, Any]) -> list[str]:
     """What an analyze_results reply says beside its values: each
     observation's code and detail, and each refusal's message."""
     said = [f"{item['code']}: {item['detail']}" for item in reply.get("observations", [])]
-    for result in reply.get("results", {}).values():
-        said.extend(failure["message"] for failure in result.get("failures", []))
+    said.extend(failure["message"] for failure in reply.get("failures", []))
     return said
 
 
@@ -100,12 +99,11 @@ async def _every_route(state: SessionState, source: dict[str, str]) -> dict[str,
             lambda arguments=arguments: api.analyze_results(**arguments)
         )
         routes[f"api {name}"] = _said(reply)
-    where = (
-        {"job_id": source["job_id"]}
+    ops = await asyncio.to_thread(
+        lambda: api.device_op_points(job_id=source["job_id"])
         if "job_id" in source
-        else {"path": Path(source["path"]).with_suffix(".log")}
+        else api.device_op_points(Path(source["path"]).with_suffix(".log"))
     )
-    ops = await asyncio.to_thread(lambda: api.device_op_points(**where))
     assert dict(ops) == {}, dict(ops)
     routes["api device_op_points"] = [f"{o['code']}: {o['detail']}" for o in ops.observations]
     return routes
@@ -154,3 +152,54 @@ async def test_a_table_read_by_path_says_it_is_not_known_whether_it_was_asked_fo
     routes = await _every_route(state_no_sim, {"path": str(raw)})
     for route, said in routes.items():
         assert any("not known whether" in line for line in said), (route, said)
+
+
+#: Scopes that name the device table's section and read no table to a caller.
+_DEFINES_THE_SECTION = {
+    "lib/log_decode.py:decode_logs": "decodes the section from the log",
+    "lib/decoded_log.py:_numeric_nulls": "checks the decoded section's shape",
+    "lib/decoded_log.py:_check_sections": "checks the decoded section's shape",
+    "lib/log_types.py:<module>": "lists the section names",
+}
+
+
+def test_every_reader_of_the_device_table_asks_why_it_may_be_empty():
+    """The guard: a scope that reads the decoded device table (the
+    ``device_op`` section) also asks ``services.device_table_unread``, so a
+    new route cannot give an empty table without its reason."""
+    import ast
+
+    from tests._source_scan import modules, scopes
+
+    def called(node: ast.AST) -> str | None:
+        if not isinstance(node, ast.Call):
+            return None
+        func = node.func
+        return (
+            func.attr
+            if isinstance(func, ast.Attribute)
+            else func.id
+            if isinstance(func, ast.Name)
+            else None
+        )
+
+    silent = []
+    readers = []
+    naming = set()
+    for path, tree in modules().items():
+        for scope, nodes in scopes(tree):
+            if not any(isinstance(n, ast.Constant) and n.value == "device_op" for n in nodes):
+                continue
+            key = f"{path}:{scope}"
+            naming.add(key)
+            if key in _DEFINES_THE_SECTION:
+                continue
+            readers.append(key)
+            if not any(called(node) == "device_table_unread" for node in nodes):
+                silent.append(key)
+    assert readers, "the scan found no reader of the device table"
+    assert set(_DEFINES_THE_SECTION) <= naming, set(_DEFINES_THE_SECTION) - naming
+    assert silent == [], (
+        "These scopes read the log's device table without asking "
+        f"services.device_table_unread why an empty one is empty: {silent}"
+    )

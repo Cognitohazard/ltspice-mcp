@@ -592,6 +592,39 @@ async def test_one_value_printed_for_a_stepped_op_names_its_step_and_the_steps_o
             assert "'value'" in statement["reason"], (route, name, statement)
 
 
+async def test_one_value_printed_by_a_build_no_evidence_names_says_its_step_is_not_established(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """The same log with its banner removed names no build: a recording
+    establishes the step for LTspice 24 and later alone, so the value keeps
+    no step. The recipe's row names none either, and each route says the run
+    had three steps and how to read them."""
+    log = work_dir / "meas_step_op.log"
+    lines = rec.recorded("ltspice26", "log/meas_step_op.log").read_bytes().splitlines(True)
+    assert lines[0].startswith(b"LTspice 26")
+    log.write_bytes(b"".join(lines[1:]))
+    reply = await dispatched(
+        state_no_sim,
+        "analyze_results",
+        sources=[{"path": str(log), "label": "log"}],
+        recipes=_RECIPE,
+        all_steps=True,
+        include=_EACH_STEP,
+    )
+    (row,) = reply["results"]["m"]["values"]
+    assert "step_index" not in row, row
+    read = await asyncio.to_thread(lambda: SyncApi(state_no_sim).measurements(path=log))
+    for name in ("vout", "iin"):
+        for statement in (
+            row["value"]["printed_once"][name],
+            read["measurements"][name]["printed_once"],
+        ):
+            assert "step" not in statement, statement
+            assert statement["step_count"] == 3, statement
+            assert "not established" in statement["reason"], statement
+            assert "'value'" in statement["reason"], statement
+
+
 async def test_the_line_a_stepped_op_prints_holds_its_first_steps_value(
     state_no_sim: SessionState, work_dir: Path
 ):

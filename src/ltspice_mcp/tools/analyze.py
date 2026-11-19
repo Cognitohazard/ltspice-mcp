@@ -95,7 +95,9 @@ from ltspice_mcp.tools._base import (
     DIAGNOSTICS_COVERAGE_SCHEMA,
     HINT_SCHEMA,
     NOT_ESTABLISHED_SCHEMA,
+    PRINTED_ONCE_SCHEMA,
     RUN_DIAGNOSTICS_SCHEMA,
+    UNREADABLE_SCHEMA,
     NotedModel,
     OptionalRawSelectionFields,
     OtherRawFields,
@@ -982,6 +984,7 @@ def _serialize_run(run: _ResolvedRun) -> dict[str, Any]:
         "trusted_job_artifact": run.source.trusted_job_artifact,
         "job_id": run.job_id,
         "producer": asdict(run.source.producer) if run.source.producer is not None else None,
+        "device_table_withheld": run.source.device_table_withheld,
     }
 
 
@@ -1015,6 +1018,7 @@ def _deserialize_runs(item: result_store.ResultSet, state: SessionState) -> list
                     identity=dict(data.get("identity") or {}),
                     trusted_job_artifact=bool(data.get("trusted_job_artifact")),
                     producer=_stored_producer(data.get("producer")),
+                    device_table_withheld=data.get("device_table_withheld"),
                 ),
                 job_id=data.get("job_id"),
             )
@@ -1747,6 +1751,16 @@ async def _measurement_step_plan(
     if not parsed or not parsed["measurements"]:
         # The metric reads the log again and says why it holds no results.
         return [(0, {})]
+    if steps.step is None and "op_solves" in parsed:
+        # One value printed for a run of several steps whose step is not
+        # established (log_parser.answered_measurements): its row names no
+        # step, and its printed_once says why.
+        answered = await services.answer_measurements(source, parsed)
+        if any(
+            "step" not in entry.get("printed_once", {"step": 0})
+            for entry in answered["measurements"].values()
+        ):
+            return [(None, {})]
     step_values = metrics.measurement_step_values(parsed, logs.value("steps") or [])
     return list(steps.plan(len(step_values), step_values))
 
@@ -1916,12 +1930,32 @@ def _absence_observations(recipe: Recipe, key: str, records: list[Record]) -> li
 
     if not isinstance(recipe, OperatingPointRecipe):
         return []
-    values = [record.value for record in records]
+    # A run whose empty device table has a reason of its own says that
+    # instead (services.device_table_unread): once per reason, naming its runs.
+    unread: dict[tuple[str, str], list[str]] = {}
+    for record in records:
+        if (reason := record.value.pop("device_table_unread", None)) is not None:
+            unread.setdefault((reason["code"], reason["detail"]), []).append(record.source)
+    observations = [
+        Observation(
+            code=code,
+            kind="coverage",
+            detail=f"Recipe {key!r} read a device table that is empty. {detail}",
+            evidence={"recipe": key, "runs": len(runs)},
+        )
+        for (code, detail), runs in unread.items()
+    ]
+    values = [
+        record.value
+        for record in records
+        if not any(record.source in runs for runs in unread.values())
+    ]
     if not values or any(value.get("device_op_points") for value in values):
-        return []
+        return observations
     if not any(metrics.has_active_device(value.get("currents") or {}) for value in values):
-        return []
+        return observations
     return [
+        *observations,
         Observation(
             code="device_op_points_absent",
             kind="coverage",
@@ -1933,7 +1967,7 @@ def _absence_observations(recipe: Recipe, key: str, records: list[Record]) -> li
                 f"{metrics.NO_DEVICE_OP_POINTS_NOTE}"
             ),
             evidence={"recipe": key, "runs": len(values)},
-        )
+        ),
     ]
 
 
@@ -2257,16 +2291,15 @@ def _measurements_compact(value: dict[str, Any]) -> dict[str, Any]:
     reducer's own extractor so a row and a reduction over it cannot disagree;
     the point a crossing or ``AT`` reported with it goes under ``at``. A name
     the log holds no number for keeps its key with null, so it never reads as
-    a missing name, and the value beside says why, each null in one place:
+    a missing name, and the value beside says why, each null in one place,
+    all of which come with the metric's value (``metrics.measurement_rows``):
     ``failed_measurements`` (LTspice printed it failed), ``unreadable``
-    (LTspice printed something other than a number), ``answer_unknown``
-    (which field holds the result is not known) and ``not_established`` (the
-    printed value is not established as the result) come with the metric's
-    value (``metrics.measurement_rows``), and ``not_finite`` names the rest,
-    each a number the log decoder holds as null because it is not finite
-    (LTspice 26 prints a stepped FRA's gain margin ``infdB``, recorded as
-    ``raw/fra_step``). A stepped run's per-name spread is its answer, so it
-    gets none of this, and neither does an empty selection.
+    (LTspice printed something other than a finite number, quoted: LTspice 26
+    prints a stepped FRA's gain margin ``infdB``, recorded as
+    ``raw/fra_step``), ``answer_unknown`` (which field holds the result is not
+    known) and ``not_established`` (the printed value is not established as
+    the result). A stepped run's per-name spread is its answer, so it gets
+    none of this, and neither does an empty selection.
     """
     stats = value.get("stats")
     if not isinstance(stats, dict) or not stats:
@@ -2280,17 +2313,6 @@ def _measurements_compact(value: dict[str, Any]) -> dict[str, Any]:
     at = {name: entry["at"] for name, entry in stats.items() if "at" in entry}
     if at:
         compact["at"] = at
-    explained = {
-        *value.get("failed_measurements", ()),
-        *value.get("unreadable", {}),
-        *value.get("answer_unknown", {}),
-        *value.get("not_established", {}),
-    }
-    not_finite = [
-        name for name, number in measured.items() if number is None and name not in explained
-    ]
-    if not_finite:
-        compact["not_finite"] = not_finite
     return compact
 
 
@@ -3037,14 +3059,17 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
                 "per .meas carries 'measured' {name: value} and 'at' {name: AT point "
                 "printed beside a result that is its value}. A null in 'measured' is "
                 "named once by why: 'failed_measurements' (LTspice printed it failed), "
-                "'unreadable' {name: {line, reason}} (it printed something other than "
-                "a number for the result), 'answer_unknown' {name: reason} (which "
-                "field holds the result is not known), 'not_established' {name: "
-                "{steps, reason}} (what it printed is not established as the result) "
-                "or 'not_finite' (it printed a number that is not finite). Its "
-                "'stats' block is left off the default row and returned by "
-                "include.fields=['value']. A stepped run's row is 'stats', with "
-                "'failed_measurements' and 'unreadable' over all its steps."
+                "'unreadable' {name: {line, reason, steps}} (it printed something "
+                "other than a finite number for the result, quoted in reason), "
+                "'answer_unknown' {name: reason} (which field holds the result is not "
+                "known) or 'not_established' {name: {steps, reason}} (what it printed "
+                "is not established as the result). 'printed_once' {name: "
+                "{step_count, step, reason}} names a value the log printed once for a "
+                "run of several steps (a stepped .op), with the step whose value it is "
+                "where that is established. Its 'stats' block is left off the default "
+                "row and returned by include.fields=['value']. A stepped run's row is "
+                "'stats', with 'failed_measurements' and 'unreadable' over all its "
+                "steps."
             ),
             "properties": {
                 "diagnostics": RUN_DIAGNOSTICS_SCHEMA,
@@ -3068,26 +3093,17 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
                         "its list names those that failed at any step."
                     ),
                 },
-                "not_finite": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    CUT: NEVER,
-                    "description": (
-                        "The measurements whose 'measured' is null because LTspice "
-                        "printed a number that is not finite, such as a gain margin "
-                        "of infdB."
-                    ),
-                },
                 "unreadable": {
                     "type": "object",
-                    "additionalProperties": {
-                        "type": "object",
-                        "properties": {
-                            "line": {"type": ["string", "null"]},
-                            "reason": {"type": "string"},
-                        },
-                        "required": ["reason"],
-                    },
+                    "additionalProperties": UNREADABLE_SCHEMA,
+                },
+                "printed_once": {
+                    "type": "object",
+                    "additionalProperties": PRINTED_ONCE_SCHEMA,
+                    "description": (
+                        "The measurements the log printed once for a run of several "
+                        "steps, by name (a stepped .op)."
+                    ),
                 },
                 "answer_unknown": {
                     "type": "object",
