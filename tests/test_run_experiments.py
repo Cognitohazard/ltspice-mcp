@@ -2920,6 +2920,18 @@ def _convergence_abort_log(index: int) -> str:
     )
 
 
+def _failure_messages(data: dict, expected: set[str]) -> str:
+    """Each failure row whose code a test did not expect, with its message, so
+    an assertion about the failure channel names the cause it did not expect."""
+    rows = [
+        f"{row['code']}: {row.get('message', '')}"
+        for row in data.get("failures", [])
+        if row["code"] not in expected
+    ]
+    codes = [row["code"] for row in data.get("failures", [])]
+    return f"failure codes {codes}; unexpected: {rows}"
+
+
 @pytest.mark.asyncio
 class TestFailureChannel:
     """What a caller learns from a batch that failed the same way N times."""
@@ -2952,7 +2964,7 @@ class TestFailureChannel:
 
         assert data["completeness"]["expanded"] == 12
         assert data["completeness"]["failed"] == 12
-        assert len(data["failures"]) == 1
+        assert len(data["failures"]) == 1, _failure_messages(data, {"convergence_failed"})
         row = data["failures"][0]
         assert row["count"] == 12
         assert len(row["case_ids"]) == 10
@@ -3019,7 +3031,8 @@ class TestFailureChannel:
         data = _assert_schema(await handle_run_experiments(args, state_with_sim))
 
         by_code = {row["code"]: row for row in data["failures"]}
-        assert set(by_code) == {"missing_model", "convergence_failed"}
+        expected = {"missing_model", "convergence_failed"}
+        assert set(by_code) == expected, _failure_messages(data, expected)
         assert by_code["missing_model"]["count"] == 4
         assert by_code["convergence_failed"]["count"] == 4
 

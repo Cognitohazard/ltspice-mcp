@@ -19,6 +19,7 @@ from ltspice_mcp.lib.pdk_native import (
     verify_launch,
 )
 from ltspice_mcp.lib.recovery_records import RecoveryError
+from ltspice_mcp.lib.redirect import same_location
 from ltspice_mcp.lib.simulator_build import executable_identity
 from ltspice_mcp.lib.store import Store
 
@@ -149,7 +150,7 @@ def prepare_native_retry(
         record.validate()
         previous = record.prepared
         root = store.lineage_run_dir(root_job_id, case.recovery.inputs.lineage_root, simulator)
-        if Path(previous.paths.cwd).resolve() != root:
+        if not same_location(Path(previous.paths.cwd), root):
             raise RecoveryError(
                 "recovery_path_escape", "Native preparation has a different lineage root"
             )

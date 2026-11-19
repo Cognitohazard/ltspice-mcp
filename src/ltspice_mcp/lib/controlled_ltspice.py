@@ -33,6 +33,7 @@ from ltspice_mcp.lib import atomic_write_bytes, hidden_desktop
 from ltspice_mcp.lib.ltspice_windows import run_on_desktop
 from ltspice_mcp.lib.pdk_native import ArtifactDigest
 from ltspice_mcp.lib.recovery_records import ExecutionRecord, RecoveryError
+from ltspice_mcp.lib.redirect import redirect_below
 from ltspice_mcp.lib.store import is_store_name
 
 STARTUP_VERSION = "ltspice-established-ini-v1"
@@ -51,12 +52,13 @@ def _require_windows() -> None:
 
 
 def _contained(path: Path, root: Path) -> None:
+    # The lineage root and everything below it down to ``path`` must exist as
+    # named, with no link or junction on the way (``redirect_below``).
     if (
         not root.is_absolute()
-        or root.resolve() != root
         or not path.is_absolute()
-        or path.resolve() != path
         or not path.is_relative_to(root)
+        or redirect_below(path, root.parent) is not None
     ):
         raise RecoveryError("recovery_path_escape", "LTspice startup path escaped its lineage")
 
