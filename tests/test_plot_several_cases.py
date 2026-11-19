@@ -272,6 +272,24 @@ class TestSeveralCases:
             "run_not_finished",
         )
 
+    async def test_a_raw_that_cannot_be_read_costs_only_its_case(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        job = _three_rc(state_no_sim, work_dir, "broken")
+        broken = job.cases[1].raw_file
+        assert broken is not None
+        whole = broken.read_bytes()
+        broken.write_bytes(whole[: len(whole) // 3])
+
+        data = await _plot(state_no_sim, job_id="broken", runs="all", signals=["V(out)"])
+
+        assert _labels(data) == ["V(out) [R1=1000]", "V(out) [R1=3000]"]
+        (unread,) = data["cases_not_drawn"]
+        assert unread["case_id"] == "case-0001"
+        assert unread["code"] == "result_unreadable"
+        assert "truncated" in unread["detail"]
+        assert unread["detail"]
+
     async def test_a_selection_with_nothing_to_draw_is_refused(
         self, state_no_sim: SessionState, work_dir: Path
     ):
@@ -283,6 +301,17 @@ class TestSeveralCases:
         )
         with pytest.raises(ResultError, match=r"case-0000.*case-0001"):
             await _plot(state_no_sim, job_id="dead", runs="all", signals=["V(out)"])
+
+    async def test_a_refusal_of_many_cases_names_a_few_and_counts_the_rest(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        _job(state_no_sim, work_dir, "many", [_Case(None, status="failed") for _ in range(9)])
+        with pytest.raises(ResultError) as refused:
+            await _plot(state_no_sim, job_id="many", runs="all", signals=["V(out)"])
+        message = str(refused.value)
+        assert "case-0004" in message and "case-0005" not in message
+        assert "showing 5 of 9 cases" in message
+        assert '"runs": "all"' in message and "coverage.missing_cases" in message
 
     async def test_cases_of_different_analyses_are_refused_by_name(
         self, state_no_sim: SessionState, work_dir: Path
@@ -312,7 +341,9 @@ class TestSeveralCases:
         assert data["traces_truncated"] == 3
         # The case whose trace is not summarized is counted, never passed over.
         assert data["cases_unsummarized"] == 1
-        assert '"case_ids": ["case-0000", "case-0001", "case-0002"]' in data["hint"]
+        # The hint passes the selection on as it was given, never every case id.
+        assert 'runs="all"' in data["hint"]
+        assert "case-0000" not in data["hint"]
 
     async def test_the_cell_limit_counts_series_across_cases(
         self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch

@@ -196,6 +196,41 @@ async def test_plot_waveform_refuses_the_running_case(one_case_running: _Running
     assert run.running.case_id in data["error"]
 
 
+async def test_a_chart_of_the_job_draws_the_finished_case_and_names_the_running_one(
+    one_case_running: _Running,
+):
+    """A chart of several cases asks each case the one question: the case
+    that produced is drawn, and the one still running is named with the code
+    and the facts a read of it alone is refused with, as analyze_results
+    names it under coverage.missing_cases."""
+    run = one_case_running
+    data = await dispatched(
+        run.state,
+        "plot_waveform",
+        job_id=run.job.job_id,
+        runs="all",
+        signals=["V(out)"],
+        open=False,
+    )
+    assert "error" not in data, data
+    assert [case["case_id"] for case in data["cases"]] == [run.done.case_id]
+    assert {trace["case_id"] for trace in data["traces"]} == {run.done.case_id}
+    (waiting,) = data["cases_not_drawn"]
+    assert waiting["case_id"] == run.running.case_id
+    assert waiting["code"] == "run_not_finished"
+    assert waiting["status"] == "running"
+    assert "written" in waiting["detail"]
+
+    analyzed = await dispatched(
+        run.state,
+        "analyze_results",
+        sources=[{"job_id": run.job.job_id, "runs": "all"}],
+        recipes=[{"key": "v", "metric": "signal_stats", "signal": "V(out)"}],
+    )
+    (missing,) = analyzed["coverage"]["missing_cases"]["items"]
+    assert (missing["case_id"], missing["code"]) == (waiting["case_id"], waiting["code"])
+
+
 async def test_analyze_results_reads_the_finished_case_and_lists_only_the_running_one(
     one_case_running: _Running,
 ):

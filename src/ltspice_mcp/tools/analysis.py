@@ -59,7 +59,7 @@ from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, PlotDescriptor
 from ltspice_mcp.lib.experiment_types import ExperimentCase, ExperimentJob
 from ltspice_mcp.lib.filelock import file_lock
-from ltspice_mcp.lib.format import si_prefix
+from ltspice_mcp.lib.format import cap_note, si_prefix
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
 from ltspice_mcp.lib.ltspice_window import (
     OpenWindows,
@@ -106,6 +106,7 @@ from ltspice_mcp.tools._base import (
     LTSPICE_SHOWN_PROPERTIES,
     NEW_WORK_ANNOTATIONS,
     OBSERVATIONS_SCHEMA,
+    CaseSelection,
     NotedModel,
     OptionalRawSelectionFields,
     OtherRawFields,
@@ -1667,7 +1668,6 @@ def _rest_of_summary(
     *,
     n_steps: int,
     run_index: int,
-    case_ids: list[str] | None = None,
 ) -> str:
     """The call that reads the traces a summary cut at ``_TRACE_SUMMARY_MAX``
     leaves out, as the reply's ``hint`` names it, reading what this call
@@ -1695,9 +1695,11 @@ def _rest_of_summary(
         "the path or job_id this call named, with its plot_index, other_raw and dialect if any"
     )
     if args.job_id is not None:
+        # The runs this call named, as it named them: a chart of several
+        # cases passes its selection on whole, never a list of every case.
         runs = (
-            {"case_ids": case_ids}
-            if case_ids is not None
+            _runs_as_given(args.runs)
+            if args.runs is not None
             else {"case_ids": [args.case_id]}
             if args.case_id is not None
             else [run_index]
@@ -1845,8 +1847,10 @@ def _steps_named(args: PlotWaveformInput, raw: Any, step_dicts: list[dict[str, A
                 "description": (
                     "With runs: each case selected and not drawn, with why: "
                     "case_not_found, run_not_found, raw_not_produced (with its status), "
-                    "other_raw_not_written, step_not_found for a case without the "
-                    "step asked for, or window_empty."
+                    "run_not_finished, other_raw_not_written, result_unreadable or "
+                    "analysis_deadline for a results file that cannot be parsed, "
+                    "step_not_found for a case without the step asked for, or "
+                    "window_empty."
                 ),
                 "items": {
                     "type": "object",
@@ -2232,14 +2236,36 @@ def _case_named(case: ExperimentCase) -> dict[str, Any]:
     return {"case_id": case.case_id, "run_index": case.run_index, "status": case.status}
 
 
-def _nothing_to_draw(not_drawn: list[dict[str, Any]]) -> ResultError:
-    """The refusal of a selection none of whose cases can be drawn, naming why
-    for each."""
+def _runs_as_given(runs: RunsSelection) -> Any:
+    """A ``runs`` value as a call names it, for a reply to name the same runs."""
+    return runs.model_dump() if isinstance(runs, CaseSelection) else runs
+
+
+#: Most cases a refusal of a selection with nothing to draw names with why.
+_NOTHING_TO_DRAW_NAMED = 5
+
+
+def _nothing_to_draw(
+    not_drawn: list[dict[str, Any]], job_id: str, runs: RunsSelection
+) -> ResultError:
+    """The refusal of a selection none of whose cases can be drawn: why for
+    the first few, and for more, how many there are and the call that names
+    every one."""
+    shown = not_drawn[:_NOTHING_TO_DRAW_NAMED]
     said = "; ".join(
         f"{item['case_id'] if item.get('case_id') else 'run ' + str(item['run_index'])}: "
         f"{item.get('detail') or item['code']}"
-        for item in not_drawn
+        for item in shown
     )
+    if len(not_drawn) > len(shown):
+        source = json.dumps({"job_id": job_id, "runs": _runs_as_given(runs)})
+        said += "; " + cap_note(
+            len(shown),
+            len(not_drawn),
+            "cases",
+            f"analyze_results with the source {source} names every one under "
+            "coverage.missing_cases",
+        )
     return ResultError(f"No case of the selection can be drawn. {said}.", show_hint=False)
 
 
@@ -2269,7 +2295,7 @@ async def _plot_several(args: PlotWaveformInput, state: SessionState, chosen: _S
     """Draw several cases of one job in one chart: each case's traces, each
     labelled by what tells its point from the others drawn, with every case
     selected and not drawn named."""
-    assert args.job_id is not None
+    assert args.job_id is not None and args.runs is not None
     if isinstance(args.signals, list) and not args.signals:
         raise ResultError("Pass at least one signal, or 'all'.")
     not_drawn = list(chosen.not_drawn)
@@ -2278,10 +2304,16 @@ async def _plot_several(args: PlotWaveformInput, state: SessionState, chosen: _S
         source = services.source_for_run(
             ctx, plot_index=args.plot_index or 0, dialect=args.dialect
         )
-        raw = await services.load_raw(source, state)
+        try:
+            raw = await services.load_raw(source, state)
+        except ResultError as exc:
+            # A results file that cannot be parsed, or whose parse ran past its
+            # deadline, costs only its case: named, and the others drawn.
+            not_drawn.append({**_case_named(case), "code": exc.code, "detail": str(exc)})
+            continue
         loaded.append((case, source, raw))
     if not loaded:
-        raise _nothing_to_draw(not_drawn)
+        raise _nothing_to_draw(not_drawn, args.job_id, args.runs)
 
     no_axis = [case.case_id for case, _, raw in loaded if raw.descriptor.axis is None]
     if no_axis:
@@ -2323,7 +2355,7 @@ async def _plot_several(args: PlotWaveformInput, state: SessionState, chosen: _S
             continue
         stepped.append((case, source, raw, steps))
     if not stepped:
-        raise _nothing_to_draw(not_drawn)
+        raise _nothing_to_draw(not_drawn, args.job_id, args.runs)
 
     first_raw = stepped[0][2]
     first_path = stepped[0][1].raw
@@ -2397,7 +2429,6 @@ async def _plot_several(args: PlotWaveformInput, state: SessionState, chosen: _S
         annotate=args.annotate,
         units_read=_units_across(plot_cases, cols),
     )
-    drawn_ids = [case.case_id for case, _, _, _ in stepped]
     n_cases = len(stepped)
     return await _deliver(
         args,
@@ -2437,7 +2468,6 @@ async def _plot_several(args: PlotWaveformInput, state: SessionState, chosen: _S
                 analysis_type,
                 n_steps=max(get_step_count(raw) for _, _, raw, _ in stepped),
                 run_index=0,
-                case_ids=drawn_ids,
             ),
         ),
     )
