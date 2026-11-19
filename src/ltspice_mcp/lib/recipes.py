@@ -594,13 +594,30 @@ class ThdRecipe(ScalarRecipe):
 class ToneRecipe(MultiRecipe):
     metric: Literal["tone"]
     signal: str
-    frequency_hz: float | str = Field(
+    frequency_hz: float | str | None = Field(
+        default=None,
         description=(
             "Hz. The window is cut to the whole periods that fit from its start; "
             "phase_deg is that of sin(2*pi*f*t), t from 0."
         ),
     )
+    frequency_param: str | None = Field(
+        default=None,
+        description=(
+            "The parameter that gives each run's frequency in Hz: its step value, "
+            "else the case's assignment. Excludes frequency_hz."
+        ),
+    )
     window: Window | None = None
+
+    @model_validator(mode="after")
+    def _one_frequency(self) -> ToneRecipe:
+        if (self.frequency_hz is None) == (self.frequency_param is None):
+            raise ValueError(
+                "provide exactly one of 'frequency_hz' (one frequency for every run) or "
+                "'frequency_param' (the parameter that gives each run its own)"
+            )
+        return self
 
 
 class BodeFilterRecipe(MultiRecipe):

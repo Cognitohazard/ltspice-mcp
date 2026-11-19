@@ -703,8 +703,8 @@ model = ["lib/raw_header.py", "lib/decoded_raw.py", "lib/raw_parser.py"]
 inputs = ["raw/tf.cir", "raw/tf_step.cir"]
 
 [behaviour.raw-fra]
-summary = "A frequency response analysis (.fra): the results file a build writes beside the transient raw, its name, header and layout, plain, stepped and under .options numdgt=7, and the loop margins a stepped run prints as measurements in its log, an infinite one as infdB."
-model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/log_parser.py", "tools/analyze.py"]
+summary = "A frequency response analysis (.fra): the results file a build writes beside the transient raw, its name, header and layout, plain, stepped and under .options numdgt=7, the crossover and phase margin an unstepped run prints on one line per analyzer (FRA Instance @1: ...), and the loop margins a stepped run prints as measurements in its log, an infinite one as infdB."
+model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/log_parser.py", "lib/metrics.py", "tools/analyze.py"]
 # One loop: an amplifier of gain 100 (an E source), a single RC pole, and the
 # analyzer @1 in series between the amplifier's output and the pole. Four
 # frequencies an octave apart and a short settling time keep the run, and the
@@ -713,6 +713,17 @@ model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/log_parser.py", "tools/a
 # with LTspice 17.1, and XVII 17.0.37 refuses the deck.
 inputs = ["raw/fra.cir"]
 keep = ["log", "raw", "fra_1.raw"]
+
+[behaviour.raw-fra-orientation]
+summary = "What a frequency response analysis's gain_N is when the analyzer faces the other way: whether it is the negative of the loop gain, as raw/fra records for one orientation, or its reciprocal or negative reciprocal, and the crossover and phase margin LTspice prints for it."
+model = ["lib/metrics.py", "assets/guide/ltspice.md"]
+# raw/fra's loop with the analyzer's two nodes swapped (@1 b a), so it injects
+# from the pole's side toward the amplifier's output. The stability recipe's
+# margin check names the form of gain_1 whose margin agrees with the printed
+# one; this recording establishes which that is.
+inputs = ["raw/fra_reversed.cir"]
+keep = ["log", "raw", "fra_1.raw"]
+pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.raw-ascii]
 summary = "A raw written as text (Values:): 8-bit with CRLF line ends, header included, where every other raw has a UTF-16 header."

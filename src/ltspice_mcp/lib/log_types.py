@@ -20,6 +20,7 @@ LogSectionName = Literal[
     "temperatures",
     "fourier",
     "native_tables",
+    "fra_margins",
     "error_context",
 ]
 LOG_SECTIONS: tuple[LogSectionName, ...] = get_args(LogSectionName)
