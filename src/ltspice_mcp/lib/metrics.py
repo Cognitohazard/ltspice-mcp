@@ -715,9 +715,10 @@ def filter_operating_point(op_data: dict, device: str, *, xvii: bool, schematic:
 
     Each name is read back to the device path it belongs to
     (``device_names.device_query``; ``xvii`` for a build that names devices as
-    XVII does, ``schematic`` for a run of a schematic), so ``device`` matches a device as the simulator spells it, a
-    top-level device (``m1``), a device in a subcircuit by its own name or
-    path (``mtail``, ``xin.mtail``, ``xa.xin.mtail``) whichever build or
+    XVII does, ``schematic`` for a run of a schematic), so ``device`` matches a
+    device as the simulator spells it, a top-level device (``m1``), a device in
+    a subcircuit by its own name or path (``mtail``, ``xin.mtail``,
+    ``xa.xin.mtail``, or as XVII writes it, ``in:tail``) whichever build or
     simulator wrote it, or an instance, which keeps everything inside it and
     its port currents.
     """
