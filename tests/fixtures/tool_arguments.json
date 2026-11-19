@@ -221,6 +221,8 @@
       "path",
       "plot_index",
       "run_index",
+      "runs",
+      "runs.case_ids",
       "signals",
       "step",
       "step.axis",

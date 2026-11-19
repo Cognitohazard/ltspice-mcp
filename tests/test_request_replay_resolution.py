@@ -86,6 +86,15 @@ async def _submitted(
     args = _args(deck, "exited-replay", wait_s=0)
     first = _assert_schema(await handle_run_experiments(args, state))
     await await_until(lambda: len(held) == 1, what="the case to reach the simulator")
+    # The stand-in is reached inside the launch, before the loop sees the launch
+    # return and writes the case as running. That write is this live session's
+    # last before the replay; a real exited owner writes nothing after it dies.
+    # Wait for the value the write records, so the drain below covers it and it
+    # cannot land after the replay's reconciliation.
+    live = state.job_registry.jobs[first["job_id"]]
+    await await_until(
+        lambda: live.cases[0].status == "running", what="the case to be written running"
+    )
     await state.job_registry.drain_pending()
     other = SessionState.create(state.config, available={"fake": FakeSim})
 

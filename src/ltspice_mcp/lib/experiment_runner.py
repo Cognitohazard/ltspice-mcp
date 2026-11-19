@@ -942,10 +942,33 @@ class ExperimentRunner(RunnerBase):
         # Outside the gate: the per-circuit index is discovery, not identity,
         # so a slow directory here holds up nothing but this submission.
         try:
-            await asyncio.to_thread(self._register_circuits, candidate, working_dir)
+            noted = await asyncio.to_thread(self._register_circuits, candidate, working_dir)
+            if noted:
+                await self._record_index_note(request, candidate)
         except Exception as exc:
             raise SubmissionCommitted(request.request_id, exc) from exc
         return AdmissionResult(candidate, replayed=False)
+
+    @staticmethod
+    async def _record_index_note(request: ExperimentRunRequest, candidate: ExperimentJob) -> None:
+        """Write the note that the circuit index failed onto the job's record.
+
+        Through the registry's writes, which write a job's record one at a
+        time, in the order asked for (``JobRegistry._persist_locks``), so the
+        record has one writer and this write cannot land on top of a newer one.
+        Admission runs only with persistence on (``_submission_pipeline``).
+        Waited for, so the record carries the note when the submission
+        answers. A failure is logged by the registry: losing a note is no
+        reason to fail a job that exists and can run, and the note still
+        reaches this submission's receipt.
+        """
+        registry = request.state.job_registry
+        before = set(registry.pending_writes(candidate.job_id))
+        registry.persist_job(candidate)
+        # ``wait``, not ``gather``: a cancelled waiter must not cancel the
+        # registry's own write, which holds the job's write lock.
+        if note := set(registry.pending_writes(candidate.job_id)) - before:
+            await asyncio.wait(note)
 
     def discard_staged_run_dir(self, request: ExperimentRunRequest, working_dir: Path) -> None:
         """Remove the run tree of a submission that staged and then failed.
@@ -1035,8 +1058,10 @@ class ExperimentRunner(RunnerBase):
         experiment_store.save_job(candidate)
 
     @staticmethod
-    def _register_circuits(candidate: ExperimentJob, working_dir: Path) -> None:
-        """Index the job under every circuit it ran; a failure is durable-but-noted."""
+    def _register_circuits(candidate: ExperimentJob, working_dir: Path) -> bool:
+        """Index the job under every circuit it ran; whether it failed, and so
+        added a note to the job that its record should carry
+        (``_record_index_note``)."""
         try:
             experiment_store.register_circuits(candidate, working_dir)
         except OSError as exc:
@@ -1050,16 +1075,8 @@ class ExperimentRunner(RunnerBase):
                     ),
                 }
             )
-            try:
-                experiment_store.save_job(candidate)
-            except OSError:
-                # The note about the index could not be persisted either. It
-                # still reaches this submission's receipt, and the record the
-                # claim wrote is the durable one — losing a note is no reason
-                # to fail a job that exists and can run.
-                logger.warning(
-                    "could not record the circuit-index failure on %s", candidate.job_id
-                )
+            return True
+        return False
 
     def case_capacity(self, request: ExperimentRunRequest) -> int:
         """One job's share of the runner's cap.
@@ -1565,6 +1582,16 @@ class ExperimentRunner(RunnerBase):
             return load_logs_sync(source, execution.request.state)
 
         try:
+            # The gate: the decision and the stamp, and nothing that waits on a
+            # write or on the loop (``tests/test_loop_waits.py``). A cancel from
+            # another process writes its marker under this lock, so it either
+            # comes first and this case never passes, or comes after and finds
+            # the case stamped: its owner reads the marker and stops the job;
+            # a recoverable case is refused at its launch record, and a case
+            # whose simulator started is killed, as for a cancel made in this
+            # process. Held across the launch, the
+            # lock made every other launch of the job, and every cancel, wait
+            # for this launch's record write.
             with file_lock(Store(working_dir).cancellation_lock(job_id)):
                 if experiment_store.cancellation_requested(job_id, working_dir):
                     return False
@@ -1573,26 +1600,26 @@ class ExperimentRunner(RunnerBase):
                         return False
                     case.status = "submitted"
                     case.submitted_at = now()
-                self.submit_netlist(
-                    run_deck,
-                    # A sub-path, not a bare name: the simulator layer joins it onto
-                    # the runner's output folder, so this is what lands the run's
-                    # deck copy, raw and log in the job's own directory without the
-                    # runner (and its shared concurrency semaphore) ever moving.
-                    run_filename_in(lineage_id, f"{case.run_token}{suffix}"),
-                    lambda outcome: self._handle_case_completion(
-                        execution.job.job_id,
-                        case.case_id,
-                        outcome,
-                    ),
-                    timeout_s=(
-                        run_timeout + execution.request.kill_grace_s + SPICELIB_TIMEOUT_MARGIN_S
-                        if run_timeout is not None
-                        else None
-                    ),
-                    completion_logs=completion_logs,
-                    **native_args,
-                )
+            self.submit_netlist(
+                run_deck,
+                # A sub-path, not a bare name: the simulator layer joins it onto
+                # the runner's output folder, so this is what lands the run's
+                # deck copy, raw and log in the job's own directory without the
+                # runner (and its shared concurrency semaphore) ever moving.
+                run_filename_in(lineage_id, f"{case.run_token}{suffix}"),
+                lambda outcome: self._handle_case_completion(
+                    execution.job.job_id,
+                    case.case_id,
+                    outcome,
+                ),
+                timeout_s=(
+                    run_timeout + execution.request.kill_grace_s + SPICELIB_TIMEOUT_MARGIN_S
+                    if run_timeout is not None
+                    else None
+                ),
+                completion_logs=completion_logs,
+                **native_args,
+            )
         except NativePrelaunchRefused:
             # The stamp guarded cancellation while launch was in progress, but
             # this refusal happened before spicelib could create a RunTask.

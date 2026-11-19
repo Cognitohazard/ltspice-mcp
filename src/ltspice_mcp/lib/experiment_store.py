@@ -147,6 +147,14 @@ def request_cancellation(
     The marker contains no authority token. The latest persisted coordinator
     record is re-read while the cross-process gate is held so a stale in-memory
     view cannot authorize cancellation.
+
+    The gate's promise: once this returns, no case of the job passes the gate
+    (``ExperimentRunner._submit_case_under_cancel_gate``), and every case that
+    passed it before and is still running when the job's owner reads the
+    marker is stopped by it, before its simulator starts or by killing it. A launch holds the gate only
+    for its decision, so this waits on no launch, no record write and no event
+    loop (``tests/test_loop_waits.py``): at most the lock's own timeout behind
+    another decision or cancel.
     """
     store = Store(working_dir)
     with file_lock(store.cancellation_lock(job_id)):

@@ -25,7 +25,7 @@ from collections.abc import Set as AbstractSet
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path, PurePath
 from stat import S_ISREG
-from typing import Annotated, Any, Literal, NamedTuple
+from typing import Annotated, Any, NamedTuple
 from weakref import WeakValueDictionary
 
 import numpy as np
@@ -36,7 +36,6 @@ from ltspice_mcp.errors import (
     AnalysisDeadlineExceeded,
     InvalidCursorError,
     LTSpiceMCPError,
-    OtherRawNotWritten,
     PathSecurityError,
     ResultError,
     ResultFileNotFoundError,
@@ -61,6 +60,7 @@ from ltspice_mcp.lib.format import cap_note, format_spice_value, held_to_cap, un
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key, printed_once_refusal
 from ltspice_mcp.lib.log_types import given_no_value, measurement_named, run_measurement_facts
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
+from ltspice_mcp.lib.points import RowIdentity, point_identity
 from ltspice_mcp.lib.presenter import (
     Annotate,
     Answer,
@@ -120,11 +120,14 @@ from ltspice_mcp.tools._base import (
     RUN_DIAGNOSTICS_SCHEMA,
     STORED_ANSWER_SCHEMA,
     UNREADABLE_SCHEMA,
+    CaseSelection,
     NotedModel,
     OptionalRawSelectionFields,
     OtherRawFields,
+    RunsSelection,
     StrictModel,
     ToolInput,
+    check_runs,
     format_response,
     open_stored_page,
     outcome_of,
@@ -163,21 +166,6 @@ def _no_rows_warning(failures: Sequence[Failure]) -> str:
     return _NO_ROWS_WARNING.format(places=shown + more)
 
 
-class CaseSelection(NotedModel):
-    case_ids: list[str] = Field(
-        min_length=1,
-        description=(
-            "Analyze only these cases, addressed by the stable case_id a "
-            "run_experiments receipt reports. Experiment jobs only."
-        ),
-    )
-
-    @model_validator(mode="after")
-    def _unique_cases(self) -> CaseSelection:
-        self.keep_first("case_ids")
-        return self
-
-
 def _names_a_log(path: str) -> bool:
     """A source path ending ``.log``, in any case, is a log read alone."""
     return PurePath(path).suffix.casefold() == ".log"
@@ -202,7 +190,7 @@ class AnalyzeSourceInput(OptionalRawSelectionFields, OtherRawFields, NotedModel)
             "deck_sha256: null. Exactly one of job_id or path."
         ),
     )
-    runs: Literal["all"] | list[int] | CaseSelection = Field(
+    runs: RunsSelection = Field(
         default="all",
         description=(
             "Which runs of this source to read: 'all', a list of run indices, "
@@ -231,12 +219,7 @@ class AnalyzeSourceInput(OptionalRawSelectionFields, OtherRawFields, NotedModel)
             raise ValueError("provide exactly one of job_id or path")
         if self.is_log and self.plot_index is not None:
             raise ValueError("a .log path does not select a RAW plot")
-        if isinstance(self.runs, list):
-            if not self.runs:
-                raise ValueError("runs must be 'all' or a non-empty list")
-            if any(index < 0 for index in self.runs):
-                raise ValueError("run indices must be non-negative integers")
-            self.keep_first("runs")
+        check_runs(self)
         # Beside a path, other_raw and a case selection are refused as every
         # reader of a path refuses them. A list of runs is not: a run the file
         # does not hold is reported missing, as for a job.
@@ -261,29 +244,6 @@ class _PendingArtifact:
     final: Path
     content_type: str
     manifest_id: str
-
-
-@dataclass(frozen=True)
-class RowIdentity:
-    """What identifies one analyzed run/step, in emission order.
-
-    Declared here rather than as a list of key strings so the row shape, the
-    attribution block and the projector's alphabet all read off one definition.
-    """
-
-    case_id: str | None = None
-    run_index: int | None = 0
-    step_index: int | None = None
-    step_values: dict[str, Any] = field(default_factory=dict)
-    assignments: dict[str, Any] = field(default_factory=dict)
-    circuit: str | None = None
-    deck_sha256: str | None = None
-    plot_index: int | None = None
-    dialect: str | None = None
-    snapshot_id: str | None = None
-
-    def wire(self, keys: tuple[str, ...]) -> dict[str, Any]:
-        return {key: getattr(self, key) for key in keys}
 
 
 @dataclass(frozen=True)
@@ -941,29 +901,6 @@ def _projection_warnings(records: list[dict[str, Any]], fields: list[str]) -> li
     )
 
 
-def _identity(
-    source: services.AnalysisSource,
-    step: int | None,
-    values: dict[str, Any],
-    *,
-    plot_index: int | None,
-) -> RowIdentity:
-    """The identity of one step of one resolved run."""
-    base = dict(source.identity or {})
-    return RowIdentity(
-        case_id=base.get("case_id"),
-        run_index=base.get("run_index", 0),
-        step_index=step,
-        step_values=values,
-        assignments=dict(base.get("assignments") or {}),
-        circuit=base.get("circuit"),
-        deck_sha256=base.get("deck_sha256"),
-        plot_index=plot_index,
-        dialect=base.get("dialect"),
-        snapshot_id=base.get("snapshot_id"),
-    )
-
-
 def _serialize_run(run: _ResolvedRun) -> dict[str, Any]:
     return {
         "manifest_id": run.manifest_id,
@@ -1136,66 +1073,31 @@ async def _resolve_sources(
 
         # Whether each case can be read is its own answer (``case_refusal``),
         # whatever the job's status: a case still running costs only itself.
-        if isinstance(source_input.runs, CaseSelection):
-            wanted = set(source_input.runs.case_ids)
-            selected = [case for case in job.cases if case.case_id in wanted]
-            found = {case.case_id for case in selected}
-            for case_id in sorted(wanted - found):
-                missing.append(
-                    {
-                        "label": source_input.label,
-                        "case_id": case_id,
-                        "run_index": None,
-                        "code": "case_not_found",
-                    }
-                )
-        elif isinstance(source_input.runs, list):
-            wanted_indices = set(source_input.runs)
-            selected = [case for case in job.cases if case.run_index in wanted_indices]
-            found_indices = {case.run_index for case in selected}
-            for index in sorted(wanted_indices - found_indices):
-                missing.append(
-                    {
-                        "label": source_input.label,
-                        "case_id": None,
-                        "run_index": index,
-                        "code": "run_not_found",
-                    }
-                )
-        else:
-            selected = list(job.cases)
+        selected, unmatched = services.select_cases(job, source_input.runs)
+        missing.extend(
+            {
+                "label": source_input.label,
+                "case_id": run.case_id,
+                "run_index": run.run_index,
+                "code": run.code,
+            }
+            for run in unmatched
+        )
         for case in selected:
-            refusal = await services.case_refusal(job, case)
-            if refusal is not None:
+            ctx = await services.read_selected_case(
+                job, case, state, require_raw=False, other_raw=source_input.other_raw
+            )
+            if isinstance(ctx, services.CaseUnread):
                 row: dict[str, Any] = {
                     "label": source_input.label,
                     "case_id": case.case_id,
                     "run_index": case.run_index,
-                    "code": refusal.code,
-                    "detail": refusal.detail,
+                    "code": ctx.code,
+                    "detail": ctx.detail,
                 }
-                if refusal.evidence is not None:
-                    row["evidence"] = refusal.evidence
+                if ctx.evidence is not None:
+                    row["evidence"] = ctx.evidence
                 missing.append(row)
-                continue
-            try:
-                ctx = services.case_run_context(
-                    job,
-                    case,
-                    state,
-                    require_raw=False,
-                    other_raw=source_input.other_raw,
-                )
-            except OtherRawNotWritten as exc:
-                missing.append(
-                    {
-                        "label": source_input.label,
-                        "case_id": case.case_id,
-                        "run_index": case.run_index,
-                        "code": exc.code,
-                        "detail": str(exc),
-                    }
-                )
                 continue
             resolved = services.source_for_run(
                 ctx, plot_index=source_input.plot_index or 0, dialect=source_input.dialect
@@ -2073,9 +1975,9 @@ async def _waveform(
                 **inline,
                 # A record's warnings become its recipe's, with how many runs said it.
                 **({"warnings": [held]} if held is not None else {}),
-                **_identity(run.source, step, step_values, plot_index=run.source.plot_index).wire(
-                    _IDENTITY_KEYS
-                ),
+                **point_identity(
+                    run.source, step, step_values, plot_index=run.source.plot_index
+                ).wire(_IDENTITY_KEYS),
             },
             [],
         )
@@ -2123,7 +2025,7 @@ async def _waveform(
                 "bytes": None,
             },
             "row_count": facts["row_count"],
-            **_identity(
+            **point_identity(
                 run.source,
                 step if export_steps is None or len(export_steps) == 1 else None,
                 step_values if export_steps is None or len(export_steps) == 1 else {},
@@ -2197,7 +2099,7 @@ async def _plot(
                 "bytes": None,
             },
             "series_count": facts["series_count"],
-            **_identity(
+            **point_identity(
                 run.source,
                 steps[0][0] if len(steps) == 1 else None,
                 steps[0][1] if len(steps) == 1 else {},
@@ -2674,7 +2576,9 @@ async def _evaluate_item(
                             Record(
                                 manifest_id=run.manifest_id,
                                 source=run.label,
-                                identity=_identity(log_source, step, step_values, plot_index=None),
+                                identity=point_identity(
+                                    log_source, step, step_values, plot_index=None
+                                ),
                                 value=_promote_headlines(recipe.metric, sanitize_payload(value)),
                             )
                         )
@@ -2746,7 +2650,7 @@ async def _evaluate_item(
                         Record(
                             manifest_id=run.manifest_id,
                             source=run.label,
-                            identity=_identity(
+                            identity=point_identity(
                                 run.source, step, step_values, plot_index=run.source.plot_index
                             ),
                             value=value,

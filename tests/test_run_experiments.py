@@ -745,6 +745,60 @@ class TestPostClaimFailures:
         assert _observation_code(data, "experiment_index_write_failed") is not None
         assert experiment_store.load_request_index("unwritable-index", work_dir) is not None
 
+    async def test_the_index_note_is_on_the_record_when_the_submission_answers(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The circuit index fails, so the job gets a note about it, written
+        through the registry's writes of the job. The submission answers only
+        once that write has landed: while it is held the submission waits, and
+        once it is let go the record on disk carries the note."""
+        loop = asyncio.get_running_loop()
+        fake_simulator(monkeypatch)
+        real_save_job = experiment_store.save_job
+        held = asyncio.Event()
+        release = threading.Event()
+        taken: list[str] = []
+
+        def unwritable_index(*_args, **_kwargs):
+            raise OSError(errno.EROFS, "read-only file system")
+
+        def held_note(job, *args, **kwargs):
+            noted = any(
+                item.get("code") == "experiment_index_write_failed" for item in job.observations
+            )
+            if noted and not taken:
+                taken.append(job.job_id)
+                loop.call_soon_threadsafe(held.set)
+                release.wait(LIVENESS_S)
+            return real_save_job(job, *args, **kwargs)
+
+        monkeypatch.setattr(experiment_store, "register_circuits", unwritable_index)
+        monkeypatch.setattr(experiment_store, "save_job", held_note)
+        deck = _deck(work_dir / "index-note.cir")
+        submission = asyncio.ensure_future(
+            handle_run_experiments(_args(deck, "index-note", wait_s=0), state_with_sim)
+        )
+        try:
+            await asyncio.wait_for(held.wait(), LIVENESS_S)
+            # timing: a negative window; the submission must not answer while its note is held
+            done, _ = await asyncio.wait({submission}, timeout=0.2)
+            assert not done
+            release.set()
+            data = _assert_schema(await asyncio.wait_for(submission, LIVENESS_S))
+            persisted = experiment_store.load_job(data["job_id"], work_dir)
+            assert persisted is not None
+            assert any(
+                item.get("code") == "experiment_index_write_failed"
+                for item in persisted.observations
+            )
+        finally:
+            release.set()
+            await asyncio.gather(submission, return_exceptions=True)
+            await state_with_sim.settled()
+
     async def test_a_failure_after_the_claim_is_not_reported_as_not_started(
         self,
         state_with_sim: SessionState,

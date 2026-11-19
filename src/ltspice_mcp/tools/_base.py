@@ -1311,6 +1311,38 @@ class NotedModel(StrictModel):
         return notes
 
 
+class CaseSelection(NotedModel):
+    case_ids: list[str] = Field(
+        min_length=1,
+        description=(
+            "Read only these cases, addressed by the stable case_id a "
+            "run_experiments receipt reports. Experiment jobs only."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _unique_cases(self) -> "CaseSelection":
+        self.keep_first("case_ids")
+        return self
+
+
+#: Which runs of a job a source reads: ``"all"``, a list of run indices, or
+#: ``{case_ids: [...]}``. ``services.select_cases`` reads it.
+RunsSelection = Literal["all"] | list[int] | CaseSelection
+
+
+def check_runs(model: NotedModel, name: str = "runs") -> None:
+    """Refuse a list of runs that names none or a negative index, and read a
+    repeated index once (noted), for a model's ``RunsSelection`` field."""
+    runs = getattr(model, name)
+    if isinstance(runs, list):
+        if not runs:
+            raise ValueError("runs must be 'all' or a non-empty list")
+        if any(index < 0 for index in runs):
+            raise ValueError("run indices must be non-negative integers")
+        model.keep_first(name)
+
+
 def outcome_of(
     failures: Any,
     *,
