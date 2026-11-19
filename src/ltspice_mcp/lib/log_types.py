@@ -445,8 +445,9 @@ NO_NUMBER_REASONS: tuple[NoNumber, ...] = (
 )
 
 #: The reason the simulator said the measurement failed, which alone is
-#: counted as a failure.
-FAILED = NO_NUMBER_REASONS[0].field
+#: counted as a failure, wherever it stands in the list.
+FAILED = "failed_measurements"
+assert FAILED in {reason.field for reason in NO_NUMBER_REASONS}
 
 
 def no_number_reasons(table: Mapping[str, Any], name: str) -> list[str | None]:

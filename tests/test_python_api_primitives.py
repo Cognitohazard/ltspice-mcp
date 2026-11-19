@@ -63,6 +63,7 @@ EXPECTED_ALL = [
     "compute_measurement_stats",
     "analyze_ac_structure",
     "parse_spice_value",
+    "no_number_reasons",
     "Quantity",
     "SearchDirection",
     "CrossingDirection",
@@ -99,11 +100,12 @@ EXPECTED_ALL = [
 ]
 
 METRIC_NAMES = EXPECTED_ALL[11:37]
-# Not a metric: a value reader, published because SPICE literals cross the
-# boundary in both directions and nothing else on the facade parses one.
-VALUE_HELPER_NAMES = EXPECTED_ALL[37:38]
-ALIAS_NAMES = EXPECTED_ALL[38:44]
-OUTPUT_TYPE_NAMES = EXPECTED_ALL[44:]
+# Not metrics: a value reader, published because SPICE literals cross the
+# boundary in both directions and nothing else on the facade parses one, and
+# the reader of why a measurement's step has no number.
+VALUE_HELPER_NAMES = EXPECTED_ALL[37:39]
+ALIAS_NAMES = EXPECTED_ALL[39:45]
+OUTPUT_TYPE_NAMES = EXPECTED_ALL[45:]
 
 
 def test_raw_result_xor_step_slicing_and_mutation_isolation(

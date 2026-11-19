@@ -39,9 +39,9 @@ from typing import Any
 
 import pytest
 
-from ltspice_mcp.api import compute_measurement_stats
+from ltspice_mcp.api import compute_measurement_stats, no_number_reasons
 from ltspice_mcp.lib.log_parser import printed_measurements, read_log_text
-from ltspice_mcp.lib.log_types import NO_NUMBER_REASONS
+from ltspice_mcp.lib.log_types import FAILED, NO_NUMBER_REASONS
 from ltspice_mcp.lib.signal_analysis import NO_REASON_GIVEN
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_tool
@@ -211,7 +211,9 @@ async def test_a_stepped_measurement_counts_each_step_by_why_on_every_route(
     statistics: ``analyze_results`` by path (the full row, the default lean
     row, a row projected to its stats, each step's row), the analysis
     ``run_experiments`` attaches, as its receipt, ``jobs`` status and ``jobs``
-    wait return it, the Python API's ``analyze_results``, and ``run_code``.
+    wait return it, the Python API's ``analyze_results`` and its
+    ``compute_measurement_stats`` given ``no_number_reasons`` over
+    ``measurements()``, and ``run_code``.
     LTspice 26 counts one failure; XVII none, and one step not
     established."""
     expected = _meas_step_expected(build)
@@ -269,6 +271,14 @@ async def test_a_stepped_measurement_counts_each_step_by_why_on_every_route(
         )
     )
     rows["api analyze_results"] = _value(analyzed)
+    # A caller's own statistics over the log's measurements, with the reasons
+    # the log decoder gives.
+    read = await asyncio.to_thread(lambda: api.measurements(job_id=job_id))
+    own = compute_measurement_stats(
+        {name: entry["values"] for name, entry in read["measurements"].items()},
+        reasons={name: no_number_reasons(read, name) for name in read["measurements"]},
+    )
+    rows["api compute_measurement_stats"] = {"stats": own}
 
     code = (
         "import json\n"
@@ -417,20 +427,28 @@ def test_one_list_of_reasons_names_the_rows_fields_and_the_statistics_counts():
     stats = value["stats"]["additionalProperties"]["properties"]
     assert "failure_count" in stats
     counted = stats["no_number"]["properties"]
-    assert set(counted) == {*fields[1:], NO_REASON_GIVEN}
-    assert fields[0] == "failed_measurements"
+    assert set(counted) == {*fields, NO_REASON_GIVEN} - {FAILED}
 
 
 # -- no second place calls a null a failure --------------------------------------
 
-#: The one place that counts the steps the simulator printed failed.
-_OWNER = ("lib/signal_analysis.py", "_count_no_number")
 _FAILURE_NAME = re.compile(r"fail", re.I)
+_A_COUNT = re.compile(r"total|valid|count|len", re.I)
+
+
+def _operand_names(node: ast.AST) -> set[str]:
+    """The names and attribute names an expression reads."""
+    return {
+        sub.id if isinstance(sub, ast.Name) else sub.attr
+        for sub in ast.walk(node)
+        if isinstance(sub, (ast.Name, ast.Attribute))
+    }
 
 
 def _tests_for_none(node: ast.AST) -> bool:
-    """Whether ``node`` holds a test of a value for None, or a difference
-    (``total - valid``), which is how a count of nulls is taken."""
+    """Whether ``node`` takes a count of nulls: it tests a value for None,
+    counts the Nones of a list (``values.count(None)``), or subtracts one
+    count from another (``total - valid``)."""
     for sub in ast.walk(node):
         if (
             isinstance(sub, ast.Compare)
@@ -441,7 +459,18 @@ def _tests_for_none(node: ast.AST) -> bool:
             )
         ):
             return True
-        if isinstance(sub, ast.BinOp) and isinstance(sub.op, ast.Sub):
+        if (
+            isinstance(sub, ast.Call)
+            and isinstance(sub.func, ast.Attribute)
+            and sub.func.attr == "count"
+            and any(isinstance(arg, ast.Constant) and arg.value is None for arg in sub.args)
+        ):
+            return True
+        if (
+            isinstance(sub, ast.BinOp)
+            and isinstance(sub.op, ast.Sub)
+            and any(_A_COUNT.search(name) for name in _operand_names(sub))
+        ):
             return True
     return False
 
@@ -474,20 +503,25 @@ def _failure_counts_from_none(tree: ast.AST) -> list[tuple[str, int]]:
     return found
 
 
-def test_no_code_but_the_owner_counts_a_null_as_a_failure():
-    """No code under ``src/`` outside the statistics' one counter derives a
-    count named for failure from a test for None (or from ``total -
+def test_no_code_counts_a_null_as_a_failure():
+    """No code under ``src/`` derives a count named for failure from a test
+    for None, a count of Nones or a difference of counts (``total -
     valid``): such a count calls a null a failure whatever the simulator
-    printed. The scan finds the one it replaced."""
+    printed. The statistics count failures by the reason the log decoder
+    gives (``signal_analysis._count_no_number``). The scan finds each form
+    it looks for, the one it replaced among them."""
     found = [
         (path, scope, line)
         for path, tree in _source_scan.modules().items()
         for scope, line in _failure_counts_from_none(tree)
-        if (path, scope) != _OWNER
     ]
     assert found == []
-    old = ast.parse('def f(values):\n    return {"failure_count": total - valid_count}\n')
-    assert _failure_counts_from_none(old)
+    for old in (
+        'def f(values):\n    return {"failure_count": total - valid_count}\n',
+        "def f(values):\n    failure_count = values.count(None)\n",
+        "def f(values):\n    failed = sum(v is None for v in values)\n",
+    ):
+        assert _failure_counts_from_none(ast.parse(old)), old
 
 
 # -- ngspice, live ----------------------------------------------------------------
@@ -500,10 +534,13 @@ async def test_an_ngspice_run_with_a_failed_measurement_counts_no_null_as_a_fail
 ):
     """A real ngspice run of a deck whose WHEN is never crossed, with its
     measurements as ``.meas`` cards and as ``meas`` commands of a control
-    script. Whatever ngspice prints for it (a build in batch mode measures
-    nothing), every statistic the measurements recipe gives counts as failed
-    only a measurement its row names failed, and its counts add up; where the
-    recipe reads no measurement, it says so in its failures."""
+    script. Whatever an ngspice build prints for it, every statistic the
+    measurements recipe gives counts as failed only a measurement its row
+    names failed, and its counts add up; where the recipe reads no
+    measurement it says so in its failures. On ngspice 42 neither form gives
+    a row (in batch mode ngspice measures nothing, and the log decoder reads
+    no ngspice measurement line), so there this checks the refusal alone; a
+    build that prints measurements the decoder reads is checked in full."""
     from ltspice_mcp.config import ServerConfig
     from ltspice_mcp.lib.simulator import detect_simulators
     from tests.conftest import terminal_experiment

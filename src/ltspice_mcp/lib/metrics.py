@@ -79,6 +79,7 @@ from ltspice_mcp.lib.log_parser import (
     result_unreadable,
 )
 from ltspice_mcp.lib.log_types import (
+    NO_NUMBER_REASONS,
     MeasurementsOutput,
     measurement_failed,
     measurement_named,
@@ -1148,6 +1149,48 @@ async def summary(
     return data
 
 
+def _row_failed(table: Mapping[str, Any], named: Mapping[str, list[int]]) -> list[str]:
+    """The measurements LTspice printed failed at the row's steps, in the
+    order the log printed them."""
+    order = list(table["failed_measurements"])
+    return sorted(named, key=lambda name: order.index(name) if name in order else len(order))
+
+
+def _row_unreadable(table: Mapping[str, Any], named: Mapping[str, list[int]]) -> dict[str, Any]:
+    """What the log printed where each measurement's number belongs."""
+    return {name: result_unreadable(table["measurements"][name]) for name in named}
+
+
+def _row_answer_unknown(
+    table: Mapping[str, Any], named: Mapping[str, list[int]]
+) -> dict[str, Any]:
+    """Why the field holding each measurement's result is not known."""
+    return {name: table["measurements"][name]["answer_unknown"] for name in named}
+
+
+def _row_not_established(
+    table: Mapping[str, Any], named: Mapping[str, list[int]]
+) -> dict[str, Any]:
+    """The row's steps whose printed value is not established, and why."""
+    return {
+        name: {"steps": steps, "reason": table["measurements"][name]["not_established"]["reason"]}
+        for name, steps in named.items()
+    }
+
+
+#: How a measurements row gives each reason a value has no number
+#: (log_types.NO_NUMBER_REASONS), from the log's answered table and the
+#: measurements it holds at the row's steps, by those steps. Every reason has
+#: one: a reason added to the list without one stops the import.
+_ROW_REASONS: dict[str, Callable[[Mapping[str, Any], Mapping[str, list[int]]], Any]] = {
+    "failed_measurements": _row_failed,
+    "unreadable": _row_unreadable,
+    "answer_unknown": _row_answer_unknown,
+    "not_established": _row_not_established,
+}
+assert set(_ROW_REASONS) == {reason.field for reason in NO_NUMBER_REASONS}
+
+
 async def measurements(
     source: services.AnalysisSource,
     recipe: MeasurementsRecipe,
@@ -1184,12 +1227,16 @@ async def measurement_rows(
     whole = await services.answer_measurements(source, decoded)
     tables = [whole if step is None else measurements_at_step(whole, step) for step in steps]
 
+    # Why each step has no number is the log decoder's answer, read over the
+    # whole run (a step's row keeps the run's step numbers in ``unreadable``
+    # and ``not_established``) and taken at the step a row reads.
+    whole_reasons: dict[str, list[str | None]] = {}
+
     def aggregate_each() -> list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]]:
         rows = []
-        # Why each step has no number is the log decoder's answer, read over
-        # the whole run (a step's row keeps the run's step numbers in
-        # ``unreadable`` and ``not_established``) and taken at the row's step.
-        whole_reasons = {name: no_number_reasons(whole, name) for name in whole["measurements"]}
+        whole_reasons.update(
+            {name: no_number_reasons(whole, name) for name in whole["measurements"]}
+        )
         for step, table in zip(steps, tables, strict=True):
             flat_values, axis_map, _steps_label, at_map = aggregate_log_measurements(table)
             stats = run_compute(
@@ -1208,7 +1255,7 @@ async def measurement_rows(
 
     aggregated = await services.bounded_parse(source.log, aggregate_each)
     values: list[MetricValue] = []
-    for step, table, (stats, axis_map, at_map) in zip(steps, tables, aggregated, strict=True):
+    for step, (stats, axis_map, at_map) in zip(steps, aggregated, strict=True):
         # Surface which field each stat block was computed from so a downstream
         # consumer can tell "this is the level (constant)" from "this is the
         # WHEN-clause crossing frequency".
@@ -1229,31 +1276,29 @@ async def measurement_rows(
             chosen = {require_measurement(name, stats) for name in recipe.names}
             stats = {name: entry for name, entry in stats.items() if name in chosen}
         row: dict[str, Any] = {"stats": stats}
-        # What LTspice printed as failed, at the steps this row reads: the
-        # log decoder's answer, never a null's (a null may be unreadable or
-        # not finite instead). A row read at one step names only that step's.
-        # The run summary beside it shows the whole run's measurements at any
-        # step, and so names what failed at any step
+        # Why each value this row reads has no number, by the reasons the log
+        # decoder gives (log_types.NO_NUMBER_REASONS): the row names a
+        # measurement under each reason that holds at a step it reads, as the
+        # statistics beside it count those steps. A row read at one step names
+        # only that step's. The run summary beside it shows the whole run's
+        # measurements at any step, and so names what failed at any step
         # (raw_parser.build_simulation_summary). Pinned by
         # test_a_summary_names_failures_at_any_step_and_a_step_row_its_own.
-        failed = [name for name in table["failed_measurements"] if name in stats]
-        if failed:
-            row["failed_measurements"] = failed
-        # Why a value this row reads is null where the log printed other than
-        # a number (log_parser.parse_measurements): a statement that names its
-        # steps concerns those alone.
-        unreadable = {
-            name: reason
-            for name, entry in whole["measurements"].items()
-            if name in stats
-            and (reason := result_unreadable(entry)) is not None
-            and (step is None or step in reason.get("steps", (step,)))
-        }
-        if unreadable:
-            row["unreadable"] = unreadable
+        for reason in NO_NUMBER_REASONS:
+            at_steps = {
+                name: [
+                    i
+                    for i, why in enumerate(whole_reasons.get(name, ()))
+                    if why == reason.field and step in (None, i)
+                ]
+                for name in stats
+            }
+            named = {name: found for name, found in at_steps.items() if found}
+            if named:
+                row[reason.field] = _ROW_REASONS[reason.field](whole, named)
         # A value the log printed once for a run of several steps: how many,
         # and which step's it is where that is established
-        # (log_parser.answered_measurements).
+        # (log_parser.answered_measurements). It is a number, not a reason.
         once = {
             name: entry["printed_once"]
             for name, entry in whole["measurements"].items()
@@ -1261,29 +1306,6 @@ async def measurement_rows(
         }
         if once:
             row["printed_once"] = once
-        # Where the field holding a result is not known, no number is given
-        # for it, and the row says why (log_parser.measurement_answer).
-        unknown = {
-            name: entry["answer_unknown"]
-            for name, entry in whole["measurements"].items()
-            if "answer_unknown" in entry and name in stats
-        }
-        if unknown:
-            row["answer_unknown"] = unknown
-        # The steps whose printed value is not established as the result
-        # (XVII prints 0 for a failed step: log_parser.answered_measurements),
-        # by the run's step, from 0: those this row reads.
-        unset = {
-            name: {
-                "steps": [i for i in entry["not_established"]["steps"] if step in (None, i)],
-                "reason": entry["not_established"]["reason"],
-            }
-            for name, entry in whole["measurements"].items()
-            if "not_established" in entry and name in stats
-        }
-        unset = {name: item for name, item in unset.items() if item["steps"]}
-        if unset:
-            row["not_established"] = unset
         values.append(row)
     return values
 

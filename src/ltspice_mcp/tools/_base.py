@@ -26,7 +26,7 @@ from ltspice_mcp.lib.format import SAME_VALUE_RTOL, held_to_cap
 # Re-exported façade names: the strict Pydantic base lives in ``lib`` (models
 # below the tool layer declare models too), and the tool modules reach it here.
 from ltspice_mcp.lib.log_conditions import COVERAGE as LOG_COVERAGE
-from ltspice_mcp.lib.log_types import NO_NUMBER_REASONS
+from ltspice_mcp.lib.log_types import FAILED, NO_NUMBER_REASONS
 from ltspice_mcp.lib.ltspice_window import Shown, file_difference
 from ltspice_mcp.lib.models import StrictModel as StrictModel
 from ltspice_mcp.lib.netlist_graph import IncludeResolver
@@ -1034,7 +1034,10 @@ MEASUREMENT_STATS_SCHEMA: dict[str, Any] = {
             "type": "integer",
             "description": "Steps with a number; the statistics are over these.",
         },
-        "failure_count": {"type": "integer", "description": NO_NUMBER_REASONS[0].counted},
+        "failure_count": {
+            "type": "integer",
+            "description": next(r.counted for r in NO_NUMBER_REASONS if r.field == FAILED),
+        },
         "no_number": {
             "type": "object",
             "description": (
@@ -1044,7 +1047,8 @@ MEASUREMENT_STATS_SCHEMA: dict[str, Any] = {
             "properties": {
                 **{
                     reason.field: {"type": "integer", "description": reason.counted}
-                    for reason in NO_NUMBER_REASONS[1:]
+                    for reason in NO_NUMBER_REASONS
+                    if reason.field != FAILED
                 },
                 NO_REASON_GIVEN: {
                     "type": "integer",
