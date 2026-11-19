@@ -18,12 +18,15 @@ from typing import Any
 import pytest
 from pydantic import BaseModel, Field, ValidationError
 
-from ltspice_mcp.lib import result_store
+from ltspice_mcp.lib import presenter
 from ltspice_mcp.lib.projection import absent_path_warnings, key_outline
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze, experiments, jobs, receipts
+from ltspice_mcp.tools._base import reply_payload
 from ltspice_mcp.tools.analyze import (
     AnalyzeResultsInput,
+    analysis_answer,
+    attached_snapshot,
     capture_attached_analysis,
     handle_analyze_results,
     render_attached_analysis,
@@ -325,7 +328,10 @@ async def test_a_continued_page_keeps_the_resolved_view(
     second = (
         await handle_analyze_results(
             AnalyzeResultsInput.model_validate(
-                {**request, "include": {"per_run": {"limit": 1, "cursor": cursor}}}
+                {
+                    **request,
+                    "include": {"per_run": {"limit": 1, "cursor": cursor}, "fields": ["rms"]},
+                }
             ),
             state_no_sim,
         )
@@ -360,46 +366,27 @@ async def test_the_attached_analysis_continues_with_its_own_view(
         ),
         state_no_sim,
     )
-    shown = render_attached_analysis(stored, fields=block.include.fields)
-    (first,) = shown["results"]["k"]["per_run"]["items"]
+    shown = render_attached_analysis(stored, fields=block.include.fields, served=())
+    assert all(set(row) == {"value"} for row in shown["results"]["k"]["per_run"]["items"])
+    # As a receipt presents it: an answer of analyze_results, cut at its page.
+    presented = presenter.present_many(
+        reply_payload(shown),
+        [analysis_answer(shown, attached_snapshot(stored, block.include.fields), target=None)],
+        target=None,
+        store=state_no_sim.store,
+        ttl_hours=24,
+    ).reply
+    (first,) = presented["results"]["k"]["per_run"]["items"]
     assert set(first) == {"value"} and "rms" in first["value"]
     continued = (
         await handle_analyze_results(
-            AnalyzeResultsInput.model_validate({"continue": shown["next"]}), state_no_sim
+            AnalyzeResultsInput.model_validate({"continue": presented["next"]}), state_no_sim
         )
     ).structured_content
     assert continued is not None
     (row,) = continued["results"]["k"]["per_run"]["items"]
     assert set(row) == {"value"} and "rms" in row["value"]
 
-
-async def test_a_cursor_carrying_a_bare_name_reads_it_under_value(
-    state_no_sim: SessionState, work_dir: Path
-) -> None:
-    """A cursor handed out before bare names were resolved still pages rows."""
-    raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
-    request = {
-        "sources": [{"path": str(raw), "label": "rc"}],
-        "recipes": [_RECIPE],
-        "all_steps": True,
-        "include": {"per_run": {"limit": 1}},
-    }
-    first = (
-        await handle_analyze_results(AnalyzeResultsInput.model_validate(request), state_no_sim)
-    ).structured_content
-    assert first is not None
-    bare = result_store.reencode_cursor(first["next"]["cursor"], view_fields=["rms"])
-    continued = (
-        await handle_analyze_results(
-            AnalyzeResultsInput.model_validate(
-                {"continue": {"result_set_id": first["result_set_id"], "cursor": bare}}
-            ),
-            state_no_sim,
-        )
-    ).structured_content
-    assert continued is not None
-    (row,) = continued["results"]["k"]["per_run"]["items"]
-    assert set(row) == {"value"} and "rms" in row["value"]
 
 
 # ---------------------------------------------------------------------------

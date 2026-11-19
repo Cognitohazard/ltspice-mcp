@@ -11,7 +11,6 @@ import typing
 import warnings
 from collections.abc import Iterator, Mapping
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, cast, get_args
 
 import pytest
@@ -736,39 +735,18 @@ def test_inspect_stale_restart_discards_the_first_revision(
     assert calls == 4
 
 
-def test_analyze_drives_neutral_continuations_without_flipping_request_fields(
+def test_analyze_evaluates_once_without_flipping_request_fields(
     state_no_sim: SessionState,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     api = SyncApi(state_no_sim)
-    seen_positions: list[int | None] = []
     seen_requests: list[analyze.AnalyzeResultsInput] = []
 
-    async def evaluate(
-        request: analyze.AnalyzeResultsInput,
-        _state: SessionState,
-        *,
-        continuation: analyze.AnalysisContinuationPosition | None = None,
-        loaded: object | None = None,
-    ):
-        del loaded
-        seen_positions.append(None if continuation is None else continuation.work_index)
+    async def complete(request: analyze.AnalyzeResultsInput, _state: SessionState):
         seen_requests.append(request)
-        next_position = len(seen_positions)
-        return SimpleNamespace(
-            item=None,
-            continuation=(
-                analyze.AnalysisContinuationPosition("set-1", next_position)
-                if next_position < 3
-                else None
-            ),
-        )
+        return {"outcome": "complete", "evaluations": len(seen_requests)}
 
-    def complete(drives: list[object]) -> dict[str, Any]:
-        return {"outcome": "complete", "drives": len(drives)}
-
-    monkeypatch.setattr(analyze, "evaluate_analysis_results", evaluate)
-    monkeypatch.setattr(analyze, "complete_analysis_evaluations", complete)
+    monkeypatch.setattr(analyze, "complete_analysis", complete)
     result = api.analyze_results(
         sources=[{"path": "result.raw", "label": "dut"}],
         recipes=[
@@ -782,8 +760,8 @@ def test_analyze_drives_neutral_continuations_without_flipping_request_fields(
             "fields": ["case_id", "value.mean"],
         },
     )
-    assert result == {"outcome": "complete", "drives": 3}
-    assert seen_positions == [None, 1, 2]
+    # One evaluation gives every recipe: no loop over continuations.
+    assert result == {"outcome": "complete", "evaluations": 1}
     assert all(
         request.include.per_run is not None and request.include.per_run.limit == 7
         for request in seen_requests

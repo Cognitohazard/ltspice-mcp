@@ -1045,7 +1045,7 @@ async def _render_static_run_receipt(
     presenter: one with a job keeps its run rows behind the job's record, and
     one with none stores its cut rows."""
     reply = await present_job_answer(
-        lambda _rung, _rows: copy.deepcopy(data),
+        lambda: copy.deepcopy(data),
         receipt_parts(
             run_fields,
             rows=rows if rows is not None else data.get("runs", {}).get("items", []),
@@ -1599,15 +1599,13 @@ async def _dwell_and_respond(
         lint_by_circuit=lint_by_circuit,
     )
 
-    def build(rung: response_budget.Rung | None, rows: int | None) -> dict[str, Any]:
+    def build() -> dict[str, Any]:
         data = render_receipt_snapshot(
             snapshot,
             control_token=receipt.control_token,
             provenance=provenance,
             run_fields=run_fields,
             analysis_fields=analysis_fields,
-            analysis_answer_channel=rung is not None and rung.answer_channel,
-            analysis_rows_cap=rows,
             analysis_served=frozenset(state.tool_dispatch),
         )
         data["replayed"] = receipt.replayed
@@ -1618,7 +1616,7 @@ async def _dwell_and_respond(
     return format_response(
         await present_job_answer(
             build,
-            receipt_parts(run_fields, snapshot),
+            receipt_parts(run_fields, snapshot, analysis_fields=analysis_fields),
             tool="run_experiments",
             schema=RUN_EXPERIMENTS_OUTPUT_SCHEMA,
             budget=budget,

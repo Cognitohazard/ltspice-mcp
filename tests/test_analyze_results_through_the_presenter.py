@@ -258,7 +258,7 @@ async def test_a_page_read_after_its_source_changed_returns_the_stored_rows_and_
         page["results"]["v"]["per_run"]["items"] == whole["results"]["v"]["per_run"]["items"][50:]
     )
     assert page["stored_answer"]["snapshot"] == snapshot
-    assert not [failure for failure in page["failures"] if failure["code"] == "source_drift"]
+    assert not [failure for failure in page.get("failures", []) if failure["code"] == "source_drift"]
 
 
 # ---------------------------------------------------------------------------

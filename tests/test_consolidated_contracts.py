@@ -29,7 +29,6 @@ import jsonschema
 import pytest
 
 from ltspice_mcp.errors import InvalidCursorError, RecipeInvalidError
-from ltspice_mcp.lib import result_store
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_view
 from ltspice_mcp.lib.presenter import open_record
 from ltspice_mcp.lib.recipes import DISCRIMINANTS
@@ -1097,9 +1096,19 @@ class TestCursorTamperOnEveryPaginatedInput:
             open_record("not-a-cursor", kind="job_runs")
         assert exc.value.code == "invalid_cursor"
 
-    def test_analyze_cursor_rejects_garbage(self):
+    def test_analyze_cursor_rejects_garbage(self, tmp_path):
+        from ltspice_mcp.lib import presenter
+        from ltspice_mcp.lib.store import Store
+        from ltspice_mcp.tools.analyze import OUTPUT_SCHEMA
+
         with pytest.raises(InvalidCursorError):
-            result_store.cursor_result_set_id("not-a-cursor")
+            presenter.open_page(
+                "not-a-cursor",
+                OUTPUT_SCHEMA,
+                tool="analyze_results",
+                store=Store(tmp_path),
+                gone="",
+            )
 
     def test_shared_view_paginator_rejects_garbage(self):
         # Backs both inspect (net/symbols/components/model) and edit_schematic

@@ -87,9 +87,6 @@ _ALLOWED: dict[str, str] = {
     "lib/signal_analysis.py:window_span": (
         "reads an axis a block of _WINDOW_CHUNK points at a time, every block; cuts nothing"
     ),
-    "tools/analyze.py:_snapshot_from_assembly": (
-        "an internal snapshot; answer_total keeps the total and the cursor bases the route"
-    ),
     "tools/receipts.py:_sample_observations": (
         "names ten assign points where every sample computed one result and gives "
         "their total in points_truncated; no reply carries a sample's digest, so no "
@@ -120,12 +117,12 @@ _ALLOWED: dict[str, str] = {
     "tools/inspect_tools.py:_do_reference": "names the cap in the hint's lever; slices nothing",
     "tools/jobs.py:_collect_circuit_groups": "a sample of recent jobs; recent_jobs_total is the total",
     "tools/receipts.py:_render_failures": "a row's sample of cases; its count is the total",
-    "tools/receipts.py:_worst_note": (
-        "builds the largest runs_not_shown to measure its bound; not a reply"
+    "lib/not_shown.py:worst_bound": (
+        "builds the largest part on entries left out to measure its bound; not a reply"
     ),
-    "tools/receipts.py:runs_not_shown": (
-        "a kind's sample of runs left out; its count is the total and more the rest, "
-        "and each run's cursor and the reply's cut read every row"
+    "lib/not_shown.py:not_shown": (
+        "a kind's sample of entries left out; its count is the total, and each "
+        "entry's cursor and the reply's cut read every entry"
     ),
 }
 
@@ -220,7 +217,7 @@ def _unnoted(found: Mapping[str, set[str]]) -> set[str]:
 
 def test_every_capped_reply_list_states_its_total_and_route() -> None:
     found = _capping_functions(modules())
-    assert "tools/analyze.py:_assemble" in found
+    assert "tools/analyze.py:for_session" in found
     missing = sorted(_unnoted(found) - set(_ALLOWED))
     assert not missing, (
         "these cut a list at a cap without saying the total and the route to the rest "

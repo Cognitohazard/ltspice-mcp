@@ -499,8 +499,9 @@ async def test_a_cut_receipt_and_its_pages_write_no_file(
     state_with_sim: SessionState, grid_deck: Path
 ):
     """Run rows are read back from the job's record, so neither a cut receipt
-    nor a page of its rows stores anything, and a reply that fits writes
-    nothing either."""
+    nor a page of its rows stores anything of the receipt's own, and a reply
+    that fits writes nothing either. What is stored is the attached analysis,
+    an answer of analyze_results, cut beside the rows."""
     receipt = await _grid_receipt(state_with_sim, grid_deck, 64, 600)
     page = await _jobs(
         state_with_sim,
@@ -514,7 +515,9 @@ async def test_a_cut_receipt_and_its_pages_write_no_file(
     assert "cut" in page and "cut" not in fits
     for data in (receipt, page, fits):
         assert "stored_answer" not in data
-    assert not list(state_with_sim.store.results_dir.glob("sa_*.json"))
+    stored = list(state_with_sim.store.results_dir.glob("sa_*.json"))
+    assert [path.stem for path in stored] == [receipt["analysis"]["result"]["stored_answer"]["id"]]
+    assert all(json.loads(path.read_text())["tool"] == "analyze_results" for path in stored)
 
 
 @pytest.mark.asyncio
@@ -609,27 +612,18 @@ def test_a_presenters_over_target_note_names_its_cut_where_a_ladders_names_none(
     assert "Cut:" not in floor["detail"] and "fully degraded" in floor["detail"]
 
 
-def test_an_attached_trim_note_speaks_of_the_analysis_where_a_ladders_names_its_rung():
-    """Two writers of budget_truncated: a receipt's ladder runs over its
-    attached analysis alone, a tool's over its whole reply."""
-    from ltspice_mcp.lib import response_budget as rb
-
-    attached = rb.attached_trimmed_observation(600, ["emptied analysis.result.x"], "exp_1")
-    rung = rb.Rung(level=rb.RUNG_TRIM, budget=600, measured=900, cut=["x"])
-    whole = rb.truncated_observation(rung, 900, cut="rows", route="")
-    assert attached["code"] == whole["code"] == "budget_truncated"
-    assert "attached analysis" in attached["detail"] and "rung" not in attached["detail"]
-    assert "rung 0" in whole["detail"] and "attached analysis" not in whole["detail"]
-
-
 @pytest.mark.asyncio
-async def test_a_receipt_over_the_default_says_an_explicit_budget_reduces_its_analysis(
+async def test_a_receipt_over_the_default_cuts_its_analysis_with_a_cursor(
     state_with_sim: SessionState, grid_deck: Path
 ):
+    """The attached analysis is a second answer under the receipt's target:
+    cut like the receipt's own rows, with a cursor analyze_results reads, and
+    no note that the target was not met."""
     receipt = await _grid_receipt(state_with_sim, grid_deck, 16, None)
-    (note,) = _observations(receipt, "budget_not_met")
-    assert "Only the trim rung ran on the attached analysis" in note["detail"]
-    assert "an explicit budget reduces it further" in note["detail"]
+    assert not _observations(receipt, "budget_not_met")
+    result = receipt["analysis"]["result"]
+    assert result["stored_answer"]["id"].startswith("sa_")
+    assert any("next" in entry for entry in result["cut"].values())
 
 
 def test_a_placement_that_describes_this_calls_outcome_is_never_shortened():

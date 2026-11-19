@@ -1536,18 +1536,15 @@ def failed_jobs_evaluation(
 def render_jobs_data(
     evaluation: JobsEvaluation,
     *,
-    rung: response_budget.Rung | None = None,
-    analysis_rows_cap: int | None = None,
     served: Collection[str] | None = None,
 ) -> dict[str, Any]:
     """One evaluation's complete answer: every group, every run row, every
     receipt. MCP presents it through the presenter (:func:`handle_jobs`); the
     Python API returns it as it is.
 
-    ``rung`` and ``analysis_rows_cap`` render an attached analysis the way
-    ``analyze_results`` trims its own, which only MCP asks for. ``served`` is
-    the MCP session's tools, which an attached analysis's failures name as
-    where their snippet runs.
+    ``served`` is the MCP session's tools, which an attached analysis's
+    failures name as where their snippet runs; None gives the attached
+    analysis as the Python API does, with every failure.
     """
     args = evaluation.args
     if evaluation.error is not None:
@@ -1637,8 +1634,6 @@ def render_jobs_data(
         action,
         snapshot,
         timed_out=None if isinstance(args, JobsResumeInput) else evaluation.timed_out,
-        analysis_answer_channel=rung is not None and rung.answer_channel,
-        analysis_rows_cap=analysis_rows_cap,
         analysis_served=served,
     )
     if evaluation.warnings:
@@ -1773,9 +1768,7 @@ async def _present_jobs(
     if isinstance(args, (JobsStatusInput, JobsWaitInput, JobsResumeInput)):
         served = frozenset(state.tool_dispatch)
         return await present_job_answer(
-            lambda rung, rows: render_jobs_data(
-                evaluation, rung=rung, analysis_rows_cap=rows, served=served
-            ),
+            lambda: render_jobs_data(evaluation, served=served),
             receipt_parts(snapshot=evaluation.snapshot),
             tool="jobs",
             schema=JOBS_OUTPUT_SCHEMA,

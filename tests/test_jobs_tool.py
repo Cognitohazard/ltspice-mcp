@@ -928,17 +928,15 @@ class TestReceiptSnapshotCoherence:
             request={"recipes": []},
             result=analysis_snapshot.envelope(
                 {
-                    "top": {
+                    "answer": {
                         "rows": [
                             {"case_id": produced.case_id, "status": produced.status},
                             {"case_id": failed.case_id, "status": failed.status},
                         ],
                         "next": None,
                     },
-                    "results": {},
-                    "natural_cursor_base": None,
-                    "natural_has_next": False,
-                    "natural_deferred": False,
+                    "snapshot": {},
+                    "request": {},
                 }
             ),
             observations=[

@@ -1,7 +1,11 @@
-"""Persistence for continuable ``analyze_results`` calls.
+"""The record of one ``analyze_results`` request, kept for its artifacts.
 
-A result set records worker-captured source digests at creation and remains
-immutable for every continuation.
+A result set records the request and the worker-captured source digests when
+an evaluation starts. Nothing reads it to read on in a reply: a cut reply is a
+stored answer (``lib/presenter.py``). It names the folder the request's CSV
+and plot artifacts are written to (:func:`artifact_paths`), and its sweep
+removes them with it: a set read from jobs when one of its jobs is deleted,
+one read only from files at ``[analysis] result_set_ttl_hours``.
 """
 
 from __future__ import annotations
@@ -17,13 +21,10 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
-from ltspice_mcp.errors import InvalidCursorError, ResultError
+from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import now, parse_iso_datetime
-from ltspice_mcp.lib.cursor_codec import CursorError
 from ltspice_mcp.lib.cursor_codec import canonical_hash as canonical_hash
 from ltspice_mcp.lib.cursor_codec import canonical_json as canonical_json
-from ltspice_mcp.lib.cursor_codec import decode_cursor as _decode_body_cursor
-from ltspice_mcp.lib.cursor_codec import encode_cursor as _encode_body_cursor
 from ltspice_mcp.lib.deck_staging import sha256_file as sha256_file  # re-export
 from ltspice_mcp.lib.store import (
     KIND_RESULT_SET,
@@ -120,10 +121,23 @@ def create(
     source_jobs: dict[str, str | None],
     ttl_hours: float,
 ) -> ResultSet:
-    """Persist a new result set after opportunistic cleanup."""
+    """Persist a result set after opportunistic cleanup.
+
+    Its id is a digest of what it records: the request, the sources' digests
+    and the jobs it reads, so the same request over the same files is one set
+    (written again, with a fresh expiry), its artifacts keep their names, and
+    a reply built from it keeps its bytes (design principle "Repeatable
+    requests")."""
     cleanup(working_dir)
     created = now()
-    result_set_id = f"rs_{secrets.token_hex(16)}"
+    result_set_id = "rs_" + canonical_hash(
+        {
+            "inputs": inputs,
+            "work": work,
+            "source_manifests": source_manifests,
+            "source_jobs": source_jobs,
+        }
+    )[:32]
     created_at = created.isoformat()
     expires_at = (created + timedelta(hours=ttl_hours)).isoformat()
     item = ResultSet(
@@ -185,48 +199,6 @@ def _delete_artifacts(working_dir: Path, result_set_id: str) -> None:
         shutil.rmtree(Store(working_dir).result_artifacts(result_set_id))
 
 
-def load(result_set_id: str, working_dir: Path) -> ResultSet:
-    """Load one immutable set, enforcing TTL and source-job retention."""
-    path = result_path(result_set_id, working_dir)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        raise ResultError(
-            f"Result set {result_set_id!r} is missing or expired; submit a fresh "
-            "analyze_results request."
-        ) from None
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ResultError(f"Could not read result set {result_set_id!r}: {exc}") from exc
-    if not isinstance(data, dict):
-        raise ResultError(f"Result set {result_set_id!r} is malformed")
-    item = _decode(data, path)
-    # Job-backed sets follow their jobs and are not subject to the raw-only TTL.
-    expires_at = parse_iso_datetime(item.expires_at)
-    if expires_at is None:
-        raise ResultError(f"Result set {result_set_id!r} has an invalid expiry timestamp")
-    if not item.source_jobs and expires_at <= now():
-        with contextlib.suppress(OSError):
-            path.unlink()
-        _delete_artifacts(working_dir, result_set_id)
-        raise ResultError(
-            f"Result set {result_set_id!r} expired; submit a fresh analyze_results request."
-        )
-    missing = _job_record_missing(item)
-    if missing is not None:
-        with contextlib.suppress(OSError):
-            path.unlink()
-        _delete_artifacts(working_dir, result_set_id)
-        raise ResultError(
-            f"Result set {result_set_id!r} is invalid because source job {missing!r} "
-            "was deleted; submit a fresh analyze_results request."
-        )
-    if item.work_hash != canonical_hash(item.work):
-        raise ResultError(f"Result set {result_set_id!r} failed its integrity check")
-    if item.snapshot_hash != canonical_hash(item.snapshot()):
-        raise ResultError(f"Result set {result_set_id!r} failed its integrity check")
-    return item
-
-
 # The stored answers beside these sets (lib/presenter.py) are swept by
 # presenter.cleanup: they depend on no job, so they expire by time alone.
 def cleanup(working_dir: Path) -> int:
@@ -273,103 +245,6 @@ def invalidate_for_job(working_dir: Path, job_id: str) -> int:
         except (OSError, json.JSONDecodeError):
             continue
     return removed
-
-
-def encode_cursor(
-    item: ResultSet,
-    position: int,
-    *,
-    intra_item: int = 0,
-    missing_offset: int = 0,
-    view_fields: list[str] | None,
-) -> str:
-    """Encode a resume point: work position, per-run offset, coverage offset.
-
-    ``missing_offset`` pages the coverage view (``missing_cases``), which lives
-    in the immutable inputs rather than the work list — a cursor that carries it
-    with ``position == len(work)`` pages that view without redoing any work.
-    Every cursor names the row view it was paged under, ``None`` being the lean
-    view; a cursor carrying no view at all does not decode.
-    """
-    body: dict[str, Any] = {
-        "result_set_id": item.result_set_id,
-        "position": position,
-        "intra_item": intra_item,
-        "missing_offset": missing_offset,
-        "work_hash": item.work_hash,
-        "view": {"fields": view_fields},
-    }
-    return _encode_body_cursor(body)
-
-
-def _decode_cursor_body(cursor: str) -> dict[str, Any]:
-    try:
-        return _decode_body_cursor(cursor)
-    except CursorError as exc:
-        raise InvalidCursorError(f"Invalid analyze_results cursor: {exc}") from None
-
-
-def cursor_result_set_id(cursor: str) -> str:
-    """Recover the immutable set id carried by a callable page cursor."""
-    result_set_id = str(_decode_cursor_body(cursor).get("result_set_id", ""))
-    if not result_set_id:
-        raise InvalidCursorError("Invalid analyze_results cursor: result_set_id is missing")
-    return result_set_id
-
-
-def cursor_view(cursor: str) -> list[str] | None:
-    """Return the fields projection the cursor was paged under (``None`` = lean)."""
-    body = _decode_cursor_body(cursor)
-    if "view" not in body:
-        raise InvalidCursorError("Invalid analyze_results cursor: it names no row view")
-    view = body["view"]
-    if not isinstance(view, dict) or set(view) != {"fields"}:
-        raise InvalidCursorError("Invalid analyze_results cursor: malformed render view")
-    fields = view["fields"]
-    if fields is not None and (
-        not isinstance(fields, list) or not all(isinstance(field, str) for field in fields)
-    ):
-        raise InvalidCursorError("Invalid analyze_results cursor: malformed fields render view")
-    return fields
-
-
-def reencode_cursor(
-    cursor: str,
-    *,
-    view_fields: list[str] | None,
-    position: int | None = None,
-    intra_item: int | None = None,
-    missing_offset: int | None = None,
-) -> str:
-    """Re-render one immutable resume point with a selected view or offset."""
-    body = _decode_cursor_body(cursor)
-    body["view"] = {"fields": view_fields}
-    if position is not None:
-        body["position"] = position
-    if intra_item is not None:
-        body["intra_item"] = intra_item
-    if missing_offset is not None:
-        body["missing_offset"] = missing_offset
-    return _encode_body_cursor(body)
-
-
-def decode_cursor(cursor: str, item: ResultSet) -> tuple[int, int, int]:
-    """Decode and bind a cursor to one immutable result set and work list.
-
-    Returns ``(position, intra_item, missing_offset)``.
-    """
-    try:
-        body = _decode_cursor_body(cursor)
-        if body["result_set_id"] != item.result_set_id or body["work_hash"] != item.work_hash:
-            raise ValueError("cursor belongs to a different result set")
-        position = int(body["position"])
-        intra_item = int(body.get("intra_item", 0))
-        missing_offset = int(body.get("missing_offset", 0))
-    except (KeyError, TypeError, ValueError) as exc:
-        raise InvalidCursorError(f"Invalid analyze_results cursor: {exc}") from None
-    if position < 0 or position > len(item.work) or intra_item < 0 or missing_offset < 0:
-        raise InvalidCursorError("Invalid analyze_results cursor position")
-    return position, intra_item, missing_offset
 
 
 def artifact_paths(

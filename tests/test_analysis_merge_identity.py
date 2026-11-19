@@ -84,16 +84,16 @@ async def test_sync_readers_use_explicitly_captured_source(
 
 
 @pytest.mark.asyncio
-async def test_budget_pages_share_resident_capture_and_reverify_each_continuation(
+async def test_fifteen_references_share_one_capture_and_a_page_reads_no_source(
     state_no_sim: SessionState,
     work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
     settled_stamps: None,
 ):
-    """Fifteen references to one raw share one capture. Each continuation
-    re-stamps the source: unchanged, it is answered without a parser process;
-    rewritten, even at the same size and modification time, a worker recaptures
-    it and every page reports the drift."""
+    """Fifteen references to one raw share one capture. A page is sliced from
+    the stored answer: it starts no parser process, and a source rewritten
+    since, even at the same size and modification time, leaves its rows as
+    they were computed."""
     raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
     original = parser_service.run_parser_sync
     operations: list[str] = []
@@ -139,6 +139,7 @@ async def test_budget_pages_share_resident_capture_and_reverify_each_continuatio
     )
     assert operations == []
     assert continued["next"] is not None
+    assert continued["stored_answer"]["snapshot"] == data["stored_answer"]["snapshot"]
 
     before = raw.stat()
     contents = bytearray(raw.read_bytes())
@@ -147,26 +148,16 @@ async def test_budget_pages_share_resident_capture_and_reverify_each_continuatio
     os.utime(raw, ns=(before.st_atime_ns, before.st_mtime_ns))
     assert raw.stat().st_size == before.st_size
     operations.clear()
-    drifted = await analyze.handle_analyze_results(
+    after = await analyze.handle_analyze_results(
         analyze.AnalyzeResultsInput.model_validate(
             {"continue": continued["next"], "budget": response_budget.BUDGET_MIN_TOKENS}
         ),
         state_no_sim,
     )
-    rejected = drifted.structured_content
-    assert rejected is not None
-    loop = rejected["results"]["loop"]
-    assert (
-        not loop.get("values")
-        and not loop.get("per_run", {}).get("items")
-        and any(warning.startswith("No rows:") for warning in loop["warnings"])
-    )
-    # One drift, fifteen sources: one row, counted.
-    (drift,) = rejected["failures"]
-    assert drift["code"] == "source_drift"
-    assert drift["count"] == 15
-    assert len(operations) <= 2
-    assert "load_raw" not in operations
+    later = after.structured_content
+    assert later is not None and "failures" not in later
+    assert later["results"]["loop"]["per_run"]["items"]
+    assert operations == []
 
 
 @pytest.mark.asyncio
@@ -218,6 +209,7 @@ async def test_capture_and_verification_share_bytes_but_keep_plot_selection(
 async def test_unlabelled_log_continuation_echo_keeps_the_immutable_record(
     state_no_sim: SessionState, work_dir: Path
 ):
+    state_no_sim.config.default_budget = 0
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     raw.unlink()
     request = {

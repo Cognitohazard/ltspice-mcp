@@ -4,7 +4,6 @@ import asyncio
 import base64
 import contextlib
 import contextvars
-import functools
 import hashlib
 import logging
 import math
@@ -230,14 +229,17 @@ async def presented(
     records: Mapping[str, presenter.Record] | None = None,
     caps: Mapping[str, int] | None = None,
     over: presenter.Over | None = None,
+    apart: Mapping[str, int] | None = None,
+    series: presenter.Series | None = None,
 ) -> dict[str, Any]:
     """``data``, a complete answer, as the reply to send: whole when it fits
     the reply target, else cut by ``lib/presenter.py``, and stored when a list
     that is not one of ``records`` is cut. ``snapshot`` names what the answer
     was computed from; ``annotate`` adds the tool's words about a cut;
-    ``over`` says once that the reply is still over its target. ``target`` is
-    the call's own (its ``budget``), else :func:`reply_target`. Build the
-    result with :func:`format_response`, as :func:`present_reply` does."""
+    ``over`` says once that the reply is still over its target; ``apart`` and
+    ``series`` are as for ``presenter.present``. ``target`` is the call's own
+    (its ``budget``), else :func:`reply_target`. Build the result with
+    :func:`format_response`, as :func:`present_reply` does."""
     shown = await asyncio.to_thread(
         presenter.present,
         reply_payload(data),
@@ -251,6 +253,8 @@ async def presented(
         records=records,
         caps=caps,
         over=over,
+        apart=apart,
+        series=series,
     )
     return shown.reply
 
@@ -297,6 +301,8 @@ async def stored_page(
     cap: int | None = None,
     target: int | Literal["default"] | None = "default",
     over: presenter.Over | None = None,
+    apart: Mapping[str, int] | None = None,
+    series: presenter.Series | None = None,
 ) -> dict[str, Any]:
     """One page of a stored answer's list as the reply to send, read from the
     stored file and cut to ``target`` (the call's own, else
@@ -312,6 +318,8 @@ async def stored_page(
         annotate=annotate,
         cap=cap,
         over=over,
+        apart=apart,
+        series=series,
     )
     return shown.reply
 
@@ -368,12 +376,6 @@ async def record_page(
 #: replies were cut by size. The Python API's automatic mode holds them all.
 ROWS_WITHOUT_TARGET = 50
 
-#: What a reply over the server's default target adds when it has an attached
-#: analysis: the default runs only the trim rung on it.
-_ANALYSIS_TRIMMED_ONLY = (
-    "Only the trim rung ran on the attached analysis; an explicit budget reduces it further."
-)
-
 _NOTES_IN_FULL: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "notes_in_full", default=False
 )
@@ -391,10 +393,9 @@ def notes_in_full() -> Iterator[None]:
         _NOTES_IN_FULL.reset(token)
 
 
-#: Builds one job's complete answer at a moment, with its attached part (a
-#: receipt's attached analysis) rendered at a ladder rung (None: as stored)
-#: and its rows held to a count (None: all).
-JobAnswerBuild = Callable[[response_budget.Rung | None, int | None], dict[str, Any]]
+#: Builds one job's complete answer at a moment, every run row and its
+#: attached analysis whole.
+JobAnswerBuild = Callable[[], dict[str, Any]]
 
 
 @dataclass(frozen=True)
@@ -413,10 +414,13 @@ class JobAnswerParts:
     annotate: Callable[
         [str | None, Mapping[str, Any]], tuple[presenter.Annotate, Mapping[str, int]]
     ]
-    #: Fits the attached part to a rung, in place: ``(answer, rung, rows, target)``.
-    trim_attached: Callable[[dict[str, Any], response_budget.Rung, int | None, int], None]
-    #: Whether an answer carries an attached part to fit at all.
-    attached: Callable[[Mapping[str, Any]], bool]
+    #: The answer of another tool the answer carries (a receipt's attached
+    #: analysis), as the presenter presents it beside the job's own under one
+    #: target: ``(answer, target, whole)``, whole for the Python API's
+    #: automatic mode; None when it carries none.
+    attached: Callable[[Mapping[str, Any], int | None, bool], presenter.Answer | None]
+    #: How the presenter redraws the attached answer's series.
+    series: presenter.Series | None
     #: The sentences of the hint that are standing notes, by job id.
     route: Callable[[str], tuple[str, ...]]
     #: That sentence once the session was sent it in full.
@@ -454,58 +458,6 @@ def say_over_target(reply: dict[str, Any], size: int, target: int, *, more: str 
     ]
 
 
-#: How many times a rung fits the attached part again, aiming lower each time.
-_FIT_ATTEMPTS = 3
-
-
-def _walk_attached(
-    candidate: Callable[[response_budget.Rung | None, int | None], presenter.Presented],
-    shown: presenter.Presented,
-    *,
-    target: int,
-    max_rung: int,
-) -> presenter.Presented:
-    """The reply at the mildest presentation of a job answer's attached part
-    whose answer, cut by the presenter, fits ``target``: as stored (``shown``),
-    then each ladder rung up to ``max_rung``, and at the shrink rung its rows
-    held to the most that fit. The last one tried stands when none fits."""
-    if shown.met or max_rung < response_budget.RUNG_TRIM:
-        return shown
-    for level in (response_budget.RUNG_TRIM, response_budget.RUNG_ANSWER):
-        if level > max_rung:
-            return shown
-        # The attached part is fitted against the answer cut to one run row,
-        # before the presenter adds its cut; a reply still over is tried again
-        # with the rung's budget lowered by what it was over.
-        aim = target
-        for _ in range(_FIT_ATTEMPTS):
-            shown = candidate(
-                response_budget.Rung(level=level, budget=aim, measured=shown.size), None
-            )
-            if shown.met:
-                return shown
-            aim -= shown.size - target
-            if aim < response_budget.BUDGET_MIN_TOKENS // 2:
-                break
-    if max_rung < response_budget.RUNG_SHRINK:
-        return shown
-    shrink = response_budget.Rung(
-        level=response_budget.RUNG_SHRINK, budget=target, measured=shown.size
-    )
-    total = presenter.resolve_pointer(shown.reply, "/runs/total", default=0)
-    high = total if isinstance(total, int) else 0
-    best: presenter.Presented | None = None
-    low = 0
-    while low <= high:
-        middle = (low + high) // 2
-        tried = candidate(shrink, middle)
-        if tried.met:
-            best, low = tried, middle + 1
-        else:
-            high = middle - 1
-    return best if best is not None else candidate(shrink, 0)
-
-
 async def present_job_answer(
     build: JobAnswerBuild,
     parts: JobAnswerParts,
@@ -521,15 +473,16 @@ async def present_job_answer(
 
     ``build`` gives the job's complete answer. Its run rows (``parts.rows``)
     are cut as rows to fit the budget's target, at least one kept, and read
-    back from the job's record (``parts.record``), so nothing is stored and no
-    file is written. An attached part (``parts.attached``) keeps its own
-    tool's trimming (``parts.trim_attached``), tried at each rung
-    :func:`_walk_attached` walks; an answer with none is cut once. A standing
-    note this session was already sent in full goes out by its code when
-    ``delivery`` shortens (``lib/said_once.py``); the Python API's automatic
-    mode sends every note in full. A reply still over its target says so
-    once. An answer that names no job has no record to read rows back from,
-    so it is sent whole.
+    back from the job's record (``parts.record``), so nothing is stored for
+    them and no file is written. The answer of another tool it carries
+    (``parts.attached``, a receipt's attached analysis) is presented beside
+    it under the same target (``presenter.present_many``), one size search
+    over the lists of both, and is stored as that tool's answer when it is
+    cut. A standing note this session was already sent in full goes out by
+    its code when ``delivery`` shortens (``lib/said_once.py``); the Python
+    API's automatic mode sends every note in full. A reply still over its
+    target says so once. An answer that names no job has no record to read
+    rows back from, so its rows are stored.
 
     Rendering and sizing a large job's whole table is slow, so it runs off the
     loop: the snapshot behind ``build`` is detached, and the session's note
@@ -541,7 +494,17 @@ async def present_job_answer(
     # the Python API's automatic mode returns them all.
     caps = {parts.rows: ROWS_WITHOUT_TARGET} if budget.tokens is None and not whole else None
     reply, planned = await asyncio.to_thread(
-        _present_job_answer, build, parts, tool, schema, budget, state, delivery, memory, caps
+        _present_job_answer,
+        build,
+        parts,
+        tool,
+        schema,
+        budget,
+        state,
+        delivery,
+        memory,
+        caps,
+        whole,
     )
     # Remembered on the loop, once the reply is in hand: a call cancelled
     # while the thread ran records nothing it did not send.
@@ -559,59 +522,50 @@ def _present_job_answer(
     delivery: said_once.Delivery,
     memory: said_once.NotesSent | None,
     caps: Mapping[str, int] | None,
+    whole: bool,
 ) -> tuple[dict[str, Any], said_once.Plan | None]:
     """The reply, and the plan of standing notes it carries, which the caller
     commits to the memory."""
-    planned: said_once.Plan | None = None
-    planned_once = False
-    attached = False
-
-    def candidate(rung: response_budget.Rung | None, rows: int | None) -> presenter.Presented:
-        nonlocal planned, planned_once, attached
-        data = build(rung, rows)
-        job_id = data.get("job_id")
-        if not planned_once:
-            planned = said_once.plan(
-                data,
-                memory=memory,
-                delivery=delivery,
-                routes=parts.route(job_id) if isinstance(job_id, str) else (),
-                short_route=parts.short_route,
-            )
-            planned_once = True
-            attached = parts.attached(data)
-        said_once.apply(data, planned)
-        if rung is not None and budget.tokens is not None:
-            parts.trim_attached(data, rung, rows, budget.tokens)
-        named = isinstance(job_id, str)
-        annotate, apart = parts.annotate(job_id if named else None, data)
-        shown = presenter.present(
-            reply_payload(data),
+    data = build()
+    job_id = data.get("job_id")
+    named = isinstance(job_id, str)
+    planned = said_once.plan(
+        data,
+        memory=memory,
+        delivery=delivery,
+        routes=parts.route(job_id) if named else (),
+        short_route=parts.short_route,
+    )
+    said_once.apply(data, planned)
+    annotate, apart = parts.annotate(job_id if named else None, data)
+    answer = reply_payload(data)
+    answers = [
+        presenter.Answer(
+            "",
             schema,
-            target=budget.tokens,
-            tool=tool,
-            snapshot={"request_id": data.get("request_id")},
-            store=state.store,
-            ttl_hours=state.config.result_set_ttl_hours,
+            tool,
+            {"request_id": data.get("request_id")},
             annotate=annotate,
-            apart=apart,
             records={parts.rows: parts.record(job_id)} if named else None,
             caps=caps,
-            over=functools.partial(
-                say_over_target,
-                more=_ANALYSIS_TRIMMED_ONLY
-                if attached and budget.max_rung < response_budget.RUNG_SHRINK
-                else "",
-            ),
+            apart=apart,
         )
-        # Every list a job's answer may cut is its run rows, read from the
-        # record; an answer that names no job has none, so its rows are stored.
-        assert shown.stored is None or not named, "a job's answer cut a list not a record"
-        return shown
-
-    shown = candidate(None, None)
-    if budget.tokens is not None and attached:
-        shown = _walk_attached(candidate, shown, target=budget.tokens, max_rung=budget.max_rung)
+    ]
+    attached = parts.attached(answer, budget.tokens, whole)
+    if attached is not None:
+        answers.append(attached)
+    shown = presenter.present_many(
+        answer,
+        answers,
+        target=budget.tokens,
+        store=state.store,
+        ttl_hours=state.config.result_set_ttl_hours,
+        over=say_over_target,
+        series=parts.series,
+    )
+    # Every list of a job's own answer it may cut is its run rows, read from
+    # the record; an answer that names no job has none, so its rows are stored.
+    assert shown.stored is None or not named, "a job's answer cut a list not a record"
     return shown.reply, planned
 
 
