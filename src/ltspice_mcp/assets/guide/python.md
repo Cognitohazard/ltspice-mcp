@@ -99,6 +99,8 @@ starting a session.
   job_id=..., case_id=...)` copies that one. Guide section 'schematics' has
   the details.
 
+### Recovering a job from Python
+
 For recovery, submit with `execution={"simulator": "ngspice", "recoverable": True}`
 and keep the original receipt's `control_token`. Once the job is terminal, use
 `api.jobs(action="resume", job_id=parent_id, resume_request_id="retry-1",
