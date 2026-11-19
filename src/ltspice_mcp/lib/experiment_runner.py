@@ -1656,11 +1656,11 @@ class ExperimentRunner(RunnerBase):
             except Exception as exc:
                 if _launch_stopped(exc):
                     # A stop of the job refused the launch before its simulator
-                    # started: the case is stopped, as one still queued is. A
-                    # failed launch record is a failed submission even when a
-                    # stop lands at the same moment: the write's error wins.
+                    # started: the case is stopped, as one still queued is.
                     self._terminalize_stopped_case(execution, case)
                 else:
+                    # A failed launch record is a failed submission even when a
+                    # stop lands at the same moment: the write's error wins.
                     self._mark_case(
                         execution,
                         case,
