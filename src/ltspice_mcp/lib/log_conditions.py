@@ -60,7 +60,7 @@ COVERAGE: dict[str, str] = {
         "the server has no recordings of this simulator's log wording, so its lines "
         "were read with the generic patterns the server used before it had "
         "recordings: a line they read as an error or a warning is counted under "
-        "'read_as_error' or 'read_as_warning' with that word, every other line "
+        "'simulator_error' or 'simulator_warning', every other line "
         "under 'unclassified'"
     ),
     "log_unread": "the run's log could not be read, so nothing it said is reported",
@@ -648,19 +648,21 @@ def _read_as(kind: str) -> tuple[_Head, _Follow]:
     return head, follow
 
 
-#: The codes of a line the line classifier reads as an error or a warning, for a
-#: simulator with no recorded wording, and that reading: there is no word of the
+#: For a simulator with no recorded wording (the ``unverified`` rules), the
+#: code a line the line classifier reads as an error or a warning is counted
+#: under, by that reading: the generic codes of a line in a simulator's own
+#: diagnostic form, which need no code of their own. There is no word of the
 #: simulator's own to prefer, so the reading the server gave before it had
 #: recordings lists the line until a recording replaces it. It is kept as the
 #: line's ``read_as``, never as its ``severity``, which is only ever the
 #: simulator's own word.
-READ_AS: dict[str, str] = {"read_as_error": "error", "read_as_warning": "warning"}
+READ_AS: dict[str, str] = {"error": "simulator_error", "warning": "simulator_warning"}
 
 #: The ``unverified`` set: only the line classifier's two readings, so no line
 #: it lists as an error or a warning goes unlisted for QSPICE or Xyce.
 _UNVERIFIED_RULES: tuple[_Rule, ...] = tuple(
     _Rule(code, head, frozenset(), follow)
-    for code, (head, follow) in ((code, _read_as(kind)) for code, kind in READ_AS.items())
+    for code, (head, follow) in ((code, _read_as(kind)) for kind, code in READ_AS.items())
 )
 
 
@@ -754,8 +756,8 @@ def classify(channels: Mapping[Channel, str], rules_name: str) -> list[LogCondit
     one's), as it spelled it: never a word the server chose.
 
     ``written`` holds each distinct occurrence that is an error or a warning
-    (:func:`said_as`), with the strongest word on it and, under :data:`READ_AS`,
-    the line classifier's reading, up to :data:`WRITTEN_KEPT`, and ``written_left_out``
+    (:func:`said_as`), with the strongest word on it and, under the
+    ``unverified`` rules, the line classifier's reading (``read_as``), up to :data:`WRITTEN_KEPT`, and ``written_left_out``
     how many more there were: every line the simulator gave a word reaches a
     reader that lists them (:func:`said_lines`), or is counted."""
     rules = _CLASSIFIERS[rules_name]
@@ -783,8 +785,8 @@ def classify(channels: Mapping[Channel, str], rules_name: str) -> list[LogCondit
             line: WrittenLine = {"text": text}
             if strongest is not None:
                 line["severity"] = strongest
-            if code in READ_AS:
-                line["read_as"] = READ_AS[code]
+            if rules_name == "unverified" and code != UNCLASSIFIED:
+                line["read_as"] = "error" if code == READ_AS["error"] else "warning"
             if said_as(line) is None:
                 continue
             kept = entry.setdefault("written", [])
@@ -939,7 +941,7 @@ def said_lines(condition: Mapping[str, Any]) -> list[dict[str, str]]:
 def diagnostic_codes() -> frozenset[str]:
     """Every code a diagnostic can carry: each rule's, and :data:`UNCLASSIFIED`."""
     return frozenset(
-        {rule.code for rule in (*_RULES, *_UNVERIFIED_RULES) if rule.code} | {UNCLASSIFIED}
+        {rule.code for rule in _RULES if rule.code} | {UNCLASSIFIED}
     )
 
 

@@ -458,20 +458,20 @@ def test_the_producer_chooses_the_rules_and_says_when_they_are_not_its_own():
     assert [entry["code"] for entry in unknown["diagnostics"]] == ["unknown_model_parameter"]
     # A simulator with no recordings is read by the line classifier's
     # patterns: what it lists as an error or a warning is counted under
-    # read_as_error or read_as_warning, every other line as unclassified.
+    # simulator_error or simulator_warning, every other line as unclassified.
     xyce = log_conditions.run_diagnostics(conditions, Producer("xyce", None, None))
     assert xyce["coverage"] == "unverified"
     by_code = {entry["code"]: entry for entry in xyce["diagnostics"]}
-    assert set(by_code) == {"read_as_error", "unclassified"}
-    assert by_code["read_as_error"]["first_text"].endswith("^^^^"), by_code
+    assert set(by_code) == {"simulator_error", "unclassified"}
+    assert by_code["simulator_error"]["first_text"].endswith("^^^^"), by_code
     said = log_conditions.classify(
         {"log": "Xyce run\nError: no such model\nWarning: a note\ntime step too small\n"},
         "unverified",
     )
     assert [(c["code"], c.get("severity"), c["count"]) for c in said] == [
         ("unclassified", None, 1),
-        ("read_as_error", "Error", 2),
-        ("read_as_warning", "Warning", 1),
+        ("simulator_error", "Error", 2),
+        ("simulator_warning", "Warning", 1),
     ]
     # A log that was not read says so.
     assert log_conditions.run_diagnostics(None, Producer("ltspice", None, None)) == {

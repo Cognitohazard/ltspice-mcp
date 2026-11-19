@@ -424,7 +424,7 @@ alongside its log. For QSPICE and Xyce, whose log wording has no
 recordings, there is no word of the simulator's own to prefer, so a line is
 read as an error or a warning by the generic patterns the server used before
 it had recordings (`log_parser.classify_line`): `diagnostics` count those under
-`read_as_error` and `read_as_warning`, every other line under `unclassified`,
+`simulator_error` and `simulator_warning`, every other line under `unclassified`,
 and the summary's `errors` and `warnings` list them as before.
 
 ## Non-goals
