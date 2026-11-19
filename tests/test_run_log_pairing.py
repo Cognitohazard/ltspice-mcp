@@ -10,6 +10,7 @@ each recorded run's ``written`` list says which suffixes it wrote.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import shutil
 from pathlib import Path
@@ -164,3 +165,41 @@ def test_an_operating_point_raw_beside_a_stepped_run_reads_as_before_with_the_ru
     assert unresolved_steps_reason(paired.stepped_kind) == unresolved_steps_reason(
         alone.stepped_kind
     )
+
+
+#: The scopes that name a log by another file's name, each with what that
+#: file is: none of them a results file.
+_LOG_NAMERS = {
+    ("lib/raw_parser.py", "run_log_path"): "the one answer for a results file",
+    ("lib/ngspice_mode.py", "run_batch"): "a probe deck's own log",
+    ("lib/controlled_ngspice.py", "run"): "a deck's own log",
+    ("lib/sheet_results.py", "files_beside"): "a circuit's own log",
+}
+
+
+def test_only_run_log_path_names_the_log_of_a_results_file():
+    """Every place that names a log after another file is the one answer for
+    a results file or names a deck's or a circuit's log: a second pairing of
+    a results file with a log is how ``.fra_1.raw`` came to be read with a
+    log no build writes."""
+    from tests._source_scan import modules, scopes
+
+    found: set[tuple[str, str]] = set()
+    for path, tree in modules().items():
+        for scope, nodes in scopes(tree):
+            for node in nodes:
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in ("with_suffix", "with_name")
+                    and any(
+                        isinstance(part, ast.Constant)
+                        and isinstance(part.value, str)
+                        and part.value.endswith(".log")
+                        and not part.value.endswith(".exe.log")
+                        for arg in node.args
+                        for part in ast.walk(arg)
+                    )
+                ):
+                    found.add((path, scope.rsplit(".", 1)[-1]))
+    assert found <= set(_LOG_NAMERS), sorted(found - set(_LOG_NAMERS))

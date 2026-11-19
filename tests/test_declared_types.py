@@ -11,6 +11,7 @@ passed as "other" in silence. A block's port current, which LTspice declares
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import re
 from pathlib import Path
@@ -199,3 +200,31 @@ def test_ngspice_declares_no_port_current_and_every_type_it_declares_is_known(tm
     assert not [name for name in names if name.lower().startswith("ix(")], names
     unknown = {kind: trace for kind, trace in found.items() if kind not in DECLARED_TYPES}
     assert not unknown, unknown
+
+
+#: The declared types only an LTspice or ngspice raw names: what one holds
+#: is the table's to say.
+_TYPE_WORDS = frozenset({"device_current", "subckt_current", "voltage-density", "current-density"})
+
+
+#: Modules that name such a type for another question than what it holds.
+_NOT_A_TABLE = {
+    "lib/trace_names.py": "the table",
+    "lib/raw_header.py": "an ngspice header declares voltage-density, which tells its dialect",
+}
+
+
+def test_only_the_table_of_declared_types_names_one():
+    """No module but ``trace_names`` maps a declared type to what it holds or
+    its unit: a second table is how one reader comes to know a type the
+    other does not."""
+    from tests._source_scan import modules
+
+    found = sorted(
+        f"{path}:{node.lineno}"
+        for path, tree in modules().items()
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant) and node.value in _TYPE_WORDS
+        if path not in _NOT_A_TABLE
+    )
+    assert not found, found
