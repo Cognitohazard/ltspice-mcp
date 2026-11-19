@@ -1265,7 +1265,7 @@ class ExperimentRunner(RunnerBase):
         self._request_stop(execution, "job_deadline")
 
     async def _persist_job(self, execution: _Execution, job: ExperimentJob | None = None) -> None:
-        """Await recovery checkpoints in the registry's existing per-job order."""
+        """Await a recovery checkpoint: the job as it stands now, on disk."""
         if execution.job.recovery is None:
             execution.request.state.persist_job(execution.job)
             return
@@ -1374,8 +1374,9 @@ class ExperimentRunner(RunnerBase):
 
         Every stop of a job (a cancel, its deadline, the process stopping) sets
         ``cancel_event`` through ``_request_stop``, so a stop ends the launch's
-        wait even while the write cannot get a thread. The write itself goes on
-        under the registry's per-job order and is this runner's to settle. A
+        wait even while the write cannot get a thread. The write itself goes on,
+        lands only if no newer write of the job has landed first
+        (``JobRegistry._newest_write``), and is this runner's to settle. A
         launch that stops here was refused before spicelib created its run, so
         no simulator starts, and the record it may leave (a launch intent with
         no outputs) is the one a crash between the record and the start leaves.
@@ -1559,6 +1560,15 @@ class ExperimentRunner(RunnerBase):
             return load_logs_sync(source, execution.request.state)
 
         try:
+            # The gate: the decision and the stamp, and nothing that waits on a
+            # write or on the loop (``tests/test_loop_waits.py``). A cancel from
+            # another process writes its marker under this lock, so it either
+            # comes first and this case never passes, or comes after and finds
+            # the case stamped: its owner reads the marker, stops the job, and
+            # the case is refused at its launch record or killed once started,
+            # as for a cancel made in this process. Held across the launch, the
+            # lock made every other launch of the job, and every cancel, wait
+            # for this launch's record write.
             with file_lock(Store(working_dir).cancellation_lock(job_id)):
                 if experiment_store.cancellation_requested(job_id, working_dir):
                     return False
@@ -1567,26 +1577,26 @@ class ExperimentRunner(RunnerBase):
                         return False
                     case.status = "submitted"
                     case.submitted_at = now()
-                self.submit_netlist(
-                    run_deck,
-                    # A sub-path, not a bare name: the simulator layer joins it onto
-                    # the runner's output folder, so this is what lands the run's
-                    # deck copy, raw and log in the job's own directory without the
-                    # runner (and its shared concurrency semaphore) ever moving.
-                    run_filename_in(lineage_id, f"{case.run_token}{suffix}"),
-                    lambda outcome: self._handle_case_completion(
-                        execution.job.job_id,
-                        case.case_id,
-                        outcome,
-                    ),
-                    timeout_s=(
-                        run_timeout + execution.request.kill_grace_s + SPICELIB_TIMEOUT_MARGIN_S
-                        if run_timeout is not None
-                        else None
-                    ),
-                    completion_logs=completion_logs,
-                    **native_args,
-                )
+            self.submit_netlist(
+                run_deck,
+                # A sub-path, not a bare name: the simulator layer joins it onto
+                # the runner's output folder, so this is what lands the run's
+                # deck copy, raw and log in the job's own directory without the
+                # runner (and its shared concurrency semaphore) ever moving.
+                run_filename_in(lineage_id, f"{case.run_token}{suffix}"),
+                lambda outcome: self._handle_case_completion(
+                    execution.job.job_id,
+                    case.case_id,
+                    outcome,
+                ),
+                timeout_s=(
+                    run_timeout + execution.request.kill_grace_s + SPICELIB_TIMEOUT_MARGIN_S
+                    if run_timeout is not None
+                    else None
+                ),
+                completion_logs=completion_logs,
+                **native_args,
+            )
         except NativePrelaunchRefused:
             # The stamp guarded cancellation while launch was in progress, but
             # this refusal happened before spicelib could create a RunTask.

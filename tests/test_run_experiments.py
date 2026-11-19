@@ -822,7 +822,9 @@ class TestIdempotency:
         monkeypatch.setattr(
             experiment_store,
             "save_job",
-            lambda job: save_job(dataclasses.replace(job, owner_pid=foreign_pid)),
+            lambda job, **kwargs: save_job(
+                dataclasses.replace(job, owner_pid=foreign_pid), **kwargs
+            ),
         )
         monkeypatch.setattr(
             experiment_store,

@@ -18,7 +18,7 @@ async def test_strict_checkpoint_surfaces_write_failure(
     job = _job(work_dir, sample_netlist)
     state_no_sim.job_registry.persist_enabled = True
 
-    def unavailable(job):
+    def unavailable(job, **_kwargs):
         raise OSError("storage unavailable")
 
     monkeypatch.setattr(experiment_store, "save_job", unavailable)
@@ -37,11 +37,11 @@ async def test_strict_checkpoint_orders_after_pending_write(
     writes = []
     save = experiment_store.save_job
 
-    def delayed(job):
+    def delayed(job, **kwargs):
         if not entered.is_set():
             entered.set()
             assert release.wait(LIVENESS_S)
-        save(job)
+        save(job, **kwargs)
         writes.append(job.job_id)
 
     monkeypatch.setattr(experiment_store, "save_job", delayed)
@@ -91,11 +91,11 @@ async def test_strict_storage_runtime_error_is_not_retried_as_executor_teardown(
     calls = []
     save = experiment_store.save_job
 
-    def fails_once(job):
+    def fails_once(job, **kwargs):
         calls.append(job.job_id)
         if len(calls) == 1:
             raise RuntimeError("Record validation failed")
-        save(job)
+        save(job, **kwargs)
 
     monkeypatch.setattr(experiment_store, "save_job", fails_once)
     with pytest.raises(RuntimeError, match="Record validation failed"):
@@ -105,9 +105,13 @@ async def test_strict_storage_runtime_error_is_not_retried_as_executor_teardown(
 
 
 @pytest.mark.parametrize("cancel_target", ["caller", "drain"])
-async def test_repeated_cancellation_keeps_write_order_until_worker_finishes(
+async def test_a_held_write_neither_holds_back_nor_overwrites_a_newer_one(
     state_no_sim, work_dir, sample_netlist, monkeypatch, cancel_target
 ):
+    """An older write is held, and its waiter (or the drain) is cancelled
+    twice. A newer write of the job lands meanwhile; the cancelled waiter still
+    ends only once its own write has; and the older write, landing last, does
+    not bring back the older state."""
     registry = state_no_sim.job_registry
     registry.persist_enabled = True
     older = _job(work_dir, sample_netlist)
@@ -117,11 +121,11 @@ async def test_repeated_cancellation_keeps_write_order_until_worker_finishes(
     finished = threading.Event()
     save = experiment_store.save_job
 
-    def delayed(job):
+    def delayed(job, **kwargs):
         if job is older:
             entered.set()
             assert release.wait(LIVENESS_S)
-        save(job)
+        save(job, **kwargs)
         if job is older:
             finished.set()
 
@@ -140,19 +144,18 @@ async def test_repeated_cancellation_keeps_write_order_until_worker_finishes(
             await asyncio.sleep(0)
         second = asyncio.create_task(registry.persist_strict(newer))
         tasks.append(second)
-        # Let the later write finish if cancellation prematurely freed its lock.
-        # timing: a negative window; the later write must not finish inside it
-        await asyncio.wait({second}, timeout=0.1)
-        completed_before_release = second.done()
+        await asyncio.wait_for(second, LIVENESS_S)
+        assert not first.done()
+        saved = experiment_store.load_job(older.job_id, work_dir)
+        assert saved is not None
+        assert saved.status == "failed" and saved.error == "New durable state"
         release.set()
-        await second
         assert await asyncio.to_thread(finished.wait, LIVENESS_S)
         with pytest.raises(asyncio.CancelledError):
             await first
         saved = experiment_store.load_job(older.job_id, work_dir)
         assert saved is not None
         assert saved.status == "failed" and saved.error == "New durable state"
-        assert not completed_before_release
     finally:
         release.set()
         await asyncio.gather(*tasks, return_exceptions=True)

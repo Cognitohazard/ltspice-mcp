@@ -79,7 +79,8 @@ import os
 import re
 import sys
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -299,9 +300,15 @@ def json_default(obj: Any) -> Any:
     raise TypeError(f"Not JSON-serializable: {type(obj).__name__}")
 
 
-def atomic_write_json(path: Path, data: Any) -> None:
-    """Atomically and durably write a store record."""
-    _atomic_write_json(path, data, default=json_default)
+def atomic_write_json(
+    path: Path,
+    data: Any,
+    *,
+    commit_guard: Callable[[], AbstractContextManager[bool]] | None = None,
+) -> None:
+    """Atomically and durably write a store record; with ``commit_guard``, only
+    when it allows the rename (``ltspice_mcp.lib.atomic_write``)."""
+    _atomic_write_json(path, data, default=json_default, commit_guard=commit_guard)
 
 
 def envelope(kind: str, **payload: Any) -> dict[str, Any]:

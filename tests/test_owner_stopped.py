@@ -294,7 +294,7 @@ async def test_a_shutdown_whose_bound_ends_in_the_final_checkpoint_settles_the_j
     write = experiment_store.save_job
     checkpoints: list[str] = []
 
-    def save_job(job):
+    def save_job(job, **kwargs):
         # The first record written with a terminal status is the coordinator's
         # final checkpoint: hold it until the shutdown has finished the job.
         if job.status in TERMINAL_STATUSES and not checkpoints:
@@ -303,7 +303,7 @@ async def test_a_shutdown_whose_bound_ends_in_the_final_checkpoint_settles_the_j
             released.wait(LIVENESS_S)
             if checkpoint == "refused":
                 raise OSError("the disk refused the final checkpoint")
-        return write(job)
+        return write(job, **kwargs)
 
     monkeypatch.setattr(experiment_store, "save_job", save_job)
     server = _state(work_dir)

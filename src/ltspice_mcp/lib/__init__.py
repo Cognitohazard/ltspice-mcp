@@ -10,7 +10,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import IO, Any, Literal, TypeVar
@@ -187,6 +187,7 @@ def atomic_write(
     encoding: str | None = "utf-8",
     durable: bool = True,
     overwrite: bool = True,
+    commit_guard: Callable[[], AbstractContextManager[bool]] | None = None,
 ) -> Iterator[IO[Any]]:
     """Open ``path`` for atomic, durable writing via tempfile-then-rename.
 
@@ -214,6 +215,11 @@ def atomic_write(
         When ``True`` (default), replace ``path`` if it exists. When
         ``False``, raise ``FileExistsError`` instead (race-free on POSIX
         via ``os.link``; best-effort on Windows via ``os.rename``).
+    commit_guard
+        When given, the rename runs inside ``commit_guard()``, and only when
+        it yields ``True``; otherwise the tempfile is dropped and ``path`` is
+        left as it is. A writer whose writes may run at once uses it to let
+        only the newest reach ``path`` (``JobRegistry._newest_write``).
 
     Guarantees
     ----------
@@ -270,13 +276,22 @@ def atomic_write(
             with contextlib.suppress(OSError):
                 os.chmod(tmp_path, existing_mode)
 
-        _commit(tmp_path, path, overwrite=overwrite)
+        if commit_guard is None:
+            _commit(tmp_path, path, overwrite=overwrite)
+            committed = True
+        else:
+            with commit_guard() as committed:
+                if committed:
+                    _commit(tmp_path, path, overwrite=overwrite)
+        if not committed:
+            with contextlib.suppress(OSError):
+                tmp_path.unlink()
     except BaseException:
         with contextlib.suppress(OSError):
             tmp_path.unlink()
         raise
 
-    if durable:
+    if durable and committed:
         fsync_dir(path.parent)
 
 
@@ -313,9 +328,10 @@ def atomic_write_json(
     indent: int = 2,
     durable: bool = True,
     overwrite: bool = True,
+    commit_guard: Callable[[], AbstractContextManager[bool]] | None = None,
 ) -> None:
     """Write ``data`` as JSON to ``path`` atomically (and durably, by default)."""
-    with atomic_write(path, durable=durable, overwrite=overwrite) as f:
+    with atomic_write(path, durable=durable, overwrite=overwrite, commit_guard=commit_guard) as f:
         json.dump(data, f, indent=indent, default=default)
 
 

@@ -10,7 +10,8 @@ import contextlib
 import json
 import logging
 import secrets
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
@@ -147,6 +148,14 @@ def request_cancellation(
     The marker contains no authority token. The latest persisted coordinator
     record is re-read while the cross-process gate is held so a stale in-memory
     view cannot authorize cancellation.
+
+    The gate's promise: once this returns, no case of the job passes the gate
+    (``ExperimentRunner._submit_case_under_cancel_gate``), and every case that
+    passed it before is one the job's owner stops when it reads the marker,
+    before its simulator starts or by killing it. A launch holds the gate only
+    for its decision, so this waits on no launch, no record write and no event
+    loop (``tests/test_loop_waits.py``): at most the lock's own timeout behind
+    another decision or cancel.
     """
     store = Store(working_dir)
     with file_lock(store.cancellation_lock(job_id)):
@@ -280,15 +289,21 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
     )
 
 
-def save_job(job: ExperimentJob) -> Path:
-    """Persist an experiment at its validated working-store path."""
+def save_job(
+    job: ExperimentJob,
+    *,
+    commit_guard: Callable[[], AbstractContextManager[bool]] | None = None,
+) -> Path:
+    """Persist an experiment at its validated working-store path; with
+    ``commit_guard``, only when it allows the rename (``JobRegistry``'s
+    newest-wins order for a job's writes)."""
     validate_job_id(job.job_id)
     root = job.store_path.parent.resolve()
     expected = (root / f"{job.job_id}.json").resolve()
     if job.store_path.resolve() != expected or expected.parent != root:
         raise ValueError(f"Experiment store path is not contained: {job.store_path}")
     job.store_path = expected
-    atomic_write_json(expected, serialize_job(job))
+    atomic_write_json(expected, serialize_job(job), commit_guard=commit_guard)
     logger.debug("Persisted experiment job %s to %s", job.job_id, expected)
     return expected
 

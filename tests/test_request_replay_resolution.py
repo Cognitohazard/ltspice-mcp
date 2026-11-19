@@ -78,7 +78,7 @@ async def _submitted(
     monkeypatch.setattr(
         experiment_store,
         "save_job",
-        lambda job: save_job(dataclasses.replace(job, owner_pid=exited)),
+        lambda job, **kwargs: save_job(dataclasses.replace(job, owner_pid=exited), **kwargs),
     )
     held: list[Callable[[], None]] = []
     fake_simulator(monkeypatch, delay_s=None, held=held)

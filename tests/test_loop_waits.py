@@ -192,3 +192,96 @@ def test_own_thread_runners_never_use_the_default_pool():
                 for call in ast.walk(node)
             ), f"{node.name} runs its work on the default pool"
     assert seen == runners
+
+
+# ---------------------------------------------------------------------------
+# The cancel gate
+# ---------------------------------------------------------------------------
+
+#: Every place that holds a job's cancellation lock, with every call made while
+#: it is held. The lock is the gate between a launch and a cancel from another
+#: process, so whatever runs under it holds every launch of the job and every
+#: cancel back: nothing under it may wait on the event loop or on a write of
+#: the job's record. A new call under the lock fails here until it is listed.
+_CANCEL_GATE: dict[str, tuple[frozenset[str], str]] = {
+    "lib/experiment_runner.py:ExperimentRunner._submit_case_under_cancel_gate": (
+        frozenset({"cancellation_requested", "is_set", "now"}),
+        "A launch's decision: no cancel marker and no stop, then its submitted "
+        "stamp. Its launch, launch record and simulator start come after.",
+    ),
+    "lib/experiment_store.py:request_cancellation": (
+        frozenset(
+            {
+                "PermissionError",
+                "atomic_write_json",
+                "cancellation",
+                "control_authorized",
+                "ensure_root",
+                "envelope",
+                "isoformat",
+                "load_job",
+                "now",
+            }
+        ),
+        "A cancel from another process: it reads the record to authorize the "
+        "cancel and writes the marker, the gate's own small record; it waits on "
+        "no launch and no loop.",
+    ),
+    "lib/experiment_store.py:_delete_unretained_job": (
+        frozenset({"cancellation", "suppress", "unlink"}),
+        "Removing a finished job's record and marker.",
+    ),
+}
+
+_LOCKS = frozenset({"file_lock", "async_file_lock"})
+
+
+def _cancel_gates() -> dict[str, tuple[set[str], bool]]:
+    """Each scope holding a cancellation lock: the calls made under it, and
+    whether anything under it is awaited."""
+    found: dict[str, tuple[set[str], bool]] = {}
+    for module, tree in modules().items():
+        for scope, nodes in scopes(tree):
+            for node in nodes:
+                if not isinstance(node, (ast.With, ast.AsyncWith)):
+                    continue
+                if not any(
+                    isinstance(item.context_expr, ast.Call)
+                    and _name(item.context_expr.func) in _LOCKS
+                    and any(
+                        isinstance(inner, ast.Call) and _name(inner.func) == "cancellation_lock"
+                        for inner in ast.walk(item.context_expr)
+                    )
+                    for item in node.items
+                ):
+                    continue
+                inside = [inner for statement in node.body for inner in ast.walk(statement)]
+                calls = {
+                    name
+                    for inner in inside
+                    if isinstance(inner, ast.Call) and (name := _name(inner.func)) is not None
+                }
+                awaited = any(isinstance(inner, ast.Await) for inner in inside)
+                site = f"{module}:{scope}"
+                previous, previously_awaited = found.get(site, (set(), False))
+                found[site] = (previous | calls, previously_awaited or awaited)
+    return found
+
+
+def test_the_cancel_gate_holds_no_wait_on_the_loop_or_a_write():
+    """Under a job's cancellation lock run only the listed calls, and nothing
+    is awaited, so the gate never waits for a launch record, a write of the
+    job's record or the loop."""
+    found = _cancel_gates()
+    assert set(found) == set(_CANCEL_GATE), (
+        "places that hold a job's cancellation lock changed; list each with its calls "
+        "and why none of them waits on a write or the loop"
+    )
+    for site, (calls, awaited) in found.items():
+        allowed, _reason = _CANCEL_GATE[site]
+        assert not awaited, f"{site} awaits under the cancellation lock"
+        assert calls == allowed, (
+            f"{site} calls {sorted(calls - allowed)} under the cancellation lock and no "
+            f"longer calls {sorted(allowed - calls)}; a launch or a cancel waits on whatever "
+            "runs there"
+        )

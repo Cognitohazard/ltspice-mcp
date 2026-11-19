@@ -15,7 +15,8 @@ import asyncio
 import contextlib
 import contextvars
 import logging
-from collections.abc import Awaitable, Callable
+import threading
+from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -129,13 +130,21 @@ class JobRegistry:
     """Resolved circuit paths whose persisted jobs have been loaded this session."""
     _pending_persist: BackgroundTasks = field(default_factory=BackgroundTasks, repr=False)
     """In-flight persistence writes, keyed by job id; drained on shutdown."""
-    _persist_locks: dict[str, asyncio.Lock] = field(default_factory=dict, repr=False)
-    """Per-job-id locks serialising successive writes.
+    _persist_issued: dict[str, int] = field(default_factory=dict, repr=False)
+    """The generation of each job's latest write or deletion, in call order.
 
-    Eviction removes a lock only after earlier writes and the persisted-record
-    deletion have completed. Removing it inside a write would let a new writer
-    allocate a second lock while the old one is still held.
-    """
+    Assigned on the loop as each write's task starts; tasks start in the order
+    they were spawned, so the generation is the order the writes were asked
+    for."""
+    _persist_landed: dict[str, int] = field(default_factory=dict, repr=False)
+    """The generation of each job's write or deletion that last reached disk.
+
+    Kept after a deletion, so a write asked for before it cannot land after it
+    and bring the record back."""
+    _persist_guards: dict[str, threading.Lock] = field(default_factory=dict, repr=False)
+    """Per-job locks held only across the rename that lands a write (or the
+    deletion), never across the write itself."""
+    _persist_guards_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     # ------------------------------------------------------------------
     # Registration
@@ -447,10 +456,10 @@ class JobRegistry:
 
         When called from an asyncio event loop, the file IO is scheduled on
         a worker thread so the loop doesn't stall on slow filesystems (WSL
-        cross-filesystem, network mounts). Successive writes for the same
-        ``job_id`` are serialised through ``_persist_locks`` so on-disk
-        order matches call order — a "completed" write after "running"
-        always wins.
+        cross-filesystem, network mounts). The writes of one job may run at
+        once, so a slow write delays only its own caller; only the newest one
+        asked for reaches disk (``_newest_write``), so on-disk order matches
+        call order: a "completed" write after "running" always wins.
         """
         if not self.persist_enabled:
             return
@@ -458,16 +467,20 @@ class JobRegistry:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             # Not in an event loop (tests, CLI usage) — write synchronously.
-            self._persist_sync(job)
+            self._persist_sync(job, self._next_generation(job.job_id))
             return
         self._pending_persist.spawn(self._persist_async(job), key=job.job_id, loop=loop)
 
     async def persist_strict(self, job: ExperimentJob) -> None:
-        """Await an ordered durable checkpoint and propagate storage failures."""
+        """Await a durable checkpoint and propagate storage failures.
+
+        Returns once the job's state as of this call is on disk: this write
+        landed, or a write asked for after it landed first, which holds that
+        state too. It does not wait for the job's earlier writes.
+        """
         if not self.persist_enabled:
             raise RuntimeError("Recovery requires durable job persistence")
-        # Queue this writer in the same event-loop order as persist_job. Taking
-        # its lock inline could overtake an older task that has not run yet.
+        # Spawned as persist_job's writes are, so its generation follows theirs.
         task = self._pending_persist.spawn(self._persist_async(job, strict=True), key=job.job_id)
         await self._await_persistence(task)
 
@@ -475,15 +488,13 @@ class JobRegistry:
     async def _await_persistence(task: asyncio.Future[None]) -> None:
         """Finish a write before honoring cancellation, including repeated requests.
 
-        A write handed to a thread runs to its end whatever its waiter does, so
-        a waiter that left early would release the per-job lock while the write
-        still runs, and a later write of the job could reach the disk first.
-        Holding a cancel back is bounded by the write itself, which needs only
-        a thread of the default pool; no thread of that pool hands the loop a
-        coroutine and waits for it (``tests/test_loop_waits.py`` lists the
-        threads that do). A waiter that must not wait for
-        the write, such as a launch whose job was stopped, races this wait
-        against the stop instead of cancelling it
+        A waiter learns its write's own outcome: a strict caller that left
+        early could not say whether its checkpoint is on disk. Holding a cancel
+        back is bounded by the write itself, which needs only a thread of the
+        default pool; no thread of that pool hands the loop a coroutine and
+        waits for it (``tests/test_loop_waits.py`` lists the threads that do).
+        A waiter that must not wait for the write, such as a launch whose job
+        was stopped, races this wait against the stop instead of cancelling it
         (``ExperimentRunner._record_launch``).
         """
         cancelled = False
@@ -497,32 +508,55 @@ class JobRegistry:
         if cancelled:
             raise asyncio.CancelledError
 
+    def _next_generation(self, job_id: str) -> int:
+        """The next write generation of ``job_id``. On the loop only."""
+        generation = self._persist_issued.get(job_id, 0) + 1
+        self._persist_issued[job_id] = generation
+        return generation
+
+    @contextlib.contextmanager
+    def _newest_write(self, job_id: str, generation: int) -> Iterator[bool]:
+        """Whether the write of ``generation`` may land, held across its rename.
+
+        A write lands only when no write or deletion asked for after it has
+        landed already. One that has is the newer state, and holds everything
+        this one would have written, because each write is the whole record
+        as it stood when its thread read it, which is after it was asked for.
+        Held only across the rename, so a slow write never holds another
+        write of the job back. A thread lock, because it is taken on worker
+        threads: it works the same on Windows.
+        """
+        with self._persist_guards_lock:
+            guard = self._persist_guards.setdefault(job_id, threading.Lock())
+        with guard:
+            newest = generation > self._persist_landed.get(job_id, 0)
+            yield newest
+            if newest:
+                self._persist_landed[job_id] = generation
+
     async def _persist_async(self, job: ExperimentJob, *, strict: bool = False) -> None:
-        """Order writes per job; strict checkpoints propagate storage failures."""
-        lock = self._persist_locks.get(job.job_id)
-        if lock is None:
-            lock = self._persist_locks.setdefault(job.job_id, asyncio.Lock())
-        async with lock:
-            if strict:
-                from ltspice_mcp.lib import experiment_store
+        """One write of a job; strict checkpoints propagate storage failures."""
+        generation = self._next_generation(job.job_id)
+        if strict:
+            from ltspice_mcp.lib import experiment_store
 
-                # A launch checkpoint cannot retry a storage error as though
-                # it were executor teardown, or hide a failed write.
-                # Keep the executor future itself: cancelling coroutine tasks
-                # during shutdown must not detach the write from its lock.
-                context = contextvars.copy_context()
+            # A launch checkpoint cannot retry a storage error as though
+            # it were executor teardown, or hide a failed write.
+            context = contextvars.copy_context()
 
-                def persist() -> None:
-                    context.run(experiment_store.save_job, job)
+            def persist() -> None:
+                context.run(
+                    experiment_store.save_job,
+                    job,
+                    commit_guard=lambda: self._newest_write(job.job_id, generation),
+                )
 
-                write = asyncio.get_running_loop().run_in_executor(None, persist)
-                await self._await_persistence(write)
-            else:
-                await self._offload_persistence(self._persist_sync, job)
+            write = asyncio.get_running_loop().run_in_executor(None, persist)
+            await self._await_persistence(write)
+        else:
+            await self._offload_persistence(lambda: self._persist_sync(job, generation))
 
-    async def _offload_persistence(
-        self, fn: Callable[[ExperimentJob], None], job: ExperimentJob
-    ) -> None:
+    async def _offload_persistence(self, fn: Callable[[], None]) -> None:
         """Run one blocking persistence step off-loop, surviving teardown.
 
         During interpreter teardown the default executor is gone and
@@ -535,11 +569,15 @@ class JobRegistry:
         stale sidecar as a job on the next preload.
         """
         try:
-            await asyncio.to_thread(fn, job)
+            await asyncio.to_thread(fn)
         except RuntimeError:
-            fn(job)
+            fn()
 
-    def _persist_sync(self, job: ExperimentJob) -> None:
+    def _persist_sync(self, job: ExperimentJob, generation: int | None = None) -> None:
+        """One blocking write of a job. ``generation`` is the order it was asked
+        for in (``_next_generation``); without one, it is asked for now."""
+        if generation is None:
+            generation = self._next_generation(job.job_id)
         try:
             from ltspice_mcp.lib import experiment_store
 
@@ -547,42 +585,46 @@ class JobRegistry:
                 from ltspice_mcp.lib.experiment_resume import persist_reconciled
                 from ltspice_mcp.lib.store import Store
 
-                persist_reconciled(job, Store(self.working_dir))
+                # It re-reads and writes under its own lineage lock: held whole.
+                with self._newest_write(job.job_id, generation) as newest:
+                    if newest:
+                        persist_reconciled(job, Store(self.working_dir))
             else:
-                experiment_store.save_job(job)
+                experiment_store.save_job(
+                    job, commit_guard=lambda: self._newest_write(job.job_id, generation)
+                )
         except Exception as e:
             # Persistence failures must never break simulation flow.
             logger.warning("Failed to persist job %s: %s", job.job_id, e)
 
     def _delete_persisted(self, job: ExperimentJob) -> None:
         """Remove a job's on-disk record (used on eviction)."""
+        generation = self._next_generation(job.job_id) if self.persist_enabled else 0
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            self._delete_persisted_sync(job)
-            self._persist_locks.pop(job.job_id, None)
+            self._delete_persisted_sync(job, generation)
             return
-        self._pending_persist.spawn(self._delete_persisted_async(job), key=job.job_id, loop=loop)
+        self._pending_persist.spawn(
+            self._offload_persistence(lambda: self._delete_persisted_sync(job, generation)),
+            key=job.job_id,
+            loop=loop,
+        )
 
-    async def _delete_persisted_async(self, job: ExperimentJob) -> None:
-        """Delete only after earlier writes for the same job have drained."""
-        lock = self._persist_locks.get(job.job_id)
-        if lock is None:
-            lock = self._persist_locks.setdefault(job.job_id, asyncio.Lock())
-        try:
-            async with lock:
-                await self._offload_persistence(self._delete_persisted_sync, job)
-        finally:
-            self._persist_locks.pop(job.job_id, None)
+    def _delete_persisted_sync(self, job: ExperimentJob, generation: int) -> None:
+        """Blocking deletion half, including dependent immutable result sets.
 
-    def _delete_persisted_sync(self, job: ExperimentJob) -> None:
-        """Blocking deletion half, including dependent immutable result sets."""
+        The record goes only as the newest step asked for, so a write asked
+        for before the deletion, still running, cannot land after it.
+        """
         try:
             from ltspice_mcp.lib import experiment_store
 
             experiment_store.guard_recovery_retention(job, self.working_dir)
             if self.persist_enabled:
-                experiment_store.delete_job(job, self.working_dir)
+                with self._newest_write(job.job_id, generation) as newest:
+                    if newest:
+                        experiment_store.delete_job(job, self.working_dir)
             from ltspice_mcp.lib import result_store
 
             result_store.invalidate_for_job(self.working_dir, job.job_id)
