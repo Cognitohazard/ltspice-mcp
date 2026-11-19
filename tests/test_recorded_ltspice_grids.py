@@ -40,7 +40,7 @@ GRIDS = grids()
 #: coordinate but the .fra margins on XVII (raw/fra_step is recorded on
 #: LTspice 26 only), and wait for a recording run on Windows.
 UNRECORDED: dict[str, dict[str, int]] = {
-    "printed-measurement": {"ltspice26": 468, "ltspice17": 468},
+    "printed-measurement": {"ltspice26": 468, "ltspice17": 467},
 }
 
 
