@@ -236,7 +236,9 @@ from ltspice_mcp.tools._base import (
     HINT_SCHEMA,
     LTSPICE_DIFFERENCE_ENTRIES,
     LTSPICE_WINDOW_PROPERTIES,
+    PRINTED_ONCE_SCHEMA,
     RO_ANNOTATIONS,
+    UNREADABLE_SCHEMA,
     WARNINGS_SCHEMA,
     NotedModel,
     OptionalRawSelectionFields,
@@ -2680,9 +2682,10 @@ class _LogRows(Sequence[dict[str, Any]]):
             for key in ("range_from", "range_to", "at"):
                 value = metadata.get(key)
                 row[key] = value[ordinal] if isinstance(value, list) else value
-            if "unreadable" in metadata:
-                row["unreadable"] = metadata["unreadable"]
-            for key in ("answer", "answer_unknown"):
+            unreadable = metadata.get("unreadable")
+            if unreadable is not None and ordinal in unreadable.get("steps", (ordinal,)):
+                row["unreadable"] = unreadable
+            for key in ("answer", "answer_unknown", "printed_once"):
                 if key in metadata:
                     row[key] = metadata[key]
             unset = metadata.get("not_established")
@@ -3081,14 +3084,8 @@ _MEASUREMENTS_DATA_PROPERTIES: dict[str, Any] = {
                 "range_from": {"type": ["number", "null"]},
                 "range_to": {"type": ["number", "null"]},
                 "at": {"type": ["number", "null"]},
-                "unreadable": {
-                    "type": "object",
-                    "properties": {
-                        "line": {"type": ["string", "null"]},
-                        "reason": {"type": "string"},
-                    },
-                    "required": ["reason"],
-                },
+                "unreadable": UNREADABLE_SCHEMA,
+                "printed_once": PRINTED_ONCE_SCHEMA,
                 "answer": {
                     "type": "string",
                     "enum": ["value", "at"],

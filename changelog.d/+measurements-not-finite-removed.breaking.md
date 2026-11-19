@@ -1,0 +1,1 @@
+The measurements recipe's `not_finite` list is removed from `analyze_results` rows and from the Python API's `analyze_results`. A measurement LTspice printed as a number that is not finite is named under `unreadable` on the row instead, whose `reason` quotes what the log printed (such as `infdB`), with `steps` where it concerns only some steps.

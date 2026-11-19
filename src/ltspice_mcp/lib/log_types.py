@@ -197,9 +197,23 @@ class LogDiagnostics(TypedDict):
 
 class UnreadableValue(TypedDict):
     """Why a measurement's printed value was not read: the log line that
-    printed it (None where no line names it) and the reason."""
+    printed it (None where no line names it) and the reason, which quotes
+    what the log printed. ``steps`` names the steps, from 0, of a stepped
+    table whose value it was, where that is not every step."""
 
     line: str | None
+    reason: str
+    steps: NotRequired[list[int]]
+
+
+class PrintedOnce(TypedDict):
+    """A measurement the log printed once for a run of several steps
+    (``log_parser.answered_measurements``): how many steps the run had,
+    the step, from 0, whose value the line holds where a recording
+    establishes it, and a reason that says so and how to read the others."""
+
+    step_count: int
+    step: NotRequired[int]
     reason: str
 
 
@@ -239,6 +253,9 @@ class _MeasurementMetadata(TypedDict, total=False):
     #: result, and why (``log_parser.answered_measurements``): their values
     #: are null.
     not_established: NotEstablished
+    #: The log printed this measurement once for a run of several steps
+    #: (``log_parser.answered_measurements``).
+    printed_once: PrintedOnce
 
 
 class MeasurementEntry(_MeasurementMetadata):
@@ -296,8 +313,8 @@ class MeasurementsOutput(TypedDict):
     ``failed_measurements`` names, in the order the log printed them, the
     measurements LTspice printed as failed: ``Measurement "name" FAIL'ed``, or
     ``failed`` in a row of the measurement's stepped table. It means that and
-    nothing else; a value that is null for another reason (``unreadable``, or a
-    number that is not finite) is not listed.
+    nothing else; a value that is null for another reason (``unreadable``,
+    which a number that is not finite is too) is not listed.
     """
 
     measurements: dict[str, MeasurementEntry]
@@ -310,6 +327,11 @@ class MeasurementsOutput(TypedDict):
     #: producer its entries are answered for
     #: (``log_parser.answered_measurements``) and never passes it on.
     printed_by: NotRequired[str]
+    #: How many times a log that prints its measurements on lines, with no
+    #: ``.step`` line, solved its operating point, where more than once: a
+    #: stepped ``.op`` (``log_parser.parse_measurements``). A reader turns it
+    #: into each entry's ``printed_once`` and never passes it on.
+    op_solves: NotRequired[int]
 
 
 def measurement_failed(table: Mapping[str, Any], name: str, step: int | None = None) -> bool:
