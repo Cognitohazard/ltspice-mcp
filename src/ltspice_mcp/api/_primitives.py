@@ -18,17 +18,19 @@ from ltspice_mcp.lib.ac_analysis import log_interp_at, log_interp_complex_at
 from ltspice_mcp.lib.decoded_raw import DecodedRaw
 from ltspice_mcp.lib.device_names import (
     TraceKey,
+    pair_traces,  # noqa: TID251 - compare is the one pairing of two results
     parse_device_param,
     path_text,
     table_device_path,
     table_naming,
-    trace_key,
+    trace_keys,  # noqa: TID251 - every key of each trace, for pair_traces
     writes_xvii_names,
 )
 from ltspice_mcp.lib.log_types import LogSectionName
 from ltspice_mcp.lib.raw_parser import OtherRawKind, get_step_count, real_axis
 from ltspice_mcp.lib.simulator_build import log_head_build
 from ltspice_mcp.lib.step_values import StepValues, listed_steps, step_values_text, step_with
+from ltspice_mcp.lib.trace_names import names_sheet_parts
 from ltspice_mcp.state import SessionState
 
 
@@ -218,22 +220,23 @@ class RawResult:
                 )
         return rows
 
-    def _keyed_traces(self) -> dict[TraceKey, int]:
-        """This plot's signals but its axis, by ``trace_key``, each to its
-        index; a key two traces share is left out, never guessed between."""
+    def _keyed_traces(self) -> tuple[tuple[bool, bool], list[int], list[tuple[str, tuple[TraceKey, ...]]]]:
+        """How this result spells names (an XVII-spelling build's, a
+        schematic's run), and its signals but its axis, each index with its
+        name and keys (``trace_keys``)."""
         xvii = writes_xvii_names(self._raw)
+        schematic = names_sheet_parts(self._raw.raw_params, self._raw.dialect)
         descriptor = self._raw.descriptor
-        keyed: dict[TraceKey, int] = {}
-        shared: set[TraceKey] = set()
+        indices: list[int] = []
+        keyed: list[tuple[str, tuple[TraceKey, ...]]] = []
         for index, trace in enumerate(descriptor.traces):
             if trace.name in descriptor.step_variables or (
                 descriptor.axis is not None and trace.name == descriptor.axis.name
             ):
                 continue
-            key = trace_key(trace.name, xvii=xvii)
-            shared.update([key] if key in keyed else [])
-            keyed[key] = index
-        return {key: index for key, index in keyed.items() if key not in shared}
+            indices.append(index)
+            keyed.append((trace.name, trace_keys(trace.name, xvii=xvii, schematic=schematic)))
+        return (xvii, schematic), indices, keyed
 
     def _step_with(self, parameters: Mapping[str, Any]) -> int:
         """The step whose parameters are ``parameters``, each value matched as
@@ -264,8 +267,15 @@ class RawResult:
         :meth:`trace` finds it. By default every signal both hold is, the axis
         aside, paired by name without case and by the path to a node or device
         inside subcircuits however each build spells it (LTspice 26's
-        ``V(xa:xin:mid)`` is XVII's ``V(a:in:mid)``). Each is compared at this result's
-        points, ``other`` read there by interpolation when its axis differs
+        ``V(xa:xin:mid)`` is XVII's ``V(a:in:mid)``; ``device_names.pair_traces``).
+        Two results of one build's spelling and one kind of run name an
+        instance alike, so a name both write pairs first; the rest pair by
+        the paths their names may stand for (``device_names.instance_readings``:
+        on a schematic's run an instance written ``mb1`` is the sheet's part
+        or a directive's card). A trace that meets more than one trace, or one
+        that another trace meets too, is not compared, and is listed under
+        ``ambiguous`` with the traces it meets, with ``signals`` given or not.
+        Each is compared at this result's points, ``other`` read there by interpolation when its axis differs
         (a compressed LTspice raw stores few points, and its values between
         them are the line drawn through them): linearly on a time or sweep
         axis, in log frequency, dB and unwrapped phase on a frequency axis
@@ -281,7 +291,9 @@ class RawResult:
         steps it has.
 
         Returns ``{"signals": {name: {"max_abs", "max_rel", "at", "value",
-        "other"}}, "only_here", "only_there", "span", "points"}``: per signal
+        "other"}}, "only_here", "only_there", "span", "points"}``, with
+        ``"ambiguous": {name: [names there]}`` for each trace left unpaired so:
+        per signal
         the largest difference, its share of this result's largest magnitude
         of that signal (None when that is 0), the axis value it is at, and
         the two values there. How large a difference may be is the caller's.
@@ -296,15 +308,16 @@ class RawResult:
         if other_step is None:
             other_step = other._step_with(self._steps[step])
         other._validate_step(other_step)
-        here, there = self._keyed_traces(), other._keyed_traces()
+        spelling, here, here_keys = self._keyed_traces()
+        other_spelling, there, there_keys = other._keyed_traces()
+        pairing = pair_traces(here_keys, there_keys, same_spelling=spelling == other_spelling)
         names = [trace.name for trace in self._raw.descriptor.traces]
         other_names = [trace.name for trace in other._raw.descriptor.traces]
         pairs: list[tuple[str, _Read, _Read]]
         if signals is None:
             pairs = [
-                (names[index], _trace_at(index), _trace_at(there[key]))
-                for key, index in here.items()
-                if key in there
+                (names[here[i]], _trace_at(here[i]), _trace_at(there[j]))
+                for i, j in pairing.pairs
             ]
         else:
             pairs, missing, reasons = [], [], []
@@ -363,8 +376,12 @@ class RawResult:
                 "value": ours[worst].item(),
                 "other": theirs[worst].item(),
             }
-        only_here = sorted(names[i] for key, i in here.items() if key not in there)
-        only_there = sorted(other_names[i] for key, i in there.items() if key not in here)
+        paired_here = {i for i, _ in pairing.pairs} | set(pairing.ambiguous)
+        paired_there = {j for _, j in pairing.pairs} | set(pairing.ambiguous_there)
+        only_here = sorted(names[here[i]] for i in range(len(here)) if i not in paired_here)
+        only_there = sorted(
+            other_names[there[j]] for j in range(len(there)) if j not in paired_there
+        )
         result: dict[str, Any] = {
             "signals": compared,
             "only_here": only_here,
@@ -372,6 +389,14 @@ class RawResult:
             "span": span,
             "points": points,
         }
+        if pairing.ambiguous:
+            # A name that may stand for more than one instance (a schematic's
+            # run, ``trace_keys``) is not paired, never guessed between, and
+            # is named here whether or not ``signals`` chose what to compare.
+            result["ambiguous"] = {
+                names[here[i]]: sorted(other_names[there[j]] for j in found)
+                for i, found in pairing.ambiguous.items()
+            }
         if other._chosen is not None:
             result["only_here"], result["unread_there"] = [], only_here
         if self._chosen is not None:
@@ -430,8 +455,12 @@ async def load_raw_result(
     budget to what it keeps."""
     if raw_path is not None:
         resolved = state.resolve_path(str(raw_path))
-        source = services.source_for_raw_path(
-            resolved, state, plot_index=plot_index, dialect=dialect
+        source = await asyncio.to_thread(
+            services.source_for_raw_path,
+            resolved,
+            state,
+            plot_index=plot_index,
+            dialect=dialect,
         )
     else:
         assert job_id is not None
@@ -489,7 +518,9 @@ async def _log_source(
     or one experiment case's. Without ``require_log`` a case with no log is
     returned, for a reader that says why itself (``services.read_measurements``)."""
     if log_path is not None:
-        return services.resolve_analysis_source(state, log_file=str(log_path))
+        return await asyncio.to_thread(
+            services.resolve_analysis_source, state, log_file=str(log_path)
+        )
     assert job_id is not None
     job = await services.resolve_job_async(job_id, state)
     context = await services.experiment_run_context(

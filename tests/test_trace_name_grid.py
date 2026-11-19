@@ -4,7 +4,7 @@ The question is the trace-name grid's (``[grid.trace-name]`` in
 ``inputs/cases.toml``; ``docs/TESTING.md``, "Grids"). A build's spelling of a
 name inside subcircuit instances is read off who wrote the result
 (``device_names.naming_for``, and from a raw's header ``writes_xvii_command``);
-two spellings of one trace share a key (``device_names.trace_key``); a name
+two spellings of one trace share a key (``device_names.trace_keys``); a name
 finds its trace (``trace_names.find_trace``, through ``read_in_plot`` for
 every reader of a plot); and what the trace holds is read off its name and
 declared type (``trace_names.trace_quantity``), its plot
@@ -14,7 +14,7 @@ A cell is one name a user writes (LTspice 26's spelling, each instance with
 its X), with the trace each build wrote for it, from the recording. What the
 trace holds is derived here from the cell's ``what``, never from the reader
 under test. Every recorded cell, on each build, is read through the naming
-facts of its build, ``find_trace``, ``trace_key``, ``read_in_plot``, the
+facts of its build, ``find_trace``, ``trace_keys``, ``read_in_plot``, the
 quantity of the trace, ``inspect``'s signals, ``analyze_results``,
 ``plot_waveform`` and the Python API's ``load_raw``. Every trace of every
 recorded raw of the grid's cases is also found under the name a user would
@@ -34,13 +34,18 @@ from typing import Any
 import pytest
 
 from ltspice_mcp.lib.decoded_raw import declared_unit
-from ltspice_mcp.lib.device_names import naming_for, trace_key, writes_xvii_command
+from ltspice_mcp.lib.device_names import naming_for, trace_keys, writes_xvii_command
 from ltspice_mcp.lib.raw_header import RawPlotHeader, preflight_raw
 from ltspice_mcp.lib.raw_parser import node_voltages
 from ltspice_mcp.lib.result_kinds import header_analysis, sampled_axis, step_variables
 from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.spice_lex import directive_head
-from ltspice_mcp.lib.trace_names import find_trace, read_in_plot, trace_quantity
+from ltspice_mcp.lib.trace_names import (
+    find_trace,
+    from_schematic,
+    read_in_plot,
+    trace_quantity,
+)
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
 from tests._asc_ops import inspect_one
@@ -53,7 +58,7 @@ GRID = grid("trace-name")
 #: How many routes answer otherwise than a cell, per build, each declared on
 #: its cell (``differs``, with the route and the reason). A count may only
 #: fall: a fix lowers it here in the same change.
-KNOWN_DIFFERENCES: dict[str, int] = {"ltspice26": 28, "ltspice17": 25}
+KNOWN_DIFFERENCES: dict[str, int] = {"ltspice26": 0, "ltspice17": 0}
 
 _DIRECTIVES = {".tran": "tran", ".ac": "ac", ".dc": "dc", ".noise": "noise", ".op": "op"}
 
@@ -190,7 +195,7 @@ def _expected(cell: Cell, build: str) -> dict[str, Any]:
         "naming_for xvii": build == "ltspice17",
         "raw header xvii": build == "ltspice17",
         "find_trace": trace,
-        "trace_key": True,
+        "trace_keys": True,
         "read_in_plot": (trace,),
         "node_voltages": voltage,
         "unit": unit,
@@ -231,15 +236,21 @@ async def _every_route(
         "naming_for xvii": xvii,
         "raw header xvii": writes_xvii_command(dict(plot.fields)),
     }
-    found = find_trace(names, user, xvii=xvii)
+    found = find_trace(names, user, xvii=xvii, schematic=from_schematic(plot))
     routes["find_trace"] = found
     trace = _trace(cell, build)
     if cell.coordinates["form"] == "section_sign" or _NAME.fullmatch(user) is None:
         # A section sign and a bare noise name are find_trace's own aliases;
         # a key is one name's function and path, compared between results.
-        not_run["trace_key"] = "the name is an alias find_trace resolves, not a spelling of a path"
+        not_run["trace_keys"] = "the name is an alias find_trace resolves, not a spelling of a path"
     else:
-        routes["trace_key"] = trace_key(user, xvii=False) == trace_key(trace, xvii=xvii)
+        # The user's name is LTspice 26's spelling, of one reading; the
+        # trace's may stand for more than one (an XVII run of a schematic),
+        # and one of them is the user's.
+        (asked,) = trace_keys(user, xvii=False, schematic=False)
+        routes["trace_keys"] = asked in trace_keys(
+            trace, xvii=xvii, schematic=from_schematic(plot)
+        )
     routes["read_in_plot"] = read_in_plot(plot, user).traces
     decoded = rec.decode_file(staged, scratch, log=None).raw
     descriptor = decoded.descriptor
@@ -428,9 +439,9 @@ def test_every_recorded_trace_is_found_under_the_name_a_user_writes(build: str):
             if what == "step_value":
                 continue
             user = named.get(variable.name, user_spelling(variable.name, build))
-            if find_trace(names, user, xvii=xvii) != variable.name:
+            if find_trace(names, user, xvii=xvii, schematic=from_schematic(plot)) != variable.name:
                 missed.append(
-                    f"{case_id}: {user!r} -> {find_trace(names, user, xvii=xvii)!r}, not {variable.name!r}"
+                    f"{case_id}: {user!r} -> {find_trace(names, user, xvii=xvii, schematic=from_schematic(plot))!r}, not {variable.name!r}"
                 )
     assert not missed, missed
     assert unnamed == UNNAMED[build], sorted(unnamed)
@@ -458,9 +469,11 @@ def test_ngspice_names_a_node_at_every_depth_as_a_user_writes_it(analysis: str, 
     names = [variable.name for variable in plot.variables]
     decoded = rec.decode_file(raw, tmp_path, producing="ngspice").raw
     for user in _NGSPICE_NAMES:
-        found = find_trace(names, user, xvii=False)
+        found = find_trace(names, user, xvii=False, schematic=False)
         assert found is not None, (user, names)
-        assert trace_key(user, xvii=False) == trace_key(found, xvii=False), (user, found)
+        assert trace_keys(user, xvii=False, schematic=False) == trace_keys(
+            found, xvii=False, schematic=False
+        ), (user, found)
         (described,) = [t for t in decoded.descriptor.traces if t.name == found]
         assert trace_quantity(found, described.declared_type) == "node_voltage", found
         assert found in node_voltages(decoded), found

@@ -576,6 +576,15 @@ ops.observations               # a log reader's dict (LogResult) says the same o
   results hold except the axis. It pairs signals by name, ignoring case; a
   node or device inside subcircuits is matched by its path, however each
   build spells it (LTspice 26's `V(xa:xin:mid)` is XVII's `V(a:in:mid)`).
+  Two results of one build's spelling and one kind of run (both a
+  schematic's, or both a deck's) name an instance alike, so a name both
+  write pairs first. The traces left pair by every instance path their names
+  may stand for: on a run of a schematic an instance written `s` is a part
+  the sheet names `S` or a card a directive writes, named `s` or `xs`. A
+  trace pairs with another when a reading of each is the same and neither
+  meets another trace so. One that meets more than one trace, or meets one
+  that another trace meets too, is not compared: it is listed under
+  `ambiguous` with the traces it meets, whether or not `signals` was given.
   `other_step` defaults to the step of `other` whose parameters match this
   step's, each value matched as a step selector matches it
   (`step_values.step_with`; step 0 of a result that is not stepped); a step

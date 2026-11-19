@@ -1045,7 +1045,8 @@ async def _resolve_sources(
             if 0 not in requested_indices:
                 continue
             try:
-                resolved = services.resolve_analysis_source(
+                resolved = await asyncio.to_thread(
+                    services.resolve_analysis_source,
                     state,
                     raw_file=None if source_input.is_log else imported_path,
                     log_file=imported_path if source_input.is_log else None,
