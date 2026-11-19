@@ -11,7 +11,8 @@ from stored bytes another build reads otherwise. A new reader of a stored
 deck's values therefore cannot skip the question unnoticed.
 
 A file is found decoded by the deck decoders and by the general ways to
-decode one (``bytes.decode``, ``Path.read_text``, a text-mode ``open``). What
+decode one (``bytes.decode``, ``str(data, codec)``, ``Path.read_text``, a
+text-mode ``open``, ``io.TextIOWrapper``). What
 the scan cannot see is whether a module that imports ``stored_values`` states
 its answer on every route it serves: the route tests
 (``tests/test_stored_value_readings.py``) hold each route to that.
@@ -37,6 +38,8 @@ DECODERS = frozenset(
         "decode",
         "read_text",
         "<text open>",
+        "<str decode>",
+        "TextIOWrapper",
     }
 )
 
@@ -118,6 +121,9 @@ def _calls(tree: ast.AST) -> set[str]:
                 called.add(node.func.attr)
             if _text_mode_open(node):
                 called.add("<text open>")
+            # str(data, "utf-8") decodes as bytes.decode does.
+            if isinstance(node.func, ast.Name) and node.func.id == "str" and len(node.args) >= 2:
+                called.add("<str decode>")
     return called
 
 
@@ -170,3 +176,20 @@ def test_the_routes_that_read_a_stored_deck_ask_stored_values():
         "tools/inspect_tools.py",
         "tools/verify.py",
     } <= asking
+
+
+def test_the_scan_finds_a_reader_that_decodes_on_its_own():
+    """Each general way to decode a file, beside a number reader, makes a
+    module a reader of a stored deck's values that must ask."""
+    forms = (
+        "text = path.read_bytes().decode('utf-8')",
+        "text = str(path.read_bytes(), 'utf-8')",
+        "text = path.read_text(encoding='utf-8')",
+        "text = open(path, encoding='utf-8').read()",
+        "text = io.TextIOWrapper(io.BytesIO(data), encoding='utf-8').read()",
+    )
+    for form in forms:
+        tree = ast.parse(f"def read(path, data):\n    {form}\n    return parse_spice_value(text)\n")
+        assert _calls(tree) & DECODERS and _calls(tree) & NUMBER_READERS, form
+    binary = ast.parse("def read(path):\n    return parse_spice_value(open(path, 'rb').read())\n")
+    assert not _calls(binary) & DECODERS

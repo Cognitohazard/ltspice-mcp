@@ -413,7 +413,7 @@ async def test_micro_sign_is_a_warning_per_value_when_the_sessions_ltspice_is_xv
     assert finding["evidence"]["suffix"] == "U+00B5"
     assert finding["evidence"]["reader"] == FakeXVII.spice_exe[0]
     assert finding["evidence"]["card"] == "C1 out 0 23µ"
-    read = finding["evidence"]["read_otherwise"]
+    (read,) = finding["evidence"]["read_otherwise"]
     assert (read["build"], read["build_reads"], read["build_number"]) == (
         "LTspice XVII",
         "23Âµ",

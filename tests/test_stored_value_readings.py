@@ -39,7 +39,8 @@ from ltspice_mcp.lib.spice_lex import lex_deck
 from ltspice_mcp.lib.spice_lex_ops import value_suffix_sites
 from ltspice_mcp.lib.stored_values import (
     CODE,
-    EXAMPLES,
+    FILES,
+    UNIDENTIFIED,
     readings_of_bytes,
     readings_of_sheet,
     summaries,
@@ -70,34 +71,47 @@ SERVER_NUMBER = 1e-6
 ASCII_DECK = "* the same value, spelled u\nV1 a 0 1u\n.op\n.end\n"
 
 
-class FakeXVII(FakeSim):
-    """An LTspice XVII install: the executable name is the build's identity."""
+class FakeUnidentified(FakeSim):
+    """An LTspice whose build nothing shows: no version resource, no stock name."""
 
-    spice_exe: ClassVar[list[str]] = ["C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe"]
-
-
-class Fake26(FakeSim):
-    """An LTspice install of 24 or later, which reads decks as LTspice 26 does."""
-
-    spice_exe: ClassVar[list[str]] = ["C:\\Program Files\\ADI\\LTspice\\LTspice.exe"]
+    spice_exe: ClassVar[list[str]] = ["C:\\tools\\spice\\sim.exe"]
 
 
-#: The sessions, by the LTspice builds each runs.
-SESSIONS: dict[str, tuple[dict[str, type], dict[str, type], frozenset[str]]] = {
-    "xvii": ({"ltspice": FakeXVII}, {}, frozenset({"LTspice XVII"})),
-    "26": ({"ltspice": Fake26}, {}, frozenset({"LTspice 26"})),
-    "both": (
-        {"ltspice": FakeXVII},
-        {"ltspice:26": Fake26},
-        frozenset({"LTspice XVII", "LTspice 26"}),
+def _xvii() -> type:
+    """LTspice XVII, as the recordings' stand-in carries its version resource."""
+    return rec.launcher("ltspice17")
+
+
+def _26() -> type:
+    """LTspice 26, as the recordings' stand-in carries its version resource."""
+    return rec.launcher("ltspice26")
+
+
+XVII, L26 = "LTspice XVII", "LTspice 26"
+
+#: The sessions: their detected and named simulators, and the builds each
+#: may run with the note a statement about it carries.
+SESSIONS: dict[str, tuple[Callable[[], dict[str, type]], Callable[[], dict[str, type]], dict[str, str | None]]] = {
+    "xvii": (lambda: {"ltspice": _xvii()}, dict, {XVII: None}),
+    "26": (lambda: {"ltspice": _26()}, dict, {L26: None}),
+    "both": (lambda: {"ltspice": _xvii()}, lambda: {"ltspice:26": _26()}, {XVII: None, L26: None}),
+    "26, xvii named": (
+        lambda: {"ltspice": _26()},
+        lambda: {"ltspice:xvii": _xvii()},
+        {XVII: None, L26: None},
     ),
-    "ngspice": ({"ngspice": FakeSim}, {}, frozenset()),
+    "unidentified": (
+        lambda: {"ltspice": FakeUnidentified},
+        dict,
+        {L26: UNIDENTIFIED, XVII: UNIDENTIFIED},
+    ),
+    "ngspice": (lambda: {"ngspice": FakeSim}, dict, {}),
 }
 
 
 def _session(config: ServerConfig, name: str) -> SessionState:
     available, named, _builds = SESSIONS[name]
-    return SessionState.create(config, available=available, named=named)
+    return SessionState.create(config, available=available(), named=named())
 
 
 def _source(case_id: str) -> Path:
@@ -236,10 +250,9 @@ async def test_every_route_states_each_build_the_session_runs_that_reads_the_val
     alone is told nothing, since no build it runs reads the value otherwise."""
     state = _session(config, session)
     fake_simulator(monkeypatch)
+    builds = SESSIONS[session][2]
     expected = {
-        build: number
-        for build, number in _expected(case_id, tmp_path).items()
-        if build in SESSIONS[session][2]
+        build: number for build, number in _expected(case_id, tmp_path).items() if build in builds
     }
     deck = work_dir / _source(case_id).name
     deck.write_bytes(_source(case_id).read_bytes())
@@ -256,19 +269,23 @@ async def test_every_route_states_each_build_the_session_runs_that_reads_the_val
     assert set(by_build) == set(expected), (case_id, route, session, stated)
     for build, number in expected.items():
         summary = by_build[build]
-        assert summary["file"] in names, summary
+        assert summary.get("note") == builds[build], summary
         assert summary["reading"] == "established" and summary["count"] == 1, summary
-        (example,) = summary["examples"]
+        assert summary["files"] == 1 and "files_not_listed" not in summary, summary
+        (entry,) = summary["by_file"]
+        assert entry["file"] in names, summary
+        (example,) = entry["examples"]
         assert math.isclose(example["build_number"], number, rel_tol=SAME_VALUE_RTOL)
         assert math.isclose(example["server_number"], SERVER_NUMBER, rel_tol=SAME_VALUE_RTOL)
         assert example["value"] in ("1µ", "1μ")
         assert example["line"] == 3
-        assert summary["listed_by"]["tool"] == "verify_circuit"
+        assert entry["listed_by"]["tool"] == "verify_circuit"
 
 
 def test_the_session_runs_the_builds_its_ltspice_executables_stand_for(config: ServerConfig):
-    """The one answer to which builds a session runs: each LTspice executable,
-    the detected one and every named one, read as XVII or as 26."""
+    """The one answer to which builds a session may run: each LTspice
+    executable, the detected one and every named one, identified as XVII or
+    as 26, and one nothing identifies standing for both, with its note."""
     for name, (_available, _named, builds) in SESSIONS.items():
         assert session_ltspice_builds(_session(config, name)) == builds, name
 
@@ -276,56 +293,81 @@ def test_the_session_runs_the_builds_its_ltspice_executables_stand_for(config: S
 # The size of a statement ----------------------------------------------------------
 
 
-def _many(count: int) -> bytes:
-    return "".join(f"C{n} n{n} 0 1µ\n" for n in range(1, count + 1)).encode()
+def _many(count: int, first: int = 1) -> bytes:
+    return "".join(f"C{n} n{n} 0 1µ\n" for n in range(first, first + count)).encode()
 
 
-@pytest.mark.parametrize("where", ["inline", "included"])
+def _write_many(folder: Path, where: str, count: int) -> Path:
+    """A deck with ``count`` micro-sign values: in the deck, in one included
+    file, or one in each of ``count`` included files."""
+    folder.mkdir()
+    deck = folder / "deck.cir"
+    if where == "inline":
+        deck.write_bytes(b"* many\n" + _many(count) + b".op\n.end\n")
+    elif where == "included":
+        (folder / "parts.inc").write_bytes(_many(count))
+        deck.write_bytes(b"* many\n.include parts.inc\n.op\n.end\n")
+    else:
+        includes = []
+        for n in range(1, count + 1):
+            (folder / f"part{n}.inc").write_bytes(f"C{n} n{n} 0 1µ\n".encode())
+            includes.append(f".include part{n}.inc\n")
+        deck.write_bytes(b"* many\n" + "".join(includes).encode() + b".op\n.end\n")
+    return deck
+
+
+def _shape(stated: list[dict[str, Any]]) -> str:
+    """A statement without its totals and the names of its files."""
+    totals = ("count", "files", "files_not_listed", "detail")
+    per_file = ("file", "count", "listed_by")
+    return json.dumps(
+        [
+            {
+                **{k: v for k, v in s.items() if k not in (*totals, "by_file")},
+                "by_file": [
+                    {k: v for k, v in f.items() if k not in per_file}
+                    for f in s.get("by_file", ())
+                ],
+            }
+            for s in stated
+        ],
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+
+
+@pytest.mark.parametrize("where", ["inline", "included", "files"])
 @pytest.mark.parametrize("route", sorted(ROUTES))
-async def test_a_statement_does_not_grow_with_the_number_of_values(
+async def test_a_statement_does_not_grow_with_the_number_of_values_or_files(
     route: str,
     where: str,
     work_dir: Path,
     config: ServerConfig,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """The same deck with 3 and with 300 micro-sign values: the statement is
-    one summary per file and build either way, naming the same examples, and
-    only its count differs."""
+    """The same deck with 3 and with 300 micro-sign values, inline, in one
+    included file, or one in each of 300 included files: the statement is one
+    summary per build and kind of reading either way, naming the same
+    examples and at most three files, and only its totals differ."""
     if route.startswith(("run_", "jobs")) and "Monte Carlo" in route:
         pytest.skip("the Monte Carlo draw targets R1, which these decks do not hold")
-    if "structural_diff" in route and where == "included":
+    if "structural_diff" in route and where != "inline":
         pytest.skip("a structural diff reads no included file, and its not_compared says so")
     state = _session(config, "xvii")
     fake_simulator(monkeypatch)
     ascii_deck = work_dir / "ascii.cir"
     ascii_deck.write_text(ASCII_DECK, encoding="ascii")
-    sizes: dict[int, list[dict[str, Any]]] = {}
+    stated: dict[int, list[dict[str, Any]]] = {}
     for count in (3, 300):
-        folder = work_dir / f"n{count}"
-        folder.mkdir()
-        deck = folder / "deck.cir"
-        if where == "inline":
-            deck.write_bytes(b"* many\n" + _many(count) + b".op\n.end\n")
-        else:
-            (folder / "parts.inc").write_bytes(_many(count))
-            deck.write_bytes(b"* many\n.include parts.inc\n.op\n.end\n")
-        sizes[count] = await ROUTES[route](state, deck, ascii_deck)
-    small, large = sizes[3], sizes[300]
+        deck = _write_many(work_dir / f"n{count}", where, count)
+        stated[count] = await ROUTES[route](state, deck, ascii_deck)
+    small, large = stated[3], stated[300]
     assert [s["count"] for s in small] == [3] and [s["count"] for s in large] == [300]
-    assert len(large[0]["examples"]) == EXAMPLES
-
-    def shape(stated: list[dict[str, Any]]) -> str:
-        return json.dumps(
-            [
-                {k: v for k, v in s.items() if k not in ("count", "file", "detail", "listed_by")}
-                for s in stated
-            ],
-            sort_keys=True,
-            ensure_ascii=False,
-        )
-
-    assert shape(large) == shape(small)
+    files = 300 if where == "files" else 1
+    assert large[0]["files"] == files
+    assert len(large[0]["by_file"]) == min(files, FILES)
+    assert large[0].get("files_not_listed", 0) == max(files - FILES, 0)
+    assert _shape(large) == _shape(small)
 
 
 # Sheets: the sheet's own bytes ----------------------------------------------------
@@ -474,8 +516,11 @@ async def test_every_route_that_reads_a_sheet_as_its_export_states_the_sheet(
 
     for label, stated in answers.items():
         assert {s["build"] for s in stated} == expected, (label, stated)
-        assert all(s["file"] == str(sheet) for s in stated), (label, stated)
-        assert all(s["listed_by"]["tool"] == "inspect" for s in stated)
+        for summary in stated:
+            (entry,) = summary["by_file"]
+            assert entry["file"] == str(sheet), (label, stated)
+            # No call lists a sheet's values with a build's reading.
+            assert "listed_by" not in entry, (label, stated)
 
 
 @pytest.mark.parametrize("exporter", rec.BUILDS)
@@ -537,11 +582,13 @@ def test_a_reading_no_recording_shows_is_stated_as_not_established():
         ("LTspice 26", None, False),
         ("LTspice XVII", None, False),
     ]
-    stated = summaries((*braces, *utf16), {"LTspice 26", "LTspice XVII"})
-    assert [(s["file"], s["build"], s["reading"], s["count"]) for s in stated] == [
-        ("d.cir", "LTspice XVII", "not_established", 2),
-        ("u.cir", "LTspice 26", "not_established", 1),
-        ("u.cir", "LTspice XVII", "not_established", 1),
+    stated = summaries((*braces, *utf16), {L26: None, XVII: None})
+    assert [
+        (s["build"], s["reading"], s["count"], [(f["file"], f["count"]) for f in s["by_file"]])
+        for s in stated
+    ] == [
+        (L26, "not_established", 1, [("u.cir", 1)]),
+        (XVII, "not_established", 3, [("d.cir", 2), ("u.cir", 1)]),
     ]
 
 
@@ -571,9 +618,10 @@ async def test_two_equal_values_on_one_line_each_carry_their_own_reading(
     data = await dispatched(state, "verify_circuit", path=str(deck), checks=["syntax"])
 
     read = [
-        (finding["evidence"]["read_otherwise"]["reading"], finding["evidence"]["card"])
+        (reading["reading"], finding["evidence"]["card"])
         for finding in data.get("findings", [])
         if finding["rule_id"] == "value_suffix_micro_sign"
+        for reading in finding["evidence"]["read_otherwise"]
     ]
     assert read == [
         ("established", "C1 a 0 1µ Rser=1µ"),
@@ -600,3 +648,156 @@ def test_a_comparison_states_only_the_sections_of_a_library_the_deck_reads(work_
 
     compared = {(r.value, r.build) for r in graph.readings}
     assert compared == {(r.value, r.build) for r in hierarchy.readings} == {("2µ", "LTspice XVII")}
+
+
+
+# A run states every file -----------------------------------------------------------
+
+
+@pytest.mark.parametrize("status", [False, True])
+async def test_a_run_states_every_file_whose_values_a_build_reads_otherwise(
+    status: bool, work_dir: Path, config: ServerConfig, monkeypatch: pytest.MonkeyPatch
+):
+    """A deck and the file it includes each hold a value XVII reads
+    otherwise: the receipt, and the job's status, name both files, as
+    inspect does, never one statement for the two."""
+    state = _session(config, "xvii")
+    fake_simulator(monkeypatch)
+    (work_dir / "part.inc").write_bytes("C2 n1 0 1µ\n".encode())
+    deck = work_dir / "two.cir"
+    deck.write_bytes("* two\nC1 n1 0 1µ\n.include part.inc\nR1 n1 0 1k\n.op\n.end\n".encode())
+    ascii_deck = work_dir / "ascii.cir"
+    ascii_deck.write_text(ASCII_DECK, encoding="ascii")
+
+    ran = await _run([], status=status)(state, deck, ascii_deck)
+    inspected = await _inspect(state, deck, ascii_deck)
+
+    for stated in (ran, inspected):
+        (summary,) = stated
+        names = {Path(entry["file"]).name for entry in summary["by_file"]}
+        assert names == {"two.cir", "part.inc"} and summary["count"] == 2, stated
+
+
+# A call named in listed_by lists every value with its reading ---------------------
+
+
+@pytest.mark.parametrize("session", ["xvii", "26, xvii named", "unidentified"])
+async def test_listed_by_is_named_only_where_its_call_lists_each_value_with_its_reading(
+    session: str, work_dir: Path, config: ServerConfig
+):
+    """A deck's summary names verify_circuit's syntax check, which gives each
+    of the deck's values its reading by that build, in a session that runs it
+    as its LTspice, as a named executable, or as an LTspice it cannot
+    identify. An included library has no such call, so names none."""
+    state = _session(config, session)
+    (work_dir / "caps.inc").write_bytes(_many(5, first=100))
+    deck = work_dir / "deck.cir"
+    deck.write_bytes(b"* d\n" + _many(4) + b".include caps.inc\n.op\n.end\n")
+
+    stated = await _inspect(state, deck, deck)
+
+    xvii = next(s for s in stated if s["build"] == XVII and s["reading"] == "established")
+    entries = {Path(entry["file"]).name: entry for entry in xvii["by_file"]}
+    assert "listed_by" not in entries["caps.inc"]
+    listed_by = entries["deck.cir"]["listed_by"]
+    assert listed_by["tool"] == "verify_circuit"
+    data = await dispatched(state, "verify_circuit", **listed_by["arguments"])
+    listed = {
+        (reading["line"], reading["value"])
+        for finding in data.get("findings", [])
+        if finding["rule_id"] == "value_suffix_micro_sign"
+        for reading in finding["evidence"].get("read_otherwise", [])
+        if reading["build"] == XVII and reading["reading"] == "established"
+    }
+    assert len(listed) == entries["deck.cir"]["count"] == 4, data
+
+
+# A sheet's value is its part's own attribute -----------------------------------------
+
+
+def _write_sheet(folder: Path, sheet_lines: list[str], export: str) -> tuple[Path, list[Any]]:
+    folder.mkdir(parents=True, exist_ok=True)
+    sheet = folder / "s.asc"
+    sheet.write_bytes(("\n".join(sheet_lines) + "\n").encode())
+    return sheet, lex_deck(export).cards
+
+
+def test_a_sheets_value_is_read_from_its_parts_attribute_not_any_text(work_dir: Path):
+    """A part whose sheet value is 100u, beside a comment that writes 100µ,
+    is stated nothing: the export's micro sign is the exporter's spelling of
+    the part's u. Two parts valued 11µ and 1µ are each stated at their own
+    attribute's line."""
+    header = ["Version 4", "SHEET 1 880 680"]
+    sheet, cards = _write_sheet(
+        work_dir / "comment",
+        [
+            *header,
+            "SYMBOL cap 0 0 R0",
+            "SYMATTR InstName C1",
+            "SYMATTR Value 100u",
+            "TEXT 0 64 Left 2 ;tolerance note: 100µ max",
+        ],
+        "* s\nC1 a 0 100µ\n.end\n",
+    )
+    assert readings_of_sheet(cards, sheet) == ()
+
+    sheet, cards = _write_sheet(
+        work_dir / "two",
+        [
+            *header,
+            "SYMBOL cap 0 0 R0",
+            "SYMATTR InstName C1",
+            "SYMATTR Value 11µ",
+            "SYMBOL cap 96 0 R0",
+            "SYMATTR InstName C2",
+            "SYMATTR Value 1µ",
+        ],
+        "* s\nC1 a 0 11µ\nC2 b 0 1µ\n.end\n",
+    )
+    found = readings_of_sheet(cards, sheet)
+    assert found is not None
+    assert {(r.value, r.line) for r in found if r.build == XVII} == {("11µ", 5), ("1µ", 8)}
+
+
+# verify_circuit reads its candidate once ---------------------------------------------
+
+
+async def test_the_syntax_check_and_the_comparison_read_the_same_bytes(
+    work_dir: Path, config: ServerConfig, monkeypatch: pytest.MonkeyPatch
+):
+    """The file changes right after verify_circuit has read it: its syntax
+    findings and its comparison both describe the bytes it read."""
+    from ltspice_mcp.tools import verify as verify_module
+
+    state = _session(config, "xvii")
+    deck = work_dir / "deck.cir"
+    deck.write_bytes("* d\nC1 n1 0 1µ\nR1 n1 0 1k\n.op\n.end\n".encode())
+    reference = work_dir / "ascii.cir"
+    reference.write_text(ASCII_DECK, encoding="ascii")
+    from ltspice_mcp.lib.stored_values import read_stored_deck as read
+
+    def read_then_change(path: Path, **kwargs: Any) -> Any:
+        stored = read(path, **kwargs)
+        if path == deck:
+            # The handshake: the file changes once its read has returned.
+            deck.write_bytes("* d\nC1 n1 0 2µ\nR1 n1 0 1k\n.op\n.end\n".encode())
+        return stored
+
+    monkeypatch.setattr(verify_module, "read_stored_deck", read_then_change)
+
+    data = await dispatched(
+        state,
+        "verify_circuit",
+        path=str(deck),
+        checks=["syntax", "compare"],
+        compare={"reference": str(reference)},
+    )
+
+    syntax = {
+        finding["subject"]
+        for finding in data["findings"]
+        if finding["rule_id"] == "value_suffix_micro_sign"
+    }
+    (summary,) = data["comparison"]["values_read_otherwise"]
+    compared = {example["value"] for entry in summary["by_file"] for example in entry["examples"]}
+    assert syntax == compared == {"1µ"}, data

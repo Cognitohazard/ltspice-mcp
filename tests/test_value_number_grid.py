@@ -44,7 +44,7 @@ import re
 import shutil
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any
 
 import pytest
 
@@ -74,7 +74,7 @@ from ltspice_mcp.lib.stored_values import summaries
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
 from tests._recorded_grids import Cell, grid
-from tests.conftest import LIVENESS_S, FakeSim, SyncApi, dispatched
+from tests.conftest import LIVENESS_S, SyncApi, dispatched
 from tests.ltspice_recorder import INPUTS
 
 GRID = grid("value-number")
@@ -394,18 +394,6 @@ async def _hierarchy_values(
 _BUILD_NAMES = {"ltspice26": "LTspice 26", "ltspice17": "LTspice XVII"}
 
 
-class _FakeXVII(FakeSim):
-    """An LTspice XVII install: the executable name is the build's identity."""
-
-    spice_exe: ClassVar[list[str]] = ["C:\\Program Files\\LTC\\LTspiceXVII\\XVIIx64.exe"]
-
-
-class _Fake26(FakeSim):
-    """An LTspice install of 24 or later, read as LTspice 26."""
-
-    spice_exe: ClassVar[list[str]] = ["C:\\Program Files\\ADI\\LTspice\\LTspice.exe"]
-
-
 def _decoded(cell: Cell, build: str) -> dict[str, Any] | None:
     """The cell's ``decoded`` entry for ``build``: that build reads other text
     than the server from the stored file."""
@@ -430,7 +418,9 @@ async def test_every_recorded_cell_reads_as_ltspice_read_it_on_every_route(
     # A session that runs both recorded builds, so each build's reading of the
     # stored file is stated (a reply states only the builds a session runs).
     session = SessionState.create(
-        config, available={"ltspice": _FakeXVII}, named={"ltspice:26": _Fake26}
+        config,
+        available={"ltspice": rec.launcher("ltspice17")},
+        named={"ltspice:26": rec.launcher("ltspice26")},
     )
     hierarchy, stated = await _hierarchy_values(session, deck)
     read = _values_by_node(case_id, as_written=False)
@@ -458,7 +448,8 @@ async def test_every_recorded_cell_reads_as_ltspice_read_it_on_every_route(
                 example
                 for summary in said
                 if summary["build"] == _BUILD_NAMES[build]
-                for example in summary["examples"]
+                for entry in summary["by_file"]
+                for example in entry["examples"]
                 if example["value"] == cell.item
             ]
             for route, said in stated.items()
