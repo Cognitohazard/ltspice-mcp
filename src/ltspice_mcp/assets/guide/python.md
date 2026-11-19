@@ -307,4 +307,5 @@ Name each further executable, in `[simulator.executables]` of the config
 and select it per run with `execution={"simulator": "ltspice:xvii"}`. The plain
 family name still runs the default build. `inspect(kind="capabilities")` lists
 the named builds under `named_executables`. Each job records the executable
-that ran it.
+that ran it, and its replies name the simulator as `simulator`, the selector
+to pass back to run the same build.

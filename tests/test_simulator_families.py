@@ -255,7 +255,10 @@ class TestRoundTrip:
         assert receipt["status"] == "completed", receipt
         assert qspice.launched, "the QSPICE stand-in was never launched"
         (source,) = receipt["source"]
-        assert (source["simulator"], source["dialect"]) == ("Qspice", "qspice")
+        # The job names its simulator once, by the selector a run passes back;
+        # its source entry no longer repeats the class name.
+        assert (receipt["simulator"], source["dialect"]) == ("qspice", "qspice")
+        assert "simulator" not in source
         # The value at the corner is right only if the frequency axis was read
         # as QSPICE writes it: a plain double, not a complex pair.
         stage = receipt["analysis"]
@@ -290,7 +293,8 @@ class TestRoundTrip:
         assert receipt["status"] == "completed", receipt
         assert xyce.launched, "the Xyce stand-in was never launched"
         (source,) = receipt["source"]
-        assert (source["simulator"], source["dialect"]) == ("XyceSimulator", "xyce")
+        assert (receipt["simulator"], source["dialect"]) == ("xyce", "xyce")
+        assert "simulator" not in source
         # Nothing in the raw names Xyce, so it parses only because the job's
         # recorded simulator supplies the dialect.
         stage = receipt["analysis"]
