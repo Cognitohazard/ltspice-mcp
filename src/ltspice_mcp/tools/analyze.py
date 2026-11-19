@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import copy
 import functools
+import json
 import math
 import os
 import re
@@ -1795,6 +1796,42 @@ def _log_precision_observations(records: list[Record]) -> list[Observation]:
                 "run_count": len(runs),
             },
         )
+    ]
+
+
+def _value_observations(key: str, records: list[Record]) -> list[Observation]:
+    """The observations a recipe's metric made of its rows' values (a
+    stability margin that is not the one LTspice printed, a structure fit),
+    each once, naming the recipe and every row it was made of.
+
+    A lean row leaves the lists of its value out, so this is where they reach
+    the reply.
+    """
+    grouped: dict[tuple[str, str, str, str], tuple[dict[str, Any], list[dict[str, Any]]]] = {}
+    for record in records:
+        for item in record.value.get("observations") or []:
+            if not isinstance(item, Mapping):
+                continue
+            evidence = dict(item.get("evidence") or {})
+            group = (
+                str(item.get("code", "")),
+                str(item.get("kind", "")),
+                str(item.get("detail", "")),
+                json.dumps(evidence, sort_keys=True, default=str),
+            )
+            where = {"source": record.source}
+            for name in ("case_id", "step_index"):
+                if (value := getattr(record.identity, name)) is not None:
+                    where[name] = value
+            grouped.setdefault(group, (evidence, []))[1].append(where)
+    return [
+        Observation(
+            code=code,
+            kind=kind,
+            detail=detail,
+            evidence={**evidence, "recipe": key, "rows": rows},
+        )
+        for (code, kind, detail, _), (evidence, rows) in grouped.items()
     ]
 
 
@@ -4282,6 +4319,7 @@ async def _evaluate_unit(
     )
     failures.extend(item_failures)
     observations.extend(_absence_observations(recipe, key, records))
+    observations.extend(_value_observations(key, records))
     observations.extend(_log_precision_observations(records))
     observations.extend(
         await asyncio.to_thread(

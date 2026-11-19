@@ -209,6 +209,12 @@ def decode_logs(captured: CapturedInputs, directory: Path, *, limits: LogLimits)
         if "log" in text
         else _section(lambda: None, limits, present=False)
     )
+    fra_margins = log_parser.printed_fra_margins(body)
+    sections["fra_margins"] = (
+        _section(lambda: fra_margins, limits, present=bool(fra_margins))
+        if "log" in text
+        else _section(lambda: None, limits, present=False)
+    )
     sections["diagnostics"] = _section(
         lambda: log_parser.extract_log_diagnostics(log_path), limits, present=bool(text)
     )

@@ -714,6 +714,17 @@ model = ["lib/raw_header.py", "lib/raw_parser.py", "lib/log_parser.py", "tools/a
 inputs = ["raw/fra.cir"]
 keep = ["log", "raw", "fra_1.raw"]
 
+[behaviour.raw-fra-orientation]
+summary = "What a frequency response analysis's gain_N is when the analyzer faces the other way: whether it is the negative of the loop gain, as raw/fra records for one orientation, or its reciprocal or negative reciprocal, and the crossover and phase margin LTspice prints for it."
+model = ["lib/metrics.py", "assets/guide/ltspice.md"]
+# raw/fra's loop with the analyzer's two nodes swapped (@1 b a), so it injects
+# from the pole's side toward the amplifier's output. The stability recipe's
+# margin check names the form of gain_1 whose margin agrees with the printed
+# one; this recording establishes which that is.
+inputs = ["raw/fra_reversed.cir"]
+keep = ["log", "raw", "fra_1.raw"]
+pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
+
 [behaviour.raw-ascii]
 summary = "A raw written as text (Values:): 8-bit with CRLF line ends, header included, where every other raw has a UTF-16 header."
 model = ["lib/raw_header.py", "lib/raw_decode.py"]

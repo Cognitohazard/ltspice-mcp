@@ -6,6 +6,7 @@ For .raw file parsing (waveform data, statistics), see raw_parser.py.
 from __future__ import annotations
 
 import contextlib
+import io
 import logging
 import re
 import tempfile
@@ -1713,6 +1714,50 @@ _REAL_ANGLE_TOLERANCE = 1e-9
 _RE_PRINTED_WITH_UNIT = re.compile(
     r"(?P<number>[-+]?(?:inf|(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?))(?:°|dB)", re.IGNORECASE
 )
+
+
+#: The line LTspice 26 prints at the end of an unstepped frequency response
+#: analysis's log, one per analyzer (the recorded raw/fra):
+#: ``FRA Instance @1: F(0dB) = 15.900 kHz, Phase Margin = 90.6 degrees, ...``.
+_RE_FRA_RESULT = re.compile(
+    r"^FRA Instance (?P<analyzer>@\S+): F\(0dB\) = (?P<crossover>\d+(?:\.\d*)?) "
+    r"(?P<prefix>[kMG]?)Hz, Phase Margin = (?P<margin>-?\d+(?:\.\d*)?) degrees"
+)
+_SI_PREFIX = {"": 1.0, "k": 1e3, "M": 1e6, "G": 1e9}
+
+
+def _last_digit(printed: str) -> float:
+    """The value of one unit in the last digit of a number as printed."""
+    _, dot, fraction = printed.partition(".")
+    return 10.0 ** -len(fraction) if dot else 1.0
+
+
+def printed_fra_margins(text: str) -> list[dict[str, Any]]:
+    """The crossover and phase margin LTspice printed for each analyzer of an
+    unstepped frequency response analysis, with the size of the last digit it
+    printed each to (``crossover_digit_hz``, ``phase_margin_digit_deg``).
+
+    A stepped run prints its margins as measurement tables instead
+    (``PhaseMargin_<analyzer>``), which the measurements section holds. A line
+    in another form than the recorded one is not read, so its analyzer has no
+    entry and a comparison with it says it was not made.
+    """
+    found = []
+    for line in io.StringIO(text):
+        match = _RE_FRA_RESULT.match(line.strip())
+        if match is None:
+            continue
+        scale = _SI_PREFIX[match["prefix"]]
+        found.append(
+            {
+                "analyzer": match["analyzer"],
+                "crossover_hz": float(match["crossover"]) * scale,
+                "crossover_digit_hz": _last_digit(match["crossover"]) * scale,
+                "phase_margin_deg": float(match["margin"]),
+                "phase_margin_digit_deg": _last_digit(match["margin"]),
+            }
+        )
+    return found
 
 
 def printed_measurement(value: str) -> float | None:

@@ -22,6 +22,7 @@ from typing import Any, get_args
 import numpy as np
 import pytest
 
+from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import metrics
 from ltspice_mcp.lib.recipes import RECIPE_MODELS
 from ltspice_mcp.state import SessionState
@@ -195,7 +196,6 @@ async def test_tone_of_a_ratio_is_the_quotient_of_the_two_tones(
     assert _phasor(gain) == pytest.approx(quotient, rel=1e-9)
     assert gain["amplitude"] == pytest.approx(0.5, rel=1e-3)
     assert gain["phase_deg"] == pytest.approx(-60.0, abs=0.03)
-    assert gain["gain_db"] == pytest.approx(20 * math.log10(abs(quotient)), rel=1e-9)
     assert (gain["t_start"], gain["t_end"], gain["n_cycles"]) == (
         out["t_start"],
         out["t_end"],
@@ -245,15 +245,18 @@ async def test_the_reciprocal_of_an_ac_response_is_its_reciprocal(
                 {"key": "inv", "signal": "1/V(out)", **point},
                 {"key": "neg_inv", "signal": "-1/V(out)", **point},
             ],
+            "include": {"fields": ["value"]},
         },
     )
-    (a,) = (row["value"] for row in _rows(data, "a"))
-    (inv,) = (row["value"] for row in _rows(data, "inv"))
-    (neg_inv,) = (row["value"] for row in _rows(data, "neg_inv"))
-    assert inv["gain_db"] == pytest.approx(-a["gain_db"], abs=1e-9)
+    (a,) = (row["value"]["points"][0] for row in _rows(data, "a"))
+    (inv,) = (row["value"]["points"][0] for row in _rows(data, "inv"))
+    (neg_inv,) = (row["value"]["points"][0] for row in _rows(data, "neg_inv"))
+    assert inv["magnitude_db"] == pytest.approx(-a["magnitude_db"], abs=1e-9)
     assert inv["phase_deg"] == pytest.approx(-a["phase_deg"], abs=1e-9)
-    assert neg_inv["gain_db"] == pytest.approx(-a["gain_db"], abs=1e-9)
-    assert neg_inv["phase_deg"] == pytest.approx(180.0 - a["phase_deg"], abs=1e-9)
+    assert neg_inv["magnitude_db"] == pytest.approx(-a["magnitude_db"], abs=1e-9)
+    # The same angle as 180 - phase, wrapped into the range the recipe gives.
+    turned = math.remainder(neg_inv["phase_deg"] - (180.0 - a["phase_deg"]), 360.0)
+    assert turned == pytest.approx(0.0, abs=1e-9)
 
 
 #: The arguments, beyond its signal, each recipe that reads a signal needs on
@@ -293,6 +296,21 @@ def _without_signal(entry: dict[str, Any]) -> Any:
     ]
 
 
+def _assert_close(first: Any, second: Any, where: Any) -> None:
+    if isinstance(first, dict):
+        assert isinstance(second, dict) and first.keys() == second.keys(), where
+        for key in first:
+            _assert_close(first[key], second[key], (*where, key))
+    elif isinstance(first, list):
+        assert isinstance(second, list) and len(first) == len(second), where
+        for index, (one, other) in enumerate(zip(first, second, strict=True)):
+            _assert_close(one, other, (*where, index))
+    elif isinstance(first, float):
+        assert second == pytest.approx(first, rel=1e-9, abs=1e-9), where
+    else:
+        assert first == second, where
+
+
 async def test_every_recipe_that_reads_an_ac_signal_reads_every_form(
     state_no_sim: SessionState, work_dir: Path
 ):
@@ -304,26 +322,26 @@ async def test_every_recipe_that_reads_an_ac_signal_reads_every_form(
     reads_ac = []
     for metric in _signal_recipes():
         recipe = {"key": "r", "metric": metric, **_ARGUMENTS.get(metric, {})}
-        on_ac, on_tran = (
+        on_ac, on_tran = [
             await _through_tool(
                 state_no_sim,
                 {"sources": [{"path": str(path)}], "recipes": [{**recipe, "signal": "V(out)"}]},
             )
             for path in (raw, tran)
-        )
+        ]
         if "failures" in on_ac or "failures" not in on_tran:
             continue
         reads_ac.append(metric)
         for form, other in _FORMS:
-            first, second = (
+            first, second = [
                 await _through_tool(
                     state_no_sim,
                     {"sources": [{"path": str(raw)}], "recipes": [{**recipe, "signal": signal}]},
                 )
                 for signal in (form, other)
-            )
+            ]
             assert "failures" not in first, (metric, form, first["failures"])
-            assert _without_signal(first) == pytest.approx(_without_signal(second)), (metric, form)
+            _assert_close(_without_signal(first), _without_signal(second), (metric, form))
     assert reads_ac == [
         "ac_structure",
         "bode_crossing",
@@ -348,7 +366,7 @@ def test_the_reader_reads_each_form_and_refuses_the_rest():
     assert parts("1/V(out)") == (None, "V(out)", False)
     assert parts("-1/gain_1") == (None, "gain_1", True)
     for bad in ("-", "--V(out)", "V(a)/V(b)/V(c)", "V(out)/", "/V(out)", "V(a)/-V(b)", "1/1"):
-        with pytest.raises(ValueError):
+        with pytest.raises(ResultError, match=r"Signal|ratio"):
             metrics.read_signal(bad)
 
 
@@ -403,7 +421,8 @@ def _fra_job(state: SessionState, work_dir: Path, run: str) -> str:
 
 async def _stability(
     read: Reader, state: SessionState, source: dict[str, Any], signal: str, **extra: Any
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """The recipe's rows, and the observations the reply makes of them."""
     data = await read(
         state,
         {
@@ -412,11 +431,12 @@ async def _stability(
             **extra,
         },
     )
-    return [row["value"] for row in _rows(data, "loop")]
-
-
-def _codes(value: dict[str, Any]) -> list[str]:
-    return [observation["code"] for observation in value.get("observations", [])]
+    made = [
+        observation
+        for observation in data.get("observations", [])
+        if observation["code"].startswith("fra_margin")
+    ]
+    return [row["value"] for row in _rows(data, "loop")], made
 
 
 @ROUTES
@@ -425,9 +445,9 @@ async def test_stability_on_the_form_ltspice_measured_says_nothing_more(
 ):
     job_id = _fra_job(state_no_sim, work_dir, "fra")
     source = {"job_id": job_id, "other_raw": "fra_1"}
-    (value,) = await _stability(read, state_no_sim, source, "-gain_1")
+    (value,), made = await _stability(read, state_no_sim, source, "-gain_1")
     assert value["phase_margin_worst_deg"] == pytest.approx(90.6, abs=0.05)
-    assert _codes(value) == []
+    assert made == []
 
 
 @pytest.mark.parametrize("signal", ["gain_1", "1/gain_1", "-1/gain_1"])
@@ -440,17 +460,18 @@ async def test_stability_on_another_form_says_its_margin_is_not_ltspices(
     loop, and the reply gives both and names the form that agrees."""
     job_id = _fra_job(state_no_sim, work_dir, "fra")
     source = {"job_id": job_id, "other_raw": "fra_1"}
-    (value,) = await _stability(read, state_no_sim, source, signal)
-    (observation,) = value["observations"]
+    (value,), (observation,) = await _stability(read, state_no_sim, source, signal)
     assert observation["code"] == "fra_margin_differs"
     assert observation["kind"] == "reconciliation"
     evidence = observation["evidence"]
+    assert evidence["recipe"] == "loop"
+    assert evidence["rows"] == [{"source": "exp_fra", "case_id": "case-0000", "step_index": 0}]
     assert evidence["printed"] == {
         "analyzer": "@1",
         "crossover_hz": 15900.0,
         "phase_margin_deg": 90.6,
     }
-    assert evidence["recipe"]["phase_margin_deg"] == value["phase_margin_worst_deg"]
+    assert evidence["found"]["phase_margin_deg"] == value["phase_margin_worst_deg"]
     assert evidence["agreeing_forms"] == ["-gain_1"]
     assert "-gain_1" in observation["detail"]
     assert "90.6" in observation["detail"]
@@ -462,11 +483,15 @@ async def test_a_stepped_fra_run_is_checked_step_by_step(
 ):
     job_id = _fra_job(state_no_sim, work_dir, "fra_step")
     source = {"job_id": job_id, "other_raw": "fra_1"}
-    right = await _stability(read, state_no_sim, source, "-gain_1", all_steps=True)
-    wrong = await _stability(read, state_no_sim, source, "gain_1", all_steps=True)
-    assert [_codes(value) for value in right] == [[], []]
-    assert [_codes(value) for value in wrong] == [["fra_margin_differs"]] * 2
-    assert [value["observations"][0]["evidence"]["printed"] for value in wrong] == [
+    right, right_made = await _stability(read, state_no_sim, source, "-gain_1", all_steps=True)
+    wrong, wrong_made = await _stability(read, state_no_sim, source, "gain_1", all_steps=True)
+    assert (len(right), len(wrong), right_made) == (2, 2, [])
+    assert [observation["code"] for observation in wrong_made] == ["fra_margin_differs"] * 2
+    assert [observation["evidence"]["rows"][0]["step_index"] for observation in wrong_made] == [
+        0,
+        1,
+    ]
+    assert [observation["evidence"]["printed"] for observation in wrong_made] == [
         {"analyzer": "@1", "crossover_hz": 15900.4, "phase_margin_deg": 90.6295},
         {"analyzer": "@1", "crossover_hz": 8007.62, "phase_margin_deg": 90.1991},
     ]
@@ -479,8 +504,7 @@ async def test_stability_on_fra_results_with_no_printed_margin_says_it_did_not_c
     """Read by its path, the results file has no log beside it to compare with."""
     raw = work_dir / "fra.fra_1.raw"
     shutil.copyfile(rec.recorded("ltspice26", "raw/fra.fra_1.raw"), raw)
-    (value,) = await _stability(read, state_no_sim, {"path": str(raw)}, "-gain_1")
-    (observation,) = value["observations"]
+    _, (observation,) = await _stability(read, state_no_sim, {"path": str(raw)}, "-gain_1")
     assert observation["code"] == "fra_margin_not_checked"
     assert observation["kind"] == "coverage"
     assert "not established" in observation["detail"]
@@ -490,5 +514,5 @@ async def test_stability_on_an_ac_sweep_compares_with_nothing(
     state_no_sim: SessionState, work_dir: Path
 ):
     raw = stage_recorded_fixture(work_dir, "ltspice_ac_rc")
-    (value,) = await _stability(_through_tool, state_no_sim, {"path": str(raw)}, "-V(out)")
-    assert "observations" not in value
+    (_,), made = await _stability(_through_tool, state_no_sim, {"path": str(raw)}, "-V(out)")
+    assert made == []

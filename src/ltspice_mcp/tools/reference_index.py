@@ -175,7 +175,9 @@ _SUMMARIES: dict[tuple[str, str], str] = {
         "Amplitude and phase of one given frequency in a transient signal, over "
         "the whole periods of it that fit from the window's start, weighted by "
         "time. phase_deg is that of sin(2*pi*f*t) with t from the start of the "
-        "simulation; sin_component and cos_component are the two coefficients."
+        "simulation; sin_component and cos_component are the two coefficients. "
+        "A ratio A/B is the quotient of the two phasors; frequency_param reads "
+        "each run at its own value of a parameter."
     ),
     ("analyze_results", "bode_filter"): (
         "Filter characteristics of an .AC sweep: passband gain and ripple, cutoff "
@@ -321,6 +323,9 @@ _SYNONYMS: dict[tuple[str, str], tuple[str, ...]] = {
         "fundamental amplitude",
         "single frequency",
         "lock-in",
+        "transfer function from a transient",
+        "injected loop gain",
+        "frequency per case",
     ),
     ("analyze_results", "bode_filter"): (
         "cutoff frequency",
