@@ -2214,9 +2214,7 @@ async def _cases_chosen(
         if isinstance(ctx, services.CaseUnread):
             not_drawn.append(
                 {
-                    "case_id": case.case_id,
-                    "run_index": case.run_index,
-                    "status": case.status,
+                    **_case_named(case),
                     "code": ctx.code,
                     "detail": ctx.detail,
                     **({"evidence": ctx.evidence} if ctx.evidence is not None else {}),
@@ -2225,6 +2223,13 @@ async def _cases_chosen(
             continue
         readable.append((case, ctx))
     return _SeveralCases(job, readable, not_drawn)
+
+
+def _case_named(case: ExperimentCase) -> dict[str, Any]:
+    """A case not drawn, as ``cases_not_drawn`` names it: its id, its run
+    index and its status. The status is said, never decided on: whether the
+    case can be read is ``services.case_refusal``'s answer."""
+    return {"case_id": case.case_id, "run_index": case.run_index, "status": case.status}
 
 
 def _nothing_to_draw(not_drawn: list[dict[str, Any]]) -> ResultError:
@@ -2310,9 +2315,7 @@ async def _plot_several(args: PlotWaveformInput, state: SessionState, chosen: _S
         except ResultError as exc:
             not_drawn.append(
                 {
-                    "case_id": case.case_id,
-                    "run_index": case.run_index,
-                    "status": case.status,
+                    **_case_named(case),
                     "code": "step_not_found",
                     "detail": str(exc),
                 }

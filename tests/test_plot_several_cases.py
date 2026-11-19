@@ -248,6 +248,30 @@ class TestSeveralCases:
         assert failed["status"] == "failed"
         assert failed["code"] == "raw_not_produced"
 
+    async def test_a_case_not_yet_run_is_named_and_the_finished_are_drawn(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        job = _job(
+            state_no_sim,
+            work_dir,
+            "running",
+            [
+                _Case("ltspice_tran_rc", {"R1": 1000}),
+                _Case(None, {"R1": 2000}, status="queued"),
+                _Case("ltspice_tran_rc", {"R1": 3000}),
+            ],
+        )
+        job.status = "running"  # type: ignore[assignment]
+        data = await _plot(state_no_sim, job_id="running", runs="all", signals=["V(out)"])
+
+        assert _labels(data) == ["V(out) [R1=1000]", "V(out) [R1=3000]"]
+        (waiting,) = data["cases_not_drawn"]
+        assert (waiting["case_id"], waiting["status"], waiting["code"]) == (
+            "case-0001",
+            "queued",
+            "run_not_finished",
+        )
+
     async def test_a_selection_with_nothing_to_draw_is_refused(
         self, state_no_sim: SessionState, work_dir: Path
     ):
