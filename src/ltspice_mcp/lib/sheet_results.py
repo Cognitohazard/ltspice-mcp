@@ -8,11 +8,13 @@ sheet's from there, so a click on a net in the sheet plots it (recorded on
 LTspice 26); what the window does with results beside a netlist is not
 recorded. The server's runs write theirs to the job folder instead. This
 module copies one run's beside its circuit on request, from
-``jobs(action="place_beside_sheet")`` or, when a job asked for it with
-``execution.results_beside_sheet``, as the job's runs finish. Both ask the
-same questions here (``check_request``, ``check_case``, ``place_case``): the
-results in the job folder stay where they are, and remain what every read of
-the job takes.
+``jobs(action="place_beside_sheet")``, from ``plot_waveform`` with
+``in_ltspice`` before it opens the run from its sheet, or, when a job asked
+for it with ``execution.results_beside_sheet``, as the job's runs finish.
+Each places through ``place_checked``, which asks ``place_case`` under
+``placement_lock``, so each gives the same answer; ``pyproject.toml`` bans the
+copy, the check-and-copy and the lock outside this module. The results in the
+job folder stay where they are, and remain what every read of the job takes.
 
 Which files beside a circuit its run goes to is decided once, by
 ``files_beside``; whose run a results file there holds, by ``results_owner``.
@@ -22,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import os
 import shutil
 from collections.abc import AsyncIterator, Mapping, Sequence
@@ -38,7 +41,7 @@ from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.experiment_types import OWNER_STOPPED, ExperimentCase, ExperimentJob
 from ltspice_mcp.lib.filelock import async_file_lock, circuit_file_lock
 from ltspice_mcp.lib.ltspice_window import results_beside  # noqa: TID251 - the one caller
-from ltspice_mcp.lib.raw_parser import other_raw_path
+from ltspice_mcp.lib.raw_parser import OTHER_RAW_KINDS, other_raw_path
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name, simulator_family
 from ltspice_mcp.lib.store import Store, file_key
 
@@ -77,6 +80,10 @@ class ResultFiles:
     def other_raw(self, kind: str) -> Path:
         """Where the run's raw of ``kind`` (``op``, ``fra_1``) goes."""
         return other_raw_path(self.raw, kind)
+
+    def every(self) -> list[Path]:
+        """Each file beside the circuit that a run of it can go to."""
+        return [self.raw, self.log, *(self.other_raw(kind) for kind in OTHER_RAW_KINDS)]
 
 
 def files_beside(circuit: Path) -> ResultFiles:
@@ -156,34 +163,66 @@ async def placement_lock(circuit: Path) -> AsyncIterator[None]:
             yield
 
 
+async def place_checked(job: ExperimentJob, case: ExperimentCase, circuit: Path) -> Placement:
+    """Put ``case``'s results beside ``circuit`` (``place_case``) under
+    ``placement_lock``: the one way any caller places them, so each gives the
+    same answer. Raises ``NotPlaced`` with the refusal, and ``NetlistError``
+    when another process held a lock past its wait.
+
+    The check and the copy are one unit in a worker thread, which a cancel
+    cannot stop. So a cancel does not end the copy, and the locks are held
+    until it has ended, whatever ends the call: a second placement cannot
+    write the same files beside it meanwhile. The call then raises the
+    ``CancelledError``.
+    """
+    async with placement_lock(circuit):
+        loop = asyncio.get_running_loop()
+        copy = loop.run_in_executor(None, functools.partial(place_case, job, case, circuit))
+        try:
+            return await asyncio.shield(copy)
+        except asyncio.CancelledError:
+            while not copy.done():
+                # A second cancel is the same request; the copy still ends first.
+                with contextlib.suppress(asyncio.CancelledError):
+                    await asyncio.wait({copy})
+            if not copy.cancelled():
+                copy.exception()  # retrieved: the cancel is what the caller hears
+            raise
+
+
 def place_beside_sheet(
     circuit: Path,
     raw: Path,
     log: Path | None,
     other_raws: Mapping[str, Path] | None = None,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[Path]]:
     """Copy a run's results beside ``circuit`` under its name (``files_beside``),
     as a run in LTspice leaves them; what is there is replaced, each file
-    whole or not at all. Returns one ``{from, to, replaced}`` per file copied.
+    whole or not at all. Returns one ``{from, to, replaced}`` per file copied,
+    and each file of the circuit's beside it that this run did not write.
 
     A file of the circuit's that this run has no counterpart for (an
     ``.op.raw`` an earlier run left, say) is left where it is, and a file that
     already is the one beside the circuit is neither copied nor listed.
+    Only ``place_case`` calls this, under the checks it makes.
     """
     beside = files_beside(circuit)
     pairs = [(raw, beside.raw), (log, beside.log)]
     pairs += [(path, beside.other_raw(kind)) for kind, path in (other_raws or {}).items()]
     placed: list[dict[str, Any]] = []
+    written: set[Path] = set()
     for source, target in pairs:
         if source is None or not source.is_file():
             continue
+        written.add(target)
         replaced = target.exists()
         if replaced and os.path.samefile(source, target):
             continue
         with source.open("rb") as read, atomic_write(target, mode="wb", durable=False) as write:
             shutil.copyfileobj(read, write)
         placed.append({"from": str(source), "to": str(target), "replaced": replaced})
-    return placed
+    left = [path for path in beside.every() if path not in written and path.is_file()]
+    return placed, left
 
 
 def _names(paths: Sequence[Path]) -> str:
@@ -280,18 +319,26 @@ class Placement:
     files: list[dict[str, Any]]
     #: Each thing the placement did not check, said in full.
     not_checked: list[str] = field(default_factory=list)
+    #: Each file beside the circuit that a run of it goes to and that this
+    #: run did not write: another run's, left where it was.
+    left_in_place: list[str] = field(default_factory=list)
 
 
-def place_case(job: ExperimentJob, case: ExperimentCase, circuit: Path) -> Placement:
-    """Copy ``case``'s results beside ``circuit``, the circuit it ran
-    (``place_beside_sheet``), or raise ``NotPlaced``. Besides ``check_case``,
-    refused when the results or the circuit are gone, when the circuit has
-    changed since the job read it (by the digest taken at submission: the
-    sheet's, or the netlist's own deck), since the results would not match
-    it, and when the results file is a sheet's and the circuit is not that
-    sheet (``results_owner``).
+def check_placement(job: ExperimentJob, case: ExperimentCase, circuit: Path) -> list[str]:
+    """Whether ``case``'s results may stand beside ``circuit``, the circuit it
+    ran, as its own: raises ``NotPlaced``, or returns what the check did not
+    look at, each said in full. Besides ``check_case``, refused when the
+    results or the circuit are gone, when the circuit has changed since the
+    job read it (by the digest taken at submission: the sheet's, or the
+    netlist's own deck), since the results would not match it, and when the
+    results file is a sheet's and the circuit is not that sheet
+    (``results_owner``).
 
-    Blocking: run it off the loop, under ``placement_lock(circuit)``.
+    ``place_case`` asks this under the locks, just before it copies. A caller
+    that has something to do before the copy that a refusal would make
+    pointless (``plot_waveform`` asks LTspice's window to close a plot) may
+    ask it first; the answer under the locks is the one that holds.
+    Blocking: it reads the circuit.
     """
     check_case(job, case)
     raw = case.raw_file
@@ -309,14 +356,20 @@ def place_case(job: ExperimentJob, case: ExperimentCase, circuit: Path) -> Place
     ran = next((source.sha256 for source in job.sources if source.circuit == case.circuit), None)
     if ran is None:
         not_checked.append(
-            f"{circuit.name} was not compared with the file job {job.job_id} ran: the "
-            "job holds no record of that file's digest."
+            f"{circuit.name} was not compared with the file job {job.job_id} ran, nor were "
+            "the files it includes: the job holds no record of that file's digest."
         )
     elif sha256_file(circuit) != ran:
         raise NotPlaced(
             "sheet_changed",
             f"{circuit.name} has changed since job {job.job_id} ran it, so these results "
             f"would not match it. Run {circuit.name} again and place that run's.",
+        )
+    else:
+        # The digest is of the circuit file alone (``SourceRecord.sha256``).
+        not_checked.append(
+            f"The files {circuit.name} includes or uses (libraries, models, symbols) were "
+            f"not compared with the ones the run read: only {circuit.name} itself was."
         )
     if not is_asc(circuit):
         not_checked.append(NETLIST_WINDOW_UNCHECKED)
@@ -326,8 +379,42 @@ def place_case(job: ExperimentJob, case: ExperimentCase, circuit: Path) -> Place
                 f"name has not been recorded; they were copied to "
                 f"{files_beside(circuit).raw.name}."
             )
+    return not_checked
+
+
+def place_case(job: ExperimentJob, case: ExperimentCase, circuit: Path) -> Placement:
+    """Copy ``case``'s results beside ``circuit``, the circuit it ran
+    (``place_beside_sheet``), once ``check_placement`` lets them stand there,
+    or raise ``NotPlaced``. A file of the circuit's that this run wrote no
+    counterpart for is left where it is, and named (``left_in_place``).
+
+    Blocking, and to be run under ``placement_lock(circuit)``: only
+    ``place_checked`` calls it.
+    """
+    not_checked = check_placement(job, case, circuit)
+    raw = case.raw_file
+    assert raw is not None  # check_case refuses a case without one
     others = {kind: other_raw_path(raw, kind) for kind in case.other_raws}
-    return Placement(place_beside_sheet(circuit, raw, case.log_file, others), not_checked)
+    files, left = place_beside_sheet(circuit, raw, case.log_file, others)
+    if left:
+        not_checked.append(_left_said(circuit, left))
+    return Placement(files, not_checked, [str(path) for path in left])
+
+
+def _left_said(circuit: Path, left: Sequence[Path]) -> str:
+    """What a reply says of the circuit's files a placement left where they were.
+
+    What LTspice's window does with such a file beside a newer run's results
+    is not recorded (``tests/fixtures/ltspice_recorded/inputs/cases.toml``,
+    behaviour ``results-of-another-run-beside-a-circuit``).
+    """
+    one = len(left) == 1
+    return (
+        f"{_names([Path(path.name) for path in left])} beside {circuit.name} "
+        f"{'is' if one else 'are'} from another run and {'was' if one else 'were'} left "
+        f"in place: this run wrote no such file. What LTspice's window does with "
+        f"{'it' if one else 'them'} beside this run's results has not been recorded."
+    )
 
 
 async def place_job_beside_sheets(job: ExperimentJob) -> list[dict[str, Any]]:
@@ -346,10 +433,9 @@ async def place_job_beside_sheets(job: ExperimentJob) -> list[dict[str, Any]]:
             continue
         circuit = case.circuit_path
         try:
-            async with placement_lock(circuit):
-                # Shielded as the jobs action's copy is: a job stopped now
-                # cannot leave a circuit with some of a run's files.
-                placed = await asyncio.shield(asyncio.to_thread(place_case, job, case, circuit))
+            # A job stopped now cannot leave a circuit with some of a run's
+            # files, nor its locks taken by another copy while this one runs.
+            placed = await place_checked(job, case, circuit)
         except NotPlaced as exc:
             observations.append(_not_placed(job, case, str(exc), code=exc.code))
             continue
@@ -439,6 +525,8 @@ def _placed(case: ExperimentCase, circuit: Path, placement: Placement) -> dict[s
     if placement.not_checked:
         detail += " " + " ".join(placement.not_checked)
         evidence["not_checked"] = list(placement.not_checked)
+    if placement.left_in_place:
+        evidence["left_in_place"] = list(placement.left_in_place)
     return {
         "code": "results_placed_beside_sheet",
         "kind": "provenance",

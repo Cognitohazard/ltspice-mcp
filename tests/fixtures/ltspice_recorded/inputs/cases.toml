@@ -956,6 +956,11 @@ summary = "What LTspice's window does with results beside a netlist: a netlist o
 model = ["lib/sheet_results.py"]
 pending = "Needs a window: tests/ltspice_bridge_recorder.py records it once it asks these questions of a netlist on LTspice 26. LTspice XVII has no bridge to find the window through, so its part needs another way to ask its window."
 
+[behaviour.results-of-another-run-beside-a-circuit]
+summary = "What LTspice's window does with a circuit's result file that a placement left beside it from another run, next to a newer run's results and log: an .op.raw or .fra_1.raw an earlier run left beside a sheet whose newer run wrote none (whether the sheet's commands open it, and as which run's), and the same beside a netlist. Until recorded, a reply that left such a file names it and says this is not recorded (sheet_results.place_case, left_in_place), and no code assumes it."
+model = ["lib/sheet_results.py"]
+pending = "Needs a window: tests/ltspice_bridge_recorder.py records it once it opens a sheet with an earlier run's .op.raw beside a newer run's results on LTspice 26. LTspice XVII has no bridge to find the window through, so its part needs another way to ask its window."
+
 [behaviour.sheet-closed-from-outside]
 summary = "What a sheet does when its pane is told to close: one nobody changed closes without a question, with the plot opened from it, and opened again opens results put beside it while it was open; one the bridge handed new text is asked about in a box (its words recorded) even when the text is back to the file's, the frame takes no input while it asks, the bridge still reads the sheet, Cancel leaves it open as it was, and No closes it without writing the file. One whose window copy differs from the file is asked about the same way, No closes it with the file as it was, and opened again the window holds the file."
 model = ["lib/ltspice_frame.py", "lib/ltspice_window.py", "tools/analysis.py", "tools/schematic_edit.py"]
