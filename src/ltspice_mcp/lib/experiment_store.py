@@ -150,8 +150,8 @@ def request_cancellation(
 
     The gate's promise: once this returns, no case of the job passes the gate
     (``ExperimentRunner._submit_case_under_cancel_gate``), and every case that
-    passed it before is one the job's owner stops when it reads the marker,
-    before its simulator starts or by killing it. A launch holds the gate only
+    passed it before and is still running when the job's owner reads the
+    marker is stopped by it, before its simulator starts or by killing it. A launch holds the gate only
     for its decision, so this waits on no launch, no record write and no event
     loop (``tests/test_loop_waits.py``): at most the lock's own timeout behind
     another decision or cancel.

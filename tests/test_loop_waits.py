@@ -294,8 +294,9 @@ def test_the_cancel_gate_holds_no_wait_on_the_loop_or_a_write():
 #: Every place that uses ``experiment_store.save_job``. A job the registry
 #: keeps is written through its writes, one at a time per job in the order
 #: asked for (``JobRegistry._persist_locks``), where an older write cannot land
-#: on top of a newer one; a write outside them could. Each other use writes a record no ordered write of the job can be in
-#: flight for, and says why. A new use fails here until it is listed.
+#: on top of a newer one; a write outside them could. Each other use writes a
+#: record no ordered write of the job can be in flight for, and says why. A new
+#: use fails here until it is listed.
 _SAVE_JOB_USES: dict[str, str] = {
     "lib/job_registry.py:JobRegistry._persist_async.persist": (
         "The registry's strict write, under the job's write lock."
@@ -310,15 +311,15 @@ _SAVE_JOB_USES: dict[str, str] = {
     ),
     "lib/experiment_resume.py:_persist_discovery": (
         "A recoverable job's first record under its new owner, at admission, "
-        "adoption or a resume's child, written before its coordinator starts: "
-        "no ordered write of it has been asked for yet."
+        "adoption or a resume's child, written before its coordinator starts, "
+        "so this owner has asked for no ordered write of it yet. On adoption the "
+        "registry may still hold the dead owner's reconciled record; its write "
+        "(``persist_reconciled``) re-reads under the lineage's recovery lock and "
+        "skips the save once the owner has changed."
     ),
     "lib/experiment_runner.py:ExperimentRunner._claim_request_id": (
         "A job's first record, written at admission inside the request gate "
         "before its coordinator starts: no ordered write of it exists yet."
-    ),
-    "lib/experiment_runner.py:ExperimentRunner._record_index_note.save": (
-        "Only with persistence off, when the registry writes nothing."
     ),
 }
 

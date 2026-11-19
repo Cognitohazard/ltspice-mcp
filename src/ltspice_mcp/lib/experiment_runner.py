@@ -947,28 +947,19 @@ class ExperimentRunner(RunnerBase):
     async def _record_index_note(request: ExperimentRunRequest, candidate: ExperimentJob) -> None:
         """Write the note that the circuit index failed onto the job's record.
 
-        Through the registry's writes when it keeps records, which write a
-        job's record one at a time, in the order asked for
-        (``JobRegistry._persist_locks``), so this write cannot land on top of
-        a newer one. With persistence off the registry writes nothing, so
-        this is the only writer of the record then. A
-        failure is logged: losing a note is no reason to fail a job that exists
-        and can run, and the note still reaches this submission's receipt.
+        Through the registry's writes, which write a job's record one at a
+        time, in the order asked for (``JobRegistry._persist_locks``), so the
+        record has one writer and this write cannot land on top of a newer one.
+        Admission runs only with persistence on (``_submission_pipeline``).
+        Waited for, so the record carries the note when the submission
+        answers. A failure is logged by the registry: losing a note is no
+        reason to fail a job that exists and can run, and the note still
+        reaches this submission's receipt.
         """
         registry = request.state.job_registry
-        if registry.persist_enabled:
-            registry.persist_job(candidate)
-            return
-
-        def save() -> None:
-            try:
-                experiment_store.save_job(candidate)
-            except OSError:
-                logger.warning(
-                    "could not record the circuit-index failure on %s", candidate.job_id
-                )
-
-        await asyncio.to_thread(save)
+        before = set(registry.pending_writes(candidate.job_id))
+        registry.persist_job(candidate)
+        await asyncio.gather(*(set(registry.pending_writes(candidate.job_id)) - before))
 
     def discard_staged_run_dir(self, request: ExperimentRunRequest, working_dir: Path) -> None:
         """Remove the run tree of a submission that staged and then failed.
@@ -1586,9 +1577,10 @@ class ExperimentRunner(RunnerBase):
             # write or on the loop (``tests/test_loop_waits.py``). A cancel from
             # another process writes its marker under this lock, so it either
             # comes first and this case never passes, or comes after and finds
-            # the case stamped: its owner reads the marker, stops the job, and
-            # the case is refused at its launch record or killed once started,
-            # as for a cancel made in this process. Held across the launch, the
+            # the case stamped: its owner reads the marker and stops the job;
+            # a recoverable case is refused at its launch record, and a case
+            # whose simulator started is killed, as for a cancel made in this
+            # process. Held across the launch, the
             # lock made every other launch of the job, and every cancel, wait
             # for this launch's record write.
             with file_lock(Store(working_dir).cancellation_lock(job_id)):

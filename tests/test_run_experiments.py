@@ -745,6 +745,40 @@ class TestPostClaimFailures:
         assert _observation_code(data, "experiment_index_write_failed") is not None
         assert experiment_store.load_request_index("unwritable-index", work_dir) is not None
 
+    async def test_the_index_note_is_on_the_record_when_the_submission_answers(
+        self,
+        state_with_sim: SessionState,
+        work_dir: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        """The circuit index fails, so the job gets a note about it, written
+        through the registry's writes of the job: the record on disk carries
+        the note when the submission answers."""
+        # The case is held at the simulator, so no later write of the job can
+        # put the note on the record in place of the one under test.
+        held: list[Callable[[], None]] = []
+        fake_simulator(monkeypatch, delay_s=None, held=held)
+
+        def unwritable_index(*_args, **_kwargs):
+            raise OSError(errno.EROFS, "read-only file system")
+
+        monkeypatch.setattr(experiment_store, "register_circuits", unwritable_index)
+        deck = _deck(work_dir / "index-note.cir")
+        data = _assert_schema(
+            await handle_run_experiments(_args(deck, "index-note", wait_s=0), state_with_sim)
+        )
+        try:
+            persisted = experiment_store.load_job(data["job_id"], work_dir)
+            assert persisted is not None
+            assert any(
+                item.get("code") == "experiment_index_write_failed"
+                for item in persisted.observations
+            )
+        finally:
+            await await_until(lambda: len(held) == 1, what="the case to reach the simulator")
+            held[0]()
+            await state_with_sim.settled()
+
     async def test_a_failure_after_the_claim_is_not_reported_as_not_started(
         self,
         state_with_sim: SessionState,
