@@ -78,6 +78,7 @@ from ltspice_mcp.lib.raw_parser import (
     result_digest,
 )
 from ltspice_mcp.lib.recovery_records import LaunchIntent, RecoveryError
+from ltspice_mcp.lib.redirect import same_location
 from ltspice_mcp.lib.result_observations import (
     Observation,
     deck_observation_inputs,
@@ -1329,7 +1330,9 @@ class ExperimentRunner(RunnerBase):
         root = Store(execution.request.state.working_dir).lineage_run_dir(
             recovery.root_job_id, job.output_folder, self.simulator_class
         )
-        if case.recovery.inputs.lineage_root != root:
+        # By location, not spelling: the recorded root was spelled when the
+        # case was frozen, possibly by another process (``same_location``).
+        if not same_location(case.recovery.inputs.lineage_root, root):
             raise RecoveryError("recovery_path_escape", "Case inputs name a different lineage")
         verify_execution_policy(recorded, self.simulator_class)
         verify_case_inputs(

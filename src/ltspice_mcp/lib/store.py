@@ -88,7 +88,7 @@ from typing import Any
 
 from ltspice_mcp.lib import atomic_write_json as _atomic_write_json
 from ltspice_mcp.lib import now
-from ltspice_mcp.lib.redirect import redirect_below, same_location
+from ltspice_mcp.lib.redirect import canonical, redirect_below, same_location
 
 logger = logging.getLogger(__name__)
 
@@ -239,11 +239,9 @@ def user_home() -> Path:
 
 
 def _resolved(path: Path) -> Path:
-    """``path`` resolved, or made absolute when it cannot be (a symlink loop)."""
-    try:
-        return path.resolve()
-    except (OSError, RuntimeError):
-        return path.absolute()
+    """``path`` in the one spelling every store path takes (``redirect.canonical``):
+    resolved, and the same whatever a peer creates, removes or replaces meanwhile."""
+    return canonical(path)
 
 
 def file_key(path: Path) -> str:
@@ -637,7 +635,7 @@ class Store:
     @property
     def experiments_dir(self) -> Path:
         """Where the job records live. One directory, one record kind."""
-        return (self.root / "experiments").resolve()
+        return _resolved(self.root / "experiments")
 
     def job_record(self, job_id: str) -> Path:
         """The durable record for one experiment job."""
@@ -663,10 +661,7 @@ class Store:
         so two sessions recording jobs for the same circuit cannot lose each
         other's entry to a read-modify-write race.
         """
-        try:
-            resolved = str(circuit_path.resolve())
-        except OSError:
-            resolved = str(circuit_path)
+        resolved = str(_resolved(circuit_path))
         return self.experiments_dir / "by-circuit" / path_digest(resolved)
 
     def circuit_index(self, circuit_path: Path, job_id: str) -> Path:
@@ -856,7 +851,7 @@ class Store:
 
     @property
     def results_dir(self) -> Path:
-        return (self.root / "results").resolve()
+        return _resolved(self.root / "results")
 
     def result_set(self, result_set_id: str) -> Path:
         """One immutable ``analyze_results`` set."""
@@ -926,10 +921,7 @@ class Store:
     def parser_dir(self, parse_id: str) -> Path:
         """One parser process's temporary capture and numeric output directory."""
         name = _validate_name(parse_id, "parser id")
-        # Made absolute and its ``..`` parts folded by spelling, not resolved:
-        # on Windows resolving a folder a peer parse is creating at that moment
-        # can keep the ``\\?\`` prefix on.
-        base = Path(os.path.abspath(self.root / "parsing"))
+        base = _resolved(self.root / "parsing")
         candidate = base / name
         if redirect_below(candidate, base) is not None:
             raise StoreError("Parser directory must not redirect to another location")

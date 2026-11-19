@@ -9,7 +9,6 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-import os
 import secrets
 from collections.abc import Mapping
 from dataclasses import asdict, replace
@@ -38,7 +37,7 @@ from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATU
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.raw_parser import has_valid_raw_header, other_raws, result_digest
 from ltspice_mcp.lib.recovery_records import CaseRecovery, JobRecovery, RecoveryError
-from ltspice_mcp.lib.redirect import redirect_below, same_location
+from ltspice_mcp.lib.redirect import canonical, redirect_below, same_location
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name, raw_extension_for
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable, reported_build
 from ltspice_mcp.lib.store import (
@@ -297,9 +296,7 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
 def save_job(job: ExperimentJob) -> Path:
     """Persist an experiment at its validated working-store path."""
     validate_job_id(job.job_id)
-    # Not resolved: the record's folder exists, and on Windows resolving it
-    # while a peer creates the store can keep the ``\\?\`` prefix on.
-    root = Path(os.path.abspath(job.store_path.parent))
+    root = canonical(job.store_path.parent)
     expected = root / f"{job.job_id}.json"
     # Whether the record redirects is answered from what is on disk: a writer
     # of the same job may create or replace the file at this moment, which on
@@ -730,7 +727,7 @@ def load_job_from_path(path: Path, working_dir: Path) -> ExperimentJob | None:
     store = Store(working_dir)
     resolved = store.experiments_dir / path.name
     if (
-        not same_location(Path(os.path.abspath(path.parent)), store.experiments_dir)
+        not same_location(canonical(path.parent), store.experiments_dir)
         or redirect_below(resolved, store.experiments_dir) is not None
     ):
         raise ValueError(f"Experiment record is outside the working store: {path}")
