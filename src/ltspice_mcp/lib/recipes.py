@@ -68,6 +68,8 @@ REDUCIBLE_FIELDS: dict[str, tuple[str, ...]] = {
     # spread of phase_deg straddling it would show.
     "tone": ("amplitude", "phase_deg", "dc", "sin_component", "cos_component"),
     "return_loss": ("return_loss_db", "vswr", "reflection_coefficient"),
+    # steps_below is a row's only with threshold_s (TimeStepsRecipe.reducible_fields).
+    "time_steps": ("min_step", "median_step", "max_step", "points", "zero_steps", "steps_below"),
 }
 
 # The result-row key a reducible field reads, where the two names differ. A
@@ -620,6 +622,29 @@ class ToneRecipe(MultiRecipe):
         return self
 
 
+class TimeStepsRecipe(MultiRecipe):
+    metric: Literal["time_steps"]
+    threshold_s: float | str | None = Field(
+        default=None,
+        description="Seconds; counts the steps shorter than this, and where the first and last start.",
+    )
+    window: Window | None = None
+
+    @field_validator("threshold_s")
+    @classmethod
+    def _positive_threshold(cls, value: float | str | None) -> float | str | None:
+        number = step_number(value)
+        if value is not None and (number is None or not number > 0):
+            raise ValueError(f"threshold_s must be a positive time in seconds; got {value!r}")
+        return value
+
+    def reducible_fields(self) -> tuple[str, ...]:
+        fields = super().reducible_fields()
+        if self.threshold_s is None:
+            return tuple(name for name in fields if name != "steps_below")
+        return fields
+
+
 class BodeFilterRecipe(MultiRecipe):
     metric: Literal["bode_filter"]
     signal: str
@@ -766,6 +791,7 @@ Recipe: TypeAlias = Annotated[
     | TransientResponseRecipe
     | ThdRecipe
     | ToneRecipe
+    | TimeStepsRecipe
     | BodeFilterRecipe
     | BodePointRecipe
     | BodeCrossingRecipe

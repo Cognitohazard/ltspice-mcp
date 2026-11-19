@@ -74,6 +74,8 @@ samples yourself only what no recipe answers.
 - A step response (rise, overshoot, settling): `transient_response`.
 - The `.meas` values of each run, failed ones named: `measurements`.
 - A loop's gain and phase margin: `stability`.
+- Which run collapsed its time step, and where: `time_steps` (guide section
+  'signals').
 
 `api.reference("analyze_results")` lists every recipe.
 

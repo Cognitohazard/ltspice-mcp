@@ -17,7 +17,7 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, TypeVar
 
 import numpy as np
 
@@ -60,6 +60,7 @@ from ltspice_mcp.lib.result_observations import (
     coarse_waveform_observation,
     compressed_transient,
     compressed_xvii_observation,
+    deck_ngspice_interp,
     deck_tran_max_step,
 )
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name
@@ -303,6 +304,142 @@ def compression_drops_points(source: AnalysisSource, raw: DecodedRaw) -> bool:
     return found is not None and found.generation == "xvii"
 
 
+#: Which of its solver's time points a transient's file holds, as
+#: :func:`stored_time_points` answers: every point the solver accepted, points
+#: on the print step, fewer points than it accepted, or not checked.
+StoredTimePoints = Literal["accepted", "print_step", "reduced", "not_checked"]
+
+
+@dataclass(frozen=True)
+class TimePointsStored:
+    """:func:`stored_time_points`' answer: what the file holds, and, for any
+    answer but ``accepted``, the sentence that says what that leaves out."""
+
+    stored: StoredTimePoints
+    why: str | None = None
+
+
+#: What the recordings show of LTspice XVII under waveform compression: the
+#: one that stores fewer points than the solver accepted
+#: (``raw/compress_1mv``, ``raw/compress_1mv_off``).
+_XVII_REDUCED = (
+    "LTspice XVII saved this run with waveform compression on, which stores fewer "
+    "points than its solver accepted (in the recorded raw/compress_1mv, 13 of the 1078 "
+    "its log counts as accepted), so these steps are between stored points, not the "
+    "solver's own. Whether the smallest of them bounds the solver's smallest step from "
+    "above is not established: some stored times are not times the solver accepted in "
+    "the same run uncompressed. '.options plotwinsize=0' stores every accepted point."
+)
+
+
+def _saved_from(raw: DecodedRaw) -> float | None:
+    """The time a transient's first step starts storing at, when it is after
+    zero: a ``.tran`` start time leaves out every point before it. None when
+    the run stores from zero, or its axis cannot be read."""
+    try:
+        axis = np.asarray(raw.get_axis(0))
+    except (ResultError, ValueError, IndexError):
+        return None
+    if axis.size == 0 or not np.isfinite(axis[0]):
+        return None
+    first = float(np.real(axis[0]))
+    return first if first > 0 else None
+
+
+def stored_time_points(source: AnalysisSource, raw: DecodedRaw) -> TimePointsStored:
+    """Which of its solver's time points the transient ``raw`` from ``source``
+    holds. The one answer every reader of a transient's steps asks.
+
+    - A run whose first stored point is after zero (a ``.tran`` start time)
+      holds none of the points before it: every answer says so, and one that
+      would be ``accepted`` is ``not_checked``.
+    - LTspice: XVII with waveform compression on stores fewer than it accepted
+      (:func:`compression_drops_points`). XVII with it off stores as many as
+      its log counts as accepted (``raw/compress_1mv_off``,
+      ``raw/tran_uncompressed``). LTspice 26 logs no count to compare with, and
+      a build not shown is not claimed: both are not checked.
+    - ngspice: every accepted time point, and none it rejected (measured on
+      ngspice-42 with ``.options acct``), or under ``.options interp`` points on
+      the print step, read from the run's deck
+      (``result_observations.deck_ngspice_interp``); not checked without a
+      deck, or where the deck holds a card that answer does not read.
+    - Any other simulator: not checked.
+
+    Blocking: it may read the run's deck, log and raw headers."""
+    found = _stored_points_by_simulator(source, raw)
+    start = _saved_from(raw)
+    if start is None:
+        return found
+    late = (
+        f"This run's first stored point is at t = {start:.6g} s, as a .tran start time "
+        "leaves it, so no point before then is in the file and no step before it is read."
+    )
+    if found.stored == "accepted":
+        return TimePointsStored(
+            "not_checked",
+            f"{late} Whether it holds every point its solver accepted after it is not checked.",
+        )
+    return TimePointsStored(found.stored, f"{found.why} {late}")
+
+
+def _stored_points_by_simulator(source: AnalysisSource, raw: DecodedRaw) -> TimePointsStored:
+    """:func:`stored_time_points` for a run that stores from zero."""
+    producer = source.producer or source_producer(
+        source, read_dialect=raw.dialect, reported=reported_build(source.log, source.raw)
+    )
+    family = producer.family or raw.dialect
+    if family == "ltspice":
+        if compression_drops_points(source, raw):
+            return TimePointsStored("reduced", _XVII_REDUCED)
+        found = which_ltspice(producer.program, producer.build)
+        if found is not None and found.generation == "xvii" and not compressed_transient(raw):
+            return TimePointsStored("accepted")
+        if found is None:
+            why = (
+                "the build that wrote it is not known, so neither whether waveform "
+                "compression dropped points nor the solver's count is known. LTspice XVII "
+                "stores fewer points than it accepts with compression on, and "
+                "'.options plotwinsize=0' turns it off"
+            )
+        elif found.generation == "xvii":
+            why = "this LTspice XVII run's points could not be compared with its solver's"
+        else:
+            why = (
+                f"this build ({found.evidence}) logs no count of the steps its solver "
+                "accepted, so the stored points cannot be compared with one"
+            )
+        return TimePointsStored(
+            "not_checked",
+            f"Whether this file holds every step LTspice's solver accepted is not checked: {why}.",
+        )
+    if family == "ngspice":
+        if source.netlist is None:
+            interp, unread = None, "the run's deck is not known to the server"
+        else:
+            interp, unread = deck_ngspice_interp(source.netlist)
+        if interp:
+            return TimePointsStored(
+                "print_step",
+                "The deck sets '.options interp', so ngspice stored this run interpolated "
+                "onto the print step instead of at the time points its solver accepted: "
+                "these steps are the print step's and say nothing of the solver's. Drop "
+                "the option to store every accepted point.",
+            )
+        if interp is None:
+            return TimePointsStored(
+                "not_checked",
+                "Whether ngspice stored every time point its solver accepted or, under "
+                f"'.options interp', points on the print step is not checked: {unread}.",
+            )
+        return TimePointsStored("accepted")
+    name = family or "the simulator that wrote it"
+    return TimePointsStored(
+        "not_checked",
+        f"Which of its solver's time points {name} stores in a transient's file is not "
+        "established, so whether these are every step it accepted is not checked.",
+    )
+
+
 def coarse_waveform(source: AnalysisSource, raw: DecodedRaw) -> dict[str, float] | None:
     """Whether waveform compression left ``raw``'s transient coarse
     (``coarse_compressed_waveform``), judged against the maximum step of the
@@ -519,8 +656,18 @@ def experiment_run_context(
     as its run row's ``other_raws`` lists it, and raises
     :class:`OtherRawNotWritten` when the run wrote none.
     """
-    job_id = job.job_id
-    # Per-case readiness is still gated case by case below.
+    case = experiment_case(job, run_index=run_index, case_id=case_id)
+    return case_run_context(job, case, state, require_raw=require_raw, other_raw=other_raw)
+
+
+def experiment_case(
+    job: ExperimentJob, *, run_index: int | None = None, case_id: str | None = None
+) -> ExperimentCase:
+    """The case of ``job`` that ``case_id``, else ``run_index`` (default 0),
+    names, once the job's runs can be read (``runs_unready``); the selection
+    ``experiment_run_context`` reads. Raises ``ResultError``.
+    """
+    # Per-case readiness is gated case by case by ``case_run_context``.
     unready = runs_unready(job)
     if unready is not None:
         raise ResultError(unready)
@@ -534,8 +681,8 @@ def experiment_run_context(
     ]
     if not matches:
         selector = f"case_id={case_id!r}" if case_id is not None else f"run_index={run_index}"
-        raise ResultError(f"Experiment job {job_id!r} has no case matching {selector}")
-    return case_run_context(job, matches[0], state, require_raw=require_raw, other_raw=other_raw)
+        raise ResultError(f"Experiment job {job.job_id!r} has no case matching {selector}")
+    return matches[0]
 
 
 def case_run_context(

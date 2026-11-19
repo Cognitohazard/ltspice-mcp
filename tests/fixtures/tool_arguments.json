@@ -59,6 +59,7 @@
       "recipes[].spec.allow_incomplete",
       "recipes[].spec.max",
       "recipes[].spec.min",
+      "recipes[].threshold_s",
       "recipes[].title",
       "recipes[].to",
       "recipes[].to.edge",

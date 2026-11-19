@@ -1,0 +1,10 @@
+* a transient that fights for convergence at a sharp edge and finishes
+V1 in 0 PWL(0 0 1u 0 1.000000001u 100 3u 100 3.000000001u 0)
+R1 in a 1
+D1 a out dhard
+C1 out 0 1p
+R2 out 0 1meg
+.model dhard D(is=1e-30 n=0.2)
+.options plotwinsize=0
+.tran 0 5u 0 1n
+.end

@@ -32,7 +32,16 @@ point, a `.tf`, or a stepped `.op` or one-frequency `.ac`, which hold one point
 a step) has no chart: it is refused with `no_axis`, which says what the plot
 holds and where its values are read, and with `in_ltspice` it is opened in
 LTspice without a chart, with no traces named for it and a `no_chart`
-observation.
+observation. With `in_ltspice`, a job's run of a sheet is put beside the sheet
+by the copy `jobs(action="place_beside_sheet")` makes, with its checks and
+locks, and opened from the sheet; the `ltspice` block then carries that copy's
+`not_checked` and `left_in_place`. Where the copy is refused (the sheet changed
+since the run or is gone, the case's results are not there, or the run was
+not LTspice's), or another server process held the sheet past the lock's wait
+(`sheet_locked`), nothing is put beside the sheet, the run opens on its own as
+a netlist's run does, and the block's `not_placed` gives the `code` and
+`message`. If LTspice's window had already closed a plot of the sheet's
+results for the copy, the `note` says so.
 
 An eighth tool, `run_code`, is always registered and is served unless the
 operator sets `[tools] run_code = false`. It runs a Python snippet in a warm
@@ -1185,13 +1194,22 @@ the echoed `action`:
   sheet or netlist, under its name, where LTspice keeps them
   (`sheet_results.files_beside`): the raw, the log, and each other raw the run
   wrote (`<name>.op.raw`). It returns `{case_id, sheet, files, assignments,
-  not_checked}`, `sheet` naming the circuit and `not_checked` what the copy did
-  not check, with
+  not_checked, left_in_place}`, `sheet` naming the circuit and `not_checked`
+  what the copy did not check, with
   one `{from, to, replaced}` per file copied; `assignments` is what the
-  case's variations set, which the sheet does not show. `case_id` may be left
+  case's variations set, which the sheet does not show. `not_checked` always
+  says that the files the circuit includes or uses were not compared with the
+  ones the run read, since only the circuit file is. `left_in_place` names
+  each of the circuit's result files beside it that this run did not write
+  (an `.op.raw` an earlier run left, say): it is not removed, and
+  `not_checked` says that what LTspice's window does with it is not recorded.
+  `case_id` may be left
   out of a job that ran one case (otherwise `case_id_required`). The copy is
-  made under the circuit's lock and then the results file's, and the job
-  keeps its own. A case that
+  made under the circuit's lock and then the results file's, held until the
+  copy has ended even when the call is cancelled, and the job
+  keeps its own. Every placement takes this one path
+  (`sheet_results.place_checked`): this action, `execution.results_beside_sheet`
+  and `plot_waveform` with `in_ltspice`. A case that
   produced no results (`case_not_produced`) or whose results are no longer
   there (`results_missing`), a case of a job whose runs are not all terminal
   yet (`job_not_terminal`, as every read of a job's runs is refused until
@@ -2791,6 +2809,7 @@ it, and reported when the caller names it.
 | `transient_response` | tran | `signal`, `mode: "step"\|"disturbance"` | `input` is required for `disturbance` and rejected for `step`; `window?` |
 | `thd` | tran | `signal` | `fundamental_hz?`, `harmonics?` (default 7, held to 50), `window?` |
 | `tone` | tran | `signal`, exactly one of `frequency_hz` / `frequency_param` | `frequency_param` names a parameter whose value at the step read (its `.step` value) or else the case's assignment is that run's frequency; a run with neither is refused. `window?`; cut to the whole periods of `frequency_hz` that fit from the window's first sample and resampled by linear interpolation onto evenly spaced times, as `thd` does by default, so samples weigh by time. `amplitude` (peak, signal unit), `phase_deg` in (-180, 180] for `dc + amplitude*sin(2*pi*f*t + phase_deg)` with `t` the run's own time from zero, `sin_component`, `cos_component`, `dc`, plus `t_start`, `t_end`, `n_cycles`. Reducible leaves: `amplitude`, `phase_deg`, `dc`, `sin_component`, `cos_component`; a spread of `phase_deg` that straddles 180 degrees reduces the wrapped value, the components do not wrap. A ratio `A/B` (or `1/A`) is the phasor of `A` over that of `B` over the same whole periods: `amplitude` is the gain, `phase_deg` the shift, the components the quotient's real and imaginary parts, and there is no `dc`; a denominator with no component at the frequency is refused as singular, and one with under 1e-3 of its peak there is warned of |
+| `time_steps` | tran | — | reads the time axis, so no `signal`; `threshold_s?`, `window?`. Per run and per step: `points`, `min_step` and `min_step_at` (where it starts), `max_step`, `median_step`, `zero_steps` (pairs of stored points at one time, never a step), `t_start`, `t_end`; with `threshold_s`, `steps_below`, `first_below_at`, `last_below_at`. `stored` is `services.stored_time_points`' answer: `accepted`, `reduced` (LTspice XVII under waveform compression), `print_step` (ngspice under `.options interp`, read from the deck and the option cards ngspice reads, `ngspice_driver.read_option_cards`) or `not_checked` (LTspice 26, an unknown build or simulator, an unread card, or a run saved from a `.tran` start time), and every answer but `accepted` adds a `time_steps_coverage` observation (kind `coverage`) to the reply. ngspice stores no step it rejected (measured with `.options acct`); for LTspice that is not established. Reducible leaves: `min_step`, `median_step`, `max_step`, `points`, `zero_steps`, and `steps_below` with `threshold_s` |
 | `bode_filter` | ac | `signal` | filter characteristics: fc, bw, Q, type; a cutoff is read at the half-power level (-3.0103 dB) below the passband |
 | `bode_point` | ac | `signal`, `at_hz` | gain and phase at a frequency |
 | `bode_crossing` | ac | `signal`, exactly one of `level_db` / `level_deg`; `ref_hz` with `level_db` | `level_deg` scans the unwrapped phase, so a crossing past 180 degrees is found once rather than at every wrap; `phase_deg` remains accepted as an alias. `ref_hz` measures `level_db` from the gain at that frequency, read as `bode_point` reads it, so the half-power point below a reference is one call; the value's `level` is then the absolute level crossed, and its `reference` gives `frequency_hz`, `magnitude_db` and the relative `level_db`. A `ref_hz` outside the sweep is refused |

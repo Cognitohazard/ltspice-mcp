@@ -664,11 +664,13 @@ class OpenWindows:
             )
         return True
 
-    def results_from_sheet(self, sheet: Path, place: Callable[[], None]) -> Shown:
+    def results_from_sheet(self, sheet: Path, place: Callable[[bool], None]) -> Shown:
         """Open the results beside ``sheet`` from the sheet, tied to it. Blocks.
 
         ``place`` is called to put the results beside the sheet, and the
-        sheet's Visible Traces command then opens them. The window's own copy
+        sheet's Visible Traces command then opens them. It is told whether a
+        pane of the results beside the sheet was closed for it (below), so a
+        caller whose ``place`` raises still knows what the window lost. The window's own copy
         of the sheet is handed back when it already had the sheet open, as
         ``open_sheet`` does. For a caller who was asked to show them, so
         LTspice is started when no window is open.
@@ -699,13 +701,13 @@ class OpenWindows:
         """
         return self._starting(lambda: self._results_from_sheet(sheet, place))
 
-    def _results_from_sheet(self, sheet: Path, place: Callable[[], None]) -> Shown:
+    def _results_from_sheet(self, sheet: Path, place: Callable[[bool], None]) -> Shown:
         results = results_beside(sheet)
         with self._session(waits=_CLOSED_S) as session:
             window, spelled = self._holder(session, sheet)
             held = None if spelled is None else session.design_text(spelled)
             reopened = self._close_results(session, window.pid, results)
-        place()
+        place(reopened)
         if held is None:
             if self._open_from_sheet(window.pid, sheet, _OPENED_S):
                 return Shown(window, reopened=reopened, tied=True)
