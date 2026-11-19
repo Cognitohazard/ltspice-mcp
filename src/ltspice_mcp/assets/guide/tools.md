@@ -149,9 +149,9 @@ attach the recipe that reads it back:
 The simulator computes the scalar and the `measurements` recipe reads it back
 from the log, parsed and with SI units. Each case's row contains it as
 `value.measured.vout_dc`. A null there is named by why:
-`value.failed_measurements` if LTspice printed the `.meas` failed,
-`value.unreadable` if it printed something other than a number, and
-`value.not_finite` if it printed a number that is not finite. On ngspice, measure the trace with a
+`value.failed_measurements` if LTspice printed the `.meas` failed, and
+`value.unreadable` if it printed something other than a finite number, which
+its reason quotes (`infdB`). On ngspice, measure the trace with a
 recipe instead (guide section 'ngspice'). An `assign` target must exist in the
 deck. If the deck restricts what it saves, `.save` every signal a `.meas` uses;
 lint blocks a mismatch. A case that produced nothing is counted in

@@ -205,8 +205,11 @@ def test_nonfinite_log_numbers_remain_null_and_are_explicit(tmp_path):
     assert summary["measurements"]["bad"]["values"] == [None]
     assert summary["fourier"][0]["thd"] is None
     assert "temp_c" not in summary
-    for section in ("temperatures", "measurements", "fourier"):
+    for section in ("temperatures", "fourier"):
         assert any(section in w and "non-finite" in w for w in summary["warnings"])
+    # A measurement's says what the log printed, on its own entry: the
+    # measurement decoder holds it as null itself (log_parser.parse_measurements).
+    assert "'nan'" in summary["measurements"]["bad"]["unreadable"]["reason"]
 
 
 def test_failed_meas_and_diagnostics_reach_reconciliation(tmp_path):

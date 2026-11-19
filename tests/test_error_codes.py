@@ -504,6 +504,7 @@ FROZEN_ERROR_CODES = (
     "detached_owner",
     "device_op_log_precision",
     "device_op_points_absent",
+    "device_table_request_unknown",
     "downsampled",
     "duplicate_assignment_target",
     "duplicate_circuit_id",

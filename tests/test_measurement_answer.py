@@ -34,6 +34,7 @@ from typing import Any, cast
 
 import pytest
 
+from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.log_parser import (
     MeasurementAnswer,
     answered_measurements,
@@ -45,6 +46,7 @@ from ltspice_mcp.lib.log_parser import (
     read_log_text,
     result_unreadable,
 )
+from ltspice_mcp.lib.metrics import measurements_at_step
 from ltspice_mcp.lib.simulator_build import Producer, log_banner_build
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
@@ -167,26 +169,73 @@ def _inspect_fields(item: dict[str, Any]) -> dict[str, str | None]:
     return {row["measurement"]: row.get("answer") for row in item["data"].get("measurements", [])}
 
 
+#: What each route says beside a measurement's value, by route and
+#: measurement: its ``unreadable`` (what the log printed where a number
+#: belongs, and why that is no number) and its ``printed_once`` (a value the
+#: log printed once for a run of several steps: how many, and which step's it
+#: is where that is established). Filled by :func:`_every_route`.
+Said = dict[str, dict[str, dict[str, Any]]]
+
+#: The statements :data:`Said` collects.
+_STATEMENTS = ("unreadable", "printed_once")
+
+
+def _say(said: dict[str, dict[str, Any]], name: str, holder: dict[str, Any]) -> None:
+    for key in _STATEMENTS:
+        if key in holder:
+            said.setdefault(name, {})[key] = holder[key]
+
+
+def _entries_said(entries: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    said: dict[str, dict[str, Any]] = {}
+    for name, entry in entries.items():
+        _say(said, name, entry)
+    return said
+
+
+def _recipe_said(reply: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    said: dict[str, dict[str, Any]] = {}
+    for row in reply["results"]["m"].get("values", []):
+        for key in _STATEMENTS:
+            for name, statement in row["value"].get(key, {}).items():
+                said.setdefault(name, {})[key] = statement
+    return said
+
+
+def _inspect_said(item: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    said: dict[str, dict[str, Any]] = {}
+    for row in item["data"].get("measurements", []):
+        _say(said, row["measurement"], row)
+    return said
+
+
 async def _every_route(
-    build: str, case_id: str, state: SessionState, directory: Path, fields: Fields | None = None
+    build: str,
+    case_id: str,
+    state: SessionState,
+    directory: Path,
+    fields: Fields | None = None,
+    said: Said | None = None,
 ) -> dict[str, dict[str, Answer]]:
     """Each measurement's result per step, by route: the measurements recipe,
     the summary recipe, ``inspect``'s measurements view and the Python API,
     each over the log's path and over a job. ``fields``, when given, gets the
-    field each route that names one says holds the result."""
+    field each route that names one says holds the result, and ``said`` what
+    each route says beside it (:data:`Said`)."""
     deck, raw, log = _stage(build, case_id, directory)
     routes: dict[str, dict[str, Answer]] = {}
     named: Fields = {} if fields is None else fields
-    routes["recipe, by path"] = _recipe_answers(
-        await dispatched(
-            state,
-            "analyze_results",
-            sources=[{"path": str(log), "label": "log"}],
-            recipes=_RECIPE,
-            all_steps=True,
-            include=_EACH_STEP,
-        )
+    told: Said = {} if said is None else said
+    reply = await dispatched(
+        state,
+        "analyze_results",
+        sources=[{"path": str(log), "label": "log"}],
+        recipes=_RECIPE,
+        all_steps=True,
+        include=_EACH_STEP,
     )
+    routes["recipe, by path"] = _recipe_answers(reply)
+    told["recipe, by path"] = _recipe_said(reply)
     summary = await dispatched(
         state,
         "analyze_results",
@@ -199,33 +248,36 @@ async def _every_route(
         name: _entry_answer(entry) for name, entry in row["value"].get("measurements", {}).items()
     }
     named["summary, by path"] = _entry_fields(row["value"].get("measurements", {}))
+    told["summary, by path"] = _entries_said(row["value"].get("measurements", {}))
     page = await dispatched(
         state, "inspect", queries=[{"kind": "results", "view": "measurements", "path": str(log)}]
     )
     routes["inspect, by path"] = _inspect_answers(page["results"][0])
     named["inspect, by path"] = _inspect_fields(page["results"][0])
+    told["inspect, by path"] = _inspect_said(page["results"][0])
     api = SyncApi(state)
     read = await asyncio.to_thread(lambda: api.measurements(path=log))
     routes["api measurements, by path"] = {
         name: _entry_answer(entry) for name, entry in read["measurements"].items()
     }
     named["api measurements, by path"] = _entry_fields(read["measurements"])
+    told["api measurements, by path"] = _entries_said(read["measurements"])
 
     job_id = "exp_" + re.sub(r"\W", "_", f"{build}_{case_id}")
     job = make_experiment_job(state, job_id=job_id, raw=raw, netlist=deck)
     # A run records its simulator's class name and the build it named.
     job.simulator = "LTspice"
     job.cases[0].simulator_version = rec.manifest(build)["reported_build"]
-    routes["recipe, by job"] = _recipe_answers(
-        await dispatched(
-            state,
-            "analyze_results",
-            sources=[{"job_id": job_id, "label": "job"}],
-            recipes=_RECIPE,
-            all_steps=True,
-            include=_EACH_STEP,
-        )
+    reply = await dispatched(
+        state,
+        "analyze_results",
+        sources=[{"job_id": job_id, "label": "job"}],
+        recipes=_RECIPE,
+        all_steps=True,
+        include=_EACH_STEP,
     )
+    routes["recipe, by job"] = _recipe_answers(reply)
+    told["recipe, by job"] = _recipe_said(reply)
     by_job = await dispatched(
         state,
         "analyze_results",
@@ -238,16 +290,19 @@ async def _every_route(
         name: _entry_answer(entry) for name, entry in row["value"].get("measurements", {}).items()
     }
     named["summary, by job"] = _entry_fields(row["value"].get("measurements", {}))
+    told["summary, by job"] = _entries_said(row["value"].get("measurements", {}))
     page = await dispatched(
         state, "inspect", queries=[{"kind": "results", "view": "measurements", "job_id": job_id}]
     )
     routes["inspect, by job"] = _inspect_answers(page["results"][0])
     named["inspect, by job"] = _inspect_fields(page["results"][0])
+    told["inspect, by job"] = _inspect_said(page["results"][0])
     read = await asyncio.to_thread(lambda: api.measurements(job_id=job_id))
     routes["api measurements, by job"] = {
         name: _entry_answer(entry) for name, entry in read["measurements"].items()
     }
     named["api measurements, by job"] = _entry_fields(read["measurements"])
+    told["api measurements, by job"] = _entries_said(read["measurements"])
     return routes
 
 
@@ -396,15 +451,6 @@ def _check_outcome(cell: Cell, build: str, shown: _Printed) -> None:
             assert row == "failed", (cell.id, build, step, row)
 
 
-#: LTspice 26 prints a stepped .fra run's gain margin as ``infdB`` where the
-#: loop's phase never crosses (``raw/fra_step``). Every route reads it as
-#: null: the measurements recipe names it under ``not_finite``, the summary
-#: warns of non-finite values, ``inspect`` counts them, and the Python API's
-#: ``measurements`` gives the null and no reason
-#: (``test_an_infinite_margin_reads_as_null_and_the_api_says_nothing_of_why``).
-PRINTED_INFINITE_READS_AS_NULL = frozenset({("raw/fra_step", "gainmargin_1")})
-
-
 def _grid_runs() -> list[Any]:
     """Every (build, case) of the grid; a case waiting for its recording
     skips with its behaviour's ``pending``."""
@@ -455,7 +501,8 @@ async def test_every_recorded_cell_of_the_grid_reads_as_its_form_means(
         ), (cell.id, form)
 
     fields: Fields = {}
-    routes = await _every_route(build, case_id, state_no_sim, work_dir, fields)
+    said: Said = {}
+    routes = await _every_route(build, case_id, state_no_sim, work_dir, fields, said)
     for route, answers in routes.items():
         assert set(answers) == set(expected), (route, set(answers) ^ set(expected))
     for cell in cells:
@@ -463,11 +510,31 @@ async def test_every_recorded_cell_of_the_grid_reads_as_its_form_means(
         if name not in expected:
             continue
         want: Answer = expected[name]
-        if (case_id, name) in PRINTED_INFINITE_READS_AS_NULL:
+        # A cell whose log printed a number that is not finite declares the
+        # text (``not_a_number``): its value is null on every route, and each
+        # says what the log printed. An undeclared one fails the comparison.
+        not_a_number = cell.extra.get("not_a_number")
+        if not_a_number is not None:
             assert isinstance(want, list) and any(
-                math.isinf(v) for v in want if isinstance(v, float)
-            )
-            want = [None if isinstance(v, float) and math.isinf(v) else v for v in want]
+                not math.isfinite(v) for v in want if isinstance(v, float)
+            ), (cell.id, want)
+            want = [None if isinstance(v, float) and not math.isfinite(v) else v for v in want]
+            for route in routes:
+                statement = said[route].get(name, {}).get("unreadable")
+                assert statement is not None, (cell.id, route, said[route])
+                assert repr(not_a_number) in statement["reason"], (cell.id, route, statement)
+        # A cell whose log printed one value for a run of several steps
+        # declares the step, from 1, and how many (``printed_once``): every
+        # route says both; no route says it of any other measurement.
+        once = cell.extra.get("printed_once")
+        for route in routes:
+            statement = said[route].get(name, {}).get("printed_once")
+            if once is None:
+                assert statement is None, (cell.id, route, statement)
+                continue
+            assert statement is not None, (cell.id, route, said[route])
+            assert statement.get("step") == once["step"] - 1, (cell.id, route, statement)
+            assert statement["step_count"] == once["of"], (cell.id, route, statement)
         line = cell.at(build)["printed"] in ("line", "line_bare")
         field = "at" if line and GRID.expected(cell, build) == "point" else "value"
         for route, answers in routes.items():
@@ -485,17 +552,59 @@ async def test_every_recorded_cell_of_the_grid_reads_as_its_form_means(
             assert named[name] == field, (cell.id, route, named[name], field)
 
 
-async def test_an_infinite_margin_reads_as_null_and_the_api_says_nothing_of_why(
+async def test_a_printed_value_that_is_not_a_number_says_what_the_log_printed_on_every_route(
     state_no_sim: SessionState, work_dir: Path
 ):
-    """Pinned: LTspice 26 prints an infinite gain margin (``infdB`` at
-    ``inf``, ``raw/fra_step``). The measurements recipe gives it as null and
-    names it under ``not_finite``; the Python API's ``measurements`` gives the
-    null with nothing that says why, though an absent reason means nothing
-    to report."""
+    """LTspice 26 prints a stepped .fra run's gain margin, where the loop's
+    phase never crosses, as ``infdB`` at ``inf`` (``raw/fra_step``). A reply
+    carries no infinite number, so every route gives null, and every route
+    says why with what the log printed: the one reason the log decoder gives
+    (``log_parser.parse_measurements``), not a count of non-finite values or
+    a list of names on one route alone."""
     text = read_log_text(rec.recorded("ltspice26", "raw/fra_step.log"))
     assert "     1\tinfdB\tinf" in text.splitlines()
-    _deck, _raw, log = _stage("ltspice26", "raw/fra_step", work_dir)
+    said: Said = {}
+    routes = await _every_route("ltspice26", "raw/fra_step", state_no_sim, work_dir, said=said)
+    for route, answers in routes.items():
+        assert answers["gainmargin_1"] == [None, None], (route, answers)
+        statement = said[route].get("gainmargin_1", {}).get("unreadable")
+        assert statement is not None, (route, said[route])
+        assert "'infdB'" in statement["reason"], (route, statement)
+        # The phase margin printed beside it is a number, and says nothing.
+        assert "phasemargin_1" not in said[route], (route, said[route])
+
+
+async def test_one_value_printed_for_a_stepped_op_names_its_step_and_the_steps_on_every_route(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """LTspice 26 prints one line for each measurement of a stepped .op, and
+    no ``.step`` line (``log/meas_step_op``, three steps). The value is the
+    first step's (:func:`test_the_line_a_stepped_op_prints_holds_its_first_steps_value`).
+    Every route says so, says the run had three steps whose other values are
+    not in the log, and names the recipe that reads them from the results."""
+    said: Said = {}
+    routes = await _every_route("ltspice26", "log/meas_step_op", state_no_sim, work_dir, said=said)
+    for route, answers in routes.items():
+        assert set(answers) == {"vout", "iin"}, (route, answers)
+        for name in ("vout", "iin"):
+            statement = said[route].get(name, {}).get("printed_once")
+            assert statement is not None, (route, name, said[route])
+            assert statement.get("step") == 0, (route, name, statement)
+            assert statement["step_count"] == 3, (route, name, statement)
+            assert "'value'" in statement["reason"], (route, name, statement)
+
+
+async def test_one_value_printed_by_a_build_no_evidence_names_says_its_step_is_not_established(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """The same log with its banner removed names no build: a recording
+    establishes the step for LTspice 26 alone, so the value keeps
+    no step. The recipe's row names none either, and each route says the run
+    had three steps and how to read them."""
+    log = work_dir / "meas_step_op.log"
+    lines = rec.recorded("ltspice26", "log/meas_step_op.log").read_bytes().splitlines(True)
+    assert lines[0].startswith(b"LTspice 26")
+    log.write_bytes(b"".join(lines[1:]))
     reply = await dispatched(
         state_no_sim,
         "analyze_results",
@@ -504,16 +613,90 @@ async def test_an_infinite_margin_reads_as_null_and_the_api_says_nothing_of_why(
         all_steps=True,
         include=_EACH_STEP,
     )
-    for row in reply["results"]["m"]["values"]:
-        assert row["value"]["measured"]["gainmargin_1"] is None
-        assert row["value"]["not_finite"] == ["gainmargin_1"]
+    (row,) = reply["results"]["m"]["values"]
+    assert "step_index" not in row, row
     read = await asyncio.to_thread(lambda: SyncApi(state_no_sim).measurements(path=log))
-    assert read["measurements"]["gainmargin_1"] == {
-        "at": None,
-        "values": [None, None],
-        "answer": "value",
-    }
-    assert read.observations == []
+    for name in ("vout", "iin"):
+        for statement in (
+            row["value"]["printed_once"][name],
+            read["measurements"][name]["printed_once"],
+        ):
+            assert "step" not in statement, statement
+            assert statement["step_count"] == 3, statement
+            assert "not established" in statement["reason"], statement
+            assert "'value'" in statement["reason"], statement
+
+
+async def test_a_step_asked_of_a_stepped_op_log_is_refused_with_what_the_log_holds(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """A step chosen of a log that printed one value for a run of three steps
+    (``log/meas_step_op``) is refused with what ``printed_once`` says: three
+    steps, the printed value is the first's, and the recipe that reads the
+    others. Through the tool and the Python API, by path and by job; and a
+    step index the log's table does not hold, read in process, says the
+    same."""
+    deck, raw, log = _stage("ltspice26", "log/meas_step_op", work_dir)
+    job = make_experiment_job(state_no_sim, job_id="exp_step_op", raw=raw, netlist=deck)
+    job.simulator = "LTspice"
+    job.cases[0].simulator_version = rec.manifest("ltspice26")["reported_build"]
+    api = SyncApi(state_no_sim)
+    for source in ({"path": str(log)}, {"job_id": "exp_step_op"}):
+        arguments = {
+            "sources": [{**source, "label": "run"}],
+            "recipes": _RECIPE,
+            "step": {"axis": "v", "value": 2},
+        }
+        tool = await dispatched(state_no_sim, "analyze_results", **arguments)
+        through_api = await asyncio.to_thread(lambda a=arguments: api.analyze_results(**a))
+        for route, reply in (("tool", tool), ("api", through_api)):
+            (message,) = [failure["message"] for failure in reply["failures"]]
+            assert "3 steps" in message, (source, route, message)
+            assert "step 0's value, the first" in message, (source, route, message)
+            assert "'value' recipe" in message, (source, route, message)
+            assert "1 step" not in message, (source, route, message)
+    table = answered_measurements(
+        parse_measurements(rec.recorded("ltspice26", "log/meas_step_op.log")),
+        Producer("ltspice", None, None),
+    )
+    with pytest.raises(ResultError) as refused:
+        measurements_at_step(table, 2)
+    assert "3 steps" in str(refused.value) and "1 step(s)" not in str(refused.value)
+    assert measurements_at_step(table, 0)["measurements"]["vout"]["values"] == [
+        table["measurements"]["vout"]["values"][0]
+    ]
+
+
+async def test_the_line_a_stepped_op_prints_holds_its_first_steps_value(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """The evidence for which step the line holds. ``raw/step_op`` runs the
+    deck of ``log/meas_step_op`` without its ``.meas`` cards (the same
+    divider, ``.step param v list 1 2 3``), and LTspice 26's results file of
+    it holds V(out) and I(V1) at each step. The values the measurement log
+    printed once are the first step's, read the way the reply names (the
+    value recipe over every step), and no other step's."""
+    printed = parse_measurements(rec.recorded("ltspice26", "log/meas_step_op.log"))
+    raw = work_dir / "step_op.raw"
+    shutil.copyfile(rec.recorded("ltspice26", "raw/step_op.raw"), raw)
+    shutil.copyfile(rec.recorded("ltspice26", "raw/step_op.log"), raw.with_suffix(".log"))
+    for name, expr in (("vout", "V(out)"), ("iin", "I(V1)")):
+        reply = await dispatched(
+            state_no_sim,
+            "analyze_results",
+            sources=[{"path": str(raw), "label": "run"}],
+            recipes=[{"key": "v", "metric": "value", "expr": expr}],
+            all_steps=True,
+            include={"fields": ["value", "step_index"]},
+        )
+        steps = [row["value"]["value"] for row in reply["results"]["v"]["values"]]
+        assert len(steps) == 3, reply
+        (value,) = printed["measurements"][name]["values"]
+        assert value is not None
+        matching = [
+            i for i, number in enumerate(steps) if math.isclose(number, value, rel_tol=1e-6)
+        ]
+        assert matching == [0], (name, value, steps)
 
 
 # ngspice -------------------------------------------------------------------

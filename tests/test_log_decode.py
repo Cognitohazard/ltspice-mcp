@@ -263,8 +263,13 @@ def test_nonfinite_facts_are_null_counted_and_never_sanitized_zero(tmp_path, mon
     assert facts["fourier"]["value"][0]["thd"] is None
     assert facts["fourier"]["value"][0]["phd"] is None
     assert facts["fourier"]["nonfinite_count"] == 2
-    assert facts["measurements"]["value"]["measurements"]["bad"]["values"] == [None]
-    assert facts["measurements"]["nonfinite_count"] == 1
+    # A measurement printed as a number that is not finite is null with what
+    # was printed, by the measurement decoder itself
+    # (log_parser.parse_measurements), so the section counts none.
+    bad = facts["measurements"]["value"]["measurements"]["bad"]
+    assert bad["values"] == [None]
+    assert "'nan'" in bad["unreadable"]["reason"]
+    assert facts["measurements"]["nonfinite_count"] == 0
     assert facts["steps"]["value"] == [{"R": None}]
     assert facts["steps"]["nonfinite_count"] == 1
     assert facts["temperatures"]["value"]["temp_c"] is None
