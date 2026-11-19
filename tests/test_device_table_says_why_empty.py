@@ -235,3 +235,62 @@ async def test_an_empty_table_that_means_no_devices_gets_no_reason(
     assert not [
         line for line in _said(reply) if line.startswith("device_table_request_unknown")
     ], reply
+
+
+def _dc_sweep_raw(directory: Path) -> Path:
+    """A .dc sweep's raw holding a MOSFET's terminal current and no device
+    parameter, with the LTspice 26 log of a run made without the option
+    beside it. No recording holds a .dc sweep of a semiconductor."""
+    raw = directory / "sweep.raw"
+    raw.write_text(
+        "Title: * sweep\n"
+        "Date: Thu Jan 15 00:00:00 2026\n"
+        "Plotname: DC transfer characteristic\n"
+        "Flags: real forward\n"
+        "No. Variables: 3\n"
+        "No. Points: 2\n"
+        "Offset: 0.0000000000000000e+00\n"
+        "Command: Linear Technology Corporation LTspice\n"
+        "Variables:\n"
+        "\t0\tv1\tvoltage\n"
+        "\t1\tV(d)\tvoltage\n"
+        "\t2\tId(M1)\tdevice_current\n"
+        "Values:\n"
+        "0\t0.0\n\t0.0\n\t0.0\n"
+        "1\t1.0\n\t0.9\n\t1.5e-05\n"
+    )
+    shutil.copyfile(_NO_TABLE.with_suffix(".log"), raw.with_suffix(".log"))
+    return raw
+
+
+@pytest.mark.asyncio
+async def test_a_sweep_read_by_path_promises_no_rerun_of_itself(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """LTspice prints the table for an .op run under the option; with it, a
+    .tran run prints none (recorded: log/device_op_tran), and no recording
+    shows a .dc sweep. So the reason given with a sweep's empty table says
+    that, and points to an .op run for the table, not to running the sweep
+    again; an .op's reason names the option for a rerun."""
+    raw = _dc_sweep_raw(work_dir)
+    reply = await dispatched(
+        state_no_sim,
+        "analyze_results",
+        sources=[{"path": str(raw), "label": "run"}],
+        recipes=[{"key": "op", "metric": "operating_point"}],
+    )
+    (said,) = [line for line in _said(reply) if line.startswith("device_table_request_unknown")]
+    assert "a .dc sweep prints one" in said, said
+    assert "rerun" not in said, said
+    assert "run the circuit's bias point as an .op" in said, said
+    op = work_dir / "devices.raw"
+    shutil.copyfile(_RAW, op)
+    shutil.copyfile(_NO_TABLE.with_suffix(".log"), op.with_suffix(".log"))
+    reply = await dispatched(
+        state_no_sim,
+        "analyze_results",
+        sources=[{"path": str(op), "label": "run"}],
+        recipes=[{"key": "op", "metric": "operating_point"}],
+    )
+    (said,) = [line for line in _said(reply) if line.startswith("device_table_request_unknown")]
+    assert "rerun it with the option" in said, said

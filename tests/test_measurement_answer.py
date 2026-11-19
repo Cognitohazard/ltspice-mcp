@@ -34,6 +34,7 @@ from typing import Any, cast
 
 import pytest
 
+from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.log_parser import (
     MeasurementAnswer,
     answered_measurements,
@@ -45,6 +46,7 @@ from ltspice_mcp.lib.log_parser import (
     read_log_text,
     result_unreadable,
 )
+from ltspice_mcp.lib.metrics import measurements_at_step
 from ltspice_mcp.lib.simulator_build import Producer, log_banner_build
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
@@ -623,6 +625,46 @@ async def test_one_value_printed_by_a_build_no_evidence_names_says_its_step_is_n
             assert statement["step_count"] == 3, statement
             assert "not established" in statement["reason"], statement
             assert "'value'" in statement["reason"], statement
+
+
+async def test_a_step_asked_of_a_stepped_op_log_is_refused_with_what_the_log_holds(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """A step chosen of a log that printed one value for a run of three steps
+    (``log/meas_step_op``) is refused with what ``printed_once`` says: three
+    steps, the printed value is the first's, and the recipe that reads the
+    others. Through the tool and the Python API, by path and by job; and a
+    step index the log's table does not hold, read in process, says the
+    same."""
+    deck, raw, log = _stage("ltspice26", "log/meas_step_op", work_dir)
+    job = make_experiment_job(state_no_sim, job_id="exp_step_op", raw=raw, netlist=deck)
+    job.simulator = "LTspice"
+    job.cases[0].simulator_version = rec.manifest("ltspice26")["reported_build"]
+    api = SyncApi(state_no_sim)
+    for source in ({"path": str(log)}, {"job_id": "exp_step_op"}):
+        arguments = {
+            "sources": [{**source, "label": "run"}],
+            "recipes": _RECIPE,
+            "step": {"axis": "v", "value": 2},
+        }
+        tool = await dispatched(state_no_sim, "analyze_results", **arguments)
+        through_api = await asyncio.to_thread(lambda a=arguments: api.analyze_results(**a))
+        for route, reply in (("tool", tool), ("api", through_api)):
+            (message,) = [failure["message"] for failure in reply["failures"]]
+            assert "3 steps" in message, (source, route, message)
+            assert "step 0's value, the first" in message, (source, route, message)
+            assert "'value' recipe" in message, (source, route, message)
+            assert "1 step" not in message, (source, route, message)
+    table = answered_measurements(
+        parse_measurements(rec.recorded("ltspice26", "log/meas_step_op.log")),
+        Producer("ltspice", None, None),
+    )
+    with pytest.raises(ResultError) as refused:
+        measurements_at_step(table, 2)
+    assert "3 steps" in str(refused.value) and "1 step(s)" not in str(refused.value)
+    assert measurements_at_step(table, 0)["measurements"]["vout"]["values"] == [
+        table["measurements"]["vout"]["values"][0]
+    ]
 
 
 async def test_the_line_a_stepped_op_prints_holds_its_first_steps_value(

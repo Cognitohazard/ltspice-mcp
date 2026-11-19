@@ -907,7 +907,9 @@ def source_producer(
     )
 
 
-#: What a read of a log's device table by path says of an empty one.
+#: What a read of a log's device table by path says of an empty one, for an
+#: .op run: LTspice 24 and later print the table for one under the option
+#: (recorded: log/device_op, and log/device_op_numdgt_off without it).
 DEVICE_TABLE_REQUEST_UNKNOWN = (
     "The log holds no device operating-point table (gm, vth, vdsat of each "
     "semiconductor). LTspice 24 and later print it for an .op run only under "
@@ -921,8 +923,28 @@ DEVICE_TABLE_REQUEST_UNKNOWN = (
 )
 
 
+#: The same for a run whose analysis is not known to be an .op. With the option,
+#: a .tran run prints no table on either build (recorded: log/device_op_tran);
+#: no recording shows whether a .dc sweep or another analysis prints one, so no
+#: rerun of this analysis is promised to give it.
+DEVICE_TABLE_NOT_OP = (
+    "The log holds no device operating-point table (gm, vth, vdsat of each "
+    "semiconductor). LTspice 24 and later print it for an .op run under "
+    "'.options logopinfo'; with the option, a .tran run prints none, and no "
+    "recording shows whether {analysis} prints one. It is not known whether this "
+    "run asked for it either: a log read by its path has no job record that says "
+    "so. So an empty table here is not evidence that the circuit has no "
+    "semiconductor devices. For the table, run the circuit's bias point as an .op "
+    "with '.options logopinfo'."
+)
+
+
 async def device_table_unread(
-    source: AnalysisSource, *, family: str | None, devices: bool | None = None
+    source: AnalysisSource,
+    *,
+    family: str | None,
+    devices: bool | None = None,
+    analysis: str | None = None,
 ) -> dict[str, Any] | None:
     """Why a read of ``source``'s log found its device operating-point table
     empty, where the reason is not "the circuit has no such device"; None
@@ -943,7 +965,10 @@ async def device_table_unread(
     raw). ``family`` is the dialect the caller read the run in; a simulator
     that is not LTspice gets no reason. ``devices`` is what the caller knows
     of the run's semiconductors (an LTspice raw's terminal currents): False,
-    an empty table means none, and no reason is given; None, not known."""
+    an empty table means none, and no reason is given; None, not known.
+    ``analysis`` is the run's, where the caller has its raw (``"op"``,
+    ``"dc"``): only an .op is recorded printing the table, so the reason for
+    any other analysis, or one not known, promises no rerun of it."""
     if family not in (None, "ltspice") or devices is False:
         return None
     if source.trusted_job_artifact:
@@ -953,11 +978,18 @@ async def device_table_unread(
     found = which_ltspice(None, build)
     if found is None or found.generation != "current":
         return None
-    return {
-        "code": "device_table_request_unknown",
-        "kind": "coverage",
-        "detail": DEVICE_TABLE_REQUEST_UNKNOWN,
-    }
+    detail = (
+        DEVICE_TABLE_REQUEST_UNKNOWN
+        if analysis == "op"
+        else DEVICE_TABLE_NOT_OP.format(
+            analysis="this run's analysis"
+            if analysis is None
+            else "a .dc sweep"
+            if analysis == "dc"
+            else f"a {analysis} run"
+        )
+    )
+    return {"code": "device_table_request_unknown", "kind": "coverage", "detail": detail}
 
 
 async def answer_measurements(

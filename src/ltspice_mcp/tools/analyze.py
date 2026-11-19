@@ -49,7 +49,7 @@ from ltspice_mcp.lib.continuation import Unfilled, call_to_continue
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, PlotDescriptor
 from ltspice_mcp.lib.format import cap_note, format_spice_value, held_to_cap, unique_name
-from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
+from ltspice_mcp.lib.log_parser import diagnostic_collapse_key, printed_once_refusal
 from ltspice_mcp.lib.log_types import given_no_value, measurement_named, run_measurement_facts
 from ltspice_mcp.lib.pagination import retotal_page
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
@@ -1751,12 +1751,20 @@ async def _measurement_step_plan(
     if not parsed or not parsed["measurements"]:
         # The metric reads the log again and says why it holds no results.
         return [(0, {})]
-    if steps.step is None and "op_solves" in parsed:
-        # One value printed for a run of several steps whose step is not
-        # established (log_parser.answered_measurements): its row names no
-        # step, and its printed_once says why.
+    if "op_solves" in parsed:
+        # One value printed for a run of several steps
+        # (log_parser.answered_measurements). A step chosen by its values has
+        # no .step line to be found by: the refusal says what the log holds
+        # (log_parser.printed_once_refusal). Every step at once, where the
+        # value's step is not established, is one row that names no step.
         answered = await services.answer_measurements(source, parsed)
-        if any(
+        if steps.step is not None:
+            refusal = printed_once_refusal(
+                answered, f"The step {steps.step.axis} = {steps.step.value!r}"
+            )
+            if refusal is not None:
+                raise ResultError(refusal, show_hint=False)
+        elif any(
             "step" not in entry.get("printed_once", {"step": 0})
             for entry in answered["measurements"].values()
         ):

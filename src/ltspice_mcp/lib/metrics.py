@@ -75,6 +75,7 @@ from ltspice_mcp.lib.log_parser import (
     DEVICE_OP_TABLE_DIGITS,
     device_key,
     measurement_cards,
+    printed_once_refusal,
     result_unreadable,
 )
 from ltspice_mcp.lib.log_types import MeasurementsOutput, measurement_failed, measurement_named
@@ -853,6 +854,15 @@ def measurements_at_step(meas_data: MeasurementsOutput, step: int) -> Measuremen
     as failed at that step (:func:`measurement_failed`).
     """
     count = max(meas_data.get("step_count") or 0, 1)
+    # A log that printed one value for a run of several steps says so, and
+    # which step that value is where that is established
+    # (log_parser.printed_once_refusal), in place of a count of one step.
+    once = printed_once_refusal(meas_data, f"Step {step}")
+    if once is not None and not any(
+        entry.get("printed_once", {}).get("step") == step
+        for entry in meas_data.get("measurements", {}).values()
+    ):
+        raise ResultError(once, show_hint=False)
     if not 0 <= step < count:
         raise ResultError(
             f"Step {step} is out of range: the log's measurement tables hold {count} step(s)."
@@ -2824,6 +2834,7 @@ async def operating_point(
             source,
             family=raw_dialect,
             devices=has_active_device(op_data.get("currents", {})),
+            analysis="op" if is_operating_point(raw) else "dc" if is_dc else None,
         )
         if not op_data.get("device_op_points")
         else None

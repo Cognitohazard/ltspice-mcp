@@ -1565,6 +1565,49 @@ def _zero_steps_reason(producer: Producer, form: str) -> str | None:
     )
 
 
+def _other_steps(solves: int) -> str:
+    """Where the values of a stepped .op's other steps are, which its log
+    does not hold (:func:`_printed_once`, :func:`printed_once_refusal`)."""
+    return (
+        f"The values of the other {solves - 1} steps are not in the log: read each "
+        "step's from the run's results, with the 'value' recipe and all_steps=true "
+        "for a trace, or a recipe over the measurement's own expression."
+    )
+
+
+def printed_once_refusal(table: Mapping[str, Any], asked: str) -> str | None:
+    """Why a request for one step (``asked``, as the caller wrote it) of a
+    log's measurements cannot be read, where the log printed each of them
+    once for a run of several steps (``printed_once``,
+    :func:`answered_measurements`); None for any other log.
+
+    The refusal takes its answer from the entries' own statement: how many
+    steps the run had, which step the printed value is where a recording
+    establishes it, and how to read the others. Every route that takes a
+    step for a measurement asks it, so none says the run has one step."""
+    once = next(
+        (
+            entry["printed_once"]
+            for entry in table.get("measurements", {}).values()
+            if "printed_once" in entry
+        ),
+        None,
+    )
+    if once is None:
+        return None
+    count = once["step_count"]
+    which = (
+        f"It is step {once['step']}'s value, the first"
+        if "step" in once
+        else "Which step's value it is is not established"
+    )
+    return (
+        f"{asked} cannot be read from this log: it printed one value for each "
+        f"measurement of a run of {count} steps, with no .step line to choose a step "
+        f"by. {which}; read it with no step chosen. {_other_steps(count)}"
+    )
+
+
 def _printed_once(producer: Producer, solves: int) -> PrintedOnce:
     """What a measurement printed on one line of a log whose run solved its
     operating point ``solves`` times, with no ``.step`` line, says of its
@@ -1579,11 +1622,7 @@ def _printed_once(producer: Producer, solves: int) -> PrintedOnce:
     alone: for another current release (24, 25 or later), XVII, which printed
     no such line in the recording, IV, and a log no evidence names, it is
     not. The values of the other steps are not in the log either way."""
-    others = (
-        f"The values of the other {solves - 1} steps are not in the log: read each "
-        "step's from the run's results, with the 'value' recipe and all_steps=true "
-        "for a trace, or a recipe over the measurement's own expression."
-    )
+    others = _other_steps(solves)
     found = which_ltspice(producer.program, producer.build)
     if found is not None and found.generation == "current" and found.major == 26:
         return {
