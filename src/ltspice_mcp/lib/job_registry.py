@@ -479,8 +479,9 @@ class JobRegistry:
         a waiter that left early would release the per-job lock while the write
         still runs, and a later write of the job could reach the disk first.
         Holding a cancel back is bounded by the write itself, which needs only
-        a thread of the default pool, and no thread of that pool waits on the
-        loop (``tests/test_loop_waits.py``). A waiter that must not wait for
+        a thread of the default pool; no thread of that pool hands the loop a
+        coroutine and waits for it (``tests/test_loop_waits.py`` lists the
+        threads that do). A waiter that must not wait for
         the write, such as a launch whose job was stopped, races this wait
         against the stop instead of cancelling it
         (``ExperimentRunner._record_launch``).

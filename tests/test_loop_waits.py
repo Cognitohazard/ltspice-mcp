@@ -17,6 +17,7 @@ cannot come back.
 from __future__ import annotations
 
 import ast
+import itertools
 from dataclasses import dataclass
 
 from tests._source_scan import modules, scopes
@@ -29,6 +30,10 @@ class _LoopWait:
     #: threads of its own, when the wait is allowed because of where it runs.
     work: str | None = None
     runner: str | None = None
+    #: The functions between the wait and the work, nearest the wait first:
+    #: the wait's own function is used only inside the first, each one only
+    #: inside the next, and the last only inside the work.
+    between: tuple[str, ...] = ()
 
 
 _LOOP_WAITS: dict[str, _LoopWait] = {
@@ -45,6 +50,7 @@ _LOOP_WAITS: dict[str, _LoopWait] = {
         "default pool.",
         work="_show_in_ltspice",
         runner="_in_window_thread",
+        between=("_show_from_sheet",),
     ),
     "api/_session.py:Api._submit_to_loop": _LoopWait(
         "The Python API's private loop runs on a thread of its own; its callers "
@@ -122,6 +128,39 @@ def test_work_that_waits_on_the_loop_runs_only_on_its_own_threads():
                     f"as the work of {wait.runner}, which keeps {site} off the default pool"
                 )
         assert uses, f"{wait.work} is no longer used; update the entry for {site}"
+
+
+def _inside(tree: ast.AST, function: str) -> set[int]:
+    """The ids of every node inside a function named ``function``."""
+    return {
+        id(inner)
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == function
+        for inner in ast.walk(node)
+    }
+
+
+def test_each_wait_is_reached_only_from_its_work():
+    """The function that waits is reached only from the listed work, so no new
+    caller (an ``asyncio.to_thread`` of it, or another hook that reaches it)
+    can wait from a thread of the default pool."""
+    for site, wait in _LOOP_WAITS.items():
+        if wait.work is None:
+            continue
+        module, scope = site.split(":")
+        chain = (scope.rsplit(".", 1)[-1], *wait.between, wait.work)
+        for used, owner in itertools.pairwise(chain):
+            for path, tree in modules().items():
+                # A public name such as ``place`` is taken elsewhere for other
+                # things; a private one is this module's own wherever it is used.
+                if path != module and not used.startswith("_"):
+                    continue
+                inside = _inside(tree, owner)
+                for node in _uses(tree, used):
+                    assert id(node) in inside, (
+                        f"{path}:{getattr(node, 'lineno', '?')} uses {used} outside "
+                        f"{owner}, which keeps {site} off the default pool"
+                    )
 
 
 def test_own_thread_runners_never_use_the_default_pool():

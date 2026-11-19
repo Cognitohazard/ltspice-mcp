@@ -180,7 +180,8 @@ def _launches_meet(monkeypatch, parties: int) -> None:
 @pytest.mark.parametrize("workers", [2, 1])
 async def test_launch_with_small_default_pool(state_no_sim, default_pool, monkeypatch, workers):
     """One recoverable case on a pool of one thread: the launch held that
-    thread while its record waited for a thread of the same pool."""
+    thread while its record waited for a thread of the same pool. Two threads
+    is the control, which finishes with or without the fix."""
     default_pool(workers)
     state_no_sim.job_registry.persist_enabled = True
     calls = _process(monkeypatch)
@@ -198,7 +199,8 @@ async def test_launches_as_many_as_the_default_pool_finish(
     state_no_sim, default_pool, monkeypatch
 ):
     """A job whose parallel launches equal the pool's size: every thread of
-    the pool would be a launch waiting for a write."""
+    the pool would be a launch waiting for a write or for the job's lock,
+    which a launch gives up on after the lock's timeout, failing its case."""
     default_pool(3)
     state_no_sim.job_registry.persist_enabled = True
     calls = _process(monkeypatch)
@@ -303,6 +305,9 @@ async def test_cancel_ends_a_launch_that_waits_for_its_record(
         assert calls == []
         assert job.cases[0].status == "cancelled", job.cases[0].error
         assert job.cases[0].failure_code == "cancelled"
+        assert job.cases[0].error == (
+            "Cancelled while its launch was being recorded; its simulator was not started"
+        )
     finally:
         release.set()
         go.set()

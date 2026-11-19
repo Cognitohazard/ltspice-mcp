@@ -1389,12 +1389,13 @@ class ExperimentRunner(RunnerBase):
             stopped.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await stopped
+            if not write.done():
+                # ``_persist_job`` keeps a failure as ``persistence_error``;
+                # nobody else awaits this write now.
+                write.add_done_callback(_retrieve)
         if write.done():
             write.result()
             return
-        # ``_persist_job`` keeps a failure as ``persistence_error``; nobody else
-        # awaits this write now.
-        write.add_done_callback(_retrieve)
         raise RecoveryError("recovery_launch_cancelled", "Cancelled before simulator spawn")
 
     def _verify_executed_copy(self, execution: _Execution, case: ExperimentCase) -> None:
@@ -1653,10 +1654,12 @@ class ExperimentRunner(RunnerBase):
                 case.status = "running"
                 self._checkpoint_case_transition(execution)
             except Exception as exc:
-                if _launch_stopped(exc) and execution.cancel_event.is_set():
+                if _launch_stopped(exc):
                     # A stop of the job refused the launch before its simulator
-                    # started: the case is stopped, as one still queued is.
-                    self._terminalize_stopped_case(execution, case, launched=False)
+                    # started: the case is stopped, as one still queued is. A
+                    # failed launch record is a failed submission even when a
+                    # stop lands at the same moment: the write's error wins.
+                    self._terminalize_stopped_case(execution, case)
                 else:
                     self._mark_case(
                         execution,
@@ -2249,17 +2252,22 @@ class ExperimentRunner(RunnerBase):
         self,
         execution: _Execution,
         case: ExperimentCase,
-        *,
-        launched: bool | None = None,
     ) -> None:
         # Reachable for a launched case only through end-of-job reconciliation,
         # which is guarded on "not terminal" alone. Say which one happened
         # rather than assume the case never started: an accounting message that
         # can be false is how a completed run gets read as one that never ran.
-        # ``launched`` is False for a recoverable case a stop refused during its
-        # launch: it keeps its submitted stamp, but no simulator started.
-        if launched is None:
-            launched = case.submitted_at is not None
+        # A case still ``submitted`` was stamped but its launch never returned:
+        # a recoverable launch a stop refused while its record was written. It
+        # keeps its stamp (the record may hold its launch intent), and it counts
+        # as submitted, but no simulator started. A case whose launch returned
+        # is ``running`` by the time anything can stop it.
+        if case.submitted_at is None:
+            stage = "unsubmitted"
+        elif case.status == "submitted":
+            stage = "launching"
+        else:
+            stage = "launched"
         if execution.stop_reason == OWNER_STOPPED:
             # The words a reader of the record writes when the process died
             # (``stop_for_owner``), which cannot tell a launched case from one
@@ -2273,11 +2281,14 @@ class ExperimentRunner(RunnerBase):
                 case,
                 "failed",
                 code="job_deadline",
-                error=(
-                    "The experiment deadline elapsed while this case was running"
-                    if launched
-                    else "The experiment deadline elapsed before this case was submitted"
-                ),
+                error={
+                    "launched": "The experiment deadline elapsed while this case was running",
+                    "launching": (
+                        "The experiment deadline elapsed while this case's launch was "
+                        "being recorded; its simulator was not started"
+                    ),
+                    "unsubmitted": "The experiment deadline elapsed before this case was submitted",
+                }[stage],
             )
         else:
             self._mark_case(
@@ -2285,11 +2296,14 @@ class ExperimentRunner(RunnerBase):
                 case,
                 "cancelled",
                 code="cancelled",
-                error=(
-                    "Cancelled after the simulator was launched"
-                    if launched
-                    else "Cancelled before submission"
-                ),
+                error={
+                    "launched": "Cancelled after the simulator was launched",
+                    "launching": (
+                        "Cancelled while its launch was being recorded; its simulator "
+                        "was not started"
+                    ),
+                    "unsubmitted": "Cancelled before submission",
+                }[stage],
             )
 
     def _reconcile_unfinished_cases(self, execution: _Execution) -> None:
