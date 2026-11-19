@@ -628,7 +628,9 @@ def test_a_names_spelling_does_not_change_what_the_selector_selects(build: str, 
     card's spelling (``xa:xin``) and the result's own (``a:in`` on XVII)
     select the same, for the whole path and every part of it, and a device's
     own name selects it under every parent that has it
-    (``device_names.device_query``). A refusal is a difference too."""
+    (``device_names.device_query``). Every name that selects any of a
+    device's values, its currents or its table's, selects all of them. A
+    refusal is a difference too."""
     from ltspice_mcp.lib.device_names import _owner, device_query, writes_xvii_command
     from ltspice_mcp.lib.log_parser import read_device_op_points
     from ltspice_mcp.lib.trace_names import plot_names_sheet_parts
@@ -669,4 +671,108 @@ def test_a_names_spelling_does_not_change_what_the_selector_selects(build: str, 
             under = {n for n, o in owners if not o.port and o.path[-1] == leaf}
             if not under <= selected(leaf):
                 differ.append((name, leaf, sorted(under - selected(leaf))))
+    # A device is one identity, whether its table's name or its currents'
+    # names carry it: every name that selects any of a device's values selects
+    # all of them, the table's split spelling (``in:tail`` for ``Mtail``)
+    # among the names asked.
+    devices: dict[tuple[str, ...], set[str]] = {}
+    for name, owner in owners:
+        if not owner.port:
+            devices.setdefault(owner.path, set()).add(name)
+    asked: set[str] = set()
+    for _, owner in owners:
+        forms = [owner.path, owner.written]
+        if not owner.port and len(owner.written[-1]) > 1:
+            forms.append((*owner.written[:-1], owner.written[-1][1:]))
+        for form in forms:
+            for start in range(len(form)):
+                for end in range(start + 1, len(form) + 1):
+                    asked.add(":".join(form[start:end]))
+    for spelled in sorted(asked):
+        chosen = selected(spelled)
+        for path, values in devices.items():
+            if chosen & values and not values <= chosen:
+                differ.append((spelled, ":".join(path), sorted(values - chosen)))
     assert not differ, differ
+
+
+#: Devices of recorded XVII runs that hold both a device's currents and its
+#: table, named as the table splits the device's name and as the result
+#: writes it: each pair selects the same (``device_names._fragment``).
+_SPLIT_NAMES = [
+    (
+        "log/subckt_names_off_saved",
+        [("tail", "mtail"), ("in:tail", "in:mtail"), ("a:in:tail", "a:in:mtail"), ("drv", "mdrv")],
+    ),
+    ("export/sheet_part_names", [("1", "m1"), ("mb1:1", "mb1:m1")]),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("case_id", "pairs"), _SPLIT_NAMES)
+async def test_a_device_named_as_xviis_table_splits_it_selects_its_currents_and_its_table(
+    case_id: str, pairs: list[tuple[str, str]], state_no_sim: SessionState, work_dir: Path
+):
+    """XVII's device table names Mtail ``m:a:in:tail``. ``tail`` and
+    ``in:tail`` name the device as ``mtail`` and ``in:mtail`` do: its
+    currents (``Id(a:in:Mtail)``) and its table values together."""
+    raw = rec.stage_run("ltspice17", case_id, work_dir / "run")
+    for split, own in pairs:
+        held = {}
+        for device in (split, own):
+            reply = await _bias(state_no_sim, raw, device=device)
+            assert not reply.get("failures"), (device, reply)
+            (value,) = [entry["value"] for entry in reply["results"]["k"]["values"]]
+            held[device] = (frozenset(value["currents"]), frozenset(value["device_op_points"]))
+        assert held[split] == held[own], (split, own, held)
+        currents, table = held[own]
+        assert currents and table, (own, held[own])
+
+
+@pytest.mark.asyncio
+async def test_an_instance_the_result_writes_outranks_a_tables_split_spelling(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """An XVII deck with a card ``Xtail`` (written ``tail``) beside the
+    device Mtail the recorded table names ``m:a:in:tail``: ``tail`` is the
+    instance, as the result writes it, and ``mtail`` the device."""
+    folder = work_dir / "run"
+    folder.mkdir()
+    raw = _xvii_schematic_op(
+        folder / "deck.raw", ["V(n001)", "Ix(tail:A)", "I(tail:R1)"], title="* a deck"
+    )
+    (folder / "deck.log").write_bytes(
+        rec.recorded("ltspice17", "log/subckt_names_off_saved.log").read_bytes()
+    )
+    for device, wanted in (("tail", {"Ix(tail:A)", "I(tail:R1)"}),):
+        reply = await _bias(state_no_sim, raw, device=device)
+        assert not reply.get("failures"), (device, reply)
+        (value,) = [entry["value"] for entry in reply["results"]["k"]["values"]]
+        assert set(value["currents"]) == wanted, (device, value)
+        assert not value["device_op_points"], (device, value)
+    reply = await _bias(state_no_sim, raw, device="mtail")
+    assert not reply.get("failures"), reply
+    (value,) = [entry["value"] for entry in reply["results"]["k"]["values"]]
+    assert not value["currents"] and value["device_op_points"], value
+    assert all("tail" in name for name in value["device_op_points"]), value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expr", ["xin.mtail.gm", "in.mtail.gm", "in.tail.gm", "mtail.gm"])
+async def test_one_value_of_two_devices_is_refused_naming_both(
+    expr: str, state_no_sim: SessionState, work_dir: Path
+):
+    """``log/subckt_names_off`` on XVII holds Mtail inside ``a:in`` and
+    inside ``b:in``: a ``dev.param`` that reaches both is refused, and the
+    refusal names each device."""
+    from tests.conftest import dispatched
+
+    raw = rec.stage_run("ltspice17", "log/subckt_names_off", work_dir / "run")
+    reply = await dispatched(
+        state_no_sim,
+        "analyze_results",
+        sources=[{"path": str(raw), "label": "dut"}],
+        recipes=[{"key": "k", "metric": "value", "expr": expr}],
+    )
+    (failure,) = reply["failures"]
+    assert "a:in:mtail, b:in:mtail" in failure["message"], failure
