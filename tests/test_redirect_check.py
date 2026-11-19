@@ -441,7 +441,11 @@ def test_a_store_spelled_with_parent_parts_after_a_link(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """``..`` after a link is folded as the system folds it, for the parser
-    folder as for every other store path: the store is the one beside the
+    folder as for every other store path, so the parser folder lies in the
+    same store as every other store path. Where that store is depends on the
+    platform's own rule: Windows folds ``..`` by spelling before it follows a
+    link (``ntpath.realpath`` normalizes the path first), so the store lies
+    beside the link; POSIX follows the link first, so it lies beside the
     link's target."""
     deep = tmp_path / "real" / "deep" / "w"
     deep.mkdir(parents=True)
@@ -453,7 +457,12 @@ def test_a_store_spelled_with_parent_parts_after_a_link(
     directory = store.parser_dir("p")
 
     assert directory.parent == store.experiments_dir.parent / "parsing"
-    assert canonical(tmp_path / "real" / "deep" / "stores") in directory.parents
+    if sys.platform == "win32":
+        expected, other = tmp_path / "stores", tmp_path / "real" / "deep" / "stores"
+    else:
+        expected, other = tmp_path / "real" / "deep" / "stores", tmp_path / "stores"
+    assert canonical(expected) in directory.parents
+    assert canonical(other) not in directory.parents
 
 
 def test_a_link_between_a_path_and_its_root_is_seen(tmp_path: Path):
