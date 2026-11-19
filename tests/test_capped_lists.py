@@ -117,7 +117,6 @@ _ALLOWED: dict[str, str] = {
         "line numbers inside one diagnostic, ending in a '(+N more)' tail"
     ),
     "lib/log_parser.py:extract_error_context": "bounds how much of a log is read",
-    "lib/raw_parser.py:_read_plot_header": "bounds how much of a raw header is read",
     "lib/raw_parser.py:_ascii_plot_end": "bounds how much of an ASCII raw is scanned",
     "lib/raw_parser.py:_ascii_last_point": "bounds how much of an ASCII raw is scanned",
     "lib/runner_manager.py:_get_or_create": "bounds a cache, not a reply",
