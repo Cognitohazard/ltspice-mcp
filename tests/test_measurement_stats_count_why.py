@@ -39,7 +39,7 @@ from typing import Any
 
 import pytest
 
-from ltspice_mcp.api import compute_measurement_stats, no_number_reasons
+from ltspice_mcp.api import compute_measurement_stats, no_number_reasons, result_numbers
 from ltspice_mcp.lib.log_parser import printed_measurements, read_log_text
 from ltspice_mcp.lib.log_types import FAILED, NO_NUMBER_REASONS
 from ltspice_mcp.lib.signal_analysis import NO_REASON_GIVEN
@@ -191,15 +191,6 @@ def _meas_step_expected(build: str) -> Counts:
     return _expect(total, total - 1, failed=1)
 
 
-def _result_numbers(entry: dict[str, Any]) -> list[float | None]:
-    """A measurement's results, one per step: the points printed after AT
-    where its ``answer`` is ``at`` (a WHEN with no FIND), else its values."""
-    if entry.get("answer") != "at":
-        return entry["values"]
-    at = entry.get("at")
-    return list(at) if isinstance(at, list) else [at] * len(entry["values"])
-
-
 def _every_stats_route_counts(
     rows: dict[str, dict[str, Any]], name: str, expected: Counts
 ) -> None:
@@ -284,7 +275,7 @@ async def test_a_stepped_measurement_counts_each_step_by_why_on_every_route(
     # the log decoder gives.
     read = await asyncio.to_thread(lambda: api.measurements(job_id=job_id))
     own = compute_measurement_stats(
-        {name: _result_numbers(entry) for name, entry in read["measurements"].items()},
+        {name: result_numbers(entry) for name, entry in read["measurements"].items()},
         reasons={name: no_number_reasons(read, name) for name in read["measurements"]},
     )
     rows["api compute_measurement_stats"] = {"stats": own}
@@ -395,8 +386,17 @@ async def test_a_result_whose_answer_is_unknown_is_counted_under_that_reason(
     value = await _stats_by_path(state_no_sim, log)
     assert value is not None
     assert "tcross" in value["answer_unknown"]
-    assert _counts(value["stats"]["tcross"]) == _expect(3, 0, answer_unknown=3)
-    assert _counts(value["stats"]["vfinal"]) == _expect(3, 3)
+    expected = {"tcross": _expect(3, 0, answer_unknown=3), "vfinal": _expect(3, 3)}
+    # The Python API's own statistics over its measurements: the printed
+    # values of tcross are not taken for its results.
+    read = await asyncio.to_thread(lambda: SyncApi(state_no_sim).measurements(log))
+    own = compute_measurement_stats(
+        {name: result_numbers(entry) for name, entry in read["measurements"].items()},
+        reasons={name: no_number_reasons(read, name) for name in read["measurements"]},
+    )
+    for route, stats in (("by path", value["stats"]), ("api", own)):
+        for name, counts in expected.items():
+            assert _counts(dict(stats[name])) == counts, (route, name)
 
 
 # -- the Python API's function, over a caller's own list ------------------------

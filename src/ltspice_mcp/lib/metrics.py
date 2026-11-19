@@ -84,6 +84,7 @@ from ltspice_mcp.lib.log_types import (
     measurement_failed,
     measurement_named,
     no_number_reasons,
+    result_numbers,
 )
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
@@ -771,20 +772,6 @@ def diagnostics_block(diags: list[str], empty_note: str) -> str:
     return "\n".join(f"  {d}" for d in diags)
 
 
-def _answer_numbers(entry: Mapping[str, Any]) -> list[float | None]:
-    """The numbers of the field an answered measurement entry names
-    (``log_parser.answered_measurements``), one per step; nulls for an entry
-    that names none."""
-    values = list(entry.get("values", []))
-    field = entry.get("answer")
-    if field == "value":
-        return values
-    if field == "at":
-        at = entry.get("at")
-        return list(at) if isinstance(at, list) else [at] * len(values)
-    return [None] * len(values)
-
-
 def aggregate_log_measurements(
     meas_data: MeasurementsOutput,
 ) -> tuple[
@@ -816,7 +803,7 @@ def aggregate_log_measurements(
         err_block = diagnostics_block(diags, "(log contained no .MEAS results and no diagnostics)")
         raise ResultError(f"No .MEAS results in log:\n{err_block}")
 
-    flat_values = {name: _answer_numbers(entry) for name, entry in measurements.items()}
+    flat_values = {name: result_numbers(entry) for name, entry in measurements.items()}
     axis_map: dict[str, AggregatedField] = {
         name: entry["answer"]  # type: ignore[typeddict-item]
         for name, entry in measurements.items()

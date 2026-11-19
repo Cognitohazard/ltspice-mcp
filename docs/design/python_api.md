@@ -746,9 +746,9 @@ functions take complex `H`, and axes are real.
   the table `Api.measurements()` returns, why it has no number: the name of
   the row field that gives the reason (`failed_measurements`, `unreadable`,
   `answer_unknown`, `not_established`), or None. `compute_measurement_stats`
-  takes these as `reasons={name: [...]}`, beside the numbers of the field
-  each entry's `answer` names (`at` for a WHEN with no FIND, else
-  `values`): its `failure_count` counts the
+  takes these as `reasons={name: [...]}`, beside `result_numbers(entry)`,
+  each entry's results as the server reads them (the field its `answer`
+  names, nulls where the answer is unknown): its `failure_count` counts the
   steps whose reason is `failed_measurements`, and its `no_number` counts the
   rest by reason. A null it is given no reason for is counted under
   `no_number.reason_not_given`, never as a failure.

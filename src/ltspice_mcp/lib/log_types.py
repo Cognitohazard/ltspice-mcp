@@ -385,6 +385,23 @@ def result_unreadable(entry: Mapping[str, Any]) -> Any:
     return entry.get("unreadable")
 
 
+def result_numbers(entry: Mapping[str, Any]) -> list[float | None]:
+    """The results of an answered measurement entry
+    (``log_parser.answered_measurements``), one per step: the numbers of the
+    field its ``answer`` names (``at`` for a WHEN with no FIND printed on its
+    own line, else ``values``), and nulls for an entry that names none
+    (``answer_unknown``). The one answer to "which numbers are this
+    measurement's results", which the statistics read."""
+    values = list(entry.get("values", []))
+    field = entry.get("answer")
+    if field == "value":
+        return values
+    if field == "at":
+        at = entry.get("at")
+        return list(at) if isinstance(at, list) else [at] * len(values)
+    return [None] * len(values)
+
+
 class NoNumber(NamedTuple):
     """One reason the log decoder gives for a step of a measurement holding
     no number. ``field`` is the name a measurements row gives the reason
@@ -456,8 +473,8 @@ def no_number_reasons(table: Mapping[str, Any], name: str) -> list[str | None]:
     :data:`NO_NUMBER_REASONS` that holds there, or None where none does. A
     reason is read only where the step has no number: an entry's statement
     may cover steps that hold one (an ``unreadable`` that names no steps
-    covers every step), so a caller pairs the reasons with the numbers of the
-    field the entry's ``answer`` names. The one answer to "why has this step
+    covers every step), so a caller pairs the reasons with the entry's
+    :func:`result_numbers`. The one answer to "why has this step
     of a measurement no number", which the statistics ask
     (``metrics.measurement_rows``)."""
     entry = (table.get("measurements") or {}).get(name)
