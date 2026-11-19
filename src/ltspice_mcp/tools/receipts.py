@@ -44,6 +44,7 @@ from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
 from ltspice_mcp.lib.log_types import given_no_value
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.pagination import page_of
+from ltspice_mcp.lib.points import STEPS_SCHEMA, steps_shown
 from ltspice_mcp.lib.presenter import ListCut, Record, record_cursor
 from ltspice_mcp.lib.projection import (
     absent_path_warnings,
@@ -241,10 +242,22 @@ _STEPS_SCHEMA: dict[str, Any] = {"type": "array", "items": {"type": "integer"}, 
 RUN_RECORD_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "case_id": {"type": "string"},
-        "run_index": {"type": "integer"},
+        "case_id": {
+            "type": "string",
+            "description": (
+                "<circuit id>-case-<number>, the number counting the circuit's cases "
+                "from 0, four digits or more (guide section 'variations')."
+            ),
+        },
+        "run_index": {
+            "type": "integer",
+            "description": "The case's place among the whole job's cases, from 0.",
+        },
         "circuit": {"type": "string"},
-        "assignments": {"type": "object"},
+        "assignments": {
+            "type": "object",
+            "description": "The value each variation target takes in this case.",
+        },
         "native_statistics": {"type": "object"},
         "status": {
             "type": "string",
@@ -310,6 +323,7 @@ RUN_RECORD_SCHEMA: dict[str, Any] = {
                 "does not read."
             ),
         },
+        "steps": STEPS_SCHEMA,
         "attempt": {
             "type": "object",
             "properties": {
@@ -750,6 +764,11 @@ def row_facts(row: Mapping[str, Any]) -> list[str]:
         kinds.append(f"measurements_coverage.{row['measurements_coverage']}")
     if row.get("status") in _ENDED_WITHOUT_OUTPUT:
         kinds.append(f"status.{row['status']}")
+    # How many steps a run's results hold was not established when it ended.
+    # A record that holds none (not_recorded) is the record's, not the run's.
+    steps = row.get("steps") or {}
+    if "count" not in steps and "not_established" in steps:
+        kinds.append("steps_not_established")
     return list(dict.fromkeys(kinds))
 
 
@@ -1532,6 +1551,7 @@ def _run_item(case: ExperimentCase) -> dict[str, Any]:
         "simulator_version": case.simulator_version,
         **run_row_diagnostics(case),
         **run_row_measurements(case),
+        **steps_shown(case),
     }
     if case.recovery is not None:
         attempt = case.recovery.attempt

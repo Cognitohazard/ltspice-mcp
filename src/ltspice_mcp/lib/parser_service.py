@@ -24,7 +24,12 @@ from dataclasses import asdict
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from ltspice_mcp.errors import AnalysisDeadlineExceeded, ResultError, ResultFileNotFoundError
+from ltspice_mcp.errors import (
+    AnalysisDeadlineExceeded,
+    PlotNotFoundError,
+    ResultError,
+    ResultFileNotFoundError,
+)
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedRaw
 from ltspice_mcp.lib.file_stamp import ABSENT, file_stamp
@@ -138,7 +143,10 @@ def select_raw(artifacts: ParsedArtifacts, plot_index: int) -> DecodedRaw:
     try:
         return raw if plot_index == raw.plot_index else raw.select_plot(plot_index)
     except IndexError as exc:
-        raise ResultError(f"RAW plot_index {plot_index} is outside this artifact") from exc
+        raise PlotNotFoundError(
+            f"RAW plot_index {plot_index} is outside this artifact: it holds "
+            f"{len(raw.plots)} plot(s), from 0"
+        ) from exc
 
 
 def load_logs_sync(

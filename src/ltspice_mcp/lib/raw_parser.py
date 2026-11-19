@@ -1172,6 +1172,54 @@ def first_plot_traces(path: Path) -> list[tuple[str, str]] | None:
     return list(zip(header.variables, header.types, strict=True))
 
 
+#: Most bytes :func:`first_plot_shape` reads of a header: a few thousand
+#: variables' lines. A longer header is not read there.
+_SHAPE_HEADER_CAP = 256 * 1024
+
+
+@dataclass(frozen=True)
+class FirstPlotShape:
+    """What the header of a raw's first plot says of its size, read from the
+    header alone: its plot name, its first variable's declared type, its
+    variables' names in order and its declared number of points (None where
+    the header gives none)."""
+
+    plot_name: str
+    first_type: str
+    variables: tuple[str, ...]
+    points: int | None
+
+
+def first_plot_shape(path: Path) -> FirstPlotShape | None:
+    """:class:`FirstPlotShape` of the raw at ``path``, read from its first
+    plot's header (at most ``_SHAPE_HEADER_CAP`` bytes); None when the file
+    is not a raw, cannot be read, or its header does not end there."""
+    try:
+        with path.open("rb") as handle:
+            magic = handle.read(len(_RAW_HEADER_UTF16[0]))
+            if magic.startswith(_RAW_HEADER_UTF16):
+                width = 2
+            elif magic.startswith(_RAW_HEADER_ASCII):
+                width = 1
+            else:
+                return None
+            header = _read_plot_header(handle, 0, width, _SHAPE_HEADER_CAP)
+    except OSError:
+        return None
+    if header.data_start is None:
+        return None
+    try:
+        points: int | None = int(header.fields.get("no. points", ""))
+    except ValueError:
+        points = None
+    return FirstPlotShape(
+        plot_name=header.fields.get("plotname", ""),
+        first_type=header.first_type,
+        variables=tuple(header.variables),
+        points=points,
+    )
+
+
 def may_hold_compressed_transient(path: Path) -> bool:
     """Whether the first plot of the raw at ``path`` may be a transient that
     waveform compression thinned: its header names a transient and its flags
@@ -1516,14 +1564,17 @@ def points_reached(points: int | None, axis: str | None, last_axis_value: float 
     return phrase
 
 
-def _read_plot_header(handle: Any, offset: int, width: int) -> _PlotHeader:
-    """Read one plot header from ``offset``, up to the line that starts its data."""
+def _read_plot_header(
+    handle: Any, offset: int, width: int, cap: int = _PARTIAL_HEADER_CAP
+) -> _PlotHeader:
+    """Read one plot header from ``offset``, up to the line that starts its
+    data, reading at most ``cap`` bytes."""
     codec = _RAW_CODECS[width]
     decoder = codecs.getincrementaldecoder(codec)(errors="surrogatepass")
     handle.seek(offset)
     text = ""
     consumed = 0
-    while consumed < _PARTIAL_HEADER_CAP:
+    while consumed < cap:
         chunk = handle.read(_PARTIAL_READ_CHUNK)
         if not chunk:
             break

@@ -55,11 +55,27 @@ stepped (`V(out) [R1=1000;r=22]`); where the assignments do not tell a case
 apart, or more than three differ, the case id stands in for them. One function
 writes that label (`points.point_label`), and a chart of one case keeps its
 labels. Each trace summary names its `case_id` and `run_index`, the reply's
-`cases` lists each case drawn with its `assignments` and `n_steps`, and
-`cases_not_drawn` names each case selected and not drawn: `case_not_found`
-and `run_not_found` as `analyze_results` names them, `raw_not_produced` with
-the case's `status`, `other_raw_not_written`, and `step_not_found` for a case
-without the `step` asked for, which applies to every case. A signal some cases
+`cases` lists each case drawn with its `assignments` and `n_steps`, the
+number of steps of the plot it drew (a `steps_not_as_recorded` observation
+names a case whose run row's `steps` says otherwise: its results file was
+rewritten after the run, or its record is wrong), and `cases_not_drawn` names each case
+selected and not drawn, at most 20 rows with the total in
+`cases_not_drawn_truncated`: `case_not_found` and `run_not_found` as
+`analyze_results` names them (one row per code, with their count and the
+first five), `run_not_finished` and `raw_not_produced` with the case's
+`status`, `other_raw_not_written`, `result_unreadable` or `analysis_deadline`
+for a results file that cannot be parsed, `plot_not_found` for one without
+the `plot_index` asked for, `load_time_exhausted` for one not loaded within
+the chart's bound on loading, and `step_not_found` for a case without the
+`step` asked for, which applies to every case. The results files load side
+by side, two at a time, through the parse service, each under its own parse
+deadline, within one bound on the whole of it (twice one file's parse
+deadline, 240 s). Before any loads, each first plot's header (at most its
+first 256 KiB), the cases' records and the request say whether the chart
+would be over its cell limit were every case drawn; where it would, it is
+refused as soon as the cases loaded are over by themselves, and the files
+after them are not loaded. Neither count holds a case the chart will not
+draw, so neither refuses a chart that would be drawn. A signal some cases
 lack is drawn for the others, and `signals_not_in_cases` names those that lack
 it. A selection with nothing to draw is refused with why for each case. One
 chart has one kind of axis: cases whose plots differ in analysis are refused,
@@ -153,6 +169,7 @@ Codes by kind of failure:
 | `run_not_finished` | a read named a case of a job whose run has not finished (queued, running, or its end-of-run checks not yet made); the message names the case, what its simulator has written so far and the wait. The job's finished cases are read meanwhile |
 | `result_file_not_found` | no file is at a `.raw` or `.log` path the caller named; the `hint` says to check the path, or to read a run of this server's by its `job_id` |
 | `analysis_deadline` | a result read ran past its wall-clock bound and was abandoned |
+| `plot_not_found` | a read named a `plot_index` its results file does not hold; the message says how many plots it holds. The file is readable: the request does not fit it. Given by `inspect(kind="results")` and `plot_waveform`; `analyze_results` gives such a recipe's failure the code `recipe_failed`, with this message |
 | `no_axis` | the selected plot is a table (an operating point, `.tf` or `.pz` result), so it has no sweep axis to query at |
 | `job_not_found` | no job with that `job_id` or `request_id` |
 | `invalid_cursor` | a page cursor did not decode, or was minted for another listing, view or request, or for a file that has changed since; the `hint` says to send back the cursor the same tool returned, or the message names the argument to change |
@@ -1045,7 +1062,7 @@ finish without it. Left false, it is not part of the request's identity.
 `{case_id?, run_index?, circuit?, assignments?, status?, raw?, log?,
 other_raws?, simulator_version?, diagnostics?, diagnostics_coverage?,
 failed_measurements?, failed_measurement_steps?, measurements_not_established?,
-measurements_not_printed?, measurements_coverage?, attempt?}`. Every key is optional because a
+measurements_not_printed?, measurements_coverage?, steps?, attempt?}`. Every key is optional because a
 run-field projection can remove any of them. `status` is the case's own
 status, which uses a separate vocabulary from the job's `status` on the
 receipt. It is `produced` once the simulator wrote its output, `failed`,
@@ -1113,12 +1130,42 @@ names `jobs(action="runs", job_id, cursor)`, which reads the rest from the
 job's record. At least one run row always stays, and a row is sent whole or
 not at all.
 
+`steps` says how a stepped case's results are stepped: `{count, parameters}`,
+the number of steps its raw's first plot holds and the names of the stepped
+parameters (never their values, which `analyze_results` and `plot_waveform`
+read from the results). It is decided once, when the run ends, by the raw
+reader: the raw's header marks a plot stepped, and the log's `.step` lines
+give each step's values (`decoded_raw.steps_held`, kept on the case's record
+as `ExperimentCase.steps`). Where the raw and the log disagree, or where each
+step starts cannot be read, `steps` is `{not_established}` with the reason and
+no number. A case whose results are not stepped carries no `steps`; a case
+with a raw whose steps were not recorded when its run ended (recorded before
+the server kept them, recovered after its server stopped, stopped with its
+partial raw kept, one whose raw could not be read when its run ended, or one
+whose end-of-run checks are still being made) carries `{not_recorded: true}`,
+which `runs_not_shown` does not count. A failed read records nothing: like the
+log read at the end of a run, which keeps the failure as `logs_error`, it is
+not made again, so a file still locked for a moment after the simulator exits
+(as on Windows) leaves its case not recorded. A stop of the job (a cancel,
+its deadline, the process shutting down) ends the read at once, with nothing
+recorded. The kinds a record names are `result_kinds.STEPPED_KINDS`, each
+established by the recordings it lists, per LTspice build. ngspice has no
+`.step`: its runs record one step. Every chart of a job's case, of one case
+(`run_index`, `case_id`, or `runs` naming one) or of several, gives `n_steps`
+from the plot it drew, and where this record gives another number a
+`steps_not_as_recorded` observation names the case with both
+(`tools/analysis._steps_not_as_recorded`, the one comparison). A chart by
+`path` names no case and has no record; a chart of a `plot_index` past the
+first or of an `other_raw` draws a plot this record does not describe, so
+neither is compared.
+
 **What the rows left out carry.** When run rows are left out, `runs_not_shown`
 states the facts on the rows after the ones sent, from the job's whole table
 whatever `run_fields` keeps: per kind (`diagnostics.<code>`,
 `diagnostics_coverage.<value>`, `failed_measurements`,
 `measurements_not_established`, `measurements_not_printed`,
-`measurements_coverage.<value>`, and `status.<status>` for a run that ended
+`measurements_coverage.<value>`, `steps_not_established` for a run whose
+steps were not established when it ended, and `status.<status>` for a run that ended
 `failed`, `cancelled` or `skipped`), `{counts, runs?}`. `counts` gives every
 kind's number of runs. `runs` names at most 3 runs over all kinds, the first
 run of each of the first kinds, each `{case_id, run_index, kinds, cursor}`
@@ -2708,6 +2755,23 @@ The variation and recipe unions are strict discriminated unions, inlined into
 each tool's `inputSchema`.
 
 ### A.1 Variation
+
+A case's id is `<circuit id>-case-<number>` (`variations.format_case_id`): the
+number counts that circuit's cases from 0, padded to four digits and wider
+past 9999, and names the case's staged deck (`case-<number>` and the deck's
+own extension, `.cir`, `.net` or `.sp`). The circuit
+id is the circuit's `id`, else its file stem made valid
+(`sanitize_circuit_id`), with `-2`, `-3` for a repeated stem
+(`derive_circuit_ids`, said in a `circuit_id_derived` observation). A run
+row's `run_index` counts the whole job's cases from 0, circuits in the order
+given. The order (`expand_variations`): circuits in the order given; entries
+in the order given, the last changing fastest; inside one grid entry the last
+target changing fastest; a zip entry pairing its targets; the samples of a
+`random` or `pdk_native` entry changing fastest of all, wherever that entry
+stands. A resume copies the job's cases and expands nothing again, so each
+keeps its id, run index and order. These are a contract a caller may write
+ids against before a job runs; `tests/test_case_ids_and_order.py` names the
+test that pins each.
 
 ```
 {kind: "assign", id?, combine: "grid"|"zip" (default grid),
