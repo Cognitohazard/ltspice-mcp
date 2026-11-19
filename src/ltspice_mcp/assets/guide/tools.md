@@ -318,8 +318,9 @@ is cut by circuit groups the same way, and its `cursor` reads on.
 A row is sent whole or not at all. For the rows left out, `runs_not_shown`
 names, per kind (`diagnostics.<code>`, `failed_measurements`,
 `measurements_not_established`, `measurements_not_printed`, a coverage that
-says something was not read, `status.failed`), how many runs carry it and up to
-5 of them, each with a cursor that reads its row. `failures`, `observations`,
+says something was not read, `status.failed`), how many runs carry it, and up
+to 3 of those runs, each with a cursor that reads its row. It stays within a
+few hundred tokens, and the rows are sized against what it leaves. `failures`, `observations`,
 `warnings`, `completeness`, `progress`, the rows sent and `runs_not_shown` are
 never cut: a target too small for them still returns them in full, with one
 `budget_not_met` observation saying the reply is over its target.

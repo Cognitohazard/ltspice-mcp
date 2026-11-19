@@ -1039,13 +1039,22 @@ whatever `run_fields` keeps: per kind (`diagnostics.<code>`,
 `diagnostics_coverage.<value>`, `failed_measurements`,
 `measurements_not_established`, `measurements_not_printed`,
 `measurements_coverage.<value>`, and `status.<status>` for a run that ended
-`failed`, `cancelled` or `skipped`), `{count, runs, more?}`, where `runs`
-names at most 5 runs by `case_id` and `run_index`, each with a record cursor
-that starts at its row, and `more` counts the rest. Rows keep their order,
-so a cursor names a row by its index. It is absent when no row is left out or
-none left out carries such a fact, and it is never cut and never shortened.
-A receipt with no job (a routing failure) has no record: its cut rows are
-stored, and the hint names the stored file. Fact channels, completeness, progress, verdicts and the
+`failed`, `cancelled` or `skipped`), `{counts, runs?}`. `counts` gives every
+kind's number of runs. `runs` names at most 3 runs over all kinds, the first
+run of each of the first kinds, each `{case_id, run_index, kinds, cursor}`
+with a record cursor that starts at its row; a kind every run of the job
+carries, shown or not (a coverage value such as
+`measurements_coverage.simulator_unsupported` on a QSPICE job), is given by
+its count alone. The whole note is held to one bound,
+`receipts.NOT_SHOWN_BOUND_TOKENS` (668 estimated tokens), whatever the number
+of kinds and runs, and rows are sized against the target less what the note
+reserves, so the search keeps every row that fits beside it; when none does,
+counts are tried whole before the reply says it is over. Rows keep their
+order, so a cursor names a row by its index. It is absent when no row is left
+out or none left out carries such a fact, and it is never cut and never
+shortened. A receipt with no job (a routing failure) has no record: its cut
+rows are stored, its `runs` block names the stored file, and its failed runs
+are left to its `failures`, which name each one. Fact channels, completeness, progress, verdicts and the
 ids, token and cursors a caller needs to continue are never cut. If they and
 one run row exceed the target, the reply goes out over it with one
 `budget_not_met` observation. The attached analysis's row surfaces may be held

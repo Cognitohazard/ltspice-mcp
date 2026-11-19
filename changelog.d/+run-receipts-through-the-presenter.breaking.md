@@ -5,9 +5,10 @@
   reply's target. A receipt over it keeps at least one run row, and its new
   `cut` field names what was left out, with a cursor that reads the rest from
   the job's record through `jobs(action="runs")`. The new `runs_not_shown`
-  names, per kind, the runs left out that carry a diagnostic, a measurement
-  that gave no value or was not read, or a status other than produced, each
-  with a cursor to its row. With no target, an MCP reply holds 50 run rows.
+  counts, per kind, the runs left out that carry a diagnostic, a measurement
+  that gave no value or was not read, or a status other than produced, and
+  names up to three of them, each with a cursor to its row, within a few
+  hundred tokens. With no target, an MCP reply holds 50 run rows.
   A reply that cannot meet its target says so once (`budget_not_met`).
   Offset cursors from earlier releases (`o:<n>`) are refused.
 - A note that describes the job or the request (`micro_sign_folded`,
