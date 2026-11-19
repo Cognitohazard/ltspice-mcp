@@ -18,7 +18,7 @@ import pytest
 from pydantic import ValidationError
 
 from ltspice_mcp.errors import ResultError
-from ltspice_mcp.lib import now
+from ltspice_mcp.lib import now, services
 from ltspice_mcp.lib.experiment_types import (
     Completeness,
     ExperimentCase,
@@ -89,6 +89,10 @@ def _job(state: SessionState, work_dir: Path, job_id: str, cases: list[_Case]) -
         status="completed" if produced == count else "partial",  # type: ignore[arg-type]
         completed_at=now(),
     )
+    # How each case's results are stepped, recorded as its run's end records
+    # it (ExperimentRunner._end_of_run).
+    for case in job.cases:
+        case.steps = services.read_steps(job, case, state)
     state.add_experiment_job(job, already_persisted=True)
     return job
 

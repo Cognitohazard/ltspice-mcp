@@ -44,6 +44,7 @@ from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
 from ltspice_mcp.lib.log_types import given_no_value
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.pagination import page_of
+from ltspice_mcp.lib.points import STEPS_NOT_RECORDED, STEPS_SCHEMA, steps_shown
 from ltspice_mcp.lib.presenter import ListCut, Record, record_cursor
 from ltspice_mcp.lib.projection import (
     absent_path_warnings,
@@ -310,6 +311,7 @@ RUN_RECORD_SCHEMA: dict[str, Any] = {
                 "does not read."
             ),
         },
+        "steps": STEPS_SCHEMA,
         "attempt": {
             "type": "object",
             "properties": {
@@ -750,6 +752,10 @@ def row_facts(row: Mapping[str, Any]) -> list[str]:
         kinds.append(f"measurements_coverage.{row['measurements_coverage']}")
     if row.get("status") in _ENDED_WITHOUT_OUTPUT:
         kinds.append(f"status.{row['status']}")
+    # A record written before steps were kept says so on every such row; it
+    # is the record's age, not a fact of the run.
+    if (row.get("steps") or {}).get("not_established") not in (None, STEPS_NOT_RECORDED):
+        kinds.append("steps_not_established")
     return list(dict.fromkeys(kinds))
 
 
@@ -1532,6 +1538,7 @@ def _run_item(case: ExperimentCase) -> dict[str, Any]:
         "simulator_version": case.simulator_version,
         **run_row_diagnostics(case),
         **run_row_measurements(case),
+        **steps_shown(case),
     }
     if case.recovery is not None:
         attempt = case.recovery.attempt

@@ -174,6 +174,10 @@ deck. If the deck restricts what it saves, `.save` every signal a `.meas` uses;
 lint blocks a mismatch. A case that produced nothing is counted in
 `completeness`, and `outcome` is `"partial"`.
 
+A case whose deck has `.step` is one run with several steps: its run row's
+`steps` gives how many and which parameters step (`{count, parameters}`), and
+says why where its raw and log did not establish them.
+
 ### A sweep's cases in one chart
 
 `plot_waveform` with `runs` beside `job_id`, as an `analyze_results` source

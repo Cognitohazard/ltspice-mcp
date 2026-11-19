@@ -1045,7 +1045,7 @@ finish without it. Left false, it is not part of the request's identity.
 `{case_id?, run_index?, circuit?, assignments?, status?, raw?, log?,
 other_raws?, simulator_version?, diagnostics?, diagnostics_coverage?,
 failed_measurements?, failed_measurement_steps?, measurements_not_established?,
-measurements_not_printed?, measurements_coverage?, attempt?}`. Every key is optional because a
+measurements_not_printed?, measurements_coverage?, steps?, attempt?}`. Every key is optional because a
 run-field projection can remove any of them. `status` is the case's own
 status, which uses a separate vocabulary from the job's `status` on the
 receipt. It is `produced` once the simulator wrote its output, `failed`,
@@ -1113,12 +1113,29 @@ names `jobs(action="runs", job_id, cursor)`, which reads the rest from the
 job's record. At least one run row always stays, and a row is sent whole or
 not at all.
 
+`steps` says how a stepped case's results are stepped: `{count, parameters}`,
+the number of steps its raw's first plot holds and the names of the stepped
+parameters (never their values, which `analyze_results` and `plot_waveform`
+read from the results). It is decided once, when the run ends, by the raw
+reader: the raw's header marks a plot stepped, and the log's `.step` lines
+give each step's values (`decoded_raw.steps_held`, kept on the case's record
+as `ExperimentCase.steps`). Where the raw and the log disagree, or where each
+step starts cannot be read, `steps` is `{not_established}` with the reason and
+no number. A case whose results are not stepped carries no `steps`; a case
+with a raw recorded before the server kept them carries `{not_established}`
+saying so. The kinds a record names are `result_kinds.STEPPED_KINDS`, each
+established by the recordings it lists, per LTspice build. ngspice has no
+`.step`: its runs record one step. A chart of several cases gives each case's
+`n_steps` from the same record (`steps` in its place where the number is not
+established).
+
 **What the rows left out carry.** When run rows are left out, `runs_not_shown`
 states the facts on the rows after the ones sent, from the job's whole table
 whatever `run_fields` keeps: per kind (`diagnostics.<code>`,
 `diagnostics_coverage.<value>`, `failed_measurements`,
 `measurements_not_established`, `measurements_not_printed`,
-`measurements_coverage.<value>`, and `status.<status>` for a run that ended
+`measurements_coverage.<value>`, `steps_not_established` for a run whose
+steps were not established when it ended, and `status.<status>` for a run that ended
 `failed`, `cancelled` or `skipped`), `{counts, runs?}`. `counts` gives every
 kind's number of runs. `runs` names at most 3 runs over all kinds, the first
 run of each of the first kinds, each `{case_id, run_index, kinds, cursor}`

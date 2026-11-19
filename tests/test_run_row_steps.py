@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -72,9 +73,10 @@ async def _jobs(state: SessionState, **arguments: Any) -> dict[str, Any]:
 
 
 def _rows(reply: dict[str, Any]) -> list[dict[str, Any]]:
-    runs = reply.get("runs")
-    if isinstance(runs, dict):
-        return list(runs["items"])
+    # A Python API result answers an absent field with an empty value, so the
+    # key itself is asked.
+    if "runs" in reply.keys():  # noqa: SIM118 - the result's own keys, not its default
+        return list(reply["runs"]["items"])
     return list(reply["items"])
 
 
@@ -111,6 +113,7 @@ class TestTheRowSaysHowItsCaseIsStepped:
         raw, log = _recorded(build, "step_tran")
         receipt = await _ran(state_with_sim, monkeypatch, work_dir, raw, log, f"sweep-{build}")
         for route, rows in (await _every_route(state_with_sim, receipt)).items():
+            assert len(rows) == 1, (route, rows)
             (row,) = rows
             assert row["steps"] == {"count": 3, "parameters": ["r"]}, (route, row)
 
@@ -125,6 +128,7 @@ class TestTheRowSaysHowItsCaseIsStepped:
         assert case.steps is not None and case.steps.count is not None
         assert case.steps.count > 1
         for route, rows in (await _every_route(state_with_sim, receipt)).items():
+            assert len(rows) == 1, (route, rows)
             (row,) = rows
             assert row["steps"]["count"] == case.steps.count, (route, row)
             assert row["steps"]["parameters"] == list(case.steps.parameters), (route, row)
@@ -139,6 +143,7 @@ class TestTheRowSaysHowItsCaseIsStepped:
         (case,) = job.cases
         assert case.steps is not None and case.steps.count == 1
         for route, rows in (await _every_route(state_with_sim, receipt)).items():
+            assert len(rows) == 1, (route, rows)
             (row,) = rows
             assert "steps" not in row, (route, row)
 
@@ -156,6 +161,7 @@ class TestTheRowSaysHowItsCaseIsStepped:
         assert case.steps.count is None
         assert case.steps.not_established
         for route, rows in (await _every_route(state_with_sim, receipt)).items():
+            assert len(rows) == 1, (route, rows)
             (row,) = rows
             assert set(row["steps"]) == {"not_established"}, (route, row)
             assert row["steps"]["not_established"] == case.steps.not_established
@@ -341,7 +347,8 @@ async def test_a_plot_index_the_cases_do_not_have_is_a_fault_of_the_request(
     receipt = await _ran(
         state_with_sim, monkeypatch, work_dir, raw, raw.with_suffix(".log"), "plots", count=2
     )
-    for selection in ({"run_index": 0}, {"runs": "all"}):
+    selections: list[dict[str, Any]] = [{"run_index": 0}, {"runs": "all"}]
+    for selection in selections:
         with pytest.raises(LTSpiceMCPError) as refused:
             await handle_plot_waveform(
                 PlotWaveformInput(
@@ -379,3 +386,45 @@ async def test_loading_the_cases_of_a_chart_has_one_bound_on_its_time(
             state_with_sim,
         )
     assert "load_time_exhausted" in str(refused.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH")
+@pytest.mark.parametrize(
+    "analysis",
+    [".tran 1u 100u", ".dc V1 0 1 0.5 V2 0 1 0.5"],
+    ids=["tran", "nested_dc"],
+)
+async def test_an_ngspice_run_records_its_one_step(work_dir: Path, analysis: str):
+    """ngspice has no .step: its raw is not marked stepped, and a nested .dc
+    is one sweep of one plot. Its case records one step, and its row carries
+    no steps. Measured with the ngspice on PATH."""
+    from ltspice_mcp.config import ServerConfig
+    from ltspice_mcp.lib.simulator import detect_simulators
+
+    config = ServerConfig(simulator="ngspice", working_dir=work_dir, allowed_paths=[work_dir])
+    available = detect_simulators(config)
+    assert "ngspice" in available
+    state = SessionState.create(config, available)
+    deck = work_dir / "ng.cir"
+    deck.write_text(
+        f"* divider\nV1 in 0 1\nV2 mid 0 0\nR1 in out 1k\nR2 out mid 1k\n{analysis}\n.end\n"
+    )
+    result = await handle_run_experiments(
+        RunExperimentsInput.model_validate(
+            {
+                "request_id": f"ng-{analysis.split()[0][1:]}",
+                "circuits": [{"path": str(deck), "id": "dut"}],
+                "execution": {"wait_s": 60},
+                "lint": "off",
+            }
+        ),
+        state,
+    )
+    assert result.structured_content is not None
+    job = state.all_jobs[result.structured_content["job_id"]]
+    (case,) = job.cases
+    assert case.status == "produced", case
+    assert case.steps is not None and case.steps.count == 1
+    (row,) = _rows(await _jobs(state, action="runs", job_id=job.job_id))
+    assert "steps" not in row

@@ -14,7 +14,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from ltspice_mcp.lib.reply_cuts import CUT, NEVER
+
 if TYPE_CHECKING:
+    from ltspice_mcp.lib.experiment_types import ExperimentCase
     from ltspice_mcp.lib.services import AnalysisSource
 
 
@@ -155,3 +158,60 @@ def point_label(
     elif step_index is not None:
         parts.append(f"step {step_index}")
     return f"{signal} [{';'.join(parts)}]" if parts else signal
+
+
+#: What a reply says of a case with a raw whose record holds no steps: one
+#: recorded before the server kept them.
+STEPS_NOT_RECORDED = (
+    "This case was recorded before the server kept how a case's results are "
+    "stepped, so its steps are not established here; its results' own steps are "
+    "read with them."
+)
+
+#: The ``steps`` a run row and a chart's ``cases[]`` carry.
+STEPS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "count": {"type": "integer", "minimum": 2, "description": "How many steps it holds."},
+        "parameters": {
+            "type": "array",
+            "items": {"type": "string"},
+            # One name per .step parameter of the deck: the deck bounds it.
+            CUT: NEVER,
+            "description": "The stepped parameters, in the order its steps first name them.",
+        },
+        "not_established": {
+            "type": "string",
+            "description": (
+                "Why how many steps it holds, or their values, were not established; "
+                "without count, a number of steps is not known."
+            ),
+        },
+    },
+    "additionalProperties": False,
+    "description": (
+        "Present for a case whose results are stepped, or whose stepping was not "
+        "established: how, as decided once when its run ended. A case whose results "
+        "are not stepped has none."
+    ),
+}
+
+
+def steps_shown(case: ExperimentCase) -> dict[str, Any]:
+    """``{"steps": ...}`` for a case whose results are stepped or whose
+    stepping is not established, else nothing: what a run row and a chart's
+    ``cases[]`` say, read off the case's record (``ExperimentCase.steps``)."""
+    steps = case.steps
+    if steps is None:
+        return {"steps": {"not_established": STEPS_NOT_RECORDED}} if case.raw_file else {}
+    if not steps.holds_steps:
+        return {}
+    if steps.count is None:
+        return {"steps": {"not_established": steps.not_established or STEPS_NOT_RECORDED}}
+    return {
+        "steps": {
+            "count": steps.count,
+            "parameters": list(steps.parameters),
+            **({"not_established": steps.not_established} if steps.not_established else {}),
+        }
+    }

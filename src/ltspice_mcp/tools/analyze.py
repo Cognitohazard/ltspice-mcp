@@ -1042,8 +1042,6 @@ async def _resolve_sources(
                     "assignments": {},
                     "circuit": Path(imported_path).stem,
                     "deck_sha256": None,
-                    "step_index": None,
-                    "step_values": {},
                     "requested_plot_index": source_input.plot_index,
                 },
             )

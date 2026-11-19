@@ -47,6 +47,7 @@ from ltspice_mcp.errors import (
     AnalysisDeadlineExceeded,
     NetlistError,
     NoAxisError,
+    PlotNotFoundError,
     ResultError,
 )
 from ltspice_mcp.lib import atomic_write, atomic_write_bytes, desktop, plot_settings, services
@@ -57,6 +58,7 @@ from ltspice_mcp.lib.ac_analysis import (
 from ltspice_mcp.lib.ac_structure import AcStructureResult, analyze_ac_structure
 from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, PlotDescriptor
+from ltspice_mcp.lib.device_names import fold_name
 from ltspice_mcp.lib.experiment_types import ExperimentCase, ExperimentJob
 from ltspice_mcp.lib.filelock import file_lock
 from ltspice_mcp.lib.format import cap_list, cap_note, si_prefix
@@ -78,16 +80,24 @@ from ltspice_mcp.lib.plot_html import (
     build_plot_html,
 )
 from ltspice_mcp.lib.plot_svg import render_plot_svg
-from ltspice_mcp.lib.points import label_assignments, point_label, values_text
+from ltspice_mcp.lib.points import (
+    STEPS_SCHEMA,
+    label_assignments,
+    point_label,
+    steps_shown,
+    values_text,
+)
 from ltspice_mcp.lib.raster import RasterSupport, RenderedImage, raster_support, render_image
 from ltspice_mcp.lib.raw_parser import (
+    FirstPlotShape,
     OtherRawKind,
+    first_plot_shape,
     get_step_count,
     safe_magnitude_db,
 )
 from ltspice_mcp.lib.recipes import WAVEFORM_MAX_POINTS_CAP, StepSelector
 from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER
-from ltspice_mcp.lib.result_kinds import AC_SHAPED, kind_named
+from ltspice_mcp.lib.result_kinds import AC_SHAPED, kind_named, plot_analysis, sampled_axis
 from ltspice_mcp.lib.sheet_results import (
     NotPlaced,
     Placement,
@@ -453,6 +463,12 @@ _UNMATCHED_NAMED = 5
 _NOT_DRAWN_MAX = 20
 #: Longest ``runs``, as JSON, a reply repeats as it was given.
 _RUNS_NAMED_MAX = 120
+#: The one bound on the time a chart of several cases spends loading their
+#: results files, in seconds; a case not loaded by then is named, not drawn.
+_LOAD_TIME_S = 60.0
+#: Most results files a chart of several cases loads side by side, each
+#: through the parse service under its own parse deadline.
+_LOADS_AT_ONCE = 4
 
 
 def _x_axis(raw, analysis_type: str) -> tuple[str, str | None]:
@@ -519,7 +535,7 @@ class PlotPlan:
     annotate: bool = False
     #: The run is a .step sweep, so each summary names its step even when one
     #: step was selected.
-    stepped: bool = False
+    holds_steps: bool = False
     #: Signals whose descriptor does not establish a unit.
     unverified_units: tuple[str, ...] = ()
 
@@ -566,7 +582,7 @@ def plan_plot(
         ts=ts,
         te=te,
         annotate=annotate,
-        stepped=get_step_count(raw) > 1,
+        holds_steps=get_step_count(raw) > 1,
         unverified_units=tuple(unverified),
     )
 
@@ -775,7 +791,7 @@ class PlotCase:
     step_dicts: list[dict[str, Any]]
     #: The results are a .step sweep, so each summary names its step even
     #: when one step is drawn.
-    stepped: bool
+    holds_steps: bool
     #: The plan's signals as this raw resolves them, by the name the plan
     #: gives them; one it lacks is absent. None: the plan's own signals.
     signals: Mapping[str, services.Signal] | None = None
@@ -789,7 +805,7 @@ class PlotCase:
     @classmethod
     def of_plan(cls, raw: Any, plan: PlotPlan) -> "PlotCase":
         """The one case a plan of one case's results draws."""
-        return cls(raw, plan.steps, plan.step_dicts, plan.stepped)
+        return cls(raw, plan.steps, plan.step_dicts, plan.holds_steps)
 
     def signal(self, sig: services.Signal) -> services.Signal | None:
         """``sig`` as this case's raw holds it, or None when it holds none."""
@@ -799,7 +815,7 @@ class PlotCase:
         """The legend label of ``signal`` at ``step`` of this case: its step
         where it draws several, and, in a chart of several cases, wherever its
         results are stepped, so each trace says which case and which step it is."""
-        several_steps = len(self.steps) > 1 or (self.case_id is not None and self.stepped)
+        several_steps = len(self.steps) > 1 or (self.case_id is not None and self.holds_steps)
         values = self.step_dicts[step] if several_steps and step < len(self.step_dicts) else None
         return point_label(
             signal,
@@ -985,7 +1001,7 @@ def extract_cases(
         facts["cases_without_step_values"] = [
             case.case_id
             for case in cases
-            if (len(case.steps) > 1 or case.stepped)
+            if (len(case.steps) > 1 or case.holds_steps)
             and not any(bool(values) for values in case.step_dicts)
         ]
         facts["cases_window_empty"] = empty_cases
@@ -1022,10 +1038,10 @@ def _trace_summary(
     if case.case_id is not None and case.run_index is not None:
         entry["case_id"] = case.case_id
         entry["run_index"] = case.run_index
-    if case.stepped:
+    if case.holds_steps:
         entry["step"] = step
     # One case's summary carries its label only where it names a step.
-    if (case.stepped or case.case_id is not None) and label != col.name:
+    if (case.holds_steps or case.case_id is not None) and label != col.name:
         entry["label"] = label
     if is_ac:
         ends = summarize_trace(x, ys[1], time_weighted_mean=False)
@@ -1831,7 +1847,9 @@ def _steps_named(args: PlotWaveformInput, raw: Any, step_dicts: list[dict[str, A
                 CUT: ITEMS,
                 "description": (
                     "With runs naming several cases: each case drawn, with its "
-                    "assignments and its number of steps."
+                    "assignments and its number of steps (n_steps), read from its "
+                    "record as its run row's steps is; steps in its place says why "
+                    "that number is not established."
                 ),
                 "items": {
                     "type": "object",
@@ -1840,8 +1858,9 @@ def _steps_named(args: PlotWaveformInput, raw: Any, step_dicts: list[dict[str, A
                         "run_index": {"type": "integer"},
                         "assignments": {"type": "object"},
                         "n_steps": {"type": "integer"},
+                        "steps": STEPS_SCHEMA,
                     },
-                    "required": ["case_id", "run_index", "n_steps"],
+                    "required": ["case_id", "run_index"],
                 },
             },
             "cases_not_drawn": {
@@ -1856,8 +1875,10 @@ def _steps_named(args: PlotWaveformInput, raw: Any, step_dicts: list[dict[str, A
                     "case_not_found, run_not_found, raw_not_produced (with its status), "
                     "run_not_finished, other_raw_not_written, result_unreadable or "
                     "analysis_deadline for a results file that cannot be parsed, "
-                    "step_not_found for a case without the step asked for, or "
-                    "window_empty."
+                    "plot_not_found for one without the plot_index asked for, "
+                    "load_time_exhausted for one not loaded within the chart's bound "
+                    "on loading, step_not_found for a case without the step asked "
+                    "for, or window_empty."
                 ),
                 "items": {
                     "type": "object",
@@ -1902,7 +1923,8 @@ def _steps_named(args: PlotWaveformInput, raw: Any, step_dicts: list[dict[str, A
                 "type": "integer",
                 "description": (
                     "Present when cases_not_drawn lists only its first rows: how many "
-                    "there are. hint names the call that lists every case."
+                    "rows there are (one row of runs the job does not hold counts them "
+                    "all, in its count). hint names the call that lists every case."
                 ),
             },
             "signals_not_in_cases": {
@@ -2272,16 +2294,15 @@ def _unmatched_rows(unmatched: list[services.UnmatchedRun]) -> list[dict[str, An
     """The runs a selection names that the job does not hold, one row per code:
     how many, and the first few. A list of indices has no bound of its own, so
     its misses are counted, not listed one a row."""
-    rows: list[dict[str, Any]] = []
-    for code, key in (("run_not_found", "run_indices"), ("case_not_found", "case_ids")):
-        named = [
-            run.run_index if key == "run_indices" else run.case_id
-            for run in unmatched
-            if run.code == code
-        ]
-        if named:
-            rows.append({"code": code, "count": len(named), key: named[:_UNMATCHED_NAMED]})
-    return rows
+    rows: dict[str, dict[str, Any]] = {}
+    for run in unmatched:
+        # Each code is the one services.select_cases gave the run.
+        key = "case_ids" if run.case_id is not None else "run_indices"
+        row = rows.setdefault(run.code, {"code": run.code, "count": 0, key: []})
+        row["count"] += 1
+        if len(row[key]) < _UNMATCHED_NAMED:
+            row[key].append(run.case_id if run.case_id is not None else run.run_index)
+    return list(rows.values())
 
 
 def _runs_named(runs: RunsSelection) -> str:
@@ -2331,18 +2352,22 @@ def _nothing_to_draw(
     every one."""
     shown = not_drawn[:_NOTHING_TO_DRAW_NAMED]
     said = "; ".join(
-        f"{_who(item)}: {item.get('detail') or item['code']}"
-        for item in shown
+        f"{_who(item)} ({item['code']}): {item.get('detail') or item['code']}" for item in shown
     )
     if len(not_drawn) > len(shown):
         said += "; " + cap_note(
             len(shown),
             len(not_drawn),
-            "cases",
+            "rows",
             f"analyze_results with a source of job_id {json.dumps(job_id)} and "
             f"{_runs_named(runs)} names every one under coverage.missing_cases",
         )
-    return ResultError(f"No case of the selection can be drawn. {said}.", show_hint=False)
+    message = f"No case of the selection can be drawn. {said}."
+    if all(item["code"] == PlotNotFoundError.code for item in not_drawn):
+        # Every case holds a results file, and none the plot asked for: the
+        # request is what does not fit.
+        return PlotNotFoundError(message)
+    return ResultError(message, show_hint=False)
 
 
 def _units_across(
@@ -2367,6 +2392,149 @@ def _units_across(
     return units, unverified
 
 
+def _analyses_differ(by_analysis: dict[str, list[str]]) -> ResultError:
+    """The refusal of cases whose plots differ in analysis, named by analysis."""
+    kinds = "; ".join(f"{kind}: {', '.join(ids)}" for kind, ids in by_analysis.items())
+    return ResultError(
+        f"These cases' plots differ in analysis ({kinds}), and one chart has one kind "
+        "of axis. Plot them in separate calls, each with runs naming cases of one "
+        "analysis, or pick another plot_index.",
+        show_hint=False,
+    )
+
+
+async def _limits_before_loading(
+    args: PlotWaveformInput, readable: list[tuple[ExperimentCase, services.RunContext]]
+) -> None:
+    """Refuse a chart of several cases that cannot be drawn within its limits
+    before any of its results files loads, from what the cases' records say
+    (their steps), what the request asks (signals, step, window, max_points)
+    and what each first plot's header declares (``raw_parser.first_plot_shape``:
+    its analysis, its variables and its number of points, read from the header
+    alone). The refusals are those a chart of the loaded files gives.
+
+    Cases whose plots differ in analysis are refused. The cell limit is held
+    to a lower bound of what each panel draws: a signal's panel draws at least
+    its own series, one per step drawn of each case whose header names it, and
+    at least as long as that case's longest step, which is at least its points
+    shared among its steps where every point is drawn (none over max_points).
+    A signal no header names exactly (a node pair) adds nothing, so the bound
+    never refuses a chart that would be drawn. Not decided here, and left to
+    the check made on the loaded files: a plot_index past the first plot (the
+    header read is the first plot's), a window (its points are known only from
+    the axis), and a header longer than the read.
+    """
+    if (args.plot_index or 0) != 0:
+        return
+    shapes = await asyncio.to_thread(
+        lambda: [first_plot_shape(ctx.raw) if ctx.raw is not None else None for _, ctx in readable]
+    )
+    by_analysis: dict[str, list[str]] = {}
+    sampled_cases: list[tuple[ExperimentCase, FirstPlotShape]] = []
+    for (case, _), shape in zip(readable, shapes, strict=True):
+        if shape is None:
+            continue
+        analysis = plot_analysis(shape.plot_name, shape.first_type)
+        by_analysis.setdefault(analysis, []).append(case.case_id)
+        if sampled_axis(analysis, shape.first_type) is not None:
+            sampled_cases.append((case, shape))
+    if len(by_analysis) > 1:
+        raise _analyses_differ(by_analysis)
+    if args.t_start is not None or args.t_end is not None:
+        return
+    max_points = args.max_points or _DEFAULT_PLOT_MAX_POINTS
+    asked = (
+        [name for panel in args.panels for name in panel]
+        if args.panels is not None
+        else None
+        if args.signals == "all"
+        else list(args.signals)
+    )
+    rows: dict[str, int] = {}
+    longest: dict[str, int] = {}
+    for case, shape in sampled_cases:
+        if shape.points is None:
+            continue
+        count = case.steps.count if case.steps is not None else None
+        if count is None:
+            # How many steps the case holds is not known: one is drawn at least.
+            drawn, length = 1, 0
+        else:
+            drawn = 1 if args.step is not None else count
+            whole = shape.points <= max_points and (count == 1 or args.step is None)
+            length = -(-shape.points // count) if whole else 0
+        held = {fold_name(name): name for name in shape.variables[1:]}
+        names = (
+            held.values()
+            if asked is None
+            else [held[key] for name in asked if (key := fold_name(name)) in held]
+        )
+        for name in dict.fromkeys(fold_name(name) for name in names):
+            rows[name] = rows.get(name, 0) + drawn
+            longest[name] = max(longest.get(name, 0), length)
+    for name, series in rows.items():
+        if (series + 1) * longest[name] > _PLOT_MAX_CELLS:
+            raise _plot_cells_exceeded(series + 1, longest[name])
+
+
+async def _load_cases(
+    args: PlotWaveformInput,
+    state: SessionState,
+    readable: list[tuple[ExperimentCase, services.RunContext]],
+    not_drawn: list[dict[str, Any]],
+) -> list[tuple[ExperimentCase, services.AnalysisSource, DecodedRaw]]:
+    """Load the results file of each of ``readable``, at most
+    ``_LOADS_AT_ONCE`` side by side through the parse service, within one
+    bound on the time it all takes (``_LOAD_TIME_S``). A file that cannot be
+    parsed, or whose parse ran past its own deadline, costs only its case; so
+    does a case not loaded when the bound ends: each is named in ``not_drawn``
+    with its code, and the others are drawn."""
+    loop = asyncio.get_running_loop()
+    ends = loop.time() + _LOAD_TIME_S
+    gate = asyncio.Semaphore(_LOADS_AT_ONCE)
+    results: dict[int, DecodedRaw | ResultError] = {}
+    sources = [
+        services.source_for_run(ctx, plot_index=args.plot_index or 0, dialect=args.dialect)
+        for _, ctx in readable
+    ]
+
+    async def load(index: int) -> None:
+        async with gate:
+            if loop.time() >= ends:
+                return
+            try:
+                results[index] = await services.load_raw(sources[index], state)
+            except ResultError as exc:
+                results[index] = exc
+
+    with contextlib.suppress(TimeoutError):
+        await asyncio.wait_for(
+            asyncio.gather(*(load(index) for index in range(len(readable)))),
+            max(0.0, ends - loop.time()),
+        )
+    loaded: list[tuple[ExperimentCase, services.AnalysisSource, DecodedRaw]] = []
+    for index, (case, _) in enumerate(readable):
+        result = results.get(index)
+        if isinstance(result, DecodedRaw):
+            loaded.append((case, sources[index], result))
+        elif isinstance(result, ResultError):
+            # A results file that cannot be parsed, or whose parse ran past its
+            # deadline, costs only its case: named, and the others drawn.
+            not_drawn.append({**_case_named(case), "code": result.code, "detail": str(result)})
+        else:
+            not_drawn.append(
+                {
+                    **_case_named(case),
+                    "code": "load_time_exhausted",
+                    "detail": (
+                        f"The chart's bound of {_LOAD_TIME_S:g} s on loading its cases' "
+                        "results ended before this case's were loaded."
+                    ),
+                }
+            )
+    return loaded
+
+
 async def _plot_several(args: PlotWaveformInput, state: SessionState, chosen: _SeveralCases):
     """Draw several cases of one job in one chart: each case's traces, each
     labelled by what tells its point from the others drawn, with every case
@@ -2375,19 +2543,8 @@ async def _plot_several(args: PlotWaveformInput, state: SessionState, chosen: _S
     if isinstance(args.signals, list) and not args.signals:
         raise ResultError("Pass at least one signal, or 'all'.")
     not_drawn = list(chosen.not_drawn)
-    loaded: list[tuple[ExperimentCase, services.AnalysisSource, DecodedRaw]] = []
-    for case, ctx in chosen.readable:
-        source = services.source_for_run(
-            ctx, plot_index=args.plot_index or 0, dialect=args.dialect
-        )
-        try:
-            raw = await services.load_raw(source, state)
-        except ResultError as exc:
-            # A results file that cannot be parsed, or whose parse ran past its
-            # deadline, costs only its case: named, and the others drawn.
-            not_drawn.append({**_case_named(case), "code": exc.code, "detail": str(exc)})
-            continue
-        loaded.append((case, source, raw))
+    await _limits_before_loading(args, chosen.readable)
+    loaded = await _load_cases(args, state, chosen.readable, not_drawn)
     if not loaded:
         raise _nothing_to_draw(not_drawn, args.job_id, args.runs)
 
@@ -2403,13 +2560,7 @@ async def _plot_several(args: PlotWaveformInput, state: SessionState, chosen: _S
     for case, _, raw in loaded:
         by_analysis.setdefault(raw.descriptor.analysis, []).append(case.case_id)
     if len(by_analysis) > 1:
-        kinds = "; ".join(f"{kind}: {', '.join(ids)}" for kind, ids in by_analysis.items())
-        raise ResultError(
-            f"These cases' plots differ in analysis ({kinds}), and one chart has one kind "
-            "of axis. Plot them in separate calls, each with runs naming cases of one "
-            "analysis, or pick another plot_index.",
-            show_hint=False,
-        )
+        raise _analyses_differ(by_analysis)
     for _, _, raw in loaded:
         # Refuse unsupported coordinates before building a plot.
         guarded_axis(raw, 0)
@@ -2531,9 +2682,14 @@ async def _plot_several(args: PlotWaveformInput, state: SessionState, chosen: _S
                         "case_id": case.case_id,
                         "run_index": case.run_index,
                         "assignments": dict(case.assignments),
-                        "n_steps": get_step_count(raw),
+                        # The case's record, as its run row says it.
+                        **(
+                            {"n_steps": case.steps.count}
+                            if case.steps is not None and case.steps.count is not None
+                            else steps_shown(case)
+                        ),
                     }
-                    for case, _, raw, _ in stepped
+                    for case, _, _, _ in stepped
                 ],
                 "signals": [sig.name for sig in cols],
             },

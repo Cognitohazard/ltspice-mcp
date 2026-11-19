@@ -30,9 +30,10 @@ from ltspice_mcp.errors import (
 )
 from ltspice_mcp.lib import recent
 from ltspice_mcp.lib.decoded_log import DecodedLog
-from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, RawData
+from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, RawData, steps_held
 from ltspice_mcp.lib.experiment_types import (
     TERMINAL_CASE_STATUSES,
+    CaseSteps,
     ExperimentCase,
     ExperimentJob,
     failure_summary,
@@ -52,6 +53,7 @@ from ltspice_mcp.lib.parser_service import load_logs_sync as _parse_logs_sync
 from ltspice_mcp.lib.parser_service import load_raw_sync as _parse_raw_sync
 from ltspice_mcp.lib.raw_parser import (
     OtherRawKind,
+    first_plot_traces,
     get_step_count,
     other_raw_path,
     points_reached,
@@ -960,8 +962,6 @@ def case_run_context(
         "assignments": dict(case.assignments),
         "circuit": case.circuit,
         "deck_sha256": case.deck_sha256,
-        "step_index": case.step_index,
-        "step_values": dict(case.step_values),
     }
     if case.native_statistics is not None:
         identity["native_statistics"] = case.native_statistics.public()
@@ -1499,6 +1499,36 @@ def load_raw_sync(source: AnalysisSource, state: SessionState) -> DecodedRaw:
     if captured is not None:
         return select_raw(captured, source.plot_index)
     return _parse_raw_sync(source, state, deadline=deadline)
+
+
+def read_steps(job: ExperimentJob, case: ExperimentCase, state: SessionState) -> CaseSteps | None:
+    """How ``case``'s results are stepped (``decoded_raw.steps_held``), read
+    once when its run ends (``ExperimentRunner._end_of_run``) and kept on its
+    record; None for a run that left no raw. The raw is read through the parse
+    service for its first plot's axis and step parameters alone (``signals``
+    names its last trace, never a step parameter, read off the header's first
+    bytes; a header too long to read there is read whole), with its log's
+    ``.step`` lines. A raw that cannot be read gives a record that says so."""
+    if case.raw_file is None:
+        return None
+    traces = first_plot_traces(case.raw_file)
+    source = AnalysisSource(
+        raw=case.raw_file,
+        log=case.log_file,
+        netlist=None,
+        dialect=dialect_for_job(job, state),
+        identity=None,
+        trusted_job_artifact=True,
+        console=(case.log_file or case.raw_file).with_suffix(".exe.log"),
+        signals=(traces[-1][0],) if traces else None,
+    )
+    try:
+        raw = load_raw_sync(source, state)
+    except ResultError as exc:
+        return CaseSteps(
+            count=None, not_established=f"Its raw could not be read when its run ended: {exc}"
+        )
+    return steps_held(raw.descriptor)
 
 
 async def load_logs(source: AnalysisSource, state: SessionState) -> DecodedLog:

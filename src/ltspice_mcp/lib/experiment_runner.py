@@ -2061,6 +2061,9 @@ class ExperimentRunner(RunnerBase):
             self._apply_stopped_outcome(execution.job, case, outcome)
         await self._read_measurements(execution.job, case, outcome)
         if kept:
+            case.steps = await asyncio.to_thread(
+                services.read_steps, execution.job, case, execution.request.state
+            )
             await self._check_raw_names(execution, case)
             await self._check_subcircuit_nodes(execution, case)
             await self._check_saves(execution, case)
