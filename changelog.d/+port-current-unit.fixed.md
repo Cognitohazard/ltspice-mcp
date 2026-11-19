@@ -1,0 +1,1 @@
+A block's port current (`Ix(u1:out)`, declared by LTspice as `subckt_current`) is now read as a current in amperes, so `plot_waveform` charts it with its unit; a declared trace type the server does not know is named in the reply instead of passing as "other".

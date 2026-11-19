@@ -1,0 +1,1 @@
+Comparing two LTspice XVII runs now pairs the traces of instances XVII writes under the sheet's own name (`Ix(x1:in)`, `Id(mb1:M1)`); before, the server added an X to their key and the traces did not pair.

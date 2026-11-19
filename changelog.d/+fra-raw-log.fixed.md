@@ -1,0 +1,1 @@
+A frequency-response results file read by its path (`<case>.fra_1.raw`) is now paired with the log of the run that wrote it, so its steps are read instead of refused as "Step boundaries are unresolved".
