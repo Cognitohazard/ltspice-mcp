@@ -2725,7 +2725,8 @@ each tool's `inputSchema`.
 
 A case's id is `<circuit id>-case-<number>` (`variations.format_case_id`): the
 number counts that circuit's cases from 0, padded to four digits and wider
-past 9999, and names the case's staged deck (`case-<number>.cir`). The circuit
+past 9999, and names the case's staged deck (`case-<number>` and the deck's
+own extension, `.cir`, `.net` or `.sp`). The circuit
 id is the circuit's `id`, else its file stem made valid
 (`sanitize_circuit_id`), with `-2`, `-3` for a repeated stem
 (`derive_circuit_ids`, said in a `circuit_id_derived` observation). A run

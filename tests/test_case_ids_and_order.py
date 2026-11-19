@@ -29,7 +29,12 @@ from typing import Any
 import pytest
 
 from ltspice_mcp.config import ServerConfig
-from ltspice_mcp.lib.variations import AssignVariation, RandomVariation, expand_variations
+from ltspice_mcp.lib.variations import (
+    AssignVariation,
+    RandomVariation,
+    expand_variations,
+    format_case_id,
+)
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
 from tests.conftest import recorded_fixture_simulator
@@ -38,18 +43,20 @@ from tests.test_variations import _deck, _random
 
 def test_a_case_number_is_padded_to_four_digits_and_wider_past_9999(tmp_path: Path):
     """The case cap ([simulation] max_experiment_cases) goes past 9999, so a
-    number wider than four digits is one a job can hold."""
+    number wider than four digits is one a job can hold; every case id is
+    formed by ``format_case_id`` from its circuit and its number."""
     assert ServerConfig().max_experiment_cases <= 9999
     assert ServerConfig(max_experiment_cases=10_001).max_experiment_cases == 10_001
-    circuit = _deck(tmp_path / "dut.cir")
-    sweep = AssignVariation(kind="assign", assign={"R1": [f"{i}" for i in range(10_001)]})
-    cases = expand_variations([circuit], [sweep], max_cases=10_001)
-    assert [cases[i].case_id for i in (0, 7, 9_999, 10_000)] == [
+    assert [format_case_id("dut", n) for n in (0, 7, 9_999, 10_000)] == [
         "dut-case-0000",
         "dut-case-0007",
         "dut-case-9999",
         "dut-case-10000",
     ]
+    circuit = _deck(tmp_path / "dut.cir")
+    sweep = AssignVariation(kind="assign", assign={"R1": [f"{i}" for i in range(12)]})
+    cases = expand_variations([circuit], [sweep])
+    assert [case.case_id for case in cases] == [format_case_id("dut", n) for n in range(12)]
 
 
 def test_samples_change_fastest_wherever_their_entry_stands(tmp_path: Path):

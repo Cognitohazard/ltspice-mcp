@@ -47,7 +47,7 @@ assignments.
 
 A case's id is `<circuit id>-case-<number>`: the number counts that
 circuit's cases from 0, padded to four digits (`dut-case-0007`; wider past
-9999), and names its staged deck (`case-0007.cir`). The circuit id is the
+9999), and names its staged deck (`case-0007` and the deck's own extension). The circuit id is the
 circuit's `id`, else its file stem made valid. A run row's `run_index` counts
 the whole job's cases from 0, circuits in the order given. Cases follow the
 entries in the order given, the last entry changing fastest; inside a grid

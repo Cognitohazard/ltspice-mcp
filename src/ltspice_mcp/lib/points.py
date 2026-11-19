@@ -185,7 +185,8 @@ STEPS_SCHEMA: dict[str, Any] = {
             "description": (
                 "How its results are stepped was not recorded when its run ended (a "
                 "case recorded before the server kept it, recovered after its server "
-                "stopped, or stopped with its partial raw kept). A read of its results "
+                "stopped, or stopped with its partial raw kept), or is not yet: its run's "
+                "end-of-run checks are still being made. A read of its results "
                 "gives their steps: inspect(kind='results', view='plots') or "
                 "plot_waveform with its case_id."
             ),
@@ -193,9 +194,9 @@ STEPS_SCHEMA: dict[str, Any] = {
     },
     "additionalProperties": False,
     "description": (
-        "Present for a case whose results are stepped, or whose stepping was not "
-        "established: how, as decided once when its run ended. A case whose results "
-        "are not stepped has none."
+        "Present for a case whose results are stepped, whose stepping was not "
+        "established, or whose stepping was not recorded: how, as decided once when "
+        "its run ended. A case whose results are not stepped has none."
     ),
 }
 
@@ -210,7 +211,9 @@ def steps_shown(case: ExperimentCase) -> dict[str, Any]:
     if not steps.holds_steps:
         return {}
     if steps.count is None:
-        return {"steps": {"not_established": steps.not_established or "not established"}}
+        return {
+            "steps": {"not_established": steps.not_established or "The record gives no reason."}
+        }
     return {
         "steps": {
             "count": steps.count,

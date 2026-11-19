@@ -2476,24 +2476,25 @@ def _cells_from_headers(
     return _cells_over(counted)
 
 
-def _count_loaded(
-    args: PlotWaveformInput, raw: DecodedRaw, counted: dict[str, tuple[int, int]]
-) -> None:
-    """Add what the chart will draw of one loaded case to ``counted``: one
-    series per step it draws of each signal its raw holds by name, at least
-    as long as its longest step drawn whole (none over max_points). A case it
-    will not draw (no sampled axis, no step asked for) adds nothing."""
+def _drawn_of_loaded(
+    args: PlotWaveformInput, raw: DecodedRaw
+) -> tuple[list[str], int, int] | None:
+    """What the chart will draw of one loaded case, for ``_count_into``: the
+    signals its raw holds by name, one series per step it draws of each, at
+    least as long as its longest step drawn whole (none over max_points).
+    None for a case it will not draw (no sampled axis, no step asked for).
+    Reads each drawn step's axis: run off the event loop."""
     if raw.descriptor.axis is None:
-        return
+        return None
     try:
         steps = _steps_named(args, raw, [dict(step.parameters) for step in raw.descriptor.steps])
     except ResultError:
-        return
+        return None
     max_points = args.max_points or _DEFAULT_PLOT_MAX_POINTS
     lengths = [len(guarded_axis(raw, step)) for step in steps]
     length = max((n for n in lengths if n <= max_points), default=0)
     names = _held_names([raw.descriptor.axis.name, *raw.get_trace_names()], _asked_names(args))
-    _count_into(counted, names, len(steps), length)
+    return names, len(steps), length
 
 
 async def _load_cases(
@@ -2512,7 +2513,7 @@ async def _load_cases(
     cases' records and the request, says whether the chart would be over its
     cell limit were every case drawn (``_cells_from_headers``). Where it would,
     the files load and each loaded case adds what the chart will draw of it
-    (``_count_loaded``): the chart is refused, as the check on the loaded
+    (``_drawn_of_loaded``): the chart is refused, as the check on the loaded
     files refuses it, once the cases loaded are over the limit by themselves,
     and the files not yet loaded are not loaded. Neither count holds a case
     the chart will not draw, so neither refuses a chart that would be drawn.
@@ -2549,6 +2550,7 @@ async def _load_cases(
         is not None
     )
     counted: dict[str, tuple[int, int]] = {}
+    analyses: dict[str, list[str]] = {}
     over: list[tuple[int, int]] = []
 
     async def load(index: int) -> None:
@@ -2562,7 +2564,12 @@ async def _load_cases(
                 return
             results[index] = raw
             if watched and not over:
-                _count_loaded(args, raw, counted)
+                drawn = await asyncio.to_thread(_drawn_of_loaded, args, raw)
+                if drawn is not None:
+                    analyses.setdefault(raw.descriptor.analysis, []).append(
+                        readable[index][0].case_id
+                    )
+                    _count_into(counted, *drawn)
                 if (found := _cells_over(counted)) is not None:
                     over.append(found)
 
@@ -2577,6 +2584,10 @@ async def _load_cases(
         if isinstance(outcome, BaseException):
             raise outcome
     if over:
+        # The cases loaded differ in analysis: that refusal says more than the
+        # cell count, as it does once every file has loaded.
+        if len(analyses) > 1:
+            raise _analyses_differ(analyses)
         raise _plot_cells_exceeded(*over[0])
     loaded: list[tuple[ExperimentCase, services.AnalysisSource, DecodedRaw]] = []
     for index, (case, _) in enumerate(readable):
