@@ -357,6 +357,7 @@ These tests run on any machine, without LTspice:
 |`test_recorded_ltspice_drawing.py`|what each build draws for a sheet: the ground triangle at each orientation and text size, where part text lands and how high it is, a text holding a backslash, a WINDOW line short of its justification or size, a hidden or moved window, a flag named GND, where a net label's text goes, a port's outline, and the text the scene leaves out|
 |`test_recorded_ltspice_plot_settings.py`|the plot settings file each build saves (encoding and line endings, pane order, the Log line) and what each build displays for a file the server wrote|
 |`test_build_benchmark.py`|the benchmark's net reading of every sheet it builds, pin by pin; the fourth node of a transistor drawn with three pins; and that each export matches the benchmark's reference circuit|
+|`test_recorded_ltspice_grids.py`|the grids' index: every cell names a case and an item of it with the coordinates its deck has, every coordinate has a cell, the functions a grid names exist and a behaviour names them, and the count of coordinates not yet recorded only falls|
 |`test_ltspice_recorder.py`|the recorder, and the tree: every listed file is present with its recorded digest, every input matches the one that was run, and every behaviour is recorded on every build or has a reason|
 
 They read the recordings through the same code that reads a live result (the
@@ -374,6 +375,65 @@ side in the test, under a name that states the difference
 `EXPORTED_BY_LTSPICE_AND_REFUSED_BY_THE_EDITOR` and
 `JOINED_BY_A_BUS_LABEL_IN_LTSPICE_ONLY` in
 `test_recorded_ltspice_schematics.py`).
+
+### Grids
+
+A recording settles the case it was written for; a grid makes sure the cases
+cover a question. **A grid is the full cross of the input forms that the
+functions deciding one question depend on, recorded on both builds, and each of
+those functions is tested on every cell.** It is declared in `cases.toml`
+beside the behaviours, as `[grid.<key>]`, and is an index over their cases: it
+names no file of its own. `tests/_recorded_grids.py` reads it.
+
+A grid states its `question`; the `functions` that decide it, as
+`module:name`, each also named in the `model` of a behaviour (a behaviour's
+`model` may name a function beside its module, `lib/log_parser.py:printed_form`,
+and `test_ltspice_recorder.py` checks that each named function exists); its
+`axis` table, each axis with its values and an optional `default`; its
+`groups`, the axes crossed together, each group standing apart from the others
+(a short list of forms tested on their own is a group of one axis); the
+`exclude` entries, the coordinates no input can have, each with its reason; and
+`expect`, what its test expects by axis value, written from what the input
+means rather than from the code under test. A cell is one item of a case: a
+measurement of a deck, a trace of a raw, a line of a log. Its table names its
+`cases`, the coordinates its items share under `at`, and its `items`; a cell
+may give other coordinates for one build (`on`) and the builds that do not take
+the item at all (`refused`, with the reason), which the test checks as such.
+
+`test_recorded_ltspice_grids.py` checks the index: each cell's case and item
+exist with the coordinates the cell declares (for the printed-measurement grid,
+its `.meas` card, form, analysis and stepping, read through the lexer); every
+coordinate of every group has a cell, recorded or pending; and the count of
+coordinates with no recorded cell, pinned per build in `UNRECORDED`, only falls.
+The grid's own test reads every recorded cell through every route that answers
+its question: for the printed-measurement grid,
+`test_measurement_answer.py::test_every_recorded_cell_of_the_grid_reads_as_its_form_means`.
+A cell where the server answers differently from the recording is pinned there
+under a name that states the difference, until a fix lands.
+
+To add a cell to a grid:
+
+1. Find the case that records it, or write a deck under a behaviour (with
+   `pending` until it is recorded). A form a build may refuse goes in a deck of
+   its own, since a refusal stops the run; each cell needs an effect in the log
+   of its own, so that it can be told apart.
+2. Add a `[[grid.<key>.cell]]` table, or an item to one, naming the case, the
+   item and its coordinates.
+3. Run `test_recorded_ltspice_grids.py` and the grid's test. When the cell
+   fills a coordinate that had no recording, lower the pin in `UNRECORDED`.
+
+To add a grid:
+
+1. Name the question and every function that answers it (all of them: a grid's
+   test runs each cell through each). Read their branches: each input form a
+   branch depends on is an axis, and an axis no branch reads is not one.
+2. Declare `[grid.<key>]` with its axes, groups, exclusions and `expect`; index
+   the recorded cases as cells; and write the decks for the coordinates no
+   recording fills, under a pending behaviour.
+3. Name each function in the `model` of the behaviours whose recordings are
+   evidence for it, pin the count of unrecorded coordinates in `UNRECORDED`,
+   and write the grid's test, which reads every recorded cell through every
+   route that answers the question.
 
 ### Recording again
 

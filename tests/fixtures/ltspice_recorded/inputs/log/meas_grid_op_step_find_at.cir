@@ -1,0 +1,9 @@
+* FIND AT in an operating point, stepped: a deck of its own, since a build may refuse the form there
+V1 in 0 1
+R1 in out 1k
+R2 out 0 {4k*s}
+.step param s list 1 2
+.op
+.meas op find_at_v FIND V(out) AT 1
+.meas op find_at_f FIND V(out) AT 5
+.end

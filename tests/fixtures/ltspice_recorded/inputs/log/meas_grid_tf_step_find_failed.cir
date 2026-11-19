@@ -1,0 +1,12 @@
+* a FIND with no point of a signal the run does not save, in a transfer function, stepped
+V1 in 0 1
+R1 in out 1k
+R2 out 0 4k
+R9 in unsaved 1k
+R10 unsaved 0 1k
+.save V(in) V(out)
+.step param s list 1 2
+.tf V(out) V1
+.meas tf find_f FIND V(unsaved)
+.meas tf param_f PARAM find_f*2
+.end

@@ -1,0 +1,20 @@
+* every form failing whole: a DC sweep, stepped
+V1 in 0 0
+R1 in out {r}
+R2 out 0 1k
+.step param r list 1k 2k
+.dc V1 0 5 0.1
+.meas dc max_f MAX V(out) FROM 7 TO 9
+.meas dc min_f MIN V(out) FROM 7 TO 9
+.meas dc pp_f PP V(out) FROM 7 TO 9
+.meas dc avg_f AVG V(out) FROM 7 TO 9
+.meas dc rms_f RMS V(out) FROM 7 TO 9
+.meas dc integ_f INTEG V(out) FROM 7 TO 9
+.meas dc find_at_f FIND V(out) AT 9
+.meas dc find_when_f FIND I(R1) WHEN V(out)=9
+.meas dc when_f WHEN V(out)=9
+.meas dc deriv_at_f DERIV V(out) AT 9
+.meas dc deriv_when_f DERIV V(out) WHEN V(out)=9
+.meas dc trig_targ_f TRIG V(out) VAL=0.5 RISE=1 TARG V(out) VAL=9 RISE=1
+.meas dc param_f PARAM when_f*2
+.end

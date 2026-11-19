@@ -1,0 +1,33 @@
+* every form failing in the second step (k=100), and every form whose result is 0 in one step (z=0 in the second, or a level of 0 in the first): an AC analysis, stepped
+V1 in 0 AC 1
+R1 in out {r}
+C1 out 0 159.154943n
+.param r=1k z=(100-k)/99
+.step param k list 1 100
+.ac dec 10 10 100k
+.meas ac max_sf MAX mag(V(out)) FROM {2k*k} TO {8k*k}
+.meas ac min_sf MIN mag(V(out)) FROM {2k*k} TO {8k*k}
+.meas ac pp_sf PP mag(V(out)) FROM {2k*k} TO {8k*k}
+.meas ac avg_sf AVG mag(V(out)) FROM {2k*k} TO {8k*k}
+.meas ac rms_sf RMS mag(V(out)) FROM {2k*k} TO {8k*k}
+.meas ac integ_sf INTEG mag(V(out)) FROM {2k*k} TO {8k*k}
+.meas ac find_at_sf FIND mag(V(out)) AT {5k*k}
+.meas ac find_when_sf FIND ph(V(out)) WHEN mag(V(out))={0.70710678*k}
+.meas ac when_sf WHEN mag(V(out))={0.70710678*k}
+.meas ac deriv_at_sf DERIV mag(V(out)) AT {5k*k}
+.meas ac deriv_when_sf DERIV mag(V(out)) WHEN mag(V(out))={0.70710678*k}
+.meas ac trig_targ_sf TRIG mag(V(out)) VAL=0.9 FALL=1 TARG mag(V(out)) VAL={0.1*k} FALL=1
+.meas ac param_sf PARAM when_sf*2
+.meas ac max_sz MAX mag(V(out))*z FROM 2k TO 8k
+.meas ac min_sz MIN mag(V(out))*z FROM 2k TO 8k
+.meas ac pp_sz PP mag(V(out))*z FROM 2k TO 8k
+.meas ac avg_sz AVG mag(V(out))*z FROM 2k TO 8k
+.meas ac rms_sz RMS mag(V(out))*z FROM 2k TO 8k
+.meas ac integ_sz INTEG mag(V(out))*z FROM 2k TO 8k
+.meas ac find_at_sz FIND mag(V(out))*z AT 5k
+.meas ac find_when_sz FIND ph(V(out))*z WHEN mag(V(out))=0.70710678
+.meas ac deriv_at_sz DERIV mag(V(out))*z AT 5k
+.meas ac deriv_when_sz DERIV mag(V(out))*z WHEN mag(V(out))=0.70710678
+.meas ac trig_targ_sz TRIG mag(V(out)) VAL=0.9 FALL=1 TARG mag(V(out)) VAL={0.9+(0.1-0.9)*z} FALL=1
+.meas ac param_sz PARAM 2*z
+.end

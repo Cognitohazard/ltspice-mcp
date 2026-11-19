@@ -1,0 +1,20 @@
+* every form failing whole: a transient, stepped
+V1 in 0 PULSE(0 1 0 1u 1u 1 2)
+R1 in out {r}
+C1 out 0 100n
+.step param r list 1k 2k
+.tran 0 1m 0 1u
+.meas tran max_f MAX V(out) FROM 2m TO 3m
+.meas tran min_f MIN V(out) FROM 2m TO 3m
+.meas tran pp_f PP V(out) FROM 2m TO 3m
+.meas tran avg_f AVG V(out) FROM 2m TO 3m
+.meas tran rms_f RMS V(out) FROM 2m TO 3m
+.meas tran integ_f INTEG V(out) FROM 2m TO 3m
+.meas tran find_at_f FIND V(out) AT 5m
+.meas tran find_when_f FIND V(in) WHEN V(out)=2
+.meas tran when_f WHEN V(out)=2
+.meas tran deriv_at_f DERIV V(out) AT 5m
+.meas tran deriv_when_f DERIV V(out) WHEN V(out)=2
+.meas tran trig_targ_f TRIG V(out) VAL=0.1 RISE=1 TARG V(out) VAL=2 RISE=1
+.meas tran param_f PARAM when_f*2
+.end

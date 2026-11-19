@@ -1,0 +1,8 @@
+* a FIND with no point, and a PARAM of it, in an operating point
+V1 in 0 1
+R1 in out 1k
+R2 out 0 4k
+.op
+.meas op find_v FIND V(out)
+.meas op param_v PARAM find_v*2
+.end
