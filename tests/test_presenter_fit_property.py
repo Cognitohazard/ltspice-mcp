@@ -1,7 +1,13 @@
 """The size search, held to its rule over many lists and targets.
 
 A reply is over its target only when every list it cut, held at one entry,
-is over it together; and a larger target never gives a much smaller reply.
+is over it together. And, for lists of whole entries (no series) at targets
+at or above that floor, a larger target never gives a reply more than
+:data:`MONOTONE_TOLERANCE` smaller. That second rule does not hold beyond
+those cases: a series is redrawn at the most points that fit, so a larger
+target can redraw it differently (eight waveform rows: 4245 estimated tokens
+at 4500, 3897 at 4550), and below the floor the note that says a reply is
+over its target adds its own size (2369 at 2100, 2137 at 2150).
 """
 
 from __future__ import annotations
@@ -87,6 +93,6 @@ def test_a_reply_is_over_its_target_only_when_its_floor_is(seed: int, tmp_path: 
         size = estimate_tokens(shown)
         if floor <= target:
             assert size <= target, (target, size, floor)
-        sizes.append(size)
+            sizes.append(size)
     for smaller, larger in itertools.pairwise(sizes):
         assert larger >= smaller - MONOTONE_TOLERANCE, sizes

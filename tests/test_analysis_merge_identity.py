@@ -39,10 +39,10 @@ async def test_drive_does_not_retain_artifacts_evicted_from_result_cache(
         references.append(weakref.ref(source.captured))
         return value
 
-    async def check_retention(processed, pending, deadline):
+    async def check_retention(processed, pending):
         assert len(references) == 6
         assert sum(reference() is not None for reference in references) <= 3
-        await original_publish(processed, pending, deadline)
+        await original_publish(processed, pending)
 
     monkeypatch.setattr(analyze, "_adapter_value", record_resident)
     monkeypatch.setattr(analyze, "_publish_unit_artifacts", check_retention)

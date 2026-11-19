@@ -29,12 +29,19 @@ from tests.test_analyze_results_through_the_presenter import _analyze
 _CSV = {"key": "csv", "metric": "waveform", "signals": ["V(out)"], "format": "csv"}
 
 
-def _slow_csv(monkeypatch: pytest.MonkeyPatch) -> None:
+def _slow_csv(monkeypatch: pytest.MonkeyPatch, *, after_calls: int = 0) -> None:
     """A CSV writer that holds until its deadline fires: the real abort
-    callback the analysis hands it, polled."""
+    callback the analysis hands it, polled. The first ``after_calls`` calls
+    write as the real writer does."""
     from ltspice_mcp.tools import analysis
 
-    def slow_writer(*args: Any) -> None:
+    real = analysis.build_waveform_csv
+    calls: list[int] = []
+
+    def slow_writer(*args: Any) -> Any:
+        calls.append(1)
+        if len(calls) <= after_calls:
+            return real(*args)
         out_path, should_abort = args[8], args[9]
         with atomic_write(out_path) as handle:
             handle.write("partial\n")

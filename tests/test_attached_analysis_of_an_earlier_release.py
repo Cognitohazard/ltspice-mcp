@@ -2,7 +2,7 @@
 
 Its record holds the analysis in that release's shape, under the same store
 version. This release tells it from its own by the analysis' own version
-(``analyze.ANSWER_VERSION``), never by its shape failing, and on every route
+(``analysis_snapshot.ANSWER_VERSION``, read by ``classify``), never by its shape failing, and on every route
 that renders it (``run_experiments`` replaying the job, ``jobs`` status and
 wait, the Python API) answers with the receipt, its status and its run rows:
 only the analysis part is replaced, by a note with a code that says to run
@@ -18,7 +18,7 @@ from typing import Any
 
 import pytest
 
-from ltspice_mcp.lib import analysis_snapshot, experiment_store
+from ltspice_mcp.lib import experiment_store
 from ltspice_mcp.lib.experiment_types import AnalysisStage
 from ltspice_mcp.lib.recovery_journal import (
     candidate_job,
@@ -26,7 +26,8 @@ from ltspice_mcp.lib.recovery_journal import (
     new_root_journal,
     save_journal,
 )
-from ltspice_mcp.lib.store import Store
+from ltspice_mcp.lib.store import KIND_ANALYSIS_SNAPSHOT, Store
+from ltspice_mcp.lib.store import envelope as store_envelope
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from tests.conftest import LIVENESS_S, SyncApi, recorded_fixture_simulator, submit_experiment
@@ -100,7 +101,7 @@ def test_an_analysis_is_told_by_its_version_not_by_its_shape():
     """A record of this shape but no version (an earlier release that wrote
     an ``answer`` key, say) is not rendered; one of this version is."""
     answer = {"outcome": "complete", "results": {}, "observations": [], "failures": []}
-    unversioned = analysis_snapshot.envelope({"answer": answer, "snapshot": {}, "request": {}})
+    unversioned = store_envelope(KIND_ANALYSIS_SNAPSHOT, answer=answer, snapshot={}, request={})
     with pytest.raises(analyze_mod.AttachedAnalysisNotRendered):
         analyze_mod.stored_analysis(unversioned)
     current = analyze_mod.attached_analysis_record(answer, {}, {})

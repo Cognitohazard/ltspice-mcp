@@ -33,7 +33,6 @@ from ltspice_mcp.lib.projection import keep_plan, project_row
 from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
-from ltspice_mcp.tools import analyze as analyze_mod
 from ltspice_mcp.tools import experiments as experiments_module
 from ltspice_mcp.tools import get_tools
 from ltspice_mcp.tools import jobs as jobs_module
@@ -929,8 +928,7 @@ class TestReceiptSnapshotCoherence:
             request={"recipes": []},
             result=analysis_snapshot.envelope(
                 {
-                    "answer_version": analyze_mod.ANSWER_VERSION,
-                    "answer": {
+                                        "answer": {
                         "rows": [
                             {"case_id": produced.case_id, "status": produced.status},
                             {"case_id": failed.case_id, "status": failed.status},

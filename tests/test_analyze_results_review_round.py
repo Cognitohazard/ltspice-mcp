@@ -17,6 +17,8 @@ import pytest
 
 from ltspice_mcp.lib import analysis_snapshot, not_shown
 from ltspice_mcp.lib.experiment_types import AnalysisStage
+from ltspice_mcp.lib.store import KIND_ANALYSIS_SNAPSHOT
+from ltspice_mcp.lib.store import envelope as store_envelope
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from tests.conftest import SyncApi, make_experiment_job
@@ -114,7 +116,6 @@ def test_the_python_api_gets_an_attached_analysis_with_every_failure(
         request={"recipes": []},
         result=analysis_snapshot.envelope(
             {
-                "answer_version": analyze_mod.ANSWER_VERSION,
                 "answer": {
                     "outcome": "partial",
                     "results": {},
@@ -199,9 +200,11 @@ def test_an_observations_rows_follow_the_rows_kept_after_a_source_drifted():
 
 
 #: The attached analysis the release before this one stored: a snapshot of
-#: its own assembly, with no complete answer in it.
-_EARLIER_RELEASE_ANALYSIS = analysis_snapshot.envelope(
-    {
+#: its own assembly, with no complete answer in it, in the store's envelope
+#: of the same store version, with no analysis version.
+_EARLIER_RELEASE_ANALYSIS = store_envelope(
+    KIND_ANALYSIS_SNAPSHOT,
+    **{
         "top": {"outcome": "complete"},
         "results": {"v": {"values": []}},
         "missing_offset": 0,
@@ -209,7 +212,7 @@ _EARLIER_RELEASE_ANALYSIS = analysis_snapshot.envelope(
         "natural_cursor_base": None,
         "natural_has_next": False,
         "natural_deferred": False,
-    }
+    },
 )
 
 
