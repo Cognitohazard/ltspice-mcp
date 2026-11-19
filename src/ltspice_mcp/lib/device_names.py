@@ -26,6 +26,7 @@ builds, and the raw then holds only the instances' port currents.
 
 from __future__ import annotations
 
+import itertools
 import re
 import string
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
@@ -341,7 +342,7 @@ def _raw_path(text: str, *, xvii: bool) -> DevicePath:
 
 def raw_name(scope: Iterable[str], name: str, *, xvii: bool) -> str:
     """How an LTspice raw, and so ``.save``, names a node or device inside
-    subcircuit instances, the reverse of :func:`trace_key`'s reading: the
+    subcircuit instances, the reverse of :func:`trace_keys`'s reading: the
     instances as written on LTspice 26 (``xa:xin:mid``), each without its X on
     XVII (``a:in:mid``). Each build's ``.save`` takes only its own spelling
     (recorded: ``raw/save_subckt_names*``)."""
@@ -374,16 +375,95 @@ def device_address(path: Sequence[str], naming: Naming) -> str:
 TraceKey = tuple[str, DevicePath]
 
 
-def trace_key(name: str, *, xvii: bool) -> TraceKey:
-    """One key for a trace however a build or simulator spells it: its
-    function and the path to its node or device. LTspice 26's
-    ``V(xa:xin:mid)``, XVII's ``V(a:in:mid)`` (``xvii``), ngspice's
+def trace_keys(name: str, *, xvii: bool, schematic: bool) -> tuple[TraceKey, ...]:
+    """Every key the trace ``name`` may stand for, however a build or
+    simulator spells it: its function and the path to its node or device, an
+    instance by the name it has where it was placed (a deck's card name, a
+    sheet's reference). The one answer to which instance path a trace's name
+    names; ``xvii`` for a result an XVII-spelling build wrote, ``schematic``
+    for one of a run of a schematic (``trace_names.from_schematic``).
+
+    LTspice 26's ``V(xa:xin:mid)``, XVII's ``V(a:in:mid)``, ngspice's
     ``v(xa.xin.mid)`` and a caller's ``V(xa.xin.mid)`` are all
-    ``("v", ("xa", "xin", "mid"))``. A name of another form is its own key."""
+    ``("v", ("xa", "xin", "mid"))``. A name of another form is its own key.
+
+    XVII writes every instance without the X of its netlist card. A deck's
+    card is the instance's own name (``Xa`` is ``a``: ``raw/subckt_names_tran_saved``),
+    so a deck's trace has one key. A sheet's export writes a part given a
+    Prefix of X as ``X`` and its reference (block ``X1`` as ``XX1``, part
+    ``MB1`` as ``XMB1``), which XVII writes as the reference (``Ix(x1:IN)``,
+    ``Id(mb1:M1)``; LTspice 26 writes ``x1`` and ``mb1`` too), and a card a
+    directive on the sheet writes (``XMB2``) without its X (``mb2``, which
+    LTspice 26 writes ``xmb2``; recorded: ``export/hier_plain_top_run``,
+    ``export/sheet_part_names``). The name alone does not say which an
+    instance of a schematic's XVII run is, and XVII's own netlist neither
+    (``XMB1`` and ``XMB2`` alike), so each instance is read both ways and the
+    name has a key for each reading, the sheet's first. A reader that needs
+    one key pairs them against another result's keys (:func:`pair_traces`).
+    """
     match = _TRACE.match(name.strip())
     if match is None:
-        return "", (fold_name(name.strip()),)
-    return fold_name(match.group(1)), _raw_path(match.group(2), xvii=xvii)
+        return (("", (fold_name(name.strip()),)),)
+    function, text = fold_name(match.group(1)), match.group(2)
+    if not (xvii and schematic and ":" in text):
+        return ((function, _raw_path(text, xvii=xvii)),)
+    *instances, last = fold_name(text).split(":")
+    readings = itertools.product(*((segment, f"x{segment}") for segment in instances))
+    return tuple((function, (*reading, last)) for reading in readings)
+
+
+def _deck_key(name: str, *, xvii: bool) -> TraceKey:
+    """The one key of ``name`` read as a deck's run writes it, each instance
+    its card (:func:`trace_keys` with no schematic): what a deck's own
+    ``.save`` and ``.meas`` name, and what its cards are."""
+    (key,) = trace_keys(name, xvii=xvii, schematic=False)
+    return key
+
+
+@dataclass(frozen=True)
+class TracePairing:
+    """Which trace of one result is which of another (:func:`pair_traces`), by
+    index into each list of keys."""
+
+    pairs: tuple[tuple[int, int], ...]
+    #: A trace of ``here`` whose keys meet more than one trace of ``there``,
+    #: or one trace there that another trace here meets too: it is not paired,
+    #: never guessed between. Each to the traces there it could be.
+    ambiguous: Mapping[int, tuple[int, ...]]
+    #: The same, from ``there``'s side.
+    ambiguous_there: Mapping[int, tuple[int, ...]]
+
+
+def pair_traces(
+    here: Sequence[tuple[TraceKey, ...]], there: Sequence[tuple[TraceKey, ...]]
+) -> TracePairing:
+    """Pair the traces of two results by their keys (:func:`trace_keys`): a
+    trace here and a trace there are one when a key of each is the same and
+    neither meets another trace so. The one rule for pairing two results'
+    traces."""
+    index: dict[TraceKey, list[int]] = {}
+    for position, keys in enumerate(there):
+        for key in dict.fromkeys(keys):
+            index.setdefault(key, []).append(position)
+    meets = [
+        tuple(dict.fromkeys(j for key in keys for j in index.get(key, ()))) for keys in here
+    ]
+    met_by: dict[int, list[int]] = {}
+    for i, found in enumerate(meets):
+        for j in found:
+            met_by.setdefault(j, []).append(i)
+    pairs = tuple(
+        (i, found[0])
+        for i, found in enumerate(meets)
+        if len(found) == 1 and len(met_by[found[0]]) == 1
+    )
+    paired_here = {i for i, _ in pairs}
+    paired_there = {j for _, j in pairs}
+    return TracePairing(
+        pairs,
+        {i: found for i, found in enumerate(meets) if found and i not in paired_here},
+        {j: tuple(found) for j, found in met_by.items() if j not in paired_there},
+    )
 
 
 def owner_path(name: str, *, xvii: bool) -> DevicePath | None:
@@ -490,7 +570,8 @@ class DeckSignal:
     """What a run's reader makes of a signal a deck names in a ``.save`` or a
     ``.meas`` (:func:`deck_signal`).
 
-    ``key`` is the trace it stores or reads (:func:`trace_key`), None when
+    ``key`` is the trace it stores or reads (:func:`trace_keys`, the reading
+    of a deck's own names: its instances are its cards), None when
     it stores or reads none; ``why`` says why it is None, or why the reading
     is not established, in which case ``established`` is False and ``key``
     is None too. ``spelled`` is the name as the reader spells it, where the
@@ -554,10 +635,10 @@ def deck_signal(
     text = re.sub(r"\s+", "", text)
     match = _TRACE.match(text)
     if match is None:
-        return DeckSignal(trace_key(text, xvii=naming.xvii))
+        return DeckSignal(_deck_key(text, xvii=naming.xvii))
     function, node = match.group(1), match.group(2).strip()
     if ":" not in node and "." not in node:
-        return DeckSignal(trace_key(text, xvii=naming.xvii))
+        return DeckSignal(_deck_key(text, xvii=naming.xvii))
     if naming.family == "ngspice":
         if ":" in node and saved:
             dotted = f"{function}({node.replace(':', '.')})"
@@ -567,7 +648,7 @@ def deck_signal(
                 f"a .save of {text.strip()} stores nothing (ngspice-42, measured)",
                 spelled=dotted,
             )
-        return DeckSignal(trace_key(text, xvii=False))
+        return DeckSignal(_deck_key(text, xvii=False))
     if naming.family != "ltspice":
         return DeckSignal(
             None,
@@ -607,10 +688,10 @@ def deck_signal(
             established=False,
         )
     if (with_x if not naming.xvii else without_x):
-        return DeckSignal(trace_key(text, xvii=naming.xvii))
+        return DeckSignal(_deck_key(text, xvii=naming.xvii))
     spelled = None
     if with_x or without_x:
-        key = trace_key(text, xvii=not naming.xvii)
+        key = _deck_key(text, xvii=not naming.xvii)
         *scope, name = key[1]
         spelled = f"{function}({spelled_name(scope, name, naming)})"
     names = (
@@ -637,14 +718,16 @@ def deck_signal(
 
 def find_trace_by_path(names: Iterable[str], signal: str, *, xvii: bool) -> str | None:
     """The one trace among ``names`` that ``signal`` names by a path through
-    subcircuit instances, as either build writes it (``trace_key``):
+    subcircuit instances, as either build writes it (``trace_keys``, as a
+    deck's run names them; a schematic's run on XVII is found by its literal
+    name, ``trace_names.find_trace``):
     ``V(xa.xin.mid)`` is LTspice 26's ``V(xa:xin:mid)`` and XVII's
     ``V(a:in:mid)``, ``Id(xa.xin.mtail)`` is ``Id(a:in:Mtail)`` on XVII, and
     ``Ix(xa.top)`` is ``Ix(a:TOP)``. None when ``signal`` names no such path or
     not exactly one trace matches."""
     if _TRACE.match(signal.strip()) is None:
         return None
-    want = trace_key(signal, xvii=False)
+    want = _deck_key(signal, xvii=False)
     if len(want[1]) < 2:
         return None
     # Every match ends with the path's last segment: a cheap test first.
@@ -652,7 +735,7 @@ def find_trace_by_path(names: Iterable[str], signal: str, *, xvii: bool) -> str 
     found = [
         name
         for name in names
-        if fold_name(name).endswith(tail) and trace_key(name, xvii=xvii) == want
+        if fold_name(name).endswith(tail) and _deck_key(name, xvii=xvii) == want
     ]
     return found[0] if len(found) == 1 else None
 

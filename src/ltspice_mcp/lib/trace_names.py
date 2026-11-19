@@ -17,7 +17,7 @@ result reads nothing, its traces being densities that do not subtract.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import PureWindowsPath
 from typing import Literal
@@ -31,7 +31,7 @@ from ltspice_mcp.lib.device_names import (
     parse_device_param,
     parse_shorthand,
     section_sign_spellings,
-    trace_key,
+    trace_keys,
     writes_xvii_command,
 )
 from ltspice_mcp.lib.raw_header import RawPlotHeader, leading_parameters
@@ -52,14 +52,52 @@ UNLABELLED_NET_RE = re.compile(r"n\d{3,}", re.IGNORECASE)
 #: What a trace of a result holds, as its name and declared type tell.
 TraceQuantity = Literal["node_voltage", "current", "device_parameter", "other"]
 
-#: The declared types that say a trace holds a node voltage or a current. A
-#: trace declared with any other type holds another quantity, whatever its
-#: name: a declared impedance does not become a voltage by its spelling.
-_QUANTITY_BY_TYPE: dict[str, TraceQuantity] = {
-    "voltage": "node_voltage",
-    "current": "current",
-    "device_current": "current",
+#: Every type a simulator declares a trace with that the server knows: what
+#: the trace holds (:func:`trace_quantity`) and its SI unit
+#: (``decoded_raw.declared_unit``), None where the type sets none. The one
+#: table both read. Every type a recorded LTspice raw declares, on each
+#: build, is here (``tests/test_declared_types.py``); a trace of a type not
+#: here holds "other", has no unit, and its descriptor says the type is not
+#: known (``decoded_raw.UNKNOWN_DECLARED_TYPE``).
+#:
+#: A declared type, not a name, decides: a declared impedance does not become
+#: a voltage by its spelling. LTspice declares a device's current
+#: ``device_current`` and a block's port current (``Ix(xa:out)``)
+#: ``subckt_current``, ngspice a branch current ``current`` (recorded:
+#: ``raw/subckt_names_tran_saved``, ``export/sheet_part_names``; the
+#: ``ngspice_runs`` fixtures). LTspice declares a ``.noise`` run's gain and a
+#: frequency response's ``gain``, a ``.tf``'s ratio ``transfer``, a stepped
+#: value ``param`` or ``temperature``: each is a ratio or a stepped value
+#: whose unit the raw does not say (``raw/noise``, ``raw/fra``, ``raw/tf``,
+#: ``raw/step_ac_one_freq``, ``raw/step_temp_op``).
+DECLARED_TYPES: dict[str, tuple[TraceQuantity, str | None]] = {
+    "voltage": ("node_voltage", "V"),
+    "current": ("current", "A"),
+    "device_current": ("current", "A"),
+    "subckt_current": ("current", "A"),
+    "time": ("other", "s"),
+    "frequency": ("other", "Hz"),
+    "hertz": ("other", "Hz"),
+    "admittance": ("other", "S"),
+    "impedance": ("other", "Ω"),
+    "capacitance": ("other", "F"),
+    "voltage-density": ("other", "V/√Hz"),
+    "current-density": ("other", "A/√Hz"),
+    "gain": ("other", None),
+    "transfer": ("other", None),
+    "param": ("other", None),
+    "temperature": ("other", None),
 }
+
+
+def declared(declared_type: str | None) -> tuple[TraceQuantity, str | None] | None:
+    """What a trace of the declared type ``declared_type`` holds and its unit
+    (:data:`DECLARED_TYPES`), or None for a type the server does not know or
+    no type."""
+    if not declared_type:
+        return None
+    return DECLARED_TYPES.get(declared_type.strip().lower())
+
 
 #: A current named with no declared type: ``I(R1)``, or a terminal current
 #: of a device of more terminals, ``Ic(Q1)`` or ``Id(M1)``.
@@ -98,7 +136,8 @@ def trace_quantity(name: str, declared: str | None, *, axis: bool = False) -> Tr
     if parse_device_param(name) is not None:
         return "device_parameter"
     if declared:
-        return _QUANTITY_BY_TYPE.get(declared.strip().lower(), "other")
+        known = DECLARED_TYPES.get(declared.strip().lower())
+        return "other" if known is None else known[0]
     if fold_name(name[:2]) == "v(":
         return "node_voltage"
     return "current" if _CURRENT_NAME.match(name) else "other"
@@ -458,12 +497,14 @@ def _respelled(plot: RawPlotHeader, signal: str) -> _Respelled | None:
     deck's for a deck's run. An X the caller added to a deck's instance has no
     rule behind it, and gets none.
     """
-    asked_function, asked_path = trace_key(signal, xvii=False)
+    # Both read literally, as LTspice 26 and a deck spell them: what differs
+    # is told apart below, by the X each instance gains or loses.
+    ((asked_function, asked_path),) = trace_keys(signal, xvii=False, schematic=False)
     if not asked_function or len(asked_path) < 2:
         return None
     found: list[tuple[str, list[tuple[str, str]]]] = []
     for name in signal_names(plot):
-        function, path = trace_key(name, xvii=False)
+        ((function, path),) = trace_keys(name, xvii=False, schematic=False)
         if function != asked_function or len(path) != len(asked_path):
             continue
         if path[-1] != asked_path[-1]:
@@ -547,7 +588,14 @@ def _unlabelled_net_note(plot: RawPlotHeader, signal: str) -> str:
 
 
 def from_schematic(plot: RawPlotHeader) -> bool:
-    """Whether ``plot`` is of a run of a schematic, as its title says.
+    """Whether ``plot`` is of a run of a schematic, as its title says
+    (:func:`titled_from_schematic`)."""
+    return titled_from_schematic(dict(plot.fields))
+
+
+def titled_from_schematic(fields: Mapping[str, object]) -> bool:
+    """Whether the raw whose header's fields are ``fields`` (names in any
+    case) is of a run of a schematic, as its title says.
 
     LTspice XVII titles a raw with its deck's first line, which a sheet's
     export writes as ``* <sheet>.asc``. LTspice 26 titles it with the path of
@@ -559,8 +607,8 @@ def from_schematic(plot: RawPlotHeader) -> bool:
     author named ``.net`` reads as a schematic's. Either title names a Windows
     path, read as one on any platform.
     """
-    title = next((value for key, value in plot.fields if key.casefold() == "title"), "")
-    path = PureWindowsPath(title.strip())
+    title = next((value for key, value in fields.items() if key.casefold() == "title"), "")
+    path = PureWindowsPath(str(title).strip())
     return is_asc(path) or path.suffix.casefold() == ".net"
 
 

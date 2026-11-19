@@ -33,7 +33,7 @@ from ltspice_mcp.lib.result_kinds import (
     stepped_kind,
 )
 from ltspice_mcp.lib.step_values import steps_with
-from ltspice_mcp.lib.trace_names import is_input_noise
+from ltspice_mcp.lib.trace_names import declared, is_input_noise
 
 if TYPE_CHECKING:
     from ltspice_mcp.lib.decoded_log import DecodedLog
@@ -141,30 +141,19 @@ class PlotDescriptor:
         return tuple(trace for trace in self.traces if trace.name not in self.step_variables)
 
 
-# The SI unit of each type a simulator declares a trace with. An unknown type
-# has none rather than a guess; an analysis can still override a declared type
-# that does not hold for what it writes (_trace_descriptor).
-_UNITS = {
-    "voltage": "V",
-    "current": "A",
-    "device_current": "A",
-    "time": "s",
-    "frequency": "Hz",
-    "hertz": "Hz",
-    "admittance": "S",
-    "impedance": "Ω",
-    "capacitance": "F",
-    "voltage-density": "V/√Hz",
-    "current-density": "A/√Hz",
-}
+#: The ``unit_evidence`` of a trace whose declared type the server does not
+#: know (``trace_names.DECLARED_TYPES``): it has no unit and holds "other",
+#: and says why.
+UNKNOWN_DECLARED_TYPE = "declared_type_unknown"
 
 
 def declared_unit(declared_type: str | None) -> str | None:
     """The SI unit of a trace's declared type (the raw header's own word for
-    what it holds), or None for a type with no known unit."""
-    if not declared_type:
-        return None
-    return _UNITS.get(declared_type.strip().lower())
+    what it holds), or None for a type with no unit or one the server does not
+    know (``trace_names.declared``). An analysis can still override a declared
+    type that does not hold for what it writes (``_trace_descriptor``)."""
+    known = declared(declared_type)
+    return None if known is None else known[1]
 
 
 _ROOT_LABEL = re.compile(r"(?:v\()?((?:pole|zero)\([0-9]+\))\)?\Z", re.I)
@@ -174,9 +163,9 @@ def _trace_descriptor(
     header: RawPlotHeader, index: int, wave: NDArray, analysis: Analysis
 ) -> TraceDescriptor:
     variable = header.variables[index]
-    declared = variable.declared_type.lower()
+    kind = variable.declared_type.lower()
     name = fold_name(variable.name)
-    unit = declared_unit(declared)
+    unit = declared_unit(kind)
     evidence = "declared_type" if unit else None
     normalization = None
     # ngspice's native analyses emit generic voltage types for derived facts.
@@ -189,7 +178,7 @@ def _trace_descriptor(
             "#input_impedance)" in name or name.startswith("v(output_impedance_at_")
         ):
             unit, evidence = "Ω", "ngspice:tf_resistance_label"
-        elif declared == "impedance":
+        elif kind == "impedance":
             unit, evidence = "Ω", "declared_type"
     elif analysis == "pz":
         unit, evidence = None, None
@@ -206,11 +195,14 @@ def _trace_descriptor(
     elif (
         analysis == "noise"
         and header.plot_name.lower() != "integrated noise"
-        and declared in ("voltage", "current", "device_current")
         and index != 0
+        and (quantity := declared(kind)) is not None
+        and quantity[0] in ("node_voltage", "current")
     ):
-        unit = "V/√Hz" if declared == "voltage" else "A/√Hz"
+        unit = "V/√Hz" if quantity[0] == "node_voltage" else "A/√Hz"
         evidence = "noise_spectral_density:declared_type"
+    if unit is None and evidence is None and declared(kind) is None:
+        evidence = UNKNOWN_DECLARED_TYPE
     return TraceDescriptor(
         variable.name,
         variable.declared_type,

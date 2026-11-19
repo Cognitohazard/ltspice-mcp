@@ -55,6 +55,7 @@ from ltspice_mcp.lib.raw_parser import (
     get_step_count,
     other_raw_path,
     points_reached,
+    run_log_path,
 )
 from ltspice_mcp.lib.result_observations import (
     READ_BY_JOB,
@@ -232,18 +233,20 @@ def source_for_raw_path(
     authorized independently on load, where a file the capture needs and does
     not find is refused (``parser_service``); only the contained capture worker
     reads writer evidence. Session simulator defaults are not provenance.
+    The log and console output are the run's (``raw_parser.run_log_path``),
+    beside an other raw of the run (``.op.raw``, ``.fra_1.raw``) too.
     """
-    sibling = raw.with_suffix(".log")
+    log = run_log_path(raw)
     return AnalysisSource(
         raw=raw,
-        log=sibling,
+        log=log,
         netlist=None,
         dialect=None,
         identity=None,
         trusted_job_artifact=False,
         explicit_dialect=dialect,
         plot_index=plot_index,
-        console=raw.with_suffix(".exe.log"),
+        console=log.with_suffix(".exe.log"),
     )
 
 
