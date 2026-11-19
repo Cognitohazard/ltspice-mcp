@@ -207,15 +207,16 @@ class TestARecordWrittenBefore:
         job.cases[0] = case
         (row,) = _rows(await _jobs(state_with_sim, action="runs", job_id=job.job_id))
         assert set(row["steps"]) == {"not_established"}
-        assert "recorded" in row["steps"]["not_established"]
+        assert "not recorded" in row["steps"]["not_established"]
 
 
 @pytest.mark.asyncio
-async def test_a_chart_over_its_cell_limit_is_refused_before_its_files_load(
+async def test_a_chart_over_its_cell_limit_is_refused_without_loading_every_file(
     state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """A chart of many cases over the cell limit is refused from the records
-    and the request, and loads no results file to find it out."""
+    """A chart of many cases over the cell limit is refused as the loaded
+    check refuses it, and the files past the point the cases loaded prove it
+    are not loaded."""
     import ltspice_mcp.tools.analysis as analysis
     from ltspice_mcp.errors import ResultError
     from ltspice_mcp.tools.analysis import PlotWaveformInput, handle_plot_waveform
@@ -248,7 +249,9 @@ async def test_a_chart_over_its_cell_limit_is_refused_before_its_files_load(
             ),
             state_with_sim,
         )
-    assert loads == []
+    # The headers say the chart would be over; it is refused once the cases
+    # loaded are over by themselves (ten draw 11 rows), before the rest load.
+    assert 10 <= len(loads) <= 10 + analysis._LOADS_AT_ONCE
 
 
 @pytest.mark.asyncio
@@ -428,3 +431,43 @@ async def test_an_ngspice_run_records_its_one_step(work_dir: Path, analysis: str
     assert case.steps is not None and case.steps.count == 1
     (row,) = _rows(await _jobs(state, action="runs", job_id=job.job_id))
     assert "steps" not in row
+
+
+@pytest.mark.asyncio
+async def test_a_chart_the_loaded_cases_fit_is_drawn_whatever_the_headers_say(
+    state_with_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The headers count every case; a case whose data cannot be read is not
+    drawn, and the chart of the others fits the limit, so it is drawn and the
+    case is named: the count made before loading refuses nothing that would
+    be drawn."""
+    import ltspice_mcp.tools.analysis as analysis
+    from ltspice_mcp.tools.analysis import PlotWaveformInput, handle_plot_waveform
+
+    raw = Path(__file__).parent / "fixtures" / "ltspice_tran_rc.raw"
+    receipt = await _ran(
+        state_with_sim, monkeypatch, work_dir, raw, raw.with_suffix(".log"), "fits", count=5
+    )
+    job = state_with_sim.all_jobs[receipt["job_id"]]
+    one = await handle_plot_waveform(
+        PlotWaveformInput(job_id=job.job_id, run_index=0, signals=["V(out)"], open=False),
+        state_with_sim,
+    )
+    assert one.structured_content is not None
+    points = one.structured_content["points_per_series"][0]
+    broken = job.cases[4].raw_file
+    assert broken is not None
+    whole = broken.read_bytes()
+    broken.write_bytes(whole[: whole.index(b"B\x00i\x00n\x00a\x00r\x00y\x00:\x00") + 40])
+    # Five cases draw six rows, four draw five.
+    monkeypatch.setattr(analysis, "_PLOT_MAX_CELLS", 5 * points + 1)
+
+    drawn = await handle_plot_waveform(
+        PlotWaveformInput(job_id=job.job_id, runs="all", signals=["V(out)"], open=False),
+        state_with_sim,
+    )
+    data = drawn.structured_content
+    assert data is not None
+    assert data["series_count"] == 4
+    (unread,) = data["cases_not_drawn"]
+    assert (unread["case_id"], unread["code"]) == (job.cases[4].case_id, "result_unreadable")

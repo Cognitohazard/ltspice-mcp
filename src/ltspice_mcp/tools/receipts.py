@@ -764,9 +764,10 @@ def row_facts(row: Mapping[str, Any]) -> list[str]:
         kinds.append(f"measurements_coverage.{row['measurements_coverage']}")
     if row.get("status") in _ENDED_WITHOUT_OUTPUT:
         kinds.append(f"status.{row['status']}")
-    # A record written before steps were kept says so on every such row; it
-    # is the record's age, not a fact of the run.
-    if (row.get("steps") or {}).get("not_established") not in (None, STEPS_NOT_RECORDED):
+    # How many steps a run's results hold was not established. A record that
+    # holds none says so on every such row; it is the record's, not the run's.
+    steps = row.get("steps") or {}
+    if "count" not in steps and steps.get("not_established") not in (None, STEPS_NOT_RECORDED):
         kinds.append("steps_not_established")
     return list(dict.fromkeys(kinds))
 

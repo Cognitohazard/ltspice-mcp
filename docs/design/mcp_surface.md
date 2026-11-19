@@ -55,11 +55,26 @@ stepped (`V(out) [R1=1000;r=22]`); where the assignments do not tell a case
 apart, or more than three differ, the case id stands in for them. One function
 writes that label (`points.point_label`), and a chart of one case keeps its
 labels. Each trace summary names its `case_id` and `run_index`, the reply's
-`cases` lists each case drawn with its `assignments` and `n_steps`, and
-`cases_not_drawn` names each case selected and not drawn: `case_not_found`
-and `run_not_found` as `analyze_results` names them, `raw_not_produced` with
-the case's `status`, `other_raw_not_written`, and `step_not_found` for a case
-without the `step` asked for, which applies to every case. A signal some cases
+`cases` lists each case drawn with its `assignments` and `n_steps`, the
+number of steps its record keeps (the run row's `steps`; `steps` in its place
+says why it is not established), and `cases_not_drawn` names each case
+selected and not drawn, at most 20 rows with the total in
+`cases_not_drawn_truncated`: `case_not_found` and `run_not_found` as
+`analyze_results` names them (one row per code, with their count and the
+first five), `run_not_finished` and `raw_not_produced` with the case's
+`status`, `other_raw_not_written`, `result_unreadable` or `analysis_deadline`
+for a results file that cannot be parsed, `plot_not_found` for one without
+the `plot_index` asked for, `load_time_exhausted` for one not loaded within
+the chart's bound on loading, and `step_not_found` for a case without the
+`step` asked for, which applies to every case. The results files load side
+by side, two at a time, through the parse service, each under its own parse
+deadline, within one bound on the whole of it (twice one file's parse
+deadline, 240 s). Before any loads, each first plot's header (at most its
+first 256 KiB), the cases' records and the request say whether the chart
+would be over its cell limit were every case drawn; where it would, it is
+refused as soon as the cases loaded are over by themselves, and the files
+after them are not loaded. Neither count holds a case the chart will not
+draw, so neither refuses a chart that would be drawn. A signal some cases
 lack is drawn for the others, and `signals_not_in_cases` names those that lack
 it. A selection with nothing to draw is refused with why for each case. One
 chart has one kind of axis: cases whose plots differ in analysis are refused,
@@ -153,6 +168,7 @@ Codes by kind of failure:
 | `run_not_finished` | a read named a case of a job whose run has not finished (queued, running, or its end-of-run checks not yet made); the message names the case, what its simulator has written so far and the wait. The job's finished cases are read meanwhile |
 | `result_file_not_found` | no file is at a `.raw` or `.log` path the caller named; the `hint` says to check the path, or to read a run of this server's by its `job_id` |
 | `analysis_deadline` | a result read ran past its wall-clock bound and was abandoned |
+| `plot_not_found` | a read named a `plot_index` its results file does not hold; the message says how many plots it holds. The file is readable: the request does not fit it |
 | `no_axis` | the selected plot is a table (an operating point, `.tf` or `.pz` result), so it has no sweep axis to query at |
 | `job_not_found` | no job with that `job_id` or `request_id` |
 | `invalid_cursor` | a page cursor did not decode, or was minted for another listing, view or request, or for a file that has changed since; the `hint` says to send back the cursor the same tool returned, or the message names the argument to change |

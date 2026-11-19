@@ -464,11 +464,16 @@ _NOT_DRAWN_MAX = 20
 #: Longest ``runs``, as JSON, a reply repeats as it was given.
 _RUNS_NAMED_MAX = 120
 #: The one bound on the time a chart of several cases spends loading their
-#: results files, in seconds; a case not loaded by then is named, not drawn.
-_LOAD_TIME_S = 60.0
+#: results files, in seconds: twice one file's own parse deadline
+#: (``services.RAW_PARSE_TIMEOUT_S``), so a file a chart of its case alone
+#: would load is loaded here too when it is among the first. A case not loaded
+#: by then is named, not drawn.
+_LOAD_TIME_S = 2 * services.RAW_PARSE_TIMEOUT_S
 #: Most results files a chart of several cases loads side by side, each
-#: through the parse service under its own parse deadline.
-_LOADS_AT_ONCE = 4
+#: through the parse service under its own parse deadline and memory limit:
+#: the parse workers and the arrays they return can hold this many times one
+#: file's.
+_LOADS_AT_ONCE = 2
 
 
 def _x_axis(raw, analysis_type: str) -> tuple[str, str | None]:
@@ -2294,15 +2299,17 @@ def _unmatched_rows(unmatched: list[services.UnmatchedRun]) -> list[dict[str, An
     """The runs a selection names that the job does not hold, one row per code:
     how many, and the first few. A list of indices has no bound of its own, so
     its misses are counted, not listed one a row."""
-    rows: dict[str, dict[str, Any]] = {}
+    named: dict[str, tuple[str, list[Any]]] = {}
     for run in unmatched:
         # Each code is the one services.select_cases gave the run.
         key = "case_ids" if run.case_id is not None else "run_indices"
-        row = rows.setdefault(run.code, {"code": run.code, "count": 0, key: []})
-        row["count"] += 1
-        if len(row[key]) < _UNMATCHED_NAMED:
-            row[key].append(run.case_id if run.case_id is not None else run.run_index)
-    return list(rows.values())
+        named.setdefault(run.code, (key, []))[1].append(
+            run.case_id if run.case_id is not None else run.run_index
+        )
+    return [
+        {"code": code, "count": len(names), key: names[:_UNMATCHED_NAMED]}
+        for code, (key, names) in named.items()
+    ]
 
 
 def _runs_named(runs: RunsSelection) -> str:
@@ -2403,78 +2410,90 @@ def _analyses_differ(by_analysis: dict[str, list[str]]) -> ResultError:
     )
 
 
-async def _limits_before_loading(
-    args: PlotWaveformInput, readable: list[tuple[ExperimentCase, services.RunContext]]
-) -> None:
-    """Refuse a chart of several cases that cannot be drawn within its limits
-    before any of its results files loads, from what the cases' records say
-    (their steps), what the request asks (signals, step, window, max_points)
-    and what each first plot's header declares (``raw_parser.first_plot_shape``:
-    its analysis, its variables and its number of points, read from the header
-    alone). The refusals are those a chart of the loaded files gives.
+def _asked_names(args: PlotWaveformInput) -> list[str] | None:
+    """The signal names a call asks to draw, None for every trace."""
+    if args.panels is not None:
+        return [name for panel in args.panels for name in panel]
+    return None if args.signals == "all" else list(args.signals)
 
-    Cases whose plots differ in analysis are refused. The cell limit is held
-    to a lower bound of what each panel draws: a signal's panel draws at least
-    its own series, one per step drawn of each case whose header names it, and
-    at least as long as that case's longest step, which is at least its points
-    shared among its steps where every point is drawn (none over max_points).
-    A signal no header names exactly (a node pair) adds nothing, so the bound
-    never refuses a chart that would be drawn. Not decided here, and left to
-    the check made on the loaded files: a plot_index past the first plot (the
-    header read is the first plot's), a window (its points are known only from
-    the axis), and a header longer than the read.
-    """
-    if (args.plot_index or 0) != 0:
-        return
-    shapes = await asyncio.to_thread(
-        lambda: [first_plot_shape(ctx.raw) if ctx.raw is not None else None for _, ctx in readable]
-    )
-    by_analysis: dict[str, list[str]] = {}
-    sampled_cases: list[tuple[ExperimentCase, FirstPlotShape]] = []
+
+def _cells_over(counted: dict[str, tuple[int, int]]) -> tuple[int, int] | None:
+    """The first signal whose panel, at ``(series, longest)`` at least, is
+    over the cell limit, as ``(rows, longest)``; None when none is."""
+    for series, longest in counted.values():
+        if (series + 1) * longest > _PLOT_MAX_CELLS:
+            return series + 1, longest
+    return None
+
+
+def _count_into(
+    counted: dict[str, tuple[int, int]], names: list[str], drawn: int, length: int
+) -> None:
+    """Add a case's ``drawn`` series of each of ``names`` (folded), each at
+    least ``length`` points, to what each signal's panel draws."""
+    for name in dict.fromkeys(names):
+        series, longest = counted.get(name, (0, 0))
+        counted[name] = (series + drawn, max(longest, length))
+
+
+def _held_names(variables: Sequence[str], asked: list[str] | None) -> list[str]:
+    """The folded names of ``asked`` (or of every variable but the first)
+    that ``variables`` holds by exactly that name; a node pair or a name
+    held under another spelling adds nothing, so a count stays a lower bound."""
+    held = {fold_name(name) for name in variables[1:]}
+    return [
+        key for key in (held if asked is None else (fold_name(n) for n in asked)) if key in held
+    ]
+
+
+def _cells_from_headers(
+    args: PlotWaveformInput,
+    readable: list[tuple[ExperimentCase, services.RunContext]],
+    shapes: list[FirstPlotShape | None],
+) -> tuple[int, int] | None:
+    """Whether the chart, were every one of ``readable`` drawn, would be over
+    its cell limit, read from their records (their steps), the request and
+    each first plot's header: its variables and its points shared among its
+    steps (a case's longest step holds at least that many, and it is drawn
+    whole where all its points are under max_points)."""
+    max_points = args.max_points or _DEFAULT_PLOT_MAX_POINTS
+    asked = _asked_names(args)
+    counted: dict[str, tuple[int, int]] = {}
     for (case, _), shape in zip(readable, shapes, strict=True):
-        if shape is None:
+        if shape is None or shape.points is None:
             continue
         analysis = plot_analysis(shape.plot_name, shape.first_type)
-        by_analysis.setdefault(analysis, []).append(case.case_id)
-        if sampled_axis(analysis, shape.first_type) is not None:
-            sampled_cases.append((case, shape))
-    if len(by_analysis) > 1:
-        raise _analyses_differ(by_analysis)
-    if args.t_start is not None or args.t_end is not None:
-        return
-    max_points = args.max_points or _DEFAULT_PLOT_MAX_POINTS
-    asked = (
-        [name for panel in args.panels for name in panel]
-        if args.panels is not None
-        else None
-        if args.signals == "all"
-        else list(args.signals)
-    )
-    rows: dict[str, int] = {}
-    longest: dict[str, int] = {}
-    for case, shape in sampled_cases:
-        if shape.points is None:
+        if sampled_axis(analysis, shape.first_type) is None:
             continue
         count = case.steps.count if case.steps is not None else None
         if count is None:
-            # How many steps the case holds is not known: one is drawn at least.
             drawn, length = 1, 0
         else:
             drawn = 1 if args.step is not None else count
             whole = shape.points <= max_points and (count == 1 or args.step is None)
             length = -(-shape.points // count) if whole else 0
-        held = {fold_name(name): name for name in shape.variables[1:]}
-        names = (
-            held.values()
-            if asked is None
-            else [held[key] for name in asked if (key := fold_name(name)) in held]
-        )
-        for name in dict.fromkeys(fold_name(name) for name in names):
-            rows[name] = rows.get(name, 0) + drawn
-            longest[name] = max(longest.get(name, 0), length)
-    for name, series in rows.items():
-        if (series + 1) * longest[name] > _PLOT_MAX_CELLS:
-            raise _plot_cells_exceeded(series + 1, longest[name])
+        _count_into(counted, _held_names(shape.variables, asked), drawn, length)
+    return _cells_over(counted)
+
+
+def _count_loaded(
+    args: PlotWaveformInput, raw: DecodedRaw, counted: dict[str, tuple[int, int]]
+) -> None:
+    """Add what the chart will draw of one loaded case to ``counted``: one
+    series per step it draws of each signal its raw holds by name, at least
+    as long as its longest step drawn whole (none over max_points). A case it
+    will not draw (no sampled axis, no step asked for) adds nothing."""
+    if raw.descriptor.axis is None:
+        return
+    try:
+        steps = _steps_named(args, raw, [dict(step.parameters) for step in raw.descriptor.steps])
+    except ResultError:
+        return
+    max_points = args.max_points or _DEFAULT_PLOT_MAX_POINTS
+    lengths = [len(guarded_axis(raw, step)) for step in steps]
+    length = max((n for n in lengths if n <= max_points), default=0)
+    names = _held_names([raw.descriptor.axis.name, *raw.get_trace_names()], _asked_names(args))
+    _count_into(counted, names, len(steps), length)
 
 
 async def _load_cases(
@@ -2485,10 +2504,26 @@ async def _load_cases(
 ) -> list[tuple[ExperimentCase, services.AnalysisSource, DecodedRaw]]:
     """Load the results file of each of ``readable``, at most
     ``_LOADS_AT_ONCE`` side by side through the parse service, within one
-    bound on the time it all takes (``_LOAD_TIME_S``). A file that cannot be
-    parsed, or whose parse ran past its own deadline, costs only its case; so
-    does a case not loaded when the bound ends: each is named in ``not_drawn``
-    with its code, and the others are drawn."""
+    bound on the time it all takes (``_LOAD_TIME_S``), and hold the chart to
+    its cell limit while they load.
+
+    Before any file loads, each first plot's header is read
+    (``raw_parser.first_plot_shape``, at most its first 256 KiB) and, with the
+    cases' records and the request, says whether the chart would be over its
+    cell limit were every case drawn (``_cells_from_headers``). Where it would,
+    the files load and each loaded case adds what the chart will draw of it
+    (``_count_loaded``): the chart is refused, as the check on the loaded
+    files refuses it, once the cases loaded are over the limit by themselves,
+    and the files not yet loaded are not loaded. Neither count holds a case
+    the chart will not draw, so neither refuses a chart that would be drawn.
+    Not read from the headers: a plot_index past the first plot, and a window,
+    whose points are known only from the axis; those load every file and are
+    held to the limit on the loaded files.
+
+    A file that cannot be parsed, or whose parse ran past its own deadline,
+    costs only its case; so does a case not loaded when the time bound ends:
+    each is named in ``not_drawn`` with its code, and the others are drawn.
+    """
     loop = asyncio.get_running_loop()
     ends = loop.time() + _LOAD_TIME_S
     gate = asyncio.Semaphore(_LOADS_AT_ONCE)
@@ -2497,21 +2532,52 @@ async def _load_cases(
         services.source_for_run(ctx, plot_index=args.plot_index or 0, dialect=args.dialect)
         for _, ctx in readable
     ]
+    watched = (
+        (args.plot_index or 0) == 0
+        and args.t_start is None
+        and args.t_end is None
+        and _cells_from_headers(
+            args,
+            readable,
+            await asyncio.to_thread(
+                lambda: [
+                    first_plot_shape(ctx.raw) if ctx.raw is not None else None
+                    for _, ctx in readable
+                ]
+            ),
+        )
+        is not None
+    )
+    counted: dict[str, tuple[int, int]] = {}
+    over: list[tuple[int, int]] = []
 
     async def load(index: int) -> None:
         async with gate:
-            if loop.time() >= ends:
+            if over or loop.time() >= ends:
                 return
             try:
-                results[index] = await services.load_raw(sources[index], state)
+                raw = await services.load_raw(sources[index], state)
             except ResultError as exc:
                 results[index] = exc
+                return
+            results[index] = raw
+            if watched and not over:
+                _count_loaded(args, raw, counted)
+                if (found := _cells_over(counted)) is not None:
+                    over.append(found)
 
-    with contextlib.suppress(TimeoutError):
-        await asyncio.wait_for(
-            asyncio.gather(*(load(index) for index in range(len(readable)))),
-            max(0.0, ends - loop.time()),
-        )
+    gathered = asyncio.gather(
+        *(load(index) for index in range(len(readable))), return_exceptions=True
+    )
+    try:
+        outcomes = await asyncio.wait_for(gathered, max(0.0, ends - loop.time()))
+    except TimeoutError:
+        outcomes = []
+    for outcome in outcomes:
+        if isinstance(outcome, BaseException):
+            raise outcome
+    if over:
+        raise _plot_cells_exceeded(*over[0])
     loaded: list[tuple[ExperimentCase, services.AnalysisSource, DecodedRaw]] = []
     for index, (case, _) in enumerate(readable):
         result = results.get(index)
@@ -2543,7 +2609,6 @@ async def _plot_several(args: PlotWaveformInput, state: SessionState, chosen: _S
     if isinstance(args.signals, list) and not args.signals:
         raise ResultError("Pass at least one signal, or 'all'.")
     not_drawn = list(chosen.not_drawn)
-    await _limits_before_loading(args, chosen.readable)
     loaded = await _load_cases(args, state, chosen.readable, not_drawn)
     if not loaded:
         raise _nothing_to_draw(not_drawn, args.job_id, args.runs)

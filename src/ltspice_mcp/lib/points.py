@@ -161,11 +161,15 @@ def point_label(
 
 
 #: What a reply says of a case with a raw whose record holds no steps: one
-#: recorded before the server kept them.
+#: recorded before the server kept them, one whose run was recovered after its
+#: owner stopped, one stopped with its partial raw kept, or one whose run's
+#: end-of-run checks have not finished.
 STEPS_NOT_RECORDED = (
-    "This case was recorded before the server kept how a case's results are "
-    "stepped, so its steps are not established here; its results' own steps are "
-    "read with them."
+    "How this case's results are stepped was not recorded when its run ended (a "
+    "case recorded before the server kept it, recovered after its server stopped, "
+    "or stopped with its partial raw kept), so it is not established here. A read "
+    "of its results gives their steps: inspect(kind='results', view='plots') or "
+    "plot_waveform with its case_id."
 )
 
 #: The ``steps`` a run row and a chart's ``cases[]`` carry.
