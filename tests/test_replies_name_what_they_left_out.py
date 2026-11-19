@@ -1163,9 +1163,10 @@ async def test_a_run_read_by_path_says_its_measurements_were_not_read(
     family: str, config: ServerConfig, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """The raw of a QSPICE or Xyce run, read by its path with its log beside
-    it, names its writer only in its own header: the summary says the run's
-    measurements were not read, as a read of the same run by job does, and
-    reports none of the values its log holds."""
+    it, names its writer only in its own header (Xyce's names none, so the
+    caller names it): the summary says the run's measurements were not read,
+    as a read of the same run by job does, the every-run check says nothing
+    of them, and the measurements recipe refuses them with the same reason."""
     from ltspice_mcp.lib.simulator import SIMULATORS
 
     state = SessionState.create(
@@ -1178,5 +1179,56 @@ async def test_a_run_read_by_path_says_its_measurements_were_not_read(
     data = await dispatched(
         state, "analyze_results", sources=sources, recipes=[{"key": "s", "metric": "summary"}]
     )
+    codes = [o["code"] for o in data.get("observations", [])]
     unread = [o for o in data.get("observations", []) if o["code"] == "measurements_not_read"]
     assert [o["evidence"]["reason"] for o in unread] == ["simulator_unsupported"], data
+    # The every-run check asks the same question, and says nothing of them.
+    assert "meas_failed_in_every_run" not in codes, codes
+    data = await dispatched(
+        state,
+        "analyze_results",
+        sources=sources,
+        recipes=[{"key": "m", "metric": "measurements"}],
+    )
+    assert "simulator_unsupported" in str(data), data
+    assert "measured" not in str(data), data
+
+
+def test_a_recipe_lifts_a_bounded_number_of_one_code_and_says_how_many_it_left():
+    """Seven runs each with an ``extreme_value`` of its own number group with
+    no other: five are lifted to the reply's never-cut top level, the last of
+    them says two more are in the rows' values, and those two stay there, so
+    none is lost and none is said twice."""
+    from ltspice_mcp.tools.analyze import (
+        _LIFTED_PER_CODE,
+        Record,
+        RowIdentity,
+        _value_observations,
+    )
+
+    records = [
+        Record(
+            manifest_id=f"m{index}",
+            source=f"run{index}",
+            identity=RowIdentity(case_id=f"c{index}"),
+            value={
+                "max": float(index),
+                "observations": [
+                    {
+                        "code": "extreme_value",
+                        "kind": "value",
+                        "detail": f"V(out) peaks at {index}e9",
+                    },
+                    {"code": "rational_fit", "kind": "description", "detail": "a fit"},
+                ],
+            },
+        )
+        for index in range(_LIFTED_PER_CODE + 2)
+    ]
+    lifted = _value_observations("s", records)
+    assert [o.evidence["rows"][0]["case_id"] for o in lifted] == [
+        f"c{index}" for index in range(_LIFTED_PER_CODE)
+    ]
+    assert "2 more extreme_value" in lifted[-1].detail
+    left = [[o["code"] for o in record.value["observations"]] for record in records]
+    assert left == [["rational_fit"]] * _LIFTED_PER_CODE + [["extreme_value", "rational_fit"]] * 2

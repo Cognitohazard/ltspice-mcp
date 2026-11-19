@@ -521,7 +521,7 @@ async def load_log_section(
         # Refused with the run row's reason where the measurements were not
         # read; each names the field holding its result.
         section = await services.answer_measurements(
-            source, services.read_measurements(source, logs)
+            source, await asyncio.to_thread(services.read_measurements, source, logs)
         )
     else:
         section = logs.value(name)

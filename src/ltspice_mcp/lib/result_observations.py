@@ -648,6 +648,27 @@ def saves_not_stored(
     stored = {trace_key(name, xvii=naming.xvii) for name, _ in traces}
     missing: list[dict[str, str]] = []
     unchecked: list[dict[str, str]] = []
+    if naming.family not in ("ltspice", "ngspice"):
+        # No recording or live run shows what this simulator's .save stores
+        # (Xyce's .SAVE writes an initial-condition file), so nothing is
+        # said to be missing.
+        reason = (
+            f"what {naming.family or 'this simulator'}'s .save stores is not recorded"
+        )
+        entries = [text for text, _ in saves.entries] + list(saves.patterns)
+        if saves.unreadable:
+            entries.append(".save")
+        if not entries:
+            return None
+        return Observation(
+            code="saves_not_stored",
+            kind="coverage",
+            detail=f"{circuit}: not checked against the results: .save {', '.join(entries)}.",
+            evidence={
+                "circuit": circuit,
+                "not_checked": [{"save": text, "reason": reason} for text in entries],
+            },
+        )
     if saves.unreadable:
         unchecked.append({"save": ".save", "reason": "a .save card could not be read"})
     for text, signal in saves.entries:
@@ -671,7 +692,12 @@ def saves_not_stored(
                 )
         elif not signal.established:
             unchecked.append({"save": text, "reason": signal.why or "not established"})
-        elif saves.includes and naming.family == "ltspice":
+        elif (
+            saves.includes
+            and naming.family == "ltspice"
+            and signal.spelled is None
+            and not signal.voids_save
+        ):
             unchecked.append(
                 {
                     "save": text,

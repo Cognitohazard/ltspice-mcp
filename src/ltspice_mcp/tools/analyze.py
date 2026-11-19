@@ -1743,7 +1743,7 @@ async def _measurement_step_plan(
     if steps.step is None and not steps.all_steps:
         return [(None, {})]
     logs = await services.load_logs(source, state)
-    parsed = services.read_measurements(source, logs)
+    parsed = await asyncio.to_thread(services.read_measurements, source, logs)
     if not parsed or not parsed["measurements"]:
         # The metric reads the log again and says why it holds no results.
         return [(0, {})]
@@ -1817,26 +1817,38 @@ _KEPT_KINDS: dict[str, str] = {
 }
 
 
+#: How many observations of one code a recipe lifts to the top level, where
+#: the list is never cut: one that names a run's own numbers (an
+#: ``extreme_value``) groups with no other, so a large run set would lift one
+#: per run. The rest stay in the rows' values, and the last lifted one says
+#: how many.
+_LIFTED_PER_CODE = 5
+
+#: One lifted observation's identity: its code, kind, detail and evidence.
+_Group = tuple[str, str, str, str]
+
+
 def _value_observations(key: str, records: list[Record]) -> list[Observation]:
     """The observations a recipe's metric made of its rows' values that limit
     or qualify the number beside them (``_LIFTED_KINDS``). Each is given once,
     naming the recipe and every row it was made of, and is taken out of the
     rows' values, so no observation appears twice in one reply whichever
-    fields it shows.
+    fields it shows. At most ``_LIFTED_PER_CODE`` of one code are lifted; the
+    others stay in the values they were made of, and the reply says how many.
 
     A lean row leaves the lists of its value out, so this is where they reach
     the reply. A value's other observations (``_KEPT_KINDS``: a fit's
-    description, a relayed log line) stay in the value.
+    description, a relayed log line) stay in the value. The values are each
+    evaluation's own, built fresh by its metric, so taking an observation out
+    of one changes no other reply.
     """
-    grouped: dict[tuple[str, str, str, str], tuple[dict[str, Any], list[dict[str, Any]]]] = {}
+    grouped: dict[_Group, tuple[dict[str, Any], list[dict[str, Any]]]] = {}
+    sites: list[tuple[Record, _Group | None, Any]] = []
     for record in records:
         found = record.value.get("observations") if isinstance(record.value, dict) else None
-        if not found:
-            continue
-        kept = []
-        for item in found:
+        for item in found or []:
             if not isinstance(item, Mapping) or item.get("kind") not in _LIFTED_KINDS:
-                kept.append(item)
+                sites.append((record, None, item))
                 continue
             evidence = dict(item.get("evidence") or {})
             group = (
@@ -1850,19 +1862,44 @@ def _value_observations(key: str, records: list[Record]) -> list[Observation]:
                 if (value := getattr(record.identity, name)) is not None:
                     where[name] = value
             grouped.setdefault(group, (evidence, []))[1].append(where)
+            sites.append((record, group, item))
+    lifted: list[_Group] = []
+    left: dict[str, int] = {}
+    for group in grouped:
+        if sum(1 for kept in lifted if kept[0] == group[0]) < _LIFTED_PER_CODE:
+            lifted.append(group)
+        else:
+            left[group[0]] = left.get(group[0], 0) + 1
+    chosen = set(lifted)
+    for record in {id(record): record for record, _, _ in sites}.values():
+        kept = [
+            item
+            for owner, group, item in sites
+            if owner is record and (group is None or group not in chosen)
+        ]
         if kept:
             record.value["observations"] = kept
         else:
-            del record.value["observations"]
-    return [
-        Observation(
-            code=code,
-            kind=kind,
-            detail=detail,
-            evidence={**evidence, "recipe": key, "rows": rows},
+            record.value.pop("observations", None)
+    observations = []
+    for index, group in enumerate(lifted):
+        code, kind, detail, _ = group
+        evidence, rows = grouped[group]
+        last = all(other[0] != code for other in lifted[index + 1 :])
+        if last and left.get(code):
+            detail = (
+                f"{detail} ({left[code]} more {code} observation(s) of this recipe are in "
+                "its rows' values; read them with include.fields=['value'].)"
+            )
+        observations.append(
+            Observation(
+                code=code,
+                kind=kind,
+                detail=detail,
+                evidence={**evidence, "recipe": key, "rows": rows},
+            )
         )
-        for (code, kind, detail, _), (evidence, rows) in grouped.items()
-    ]
+    return observations
 
 
 def _absence_observations(recipe: Recipe, key: str, records: list[Record]) -> list[Observation]:
