@@ -9,6 +9,12 @@ that turns a value into a number (or compares two): such a module imports
 ``stored_values``, or is listed below with the reason it sends no number read
 from stored bytes another build reads otherwise. A new reader of a stored
 deck's values therefore cannot skip the question unnoticed.
+
+A file is found decoded by the deck decoders and by the general ways to
+decode one (``bytes.decode``, ``Path.read_text``, a text-mode ``open``). What
+the scan cannot see is whether a module that imports ``stored_values`` states
+its answer on every route it serves: the route tests
+(``tests/test_stored_value_readings.py``) hold each route to that.
 """
 
 from __future__ import annotations
@@ -26,6 +32,11 @@ DECODERS = frozenset(
         "decode_spice_bytes_with_encoding",
         "decode_spice_bytes_strictly",
         "parse_hierarchy_cards",
+        # The general ways to turn a file's bytes into text, so a new reader
+        # that decodes on its own is found too.
+        "decode",
+        "read_text",
+        "<text open>",
     }
 )
 
@@ -81,7 +92,23 @@ EXEMPT: dict[str, str] = {
 }
 
 
+def _text_mode_open(node: ast.Call) -> bool:
+    """``open(...)`` or ``path.open(...)`` with no ``b`` in its mode: a file
+    read as text, decoded by the platform or a named codec."""
+    func = node.func
+    if not (
+        (isinstance(func, ast.Name) and func.id == "open")
+        or (isinstance(func, ast.Attribute) and func.attr == "open")
+    ):
+        return False
+    modes = [arg for arg in node.args if isinstance(arg, ast.Constant)]
+    modes += [kw.value for kw in node.keywords if kw.arg == "mode"]
+    mode = next((m.value for m in modes if isinstance(m, ast.Constant)), "r")
+    return isinstance(mode, str) and "b" not in mode
+
+
 def _calls(tree: ast.AST) -> set[str]:
+    """The names a module calls, and ``<text open>`` for a text-mode open."""
     called: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
@@ -89,6 +116,8 @@ def _calls(tree: ast.AST) -> set[str]:
                 called.add(node.func.id)
             elif isinstance(node.func, ast.Attribute):
                 called.add(node.func.attr)
+            if _text_mode_open(node):
+                called.add("<text open>")
     return called
 
 
