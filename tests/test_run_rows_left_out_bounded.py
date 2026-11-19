@@ -269,6 +269,100 @@ def test_a_band_of_counts_that_fit_below_the_largest_is_found(tmp_path):
     assert len(shown.reply["rows"]) == 90
 
 
+def _over(data: dict[str, Any]) -> bool:
+    return any(item["code"] == "budget_not_met" for item in data.get("observations", []))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("budget", range(900, 4051, 150))
+async def test_a_note_that_grows_with_the_rows_kept_does_not_send_a_reply_over(
+    state_no_sim: SessionState, budget: int
+):
+    """The second run carries two codes and the third a third, so the note at
+    one row names two runs; from run 40 on the three fall on separate runs,
+    and the note at a larger count names three. The reserve, measured at one
+    row, is below that note: a reply is over its target only at one row."""
+    job = _job(state_no_sim, f"exp_grows_{budget}", 300)
+    job.cases[1].log_diagnostics = _diagnosed(_CODES[0:2])
+    job.cases[2].log_diagnostics = _diagnosed(_CODES[2:3])
+    for index in range(40, 300):
+        job.cases[index].log_diagnostics = _diagnosed([_CODES[index % 3]])
+    data = await _jobs(state_no_sim, action="status", job_id=job.job_id, budget=budget)
+    if _over(data):
+        assert len(data["runs"]["items"]) == 1, (budget, len(data["runs"]["items"]))
+    else:
+        assert estimate_tokens(data) <= budget
+
+
+@pytest.mark.parametrize("seed", range(60))
+def test_no_reply_is_over_its_target_while_a_smaller_count_fits(tmp_path, seed: int):
+    """Facts placed at random, one to three kinds a run, and a note shaped as
+    ``runs_not_shown`` is: every kind's count, and up to three runs named,
+    each the first left out with a kind not yet named and at most two of its
+    kinds. A run with several kinds early and runs with one kind later make
+    the note grow as rows are kept."""
+    rng = random.Random(seed)
+    count = rng.randint(20, 150)
+    rows = [f"row {index:04d} " + "y" * rng.randint(4, 40) for index in range(count)]
+    kinds = [f"kind{number}" for number in range(6)]
+    facts = {
+        index: rng.sample(kinds, rng.randint(1, 3))
+        for index in rng.sample(range(count), rng.randint(3, min(count, 30)))
+    }
+
+    def note_from(start: int) -> dict[str, Any] | None:
+        left = {index: carried for index, carried in facts.items() if index >= start}
+        if not left:
+            return None
+        counts: dict[str, int] = {}
+        for carried in left.values():
+            for kind in carried:
+                counts[kind] = counts.get(kind, 0) + 1
+        named: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for index in sorted(left):
+            fresh = [kind for kind in left[index] if kind not in seen][:2]
+            if fresh and len(named) < 3:
+                seen.update(fresh)
+                named.append({"run": f"run {index:04d} " + "z" * 30, "kinds": fresh})
+        return {"counts": counts, "runs": named}
+
+    def annotate(reply: dict[str, Any], cut: Any, _stored: Any, _paged: Any) -> None:
+        entry = cut.get("/rows")
+        note = note_from(0 if entry is None else entry.returned)
+        if entry is not None and note:
+            reply["left_out"] = note
+
+    first = note_from(1)
+    reserve = estimate_tokens({"left_out": first}) if first else 0
+
+    def presented(target: int, cap: int | None = None) -> Any:
+        return present(
+            {"rows": rows},
+            _SCHEMA,
+            target=target,
+            tool="tool",
+            snapshot={},
+            store=Store(tmp_path),
+            ttl_hours=1.0,
+            annotate=annotate,
+            records={"/rows": Record("rows", "r")},
+            caps=None if cap is None else {"/rows": cap},
+            apart={"left_out": reserve} if reserve else None,
+        )
+
+    target = rng.randint(80, max(81, estimate_tokens({"rows": rows}, as_sent=False)))
+    shown = presented(target)
+    kept = len(shown.reply["rows"])
+    if not shown.met and kept > 1:
+        smaller = [
+            c
+            for c in range(1, kept)
+            if estimate_tokens(presented(10**9, cap=c).reply, as_sent=False) <= target
+        ]
+        assert not smaller, f"{kept} rows over {target} while {smaller[-1]} fit"
+
+
 # ---------------------------------------------------------------------------
 # 3. The lint branch
 # ---------------------------------------------------------------------------
