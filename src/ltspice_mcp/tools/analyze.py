@@ -94,6 +94,7 @@ from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
     DIAGNOSTICS_COVERAGE_SCHEMA,
     HINT_SCHEMA,
+    MEASUREMENT_STATS_SCHEMA,
     NOT_ESTABLISHED_SCHEMA,
     PRINTED_ONCE_SCHEMA,
     RUN_DIAGNOSTICS_SCHEMA,
@@ -2976,6 +2977,7 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
             "properties": {
                 "diagnostics": RUN_DIAGNOSTICS_SCHEMA,
                 "diagnostics_coverage": DIAGNOSTICS_COVERAGE_SCHEMA,
+                "stats": {"type": "object", "additionalProperties": MEASUREMENT_STATS_SCHEMA},
                 "measured": {
                     "type": "object",
                     "additionalProperties": {"type": ["number", "null"]},

@@ -61,6 +61,7 @@ if TYPE_CHECKING:
         analyze_ac_structure,
     )
     from ltspice_mcp.lib.format import parse_spice_value
+    from ltspice_mcp.lib.log_types import no_number_reasons, result_numbers
     from ltspice_mcp.lib.result_observations import Observation
     from ltspice_mcp.lib.signal_analysis import (
         DisturbanceResponseOutput,
@@ -129,6 +130,10 @@ __all__ = [  # noqa: RUF022 - grouped in the contract's published order
     # Variation values round-trip as SPICE literals ('5p'), so the Python API
     # needs the same reader MCP parses them with.
     "parse_spice_value",
+    # A measurement's results and why each step has none, as the server
+    # reads them, for compute_measurement_stats.
+    "result_numbers",
+    "no_number_reasons",
     "Quantity",
     "SearchDirection",
     "CrossingDirection",
@@ -225,6 +230,7 @@ _SOURCES: dict[str, str] = {
             ("AcStructureResult", "Corner", "CornerKind", "analyze_ac_structure"),
         ),
         ("ltspice_mcp.lib.format", ("parse_spice_value",)),
+        ("ltspice_mcp.lib.log_types", ("no_number_reasons", "result_numbers")),
         ("ltspice_mcp.lib.result_observations", ("Observation",)),
         (
             "ltspice_mcp.lib.signal_analysis",

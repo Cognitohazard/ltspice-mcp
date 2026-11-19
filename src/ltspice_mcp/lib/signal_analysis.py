@@ -21,7 +21,7 @@ from typing import Literal, NotRequired, TypedDict
 import numpy as np
 
 from ltspice_mcp.lib.format import held_to_cap
-from ltspice_mcp.lib.log_types import measurement_named
+from ltspice_mcp.lib.log_types import FAILED, measurement_named
 
 _LEVEL_EPSILON = 1e-12
 
@@ -218,11 +218,15 @@ class HistogramBin(TypedDict):
 
 
 class MeasurementStatsEntry(TypedDict):
-    """Per-measurement aggregate stats in :func:`compute_measurement_stats`."""
+    """Per-measurement aggregate stats in :func:`compute_measurement_stats`.
+
+    ``total_count`` is ``valid_count`` plus ``failure_count`` plus every count
+    in ``no_number``."""
 
     total_count: int
     valid_count: int
     failure_count: int
+    no_number: dict[str, int]
     min: float | None
     max: float | None
     mean: float | None
@@ -2209,17 +2213,49 @@ def downsample_minmax_traces(
     return (xs[::-1] if flipped else xs), kept
 
 
+#: What :func:`compute_measurement_stats` counts a step with no number under
+#: when no reason comes with it.
+NO_REASON_GIVEN = "reason_not_given"
+
+
+def _count_no_number(
+    values: Sequence[float | None], reasons: Sequence[str | None] | None
+) -> tuple[int, dict[str, int]]:
+    """The steps of ``values`` with no number, by the reason given for each:
+    how many the simulator printed failed, and the rest by reason."""
+    failed = 0
+    other: dict[str, int] = {}
+    for step, value in enumerate(values):
+        if value is not None:
+            continue
+        reason = reasons[step] if reasons is not None and step < len(reasons) else None
+        if reason == FAILED:
+            failed += 1
+        else:
+            key = reason or NO_REASON_GIVEN
+            other[key] = other.get(key, 0) + 1
+    return failed, other
+
+
 def compute_measurement_stats(
     measurements: Mapping[str, Sequence[float | None]],
     *,
     histogram_bins: int = 10,
     measurement: str | None = None,
+    reasons: Mapping[str, Sequence[str | None]] | None = None,
 ) -> dict[str, MeasurementStatsEntry]:
     """Aggregate stats across all steps of a ``.MEAS`` result dict.
 
-    ``None`` entries (failed measurements) are counted but excluded from stats.
-    If ``measurement`` is given, stats are computed for only that one, named
-    in any case (:func:`~ltspice_mcp.lib.log_types.measurement_named`).
+    A ``None`` entry has no number: it is counted, and left out of the
+    statistics over the numbers. ``reasons`` gives, by name and step, why a
+    step has none, as the log decoder answers it
+    (:func:`~ltspice_mcp.lib.log_types.no_number_reasons`): ``failure_count``
+    counts the steps whose reason is that the simulator printed the
+    measurement failed, and ``no_number`` counts every other such step under
+    its reason. A ``None`` no reason comes with is counted under
+    :data:`NO_REASON_GIVEN`, never as a failure. If ``measurement`` is given,
+    stats are computed for only that one, named in any case
+    (:func:`~ltspice_mcp.lib.log_types.measurement_named`).
     """
     if histogram_bins < 0:
         raise ValueError(f"histogram_bins must be >= 0, got {histogram_bins}")
@@ -2240,12 +2276,14 @@ def compute_measurement_stats(
         total = len(values)
         valid = [v for v in values if v is not None]
         valid_count = len(valid)
+        failure_count, no_number = _count_no_number(values, (reasons or {}).get(name))
 
         if valid_count == 0:
             result[name] = {
                 "total_count": total,
                 "valid_count": valid_count,
-                "failure_count": total - valid_count,
+                "failure_count": failure_count,
+                "no_number": no_number,
                 "min": None,
                 "max": None,
                 "mean": None,
@@ -2295,7 +2333,8 @@ def compute_measurement_stats(
         result[name] = {
             "total_count": total,
             "valid_count": valid_count,
-            "failure_count": total - valid_count,
+            "failure_count": failure_count,
+            "no_number": no_number,
             "min": e_min,
             "max": e_max,
             "mean": float(np.mean(arr)),
