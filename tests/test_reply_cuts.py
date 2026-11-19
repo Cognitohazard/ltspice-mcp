@@ -363,8 +363,11 @@ NEVER_BOUNDS: dict[tuple[str, str], str] = {
         "the signals the call asks for in that panel; no cap"
     ),
     ("analysis.handle_plot_waveform", "ltspice.saved_panes"): _UNBOUNDED,
-    ("analysis.handle_plot_waveform", "cases_not_drawn"): (
-        "one per run the runs selection names, bounded by the job's cases"
+    ("analysis.handle_plot_waveform", "cases_not_drawn[].run_indices"): (
+        "at most _UNMATCHED_NAMED (5), the total in the row's count"
+    ),
+    ("analysis.handle_plot_waveform", "cases_not_drawn[].case_ids"): (
+        "at most _UNMATCHED_NAMED (5), the total in the row's count"
     ),
     ("analysis.handle_plot_waveform", "signals_not_in_cases"): "one per signal drawn",
     ("analysis.handle_plot_waveform", "signals_not_in_cases[].case_ids"): (
@@ -465,6 +468,7 @@ CUT_TODAY: dict[tuple[str, str], tuple[str, ...]] = {
     ("schematic_edit.handle_edit_schematic", "views.pin_legend"): ("views.pin_legend.items",),
     ("schematic_edit.handle_edit_schematic", "views.preexisting"): ("views.preexisting.items",),
     ("analysis.handle_plot_waveform", "<root>:traces_truncated"): ("traces",),
+    ("analysis.handle_plot_waveform", "<root>:cases_not_drawn_truncated"): ("cases_not_drawn",),
     # What run_code cuts is its captured output, a string, not a list.
     ("run_code.handle_run_code", "<root>"): (),
     ("analyze.handle_analyze_results", "coverage.missing_cases"): (

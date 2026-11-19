@@ -88,6 +88,14 @@ _ALLOWED: dict[str, str] = {
         "names a case by its id in a legend label where too many assignments differ; "
         "the reply's cases list gives every assignment, so no list is cut"
     ),
+    "tools/analysis.py:_runs_named": (
+        "names a long runs argument by how many runs it names, for the caller to pass "
+        "the same runs again; it cuts no list of a reply"
+    ),
+    "tools/analysis.py:_unmatched_rows": (
+        "names the first few runs a selection names that the job does not hold, beside "
+        "their count in the same row; the caller's own runs lists them all"
+    ),
     "lib/signal_analysis.py:window_span": (
         "reads an axis a block of _WINDOW_CHUNK points at a time, every block; cuts nothing"
     ),

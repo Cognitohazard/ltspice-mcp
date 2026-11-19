@@ -59,7 +59,7 @@ from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, PlotDescriptor
 from ltspice_mcp.lib.experiment_types import ExperimentCase, ExperimentJob
 from ltspice_mcp.lib.filelock import file_lock
-from ltspice_mcp.lib.format import cap_note, si_prefix
+from ltspice_mcp.lib.format import cap_list, cap_note, si_prefix
 from ltspice_mcp.lib.ltspice_bridge import BridgeError
 from ltspice_mcp.lib.ltspice_window import (
     OpenWindows,
@@ -445,6 +445,14 @@ _IMAGE_TOTAL_POINTS = 40_000
 _IMAGE_SERIES_POINTS = (200, 1_400)
 # Most panels a caller may lay out by hand.
 _MAX_PANELS = 8
+
+#: Most run indices or case ids a row of runs the job does not hold names.
+_UNMATCHED_NAMED = 5
+#: Most rows ``cases_not_drawn`` carries; past it the reply counts them all in
+#: ``cases_not_drawn_truncated`` and names the call that lists every case.
+_NOT_DRAWN_MAX = 20
+#: Longest ``runs``, as JSON, a reply repeats as it was given.
+_RUNS_NAMED_MAX = 120
 
 
 def _x_axis(raw, analysis_type: str) -> tuple[str, str | None]:
@@ -1697,14 +1705,11 @@ def _rest_of_summary(
     if args.job_id is not None:
         # The runs this call named, as it named them: a chart of several
         # cases passes its selection on whole, never a list of every case.
-        runs = (
-            _runs_as_given(args.runs)
-            if args.runs is not None
-            else {"case_ids": [args.case_id]}
-            if args.case_id is not None
-            else [run_index]
-        )
-        source += f", and runs={json.dumps(runs)}"
+        if args.runs is not None:
+            source += f", and {_runs_named(args.runs)}"
+        else:
+            runs = {"case_ids": [args.case_id]} if args.case_id is not None else [run_index]
+            source += f", and runs={json.dumps(runs)}"
     said = [
         "analyze_results reads the traces this summary leaves out.",
         f"Source: {source}.",
@@ -1841,11 +1846,13 @@ def _steps_named(args: PlotWaveformInput, raw: Any, step_dicts: list[dict[str, A
             },
             "cases_not_drawn": {
                 "type": "array",
-                # Each names a case the chart leaves out; leaving one out of
-                # this list would pass it off as drawn.
-                CUT: NEVER,
+                # Cut at _NOT_DRAWN_MAX rows with the total beside it, so a case
+                # left out of the list is still counted.
+                CUT: ITEMS,
                 "description": (
-                    "With runs: each case selected and not drawn, with why: "
+                    "With runs: each case selected and not drawn, with why, at most "
+                    f"{_NOT_DRAWN_MAX} rows (runs the job does not hold are one row "
+                    "per code, with their count): "
                     "case_not_found, run_not_found, raw_not_produced (with its status), "
                     "run_not_finished, other_raw_not_written, result_unreadable or "
                     "analysis_deadline for a results file that cannot be parsed, "
@@ -1860,9 +1867,43 @@ def _steps_named(args: PlotWaveformInput, raw: Any, step_dicts: list[dict[str, A
                         "status": {"type": "string"},
                         "code": {"type": "string"},
                         "detail": {"type": "string"},
+                        "evidence": {
+                            "type": "object",
+                            "description": (
+                                "With run_not_finished: what the case's simulator "
+                                "has written so far."
+                            ),
+                        },
+                        "count": {
+                            "type": "integer",
+                            "description": (
+                                "With run_not_found or case_not_found: how many runs "
+                                "the selection names that the job does not hold."
+                            ),
+                        },
+                        "run_indices": {
+                            "type": "array",
+                            "items": {"type": "integer"},
+                            CUT: NEVER,
+                            "description": "The first few of them, with count.",
+                        },
+                        "case_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            CUT: NEVER,
+                            "description": "The first few of them, with count.",
+                        },
                     },
                     "required": ["code"],
+                    "additionalProperties": False,
                 },
+            },
+            "cases_not_drawn_truncated": {
+                "type": "integer",
+                "description": (
+                    "Present when cases_not_drawn lists only its first rows: how many "
+                    "there are. hint names the call that lists every case."
+                ),
             },
             "signals_not_in_cases": {
                 "type": "array",
@@ -2207,9 +2248,7 @@ async def _cases_chosen(
         return job, case, context
     if args.in_ltspice:
         raise ResultError(_IN_LTSPICE_ONE_CASE, show_hint=False)
-    not_drawn: list[dict[str, Any]] = [
-        {"case_id": run.case_id, "run_index": run.run_index, "code": run.code} for run in unmatched
-    ]
+    not_drawn: list[dict[str, Any]] = _unmatched_rows(unmatched)
     readable: list[tuple[ExperimentCase, services.RunContext]] = []
     for case in selected:
         ctx = await services.read_selected_case(
@@ -2229,9 +2268,39 @@ async def _cases_chosen(
     return _SeveralCases(job, readable, not_drawn)
 
 
+def _unmatched_rows(unmatched: list[services.UnmatchedRun]) -> list[dict[str, Any]]:
+    """The runs a selection names that the job does not hold, one row per code:
+    how many, and the first few. A list of indices has no bound of its own, so
+    its misses are counted, not listed one a row."""
+    rows: list[dict[str, Any]] = []
+    for code, key in (("run_not_found", "run_indices"), ("case_not_found", "case_ids")):
+        named = [
+            run.run_index if key == "run_indices" else run.case_id
+            for run in unmatched
+            if run.code == code
+        ]
+        if named:
+            rows.append({"code": code, "count": len(named), key: named[:_UNMATCHED_NAMED]})
+    return rows
+
+
+def _runs_named(runs: RunsSelection) -> str:
+    """``runs`` as a reply names the call to make with it: as it was given
+    while short, else how many runs it named and that the same ``runs`` is
+    passed, so a long list is never repeated."""
+    given = _runs_as_given(runs)
+    text = json.dumps(given)
+    if len(text) <= _RUNS_NAMED_MAX:
+        return f"runs={text}"
+    if isinstance(runs, CaseSelection):
+        return f"the same runs this call passed ({len(runs.case_ids)} case ids)"
+    return f"the same runs this call passed ({len(given)} run indices)"
+
+
 def _case_named(case: ExperimentCase) -> dict[str, Any]:
     """A case not drawn, as ``cases_not_drawn`` names it: its id, its run
-    index and its status. The status is said, never decided on: whether the
+    index and its status. The status is said, never decided on (listed in
+    tests/test_case_readiness.py, ``_STATUS_SHOWN``): whether the
     case can be read is ``services.case_refusal``'s answer."""
     return {"case_id": case.case_id, "run_index": case.run_index, "status": case.status}
 
@@ -2245,6 +2314,15 @@ def _runs_as_given(runs: RunsSelection) -> Any:
 _NOTHING_TO_DRAW_NAMED = 5
 
 
+def _who(item: dict[str, Any]) -> str:
+    """Who a row of ``cases_not_drawn`` names, for a refusal's text."""
+    if "count" in item:
+        named = item.get("run_indices") or item.get("case_ids") or []
+        more = f" and {item['count'] - len(named)} more" if item["count"] > len(named) else ""
+        return f"{item['count']} not in the job ({', '.join(map(str, named))}{more})"
+    return str(item["case_id"])
+
+
 def _nothing_to_draw(
     not_drawn: list[dict[str, Any]], job_id: str, runs: RunsSelection
 ) -> ResultError:
@@ -2253,18 +2331,16 @@ def _nothing_to_draw(
     every one."""
     shown = not_drawn[:_NOTHING_TO_DRAW_NAMED]
     said = "; ".join(
-        f"{item['case_id'] if item.get('case_id') else 'run ' + str(item['run_index'])}: "
-        f"{item.get('detail') or item['code']}"
+        f"{_who(item)}: {item.get('detail') or item['code']}"
         for item in shown
     )
     if len(not_drawn) > len(shown):
-        source = json.dumps({"job_id": job_id, "runs": _runs_as_given(runs)})
         said += "; " + cap_note(
             len(shown),
             len(not_drawn),
             "cases",
-            f"analyze_results with the source {source} names every one under "
-            "coverage.missing_cases",
+            f"analyze_results with a source of job_id {json.dumps(job_id)} and "
+            f"{_runs_named(runs)} names every one under coverage.missing_cases",
         )
     return ResultError(f"No case of the selection can be drawn. {said}.", show_hint=False)
 
@@ -2741,7 +2817,7 @@ async def _deliver(args: PlotWaveformInput, state: SessionState, chart: _Chart):
         # A case the window leaves no sample of is not drawn: said, not listed.
         empty = set(facts["cases_window_empty"])
         data["cases"] = [case for case in data["cases"] if case["case_id"] not in empty]
-        data["cases_not_drawn"] = [
+        not_drawn = [
             *chart.not_drawn,
             *(
                 {
@@ -2754,6 +2830,17 @@ async def _deliver(args: PlotWaveformInput, state: SessionState, chart: _Chart):
                 if case["case_id"] in empty
             ),
         ]
+        if not_drawn:
+            assert args.job_id is not None and args.runs is not None
+            cap_list(
+                data,
+                "cases_not_drawn",
+                not_drawn,
+                _NOT_DRAWN_MAX,
+                f"analyze_results with a source of job_id {json.dumps(args.job_id)} and "
+                f"{_runs_named(args.runs)} lists every case it cannot read under "
+                "coverage.missing_cases, a page at a time.",
+            )
         data["signals_not_in_cases"] = [
             {"signal": signal, "case_ids": case_ids}
             for signal, case_ids in facts["signals_lacking"].items()

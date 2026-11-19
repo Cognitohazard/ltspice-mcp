@@ -690,7 +690,7 @@ def partial_raw_observation(case: ExperimentCase, held: dict[str, Any]) -> dict[
 CaseUnreadableCode = Literal["run_not_finished", "raw_not_produced"]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class CaseUnreadable:
     """Why a case of a job cannot be read now (``case_unreadable``).
 
@@ -888,7 +888,7 @@ def experiment_case(
     return matches[0]
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class UnmatchedRun:
     """A run a selection named that its job does not hold: a case id
     (``case_not_found``) or a run index (``run_not_found``)."""
@@ -918,14 +918,14 @@ def select_cases(
         selected = [case for case in job.cases if case.run_index in wanted_indices]
         found_indices = {case.run_index for case in selected}
         return selected, [
-            UnmatchedRun(None, index, "run_not_found")
+            UnmatchedRun(case_id=None, run_index=index, code="run_not_found")
             for index in sorted(wanted_indices - found_indices)
         ]
     wanted = set(runs.case_ids)
     selected = [case for case in job.cases if case.case_id in wanted]
     found = {case.case_id for case in selected}
     return selected, [
-        UnmatchedRun(case_id, None, "case_not_found") for case_id in sorted(wanted - found)
+        UnmatchedRun(case_id=case_id, run_index=None, code="case_not_found") for case_id in sorted(wanted - found)
     ]
 
 
@@ -996,7 +996,7 @@ def case_run_context(
     )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class CaseUnread:
     """Why a selected case of a job is not read: ``case_refusal``'s reason
     (``run_not_finished`` or ``raw_not_produced``, with what a running case's
@@ -1028,11 +1028,11 @@ async def read_selected_case(
     """
     refusal = await case_refusal(job, case, require_raw=require_raw)
     if refusal is not None:
-        return CaseUnread(refusal.code, refusal.detail, refusal.evidence)
+        return CaseUnread(code=refusal.code, detail=refusal.detail, evidence=refusal.evidence)
     try:
         return case_run_context(job, case, state, require_raw=require_raw, other_raw=other_raw)
     except OtherRawNotWritten as exc:
-        return CaseUnread(exc.code, str(exc))
+        return CaseUnread(code=exc.code, detail=str(exc))
 
 
 def resolve_analysis_source(

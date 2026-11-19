@@ -290,6 +290,49 @@ class TestSeveralCases:
         assert "truncated" in unread["detail"]
         assert unread["detail"]
 
+    async def test_a_runs_list_far_longer_than_the_job_gives_a_bounded_reply(
+        self, state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """A list of run indices has no bound of its own: the runs the job does
+        not hold are counted in one row, and the reply never repeats the list."""
+        import ltspice_mcp.tools.analysis as mod
+
+        monkeypatch.setattr(mod, "_TRACE_SUMMARY_MAX", 1)
+        _three_rc(state_no_sim, work_dir, "short")
+        data = await _plot(
+            state_no_sim, job_id="short", runs=list(range(3000)), signals=["V(out)"]
+        )
+        (missing,) = data["cases_not_drawn"]
+        assert missing["code"] == "run_not_found"
+        assert missing["count"] == 2997
+        assert missing["run_indices"] == [3, 4, 5, 6, 7]
+        assert "3000 run indices" in data["hint"]
+        assert len(json.dumps(data)) < 6_000
+
+    async def test_many_cases_not_drawn_are_counted_past_the_rows_listed(
+        self, state_no_sim: SessionState, work_dir: Path
+    ):
+        cases = [_Case("ltspice_tran_rc", {"R1": 1})] + [
+            _Case(None, {"R1": i}, status="failed") for i in range(2, 42)
+        ]
+        _job(state_no_sim, work_dir, "wide", cases)
+        data = await _plot(state_no_sim, job_id="wide", runs=list(range(5000)), signals=["V(out)"])
+        assert len(data["cases_not_drawn"]) == 20
+        # 40 failed cases, and one row for the 4959 runs the job does not hold.
+        assert data["cases_not_drawn_truncated"] == 41
+        assert "coverage.missing_cases" in data["hint"]
+        assert len(json.dumps(data)) < 12_000
+
+        _job(
+            state_no_sim, work_dir, "dead_wide", [_Case(None, status="failed") for _ in range(40)]
+        )
+        with pytest.raises(ResultError) as refused:
+            await _plot(
+                state_no_sim, job_id="dead_wide", runs=list(range(5000)), signals=["V(out)"]
+            )
+        assert len(str(refused.value)) < 2_000
+        assert "5000 run indices" in str(refused.value)
+
     async def test_a_selection_with_nothing_to_draw_is_refused(
         self, state_no_sim: SessionState, work_dir: Path
     ):
@@ -311,7 +354,7 @@ class TestSeveralCases:
         message = str(refused.value)
         assert "case-0004" in message and "case-0005" not in message
         assert "showing 5 of 9 cases" in message
-        assert '"runs": "all"' in message and "coverage.missing_cases" in message
+        assert 'runs="all"' in message and "coverage.missing_cases" in message
 
     async def test_cases_of_different_analyses_are_refused_by_name(
         self, state_no_sim: SessionState, work_dir: Path
@@ -524,10 +567,17 @@ class TestOneSelection:
             if "cases" in data
             else {(t["case_id"], t["run_index"]) for t in data["traces"]}
         )
-        not_drawn = {
-            (item.get("case_id"), item.get("run_index"), item["code"])
-            for item in data.get("cases_not_drawn", [])
-        }
+        # Runs the job does not hold are one row per code, naming the first few.
+        not_drawn: set[tuple[Any, Any, str]] = set()
+        for item in data.get("cases_not_drawn", []):
+            if "count" in item:
+                assert item["count"] == len(item.get("run_indices") or item["case_ids"])
+                not_drawn |= {(None, index, item["code"]) for index in item.get("run_indices", [])}
+                not_drawn |= {
+                    (case_id, None, item["code"]) for case_id in item.get("case_ids", [])
+                }
+            else:
+                not_drawn.add((item.get("case_id"), item.get("run_index"), item["code"]))
         assert drawn == read
         assert not_drawn == missing
 

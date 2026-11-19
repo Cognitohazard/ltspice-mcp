@@ -329,6 +329,14 @@ _JOB_READINESS = frozenset(
 #: The one place that decides whether a case can be read, and the wording of
 #: its refusal.
 _OWNERS = frozenset({"case_unreadable", "case_refusal", "_not_finished"})
+#: Functions that read a case's status to show it, never to decide on it, each
+#: with what it shows. ``test_a_status_shown_is_never_decided_on`` holds every
+#: other scope of their module to reading no status, from a case or from them.
+_STATUS_SHOWN = {
+    "tools/analysis.py": {
+        "_case_named": "the status shown for a case a chart of several cases does not draw",
+    },
+}
 #: Functions that ask the job's question on purpose, called from a scope that
 #: also reads a case, each with why its answer is not a read's.
 _JOB_QUESTIONS = {
@@ -407,3 +415,39 @@ def test_no_reader_of_a_case_decides_by_a_status_outside_the_one_answer():
                 if helper in asks_job and helper not in _JOB_QUESTIONS
             )
     assert offenders == []
+
+
+def test_a_status_shown_is_never_decided_on():
+    """A function listed in ``_STATUS_SHOWN`` reads a case's status to put it
+    in a reply. No other scope of its module reads a ``.status``, nor a
+    ``"status"`` key, as ``_case_named(case)["status"]`` or a row's
+    ``item.get("status")`` would: whether a case is read is
+    ``services.case_unreadable``'s answer alone."""
+    import ast
+
+    trees = modules()
+    offenders: list[str] = []
+    for module, owners in _STATUS_SHOWN.items():
+        for name, nodes in scopes(trees[module]):
+            if name.rsplit(".", 1)[-1] in owners:
+                continue
+            for node in nodes:
+                if isinstance(node, ast.Attribute) and node.attr == "status":
+                    offenders.append(f"{module}:{name} line {node.lineno}: .status")
+                elif (
+                    isinstance(node, ast.Subscript)
+                    and isinstance(node.slice, ast.Constant)
+                    and node.slice.value == "status"
+                ):
+                    offenders.append(f"{module}:{name} line {node.lineno}: ['status']")
+                elif (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "get"
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and node.args[0].value == "status"
+                ):
+                    offenders.append(f"{module}:{name} line {node.lineno}: .get('status')")
+    assert offenders == []
+
