@@ -415,3 +415,27 @@ async def test_the_meas_route_reads_what_the_runner_kept_and_no_deck(state_no_si
         case.staged_deck = state_no_sim.working_dir / "gone" / f"{case.case_id}.cir"
     data = await _jobs(state_no_sim, action="status", job_id=job.job_id)
     assert "The deck has .meas cards" in data["hint"]
+
+
+# ---------------------------------------------------------------------------
+# 5. What a run's case observed
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "code", ["saves_not_stored", "raw_names_disagree", "subcircuit_nodes_not_saved"]
+)
+async def test_a_case_observation_on_a_run_left_out_is_on_the_reply(
+    state_no_sim: SessionState, code: str
+):
+    """A run's case observations are lifted to the reply's ``observations``,
+    which is never cut, whatever rows the reply holds: a run left out keeps
+    them, the same for every code a case can carry."""
+    job = _job(state_no_sim, f"exp_case_obs_{code}", 300)
+    job.cases[250].observations.append(
+        {"code": code, "kind": "coverage", "detail": f"{code} on run 250"}
+    )
+    data = await _jobs(state_no_sim, action="status", job_id=job.job_id, budget=600)
+    assert len(data["runs"]["items"]) < 250
+    assert [item for item in data["observations"] if item["code"] == code]
