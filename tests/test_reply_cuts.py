@@ -410,8 +410,12 @@ NEVER_BOUNDS: dict[tuple[str, str], str] = {
             ("source", "one per circuit the request names"),
             ("lint", "one per circuit the request names"),
             ("artifacts", "one per artifact the job recorded beside its runs"),
+            ("simulator_notes", "one per code of job_simulator.NOTE_CODES (3)"),
         )
     },
+    ("jobs.handle_jobs", "items[].recent_jobs[].simulator_notes"): (
+        "one per code of job_simulator.NOTE_CODES (3)"
+    ),
     ("jobs.handle_jobs", "not_checked"): (
         "at most four: the digest or the included files not compared, a netlist's "
         "window, a dotted netlist's name, the files left in place"

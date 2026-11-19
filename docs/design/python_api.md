@@ -911,9 +911,14 @@ a call selects it with `execution={"simulator": "ltspice:xvii"}`
 (`docs/design/mcp_surface.md`, "Selecting a build"). A second process on the
 same working directory with its own `simulator_exe` also works; use it when
 the two builds must not share a process. Either way, each job records the
-executable its cases launched (`simulator_executable`) and each run records
-the build it reported (`simulator_version`), so the shared records show which
-build produced each result. A `request_id` reused from the other process, or
+selector it ran with and the executable its cases launched
+(`simulator_executable`), and each run records the build it reported
+(`simulator_version`), so the shared records show which build produced each
+result. A receipt, `wait()` and every `jobs()` reply name the job's simulator
+as that selector (`simulator`, `"ltspice:xvii"`), which a later call passes
+back as `execution={"simulator": ...}` to run the same executable; a session
+that has no simulator under that name says so in `simulator_notes`
+(`docs/design/mcp_surface.md`, "Selecting a build"). A `request_id` reused from the other process, or
 under another simulator name, replays only when it would launch the same build;
 otherwise the call fails with `idempotency_conflict`
 (`docs/design/mcp_surface.md`, "Replay is scoped to the simulator build").

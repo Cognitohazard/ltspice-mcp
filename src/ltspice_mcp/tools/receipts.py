@@ -37,6 +37,7 @@ from ltspice_mcp.lib.experiment_types import (
     SourceRecord,
     sample_index,
 )
+from ltspice_mcp.lib.job_simulator import NOTE_CODES, JobSimulator, job_simulator
 from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATUSES
 from ltspice_mcp.lib.log_conditions import reply_fields
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
@@ -463,6 +464,39 @@ RUNS_NOT_SHOWN_SCHEMA: dict[str, Any] = {
 }
 
 
+#: A job's simulator, as the selector ``execution.simulator`` takes
+#: (``lib/job_simulator.py``). Every reply that names a job carries it.
+JOB_SIMULATOR_SCHEMA: dict[str, Any] = {
+    "type": ["string", "null"],
+    "description": (
+        "The simulator the job ran with, as the selector execution.simulator takes: "
+        "a family ('ltspice'), or a family and the name of a configured executable "
+        "('ltspice:xvii'). Passed back in this session, it runs the same executable. "
+        "Null only for a record that names no simulator this server knows."
+    ),
+}
+
+#: What the session answering says of a job's selector: the build's name was
+#: not recorded, or the session has no simulator under it.
+JOB_SIMULATOR_NOTES_SCHEMA: dict[str, Any] = {
+    "type": "array",
+    # At most one entry per code.
+    CUT: NEVER,
+    "items": {
+        "type": "object",
+        "properties": {
+            "code": {"enum": list(NOTE_CODES)},
+            "detail": {"type": "string"},
+            "executable": {
+                "type": "string",
+                "description": "The executable the record says the job ran.",
+            },
+        },
+        "required": ["code", "detail"],
+    },
+}
+
+
 RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -477,6 +511,8 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
         "replayed": {"type": "boolean", DELIVERY: True},
         "status": JOB_STATUS_SCHEMA,
         "job_type": JOB_TYPE_SCHEMA,
+        "simulator": JOB_SIMULATOR_SCHEMA,
+        "simulator_notes": JOB_SIMULATOR_NOTES_SCHEMA,
         "dialect": {"type": ["string", "null"]},
         "analysis_status": {"type": "string"},
         "outcome": OUTCOME_SCHEMA,
@@ -494,7 +530,6 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
                         "staged_deck": {"type": "string"},
                         "manifest": {"type": "array", "items": _MANIFEST_SCHEMA, CUT: ITEMS},
                         "linter_version": {"type": "string"},
-                        "simulator": {"type": "string"},
                         "dialect": {"type": ["string", "null"]},
                         "staged_files": {"type": "integer"},
                     },
@@ -503,7 +538,7 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
                     # they are emitted when 'provenance' is set, and otherwise
                     # omitted, because they are a third of a receipt's bytes
                     # and name files the caller does not open.
-                    "required": ["circuit", "path", "simulator", "dialect"],
+                    "required": ["circuit", "path", "dialect"],
                 },
                 "circuit",
             ),
@@ -1121,6 +1156,8 @@ class ReceiptSnapshot:
     analysis_observations: tuple[dict[str, Any], ...]
     analysis_request: dict[str, Any] | None
     simulator_executable: SimulatorExecutable | None = None
+    simulator: JobSimulator = field(default_factory=lambda: JobSimulator(None))
+    """The job's simulator as its replies name it (``job_simulator``)."""
     lineage: dict[str, Any] | None = None
     measures: bool = False
     """Whether a finished job's deck requests a ``.meas``, as the runner kept
@@ -1195,6 +1232,7 @@ def render_receipt_snapshot(
         "job_type": "experiment",
         "status": snapshot.status,
         "analysis_status": snapshot.analysis_status,
+        **snapshot.simulator.fields(),
         "dialect": snapshot.dialect,
         "outcome": snapshot.outcome,
         "source": [
@@ -1304,7 +1342,6 @@ def _source_payload(source: SourceRecord, *, provenance: bool) -> dict[str, Any]
     payload: dict[str, Any] = {
         "circuit": source.circuit,
         "path": str(source.path),
-        "simulator": source.simulator,
         "dialect": source.dialect,
     }
     if provenance:
@@ -1711,6 +1748,7 @@ def snapshot_receipt(
         analysis_observations=tuple(copy.deepcopy(analysis.observations)),
         analysis_request=copy.deepcopy(analysis.request),
         simulator_executable=job.simulator_executable,
+        simulator=job_simulator(job, state),
         measures=_requests_measures(job),
         lineage=(
             {
@@ -1816,6 +1854,7 @@ def render_runs_envelope(
         "request_id": snapshot.request_id,
         "status": snapshot.status,
         "progress": progress_from_completeness(snapshot.completeness),
+        **snapshot.simulator.fields(),
         "dialect": snapshot.dialect,
         **page,
         "observations": [],

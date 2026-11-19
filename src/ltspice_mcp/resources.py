@@ -22,6 +22,7 @@ from ltspice_mcp.lib.plot_html import (
     WIDGET_RESOURCE_URI,
     build_widget_html,
 )
+from ltspice_mcp.lib.simulator import simulator_selector
 from ltspice_mcp.state import SessionState
 
 logger = logging.getLogger(__name__)
@@ -322,8 +323,8 @@ def _read_config(
         "simulator": cfg.simulator,
         "simulator_exe": str(cfg.simulator_exe) if cfg.simulator_exe else None,
         "detected_simulators": list(state.available_simulators.keys()),
-        "default_simulator": (
-            state.default_simulator.__name__ if state.default_simulator is not None else None
+        "default_simulator": simulator_selector(
+            state.default_simulator, state.offered_simulators
         ),
         "max_parallel_sims": cfg.max_parallel_sims,
         "default_timeout": cfg.default_timeout,

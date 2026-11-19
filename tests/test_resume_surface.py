@@ -173,6 +173,8 @@ async def test_terminal_root_token_noop_replay_and_read_only_views(
         JOBS_OUTPUT_SCHEMA,
     )
     assert noop["resumed"] is replay["resumed"] is False
+    # A resume names the job's simulator as the selector a run passes back.
+    assert root["simulator"] == noop["simulator"] == replay["simulator"] == "ngspice"
     assert "replayed" not in noop and replay["replayed"] is True
     assert noop["job_id"] == noop["head_job_id"] == root["job_id"]
     assert "control_token" not in noop and "control_token" not in replay
@@ -226,6 +228,7 @@ async def test_resume_child_reuses_success_and_replays_after_source_deletion(
     }
     child = _data(await handle_jobs(JobsInput.model_validate(payload), state), JOBS_OUTPUT_SCHEMA)
     assert child["resumed"] is True and "replayed" not in child
+    assert child["simulator"] == "ngspice"
     assert child["job_id"] != root["job_id"]
     assert child["control_token"] != root["control_token"]
     assert child["completeness"]["reused"] == child["completeness"]["submitted"] == 1

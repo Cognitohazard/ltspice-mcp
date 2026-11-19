@@ -115,6 +115,8 @@ async def test_capabilities_keys_present(cap_state: SessionState):
     assert res["ok"] is True
     assert res["kind"] == "capabilities"
     data = res["data"]
+    # The selector a run names the default by, not its class name.
+    assert data["default_simulator"] == "ltspice"
     for key in (
         "simulators",
         "default_simulator",
