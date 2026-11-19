@@ -1231,12 +1231,19 @@ async def measurement_rows(
     # whole run (a step's row keeps the run's step numbers in ``unreadable``
     # and ``not_established``) and taken at the step a row reads.
     whole_reasons: dict[str, list[str | None]] = {}
+    # The same, by measurement and reason: the steps it holds at, in one pass.
+    steps_by_reason: dict[str, dict[str, list[int]]] = {}
 
     def aggregate_each() -> list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]]:
         rows = []
         whole_reasons.update(
             {name: no_number_reasons(whole, name) for name in whole["measurements"]}
         )
+        for name, why in whole_reasons.items():
+            grouped = steps_by_reason.setdefault(name, {})
+            for i, reason in enumerate(why):
+                if reason is not None:
+                    grouped.setdefault(reason, []).append(i)
         for step, table in zip(steps, tables, strict=True):
             flat_values, axis_map, _steps_label, at_map = aggregate_log_measurements(table)
             stats = run_compute(
@@ -1285,15 +1292,19 @@ async def measurement_rows(
         # (raw_parser.build_simulation_summary). Pinned by
         # test_a_summary_names_failures_at_any_step_and_a_step_row_its_own.
         for reason in NO_NUMBER_REASONS:
-            at_steps = {
-                name: [
-                    i
-                    for i, why in enumerate(whole_reasons.get(name, ()))
-                    if why == reason.field and step in (None, i)
-                ]
-                for name in stats
-            }
-            named = {name: found for name, found in at_steps.items() if found}
+            if step is None:
+                named = {
+                    name: found
+                    for name in stats
+                    if (found := steps_by_reason.get(name, {}).get(reason.field))
+                }
+            else:
+                named = {
+                    name: [step]
+                    for name in stats
+                    if step < len(why := whole_reasons.get(name, ()))
+                    and why[step] == reason.field
+                }
             if named:
                 row[reason.field] = _ROW_REASONS[reason.field](whole, named)
         # A value the log printed once for a run of several steps: how many,

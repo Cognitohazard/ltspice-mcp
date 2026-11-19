@@ -453,10 +453,13 @@ assert FAILED in {reason.field for reason in NO_NUMBER_REASONS}
 def no_number_reasons(table: Mapping[str, Any], name: str) -> list[str | None]:
     """Why each step, from 0, of the measurement ``name`` of a log's answered
     measurement ``table`` holds no number: the ``field`` of the first of
-    :data:`NO_NUMBER_REASONS` that holds there, or None where none does (a
-    step that holds a number, or one the decoder gives no reason for). The
-    one answer to "why has this step of a measurement no number", which the
-    statistics ask (``metrics.measurement_rows``)."""
+    :data:`NO_NUMBER_REASONS` that holds there, or None where none does. A
+    reason is read only where the step has no number: an entry's statement
+    may cover steps that hold one (an ``unreadable`` that names no steps
+    covers every step), so a caller pairs the reasons with the numbers of the
+    field the entry's ``answer`` names. The one answer to "why has this step
+    of a measurement no number", which the statistics ask
+    (``metrics.measurement_rows``)."""
     entry = (table.get("measurements") or {}).get(name)
     if not isinstance(entry, Mapping):
         return []

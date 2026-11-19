@@ -191,6 +191,15 @@ def _meas_step_expected(build: str) -> Counts:
     return _expect(total, total - 1, failed=1)
 
 
+def _result_numbers(entry: dict[str, Any]) -> list[float | None]:
+    """A measurement's results, one per step: the points printed after AT
+    where its ``answer`` is ``at`` (a WHEN with no FIND), else its values."""
+    if entry.get("answer") != "at":
+        return entry["values"]
+    at = entry.get("at")
+    return list(at) if isinstance(at, list) else [at] * len(entry["values"])
+
+
 def _every_stats_route_counts(
     rows: dict[str, dict[str, Any]], name: str, expected: Counts
 ) -> None:
@@ -275,7 +284,7 @@ async def test_a_stepped_measurement_counts_each_step_by_why_on_every_route(
     # the log decoder gives.
     read = await asyncio.to_thread(lambda: api.measurements(job_id=job_id))
     own = compute_measurement_stats(
-        {name: entry["values"] for name, entry in read["measurements"].items()},
+        {name: _result_numbers(entry) for name, entry in read["measurements"].items()},
         reasons={name: no_number_reasons(read, name) for name in read["measurements"]},
     )
     rows["api compute_measurement_stats"] = {"stats": own}
