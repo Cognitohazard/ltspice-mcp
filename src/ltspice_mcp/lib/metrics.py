@@ -118,6 +118,7 @@ from ltspice_mcp.lib.recipes import (
     StabilityRecipe,
     SummaryRecipe,
     ThdRecipe,
+    TimeStepsRecipe,
     TimingRecipe,
     ToneRecipe,
     TransientResponseRecipe,
@@ -1836,6 +1837,76 @@ async def periodic(
     return await relay_solve_failures(source, data, state)
 
 
+async def time_steps(
+    source: services.AnalysisSource,
+    recipe: TimeStepsRecipe,
+    step: int,
+    state: SessionState,
+) -> MetricValue:
+    """The steps between a transient's stored points over one window: how many
+    points, the smallest step and where it starts, the largest and the median,
+    and with ``threshold_s`` how many are shorter and where the first and last
+    start. Two points at one time are counted apart (``zero_steps``), never as
+    a step. Which of the solver's points the file holds is
+    ``services.stored_time_points``' answer, and an answer other than every
+    accepted point is a ``coverage`` observation on the row."""
+    raw = await services.load_raw(source, state)
+    reject_non_transient(raw)
+    services.validate_step(raw, step)
+    axis = guarded_axis(raw, step)
+    t_start, t_end = window_bounds(recipe.window)
+    lo, hi = window_indices(
+        axis, parse_time(t_start, "window.start"), parse_time(t_end, "window.end")
+    )
+    times = axis[lo:hi]
+    if times.size < 2:
+        raise ResultError(
+            f"time_steps needs two stored points in the window to take a step between; "
+            f"it holds {max(times.size, 0)}. Widen the window or drop it.",
+            show_hint=False,
+        )
+    steps = np.diff(times)
+    if np.any(steps < 0):
+        raise ResultError(
+            "time_steps found stored times that go backwards within one step of this run; "
+            "read it with the waveform recipe to see its time axis.",
+            show_hint=False,
+        )
+    moving = steps > 0
+    data: dict[str, Any] = {
+        "points": int(times.size),
+        "zero_steps": int(np.count_nonzero(~moving)),
+        "t_start": float(times[0]),
+        "t_end": float(times[-1]),
+    }
+    if np.any(moving):
+        nonzero = steps[moving]
+        smallest = int(np.flatnonzero(moving)[int(np.argmin(nonzero))])
+        data.update(
+            min_step=float(steps[smallest]),
+            min_step_at=float(times[smallest]),
+            max_step=float(nonzero.max()),
+            median_step=float(np.median(nonzero)),
+        )
+    if recipe.threshold_s is not None:
+        threshold = parse_time(spice_text(recipe.threshold_s), "threshold_s")
+        if threshold is None or not threshold > 0:
+            raise ResultError("threshold_s must be a positive time in seconds.", show_hint=False)
+        below = np.flatnonzero(moving & (steps < threshold))
+        data["threshold_s"] = threshold
+        data["steps_below"] = int(below.size)
+        if below.size:
+            data["first_below_at"] = float(times[below[0]])
+            data["last_below_at"] = float(times[below[-1]])
+    stored = await asyncio.to_thread(services.stored_time_points, source, raw)
+    data["stored"] = stored.stored
+    if stored.why is not None:
+        data["observations"] = [
+            {"code": "time_steps_coverage", "kind": "coverage", "detail": stored.why}
+        ]
+    return await relay_solve_failures(source, data, state)
+
+
 async def thd(
     source: services.AnalysisSource,
     recipe: ThdRecipe,
@@ -2759,6 +2830,7 @@ METRICS: dict[type[Recipe], MetricFn] = {
     PeriodicRecipe: periodic,
     TransientResponseRecipe: transient_response,
     ThdRecipe: thd,
+    TimeStepsRecipe: time_steps,
     ToneRecipe: tone,
     BodeFilterRecipe: bode_filter,
     BodePointRecipe: bode_point,

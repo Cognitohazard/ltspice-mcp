@@ -116,13 +116,21 @@ from ltspice_mcp.api import compute_stability_metrics
 
 loop = api.analyze_results(
     sources=[{"job_id": job_id}],
-    recipes=[{"key": "t", "metric": "tone", "signal": "V(a)/V(b)",
-              "frequency_param": "FINJ", "window": {"start": "2m"}}],
+    recipes=[
+        {
+            "key": "t",
+            "metric": "tone",
+            "signal": "V(a)/V(b)",
+            "frequency_param": "FINJ",
+            "window": {"start": "2m"},
+        }
+    ],
 )
 rows = sorted(loop["results"]["t"]["values"], key=lambda row: row["value"]["frequency_hz"])
 f = np.array([row["value"]["frequency_hz"] for row in rows])
-h = np.array([complex(row["value"]["sin_component"], row["value"]["cos_component"])
-              for row in rows])
+h = np.array(
+    [complex(row["value"]["sin_component"], row["value"]["cos_component"]) for row in rows]
+)
 margins = compute_stability_metrics(f, h)  # h as the loop gain your injection measures
 ```
 
@@ -139,6 +147,22 @@ convention. For a `SINE(0 1 1k)` source, LTspice XVII prints the fundamental at
 phases to the other's. Read phase with `tone`. ngspice skips `.four` when it
 writes a raw file, which is how the server runs it, and the run's warnings
 report the skip.
+
+## How a transient stepped: `time_steps`
+
+The `time_steps` recipe reads a transient's time axis, not a signal, and gives
+one row per run (and per step with `all_steps`): `points`, `min_step` and
+`min_step_at` (where it starts), `max_step`, `median_step`, and with
+`"threshold_s": "1n"` the count `steps_below` and `first_below_at` and
+`last_below_at`. Two stored points at one time are counted as `zero_steps`,
+never as a step of zero. The file holds the points the simulator stored, and
+no simulator stores a step its solver rejected. `stored` says which points
+those are: `accepted` (every accepted point: ngspice without
+`.options interp`, LTspice XVII with compression off), `reduced` (LTspice XVII
+compresses a transient by default and keeps fewer), `print_step` (ngspice
+under `.options interp`) or `not_checked`. Every answer but `accepted` comes
+with a `time_steps_coverage` observation saying what that leaves out; add
+`.options plotwinsize=0` to an LTspice deck to store every accepted point.
 
 ## Reading a deck with `.step`
 

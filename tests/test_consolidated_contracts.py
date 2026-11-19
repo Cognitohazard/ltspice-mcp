@@ -738,7 +738,12 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 165 characters for tone's frequency_param, which reads
     # each case of a frequency sweep at its own frequency in one recipe instead
     # of one recipe per frequency with case filters. Measured 21,494.
-    "analyze_results": 21500,
+    # Raised by about 615 characters for the time_steps recipe, which reports
+    # each run's smallest time step and where it falls, and the steps below a
+    # size, in one call instead of loading every run's time axis into numpy;
+    # its reduce, field and spec let a sweep be judged on its smallest step.
+    # Measured 22,110.
+    "analyze_results": 22150,
     # Ten query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.

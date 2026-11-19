@@ -696,6 +696,7 @@ FROZEN_ERROR_CODES = (
     "submission_failed",
     "symbol_not_found",
     "symbol_unresolved",
+    "time_steps_coverage",
     "too_large",
     "too_large_to_decode",
     "trace_unit_unknown",

@@ -61,6 +61,11 @@ import numpy as np
 
 from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib.cache import FileCache
+from ltspice_mcp.lib.deck_staging import (
+    resolve_existing,
+    resolve_reference,
+    scan_include_references,
+)
 from ltspice_mcp.lib.device_names import DevicePath, path_text, spelled_name, split_path, trace_key
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import parse_spice_value
@@ -352,6 +357,72 @@ def tran_max_step(netlist_text: str) -> float | None:
     tokens = _first_directive(netlist_text, ".tran")
     numbers = leading_numeric_tokens(tokens[1:5]) if tokens else []
     return numbers[3] if len(numbers) == 4 and numbers[3] > 0 else None
+
+
+#: How deep ``ngspice_interp`` follows ``.include`` cards before it stops and
+#: says the rest was not read.
+_INTERP_INCLUDE_DEPTH = 16
+
+
+def deck_ngspice_interp(netlist: Path) -> tuple[bool | None, str | None]:
+    """Whether the deck at ``netlist`` sets ngspice's ``interp`` option, which
+    makes a batch run store its transient interpolated onto the print step
+    instead of at the time points its solver accepted (measured on ngspice-42:
+    ``tests/test_time_steps_recipe.py``).
+
+    ``(True, None)`` when an ``.option``/``.options``/``.opt`` card of the deck
+    or of a file it ``.include``s names it; ``(False, None)`` when every card
+    ngspice reads was read and none does; ``(None, why)`` when a card it may
+    read was not: a ``.lib`` card (which part of the file ngspice reads turns
+    on its mode), a ``.control`` block, which can set the option as a command,
+    or a file that could not be read."""
+    pending: list[tuple[Path, int]] = [(netlist, 0)]
+    seen: set[Path] = set()
+    unread: str | None = None
+    while pending:
+        path, depth = pending.pop()
+        if path in seen:
+            continue
+        seen.add(path)
+        try:
+            cards = lex_deck(read_spice_text(path), title=depth == 0).cards
+        except (OSError, SpiceLexError):
+            unread = unread or f"the file {path.name} could not be read"
+            continue
+        for card in cards:
+            if card.kind == "control":
+                unread = unread or "a .control block can set it as a command, and is not read here"
+                continue
+            if card.kind != "directive":
+                continue
+            if directive_head(card) in {".option", ".options", ".opt"}:
+                try:
+                    words = directive_args(card)
+                except SpiceLexError:
+                    unread = (
+                        unread or f"an option card ({card.body.strip()[:40]}) could not be read"
+                    )
+                    continue
+                if any(word.split("=", 1)[0].strip().casefold() == "interp" for word in words):
+                    return True, None
+        try:
+            references = scan_include_references(cards, path, family="ngspice", depth=depth)
+        except SpiceLexError:
+            unread = unread or "a card that names a file could not be read"
+            continue
+        for reference in references:
+            if reference.head != ".include" and reference.head != ".inc":
+                unread = (
+                    unread
+                    or f"the {reference.head} card naming {reference.raw_path} is not read here"
+                )
+                continue
+            target = resolve_existing(resolve_reference(path.parent, reference.raw_path))
+            if target is None or depth + 1 > _INTERP_INCLUDE_DEPTH:
+                unread = unread or f"the file {reference.raw_path} it includes could not be read"
+                continue
+            pending.append((target, depth + 1))
+    return (None, unread) if unread else (False, None)
 
 
 def one_ac_frequency(netlist_text: str) -> float | None:

@@ -10,21 +10,29 @@ are read from the recordings; the ngspice ones from live runs.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import re
 import shutil
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pytest
 
 from ltspice_mcp.config import ServerConfig
-from ltspice_mcp.lib.simulator import detect_simulators
+from ltspice_mcp.lib import metrics, services
+from ltspice_mcp.lib.recipes import TimeStepsRecipe
+from ltspice_mcp.lib.simulator import SIMULATORS, detect_simulators
+from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.analyze import AnalyzeResultsInput, handle_analyze_results
 from tests import _ltspice_recorded as rec
-from tests.conftest import SyncApi, make_experiment_job, terminal_experiment
+from tests.conftest import (
+    SyncApi,
+    make_experiment_job,
+    ngspice_binary_raw,
+    terminal_experiment,
+)
 
 Reader = Callable[[SessionState, dict[str, Any]], Any]
 
@@ -161,8 +169,9 @@ async def test_interp_stores_the_print_step_and_says_so(
     read: Reader, ngspice_state: SessionState, work_dir: Path
 ):
     """Under '.options interp' ngspice stores its results on the print step,
-    and a pair of stored points at one time is counted apart, never as a
-    smallest step of zero."""
+    and the row says so. ngspice-42 writes such a file with more rows than its
+    header declares, the extra ones repeating a time, and the reader refuses
+    it; a build that writes the file whole is read and labelled."""
     job_id = await _ramp_job(ngspice_state, work_dir, options=".options interp\n")
     data = await read(
         ngspice_state,
@@ -171,33 +180,48 @@ async def test_interp_stores_the_print_step_and_says_so(
             "recipes": [{"key": "ts", "metric": "time_steps"}],
         },
     )
-    for row in _rows(data, "ts"):
-        value = row["value"]
-        assert value["stored"] == "print_step"
-        assert value["min_step"] > 0
-        assert value["min_step"] == pytest.approx(10e-9, rel=1e-6)
-        assert value["zero_steps"] >= 0
+    if "failures" in data:
+        assert all("RAW" in failure["message"] for failure in data["failures"])
+        return
+    for row in data["results"]["ts"]["values"]:
+        assert row["value"]["stored"] == "print_step"
+        assert row["value"]["min_step"] > 0
     (observation,) = _coverage(data)
     assert observation["kind"] == "coverage"
     assert "interp" in observation["detail"]
 
 
-@needs_ngspice
+@ROUTES
 async def test_stored_points_at_one_time_are_counted_apart(
-    ngspice_state: SessionState, work_dir: Path
+    read: Reader, state_no_sim: SessionState, work_dir: Path
 ):
-    """The count of pairs at one time is the raw's own, read independently."""
-    job_id = await _ramp_job(ngspice_state, work_dir, options=".options interp\n")
-    data = await _through_tool(
-        ngspice_state,
+    """Two stored points at one time are not a smallest step of zero: they are
+    counted as zero_steps, and the steps are read between the others. The rows
+    repeat a time as an ngspice file under '.options interp' does."""
+    times = [0.0, 0.0, 1e-9, 2e-9, 2e-9, 2e-9, 5e-9]
+    raw = work_dir / "repeated.raw"
+    raw.write_bytes(
+        ngspice_binary_raw([(t, 0.5) for t in times], ["time", "v(out)"], declared=len(times))
+    )
+    data = await read(
+        state_no_sim,
         {
-            "sources": [{"job_id": job_id, "runs": "all"}],
-            "recipes": [{"key": "ts", "metric": "time_steps"}],
+            "sources": [{"path": str(raw), "label": "dut", "dialect": "ngspice"}],
+            "recipes": [{"key": "ts", "metric": "time_steps", "threshold_s": "1.5n"}],
         },
     )
-    expected = await asyncio.to_thread(_zero_pairs_of_each_raw, work_dir)
-    assert len(expected) == 3
-    assert sorted(row["value"]["zero_steps"] for row in _rows(data, "ts")) == expected
+    (row,) = _rows(data, "ts")
+    value = row["value"]
+    assert value["points"] == 7
+    assert value["zero_steps"] == 3
+    assert value["min_step"] == pytest.approx(1e-9)
+    assert value["min_step_at"] == 0.0
+    assert value["max_step"] == pytest.approx(3e-9)
+    assert value["steps_below"] == 2
+    # The file names no deck, so which points ngspice stored is not checked.
+    assert value["stored"] == "not_checked"
+    (observation,) = _coverage(data)
+    assert "not checked" in observation["detail"]
 
 
 def _accepted_counts(work_dir: Path) -> list[int]:
@@ -208,23 +232,6 @@ def _accepted_counts(work_dir: Path) -> list[int]:
         if (found := re.search(r"Accepted timepoints\s*=\s*(\d+)", text)) is not None:
             counts.append(int(found[1]))
     return counts
-
-
-def _zero_pairs_of_each_raw(work_dir: Path) -> list[int]:
-    return sorted(_zero_pairs(raw) for raw in sorted(work_dir.rglob("*.raw")))
-
-
-def _zero_pairs(raw: Path) -> int:
-    """Pairs of consecutive stored points at one time in an ngspice binary raw,
-    read from its bytes."""
-    data = raw.read_bytes()
-    start = data.index(b"Binary:\n")
-    header = data[:start].decode("ascii")
-    variables = int(re.search(r"No\. Variables:\s*(\d+)", header)[1])  # type: ignore[index]
-    points = int(re.search(r"No\. Points:\s*(\d+)", header)[1])  # type: ignore[index]
-    values = np.frombuffer(data[start + 8 : start + 8 + points * variables * 8], "<f8")
-    times = values.reshape(points, variables)[:, 0]
-    return int(np.count_nonzero(np.diff(times) == 0))
 
 
 # ---------------------------------------------------------------------------
@@ -409,3 +416,79 @@ async def test_a_job_reads_each_case_from_its_own_recording(
     assert [row["value"]["min_step"] for row in rows] == pytest.approx(
         [2.0e-10, 4.8828125e-11, 2.0e-10], rel=1e-6
     )
+
+
+# ---------------------------------------------------------------------------
+# The guard: no smallest step without what the file leaves out
+# ---------------------------------------------------------------------------
+
+
+def _ngspice_shaped(work_dir: Path) -> Path:
+    raw = work_dir / "plain.raw"
+    times = [0.0, 1e-9, 3e-9, 7e-9]
+    raw.write_bytes(
+        ngspice_binary_raw([(t, 0.5) for t in times], ["time", "v(out)"], declared=len(times))
+    )
+    return raw
+
+
+def _sources(family: str, work_dir: Path) -> list[tuple[str, services.AnalysisSource]]:
+    """Every kind of run of ``family`` whose stored points the server can be
+    asked about: by build, compression and deck, as each family has them."""
+    state_free: list[tuple[str, services.AnalysisSource]] = []
+
+    def bare(raw: Path, dialect: str) -> services.AnalysisSource:
+        return services.AnalysisSource(
+            raw=raw,
+            log=raw.with_suffix(".log"),
+            netlist=None,
+            dialect=None,
+            identity=None,
+            trusted_job_artifact=False,
+            explicit_dialect=dialect,
+        )
+
+    if family == "ltspice":
+        for build in rec.BUILDS:
+            for case_id in ("raw/compress_1mv", "raw/compress_1mv_off", "raw/step_tran"):
+                raw = rec.stage_run(build, case_id, work_dir / build)
+                state_free.append((f"{build}:{case_id}", bare(raw, "ltspice")))
+                unknown = dataclasses.replace(
+                    bare(raw, "ltspice"), producer=Producer("ltspice", None, None)
+                )
+                state_free.append((f"unknown build:{case_id}", unknown))
+        return state_free
+    raw = _ngspice_shaped(work_dir)
+    plain = dataclasses.replace(bare(raw, "ngspice"), producer=Producer(family, None, None))
+    state_free.append((f"{family}:no deck", plain))
+    for name, options in (("deck", ""), ("interp deck", ".options interp\n")):
+        deck = work_dir / f"{family}_{name.replace(' ', '_')}.cir"
+        deck.write_text(f"* deck\nR1 a 0 1k\n{options}.tran 1n 7n\n.end\n", encoding="utf-8")
+        state_free.append((f"{family}:{name}", dataclasses.replace(plain, netlist=deck)))
+    return state_free
+
+
+@pytest.mark.parametrize("family", sorted(SIMULATORS))
+async def test_no_smallest_step_is_reported_without_what_the_file_leaves_out(
+    family: str, state_no_sim: SessionState, work_dir: Path
+):
+    """Over every simulator the server runs, a row that reports a smallest step
+    says what the stored points are, and every answer but 'every accepted point'
+    carries the coverage observation. A run whose points are known to be
+    reduced (LTspice XVII under compression) is always 'reduced'."""
+    recipe = TimeStepsRecipe(key="ts", metric="time_steps")
+    sources = await asyncio.to_thread(_sources, family, work_dir)
+    assert sources
+    for label, source in sources:
+        value = await metrics.time_steps(source, recipe, 0, state_no_sim)
+        assert "min_step" in value, label
+        raw = await services.load_raw(source, state_no_sim)
+        if await asyncio.to_thread(services.compression_drops_points, source, raw):
+            assert value["stored"] == "reduced", label
+        if value["stored"] == "accepted":
+            assert "observations" not in value, label
+            continue
+        (observation,) = value["observations"]
+        assert observation["code"] == COVERAGE_CODE, label
+        assert observation["kind"] == "coverage", label
+        assert "rejected" not in observation["detail"], label
