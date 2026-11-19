@@ -1,0 +1,9 @@
+* a current-controlled switch with its initial state after its model
+.op
+Iw 0 w_a 1m
+Ww w_a w_b Vws wmod on
+Rw0 w_b 0 1k
+Iws 0 w_s 1
+Vws w_s 0 0
+.model wmod CSW(It=0.5 Ih=0 Ron=1k Roff=1Meg)
+.end

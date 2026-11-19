@@ -1,0 +1,6 @@
+* a special-function A card: eight nodes, then its model
+.op
+Va a_1 0 1
+Aa a_1 a_2 a_3 a_4 a_5 a_6 a_7 a_8 BUF
+Ra a_7 0 1k
+.end

@@ -1,0 +1,5 @@
+* an included file whose first line is a plus line
+I01 0 n01 1
+.include card_grid_plus_first.inc
+.op
+.end
