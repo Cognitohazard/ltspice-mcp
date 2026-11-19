@@ -20,7 +20,7 @@ from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import services
 from ltspice_mcp.state import SessionState
 from tests.conftest import FIXTURES_DIR, make_experiment_job, stage_recorded_fixture
-from tests.test_analyze_results_call_bound import _CSV, _slow_csv
+from tests.test_analyze_results_call_bound import _CSV, _slow_csv, _slow_read
 from tests.test_analyze_results_through_the_presenter import _SWEEP_DECK, _SWEEP_LOGS, _analyze
 
 _VALUE = {"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"}
@@ -106,11 +106,12 @@ async def test_a_source_whose_signals_could_not_be_read_is_named_with_the_reason
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("slow", [False, True], ids=["read", "slow_read"])
 async def test_a_signal_listing_the_bound_ended_names_the_sources_it_did_not_read(
-    state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+    state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch, slow: bool
 ):
-    state_no_sim.config.analysis_budget_s = 1.0
     _slow_csv(monkeypatch)
+    _slow_read(monkeypatch, slow)
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     data = await _analyze(
         state_no_sim,
@@ -120,7 +121,7 @@ async def test_a_signal_listing_the_bound_ended_names_the_sources_it_did_not_rea
             "include": {"signals_available": True},
         },
     )
-    (failure,) = [f for f in data["failures"] if f.get("stage") == "signals"]
-    assert failure["code"] == "analysis_deadline"
+    (failure,) = [f for f in data.get("failures", []) if f.get("stage") == "signals"]
+    assert failure["code"] == "analysis_deadline", data.get("failures")
     assert failure["where"] == "signals_available"
     assert "dut" in failure["message"] and "call of its own" in failure["message"]
