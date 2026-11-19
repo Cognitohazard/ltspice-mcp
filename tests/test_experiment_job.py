@@ -1341,7 +1341,7 @@ class TestCancelledExperimentReads:
         job.completeness.produced = 1
         state_no_sim.add_experiment_job(job)
 
-        context = services.resolve_experiment_run(job.job_id, state_no_sim)
+        context = await services.resolve_experiment_run(job.job_id, state_no_sim)
         assert context.raw == raw
         assert context.netlist == circuit
         assert context.identity["case_id"] == "case_0000"
@@ -1361,7 +1361,7 @@ class TestCancelledExperimentReads:
         job.completeness.cancelled = 1
         state_no_sim.all_jobs[job.job_id] = job
         with pytest.raises(ResultError, match="did not produce a raw"):
-            services.resolve_experiment_run(job.job_id, state_no_sim)
+            await services.resolve_experiment_run(job.job_id, state_no_sim)
 
     async def test_failed_experiment_case_with_partial_raw_is_not_analysis_source(
         self,
@@ -1378,7 +1378,7 @@ class TestCancelledExperimentReads:
         job.completeness.failed = 1
         state_no_sim.all_jobs[job.job_id] = job
         with pytest.raises(ResultError, match="did not produce a raw"):
-            services.resolve_experiment_run(job.job_id, state_no_sim)
+            await services.resolve_experiment_run(job.job_id, state_no_sim)
 
 
 def test_persist_jobs_false_submission_fails_clearly(

@@ -1032,24 +1032,20 @@ async def _place_case_beside_sheet(
     checked placement (``sheet_results.place_checked``).
 
     Refused where they could not stand as the circuit's own
-    (``sheet_results.check_case`` and ``check_placement`` say which), and while the
-    job's runs are not all done, as every read of a job's runs is
-    (``services.runs_unready``).
+    (``sheet_results.check_case`` and ``check_placement`` say which), including
+    while the job's runs have not all ended (``job_not_terminal``), which a
+    wait on them ends.
     """
     case = _case_to_place(job, case_id)
-    unready = services.runs_unready(job)
-    if unready is not None:
-        raise _JobsActionError(
-            "job_not_terminal",
-            f"{unready}; wait for them with jobs(action='wait', job_id='{job.job_id}', "
-            "wait_for='runs').",
-            stage="resolution",
-            retryable=True,
-        )
     try:
         check_case(job, case)
     except NotPlaced as exc:
-        raise _JobsActionError(exc.code, str(exc), stage="resolution") from None
+        raise _JobsActionError(
+            exc.code,
+            str(exc),
+            stage="resolution",
+            retryable=exc.code == "job_not_terminal",
+        ) from None
     sheet = await asyncio.to_thread(safe_path, str(case.circuit_path), state)
     try:
         placement = await place_checked(job, case, sheet)

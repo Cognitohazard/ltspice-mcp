@@ -668,6 +668,7 @@ FROZEN_ERROR_CODES = (
     "resume_not_authorized",
     "review_against_plot",
     "revision_conflict",
+    "run_not_finished",
     "run_not_found",
     "run_progress",
     "samples_not_compared",

@@ -48,7 +48,12 @@ A case has no time limit unless `execution.run_timeout_s` (or the server's
 `[simulation] run_timeout`) sets one. While a job runs, each `jobs(status)` or
 `jobs(wait)` receipt contains a `run_progress` observation for each running
 case. It reports the points written and the last time or frequency reached,
-which you can compare with the deck's own stop value. A simulator writes in
+which you can compare with the deck's own stop value. A case that has
+finished is read at once, while its siblings still run; a read of one still
+running is refused with `run_not_finished`, and `analyze_results` lists it in
+`coverage.missing_cases` and counts it in `coverage.runs_running`, so a
+statistic over the runs read is not the job's result until that count is
+gone. A simulator writes in
 buffered blocks, so compare readings a few minutes apart. If `points` has not
 changed, the case is not advancing, and `jobs(action="cancel")` stops it. A
 stopped case's raw is deleted unless the run set
