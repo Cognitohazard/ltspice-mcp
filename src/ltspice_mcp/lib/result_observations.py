@@ -78,6 +78,7 @@ from ltspice_mcp.lib.trace_names import is_node_voltage
 if TYPE_CHECKING:
     from ltspice_mcp.lib.decoded_raw import DecodedRaw
     from ltspice_mcp.lib.device_names import Naming
+    from ltspice_mcp.lib.lint_rules import SaveList
     from ltspice_mcp.lib.netlist_graph import FlatNetlist
     from ltspice_mcp.lib.result_kinds import Analysis
 
@@ -585,7 +586,9 @@ def relay_observations(summary: dict) -> list[Observation]:
 #: raw holds, or how its names are spelled, which a read of one signal would
 #: otherwise not see. ``partial_raw`` (a stopped run's kept raw) is added to
 #: the read by ``services.partial_raw_observation`` itself.
-READ_BY_JOB = frozenset({"subcircuit_nodes_not_saved", "raw_names_disagree"})
+READ_BY_JOB = frozenset(
+    {"subcircuit_nodes_not_saved", "raw_names_disagree", "saves_not_stored"}
+)
 
 #: Every other code a run's case can carry, and why a read of the run by job
 #: does not repeat it. The job's receipt (``run_experiments``, ``jobs``)
@@ -619,6 +622,91 @@ NOT_READ_BY_JOB: Mapping[str, str] = {
     "source_unavailable_after_staging": "the source after staging; the staged copy ran",
     "source_modified_after_staging": "the source after staging; the staged copy ran",
 }
+
+
+def saves_not_stored(
+    saves: SaveList,
+    traces: Sequence[tuple[str, str | None]],
+    naming: Naming,
+    *,
+    circuit: str,
+) -> Observation | None:
+    """Name each entry of a deck's ``.save`` list (``saves``, from
+    ``lint_rules.save_list``, the reading the lint makes before the run) that
+    the run's results do not hold, and each this check could not settle; None
+    when every entry is held.
+
+    ``traces`` is the raw's first plot (``raw_parser.first_plot_traces``),
+    each read as ``naming`` writes a raw (``device_names.trace_key``). An
+    entry is not stored where the reader is known to store nothing for it (an
+    ngspice ``.save`` of a colon path, another LTspice build's spelling, both
+    measured or recorded), or where it is a node voltage whose trace the raw
+    lacks. A current or device value the raw does not hold under the ``.save``'s
+    own spelling (ngspice writes ``v1#branch`` for ``i(v1)``), an entry whose
+    reading is not established, and a pattern (``V(x1:*)``) are not checked:
+    which name the run would store is not established, so none is guessed."""
+    stored = {trace_key(name, xvii=naming.xvii) for name, _ in traces}
+    missing: list[dict[str, str]] = []
+    unchecked: list[dict[str, str]] = []
+    if saves.unreadable:
+        unchecked.append({"save": ".save", "reason": "a .save card could not be read"})
+    for text, signal in saves.entries:
+        if signal.key is not None:
+            if signal.key in stored:
+                continue
+            if signal.key[0] == "v":
+                missing.append(
+                    {"save": text, "reason": f"the results hold no trace that {text} names"}
+                )
+            else:
+                unchecked.append(
+                    {
+                        "save": text,
+                        "reason": (
+                            "which name the run stores for a current or a device value is "
+                            "not established, and the results hold none spelled as the "
+                            ".save spells it"
+                        ),
+                    }
+                )
+        elif not signal.established:
+            unchecked.append({"save": text, "reason": signal.why or "not established"})
+        elif saves.includes and naming.family == "ltspice":
+            unchecked.append(
+                {
+                    "save": text,
+                    "reason": (
+                        "the deck reads other files, whose subcircuit instances this check "
+                        f"did not read ({signal.why})"
+                    ),
+                }
+            )
+        else:
+            missing.append({"save": text, "reason": signal.why or "it stores nothing"})
+    for pattern in saves.patterns:
+        unchecked.append(
+            {"save": pattern, "reason": "which signals a pattern saves is not recorded"}
+        )
+    if not missing and not unchecked:
+        return None
+    parts = []
+    if missing:
+        names = ", ".join(item["save"] for item in missing)
+        parts.append(
+            f"{circuit}: the run's results hold nothing for .save {names}, so a .meas "
+            "or a read of it gives no value."
+        )
+    if unchecked:
+        names = ", ".join(item["save"] for item in unchecked)
+        parts.append(f"Not checked against the results: .save {names}.")
+    evidence: dict[str, Any] = {"circuit": circuit}
+    if missing:
+        evidence["not_stored"] = missing
+    if unchecked:
+        evidence["not_checked"] = unchecked
+    return Observation(
+        code="saves_not_stored", kind="coverage", detail=" ".join(parts), evidence=evidence
+    )
 
 
 def subcircuit_nodes_not_saved(

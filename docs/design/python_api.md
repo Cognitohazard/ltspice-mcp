@@ -490,7 +490,7 @@ raw.plots; raw.descriptor; raw.plot_index  # inventory and selected plot facts
 raw.table(step=0)              # native table rows; complex values use real/imag
 raw.compare(other, signals=None, step=0, other_step=None)  # per-signal differences
 raw.analysis_type; raw.dialect; raw.source          # provenance
-raw.observations               # [{code, kind, detail, evidence}]; partial_raw, coarse_compressed_waveform, compressed_transient, subcircuit_nodes_not_saved, raw_names_disagree
+raw.observations               # [{code, kind, detail, evidence}]; partial_raw, coarse_compressed_waveform, compressed_transient, subcircuit_nodes_not_saved, raw_names_disagree, saves_not_stored
 api.measurements(job_id=..., run_index=0, case_id=None)
 api.measurements("result.log")  # XOR: path | job_id; RAW is optional
 api.device_op_points(job_id=..., case_id=None)  # {"m1": {"gm": ...}}; same sources
@@ -543,7 +543,9 @@ ops.observations               # a log reader's dict (LogResult) says the same o
   on that is not that coarse, and `subcircuit_nodes_not_saved` for a job's run
   whose raw holds no node inside the deck's subcircuits, and
   `raw_names_disagree` for a job's run whose raw spells subcircuit members
-  otherwise than its deck was read. It is empty for a whole result.
+  otherwise than its deck was read, and `saves_not_stored` for a job's run
+  whose results hold nothing for a `.save` entry (with the entries it could
+  not check). It is empty for a whole result.
   `measurements` and `device_op_points` return a
   `LogResult`, a plain `dict` that has the same `observations` for the log it
   read; `measurements` refuses a run whose measurements were not read, with

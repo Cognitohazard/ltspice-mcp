@@ -1798,25 +1798,45 @@ def _log_precision_observations(records: list[Record]) -> list[Observation]:
     ]
 
 
-#: The kinds of a value's observation that the reply carries at its top level.
-_LIFTED_KINDS = frozenset({"reconciliation", "coverage"})
+#: The kinds of a recipe's observation that limit or qualify the number beside
+#: it, which the reply carries at its top level whatever fields it shows: a
+#: ``reconciliation`` (the number is not of the quantity asked about), a
+#: ``coverage`` (a check that did not run, or a part not read) and a ``value``
+#: (a fact about the data the number was read from: constant over the window,
+#: not finite, corners merged at this sweep density).
+_LIFTED_KINDS = frozenset({"reconciliation", "coverage", "value"})
+
+#: The kinds that stay in the row's value, and why: what a reply leaves out
+#: with the value does not change what its numbers mean.
+_KEPT_KINDS: dict[str, str] = {
+    "description": "says how the number was computed, not that it is limited",
+    "relay": (
+        "a line the simulator printed, which the summary's own errors and warnings "
+        "and the reply's relayed solve failures carry"
+    ),
+}
 
 
 def _value_observations(key: str, records: list[Record]) -> list[Observation]:
-    """The observations a recipe's metric made of its rows' values that say
-    whether a row answers what was asked: a ``reconciliation`` (the answer is
-    not of the quantity asked about, such as a stability margin that is not
-    the one LTspice printed) or a ``coverage`` (a check that did not run). Each
-    is given once, naming the recipe and every row it was made of.
+    """The observations a recipe's metric made of its rows' values that limit
+    or qualify the number beside them (``_LIFTED_KINDS``). Each is given once,
+    naming the recipe and every row it was made of, and is taken out of the
+    rows' values, so no observation appears twice in one reply whichever
+    fields it shows.
 
     A lean row leaves the lists of its value out, so this is where they reach
-    the reply. A value's other observations (a fit's description, a relayed
-    log line the reply already relays) stay in the value.
+    the reply. A value's other observations (``_KEPT_KINDS``: a fit's
+    description, a relayed log line) stay in the value.
     """
     grouped: dict[tuple[str, str, str, str], tuple[dict[str, Any], list[dict[str, Any]]]] = {}
     for record in records:
-        for item in record.value.get("observations") or []:
+        found = record.value.get("observations") if isinstance(record.value, dict) else None
+        if not found:
+            continue
+        kept = []
+        for item in found:
             if not isinstance(item, Mapping) or item.get("kind") not in _LIFTED_KINDS:
+                kept.append(item)
                 continue
             evidence = dict(item.get("evidence") or {})
             group = (
@@ -1830,6 +1850,10 @@ def _value_observations(key: str, records: list[Record]) -> list[Observation]:
                 if (value := getattr(record.identity, name)) is not None:
                     where[name] = value
             grouped.setdefault(group, (evidence, []))[1].append(where)
+        if kept:
+            record.value["observations"] = kept
+        else:
+            del record.value["observations"]
     return [
         Observation(
             code=code,

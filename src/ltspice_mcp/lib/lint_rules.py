@@ -1673,6 +1673,57 @@ RULES: tuple[LintRule, ...] = (
 RULES_BY_ID: dict[str, LintRule] = {rule.rule_id: rule for rule in RULES}
 
 
+@dataclass(frozen=True)
+class SaveList:
+    """What a deck's ``.save`` cards ask its run's reader to store, read as
+    the lint reads them before the run (``_coverage``): each signal named one
+    by one, with what the reader stores for it (``device_names.deck_signal``),
+    and the probes that name signals by a pattern. ``unreadable`` says a
+    ``.save`` card could not be read, so none of its signals is known.
+    ``includes`` says the deck reads other files, whose subcircuit instances
+    this reading did not see, so a path it found naming no instance is not
+    established."""
+
+    entries: tuple[tuple[str, DeckSignal], ...]
+    patterns: tuple[str, ...]
+    unreadable: bool = False
+    includes: bool = False
+
+
+def save_list(
+    deck_text: str, path: Path, reader: Producer, *, ngbehavior: str | None = None
+) -> SaveList | None:
+    """The deck's ``.save`` list as its run's reader (``reader``) reads it, for
+    a check after the run of what the results hold; None for a deck with no
+    ``.save`` card, or one whose ``.save`` saves everything, which leaves
+    nothing to check. The same reading as the rules above, so a check before
+    the run and one after it cannot disagree about what a ``.save`` names."""
+    cards = lex_deck(deck_text).cards
+    saves = save_cards(cards)
+    if not saves or any(save.saves_all for save in saves):
+        return None
+    if unreadable_cards(save.card for save in saves):
+        return SaveList((), (), unreadable=True)
+    family = reader.family or DEFAULT_FAMILY
+    context = _LintContext(
+        text=deck_text,
+        path=path,
+        cards=cards,
+        family=family,
+        ngbehavior=ngbehavior,
+        definitions=definition_rule(reader),
+        reader=reader,
+    )
+    coverage = _coverage(context)
+    if coverage is None:
+        return None
+    return SaveList(
+        tuple((entry.text, entry.read) for entry in coverage.saves),
+        tuple(coverage.patterns),
+        includes=any(directive_head(card) in {".include", ".inc", ".lib"} for card in cards),
+    )
+
+
 def lint_deck(
     deck_text: str,
     path: Path,

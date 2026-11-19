@@ -1955,6 +1955,7 @@ class ExperimentRunner(RunnerBase):
         if kept:
             await self._check_raw_names(execution, case)
             await self._check_subcircuit_nodes(execution, case)
+            await self._check_saves(execution, case)
         return outcome
 
     @staticmethod
@@ -2040,6 +2041,23 @@ class ExperimentRunner(RunnerBase):
             return
         found = await asyncio.to_thread(
             _subcircuit_nodes_observation,
+            case.raw_file,
+            case.staged_deck,
+            services.run_producer(execution.job, case),
+            run_ngbehavior(self.simulator_class) if is_ngspice(self.simulator_class) else None,
+            case.circuit,
+        )
+        if found is not None:
+            case.observations.append(dict(found))
+
+    async def _check_saves(self, execution: _Execution, case: ExperimentCase) -> None:
+        """Say on ``case`` which entries of its deck's ``.save`` list its raw
+        does not hold (``result_observations.saves_not_stored``), read as
+        the lint reads them before the run."""
+        if case.raw_file is None:
+            return
+        found = await asyncio.to_thread(
+            _saves_observation,
             case.raw_file,
             case.staged_deck,
             services.run_producer(execution.job, case),
@@ -2611,6 +2629,32 @@ def _read_live_progress(
                 case_id, run_index, *read, code="run_progress", running_s=running_s
             )
     return observations
+
+
+def _saves_observation(
+    raw: Path, deck: Path, producer: Producer, ngbehavior: str | None, circuit: str
+) -> Observation | None:
+    """``saves_not_stored`` for a run: its deck's ``.save`` list as the lint
+    reads it for ``producer`` (``lint_rules.save_list``), against the traces
+    its raw's header holds. None for a deck with no ``.save`` list, and where
+    the raw or the deck cannot be read, which other observations report."""
+    from ltspice_mcp.lib.device_names import naming_for
+    from ltspice_mcp.lib.encoding import read_spice_text
+    from ltspice_mcp.lib.lint_rules import save_list
+    from ltspice_mcp.lib.raw_parser import first_plot_traces
+    from ltspice_mcp.lib.result_observations import saves_not_stored
+
+    traces = first_plot_traces(raw)
+    if traces is None:
+        return None
+    try:
+        text = read_spice_text(deck)
+    except OSError:
+        return None
+    saves = save_list(text, deck, producer, ngbehavior=ngbehavior)
+    if saves is None:
+        return None
+    return saves_not_stored(saves, traces, naming_for(producer), circuit=circuit)
 
 
 def _subcircuit_nodes_observation(
