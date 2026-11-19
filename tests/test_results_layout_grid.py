@@ -28,6 +28,7 @@ is on PATH; nothing of ngspice is recorded.
 from __future__ import annotations
 
 import asyncio
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -517,20 +518,42 @@ _NGSPICE_DECKS = {
 }
 
 
-@pytest.mark.parametrize("text", [False, True], ids=["binary", "text"])
+def stored_as(raw: Path) -> list[str]:
+    """How each plot of an ngspice raw stores its values, read off the file's
+    own data markers (``Binary:`` or ``Values:`` at the start of a line of its
+    ASCII header), without the reader under test."""
+    data = raw.read_bytes()
+    return [
+        marker.decode("ascii")[:-1].lower()
+        for marker in re.findall(rb"(?m)^(Binary:|Values:)", data)
+    ]
+
+
+@pytest.mark.parametrize("text", [False, True], ids=["default", "text"])
 @pytest.mark.parametrize(("source", "analysis"), list(_NGSPICE_DECKS.items()))
 def test_ngspice_lays_out_a_plot_as_every_route_reads_it(
     source: str, analysis: str, text: bool, tmp_path: Path
 ):
-    """An ngspice raw of each analysis, binary and text: the header reader
-    names its writer ngspice and its storage, one of its plots holds the
-    analysis, and the decoder and the run row read the plot the file ends in
-    as the header does. What ngspice names its plots beyond that, and how
-    many it writes, differs by version, so only these are asserted."""
+    """An ngspice raw of each analysis, as the installation writes it by
+    default and asked for text: the header reader names its writer ngspice
+    and each plot's storage as the file's own markers state it, one of its
+    plots holds the analysis, and the decoder and the run row read the plot
+    the file ends in as the header does.
+
+    Which storage ngspice writes by default is the installation's: its
+    ``spinit`` may set ``filetype`` (the official Windows build sets it to
+    ascii, which the CI workflow notes), and ``-n`` reads no user file but
+    still reads ``spinit``. So the storage is asserted as the file states it,
+    not as asked. What ngspice names its plots beyond that, and how many it
+    writes, differs by version, so only these are asserted."""
     raw = run_ngspice(rec.INPUTS / source, tmp_path / "run", text=text)
     header = preflight_raw(raw, limits=rec.RAW_LIMITS, producing_dialect="ngspice")
     assert {plot.dialect for plot in header.plots} == {"ngspice"}
-    assert {plot.storage for plot in header.plots} == {"values" if text else "binary"}
+    stored = stored_as(raw)
+    print(f"{source}: ngspice stored {stored} ({'text asked' if text else 'default'})")
+    assert [plot.storage for plot in header.plots] == stored
+    if text:
+        assert set(stored) == {"values"}, stored
     analyses = [plot_analysis(plot.plot_name, plot.first_type) for plot in header.plots]
     assert ANALYSES[analysis] in analyses, analyses
     last = header.plots[-1]
