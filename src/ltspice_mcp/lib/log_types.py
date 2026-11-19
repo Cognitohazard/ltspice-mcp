@@ -365,9 +365,11 @@ def run_measurement_facts(
     ``not_printed``: each requested name the log printed nothing for, not
     even a failure (LTspice 26 on ``deck/save_omits_meas``; ngspice skips a
     top-level ``.meas`` in batch mode). Each only when it names something, so
-    ``{}`` says every requested ``.meas`` was given. ``requested`` is kept
-    beside any of the first or the last, for :func:`given_no_value`'s
-    callers to say whether that is every one the deck's own text requests."""
+    facts without them say every requested ``.meas`` was given. ``requested``
+    is kept whenever the deck's own text requests a ``.meas``: for
+    :func:`given_no_value`'s callers to say whether a failure is every one
+    the deck requests, and for a receipt to say the deck has ``.meas`` cards
+    without reading it again."""
     facts: dict[str, Any] = {}
     failed = list(table.get("failed_measurements") or ())
     entries = table.get("measurements") or {}
@@ -391,7 +393,7 @@ def run_measurement_facts(
     missing = [name for name in requested or () if measurement_named(name, printed) is None]
     if missing:
         facts["not_printed"] = missing
-    if requested is not None and (failed or missing):
+    if requested:
         facts["requested"] = list(requested)
     return facts
 

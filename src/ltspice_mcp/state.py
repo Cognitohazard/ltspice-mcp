@@ -31,6 +31,7 @@ from ltspice_mcp.lib.pathutil import (
 )
 from ltspice_mcp.lib.result_cache import ResultCache
 from ltspice_mcp.lib.runner_manager import RunnerManager
+from ltspice_mcp.lib.said_once import NotesSent
 from ltspice_mcp.lib.simulator import simulator_dialect
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.lib.symbol_library import SymbolLibrary
@@ -127,6 +128,10 @@ class SessionState:
     background: BackgroundTasks = field(default_factory=BackgroundTasks, repr=False)
     """Tasks this session started without awaiting them, such as recording a
     circuit in the recent index. ``settled`` waits for them."""
+    notes_sent: NotesSent = field(default_factory=NotesSent, repr=False)
+    """The standing notes about a job this session has sent in full, so a
+    later reply sends each by its code (``lib/said_once.py``). Bounded, and
+    never written to disk: a new session starts with nothing remembered."""
     symbols: SymbolLibrary = field(default_factory=SymbolLibrary, repr=False)
     """The symbol libraries of this session: the configured folders, then the
     library of the LTspice it runs. The edit, the check, the inspection and the

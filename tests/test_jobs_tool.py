@@ -28,6 +28,7 @@ from ltspice_mcp.lib.experiment_types import (
 )
 from ltspice_mcp.lib.job_lifecycle import WaitFor
 from ltspice_mcp.lib.native_records import NativeCaseRecord
+from ltspice_mcp.lib.presenter import record_cursor
 from ltspice_mcp.lib.projection import keep_plan, project_row
 from ltspice_mcp.lib.runner_base import RunOutcome
 from ltspice_mcp.lib.store import Store
@@ -55,6 +56,7 @@ from ltspice_mcp.tools.receipts import (
     progress_from_completeness,
     project_receipt_runs,
     render_receipt_snapshot,
+    run_rows_record,
     snapshot_receipt,
 )
 from tests.conftest import (
@@ -614,9 +616,9 @@ class TestActionShapesAndTokenSecrecy:
         state_no_sim: SessionState,
         work_dir: Path,
     ):
-        """A terminal experiment with more cases than one inline page must
-        return a receipt (not crash) whose runs page carries a next_cursor
-        that jobs(action="runs") actually accepts."""
+        """A terminal experiment with more run rows than its reply target
+        holds must return a receipt (not crash) whose run rows are cut, with a
+        next_cursor that jobs(action="runs") actually accepts."""
         circuit = _circuit(work_dir)
         job = _experiment(
             work_dir,
@@ -635,20 +637,21 @@ class TestActionShapesAndTokenSecrecy:
             )
             runs = data["runs"]
             assert runs["truncated"] is True
-            assert runs["returned"] == 50
+            assert 1 <= runs["returned"] < 60
             assert runs["total"] == 60
-            assert runs["next_cursor"] == "o:50"
+            assert runs["next_cursor"] == data["cut"]["/runs/items"]["next"]
             assert runs["next_cursor"] in data["hint"]
             # The counts are in 'progress'; the hint does not restate them.
             assert "remaining" not in data["hint"]
 
         follow = _assert_jobs_schema(
             await handle_jobs(
-                _args("runs", job_id=job.job_id, cursor="o:50"),
+                _args("runs", job_id=job.job_id, cursor=runs["next_cursor"], budget=1_000_000),
                 state_no_sim,
             )
         )
-        assert follow["returned"] == 10
+        assert follow["returned"] == 60 - runs["returned"]
+        assert follow["items"][0]["run_index"] == runs["returned"]
         assert "truncated" not in follow
 
     async def test_completed_with_failures_status_reports_partial_outcome(
@@ -786,7 +789,7 @@ class TestReceiptSnapshotCoherence:
         "fields",
         [None, ["case_id"], ["native_statistics"], ["native_statistics.validated.effective_seed"]],
     )
-    async def test_native_evidence_is_rendered_only_for_the_returned_page(
+    async def test_native_evidence_is_rendered_once_per_row(
         self, state_no_sim, work_dir, monkeypatch, fields
     ):
         circuit = _circuit(work_dir)
@@ -813,7 +816,13 @@ class TestReceiptSnapshotCoherence:
         monkeypatch.setattr(NativeCaseRecord, "public", observed)
         data = _assert_jobs_schema(
             await handle_jobs(
-                _args("runs", job_id=job.job_id, cursor="o:200", run_fields=fields), state_no_sim
+                _args(
+                    "runs",
+                    job_id=job.job_id,
+                    cursor=record_cursor(run_rows_record(job.job_id), 200),
+                    run_fields=fields,
+                ),
+                state_no_sim,
             )
         )
 
@@ -822,7 +831,10 @@ class TestReceiptSnapshotCoherence:
         # The row as a reply sends it: without the fields that say nothing.
         lean = as_sent(expected, "jobs")
         assert all(data["items"][0][key] == value for key, value in lean.items())
-        assert len(calls) == (0 if fields == ["case_id"] else 1)
+        # A page is cut from the job's whole table, read from its record now,
+        # so each row's evidence is rendered once, and never for a projection
+        # that leaves it out.
+        assert len(calls) == (0 if fields == ["case_id"] else 201)
 
     async def test_native_snapshot_keeps_its_facts_after_live_record_changes(
         self, state_no_sim, work_dir
@@ -1618,17 +1630,17 @@ class TestListAndRunsPagination:
         monkeypatch.setenv("LTSPICE_MCP_HOME", str(work_dir / "recent-state"))
         for index in range(3):
             await asyncio.to_thread(recent.touch, _circuit(work_dir, f"c{index}.cir"))
-        real_render = jobs_module.render_jobs_data
-        limits: list[int | None] = []
+        real_presented = jobs_module.presented
+        limits: list[dict[str, int] | None] = []
 
-        def spy(evaluation, *, limit=None, rung=None, **rest):
-            limits.append(limit)
-            return real_render(evaluation, limit=limit, rung=rung, **rest)
+        async def spy(data, **kwargs):
+            limits.append(kwargs.get("caps"))
+            return await real_presented(data, **kwargs)
 
-        monkeypatch.setattr(jobs_module, "render_jobs_data", spy)
+        monkeypatch.setattr(jobs_module, "presented", spy)
         data = _assert_jobs_schema(await handle_jobs(_args("list", limit=500), state_no_sim))
 
-        assert limits == [JOBS_PAGE_LIMIT]
+        assert limits == [{"/items": JOBS_PAGE_LIMIT}]
         assert data["returned"] == data["total"] == 3
         (note,) = data["warnings"]
         assert "limit=500" in note and f"{JOBS_PAGE_LIMIT} was used" in note
@@ -1717,18 +1729,18 @@ class TestListAndRunsPagination:
         state_no_sim.all_jobs[job.job_id] = job
 
         first = _assert_jobs_schema(
-            await handle_jobs(_args("runs", job_id=job.job_id), state_no_sim)
+            await handle_jobs(_args("runs", job_id=job.job_id, budget=500), state_no_sim)
         )
         second = _assert_jobs_schema(
             await handle_jobs(
-                _args("runs", job_id=job.job_id, cursor=first["next_cursor"]),
+                _args("runs", job_id=job.job_id, cursor=first["next_cursor"], budget=500),
                 state_no_sim,
             )
         )
 
-        assert first["returned"] == 50
-        assert second["returned"] == 1
-        assert second["items"][0]["run_index"] == 50
+        assert 1 <= first["returned"] < 51
+        assert second["cut"]["/items"]["offset"] == first["returned"]
+        assert second["items"][0]["run_index"] == first["returned"]
 
     async def test_runs_cursor_applies_to_a_fresh_invocation_snapshot(
         self,
@@ -1740,17 +1752,21 @@ class TestListAndRunsPagination:
         state_no_sim.all_jobs[job.job_id] = job
 
         first = _assert_jobs_schema(
-            await handle_jobs(_args("runs", job_id=job.job_id), state_no_sim)
+            await handle_jobs(_args("runs", job_id=job.job_id, budget=500), state_no_sim)
         )
-        job.cases[50].status = "produced"
+        after = first["returned"]
+        job.cases[after].status = "produced"
         job.completeness.recount(job.cases)
         second = _assert_jobs_schema(
             await handle_jobs(
-                _args("runs", job_id=job.job_id, cursor=first["next_cursor"]),
+                _args("runs", job_id=job.job_id, cursor=first["next_cursor"], budget=500),
                 state_no_sim,
             )
         )
 
         assert first["items"][-1]["status"] == "queued"
-        assert second["items"][0]["run_index"] == 50
+        assert second["items"][0]["run_index"] == after
+        # A page is read from the record as it stands, and says so.
         assert second["items"][0]["status"] == "produced"
+        assert second["progress"]["terminal"] == 1
+        assert "read from its record now" in second["hint"]
