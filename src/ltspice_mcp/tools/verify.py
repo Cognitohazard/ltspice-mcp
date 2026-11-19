@@ -163,6 +163,7 @@ from ltspice_mcp.lib.stored_values import (
     SHEET_NOT_CHECKED,
     STATEMENTS_SCHEMA,
     OtherReading,
+    holds_micro_sign,
     readings_of_sites,
     statements,
 )
@@ -2353,6 +2354,15 @@ def compare_netlists(
             reader=session_reader(state),
         )
     comparison = compared[0]
+    if comparison is not None:
+        # A candidate sheet's export handed over as text (edit_schematic's)
+        # has no stored bytes to check. A reference given as text is the
+        # caller's own text, with no file behind it: nothing to check.
+        comparison["values_read_otherwise_not_checked"] = (
+            [{"file": str(cand_source), "reason": SHEET_NOT_CHECKED}]
+            if isinstance(candidate, str) and is_asc(cand_source) and holds_micro_sign(candidate)
+            else []
+        )
     if comparison is not None and comparison.get("values_read_otherwise"):
         # A side compared as the server's export of a sheet is not a file the
         # caller stored: what a build makes of the export's bytes says nothing
@@ -2368,7 +2378,7 @@ def compare_netlists(
             statement for statement in stated if statement.get("file") not in exports
         ]
         # Not checked is said, since an absent statement reads as checked.
-        comparison["values_read_otherwise_not_checked"] = [
+        comparison["values_read_otherwise_not_checked"] += [
             {"file": str(own), "reason": SHEET_NOT_CHECKED}
             for export, own in exports.items()
             if any(statement.get("file") == export for statement in stated)

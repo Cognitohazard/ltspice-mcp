@@ -359,3 +359,10 @@ NOT_CHECKED_SCHEMA: dict[str, Any] = {
         "required": ["file", "reason"],
     },
 }
+
+
+def holds_micro_sign(text: str) -> bool:
+    """Whether ``text``, a deck with no stored bytes here (a sheet's export
+    handed over as text), holds a micro sign at a value's suffix: a value
+    whose reading by another build this module cannot check without the bytes."""
+    return any(site.micro for site in value_suffix_sites(lex_deck(text).cards))

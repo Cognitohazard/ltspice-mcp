@@ -341,3 +341,25 @@ def test_staging_says_a_sheet_run_as_its_export_was_not_checked(tmp_path: Path):
     assert set(observed) == {str(sheet.resolve()), str((root / "part.inc").resolve())}
     assert set(observed[str(sheet.resolve())]) == {"file", "not_checked"}
     assert [s["value"] for s in observed[str((root / "part.inc").resolve())]["values"]] == ["2µ"]
+
+
+def test_a_sheets_export_handed_over_as_text_is_said_not_checked(
+    work_dir: Path, state_no_sim: SessionState
+):
+    """edit_schematic compares the edited sheet's export as text, which has no
+    stored bytes: where it holds a micro sign the sheet is listed as not
+    checked, never left out as though it were read alike."""
+    from ltspice_mcp.tools.verify import VerifyCompareSpec, compare_netlists
+
+    reference = work_dir / "reference.cir"
+    reference.write_text(ASCII_DECK, encoding="ascii")
+    sheet = work_dir / "sheet.asc"
+    spec = VerifyCompareSpec(reference=str(reference))
+
+    for text, expected in (("* s\nV1 a 0 1µ\n.op\n.end\n", [str(sheet)]), (ASCII_DECK, [])):
+        comparison, _findings, failure, _warnings = compare_netlists(
+            spec, reference, text, reference, sheet, state_no_sim, ref_base_dir=work_dir
+        )
+        assert failure is None and comparison is not None
+        listed = comparison["values_read_otherwise_not_checked"]
+        assert [entry["file"] for entry in listed] == expected
