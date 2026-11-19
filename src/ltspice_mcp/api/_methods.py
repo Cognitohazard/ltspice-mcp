@@ -892,21 +892,24 @@ class ApiMethodsMixin(ABC):
         return _reference.reference(op)
 
     @staticmethod
-    def guide(section: str | None = None) -> str:
-        """Return the guide: its core and index, or one section.
+    def guide(section: str | None = None, heading: str | None = None) -> str:
+        """Return the guide: its core and index, one section, or one heading of it.
 
         ``guide()`` is the core a session reads first — how to work here,
         Python or tools, the rules that cause silent errors — ending in an index
         of the topic sections and task playbooks. ``guide('ltspice')`` or
-        ``guide('bench-craft')`` returns one of them. The same text
-        ``inspect(kind='guide')`` serves over MCP.
+        ``guide('bench-craft')`` returns one of them, and
+        ``guide('schematics', heading='MOSFET orientation conventions')`` one
+        heading of a section, down to the next heading of its level, matched
+        whatever its case. The same text ``inspect(kind='guide')`` serves over
+        MCP.
 
         A static method for the same reason as :meth:`reference`: reading the
         guide must not require a session.
         """
         from ltspice_mcp.lib import guide as _guide
 
-        return _guide.read(section)
+        return _guide.read(section, heading)
 
     @abstractmethod
     def _check_process_and_thread(self) -> None:

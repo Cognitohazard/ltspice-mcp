@@ -40,7 +40,7 @@ from collections import Counter
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import PurePath
-from typing import Any, ClassVar, Literal, Self, cast
+from typing import Any, ClassVar, Literal, Self, cast, get_args
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib.encoding import (
@@ -49,8 +49,10 @@ from ltspice_mcp.lib.encoding import (
     encode_spice_text_strictly,
 )
 
-#: The eight placements of a symbol, as a ``SYMBOL`` line names them.
-ROTATIONS: tuple[str, ...] = ("R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270")
+#: The eight placements of a symbol, as a ``SYMBOL`` line names them: the type
+#: an argument naming one is declared with, and the table read from it.
+Rotation = Literal["R0", "R90", "R180", "R270", "M0", "M90", "M180", "M270"]
+ROTATIONS: tuple[str, ...] = get_args(Rotation)
 
 #: The alignments a ``TEXT`` or ``WINDOW`` line names; a leading ``V`` turns the
 #: text a quarter turn.
