@@ -246,3 +246,32 @@ async def test_a_device_of_an_xvii_sheet_run_is_selected_by_the_sheets_name(
                 assert params, reply
                 assert all("mb1" in n and "mb2" not in n for n in params), params
                 assert "logopinfo" not in str(reply), reply
+
+
+@pytest.mark.asyncio
+async def test_compare_of_chosen_signals_still_names_a_trace_that_could_be_two(
+    state_no_sim: SessionState, tmp_path: Path
+):
+    """With ``signals`` given, a trace that could be either of two traces of
+    the other result is still listed under ambiguous: every trace is in one
+    of compare's lists or named with the reason."""
+    here = _xvii_sheet_raw(
+        tmp_path / "xvii.raw",
+        "* C:\\\\work\\\\sheet.asc",
+        "Linear Technology Corporation LTspice XVII",
+        ["Ix(mb1:D)", "Ix(r1:A)"],
+    )
+    there = _xvii_sheet_raw(
+        tmp_path / "26.raw",
+        "C:\\\\work\\\\sheet.net",
+        "Linear Technology Corporation LTspice",
+        ["Ix(mb1:d)", "Ix(xmb1:d)", "Ix(r1:a)"],
+    )
+    api = SyncApi(state_no_sim)
+
+    def compared() -> dict[str, Any]:
+        return api.load_raw(here).compare(api.load_raw(there), signals=["Ix(r1:A)"])
+
+    result = await asyncio.to_thread(compared)
+    assert list(result["signals"]) == ["Ix(r1:A)"]
+    assert result.get("ambiguous") == {"Ix(mb1:D)": ["Ix(mb1:d)", "Ix(xmb1:d)"]}, result
