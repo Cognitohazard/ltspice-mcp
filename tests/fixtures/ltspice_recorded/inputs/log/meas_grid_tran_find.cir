@@ -1,0 +1,8 @@
+* a FIND with no point in a transient
+.param r=1k
+V1 in 0 PULSE(0 1 0 1u 1u 1 2)
+R1 in out {r}
+C1 out 0 100n
+.tran 0 1m 0 1u
+.meas tran find_v FIND V(out)
+.end

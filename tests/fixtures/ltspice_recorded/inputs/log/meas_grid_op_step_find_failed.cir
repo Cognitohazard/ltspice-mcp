@@ -1,0 +1,12 @@
+* a FIND with no point of a signal the run does not save, in an operating point, stepped
+V1 in 0 1
+R1 in out 1k
+R2 out 0 4k
+R9 in unsaved 1k
+R10 unsaved 0 1k
+.save V(in) V(out)
+.step param s list 1 2
+.op
+.meas op find_f FIND V(unsaved)
+.meas op param_f PARAM find_f*2
+.end

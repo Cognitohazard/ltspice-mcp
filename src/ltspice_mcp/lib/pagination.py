@@ -13,10 +13,8 @@ position alongside the row offset, so they pass ``cursor=None`` here and fill
 the key in themselves. A surface paging a list it recomputes each call uses the
 plain ``"o:<offset>"`` form: there is nothing to tamper with beyond an offset.
 
-Decoding one is the caller's job — :func:`decode_offset` reports a malformed
-cursor as ``None`` rather than raising, because the error a caller should see
-belongs to the tool it addressed, and because a silent clamp to zero would
-restart a listing the caller believed it was continuing.
+No tool reads an ``"o:<offset>"`` cursor back any more: the tools on the
+presenter (``lib/presenter.py``) write and read their own.
 
 Three entry points, differing in who did the slicing: :func:`page` takes the
 whole list and slices it, with the guards a caller-supplied offset and limit
@@ -42,19 +40,6 @@ CursorFor = Callable[[int], str] | None
 def encode_offset(offset: int) -> str:
     """The cursor that continues a listing at ``offset``."""
     return f"{CURSOR_PREFIX}:{offset}"
-
-
-def decode_offset(cursor: str | None) -> int | None:
-    """The offset an ``"o:<offset>"`` cursor names; ``None`` if it is not one.
-
-    Absent means the first page, so ``None`` in gives 0 out.
-    """
-    if cursor is None:
-        return 0
-    prefix, separator, raw_offset = cursor.partition(":")
-    if separator != ":" or prefix != CURSOR_PREFIX or not raw_offset.isdecimal():
-        return None
-    return int(raw_offset)
 
 
 def page_of(

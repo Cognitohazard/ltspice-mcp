@@ -152,9 +152,11 @@ Codes named after the stage, used where the stage is the more useful fact:
 **Page object.** No tool returns an unbounded collection. Every collection
 that can be large is a page, `{items, total, returned, truncated,
 next_cursor}`, and every tool that returns a page accepts its cursor as input.
-`verify_circuit` is on the presenter instead (below): its `findings` is cut
-only when its reply is too long to send whole, and then read on from the
-stored answer (§3.5).
+`verify_circuit`, `run_experiments` and `jobs` are on the presenter instead
+(below): a list is cut only when its reply is too long to send whole.
+`verify_circuit`'s `findings` and `jobs(list)`'s groups are then read on from
+the stored answer (§3.5, §3.2); a job's run rows are read on from the job's
+own record (§3.1).
 
 An `inspect` item's `page` names the data key its cursor pages in a
 `collections {<data key>: {total, returned, truncated}}` block, which is how
@@ -265,11 +267,16 @@ The list is `ALWAYS_PRESENT` in `tools/_base.py`, and the suite fails any
 reply that carries a silent field not on it.
 
 **A reply too long to send whole.** A tool on the presenter
-(`lib/presenter.py`; `verify_circuit` today, the other tools as they move)
-computes its complete answer and hands it, with its output schema, to one
-function that decides what is sent. The target is the tool's `budget`
-argument where it has one, and `[analysis] default_budget` (4000 estimated
-tokens) where it has none; 0 sends every answer whole.
+(`lib/presenter.py`; `verify_circuit`, `run_experiments` and `jobs` today,
+`inspect` and `analyze_results` as they move) computes its complete answer and
+hands it, with its output schema, to one function that decides what is sent.
+The target is one number: the tool's `budget` argument where it has one
+(at least 500 estimated tokens; a smaller one is refused), else
+`[analysis] default_budget` (4000 estimated tokens). A default of 0 and no
+`budget` is no target: every answer is sent whole, except a list read from a
+record (a job's run rows), which an MCP reply still caps at 50 entries, named
+in `cut` and continued by its cursor, so no reply carries an unbounded
+collection. The Python API's automatic mode returns every row.
 
 - An answer within the target is sent exactly as "Fields left out" makes it.
   It carries neither field below, and nothing is stored.
@@ -292,6 +299,19 @@ A cut reply carries two fields, declared once in `tools/_base.py`:
 - `stored_answer`: `{id, path, snapshot}`. `path` is the stored JSON file,
   whose `answer` is the complete answer; `snapshot` is what it was computed
   from, such as a file's `sha256`.
+
+**A list the server already keeps.** A list a record of the server holds
+whole, a job's run rows in its record, is a second kind of source. When it is
+cut, nothing is stored for it: its cursor names the record and an offset, and
+a page is read from the record when it is asked for, so it carries the record
+as it stands then (for run rows, the job's `status` and `progress`) and a
+caller can tell the rows may have moved since the first page. A reply whose
+cut lists are all records carries no `stored_answer` and writes no file.
+
+**Over the target.** When the parts of a reply that are never cut already
+exceed the target, a `run_experiments` or `jobs` reply goes out over it and
+says so once, in a `budget_not_met` observation naming what it cut. No note
+says that nothing was dropped while a `cut` field is present.
 
 A cursor names the stored answer, the list's pointer and an offset. Reading
 it slices the stored file: nothing is computed again and no request is
@@ -551,18 +571,25 @@ budget               int | null            approximate response-token cap
 ```
 
 `budget` and `analyze.include.fields` control how the durable receipt is
-rendered and do not change what runs. A reply over its budget is rendered
-again with each rung of a fixed ladder in turn until it fits. The trim rung
-empties the `source_hashes` rows (the identity echo), the answer rung drops the caller's opt-ins that enlarge the reply
-(such as `include.per_run`, `include.outliers` and `include.provenance`), and
-the shrink rung lowers the number of rows on every page. A call with no
-budget is rendered under the server default (`[analysis] default_budget`,
-default 4000), which applies only the trim rung. Trim never removes facts or
-caller opt-ins. An explicit budget replaces the default and may use all three
-rungs.
+rendered and do not change what runs. `budget` is the reply's target, at
+least 500 estimated tokens; with none, `[analysis] default_budget` (default
+4000) is the target. The receipt goes through the presenter (§1, "A reply too
+long to send whole"): its run rows are cut as rows to fit, at least one always
+stays, and the rest are read from the job's record.
 
-From the trim rung on, a reply still over its budget has its inline
-`waveform` samples thinned until it fits. The samples are already a min/max
+The attached analysis keeps `analyze_results`' own trimming until that tool
+moves onto the presenter. A receipt over its target is rendered again with the
+attached analysis at each rung of a fixed ladder in turn, until the receipt,
+cut by the presenter, fits. The trim rung empties the attached analysis's
+`source_hashes` rows (the identity echo), the answer rung drops the caller's
+opt-ins that enlarge it (such as `include.per_run`, `include.outliers` and
+`include.provenance`), and the shrink rung lowers the number of its rows. With
+no `budget`, only the trim rung applies; an explicit budget may use all
+three. A `budget_truncated` observation says what fitting took from the
+attached analysis.
+
+From the trim rung on, a receipt still over its target has the attached
+analysis's inline `waveform` samples thinned until it fits. The samples are already a min/max
 decimation, so they are drawn again with fewer buckets, each keeping its
 minimum and maximum, under one point limit for every series and never below
 32 points; `points_total` still counts every sample, and the recipe's
@@ -1020,28 +1047,79 @@ recipe, and a `meas_failed_in_every_run` observation names each `.meas` that
 gave no value in any run. Runs are rendered as `items: [RunRecord]`, each row an object
 with the same keys at every budget.
 
-Under a `budget`, receipts keep the common envelope and step down the
-trim -> answer -> shrink ladder described under the input above. The trim rung
-empties the attached analysis's `source_hashes` (one identity row per run);
-`source` stays, because it lists the includes that were read in place, not
-staged, or staged with a reason. The runs page and the attached analysis's
-row surfaces may be shrunk to fewer rows, and its inline waveforms are
-thinned first (see the input above); fact channels, completeness,
-progress, verdicts, coverage and the ids, token and cursors a caller needs to
-continue are never cut. If the floor (the smallest
-response the ladder can produce) exceeds the budget, the floor is returned
-with `budget_not_met`; facts are not dropped.
+A receipt is the job's complete answer at a moment, every run row in it
+(`receipts.render_receipt_snapshot`, which knows nothing of a wait). Its run
+rows are the one list the presenter cuts; `source`, `lint`, `artifacts`,
+`failures` and `observations` are sent whole. When the rows are cut, the
+reply's `cut` names `/runs/items` with `{total, returned, next}`, the `runs`
+block's `returned`, `truncated` and `next_cursor` say the same, and the hint
+names `jobs(action="runs", job_id, cursor)`, which reads the rest from the
+job's record. At least one run row always stays, and a row is sent whole or
+not at all.
 
-One page limit applies to every row surface of a receipt, which means the run
-page and each attached recipe's values, groups, failing cases and missing
-cases. The shrink rung lowers it to the largest limit that fits, which may be
-zero. A receipt's rows preview data that other calls page (`jobs(runs)`,
-`analyze_results` over the `job_id`), so the floor has no per-case rows. In
-the floor, `completeness` and `runs.total` count the runs, `runs.next_cursor`
-starts `jobs(runs)` at the first run, each recipe's warning counts its omitted
-rows, and reductions and spec verdicts remain. The floor's size does not
-depend on the number of cases. `jobs(runs)` and `jobs(list)` keep at least one
-row at their floor.
+**What the rows left out carry.** When run rows are left out, `runs_not_shown`
+states the facts on the rows after the ones sent, from the job's whole table
+whatever `run_fields` keeps: per kind (`diagnostics.<code>`,
+`diagnostics_coverage.<value>`, `failed_measurements`,
+`measurements_not_established`, `measurements_not_printed`,
+`measurements_coverage.<value>`, and `status.<status>` for a run that ended
+`failed`, `cancelled` or `skipped`), `{counts, runs?}`. `counts` gives every
+kind's number of runs. `runs` names at most 3 runs over all kinds, the first
+run of each of the first kinds, each `{case_id, run_index, kinds, cursor}`
+with a record cursor that starts at its row; a kind every run of the job
+carries, shown or not (a coverage value such as
+`measurements_coverage.simulator_unsupported` on a QSPICE job), is given by
+its count alone. The whole note is held to one bound,
+`receipts.NOT_SHOWN_BOUND_TOKENS` (668 estimated tokens), whatever the number
+of kinds and runs, and rows are sized against the target less what the note
+reserves (its size at one row, a first estimate). The whole reply at the
+count found decides: the note can be larger there, and while the reply is
+over, a row comes off. When no count fits beside the reserve, counts are tried
+whole; a reply says it is over its target only when one row is. Rows keep their
+order, so a cursor names a row by its index. It is absent when no row is left
+out or none left out carries such a fact, and it is never cut and never
+shortened. A receipt with no job (a routing failure) has no record: its cut
+rows are stored, its `runs` block names the stored file, and its failed runs
+are left to its `failures`, which name each one. Fact channels, completeness, progress, verdicts and the
+ids, token and cursors a caller needs to continue are never cut. If they and
+one run row exceed the target, the reply goes out over it with one
+`budget_not_met` observation. The attached analysis's row surfaces may be held
+to fewer rows at the shrink rung, down to none; `analyze_results` over the
+`job_id` returns them.
+
+**Standing notes, said once.** Some notes describe the job or the request and
+read the same on every reply about it: the `micro_sign_folded`,
+`ngspice_mode_unverified` and `results_not_beside_sheet` observations, each
+`lint` entry and `source` entry, and the hint's route to the `measurements`
+recipe (when a row names a `.meas` that gave no value, or, on a terminal
+receipt, when the deck has `.meas` cards, the request did not attach the
+recipe and the simulator's measure output is read). Whether the deck has
+`.meas` cards is read from the facts the job keeps for each run, never from
+the deck file; a job recorded by an earlier release kept them only beside a
+`.meas` that gave no value, so its receipt names the route only then. The session remembers each one it has sent, by job, code and a digest
+of its text (`lib/said_once.py`; bounded, never written to disk). A reply that
+repeats one sends it as its code and `said_before`, the number of replies that
+carried it before, in place of its text: an observation as `{code, kind,
+said_before}`, a `lint` or `source` entry as `{circuit, said_before}`, and the
+route as a shorter sentence. The hint then names `jobs(action="status",
+job_id)`, which sends every note in full. A note whose text changed is new and
+is sent in full. Which deliveries shorten is one table: `jobs(action="status")`
+and a replay by `request_id` never do; a `wait`, a `run_experiments` receipt
+and a `resume` do. Each note's schema has two branches: the whole entry, with
+every field it always carries, and the short one, with `said_before` and
+nothing of its text. A new
+session starts with nothing remembered. The Python API sends every note in
+full; `raw_page=True` returns the MCP reply, shortened notes included. Failures, run rows and their diagnostics and measurement fields,
+progress, and every other observation are never shortened.
+
+**Deliveries of one answer.** The run receipt, a `wait` and a `status` are
+deliveries of one job's answer. What a delivery adds is marked in the output
+schema with `x-delivery`: `replayed` on a run receipt, `action` on a `jobs`
+reply, `timed_out` on a wait, and on a resume `resumed`, `replayed`,
+`resume_request_id`, `addressed_parent_job_id` and `head_job_id`. Set those aside, and the run receipt, the
+last wait and a status of a finished job carry the same answer, read in a
+session that has sent none of its standing notes. A wait holds nothing that
+can stop its job: a cancelled wait leaves the job running.
 
 The lean row flattens `value` to its scalar leaves and keeps any `artifact`
 handle, both in `analyze_results` and in a `run_experiments` receipt. A
@@ -1054,9 +1132,10 @@ ignored) are merged into one row. That row is the merged failure whose
 the same excerpt. `count` is the number of failures merged, and `case_ids`
 lists at most 10 of their case ids.
 
-Output: `job_id, request_id, control_token, status, outcome, source[],
-completeness, progress, lint findings (per circuit), runs (a page of
-RunRecords), analysis?, failures[], observations[], artifacts[], hint`.
+Output: `job_id, request_id, control_token, job_type, status,
+analysis_status, dialect, outcome, source[], completeness, progress, lint
+findings (per circuit), runs (a page of RunRecords), analysis?, failures[],
+observations[], artifacts[], hint, cut?`.
 
 ### 3.2 `jobs` — job status and control
 
@@ -1068,7 +1147,7 @@ RunRecords), analysis?, failures[], observations[], artifacts[], hint`.
 {action: "resume", job_id, resume_request_id, control_token?, case_ids?,
  retry_failed?, retry_cancelled?, wait_s?}
 {action: "list",   circuit?: path, limit? (capped at 50), cursor?}
-{action: "runs",   job_id | request_id, cursor?}   cursor absent = first page
+{action: "runs",   job_id | request_id, cursor?, run_fields?}   cursor absent = first page
 {action: "place_beside_sheet", job_id | request_id, case_id?}
 ```
 
@@ -1086,9 +1165,10 @@ differently names each action before its sentence. The tool refuses a field
 the action does not take, naming both. The output shape is discriminated on
 the echoed `action`:
 
-- `status` / `wait` return the §3.1 receipt **without** `control_token`, plus
-  `analysis_status` and, for `wait`, `timed_out`. The receipt includes
-  `progress`, terminal states included, and follows the same budget rules.
+- `status` / `wait` return the §3.1 receipt **without** `control_token`, plus,
+  for `wait`, `timed_out`. The receipt includes `progress`, terminal states
+  included, and follows the same rules for its target, run rows and standing
+  notes; `status` sends every standing note in full.
 - `cancel` returns a page with one row per case that had not finished,
   `{case_id, run_index, prior_status, status}`.
 - `resume` returns the receipt of the addressed parent or of the new child,
@@ -1102,7 +1182,18 @@ the echoed `action`:
   `interrupted`. `recent_jobs` gives at most 5 of the circuit's jobs, newest
   activity first, each `{job_id, status, request_id, finished_at}`, and
   `recent_jobs_total` counts them all.
-- `runs` returns a page of `RunRecord` rows.
+- `runs` returns the job's `RunRecord` rows, read from its record when the
+  call is made, with the job's `status` and `progress` at that moment. They
+  are cut as rows to the target like a receipt's, at least one kept; `cut`
+  names `/items` with its `offset`, and `next` is the cursor for the rows
+  after. A receipt's `cut` cursor for `/runs/items` is the same kind of
+  cursor. A cursor names the job and an offset, so it is refused for another
+  job, and a page of a job still running may show rows that changed since the
+  first page. `run_fields` projects each row, as on `run_experiments`; pass it
+  again with each cursor.
+- `list` is sent whole when it fits, else stored and cut as groups, and
+  `cursor` takes a `cut` entry's `next` to read the stored list on. `limit`
+  caps the groups one reply sends, at most 50.
 - `place_beside_sheet` copies one case's results beside the circuit it ran,
   sheet or netlist, under its name, where LTspice keeps them
   (`sheet_results.files_beside`): the raw, the log, and each other raw the run

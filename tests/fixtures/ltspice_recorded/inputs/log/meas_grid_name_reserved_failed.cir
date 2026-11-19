@@ -1,0 +1,9 @@
+* a measurement named e, a constant of the expression engine, that fails; one deck per form, since LTspice 26 stops at the refusal
+.param r=1k
+V1 in 0 PULSE(0 1 0 1u 1u 1 2)
+R1 in out {r}
+C1 out 0 100n
+.tran 0 1m 0 1u
+.meas tran e WHEN V(out)=2
+.meas tran after MIN V(out)
+.end

@@ -31,6 +31,7 @@ import pytest
 from ltspice_mcp.errors import InvalidCursorError, RecipeInvalidError
 from ltspice_mcp.lib import result_store
 from ltspice_mcp.lib.pin_legend import PageCursorError, paginate_view
+from ltspice_mcp.lib.presenter import open_record
 from ltspice_mcp.lib.recipes import DISCRIMINANTS
 from ltspice_mcp.tools import _base, get_tools
 from ltspice_mcp.tools.experiments import (
@@ -39,7 +40,6 @@ from ltspice_mcp.tools.experiments import (
     _validate_attached_analysis,
 )
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
-from ltspice_mcp.tools.jobs import _decode_jobs_cursor
 from ltspice_mcp.tools.schematic_edit import EditViewCursors, _validate_view_cursors
 from ltspice_mcp.tools.verify import VerifyCircuitInput, handle_verify_circuit
 
@@ -1090,7 +1090,7 @@ class TestCursorTamperOnEveryPaginatedInput:
 
     def test_jobs_cursor_rejects_garbage(self):
         with pytest.raises(InvalidCursorError) as exc:
-            _decode_jobs_cursor("not-a-cursor")
+            open_record("not-a-cursor", kind="job_runs")
         assert exc.value.code == "invalid_cursor"
 
     def test_analyze_cursor_rejects_garbage(self):

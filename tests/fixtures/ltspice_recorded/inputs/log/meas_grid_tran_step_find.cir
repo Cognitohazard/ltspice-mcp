@@ -1,0 +1,10 @@
+* a FIND with no point in a transient, stepped
+V1 in 0 PULSE(0 1 0 1u 1u 1 2)
+R1 in out {r}
+C1 out 0 100n
+.param r=1k z=(100-k)/99
+.step param k list 1 100
+.tran 0 1m 0 1u
+.meas tran find_v FIND V(out)
+.meas tran find_sz FIND V(out)*z
+.end

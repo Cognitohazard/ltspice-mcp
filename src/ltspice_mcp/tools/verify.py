@@ -3042,12 +3042,14 @@ def _left_out(entry: ListCut) -> int:
 def _say_how_to_read_the_rest(
     reply: dict[str, Any],
     cut: Mapping[str, ListCut],
-    stored: StoredAnswer,
+    stored: StoredAnswer | None,
     paged: str | None,
 ) -> None:
     """Add to a cut reply ``findings_omitted``, counted from the stored
     findings, and to its hint which entries a page holds and the three ways
     to read the rest: the stored file, the call, and its Python form."""
+    # Every list verify_circuit cuts is stored: it names no record.
+    assert stored is not None
     findings = cut.get("/findings")
     if findings is not None and findings.next is not None:
         every = Counter(str(f["rule_id"]) for f in stored.answer.get("findings", ()))
