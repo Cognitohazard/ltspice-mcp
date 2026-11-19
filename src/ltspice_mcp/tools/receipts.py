@@ -242,10 +242,22 @@ _STEPS_SCHEMA: dict[str, Any] = {"type": "array", "items": {"type": "integer"}, 
 RUN_RECORD_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "case_id": {"type": "string"},
-        "run_index": {"type": "integer"},
+        "case_id": {
+            "type": "string",
+            "description": (
+                "<circuit id>-case-<number>, the number counting the circuit's cases "
+                "from 0, four digits or more (guide section 'variations')."
+            ),
+        },
+        "run_index": {
+            "type": "integer",
+            "description": "The case's place among the whole job's cases, from 0.",
+        },
         "circuit": {"type": "string"},
-        "assignments": {"type": "object"},
+        "assignments": {
+            "type": "object",
+            "description": "The value each variation target takes in this case.",
+        },
         "native_statistics": {"type": "object"},
         "status": {
             "type": "string",

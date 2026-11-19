@@ -2705,6 +2705,22 @@ each tool's `inputSchema`.
 
 ### A.1 Variation
 
+A case's id is `<circuit id>-case-<number>` (`variations.format_case_id`): the
+number counts that circuit's cases from 0, padded to four digits and wider
+past 9999, and names the case's staged deck (`case-<number>.cir`). The circuit
+id is the circuit's `id`, else its file stem made valid
+(`sanitize_circuit_id`), with `-2`, `-3` for a repeated stem
+(`derive_circuit_ids`, said in a `circuit_id_derived` observation). A run
+row's `run_index` counts the whole job's cases from 0, circuits in the order
+given. The order (`expand_variations`): circuits in the order given; entries
+in the order given, the last changing fastest; inside one grid entry the last
+target changing fastest; a zip entry pairing its targets; the samples of a
+`random` or `pdk_native` entry changing fastest of all, wherever that entry
+stands. A resume copies the job's cases and expands nothing again, so each
+keeps its id, run index and order. These are a contract a caller may write
+ids against before a job runs; `tests/test_case_ids_and_order.py` names the
+test that pins each.
+
 ```
 {kind: "assign", id?, combine: "grid"|"zip" (default grid),
  applies_to?: [circuit id],

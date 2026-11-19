@@ -601,6 +601,8 @@ def _make_child(
         case.log_diagnostics = None
         case.measurement_facts = None
         case.result_digest = None
+        # The steps its new run's results hold are read when that run ends.
+        case.steps = None
         case.observations = []
         prepare_seeded_driver(case, recovery.execution, store, recovery.root_job_id, simulator)
         prepare_case_startup(case, recovery.execution, store, recovery.root_job_id, simulator)
