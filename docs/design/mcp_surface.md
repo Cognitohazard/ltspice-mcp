@@ -2699,12 +2699,12 @@ it, and reported when the caller names it.
 | `periodic` | tran | `signal` | `window?`; period, frequency, duty cycle |
 | `transient_response` | tran | `signal`, `mode: "step"\|"disturbance"` | `input` is required for `disturbance` and rejected for `step`; `window?` |
 | `thd` | tran | `signal` | `fundamental_hz?`, `harmonics?` (default 7, held to 50), `window?` |
-| `tone` | tran | `signal`, `frequency_hz` | `window?`; cut to the whole periods of `frequency_hz` that fit from the window's first sample and resampled by linear interpolation onto evenly spaced times, as `thd` does by default, so samples weigh by time. `amplitude` (peak, signal unit), `phase_deg` in (-180, 180] for `dc + amplitude*sin(2*pi*f*t + phase_deg)` with `t` the run's own time from zero, `sin_component`, `cos_component`, `dc`, plus `t_start`, `t_end`, `n_cycles`. Reducible leaves: `amplitude`, `phase_deg`, `dc`, `sin_component`, `cos_component`; a spread of `phase_deg` that straddles 180 degrees reduces the wrapped value, the components do not wrap |
+| `tone` | tran | `signal`, exactly one of `frequency_hz` / `frequency_param` | `frequency_param` names a parameter whose value at the step read (its `.step` value) or else the case's assignment is that run's frequency; a run with neither is refused. `window?`; cut to the whole periods of `frequency_hz` that fit from the window's first sample and resampled by linear interpolation onto evenly spaced times, as `thd` does by default, so samples weigh by time. `amplitude` (peak, signal unit), `phase_deg` in (-180, 180] for `dc + amplitude*sin(2*pi*f*t + phase_deg)` with `t` the run's own time from zero, `sin_component`, `cos_component`, `dc`, plus `t_start`, `t_end`, `n_cycles`. Reducible leaves: `amplitude`, `phase_deg`, `dc`, `sin_component`, `cos_component`; a spread of `phase_deg` that straddles 180 degrees reduces the wrapped value, the components do not wrap. A ratio `A/B` (or `1/A`) is the phasor of `A` over that of `B` over the same whole periods: `amplitude` is the gain, `phase_deg` the shift, the components the quotient's real and imaginary parts, and there is no `dc`; a denominator with no component at the frequency is refused as singular, and one with under 1e-3 of its peak there is warned of |
 | `bode_filter` | ac | `signal` | filter characteristics: fc, bw, Q, type; a cutoff is read at the half-power level (-3.0103 dB) below the passband |
 | `bode_point` | ac | `signal`, `at_hz` | gain and phase at a frequency |
 | `bode_crossing` | ac | `signal`, exactly one of `level_db` / `level_deg`; `ref_hz` with `level_db` | `level_deg` scans the unwrapped phase, so a crossing past 180 degrees is found once rather than at every wrap; `phase_deg` remains accepted as an alias. `ref_hz` measures `level_db` from the gain at that frequency, read as `bode_point` reads it, so the half-power point below a reference is one call; the value's `level` is then the absolute level crossed, and its `reference` gives `frequency_hz`, `magnitude_db` and the relative `level_db`. A `ref_hz` outside the sweep is refused |
 | `bode_slope` | ac | `signal`, `from_hz`, `to_hz` | dB per decade |
-| `stability` | ac | `signal` | phase margin = 180 degrees + phase at unity gain, positive being stable. Reducible leaves: `phase_margin_deg`, `gain_margin_db`, `unity_gain_hz`, `dc_gain_db` |
+| `stability` | ac | `signal` | phase margin = 180 degrees + phase at unity gain, positive being stable. Reducible leaves: `phase_margin_deg`, `gain_margin_db`, `unity_gain_hz`, `dc_gain_db`. On FRA results the crossover and phase margin are compared with the ones LTspice printed for the same analyzer and step: the reply's `observations` carry `fra_margin_differs` (kind `reconciliation`, both values and the forms of the signal whose margin agrees) when they differ beyond the printed digits, or `fra_margin_not_checked` (kind `coverage`, with why) when the log printed none; nothing when they agree |
 | `ac_structure` | ac | `signal` | structural poles and zeros |
 | `resonance` | ac | `signal` | resonant frequency, Q, peak; the bandwidth Q is taken from is read at the half-power level below the peak |
 | `return_loss` | ac | `signal` | `z0?` (default 50); return loss in dB, VSWR, reflection coefficient |
@@ -2718,7 +2718,10 @@ a node-pair voltage `V(a,b)`. No simulator writes a pair as a trace, so every
 reader computes `V(a) - V(b)` from the same raw, step and axis, complex on an
 AC run. `V(a,0)` and `V(a,gnd)` are `V(a)`, a missing node is named, and a
 `.noise` run refuses a pair because spectral densities do not subtract. The AC
-recipes also accept a ratio `A/B` of two such signals and a leading `-`. Other
+recipes and `tone` also accept a ratio `A/B` of two such signals, a reciprocal
+`1/A`, and one leading `-` that negates the whole expression
+(`metrics.signal_expression` is the one reader of these; no other operator is
+read). Other
 trace math is done in Python on `RawResult.trace`. A not-found error for an
 input that looks like an expression includes the Python snippet and names
 where to run it, which is `run_code` when the session serves it and the

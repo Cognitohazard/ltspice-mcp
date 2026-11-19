@@ -277,11 +277,17 @@ C1 out 0 {C}
   `run_experiments`' attached `analyze` block, `plot_waveform`,
   `inspect(kind="results")` and `api.load_raw`; its path reads it too. A
   stepped FRA run's results file holds each step's sweep in turn, and the
-  server reads it one step at a time, as it reads a stepped `.ac`. The
-  results' `gain_N` is the negative of the loop gain the `stability` recipe
-  takes, so `stability` on `-gain_1` gives the crossover and phase margin
-  LTspice prints at the end of the log. LTspice XVII 17.0 has no FRA and
-  refuses the analyzer.
+  server reads it one step at a time, as it reads a stepped `.ac`. Which
+  way the analyzer faces decides whether `gain_N` is the loop gain the
+  `stability` recipe takes, its negative, its reciprocal or its negative
+  reciprocal, and that is not established from the results; with the
+  analyzer facing as in the one recorded run, `stability` on `-gain_1` gives
+  the crossover and phase margin LTspice prints at the end of the log.
+  `stability` on these results compares its margin with that printed one: an
+  observation `fra_margin_differs` gives both and names the form whose margin
+  agrees, and `fra_margin_not_checked` says the log held none to compare.
+  Read that observation before trusting the margin. LTspice XVII 17.0 has no
+  FRA and refuses the analyzer.
 - **Text of more than one line**: a sheet holds a line break in a TEXT as
   `\n` and a backslash as `\\`; a `\n` inside a path such as `C:\new` is a
   line break too. On export, both builds split a directive at each line break

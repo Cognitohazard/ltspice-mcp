@@ -515,6 +515,8 @@ FROZEN_ERROR_CODES = (
     "external_cancellation_requested",
     "extreme_value",
     "failures_truncated",
+    "fra_margin_differs",
+    "fra_margin_not_checked",
     "hierarchy_write_conflict",
     "idempotency_conflict",
     "identical_samples",

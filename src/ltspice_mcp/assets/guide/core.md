@@ -69,7 +69,8 @@ over every run at once, with checks behind each number. Compute over the
 samples yourself only what no recipe answers.
 
 - Amplitude and phase at one frequency: `tone`, or `.four` in the deck, read
-  with `summary` (guide section 'signals').
+  with `summary` (guide section 'signals'). `tone` also reads a ratio
+  (`V(out)/V(in)`) and each case at its own frequency (`frequency_param`).
 - A step response (rise, overshoot, settling): `transient_response`.
 - The `.meas` values of each run, failed ones named: `measurements`.
 - A loop's gain and phase margin: `stability`.

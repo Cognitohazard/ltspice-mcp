@@ -735,7 +735,10 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 40 characters: thd's harmonics is held at its cap rather
     # than refused, so its description names the cap the dropped maximum
     # stated, and what the count is. Measured 21,321.
-    "analyze_results": 21330,
+    # Raised by about 165 characters for tone's frequency_param, which reads
+    # each case of a frequency sweep at its own frequency in one recipe instead
+    # of one recipe per frequency with case filters. Measured 21,494.
+    "analyze_results": 21500,
     # Ten query kinds, each with its own argument shape — including the
     # reference lookup, which is what a session on the compact listing uses to
     # learn a branch's fields at all.
