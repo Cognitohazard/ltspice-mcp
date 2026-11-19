@@ -304,7 +304,7 @@ async def test_a_measurements_no_number_counts_pass_through_cuts_and_pages(
     job = make_experiment_job(
         state_no_sim, job_id="exp_no_number", count=30, raw=work_dir / "case.raw"
     )
-    request = {
+    request: dict[str, Any] = {
         "sources": [{"job_id": job.job_id, "label": "dut"}],
         "recipes": [{"key": "m", "metric": "measurements"}],
     }
