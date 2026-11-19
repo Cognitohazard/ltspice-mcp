@@ -1,0 +1,6 @@
+* an R card with nothing after its nodes
+.op
+In 0 r_a 1m
+Rn0 r_a 0 1k
+Rn r_a r_b
+.end

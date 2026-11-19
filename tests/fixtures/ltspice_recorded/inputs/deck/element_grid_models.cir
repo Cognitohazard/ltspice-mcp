@@ -1,0 +1,35 @@
+* each element with a model after its nodes
+.op
+Id 0 d_a 1m
+Dd d_a d_b dmod
+Rd0 d_b 0 1k
+.model dmod D
+Vq q_c 0 5
+Rq0 q_b q_c 100k
+Qq q_c q_b q_e qmod
+Rq1 q_e 0 1k
+.model qmod NPN
+Vm m_d 0 5
+Vmg m_g 0 2
+Mm m_d m_g m_s m_b mmod
+Rm0 m_s 0 1k
+Rm1 m_b 0 1Meg
+.model mmod NMOS
+Vj j_d 0 5
+Jj j_d j_g j_s jmod
+Rj0 j_g 0 1k
+Rj1 j_s 0 1k
+.model jmod NJF
+Is 0 s_a 1m
+Ss s_a s_b s_cp s_cn smod
+Rs0 s_b 0 1k
+Vsc s_cp s_cn 1
+Rs1 s_cn 0 1k
+.model smod SW(Ron=1k Roff=1Meg Vt=0.5 Vh=0)
+Ix 0 x_a 1m
+Xx x_a x_b xsub
+Rx0 x_b 0 1k
+.subckt xsub p q
+Rp p q 1k
+.ends xsub
+.end

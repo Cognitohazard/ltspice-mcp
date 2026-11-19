@@ -1,0 +1,5 @@
+* an I card with nothing after its nodes
+.op
+Rn0 i_a 0 1k
+In i_a i_b
+.end

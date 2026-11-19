@@ -1,0 +1,8 @@
+* a .save card naming one node of two
+.op
+I01 0 n01 1
+R01 n01 0 1k
+I02 0 n02 1
+R02 n02 0 2k
+.save V(n01)
+.end

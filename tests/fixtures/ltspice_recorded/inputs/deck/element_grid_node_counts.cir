@@ -1,0 +1,14 @@
+* a BJT with its substrate node of its own, and a MOSFET with three nodes
+.op
+Vq q_c 0 5
+Rq0 q_b q_c 100k
+Qq q_c q_b q_e q_s qmod
+Rq1 q_e 0 1k
+Rq2 q_s 0 1Meg
+.model qmod NPN
+Vm m_d 0 5
+Vmg m_g 0 2
+Mm m_d m_g m_s mmod
+Rm0 m_s 0 1k
+.model mmod NMOS
+.end

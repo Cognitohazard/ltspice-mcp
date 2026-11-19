@@ -363,6 +363,9 @@ These tests run on any machine, without LTspice:
 |`test_trace_name_grid.py`|which trace each name a user writes reads, and what it holds, through `naming_for`, `find_trace`, `trace_keys`, `read_in_plot`, `trace_quantity`, `node_voltages`, the unit, `inspect`, `analyze_results`, `plot_waveform` and the Python API; every recorded trace of the grid's cases is found under the name a user writes; and ngspice's dotted names live|
 |`test_value_number_grid.py`|what number each recorded value is, through `parse_spice_value`, `is_scaled_number`, `plain_number`, `parse_plain_value`, the Monte Carlo nominal, the netlist comparison, a `.step` value, an `analyze_results` time and frequency, a window bound of the Python API, a directive's leading numbers, the evaluator and `inspect(kind="hierarchy")`; the lint's reading of a capital M; every suffix the reader knows is an axis value; and the server's reading for ngspice against ngspice live, in each mode|
 |`test_expression_value_grid.py`|what each recorded parameter expression evaluates to, through `Environment`, `load_hierarchy` and `inspect(kind="hierarchy")`; a cell of one plain operator declares what arithmetic gives; every operator the evaluator takes is an axis value; and the server's reading for ngspice against ngspice live, in each mode|
+|`test_deck_card_grid.py`|which lines of each recorded deck are cards and which directive each is (a title, a `+` line, a comment, a `.end` and a `.ends`, a line break, each directive the server acts on in each spelling and case), through the lexer and a deck read for an edit, the lexer's reading of an included file, the netlist reading of `services`, the netlist graph, the hierarchy, the dangling-node check, a run's source amplitudes, a variation's targets, `inspect` and the Python API; every directive the lexer knows is an axis value; and the server's reading for ngspice against ngspice live, in each mode|
+|`test_element_nodes_grid.py`|which words of each recorded element card are its nodes and which its model, for each letter by what follows its nodes, a node count that varies, a switch's state and a call's `params:`, through the same routes; every letter the views and the dangling-node check know is an axis value; and the same live on ngspice|
+|`test_declaration_grid.py`|what each recorded `.param`, `.model` and `.subckt` card declares (each form of an assignment, a model's parameters and level, a subcircuit's defaults), through `ParamCard`, `assigned_params`, `ModelCard`, `SubcktCard`, a variation's targets, a run's source amplitudes and the hierarchy's value of the element each sets; every form the card readers tell apart is an axis value or listed outside the grid; and the same live on ngspice|
 |`test_recorded_ltspice_grids.py`|the grids' index: every cell names a case and an item of it with the coordinates its deck has, every coordinate has a cell, the functions a grid names exist and a behaviour names them, and the count of coordinates not yet recorded only falls|
 |`test_ltspice_recorder.py`|the recorder, and the tree: every listed file is present with its recorded digest, every input matches the one that was run, and every behaviour is recorded on every build or has a reason|
 
@@ -431,7 +434,13 @@ results file is laid out, and what its plot is), `test_results_layout_grid.py`;
 for the trace-name grid (which trace a name reads, and what it holds),
 `test_trace_name_grid.py`; for the value-number grid (what number a value
 is), `test_value_number_grid.py`; for the expression-value grid (what a
-parameter expression evaluates to), `test_expression_value_grid.py`.
+parameter expression evaluates to), `test_expression_value_grid.py`; for the
+deck-card grid (which lines of a deck are cards, and which directive a card
+is), `test_deck_card_grid.py`; for the element-node grid (how many nodes an
+element takes, and what follows them), `test_element_nodes_grid.py`; for the
+declaration grid (what a `.param`, `.model` or `.subckt` card declares),
+`test_declaration_grid.py`. The three deck grids read a deck through every
+route with `tests/_deck_readings.py`.
 A cell where the server answers differently from the recording is pinned there
 under a name that states the difference, until a fix lands.
 

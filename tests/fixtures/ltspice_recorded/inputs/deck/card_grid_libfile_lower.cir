@@ -1,0 +1,6 @@
+* a .libfile card naming a file of parameters
+I01 0 n01 1
+R01 n01 0 {plibf}
+.libfile card_grid_libfile.lib
+.op
+.end

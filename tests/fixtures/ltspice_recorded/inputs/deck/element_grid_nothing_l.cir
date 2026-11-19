@@ -1,0 +1,6 @@
+* an L card with nothing after its nodes
+.op
+In 0 l_a 1m
+Rn0 l_a 0 1k
+Ln l_a l_b
+.end
