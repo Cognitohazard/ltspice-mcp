@@ -702,9 +702,11 @@ def classify(channels: Mapping[Channel, str], rules_name: str) -> list[LogCondit
     entry per code and channel, in the order each first appears, log before
     console. ``severity`` is the strongest word the simulator wrote on any line
     of any occurrence (of ``unclassified``, whose lines are unrelated, the first
-    one's), as it spelled it: a condition whose first line carries
+    one's), as it spelled it, and ``severity_text`` the occurrence it was written
+    on where that is not the first: a condition whose first occurrence carries
     none and whose later one says ``Fatal Error`` (XVII's ``convergence_failed``
-    on log/err_timestep) is the error the simulator called it."""
+    on log/err_timestep) is the error the simulator called it, on the line it
+    called one (:func:`said_text`)."""
     rules = _CLASSIFIERS[rules_name]
     entries: dict[tuple[str, Channel], LogCondition] = {}
     channel: Channel
@@ -723,6 +725,7 @@ def classify(channels: Mapping[Channel, str], rules_name: str) -> list[LogCondit
                     seen.get("severity", ""), -1
                 ):
                     seen["severity"] = strongest
+                    seen["severity_text"] = _held("\n".join(block))
                 continue
             entry: LogCondition = {
                 "code": code,
@@ -828,6 +831,14 @@ def said_as(condition: Mapping[str, Any]) -> Literal["error", "warning"] | None:
     this, so none decides it otherwise."""
     severity = condition.get("severity")
     return _SAID_AS.get(severity.casefold()) if isinstance(severity, str) else None
+
+
+def said_text(condition: Mapping[str, Any]) -> str:
+    """The text of ``condition`` (a :class:`LogCondition`) that its severity
+    was written on: the occurrence that said it, else the first. A reader that
+    lists a condition as an error or a warning lists this text, so a word is
+    never shown beside a line that does not carry it."""
+    return str(condition.get("severity_text") or condition["first_text"])
 
 
 def reply_fields(found: Mapping[str, Any]) -> dict[str, Any]:

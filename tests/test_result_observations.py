@@ -525,6 +525,19 @@ class TestSurfaceObservations:
         )
         assert all(o["code"] != "meas_batch_abort" for o in obs)
 
+    def test_no_batch_abort_where_the_log_holds_a_measurement(self):
+        # Two .meas fail on XVII, which keeps one meas_errors entry for its one
+        # condition; the others were measured, so the batch was evaluated and
+        # the second failure's miss is no phantom either.
+        summary = {
+            "meas_errors": [{"directive": ".meas tran broken find v(out at 0.5m"}],
+            "measurements": {"before": 1.0, "after": 0.0},
+        }
+        obs = surface_observations(
+            summary, requested={"meas": ["before", "broken", "broken2", "after"], "four": []}
+        )
+        assert all(o["code"] != "meas_batch_abort" for o in obs)
+
     def test_an_error_naming_a_meas_is_relayed_once_as_the_meas(self):
         block = ".meas tran broken find v(out at 0.5m\n  Error: FIND can not be evaluated."
         summary = {

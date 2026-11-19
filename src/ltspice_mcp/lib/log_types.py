@@ -182,6 +182,8 @@ class LogCondition(TypedDict):
     first_text: str
     channel: Literal["log", "console"]
     severity: NotRequired[str]
+    #: The occurrence ``severity`` was written on, where that is not the first.
+    severity_text: NotRequired[str]
 
 
 class LogDiagnostics(TypedDict):

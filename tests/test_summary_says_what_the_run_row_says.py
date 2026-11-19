@@ -109,7 +109,7 @@ _WARNING_WORDS = {"warning"}
 
 def _texts(row: dict[str, Any], words: set[str]) -> set[str]:
     return {
-        d["first_text"]
+        d.get("severity_text") or d["first_text"]
         for d in row.get("diagnostics", [])
         if d.get("severity", "").casefold() in words
     }
@@ -202,9 +202,9 @@ def test_a_condition_is_as_severe_as_the_strongest_word_the_simulator_wrote_on_i
 ):
     """LTspice XVII's log/err_timestep: the ``convergence_failed`` block starts
     ``Trouble finding operating point...`` and a later line says ``Fatal
-    Error``. The condition's severity is ``Fatal Error``, so the summary lists
-    it as an error; LTspice 26 writes the same block with no word, so there it
-    is in neither list."""
+    Error``. The condition's severity is ``Fatal Error``, and the summary lists
+    as the error the line LTspice called one, which names the node; LTspice 26
+    writes the same block with no word, so there it is in neither list."""
     import numpy as np
 
     from ltspice_mcp.lib.log_conditions import run_diagnostics
@@ -227,7 +227,12 @@ def test_a_condition_is_as_severe_as_the_strongest_word_the_simulator_wrote_on_i
         ]
         assert condition.get("severity") == expected, (build, condition)
         errors = build_simulation_summary(raw, logs, producer=producer).get("errors", [])
-        assert (condition["first_text"] in errors) == (expected is not None), (build, errors)
+        if expected is None:
+            assert not [e for e in errors if "operating point" in e], (build, errors)
+        else:
+            (said,) = [e for e in errors if expected in e]
+            assert said.startswith("Fatal Error:") and 'node "a"' in said, (build, errors)
+            assert condition["severity_text"] == said, (build, condition)
 
 
 async def test_an_operating_point_found_by_stepping_is_no_error_and_says_no_demotion(
@@ -252,6 +257,10 @@ async def test_an_operating_point_found_by_stepping_is_no_error_and_says_no_demo
     assert any(d["code"] == "operating_point_fallback" for d in row["diagnostics"]), row
     for route, (value, _observations_found) in found.items():
         assert not any("stepping" in line.casefold() for line in value.get("errors", [])), route
+        # A severity is listed with the line it was written on: ngspice's
+        # ``Note:`` rungs are no warning, its ``Warning:`` rung is one.
+        stepping = [w for w in value.get("warnings", []) if "stepping" in w.casefold()]
+        assert all(w.startswith("Warning:") for w in stepping), (route, stepping)
         assert not any("surfaced as a warning" in line for line in value.get("warnings", [])), (
             route
         )
@@ -305,7 +314,13 @@ _LINE_CLASSIFIER_READERS = {
 
 #: Words in an expression that make it the line classifier's output: its
 #: diagnostics, or the measurement parser's, which carries its lists.
-_CLASSIFIER_OUTPUT = ("diag", "meas_data")
+_CLASSIFIER_OUTPUT = (
+    "diag",
+    "meas_data",
+    '"measurements")',
+    "measurementsoutput",
+    "logdiagnostics",
+)
 
 
 def test_only_the_named_readers_read_the_line_classifiers_lists():
@@ -329,6 +344,10 @@ def test_only_the_named_readers_read_the_line_classifiers_lists():
             # A name bound to the classifier's output under another name
             # (``section = logs.value("diagnostics")``) is read as that output.
             aliases = {
+                arg.arg
+                for arg in [*scope.args.posonlyargs, *scope.args.args, *scope.args.kwonlyargs]
+                if arg.annotation is not None and holds_output(ast.unparse(arg.annotation))
+            } | {
                 target.id
                 for node in ast.walk(scope)
                 if isinstance(node, (ast.Assign, ast.AnnAssign))
@@ -386,10 +405,11 @@ def test_every_recorded_log_gives_the_summary_the_run_rows_errors_and_warnings(
 ):
     """On every recorded log of both builds, the summary's errors are the
     run's conditions the simulator called errors, its log warnings those it
-    called warnings, and no other line is either."""
+    called warnings, each listed by the line the word was written on, and no
+    other line is either."""
     import numpy as np
 
-    from ltspice_mcp.lib.log_conditions import run_diagnostics, said_as
+    from ltspice_mcp.lib.log_conditions import run_diagnostics, said_as, said_text
     from ltspice_mcp.lib.raw_parser import build_simulation_summary
     from tests.conftest import make_raw_mock
 
@@ -402,9 +422,9 @@ def test_every_recorded_log_gives_the_summary_the_run_rows_errors_and_warnings(
     said = (run_diagnostics(section["conditions"], producer) if section else {}).get(
         "diagnostics", []
     )
-    errors = [c["first_text"] for c in said if said_as(c) == "error"]
-    warnings = [c["first_text"] for c in said if said_as(c) == "warning"]
+    errors = [said_text(c) for c in said if said_as(c) == "error"]
+    warnings = [said_text(c) for c in said if said_as(c) == "warning"]
     assert summary.get("errors", []) == errors
     assert [
-        w for w in summary.get("warnings", []) if w in {c["first_text"] for c in said}
+        w for w in summary.get("warnings", []) if w in {said_text(c) for c in said}
     ] == warnings

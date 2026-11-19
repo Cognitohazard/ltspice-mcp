@@ -379,8 +379,9 @@ ENTRIES: tuple[Entry, ...] = (
         _UNMODELLED,
         "diagnostics",
         "unverified",
-        "Convergence and fatal errors are read with the generic patterns, and every line "
-        "of the log is counted as unclassified; no recording of {display}'s wording exists.",
+        "Only a line the simulator starts with 'Error:' or 'Warning:' is told apart, and "
+        "every other line of the log is counted as unclassified; no recording of "
+        "{display}'s wording exists.",
     ),
     # --- results -----------------------------------------------------------
     Entry(

@@ -41,7 +41,7 @@ from ltspice_mcp.lib.decoded_raw import (
 from ltspice_mcp.lib.device_names import fold_name
 from ltspice_mcp.lib.families import DISPLAY
 from ltspice_mcp.lib.format import cap_list
-from ltspice_mcp.lib.log_conditions import run_diagnostics, said_as
+from ltspice_mcp.lib.log_conditions import run_diagnostics, said_as, said_text
 from ltspice_mcp.lib.log_parser import (
     CardKind,
     answered_measurements,  # noqa: TID251 - the summary is built off the loop, handed its producer and cards
@@ -743,7 +743,7 @@ def _meas_error(condition: Mapping[str, Any], family: str | None) -> dict[str, A
     directive = next(
         (
             line.strip()
-            for line in str(condition["first_text"]).splitlines()
+            for line in said_text(condition).splitlines()
             if line.strip().casefold().startswith(".meas")
         ),
         None,
@@ -753,7 +753,7 @@ def _meas_error(condition: Mapping[str, Any], family: str | None) -> dict[str, A
     found = validate_directive(directive, simulator=DISPLAY.get(family or "", "LTspice"))
     return {
         "directive": directive,
-        "raw_block": condition["first_text"],
+        "raw_block": said_text(condition),
         "suggestion": found.suggestion if found is not None else None,
     }
 
@@ -948,9 +948,9 @@ def build_simulation_summary(
             )
             said = list(found.get("diagnostics") or [])
             error_conditions = [c for c in said if said_as(c) == "error"]
-            warnings.extend(c["first_text"] for c in said if said_as(c) == "warning")
+            warnings.extend(said_text(c) for c in said if said_as(c) == "warning")
             if error_conditions:
-                summary["errors"] = [c["first_text"] for c in error_conditions]
+                summary["errors"] = [said_text(c) for c in error_conditions]
             meas_errors = [
                 entry
                 for c in error_conditions
@@ -993,7 +993,7 @@ def build_simulation_summary(
         # did, on a run whose raw holds finite data, found the point after all.
         errs = summary.get("errors")
         if errs:
-            fallback = {c["first_text"] for c in said if c["code"] == "operating_point_fallback"}
+            fallback = {said_text(c) for c in said if c["code"] == "operating_point_fallback"}
             demoted = [e for e in errs if e in fallback]
             if (
                 demoted

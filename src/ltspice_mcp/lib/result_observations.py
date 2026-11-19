@@ -70,6 +70,7 @@ from ltspice_mcp.lib.deck_staging import (
 from ltspice_mcp.lib.device_names import DevicePath, path_text, spelled_name, split_path, trace_key
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import parse_spice_value
+from ltspice_mcp.lib.log_conditions import said_text
 from ltspice_mcp.lib.log_types import (
     MEASUREMENTS_UNREAD,
     given_no_value,
@@ -629,7 +630,7 @@ def relay_observations(summary: dict, said: Sequence[Mapping[str, Any]] = ()) ->
     made up.
     """
     severity = {
-        str(c["first_text"]): c["severity"] for c in said if isinstance(c.get("severity"), str)
+        said_text(c): c["severity"] for c in said if isinstance(c.get("severity"), str)
     }
 
     def with_severity(item: Observation, text: str) -> Observation:
@@ -997,8 +998,8 @@ def reconciliation_observations(
 
     Classifies each miss as ``failed`` (LTspice printed it failed at every
     step — in ``failed_measurements``), ``skipped_in_batch_mode`` (ngspice
-    can't evaluate in batch mode — a recoverable relay signal already in
-    ``warnings``), or ``missing`` (silently absent — the real trust gap). A
+    can't evaluate in batch mode — its ``measurement_skipped_batch`` condition
+    in ``said``), or ``missing`` (silently absent — the real trust gap). A
     measurement that failed at some steps of a stepped run and was taken at the
     others was produced. The fact, not a verdict: the model decides whether a
     missing measurement matters.
@@ -1174,7 +1175,9 @@ def value_observations(
     return obs
 
 
-def meas_batch_abort_observation(obs: list[Observation]) -> Observation | None:
+def meas_batch_abort_observation(
+    obs: list[Observation], *, measured: bool = False
+) -> Observation | None:
     """Causal link between a ``.meas`` parse error and unexplained misses.
 
     One erroring ``.meas`` directive makes LTspice abandon the whole ``.meas``
@@ -1183,15 +1186,21 @@ def meas_batch_abort_observation(obs: list[Observation]) -> Observation | None:
     ``missing`` misses, link them so the model fixes the one failing directive
     instead of chasing N phantom misses. Correlates across families, so it runs
     over the assembled list, not inside either family builder.
+
+    ``measured`` says the log holds a measurement: then the batch was
+    evaluated, and no abort is claimed (LTspice XVII's log/meas_bad_syntax
+    measures the ``.meas`` around the one it cannot take).
     """
     parse_errors = [o for o in obs if o.get("code") == "meas_parse_error"]
     # A failed directive's own miss is explained by its own error, not by the
     # batch: only the others are phantom misses.
-    failed = {
-        name.casefold()
+    if measured:
+        return None
+    failed = [
+        name
         for o in parse_errors
         if (name := extract_meas_name(str(o.get("evidence", {}).get("directive", ""))))
-    }
+    ]
     # request_kind gate: .four misses also carry reason="missing", but the
     # Fourier pipeline is unrelated to the .meas batch abort — folding them
     # in would state a wrong count and attribution.
@@ -1201,7 +1210,7 @@ def meas_batch_abort_observation(obs: list[Observation]) -> Observation | None:
         if o.get("code") == "unmet_request"
         and o.get("evidence", {}).get("reason") == "missing"
         and o.get("evidence", {}).get("request_kind") == "meas"
-        and str(o.get("evidence", {}).get("name", "")).casefold() not in failed
+        and measurement_named(str(o.get("evidence", {}).get("name", "")), failed) is None
     ]
     if not (parse_errors and missing):
         return None
@@ -1266,7 +1275,7 @@ def surface_observations(
             requested = {**requested, "meas": []}
     if requested:
         obs.extend(reconciliation_observations(summary, requested, said))
-        abort = meas_batch_abort_observation(obs)
+        abort = meas_batch_abort_observation(obs, measured=bool(summary.get("measurements")))
         if abort is not None:
             obs.append(abort)
     if value_traces is not None:
