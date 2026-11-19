@@ -78,7 +78,12 @@ from ltspice_mcp.lib.log_parser import (
     printed_once_refusal,
     result_unreadable,
 )
-from ltspice_mcp.lib.log_types import MeasurementsOutput, measurement_failed, measurement_named
+from ltspice_mcp.lib.log_types import (
+    MeasurementsOutput,
+    measurement_failed,
+    measurement_named,
+    no_number_reasons,
+)
 from ltspice_mcp.lib.raw_parser import (
     build_simulation_summary,
     compute_ac_bandwidth_metrics,
@@ -1181,13 +1186,22 @@ async def measurement_rows(
 
     def aggregate_each() -> list[tuple[dict[str, Any], dict[str, Any], dict[str, Any]]]:
         rows = []
-        for table in tables:
+        # Why each step has no number is the log decoder's answer, read over
+        # the whole run (a step's row keeps the run's step numbers in
+        # ``unreadable`` and ``not_established``) and taken at the row's step.
+        whole_reasons = {name: no_number_reasons(whole, name) for name in whole["measurements"]}
+        for step, table in zip(steps, tables, strict=True):
             flat_values, axis_map, _steps_label, at_map = aggregate_log_measurements(table)
             stats = run_compute(
                 compute_measurement_stats,
                 flat_values,
                 histogram_bins=recipe.histogram_bins,
                 measurement=measurement,
+                reasons=(
+                    whole_reasons
+                    if step is None
+                    else {name: why[step : step + 1] for name, why in whole_reasons.items()}
+                ),
             )
             rows.append((stats, axis_map, at_map))
         return rows

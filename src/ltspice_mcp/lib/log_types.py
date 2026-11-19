@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, fields
-from typing import Any, Literal, NotRequired, get_args
+from typing import Any, Literal, NamedTuple, NotRequired, get_args
 
 from typing_extensions import TypedDict
 
@@ -370,6 +370,106 @@ def measurement_failed(table: Mapping[str, Any], name: str, step: int | None = N
     if step is not None:
         return step in steps
     return set(range(len(entry.get("values") or ()))) <= set(steps)
+
+
+def result_unreadable(entry: Mapping[str, Any]) -> Any:
+    """Why an answered measurement entry's result could not be read, or None.
+
+    An entry's ``unreadable`` says its ``values`` were printed as other than a
+    number. That is its result unless ``answer`` names ``at``: a WHEN with no
+    FIND printed its threshold there, the level it searched for, and its
+    result is the crossing, which reads. An entry whose answer is not known
+    is named by ``answer_unknown`` alone, so each null has one reason."""
+    if entry.get("answer") == "at" or "answer_unknown" in entry:
+        return None
+    return entry.get("unreadable")
+
+
+class NoNumber(NamedTuple):
+    """One reason the log decoder gives for a step of a measurement holding
+    no number. ``field`` is the name a measurements row gives the reason
+    under beside its statistics (``metrics.measurement_rows``), and the name
+    the statistics count such steps under
+    (``signal_analysis.compute_measurement_stats``); ``holds`` says whether
+    it is the reason at a step, from 0, given the log's answered measurement
+    table, the measurement's name and its entry; ``counted`` is the sentence
+    the statistics' schema says a count of such steps means."""
+
+    field: str
+    holds: Callable[[Mapping[str, Any], str, Mapping[str, Any], int], bool]
+    counted: str
+
+
+def _unreadable_at(
+    table: Mapping[str, Any], name: str, entry: Mapping[str, Any], step: int
+) -> bool:
+    reason = result_unreadable(entry)
+    return reason is not None and step in reason.get("steps", (step,))
+
+
+#: Why a step of a measurement has no number, as the log decoder decides it
+#: (``log_parser.parse_measurements`` and ``log_parser.answered_measurements``),
+#: in the order they are asked; the first that holds is the step's reason. The
+#: one list: the row's reason fields and the statistics' counts are both read
+#: from it, so a reason added here reaches both. ``printed_once`` is not one:
+#: a value printed once for a run of several steps is a number.
+NO_NUMBER_REASONS: tuple[NoNumber, ...] = (
+    # The simulator printed it failed: FAIL'ed, or 'failed' in a table's row.
+    NoNumber(
+        "failed_measurements",
+        lambda table, name, _entry, step: measurement_failed(table, name, step),
+        "Steps the simulator printed failed: FAIL'ed, or 'failed' in a stepped table's row.",
+    ),
+    # Which printed field holds the result is not known: no step has a number.
+    NoNumber(
+        "answer_unknown",
+        lambda _table, _name, entry, _step: "answer_unknown" in entry,
+        "Steps with no number because which printed field holds the result is not known.",
+    ),
+    # The log printed something other than a finite number for the result.
+    NoNumber(
+        "unreadable",
+        _unreadable_at,
+        "Steps where the log printed something other than a finite number for the result.",
+    ),
+    # What the log printed is not established as the result (XVII's 0).
+    NoNumber(
+        "not_established",
+        lambda _table, _name, entry, step: (
+            step in entry.get("not_established", {}).get("steps", ())
+        ),
+        "Steps whose printed value is not established as the result, such as a 0 LTspice "
+        "XVII prints for a failed step: each may be a failure or a real 0, so "
+        "failure_count is a lower bound while this count is present.",
+    ),
+)
+
+#: The reason the simulator said the measurement failed, which alone is
+#: counted as a failure.
+FAILED = NO_NUMBER_REASONS[0].field
+
+
+def no_number_reasons(table: Mapping[str, Any], name: str) -> list[str | None]:
+    """Why each step, from 0, of the measurement ``name`` of a log's answered
+    measurement ``table`` holds no number: the ``field`` of the first of
+    :data:`NO_NUMBER_REASONS` that holds there, or None where none does (a
+    step that holds a number, or one the decoder gives no reason for). The
+    one answer to "why has this step of a measurement no number", which the
+    statistics ask (``metrics.measurement_rows``)."""
+    entry = (table.get("measurements") or {}).get(name)
+    if not isinstance(entry, Mapping):
+        return []
+    return [
+        next(
+            (
+                reason.field
+                for reason in NO_NUMBER_REASONS
+                if reason.holds(table, name, entry, step)
+            ),
+            None,
+        )
+        for step in range(len(entry.get("values") or ()))
+    ]
 
 
 #: Why a run's log says nothing of its measurements that can be trusted, by

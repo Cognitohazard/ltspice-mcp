@@ -26,6 +26,7 @@ from ltspice_mcp.lib.format import SAME_VALUE_RTOL, held_to_cap
 # Re-exported façade names: the strict Pydantic base lives in ``lib`` (models
 # below the tool layer declare models too), and the tool modules reach it here.
 from ltspice_mcp.lib.log_conditions import COVERAGE as LOG_COVERAGE
+from ltspice_mcp.lib.log_types import NO_NUMBER_REASONS
 from ltspice_mcp.lib.ltspice_window import Shown, file_difference
 from ltspice_mcp.lib.models import StrictModel as StrictModel
 from ltspice_mcp.lib.netlist_graph import IncludeResolver
@@ -54,6 +55,7 @@ from ltspice_mcp.lib.runner_base import (
 from ltspice_mcp.lib.schematic_renderer import render_svg
 from ltspice_mcp.lib.schematic_scene import Scene
 from ltspice_mcp.lib.sheet_findings import RULES as SHEET_RULES
+from ltspice_mcp.lib.signal_analysis import NO_REASON_GIVEN
 from ltspice_mcp.lib.simulator import (
     family_refusal,
     no_simulator_message,
@@ -1013,6 +1015,45 @@ PRINTED_ONCE_SCHEMA: dict[str, Any] = {
         "where a recording establishes it, and how to read the other steps' "
         "values, which are not in the log."
     ),
+}
+
+#: One measurement's statistics in a measurements row
+#: (``signal_analysis.compute_measurement_stats``). Its counts of the steps
+#: with no number are by the reasons the log decoder gives
+#: (``log_types.NO_NUMBER_REASONS``), from which ``no_number`` is built.
+MEASUREMENT_STATS_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "total_count": {
+            "type": "integer",
+            "description": (
+                "Steps read: valid_count plus failure_count plus every count in no_number."
+            ),
+        },
+        "valid_count": {
+            "type": "integer",
+            "description": "Steps with a number; the statistics are over these.",
+        },
+        "failure_count": {"type": "integer", "description": NO_NUMBER_REASONS[0].counted},
+        "no_number": {
+            "type": "object",
+            "description": (
+                "The other steps with no number, counted under the name of the row "
+                "field that gives their reason."
+            ),
+            "properties": {
+                **{
+                    reason.field: {"type": "integer", "description": reason.counted}
+                    for reason in NO_NUMBER_REASONS[1:]
+                },
+                NO_REASON_GIVEN: {
+                    "type": "integer",
+                    "description": "Steps with no number for which no reason was given.",
+                },
+            },
+            "additionalProperties": False,
+        },
+    },
 }
 
 # Parsed .MEAS results, keyed by measurement name. Each entry names the field

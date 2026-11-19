@@ -30,6 +30,7 @@ from ltspice_mcp.lib.log_types import MeasErrorEntry as MeasErrorEntry
 from ltspice_mcp.lib.log_types import MeasurementEntry as MeasurementEntry
 from ltspice_mcp.lib.log_types import MeasurementsOutput as MeasurementsOutput
 from ltspice_mcp.lib.log_types import PrintedOnce
+from ltspice_mcp.lib.log_types import result_unreadable as result_unreadable
 from ltspice_mcp.lib.simulator_build import Producer, log_banner_build, which_ltspice
 from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.lib.store import parser_file_in
@@ -1728,19 +1729,6 @@ def answered_measurements(
         key: value for key, value in table.items() if key not in ("printed_by", "op_solves")
     }
     return {**answered_table, "measurements": entries}  # type: ignore[typeddict-item]
-
-
-def result_unreadable(entry: Mapping[str, Any]) -> Any:
-    """Why an answered measurement entry's result could not be read, or None.
-
-    An entry's ``unreadable`` says its ``values`` were printed as other than a
-    number. That is its result unless ``answer`` names ``at``: a WHEN with no
-    FIND printed its threshold there, the level it searched for, and its
-    result is the crossing, which reads. An entry whose answer is not known
-    is named by ``answer_unknown`` alone, so each null has one reason."""
-    if entry.get("answer") == "at" or "answer_unknown" in entry:
-        return None
-    return entry.get("unreadable")
 
 
 _RE_FOURIER_NAN = re.compile(
