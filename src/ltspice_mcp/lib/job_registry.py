@@ -33,6 +33,14 @@ logger = logging.getLogger(__name__)
 _T = TypeVar("_T")
 
 
+def _retrieved(task: asyncio.Task[Any]) -> None:
+    """Mark a finished write's outcome read: a waiter cancelled before it
+    finished no longer reads it, and its failure is already logged or raised
+    where a waiter remains."""
+    if not task.cancelled():
+        task.exception()
+
+
 def _cases_finished(job: ExperimentJob) -> tuple[int, int, str]:
     """How many of a job's cases have finished, of how many, as a wait reports it."""
     counts = job.completeness
@@ -493,13 +501,16 @@ class JobRegistry:
 
         Returns once this write landed (``True``), or once a write of the job
         asked for after it landed first and this one was refused (``False``).
-        When ``job`` is the live record, either way its state as of this call
-        is on disk: a later write of the live job was read after this call. A
-        caller that writes a copy holding state the live job does not have yet
-        (a terminal snapshot) has that state on disk only when this returns
-        ``True``, and writes again otherwise
-        (``ExperimentRunner._checkpoint_ahead``). It does not wait for the
-        job's earlier writes.
+        It does not wait for the job's earlier writes.
+
+        For the live record, what holds on return either way: every write of
+        the job asked for after this call reads the live job after it, so the
+        record on disk holds the live job's state as of this call, now and
+        after any later landing. A copy of the job that holds a state the live
+        job does not have yet is not covered by that: on ``False`` its state is
+        not on disk, and on ``True`` a write asked for before the live job
+        takes the state can still land on top of it. Such a copy is written
+        through ``persist_ahead``.
         """
         if not self.persist_enabled:
             raise RuntimeError("Recovery requires durable job persistence")
@@ -508,6 +519,77 @@ class JobRegistry:
             key=job.job_id,
         )
         return await self._await_persistence(task)
+
+    async def persist_ahead(
+        self,
+        live: ExperimentJob,
+        ahead: Callable[[], ExperimentJob],
+        take: Callable[[ExperimentJob], None],
+    ) -> None:
+        """Put a state on disk before the live job takes it, then take it, and
+        leave it on disk once the job's writes have settled.
+
+        ``ahead()`` builds a copy of ``live`` as it is now, holding the state;
+        ``take`` gives ``live`` that copy's state. Returns only once the copy
+        landed and ``live`` took it; a storage failure propagates before
+        anything is taken, so a state is never published ahead of its write.
+
+        - **The copy is refused:** a write asked for after it landed first,
+          holding the live job without the state. Nothing is taken; the copy is
+          built again from the live job and written again. A try is refused
+          only when another write of the job is asked for while it is in
+          flight and lands first, and every write of a job is asked for by one
+          change to it, never in a loop, so the tries end.
+        - **The copy lands:** ``live`` takes the state on the loop as soon as
+          the landing is known, in the write's own completion, so a waiter
+          cancelled meanwhile does not skip it. Any write asked for after the
+          copy and before the take may have read ``live`` without the state
+          and could land after the copy. So when one was asked for, one more
+          write of ``live``, which now holds the state, is asked for at once:
+          it and every write asked for after it read ``live`` after the take,
+          and every write asked for before it is refused once it lands. If it
+          is refused, a newer one, asked for after the take too, landed. When
+          none was asked for, every later write is asked for after the take.
+          Either way, once the job's writes have settled the record holds the
+          state. This waits for that write; if the waiter is cancelled, the
+          registry still owns it (``drain_pending``).
+        """
+        if not self.persist_enabled:
+            raise RuntimeError("Recovery requires durable job persistence")
+        job_id = live.job_id
+        while True:
+            copy = ahead()
+            generation = self._next_generation(job_id)
+            write = self._pending_persist.spawn(
+                self._persist_async(copy, generation, strict=True), key=job_id
+            )
+            follow: list[asyncio.Task[bool]] = []
+
+            def landed(
+                done: asyncio.Task[bool],
+                copy: ExperimentJob = copy,
+                generation: int = generation,
+                follow: list[asyncio.Task[bool]] = follow,
+            ) -> None:
+                if done.cancelled() or done.exception() is not None or not done.result():
+                    return
+                take(copy)
+                if self._persist_issued.get(job_id, 0) > generation:
+                    again = self._pending_persist.spawn(
+                        self._persist_async(live, self._next_generation(job_id), strict=True),
+                        key=job_id,
+                    )
+                    again.add_done_callback(_retrieved)
+                    follow.append(again)
+
+            # Added before the wait below adds its own, so it runs first: the
+            # take happens before this coroutine resumes, cancelled or not.
+            write.add_done_callback(landed)
+            if not await self._await_persistence(write):
+                continue
+            for again in follow:
+                await self._await_persistence(again)
+            return
 
     @staticmethod
     async def _await_persistence(task: asyncio.Future[_T]) -> _T:

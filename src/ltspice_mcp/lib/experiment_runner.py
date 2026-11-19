@@ -165,11 +165,6 @@ _DRIFT_REASONS = {
 
 _T = TypeVar("_T")
 
-#: How many times a state written ahead of the live job is built and written
-#: again when newer writes overtake it, before the live job takes the state
-#: and is written itself (``ExperimentRunner._checkpoint_ahead``).
-_AHEAD_TRIES = 3
-
 #: The threads that launch a case (``_submit_case_under_cancel_gate``). The rule
 #: for every thread that waits on the event loop: it is never a thread of the
 #: loop's default pool, because the loop answers it with work that runs on that
@@ -1294,9 +1289,8 @@ class ExperimentRunner(RunnerBase):
     async def _persist_job(self, execution: _Execution, job: ExperimentJob | None = None) -> bool:
         """Await a recovery checkpoint of the live job, or of ``job``, a copy of
         it; whether that write itself landed (``JobRegistry.persist_strict``).
-        A write of the live job that did not land is on disk all the same; a
-        copy that did not land is not, so a copy goes through
-        ``_checkpoint_ahead``."""
+        A copy holding a state the live job has not taken goes through
+        ``_checkpoint_ahead`` instead."""
         if execution.job.recovery is None:
             execution.request.state.persist_job(execution.job)
             return True
@@ -1312,26 +1306,14 @@ class ExperimentRunner(RunnerBase):
         ahead: Callable[[], ExperimentJob],
         take: Callable[[ExperimentJob], None],
     ) -> None:
-        """Put a state on disk before the live job takes it, then take it.
-
-        ``ahead()`` builds a copy of the live job as it is now, holding the
-        state; ``take`` gives the live job that copy's state. The copy's write
-        is refused when a newer write of the job landed first: that one holds
-        the live job, which has no such state yet, so the state is not on disk.
-        The copy is then built again from the live job and written again. Each
-        try is refused only if yet another write overtook it, so after
-        ``_AHEAD_TRIES`` the live job takes the state first and is written
-        itself: a write of the live job, landed or overtaken by a newer one of
-        it, leaves the state on disk. Either way this returns once the state is
-        on disk, so no finished job's record is left behind its live job.
-        """
-        for _ in range(_AHEAD_TRIES):
-            copy = ahead()
-            if await self._persist_job(execution, copy):
-                take(copy)
-                return
-        take(ahead())
-        await self._persist_job(execution)
+        """Put a state on disk before the live job takes it, then take it
+        (``JobRegistry.persist_ahead``, which decides the order). A storage
+        failure is the execution's persistence error, as any checkpoint's."""
+        try:
+            await execution.request.state.job_registry.persist_ahead(execution.job, ahead, take)
+        except Exception as exc:
+            execution.persistence_error = exc
+            raise
 
     async def _transition_job(self, execution: _Execution, status: str, **extra: Any) -> None:
         """Publish terminal recovery state only after its durable checkpoint."""
