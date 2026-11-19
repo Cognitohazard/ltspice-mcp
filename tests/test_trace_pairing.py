@@ -313,11 +313,19 @@ def test_one_place_reads_a_names_instances_and_one_pairs_two_results():
     for path, tree in modules().items():
         for scope, nodes in scopes(tree):
             for node in nodes:
-                if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+                if not isinstance(node, ast.Call):
                     continue
-                if node.func.id in calls:
-                    calls[node.func.id].add((path, scope))
-                if node.func.id == "trace_keys":
+                # A bare name or an attribute (``device_names.trace_keys``) alike.
+                called = (
+                    node.func.id
+                    if isinstance(node.func, ast.Name)
+                    else node.func.attr
+                    if isinstance(node.func, ast.Attribute)
+                    else None
+                )
+                if called in calls:
+                    calls[called].add((path, scope))
+                if called == "trace_keys":
                     schematic = next(k.value for k in node.keywords if k.arg == "schematic")
                     if not (isinstance(schematic, ast.Constant) and schematic.value is False):
                         single.add((path, scope))
@@ -336,8 +344,13 @@ def test_one_place_reads_a_names_instances_and_one_pairs_two_results():
             if (
                 isinstance(node, ast.Subscript)
                 and isinstance(node.value, ast.Call)
-                and isinstance(node.value.func, ast.Name)
-                and node.value.func.id == "trace_keys"
+                and (
+                    (isinstance(node.value.func, ast.Name) and node.value.func.id == "trace_keys")
+                    or (
+                        isinstance(node.value.func, ast.Attribute)
+                        and node.value.func.attr == "trace_keys"
+                    )
+                )
             ):
                 pytest.fail(f"{path}:{node.lineno} takes one of trace_keys' keys")
 
@@ -349,9 +362,11 @@ def test_one_place_reads_a_names_instances_and_one_pairs_two_results():
 _COLLIDING = ["V(n001)", "Id(x1:M1)", "Id(1:M1)", "Ix(x1:D)", "Ix(1:D)"]
 
 
-def _xvii_schematic_op(path: Path, traces: list[str]) -> Path:
+def _xvii_schematic_op(
+    path: Path, traces: list[str], *, title: str = "* C:\\x\\sheet.asc"
+) -> Path:
     lines = [
-        "Title: * C:\\x\\sheet.asc",
+        f"Title: {title}",
         "Date: Thu Jan 15 00:00:00 2026",
         "Plotname: Operating Point",
         "Flags: real",
@@ -410,13 +425,116 @@ async def test_a_device_named_as_the_result_writes_it_selects_that_instance_alon
 async def test_a_device_whose_readings_reach_two_instances_is_refused_with_both(
     state_no_sim: SessionState, tmp_path: Path
 ):
-    """``x1`` names nothing the result writes; read with an X put back, it
-    is both the card written ``1`` and the one written ``1`` inside ``b``:
-    refused, and both named, never merged."""
-    raw = _xvii_schematic_op(tmp_path / "sheet.raw", ["V(n001)", "Id(1:M1)", "Id(b:1:M1)"])
-    reply = await _bias(state_no_sim, raw, device="x1")
+    """``xa:xb:m1`` names nothing the result writes. Read with the first X
+    dropped it is the device in ``a:xb``, with the second dropped the one in
+    ``xa:b``: two readings that reach different devices, refused with both
+    named, never merged."""
+    raw = _xvii_schematic_op(tmp_path / "sheet.raw", ["V(n001)", "Id(a:xb:M1)", "Id(xa:b:M1)"])
+    reply = await _bias(state_no_sim, raw, device="xa:xb:m1")
     (failure,) = reply["failures"]
-    assert "1, b:1" in failure["message"], failure
+    assert "a:xb:m1, xa:b:m1" in failure["message"], failure
+
+
+@pytest.mark.asyncio
+async def test_one_reading_of_a_name_is_one_selection_under_every_parent(
+    state_no_sim: SessionState, tmp_path: Path
+):
+    """One reading of a name, matched as a part of a path, selects it under
+    every parent that has it: ``xin`` (read ``in`` on XVII) is the instance
+    inside both ``a`` and ``b``, as the name the result writes is."""
+    raw = _xvii_schematic_op(
+        tmp_path / "deck.raw",
+        ["V(n001)", "Id(a:in:Mtail)", "Id(b:in:Mtail)", "Id(a:Mdrv)"],
+        title="* a deck",
+    )
+    held = {"Id(a:in:Mtail)", "Id(b:in:Mtail)"}
+    for device in ("xin", "in", "xin:mtail", "xin.mtail", "in:mtail"):
+        reply = await _bias(state_no_sim, raw, device=device)
+        assert not reply.get("failures"), (device, reply)
+        (value,) = [entry["value"] for entry in reply["results"]["k"]["values"]]
+        assert set(value["currents"]) == held, (device, value["currents"])
+
+
+@pytest.mark.asyncio
+async def test_a_device_and_an_instance_of_one_written_name_are_two_things(
+    state_no_sim: SessionState, tmp_path: Path
+):
+    """An XVII deck with a top-level ``M1`` and a card ``XM1`` (written
+    ``m1``) holding ``M2``: ``m1`` is the device, as the result writes it,
+    on the selector, ``find_trace`` and the shorthand alike; the instance is
+    reached by its card, ``xm1``."""
+    from ltspice_mcp.lib.trace_names import read_in_plot
+
+    names = ["V(n001)", "Id(M1)", "Id(m1:M2)", "Ix(m1:D)"]
+    raw = _xvii_schematic_op(tmp_path / "deck.raw", names, title="* a deck")
+    for device, held in (("m1", {"Id(M1)"}), ("xm1", {"Id(m1:M2)", "Ix(m1:D)"})):
+        reply = await _bias(state_no_sim, raw, device=device)
+        assert not reply.get("failures"), (device, reply)
+        (value,) = [entry["value"] for entry in reply["results"]["k"]["values"]]
+        assert set(value["currents"]) == held, (device, value["currents"])
+    (plot,) = preflight_raw(raw, limits=rec.RAW_LIMITS).plots
+    assert read_in_plot(plot, "Id(m1)").traces == ("Id(M1)",)
+    assert read_in_plot(plot, "Id(xm1:m2)").traces == ("Id(m1:M2)",)
+
+
+#: Recorded runs of decks whose instances XVII writes without their X, and
+#: what a selector names in them under both spellings (``subckt-device-names``,
+#: ``deck/subckt_multiplier_nested``).
+_DECK_SELECTIONS = [
+    # LTspice 26 prints its device table only under logopinfo, which
+    # log/subckt_names carries and XVII refuses.
+    (
+        "log/subckt_names_off",
+        ("xin", "xin:mtail", "xin.mtail"),
+        ("in", "in:tail"),
+        "log/subckt_names",
+    ),
+    # LTspice 26's run holds no current inside X0 and prints no table: it has
+    # nothing of X0 to select.
+    ("deck/subckt_multiplier_nested", ("x0",), ("0",), None),
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("case_id", "card", "written", "on_26"), _DECK_SELECTIONS)
+async def test_the_card_and_the_written_spelling_select_alike_on_a_recorded_xvii_deck(
+    case_id: str,
+    card: tuple[str, ...],
+    written: tuple[str, ...],
+    on_26: str | None,
+    state_no_sim: SessionState,
+    work_dir: Path,
+):
+    """On XVII the card's spelling (``xin``, ``x0``) and the result's own
+    (``in``, ``0``) select the same instances, under every parent; LTspice 26
+    writes the card's spelling and selects them by it."""
+    selections: dict[str, frozenset[str]] = {}
+    for build in rec.BUILDS:
+        run = case_id if build == "ltspice17" else on_26
+        if run is None or not rec.has(build, f"{run}.raw"):
+            continue
+        raw = rec.stage_run(build, run, work_dir / build)
+        spellings = card + (written if build == "ltspice17" else ())
+        for device in spellings:
+            reply = await _bias(state_no_sim, raw, device=device)
+            assert not reply.get("failures"), (build, device, reply)
+            (value,) = [entry["value"] for entry in reply["results"]["k"]["values"]]
+            held = frozenset(
+                name for bucket in ("currents", "device_op_points") for name in value[bucket]
+            )
+            assert held, (build, device, value)
+            selections[f"{build}:{device}"] = held
+        mine = {
+            key.split(":", 1)[1]: held
+            for key, held in selections.items()
+            if key.startswith(f"{build}:")
+        }
+        # Each card spelling selects what its written spelling selects.
+        for spelled, as_written in zip(card, written, strict=False):
+            if as_written in mine:
+                assert mine[spelled] == mine[as_written], (build, spelled, mine)
+        for spelled in card[1:]:
+            assert mine[spelled] == mine[card[1]], (build, spelled, mine)
 
 
 @pytest.mark.asyncio
@@ -484,3 +602,71 @@ async def test_a_block_on_an_ltspice_26_sheet_selects_its_table_values_and_its_c
     (value,) = [entry["value"] for entry in reply["results"]["k"]["values"]]
     assert set(value["currents"]) == {"Ix(u1:in)", "Ix(u1:out)"}, value
     assert {name.lower() for name in value["device_op_points"]} >= {"@u1:d1[id]"}, value
+
+
+def _op_runs() -> list[Any]:
+    """Every recorded run of each build whose raw is an operating point."""
+    runs = []
+    for build in rec.BUILDS:
+        for case_id, entry in sorted(rec.manifest(build)["cases"].items()):
+            if f"{case_id}.raw" not in entry["outputs"]:
+                continue
+            try:
+                (plot, *_) = preflight_raw(
+                    rec.recorded(build, f"{case_id}.raw"), limits=rec.RAW_LIMITS
+                ).plots
+            except Exception:
+                continue
+            if plot.plot_name.lower().startswith("operating point"):
+                runs.append(pytest.param(build, case_id, id=f"{build}/{case_id}"))
+    return runs
+
+
+@pytest.mark.parametrize(("build", "case_id"), _op_runs())
+def test_a_names_spelling_does_not_change_what_the_selector_selects(build: str, case_id: str):
+    """For every instance and device of every recorded operating point, the
+    card's spelling (``xa:xin``) and the result's own (``a:in`` on XVII)
+    select the same, for the whole path and every part of it, and a device's
+    own name selects it under every parent that has it
+    (``device_names.device_query``). A refusal is a difference too."""
+    from ltspice_mcp.lib.device_names import _owner, device_query, writes_xvii_command
+    from ltspice_mcp.lib.log_parser import read_device_op_points
+    from ltspice_mcp.lib.trace_names import plot_names_sheet_parts
+
+    (plot, *_) = preflight_raw(rec.recorded(build, f"{case_id}.raw"), limits=rec.RAW_LIMITS).plots
+    xvii = writes_xvii_command(dict(plot.fields))
+    schematic = plot_names_sheet_parts(plot)
+    names = [variable.name for variable in plot.variables]
+    if rec.has(build, f"{case_id}.log"):
+        names += list(read_device_op_points(rec.recorded(build, f"{case_id}.log")))
+    owners = [
+        (name, owner)
+        for name in names
+        if (owner := _owner(name, xvii=xvii, schematic=schematic)) is not None
+    ]
+
+    def selected(device: str) -> frozenset[str]:
+        try:
+            chosen = device_query(device, xvii=xvii, schematic=schematic, among=names)
+        except ValueError as refused:
+            return frozenset({f"refused: {refused}"})
+        return frozenset(name for name in names if chosen(name))
+
+    differ = []
+    for name, owner in owners:
+        # Every part of the path, from any instance to any below it: ``xin``
+        # as well as ``xa:xin`` and ``xa:xin:mtail``.
+        for start in range(len(owner.path)):
+            for end in range(start + 1, len(owner.path) + 1):
+                card = ":".join(owner.path[start:end])
+                written = ":".join(owner.written[start:end])
+                if selected(card) != selected(written) or name not in selected(card):
+                    differ.append(
+                        (name, card, written, sorted(selected(card)), sorted(selected(written)))
+                    )
+        if not owner.port:
+            leaf = owner.path[-1]
+            under = {n for n, o in owners if not o.port and o.path[-1] == leaf}
+            if not under <= selected(leaf):
+                differ.append((name, leaf, sorted(under - selected(leaf))))
+    assert not differ, differ

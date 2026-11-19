@@ -955,7 +955,8 @@ def test_every_reader_names_a_schematic_part_by_its_reference(
 #: Names that miss a trace of ``raw/subckt_names_tran_saved`` only by the X of
 #: an instance on their path, and per build generation the trace the refusal
 #: names, what the result names otherwise, and why. None where the build
-#: reads the name as it is: XVII writes ``Id(a:Mdrv)`` itself.
+#: reads the name: XVII writes ``Id(a:Mdrv)`` itself, and reads ``xin`` with
+#: its X dropped as the ``in`` it writes (``device_names._select``).
 DECK_X_SPELLINGS: dict[str, dict[str, tuple[str, str, str] | None]] = {
     "Id(a:Mdrv)": {
         "current": ("Id(xa:Mdrv)", "'a' as 'xa'", DECK_INSTANCE_X),
@@ -963,7 +964,7 @@ DECK_X_SPELLINGS: dict[str, dict[str, tuple[str, str, str] | None]] = {
     },
     "I(a:xin:Rin)": {
         "current": ("I(xa:xin:Rin)", "'a' as 'xa'", DECK_INSTANCE_X),
-        "xvii": ("I(a:in:Rin)", "'xin' as 'in'", XVII_DROPS_X),
+        "xvii": None,
     },
 }
 
@@ -995,9 +996,16 @@ async def test_plot_waveform_names_a_deck_instances_trace_by_its_x(
     build: str, state_no_sim: SessionState, work_dir: Path
 ):
     raw = rec.stage_run(build, "raw/subckt_names_tran_saved", work_dir)
-    trace, named, why = cast(
-        "tuple[str, str, str]", DECK_X_SPELLINGS["I(a:xin:Rin)"][rec.generation(build)]
-    )
+    expected = DECK_X_SPELLINGS["I(a:xin:Rin)"][rec.generation(build)]
+    if expected is None:
+        plotted = await analysis.handle_plot_waveform(
+            analysis.PlotWaveformInput(path=str(raw), signals=["I(a:xin:Rin)"], open=False),
+            state_no_sim,
+        )
+        assert plotted.structured_content is not None
+        assert plotted.structured_content["traces"], plotted.structured_content
+        return
+    trace, named, why = cast("tuple[str, str, str]", expected)
     with pytest.raises(ResultError) as refused:
         await analysis.handle_plot_waveform(
             analysis.PlotWaveformInput(path=str(raw), signals=["I(a:xin:Rin)"], open=False),
