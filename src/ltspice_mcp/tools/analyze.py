@@ -4410,13 +4410,21 @@ async def evaluate_analysis(args: AnalyzeResultsInput, state: SessionState) -> A
     step_failures: list[Failure] = []
     if include.signals_available:
         signals = {run.manifest_id: [] for run in runs}
-        listed = [
+        covered = [
             run
             for run in runs
-            if manifests[run.manifest_id].get("raw_present")
-            and run.manifest_id not in precheck
-            and run.manifest_id not in postcheck
+            if run.manifest_id not in precheck and run.manifest_id not in postcheck
         ]
+        listed = [run for run in covered if manifests[run.manifest_id].get("raw_present")]
+        # A source given as a log names no results file and has no signals to
+        # list; a run that names one that is not there is named.
+        without_results = [
+            run
+            for run in covered
+            if run.source.raw is not None and not manifests[run.manifest_id].get("raw_present")
+        ]
+        if without_results:
+            step_failures.append(_signals_without_results(without_results))
         unread: list[_ResolvedRun] = []
         unreadable: list[tuple[_ResolvedRun, LTSpiceMCPError]] = []
         for index, run in enumerate(listed):
@@ -4474,6 +4482,28 @@ def _not_rechecked(runs: Sequence[_ResolvedRun], manifest_ids: Sequence[str]) ->
             f"reads before it read {len(missed)} source(s) again (sources {named}): their "
             "rows are as read, not confirmed unchanged since. Ask again for those sources, "
             "or with a larger analysis_budget_s, to check them."
+        ),
+    )
+
+
+def _signals_without_results(runs: Sequence[_ResolvedRun]) -> Failure:
+    """The failure of a signal listing for runs whose results file is not
+    there: the sources, so every run the call covers is listed or named."""
+    labels = list(dict.fromkeys(run.label for run in runs))
+    named = ", ".join(labels[:_FAILURE_WHERE_CAP])
+    if len(labels) > _FAILURE_WHERE_CAP:
+        named += (
+            " ("
+            + cap_note(_FAILURE_WHERE_CAP, len(labels), "sources", "every run not read is counted")
+            + ")"
+        )
+    return Failure(
+        code="results_missing",
+        stage="signals",
+        where="signals_available",
+        message=(
+            f"The results file of {len(runs)} run(s) is not there (sources {named}), so "
+            "their signals could not be listed. signals_available lists only the runs read."
         ),
     )
 
