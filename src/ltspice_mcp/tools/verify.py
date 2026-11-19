@@ -164,6 +164,7 @@ from ltspice_mcp.tools._base import (
     FINDING_SCHEMA,
     HINT_SCHEMA,
     LTSPICE_SHOWN_PROPERTIES,
+    PAGE_OF_SCHEMA,
     REPEATABLE_CHANGE_ANNOTATIONS,
     RULES_RUN_SCHEMA,
     STORED_ANSWER_SCHEMA,
@@ -181,6 +182,7 @@ from ltspice_mcp.tools._base import (
     format_response,
     image_content,
     make_include_resolver,
+    not_sent,
     open_stored_page,
     open_window_call,
     outcome_of,
@@ -398,7 +400,9 @@ FINDINGS_OMITTED_SCHEMA: dict[str, Any] = {
                 "description": "Pass as findings_cursor to read the findings after these.",
             },
         },
-        "required": ["omitted", "total", "next_cursor"],
+        # next_cursor is absent only when the answer was not kept
+        # (stored_answer.not_kept): the counts still say what was left out.
+        "required": ["omitted", "total"],
     },
 }
 
@@ -905,6 +909,7 @@ _OUTPUT_SCHEMA: dict[str, Any] = {
         "findings_omitted": FINDINGS_OMITTED_SCHEMA,
         "cut": CUT_SCHEMA,
         "stored_answer": STORED_ANSWER_SCHEMA,
+        "page_of": PAGE_OF_SCHEMA,
         "comparison": COMPARISON_SCHEMA,
         "export": _EXPORT_SCHEMA,
         "render": _RENDER_SCHEMA,
@@ -3035,10 +3040,6 @@ def _answer_snapshot(args: VerifyCircuitInput, state: SessionState) -> dict[str,
     return snapshot
 
 
-def _left_out(entry: ListCut) -> int:
-    return entry.total - entry.offset - entry.returned
-
-
 def _say_how_to_read_the_rest(
     reply: dict[str, Any],
     cut: Mapping[str, ListCut],
@@ -3051,7 +3052,7 @@ def _say_how_to_read_the_rest(
     # Every list verify_circuit cuts is stored: it names no record.
     assert stored is not None
     findings = cut.get("/findings")
-    if findings is not None and findings.next is not None:
+    if findings is not None and findings.left_out:
         every = Counter(str(f["rule_id"]) for f in stored.answer.get("findings", ()))
         after = Counter(
             str(f["rule_id"])
@@ -3073,8 +3074,10 @@ def _say_how_to_read_the_rest(
             "since. The snapshot does not cover the symbols, includes, libraries or "
             "export the findings also read."
         )
-    more = {pointer: _left_out(entry) for pointer, entry in cut.items() if entry.next is not None}
-    if more:
+    more = {pointer: entry.after for pointer, entry in cut.items() if entry.left_out}
+    if more and stored.not_kept is not None:
+        said.append(not_sent(more, kept=False))
+    elif more:
         read_on = call_to_continue(
             "verify_circuit",
             {
@@ -3082,9 +3085,8 @@ def _say_how_to_read_the_rest(
                 "findings_cursor": Unfilled("a cut entry's next"),
             },
         )
-        not_sent = ", ".join(f"{count} of {pointer}" for pointer, count in more.items())
         said.append(
-            f"Not sent: {not_sent}. The complete answer is in {stored.path} (under "
+            f"{not_sent(more, kept=True)} The complete answer is in {stored.path} (under "
             f"'answer'); or read on with {read_on}."
         )
     if said:

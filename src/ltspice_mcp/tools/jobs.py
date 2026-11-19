@@ -71,6 +71,7 @@ from ltspice_mcp.tools._base import (
     ENVELOPE_ERROR_SCHEMA,
     HINT_SCHEMA,
     OUTCOME_SCHEMA,
+    PAGE_OF_SCHEMA,
     REPEATABLE_CHANGE_ANNOTATIONS,
     STORED_ANSWER_SCHEMA,
     ToolInput,
@@ -658,6 +659,7 @@ def _jobs_page_schema(
     }
     if action == "list":
         properties["stored_answer"] = STORED_ANSWER_SCHEMA
+        properties["page_of"] = PAGE_OF_SCHEMA
     required = [*_JOBS_COMMON_REQUIRED, *page["required"]]
     if addressed:
         properties.update(
@@ -824,7 +826,7 @@ def _say_which_groups(
     if entry is None:
         return
     reply["returned"] = entry.returned
-    reply["truncated"] = entry.next is not None
+    reply["truncated"] = entry.left_out
     reply["next_cursor"] = entry.next
     said = [
         f"Circuit groups {entry.offset + 1} to {entry.offset + entry.returned} of {entry.total}."
@@ -1547,18 +1549,15 @@ def failed_jobs_evaluation(
 def render_jobs_data(
     evaluation: JobsEvaluation,
     *,
-    rung: response_budget.Rung | None = None,
-    analysis_rows_cap: int | None = None,
     served: Collection[str] | None = None,
 ) -> dict[str, Any]:
     """One evaluation's complete answer: every group, every run row, every
     receipt. MCP presents it through the presenter (:func:`handle_jobs`); the
     Python API returns it as it is.
 
-    ``rung`` and ``analysis_rows_cap`` render an attached analysis the way
-    ``analyze_results`` trims its own, which only MCP asks for. ``served`` is
-    the MCP session's tools, which an attached analysis's failures name as
-    where their snippet runs.
+    ``served`` is the MCP session's tools, which an attached analysis's
+    failures name as where their snippet runs; None gives the attached
+    analysis as the Python API does, with every failure.
     """
     args = evaluation.args
     if evaluation.error is not None:
@@ -1648,8 +1647,6 @@ def render_jobs_data(
         action,
         snapshot,
         timed_out=None if isinstance(args, JobsResumeInput) else evaluation.timed_out,
-        analysis_answer_channel=rung is not None and rung.answer_channel,
-        analysis_rows_cap=analysis_rows_cap,
         analysis_served=served,
     )
     if evaluation.warnings:
@@ -1784,9 +1781,7 @@ async def _present_jobs(
     if isinstance(args, (JobsStatusInput, JobsWaitInput, JobsResumeInput)):
         served = frozenset(state.tool_dispatch)
         return await present_job_answer(
-            lambda rung, rows: render_jobs_data(
-                evaluation, rung=rung, analysis_rows_cap=rows, served=served
-            ),
+            lambda: render_jobs_data(evaluation, served=served),
             receipt_parts(snapshot=evaluation.snapshot),
             tool="jobs",
             schema=JOBS_OUTPUT_SCHEMA,

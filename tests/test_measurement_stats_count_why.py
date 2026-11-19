@@ -422,7 +422,20 @@ def test_a_null_with_no_reason_is_not_a_failure():
 #: The measurements row's fields that are not a reason a step has no number:
 #: the numbers and their points, the statistics, the run's diagnostics, and a
 #: value printed once for several steps, which is a number.
-_NOT_A_REASON = {"diagnostics", "diagnostics_coverage", "measured", "at", "stats", "printed_once"}
+_NOT_A_REASON = {
+    "diagnostics",
+    "diagnostics_coverage",
+    "measured",
+    "at",
+    "stats",
+    "printed_once",
+    # A waveform's value, declared in the same row value schema so the
+    # presenter thins its series (``series("waveform")``).
+    "x",
+    "series",
+    "points_returned",
+    "points_total",
+}
 
 
 def test_one_list_of_reasons_names_the_rows_fields_and_the_statistics_counts():

@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import time
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from ltspice_mcp.errors import AnalysisDeadlineExceeded
-from ltspice_mcp.lib import parser_service, result_store, services
+from ltspice_mcp.lib import parser_service, services
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze
@@ -147,53 +145,28 @@ async def test_elapsed_initial_capture_has_no_set_and_fresh_retry_succeeds(
 
 
 @pytest.mark.asyncio
-async def test_optional_signal_inventory_does_not_start_after_call_budget(
+async def test_the_signal_inventory_reads_no_raw_of_a_log_source(
     state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    """The signal inventory, which has a budget of its own, reads a raw only
+    for a source that has one."""
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
     request = analyze.AnalyzeResultsInput.model_validate(
         {
-            "sources": [{"path": str(raw), "label": "log"}],
+            "sources": [{"path": str(raw.with_suffix(".log")), "label": "log"}],
             "recipes": [{"metric": "measurements", "key": "meas"}],
             "include": {"signals_available": True, "per_run": True},
         }
     )
-    item = await analyze._create_result_set(request, state_no_sim, time.monotonic() + 30)
-    cursor = result_store.encode_cursor(item, 0, view_fields=request.include.fields)
-    continued = analyze.AnalyzeResultsInput.model_validate(
-        {"continue": {"result_set_id": item.result_set_id, "cursor": cursor}}
-    )
-    original_publish = analyze._publish_unit_artifacts
     original_raw = services.load_raw
     raw_reads: list[services.AnalysisSource] = []
-    real_loop = asyncio.get_running_loop()
-    expired_at: float | None = None
-
-    def drive_time() -> float:
-        now = real_loop.time()
-        return max(now, expired_at) if expired_at is not None else now
-
-    async def expire_after_publish(processed, pending, deadline):
-        nonlocal expired_at
-        await original_publish(processed, pending, deadline)
-        expired_at = deadline + 1.0
 
     async def record_raw_read(source: services.AnalysisSource, state: SessionState):
         raw_reads.append(source)
         return await original_raw(source, state)
 
-    monkeypatch.setattr(analyze, "_publish_unit_artifacts", expire_after_publish)
     monkeypatch.setattr(services, "load_raw", record_raw_read)
-    # Replace only this module's clock lookup, never the scheduler or parser clock.
-    monkeypatch.setattr(
-        analyze,
-        "asyncio",
-        SimpleNamespace(
-            get_running_loop=lambda: SimpleNamespace(time=drive_time),
-            to_thread=asyncio.to_thread,
-        ),
-    )
-    response = await analyze.handle_analyze_results(continued, state_no_sim)
+    response = await analyze.handle_analyze_results(request, state_no_sim)
     data = response.structured_content
     assert data is not None and "failures" not in data
     assert data["results"]["meas"]["per_run"]["items"]

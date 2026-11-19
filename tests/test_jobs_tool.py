@@ -928,17 +928,15 @@ class TestReceiptSnapshotCoherence:
             request={"recipes": []},
             result=analysis_snapshot.envelope(
                 {
-                    "top": {
+                                        "answer": {
                         "rows": [
                             {"case_id": produced.case_id, "status": produced.status},
                             {"case_id": failed.case_id, "status": failed.status},
                         ],
                         "next": None,
                     },
-                    "results": {},
-                    "natural_cursor_base": None,
-                    "natural_has_next": False,
-                    "natural_deferred": False,
+                    "snapshot": {},
+                    "request": {},
                 }
             ),
             observations=[
@@ -1616,7 +1614,9 @@ class TestListAndRunsPagination:
 
         assert page_one["total"] == 2
         assert page_one["returned"] == page_two["returned"] == 1
-        observations = [*page_one["observations"], *page_two["observations"]]
+        # The first page names it; a page after it leaves the reply's notes to it.
+        observations = page_one["observations"]
+        assert "observations" not in page_two
         assert any(item["code"] == "experiment_index_invalid" for item in observations)
 
     async def test_a_list_limit_past_the_page_cap_is_held_to_it_and_says_so(
