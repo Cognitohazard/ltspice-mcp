@@ -21,7 +21,7 @@ from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, get_args
 
 from ltspice_mcp.errors import PathSecurityError
-from ltspice_mcp.lib import response_budget, services
+from ltspice_mcp.lib import not_shown, services
 from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.continuation import call_to_continue
 from ltspice_mcp.lib.experiment_runner import live_run_progress
@@ -45,7 +45,7 @@ from ltspice_mcp.lib.log_types import given_no_value
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.pagination import page_of
 from ltspice_mcp.lib.points import STEPS_SCHEMA, steps_shown
-from ltspice_mcp.lib.presenter import ListCut, Record, record_cursor
+from ltspice_mcp.lib.presenter import Answer, ListCut, Record, record_cursor
 from ltspice_mcp.lib.projection import (
     absent_path_warnings,
     keep_plan,
@@ -438,10 +438,10 @@ LINEAGE_SCHEMA: dict[str, Any] = {
 #: How many kinds of fact ``runs_not_shown`` names a run for, over all kinds:
 #: the first run of each of the first kinds, each run naming at most
 #: :data:`NOT_SHOWN_KINDS_PER_RUN` of them. Every kind keeps its count.
-NOT_SHOWN_NAMED = 3
+NOT_SHOWN_NAMED = not_shown.NAMED
 
 #: How many kinds one named run is named for.
-NOT_SHOWN_KINDS_PER_RUN = 2
+NOT_SHOWN_KINDS_PER_RUN = not_shown.KINDS_PER_ENTRY
 
 #: The schema of ``runs_not_shown``: never cut and never shortened.
 RUNS_NOT_SHOWN_SCHEMA: dict[str, Any] = {
@@ -601,7 +601,9 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
             "properties": {
                 "status": {"type": "string"},
                 "request": {"type": ["object", "null"]},
-                "result": {"type": ["object", "null"]},
+                # An answer of analyze_results, declared by that tool's own
+                # schema, so the presenter cuts it as that tool's answer.
+                "result": {**analyze.OUTPUT_SCHEMA, "type": ["object", "null"]},
                 "error": {"type": ["string", "null"]},
                 "observations": {
                     "type": "array",
@@ -660,82 +662,21 @@ def run_rows_record(job_id: str) -> Record:
     return Record(JOB_RUNS, job_id)
 
 
-# The attached analysis is that tool's own envelope, trimmed by that tool's own
-# allowlist (`analyze.trim_analysis`) until analyze_results moves onto the
-# presenter: its `source_hashes` is one identity row per run, so a receipt that
-# kept it grew by every case it ran whatever the budget. The receipt's own
-# lists are the presenter's: its run rows are cut as rows, read back from the
-# job's record, and every other list is sent whole.
+# The attached analysis is an answer of analyze_results: the receipt presents
+# it beside its own under one target (presenter.present_many), cut by that
+# tool's schema and stored, when cut, as that tool's answer, so its cursors
+# are read by analyze_results with 'continue'.
 
 
-def _attached_result(data: dict[str, Any]) -> dict[str, Any] | None:
+def _attached_result(data: Mapping[str, Any]) -> dict[str, Any] | None:
     """The attached analysis's rendered result, when the receipt carries one."""
     analysis_block = data.get("analysis")
     result = analysis_block.get("result") if isinstance(analysis_block, dict) else None
     return result if isinstance(result, dict) else None
 
 
-#: Where a caller reads more of an attached waveform the receipt thinned.
-_THINNED_ATTACHED_ROUTE = (
-    "analyze_results over this job_id with a larger max_points returns more points, "
-    "and format 'csv' writes every sample."
-)
-
-
-def _with_one_run_row(data: dict[str, Any]) -> dict[str, Any]:
-    """``data`` as the presenter's smallest cut leaves it: one run row. What
-    the attached analysis is fitted against, since the rows are cut after."""
-    runs = data.get("runs")
-    if not isinstance(runs, dict) or not isinstance(runs.get("items"), list):
-        return data
-    return {**data, "runs": {**runs, "items": runs["items"][:1]}}
-
-
-def _degrade_receipt(data: dict[str, Any], rung: response_budget.Rung) -> list[str]:
-    """Apply a ladder rung to a receipt's attached analysis, by that tool's
-    own trim, in place.
-
-    Returns the blocks the trim emptied of content. An attached analysis's
-    inline waveforms are then thinned to fit at every rung, whatever
-    ``max_points`` the request set, measured with the receipt cut to one run
-    row as the presenter cuts it: the receipt's rows preview what
-    ``analyze_results`` over the job returns, and that call sizes them.
-    """
-    emptied: list[str] = []
-    if rung.trim:
-        result = _attached_result(data)
-        if result is not None:
-            emptied = [f"analysis.result.{key}" for key in analyze.trim_analysis(result)]
-            results = result.get("results")
-            if isinstance(results, dict):
-                analyze.fit_waveform_samples(
-                    _with_one_run_row(data), results, rung, list(results), _THINNED_ATTACHED_ROUTE
-                )
-    return emptied
-
-
-def trim_attached_analysis(
-    data: dict[str, Any], rung: response_budget.Rung, rows: int | None, target: int
-) -> None:
-    """Fit a receipt's attached analysis to ``rung`` by ``analyze_results``'
-    own trimming, in place, and say what it took. ``rows`` is the count the
-    analysis was rendered with (None: all). Until that tool moves onto the
-    presenter, this is how its envelope is shortened inside a receipt."""
-    if _attached_result(data) is None:
-        return
-    emptied = _degrade_receipt(data, rung)
-    parts: list[str] = []
-    if emptied:
-        parts.append("emptied " + ", ".join(emptied))
-    if rung.answer_channel:
-        parts.append("rendered on its answer channel, without the opt-ins the request set")
-    if rows is not None:
-        parts.append(f"its rows held to {rows} per list")
-    if parts:
-        data["observations"] = [
-            *data.get("observations", []),
-            response_budget.attached_trimmed_observation(target, parts, data.get("job_id")),
-        ]
+#: Where a receipt's attached analysis sits, as the presenter names an answer.
+ATTACHED_ANALYSIS = "/analysis/result"
 
 
 #: The statuses of a run that ended without its output, which a run row says
@@ -772,19 +713,9 @@ def row_facts(row: Mapping[str, Any]) -> list[str]:
     return list(dict.fromkeys(kinds))
 
 
-#: Each row of a job's table that carries a fact, by its index in the table:
-#: ``(index, case_id, run_index, kinds)``.
-FactIndex = tuple[tuple[int, str, int, tuple[str, ...]], ...]
-
-
-def fact_index(rows: Sequence[Mapping[str, Any]]) -> FactIndex:
-    """The rows of a job's whole table that carry a fact (:func:`row_facts`),
-    read from rows no ``run_fields`` projected."""
-    return tuple(
-        (index, str(row.get("case_id")), int(row.get("run_index", index)), tuple(kinds))
-        for index, row in enumerate(rows)
-        if (kinds := row_facts(row))
-    )
+def _run_identity(index: int, row: Mapping[str, Any]) -> dict[str, Any]:
+    """What names a run in ``runs_not_shown``: its case and run index."""
+    return {"case_id": str(row.get("case_id")), "run_index": int(row.get("run_index", index))}
 
 
 @dataclass(frozen=True)
@@ -792,17 +723,11 @@ class RowFacts:
     """The facts on a job's whole table, and the kinds every run carries:
     what ``runs_not_shown`` is made from, whatever page a reply holds."""
 
-    facts: FactIndex
-    #: The kinds every run of the job carries, shown or not: given by count.
-    every: frozenset[str]
+    facts: not_shown.Facts
 
     @classmethod
     def of(cls, rows: Sequence[Mapping[str, Any]]) -> RowFacts:
-        facts = fact_index(rows)
-        every: frozenset[str] = frozenset()
-        if rows and len(facts) == len(rows):
-            every = frozenset.intersection(*(frozenset(kinds) for *_, kinds in facts))
-        return cls(facts, every)
+        return cls(not_shown.Facts.of(rows, row_facts, _run_identity))
 
     def not_shown(
         self, start: int, record: Record | None, *, statuses: bool = True
@@ -821,88 +746,55 @@ class RowFacts:
         if not note:
             return 0
         return min(
-            estimate_tokens({"runs_not_shown": note}) + _RESERVE_MARGIN, NOT_SHOWN_BOUND_TOKENS
+            estimate_tokens({"runs_not_shown": note}) + not_shown.RESERVE_MARGIN,
+            NOT_SHOWN_BOUND_TOKENS,
         )
 
 
-#: What a longer case id or count of a later page may add to a reserve.
-_RESERVE_MARGIN = 16
+#: The one group of ``runs_not_shown``: a job's run rows.
+_RUNS_GROUP = "runs"
 
 
 def runs_not_shown(
     table: RowFacts, start: int, record: Record | None, *, statuses: bool = True
 ) -> dict[str, Any]:
-    """What the runs from ``start`` on carry, bounded by
-    :data:`NOT_SHOWN_BOUND_TOKENS`: every kind's count, and the first run of
+    """What the runs from ``start`` on carry, by ``lib/not_shown.py``, bounded
+    by :data:`NOT_SHOWN_BOUND_TOKENS`: every kind's count, and the first run of
     each of the first :data:`NOT_SHOWN_NAMED` kinds that not every run carries,
     with a record cursor that starts at its row. Rows keep their order, so a
     cursor names a row by its index. ``statuses`` False leaves out the kinds
     a reply's failures already name (a receipt with no job)."""
-    counts: dict[str, int] = {}
-    runs: list[dict[str, Any]] = []
-    named: set[str] = set()
-    for index, case_id, run_index, kinds in table.facts:
-        if index < start:
-            continue
-        kept = [kind for kind in kinds if statuses or not kind.startswith("status.")]
-        for kind in kept:
-            counts[kind] = counts.get(kind, 0) + 1
-        fresh = [kind for kind in kept if kind not in table.every and kind not in named]
-        room = NOT_SHOWN_NAMED - len(named)
-        if fresh and room > 0:
-            fresh = fresh[: min(room, NOT_SHOWN_KINDS_PER_RUN)]
-            named.update(fresh)
-            run: dict[str, Any] = {"case_id": case_id, "run_index": run_index, "kinds": fresh}
-            if record is not None:
-                run["cursor"] = record_cursor(record, index)
-            runs.append(run)
-    if not counts:
-        return {}
-    note: dict[str, Any] = {"counts": counts}
-    if runs:
-        note["runs"] = runs
-    # Long names can take a named run past the bound; the counts never do.
-    while runs and estimate_tokens({"runs_not_shown": note}) > NOT_SHOWN_BOUND_TOKENS:
-        runs.pop()
-        if not runs:
-            note.pop("runs")
-    return note
+    part = not_shown.not_shown(
+        {
+            _RUNS_GROUP: not_shown.LeftOut(
+                table.facts,
+                start,
+                (lambda index: record_cursor(record, index)) if record is not None else _no_cursor,
+            )
+        },
+        bound=NOT_SHOWN_BOUND_TOKENS,
+        field="runs_not_shown",
+        entries="runs",
+        keep=(lambda _kind: True) if statuses else (lambda kind: not kind.startswith("status.")),
+    )
+    return part.get(_RUNS_GROUP, {})
+
+
+def _no_cursor(_index: int) -> None:
+    return None
 
 
 def _kind_vocabulary() -> list[str]:
-    """Every kind :func:`row_facts` can give a row."""
-    from ltspice_mcp.lib import log_conditions
-
+    """Every kind :func:`row_facts` can give a run row: a log's, and what a
+    run's measurements and status state."""
     return [
-        *(f"diagnostics.{code}" for code in sorted(log_conditions.diagnostic_codes())),
-        *(f"diagnostics_coverage.{value}" for value in log_conditions.COVERAGE),
+        *not_shown.log_kinds(),
         "failed_measurements",
         "measurements_not_established",
         "measurements_not_printed",
         *(f"measurements_coverage.{value}" for value in MEASUREMENTS_COVERAGE),
         *(f"status.{status}" for status in _ENDED_WITHOUT_OUTPUT),
     ]
-
-
-def _worst_note() -> dict[str, Any]:
-    """``runs_not_shown`` at its largest for ids of ordinary length: every
-    kind counted in the hundreds of thousands, and every named run with a 48-character case id
-    and a cursor for a 48-character job id."""
-    vocabulary = _kind_vocabulary()
-    longest = sorted(vocabulary, key=len, reverse=True)
-    record = Record(JOB_RUNS, "j" * 48)
-    return {
-        "counts": dict.fromkeys(vocabulary, 999_999),
-        "runs": [
-            {
-                "case_id": "c" * 48,
-                "run_index": 999_999,
-                "kinds": longest[:NOT_SHOWN_KINDS_PER_RUN],
-                "cursor": record_cursor(record, 999_999),
-            }
-            for _ in range(NOT_SHOWN_NAMED)
-        ],
-    }
 
 
 def _say_where_the_runs_are(
@@ -941,7 +833,7 @@ def _say_where_the_runs_are(
                 return
             runs = reply["runs"]
             runs["returned"] = entry.returned
-            runs["truncated"] = entry.next is not None
+            runs["truncated"] = entry.left_out
             runs["next_cursor"] = entry.next
             if entry.next is None:
                 return
@@ -981,16 +873,41 @@ def _the_rest_of_the_rows(
     return f"{left}; read them from the job's record with {read_on}{same}."
 
 
+def _attached_answer(
+    snapshot: ReceiptSnapshot | None, fields: list[str] | None
+) -> Callable[[Mapping[str, Any], int | None, bool], Answer | None]:
+    """The attached analysis of a receipt as the second answer under its
+    target: an answer of ``analyze_results`` at :data:`ATTACHED_ANALYSIS`,
+    with that tool's caps, words and snapshot (``analyze.analysis_answer``),
+    rendered in the row view ``fields`` the delivery asked for."""
+
+    def attached(data: Mapping[str, Any], target: int | None, whole: bool) -> Answer | None:
+        result = _attached_result(data)
+        if result is None or snapshot is None or snapshot.analysis_result is None:
+            return None
+        return analyze.analysis_answer(
+            result,
+            analyze.attached_snapshot(snapshot.analysis_result, fields),
+            root=ATTACHED_ANALYSIS,
+            target=target,
+            whole=whole,
+        )
+
+    return attached
+
+
 def receipt_parts(
     run_fields: list[str] | None = None,
     snapshot: ReceiptSnapshot | None = None,
     rows: Sequence[Mapping[str, Any]] | None = None,
+    *,
+    analysis_fields: list[str] | None = None,
 ) -> JobAnswerParts:
     """What the reply layer needs to deliver a job's answer
     (``tools/_base.present_job_answer``): where its run rows are and the
     record they are read back from, the words a cut of them adds, the
-    attached analysis's own trimming, and the measurements routes, which are
-    standing notes. ``snapshot``, or ``rows`` for a receipt built without one,
+    attached analysis as a second answer, and the measurements routes, which
+    are standing notes. ``snapshot``, or ``rows`` for a receipt built without one,
     is the whole table before any ``run_fields`` projection: the facts on
     every row are read from it whatever ``run_fields`` keeps."""
 
@@ -1005,8 +922,8 @@ def receipt_parts(
         rows=RUN_ROWS,
         record=run_rows_record,
         annotate=_say_where_the_runs_are(run_fields, whole),
-        trim_attached=trim_attached_analysis,
-        attached=lambda data: _attached_result(dict(data)) is not None,
+        attached=_attached_answer(snapshot, analysis_fields),
+        series=analyze.SERIES,
         route=measurements_routes,
         short_route=_SHORT_MEASUREMENTS_ROUTE,
     )
@@ -1313,8 +1230,6 @@ def render_receipt_snapshot(
     provenance: bool = False,
     run_fields: list[str] | None = None,
     analysis_fields: list[str] | None = None,
-    analysis_answer_channel: bool = False,
-    analysis_rows_cap: int | None = None,
     analysis_served: Collection[str] | None = None,
 ) -> dict[str, Any]:
     """A job's complete answer at the moment of ``snapshot``, with every run
@@ -1366,19 +1281,30 @@ def render_receipt_snapshot(
         data["lineage"] = dict(snapshot.lineage)
     if snapshot.analysis_status != "not_requested":
         rendered_result: dict[str, Any] | None = None
+        analysis_error = snapshot.analysis_error
+        not_rendered: dict[str, Any] | None = None
         if snapshot.analysis_result is not None:
-            rendered_result = analyze.render_attached_analysis(
-                snapshot.analysis_result,
-                fields=analysis_fields,
-                answer_channel=analysis_answer_channel,
-                row_limit=analysis_rows_cap,
-                served=analysis_served,
-            )
+            try:
+                rendered_result = analyze.render_attached_analysis(
+                    snapshot.analysis_result, fields=analysis_fields, served=analysis_served
+                )
+            except analyze.AttachedAnalysisNotRendered as exc:
+                # An analysis an earlier release stored, told by its version:
+                # only this part is replaced, by the note naming the call that
+                # reads it, and the receipt and its run rows still answer.
+                analysis_error = str(exc)
+                not_rendered = {
+                    "code": analyze.NOT_RENDERED_CODE,
+                    "kind": "coverage",
+                    "detail": str(exc),
+                }
         analysis_observations = list(snapshot.analysis_observations)
+        if not_rendered is not None:
+            analysis_observations.append(not_rendered)
         data["analysis"] = {
             "status": snapshot.analysis_status,
             "result": rendered_result,
-            "error": snapshot.analysis_error,
+            "error": analysis_error,
             "observations": analysis_observations,
         }
         if provenance:
@@ -1917,18 +1843,11 @@ def render_jobs_receipt_snapshot(
     snapshot: ReceiptSnapshot,
     *,
     timed_out: bool | None = None,
-    analysis_answer_channel: bool = False,
-    analysis_rows_cap: int | None = None,
     analysis_served: Collection[str] | None = None,
 ) -> dict[str, Any]:
     """One jobs delivery of a job's complete answer: the answer
     (:func:`render_receipt_snapshot`) and the delivery's own fields."""
-    data = render_receipt_snapshot(
-        snapshot,
-        analysis_answer_channel=analysis_answer_channel,
-        analysis_rows_cap=analysis_rows_cap,
-        analysis_served=analysis_served,
-    )
+    data = render_receipt_snapshot(snapshot, analysis_served=analysis_served)
     data.update(
         {
             "action": action,
@@ -2003,7 +1922,7 @@ def say_which_rows(
         if entry is None:
             return
         reply["returned"] = entry.returned
-        reply["truncated"] = entry.next is not None
+        reply["truncated"] = entry.left_out
         reply["next_cursor"] = entry.next
         said = [
             f"Run rows {entry.offset + 1} to {entry.offset + entry.returned} of "
@@ -2025,4 +1944,12 @@ def say_which_rows(
 
 #: The most ``runs_not_shown`` takes, in estimated tokens, whatever the number
 #: of kinds and runs (:func:`runs_not_shown` holds it to this).
-NOT_SHOWN_BOUND_TOKENS: int = estimate_tokens({"runs_not_shown": _worst_note()})
+NOT_SHOWN_BOUND_TOKENS: int = not_shown.worst_bound(
+    _kind_vocabulary(),
+    identity={"case_id": "c" * 48, "run_index": 999_999},
+    cursor=record_cursor(Record(JOB_RUNS, "j" * 48), 999_999),
+    field="runs_not_shown",
+    entries="runs",
+    group=_RUNS_GROUP,
+    folded=False,
+)

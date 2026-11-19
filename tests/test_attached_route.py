@@ -50,11 +50,11 @@ async def test_the_attached_analysis_says_where_the_snippet_runs(
     stored = await capture_attached_analysis(
         AnalyzeResultsInput.model_validate(_request(raw)), state_no_sim
     )
-    shown = render_attached_analysis(stored, fields=None, served=served)
+    shown = render_attached_analysis(stored, served=served)
     assert shown["failures"] == [failure]
 
     # The Python API reads the message as is, as api.analyze_results does.
-    plain = render_attached_analysis(stored, fields=None)
+    plain = render_attached_analysis(stored)
     (bare,) = plain["failures"]
     assert f"{bare['message']} {route}" == failure["message"]
     assert "python_route" not in bare
@@ -68,7 +68,7 @@ async def test_the_route_follows_the_session_that_shows_it(
         AnalyzeResultsInput.model_validate(_request(raw)), state_no_sim
     )
     without_run_code = frozenset(state_no_sim.tool_dispatch) - {"run_code"}
-    (failure,) = render_attached_analysis(stored, fields=None, served=without_run_code)["failures"]
+    (failure,) = render_attached_analysis(stored, served=without_run_code)["failures"]
     assert failure["message"].endswith(python_route_text(without_run_code))
     assert "run_code" not in failure["message"]
 

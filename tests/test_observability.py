@@ -221,7 +221,7 @@ class TestEachToolCallEmitsOne:
             "jobs": ({"action": "status", "job_id": "no-such-job"}, "job_not_found"),
             "analyze_results": (
                 {"continue": {"result_set_id": "no-such-set", "cursor": "x"}},
-                "result_unreadable",
+                "invalid_cursor",
             ),
             "inspect": ({"queries": [], "continue": "x"}, "invalid_arguments"),
             "edit_schematic": (

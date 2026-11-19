@@ -520,31 +520,8 @@ async def _collect_analysis(
     request: analyze.AnalyzeResultsInput,
     state: SessionState,
 ) -> dict[str, Any]:
-    drives: list[analyze.AnalysisEvaluation] = []
-    position: analyze.AnalysisContinuationPosition | None = None
-    seen: set[tuple[str, int, int, int]] = set()
-    while True:
-        drive = await analyze.evaluate_analysis_results(
-            request,
-            state,
-            continuation=position,
-            # The set is immutable and the previous drive holds it, so a
-            # continuation resumes without re-reading it from disk.
-            loaded=drives[-1].item if drives else None,
-        )
-        drives.append(drive)
-        position = drive.continuation
-        if position is None:
-            return analyze.complete_analysis_evaluations(drives)
-        marker = (
-            position.result_set_id,
-            position.work_index,
-            position.row_offset,
-            position.missing_offset,
-        )
-        if marker in seen:
-            raise ApiInternalError("The analysis evaluator continuation made no progress")
-        seen.add(marker)
+    # One evaluation gives every recipe, every row and every failure.
+    return await analyze.complete_analysis(request, state)
 
 
 def _dedupe(values: Sequence[Any]) -> list[Any]:

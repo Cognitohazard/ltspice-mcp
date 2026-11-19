@@ -3,9 +3,6 @@
 import hashlib
 import json
 
-import pytest
-
-from ltspice_mcp.errors import ResultError
 from ltspice_mcp.lib import result_store
 
 
@@ -54,10 +51,10 @@ def test_result_sets_with_older_artifact_contract_are_not_reinterpreted(tmp_path
         source_jobs={},
         ttl_hours=1,
     )
-    assert result_store.load(item.result_set_id, tmp_path) == item
     path = result_store.result_path(item.result_set_id, tmp_path)
     data = json.loads(path.read_text(encoding="utf-8"))
     data["store_version"] = 3
     path.write_text(json.dumps(data), encoding="utf-8")
-    with pytest.raises(ResultError, match="unsupported storage schema"):
-        result_store.load(item.result_set_id, tmp_path)
+    # A set this build cannot read is neither read nor swept as if it could be.
+    assert result_store.cleanup(tmp_path) == 0
+    assert path.exists()
