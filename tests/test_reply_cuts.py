@@ -436,6 +436,19 @@ NEVER_BOUNDS: dict[tuple[str, str], str] = {
 }
 
 
+#: The analysis attached to a run is an answer of analyze_results, declared
+#: by that tool's schema: each list in it is bounded as that tool's is.
+_ATTACHED = "analysis.result."
+NEVER_BOUNDS.update(
+    {
+        (handler, _ATTACHED + path): bound
+        for handler in ("experiments.handle_run_experiments", "jobs.handle_jobs")
+        for (tool, path), bound in list(NEVER_BOUNDS.items())
+        if tool == "analyze.handle_analyze_results"
+    }
+)
+
+
 def test_every_list_sent_whole_states_its_bound():
     declared = {(name, _unbranched(item.path)) for name, item in _lists() if item.kind == "never"}
     missing = sorted(declared - NEVER_BOUNDS.keys())
@@ -583,6 +596,25 @@ _MACHINERY_NAMES = frozenset(
         "CursorError",
     }
 )
+
+#: The attached analysis's page objects, cut as analyze_results cuts them, in
+#: a run receipt and in each jobs reply that carries a receipt.
+_ATTACHED_BRANCHES = {
+    "experiments.handle_run_experiments": ("",),
+    "jobs.handle_jobs": ("<oneOf0>.", "<oneOf1>.", "<oneOf5>."),
+}
+CUT_TODAY.update(
+    {
+        (handler, f"{branch}{_ATTACHED}{place}"): tuple(
+            f"{branch}{_ATTACHED}{path}" for path in paths
+        )
+        for handler, branches in _ATTACHED_BRANCHES.items()
+        for branch in branches
+        for (tool, place), paths in list(CUT_TODAY.items())
+        if tool == "analyze.handle_analyze_results"
+    }
+)
+
 
 #: Names a cursor or a reply budget goes by, as a parameter, an argument, a
 #: field read or a variable. Matched whole: ``analysis_budget_s`` and the

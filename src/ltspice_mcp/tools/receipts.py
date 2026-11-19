@@ -587,7 +587,9 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
             "properties": {
                 "status": {"type": "string"},
                 "request": {"type": ["object", "null"]},
-                "result": {"type": ["object", "null"]},
+                # An answer of analyze_results, declared by that tool's own
+                # schema, so the presenter cuts it as that tool's answer.
+                "result": {**analyze.OUTPUT_SCHEMA, "type": ["object", "null"]},
                 "error": {"type": ["string", "null"]},
                 "observations": {
                     "type": "array",
