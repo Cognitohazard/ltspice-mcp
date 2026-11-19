@@ -312,11 +312,6 @@ class _Owner:
     port: bool = False
     #: The parameter of a ``@device[param]`` name.
     param: str | None = None
-    #: The owner as the result writes it in another form, matched as
-    #: ``written`` is: XVII's device table writes the device's letter first
-    #: (``m:a:in:tail``, the path ``a:in:tail``), which ``written`` folds into
-    #: the device's own name (``mtail``).
-    also_written: tuple[DevicePath, ...] = ()
 
 
 def parse_device_param(name: str) -> tuple[str, str] | None:
@@ -379,8 +374,7 @@ def _param_owner(name: str, *, xvii: bool, schematic: bool) -> _Owner | None:
         (*reading, own)
         for reading in instance_readings(instances, xvii=xvii, schematic=schematic)
     )
-    also = ((*instances, fold_name(device).rsplit(":", 1)[-1]),) if xvii else ()
-    return _Owner(device, path, (*instances, own), readings, param=param, also_written=also)
+    return _Owner(device, path, (*instances, own), readings, param=param)
 
 
 def _owner(name: str, *, xvii: bool, schematic: bool) -> _Owner | None:
@@ -620,19 +614,25 @@ def _equal(path: DevicePath, want: DevicePath) -> int | None:
 
 
 class AmbiguousName(ValueError):
-    """A name that matches nothing as a result writes it and whose other
-    readings (an instance's X dropped, :func:`instance_readings`) select
-    different things: never chosen between. ``candidates`` names each place
-    they reach, as the result writes it."""
+    """A name that reaches more than one thing where one is needed, never
+    chosen between: other readings of a name that matches nothing as the
+    result writes it (an instance's X dropped, a table's split spelling)
+    selecting different things, or a ``dev.param`` shorthand reaching more
+    than one device. ``candidates`` names each, as the result writes it."""
 
     def __init__(self, wanted: str, candidates: Sequence[str]) -> None:
         self.wanted = wanted
         self.candidates = tuple(candidates)
-        super().__init__(
-            f"{wanted!r} names nothing as this result writes it, and its readings with an "
-            f"instance's X read otherwise reach different instances: {', '.join(self.candidates)}. "
-            "Name one as the result writes it."
-        )
+        super().__init__(ambiguous_detail(wanted, self.candidates))
+
+
+def ambiguous_detail(wanted: str, candidates: Sequence[str]) -> str:
+    """What a refusal of a name :class:`AmbiguousName` raises for says: the
+    one wording every reader gives."""
+    return (
+        f"{wanted!r} could be any of {', '.join(candidates)} in this result, and is not "
+        "chosen between: name one as the result writes it."
+    )
 
 
 def _name_readings(want: DevicePath) -> list[DevicePath]:
@@ -648,6 +648,17 @@ def _name_readings(want: DevicePath) -> list[DevicePath]:
     return [reading for reading in itertools.product(*options) if reading != want]
 
 
+def _fragment(owner: _Owner) -> DevicePath | None:
+    """A device's path with its own name less its type letter, as XVII's device
+    table splits it (``m:a:in:tail`` for ``Mtail`` in ``a:in``): ``a:in:tail``,
+    for the table's name and the device's currents alike. None for an
+    instance, and for a device outside every subcircuit, whose name the table
+    writes whole."""
+    if owner.port or len(owner.written) < 2 or len(owner.written[-1]) < 2:
+        return None
+    return (*owner.written[:-1], owner.written[-1][1:])
+
+
 def _select(
     wanted: str,
     owned: Sequence[tuple[str, _Owner]],
@@ -655,57 +666,70 @@ def _select(
     match: Callable[[DevicePath, DevicePath], int | None],
     *,
     readings: bool,
+    fragments: bool,
     literal: Callable[[_Owner], bool] = lambda _owner: False,
 ) -> frozenset[str]:
     """The names of ``owned`` that ``wanted`` (its path ``want``) selects. The
     one rule every reader of a name inside subcircuits follows: the device
-    selector, the ``dev.param`` shorthand and a path name.
+    selector, the ``dev.param`` shorthand and a path name. A device is one
+    identity, its path with its own name, whether its table's name or its
+    currents' names carry it, so a name selects all of a device or none of it.
 
     In order, the first step that selects anything answers: the name as the
     result writes a device (``literal``, or ``want`` matching to the end of a
-    device's written path); the name as the result writes an instance; then,
-    where the result's instances may be read otherwise (``readings``: XVII's,
-    which drop each card's X, and a schematic's run, :func:`instance_readings`),
-    each other reading of the name (:func:`_name_readings`). One reading
-    matched as a part of a path is one selection, under however many parents
-    it reaches (``xin`` under ``xa`` and ``xb``). Two other readings that select
-    different things raise :class:`AmbiguousName`, naming the places."""
+    device's written path); the name as the result writes an instance; then
+    each other reading: where the result's instances may be read otherwise
+    (``readings``: XVII's, which drop each card's X, and a schematic's run,
+    :func:`instance_readings`), the name with an instance's X dropped
+    (:func:`_name_readings`); and where the result is XVII's (``fragments``),
+    a device named as its table splits it (:func:`_fragment`: ``tail`` for
+    ``Mtail``). One reading matched as a part of a path is one selection,
+    under however many parents it reaches (``xin`` under ``xa`` and ``xb``).
+    Two other readings that select different things raise
+    :class:`AmbiguousName`, naming the places."""
 
     def ends_a_device(owner: _Owner, path: DevicePath) -> bool:
-        return not owner.port and any(
-            match(form, path) == len(form) for form in (owner.written, *owner.also_written)
-        )
+        return not owner.port and match(owner.written, path) == len(owner.written)
 
     devices = frozenset(
         name for name, owner in owned if literal(owner) or ends_a_device(owner, want)
     )
     if devices:
         return devices
-    found = frozenset(
-        name
-        for name, owner in owned
-        if any(match(form, want) is not None for form in (owner.written, *owner.also_written))
-    )
+    found = frozenset(name for name, owner in owned if match(owner.written, want) is not None)
     if found:
         return found
-    if not readings:
-        return frozenset()
     chosen: dict[frozenset[str], set[str]] = {}
     written = dict(owned)
-    for reading in _name_readings(want):
-        # A segment read without its X is an instance's, the letter of a
-        # subcircuit instance: a reading whose last segment lost one names no
-        # device's own name.
-        hits = [
-            (name, end)
-            for name, owner in owned
-            if (end := match(owner.written, reading)) is not None
-            and not (reading[-1] != want[-1] and ends_a_device(owner, reading))
-        ]
+
+    def take(hits: list[tuple[str, int]]) -> None:
         if hits:
             chosen.setdefault(frozenset(name for name, _ in hits), set()).update(
                 ":".join(written[name].written[:end]) for name, end in hits
             )
+
+    for reading in _name_readings(want) if readings else ():
+        # A segment read without its X is an instance's, the letter of a
+        # subcircuit instance: a reading whose last segment lost one names no
+        # device's own name.
+        take(
+            [
+                (name, end)
+                for name, owner in owned
+                if (end := match(owner.written, reading)) is not None
+                and not (reading[-1] != want[-1] and ends_a_device(owner, reading))
+            ]
+        )
+    # The table's split spelling is a reading of the name as written: a name
+    # that already lost an X names an instance, not a device's split name.
+    for reading in [want] if fragments else ():
+        take(
+            [
+                (name, len(owner.written))
+                for name, owner in owned
+                if (form := _fragment(owner)) is not None and match(form, reading) == len(form)
+            ]
+        )
     if len(chosen) > 1:
         raise AmbiguousName(wanted, sorted(set().union(*chosen.values())))
     return next(iter(chosen), frozenset())
@@ -761,6 +785,7 @@ def device_query(
             split_path(spelled),
             _within,
             readings=xvii or schematic,
+            fragments=xvii,
             literal=lambda owner: fold_name(owner.text) == literal,
         )
 
@@ -800,12 +825,19 @@ def find_device_param(
             want,
             _ending,
             readings=xvii or schematic,
+            fragments=xvii,
             literal=lambda owner: fold_name(owner.text) in literals,
         )
         if found:
             break
-    # One value needs one device: a name that reaches more is refused.
-    return next(iter(found)) if len(found) == 1 else None
+    # One value needs one device: a name that reaches more is refused, naming
+    # each device it reaches.
+    if len(found) > 1:
+        reached = dict(owned)
+        raise AmbiguousName(
+            device, sorted({":".join(reached[name].written) for name in found})
+        )
+    return next(iter(found)) if found else None
 
 
 @dataclass(frozen=True)
@@ -986,7 +1018,7 @@ def find_trace_by_path(
             continue
         written, readings = _trace_paths(match.group(2), xvii=xvii, schematic=schematic)
         owned.append((name, _Owner(name, written, written, readings)))
-    found = _select(signal, owned, want, _equal, readings=xvii or schematic)
+    found = _select(signal, owned, want, _equal, readings=xvii or schematic, fragments=xvii)
     return next(iter(found)) if len(found) == 1 else None
 
 

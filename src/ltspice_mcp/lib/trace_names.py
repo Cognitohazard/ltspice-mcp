@@ -26,13 +26,14 @@ from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.deck_nodes import GROUND_NAMES
 from ltspice_mcp.lib.device_names import (
     AmbiguousName,
+    ambiguous_detail,
     device_param_name,
     find_trace_by_path,
     fold_name,
     parse_device_param,
     parse_shorthand,
     section_sign_spellings,
-    trace_keys,
+    trace_keys,  # noqa: TID251 - names read literally, then told apart by an X
     writes_xvii_command,
 )
 from ltspice_mcp.lib.raw_header import RawPlotHeader, leading_parameters
@@ -427,11 +428,7 @@ def _missing_note(plot: RawPlotHeader, signal: str) -> str:
         xvii=writes_xvii_command(dict(plot.fields)),
         schematic=plot_names_sheet_parts(plot),
     ):
-        return (
-            f" It names nothing as this result writes it, and once an instance's X is "
-            f"read otherwise it could be any of {', '.join(candidates)}: name one as "
-            "the result writes it."
-        )
+        return f" {ambiguous_detail(signal, candidates)}"
     lowered = fold_name(signal)
     device = parse_shorthand(lowered)
     if device or "@" in lowered:

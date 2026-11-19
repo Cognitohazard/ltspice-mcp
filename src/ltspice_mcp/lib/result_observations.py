@@ -72,7 +72,7 @@ from ltspice_mcp.lib.device_names import (
     path_text,
     spelled_name,
     split_path,
-    trace_keys,
+    trace_keys,  # noqa: TID251 - a deck's own .save names and cards, one reading each
 )
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import parse_spice_value

@@ -18,12 +18,12 @@ from ltspice_mcp.lib.ac_analysis import log_interp_at, log_interp_complex_at
 from ltspice_mcp.lib.decoded_raw import DecodedRaw
 from ltspice_mcp.lib.device_names import (
     TraceKey,
-    pair_traces,
+    pair_traces,  # noqa: TID251 - compare is the one pairing of two results
     parse_device_param,
     path_text,
     table_device_path,
     table_naming,
-    trace_keys,
+    trace_keys,  # noqa: TID251 - every key of each trace, for pair_traces
     writes_xvii_names,
 )
 from ltspice_mcp.lib.log_types import LogSectionName

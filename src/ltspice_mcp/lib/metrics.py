@@ -56,6 +56,7 @@ from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, declared_unit
 from ltspice_mcp.lib.device_names import (
     AmbiguousName,
+    ambiguous_detail,
     current_device,
     device_names,
     device_query,
@@ -726,12 +727,7 @@ def filter_operating_point(op_data: dict, device: str, *, xvii: bool, schematic:
     try:
         names_device = device_query(device, xvii=xvii, schematic=schematic, among=every)
     except AmbiguousName as exc:
-        raise ResultError(
-            f"Device {device!r} names nothing as this result writes it, and once an "
-            f"instance's X is read otherwise it could be any of {', '.join(exc.candidates)}: "
-            "name one as the result writes it.",
-            show_hint=False,
-        ) from None
+        raise ResultError(str(exc), show_hint=False) from None
     matched = False
     for bucket in OP_BUCKETS:
         kept = {}
@@ -1409,12 +1405,7 @@ async def _value_from_operating_point(
             list(flat), recipe.expr, xvii=xvii, schematic=schematic
         )
         if candidates:
-            raise ResultError(
-                f"{recipe.expr!r} names nothing as this operating-point result writes "
-                "it, and once an instance's X is read otherwise it could be any of "
-                f"{', '.join(candidates)}: name one as the result writes it.",
-                show_hint=False,
-            )
+            raise ResultError(ambiguous_detail(recipe.expr, candidates), show_hint=False)
         present = ", ".join(sorted(flat)[:8])
         if len(flat) > 8:
             present += f", ... ({len(flat)} total)"
