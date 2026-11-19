@@ -26,11 +26,14 @@ from ltspice_mcp.config import ServerConfig
 from ltspice_mcp.lib import filelock as filelock_mod
 from ltspice_mcp.lib import wsl as wsl_mod
 from ltspice_mcp.lib.experiment_runner import ExperimentRunner
+from ltspice_mcp.lib.raw_parser import OTHER_RAW_KINDS
 from ltspice_mcp.lib.runner_base import RunOutcome
+from ltspice_mcp.lib.sheet_results import files_beside
 from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools.experiments import RunExperimentsInput, handle_run_experiments
 from ltspice_mcp.tools.jobs import JOBS_OUTPUT_SCHEMA, JobsInput, handle_jobs
+from tests import _ltspice_recorded as rec
 from tests.conftest import (
     FIXTURES_DIR,
     LIVENESS_S,
@@ -516,7 +519,13 @@ async def test_one_circuit_named_by_two_spellings_is_refused(
         shutil.copyfile(sheet, other)
     error = await _refused_request(ltspice_state, sheet, other)
     assert error["code"] == "several_cases_per_sheet"
-    assert "amp.asc and AMP.asc" in error["message"]
+    # Windows resolves both spellings to the name on disk, which reads as one
+    # circuit run twice; a filesystem that keeps case names both.
+    assert any(
+        said in error["message"]
+        for said in ("amp.asc and AMP.asc", "amp.asc runs 2 cases in this job")
+    ), error["message"]
+    assert "amp.raw" in error["message"]
 
 
 async def test_a_netlist_whose_results_file_is_a_sheets_is_refused(
@@ -600,3 +609,51 @@ async def test_two_placements_at_one_results_file_do_not_interleave(
     assert [r["outcome"] for r in results] == ["complete", "complete"], results
     assert events.index("second waits") < events.index("first copied")
     assert events.index("first copied") < events.index("second copies")
+
+
+async def test_a_dotted_netlists_reply_says_where_its_results_go_is_unchecked(
+    state_no_sim: SessionState, work_dir: Path
+):
+    netlist = _netlist(work_dir, "two.dots.cir")
+    job_that_ran(state_no_sim, netlist, work_dir)
+    placed = await place(state_no_sim)
+    assert [Path(f["to"]).name for f in placed["files"]] == ["two.dots.raw", "two.dots.log"]
+    assert any("more than one dot" in said for said in placed["not_checked"])
+
+
+# ---------------------------------------------------------------------------
+# Against the recordings: where a build's batch run writes a netlist's files
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_files_beside_names_what_a_netlists_batch_run_wrote(build: str):
+    """Every case under raw/ is a netlist run with -Run -b in a folder of its
+    own; what it wrote beside itself is what files_beside names."""
+    checked = 0
+    for case_id, entry in rec.manifest(build)["cases"].items():
+        if not case_id.startswith("raw/") or entry.get("kind") != "run":
+            continue
+        deck = Path(f"{case_id.rsplit('/', 1)[-1]}.cir")
+        beside = files_beside(deck)
+        named = {beside.raw.name, beside.log.name}
+        named |= {beside.other_raw(kind).name for kind in OTHER_RAW_KINDS}
+        # Not copied: the .db LTspice 26 keeps of a run's measurements, and the
+        # .log.raw both builds write beside a stepped run, which no job keeps.
+        uncopied = {".db", ".log.raw"}
+        written = {deck.stem + suffix for suffix in entry["written"] if suffix not in uncopied}
+        assert beside.log.name in written, (case_id, written)
+        assert written <= named, (case_id, written - named)
+        checked += 1
+    assert checked > 10
+
+
+@pytest.mark.parametrize("build", rec.BUILDS)
+def test_a_netlist_with_two_dots_writes_under_its_whole_stem(build: str):
+    behaviour = rec.CASES.behaviours["results-beside-a-netlist-two-dots"]
+    if behaviour.pending:
+        pytest.skip(behaviour.pending)
+    entry = rec.entry(build, "beside/two.dots")
+    beside = files_beside(Path("two.dots.cir"))
+    written = {"two.dots" + suffix for suffix in entry["written"]}
+    assert {beside.raw.name, beside.log.name} <= written, written

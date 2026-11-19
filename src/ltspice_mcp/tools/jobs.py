@@ -1074,6 +1074,8 @@ def _placed_hint(placed: dict[str, Any]) -> str:
             f"The results are beside {circuit.name}, under its name, "
             f"{where_placed(circuit)}; not_checked says what was not checked."
         )
+    if placed["not_checked"] and is_asc(circuit):
+        hint += " not_checked says what was not checked."
     if placed["assignments"]:
         hint += (
             " This case ran with values its variations set, which the circuit does not "

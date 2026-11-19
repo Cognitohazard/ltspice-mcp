@@ -250,11 +250,12 @@ def _resolved(path: Path) -> Path:
         return path.absolute()
 
 
-def results_key(results_path: Path) -> str:
-    """One results file as it is named whatever its spelling: the resolved path,
+def file_key(path: Path) -> str:
+    """One file as it is named whatever its spelling: the resolved path,
     case-folded, so two spellings of one file on a case-insensitive filesystem
-    are one key (:meth:`Store.results_file_lock`). Filesystem work."""
-    return str(_resolved(results_path)).casefold()
+    are one key (:meth:`Store.circuit_lock`, :meth:`Store.results_file_lock`).
+    Filesystem work."""
+    return str(_resolved(path)).casefold()
 
 
 @functools.lru_cache(maxsize=64)
@@ -949,8 +950,7 @@ class Store:
         "locked, retry" error, never a missed exclusion. Resolving is filesystem
         work, so an event-loop caller runs this off-loop.
         """
-        resolved = _resolved(circuit_path)
-        return user_home() / "locks" / "circuits" / path_digest(str(resolved).casefold())
+        return user_home() / "locks" / "circuits" / path_digest(file_key(circuit_path))
 
     @staticmethod
     def results_file_lock(results_path: Path) -> Path:
@@ -963,7 +963,7 @@ class Store:
         digest of the resolved path, case-folded; resolving is filesystem
         work, so an event-loop caller runs this off-loop.
         """
-        return user_home() / "locks" / "results" / path_digest(results_key(results_path))
+        return user_home() / "locks" / "results" / path_digest(file_key(results_path))
 
     @staticmethod
     def renders_dir() -> Path:

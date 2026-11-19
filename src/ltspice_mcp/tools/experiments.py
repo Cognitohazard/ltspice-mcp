@@ -758,7 +758,7 @@ async def handle_run_experiments(
                     (circuit.path, projected_case_count(circuit.circuit_id, args.variations))
                     for circuit in circuit_inputs
                 ],
-                simulator,
+                simulator.__name__,
             )
         if args.analyze is not None:
             _validate_attached_analysis(args.analyze)

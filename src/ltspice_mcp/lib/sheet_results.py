@@ -40,7 +40,7 @@ from ltspice_mcp.lib.filelock import async_file_lock, circuit_file_lock
 from ltspice_mcp.lib.ltspice_window import results_beside  # noqa: TID251 - the one caller
 from ltspice_mcp.lib.raw_parser import other_raw_path
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name, simulator_family
-from ltspice_mcp.lib.store import Store, results_key
+from ltspice_mcp.lib.store import Store, file_key
 
 #: The capability the request check and the case check ask the table about.
 CAPABILITY = "results_beside_sheet"
@@ -114,8 +114,8 @@ def results_owner(circuit: Path) -> Path:
     return circuit
 
 
-def places_results(simulator: type | str | None) -> bool:
-    """Whether a run on ``simulator`` (a class, or a job's recorded class name)
+def places_results(simulator: str | None) -> bool:
+    """Whether a run on ``simulator`` (a job's recorded class name)
     has its results put beside its circuit: the capability table's answer.
 
     A record that names no simulator passes, as it did before the table was
@@ -124,9 +124,9 @@ def places_results(simulator: type | str | None) -> bool:
     """
     if simulator is None or simulator == "":
         return True
-    family = simulator_family(simulator)
-    if family is None and isinstance(simulator, str):
-        family = dialect_for_simulator_name(simulator)
+    # The family maps know this platform's class names; a record written on
+    # WSL (LTspiceWSL) and read elsewhere is known to the dialect map.
+    family = simulator_family(simulator) or dialect_for_simulator_name(simulator)
     found = entry(family, CAPABILITY) if family is not None else None
     return found is not None and found.status == "supported"
 
@@ -207,12 +207,13 @@ def _belongs_to_sheet(circuit: Path, sheet: Path) -> NotPlaced:
     )
 
 
-def check_request(circuits: Sequence[tuple[Path, int]], simulator: type) -> None:
+def check_request(circuits: Sequence[tuple[Path, int]], simulator: str) -> None:
     """Refuse, before a job exists, a request to put its runs' results beside
     their circuits (``execution.results_beside_sheet``) that could not end
     with each results file holding one run of its own circuit: ``circuits``
     pairs each circuit's path with the number of cases it runs, and
-    ``simulator`` is the class the job runs on.
+    ``simulator`` is the class name the job runs on and will record, judged
+    as ``check_case`` judges the record, so the two cannot disagree.
 
     A results file holds one run's results, so a file that would receive
     several cases (a sweep, one circuit named twice by any spelling, or
@@ -224,12 +225,12 @@ def check_request(circuits: Sequence[tuple[Path, int]], simulator: type) -> None
         raise NotPlaced(
             "not_ltspice",
             "execution.results_beside_sheet puts a run's results beside its circuit "
-            f"where LTspice keeps them, and this job runs on {simulator.__name__}, whose "
+            f"where LTspice keeps them, and this job runs on {simulator}, whose "
             "results the server does not put there. Leave the option off.",
         )
     by_file: dict[str, tuple[list[Path], int]] = {}
     for path, count in circuits:
-        key = results_key(files_beside(path).raw)
+        key = file_key(files_beside(path).raw)
         paths, total = by_file.get(key, ([], 0))
         by_file[key] = ([*paths, path], total + count)
     for paths, count in by_file.values():
@@ -319,6 +320,12 @@ def place_case(job: ExperimentJob, case: ExperimentCase, circuit: Path) -> Place
         )
     if not is_asc(circuit):
         not_checked.append(NETLIST_WINDOW_UNCHECKED)
+        if "." in circuit.stem:
+            not_checked.append(
+                f"Where LTspice writes the results of a netlist with more than one dot in its "
+                f"name has not been recorded; they were copied to "
+                f"{files_beside(circuit).raw.name}."
+            )
     others = {kind: other_raw_path(raw, kind) for kind in case.other_raws}
     return Placement(place_beside_sheet(circuit, raw, case.log_file, others), not_checked)
 
