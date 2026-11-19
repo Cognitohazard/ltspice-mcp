@@ -188,37 +188,79 @@ def split_path(text: str) -> DevicePath:
     return tuple(segment for segment in re.split(r"[.:]", fold_name(text)) if segment)
 
 
-def _instances(segments: Iterable[str], *, xvii: bool) -> DevicePath:
-    """Instance names as the deck writes them: XVII drops each one's ``X``."""
-    return tuple(f"x{segment}" for segment in segments) if xvii else tuple(segments)
+def instance_readings(written: Sequence[str], *, xvii: bool, schematic: bool) -> tuple[DevicePath, ...]:
+    """Every path of instances that the instances ``written`` (as a result of
+    LTspice writes them, folded) may stand for, each instance by the name it
+    has where it was placed: a deck's card, a sheet's reference. The one
+    answer to which instances a name inside subcircuits names, for a trace,
+    a current and a device-table name alike, on each build.
+
+    On a deck's run there is one reading: XVII writes every card without its
+    X (``Xa`` is ``a``; ``raw/subckt_names_tran_saved``), LTspice 26 writes it
+    whole. On a run of a schematic (``schematic``) an instance written ``s``
+    is a part the sheet names ``s``, which the export writes ``XS`` (XVII) or
+    ``X§S`` (LTspice 26), or a card a directive on the sheet writes, which
+    XVII writes without its X and LTspice 26 whole: the name does not say
+    which, on either build (recorded: ``export/sheet_part_names``,
+    ``export/hier_plain_top_run``, ``export/hier_device_logopinfo``), so the
+    instance is read both ways, ``s`` and ``xs``, the first reading as written.
+    """
+    segments = tuple(fold_name(segment) for segment in written)
+    if schematic:
+        return tuple(itertools.product(*((segment, f"x{segment}") for segment in segments)))
+    if xvii:
+        return (tuple(f"x{segment}" for segment in segments),)
+    return (segments,)
+
+
+def card_path(written: Sequence[str], *, xvii: bool) -> DevicePath:
+    """The instances ``written`` as the netlist's cards name them, without
+    LTspice 26's ``§``: the one name a device or instance is listed and keyed
+    by, on either build. XVII drops every card's X; LTspice 26 writes a deck's
+    card whole and a sheet's part by its reference, which its export writes
+    ``X§U1`` (``export/hier_device_logopinfo``), so a segment written without
+    an X is read as a part's and given one. One read as a reading of
+    :func:`instance_readings` on a schematic's run."""
+    segments = tuple(fold_name(segment) for segment in written)
+    if xvii:
+        return tuple(f"x{segment}" for segment in segments)
+    return tuple(segment if segment.startswith("x") else f"x{segment}" for segment in segments)
+
+
+def _table_written(name: str, *, xvii: bool) -> tuple[DevicePath, str] | None:
+    """The instances and the device's own name a name of the log's device
+    table (or an ngspice ``@`` trace) writes, or None for one of no
+    instances in LTspice's form. XVII writes the device's letter first and
+    drops it from its name (``m:a:in:tail``); LTspice 26 the path, then the
+    device's own name (``xa:xin:mtail``)."""
+    low = fold_name(name)
+    if ":" not in low:
+        return None
+    if xvii:
+        first, *instances, last = low.split(":")
+        return tuple(instances), first + last
+    *instances, last = low.split(":")
+    return tuple(instances), last
 
 
 def table_device_path(name: str, *, xvii: bool) -> DevicePath:
     """The device a name in the log's device table (or an ngspice ``@`` trace)
     belongs to, read as the build that wrote it spells the table (``xvii``,
-    :func:`table_naming`): ``xa:xin:mtail`` and ``m:a:in:tail`` are both
-    ``("xa", "xin", "mtail")``, ngspice's ``m.xa.xin.mtail`` too.
-
-    LTspice 26 writes the path of instance names, then the device's own name;
-    XVII the device's letter, each instance without its X, then the rest of
-    the device's name. LTspice 26 writes a block placed as U1, which its
-    export names ``X§U1``, as ``u1`` (recorded: ``export/hier_device_logopinfo``,
-    ``u1:D1``), where XVII exports it ``XU1`` and writes ``d:u1:1``: both are
-    the instance ``xu1``, the export's name without the ``§``, as every
-    instance of a deck starts with X."""
-    low = fold_name(name)
-    if ":" not in low:
-        segments = [segment for segment in low.split(".") if segment]
+    :func:`table_naming`), each instance its card (:func:`card_path`):
+    ``xa:xin:mtail`` and ``m:a:in:tail`` are both ``("xa", "xin", "mtail")``,
+    ngspice's ``m.xa.xin.mtail`` too. LTspice 26 writes a block placed as U1,
+    which its export names ``X§U1``, as ``u1`` (recorded:
+    ``export/hier_device_logopinfo``, ``u1:D1``), where XVII exports it ``XU1``
+    and writes ``d:u1:1``: both are the instance ``xu1``."""
+    written = _table_written(name, xvii=xvii)
+    if written is None:
+        segments = [segment for segment in fold_name(name).split(".") if segment]
         # ngspice writes the device's class letter first: m.x1.mn.
         if len(segments) > 1 and len(segments[0]) == 1:
             segments = segments[1:]
         return tuple(segments)
-    if xvii:
-        # XVII writes the device's letter first and drops it from its name.
-        first, *instances, last = low.split(":")
-        return (*_instances(instances, xvii=True), first + last)
-    *instances, last = low.split(":")
-    return (*(i if i.startswith("x") else f"x{i}" for i in instances), last)
+    instances, own = written
+    return (*card_path(instances, xvii=xvii), own)
 
 
 def table_naming(writer: Producer, printed_by: str | None) -> Naming:
@@ -259,15 +301,17 @@ class _Owner:
 
     #: The owner as the name spells it: ``xa:xin:Mtail``, ``m.x1.mn``.
     text: str
+    #: The owner as the netlist's cards name it (:func:`card_path`): the one
+    #: it is listed and keyed by.
     path: DevicePath
+    #: The owner as the result writes it, folded.
+    written: DevicePath
+    #: Every path the name may stand for (:func:`instance_readings`).
+    readings: tuple[DevicePath, ...]
     #: A port current (``Ix(xa:out)``), which belongs to the instance.
     port: bool = False
     #: The parameter of a ``@device[param]`` name.
     param: str | None = None
-    #: Every path the name may stand for (:func:`trace_keys`): ``path`` alone
-    #: but on an XVII run of a schematic, where ``path`` is the reading of
-    #: each instance as its card and the others read some as the sheet's parts.
-    readings: tuple[DevicePath, ...] = ()
 
 
 def parse_device_param(name: str) -> tuple[str, str] | None:
@@ -286,7 +330,9 @@ def parse_shorthand(signal: str) -> tuple[str, str] | None:
     return None if match is None else (match.group(1), match.group(2))
 
 
-def device_param_name(names: Iterable[str], signal: str, *, xvii: bool) -> str | None:
+def device_param_name(
+    names: Iterable[str], signal: str, *, xvii: bool, schematic: bool
+) -> str | None:
     """The one name among ``names`` a ``dev.param`` shorthand addresses, or None.
 
     Its literal forms first: ngspice writes a device parameter bare
@@ -306,69 +352,75 @@ def device_param_name(names: Iterable[str], signal: str, *, xvii: bool) -> str |
     for form in (f"@{dev}[{param}]", f"v(@{dev}[{param}])", f"i(@{dev}[{param}])"):
         if form in by_lower:
             return by_lower[form]
-    return find_device_param(by_lower.values(), *parsed, xvii=xvii)
+    return find_device_param(by_lower.values(), *parsed, xvii=xvii, schematic=schematic)
 
 
-def _param_owner(name: str, *, xvii: bool, schematic: bool = False) -> _Owner | None:
+def _param_owner(name: str, *, xvii: bool, schematic: bool) -> _Owner | None:
     """The device a ``@device[param]`` name holds a parameter of, as the log's
-    table, written as ``xvii`` says (:func:`table_device_path`), or ngspice
-    spells it; None for any other name.
-
-    ``path`` reads each instance as its card. On a run of a schematic
-    (``schematic``) the table's own spelling of an instance is a reading too,
-    as :func:`trace_keys` reads a trace: XVII writes part MB1 (card ``XMB1``)
-    ``m:mb1:1``, which is ``mb1`` or the card ``xmb1``, and LTspice 26 writes
-    it ``mb1:m1`` (``export/sheet_part_names``, ``export/hier_device_logopinfo``)."""
+    table writes it on the build ``xvii`` says, or ngspice spells it; None for
+    any other name. Its instances are read as a trace's are
+    (:func:`instance_readings`): the table and the raw name one instance alike
+    on each build (``export/sheet_part_names``, ``export/hier_device_logopinfo``)."""
     parsed = parse_device_param(name)
     if parsed is None:
         return None
     device, param = parsed
     path = table_device_path(device, xvii=xvii)
-    readings: tuple[DevicePath, ...] = ()
-    low = fold_name(device)
-    if schematic and ":" in low:
-        if xvii:
-            first, *instances, last = low.split(":")
-            own = first + last
-            readings = tuple(
-                (*reading, own)
-                for reading in itertools.product(*((i, f"x{i}") for i in instances))
-            )
-        else:
-            *instances, last = low.split(":")
-            readings = tuple(dict.fromkeys(((*instances, last), path)))
-    return _Owner(device, path, param=param, readings=readings)
+    written = _table_written(device, xvii=xvii)
+    if written is None:
+        return _Owner(device, path, path, (path,), param=param)
+    instances, own = written
+    readings = tuple(
+        (*reading, own)
+        for reading in instance_readings(instances, xvii=xvii, schematic=schematic)
+    )
+    return _Owner(device, path, (*instances, own), readings, param=param)
 
 
-def _owner(name: str, *, xvii: bool, schematic: bool = False) -> _Owner | None:
-    """What the value ``name`` belongs to, its instances read as
-    :func:`trace_keys` reads them (``schematic`` for a result of a run of a
-    schematic). ``path`` is the reading of each instance as its card, the one
-    a deck's run has and the one the log's device table is read in
-    (:func:`table_device_path`); ``readings`` holds every reading."""
+def _owner(name: str, *, xvii: bool, schematic: bool) -> _Owner | None:
+    """What the value ``name`` belongs to: a device for ``@device[param]`` or
+    ``Id(xa:xin:Mtail)``, the instance for a port current ``Ix(xa:out)``. Its
+    instances are read by :func:`instance_readings` (``schematic`` for a
+    result of a run of a schematic)."""
     if (owner := _param_owner(name, xvii=xvii, schematic=schematic)) is not None:
         return owner
     current = _CURRENT.match(name)
     if current is None:
         return None
     text = current.group(2)
-    # The last reading reads every instance as its card (trace_keys).
-    readings = tuple(path for _, path in trace_keys(name, xvii=xvii, schematic=schematic))
-    if fold_name(current.group(1)) == "ix" and len(readings[-1]) > 1:
+    written, readings = _trace_paths(text, xvii=xvii, schematic=schematic)
+    path = _card_of(written, xvii=xvii, colons=":" in text)
+    if fold_name(current.group(1)) == "ix" and len(written) > 1:
         # The port's name follows the instance's path.
-        instances = tuple(path[:-1] for path in readings)
-        return _Owner(text, instances[-1], port=True, readings=instances)
-    return _Owner(text, readings[-1], readings=readings)
+        return _Owner(
+            text,
+            path[:-1],
+            written[:-1],
+            tuple(reading[:-1] for reading in readings),
+            port=True,
+        )
+    return _Owner(text, path, written, readings)
 
 
-def _raw_path(text: str, *, xvii: bool) -> DevicePath:
-    """The path a raw's name for a node or device spells: LTspice's ``:`` or
-    ngspice's ``.`` between instances, each instance without its ``X`` on
-    XVII."""
+def _trace_paths(
+    text: str, *, xvii: bool, schematic: bool
+) -> tuple[DevicePath, tuple[DevicePath, ...]]:
+    """The path a raw's name for a node or device writes (LTspice's ``:`` or
+    ngspice's ``.`` between instances), folded, and every path it may stand
+    for (:func:`instance_readings`). A name with no colon, ngspice's dotted
+    path among them, keeps every X and has one reading."""
     if ":" not in text:
-        return split_path(text)
+        path = split_path(text)
+        return path, (path,)
     *instances, last = fold_name(text).split(":")
-    return (*_instances(instances, xvii=xvii), last)
+    readings = instance_readings(instances, xvii=xvii, schematic=schematic)
+    return (*instances, last), tuple((*reading, last) for reading in readings)
+
+
+def _card_of(written: DevicePath, *, xvii: bool, colons: bool) -> DevicePath:
+    if not colons:
+        return written
+    return (*card_path(written[:-1], xvii=xvii), written[-1])
 
 
 def raw_name(scope: Iterable[str], name: str, *, xvii: bool) -> str:
@@ -427,20 +479,18 @@ def trace_keys(name: str, *, xvii: bool, schematic: bool) -> tuple[TraceKey, ...
     directive on the sheet writes (``XMB2``) without its X (``mb2``, which
     LTspice 26 writes ``xmb2``; recorded: ``export/hier_plain_top_run``,
     ``export/sheet_part_names``). The name alone does not say which an
-    instance of a schematic's XVII run is, and XVII's own netlist neither
+    instance of a schematic's run is, and XVII's own netlist neither
     (``XMB1`` and ``XMB2`` alike), so each instance is read both ways and the
-    name has a key for each reading, the sheet's first. A reader that needs
-    one key pairs them against another result's keys (:func:`pair_traces`).
+    name has a key for each reading, as written first
+    (:func:`instance_readings`). Two results' traces are paired by these keys
+    only through :func:`pair_traces`.
     """
     match = _TRACE.match(name.strip())
     if match is None:
         return (("", (fold_name(name.strip()),)),)
-    function, text = fold_name(match.group(1)), match.group(2)
-    if not (xvii and schematic and ":" in text):
-        return ((function, _raw_path(text, xvii=xvii)),)
-    *instances, last = fold_name(text).split(":")
-    readings = itertools.product(*((segment, f"x{segment}") for segment in instances))
-    return tuple((function, (*reading, last)) for reading in readings)
+    function = fold_name(match.group(1))
+    _, readings = _trace_paths(match.group(2), xvii=xvii, schematic=schematic)
+    return tuple((function, reading) for reading in readings)
 
 
 def _deck_key(name: str, *, xvii: bool) -> TraceKey:
@@ -454,54 +504,82 @@ def _deck_key(name: str, *, xvii: bool) -> TraceKey:
 @dataclass(frozen=True)
 class TracePairing:
     """Which trace of one result is which of another (:func:`pair_traces`), by
-    index into each list of keys."""
+    index into each list."""
 
     pairs: tuple[tuple[int, int], ...]
-    #: A trace of ``here`` whose keys meet more than one trace of ``there``,
-    #: or one trace there that another trace here meets too: it is not paired,
-    #: never guessed between. Each to the traces there it could be.
+    #: A trace of ``here`` not paired because its keys meet more than one
+    #: trace of ``there``, or meet one trace that another trace here meets
+    #: too: never guessed between. Each to the traces there it meets.
     ambiguous: Mapping[int, tuple[int, ...]]
     #: The same, from ``there``'s side.
     ambiguous_there: Mapping[int, tuple[int, ...]]
 
 
 def pair_traces(
-    here: Sequence[tuple[TraceKey, ...]], there: Sequence[tuple[TraceKey, ...]]
+    here: Sequence[tuple[str, tuple[TraceKey, ...]]],
+    there: Sequence[tuple[str, tuple[TraceKey, ...]]],
+    *,
+    same_spelling: bool,
 ) -> TracePairing:
-    """Pair the traces of two results by their keys (:func:`trace_keys`): a
-    trace here and a trace there are one when a key of each is the same and
-    neither meets another trace so. The one rule for pairing two results'
-    traces."""
+    """Pair the traces of two results, each a name and its keys
+    (:func:`trace_keys`). The one rule for pairing two results' traces.
+
+    Two results of one build's spelling and one kind of run (both a
+    schematic's or both a deck's: ``same_spelling``) name an instance alike,
+    so a name both write, in any case, pairs first. The traces left pair by
+    their keys: a trace here and one there are one when a key of each is the
+    same and neither meets another trace so; a trace that meets more than
+    one, or one another trace meets too, is not paired."""
+    pairs: list[tuple[int, int]] = []
+    left_here = list(range(len(here)))
+    left_there = list(range(len(there)))
+    if same_spelling:
+        by_name: dict[str, list[int]] = {}
+        for j, (name, _) in enumerate(there):
+            by_name.setdefault(fold_name(name), []).append(j)
+        mine: dict[str, list[int]] = {}
+        for i, (name, _) in enumerate(here):
+            mine.setdefault(fold_name(name), []).append(i)
+        for name, indices in mine.items():
+            theirs = by_name.get(name, [])
+            if len(indices) == 1 and len(theirs) == 1:
+                pairs.append((indices[0], theirs[0]))
+        named_here = {i for i, _ in pairs}
+        named_there = {j for _, j in pairs}
+        left_here = [i for i in left_here if i not in named_here]
+        left_there = [j for j in left_there if j not in named_there]
     index: dict[TraceKey, list[int]] = {}
-    for position, keys in enumerate(there):
-        for key in dict.fromkeys(keys):
-            index.setdefault(key, []).append(position)
-    meets = [
-        tuple(dict.fromkeys(j for key in keys for j in index.get(key, ()))) for keys in here
-    ]
+    for j in left_there:
+        for key in dict.fromkeys(there[j][1]):
+            index.setdefault(key, []).append(j)
+    meets = {
+        i: tuple(dict.fromkeys(j for key in here[i][1] for j in index.get(key, ())))
+        for i in left_here
+    }
     met_by: dict[int, list[int]] = {}
-    for i, found in enumerate(meets):
+    for i, found in meets.items():
         for j in found:
             met_by.setdefault(j, []).append(i)
-    pairs = tuple(
+    by_keys = [
         (i, found[0])
-        for i, found in enumerate(meets)
+        for i, found in meets.items()
         if len(found) == 1 and len(met_by[found[0]]) == 1
-    )
-    paired_here = {i for i, _ in pairs}
-    paired_there = {j for _, j in pairs}
+    ]
+    paired_here = {i for i, _ in by_keys}
+    paired_there = {j for _, j in by_keys}
     return TracePairing(
-        pairs,
-        {i: found for i, found in enumerate(meets) if found and i not in paired_here},
+        tuple(sorted(pairs + by_keys)),
+        {i: found for i, found in meets.items() if found and i not in paired_here},
         {j: tuple(found) for j, found in met_by.items() if j not in paired_there},
     )
 
 
-def owner_path(name: str, *, xvii: bool) -> DevicePath | None:
-    """The device or instance an operating-point value's name belongs to: a
-    device for ``@device[param]`` or ``Id(xa:xin:Mtail)``, the instance for a
-    port current ``Ix(xa:out)``. None for a node voltage."""
-    owner = _owner(name, xvii=xvii)
+def owner_path(name: str, *, xvii: bool, schematic: bool) -> DevicePath | None:
+    """The device or instance an operating-point value's name belongs to, as
+    the netlist's cards name it (:func:`card_path`): a device for
+    ``@device[param]`` or ``Id(xa:xin:Mtail)``, the instance for a port
+    current ``Ix(xa:out)``. None for a node voltage."""
+    owner = _owner(name, xvii=xvii, schematic=schematic)
     return None if owner is None else owner.path
 
 
@@ -509,16 +587,69 @@ def current_device(name: str) -> str | None:
     """The device's own name a device current belongs to: ``mtail`` for
     ``Id(xa:xin:Mtail)`` on either build. None for a port current or any other
     name."""
-    owner = _owner(name, xvii=False)
+    owner = _owner(name, xvii=False, schematic=False)
     if owner is None or owner.port or owner.param is not None:
         return None
     return owner.path[-1]
 
 
-def _within(path: DevicePath, want: DevicePath) -> bool:
-    return bool(want) and any(
-        path[i : i + len(want)] == want for i in range(len(path) - len(want) + 1)
+def _within(path: DevicePath, want: DevicePath) -> int | None:
+    """Where ``want`` ends in ``path``, at its first place, or None."""
+    if not want:
+        return None
+    for i in range(len(path) - len(want) + 1):
+        if path[i : i + len(want)] == want:
+            return i + len(want)
+    return None
+
+
+def _ending(path: DevicePath, want: DevicePath) -> int | None:
+    """``len(path)`` when ``path`` ends with ``want``, else None."""
+    return len(path) if want and path[-len(want) :] == want else None
+
+
+class AmbiguousName(ValueError):
+    """A name that matches nothing as a result writes it and, once an
+    instance's X is read otherwise (:func:`instance_readings`), more than one
+    instance: never chosen between. ``candidates`` names each, as the result
+    writes it."""
+
+    def __init__(self, wanted: str, candidates: Sequence[str]) -> None:
+        self.wanted = wanted
+        self.candidates = tuple(candidates)
+        super().__init__(
+            f"{wanted!r} names nothing as this result writes it, and more than one "
+            f"instance once an instance's X is read otherwise: {', '.join(self.candidates)}. "
+            "Name one as the result writes it."
+        )
+
+
+def _select(
+    wanted: str,
+    owned: Sequence[tuple[str, _Owner]],
+    at: Callable[[DevicePath], int | None],
+    *,
+    literal: Callable[[_Owner], bool] = lambda _owner: False,
+) -> frozenset[str]:
+    """The names of ``owned`` that ``wanted`` selects: those it names as the
+    result writes them (``literal``, or ``at`` of the written path), else those
+    one of their readings matches (:func:`instance_readings`). Where the
+    readings reach more than one instance (``at`` ending at another written
+    place), raise :class:`AmbiguousName`. The one rule every reader of a name
+    inside subcircuits follows: a selector, a ``dev.param`` shorthand, a path."""
+    direct = frozenset(
+        name for name, owner in owned if literal(owner) or at(owner.written) is not None
     )
+    if direct:
+        return direct
+    located: dict[DevicePath, set[str]] = {}
+    for name, owner in owned:
+        for reading in owner.readings:
+            if (end := at(reading)) is not None:
+                located.setdefault(owner.written[:end], set()).add(name)
+    if len(located) > 1:
+        raise AmbiguousName(wanted, sorted(":".join(place) for place in located))
+    return frozenset(next(iter(located.values()), ()))
 
 
 def section_sign_spellings(name: str) -> tuple[str, ...]:
@@ -548,59 +679,64 @@ def device_query(
     ``wanted`` names: the device as the simulator spells it (``m.xa.xleaf.m0``,
     which ``inspect``'s hierarchy addresses use), its path or part of it
     (``mtail``, ``xin.mtail``, ``xa.xin.mtail``; dots or colons), or an
-    instance it is inside.
+    instance it is inside, each name of ``among`` read by :func:`_select`:
+    as the result writes it first, then by its readings, refused
+    (:class:`AmbiguousName`) where those reach more than one instance.
 
     A name exported with LTspice's ``§`` (``R§Load``) names the part by the
     one of its names (:func:`section_sign_spellings`) that a name of ``among``,
     every name of the result, belongs to: ``Load`` in LTspice's results,
     ``RLoad`` in ngspice's. Where both are there, they are two parts and the
-    name answers to neither, as ``trace_names.find_trace`` refuses it.
+    name answers to neither, as ``trace_names.find_trace`` refuses it."""
+    owned = [
+        (name, owner)
+        for name in among
+        if (owner := _owner(name, xvii=xvii, schematic=schematic)) is not None
+    ]
 
-    On an XVII run of a schematic (``schematic``) an instance is read both
-    as the sheet's part and as a directive's card (:func:`trace_keys`), so
-    ``mb1`` and ``xmb1`` both name part MB1 there (``export/sheet_part_names``)."""
-    names = list(among)
-
-    def query(spelled: str) -> Callable[[str], bool]:
+    def query(spelled: str) -> frozenset[str]:
         literal = fold_name(spelled.strip())
         want = split_path(spelled)
-
-        def belongs(name: str) -> bool:
-            owner = _owner(name, xvii=xvii, schematic=schematic)
-            return owner is not None and (
-                fold_name(owner.text) == literal
-                or any(_within(path, want) for path in owner.readings or (owner.path,))
-            )
-
-        return belongs
+        return _select(
+            spelled,
+            owned,
+            lambda path: _within(path, want),
+            literal=lambda owner: fold_name(owner.text) == literal,
+        )
 
     spellings = section_sign_spellings(wanted)
     if not spellings:
-        return query(wanted)
-    found = [q for q in map(query, (wanted, *spellings)) if any(map(q, names))]
-    return found[0] if len(found) == 1 else (lambda _name: False)
+        selected = query(wanted)
+    else:
+        found = [chosen for chosen in map(query, (wanted, *spellings)) if chosen]
+        selected = found[0] if len(found) == 1 else frozenset()
+    return lambda name: name in selected
 
 
-def find_device_param(names: Iterable[str], device: str, param: str, *, xvii: bool) -> str | None:
+def find_device_param(
+    names: Iterable[str], device: str, param: str, *, xvii: bool, schematic: bool
+) -> str | None:
     """The one name among ``names`` that holds ``param`` of ``device``: the
     device as the simulator spells it, or the end of its path (``x1.mn`` for
     ``MN`` inside ``X1``, wherever ``X1`` is), whichever build or simulator
-    wrote it. None when there is not exactly one."""
+    wrote it, read by :func:`_select`. None when there is not exactly one;
+    :class:`AmbiguousName` where the readings reach more than one instance."""
     asked = (device, *section_sign_spellings(device))
     literals = {fold_name(spelled) for spelled in asked}
     wants = [want for spelled in asked if (want := split_path(spelled))]
-    found = [
-        name
+    owned = [
+        (name, owner)
         for name in names
-        if (owner := _param_owner(name, xvii=xvii)) is not None
+        if (owner := _param_owner(name, xvii=xvii, schematic=schematic)) is not None
         and owner.param is not None
         and fold_name(owner.param) == fold_name(param)
-        and (
-            fold_name(owner.text) in literals
-            or any(owner.path[-len(want) :] == want for want in wants)
-        )
     ]
-    return found[0] if len(found) == 1 else None
+
+    def at(path: DevicePath) -> int | None:
+        return next((end for want in wants if (end := _ending(path, want)) is not None), None)
+
+    found = _select(device, owned, at, literal=lambda owner: fold_name(owner.text) in literals)
+    return next(iter(found)) if len(found) == 1 else None
 
 
 @dataclass(frozen=True)
@@ -754,28 +890,35 @@ def deck_signal(
     )
 
 
-def find_trace_by_path(names: Iterable[str], signal: str, *, xvii: bool) -> str | None:
+def find_trace_by_path(
+    names: Iterable[str], signal: str, *, xvii: bool, schematic: bool
+) -> str | None:
     """The one trace among ``names`` that ``signal`` names by a path through
-    subcircuit instances, as either build writes it (``trace_keys``, as a
-    deck's run names them; a schematic's run on XVII is found by its literal
-    name, ``trace_names.find_trace``):
+    subcircuit instances, as either build writes it, read by :func:`_select`
+    (as written first, then by the readings of :func:`instance_readings`):
     ``V(xa.xin.mid)`` is LTspice 26's ``V(xa:xin:mid)`` and XVII's
     ``V(a:in:mid)``, ``Id(xa.xin.mtail)`` is ``Id(a:in:Mtail)`` on XVII, and
     ``Ix(xa.top)`` is ``Ix(a:TOP)``. None when ``signal`` names no such path or
-    not exactly one trace matches."""
+    not exactly one trace; :class:`AmbiguousName` where the readings reach
+    more than one."""
     if _TRACE.match(signal.strip()) is None:
         return None
-    want = _deck_key(signal, xvii=False)
-    if len(want[1]) < 2:
+    function, want = _deck_key(signal, xvii=False)
+    if len(want) < 2:
         return None
     # Every match ends with the path's last segment: a cheap test first.
-    tail = f"{want[1][-1]})"
-    found = [
-        name
-        for name in names
-        if fold_name(name).endswith(tail) and _deck_key(name, xvii=xvii) == want
-    ]
-    return found[0] if len(found) == 1 else None
+    tail = f"{want[-1]})"
+    owned = []
+    for name in names:
+        match = _TRACE.match(name.strip())
+        if match is None or not fold_name(name).endswith(tail):
+            continue
+        if fold_name(match.group(1)) != function:
+            continue
+        written, readings = _trace_paths(match.group(2), xvii=xvii, schematic=schematic)
+        owned.append((name, _Owner(name, written, written, readings)))
+    found = _select(signal, owned, lambda path: len(path) if path == want else None)
+    return next(iter(found)) if len(found) == 1 else None
 
 
 def path_text(path: DevicePath) -> str:
@@ -784,7 +927,7 @@ def path_text(path: DevicePath) -> str:
 
 
 def device_names(
-    table_names: Iterable[str], raw_traces: Iterable[str], *, xvii: bool
+    table_names: Iterable[str], raw_traces: Iterable[str], *, xvii: bool, schematic: bool
 ) -> dict[str, dict[str, str | None]]:
     """Each device's name in the log's device table and in the raw's currents.
 
@@ -802,7 +945,7 @@ def device_names(
         )
         entry["op_table"] = name
     for trace in raw_traces:
-        owner = _owner(trace, xvii=xvii)
+        owner = _owner(trace, xvii=xvii, schematic=schematic)
         if owner is None or owner.port or owner.param is not None:
             continue
         key = path_text(owner.path)

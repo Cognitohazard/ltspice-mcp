@@ -2752,7 +2752,8 @@ def _with_observations(
 async def _results_page(query: ResultsQuery, state: SessionState, view: _View) -> dict[str, Any]:
     log_view = query.view in ("measurements", "native_tables")
     if query.path is not None:
-        source = services.resolve_analysis_source(
+        source = await asyncio.to_thread(
+            services.resolve_analysis_source,
             state,
             raw_file=None if log_view else query.path,
             log_file=query.path if log_view else None,

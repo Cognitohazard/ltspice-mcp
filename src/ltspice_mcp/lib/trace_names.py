@@ -25,6 +25,7 @@ from typing import Literal
 from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.deck_nodes import GROUND_NAMES
 from ltspice_mcp.lib.device_names import (
+    AmbiguousName,
     device_param_name,
     find_trace_by_path,
     fold_name,
@@ -166,7 +167,7 @@ def is_node_voltage(name: str, declared: str | None, *, axis: bool = False) -> b
     return trace_quantity(name, declared, axis=axis) == "node_voltage"
 
 
-def find_trace(names: Sequence[str], signal: str, *, xvii: bool) -> str | None:
+def find_trace(names: Sequence[str], signal: str, *, xvii: bool, schematic: bool) -> str | None:
     """The name among ``names`` that ``signal`` addresses, or None.
 
     Lookup is case-insensitive: SPICE node names are case-insensitive per
@@ -174,8 +175,13 @@ def find_trace(names: Sequence[str], signal: str, *, xvii: bool) -> str | None:
     LTspice writes ``V(out)`` for transient/AC/DC sweep raws but ``v(onoise)``
     for ``.NOISE`` raws — case-sensitive match would reject the user's
     ``V(onoise)`` even though the data exists. ``xvii`` is for names a build
-    wrote that names subcircuit members as XVII does. The one rule behind
-    every reader that finds a trace or an operating-point value by name.
+    wrote that names subcircuit members as XVII does, ``schematic`` for a
+    result of a run of a schematic, whose instances a name may read two ways
+    (``device_names.instance_readings``). A name the result writes reads that
+    trace first; one whose other readings reach more than one trace reads
+    none, and the refusal names them (:func:`ambiguous_candidates`). The one
+    rule behind every reader that finds a trace or an operating-point value
+    by name.
     """
     if signal in names:
         return signal
@@ -209,10 +215,30 @@ def find_trace(names: Sequence[str], signal: str, *, xvii: bool) -> str | None:
         found = {
             trace
             for spelled in spellings
-            if (trace := find_trace(names, spelled, xvii=xvii)) is not None
+            if (trace := find_trace(names, spelled, xvii=xvii, schematic=schematic)) is not None
         }
         return found.pop() if len(found) == 1 else None
-    return find_trace_by_path(names, signal, xvii=xvii) or device_param_name(names, signal, xvii=xvii)
+    try:
+        return find_trace_by_path(
+            names, signal, xvii=xvii, schematic=schematic
+        ) or device_param_name(names, signal, xvii=xvii, schematic=schematic)
+    except AmbiguousName:
+        return None
+
+
+def ambiguous_candidates(
+    names: Sequence[str], signal: str, *, xvii: bool, schematic: bool
+) -> tuple[str, ...]:
+    """The instances ``signal`` could name among ``names`` when it names none
+    as the result writes them and more than one once an instance's X is read
+    otherwise, each as the result writes it; empty otherwise. What a refusal
+    of such a name says (:func:`find_trace`)."""
+    try:
+        find_trace_by_path(names, signal, xvii=xvii, schematic=schematic)
+        device_param_name(names, signal, xvii=xvii, schematic=schematic)
+    except AmbiguousName as exc:
+        return exc.candidates
+    return ()
 
 
 Refusal = Literal["missing", "expression", "step_value", "ground_twice", "noise_pair"]
@@ -251,6 +277,7 @@ def read_in_plot(plot: RawPlotHeader, signal: str) -> NameRead:
         signal_names(plot),
         signal,
         xvii=writes_xvii_command(dict(plot.fields)),
+        schematic=plot_names_sheet_parts(plot),
         step_values=step_variables(plot),
         noise=header_analysis(plot) == "noise",
     )
@@ -261,6 +288,7 @@ def read_name(
     signal: str,
     *,
     xvii: bool,
+    schematic: bool,
     step_values: Sequence[str] = (),
     noise: bool = False,
 ) -> NameRead:
@@ -272,12 +300,20 @@ def read_name(
     hold each step's stepped value, and ``noise`` says the traces are noise
     densities; ``xvii`` is ``find_trace``'s.
     """
-    trace = find_trace(names, signal, xvii=xvii)
+    trace = find_trace(names, signal, xvii=xvii, schematic=schematic)
     if trace is not None:
         return NameRead(trace, trace)
     pair = NODE_PAIR_RE.fullmatch(signal)
     if pair is not None:
-        return _node_pair(names, signal, pair.group(1), pair.group(2), xvii=xvii, noise=noise)
+        return _node_pair(
+            names,
+            signal,
+            pair.group(1),
+            pair.group(2),
+            xvii=xvii,
+            schematic=schematic,
+            noise=noise,
+        )
     if looks_like_expression(signal):
         return NameRead(signal, refused="expression")
     if fold_name(signal) in {fold_name(name) for name in step_values}:
@@ -286,12 +322,22 @@ def read_name(
 
 
 def _node_pair(
-    names: Sequence[str], signal: str, plus_node: str, minus_node: str, *, xvii: bool, noise: bool
+    names: Sequence[str],
+    signal: str,
+    plus_node: str,
+    minus_node: str,
+    *,
+    xvii: bool,
+    schematic: bool,
+    noise: bool,
 ) -> NameRead:
     """``V(plus_node, minus_node)`` read from the two node voltages among
     ``names``. A name a deck reads as ground (``deck_nodes``) that the result
     carries no voltage for contributes nothing, so ``V(a,0)`` is ``V(a)``."""
-    traces = {node: find_trace(names, f"V({node})", xvii=xvii) for node in (plus_node, minus_node)}
+    traces = {
+        node: find_trace(names, f"V({node})", xvii=xvii, schematic=schematic)
+        for node in (plus_node, minus_node)
+    }
     grounded = {
         node for node, trace in traces.items() if trace is None and fold_name(node) in GROUND_NAMES
     }
@@ -375,6 +421,17 @@ def _missing_note(plot: RawPlotHeader, signal: str) -> str:
 
     if note := naming_note(plot, signal):
         return note
+    if candidates := ambiguous_candidates(
+        signal_names(plot),
+        signal,
+        xvii=writes_xvii_command(dict(plot.fields)),
+        schematic=plot_names_sheet_parts(plot),
+    ):
+        return (
+            f" It names nothing as this result writes it, and once an instance's X is "
+            f"read otherwise it could be any of {', '.join(candidates)}: name one as "
+            "the result writes it."
+        )
     lowered = fold_name(signal)
     device = parse_shorthand(lowered)
     if device or "@" in lowered:
@@ -593,6 +650,20 @@ def from_schematic(plot: RawPlotHeader) -> bool:
     return titled_from_schematic(dict(plot.fields))
 
 
+def names_sheet_parts(fields: Mapping[str, object], dialect: str) -> bool:
+    """Whether the instances a result names may be a schematic's parts as
+    well as its cards (``device_names.instance_readings``): a result LTspice
+    wrote (``dialect``) of a run of a schematic, as its title says
+    (:func:`titled_from_schematic`). ngspice keeps every card's whole name,
+    whatever its deck came from. The one answer every reader of a name asks."""
+    return dialect == "ltspice" and titled_from_schematic(fields)
+
+
+def plot_names_sheet_parts(plot: RawPlotHeader) -> bool:
+    """:func:`names_sheet_parts` of a plot's header."""
+    return names_sheet_parts(dict(plot.fields), plot.dialect)
+
+
 def titled_from_schematic(fields: Mapping[str, object]) -> bool:
     """Whether the raw whose header's fields are ``fields`` (names in any
     case) is of a run of a schematic, as its title says.
@@ -637,6 +708,7 @@ def _pin_note(plot: RawPlotHeader, signal: str) -> str:
         signal_names(plot),
         f"Ix({instance}:{pin})",
         xvii=writes_xvii_command(dict(plot.fields)),
+        schematic=plot_names_sheet_parts(plot),
     )
     respelled = None
     if current is None and not pins:

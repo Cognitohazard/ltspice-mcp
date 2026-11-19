@@ -2125,7 +2125,8 @@ async def handle_plot_waveform(args: PlotWaveformInput, state: SessionState):
         run_index = case.identity["run_index"]
         netlist: Path | None = case.netlist
     else:
-        source = _direct_source(
+        source = await asyncio.to_thread(
+            _direct_source,
             args.path,
             args.job_id,
             state,

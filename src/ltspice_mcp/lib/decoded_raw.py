@@ -9,6 +9,8 @@ This module neither reads files nor constructs third-party readers.
 
 from __future__ import annotations
 
+import copy
+import dataclasses
 import math
 import re
 from collections.abc import Mapping, Sequence
@@ -300,9 +302,11 @@ def _coordinate_facts(wave: NDArray, boundaries: tuple[int, ...]) -> tuple[bool,
     return True, "nonmonotonic"
 
 
-def unresolved_steps_reason(stepped: str | None) -> str:
+def unresolved_steps_reason(stepped: str | None, *, absent_log: str | None = None) -> str:
     """Why a stepped plot whose kind is ``stepped`` (its ``stepped_kind``)
     cannot be read a step at a time, and what to read instead, where it shows.
+    ``absent_log`` names the log the read looked for beside the results file
+    and did not find (``raw_parser.run_log_path``).
 
     The operating-point raw of a stepped ``.tran`` or ``.ac`` on LTspice 26
     is one point that does not say whose step it is.
@@ -313,6 +317,13 @@ def unresolved_steps_reason(stepped: str | None) -> str:
             "This operating-point raw of a stepped run holds one point and does not say "
             "which step it is, as LTspice writes a stepped .tran's or .ac's .op.raw. For "
             "an operating point at each step, run .op under the same .step."
+        )
+    if absent_log is not None:
+        return (
+            "Step boundaries are unresolved: the run's log, which says where each step "
+            f"starts, was looked for as {absent_log} beside the results file and is not "
+            "there, and without it the steps of this plot cannot be told apart. Put the "
+            "run's log there; this plot supports inventory only"
         )
     return "Step boundaries are unresolved; this plot supports inventory only"
 
@@ -401,6 +412,8 @@ class DecodedPlot:
     _traces: tuple[DecodedTrace, ...]
     _has_step_metadata: bool
     _stored_waves: tuple[NDArray, ...]
+    #: The refusal of a step read where the boundaries are unresolved.
+    _unresolved: str
 
     def __init__(
         self,
@@ -503,6 +516,7 @@ class DecodedPlot:
         object.__setattr__(self, "_has_step_metadata", steps is not None)
         object.__setattr__(self, "_stored_waves", tuple(waves))
         refusal = unresolved_steps_reason(descriptor.stepped_kind)
+        object.__setattr__(self, "_unresolved", refusal)
         object.__setattr__(
             self,
             "_traces",
@@ -511,6 +525,29 @@ class DecodedPlot:
                 for t, w in zip(traces, arrays, strict=True)
             ),
         )
+
+    def without_log(self, looked_for: str) -> DecodedPlot:
+        """This plot as read with no log beside it, which the read looked
+        for as ``looked_for``: a plot whose steps cannot be told apart says
+        so in its refusal; any other plot is itself."""
+        if self.descriptor.completeness != "step_metadata_missing":
+            return self
+        # One copy a name, kept with the plot, so every read of one cached
+        # capture under one name sees the same plot.
+        noted: dict[str, DecodedPlot] = self.__dict__.setdefault("_noted", {})
+        if looked_for in noted:
+            return noted[looked_for]
+        refusal = unresolved_steps_reason(self.descriptor.stepped_kind, absent_log=looked_for)
+        plot = copy.copy(self)
+        object.__setattr__(plot, "_noted", noted)
+        object.__setattr__(plot, "_unresolved", refusal)
+        object.__setattr__(
+            plot,
+            "_traces",
+            tuple(dataclasses.replace(trace, _unresolved=refusal) for trace in self._traces),
+        )
+        noted[looked_for] = plot
+        return plot
 
     @property
     def dialect(self) -> str:
@@ -574,7 +611,7 @@ class DecodedPlot:
         each of its values, matched as a step selector matches a value
         (``step_values.steps_with``)."""
         if not self.descriptor.steps:
-            raise ResultError(unresolved_steps_reason(self.descriptor.stepped_kind))
+            raise ResultError(self._unresolved)
         steps = self.descriptor.steps
         found = steps_with([dict(step.parameters) for step in steps], kwargs)
         return [steps[position].index for position in found]
@@ -626,6 +663,14 @@ class DecodedRaw:
 
     def select_plot(self, plot_index: int) -> DecodedRaw:
         return DecodedRaw(self.plots, plot_index=plot_index, logs=self.logs)
+
+    def without_log(self, looked_for: str) -> DecodedRaw:
+        """This result as read with no log beside it (``DecodedPlot.without_log``);
+        itself where no plot's refusal changes."""
+        plots = [plot.without_log(looked_for) for plot in self.plots]
+        if all(new is old for new, old in zip(plots, self.plots, strict=True)):
+            return self
+        return DecodedRaw(plots, plot_index=self.plot_index, logs=self.logs)
 
     def get_plot_names(self) -> list[str]:
         return [p.header.plot_name for p in self.plots]

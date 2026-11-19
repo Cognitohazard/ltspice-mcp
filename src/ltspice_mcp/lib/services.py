@@ -236,7 +236,9 @@ def source_for_raw_path(
     not find is refused (``parser_service``); only the contained capture worker
     reads writer evidence. Session simulator defaults are not provenance.
     The log and console output are the run's (``raw_parser.run_log_path``),
-    beside an other raw of the run (``.op.raw``, ``.fra_1.raw``) too.
+    beside an other raw of the run (``.op.raw``, ``.fra_1.raw``) too. Blocking:
+    it looks for a log of the file's own name, so a coroutine calls it, and
+    :func:`resolve_analysis_source`, in a thread.
     """
     log = run_log_path(raw)
     return AnalysisSource(
@@ -1492,7 +1494,7 @@ async def load_artifacts(
 
 async def load_raw(source: AnalysisSource, state: SessionState) -> DecodedRaw:
     """Load a selected resident plot and its same-capture log facts."""
-    return select_raw(await load_artifacts(source, state, require_raw=True), source.plot_index)
+    return source_raw(source, await load_artifacts(source, state, require_raw=True))
 
 
 def load_raw_sync(source: AnalysisSource, state: SessionState) -> DecodedRaw:
@@ -1500,8 +1502,24 @@ def load_raw_sync(source: AnalysisSource, state: SessionState) -> DecodedRaw:
     deadline = _raw_deadline()
     captured = _resident_artifacts(source, require_raw=True, deadline=deadline)
     if captured is not None:
-        return select_raw(captured, source.plot_index)
-    return _parse_raw_sync(source, state, deadline=deadline)
+        return source_raw(source, captured)
+    return _as_read_from(source, _parse_raw_sync(source, state, deadline=deadline))
+
+
+def source_raw(source: AnalysisSource, artifacts: ParsedArtifacts) -> DecodedRaw:
+    """The plot ``source`` selects of ``artifacts``, as ``source`` reads it
+    (:func:`_as_read_from`): what every reader of a source's results takes."""
+    return _as_read_from(source, select_raw(artifacts, source.plot_index))
+
+
+def _as_read_from(source: AnalysisSource, raw: DecodedRaw) -> DecodedRaw:
+    """``raw`` as ``source`` reads it: where the read found no log under the
+    name the source gives it (``raw_parser.run_log_path``), a plot whose steps
+    cannot be told apart names that log in its refusal. The capture, which a
+    cache shares between sources, holds no file name."""
+    if source.log is None or raw.logs is None or "log" not in raw.logs.captured.absent:
+        return raw
+    return raw.without_log(source.log.name)
 
 
 async def read_steps(

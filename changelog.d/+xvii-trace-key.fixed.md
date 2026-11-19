@@ -1,8 +1,20 @@
-The Python API's `compare` now pairs the traces of an LTspice XVII run of a
-schematic with another run's. XVII writes a part the sheet names `X1` or
-`MB1` under that name (`Ix(x1:IN)`, `Id(mb1:M1)`), and the server read every
-XVII instance as one whose X was dropped, so such a trace did not pair. The
-name does not say whether such an instance is a part of the sheet or a card a
-directive on it wrote, so the trace now pairs with the one trace either
-reading names; a trace that could be more than one is not compared, and is
-listed under `ambiguous` with the traces it could be.
+Names inside a block placed on a schematic are now read alike on LTspice 26
+and XVII. Such a run writes a part the sheet names `X1` or `MB1` under that
+name (`Ix(x1:IN)`, `Id(mb1:M1)`) and a card a directive on the sheet writes
+under its own, and the name does not say which an instance is.
+
+- A name the result writes stands for that trace, device or instance first.
+  One that matches nothing as written is read with an instance's X put back
+  or dropped, so the netlist's spelling (`Ix(xx1:in)`, `xmb1.m1.gm`,
+  `device="xmb1"`) reads the part on either build. Where those readings reach
+  more than one instance, the read is refused and names each one instead of
+  merging them.
+- A device's table values and its currents are selected by the same names,
+  so `device="mb1"` on an XVII sheet run keeps both, and `mb1.m1.gm` reads
+  the value.
+- The Python API's `compare` pairs a trace with the trace of its own name
+  when both results are of one build and one kind of run, and otherwise by
+  the instances each name may stand for, so two runs of one sheet on
+  LTspice 26 and XVII now pair. A trace that could be more than one is not
+  compared and is listed under `ambiguous` with the traces it could be,
+  whether or not `signals` was given.
