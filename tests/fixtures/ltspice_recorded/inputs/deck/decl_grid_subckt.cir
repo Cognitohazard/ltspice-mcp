@@ -1,0 +1,10 @@
+* a subcircuit whose default follows its ports with no params:, used and overridden
+.subckt simp top r=2k
+R1 top 0 {r}
+.ends
+I1 0 n01 1
+X1 n01 simp
+I2 0 n02 1
+X2 n02 simp r=4k
+.op
+.end

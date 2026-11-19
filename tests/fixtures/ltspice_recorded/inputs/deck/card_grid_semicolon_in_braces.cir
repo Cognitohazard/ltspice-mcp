@@ -1,0 +1,6 @@
+* a semicolon inside braces, the braces closed on the next line
+I01 0 n01 1
+R01 n01 0 {1k ; 5k
++ +1k}
+.op
+.end

@@ -1,0 +1,23 @@
+* a .model card's parameters in parentheses and bare, and its level as a number and computed
+.op
+.param lv=8
+Ia 0 n01 1m
+Sa n01 0 c01 0 swp
+Va c01 0 1
+.model swp SW(Ron=2k Roff=1G Vt=0.5 Vh=0)
+Ib 0 n02 1m
+Sb n02 0 c02 0 swb
+Vb c02 0 1
+.model swb SW Ron=3k Roff=1G Vt=0.5 Vh=0
+Vdd vdd 0 5
+Vgg gg 0 2
+R1 vdd n03 10k
+M1 n03 gg 0 0 mone
+R2 vdd n04 10k
+M2 n04 gg 0 0 mlit
+R3 vdd n05 10k
+M3 n05 gg 0 0 mcomp
+.model mone NMOS(level=1 kp=100u vto=1)
+.model mlit NMOS(level=8 kp=100u vto=1)
+.model mcomp NMOS(level={lv} kp=100u vto=1)
+.end

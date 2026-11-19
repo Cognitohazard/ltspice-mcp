@@ -1,0 +1,1 @@
+Three more grids of recorded LTspice inputs for what a deck says: which lines are cards and which directive a card is, how many nodes an element takes and what follows them, and what a `.param`, `.model` or `.subckt` card declares.
