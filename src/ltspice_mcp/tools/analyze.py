@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import copy
 import functools
+import json
 import math
 import os
 import re
@@ -1794,6 +1795,49 @@ def _log_precision_observations(records: list[Record]) -> list[Observation]:
                 "run_count": len(runs),
             },
         )
+    ]
+
+
+#: The kinds of a value's observation that the reply carries at its top level.
+_LIFTED_KINDS = frozenset({"reconciliation", "coverage"})
+
+
+def _value_observations(key: str, records: list[Record]) -> list[Observation]:
+    """The observations a recipe's metric made of its rows' values that say
+    whether a row answers what was asked: a ``reconciliation`` (the answer is
+    not of the quantity asked about, such as a stability margin that is not
+    the one LTspice printed) or a ``coverage`` (a check that did not run). Each
+    is given once, naming the recipe and every row it was made of.
+
+    A lean row leaves the lists of its value out, so this is where they reach
+    the reply. A value's other observations (a fit's description, a relayed
+    log line the reply already relays) stay in the value.
+    """
+    grouped: dict[tuple[str, str, str, str], tuple[dict[str, Any], list[dict[str, Any]]]] = {}
+    for record in records:
+        for item in record.value.get("observations") or []:
+            if not isinstance(item, Mapping) or item.get("kind") not in _LIFTED_KINDS:
+                continue
+            evidence = dict(item.get("evidence") or {})
+            group = (
+                str(item.get("code", "")),
+                str(item.get("kind", "")),
+                str(item.get("detail", "")),
+                json.dumps(evidence, sort_keys=True, default=str),
+            )
+            where = {"source": record.source}
+            for name in ("case_id", "step_index"):
+                if (value := getattr(record.identity, name)) is not None:
+                    where[name] = value
+            grouped.setdefault(group, (evidence, []))[1].append(where)
+    return [
+        Observation(
+            code=code,
+            kind=kind,
+            detail=detail,
+            evidence={**evidence, "recipe": key, "rows": rows},
+        )
+        for (code, kind, detail, _), (evidence, rows) in grouped.items()
     ]
 
 
@@ -4281,6 +4325,7 @@ async def _evaluate_unit(
     )
     failures.extend(item_failures)
     observations.extend(_absence_observations(recipe, key, records))
+    observations.extend(_value_observations(key, records))
     observations.extend(_log_precision_observations(records))
     observations.extend(
         await asyncio.to_thread(

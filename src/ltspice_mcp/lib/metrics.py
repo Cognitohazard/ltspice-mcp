@@ -24,15 +24,18 @@ value the maths produced.
 from __future__ import annotations
 
 import asyncio
+import cmath
 import contextlib
 import math
+import re
 from collections.abc import Callable, Collection, Coroutine, Mapping, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal, NoReturn, TypeAlias
 
 import numpy as np
 
-from ltspice_mcp.errors import NoAxisError, ResultError
+from ltspice_mcp.errors import LTSpiceMCPError, NoAxisError, ResultError
 from ltspice_mcp.lib import services
 from ltspice_mcp.lib.ac_analysis import (
     HALF_POWER_DB,
@@ -491,21 +494,100 @@ async def load_real_signal(
     return axis, wave
 
 
-def split_ratio(signal: str) -> tuple[str, str] | None:
-    """Split a transfer-function ratio ``A/B`` into ``(A, B)``, or None if it
-    isn't a ratio.
+@dataclass(frozen=True)
+class SignalExpression:
+    """What a recipe's ``signal`` names: ``numerator / denominator``, negated
+    or not. ``numerator`` None is the constant 1 (``1/A``); ``denominator``
+    None divides by nothing (``A``). Each operand is one signal as the raw
+    names it, a node pair included."""
 
-    Only a single ``/`` is supported — a two-signal quotient such as
-    ``V(out)/V(mid)``. SPICE node names don't contain ``/``, so the operator is
-    unambiguous. A ``/`` that doesn't yield exactly two non-empty operands is a
-    malformed ratio, not a plain signal, so it raises.
+    numerator: str | None
+    denominator: str | None = None
+    negated: bool = False
+
+    @property
+    def operands(self) -> tuple[str, ...]:
+        return tuple(name for name in (self.numerator, self.denominator) if name is not None)
+
+    @property
+    def unsigned(self) -> str:
+        """The expression without its sign, as a caller writes it."""
+        if self.denominator is None:
+            return self.numerator or "1"
+        return f"{self.numerator or '1'}/{self.denominator}"
+
+    @property
+    def text(self) -> str:
+        return f"-{self.unsigned}" if self.negated else self.unsigned
+
+    def forms(self) -> list[SignalExpression]:
+        """This expression, its negative, its reciprocal and its negative
+        reciprocal: the four ways a gain measured facing either way can be
+        written, in that order."""
+        reciprocal = SignalExpression(self.denominator, self.numerator, self.negated)
+        return [
+            self,
+            replace(self, negated=not self.negated),
+            reciprocal,
+            replace(reciprocal, negated=not reciprocal.negated),
+        ]
+
+
+def signal_expression(signal: str) -> SignalExpression:
+    """Read a recipe's ``signal``: ``A``, ``A/B`` or ``1/A``, each optionally
+    under one leading ``-`` that negates the whole expression. ``A`` and ``B``
+    are signals as the raw names them (``V(out)``, ``V(inp,inn)``,
+    ``gain_1``); SPICE node names hold no ``/``, so the operator is
+    unambiguous.
+
+    The one reader of these operators: every recipe that reads a ratio asks
+    here, so each reads the same forms the same way. No other operator is
+    read; a ``/`` that does not give two operands, a second ``-``, or a ``-``
+    on the denominator alone is refused rather than read as a trace name.
     """
-    if "/" not in signal:
-        return None
-    parts = [p.strip() for p in signal.split("/")]
+    text = signal.strip()
+    negated = text.startswith("-")
+    if negated:
+        text = text[1:].lstrip()
+    if not text:
+        raise ResultError(
+            f"Signal {signal!r} names nothing; expected 'A', 'A/B' or '1/A', each "
+            "optionally with one leading '-'."
+        )
+    if text.startswith("-"):
+        raise ResultError(
+            f"Signal {signal!r} has more than one leading '-'; one '-' negates the "
+            "whole expression."
+        )
+    if "/" not in text:
+        return SignalExpression(text, None, negated)
+    parts = [part.strip() for part in text.split("/")]
     if len(parts) != 2 or not all(parts):
-        raise ResultError(f"Ratio signal must be exactly 'A/B' (two signals); got {signal!r}.")
-    return parts[0], parts[1]
+        raise ResultError(
+            f"A ratio signal is 'A/B' or '1/A', two operands and one '/'; got {signal!r}."
+        )
+    numerator, denominator = parts
+    if denominator.startswith("-"):
+        raise ResultError(
+            f"Signal {signal!r} negates its denominator; only a '-' leading the whole "
+            f"signal negates it: write '-{numerator}/{denominator[1:].lstrip()}'."
+        )
+    if denominator == "1":
+        raise ResultError(
+            f"Signal {signal!r} divides by 1; name {numerator!r} alone.", show_hint=False
+        )
+    return SignalExpression(None if numerator == "1" else numerator, denominator, negated)
+
+
+def _singular_ratio(expression: SignalExpression, denominator: str, where: str) -> ResultError:
+    """The refusal of a ratio whose denominator is zero where it is read: a
+    pole of the requested transfer function, which a recipe reports rather
+    than read around."""
+    return ResultError(
+        f"Ratio {expression.unsigned} is singular {where}: the denominator "
+        f"{denominator} is ~0 there, so the transfer function has a pole. Narrow the "
+        "window to exclude the null, or pick a denominator that does not cross zero."
+    )
 
 
 async def load_ac_signal(
@@ -516,24 +598,17 @@ async def load_ac_signal(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Load ``(freqs, H)`` for an AC signal. Rejects transient data.
 
-    ``signal`` may be a single trace (``V(out)``) or a transfer-function ratio
-    of two traces (``V(out)/V(mid)``), in which case the two complex AC waves
-    are divided element-wise — the way to express an inter-stage gain, loop
-    gain, or PSRR that the simulator never stores as its own trace. Either
-    side may be a node pair, so an open-loop gain reads as
-    ``V(out)/V(inp,inn)``.
-
-    A single leading ``-`` negates the whole expression (``-V(out)/V(vsense)``
-    is −(V(out)/V(vsense))): a 180° phase flip, so a loop gain probed with an
-    inverting sense or a reversed impedance probe reads in its natural
-    convention without a behavioral inverter node in the deck.
+    ``signal`` is read by :func:`signal_expression`: a single trace (``V(out)``), a
+    transfer-function ratio of two traces (``V(out)/V(mid)``), whose two
+    complex AC waves are divided element-wise, or a reciprocal (``1/V(out)``).
+    A ratio is the way to express an inter-stage gain, loop gain or PSRR that
+    the simulator never stores as its own trace, and either side may be a node
+    pair, so an open-loop gain reads as ``V(out)/V(inp,inn)``. A leading ``-``
+    negates the whole expression: a 180° phase flip, so a loop gain probed with
+    an inverting sense reads in its natural convention without a behavioral
+    inverter node in the deck.
     """
-    signal = signal.strip()
-    negate = signal.startswith("-")
-    if negate:
-        signal = signal[1:].lstrip()
-        if not signal:
-            raise ResultError("Signal is just a '-'; expected '-V(node)' or '-A/B'.")
+    expression = signal_expression(signal)
     raw = await services.load_raw(source, state)
     if not is_ac_analysis(raw):
         # show_hint=False: precise redirect; the generic hint would misdirect.
@@ -545,13 +620,19 @@ async def load_ac_signal(
     services.validate_step(raw, step)
     axis = guarded_axis(raw, step)
 
-    ratio = split_ratio(signal)
-    if ratio is not None:
-        num = services.resolve_signal(raw, ratio[0]).wave(raw, step)
-        den_signal = services.resolve_signal(raw, ratio[1])
+    numerator = (
+        None
+        if expression.numerator is None
+        else services.resolve_signal(raw, expression.numerator).wave(raw, step)
+    )
+    if expression.denominator is None:
+        assert numerator is not None
+        wave = numerator
+    else:
+        den_signal = services.resolve_signal(raw, expression.denominator)
         den = den_signal.wave(raw, step)
         with np.errstate(divide="ignore", invalid="ignore"):
-            wave = num / den
+            wave = (1.0 if numerator is None else numerator) / den
         # A null (or non-finite) denominator makes the ratio singular at those
         # bins — a genuine pole of the requested transfer function.
         # prepare_ac_arrays would silently drop them and analyze the rest,
@@ -559,18 +640,13 @@ async def load_ac_signal(
         # (which frequencies, how many) instead of fabricating clean numbers.
         singular = ~np.isfinite(wave)
         if singular.any():
-            axis_real = np.real(axis)
-            example = float(axis_real[int(np.argmax(singular))])
-            raise ResultError(
-                f"Ratio {ratio[0]}/{ratio[1]} is singular at {int(singular.sum())} of "
-                f"{singular.size} frequencies — the denominator {den_signal.name} is ~0 there "
-                f"(e.g. {example:.6g} Hz), so the transfer function has a pole. Narrow "
-                f"the frequency window to exclude the null, or pick a denominator that "
-                f"does not cross zero."
+            example = float(np.real(axis)[int(np.argmax(singular))])
+            raise _singular_ratio(
+                expression,
+                den_signal.name,
+                f"at {int(singular.sum())} of {singular.size} frequencies (e.g. {example:.6g} Hz)",
             )
-    else:
-        wave = services.resolve_signal(raw, signal).wave(raw, step)
-    if negate:
+    if expression.negated:
         wave = -wave
     try:
         return prepare_ac_arrays(axis, wave)
@@ -1796,21 +1872,155 @@ async def thd(
     return await relay_solve_failures(source, data, state)
 
 
+async def tone_frequency(
+    source: services.AnalysisSource,
+    recipe: ToneRecipe,
+    step: int,
+    state: SessionState,
+) -> float:
+    """The frequency a ``tone`` recipe reads at one step of one run, in Hz.
+
+    ``frequency_hz`` is the same for every run. ``frequency_param`` names a
+    parameter whose value at this step of this run is the frequency: the
+    step's value in a stepped deck, which is the value the run had there,
+    else the case's assignment. A run that has neither is refused.
+    """
+    if recipe.frequency_param is None:
+        assert recipe.frequency_hz is not None
+        return parse_freq(recipe.frequency_hz, "frequency_hz")
+    wanted = fold_name(recipe.frequency_param)
+    raw = await services.load_raw(source, state)
+    steps = raw.descriptor.steps
+    stepped = dict(steps[step].parameters) if step < len(steps) else {}
+    assignments = dict((source.identity or {}).get("assignments") or {})
+    for where, values in ((f"step {step}", stepped), ("the case's assignments", assignments)):
+        for name, value in values.items():
+            if fold_name(str(name)) == wanted:
+                return parse_freq(value, f"frequency_param {name!r} ({where})")
+    raise ResultError(
+        f"frequency_param {recipe.frequency_param!r}: this run neither steps nor assigns "
+        f"it (stepped: {', '.join(map(str, stepped)) or 'none'}; assigned: "
+        f"{', '.join(map(str, assignments)) or 'none'}). Name a parameter the run steps "
+        "or its case assigns, or give the frequency as frequency_hz.",
+        show_hint=False,
+    )
+
+
+#: Below this share of its peak, a ratio's denominator carries little of the
+#: frequency read, and the reply says so.
+_SMALL_DENOMINATOR = 1e-3
+
+
+def _tone_phasor(value: Mapping[str, Any]) -> complex:
+    """A tone as the complex amplitude of ``amplitude*sin(2*pi*f*t + phase)``:
+    ``sin_component + j*cos_component``."""
+    return complex(value["sin_component"], value["cos_component"])
+
+
 async def tone(
     source: services.AnalysisSource,
     recipe: ToneRecipe,
     step: int,
     state: SessionState,
 ) -> MetricValue:
-    """Amplitude and phase of one frequency over the window's whole periods."""
+    """Amplitude and phase of one frequency over the window's whole periods.
+
+    A ratio (``A/B``, ``1/A``, read by :func:`signal_expression`) is the phasor of
+    ``A`` divided by that of ``B``, both taken over the same whole periods of
+    the same samples: the gain and phase shift from ``B`` to ``A`` at that
+    frequency, with no ``dc``.
+    """
+    expression = signal_expression(recipe.signal)
+    frequency = await tone_frequency(source, recipe, step, state)
     t_start, t_end = window_bounds(recipe.window)
-    axis, wave = await load_real_signal(source, recipe.signal, step, state)
-    t, y, _ = apply_window(axis, wave, t_start, t_end)
-    frequency = parse_freq(recipe.frequency_hz, "frequency_hz")
-    data = await run_metric(source, state, analyze_tone, t, y, frequency)
-    data["signal"] = recipe.signal
-    await _label_unit(source, recipe.signal, data, state)
+
+    async def one(signal: str) -> tuple[MetricValue, float]:
+        axis, wave = await load_real_signal(source, signal, step, state)
+        t, y, _ = apply_window(axis, wave, t_start, t_end)
+        found = await run_metric(source, state, analyze_tone, t, y, frequency)
+        return found, float(np.max(np.abs(y))) if y.size else 0.0
+
+    if expression.denominator is None:
+        assert expression.numerator is not None
+        data, _ = await one(expression.numerator)
+        if expression.negated:
+            for key in ("sin_component", "cos_component", "dc"):
+                data[key] = -data[key]
+            data["phase_deg"] = _wrapped_degrees(data["phase_deg"] + 180.0)
+        data["signal"] = recipe.signal
+        await _label_unit(source, expression.numerator, data, state)
+        return await relay_solve_failures(source, data, state)
+
+    den, den_peak = await one(expression.denominator)
+    den_phasor = _tone_phasor(den)
+    if abs(den_phasor) <= 1e-9 * den_peak:
+        raw = await services.load_raw(source, state)
+        raise _singular_ratio(
+            expression,
+            services.resolve_signal(raw, expression.denominator).name,
+            f"at {frequency:g} Hz (the denominator's amplitude there is "
+            f"{abs(den_phasor):.3g} against a peak of {den_peak:.3g})",
+        )
+    num = None if expression.numerator is None else (await one(expression.numerator))[0]
+    ratio = (1.0 if num is None else _tone_phasor(num)) / den_phasor
+    if expression.negated:
+        ratio = -ratio
+    warnings = [
+        f"{name}: {warning}"
+        for name, found in ((expression.numerator, num), (expression.denominator, den))
+        if found is not None
+        for warning in found.get("warnings", [])
+    ]
+    if abs(den_phasor) < _SMALL_DENOMINATOR * den_peak:
+        warnings.append(
+            f"The denominator {expression.denominator} has an amplitude of "
+            f"{abs(den_phasor):.3g} at {frequency:g} Hz, {abs(den_phasor) / den_peak:.2g} of "
+            "its peak: little of it is at that frequency, so the ratio is that of a small "
+            "component and solver noise in it is magnified. Check that the run injects "
+            "this frequency into it."
+        )
+    data = {
+        "frequency_hz": den["frequency_hz"],
+        "amplitude": abs(ratio),
+        "phase_deg": _wrapped_degrees(math.degrees(cmath.phase(ratio))),
+        "sin_component": ratio.real,
+        "cos_component": ratio.imag,
+        "t_start": den["t_start"],
+        "t_end": den["t_end"],
+        "n_cycles": den["n_cycles"],
+        "warnings": warnings,
+        "signal": recipe.signal,
+    }
+    unit = await _ratio_unit(source, expression, state)
+    if unit:
+        data["unit"] = unit
     return await relay_solve_failures(source, data, state)
+
+
+def _wrapped_degrees(degrees: float) -> float:
+    """An angle in (-180, 180], as ``analyze_tone`` gives a phase."""
+    wrapped = math.fmod(degrees + 180.0, 360.0)
+    wrapped = wrapped + 360.0 if wrapped <= 0.0 else wrapped
+    return wrapped - 180.0
+
+
+async def _ratio_unit(
+    source: services.AnalysisSource, expression: SignalExpression, state: SessionState
+) -> str | None:
+    """The unit of a ratio of two signals: none when both share one or either
+    is not known, else ``num/den`` (``1/den`` for a reciprocal)."""
+    units = []
+    for operand in (expression.numerator, expression.denominator):
+        found: MetricValue = {}
+        if operand is not None:
+            await _label_unit(source, operand, found, state)
+        units.append(found.get("unit"))
+    numerator_unit, denominator_unit = units
+    if denominator_unit is None or (expression.numerator is not None and numerator_unit is None):
+        return None  # an operand's unit is not known, so neither is the ratio's
+    if numerator_unit == denominator_unit:
+        return None
+    return f"{numerator_unit or '1'}/{denominator_unit}"
 
 
 async def _label_unit(
@@ -2041,7 +2251,11 @@ async def stability(
     *,
     min_separation_decades: float = 0.1,
 ) -> MetricValue:
-    """Loop-gain margins: unity-gain crossovers, phase margin, gain margin."""
+    """Loop-gain margins: unity-gain crossovers, phase margin, gain margin.
+
+    On a frequency response analysis's results, the margin is checked against
+    the one LTspice printed for the same analyzer (:func:`_fra_margin_check`).
+    """
     freqs, h = await load_ac_signal(source, recipe.signal, step, state)
     data = await run_metric(
         source,
@@ -2052,7 +2266,179 @@ async def stability(
         min_separation_decades=min_separation_decades,
     )
     data["signal"] = recipe.signal
+    raw = await services.load_raw(source, state)
+    if raw.descriptor.analysis == "fra":
+        check = await _fra_margin_check(
+            source,
+            signal_expression(recipe.signal),
+            data,
+            (freqs, h),
+            step,
+            state,
+            min_separation_decades=min_separation_decades,
+        )
+        if check is not None:
+            data.setdefault("observations", []).append(check)
     return await relay_solve_failures(source, data, state)
+
+
+#: An analyzer's gain trace in a frequency response analysis's results:
+#: ``gain_1`` for the analyzer ``@1`` (the recorded raw/fra).
+_FRA_GAIN_TRACE = re.compile(r"gain_(?P<analyzer>\S+)", re.IGNORECASE)
+
+
+async def printed_fra_margin(
+    source: services.AnalysisSource, analyzer: str | None, step: int, state: SessionState
+) -> tuple[dict[str, Any] | None, str]:
+    """The crossover and phase margin LTspice printed for ``analyzer`` (``@1``)
+    at ``step`` of a frequency response analysis, with the last printed digit
+    of each (``log_parser.printed_fra_margins``), or None and why there is
+    none. ``analyzer`` None takes the run's one analyzer, if it has only one.
+    """
+    try:
+        logs = await services.load_logs(source, state)
+        printed = logs.value("fra_margins") or []
+    except LTSpiceMCPError as e:
+        return None, f"its log could not be read: {e}"
+    analyzers = {entry["analyzer"].lower() for entry in printed}
+    if analyzer is None:
+        if len(analyzers) != 1:
+            return None, "the signal names no analyzer's gain_N"
+        (wanted,) = analyzers
+    else:
+        wanted = analyzer.lower()
+    for entry in printed:
+        if entry["analyzer"].lower() == wanted and entry["step"] == step:
+            return entry, ""
+    if wanted in analyzers:
+        return None, f"its log holds no finite margin printed for step {step}"
+    return None, f"its log holds no margin printed for analyzer {analyzer or wanted}"
+
+
+def _agrees(stability: Mapping[str, Any], printed: Mapping[str, Any]) -> tuple[Any, Any, bool]:
+    """The recipe's crossover and phase margin nearest the printed crossover,
+    and whether both are within half a printed digit of LTspice's. The margins
+    are compared as angles, so one printed a turn away from the recipe's still
+    agrees."""
+    margins = stability.get("phase_margins") or []
+    if not margins:
+        return None, None, False
+    target = printed["crossover_hz"]
+    nearest = min(margins, key=lambda margin: abs(margin["frequency_hz"] - target))
+    crossover, margin = nearest["frequency_hz"], nearest["margin_deg"]
+    # Half a digit is the rounding; the 1% beyond it absorbs the binary
+    # representation of a decimal that sits on the boundary.
+    agrees = (
+        abs(crossover - target) <= 0.505 * printed["crossover_digit_hz"]
+        and abs(math.remainder(margin - printed["phase_margin_deg"], 360.0))
+        <= 0.505 * printed["phase_margin_digit_deg"]
+    )
+    return crossover, margin, agrees
+
+
+def _agreeing_forms(
+    expression: SignalExpression,
+    response: tuple[np.ndarray, np.ndarray],
+    printed: Mapping[str, Any],
+    min_separation_decades: float,
+) -> list[str]:
+    """The other three forms of ``expression`` (its negative, reciprocal and
+    negative reciprocal), computed from the response already read, whose
+    margin agrees with the printed one."""
+    freqs, h = response
+    agreeing = []
+    for form, transform in zip(
+        expression.forms()[1:], (lambda x: -x, lambda x: 1 / x, lambda x: -1 / x), strict=True
+    ):
+        with np.errstate(divide="ignore", invalid="ignore"):
+            other = transform(h)
+        if not np.all(np.isfinite(other)):
+            continue
+        try:
+            other_data = compute_stability_metrics(
+                freqs, other, min_separation_decades=min_separation_decades
+            )
+        except (ValueError, ResultError):
+            continue
+        if _agrees(other_data, printed)[2]:
+            agreeing.append(form.text)
+    return agreeing
+
+
+async def _fra_margin_check(
+    source: services.AnalysisSource,
+    expression: SignalExpression,
+    data: MetricValue,
+    response: tuple[np.ndarray, np.ndarray],
+    step: int,
+    state: SessionState,
+    *,
+    min_separation_decades: float,
+) -> dict[str, Any] | None:
+    """Whether ``stability`` read the quantity whose margin LTspice printed.
+
+    Which form of ``gain_N`` is the loop gain the recipe takes is recorded for
+    one way of placing the analyzer only (raw/fra: ``-gain_1``), so it is not
+    established from the results. LTspice prints its own crossover and phase
+    margin in the log; a recipe margin that differs from it beyond the printed
+    digits is of another quantity, and the observation says so, gives both and
+    names the forms whose margin agrees. None when the margins agree.
+    """
+    analyzers = {
+        f"@{match['analyzer']}"
+        for operand in expression.operands
+        if (match := _FRA_GAIN_TRACE.fullmatch(operand)) is not None
+    }
+    analyzer = next(iter(analyzers)) if len(analyzers) == 1 else None
+    printed, why = await printed_fra_margin(source, analyzer, step, state)
+    if printed is None:
+        return {
+            "code": "fra_margin_not_checked",
+            "kind": "coverage",
+            "detail": (
+                f"Not checked against LTspice: {why}, so whether {expression.text} is "
+                "the quantity whose margin LTspice prints is not checked. Which form "
+                "of gain_N that is depends on how the analyzer is placed, which is not "
+                "established from the results."
+            ),
+        }
+    crossover, margin, agrees = _agrees(data, printed)
+    if agrees:
+        return None
+    agreeing = await asyncio.to_thread(
+        _agreeing_forms, expression, response, printed, min_separation_decades
+    )
+    shown = {key: printed[key] for key in ("analyzer", "crossover_hz", "phase_margin_deg")}
+    said = (
+        f"LTspice printed a crossover of {printed['crossover_hz']:g} Hz and a phase margin "
+        f"of {printed['phase_margin_deg']:g}° for {printed['analyzer']}"
+    )
+    got = (
+        "no unity-gain crossover"
+        if crossover is None
+        else f"a crossover of {crossover:.6g} Hz and a phase margin of {margin:.6g}°"
+    )
+    others = [form.text for form in expression.forms()[1:]]
+    try_next = (
+        f"{' and '.join(agreeing)} gives LTspice's margin; read stability on it."
+        if agreeing
+        else f"None of {', '.join(others)} gives it either."
+    )
+    return {
+        "code": "fra_margin_differs",
+        "kind": "reconciliation",
+        "detail": (
+            f"stability on {expression.text} gives {got}, but {said}. They differ beyond "
+            f"the printed digits, so {expression.text} is not the quantity whose margin "
+            f"LTspice printed. {try_next} Which form of gain_N is the loop gain is not "
+            "established from the results; this comparison is the check."
+        ),
+        "evidence": {
+            "found": {"crossover_hz": crossover, "phase_margin_deg": margin},
+            "printed": shown,
+            "agreeing_forms": agreeing,
+        },
+    }
 
 
 async def ac_structure(
