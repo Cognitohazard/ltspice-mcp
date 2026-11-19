@@ -26,17 +26,18 @@ from ltspice_mcp.errors import (
     JobNotFoundError,
     OtherRawNotWritten,
     ResultError,
+    RunNotFinishedError,
 )
 from ltspice_mcp.lib import recent
 from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedPlot, DecodedRaw, RawData
 from ltspice_mcp.lib.experiment_types import (
+    TERMINAL_CASE_STATUSES,
     ExperimentCase,
     ExperimentJob,
     failure_summary,
     partial_raw,
 )
-from ltspice_mcp.lib.job_lifecycle import runs_done
 from ltspice_mcp.lib.log_parser import (
     LogDiagnostics,
     MeasurementsOutput,
@@ -636,7 +637,7 @@ def run_selectors_beside_path(
     )
 
 
-def resolve_experiment_run(
+async def resolve_experiment_run(
     job_id: str,
     state: SessionState,
     *,
@@ -644,9 +645,9 @@ def resolve_experiment_run(
     case_id: str | None = None,
     require_raw: bool = True,
 ) -> RunContext:
-    """Resolve a produced case from any experiment job whose runs are terminal."""
-    job = resolve_job(job_id, state)
-    return experiment_run_context(
+    """Resolve a case of an experiment job that can be read (``case_unreadable``)."""
+    job = await resolve_job_async(job_id, state)
+    return await experiment_run_context(
         job, state, run_index=run_index, case_id=case_id, require_raw=require_raw
     )
 
@@ -679,32 +680,119 @@ def partial_raw_observation(case: ExperimentCase, held: dict[str, Any]) -> dict[
     }
 
 
-def runs_unready(job: ExperimentJob) -> str | None:
-    """Why ``job``'s runs cannot be read yet, or None once they can.
+CaseUnreadableCode = Literal["run_not_finished", "raw_not_produced"]
 
-    The one readiness rule for everything that reads a job's runs by its id:
-    ``analyze_results``, ``inspect``, ``plot_waveform``, the Python API's
-    reads and ``jobs(place_beside_sheet)``. A job's runs are read once every
-    run has finished (``job_lifecycle.runs_done``), which is the moment
-    ``jobs(wait, wait_for="runs")`` returns, and not before: a case read while
-    its siblings still run would be the answer to a different question than
-    the job's. Which of them can be read is then the case's own answer
-    (``case_unreadable``).
+
+@dataclass(frozen=True)
+class CaseUnreadable:
+    """Why a case of a job cannot be read now (``case_unreadable``).
+
+    ``run_not_finished``: its run has not ended, so wait for it.
+    ``raw_not_produced``: its run ended without results a read takes;
+    ``detail`` is its failure summary. Only a case whose simulator's exit was
+    not confirmed may have them later, and its detail says so. ``evidence`` is what a
+    running case's simulator has written so far (``run_progress``' fields),
+    when ``case_refusal`` read it."""
+
+    code: CaseUnreadableCode
+    detail: str
+    evidence: dict[str, Any] | None = None
+
+    def error(self, job: ExperimentJob, case: ExperimentCase) -> ResultError:
+        """The error a read of one case raises with this reason."""
+        if self.code == "run_not_finished":
+            return RunNotFinishedError(self.detail)
+        return ResultError(_no_raw_result(job.job_id, case))
+
+
+def case_unreadable(job: ExperimentJob, case: ExperimentCase) -> CaseUnreadable | None:
+    """Why ``case`` of ``job`` cannot be read now, or None when it can.
+
+    The one answer to "can this case be read, and if not, why", for every read
+    of a job's case: ``inspect(kind="results")``, ``plot_waveform``,
+    ``analyze_results``, the Python API's raw and log reads, and
+    ``jobs(place_beside_sheet)``. It is the case's own answer, whatever its
+    job's status or its sibling cases: a case that produced, or that was
+    stopped and kept what its run wrote (``partial_raw``), is read.
+
+    A case is final once its status is terminal. The coordinator sets a
+    produced status last, after the end-of-run checks
+    (``ExperimentRunner._end_of_run``) have read the log, set ``raw_file`` and
+    ``log_file`` and checked the raw, and after the result digest; a stopped
+    case gets its terminal status after its kept raw is cut and recorded. Until
+    then the case reads ``submitted`` or ``running`` here and in its record,
+    so a case whose files may still change is never read. On WSL the run files
+    are on the Windows side and the reads take them over ``/mnt``; the
+    simulator has exited before its outcome reaches the coordinator, and no
+    copy follows, so a terminal case's files are final there too.
+
+    A case stopped with its exit unconfirmed (``kill_unconfirmed``) is terminal
+    with no raw; a late exit may then keep its partial raw, and the case is
+    read from then on. That holds whatever the job's status, as it did when
+    this gate was the job's.
     """
-    if runs_done(job):
+    if case.status not in TERMINAL_CASE_STATUSES:
+        return CaseUnreadable(
+            code="run_not_finished", detail=_not_finished(job, case, None, read=False)
+        )
+    if case.status == "produced" or partial_raw(case) is not None:
         return None
-    return f"Experiment job {job.job_id!r} has no readable runs yet (status={job.status!r})"
+    detail = failure_summary(case)
+    if case.failure_code == "kill_unconfirmed" and not any(
+        item.get("code") == "late_simulator_exit" for item in case.observations
+    ):
+        detail += (
+            ". Its simulator's exit was not confirmed: if the run keeps a stopped "
+            "case's raw (execution.keep_partial_raw), the case is read once the "
+            "simulator exits"
+        )
+    return CaseUnreadable(code="raw_not_produced", detail=detail)
 
 
-def case_unreadable(case: ExperimentCase) -> str | None:
-    """Why a read of ``case``, of a job whose runs are done, takes no raw, or
-    None when it does: the case produced one, or was stopped and kept what its
-    run wrote (``partial_raw``). The answer is the case's failure summary."""
-    readable = case.status == "produced" or partial_raw(case) is not None
-    return None if readable else failure_summary(case)
+async def case_refusal(job: ExperimentJob, case: ExperimentCase) -> CaseUnreadable | None:
+    """``case_unreadable``, with what a running case's simulator has written so
+    far (``experiment_runner.live_run_progress``), read off the loop. The
+    answer is ``case_unreadable``'s; only the refusal's wording gains the
+    facts."""
+    refusal = case_unreadable(job, case)
+    if refusal is None or refusal.code != "run_not_finished" or case.status == "queued":
+        return refusal
+    from ltspice_mcp.lib.experiment_runner import live_run_progress
+
+    progress = (await live_run_progress(job, case_ids={case.case_id})).get(case.case_id)
+    return CaseUnreadable(
+        code="run_not_finished",
+        detail=_not_finished(job, case, progress, read=True),
+        evidence=progress["evidence"] if progress is not None else None,
+    )
 
 
-def experiment_run_context(
+def _not_finished(
+    job: ExperimentJob, case: ExperimentCase, progress: dict[str, Any] | None, *, read: bool
+) -> str:
+    """The refusal of a read of a case whose run has not finished: the case,
+    what its simulator has written so far (``progress``, when ``read`` read
+    it), and the wait."""
+    head = f"Case {case.case_id!r} of job {job.job_id!r} "
+    if case.status == "queued":
+        written = "has not started yet (queued), so its results cannot be read yet."
+    else:
+        written = "has not finished, so its results cannot be read yet. " + (
+            progress["detail"]
+            if progress is not None
+            else "What its simulator has written so far could not be read."
+            if read
+            else "Its run_progress in jobs(action='status') says what its simulator has "
+            "written so far."
+        )
+    return (
+        f"{head}{written} It is read once its run ends and the checks made then have "
+        f"run: wait for it with jobs(action='wait', job_id='{job.job_id}', "
+        "wait_for='runs'). The job's cases that have finished can be read now."
+    )
+
+
+async def experiment_run_context(
     job: ExperimentJob,
     state: SessionState,
     *,
@@ -722,21 +810,44 @@ def experiment_run_context(
     as its run row's ``other_raws`` lists it, and raises
     :class:`OtherRawNotWritten` when the run wrote none.
     """
+    _, context = await readable_case(
+        job,
+        state,
+        run_index=run_index,
+        case_id=case_id,
+        require_raw=require_raw,
+        other_raw=other_raw,
+    )
+    return context
+
+
+async def readable_case(
+    job: ExperimentJob,
+    state: SessionState,
+    *,
+    run_index: int | None = None,
+    case_id: str | None = None,
+    require_raw: bool = True,
+    other_raw: OtherRawKind | None = None,
+) -> tuple[ExperimentCase, RunContext]:
+    """The case of ``job`` that ``case_id``, else ``run_index``, names, and what
+    a read of it takes, once it can be read (``case_refusal``). Raises
+    ``RunNotFinishedError`` for a case whose run has not finished, else
+    ``ResultError``."""
     case = experiment_case(job, run_index=run_index, case_id=case_id)
-    return case_run_context(job, case, state, require_raw=require_raw, other_raw=other_raw)
+    refusal = await case_refusal(job, case)
+    if refusal is not None:
+        raise refusal.error(job, case)
+    return case, case_run_context(job, case, state, require_raw=require_raw, other_raw=other_raw)
 
 
 def experiment_case(
     job: ExperimentJob, *, run_index: int | None = None, case_id: str | None = None
 ) -> ExperimentCase:
     """The case of ``job`` that ``case_id``, else ``run_index`` (default 0),
-    names, once the job's runs can be read (``runs_unready``); the selection
-    ``experiment_run_context`` reads. Raises ``ResultError``.
+    names. Whether it can be read is its own answer (``case_unreadable``).
+    Raises ``ResultError``.
     """
-    # Per-case readiness is gated case by case by ``case_run_context``.
-    unready = runs_unready(job)
-    if unready is not None:
-        raise ResultError(unready)
     if case_id is None and run_index is None:
         run_index = 0
     matches = [
@@ -759,12 +870,14 @@ def case_run_context(
     require_raw: bool = True,
     other_raw: OtherRawKind | None = None,
 ) -> RunContext:
-    """``experiment_run_context`` for a caller already holding the case, of a
-    job whose runs it has checked are done (``runs_unready``). A caller reading
-    every case of a job takes each this way rather than finding it again by
-    its id."""
+    """``experiment_run_context`` for a caller already holding the case, which
+    it has asked can be read (``case_refusal``). A caller reading every case of
+    a job takes each this way rather than finding it again by its id."""
     job_id = job.job_id
-    if case_unreadable(case) is not None or (require_raw and case.raw_file is None):
+    refusal = case_unreadable(job, case)
+    if refusal is not None:
+        raise refusal.error(job, case)
+    if require_raw and case.raw_file is None:
         raise ResultError(_no_raw_result(job_id, case))
     raw = case.raw_file
     if other_raw is not None:

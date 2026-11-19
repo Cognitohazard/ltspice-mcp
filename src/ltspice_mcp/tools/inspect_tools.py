@@ -2762,7 +2762,7 @@ async def _results_page(query: ResultsQuery, state: SessionState, view: _View) -
     else:
         assert query.job_id is not None
         job = await services.resolve_job_async(query.job_id, state)
-        run = services.experiment_run_context(
+        run = await services.experiment_run_context(
             job,
             state,
             run_index=query.run_index,

@@ -182,8 +182,10 @@ async def _experiment_case(
         else None
     )
     if job is not None:
-        case = services.experiment_case(job, run_index=run_index, case_id=case_id)
-        return job, case, services.case_run_context(job, case, state, other_raw=other_raw)
+        case, context = await services.readable_case(
+            job, state, run_index=run_index, case_id=case_id, other_raw=other_raw
+        )
+        return job, case, context
     if (
         path is not None
         and job_id is None
@@ -1164,9 +1166,7 @@ async def _in_window_thread(work: Callable[..., _T], *args: Any) -> _T:
     loop = asyncio.get_running_loop()
     # As ``asyncio.to_thread`` does, so the work sees this request's context.
     context = contextvars.copy_context()
-    return await loop.run_in_executor(
-        _WINDOW_THREADS, functools.partial(context.run, work, *args)
-    )
+    return await loop.run_in_executor(_WINDOW_THREADS, functools.partial(context.run, work, *args))
 
 
 @dataclass(frozen=True)
@@ -1398,9 +1398,7 @@ def _show_from_sheet(
         closed = reopened
         if run is not None:
             placement = run.place(sheet)
-            report.update(
-                not_checked=placement.not_checked, left_in_place=placement.left_in_place
-            )
+            report.update(not_checked=placement.not_checked, left_in_place=placement.left_in_place)
         report.update(results=str(beside), sheet=str(sheet))
         left_alone = _write_panes(report, beside, plot_name, panes, of_a_sheet=True)
 
