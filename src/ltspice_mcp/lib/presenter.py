@@ -285,9 +285,11 @@ def _fit(
     apart, each with the bound it reserves: a note the annotation adds on the
     entries left out, which shrinks as more are kept. The entries are sized
     against the target less those bounds, without those fields, so the size
-    grows with every entry kept and a binary search is right. Where that finds
-    no count, every count that fits without the reserve is tried whole, from
-    the largest, so a reply never says it is over its target while one fits.
+    grows with every entry kept and a binary search is right. The reserve is
+    a first estimate: the whole reply at the count found decides, and while it
+    is over, one entry comes off. Where the search finds no count, every count
+    that fits without the reserve is tried whole, from the largest. A reply is
+    over its target only when one entry is.
     """
     apart = apart or {}
     reserve = sum(apart.values())
@@ -333,6 +335,12 @@ def _fit(
                 ),
                 None,
             )
+        # The reserve is a first estimate: the note at the count chosen can
+        # be larger than at one entry (the entries left out change). The
+        # whole reply at that count decides; while it is over, one entry
+        # comes off.
+        while best is not None and best > 1 and whole({**keep, largest: best}) > target:
+            best -= 1
         if best is not None:
             keep[largest] = best
             return keep

@@ -757,10 +757,12 @@ class RowFacts:
         return runs_not_shown(self, start, record, statuses=statuses)
 
     def reserve(self, start: int, record: Record | None, *, statuses: bool = True) -> int:
-        """The most ``runs_not_shown`` takes in a reply that holds rows from
-        ``start - 1`` on: its size when one row is kept, which no larger count
-        exceeds, within the margin of a longer name, and never above
-        :data:`NOT_SHOWN_BOUND_TOKENS`."""
+        """A first estimate of what ``runs_not_shown`` takes in a reply that
+        holds rows from ``start - 1`` on: its size when one row is kept, with
+        the margin of a longer name, never above :data:`NOT_SHOWN_BOUND_TOKENS`.
+        A larger count can take more (the runs left out then name more
+        kinds apart), so the presenter measures the whole reply at the count
+        it picks and takes rows off while it is over (``presenter._fit``)."""
         note = self.not_shown(start, record, statuses=statuses)
         if not note:
             return 0
