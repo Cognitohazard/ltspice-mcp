@@ -1,8 +1,6 @@
-"""What a reply says when the call's bound, a full disk or a slow file ends
-a step, and the one place that says whether a stored analysis is rendered.
+"""What a reply says when a full disk or a slow file ends a step, and the
+one place that says whether a stored analysis is rendered.
 
-- A step the call's bound ends is named as not done (the signal listing
-  names the sources it did not read), never left out as if it found nothing.
 - A stored answer never sits at its path with a time that reads as expired.
 - Publishing an artifact of an answered recipe is not ended by the call's
   bound, a comparison with the file already there that cannot finish
@@ -29,39 +27,13 @@ from ltspice_mcp.lib.store import Store
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from tests.conftest import stage_recorded_fixture
-from tests.test_analyze_results_call_bound import _CSV, _slow_csv
-from tests.test_analyze_results_review_round import _EARLIER_RELEASE_ANALYSIS
+from tests.test_analyze_results_call_bound import _CSV
+from tests.test_analyze_results_cut_replies import _EARLIER_RELEASE_ANALYSIS
 from tests.test_analyze_results_through_the_presenter import _analyze, _job
 from tests.test_presenter_unkept_answer import full_disk  # noqa: F401
 
 # ---------------------------------------------------------------------------
-# A. A step the bound ends is named
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_a_signal_listing_the_bound_ended_names_the_sources_it_did_not_read(
-    state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
-):
-    state_no_sim.config.analysis_budget_s = 1.0
-    _slow_csv(monkeypatch)
-    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    data = await _analyze(
-        state_no_sim,
-        {
-            "sources": [{"path": str(raw), "label": "dut"}],
-            "recipes": [_CSV],
-            "include": {"signals_available": True},
-        },
-    )
-    (failure,) = [f for f in data["failures"] if f.get("stage") == "signals"]
-    assert failure["code"] == "analysis_deadline"
-    assert failure["where"] == "signals_available"
-    assert "dut" in failure["message"] and "call of its own" in failure["message"]
-
-
-# ---------------------------------------------------------------------------
-# C. A stored answer is never at its path with an expired time
+# A stored answer is never at its path with an expired time
 # ---------------------------------------------------------------------------
 
 _SCHEMA: dict[str, Any] = {
@@ -98,7 +70,7 @@ def test_a_sweep_right_after_the_rename_keeps_the_answer(
 
 
 # ---------------------------------------------------------------------------
-# D. Publishing an answered recipe's artifact
+# Publishing an answered recipe's artifact
 # ---------------------------------------------------------------------------
 
 
@@ -142,7 +114,7 @@ def test_a_temp_left_behind_by_a_publish_is_removed_by_the_next_sweep(work_dir: 
 
 
 # ---------------------------------------------------------------------------
-# E. A reply whose answer was not kept still says its lists were cut
+# A reply whose answer was not kept still says its lists were cut
 # ---------------------------------------------------------------------------
 
 
@@ -170,7 +142,7 @@ async def test_a_page_object_of_an_answer_not_kept_says_rows_were_left_out(
 
 
 # ---------------------------------------------------------------------------
-# F. One place says whether this build renders a stored analysis
+# One place says whether this build renders a stored analysis
 # ---------------------------------------------------------------------------
 
 

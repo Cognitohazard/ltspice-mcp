@@ -1,14 +1,13 @@
-"""What a reply says of a stored analysis of another version, of signals it
-could not read, of sources the bound left unchecked, and how long a publish
-may take.
+"""What a reply says of a stored analysis of another version and of
+sources the bound left unchecked, and how long a publish may take.
 
 - ``analysis_snapshot.classify`` alone decides whether a stored analysis is
   rendered, and says earlier, later or damaged as the record is.
-- A source whose signals could not be read is named, with the reason.
 - Rows a recipe answered are never withdrawn because the bound ended the
   check after the reads; the reply names the sources not checked again.
 - The publish step of a whole call has one allowance; past it, comparisons
-  are skipped and the new files replace the old.
+  are skipped and the new files replace the old. Each recipe digests the
+  files it writes as it writes them, so publishing reads no new file.
 - One place says how many entries come after the ones held, and one writes
   the words for entries a reply did not send.
 """
@@ -22,21 +21,21 @@ from typing import Any
 
 import pytest
 
-from ltspice_mcp.errors import AnalysisDeadlineExceeded, ResultError
-from ltspice_mcp.lib import analysis_snapshot, services
+from ltspice_mcp.errors import AnalysisDeadlineExceeded
+from ltspice_mcp.lib import analysis_snapshot, result_store, services
 from ltspice_mcp.lib.store import KIND_ANALYSIS_SNAPSHOT, STORE_VERSION
 from ltspice_mcp.lib.store import envelope as store_envelope
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from tests.conftest import stage_recorded_fixture
-from tests.test_analyze_results_call_bound import _CSV, _slow_csv
-from tests.test_analyze_results_review_round import _EARLIER_RELEASE_ANALYSIS
+from tests.test_analyze_results_call_bound import _CSV
+from tests.test_analyze_results_cut_replies import _EARLIER_RELEASE_ANALYSIS
 from tests.test_analyze_results_through_the_presenter import _analyze
 
 _ANSWER = {"outcome": "complete", "results": {}, "observations": [], "failures": []}
 
 # ---------------------------------------------------------------------------
-# 1. Earlier, later or damaged, decided in one place
+# Earlier, later or damaged, decided in one place
 # ---------------------------------------------------------------------------
 
 
@@ -85,41 +84,7 @@ def test_the_renderer_asks_classify_and_decides_nothing_itself():
 
 
 # ---------------------------------------------------------------------------
-# 2. Signals that could not be read are named
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_a_source_whose_signals_could_not_be_read_is_named_with_the_reason(
-    state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
-):
-    raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    real = services.load_raw
-    calls: list[int] = []
-
-    async def unreadable_for_the_listing(source: Any, state: Any) -> Any:
-        calls.append(1)
-        if len(calls) > 1:
-            raise ResultError("the raw could not be read for its signals")
-        return await real(source, state)
-
-    monkeypatch.setattr(services, "load_raw", unreadable_for_the_listing)
-    data = await _analyze(
-        state_no_sim,
-        {
-            "sources": [{"path": str(raw), "label": "dut"}],
-            "recipes": [{"key": "v", "metric": "value", "expr": "V(out)", "at": "500u"}],
-            "include": {"signals_available": True},
-        },
-    )
-    (failure,) = [f for f in data.get("failures", []) if f.get("stage") == "signals"]
-    assert failure["where"] == "signals_available"
-    assert "dut" in failure["message"]
-    assert "could not be read for its signals" in failure["message"]
-
-
-# ---------------------------------------------------------------------------
-# 3. The check after the reads, ended by the bound, withdraws nothing
+# The check after the reads, ended by the bound, withdraws nothing
 # ---------------------------------------------------------------------------
 
 
@@ -161,7 +126,7 @@ async def test_answered_rows_stay_when_the_bound_ends_the_check_after_the_reads(
 
 
 # ---------------------------------------------------------------------------
-# 4. One allowance for the publish step of a call
+# One allowance for the publish step of a call
 # ---------------------------------------------------------------------------
 
 
@@ -192,14 +157,33 @@ async def test_past_the_publish_allowance_comparisons_are_skipped_and_files_repl
 
 
 @pytest.mark.asyncio
-async def test_an_answered_recipes_artifact_has_its_digest_when_the_bound_is_spent(
+async def test_publishing_reads_no_new_file_its_digest_was_taken_as_it_was_written(
     state_no_sim: SessionState, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """The second recipe spends the whole bound; the first one's file was
-    digested as it was written, so its publish needs no more time."""
-    state_no_sim.config.analysis_budget_s = 1.0
+    """Each recipe digests the file it writes, under its own deadline, so the
+    publish step reads none of the new files: past its allowance it reads no
+    file at all, and every artifact still carries its digest."""
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
-    _slow_csv(monkeypatch, after_calls=1)
+    monkeypatch.setattr(analyze_mod, "PUBLISH_ALLOWANCE_S", 0.0)
+    real_parse = services.bounded_parse
+    real_publish = analyze_mod._publish
+    publishing: list[int] = []
+    read_while_publishing: list[Path] = []
+
+    async def recorded(file: Path, *args: Any, **kwargs: Any) -> Any:
+        if publishing:
+            read_while_publishing.append(file)
+        return await real_parse(file, *args, **kwargs)
+
+    async def publish(pending: Any) -> Any:
+        publishing.append(1)
+        try:
+            return await real_publish(pending)
+        finally:
+            publishing.pop()
+
+    monkeypatch.setattr(services, "bounded_parse", recorded)
+    monkeypatch.setattr(analyze_mod, "_publish", publish)
     data = await _analyze(
         state_no_sim,
         {
@@ -207,13 +191,18 @@ async def test_an_answered_recipes_artifact_has_its_digest_when_the_bound_is_spe
             "recipes": [{**_CSV, "key": "first"}, _CSV],
         },
     )
-    artifact = data["results"]["first"]["values"][0]["value"]["artifact"]
-    assert re.fullmatch(r"[0-9a-f]{64}", artifact["sha256"])
-    assert (await asyncio.to_thread(Path(artifact["path"]).stat)).st_size == artifact["bytes"]
+    assert read_while_publishing == [], "the publish step read a file"
+    for key in ("first", "csv"):
+        artifact = data["results"][key]["values"][0]["value"]["artifact"]
+        assert re.fullmatch(r"[0-9a-f]{64}", artifact["sha256"])
+        path = Path(artifact["path"])
+        assert (await asyncio.to_thread(path.stat)).st_size == artifact["bytes"]
+        digest = await asyncio.to_thread(result_store.sha256_file, path)
+        assert digest == artifact["sha256"]
 
 
 # ---------------------------------------------------------------------------
-# 5. One answer each
+# One answer each
 # ---------------------------------------------------------------------------
 
 

@@ -31,7 +31,7 @@ from ltspice_mcp.lib.store import envelope as store_envelope
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze as analyze_mod
 from tests.conftest import LIVENESS_S, SyncApi, recorded_fixture_simulator, submit_experiment
-from tests.test_analyze_results_review_round import _EARLIER_RELEASE_ANALYSIS
+from tests.test_analyze_results_cut_replies import _EARLIER_RELEASE_ANALYSIS
 from tests.test_recovery_records import recovery_job
 from tests.test_response_budget import _GRID_DECK, _grid_receipt, _jobs
 
