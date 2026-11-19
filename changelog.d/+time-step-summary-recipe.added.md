@@ -1,0 +1,1 @@
+`analyze_results` has a `time_steps` recipe that reports, per run and per step of a stepped run, how large the steps between a transient's stored points were, where the smallest one was, and how many fell below a size you name.
