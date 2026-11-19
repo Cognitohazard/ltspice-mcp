@@ -3,7 +3,7 @@
 The draw is made on the hierarchy the deck's simulator reads
 (``variations._nested_mismatch_edits``); on ngspice it writes ``delvto`` and
 ``mulu0`` on the device's card, which only a BSIM3 or BSIM4 model takes
-(``subckt_mismatch.require_scoped_bsim``). Fixtures are shaped like a foundry
+(``subckt_mismatch.require_instance_parameter``). Fixtures are shaped like a foundry
 model deck (``tests._mismatch_fixtures``) in the BINNED model spelling a real
 PDK ships, but self-contained, so the suite runs with no PDK installed.
 """
@@ -17,7 +17,7 @@ import pytest
 from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
 from ltspice_mcp.lib.spice_lex import lex
 from ltspice_mcp.lib.spice_lex_views import ModelCard
-from ltspice_mcp.lib.subckt_mismatch import MismatchPlanError, require_scoped_bsim
+from ltspice_mcp.lib.subckt_mismatch import MismatchPlanError, require_instance_parameter
 from tests._mismatch_fixtures import BINNED_MINI_FET as MINI_FET
 
 DECK = f"""\
@@ -69,7 +69,7 @@ def test_every_reader_of_a_model_level_reads_one_level(
     for row in rows:
         if level is None:
             with pytest.raises(MismatchPlanError) as exc:
-                require_scoped_bsim(row)
+                require_instance_parameter(row, "ngspice", "delvto")
             assert exc.value.code == "unsupported_model"
         else:
-            require_scoped_bsim(row)
+            require_instance_parameter(row, "ngspice", "delvto")

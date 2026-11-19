@@ -745,6 +745,7 @@ def build_simulation_summary(
     source_amplitudes: dict[str, float] | None = None,
     producer: Producer | None = None,
     cards: Mapping[str, CardKind] | None = None,
+    measurements_unread: str | None = None,
 ) -> dict:
     """Build comprehensive, type-aware simulation summary.
 
@@ -770,6 +771,11 @@ def build_simulation_summary(
             measurement is: each measurement names the field holding its
             result from them (``log_parser.answered_measurements``). With no
             producer, the log is read as one whose writer is not known.
+        measurements_unread: Why the log's measurements say nothing that can
+            be trusted (``services.measurements_unread``, which the caller
+            asks), or None. Given, the summary reports no measurement and its
+            observations say why once, as the run row does, instead of
+            calling each requested ``.meas`` missing.
 
     Returns:
         Dictionary with sim_type, range info, signals, point_count, step_count,
@@ -881,7 +887,11 @@ def build_simulation_summary(
             if temperature is not None:
                 summary["temp_c"] = temperature
 
-        meas_data = section_value("measurements", "measurements")
+        meas_data = (
+            section_value("measurements", "measurements")
+            if measurements_unread is None
+            else None
+        )
         if meas_data is not None:
             # The whole run's measurements, whichever ``step`` this summarises:
             # each entry holds every step's value and the steps LTspice printed
@@ -1028,6 +1038,7 @@ def build_simulation_summary(
         value_traces=value_traces,
         source_amplitudes=source_amplitudes,
         node_voltages=None if value_traces is None else node_voltages(raw),
+        measurements_unread=measurements_unread,
     )
 
     return summary
