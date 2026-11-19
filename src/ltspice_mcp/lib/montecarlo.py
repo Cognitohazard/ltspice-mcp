@@ -492,7 +492,32 @@ def rewrite_instance_model(
     return emit(lexed.cards)
 
 
-def extract_mosfet_instances(netlist_text: str, *, deck: bool) -> list[InstanceGeometry]:
+@dataclass(frozen=True)
+class UnsizedInstance:
+    """A top-level ``M`` card whose mismatch area this module cannot read, and
+    why: the sigma of a draw for it is undefined."""
+
+    ref: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class TopLevelMosfets:
+    """Every top-level ``M`` card of one file: those this module sizes, and
+    those it cannot, each with the reason. A mismatch rule reaches both; one
+    that reaches an unsized device is refused, never drawn for the others
+    alone (``variations._refuse_unsized``)."""
+
+    sized: tuple[InstanceGeometry, ...]
+    unsized: tuple[UnsizedInstance, ...]
+
+    @property
+    def refs(self) -> tuple[str, ...]:
+        """Every device's reference, sized or not, in card order."""
+        return tuple(i.ref for i in self.sized) + tuple(i.ref for i in self.unsized)
+
+
+def extract_mosfet_instances(netlist_text: str, *, deck: bool) -> TopLevelMosfets:
     """Find every ``Mxxx`` instance and parse its model name + W/L geometry.
 
     Top-level only — subcircuit-instantiated transistors (``X1.M1``)
@@ -501,47 +526,59 @@ def extract_mosfet_instances(netlist_text: str, *, deck: bool) -> list[InstanceG
     not the title, nor a card after ``.END``. W/L are
     pulled from the ``InstanceLine.params`` dict, parsed via
     ``parse_spice_value`` so engineering suffixes (``10u``, ``180n``)
-    work. Instances missing W, L, or a model are skipped (Pelgrom σ
-    is undefined without those).
+    work.
 
-    An ``m`` on the card is the device's multiplier. Absent, it is 1; written
-    but not a positive literal number, the instance is still returned, with
-    ``multiplier=None``, so a rule that reaches it is refused rather than
-    drawn as if it were one copy.
+    This path evaluates no expression: it is the one a deck with no semantic
+    profile (QSPICE, Xyce) draws on, and the server does not model how those
+    simulators evaluate one. A card with no model, a W or L that is missing or
+    not a literal number, or an ``m`` written but not a positive literal number
+    is returned in ``unsized`` with the reason, never dropped: a rule that
+    reaches it is refused rather than drawn for the other devices alone, or
+    drawn as if it were one copy. Absent, ``m`` is 1.
     """
-    instances: list[InstanceGeometry] = []
+    sized: list[InstanceGeometry] = []
+    unsized: list[UnsizedInstance] = []
     for c in _top_level_instances(lex_for_edit(netlist_text, deck=deck).read).values():
         if not c.name or c.name[:1].upper() != "M":
             continue
         view = InstanceLine.from_card(c)
         if view.model is None:
+            unsized.append(UnsizedInstance(view.ref, "it names no model"))
             continue
         # get_param (not a raw dict read): ngspice decks write lowercase
         # "w="/"l=", and a case-sensitive lookup silently skipped every
         # instance — a zero-mismatch Monte Carlo that looked like a clean run.
-        w = parse_value(view.get_param("W") or "")
-        l_val = parse_value(view.get_param("L") or "")
-        if w is None or l_val is None:
-            logger.debug(
-                "MC: instance %s has no W/L parameter, skipping mismatch (params=%r)",
-                view.ref,
-                view.params,
-            )
-            continue
+        reasons = []
+        sizes: dict[str, float] = {}
+        for name in ("W", "L"):
+            written = view.get_param(name)
+            number = parse_value(written or "")
+            if number is None:
+                reasons.append(
+                    f"it gives no {name}"
+                    if written is None
+                    else f"its {name} is {written}, not a literal number"
+                )
+            else:
+                sizes[name] = number
         written = view.get_param("M")
         multiplier = 1.0 if written is None else parse_value(written)
-        if multiplier is not None and not multiplier > 0.0:
-            multiplier = None
-        instances.append(
+        if multiplier is None or not multiplier > 0.0:
+            reasons.append(f"its multiplier m is {written}, not a positive literal number")
+        if reasons:
+            unsized.append(UnsizedInstance(view.ref, " and ".join(reasons)))
+            continue
+        assert multiplier is not None
+        sized.append(
             InstanceGeometry(
                 ref=view.ref,
                 model_name=view.model,
-                width_m=w,
-                length_m=l_val,
+                width_m=sizes["W"],
+                length_m=sizes["L"],
                 multiplier=multiplier,
             )
         )
-    return instances
+    return TopLevelMosfets(tuple(sized), tuple(unsized))
 
 
 def matches_prefix(instance_ref: str, prefix: str) -> bool:

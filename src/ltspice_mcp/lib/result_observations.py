@@ -64,7 +64,12 @@ from ltspice_mcp.lib.cache import FileCache
 from ltspice_mcp.lib.device_names import DevicePath, path_text, spelled_name, split_path, trace_key
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import parse_spice_value
-from ltspice_mcp.lib.log_types import given_no_value, measurement_named, run_measurement_facts
+from ltspice_mcp.lib.log_types import (
+    MEASUREMENTS_UNREAD,
+    given_no_value,
+    measurement_named,
+    run_measurement_facts,
+)
 from ltspice_mcp.lib.spice_lex import SpiceLexError, directive_head, lex_deck
 from ltspice_mcp.lib.spice_lex_views import directive_args, read_instance
 from ltspice_mcp.lib.spice_validator import leading_numeric_tokens
@@ -577,8 +582,43 @@ def relay_observations(summary: dict) -> list[Observation]:
 
 #: The codes of what a run's case observed that every read of its results by
 #: job repeats (``services.experiment_run_context``): facts about what the
-#: raw holds, which a read of one signal would otherwise not see.
-READ_BY_JOB = frozenset({"subcircuit_nodes_not_saved"})
+#: raw holds, or how its names are spelled, which a read of one signal would
+#: otherwise not see. ``partial_raw`` (a stopped run's kept raw) is added to
+#: the read by ``services.partial_raw_observation`` itself.
+READ_BY_JOB = frozenset({"subcircuit_nodes_not_saved", "raw_names_disagree"})
+
+#: Every other code a run's case can carry, and why a read of the run by job
+#: does not repeat it. The job's receipt (``run_experiments``, ``jobs``)
+#: states each of these; ``tests/test_replies_name_what_they_left_out.py``
+#: fails a code a case can carry that is on neither list.
+NOT_READ_BY_JOB: Mapping[str, str] = {
+    # What the run did, which its receipt says and no read of the raw changes.
+    "control_write_injected": "how the run was launched; the raw it wrote is read as written",
+    "late_simulator_exit": "when the simulator exited; the raw it left is read as written",
+    "kill_unconfirmed": "a run with no confirmed exit leaves no raw a read takes",
+    "kill_attempt_failed": "a failed kill attempt; the run's raw, if any, is read as written",
+    "partial_progress": "how far a stopped run got; partial_raw says it of the raw a read takes",
+    "run_progress": "how far a running case has got, said only while it runs",
+    # What the run's log says; a read of the raw does not read the log.
+    "logopinfo_withheld": (
+        "the log's device table, not the raw; a read of that table by job does not repeat "
+        "it (listed as not fixed)"
+    ),
+    "native_log_output": "a run that wrote no raw, so no read of a raw by job is made",
+    "missing_required_raw": "a run that wrote no raw, so no read of a raw by job is made",
+    "ngspice_mode_unverified": (
+        "how ngspice read the deck, which the server's deck models use; the raw's traces "
+        "are read as the raw spells them"
+    ),
+    # Where the deck came from; the staged copy is what ran.
+    "circuit_id_derived": "how the circuit was named, not what its run wrote",
+    "micro_sign_folded": "how the staged deck spells a suffix, not what its run wrote",
+    "live_include": "which input the run read live, not what its run wrote",
+    "live_data_file": "which input the run read live, not what its run wrote",
+    "data_path_unrecorded": "how the staged deck names a data file, not what its run wrote",
+    "source_unavailable_after_staging": "the source after staging; the staged copy ran",
+    "source_modified_after_staging": "the source after staging; the staged copy ran",
+}
 
 
 def subcircuit_nodes_not_saved(
@@ -714,6 +754,21 @@ def measurements_failed_in_every_run(
         detail=detail,
         evidence=evidence,
     )
+
+
+def measurements_not_read_observation(reason: str, requested: Sequence[str]) -> Observation:
+    """Say that the ``.meas`` a deck requests have no value here because the
+    run's measurements were not read, and why (``reason``, from
+    ``services.measurements_unread``, the run row's ``measurements_coverage``)."""
+    return {
+        "code": "measurements_not_read",
+        "kind": "coverage",
+        "detail": (
+            f"The deck requests {len(requested)} .meas, and none is reported: "
+            f"{MEASUREMENTS_UNREAD[reason]} ({reason})."
+        ),
+        "evidence": {"reason": reason, "requested": list(requested)},
+    }
 
 
 def reconciliation_observations(
@@ -947,8 +1002,14 @@ def surface_observations(
     value_traces: dict[str, np.ndarray] | None = None,
     source_amplitudes: dict[str, float] | None = None,
     node_voltages: Collection[str] | None = None,
+    measurements_unread: str | None = None,
 ) -> list[Observation]:
     """Assemble the full observation list for a result summary.
+
+    ``measurements_unread`` is why the log's measurements were not read
+    (``services.measurements_unread``): the requested ``.meas`` are then said
+    once to be unread for that reason (``measurements_not_read_observation``),
+    never each "missing".
 
     Passing ``value_traces`` is the decision to surface value facts: a caller
     that loaded them wants them scanned, and one that did not passes None.
@@ -960,6 +1021,9 @@ def surface_observations(
     """
     obs: list[Observation] = []
     obs.extend(relay_observations(summary))
+    if requested and measurements_unread is not None and requested.get("meas"):
+        obs.append(measurements_not_read_observation(measurements_unread, requested["meas"]))
+        requested = {**requested, "meas": []}
     if requested:
         obs.extend(reconciliation_observations(summary, requested))
         abort = meas_batch_abort_observation(obs)

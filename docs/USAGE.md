@@ -334,7 +334,8 @@ Sweeps and Monte Carlo are set in the `variations` argument of
   `.MODEL` parameter spread, and Pelgrom W·L device mismatch. Mismatch for a
   transistor inside a subcircuit, and `X1:delvto`, run on LTspice and ngspice
   only: on QSPICE and Xyce they are refused, because the server does not model
-  how those simulators read a subcircuit body.
+  how those simulators read a subcircuit body. On LTspice `X1:delvto` runs
+  only on a BSIM4 (level 54) model, the one its recordings show it taken on.
 
 Variations do not set the temperature. Set it in the deck with `.temp`,
 `.step temp` or `.options temp=`. A `.param TEMP` is rejected, because SPICE

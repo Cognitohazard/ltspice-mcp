@@ -1603,11 +1603,7 @@ class ExperimentRunner(RunnerBase):
                 # The simulator has exited: its permit goes to the next case
                 # before the log is read, which waits on the one parser.
                 self._release_slot(execution, case.case_id)
-                outcome = await self._with_logs(execution, outcome)
-                self._apply_outcome(execution.job, case, outcome)
-                await self._read_measurements(execution.job, case, outcome)
-                await self._check_raw_names(execution, case)
-                await self._check_subcircuit_nodes(execution, case)
+                outcome = await self._end_of_run(execution, case, outcome, kept=True)
                 if (
                     outcome.error is None
                     and case.raw_file is not None
@@ -1749,14 +1745,9 @@ class ExperimentRunner(RunnerBase):
             return
 
         # Read before the stopped case's artifacts are removed below.
-        outcome = await self._with_logs(execution, outcome)
-        if execution.job.recovery is not None:
-            self._apply_outcome(execution.job, case, outcome)
-            await self._check_raw_names(execution, case)
-            await self._check_subcircuit_nodes(execution, case)
-        else:
-            self._apply_stopped_outcome(execution.job, case, outcome)
-        await self._read_measurements(execution.job, case, outcome)
+        outcome = await self._end_of_run(
+            execution, case, outcome, kept=_keeps_stopped_artifacts(execution.job)
+        )
         kept = await self._record_progress_then_remove(execution, case)
         terminal_status = "cancelled" if reason == "cancelled" else "failed"
         self._mark_case(
@@ -1842,10 +1833,8 @@ class ExperimentRunner(RunnerBase):
         case = next((item for item in execution.job.cases if item.case_id == case_id), None)
         if case is None:
             return
-        if execution.job.recovery is not None:
-            self._apply_outcome(execution.job, case, outcome)
-        else:
-            self._apply_stopped_outcome(execution.job, case, outcome)
+        # Its artifacts and log are read off the loop, by the end-of-run
+        # checks every ending makes (``_retire_late_exit``).
         case.observations.append(
             {
                 "code": "late_simulator_exit",
@@ -1875,11 +1864,9 @@ class ExperimentRunner(RunnerBase):
     ) -> None:
         """Record late-exit progress and persist final artifact facts."""
         try:
-            # Off the loop, as for any run that ended: what its log said.
-            read = await self._with_logs(execution, outcome)
-            if read is not outcome:
-                case.log_diagnostics = self._classified(execution.job, case, read)
-            await self._read_measurements(execution.job, case, read)
+            await self._end_of_run(
+                execution, case, outcome, kept=_keeps_stopped_artifacts(execution.job)
+            )
             kept = await self._record_progress_then_remove(execution, case)
             case.failure_evidence = _with_partial_raw(case.failure_evidence, kept)
         finally:
@@ -1948,6 +1935,27 @@ class ExperimentRunner(RunnerBase):
             kept=kept,
         )
         return fact, kept
+
+    async def _end_of_run(
+        self, execution: _Execution, case: ExperimentCase, outcome: RunOutcome, *, kept: bool
+    ) -> RunOutcome:
+        """Make the end-of-run checks on ``case``, whatever path ended its run:
+        the one place they run, so a run that completed, one stopped that
+        exited within its kill grace and one that exited after it are each
+        checked alike. ``kept`` says the run's files stay (a completed run, or
+        any run of a recoverable job): only then is the raw read, for its
+        names and its subcircuit nodes. Returns ``outcome`` with its log facts.
+        """
+        outcome = await self._with_logs(execution, outcome)
+        if kept:
+            self._apply_outcome(execution.job, case, outcome)
+        else:
+            self._apply_stopped_outcome(execution.job, case, outcome)
+        await self._read_measurements(execution.job, case, outcome)
+        if kept:
+            await self._check_raw_names(execution, case)
+            await self._check_subcircuit_nodes(execution, case)
+        return outcome
 
     @staticmethod
     async def _with_logs(execution: _Execution, outcome: RunOutcome) -> RunOutcome:

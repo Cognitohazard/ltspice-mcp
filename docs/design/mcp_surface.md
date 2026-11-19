@@ -991,7 +991,11 @@ printed nothing for. `measurements_coverage` is `not_read` for a case recorded
 before these were kept, `log_unread` when the log's measurements could not
 be read, and `simulator_unsupported` for a QSPICE or Xyce run, whose measure
 output the server does not read; the fields left out otherwise mean every
-requested `.meas` gave a value. When a row names one, the receipt's hint names the `measurements`
+requested `.meas` gave a value. Every other reader of the run's measurements
+gives the same reason (`services.measurements_unread`): the `summary` recipe
+reports none and says why once in a `measurements_not_read` observation, and
+the `measurements` recipe and the Python API's `measurements` refuse, naming
+it. When a row names one, the receipt's hint names the `measurements`
 recipe, and a `meas_failed_in_every_run` observation names each `.meas` that
 gave no value in any run. Runs are rendered as `items: [RunRecord]`, each row an object
 with the same keys at every budget.
@@ -2482,9 +2486,15 @@ each tool's `inputSchema`.
        (the corner idiom: {"M*@model": ["NTT", "NSS", "NFF"]})
     "INSTANCE:{delvto|mulu0}"            -> explicit per-instance mismatch
        value; "X1:delvto" for a single-FET body, or the qualified
-       "X1.M0:delvto" for a multi-FET body. Supported only on
-       ngspice-compatible BSIM3/4 devices through exactly one X -> M wrapper
-       level as this convenience spelling. Use an ordered `instances` selector
+       "X1.M0:delvto" for a multi-FET body. Supported only through
+       exactly one X -> M wrapper level as this convenience spelling, and
+       only where the simulator is known to apply the parameter to the
+       device's model (`subckt_mismatch.require_instance_parameter`): on
+       ngspice a BSIM3/4 model (`unsupported_model` otherwise); on LTspice
+       `delvto` on a level 54 model, the one its recordings show taken
+       (`instance_parameter_not_taken` where they show it refused or
+       ignored, `instance_parameter_unestablished` where none covers the
+       level). Use an ordered `instances` selector
        for arbitrary supported depth; never construct a selector by joining
        segments with punctuation. Refused on QSPICE and Xyce
        (`mismatch_inside_subcircuit_unmodelled`).

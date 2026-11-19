@@ -50,9 +50,10 @@ from ltspice_mcp.lib.instance_targeting import (
     validate_segments,
 )
 from ltspice_mcp.lib.montecarlo import (
+    InstanceGeometry,
     MCSampler,
     ToleranceSpec,
-    extract_mosfet_instances,
+    TopLevelMosfets,
     inject_card_before_end,
     matches_prefix,
     parse_model_params,
@@ -92,6 +93,7 @@ from ltspice_mcp.lib.subckt_mismatch import (
     MOBILITY_PARAM,
     VTH_PARAM,
     ClosureFile,
+    require_instance_parameter,
 )
 
 ScalarValue: TypeAlias = StrictInt | StrictFloat | str
@@ -2361,14 +2363,47 @@ def _flat_mismatch_files(
         if not any(ref.startswith(prefixes) for ref in file.targets.components):
             continue
         with reading(file.path.name):
-            refs = [
-                instance.ref
-                for instance in extract_mosfet_instances(texts[file.index], deck=file.is_deck)
-            ]
+            devices = _flat_devices(texts[file.index], deck=file.is_deck)
         for position, rule in enumerate(rules):
-            if any(matches_prefix(ref, rule.prefix) for ref in refs):
+            # Sized or not: a rule reaches every device its prefix claims, and
+            # one it cannot size is refused (``_rule_devices``), never skipped.
+            if any(matches_prefix(ref, rule.prefix) for ref in devices.refs):
+                _rule_devices(devices, rule)
                 hits[position].append(file.index)
     return tuple(tuple(indexes) for indexes in hits)
+
+
+def _flat_devices(text: str, *, deck: bool) -> TopLevelMosfets:
+    """The top-level ``M`` cards of one file of a deck with no semantic
+    profile, sized or not: the one reading of them a mismatch draw makes."""
+    from ltspice_mcp.lib.montecarlo import (
+        extract_mosfet_instances,  # noqa: TID251 - the one reader of a flat deck's devices
+    )
+
+    return extract_mosfet_instances(text, deck=deck)
+
+
+def _rule_devices(devices: TopLevelMosfets, rule: MismatchRule) -> list[InstanceGeometry]:
+    """The devices ``rule`` reaches among ``devices``, each sized; refuse the
+    rule when it reaches one this path cannot size.
+
+    Drawn for the others alone, the spread reported would be for fewer
+    devices than the rule names, with nothing to say so. The hierarchy path
+    of a deck with a profile refuses a device whose W or L it cannot resolve
+    the same way (``_nested_mismatch_edits``)."""
+    unsized = [item for item in devices.unsized if matches_prefix(item.ref, rule.prefix)]
+    if unsized:
+        named = "; ".join(f"{item.ref}: {item.reason}" for item in unsized)
+        raise VariationError(
+            "mismatch_geometry_unresolved",
+            f"Mismatch prefix {rule.prefix!r} reaches {len(unsized)} top-level "
+            f"device{'s' if len(unsized) != 1 else ''} whose gate area the server cannot "
+            f"read ({named}). On this simulator the server evaluates no "
+            "expression in a device's size, so a draw for the other devices alone would "
+            "report a spread for fewer devices than the rule names. Write W, L and m on "
+            "those cards as literal numbers, or narrow the prefix to leave them out.",
+        )
+    return [item for item in devices.sized if matches_prefix(item.ref, rule.prefix)]
 
 
 def _mismatch_head(rules: Sequence[RandomRule]) -> MismatchRule | None:
@@ -2525,11 +2560,7 @@ def _apply_mismatch_rule(
     ``.END`` hold no device the simulator reads (``_ClosureFile.is_deck``).
     """
     engine_rule = _engine_rule(rule)
-    instances = [
-        instance
-        for instance in extract_mosfet_instances(text, deck=deck)
-        if matches_prefix(instance.ref, rule.prefix)
-    ]
+    instances = _rule_devices(_flat_devices(text, deck=deck), rule)
     if not instances:
         raise VariationError(
             "ambiguous_target",
@@ -2543,13 +2574,6 @@ def _apply_mismatch_rule(
                 "model_missing",
                 f"Mismatch instance {instance.ref!r} references missing model "
                 f"{instance.model_name!r}",
-            )
-        if instance.multiplier is None:
-            raise VariationError(
-                "mismatch_geometry_unresolved",
-                f"Mismatch instance {instance.ref!r} gives its multiplier m as something "
-                "other than a positive number, so the area its draw stands for is unknown; "
-                "write m as a number",
             )
         nominals = parse_model_params(base_card)
         mismatch = sample_instance_mismatch(sampler, instance, engine_rule)
@@ -2609,8 +2633,26 @@ def _legacy_instance_edits(
             row = children[0]
         if row.element != "M":
             raise VariationError("ambiguous_target", "mismatch alias must select a MOS")
-        result.append(InstanceEdit(row.instance, "parameter", edit.value, edit.instance_param))
+        assert edit.instance_param is not None
+        result.append(
+            _instance_parameter_edit(
+                row, edit.instance_param, edit.value, hierarchy.profile.simulator
+            )
+        )
     return result
+
+
+def _instance_parameter_edit(
+    row: ResolvedInstance, parameter: str, value: Any, simulator: str
+) -> InstanceEdit:
+    """The edit that writes ``parameter`` (``delvto`` or ``mulu0``) on
+    ``row``'s card, refused where ``simulator`` is known not to apply it to
+    the device's model, or is not known to
+    (``subckt_mismatch.require_instance_parameter``): the one writer of either,
+    so no draw is run that changes nothing and no run is started that the
+    simulator stops on."""
+    require_instance_parameter(row, simulator, parameter)
+    return InstanceEdit(row.instance, "parameter", value, parameter)
 
 
 @dataclass(frozen=True)
@@ -2885,10 +2927,9 @@ def _takes_model_copy(row: ResolvedInstance, simulator: str) -> bool:
     subcircuit, ngspice takes the draw as ``delvto`` and ``mulu0`` on the
     device's card, which needs a BSIM3 or BSIM4 model.
     """
-    from ltspice_mcp.lib.subckt_mismatch import require_scoped_bsim
-
     if len(row.instance) > 1 and simulator == "ngspice":
-        require_scoped_bsim(row)
+        # Whether ngspice applies them to this model is asked as each is
+        # written (``_instance_parameter_edit``).
         return False
     if row.model_source is None or len(row.model_family) != 1:
         raise VariationError(
@@ -2903,8 +2944,6 @@ def _takes_model_copy(row: ResolvedInstance, simulator: str) -> bool:
 def _nested_mismatch_edits(
     hierarchy: Hierarchy, rules: Sequence[MismatchRule], sampler: MCSampler, editor: TargetEditor
 ) -> tuple[list[InstanceEdit], dict[str, float]]:
-    from ltspice_mcp.lib.montecarlo import InstanceGeometry
-
     edits: list[InstanceEdit] = []
     draws: dict[str, float] = {}
     claimed: set[tuple[str, ...]] = set()
@@ -2998,7 +3037,7 @@ def _nested_mismatch_edits(
                     (MOBILITY_PARAM, 1 + delta["dk_over_k"], rule.AK > 0),
                 ):
                     if enabled:
-                        edit = InstanceEdit(row.instance, "parameter", value, parameter)
+                        edit = _instance_parameter_edit(row, parameter, value, simulator)
                         edits.append(edit)
                         draws[edit.target] = value
     return edits, draws

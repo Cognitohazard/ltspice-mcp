@@ -14,7 +14,7 @@ import contextvars
 import logging
 import threading
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -43,6 +43,7 @@ from ltspice_mcp.lib.log_parser import (
     answered_measurements,  # noqa: TID251 - answer_measurements is the readers' door to it
     measurement_cards,
 )
+from ltspice_mcp.lib.log_types import MEASUREMENTS_UNREAD
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.parser_service import ParserCleanupError, select_raw
 from ltspice_mcp.lib.parser_service import load_artifacts_sync as _parse_artifacts_sync
@@ -283,6 +284,41 @@ def measurements_unread(logs: DecodedLog | None, family: str | None) -> str | No
     if logs.section("measurements")["status"] == "error":
         return "log_unread"
     return None
+
+
+def source_measurements_unread(source: AnalysisSource, logs: DecodedLog | None) -> str | None:
+    """:func:`measurements_unread` for a read of ``source``: its family is
+    the dialect the caller named, else the one the source was read in."""
+    return measurements_unread(logs, source.explicit_dialect or source.dialect)
+
+
+def _unread_detail(source: AnalysisSource, logs: DecodedLog, unread: str) -> str:
+    """What made a log's measurements unread, for the refusal that names why:
+    the case with no log, or the decoder's own error."""
+    if unread != "log_unread":
+        return ""
+    if source.log is None:
+        case_id = (source.identity or {}).get("case_id")
+        return f". Experiment case {case_id!r} has no log file" if case_id else ""
+    error = logs.section("measurements").get("error")
+    return f". {error['message']}" if isinstance(error, Mapping) else ""
+
+
+def read_measurements(source: AnalysisSource, logs: DecodedLog) -> MeasurementsOutput:
+    """The decoded measurements section of ``source``'s log, refused with why
+    it says nothing that can be trusted (:func:`measurements_unread`): the one
+    read of a log's measurements every reader of their values makes, so each
+    gives the run row's reason."""
+    unread = source_measurements_unread(source, logs)
+    if unread is not None:
+        raise ResultError(
+            f"The run's measurements were not read ({unread}): "
+            f"{MEASUREMENTS_UNREAD[unread]}{_unread_detail(source, logs, unread)}"
+        )
+    decoded = logs.value("measurements")
+    if decoded is None:
+        raise ResultError("source has no log artifact for .MEAS results")
+    return decoded
 
 
 def compression_drops_points(source: AnalysisSource, raw: DecodedRaw) -> bool:

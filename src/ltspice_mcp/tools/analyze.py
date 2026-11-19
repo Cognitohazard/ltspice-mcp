@@ -1313,8 +1313,7 @@ def _measurements_failed_everywhere(
     groups: dict[tuple[str, ...] | None, tuple[list[list[str]], set[str]]] = {}
     for run in runs:
         logs = captured_logs.get(run.manifest_id)
-        family = run.source.explicit_dialect or run.source.dialect
-        if logs is None or services.measurements_unread(logs, family) is not None:
+        if logs is None or services.source_measurements_unread(run.source, logs) is not None:
             continue
         section = logs.section("measurements")
         requested = (
@@ -1743,7 +1742,7 @@ async def _measurement_step_plan(
     if steps.step is None and not steps.all_steps:
         return [(None, {})]
     logs = await services.load_logs(source, state)
-    parsed = logs.value("measurements")
+    parsed = services.read_measurements(source, logs)
     if not parsed or not parsed["measurements"]:
         # The metric reads the log again and says why it holds no results.
         return [(0, {})]

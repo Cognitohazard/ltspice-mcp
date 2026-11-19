@@ -703,6 +703,7 @@ def test_every_simulator_answers_whether_it_takes_an_instance_parameter(tmp_path
 _MEASUREMENT_READERS = {
     ("lib/services.py", "measurements_unread"),
     ("lib/services.py", "read_measurements"),
+    ("lib/services.py", "_unread_detail"),
     ("lib/experiment_runner.py", "ExperimentRunner._read_measurements"),
     ("tools/analyze.py", "_measurements_failed_everywhere"),
     ("lib/raw_parser.py", "build_simulation_summary"),
@@ -732,7 +733,11 @@ def test_every_read_of_a_logs_measurements_asks_why_they_may_not_be_read():
                     readers.add((path, scope))
     assert readers == _MEASUREMENT_READERS
     asked = _calls({"measurements_unread", "source_measurements_unread"})
-    for reader in readers - {("lib/services.py", "measurements_unread")}:
+    for reader in readers - {
+        ("lib/services.py", "measurements_unread"),
+        # Called only by read_measurements, once it has the reason.
+        ("lib/services.py", "_unread_detail"),
+    }:
         assert reader in asked, reader
 
 
