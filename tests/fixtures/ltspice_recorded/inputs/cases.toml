@@ -7197,7 +7197,7 @@ R3 = { node = "b", volts = { "1000" = 1000.0, "absent" = "missing" }, reads = "1
 [[grid.deck-card.cell]]
 cases = ["deck/byte_85_in_comment"]
 [grid.deck-card.cell.items]
-R3 = { line_ending = "nel", node = "b", volts = { "absent" = 0.5, "1000" = 0.333333 }, reads = { ltspice26 = "1000", ltspice17 = "absent" }, differs = [{ build = "ltspice26", routes = ["lex_deck", "lex_for_edit", "lex_deck with its included files", "extract_netlist_info", "parse_netlist_graph", "load_hierarchy", "spice_validator._instance_terminals", "variation targets", "inspect components", "api inspect components"], reason = "LTspice 26 ends a line at byte 85 inside a comment and reads the card after it; every route reads the deck in cp1252, where byte 85 is an ellipsis, and reads no card there. The lint warns of it (byte-85-comment), so the reply says so." }] }
+R3 = { line_ending = "nel", node = "b", volts = { "absent" = 0.5, "1000" = 0.333333 }, reads = { ltspice26 = "1000", ltspice17 = "absent" }, differs = [{ build = "ltspice26", routes = ["lex_deck", "lex_for_edit", "lex_deck with its included files", "extract_netlist_info", "parse_netlist_graph", "load_hierarchy", "netlist_diff.read_deck", "spice_validator._instance_terminals", "variation targets", "inspect components", "api inspect components"], reason = "LTspice 26 ends a line at byte 85 inside a comment and reads the card after it; every route reads the deck in cp1252, where byte 85 is an ellipsis, and reads no card there. The lint warns of it (byte-85-comment), so the reply says so." }] }
 
 [[grid.deck-card.cell]]
 cases = ["deck/save_omits_meas"]

@@ -13,6 +13,13 @@ A cell names its subject as words: ``element R1``, ``param pa``,
 ``meas m08``. An answer is ``"absent"`` (the route reads the deck and holds no
 such thing), a number (the value it reads it to take), ``"present"`` (it holds
 the thing and reads no number for it), or None (the route does not answer).
+
+Not routes here: the lint rules and ``verify_circuit`` read a deck's cards
+with ``lex_deck``, as the first route does, and answer whether a card is
+wrong, not what it is, so no reading of a cell can be taken from them; nor is
+``deck_staging``'s staging of a deck's includes, whose reading of an include
+card is ``scan_include_references``, which the route through the included
+files uses.
 """
 
 from __future__ import annotations
@@ -28,6 +35,7 @@ from ltspice_mcp.lib.deck_staging import scan_include_references
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import SAME_VALUE_RTOL, plain_number
 from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
+from ltspice_mcp.lib.netlist_diff import read_deck
 from ltspice_mcp.lib.netlist_graph import parse_netlist_graph
 from ltspice_mcp.lib.result_observations import parse_source_amplitudes
 from ltspice_mcp.lib.services import extract_netlist_info
@@ -322,6 +330,20 @@ def _hierarchy(deck: Path, profile: SemanticProfile) -> Reading:
     return Reading("load_hierarchy", elements=elements, levels=levels)
 
 
+def _compared(deck: Path) -> Reading:
+    """The deck as the deck comparison reads it (``netlist_diff.read_deck``):
+    each top-level component by reference, with the signature it compares,
+    whose number is the value when the signature is one."""
+    top = read_deck(deck).scopes[()]
+    return Reading(
+        "netlist_diff.read_deck",
+        elements={
+            ref.lower(): Element(number=plain_number(signature))
+            for ref, signature in top.components.values()
+        },
+    )
+
+
 def _terminals(deck: Path) -> Reading:
     """The nodes the dangling-node check counts: ``_instance_terminals``,
     over the cards ``lex_deck`` reads."""
@@ -440,6 +462,7 @@ def read_offline(
             _guarded("extract_netlist_info", lambda: _netlist_info(deck)),
             _guarded("parse_netlist_graph", lambda: _graph(deck, profile)),
             _guarded("load_hierarchy", lambda: _hierarchy(deck, profile)),
+            _guarded("netlist_diff.read_deck", lambda: _compared(deck)),
             _guarded("spice_validator._instance_terminals", lambda: _terminals(deck)),
             _guarded("parse_source_amplitudes", lambda: _amplitudes(deck)),
             _guarded("variation targets", lambda: _targets(deck)),
