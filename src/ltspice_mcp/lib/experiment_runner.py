@@ -2061,10 +2061,36 @@ class ExperimentRunner(RunnerBase):
             self._apply_stopped_outcome(execution.job, case, outcome)
         await self._read_measurements(execution.job, case, outcome)
         if kept:
+            await self._read_steps(execution, case)
             await self._check_raw_names(execution, case)
             await self._check_subcircuit_nodes(execution, case)
             await self._check_saves(execution, case)
         return outcome
+
+    async def _read_steps(self, execution: _Execution, case: ExperimentCase) -> None:
+        """Keep on ``case`` how its results are stepped (``services.read_steps``),
+        unless the job is stopped first: a stop of the job (a cancel, its
+        deadline, the process stopping) sets ``cancel_event``, which ends the
+        read and its parse at once, and the case keeps its results with no
+        steps recorded."""
+        if execution.cancel_event.is_set():
+            return
+        read = self.loop.create_task(
+            services.read_steps(execution.job, case, execution.request.state)
+        )
+        stopped = self.loop.create_task(execution.cancel_event.wait())
+        try:
+            await asyncio.wait({read, stopped}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            stopped.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stopped
+            if not read.done():
+                read.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await read
+        if not read.cancelled():
+            case.steps = read.result()
 
     @staticmethod
     async def _with_logs(execution: _Execution, outcome: RunOutcome) -> RunOutcome:

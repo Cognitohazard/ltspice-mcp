@@ -19,6 +19,7 @@ from ltspice_mcp.lib import now, parse_iso_datetime, read_text_file
 from ltspice_mcp.lib.experiment_types import (
     TERMINAL_CASE_STATUSES,
     AnalysisStage,
+    CaseSteps,
     Completeness,
     ExperimentCase,
     ExperimentJob,
@@ -207,8 +208,8 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
                 "submitted_at": case.submitted_at.isoformat() if case.submitted_at else None,
                 "completed_at": case.completed_at.isoformat() if case.completed_at else None,
                 "run_token": case.run_token,
-                "step_index": case.step_index,
-                "step_values": case.step_values,
+                **(case.legacy_step_fields or {}),
+                **({"steps": case.steps.to_record()} if case.steps is not None else {}),
                 "native_statistics": (
                     case.native_statistics.to_record() if case.native_statistics else None
                 ),
@@ -436,8 +437,12 @@ def _case_record(data: dict[str, Any]) -> ExperimentCase:
         submitted_at=parse_iso_datetime(data.get("submitted_at")),
         completed_at=parse_iso_datetime(data.get("completed_at")),
         run_token=str(data.get("run_token", "")),
-        step_index=data.get("step_index"),
-        step_values=dict(data.get("step_values") or {}),
+        steps=(
+            CaseSteps.from_record(data["steps"]) if isinstance(data.get("steps"), dict) else None
+        ),
+        legacy_step_fields=(
+            {key: data[key] for key in ("step_index", "step_values") if key in data} or None
+        ),
         native_statistics=(
             NativeCaseRecord.from_record(data["native_statistics"])
             if data.get("native_statistics") is not None

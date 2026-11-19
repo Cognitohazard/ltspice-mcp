@@ -401,6 +401,14 @@ class OtherRawNotWritten(ResultError):
     takes_family_hint = False
 
 
+class PlotNotFoundError(ResultError):
+    """A read named a plot (``plot_index``) its results file does not hold:
+    the file can be read, and the request is what does not fit it."""
+
+    code = "plot_not_found"
+    takes_family_hint = False
+
+
 class AnalysisDeadlineExceeded(ResultError):
     """A read of a result artifact ran past the deadline it was given.
 
