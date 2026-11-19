@@ -43,6 +43,34 @@ a netlist's run does, and the block's `not_placed` gives the `code` and
 `message`. If LTspice's window had already closed a plot of the sheet's
 results for the copy, the `note` says so.
 
+`plot_waveform` draws several cases of one job in one chart when `runs` is
+given beside `job_id`, in the grammar of an `analyze_results` source: `"all"`,
+a list of run indices, or `{case_ids: [...]}`. Both tools select the cases
+through one function (`services.select_cases`), so one selection reads the
+same cases in both. `runs` beside `run_index`, `case_id` or `path` is refused,
+and a selection of one case reads as that case named by `case_id` does. With
+several cases, each trace's legend label is the signal, then the assignments
+that differ among the cases drawn, then the step's values where the case is
+stepped (`V(out) [R1=1000;r=22]`); where the assignments do not tell a case
+apart, or more than three differ, the case id stands in for them. One function
+writes that label (`points.point_label`), and a chart of one case keeps its
+labels. Each trace summary names its `case_id` and `run_index`, the reply's
+`cases` lists each case drawn with its `assignments` and `n_steps`, and
+`cases_not_drawn` names each case selected and not drawn: `case_not_found`
+and `run_not_found` as `analyze_results` names them, `raw_not_produced` with
+the case's `status`, `other_raw_not_written`, and `step_not_found` for a case
+without the `step` asked for, which applies to every case. A signal some cases
+lack is drawn for the others, and `signals_not_in_cases` names those that lack
+it. A selection with nothing to draw is refused with why for each case. One
+chart has one kind of axis: cases whose plots differ in analysis are refused,
+named by analysis, with the advice to plot them in separate calls; cases with
+different time grids are drawn together, as steps with different axes are.
+The limits count series across cases and steps together; when the summary
+limit cuts the traces, `cases_unsummarized` counts the cases with no trace
+summarized and `hint` names the `analyze_results` call that reads the rest.
+`in_ltspice` with several cases is refused: an LTspice window shows one
+case's results from its sheet.
+
 An eighth tool, `run_code`, is always registered and is served unless the
 operator sets `[tools] run_code = false`. It runs a Python snippet in a warm
 worker process that holds the Python API as `api` (the six operations as methods
@@ -1339,8 +1367,9 @@ continue   {result_set_id, cursor}   resumes a budget-truncated call; request
 first plot is selected only if a RAW recipe reads one. A source whose `path`
 is a `.log` refuses plot selection. `dialect` is null or one of `ltspice`, `ngspice`,
 `qspice`, `xyce`; an explicit dialect must agree with the raw file's header
-and with the simulator the job recorded. `plot_waveform` and the attached
-`run_experiments.analyze` block accept the same selectors and the same
+and with the simulator the job recorded. `plot_waveform` (with `runs`
+beside a `job_id`) and the attached `run_experiments.analyze` block accept the
+same selectors and the same
 `{axis, value}` step selector; `plot_waveform`'s `step` also takes a 0-based
 index. Analysis type, axis and units come from the selected plot's header. A
 recipe never gives a table plot an axis, so read its quantities through the

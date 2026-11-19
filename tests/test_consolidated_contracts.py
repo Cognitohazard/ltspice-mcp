@@ -897,7 +897,12 @@ _SURFACE_BUDGET_CHARS: dict[str, int] = {
     # Raised by about 320 characters so step takes the {axis, value} selector
     # analyze_results takes, and plot_index takes null, as in every other
     # tool. Measured 4,977.
-    "plot_waveform": 4980,
+    # Raised by about 390 characters for runs, which draws several cases of a
+    # job in one chart in the grammar an analyze_results source takes (its
+    # union with the {case_ids} object is most of it), and a clause in the
+    # description so a host asked to compare a sweep's cases finds it.
+    # Measured 5,366.
+    "plot_waveform": 5370,
 }
 
 # Recipe branches no recorded workload has ever called (measured over 477

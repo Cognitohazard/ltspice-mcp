@@ -196,6 +196,41 @@ async def test_plot_waveform_refuses_the_running_case(one_case_running: _Running
     assert run.running.case_id in data["error"]
 
 
+async def test_a_chart_of_the_job_draws_the_finished_case_and_names_the_running_one(
+    one_case_running: _Running,
+):
+    """A chart of several cases asks each case the one question: the case
+    that produced is drawn, and the one still running is named with the code
+    and the facts a read of it alone is refused with, as analyze_results
+    names it under coverage.missing_cases."""
+    run = one_case_running
+    data = await dispatched(
+        run.state,
+        "plot_waveform",
+        job_id=run.job.job_id,
+        runs="all",
+        signals=["V(out)"],
+        open=False,
+    )
+    assert "error" not in data, data
+    assert [case["case_id"] for case in data["cases"]] == [run.done.case_id]
+    assert {trace["case_id"] for trace in data["traces"]} == {run.done.case_id}
+    (waiting,) = data["cases_not_drawn"]
+    assert waiting["case_id"] == run.running.case_id
+    assert waiting["code"] == "run_not_finished"
+    assert waiting["status"] == "running"
+    assert "written" in waiting["detail"]
+
+    analyzed = await dispatched(
+        run.state,
+        "analyze_results",
+        sources=[{"job_id": run.job.job_id, "runs": "all"}],
+        recipes=[{"key": "v", "metric": "signal_stats", "signal": "V(out)"}],
+    )
+    (missing,) = analyzed["coverage"]["missing_cases"]["items"]
+    assert (missing["case_id"], missing["code"]) == (waiting["case_id"], waiting["code"])
+
+
 async def test_analyze_results_reads_the_finished_case_and_lists_only_the_running_one(
     one_case_running: _Running,
 ):
@@ -294,6 +329,14 @@ _JOB_READINESS = frozenset(
 #: The one place that decides whether a case can be read, and the wording of
 #: its refusal.
 _OWNERS = frozenset({"case_unreadable", "case_refusal", "_not_finished"})
+#: Functions that read a case's status to show it, never to decide on it, each
+#: with what it shows. ``test_a_status_shown_is_never_decided_on`` holds every
+#: other scope of their module to reading no status, from a case or from them.
+_STATUS_SHOWN = {
+    "tools/analysis.py": {
+        "_case_named": "the status shown for a case a chart of several cases does not draw",
+    },
+}
 #: Functions that ask the job's question on purpose, called from a scope that
 #: also reads a case, each with why its answer is not a read's.
 _JOB_QUESTIONS = {
@@ -372,3 +415,39 @@ def test_no_reader_of_a_case_decides_by_a_status_outside_the_one_answer():
                 if helper in asks_job and helper not in _JOB_QUESTIONS
             )
     assert offenders == []
+
+
+def test_a_status_shown_is_never_decided_on():
+    """A function listed in ``_STATUS_SHOWN`` reads a case's status to put it
+    in a reply. No other scope of its module reads a ``.status``, nor a
+    ``"status"`` key, as ``_case_named(case)["status"]`` or a row's
+    ``item.get("status")`` would: whether a case is read is
+    ``services.case_unreadable``'s answer alone."""
+    import ast
+
+    trees = modules()
+    offenders: list[str] = []
+    for module, owners in _STATUS_SHOWN.items():
+        for name, nodes in scopes(trees[module]):
+            if name.rsplit(".", 1)[-1] in owners:
+                continue
+            for node in nodes:
+                if isinstance(node, ast.Attribute) and node.attr == "status":
+                    offenders.append(f"{module}:{name} line {node.lineno}: .status")
+                elif (
+                    isinstance(node, ast.Subscript)
+                    and isinstance(node.slice, ast.Constant)
+                    and node.slice.value == "status"
+                ):
+                    offenders.append(f"{module}:{name} line {node.lineno}: ['status']")
+                elif (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "get"
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and node.args[0].value == "status"
+                ):
+                    offenders.append(f"{module}:{name} line {node.lineno}: .get('status')")
+    assert offenders == []
+
