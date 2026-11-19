@@ -26,9 +26,12 @@ async def test_strict_checkpoint_surfaces_write_failure(
         await state_no_sim.job_registry.persist_strict(job)
 
 
-async def test_strict_checkpoint_orders_after_pending_write(
+async def test_strict_checkpoint_does_not_wait_for_a_held_earlier_write(
     state_no_sim, work_dir, sample_netlist, monkeypatch
 ):
+    """An earlier write of the job is held, as on slow storage; a strict
+    checkpoint asked for after it lands and returns meanwhile, and the held
+    write, landing last, leaves the checkpoint's state on disk."""
     registry = state_no_sim.job_registry
     registry.persist_enabled = True
     job = _job(work_dir, sample_netlist)
@@ -41,24 +44,76 @@ async def test_strict_checkpoint_orders_after_pending_write(
         if not entered.is_set():
             entered.set()
             assert release.wait(LIVENESS_S)
+            writes.append("held")
+        else:
+            writes.append("strict")
         save(job, **kwargs)
-        writes.append(job.job_id)
 
     monkeypatch.setattr(experiment_store, "save_job", delayed)
     registry.persist_job(job)
     try:
         assert await asyncio.to_thread(entered.wait, LIVENESS_S)
-        strict = asyncio.create_task(registry.persist_strict(job))
-        await asyncio.sleep(0)
-        assert not strict.done()
+        job.status = "failed"
+        await asyncio.wait_for(registry.persist_strict(job), LIVENESS_S)
+        assert writes == ["strict"]
+        saved = experiment_store.load_job(job.job_id, work_dir)
+        assert saved is not None and saved.status == "failed"
         release.set()
-        await strict
         await registry.drain_pending()
-        assert writes == [job.job_id, job.job_id]
-        assert experiment_store.load_job(job.job_id, work_dir) is not None
+        assert writes == ["strict", "held"]
+        saved = experiment_store.load_job(job.job_id, work_dir)
+        assert saved is not None and saved.status == "failed"
     finally:
         release.set()
         await registry.drain_pending()
+
+
+async def test_a_deletion_after_a_queued_write_is_not_undone(
+    state_no_sim, work_dir, sample_netlist
+):
+    """A write asked for, and a deletion asked for in the same tick (eviction
+    of a finished job): the record stays deleted."""
+    registry = state_no_sim.job_registry
+    registry.persist_enabled = True
+    job = _job(work_dir, sample_netlist, status="completed")
+    experiment_store.save_job(job)
+    registry.persist_job(job)
+    registry._delete_persisted(job)
+    await registry.drain_pending()
+    assert experiment_store.load_job(job.job_id, work_dir) is None
+
+
+async def test_a_deletion_after_a_held_write_is_not_undone(
+    state_no_sim, work_dir, sample_netlist, monkeypatch
+):
+    """A write is held on slow storage when the job is deleted; the write,
+    landing after the deletion, does not bring the record back."""
+    registry = state_no_sim.job_registry
+    registry.persist_enabled = True
+    job = _job(work_dir, sample_netlist, status="completed")
+    experiment_store.save_job(job)
+    entered = threading.Event()
+    release = threading.Event()
+    save = experiment_store.save_job
+
+    def delayed(job, **kwargs):
+        entered.set()
+        assert release.wait(LIVENESS_S)
+        save(job, **kwargs)
+
+    monkeypatch.setattr(experiment_store, "save_job", delayed)
+    registry.persist_job(job)
+    try:
+        assert await asyncio.to_thread(entered.wait, LIVENESS_S)
+        held = set(registry.pending_writes(job.job_id))
+        registry._delete_persisted(job)
+        deletion = set(registry.pending_writes(job.job_id)) - held
+        await asyncio.wait_for(asyncio.gather(*deletion), LIVENESS_S)
+        assert experiment_store.load_job(job.job_id, work_dir) is None
+    finally:
+        release.set()
+        await registry.drain_pending()
+    assert experiment_store.load_job(job.job_id, work_dir) is None
 
 
 async def test_strict_checkpoint_preserves_order_before_queued_writer_starts(

@@ -283,6 +283,10 @@ def atomic_write(
             with commit_guard() as committed:
                 if committed:
                     _commit(tmp_path, path, overwrite=overwrite)
+                    # Inside the guard: a writer it refuses next counts on this
+                    # rename being durable.
+                    if durable:
+                        fsync_dir(path.parent)
         if not committed:
             with contextlib.suppress(OSError):
                 tmp_path.unlink()
@@ -291,7 +295,7 @@ def atomic_write(
             tmp_path.unlink()
         raise
 
-    if durable and committed:
+    if durable and committed and commit_guard is None:
         fsync_dir(path.parent)
 
 

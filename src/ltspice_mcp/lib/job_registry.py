@@ -109,6 +109,15 @@ def _cancel_tasks(jobs: list[LiveJob]) -> list[Awaitable[Any]]:
 
 
 @dataclass
+class _Landing:
+    """One step's turn to reach disk (``JobRegistry._landing``)."""
+
+    allowed: bool
+    #: Set False by a step that was allowed but wrote nothing.
+    wrote: bool = True
+
+
+@dataclass
 class JobRegistry:
     """Tracks all job kinds with optional disk persistence.
 
@@ -133,9 +142,8 @@ class JobRegistry:
     _persist_issued: dict[str, int] = field(default_factory=dict, repr=False)
     """The generation of each job's latest write or deletion, in call order.
 
-    Assigned on the loop as each write's task starts; tasks start in the order
-    they were spawned, so the generation is the order the writes were asked
-    for."""
+    Assigned where each write or deletion is asked for, before its task is
+    spawned, so the generation is the order they were asked for."""
     _persist_landed: dict[str, int] = field(default_factory=dict, repr=False)
     """The generation of each job's write or deletion that last reached disk.
 
@@ -145,6 +153,8 @@ class JobRegistry:
     """Per-job locks held only across the rename that lands a write (or the
     deletion), never across the write itself."""
     _persist_guards_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+    # The three per-job tables are kept after eviction: a few integers per job
+    # ever run, and the landed generation must outlive a deletion.
 
     # ------------------------------------------------------------------
     # Registration
@@ -205,8 +215,8 @@ class JobRegistry:
         """Evict the oldest terminal jobs once the registry is over the limit.
 
         When persistence is enabled, the on-disk record is deleted alongside
-        the in-memory entry so the two never drift. Async deletion drains
-        earlier writes before it drops the per-job lock.
+        the in-memory entry so the two never drift. The deletion is ordered
+        after every write asked for before it (``_newest_write``).
         """
         done = [(jid, j) for jid, j in self.jobs.items() if j.status in TERMINAL_STATUSES]
         overflow = len(done) - _MAX_FINISHED_JOBS
@@ -469,19 +479,29 @@ class JobRegistry:
             # Not in an event loop (tests, CLI usage) — write synchronously.
             self._persist_sync(job, self._next_generation(job.job_id))
             return
-        self._pending_persist.spawn(self._persist_async(job), key=job.job_id, loop=loop)
+        self._pending_persist.spawn(
+            self._persist_async(job, self._next_generation(job.job_id)),
+            key=job.job_id,
+            loop=loop,
+        )
 
     async def persist_strict(self, job: ExperimentJob) -> None:
         """Await a durable checkpoint and propagate storage failures.
 
-        Returns once the job's state as of this call is on disk: this write
-        landed, or a write asked for after it landed first, which holds that
-        state too. It does not wait for the job's earlier writes.
+        Returns once this write landed, or once a write of the job asked for
+        after it landed first. That one holds the live job's state as of this
+        call, so the wait answers for ``job`` when it is the live record. A
+        caller that writes a copy holding state the live job does not have yet
+        (a terminal snapshot) has that state on disk only if its own write
+        lands, as before writes ran side by side, when a later write of the
+        live job replaced it. It does not wait for the job's earlier writes.
         """
         if not self.persist_enabled:
             raise RuntimeError("Recovery requires durable job persistence")
-        # Spawned as persist_job's writes are, so its generation follows theirs.
-        task = self._pending_persist.spawn(self._persist_async(job, strict=True), key=job.job_id)
+        task = self._pending_persist.spawn(
+            self._persist_async(job, self._next_generation(job.job_id), strict=True),
+            key=job.job_id,
+        )
         await self._await_persistence(task)
 
     @staticmethod
@@ -509,34 +529,46 @@ class JobRegistry:
             raise asyncio.CancelledError
 
     def _next_generation(self, job_id: str) -> int:
-        """The next write generation of ``job_id``. On the loop only."""
+        """The next write generation of ``job_id``, where the write or deletion
+        is asked for: on the loop, or on the one thread of a registry with no
+        loop. Not thread-safe across the two."""
         generation = self._persist_issued.get(job_id, 0) + 1
         self._persist_issued[job_id] = generation
         return generation
 
     @contextlib.contextmanager
-    def _newest_write(self, job_id: str, generation: int) -> Iterator[bool]:
-        """Whether the write of ``generation`` may land, held across its rename.
+    def _landing(self, job_id: str, generation: int) -> Iterator[_Landing]:
+        """Whether the step of ``generation`` may reach disk, held across it.
 
-        A write lands only when no write or deletion asked for after it has
-        landed already. One that has is the newer state, and holds everything
-        this one would have written, because each write is the whole record
-        as it stood when its thread read it, which is after it was asked for.
-        Held only across the rename, so a slow write never holds another
-        write of the job back. A thread lock, because it is taken on worker
-        threads: it works the same on Windows.
+        A write or deletion lands only when no step asked for after it has
+        landed already. A write of the live job is the whole record as it
+        stood when its thread read it, after it was asked for, so a newer one
+        that landed holds every older write's state of the live job. Held only
+        across the rename (and its directory flush), so a slow write never
+        holds another write of the job back. A step that was allowed but
+        wrote nothing says so (``wrote = False``) and leaves the order as it
+        was. A thread lock, because it is taken on worker threads: it works
+        the same on Windows.
         """
         with self._persist_guards_lock:
             guard = self._persist_guards.setdefault(job_id, threading.Lock())
         with guard:
-            newest = generation > self._persist_landed.get(job_id, 0)
-            yield newest
-            if newest:
+            landing = _Landing(generation > self._persist_landed.get(job_id, 0))
+            yield landing
+            if landing.allowed and landing.wrote:
                 self._persist_landed[job_id] = generation
 
-    async def _persist_async(self, job: ExperimentJob, *, strict: bool = False) -> None:
-        """One write of a job; strict checkpoints propagate storage failures."""
-        generation = self._next_generation(job.job_id)
+    @contextlib.contextmanager
+    def _newest_write(self, job_id: str, generation: int) -> Iterator[bool]:
+        """``_landing`` as the commit guard of one rename (``atomic_write``)."""
+        with self._landing(job_id, generation) as landing:
+            yield landing.allowed
+
+    async def _persist_async(
+        self, job: ExperimentJob, generation: int, *, strict: bool = False
+    ) -> None:
+        """One write of a job, of the generation it was asked for in; strict
+        checkpoints propagate storage failures."""
         if strict:
             from ltspice_mcp.lib import experiment_store
 
@@ -586,9 +618,9 @@ class JobRegistry:
                 from ltspice_mcp.lib.store import Store
 
                 # It re-reads and writes under its own lineage lock: held whole.
-                with self._newest_write(job.job_id, generation) as newest:
-                    if newest:
-                        persist_reconciled(job, Store(self.working_dir))
+                with self._landing(job.job_id, generation) as landing:
+                    if landing.allowed:
+                        landing.wrote = persist_reconciled(job, Store(self.working_dir))
             else:
                 experiment_store.save_job(
                     job, commit_guard=lambda: self._newest_write(job.job_id, generation)

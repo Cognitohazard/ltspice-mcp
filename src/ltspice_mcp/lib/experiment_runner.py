@@ -1359,8 +1359,8 @@ class ExperimentRunner(RunnerBase):
             adaptation,
         )
         case.recovery = replace(case.recovery, attempt=replace(attempt, launch=intent))
-        # Only this launch thread waits; the loop stays free for a cancel and the
-        # ordered registry lock. Never hold launch_lock across this wait. This is a
+        # Only this launch thread waits; the loop stays free for a cancel and for
+        # the write. Never hold launch_lock across this wait. This is a
         # thread of ``_LAUNCH_THREADS``, never of the default pool the write runs
         # on (see there), and a stop of the job ends the wait (``_record_launch``).
         asyncio.run_coroutine_threadsafe(self._record_launch(execution), self.loop).result()
