@@ -44,7 +44,7 @@ from ltspice_mcp.lib.log_parser import diagnostic_collapse_key
 from ltspice_mcp.lib.log_types import given_no_value
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.pagination import page_of
-from ltspice_mcp.lib.points import STEPS_NOT_RECORDED, STEPS_SCHEMA, steps_shown
+from ltspice_mcp.lib.points import STEPS_SCHEMA, steps_shown
 from ltspice_mcp.lib.presenter import ListCut, Record, record_cursor
 from ltspice_mcp.lib.projection import (
     absent_path_warnings,
@@ -764,10 +764,10 @@ def row_facts(row: Mapping[str, Any]) -> list[str]:
         kinds.append(f"measurements_coverage.{row['measurements_coverage']}")
     if row.get("status") in _ENDED_WITHOUT_OUTPUT:
         kinds.append(f"status.{row['status']}")
-    # How many steps a run's results hold was not established. A record that
-    # holds none says so on every such row; it is the record's, not the run's.
+    # How many steps a run's results hold was not established when it ended.
+    # A record that holds none (not_recorded) is the record's, not the run's.
     steps = row.get("steps") or {}
-    if "count" not in steps and steps.get("not_established") not in (None, STEPS_NOT_RECORDED):
+    if "count" not in steps and "not_established" in steps:
         kinds.append("steps_not_established")
     return list(dict.fromkeys(kinds))
 

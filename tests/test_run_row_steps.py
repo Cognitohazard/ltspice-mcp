@@ -206,8 +206,7 @@ class TestARecordWrittenBefore:
         # A row of it says its steps were not recorded, never that it has none.
         job.cases[0] = case
         (row,) = _rows(await _jobs(state_with_sim, action="runs", job_id=job.job_id))
-        assert set(row["steps"]) == {"not_established"}
-        assert "not recorded" in row["steps"]["not_established"]
+        assert row["steps"] == {"not_recorded": True}
 
 
 @pytest.mark.asyncio

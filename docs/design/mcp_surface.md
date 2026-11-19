@@ -1138,8 +1138,10 @@ give each step's values (`decoded_raw.steps_held`, kept on the case's record
 as `ExperimentCase.steps`). Where the raw and the log disagree, or where each
 step starts cannot be read, `steps` is `{not_established}` with the reason and
 no number. A case whose results are not stepped carries no `steps`; a case
-with a raw recorded before the server kept them carries `{not_established}`
-saying so. The kinds a record names are `result_kinds.STEPPED_KINDS`, each
+with a raw whose steps were not recorded when its run ended (recorded before
+the server kept them, recovered after its server stopped, or stopped with its
+partial raw kept) carries `{not_recorded: true}`, which `runs_not_shown` does
+not count. The kinds a record names are `result_kinds.STEPPED_KINDS`, each
 established by the recordings it lists, per LTspice build. ngspice has no
 `.step`: its runs record one step. A chart of several cases gives each case's
 `n_steps` from the same record (`steps` in its place where the number is not

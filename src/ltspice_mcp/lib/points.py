@@ -160,18 +160,6 @@ def point_label(
     return f"{signal} [{';'.join(parts)}]" if parts else signal
 
 
-#: What a reply says of a case with a raw whose record holds no steps: one
-#: recorded before the server kept them, one whose run was recovered after its
-#: owner stopped, one stopped with its partial raw kept, or one whose run's
-#: end-of-run checks have not finished.
-STEPS_NOT_RECORDED = (
-    "How this case's results are stepped was not recorded when its run ended (a "
-    "case recorded before the server kept it, recovered after its server stopped, "
-    "or stopped with its partial raw kept), so it is not established here. A read "
-    "of its results gives their steps: inspect(kind='results', view='plots') or "
-    "plot_waveform with its case_id."
-)
-
 #: The ``steps`` a run row and a chart's ``cases[]`` carry.
 STEPS_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -191,6 +179,17 @@ STEPS_SCHEMA: dict[str, Any] = {
                 "without count, a number of steps is not known."
             ),
         },
+        "not_recorded": {
+            "type": "boolean",
+            "const": True,
+            "description": (
+                "How its results are stepped was not recorded when its run ended (a "
+                "case recorded before the server kept it, recovered after its server "
+                "stopped, or stopped with its partial raw kept). A read of its results "
+                "gives their steps: inspect(kind='results', view='plots') or "
+                "plot_waveform with its case_id."
+            ),
+        },
     },
     "additionalProperties": False,
     "description": (
@@ -207,11 +206,11 @@ def steps_shown(case: ExperimentCase) -> dict[str, Any]:
     ``cases[]`` say, read off the case's record (``ExperimentCase.steps``)."""
     steps = case.steps
     if steps is None:
-        return {"steps": {"not_established": STEPS_NOT_RECORDED}} if case.raw_file else {}
+        return {"steps": {"not_recorded": True}} if case.raw_file else {}
     if not steps.holds_steps:
         return {}
     if steps.count is None:
-        return {"steps": {"not_established": steps.not_established or STEPS_NOT_RECORDED}}
+        return {"steps": {"not_established": steps.not_established or "not established"}}
     return {
         "steps": {
             "count": steps.count,
