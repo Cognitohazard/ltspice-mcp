@@ -52,6 +52,7 @@ from ltspice_mcp.lib.experiment_types import (
 )
 from ltspice_mcp.lib.format import held_to_cap
 from ltspice_mcp.lib.job_lifecycle import WaitFor
+from ltspice_mcp.lib.job_simulator import job_simulator
 from ltspice_mcp.lib.job_types import TERMINAL_STATUSES
 from ltspice_mcp.lib.pagination import unpaged
 from ltspice_mcp.lib.presenter import ListCut, StoredAnswer, open_record
@@ -93,6 +94,8 @@ from ltspice_mcp.tools.receipts import (
     CASE_FAILURE_SCHEMA,
     DELIVERY,
     JOB_RUNS,
+    JOB_SIMULATOR_NOTES_SCHEMA,
+    JOB_SIMULATOR_SCHEMA,
     JOB_STATUS_SCHEMA,
     JOB_TYPE_SCHEMA,
     JOBS_PAGE_LIMIT,
@@ -505,6 +508,8 @@ _JOBS_RECEIPT_PROPERTIES: dict[str, Any] = {
     "job_type": JOB_TYPE_SCHEMA,
     "status": JOB_STATUS_SCHEMA,
     "analysis_status": {"type": "string"},
+    "simulator": JOB_SIMULATOR_SCHEMA,
+    "simulator_notes": JOB_SIMULATOR_NOTES_SCHEMA,
     "dialect": {"type": ["string", "null"]},
     "source": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["source"],
     "completeness": RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["completeness"],
@@ -577,6 +582,8 @@ _CIRCUIT_GROUP_SCHEMA: dict[str, Any] = {
                     "job_id": {"type": "string"},
                     "status": {"type": "string"},
                     "request_id": {"type": "string"},
+                    "simulator": JOB_SIMULATOR_SCHEMA,
+                    "simulator_notes": JOB_SIMULATOR_NOTES_SCHEMA,
                     "finished_at": {"type": ["string", "null"]},
                 },
                 "required": ["job_id", "status", "request_id", "finished_at"],
@@ -662,6 +669,8 @@ def _jobs_page_schema(
         )
         required.extend(["job_id", "request_id", "status"])
     if action == "runs":
+        properties["simulator"] = JOB_SIMULATOR_SCHEMA
+        properties["simulator_notes"] = JOB_SIMULATOR_NOTES_SCHEMA
         properties["dialect"] = {"type": ["string", "null"]}
         # The job as it stood when this page was read from its record.
         properties["progress"] = RUN_EXPERIMENTS_OUTPUT_SCHEMA["properties"]["progress"]
@@ -970,6 +979,7 @@ def _collect_circuit_groups(
                         "job_id": experiment.job_id,
                         "status": experiment.status,
                         "request_id": experiment.request_id,
+                        **job_simulator(experiment, state).fields(),
                         "finished_at": (
                             experiment.completed_at.isoformat()
                             if experiment.completed_at is not None
@@ -1248,6 +1258,7 @@ def _jobs_error_payload(evaluation: JobsEvaluation) -> dict[str, Any]:
                     analysis_status=snapshot.analysis_status,
                     dialect=snapshot.dialect,
                     completeness=snapshot.completeness,
+                    **snapshot.simulator.fields(),
                 )
                 if snapshot.lineage is not None:
                     common["lineage"] = dict(snapshot.lineage)

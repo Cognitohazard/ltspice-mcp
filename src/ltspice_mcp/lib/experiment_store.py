@@ -260,6 +260,7 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
         pid=job.owner_pid,
         owner_start=owner_start_record(job.owner_pid, job.owner_start),
         simulator=job.simulator,
+        simulator_selector=job.simulator_selector,
         status=job.status,
         started_at=job.started_at.isoformat(),
         completed_at=job.completed_at.isoformat() if job.completed_at else None,
@@ -627,6 +628,7 @@ def deserialize_job(
         error=data.get("error"),
         output_folder=_path_or_none(data.get("output_folder")),
         simulator_executable=SimulatorExecutable.from_record(data.get("simulator_executable")),
+        simulator_selector=_optional_str(data.get("simulator_selector")),
         deck_names_xvii=(
             data.get("deck_names_xvii") if isinstance(data.get("deck_names_xvii"), bool) else None
         ),

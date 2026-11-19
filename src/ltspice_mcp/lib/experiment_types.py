@@ -344,6 +344,12 @@ class ExperimentJob:
     #: request would launch now is a different build. None when the simulator
     #: named no program, and on a record written before it was recorded.
     simulator_executable: SimulatorExecutable | None = None
+    #: The selector the run resolved to, as ``execution.simulator`` names it
+    #: (``ltspice``, ``ltspice:xvii``; ``simulator.simulator_selector``): the
+    #: default's when the request named none. What a reply names the job's
+    #: simulator by (``job_simulator``). None on a record written before it
+    #: was recorded; ``simulator`` keeps the class name, which resume reads.
+    simulator_selector: str | None = None
     #: Whether the job's decks were read with each subcircuit instance spelled
     #: without its X (LTspice XVII and IV, ``device_names.naming_for``), as
     #: their hierarchy profile was built at submission: what each run's raw is

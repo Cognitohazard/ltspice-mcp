@@ -157,8 +157,11 @@ def _barrier_process(
     circuit = Path(circuit_path)
     # With persistence on, as a submission requires: the gate finds the other
     # process's job through this registry, which reads it from the store.
+    # A new job records the selector of its runner's class among these.
     state = SimpleNamespace(
-        working_dir=working, job_registry=JobRegistry(persist_enabled=True, working_dir=working)
+        working_dir=working,
+        job_registry=JobRegistry(persist_enabled=True, working_dir=working),
+        offered_simulators={},
     )
     request = ExperimentRunRequest(
         state=cast("SessionState", state),
