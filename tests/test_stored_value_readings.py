@@ -1,0 +1,226 @@
+"""Every reply that gives a number read from a stored deck says when a
+recorded LTspice build reads that value's stored bytes as another number.
+
+The question is "which recorded builds read this stored value as another
+number than the server does", and ``lib/stored_values.py`` answers it. The
+recorded decks of ``deck-encoding`` hold one micro sign or Greek mu each, in
+every encoding a build was recorded reading (``inputs/cases.toml``); each
+build's ``.op`` raw shows the number it took. Every route that reads a value
+from a stored deck and sends a number or a comparison runs each deck, and its
+first reply states exactly the builds whose recorded number differs from the
+server's, with that number, and no other.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import math
+from collections.abc import Awaitable, Callable
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from ltspice_mcp.lib.format import SAME_VALUE_RTOL
+from ltspice_mcp.lib.hierarchy import SemanticProfile, load_hierarchy
+from ltspice_mcp.state import SessionState
+from tests import _ltspice_recorded as rec
+from tests.conftest import FakeSim, SyncApi, dispatched, fake_simulator
+from tests.ltspice_recorder import INPUTS
+
+#: The code a statement carries (``stored_values.CODE``).
+CODE = "value_read_otherwise"
+
+#: The recorded decks whose one value is a micro sign or a Greek mu, on node a.
+DECKS = (
+    "deck/micro_utf8",
+    "deck/micro_utf8_bom",
+    "deck/greek_mu_utf8",
+    "deck/micro_cp1252",
+    "deck/micro_utf16le",
+    "deck/micro_utf16le_bom",
+)
+
+#: The name a statement gives each recorded build.
+BUILD_NAMES = {"ltspice26": "LTspice 26", "ltspice17": "LTspice XVII"}
+
+#: What the server reads each deck's value as: its run spells the sign u.
+SERVER_NUMBER = 1e-6
+
+#: The same circuit with the value spelled in ASCII, which every build reads
+#: alike: the other side of a comparison.
+ASCII_DECK = "* the same value, spelled u\nV1 a 0 1u\n.op\n.end\n"
+
+
+def _source(case_id: str) -> Path:
+    return INPUTS / rec.CASES.case(case_id).source
+
+
+def _recorded_numbers(case_id: str, scratch: Path) -> dict[str, float]:
+    """The number each recorded build took for the deck's value."""
+    return {
+        BUILD_NAMES[build]: rec.operating_point(build, case_id, scratch)["v(a)"]
+        for build in rec.BUILDS
+        if case_id in rec.manifest(build)["cases"]
+    }
+
+
+def _expected(case_id: str, scratch: Path) -> dict[str, float]:
+    """The builds whose recorded number is not the server's, with that number."""
+    return {
+        build: number
+        for build, number in _recorded_numbers(case_id, scratch).items()
+        if not math.isclose(number, SERVER_NUMBER, rel_tol=SAME_VALUE_RTOL)
+    }
+
+
+# The routes ---------------------------------------------------------------------
+
+Route = Callable[[SessionState, Path, Path], Awaitable[list[dict[str, Any]]]]
+
+
+async def _inspect(state: SessionState, deck: Path, _ascii: Path) -> list[dict[str, Any]]:
+    query = {"kind": "hierarchy", "path": str(deck), "simulator": "ltspice"}
+    (result,) = (await dispatched(state, "inspect", queries=[query]))["results"]
+    assert result["ok"], result
+    return result["data"].get("values_read_otherwise", [])
+
+
+async def _api_inspect(state: SessionState, deck: Path, _ascii: Path) -> list[dict[str, Any]]:
+    query = {"kind": "hierarchy", "path": str(deck), "simulator": "ltspice"}
+    reply = await asyncio.to_thread(lambda: SyncApi(state).inspect(queries=[query]))
+    (result,) = reply["results"]
+    assert result["ok"], result
+    return result["data"].get("values_read_otherwise", [])
+
+
+async def _load_hierarchy(_state: SessionState, deck: Path, _ascii: Path) -> list[dict[str, Any]]:
+    hierarchy = load_hierarchy(str(deck), None, SemanticProfile("ltspice"))
+    return [reading.statement() for reading in getattr(hierarchy, "readings", ())]
+
+
+def _verify_compare(mode: str, *, deck_is_reference: bool) -> Route:
+    async def route(state: SessionState, deck: Path, ascii_deck: Path) -> list[dict[str, Any]]:
+        path, reference = (ascii_deck, deck) if deck_is_reference else (deck, ascii_deck)
+        data = await dispatched(
+            state,
+            "verify_circuit",
+            path=str(path),
+            checks=["compare"],
+            compare={"reference": str(reference), "mode": mode},
+        )
+        comparison = data["comparison"]
+        assert comparison is not None, data
+        return comparison.get("values_read_otherwise", [])
+
+    return route
+
+
+ROUTES: dict[str, Route] = {
+    "inspect": _inspect,
+    "api inspect": _api_inspect,
+    "load_hierarchy": _load_hierarchy,
+    "verify_circuit compare equivalence": _verify_compare("equivalence", deck_is_reference=False),
+    "verify_circuit compare equivalence, the deck as reference": _verify_compare(
+        "equivalence", deck_is_reference=True
+    ),
+    "verify_circuit compare structural_diff": _verify_compare(
+        "structural_diff", deck_is_reference=False
+    ),
+    "verify_circuit compare structural_diff, the deck as reference": _verify_compare(
+        "structural_diff", deck_is_reference=True
+    ),
+}
+
+
+@pytest.mark.parametrize("route", sorted(ROUTES))
+@pytest.mark.parametrize("case_id", DECKS)
+async def test_every_route_states_each_build_that_reads_the_stored_value_otherwise(
+    case_id: str, route: str, tmp_path: Path, work_dir: Path, state_no_sim: SessionState
+):
+    expected = _expected(case_id, tmp_path)
+    deck = work_dir / _source(case_id).name
+    deck.write_bytes(_source(case_id).read_bytes())
+    ascii_deck = work_dir / "ascii.cir"
+    ascii_deck.write_text(ASCII_DECK, encoding="ascii")
+
+    stated = await ROUTES[route](state_no_sim, deck, ascii_deck)
+
+    assert all(statement["code"] == CODE for statement in stated), stated
+    assert all(statement["file"] == str(deck) for statement in stated), stated
+    by_build = {statement["build"]: statement for statement in stated}
+    assert len(by_build) == len(stated), stated
+    assert set(by_build) == set(expected), (case_id, route, stated)
+    for build, number in expected.items():
+        statement = by_build[build]
+        assert statement["established"], statement
+        assert math.isclose(statement["build_number"], number, rel_tol=SAME_VALUE_RTOL)
+        assert math.isclose(statement["server_number"], SERVER_NUMBER, rel_tol=SAME_VALUE_RTOL)
+        assert statement["value"] in ("1µ", "1μ")
+        assert statement["line"] == 3
+
+
+# A run: the receipt states the source's readings ---------------------------------
+
+#: A run of the deck as it is, and a Monte Carlo draw around its value's
+#: nominal, which the server reads from the stored deck.
+RUNS: dict[str, dict[str, Any]] = {
+    "run_experiments": {},
+    "run_experiments Monte Carlo nominal": {
+        "variations": [
+            {
+                "kind": "random",
+                "runs": 2,
+                "seed": 7,
+                "rules": [{"rule": "component", "target": "R1", "tolerance": 0.1}],
+            }
+        ]
+    },
+}
+
+
+def _run_statements(reply: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        statement
+        for item in reply.get("observations", [])
+        if item["code"] == CODE
+        for statement in item["evidence"]["values"]
+    ]
+
+
+@pytest.mark.parametrize("run", sorted(RUNS))
+@pytest.mark.parametrize("case_id", DECKS)
+async def test_a_run_states_each_build_that_reads_the_source_otherwise(
+    case_id: str,
+    run: str,
+    tmp_path: Path,
+    work_dir: Path,
+    config,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The run reads the value as the server does, whatever its simulator; its
+    receipt, and the job's status, state the builds that read the source
+    otherwise, as every other route does."""
+    expected = _expected(case_id, tmp_path)
+    state = SessionState.create(config, available={"fake": FakeSim})
+    fake_simulator(monkeypatch)
+    deck = work_dir / _source(case_id).name
+    deck.write_bytes(_source(case_id).read_bytes())
+
+    reply = await dispatched(
+        state,
+        "run_experiments",
+        request_id=f"{case_id}-{run}".replace("/", "-").replace(" ", "-"),
+        circuits=[{"path": str(deck), "id": "dut"}],
+        lint="off",
+        execution={"wait_s": 60},
+        **RUNS[run],
+    )
+    status = await dispatched(state, "jobs", action="status", job_id=reply["job_id"])
+
+    for stated in (_run_statements(reply), _run_statements(status)):
+        by_build = {statement["build"]: statement for statement in stated}
+        assert set(by_build) == set(expected), (case_id, run, stated)
+        for build, number in expected.items():
+            assert by_build[build]["file"] == str(deck.resolve())
+            assert math.isclose(by_build[build]["build_number"], number, rel_tol=SAME_VALUE_RTOL)
