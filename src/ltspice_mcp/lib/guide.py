@@ -23,6 +23,7 @@ session.
 from __future__ import annotations
 
 import functools
+import re
 from dataclasses import dataclass
 from importlib.resources import files
 from importlib.resources.abc import Traversable
@@ -61,6 +62,19 @@ class UnknownGuideSection(ValueError):
             f"unknown guide section {name!r}; omit 'section' for the core and its index, "
             f"or name one of: {', '.join(known)}"
         )
+        self.name = name
+        self.known = known
+
+
+class UnknownGuideHeading(ValueError):
+    """A heading a section does not have; the message lists the ones it does."""
+
+    def __init__(self, section: str, name: str, known: tuple[str, ...]) -> None:
+        super().__init__(
+            f"guide section {section!r} has no heading {name!r}; omit 'heading' for the "
+            f"whole section, or name one of: {'; '.join(known)}"
+        )
+        self.section = section
         self.name = name
         self.known = known
 
@@ -164,11 +178,87 @@ def _find(section: str) -> GuideEntry:
     raise UnknownGuideSection(section, names())
 
 
-def read(section: str | None = None) -> str:
-    """The core with its index, or one section by name.
+@dataclass(frozen=True)
+class GuideHeading:
+    """One heading of a section and the text that belongs to it."""
 
-    Raises :class:`UnknownGuideSection` for a name the guide does not have.
+    name: str
+    """The heading's text, as the section spells it, without its ``#`` marks."""
+    level: int
+    """How many ``#`` mark it: 2 for ``##``."""
+    text: str
+    """From the heading's line down to the next heading of the same or a higher
+    level, so its subheadings come with it."""
+
+
+#: A Markdown heading below the section's own title. The title (``#``) is the
+#: section itself, so it is not one of its parts.
+_HEADING = re.compile(r"^(#{2,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
+_FENCE = re.compile(r"^[ \t]*(```|~~~)")
+
+
+@functools.cache
+def headings(section: str) -> tuple[GuideHeading, ...]:
+    """Which headings a section has, and which text belongs to each.
+
+    The one answer to that question: ``read`` with a ``heading``, the
+    ``inspect`` guide kind and ``Api.guide`` all ask it. A ``#`` line inside a
+    fenced code block is code, not a heading. Raises
+    :class:`UnknownGuideSection` for a name the guide does not have.
     """
+    lines = _find(section).body.splitlines(keepends=True)
+    marks: list[tuple[int, int, str]] = []
+    fence: str | None = None
+    for number, line in enumerate(lines):
+        opened = _FENCE.match(line)
+        if opened:
+            if fence is None:
+                fence = opened.group(1)
+            elif opened.group(1) == fence:
+                fence = None
+            continue
+        if fence is None and (match := _HEADING.match(line.rstrip("\n"))):
+            marks.append((number, len(match.group(1)), match.group(2)))
+    found = []
+    for position, (start, level, name) in enumerate(marks):
+        end = next(
+            (later for later, deeper, _ in marks[position + 1 :] if deeper <= level),
+            len(lines),
+        )
+        text = "".join(lines[start:end]).rstrip("\n") + "\n"
+        found.append(GuideHeading(name=name, level=level, text=text))
+    return tuple(found)
+
+
+def _key(name: str) -> str:
+    return " ".join(name.split()).casefold()
+
+
+def find_heading(section: str, heading: str) -> GuideHeading:
+    """One heading of a section, matched by its text whatever its case.
+
+    Raises :class:`UnknownGuideSection` for a section the guide does not have
+    and :class:`UnknownGuideHeading` for a heading the section does not have.
+    """
+    listed = headings(section)
+    wanted = _key(heading)
+    for entry in listed:
+        if _key(entry.name) == wanted:
+            return entry
+    raise UnknownGuideHeading(section, heading, tuple(entry.name for entry in listed))
+
+
+def read(section: str | None = None, heading: str | None = None) -> str:
+    """The core with its index, one section by name, or one heading of it.
+
+    Raises :class:`UnknownGuideSection` for a name the guide does not have,
+    :class:`UnknownGuideHeading` for a heading the section does not have, and
+    ``ValueError`` for a heading with no section.
+    """
+    if heading is not None:
+        if section is None:
+            raise ValueError("a heading needs the section it is in: pass 'section' too")
+        return find_heading(section, heading).text
     return core() if section is None else _find(section).body
 
 

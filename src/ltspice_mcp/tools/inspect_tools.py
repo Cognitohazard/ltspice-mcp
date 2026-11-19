@@ -15,9 +15,9 @@ and the circuits it can reach. Each query names one supported kind:
 * ``symbols`` — the legal ``.asy`` symbol names and the resolution-order
   precedence they resolve through. A ``path`` adds that schematic's own
   directory to the front of the reported precedence.
-* ``symbol`` — one symbol's pin positions per rotation (``R0``…``M270``),
-  bounding box, and origin (the ``symbol_info`` geometry internals), with its
-  ``SymbolType`` and every ``SYMATTR`` it carries (``Prefix``, ``SpiceModel``,
+* ``symbol`` — one symbol's pin positions per rotation (``R0``…``M270``), or
+  at the one ``rotation`` names, bounding box, and origin (the ``symbol_info``
+  geometry internals), with its ``SymbolType`` and every ``SYMATTR`` it carries (``Prefix``, ``SpiceModel``,
   ``Value``, ``SpiceLine``, ``ModelFile``...): the model and parameters an
   instance of it is netlisted with.
 * ``net`` — everything on a net. On a ``.asc`` this is a geometric trace
@@ -66,8 +66,9 @@ than a hunt.
   reads no file and touches no session state.
 * ``guide`` — the packaged guide (``lib/guide.py``): with no ``section``, the
   core a session reads first and the index of topic sections and task
-  playbooks; with one, that section. It records on the session that the guide
-  was read, which retires the one read-the-guide reminder.
+  playbooks; with one, that section; with a ``heading`` too, that heading's
+  part of it (``lib/guide.py:headings``). It records on the session that the
+  guide was read, which retires the one read-the-guide reminder.
 * ``simulator_docs`` — the reference documents the simulator's vendor installs
   with it (``lib/simulator_docs.py``): for LTspice 26.1 and later, its own
   account of the keyboard shortcuts, menus, schematic file format, ``.MEAS``
@@ -148,7 +149,7 @@ from ltspice_mcp.lib import (
 )
 from ltspice_mcp.lib import file_stamp as stamps
 from ltspice_mcp.lib import simulator as simulator_mod
-from ltspice_mcp.lib.asc_document import ROTATIONS, is_asc
+from ltspice_mcp.lib.asc_document import ROTATIONS, Rotation, is_asc
 from ltspice_mcp.lib.cache import file_stamp
 from ltspice_mcp.lib.connectivity import (
     GROUND,
@@ -654,9 +655,9 @@ class SymbolsQuery(StrictModel):
 
 
 class SymbolQuery(StrictModel):
-    """One symbol's geometry: pin positions at every rotation, bounding box, and
-    origin. The pins reported for a rotation are where they land when the part
-    is placed at it."""
+    """One symbol's geometry: pin positions at every rotation, or at the one
+    asked for, bounding box, and origin. The pins reported for a rotation are
+    where they land when the part is placed at it."""
 
     kind: Literal["symbol"]
     name: str = Field(
@@ -667,6 +668,13 @@ class SymbolQuery(StrictModel):
         default=None,
         min_length=1,
         description="Optional schematic whose directory is searched first, for a sheet-local symbol.",
+    )
+    rotation: Rotation | None = Field(
+        default=None,
+        description=(
+            "The placement to report pins and bounding box for, as edit_schematic names it; "
+            "omit it for all eight."
+        ),
     )
 
 
@@ -896,6 +904,20 @@ class GuideQuery(StrictModel):
             "Omit it for the core and the index."
         ),
     )
+    heading: str | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "One heading of the section, matched by its text in any case: returns that "
+            "part, down to the next heading of its level. Needs section."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _heading_in_a_section(self) -> GuideQuery:
+        if self.heading is not None and self.section is None:
+            raise ValueError("heading needs section, the guide section the heading is in")
+        return self
 
 
 class SimulatorDocsQuery(StrictModel):
@@ -1443,8 +1465,11 @@ async def _do_symbols(q: SymbolsQuery, state: SessionState, view: _View) -> dict
 # ---------------------------------------------------------------------------
 
 
-def _symbol_geometry(resolver: SymbolResolver, name: str) -> dict[str, Any] | None:
-    """Resolve + parse a symbol and compute its geometry at every rotation.
+def _symbol_geometry(
+    resolver: SymbolResolver, name: str, rotation: str | None = None
+) -> dict[str, Any] | None:
+    """Resolve + parse a symbol and compute its geometry at every rotation, or
+    at ``rotation`` alone.
 
     Returns ``None`` when the symbol does not resolve. Pure/immutable — safe to
     run off the event loop.
@@ -1457,7 +1482,7 @@ def _symbol_geometry(resolver: SymbolResolver, name: str) -> dict[str, Any] | No
     sym_info = symbol_info_of(found.name, found.file)
     pins_by_rotation: dict[str, list[dict[str, Any]]] = {}
     bbox_by_rotation: dict[str, dict[str, int]] = {}
-    for rot in ROTATIONS:
+    for rot in ROTATIONS if rotation is None else (rotation,):
         geom = compute_placed_geometry(sym_info, 0, 0, rot)
         pins_by_rotation[rot] = geom["pins"]
         bbox_by_rotation[rot] = geom["bounding_box"]
@@ -1477,7 +1502,7 @@ def _symbol_geometry(resolver: SymbolResolver, name: str) -> dict[str, Any] | No
 async def _do_symbol(q: SymbolQuery, state: SessionState) -> dict[str, Any]:
     asc_path = safe_path(q.path, state) if q.path is not None else None
     resolver = state.symbols.for_sheet(asc_path)
-    payload = await asyncio.to_thread(_symbol_geometry, resolver, q.name)
+    payload = await asyncio.to_thread(_symbol_geometry, resolver, q.name, q.rotation)
     if payload is None:
         raise _QueryError(
             "symbol_not_found",
@@ -2451,12 +2476,20 @@ def _do_guide(q: GuideQuery, state: SessionState) -> dict[str, Any]:
     nothing is offloaded. A read here is what the session's read-the-guide
     reminder waits for, whichever section it names.
     """
+    data: dict[str, Any] = {"section": q.section}
     try:
-        text = guide.read(q.section)
+        data["title"] = guide.title_of(q.section)
+        if q.section is not None and q.heading is not None:
+            part = guide.find_heading(q.section, q.heading)
+            data.update(heading=part.name, text=part.text)
+        else:
+            data["text"] = guide.read(q.section)
     except guide.UnknownGuideSection as exc:
         raise _QueryError("unknown_section", str(exc), supported=list(exc.known)) from exc
+    except guide.UnknownGuideHeading as exc:
+        raise _QueryError("unknown_heading", str(exc), supported=list(exc.known)) from exc
     state.guide_read = True
-    return {"data": {"section": q.section, "title": guide.title_of(q.section), "text": text}}
+    return {"data": data}
 
 
 # ---------------------------------------------------------------------------
@@ -2942,6 +2975,10 @@ _GUIDE_DATA_PROPERTIES: dict[str, Any] = {
         "type": ["string", "null"],
         "description": "The section read; absent for the core and its index.",
     },
+    "heading": {
+        "type": "string",
+        "description": "The heading read, as the section spells it; absent for a whole section.",
+    },
     "title": {"type": "string"},
     "text": {"type": "string", "description": "Markdown."},
 }
@@ -3255,7 +3292,8 @@ INSPECT_DESCRIPTION = (
     "— each with its own arguments, "
     "described on its branch of the query schema. 'reference' searches every tool's "
     "recipes, ops, checks and their fields in plain words ('phase margin'). 'guide' "
-    "returns the guide's core, or one 'section' its index names. A "
+    "returns the guide's core, one 'section' its index names, or one 'heading' of it; "
+    "'symbol' takes a 'rotation' for one placement's pins. A "
     "denied path, a stale cursor, an unknown kind, or a malformed query fails "
     "only that item; every other query still returns, and paginated kinds resume "
     "via 'cursor'. It is the only tool on this surface that never writes."
