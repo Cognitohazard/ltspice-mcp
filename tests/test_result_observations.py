@@ -512,6 +512,31 @@ class TestSurfaceObservations:
         assert ".meas tran bad MAX I(Qnope)" in abort[0]["evidence"]["failed_directives"]
         assert set(abort[0]["evidence"]["missing"]) >= {"aaa_good", "zzz_good"}
 
+    def test_a_failed_directives_own_miss_is_no_batch_abort(self):
+        # LTspice XVII's log/meas_bad_syntax: the one .meas that cannot be
+        # taken is missing because of its own error; the others were measured.
+        # Its own miss is no phantom miss, so no batch abort is claimed.
+        summary = {
+            "meas_errors": [{"directive": ".meas tran broken find v(out at 0.5m"}],
+            "measurements": {"before": 1.0, "after": 0.0},
+        }
+        obs = surface_observations(
+            summary, requested={"meas": ["before", "Broken", "after"], "four": []}
+        )
+        assert all(o["code"] != "meas_batch_abort" for o in obs)
+
+    def test_an_error_naming_a_meas_is_relayed_once_as_the_meas(self):
+        block = ".meas tran broken find v(out at 0.5m\n  Error: FIND can not be evaluated."
+        summary = {
+            "errors": [block],
+            "meas_errors": [
+                {"directive": ".meas tran broken find v(out at 0.5m", "raw_block": block}
+            ],
+        }
+        said = [{"code": "measurement_error", "first_text": block, "severity": "Error"}]
+        relayed = [o for o in surface_observations(summary, said=said) if o["kind"] == "relay"]
+        assert [(o["code"], o.get("severity")) for o in relayed] == [("meas_parse_error", "Error")]
+
     def test_no_abort_link_without_parse_error(self):
         obs = surface_observations({"measurements": {}}, requested={"meas": ["vpp"], "four": []})
         assert all(o["code"] != "meas_batch_abort" for o in obs)

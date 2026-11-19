@@ -176,8 +176,10 @@ async def test_an_xvii_measurement_error_is_a_meas_error_with_the_simulators_sev
 ):
     """LTspice XVII writes the ``.meas`` it cannot take and ``Error: FIND can
     not be evaluated over an interval.`` (recorded: log/meas_bad_syntax). The
-    summary names that ``.meas`` in ``meas_errors``, and relays it with the
-    severity XVII wrote, ``Error``."""
+    summary names that ``.meas`` in ``meas_errors``, and relays it once, as
+    that measurement, with the severity XVII wrote, ``Error``. The other two
+    ``.meas`` were measured, so no batch abort is claimed for the broken one's
+    own miss."""
     deck = _recorded(work_dir, "log/meas_bad_syntax")
     _row, found = await _row_and_summaries(
         _ltspice(config),
@@ -191,6 +193,41 @@ async def test_an_xvii_measurement_error_is_a_meas_error_with_the_simulators_sev
         assert entry["directive"].casefold().startswith(".meas tran broken"), (route, entry)
         relayed = [o for o in observations if o["code"] == "meas_parse_error"]
         assert [o["severity"] for o in relayed] == ["Error"], (route, relayed)
+        assert not [o for o in observations if o["code"] == "log_error"], route
+        assert not [o for o in observations if o["code"] == "meas_batch_abort"], route
+
+
+def test_a_condition_is_as_severe_as_the_strongest_word_the_simulator_wrote_on_it(
+    tmp_path: Path,
+):
+    """LTspice XVII's log/err_timestep: the ``convergence_failed`` block starts
+    ``Trouble finding operating point...`` and a later line says ``Fatal
+    Error``. The condition's severity is ``Fatal Error``, so the summary lists
+    it as an error; LTspice 26 writes the same block with no word, so there it
+    is in neither list."""
+    import numpy as np
+
+    from ltspice_mcp.lib.log_conditions import run_diagnostics
+    from ltspice_mcp.lib.raw_parser import build_simulation_summary
+    from tests.conftest import make_raw_mock
+
+    axis = np.linspace(0.0, 1e-3, 5)
+    raw = make_raw_mock(["time", "V(out)"], axis, {"time": axis, "V(out)": np.ones(5)})
+    for build, expected in (("ltspice17", "Fatal Error"), ("ltspice26", None)):
+        if build not in rec.BUILDS:
+            continue
+        producer = _producer(build)
+        logs = rec.decode_log(build, "log/err_timestep", tmp_path / build)
+        (condition,) = [
+            c
+            for c in run_diagnostics(logs.value("diagnostics")["conditions"], producer)[
+                "diagnostics"
+            ]
+            if c["code"] == "convergence_failed"
+        ]
+        assert condition.get("severity") == expected, (build, condition)
+        errors = build_simulation_summary(raw, logs, producer=producer).get("errors", [])
+        assert (condition["first_text"] in errors) == (expected is not None), (build, errors)
 
 
 async def test_an_operating_point_found_by_stepping_is_no_error_and_says_no_demotion(
@@ -220,6 +257,34 @@ async def test_an_operating_point_found_by_stepping_is_no_error_and_says_no_demo
         )
 
 
+@pytest.mark.parametrize("family", ["xyce", "qspice"])
+def test_a_simulator_with_no_recordings_keeps_the_errors_and_warnings_it_wrote(
+    family: str, tmp_path: Path
+):
+    """A simulator whose log wording the server has no recordings of is still
+    read for the lines it starts with ``Error:`` or ``Warning:``: the run row
+    names them, and the summary lists them, as it did before it read the row."""
+    import numpy as np
+
+    from ltspice_mcp.lib.log_conditions import run_diagnostics
+    from ltspice_mcp.lib.raw_parser import build_simulation_summary
+    from ltspice_mcp.lib.simulator_build import Producer
+    from tests._ltspice_recorded import _decode_paths
+    from tests.conftest import make_raw_mock
+
+    log = tmp_path / "run.log"
+    log.write_text("A run\nError: no model named qx\nWarning: a default was used\n")
+    logs = _decode_paths(None, log, tmp_path / "decoded", producing=family).logs
+    producer = Producer(family, None, None)
+    said = run_diagnostics(logs.value("diagnostics")["conditions"], producer)
+    assert said["coverage"] == "unverified"
+    axis = np.linspace(0.0, 1e-3, 5)
+    raw = make_raw_mock(["time", "V(out)"], axis, {"time": axis, "V(out)": np.ones(5)})
+    summary = build_simulation_summary(raw, logs, producer=producer)
+    assert summary["errors"] == ["Error: no model named qx"]
+    assert "Warning: a default was used" in summary["warnings"]
+
+
 # --------------------------------------------------------------------------
 # The guards
 # --------------------------------------------------------------------------
@@ -233,7 +298,14 @@ _LINE_CLASSIFIER_READERS = {
     ("lib/log_parser.py", "empty_measurements"): "the reason a refused run has no measurements",
     ("lib/services.py", "solve_failure_lines"): "solve-failure lines by phrase, on both lists",
     ("lib/metrics.py", "read_log_warnings"): "unrecognized-variable lines by phrase",
+    ("lib/metrics.py", "aggregate_log_measurements"): (
+        "the text of why a log has no measurements, in a refusal, with no severity"
+    ),
 }
+
+#: Words in an expression that make it the line classifier's output: its
+#: diagnostics, or the measurement parser's, which carries its lists.
+_CLASSIFIER_OUTPUT = ("diag", "meas_data")
 
 
 def test_only_the_named_readers_read_the_line_classifiers_lists():
@@ -246,11 +318,25 @@ def test_only_the_named_readers_read_the_line_classifiers_lists():
 
     from tests._source_scan import modules
 
+    def holds_output(text: str) -> bool:
+        return any(word in text.casefold() for word in _CLASSIFIER_OUTPUT)
+
     readers = set()
     for path, tree in modules().items():
         for scope in ast.walk(tree):
             if not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
+            # A name bound to the classifier's output under another name
+            # (``section = logs.value("diagnostics")``) is read as that output.
+            aliases = {
+                target.id
+                for node in ast.walk(scope)
+                if isinstance(node, (ast.Assign, ast.AnnAssign))
+                and node.value is not None
+                and holds_output(ast.unparse(node.value))
+                for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+                if isinstance(target, ast.Name)
+            }
             for node in ast.walk(scope):
                 key = base = None
                 if (
@@ -268,9 +354,21 @@ def test_only_the_named_readers_read_the_line_classifiers_lists():
                     and node.args[0].value in ("errors", "warnings", "meas_errors")
                 ):
                     key, base = node.args[0].value, ast.unparse(node.func.value)
-                if key is not None and base is not None and "diag" in base.casefold():
-                    readers.add((path, scope.name))
+                if key is not None and base is not None:
+                    root = base.split(".", 1)[0].split("[", 1)[0].split("(", 1)[0]
+                    if holds_output(base) or root in aliases:
+                        readers.add((path, scope.name))
     assert readers == set(_LINE_CLASSIFIER_READERS)
+
+
+def _producer(build: str) -> Any:
+    from ltspice_mcp.lib.simulator_build import Producer
+
+    return Producer(
+        "ltspice",
+        "LTspice 26.1.1 for Windows" if build == "ltspice26" else None,
+        "LTspice.exe" if build == "ltspice26" else "XVIIx64.exe",
+    )
 
 
 def _recorded_logs() -> list[tuple[str, str]]:
@@ -293,14 +391,9 @@ def test_every_recorded_log_gives_the_summary_the_run_rows_errors_and_warnings(
 
     from ltspice_mcp.lib.log_conditions import run_diagnostics, said_as
     from ltspice_mcp.lib.raw_parser import build_simulation_summary
-    from ltspice_mcp.lib.simulator_build import Producer
     from tests.conftest import make_raw_mock
 
-    producer = Producer(
-        "ltspice",
-        "LTspice 26.1.1 for Windows" if build == "ltspice26" else None,
-        "LTspice.exe" if build == "ltspice26" else "XVIIx64.exe",
-    )
+    producer = _producer(build)
     logs = rec.decode_log(build, case, tmp_path)
     axis = np.linspace(0.0, 1e-3, 5)
     raw = make_raw_mock(["time", "V(out)"], axis, {"time": axis, "V(out)": np.ones(5)})

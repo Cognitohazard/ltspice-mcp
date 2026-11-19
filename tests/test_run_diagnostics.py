@@ -455,12 +455,21 @@ def test_the_producer_chooses_the_rules_and_says_when_they_are_not_its_own():
     unknown = log_conditions.run_diagnostics(conditions, Producer(None, None, None))
     assert unknown["coverage"] == "producer_unknown"
     assert [entry["code"] for entry in unknown["diagnostics"]] == ["unknown_model_parameter"]
-    # A simulator with no recordings has every line counted as unclassified.
+    # A simulator with no recordings has every line counted as unclassified,
+    # but one it starts with its own ``Error:`` or ``Warning:``.
     xyce = log_conditions.run_diagnostics(conditions, Producer("xyce", None, None))
     assert xyce["coverage"] == "unverified"
     ((entry),) = xyce["diagnostics"]
     assert entry["code"] == "unclassified"
     assert entry["count"] == sum(1 for line in read_spice_text(log).splitlines() if line.strip())
+    said = log_conditions.classify(
+        {"log": "Xyce run\nError: no such model\nWarning: a note\n"}, "unverified"
+    )
+    assert [(c["code"], c.get("severity")) for c in said] == [
+        ("unclassified", None),
+        ("simulator_error", "Error"),
+        ("simulator_warning", "Warning"),
+    ]
     # A log that was not read says so.
     assert log_conditions.run_diagnostics(None, Producer("ltspice", None, None)) == {
         "coverage": "log_unread"

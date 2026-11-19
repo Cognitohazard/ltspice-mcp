@@ -55,7 +55,8 @@ COVERAGE: dict[str, str] = {
         "so its log was read with the wording of every recorded build"
     ),
     "unverified": (
-        "the server has no recordings of this simulator's log wording, so every "
+        "the server has no recordings of this simulator's log wording, so only a "
+        "line it starts with 'Error:' or 'Warning:' is told apart; every other "
         "line is counted under 'unclassified'"
     ),
     "log_unread": "the run's log could not be read, so nothing it said is reported",
@@ -554,6 +555,17 @@ _RULES: tuple[_Rule, ...] = (
 
 _SEVERITY = re.compile(r"^(Fatal Error|Error|ERROR|Warning|WARNING|Note)\b")
 
+#: How strong each word ``_SEVERITY`` reads is, for a condition written with
+#: more than one: its severity is the strongest.
+_SEVERITY_RANK: dict[str, int] = {
+    "Note": 0,
+    "Warning": 1,
+    "WARNING": 1,
+    "Error": 2,
+    "ERROR": 2,
+    "Fatal Error": 3,
+}
+
 
 class _RuleSet:
     """One set of rules, ready to find the first that starts at a line.
@@ -607,14 +619,18 @@ def _rules_of(*builds: str) -> tuple[_Rule, ...]:
 
 #: Each set of rules a log can be read with, by name. ``ltspice`` is every
 #: recorded LTspice build's, ``wording`` every recorded simulator's, and
-#: ``unverified`` none.
+#: ``unverified`` only the rules for a line in the form ``Error: …`` or
+#: ``Warning: …``: a simulator with no recordings is still read for the words
+#: it wrote itself, so a reply says which of its lines it called errors.
 _CLASSIFIERS: dict[str, _RuleSet] = {
     _LT26: _RuleSet(_rules_of(_LT26)),
     _LT17: _RuleSet(_rules_of(_LT17)),
     "ltspice": _RuleSet(_rules_of(_LT26, _LT17)),
     _NG: _RuleSet(_rules_of(_NG)),
     "wording": _RuleSet(_RULES),
-    "unverified": _RuleSet(()),
+    "unverified": _RuleSet(
+        tuple(r for r in _RULES if r.code in ("simulator_error", "simulator_warning"))
+    ),
 }
 CLASSIFIERS: tuple[str, ...] = tuple(_CLASSIFIERS)
 
@@ -684,15 +700,29 @@ def _held(text: str) -> str:
 def classify(channels: Mapping[Channel, str], rules_name: str) -> list[LogCondition]:
     """The conditions the ``channels``' text names under one set of rules: one
     entry per code and channel, in the order each first appears, log before
-    console. ``severity`` is the first occurrence's."""
+    console. ``severity`` is the strongest word the simulator wrote on any line
+    of any occurrence (of ``unclassified``, whose lines are unrelated, the first
+    one's), as it spelled it: a condition whose first line carries
+    none and whose later one says ``Fatal Error`` (XVII's ``convergence_failed``
+    on log/err_timestep) is the error the simulator called it."""
     rules = _CLASSIFIERS[rules_name]
     entries: dict[tuple[str, Channel], LogCondition] = {}
     channel: Channel
     for channel in ("log", "console"):
         for code, block in _occurrences(channels.get(channel) or "", rules):
+            written = [m[1] for line in block if (m := _SEVERITY.match(line.strip())) is not None]
+            strongest = max(written, key=_SEVERITY_RANK.__getitem__, default=None)
             seen = entries.get((code, channel))
             if seen is not None:
                 seen["count"] += 1
+                # Unclassified lines are unrelated to each other: a later one's
+                # word is not said of the first one's text.
+                if code == UNCLASSIFIED:
+                    continue
+                if strongest is not None and _SEVERITY_RANK[strongest] > _SEVERITY_RANK.get(
+                    seen.get("severity", ""), -1
+                ):
+                    seen["severity"] = strongest
                 continue
             entry: LogCondition = {
                 "code": code,
@@ -700,12 +730,8 @@ def classify(channels: Mapping[Channel, str], rules_name: str) -> list[LogCondit
                 "first_text": _held("\n".join(block)),
                 "channel": channel,
             }
-            severity = next(
-                (m[1] for line in block if (m := _SEVERITY.match(line.strip())) is not None),
-                None,
-            )
-            if severity is not None:
-                entry["severity"] = severity
+            if strongest is not None:
+                entry["severity"] = strongest
             entries[(code, channel)] = entry
     return list(entries.values())
 

@@ -34,8 +34,10 @@ Guide section 'fundamentals' applies to ngspice, with these differences:
 - ngspice run in batch mode with a raw output (`-b -r`, as the server runs it)
   does not evaluate a top-level `.meas`. `run_experiments` warns (lint
   `meas-ngspice-batch`) and runs the deck; the measurement is absent from the
-  result, and results read from the run include ngspice's notice
-  `No .measure possible in batch mode` in `warnings`. Read the trace with a
+  result, and a read of the run reports each requested `.meas` as unmet with
+  reason `skipped_in_batch_mode` (ngspice's notice `No .measure possible in
+  batch mode` is in the run's `diagnostics` as `measurement_skipped_batch`).
+  Read the trace with a
   recipe instead (`waveform`, `value`, `operating_point`), or
   measure inside a `.control ... run ... .endc` block with the dot-less
   interactive `meas` command (`meas tran vmax MAX V(out)`), whose result prints

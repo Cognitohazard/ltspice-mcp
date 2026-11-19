@@ -81,6 +81,7 @@ from ltspice_mcp.lib.spice_lex import (
     EditCards,
     SpiceLexError,
     directive_head,
+    extract_meas_name,
     lex_deck,
     lex_for_edit,
 )
@@ -613,9 +614,7 @@ _OBSERVATION_INPUTS: FileCache[tuple[dict[str, list[str]] | None, dict[str, floa
 )
 
 
-def relay_observations(
-    summary: dict, said: Sequence[Mapping[str, Any]] = ()
-) -> list[Observation]:
+def relay_observations(summary: dict, said: Sequence[Mapping[str, Any]] = ()) -> list[Observation]:
     """Promote the simulator's own error diagnostics to surfaced observations.
 
     These are the highest-authority facts — the simulator classified them, we
@@ -639,15 +638,27 @@ def relay_observations(
         return item
 
     obs: list[Observation] = []
+    # An error that names a ``.meas`` is relayed once, as the measurement that
+    # failed (below), not again as a log line.
     seen: set[str] = set()
+    measured = {
+        str(entry.get("raw_block"))
+        for entry in summary.get("meas_errors", []) or []
+        if isinstance(entry, dict)
+    }
     for err in summary.get("errors", []) or []:
         first_line = err.splitlines()[0] if err else err
-        if first_line in seen:
+        if err in measured or first_line in seen:
             continue
         seen.add(first_line)
         obs.append(
             with_severity(
-                {"code": "log_error", "kind": "relay", "detail": first_line, "evidence": {"log": err}},
+                {
+                    "code": "log_error",
+                    "kind": "relay",
+                    "detail": first_line,
+                    "evidence": {"log": err},
+                },
                 err,
             )
         )
@@ -1174,6 +1185,13 @@ def meas_batch_abort_observation(obs: list[Observation]) -> Observation | None:
     over the assembled list, not inside either family builder.
     """
     parse_errors = [o for o in obs if o.get("code") == "meas_parse_error"]
+    # A failed directive's own miss is explained by its own error, not by the
+    # batch: only the others are phantom misses.
+    failed = {
+        name.casefold()
+        for o in parse_errors
+        if (name := extract_meas_name(str(o.get("evidence", {}).get("directive", ""))))
+    }
     # request_kind gate: .four misses also carry reason="missing", but the
     # Fourier pipeline is unrelated to the .meas batch abort — folding them
     # in would state a wrong count and attribution.
@@ -1183,6 +1201,7 @@ def meas_batch_abort_observation(obs: list[Observation]) -> Observation | None:
         if o.get("code") == "unmet_request"
         and o.get("evidence", {}).get("reason") == "missing"
         and o.get("evidence", {}).get("request_kind") == "meas"
+        and str(o.get("evidence", {}).get("name", "")).casefold() not in failed
     ]
     if not (parse_errors and missing):
         return None
