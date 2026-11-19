@@ -88,6 +88,7 @@ from typing import Any
 
 from ltspice_mcp.lib import atomic_write_json as _atomic_write_json
 from ltspice_mcp.lib import now
+from ltspice_mcp.lib.redirect import redirect_below, same_location
 
 logger = logging.getLogger(__name__)
 
@@ -169,23 +170,18 @@ def validate_job_id(job_id: str) -> str:
 
 
 def _record(directory: Path, name: str, error: str) -> Path:
-    """One record file under an already-resolved store directory.
+    """One record file under a store directory, refused with ``error`` when it
+    exists and redirects elsewhere (a planted symlink or junction).
 
-    An existing record comes back resolved and must resolve inside its
-    directory (a planted symlink is refused with ``error``). One that does not
-    exist yet is returned as named and NOT resolved: the name is already one
-    validated segment, and on Windows resolving a path whose directory a peer
-    is creating at that moment can come back with the ``\\?\\`` prefix still
-    on, which no comparison survives.
+    Returned as named: the name is already one validated segment, and the
+    question is answered by ``redirect.redirect_below`` from what is on disk,
+    never by comparing a resolved path's text, which on Windows can keep the
+    ``\\\\?\\`` prefix when a peer creates or removes the file at that moment.
     """
     candidate = directory / name
-    try:
-        resolved = candidate.resolve(strict=True)
-    except OSError:
-        return candidate
-    if resolved.parent != directory:
+    if redirect_below(candidate, directory) is not None:
         raise StoreError(error)
-    return resolved
+    return candidate
 
 
 def _validate_name(name: str, what: str) -> str:
@@ -803,12 +799,15 @@ class Store:
         self, root_job_id: str, recorded: Path, simulator: type | None = None
     ) -> Path:
         """Validate the retained initial artifact directory before reuse."""
-        runs = self.runs_root(simulator).resolve()
+        runs = _resolved(self.runs_root(simulator))
         expected = run_dir_in(runs, root_job_id)
-        resolved = expected.resolve()
-        if not recorded.is_absolute() or recorded.resolve() != resolved or resolved != expected:
+        if (
+            not recorded.is_absolute()
+            or redirect_below(expected, runs) is not None
+            or not same_location(recorded, expected)
+        ):
             raise StoreError("Recorded lineage directory is outside its Store run root")
-        return resolved
+        return expected
 
     def recovery_spinit(self, root_job_id: str, simulator: type | None = None) -> Path:
         """Inert system startup input retained inside the initial run root."""
@@ -921,9 +920,9 @@ class Store:
     def parser_dir(self, parse_id: str) -> Path:
         """One parser process's temporary capture and numeric output directory."""
         name = _validate_name(parse_id, "parser id")
-        base = (self.root / "parsing").resolve()
+        base = _resolved(self.root / "parsing")
         candidate = base / name
-        if candidate.resolve() != candidate:
+        if redirect_below(candidate, base) is not None:
             raise StoreError("Parser directory must not redirect to another location")
         return candidate
 

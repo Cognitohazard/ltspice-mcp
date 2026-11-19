@@ -37,6 +37,7 @@ from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATU
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.raw_parser import has_valid_raw_header, other_raws, result_digest
 from ltspice_mcp.lib.recovery_records import CaseRecovery, JobRecovery, RecoveryError
+from ltspice_mcp.lib.redirect import redirect_below
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name, raw_extension_for
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable, reported_build
 from ltspice_mcp.lib.store import (
@@ -296,8 +297,11 @@ def save_job(job: ExperimentJob) -> Path:
     """Persist an experiment at its validated working-store path."""
     validate_job_id(job.job_id)
     root = job.store_path.parent.resolve()
-    expected = (root / f"{job.job_id}.json").resolve()
-    if job.store_path.resolve() != expected or expected.parent != root:
+    expected = root / f"{job.job_id}.json"
+    # Whether the record redirects is answered from what is on disk: a writer
+    # of the same job may create or replace the file at this moment, which on
+    # Windows can leave a resolved path's text with the ``\\?\`` prefix on.
+    if job.store_path.name != expected.name or redirect_below(expected, root) is not None:
         raise ValueError(f"Experiment store path is not contained: {job.store_path}")
     job.store_path = expected
     atomic_write_json(expected, serialize_job(job))

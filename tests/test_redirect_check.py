@@ -13,16 +13,20 @@ must still answer from what is on disk.
 
 from __future__ import annotations
 
+import ast
 import sys
 import threading
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
+from ltspice_mcp.lib.redirect import redirect_below, same_location
 from ltspice_mcp.lib.store import Store, parser_file_in
-from tests.conftest import LIVENESS_S
+from tests._source_scan import modules
+from tests.conftest import LIVENESS_S, symlink_or_skip
 
 windows_only = pytest.mark.skipif(
     sys.platform != "win32",
@@ -207,3 +211,223 @@ def test_ltspice_attempt_whose_folder_appears_between_the_two_lookups(
         controlled_ltspice.prepare_attempt_ini(template, path, tmp_path)
 
     assert path.is_file()
+
+
+# -- a path that does redirect is still refused ------------------------------
+
+
+def _junction_or_skip(link: Path, target: Path) -> None:
+    """Create a junction ``link`` -> ``target``; a junction needs no privilege,
+    so only another platform skips."""
+    if sys.platform != "win32":
+        pytest.skip("junctions are a native Windows facility")
+    if TYPE_CHECKING:
+
+        def create_junction(target: str, link: str) -> None: ...
+
+    else:
+        from _winapi import CreateJunction as create_junction
+
+    create_junction(str(target), str(link))
+
+
+_LINKS = {
+    "symlink": lambda link, target: symlink_or_skip(link, target, target_is_directory=True),
+    "junction": _junction_or_skip,
+}
+
+
+@pytest.mark.parametrize("kind", sorted(_LINKS))
+def test_a_link_below_the_root_redirects(tmp_path: Path, kind: str):
+    root = tmp_path / "root"
+    elsewhere = tmp_path / "elsewhere"
+    (root / "sub").mkdir(parents=True)
+    elsewhere.mkdir()
+    _LINKS[kind](root / "sub" / "link", elsewhere)
+
+    assert redirect_below(root / "sub" / "link" / "file", root) == root / "sub" / "link"
+    assert redirect_below(root / "sub" / "link", root) == root / "sub" / "link"
+    assert redirect_below(root / "sub" / "missing" / "file", root) is None
+
+
+@pytest.mark.parametrize("kind", sorted(_LINKS))
+def test_the_root_itself_may_redirect(tmp_path: Path, kind: str):
+    """What lies at and above the root is the caller's choice (a store kept
+    behind a link is still the store); only what lies below it is asked."""
+    target = tmp_path / "target"
+    (target / "sub").mkdir(parents=True)
+    root = tmp_path / "root"
+    _LINKS[kind](root, target)
+
+    assert redirect_below(root / "sub" / "file", root) is None
+
+
+def test_a_path_outside_the_root_or_with_parent_parts_is_refused(tmp_path: Path):
+    root = tmp_path / "root"
+    root.mkdir()
+    (tmp_path / "other").mkdir()
+
+    assert redirect_below(tmp_path / "other" / "file", root) == tmp_path / "other" / "file"
+    escape = root / ".." / "other" / "file"
+    assert redirect_below(escape, root) == escape
+    assert redirect_below(Path("relative") / "file", root) == Path("relative") / "file"
+
+
+def test_nothing_below_a_root_that_does_not_exist_redirects(tmp_path: Path):
+    root = tmp_path / "not-yet" / "root"
+
+    assert redirect_below(root / "a" / "b", root) is None
+    assert redirect_below(tmp_path / "elsewhere", root) == tmp_path / "elsewhere"
+
+
+def test_same_location_follows_a_link_to_the_folder_that_exists(tmp_path: Path):
+    target = tmp_path / "target"
+    target.mkdir()
+    link = tmp_path / "link"
+    symlink_or_skip(link, target, target_is_directory=True)
+
+    assert same_location(link / "missing" / "dir", target / "missing" / "dir")
+    assert not same_location(link / "missing" / "dir", target / "missing" / "other")
+    assert not same_location(tmp_path / "a", tmp_path / "b")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="short names are a Windows facility")
+def test_same_location_and_containment_hold_over_a_short_name(tmp_path: Path):
+    import ctypes
+
+    long_dir = tmp_path / "a folder with a long name"
+    (long_dir / "sub").mkdir(parents=True)
+    buffer = ctypes.create_unicode_buffer(1024)
+    if not ctypes.windll.kernel32.GetShortPathNameW(str(long_dir), buffer, 1024):  # type: ignore[attr-defined]
+        pytest.skip("this volume keeps no short names")
+    short_dir = Path(buffer.value)
+    if short_dir == long_dir:
+        pytest.skip("this volume keeps no short names")
+
+    assert same_location(short_dir / "sub" / "missing", long_dir / "sub" / "missing")
+    assert redirect_below(short_dir / "sub" / "missing", long_dir) is None
+
+
+@pytest.mark.parametrize("kind", sorted(_LINKS))
+def test_every_check_refuses_a_link_in_its_path(tmp_path: Path, kind: str):
+    """The same input through every check that asks whether a path redirects."""
+    from ltspice_mcp.lib import experiment_store
+    from ltspice_mcp.lib.store import StoreError
+    from tests.conftest import persist_experiment_record
+
+    store = Store(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+
+    # The parser folder of one parse.
+    parsing = store.root / "parsing"
+    parsing.mkdir(parents=True)
+    _LINKS[kind](parsing / "linked", elsewhere)
+    with pytest.raises(StoreError, match="must not redirect"):
+        store.parser_dir("linked")
+
+    # A record in a parser folder.
+    directory = store.parser_dir("records")
+    directory.mkdir()
+    _LINKS[kind](directory / "result.json", elsewhere)
+    with pytest.raises(StoreError):
+        parser_file_in(directory, "result.json")
+
+    # A job's lineage folder.
+    store.runs_root().mkdir(parents=True)
+    _LINKS[kind](store.run_dir("exp_linked"), elsewhere)
+    with pytest.raises(StoreError):
+        store.lineage_run_dir("exp_linked", store.run_dir("exp_linked"))
+
+    # A job's record.
+    circuit = tmp_path / "deck.cir"
+    circuit.write_text("* deck\n.end\n", encoding="utf-8")
+    path = persist_experiment_record(tmp_path, circuit, "exp_record")
+    job = experiment_store.load_job_from_path(path, tmp_path)
+    assert job is not None
+    path.unlink()
+    _LINKS[kind](path, elsewhere)
+    with pytest.raises(ValueError, match="not contained"):
+        experiment_store.save_job(job)
+
+
+@pytest.mark.parametrize("kind", sorted(_LINKS))
+def test_an_ltspice_attempt_through_a_link_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+):
+    from ltspice_mcp.lib import controlled_ltspice
+    from ltspice_mcp.lib.recovery_records import RecoveryError
+    from tests.test_controlled_ltspice import _QUERY, _template
+
+    template = _template(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    _LINKS[kind](tmp_path / "startup" / "attempt-1", elsewhere)
+    monkeypatch.setattr("ltspice_mcp.lib.controlled_ltspice.time.time", lambda: _QUERY)
+    if sys.platform != "win32":
+        # As ``test_controlled_ltspice`` runs these checks off Windows: the
+        # profile reader is the Windows API, so the template's values are given.
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr(
+            controlled_ltspice,
+            "_read_profile",
+            lambda path: {
+                ("options", "uuid"): "12345678901234567890",
+                ("options", "captureanalytics"): "false",
+                ("options", "lastwebupdatequery"): str(_QUERY),
+            },
+        )
+    path = tmp_path / "startup" / "attempt-1" / "LTspice.ini"
+
+    with pytest.raises(RecoveryError, match="escaped"):
+        controlled_ltspice.prepare_attempt_ini(template, path, tmp_path)
+    assert list(elsewhere.iterdir()) == []
+
+
+# -- the guard ---------------------------------------------------------------
+
+#: Every comparison in the package with a ``resolve()`` result on one side,
+#: with why it is not a redirect check. A new one fails the test below: ask
+#: ``redirect.redirect_below`` whether a path redirects, and
+#: ``redirect.same_location`` whether two paths are one place.
+_RESOLVED_COMPARISONS_ALLOWED = {
+    # Whether a relative include already reaches its staged file, so its text
+    # can stay as written. A false "no" rewrites it to a path that reaches the
+    # same file, so a wrong answer costs a rewrite, never a wrong file.
+    ("lib/deck_staging.py", "expected != actual_destination.resolve()"),
+    # Two spellings of a staged source and its recorded edit, both files that
+    # exist and that no other thread changes: which file an edit belongs to.
+    (
+        "lib/native_inputs.py",
+        "Path(origin.path).resolve() != files[edit.file_index].resolve()",
+    ),
+    ("lib/native_inputs.py", "item.path == variant.path.resolve()"),
+    # A lookup by a resolved key, compared with a digest, not with a path.
+    ("lib/native_inputs.py", "expected.get(variant.path.resolve()) != variant.sha256"),
+    # Which of a circuit's jobs ran it: both sides name a circuit file that
+    # exists, so neither is being created or removed by the server meanwhile.
+    (
+        "tools/jobs.py",
+        "(source.path.resolve() if source.path.exists() else source.path) == resolved_circuit",
+    ),
+}
+
+
+def test_no_check_compares_the_text_of_a_resolved_path():
+    found: set[tuple[str, str]] = set()
+    for module, tree in modules().items():
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Compare) or not all(
+                isinstance(op, (ast.Eq, ast.NotEq)) for op in node.ops
+            ):
+                continue
+            sides = [node.left, *node.comparators]
+            if any(
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "resolve"
+                for side in sides
+                for call in ast.walk(side)
+            ):
+                found.add((module, ast.unparse(node)))
+    assert found == _RESOLVED_COMPARISONS_ALLOWED
