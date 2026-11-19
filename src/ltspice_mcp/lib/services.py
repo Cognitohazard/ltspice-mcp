@@ -731,10 +731,12 @@ def case_unreadable(job: ExperimentJob, case: ExperimentCase) -> CaseUnreadable 
     this gate was the job's.
     """
     if case.status not in TERMINAL_CASE_STATUSES:
-        return CaseUnreadable("run_not_finished", _not_finished(job, case, None, read=False))
+        return CaseUnreadable(
+            code="run_not_finished", detail=_not_finished(job, case, None, read=False)
+        )
     if case.status == "produced" or partial_raw(case) is not None:
         return None
-    return CaseUnreadable("raw_not_produced", failure_summary(case))
+    return CaseUnreadable(code="raw_not_produced", detail=failure_summary(case))
 
 
 async def case_refusal(job: ExperimentJob, case: ExperimentCase) -> CaseUnreadable | None:
@@ -749,8 +751,8 @@ async def case_refusal(job: ExperimentJob, case: ExperimentCase) -> CaseUnreadab
 
     progress = (await live_run_progress(job, case_ids={case.case_id})).get(case.case_id)
     return CaseUnreadable(
-        "run_not_finished",
-        _not_finished(job, case, progress, read=True),
+        code="run_not_finished",
+        detail=_not_finished(job, case, progress, read=True),
         evidence=progress["evidence"] if progress is not None else None,
     )
 
@@ -826,9 +828,7 @@ async def readable_case(
     refusal = await case_refusal(job, case)
     if refusal is not None:
         raise refusal.error(job, case)
-    return case, case_run_context(
-        job, case, state, require_raw=require_raw, other_raw=other_raw
-    )
+    return case, case_run_context(job, case, state, require_raw=require_raw, other_raw=other_raw)
 
 
 def experiment_case(

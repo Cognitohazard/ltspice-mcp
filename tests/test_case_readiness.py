@@ -108,15 +108,15 @@ async def one_case_running(
         )
         held.release(first.run_token)
         await await_until(lambda: first.status == "produced", what="the first case to produce")
-        await await_until(
-            lambda: second.status == "running", what="the second case to be running"
-        )
+        await await_until(lambda: second.status == "running", what="the second case to be running")
         yield _Running(state, job, first, second, held)
     finally:
         # Let the held case end, so the job's coordinator returns.
         await await_until(
-            lambda: any(second.run_token in item[2] for item in held.launches)
-            or second.status != "running",
+            lambda: (
+                any(second.run_token in item[2] for item in held.launches)
+                or second.status != "running"
+            ),
             what="the second case's launch",
         )
         if second.status == "running":
