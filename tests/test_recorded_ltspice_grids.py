@@ -56,10 +56,28 @@ GRIDS = grids()
 #: no recording does: each sweep of each stepped thing alone and nested, a
 #: negative value, zero and many digits in a log and in a raw, and the cases a
 #: name is spelled in.
+#:
+#: results-layout: of each analysis, the stepping over the temperature, a
+#: source and a model parameter, and text storage stepped or not (bar the
+#: unstepped transient and AC sweep); a frequency or DC sweep of one point
+#: stepped each way, and a DC sweep of one point; dc, noise and tf under
+#: numdgt above 6; Fast Access of every analysis but the transient; and the
+#: .op.raw a transient stepped over the temperature, a source or a model
+#: parameter leaves. Their decks (behaviour results-layout-grid) wait for a
+#: recording run on Windows. XVII also lacks raw/fra_step and raw/fra_numdgt7,
+#: which no XVII run recorded.
+#:
+#: trace-name: the decks of behaviour trace-name-grid fill every coordinate
+#: no recording does: every kind of trace at each depth in an AC sweep and a
+#: DC sweep, a node voltage in a block and a terminal current at the top in
+#: a transient and an operating point, a noise contribution inside a block,
+#: and a section-sign part in an AC sweep, a DC sweep and a noise run.
 UNRECORDED: dict[str, dict[str, int]] = {
     "printed-measurement": {"ltspice26": 416, "ltspice17": 415},
     "log-condition": {"ltspice26": 20, "ltspice17": 21},
     "step-value": {"ltspice26": 56, "ltspice17": 56},
+    "results-layout": {"ltspice26": 85, "ltspice17": 87},
+    "trace-name": {"ltspice26": 27, "ltspice17": 27},
 }
 
 
