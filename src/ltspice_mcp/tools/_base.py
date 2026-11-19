@@ -950,7 +950,10 @@ DIAGNOSTICS_COVERAGE_SCHEMA: dict[str, Any] = {
 # Surfaced result observations — see lib/result_observations.py. A surfacing
 # layer: facts lifted into view for the consuming agent to judge, never a trust
 # verdict. ``severity`` is present only on ``relay`` items (the simulator's own
-# classification); ``value``/``reconciliation``/``coverage`` items omit it.
+# classification); ``value``/``reconciliation``/``coverage`` items omit it. A
+# read by job repeats a run's own observations
+# (``result_observations.READ_BY_JOB``), so ``execution`` is one kind it holds:
+# ``raw_names_disagree`` is the run's.
 OBSERVATIONS_SCHEMA: dict[str, Any] = {
     "type": "array",
     CUT: NEVER,
@@ -960,7 +963,7 @@ OBSERVATIONS_SCHEMA: dict[str, Any] = {
             "code": {"type": "string"},
             "kind": {
                 "type": "string",
-                "enum": ["relay", "reconciliation", "value", "coverage"],
+                "enum": ["relay", "reconciliation", "value", "coverage", "execution"],
             },
             "detail": {"type": "string"},
             "severity": {"type": "string"},

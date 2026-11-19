@@ -333,6 +333,21 @@ def measurement_failed(table: Mapping[str, Any], name: str, step: int | None = N
     return set(range(len(entry.get("values") or ()))) <= set(steps)
 
 
+#: Why a run's log says nothing of its measurements that can be trusted, by
+#: the reason ``services.measurements_unread`` gives, as every reader that
+#: says so words it: the run row (``measurements_coverage``), the ``summary``
+#: recipe, the ``measurements`` recipe and the Python API's ``measurements``.
+MEASUREMENTS_UNREAD: dict[str, str] = {
+    "simulator_unsupported": (
+        "the server reads .meas results only from LTspice and ngspice logs, and does "
+        "not read this simulator's measure output"
+    ),
+    "log_unread": (
+        "the run's log was not captured, or its measurements section could not be decoded"
+    ),
+}
+
+
 def run_measurement_facts(
     table: Mapping[str, Any], requested: Sequence[str] | None
 ) -> dict[str, Any]:

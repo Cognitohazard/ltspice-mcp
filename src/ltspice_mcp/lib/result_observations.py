@@ -70,7 +70,12 @@ from ltspice_mcp.lib.deck_staging import (
 from ltspice_mcp.lib.device_names import DevicePath, path_text, spelled_name, split_path, trace_key
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import parse_spice_value
-from ltspice_mcp.lib.log_types import given_no_value, measurement_named, run_measurement_facts
+from ltspice_mcp.lib.log_types import (
+    MEASUREMENTS_UNREAD,
+    given_no_value,
+    measurement_named,
+    run_measurement_facts,
+)
 from ltspice_mcp.lib.ngspice_driver import interp_option, read_option_cards
 from ltspice_mcp.lib.spice_lex import (
     EditCards,
@@ -86,6 +91,7 @@ from ltspice_mcp.lib.trace_names import is_node_voltage
 if TYPE_CHECKING:
     from ltspice_mcp.lib.decoded_raw import DecodedRaw
     from ltspice_mcp.lib.device_names import Naming
+    from ltspice_mcp.lib.lint_rules import SaveList
     from ltspice_mcp.lib.netlist_graph import FlatNetlist
     from ltspice_mcp.lib.result_kinds import Analysis
 
@@ -647,8 +653,156 @@ def relay_observations(summary: dict) -> list[Observation]:
 
 #: The codes of what a run's case observed that every read of its results by
 #: job repeats (``services.experiment_run_context``): facts about what the
-#: raw holds, which a read of one signal would otherwise not see.
-READ_BY_JOB = frozenset({"subcircuit_nodes_not_saved"})
+#: raw holds, or how its names are spelled, which a read of one signal would
+#: otherwise not see. ``partial_raw`` (a stopped run's kept raw) is added to
+#: the read by ``services.partial_raw_observation`` itself.
+READ_BY_JOB = frozenset(
+    {"subcircuit_nodes_not_saved", "raw_names_disagree", "saves_not_stored"}
+)
+
+#: Every other code a run's case can carry, and why a read of the run by job
+#: does not repeat it. A case's observations are on the job's receipt
+#: (``run_experiments``, ``jobs``); ``tests/test_replies_name_what_they_left_out.py``
+#: fails a code a case can carry that is on neither list.
+NOT_READ_BY_JOB: Mapping[str, str] = {
+    # What the run did, which its receipt says and no read of the raw changes.
+    "control_write_injected": "how the run was launched; the raw it wrote is read as written",
+    "late_simulator_exit": "when the simulator exited; the raw it left is read as written",
+    "kill_unconfirmed": "a run with no confirmed exit leaves no raw a read takes",
+    "kill_attempt_failed": "a failed kill attempt; the run's raw, if any, is read as written",
+    "partial_progress": "how far a stopped run got; partial_raw says it of the raw a read takes",
+    "run_progress": "how far a running case has got, said only while it runs",
+    # What the run's log says; a read of the raw does not read the log.
+    "logopinfo_withheld": (
+        "the log's device table, not the raw. A read of that table by job "
+        "(operating_point, api.device_op_points) needs it, and does not repeat it yet"
+    ),
+    "native_log_output": "a run that wrote no raw, so no read of a raw by job is made",
+    "missing_required_raw": "a run that wrote no raw, so no read of a raw by job is made",
+    "ngspice_mode_unverified": (
+        "how ngspice read the deck, which the server's deck models use; the raw's traces "
+        "are read as the raw spells them"
+    ),
+    # Where the deck came from; the staged copy is what ran.
+    "circuit_id_derived": "how the circuit was named, not what its run wrote",
+    "micro_sign_folded": "how the staged deck spells a suffix, not what its run wrote",
+    "live_include": "which input the run read live, not what its run wrote",
+    "live_data_file": "which input the run read live, not what its run wrote",
+    "data_path_unrecorded": "how the staged deck names a data file, not what its run wrote",
+    "source_unavailable_after_staging": "the source after staging; the staged copy ran",
+    "source_modified_after_staging": "the source after staging; the staged copy ran",
+}
+
+
+def saves_not_stored(
+    saves: SaveList,
+    traces: Sequence[tuple[str, str | None]],
+    naming: Naming,
+    *,
+    circuit: str,
+) -> Observation | None:
+    """Name each entry of a deck's ``.save`` list (``saves``, from
+    ``lint_rules.save_list``, the reading the lint makes before the run) that
+    the run's results do not hold, and each this check could not settle; None
+    when every entry is held.
+
+    ``traces`` is the raw's first plot (``raw_parser.first_plot_traces``),
+    each read as ``naming`` writes a raw (``device_names.trace_key``). An
+    entry is not stored where the reader is known to store nothing for it (an
+    ngspice ``.save`` of a colon path, another LTspice build's spelling, both
+    measured or recorded), or where it is a node voltage whose trace the raw
+    lacks. A current or device value the raw does not hold under the ``.save``'s
+    own spelling (ngspice writes ``v1#branch`` for ``i(v1)``), an entry whose
+    reading is not established, and a pattern (``V(x1:*)``) are not checked:
+    which name the run would store is not established, so none is guessed."""
+    stored = {trace_key(name, xvii=naming.xvii) for name, _ in traces}
+    missing: list[dict[str, str]] = []
+    unchecked: list[dict[str, str]] = []
+    if naming.family not in ("ltspice", "ngspice"):
+        # No recording or live run shows what this simulator's .save stores
+        # (Xyce's .SAVE writes an initial-condition file), so nothing is
+        # said to be missing.
+        reason = (
+            f"what {naming.family or 'this simulator'}'s .save stores is not recorded"
+        )
+        entries = [text for text, _ in saves.entries] + list(saves.patterns)
+        if saves.unreadable:
+            entries.append(".save")
+        if not entries:
+            return None
+        return Observation(
+            code="saves_not_stored",
+            kind="coverage",
+            detail=f"{circuit}: not checked against the results: .save {', '.join(entries)}.",
+            evidence={
+                "circuit": circuit,
+                "not_checked": [{"save": text, "reason": reason} for text in entries],
+            },
+        )
+    if saves.unreadable:
+        unchecked.append({"save": ".save", "reason": "a .save card could not be read"})
+    for text, signal in saves.entries:
+        if signal.key is not None:
+            if signal.key in stored:
+                continue
+            if signal.key[0] == "v":
+                missing.append(
+                    {"save": text, "reason": f"the results hold no trace that {text} names"}
+                )
+            else:
+                unchecked.append(
+                    {
+                        "save": text,
+                        "reason": (
+                            "which name the run stores for a current or a device value is "
+                            "not established, and the results hold none spelled as the "
+                            ".save spells it"
+                        ),
+                    }
+                )
+        elif not signal.established:
+            unchecked.append({"save": text, "reason": signal.why or "not established"})
+        elif (
+            saves.includes
+            and naming.family == "ltspice"
+            and signal.spelled is None
+            and not signal.voids_save
+        ):
+            unchecked.append(
+                {
+                    "save": text,
+                    "reason": (
+                        "the deck reads other files, whose subcircuit instances this check "
+                        f"did not read ({signal.why})"
+                    ),
+                }
+            )
+        else:
+            missing.append({"save": text, "reason": signal.why or "it stores nothing"})
+    for pattern in saves.patterns:
+        unchecked.append(
+            {"save": pattern, "reason": "which signals a pattern saves is not recorded"}
+        )
+    if not missing and not unchecked:
+        return None
+    parts = []
+    if missing:
+        names = ", ".join(item["save"] for item in missing)
+        parts.append(
+            f"{circuit}: the run's results hold nothing for .save {names}, so a .meas "
+            "or a read of it gives no value."
+        )
+    if unchecked:
+        names = ", ".join(item["save"] for item in unchecked)
+        parts.append(f"Not checked against the results: .save {names}.")
+    evidence: dict[str, Any] = {"circuit": circuit}
+    if missing:
+        evidence["not_stored"] = missing
+    if unchecked:
+        evidence["not_checked"] = unchecked
+    return Observation(
+        code="saves_not_stored", kind="coverage", detail=" ".join(parts), evidence=evidence
+    )
 
 
 def subcircuit_nodes_not_saved(
@@ -784,6 +938,29 @@ def measurements_failed_in_every_run(
         detail=detail,
         evidence=evidence,
     )
+
+
+def measurements_not_read_observation(
+    reason: str, requested: Sequence[str] | None
+) -> Observation:
+    """Say that the run's measurements have no value here because they were
+    not read, and why (``reason``, from ``services.measurements_unread``, the
+    run row's ``measurements_coverage``); ``requested`` is the ``.meas`` the
+    deck requests, None where the deck was not read."""
+    asked = (
+        f"The deck requests {len(requested)} .meas, and none is reported"
+        if requested is not None
+        else "No .meas result of this run is reported"
+    )
+    evidence: dict[str, Any] = {"reason": reason}
+    if requested is not None:
+        evidence["requested"] = list(requested)
+    return {
+        "code": "measurements_not_read",
+        "kind": "coverage",
+        "detail": f"{asked}: {MEASUREMENTS_UNREAD[reason]} ({reason}).",
+        "evidence": evidence,
+    }
 
 
 def reconciliation_observations(
@@ -1017,8 +1194,14 @@ def surface_observations(
     value_traces: dict[str, np.ndarray] | None = None,
     source_amplitudes: dict[str, float] | None = None,
     node_voltages: Collection[str] | None = None,
+    measurements_unread: str | None = None,
 ) -> list[Observation]:
     """Assemble the full observation list for a result summary.
+
+    ``measurements_unread`` is why the log's measurements were not read
+    (``services.measurements_unread``): the requested ``.meas`` are then said
+    once to be unread for that reason (``measurements_not_read_observation``),
+    never each "missing".
 
     Passing ``value_traces`` is the decision to surface value facts: a caller
     that loaded them wants them scanned, and one that did not passes None.
@@ -1030,6 +1213,18 @@ def surface_observations(
     """
     obs: list[Observation] = []
     obs.extend(relay_observations(summary))
+    if measurements_unread is not None and (
+        requested.get("meas")
+        if requested is not None
+        # A summary of a raw by path has no deck to say what it requests: it
+        # still says a simulator's measurements are not read. A log that was
+        # not read is said by the summary's diagnostics_coverage.
+        else measurements_unread == "simulator_unsupported"
+    ):
+        asked = None if requested is None else requested["meas"]
+        obs.append(measurements_not_read_observation(measurements_unread, asked))
+        if requested is not None:
+            requested = {**requested, "meas": []}
     if requested:
         obs.extend(reconciliation_observations(summary, requested))
         abort = meas_batch_abort_observation(obs)

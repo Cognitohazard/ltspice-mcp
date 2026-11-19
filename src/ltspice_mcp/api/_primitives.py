@@ -482,9 +482,12 @@ async def _log_source(
     run_index: int,
     case_id: str | None,
     log_path: str | Path | None,
+    *,
+    require_log: bool = True,
 ) -> services.AnalysisSource:
     """The source whose log a section is read from: the log at ``log_path``,
-    or one experiment case's."""
+    or one experiment case's. Without ``require_log`` a case with no log is
+    returned, for a reader that says why itself (``services.read_measurements``)."""
     if log_path is not None:
         return services.resolve_analysis_source(state, log_file=str(log_path))
     assert job_id is not None
@@ -492,7 +495,7 @@ async def _log_source(
     context = services.experiment_run_context(
         job, state, run_index=run_index, case_id=case_id, require_raw=False
     )
-    if context.log is None:
+    if context.log is None and require_log:
         raise ResultError(f"Experiment case {context.identity['case_id']!r} has no log file")
     return services.source_for_run(context)
 
@@ -510,12 +513,18 @@ async def load_log_section(
     ``log_path``, or of one experiment case's, and what the read says of it
     (``AnalysisSource.observations``). The section is None when the log has no
     such section."""
-    source = await _log_source(state, job_id, run_index, case_id, log_path)
+    source = await _log_source(
+        state, job_id, run_index, case_id, log_path, require_log=name != "measurements"
+    )
     logs = await services.load_logs(source, state)
-    section = logs.value(name)
-    if name == "measurements" and section is not None:
-        # Each measurement names the field holding its result.
-        section = await services.answer_measurements(source, section)
+    if name == "measurements":
+        # Refused with the run row's reason where the measurements were not
+        # read; each names the field holding its result.
+        section = await services.answer_measurements(
+            source, services.read_measurements(source, logs)
+        )
+    else:
+        section = logs.value(name)
     return section, source.observations
 
 
