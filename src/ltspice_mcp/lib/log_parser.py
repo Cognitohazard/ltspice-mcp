@@ -1728,7 +1728,7 @@ _RE_FRA_RESULT = re.compile(
 #: heading, then one row a step, ``     1<TAB>90.6295°<TAB>15900.4``.
 _RE_FRA_TABLE = re.compile(r"^Measurement: PhaseMargin_(?P<analyzer>\S+)$")
 _RE_FRA_ROW = re.compile(
-    r"^(?P<step>\d+)\t(?P<margin>-?\d+(?:\.\d*)?)°\t(?P<crossover>\d+(?:\.\d*)?)$"
+    r"^(?P<step>[1-9]\d*)\t(?P<margin>-?\d+(?:\.\d*)?)°\t(?P<crossover>\d+(?:\.\d*)?)$"
 )
 _SI_PREFIX = {"": 1.0, "k": 1e3, "M": 1e6, "G": 1e9}
 
