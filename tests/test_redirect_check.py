@@ -265,6 +265,23 @@ def test_the_root_itself_may_redirect(tmp_path: Path, kind: str):
     assert redirect_below(root / "sub" / "file", root) is None
 
 
+def test_a_store_spelled_with_parent_parts_still_parses(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A relative ``LTSPICE_MCP_STORE_DIR`` such as ``../stores`` spells the
+    store root with ``..``; its parser folders are still its own."""
+    working = tmp_path / "work"
+    working.mkdir()
+    monkeypatch.chdir(working)
+    monkeypatch.setenv("LTSPICE_MCP_STORE_DIR", "../stores")
+    store = Store(working)
+
+    directory = store.parser_dir("parse_1")
+
+    assert ".." not in directory.parts
+    assert tmp_path / "stores" in directory.parents
+
+
 def test_a_path_outside_the_root_or_with_parent_parts_is_refused(tmp_path: Path):
     root = tmp_path / "root"
     root.mkdir()
@@ -418,7 +435,8 @@ _RESOLVED_COMPARISONS_ALLOWED = {
     ("lib/deck_staging.py", "entry.path == source"),
     ("lib/deck_staging.py", "path != source"),
     # Native inputs: which original capture a staged file came from, and
-    # whether a dependency is the root deck, by the same strict names.
+    # whether a dependency is the root deck: keys of resolved names and
+    # identity digests, of files that exist, not a redirect check.
     ("lib/native_inputs.py", "previous != original"),
     ("lib/native_inputs.py", "identity == root_identity"),
     # Whether two staged dependencies are one file: a count, not a location.

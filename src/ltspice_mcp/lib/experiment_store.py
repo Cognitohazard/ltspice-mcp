@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+import os
 import secrets
 from collections.abc import Mapping
 from dataclasses import asdict, replace
@@ -298,7 +299,7 @@ def save_job(job: ExperimentJob) -> Path:
     validate_job_id(job.job_id)
     # Not resolved: the record's folder exists, and on Windows resolving it
     # while a peer creates the store can keep the ``\\?\`` prefix on.
-    root = job.store_path.parent.absolute()
+    root = Path(os.path.abspath(job.store_path.parent))
     expected = root / f"{job.job_id}.json"
     # Whether the record redirects is answered from what is on disk: a writer
     # of the same job may create or replace the file at this moment, which on
@@ -729,7 +730,7 @@ def load_job_from_path(path: Path, working_dir: Path) -> ExperimentJob | None:
     store = Store(working_dir)
     resolved = store.experiments_dir / path.name
     if (
-        not same_location(path.parent.absolute(), store.experiments_dir)
+        not same_location(Path(os.path.abspath(path.parent)), store.experiments_dir)
         or redirect_below(resolved, store.experiments_dir) is not None
     ):
         raise ValueError(f"Experiment record is outside the working store: {path}")

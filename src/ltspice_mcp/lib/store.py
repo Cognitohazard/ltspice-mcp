@@ -926,9 +926,10 @@ class Store:
     def parser_dir(self, parse_id: str) -> Path:
         """One parser process's temporary capture and numeric output directory."""
         name = _validate_name(parse_id, "parser id")
-        # Not resolved: on Windows resolving a folder a peer parse is creating
-        # at that moment can keep the ``\\?\`` prefix on.
-        base = (self.root / "parsing").absolute()
+        # Made absolute and its ``..`` parts folded by spelling, not resolved:
+        # on Windows resolving a folder a peer parse is creating at that moment
+        # can keep the ``\\?\`` prefix on.
+        base = Path(os.path.abspath(self.root / "parsing"))
         candidate = base / name
         if redirect_below(candidate, base) is not None:
             raise StoreError("Parser directory must not redirect to another location")
