@@ -1,1 +1,1 @@
-The guide's longest sections have headings for each of their parts, so `inspect(kind="guide", section=..., heading=...)` can return one part of `schematics` instead of the whole section.
+Every part of a guide section longer than about 3 KB that covers more than one topic now has a heading per topic, so `inspect(kind="guide", section=..., heading=...)` returns one topic. In `schematics`, for example, the 10 KB opening and the 10 KB layout practice are now parts of at most 2.3 KB each. The guidance itself is unchanged. The core says how to list a section's headings.
