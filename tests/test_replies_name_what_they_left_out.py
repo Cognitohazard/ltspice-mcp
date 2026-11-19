@@ -313,16 +313,20 @@ async def _every_reason(state: SessionState, receipt: dict[str, Any]) -> dict[st
         ("tool", lambda **kw: dispatched(state, "analyze_results", **kw)),
         ("api", lambda **kw: asyncio.to_thread(lambda: api.analyze_results(**kw))),
     ):
-        # The whole value, where the summary's own observations sit.
-        data = await read(sources=job, recipes=[summary], include={"fields": ["value"]})
-        said = _observations(data)
+        # The reply carries the summary's coverage and reconciliation
+        # observations at its top level.
+        data = await read(sources=job, recipes=[summary])
+        said = data.get("observations", [])
         unread = [o for o in said if o["code"] == "measurements_not_read"]
         unmet = [o for o in said if o["code"] == "unmet_request"]
         assert unmet == [], (route, unmet)
         assert len(unread) == 1, (route, data)
         found[f"{route} summary"] = unread[0]["evidence"]["reason"]
-        # No value the server did not read is reported.
+        # The whole value reports no measurement the server did not read.
+        data = await read(sources=job, recipes=[summary], include={"fields": ["value"]})
         assert "failed_measurements" not in str(data), route
+        (row,) = data["results"]["s"]["values"]
+        assert "measurements" not in row["value"], route
         data = await read(sources=job, recipes=[measurements])
         found[f"{route} measurements"] = data
     try:
