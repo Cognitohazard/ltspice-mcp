@@ -3,8 +3,9 @@
 One answer to "what did the simulator say about this run", for every reader:
 the run rows of ``run_experiments`` and ``jobs``, the ``summary`` recipe and
 the Python API. A diagnostic is data, ``{code, count, first_text, channel}``,
-plus ``severity`` only where the simulator wrote one: ``code`` is the server's
-name for the condition, ``severity`` the simulator's own word, kept apart
+plus ``severity`` only where the simulator wrote one (the strongest over its
+occurrences): ``code`` is the server's name for the condition, ``severity`` the
+simulator's own word, kept apart
 because LTspice XVII calls an ignored model parameter an error on a run that
 finished.
 
@@ -26,12 +27,13 @@ captured bytes. A reader picks the set for its producer
 from __future__ import annotations
 
 import re
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal
 
 from ltspice_mcp.lib.format import cap_note
-from ltspice_mcp.lib.log_types import LogCondition
+from ltspice_mcp.lib.log_types import LogCondition, WrittenLine
 
 if TYPE_CHECKING:
     # Only named here, for annotations: the readers construct it.
@@ -55,8 +57,11 @@ COVERAGE: dict[str, str] = {
         "so its log was read with the wording of every recorded build"
     ),
     "unverified": (
-        "the server has no recordings of this simulator's log wording, so every "
-        "line is counted under 'unclassified'"
+        "the server has no recordings of this simulator's log wording, so its lines "
+        "were read with the generic patterns the server used before it had "
+        "recordings: a line they read as an error or a warning is counted under "
+        "'simulator_error' or 'simulator_warning', every other line "
+        "under 'unclassified'"
     ),
     "log_unread": "the run's log could not be read, so nothing it said is reported",
     "not_classified": (
@@ -405,6 +410,16 @@ _RULES: tuple[_Rule, ...] = (
         _ONLY_17,
     ),
     _Rule("source_value_assumed", _re(r"^Note: \S+: has no value, DC 0 assumed$"), _ONLY_NG),
+    # ngspice run with a rawfile in batch mode evaluates no top-level .meas
+    # and no .four, and says so with no word for how severe (ngspice-42,
+    # measured: "No .measure possible in batch mode (-b) with -r rawfile
+    # set!", ".fourier line ignored since rawfile was produced.").
+    _Rule("measurement_skipped_batch", _re(r"^No \.measure possible in batch mode\b"), _ONLY_NG),
+    _Rule(
+        "fourier_skipped_batch",
+        _re(r"^\.fourier line ignored\b"),
+        _ONLY_NG,
+    ),
     _Rule(
         "simulator_note",
         _re(r"^lossy: using linear interpolation because trytocompact option specified$"),
@@ -544,6 +559,19 @@ _RULES: tuple[_Rule, ...] = (
 
 _SEVERITY = re.compile(r"^(Fatal Error|Error|ERROR|Warning|WARNING|Note)\b")
 
+#: How strong each word ``_SEVERITY`` reads is, for a condition written with
+#: more than one: its severity is the strongest.
+_SEVERITY_RANK: dict[str, int] = {
+    "Note": 0,
+    "warning": 1,
+    "error": 2,
+    "Warning": 1,
+    "WARNING": 1,
+    "Error": 2,
+    "ERROR": 2,
+    "Fatal Error": 3,
+}
+
 
 class _RuleSet:
     """One set of rules, ready to find the first that starts at a line.
@@ -591,20 +619,69 @@ class _RuleSet:
         return None
 
 
+_READINGS = threading.local()
+
+
+def _line_reading(lines: Sequence[str], index: int) -> Any:
+    """The line classifier's reading at ``index`` (``log_parser.classify_line``),
+    worked out once per line of the log being read: both rule heads and the
+    follow ask it of the same line."""
+    # Imported here: the log parser imports this module.
+    from ltspice_mcp.lib.log_parser import classify_line
+
+    if getattr(_READINGS, "lines", None) is not lines:
+        _READINGS.lines = lines
+        _READINGS.found = {}
+    found: dict[int, Any] = _READINGS.found
+    if index not in found:
+        found[index] = classify_line(lines, index)
+    return found[index]
+
+
+def _read_as(kind: str) -> tuple[_Head, _Follow]:
+    def head(lines: Sequence[str], index: int) -> bool:
+        return _line_reading(lines, index).kind == kind
+
+    def follow(lines: Sequence[str], index: int) -> int:
+        return _line_reading(lines, index - 1).taken - 1
+
+    return head, follow
+
+
+#: For a simulator with no recorded wording (the ``unverified`` rules), the
+#: code a line the line classifier reads as an error or a warning is counted
+#: under, by that reading: the generic codes of a line in a simulator's own
+#: diagnostic form, which need no code of their own. There is no word of the
+#: simulator's own to prefer, so the reading the server gave before it had
+#: recordings lists the line until a recording replaces it. It is kept as the
+#: line's ``read_as``, never as its ``severity``, which is only ever the
+#: simulator's own word.
+READ_AS: dict[str, str] = {"error": "simulator_error", "warning": "simulator_warning"}
+
+#: The ``unverified`` set: only the line classifier's two readings, so no line
+#: it lists as an error or a warning goes unlisted for QSPICE or Xyce.
+_UNVERIFIED_RULES: tuple[_Rule, ...] = tuple(
+    _Rule(code, head, frozenset(), follow)
+    for code, (head, follow) in ((code, _read_as(kind)) for kind, code in READ_AS.items())
+)
+
+
 def _rules_of(*builds: str) -> tuple[_Rule, ...]:
     return tuple(rule for rule in _RULES if rule.builds & set(builds))
 
 
 #: Each set of rules a log can be read with, by name. ``ltspice`` is every
 #: recorded LTspice build's, ``wording`` every recorded simulator's, and
-#: ``unverified`` none.
+#: ``unverified`` only the rules for a line in the form ``Error: …`` or
+#: ``Warning: …``: a simulator with no recordings is still read for the words
+#: it wrote itself, so a reply says which of its lines it called errors.
 _CLASSIFIERS: dict[str, _RuleSet] = {
     _LT26: _RuleSet(_rules_of(_LT26)),
     _LT17: _RuleSet(_rules_of(_LT17)),
     "ltspice": _RuleSet(_rules_of(_LT26, _LT17)),
     _NG: _RuleSet(_rules_of(_NG)),
     "wording": _RuleSet(_RULES),
-    "unverified": _RuleSet(()),
+    "unverified": _RuleSet(_UNVERIFIED_RULES),
 }
 CLASSIFIERS: tuple[str, ...] = tuple(_CLASSIFIERS)
 
@@ -674,30 +751,61 @@ def _held(text: str) -> str:
 def classify(channels: Mapping[Channel, str], rules_name: str) -> list[LogCondition]:
     """The conditions the ``channels``' text names under one set of rules: one
     entry per code and channel, in the order each first appears, log before
-    console. ``severity`` is the first occurrence's."""
+    console. ``severity`` is the strongest word the simulator wrote on any line
+    of any occurrence (of ``unclassified``, whose lines are unrelated, the first
+    one's), as it spelled it: never a word the server chose.
+
+    ``written`` holds each distinct occurrence that is an error or a warning
+    (:func:`said_as`), with the strongest word on it and, under the
+    ``unverified`` rules, the line classifier's reading (``read_as``), up to :data:`WRITTEN_KEPT`, and ``written_left_out``
+    how many more there were: every line the simulator gave a word reaches a
+    reader that lists them (:func:`said_lines`), or is counted."""
     rules = _CLASSIFIERS[rules_name]
     entries: dict[tuple[str, Channel], LogCondition] = {}
+    left_out: dict[tuple[str, Channel], set[str]] = {}
     channel: Channel
     for channel in ("log", "console"):
         for code, block in _occurrences(channels.get(channel) or "", rules):
-            seen = entries.get((code, channel))
-            if seen is not None:
-                seen["count"] += 1
+            words = [m[1] for line in block if (m := _SEVERITY.match(line.strip())) is not None]
+            strongest = max(words, key=_SEVERITY_RANK.__getitem__, default=None)
+            text = _held("\n".join(block))
+            entry = entries.get((code, channel))
+            if entry is None:
+                entry = LogCondition(code=code, count=0, first_text=text, channel=channel)
+                if strongest is not None:
+                    entry["severity"] = strongest
+                entries[(code, channel)] = entry
+            elif (
+                code != UNCLASSIFIED
+                and strongest is not None
+                and _SEVERITY_RANK[strongest] > _SEVERITY_RANK.get(entry.get("severity", ""), -1)
+            ):
+                entry["severity"] = strongest
+            entry["count"] += 1
+            line: WrittenLine = {"text": text}
+            if strongest is not None:
+                line["severity"] = strongest
+            if rules_name == "unverified" and code != UNCLASSIFIED:
+                line["read_as"] = "error" if code == READ_AS["error"] else "warning"
+            if said_as(line) is None:
                 continue
-            entry: LogCondition = {
-                "code": code,
-                "count": 1,
-                "first_text": _held("\n".join(block)),
-                "channel": channel,
-            }
-            severity = next(
-                (m[1] for line in block if (m := _SEVERITY.match(line.strip())) is not None),
-                None,
-            )
-            if severity is not None:
-                entry["severity"] = severity
-            entries[(code, channel)] = entry
+            kept = entry.setdefault("written", [])
+            if any(seen["text"] == text for seen in kept):
+                continue
+            if len(kept) < WRITTEN_KEPT:
+                kept.append(line)
+            else:
+                left_out.setdefault((code, channel), set()).add(text)
+    for key, texts in left_out.items():
+        entries[key]["written_left_out"] = len(texts)
+    # The line classifier's readings were for this log only.
+    _READINGS.__dict__.clear()
     return list(entries.values())
+
+
+#: How many distinct worded occurrences one condition keeps (``written``); a
+#: reader that lists them says how many more there were.
+WRITTEN_KEPT = 50
 
 
 def classify_channels(log_text: str, console_text: str) -> dict[str, list[LogCondition]]:
@@ -745,15 +853,24 @@ def run_diagnostics(
     producer: Producer,
     *,
     unread: bool = False,
+    lines: bool = False,
 ) -> RunDiagnostics:
     """What ``producer``'s run said, from the ``conditions`` a log decode
     found (the ``conditions`` of its ``diagnostics`` section). ``unread`` (or
-    no ``conditions``) says the log could not be read."""
+    no ``conditions``) says the log could not be read.
+
+    Each condition is ``code``, ``count``, ``first_text``, ``channel`` and
+    ``severity``, as a run row keeps it. ``lines`` keeps each condition's
+    ``written`` lines too, for a reader that lists them (the summary): they
+    stay off the row, which the summary reads them beside from the log."""
     if unread or conditions is None:
         return {"coverage": "log_unread"}
     name, coverage = rules_for(producer)
     result: RunDiagnostics = {}
-    found = [dict(entry) for entry in conditions.get(name, ())]
+    found = [
+        {k: v for k, v in entry.items() if lines or k not in _WRITTEN_KEYS}
+        for entry in conditions.get(name, ())
+    ]
     if found:
         result["diagnostics"] = found
     if coverage is not None:
@@ -774,9 +891,58 @@ def decoded_run_diagnostics(
     return run_diagnostics(section["value"]["conditions"], producer)
 
 
+#: The words a simulator writes on a line (``severity``), by what a reader of
+#: its conditions calls the line: the one decision whether a line is an error
+#: or a warning. A condition whose line carries no such word, or a ``Note``, is
+#: neither.
+_SAID_AS: dict[str, Literal["error", "warning"]] = {
+    "fatal error": "error",
+    "error": "error",
+    "warning": "warning",
+}
+
+
+def said_as(condition: Mapping[str, Any]) -> Literal["error", "warning"] | None:
+    """Whether ``condition`` (a :class:`LogCondition`, or one of its
+    :func:`said_lines`) is an error or a warning: for a simulator with no
+    recorded wording, by the line classifier's reading (``read_as``), which
+    stands as it did before there were recordings (it lists a ``Warning:``
+    convergence failure as an error); otherwise by the word the simulator
+    wrote on it. None for neither. Every reader that lists a run's errors or
+    warnings asks this, so none decides it otherwise."""
+    read_as = condition.get("read_as")
+    if read_as in ("error", "warning"):
+        return read_as
+    severity = condition.get("severity")
+    return _SAID_AS.get(severity.casefold()) if isinstance(severity, str) else None
+
+
+#: The keys of a condition that hold its worded lines, kept off a run row.
+_WRITTEN_KEYS = frozenset({"written", "written_left_out"})
+
+
+def said_lines(condition: Mapping[str, Any]) -> list[dict[str, str]]:
+    """Each distinct line of ``condition`` (a :class:`LogCondition`) that
+    carries a word, with that word (``{"text", "severity"}``), in order: the one
+    answer to which lines of a condition the simulator called what. A reader
+    that lists a run's errors or warnings lists these, and says the
+    condition's ``written_left_out`` beside them. ``severity`` is the
+    simulator's own word and is absent where it wrote none; ``read_as`` is the
+    line classifier's reading for a simulator with no recorded wording. A
+    condition decoded before lines were kept gives its first text with its
+    severity."""
+    if "written" in condition:
+        return [dict(line) for line in condition["written"]]
+    if said_as(condition) is not None:
+        return [{"text": str(condition["first_text"]), "severity": condition["severity"]}]
+    return []
+
+
 def diagnostic_codes() -> frozenset[str]:
     """Every code a diagnostic can carry: each rule's, and :data:`UNCLASSIFIED`."""
-    return frozenset({rule.code for rule in _RULES if rule.code} | {UNCLASSIFIED})
+    return frozenset(
+        {rule.code for rule in _RULES if rule.code} | {UNCLASSIFIED}
+    )
 
 
 def reply_fields(found: Mapping[str, Any]) -> dict[str, Any]:

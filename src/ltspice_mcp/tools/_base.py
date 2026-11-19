@@ -918,8 +918,8 @@ RUN_DIAGNOSTICS_SCHEMA: dict[str, Any] = {
     CUT: NEVER,
     "description": (
         "What the simulator said about the run, one entry per condition and channel: 'code' is "
-        "the server's name for it, 'severity' the simulator's own word where it wrote "
-        "one, 'first_text' the first occurrence as written, 'count' how often. A line "
+        "the server's name for it, 'severity' the strongest word the simulator wrote on "
+        "it, 'first_text' the first occurrence as written, 'count' how often. A line "
         "the server does not recognise is counted under 'unclassified'. The run's "
         "'log' and the summary recipe hold the rest."
     ),

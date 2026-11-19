@@ -39,11 +39,12 @@ from ltspice_mcp.lib.decoded_raw import (
     time_offset,
 )
 from ltspice_mcp.lib.device_names import fold_name
+from ltspice_mcp.lib.families import DISPLAY
 from ltspice_mcp.lib.format import cap_list
+from ltspice_mcp.lib.log_conditions import rules_for, run_diagnostics, said_as, said_lines
 from ltspice_mcp.lib.log_parser import (
     CardKind,
     answered_measurements,  # noqa: TID251 - the summary is built off the loop, handed its producer and cards
-    is_op_stepping_failure,
 )
 from ltspice_mcp.lib.log_types import LogSectionName
 from ltspice_mcp.lib.raw_header import STEPPED_TEMPERATURE, RawDialectError, command_writer
@@ -56,6 +57,7 @@ from ltspice_mcp.lib.result_kinds import (
 )
 from ltspice_mcp.lib.result_observations import surface_observations
 from ltspice_mcp.lib.simulator_build import Producer
+from ltspice_mcp.lib.spice_validator import validate_directive
 from ltspice_mcp.lib.trace_names import TraceQuantity, is_node_voltage, trace_quantity
 
 # What a raw accessor raises when the thing being asked for is not there: a
@@ -734,6 +736,28 @@ def _step_temperature(
     return True, None
 
 
+def _meas_error(text: str, family: str | None) -> dict[str, Any] | None:
+    """A ``meas_errors`` entry for an error line ``text`` that names a
+    ``.meas`` card, with the fix the pre-flight rules suggest for it; None for
+    one that names none."""
+    directive = next(
+        (
+            line.strip()
+            for line in text.splitlines()
+            if line.strip().casefold().startswith(".meas")
+        ),
+        None,
+    )
+    if directive is None:
+        return None
+    found = validate_directive(directive, simulator=DISPLAY.get(family or "", "LTspice"))
+    return {
+        "directive": directive,
+        "raw_block": text,
+        "suggestion": found.suggestion if found is not None else None,
+    }
+
+
 def build_simulation_summary(
     raw: DecodedRaw | DecodedPlot,
     logs: DecodedLog | None,
@@ -797,6 +821,8 @@ def build_simulation_summary(
     # this function has somewhere to land; attached to the summary once, at the
     # end, so a warning raised after the attachment point is not lost.
     warnings: list[str] = []
+    # The conditions the run's log names, as its producer's rules read them.
+    said: list[Mapping[str, Any]] = []
 
     # A plot with no sampled axis (an operating point, a table) has a point
     # count and no range. A step the plot cannot give is a different fact
@@ -912,11 +938,38 @@ def build_simulation_summary(
 
         diagnostics = section_value("diagnostics", "log diagnostics (errors, warnings)")
         if diagnostics is not None:
-            warnings.extend(diagnostics["warnings"])
-            if diagnostics["errors"]:
-                summary["errors"] = diagnostics["errors"]
-            if diagnostics.get("meas_errors"):
-                summary["meas_errors"] = diagnostics["meas_errors"]
+            # What the simulator said, and how severe it called it: the run's
+            # conditions as its producer's rules read them, the run row's
+            # diagnostics. A line is an error or a warning where the simulator
+            # wrote that word on it (log_conditions.said_as), and neither where
+            # it wrote none; the summary's diagnostics carry every condition.
+            # Each distinct line the simulator gave a word is listed, by that
+            # word (log_conditions.said_lines); lines past a condition's bound
+            # are counted in lines_left_out, never dropped unsaid.
+            found = run_diagnostics(
+                diagnostics["conditions"], producer or Producer(None, None, None), lines=True
+            )
+            said = list(found.get("diagnostics") or [])
+            worded = [line for c in said for line in said_lines(c)]
+            error_lines = [line["text"] for line in worded if said_as(line) == "error"]
+            warnings.extend(line["text"] for line in worded if said_as(line) == "warning")
+            if error_lines:
+                summary["errors"] = error_lines
+            meas_errors = [
+                entry
+                for text in error_lines
+                if (entry := _meas_error(text, (producer.family if producer else None)))
+                is not None
+            ]
+            if meas_errors:
+                summary["meas_errors"] = meas_errors
+            left_out: dict[str, int] = {}
+            for c in said:
+                if c.get("written_left_out"):
+                    code = str(c["code"])
+                    left_out[code] = left_out.get(code, 0) + int(c["written_left_out"])
+            if left_out:
+                summary["lines_left_out"] = left_out
 
         # How many bias-point solves the log records — each OP-solve block opens
         # with a "Direct Newton iteration" line (whether it converges or fails).
@@ -946,9 +999,19 @@ def build_simulation_summary(
         # stepped .op (the log shows >1 solve) or a multi-step raw (later steps
         # not checked here) keeps the error — the
         # first step's finite data can't clear a failure that belongs to another.
+        # The rungs of the bias-point search are one condition
+        # (``operating_point_fallback``); no recorded build writes an error
+        # word on them, so this demotes nothing a recording shows. A build that
+        # did, on a run whose raw holds finite data, found the point after all.
         errs = summary.get("errors")
         if errs:
-            demoted = [e for e in errs if is_op_stepping_failure(e)]
+            fallback = {
+                line["text"]
+                for c in said
+                if c["code"] == "operating_point_fallback"
+                for line in said_lines(c)
+            }
+            demoted = [e for e in errs if e in fallback]
             if (
                 demoted
                 and step_count <= 1
@@ -1039,6 +1102,8 @@ def build_simulation_summary(
         source_amplitudes=source_amplitudes,
         node_voltages=None if value_traces is None else node_voltages(raw),
         measurements_unread=measurements_unread,
+        said=said,
+        reading=rules_for(producer or Producer(None, None, None))[0],
     )
 
     return summary

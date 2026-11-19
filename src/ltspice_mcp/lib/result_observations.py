@@ -70,6 +70,7 @@ from ltspice_mcp.lib.deck_staging import (
 from ltspice_mcp.lib.device_names import DevicePath, path_text, spelled_name, split_path, trace_key
 from ltspice_mcp.lib.encoding import read_spice_text
 from ltspice_mcp.lib.format import parse_spice_value
+from ltspice_mcp.lib.log_conditions import said_lines
 from ltspice_mcp.lib.log_types import (
     MEASUREMENTS_UNREAD,
     given_no_value,
@@ -81,6 +82,7 @@ from ltspice_mcp.lib.spice_lex import (
     EditCards,
     SpiceLexError,
     directive_head,
+    extract_meas_name,
     lex_deck,
     lex_for_edit,
 )
@@ -613,40 +615,69 @@ _OBSERVATION_INPUTS: FileCache[tuple[dict[str, list[str]] | None, dict[str, floa
 )
 
 
-def relay_observations(summary: dict) -> list[Observation]:
+def relay_observations(summary: dict, said: Sequence[Mapping[str, Any]] = ()) -> list[Observation]:
     """Promote the simulator's own error diagnostics to surfaced observations.
 
     These are the highest-authority facts — the simulator classified them, we
     only relay. They are also the gap (b) fix: a ``completed`` run with a
     ``singular matrix`` line now surfaces it prominently instead of leaving it
     buried in ``errors`` while the headline says success.
+
+    Each carries the ``severity`` the simulator wrote on its line, read off
+    the run's condition that holds it (``said``, the run row's diagnostics),
+    or none where no condition names one: a line relayed without its
+    condition (a solve-failure line) carries none rather than one the server
+    made up.
     """
+    severity = {
+        line["text"]: line["severity"]
+        for c in said
+        for line in said_lines(c)
+        if isinstance(line.get("severity"), str)
+    }
+
+    def with_severity(item: Observation, text: str) -> Observation:
+        if text in severity:
+            item["severity"] = severity[text]
+        return item
+
     obs: list[Observation] = []
+    # An error that names a ``.meas`` is relayed once, as the measurement that
+    # failed (below), not again as a log line.
     seen: set[str] = set()
+    measured = {
+        str(entry.get("raw_block"))
+        for entry in summary.get("meas_errors", []) or []
+        if isinstance(entry, dict)
+    }
     for err in summary.get("errors", []) or []:
         first_line = err.splitlines()[0] if err else err
-        if first_line in seen:
+        if err in measured or first_line in seen:
             continue
         seen.add(first_line)
         obs.append(
-            {
-                "code": "log_error",
-                "kind": "relay",
-                "severity": "error",
-                "detail": first_line,
-                "evidence": {"log": err},
-            }
+            with_severity(
+                {
+                    "code": "log_error",
+                    "kind": "relay",
+                    "detail": first_line,
+                    "evidence": {"log": err},
+                },
+                err,
+            )
         )
     for entry in summary.get("meas_errors", []) or []:
         directive = entry.get("directive", "") if isinstance(entry, dict) else str(entry)
         obs.append(
-            {
-                "code": "meas_parse_error",
-                "kind": "relay",
-                "severity": "error",
-                "detail": f".meas failed to parse: {directive}",
-                "evidence": entry if isinstance(entry, dict) else {"directive": directive},
-            }
+            with_severity(
+                {
+                    "code": "meas_parse_error",
+                    "kind": "relay",
+                    "detail": f".meas failed to parse: {directive}",
+                    "evidence": entry if isinstance(entry, dict) else {"directive": directive},
+                },
+                str(entry.get("raw_block", "")) if isinstance(entry, dict) else "",
+            )
         )
     return obs
 
@@ -964,14 +995,14 @@ def measurements_not_read_observation(
 
 
 def reconciliation_observations(
-    summary: dict, requested: dict[str, list[str]]
+    summary: dict, requested: dict[str, list[str]], said: Sequence[Mapping[str, Any]] = ()
 ) -> list[Observation]:
     """Surface requested ``.meas``/``.four`` outputs that were not produced.
 
     Classifies each miss as ``failed`` (LTspice printed it failed at every
     step — in ``failed_measurements``), ``skipped_in_batch_mode`` (ngspice
-    can't evaluate in batch mode — a recoverable relay signal already in
-    ``warnings``), or ``missing`` (silently absent — the real trust gap). A
+    can't evaluate in batch mode — its ``measurement_skipped_batch`` condition
+    in ``said``), or ``missing`` (silently absent — the real trust gap). A
     measurement that failed at some steps of a stepped run and was taken at the
     others was produced. The fact, not a verdict: the model decides whether a
     missing measurement matters.
@@ -984,9 +1015,12 @@ def reconciliation_observations(
     facts = run_measurement_facts(summary, requested.get("meas") or [])
     no_value = given_no_value(facts)
     failed = facts.get("failed") or []
-    warns = " ".join(summary.get("warnings") or []).lower()
-    meas_batch_skipped = "batch mode" in warns and "meas" in warns
-    four_batch_skipped = ".fourier line ignored" in warns or "skips .four" in warns
+    # Whether ngspice skipped a .meas or .four in batch mode is read off the
+    # run's conditions by their codes (``said``), not the warnings list: its
+    # lines saying so carry no severity word (log_conditions).
+    skipped = {str(c.get("code")) for c in said}
+    meas_batch_skipped = "measurement_skipped_batch" in skipped
+    four_batch_skipped = "fourier_skipped_batch" in skipped
 
     for name in requested.get("meas", []):
         if measurement_named(name, no_value) is None:
@@ -1144,45 +1178,105 @@ def value_observations(
     return obs
 
 
-def meas_batch_abort_observation(obs: list[Observation]) -> Observation | None:
-    """Causal link between a ``.meas`` parse error and unexplained misses.
+#: What a recording establishes about a ``.meas`` that cannot be taken, by the
+#: rules a run's log was read with (``log_conditions.rules_for``), and the
+#: recording that shows it. A reading not listed has nothing established.
+_FAILED_MEAS_ESTABLISHED: dict[str, str] = {
+    "ltspice26": (
+        "LTspice 26 refuses a deck whose .meas card does not parse, and a refused "
+        "run measures nothing (recorded: log/meas_bad_syntax)"
+    ),
+}
 
-    One erroring ``.meas`` directive makes LTspice abandon the whole ``.meas``
-    batch — even directives that precede it come back missing. When the
-    assembled list holds both a relay ``meas_parse_error`` and reconciliation
-    ``missing`` misses, link them so the model fixes the one failing directive
-    instead of chasing N phantom misses. Correlates across families, so it runs
-    over the assembled list, not inside either family builder.
+#: The recording that would settle whether a failed ``.meas`` leaves the
+#: others unmeasured where none is established.
+_FAILED_MEAS_UNSETTLED = (
+    "Whether the other .meas go unmeasured because one failed is not established: "
+    "LTspice XVII takes the others in log/meas_bad_syntax, and no recording shows a "
+    "build leaving them unmeasured; a recording of a deck with a failing .meas beside "
+    "ones that would measure, whose log holds no measurement, would settle it"
+)
+
+
+def _failed_meas_cards(obs: list[Observation], said: Sequence[Mapping[str, Any]]) -> list[str]:
+    """The ``.meas`` cards a run's log says failed: those the summary relays as
+    ``meas_errors``, and each ``measurement_error`` condition's card where the
+    simulator gave it no word (LTspice 26's refusal), in order, once each."""
+    cards: list[str] = [
+        str(o.get("evidence", {}).get("directive", o.get("detail")))
+        for o in obs
+        if o.get("code") == "meas_parse_error"
+    ]
+    for condition in said:
+        if condition.get("code") != "measurement_error":
+            continue
+        texts = [line["text"] for line in said_lines(condition)] or [str(condition["first_text"])]
+        cards.extend(
+            line.strip()
+            for text in texts
+            for line in text.splitlines()
+            if line.strip().casefold().startswith(".meas")
+        )
+    return list(dict.fromkeys(cards))
+
+
+def meas_batch_abort_observation(
+    obs: list[Observation],
+    *,
+    measured: bool = False,
+    said: Sequence[Mapping[str, Any]] = (),
+    reading: str | None = None,
+) -> Observation | None:
+    """Link requested ``.meas`` the log does not hold to the ``.meas`` the log
+    says failed, saying only what a recording establishes for the build that
+    wrote it (``reading``, the rules its log was read with).
+
+    It fires only when the log holds no measurement (``measured`` false): a
+    log that holds one shows the ``.meas`` were evaluated, as LTspice XVII's
+    log/meas_bad_syntax does around the one it cannot take. A failed
+    directive's own miss is explained by its own error and is not counted.
+    Correlates across families, so it runs over the assembled list.
     """
-    parse_errors = [o for o in obs if o.get("code") == "meas_parse_error"]
+    if measured:
+        return None
+    cards = _failed_meas_cards(obs, said)
+    failed = [name for card in cards if (name := extract_meas_name(card))]
     # request_kind gate: .four misses also carry reason="missing", but the
-    # Fourier pipeline is unrelated to the .meas batch abort — folding them
-    # in would state a wrong count and attribution.
+    # Fourier pipeline is unrelated to a failed .meas.
     missing = [
         o
         for o in obs
         if o.get("code") == "unmet_request"
         and o.get("evidence", {}).get("reason") == "missing"
         and o.get("evidence", {}).get("request_kind") == "meas"
+        and measurement_named(str(o.get("evidence", {}).get("name", "")), failed) is None
     ]
-    if not (parse_errors and missing):
+    if not (cards and missing):
         return None
+    established = _FAILED_MEAS_ESTABLISHED.get(reading or "")
+    evidence: dict[str, Any] = {
+        "missing": [o.get("evidence", {}).get("name") for o in missing],
+        "failed_directives": cards,
+        "established": established is not None,
+    }
+    detail = (
+        f"{len(missing)} .meas requested were not produced and the log holds no "
+        f"measurement, while {len(cards)} .meas directive(s) failed; fix the failing "
+        "directive first. "
+    )
+    if established is not None:
+        detail += established + "."
+    else:
+        detail += _FAILED_MEAS_UNSETTLED + "."
+        evidence["settled_by"] = (
+            "a recording of a deck with a failing .meas beside ones that would "
+            "measure, whose log holds no measurement"
+        )
     return {
         "code": "meas_batch_abort",
         "kind": "reconciliation",
-        "detail": (
-            f"{len(missing)} .meas requested but not produced while "
-            f"{len(parse_errors)} .meas directive(s) failed to parse — LTspice "
-            "skips the remaining .meas evaluation (including directives that "
-            "come earlier in the deck) after one bad directive; fix the "
-            "failing directive first."
-        ),
-        "evidence": {
-            "missing": [o.get("evidence", {}).get("name") for o in missing],
-            "failed_directives": [
-                o.get("evidence", {}).get("directive", o.get("detail")) for o in parse_errors
-            ],
-        },
+        "detail": detail,
+        "evidence": evidence,
     }
 
 
@@ -1195,8 +1289,13 @@ def surface_observations(
     source_amplitudes: dict[str, float] | None = None,
     node_voltages: Collection[str] | None = None,
     measurements_unread: str | None = None,
+    said: Sequence[Mapping[str, Any]] = (),
+    reading: str | None = None,
 ) -> list[Observation]:
     """Assemble the full observation list for a result summary.
+
+    ``said`` is the run's conditions with their worded lines, and ``reading``
+    the rules its log was read with (``log_conditions.rules_for``).
 
     ``measurements_unread`` is why the log's measurements were not read
     (``services.measurements_unread``): the requested ``.meas`` are then said
@@ -1212,7 +1311,7 @@ def surface_observations(
     traces ``node_voltages`` names (``value_observations``).
     """
     obs: list[Observation] = []
-    obs.extend(relay_observations(summary))
+    obs.extend(relay_observations(summary, said))
     if measurements_unread is not None and (
         requested.get("meas")
         if requested is not None
@@ -1226,8 +1325,10 @@ def surface_observations(
         if requested is not None:
             requested = {**requested, "meas": []}
     if requested:
-        obs.extend(reconciliation_observations(summary, requested))
-        abort = meas_batch_abort_observation(obs)
+        obs.extend(reconciliation_observations(summary, requested, said))
+        abort = meas_batch_abort_observation(
+            obs, measured=bool(summary.get("measurements")), said=said, reading=reading
+        )
         if abort is not None:
             obs.append(abort)
     if value_traces is not None:
