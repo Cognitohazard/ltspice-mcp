@@ -20,7 +20,7 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, get_args
 
-from ltspice_mcp.errors import PathSecurityError
+from ltspice_mcp.errors import PathSecurityError, ResultError
 from ltspice_mcp.lib import not_shown, services
 from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.continuation import call_to_continue
@@ -1266,15 +1266,22 @@ def render_receipt_snapshot(
         data["lineage"] = dict(snapshot.lineage)
     if snapshot.analysis_status != "not_requested":
         rendered_result: dict[str, Any] | None = None
+        analysis_error = snapshot.analysis_error
         if snapshot.analysis_result is not None:
-            rendered_result = analyze.render_attached_analysis(
-                snapshot.analysis_result, fields=analysis_fields, served=analysis_served
-            )
+            try:
+                rendered_result = analyze.render_attached_analysis(
+                    snapshot.analysis_result, fields=analysis_fields, served=analysis_served
+                )
+            except ResultError as exc:
+                # An analysis an earlier release stored in another shape: only
+                # this part is replaced, by the note naming the call that reads
+                # it, and the receipt and its run rows still answer.
+                analysis_error = str(exc)
         analysis_observations = list(snapshot.analysis_observations)
         data["analysis"] = {
             "status": snapshot.analysis_status,
             "result": rendered_result,
-            "error": snapshot.analysis_error,
+            "error": analysis_error,
             "observations": analysis_observations,
         }
         if provenance:

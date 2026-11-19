@@ -182,13 +182,14 @@ a plain dict at the top level, whose nested objects still answer;
 **Complete results.** Where an MCP tool pages or caps a result, the method
 returns all of it:
 
-- `analyze_results` runs the evaluation to completion in passes of up to
-  `[analysis] analysis_budget_s` each. Where the MCP tool would return partial
-  results and a `result_set_id`, the method starts the next pass. If reading
-  the sources and recording their content hashes and log diagnostics does not
-  finish within the first pass, the call raises `AnalysisDeadlineExceeded` and
-  creates no result set or cursor; retry the original request with fewer
-  sources or a larger `analysis_budget_s`. `result["results"]` has an entry
+- `analyze_results` returns the evaluation the MCP tool presents, whole: every
+  row and every failure, with no page or cursor. It has the tool's bound,
+  `[analysis] analysis_budget_s` over the whole call, and the same answer
+  when the bound ends it: each recipe left unevaluated fails alone with
+  `analysis_deadline`. If reading the sources and recording their content
+  hashes and log diagnostics does not finish within the bound, the call
+  raises `AnalysisDeadlineExceeded` and creates no result set; retry the
+  original request with fewer sources or a larger `analysis_budget_s`. `result["results"]` has an entry
   for every recipe, so `result["results"][key]` never raises for a recipe
   that failed: its rows are empty and a `No rows:` warning names the
   `failures` places that explain it.

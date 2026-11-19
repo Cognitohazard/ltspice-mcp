@@ -24,6 +24,7 @@ from collections.abc import Callable, Collection, Mapping, MutableMapping, Seque
 from collections.abc import Set as AbstractSet
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path, PurePath
+from stat import S_ISREG
 from typing import Annotated, Any, Literal, NamedTuple
 from weakref import WeakValueDictionary
 
@@ -2772,11 +2773,6 @@ async def _evaluate_item(
 def _rename_artifacts(pending: list[_PendingArtifact]) -> None:
     for artifact in pending:
         artifact.final.parent.mkdir(parents=True, exist_ok=True)
-        # Match the repo's atomic-write durability: flush the fully-written temp
-        # to stable storage, then the rename metadata after, so a crash between
-        # digest and publish can't surface a truncated artifact under its final
-        # name. The digest was already taken on this same byte content.
-        # Opened for writing: Windows refuses to flush a read-only handle.
         fd = os.open(artifact.pending, os.O_RDWR | O_BINARY)
         try:
             fsync_fd(fd)
@@ -2786,20 +2782,51 @@ def _rename_artifacts(pending: list[_PendingArtifact]) -> None:
         fsync_dir(artifact.final.parent)
 
 
-async def _publish(
-    pending: list[_PendingArtifact],
-    deadline: float,
-) -> list[dict[str, Any]]:
-    """Digest every complete temp under budget, then publish with rename."""
+def _published_size(path: Path) -> int | None:
+    """The size of the regular file published at ``path``, or None."""
+    try:
+        status = path.stat()
+    except OSError:
+        return None
+    return status.st_size if S_ISREG(status.st_mode) else None
+
+
+async def _publish(pending: list[_PendingArtifact], deadline: float) -> list[dict[str, Any]]:
+    """Publish each pending artifact at its final path, and its handle.
+
+    A final path holds only what :func:`_rename_artifacts` moved there: a
+    written and flushed file, renamed into place whole, so a file at a final
+    path is a complete earlier publish. Its name is a digest of the result
+    set (the request and the sources' digests), the recipe and the source,
+    so a repeat of the request writes to the same path. When the file there
+    already holds the bytes just written (same size and SHA-256) it is kept
+    as it is: never replaced or opened for writing, so a program holding it
+    open (a CSV in a spreadsheet, on Windows) does not fail the repeat. When
+    its bytes differ (a writer of another release, or a file changed after it
+    was published) it is replaced, and a refusal to replace it fails the
+    recipe as before."""
     prepared: list[dict[str, Any]] = []
+    moved: list[_PendingArtifact] = []
+    kept: list[_PendingArtifact] = []
     loop = asyncio.get_running_loop()
-    for artifact in pending:
-        digest = await services.bounded_parse(
-            artifact.pending,
-            lambda path=artifact.pending: result_store.sha256_file(path),
+
+    async def digest_of(path: Path) -> str:
+        return await services.bounded_parse(
+            path,
+            lambda: result_store.sha256_file(path),
             timeout_s=max(_MIN_ITEM_DEADLINE_S, deadline - loop.time()),
         )
+
+    for artifact in pending:
+        digest = await digest_of(artifact.pending)
         size = await asyncio.to_thread(lambda path=artifact.pending: path.stat().st_size)
+        published = await asyncio.to_thread(_published_size, artifact.final)
+        same = False
+        if published == size:
+            # An unreadable published file is replaced, as one that differs.
+            with contextlib.suppress(OSError):
+                same = await digest_of(artifact.final) == digest
+        (kept if same else moved).append(artifact)
         prepared.append(
             {
                 "path": str(artifact.final),
@@ -2808,7 +2835,8 @@ async def _publish(
                 "bytes": size,
             }
         )
-    await asyncio.to_thread(_rename_artifacts, pending)
+    await asyncio.to_thread(_rename_artifacts, moved)
+    await asyncio.to_thread(_remove_pending, kept)
     return prepared
 
 
@@ -3738,8 +3766,8 @@ _READ_ON = call_to_continue(
 
 _THINNED_WARNING = (
     "Inline series thinned to {shown} of {total} points per signal, keeping each "
-    "bucket's minimum and maximum, to fit the reply. Set max_points for fewer "
-    "points held, or format 'csv' to write every sample."
+    "bucket's minimum and maximum, to fit the reply. analyze_results with "
+    "budget {whole} sends every point, and format 'csv' writes every sample to a file."
 )
 
 
@@ -3802,6 +3830,11 @@ def say_what_was_cut(
     so on its recipe's warnings."""
     facts = _row_facts(whole)
 
+    @functools.cache
+    def whole_size() -> int:
+        # The target at which the presenter sends this answer whole.
+        return estimate_tokens(dict(whole))
+
     def part(cut: Mapping[str, ListCut], stored: StoredAnswer | None) -> dict[str, Any]:
         groups: dict[str, not_shown.LeftOut] = {}
         for pointer, table in facts.items():
@@ -3854,7 +3887,9 @@ def say_what_was_cut(
             elif keys[-2:-1] == ["value"] and keys[-1] in _SERIES_KEYS:
                 # A series thinned: said once on its recipe.
                 recipe = _owned(reply, join_pointer(keys[:2]))
-                said = _THINNED_WARNING.format(shown=entry.returned, total=entry.total)
+                said = _THINNED_WARNING.format(
+                    shown=entry.returned, total=entry.total, whole=whole_size()
+                )
                 warnings = list(recipe.get("warnings", []))
                 if not any(text.startswith("Inline series thinned") for text in warnings):
                     recipe["warnings"] = [*warnings, said]
@@ -4229,19 +4264,28 @@ def _request_digest(args: AnalyzeResultsInput) -> str:
 async def evaluate_analysis(args: AnalyzeResultsInput, state: SessionState) -> AnalysisEvaluation:
     """Evaluate every recipe of a new request over its sources.
 
-    Each step gets ``[analysis] analysis_budget_s`` of its own: reading the
-    sources, each recipe, and the check of every source after the reads. A
-    recipe that runs out of it fails with ``analysis_deadline`` and costs only
-    its own entry. Nothing here knows a page, a cursor or a reply size.
+    ``[analysis] analysis_budget_s`` bounds the whole call: reading the
+    sources, the check before the reads, every recipe, the check after them
+    and the signal listing. A step gets what is left of the bound (at least
+    ``_MIN_ITEM_DEADLINE_S``, so a check of what was read always runs); a
+    recipe that runs out of it fails with ``analysis_deadline``, and each
+    recipe the bound leaves no time for fails alone with the same code,
+    saying to ask for it in a call of its own. Nothing here knows a page, a
+    cursor or a reply size.
     """
     loop = asyncio.get_running_loop()
     budget_s = state.config.analysis_budget_s
+    call_deadline = loop.time() + budget_s
+
+    def step_deadline() -> float:
+        return loop.time() + max(_MIN_ITEM_DEADLINE_S, call_deadline - loop.time())
+
     # RAW recipes share one resolved step plan per source per call.
     step_plans: dict[tuple[_CaptureKey, int], _RawStepPlan] = {}
     # Share only while the bounded result cache or an active reader owns it.
     captures: WeakValueDictionary[_CaptureKey, ParsedArtifacts] = WeakValueDictionary()
 
-    item = await _create_result_set(args, state, loop.time() + budget_s)
+    item = await _create_result_set(args, state, call_deadline)
     include = AnalyzeInclude.model_validate(item.inputs.get("include", {}))
     runs = _deserialize_runs(item, state)
     manifests = {str(manifest["manifest_id"]): manifest for manifest in item.source_manifests}
@@ -4262,7 +4306,7 @@ async def evaluate_analysis(args: AnalyzeResultsInput, state: SessionState) -> A
     precheck = await _verify_direct_sources(
         item.source_manifests,
         {run.manifest_id for run in runs},
-        loop.time() + budget_s,
+        step_deadline(),
         state=state,
     )
 
@@ -4313,6 +4357,9 @@ async def evaluate_analysis(args: AnalyzeResultsInput, state: SessionState) -> A
                 )
             )
             continue
+        if loop.time() >= call_deadline:
+            skipped.append((position, _left_by_the_bound(key, budget_s)))
+            continue
         unit = await _evaluate_unit(
             recipe,
             key,
@@ -4322,7 +4369,7 @@ async def evaluate_analysis(args: AnalyzeResultsInput, state: SessionState) -> A
             manifests,
             state,
             item,
-            loop.time() + budget_s,
+            step_deadline(),
             step_plans,
             steps,
             captures,
@@ -4336,7 +4383,7 @@ async def evaluate_analysis(args: AnalyzeResultsInput, state: SessionState) -> A
     # artifact is published or results are returned. Drift discards the
     # records and artifacts derived from that source across every recipe
     # that used it.
-    postcheck_deadline = loop.time() + budget_s
+    postcheck_deadline = step_deadline()
     postcheck = await _verify_direct_sources(
         item.source_manifests,
         evaluated_ids,
@@ -4355,7 +4402,7 @@ async def evaluate_analysis(args: AnalyzeResultsInput, state: SessionState) -> A
 
     signals: dict[str, list[str]] | None = None
     if include.signals_available:
-        signals_deadline = loop.time() + budget_s
+        signals_deadline = call_deadline
         signals = {run.manifest_id: [] for run in runs}
         for run in runs:
             if loop.time() >= signals_deadline:
@@ -4388,6 +4435,20 @@ async def evaluate_analysis(args: AnalyzeResultsInput, state: SessionState) -> A
         signals=signals,
         argument_notes=tuple(args.argument_notes()),
         request=_request_digest(args),
+    )
+
+
+def _left_by_the_bound(key: str, budget_s: float) -> Failure:
+    """The failure of a recipe the call's bound left no time for."""
+    return Failure(
+        code="analysis_deadline",
+        stage="deadline",
+        where=key,
+        message=(
+            f"The call's work bound ([analysis] analysis_budget_s, {budget_s:g} s) ended "
+            "before this recipe was evaluated. Ask for it in a call of its own; the "
+            "recipes before it are answered."
+        ),
     )
 
 

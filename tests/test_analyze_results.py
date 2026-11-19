@@ -623,13 +623,14 @@ async def test_artifact_far_beyond_safety_factor_fails_fast(
 
 
 @pytest.mark.asyncio
-async def test_a_slow_csv_fails_its_own_recipe_and_removes_its_temp(
+async def test_a_slow_csv_fails_its_recipe_and_removes_its_temp(
     state_no_sim: SessionState,
     work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """A recipe that runs out of its budget costs only its own entry: the
-    recipe after it gets a budget of its own and answers."""
+    """A recipe that runs out of the call's bound fails with
+    ``analysis_deadline``, the recipe after it fails alone, and no temp is
+    left behind (``test_analyze_results_call_bound.py`` pins the bound)."""
     from ltspice_mcp.tools import analysis
 
     raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
@@ -662,8 +663,8 @@ async def test_a_slow_csv_fails_its_own_recipe_and_removes_its_temp(
             {"key": "v", "metric": "value", "expr": "V(out)", "at": "900u"},
         ],
     )
-    assert any(failure["code"] == "analysis_deadline" for failure in data["failures"])
-    assert data["results"]["v"]["values"]
+    assert {failure["code"] for failure in data["failures"]} == {"analysis_deadline"}
+    assert not data["results"]["v"].get("values")
     assert "next" not in data
     assert not list((work_dir / ".ltspice-mcp" / "results").rglob("*.pending"))
 

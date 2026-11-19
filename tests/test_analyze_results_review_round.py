@@ -195,3 +195,60 @@ def test_an_observations_rows_follow_the_rows_kept_after_a_source_drifted():
     assert [r.manifest_id for r in unit.records] == ["A", "A"]
     assert observation.evidence is not None
     assert [row["index"] for row in observation.evidence["rows"]] == [0, 1]
+
+
+#: The attached analysis the release before this one stored: a snapshot of
+#: its own assembly, with no complete answer in it.
+_EARLIER_RELEASE_ANALYSIS = analysis_snapshot.envelope(
+    {
+        "top": {"outcome": "complete"},
+        "results": {"v": {"values": []}},
+        "missing_offset": 0,
+        "coverage_cursor_base": None,
+        "natural_cursor_base": None,
+        "natural_has_next": False,
+        "natural_deferred": False,
+    }
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["status", "wait", "runs"])
+async def test_a_job_from_an_earlier_release_still_answers_with_its_runs(
+    state_no_sim: SessionState, action: str
+):
+    """Only the attached analysis is replaced, by the note that says to run
+    analyze_results over the job; the receipt and its run rows answer."""
+    from ltspice_mcp.tools.jobs import JobsInput, handle_jobs
+
+    job = make_experiment_job(state_no_sim, job_id=f"exp_earlier_{action}", count=3)
+    job.analysis = AnalysisStage(
+        status="completed", request={"recipes": []}, result=_EARLIER_RELEASE_ANALYSIS
+    )
+    result = await handle_jobs(
+        JobsInput.model_validate({"action": action, "job_id": job.job_id}), state_no_sim
+    )
+    assert not result.is_error, result.content
+    data = result.structured_content
+    assert data is not None
+    rows = data["items"] if action == "runs" else data["runs"]
+    assert len(rows) == 3
+    if action != "runs":
+        analysis = data["analysis"]
+        assert analysis["status"] == "completed"
+        assert "result" not in analysis
+        assert "analyze_results" in analysis["error"]
+
+
+@pytest.mark.parametrize("action", ["status", "wait", "runs"])
+def test_the_python_api_answers_a_job_from_an_earlier_release(
+    state_no_sim: SessionState, action: str
+):
+    job = make_experiment_job(state_no_sim, job_id=f"exp_earlier_api_{action}", count=3)
+    job.analysis = AnalysisStage(
+        status="completed", request={"recipes": []}, result=_EARLIER_RELEASE_ANALYSIS
+    )
+    data = SyncApi(state_no_sim).jobs(action=action, job_id=job.job_id)
+    assert len(data["items"] if action == "runs" else data["runs"]) == 3
+    if action != "runs":
+        assert "analyze_results" in data["analysis"]["error"]

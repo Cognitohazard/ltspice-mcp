@@ -367,8 +367,9 @@ the same way, beside the run rows, and read on with `analyze_results`.
 An inline `waveform` too long for the reply is drawn again at fewer points
 first, each bucket keeping its minimum and maximum, never below 32 points:
 its `cut` entry at `.../value/x` gives the points the answer holds and those
-sent, with no cursor, and the recipe's `warnings` say so. Set `max_points` for
-fewer points held, or use `"format": "csv"` for every sample.
+sent, with no cursor, and the recipe's `warnings` say so and name the
+`budget` at which the reply sends every point; `"format": "csv"` writes every
+sample to a file.
 
 ### Notes sent once per session
 

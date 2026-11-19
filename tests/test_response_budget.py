@@ -12,6 +12,7 @@ import ast
 import asyncio
 import copy
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -806,9 +807,7 @@ class TestWaveformSamplesFitTheBudget:
             assert min(after["y"]) == min(before["y"])
             assert max(after["y"]) == max(before["y"])
         (warning,) = _thinning_warnings(thinned["results"]["w"])
-        assert "max_points" in warning
-        # A caller who set no budget is not sent to raise one.
-        assert "'budget'" not in warning
+        assert "budget" in warning and "csv" in warning
         assert _observation(thinned, "budget_not_met") is None
 
     async def test_a_reply_too_long_thins_an_explicit_max_points_too(
@@ -827,7 +826,16 @@ class TestWaveformSamplesFitTheBudget:
         assert (cut["total"], cut["returned"]) == (value["points_total"], len(value["x"]))
         assert "next" not in cut
         (warning,) = _thinning_warnings(data["results"]["w"])
-        assert "max_points" in warning and "csv" in warning
+        assert "csv" in warning
+        # The budget the warning names sends every point the caller asked for.
+        named = re.search(r"budget (\d+) sends every point", warning)
+        assert named is not None, warning
+        every = await _waveform_reply(
+            state_no_sim, raw, budget=int(named.group(1)), max_points=2000
+        )
+        (whole,) = _inline_values(every["results"]["w"])
+        assert whole["points_returned"] == whole["points_total"] == len(whole["x"])
+        assert "cut" not in every
 
     async def test_a_caller_budget_thins_as_the_default_does(
         self, state_no_sim: SessionState, work_dir: Path
@@ -840,7 +848,7 @@ class TestWaveformSamplesFitTheBudget:
         (value,) = _inline_values(data["results"]["w"])
         assert value["points_returned"] < value["points_total"]
         (warning,) = _thinning_warnings(data["results"]["w"])
-        assert "max_points" in warning
+        assert "budget" in warning
         assert _observation(data, "budget_truncated") is None
 
     async def test_receipts_thin_their_attached_waveform_to_fit(
@@ -864,7 +872,7 @@ class TestWaveformSamplesFitTheBudget:
             for value in values:
                 assert value["points_returned"] == len(value["x"]) < value["points_total"]
             (warning,) = _thinning_warnings(entry)
-            assert "max_points" in warning
+            assert "analyze_results with budget" in warning
 
 
 @pytest.mark.asyncio

@@ -736,8 +736,7 @@ class ServerConfig:
     """Maximum waveform data points to return."""
 
     analysis_budget_s: float = 60.0
-    """Work budget of each step of an ``analyze_results`` call: reading its
-    sources, each recipe, and the check of every source after the reads."""
+    """Whole-call work budget for ``analyze_results``."""
 
     result_set_ttl_hours: float = 24.0
     """Hours a cut reply's stored answer can be read on, and a result set
@@ -1082,9 +1081,7 @@ def generate_default_config(path: Path) -> None:
     analysis = table()
     analysis.add(comment("Maximum waveform data points to return per trace"))
     _shown_default(analysis, "max_points_returned")
-    analysis.add(
-        comment("Work budget of each step of an analyze_results call (each recipe), in seconds")
-    )
+    analysis.add(comment("Whole-call work budget for analyze_results, in seconds"))
     _shown_default(analysis, "analysis_budget_s")
     analysis.add(comment("Default response budget, in tokens, for run_experiments, jobs,"))
     analysis.add(comment("analyze_results and inspect replies (0 disables)"))

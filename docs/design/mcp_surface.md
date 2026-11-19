@@ -1586,11 +1586,18 @@ answers, so a page reads the steps its first reply read.
   field, unless `allow_incomplete` is set, which judges the rows that have a
   number and still reports the count. A verdict stored with a job by an
   earlier release has no `no_value_count`; it skipped rows with no number.
-- Each step of a call has a time limit of its own, `[analysis]
-  analysis_budget_s` (default 60 s), on top of the deadline on each parse:
-  reading the sources, each recipe, the check of every source after the
-  reads, and the signal listing. A recipe that runs out of it fails with
-  `analysis_deadline` and costs only its own entry. The result set the call
+- One time limit bounds the whole call, `[analysis] analysis_budget_s`
+  (default 60 s), on top of the deadline on each parse: reading the sources,
+  the checks of every source before and after the reads, every recipe and
+  the signal listing share it, and each step gets what is left of it. A
+  recipe that runs out of it fails with `analysis_deadline`, and each recipe
+  the limit leaves no time for fails alone with the same code (stage
+  `deadline`), naming the fix: ask for it in a call of its own. The recipes
+  evaluated before it are answered. The check after the reads always runs
+  (at least 50 ms), so nothing read is published unchecked. A repeat of a
+  request writes to the same artifact paths; an artifact already published
+  there with the same bytes is kept as it is, never replaced or reopened for
+  writing, so a file held open by another program does not fail the repeat. The result set the call
   records (its request and source digests) names the folder its CSV and plot
   artifacts are written to; its id is a digest of what it records, so the
   same request over the same files gives the same id and the same bytes. A

@@ -77,7 +77,7 @@
 [analysis]
 # Maximum waveform data points to return per trace
 # max_points = 10000
-# Work budget of each step of an analyze_results call (each recipe), in seconds
+# Whole-call work budget for analyze_results, in seconds
 # analysis_budget_s = 60.0
 # Default response budget, in tokens, for run_experiments, jobs,
 # analyze_results and inspect replies (0 disables)
