@@ -1743,7 +1743,7 @@ async def _measurement_step_plan(
     if steps.step is None and not steps.all_steps:
         return [(None, {})]
     logs = await services.load_logs(source, state)
-    parsed = await asyncio.to_thread(services.read_measurements, source, logs)
+    parsed = services.read_measurements(source, logs)
     if not parsed or not parsed["measurements"]:
         # The metric reads the log again and says why it holds no results.
         return [(0, {})]

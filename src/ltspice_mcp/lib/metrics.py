@@ -1162,7 +1162,7 @@ async def measurement_rows(
     printed value is not established as the result in ``not_established``.
     The deck and the build that wrote the run are read once for all of them."""
     logs = await services.load_logs(source, state)
-    decoded = await asyncio.to_thread(services.read_measurements, source, logs)
+    decoded = services.read_measurements(source, logs)
     # A log was captured, or read_measurements refused: it is source's log.
     assert source.log is not None
     whole = await services.answer_measurements(source, decoded)

@@ -1163,10 +1163,10 @@ async def test_a_run_read_by_path_says_its_measurements_were_not_read(
     family: str, config: ServerConfig, work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ):
     """The raw of a QSPICE or Xyce run, read by its path with its log beside
-    it, names its writer only in its own header (Xyce's names none, so the
-    caller names it): the summary says the run's measurements were not read,
-    as a read of the same run by job does, the every-run check says nothing
-    of them, and the measurements recipe refuses them with the same reason."""
+    it and the simulator named: the summary says the run's measurements were
+    not read, as a read of the same run by job does, the every-run check says
+    nothing of them, and the measurements recipe refuses them with the same
+    reason."""
     from ltspice_mcp.lib.simulator import SIMULATORS
 
     state = SessionState.create(
@@ -1175,7 +1175,9 @@ async def test_a_run_read_by_path_says_its_measurements_were_not_read(
     raw = work_dir / "run.raw"
     raw.write_bytes(_qspice_ac_qraw() if family == "qspice" else _XYCE_TRAN_RAW)
     shutil.copyfile(rec.recorded("ltspice26", "log/meas_failed.log"), work_dir / "run.log")
-    sources = [{"path": str(raw), "dialect": family}] if family == "xyce" else [{"path": str(raw)}]
+    # The caller names the simulator: a log-only reader does not read the
+    # raw's header, so a path that names none is read as its log decodes.
+    sources = [{"path": str(raw), "dialect": family}]
     data = await dispatched(
         state, "analyze_results", sources=sources, recipes=[{"key": "s", "metric": "summary"}]
     )
@@ -1226,7 +1228,7 @@ def test_a_recipe_lifts_a_bounded_number_of_one_code_and_says_how_many_it_left()
         for index in range(_LIFTED_PER_CODE + 2)
     ]
     lifted = _value_observations("s", records)
-    assert [o.evidence["rows"][0]["case_id"] for o in lifted] == [
+    assert [(o.evidence or {})["rows"][0]["case_id"] for o in lifted] == [
         f"c{index}" for index in range(_LIFTED_PER_CODE)
     ]
     assert "2 more extreme_value" in lifted[-1].detail

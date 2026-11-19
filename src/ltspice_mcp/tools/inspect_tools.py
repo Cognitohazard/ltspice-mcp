@@ -2677,7 +2677,7 @@ async def _log_results_page(
     if query.view == "measurements":
         # Refused with the run row's reason where the measurements were not
         # read (a QSPICE or Xyce run, a log not captured).
-        await asyncio.to_thread(services.require_measurements_read, source, logs)
+        services.require_measurements_read(source, logs)
     facts = logs.value(section_name)
     if query.view == "measurements" and facts is not None:
         # Each measurement names the field holding its result.

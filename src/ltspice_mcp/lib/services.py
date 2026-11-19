@@ -49,13 +49,11 @@ from ltspice_mcp.lib.parser_service import ParserCleanupError, select_raw
 from ltspice_mcp.lib.parser_service import load_artifacts_sync as _parse_artifacts_sync
 from ltspice_mcp.lib.parser_service import load_logs_sync as _parse_logs_sync
 from ltspice_mcp.lib.parser_service import load_raw_sync as _parse_raw_sync
-from ltspice_mcp.lib.raw_header import RawDialectError, command_writer
 from ltspice_mcp.lib.raw_parser import (
     OtherRawKind,
     get_step_count,
     other_raw_path,
     points_reached,
-    raw_writer_command,
 )
 from ltspice_mcp.lib.result_observations import (
     READ_BY_JOB,
@@ -293,27 +291,16 @@ def source_measurements_unread(
 ) -> str | None:
     """:func:`measurements_unread` for a read of ``source``: its family is
     the dialect the caller named, else the one the source was read in, else
-    the family of who wrote it (``producer``), else the simulator its raw's
-    header names, so a run read by path and by job give one answer for every
-    reader of its measurements. Blocking: it may read the raw's header."""
+    the family of who wrote it (``producer``, which a reader of the raw has
+    from its header). A raw read by its path with no dialect named is read by
+    a log-only reader as the log decoder reads it: the parser worker does not
+    read the raw for a log, so its writer is not known there."""
     family = (
         source.explicit_dialect
         or source.dialect
         or (producer.family if producer is not None else None)
-        or _raw_written_by(source)
     )
     return measurements_unread(logs, family)
-
-
-def _raw_written_by(source: AnalysisSource) -> str | None:
-    """The simulator ``source``'s raw names itself in its header's ``Command``
-    field (``raw_header.command_writer``), or None."""
-    if source.raw is None:
-        return None
-    try:
-        return command_writer(raw_writer_command(source.raw) or "")
-    except RawDialectError:
-        return None
 
 
 def _unread_detail(source: AnalysisSource, logs: DecodedLog, unread: str) -> str:
