@@ -2241,8 +2241,12 @@ item_axis = "form"
 # Keys of a cell beside its coordinates: the steps, from 1, that an outcome in
 # one step concerns; and zero_by_form, for a result that is 0 in every step by
 # what its form is where each step has one point (a PP, a derivative, a
-# TRIG/TARG at one level, in a stepped .tf).
-item_keys = ["steps", "zero_by_form"]
+# TRIG/TARG at one level, in a stepped .tf). not_a_number: the text the log
+# printed where the result's number belongs, a number that is not finite;
+# every route gives null and says what was printed. printed_once: the step,
+# from 1, whose value a line printed once for a run of several steps holds,
+# and how many steps the run had (`of`); every route says both.
+item_keys = ["steps", "zero_by_form", "not_a_number", "printed_once"]
 groups = [
     ["form", "analysis", "stepped", "outcome"],
     ["name", "printed"],
@@ -2362,13 +2366,17 @@ s_when = { form = "when", level = "number", outcome = "step_fails", steps = [3] 
 s_rise = "trig_targ"
 s_param = "param"
 
-# LTspice 26 prints one line for the three steps; XVII prints nothing.
+# LTspice 26 prints one line for the three steps; XVII prints nothing. The
+# line holds the first step's value: raw/step_op runs the same divider over the
+# same steps, and its results file holds V(out) 0.8, 1.6 and 2.4 and I(V1)
+# -0.2m, -0.4m and -0.6m; the log printed 0.800000011921 and -0.000199999994948
+# (test_the_line_a_stepped_op_prints_holds_its_first_steps_value).
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_step_op"]
 at = { analysis = "op", stepped = "yes", outcome = "value", printed = "line" }
 [grid.printed-measurement.cell.items]
-vout = { form = "find", refused = { ltspice17 = "XVII prints no measurement of a stepped .op." } }
-iin = { form = "find", refused = { ltspice17 = "XVII prints no measurement of a stepped .op." } }
+vout = { form = "find", printed_once = { step = 1, of = 3 }, refused = { ltspice17 = "XVII prints no measurement of a stepped .op." } }
+iin = { form = "find", printed_once = { step = 1, of = 3 }, refused = { ltspice17 = "XVII prints no measurement of a stepped .op." } }
 
 [[grid.printed-measurement.cell]]
 cases = ["log/meas_deriv_when"]
@@ -2726,13 +2734,14 @@ vfinal = "find_at"
 vmax = "max"
 
 # A stepped .fra run's loop margins, which LTspice 26 prints as measurement
-# tables of their own (no .meas card asks for them), with their units.
+# tables of their own (no .meas card asks for them), with their units. The
+# loop's phase never crosses, so the gain margin is printed infdB in each step.
 [[grid.printed-measurement.cell]]
 cases = ["raw/fra_step"]
 at = { stepped = "yes", outcome = "value", printed = "table", card = "fra" }
 [grid.printed-measurement.cell.items]
 PhaseMargin_1 = {}
-GainMargin_1 = {}
+GainMargin_1 = { not_a_number = "infdB" }
 
 # Cells written to be recorded (behaviour log-meas-grid, pending) -------------
 
