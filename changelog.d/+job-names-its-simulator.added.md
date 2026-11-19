@@ -1,0 +1,1 @@
+A job names the simulator it ran with as `simulator`, in the selector a caller can pass back as `execution.simulator` (`ltspice`, or `ltspice:xvii` for a named build), on the `run_experiments` receipt, the `jobs` status, wait, resume and runs replies, each row of `jobs(action="list")`, and the same replies through the Python API.
