@@ -922,7 +922,7 @@ DEVICE_TABLE_REQUEST_UNKNOWN = (
 
 
 async def device_table_unread(
-    source: AnalysisSource, *, family: str | None
+    source: AnalysisSource, *, family: str | None, devices: bool | None = None
 ) -> dict[str, Any] | None:
     """Why a read of ``source``'s log found its device operating-point table
     empty, where the reason is not "the circuit has no such device"; None
@@ -936,17 +936,22 @@ async def device_table_unread(
     withheld the option (``logopinfo_withheld``, relayed as the run gave it);
     a case without it was given the option, or ran on a build that needs none.
     By path no job record says whether the run asked for the table, so that
-    is said, unless the log was written by a simulator that never prints it
-    (``family``, an ngspice run's are traces of its raw) or by XVII, as the
-    log's first line names it."""
+    is said where the log's first line names an LTspice 24 or later, the
+    builds that print it only when asked. A log with no such banner is not
+    one: LTspice 26 opens every log with it, XVII prints the table unasked,
+    and an ngspice log never holds one (its device values are traces of its
+    raw). ``family`` is the dialect the caller read the run in; a simulator
+    that is not LTspice gets no reason. ``devices`` is what the caller knows
+    of the run's semiconductors (an LTspice raw's terminal currents): False,
+    an empty table means none, and no reason is given; None, not known."""
+    if family not in (None, "ltspice") or devices is False:
+        return None
     if source.trusted_job_artifact:
         withheld = source.device_table_withheld
         return dict(withheld) if withheld is not None else None
-    if family not in (None, "ltspice"):
-        return None
     build = await asyncio.to_thread(log_head_build, source.log) if source.log is not None else None
     found = which_ltspice(None, build)
-    if found is not None and found.generation == "xvii":
+    if found is None or found.generation != "current":
         return None
     return {
         "code": "device_table_request_unknown",

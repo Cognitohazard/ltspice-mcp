@@ -1392,9 +1392,9 @@ names it in one of five places, by why:
   value once for a run of several steps. LTspice 26 prints one line for each
   measurement of a stepped `.op`, and no `.step` line; the line holds the
   first step's value (recorded: `log/meas_step_op`, compared with the
-  results file of `raw/step_op`), so `step` is 0 for LTspice 24 and later and
-  absent, with the reason saying it is not established, for a log no
-  evidence names. The other steps' values are not in the log, and the reason
+  results file of `raw/step_op`), so `step` is 0 for LTspice 26 and
+  absent, with the reason saying it is not established, for any other build
+  and for a log no evidence names. The other steps' values are not in the log, and the reason
   names the recipe that reads them from the results. The summary's entries,
   an `inspect` measurements row and the Python API's `measurements()` carry
   the same statement.

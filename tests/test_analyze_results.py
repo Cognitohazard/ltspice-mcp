@@ -2570,18 +2570,14 @@ async def test_a_bias_point_with_no_device_params_says_so_on_observations(
     work_dir: Path,
 ):
     """Never a bare success: the caller who asked for a device's operating point
-    and got none must be told what was looked for and where it was looked. A
-    raw read by its path has no job record that says whether the run asked for
-    the log's device table, so the reply says that is not known, with how to
-    get the table."""
+    and got none must be told what was looked for and where it was looked."""
     raw = _bare_device_op_raw(work_dir)
 
     data = await _analyze(state_no_sim, raw, [_OP_RECIPE])
 
     observation = next(
-        item for item in data["observations"] if item["code"] == "device_table_request_unknown"
+        item for item in data["observations"] if item["code"] == "device_op_points_absent"
     )
-    assert "not known whether" in observation["detail"]
     assert observation["evidence"]["recipe"] == "bias"
     assert "logopinfo" in observation["detail"]
     assert ".save" in observation["detail"]

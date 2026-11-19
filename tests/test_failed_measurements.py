@@ -15,7 +15,7 @@ A measurement with no number for another reason is not among them. One whose
 printed value is not a number (a WHEN's threshold written as an expression,
 recorded as ``log/meas_when_threshold_ac``) is under ``unreadable``; one whose
 printed value is not finite (a stepped FRA's gain margin of ``infdB``,
-recorded as ``raw/fra_step``) is under a recipe row's ``not_finite``.
+recorded as ``raw/fra_step``) is there too, its reason quoting the text.
 """
 
 from __future__ import annotations
@@ -573,7 +573,6 @@ async def test_each_null_of_a_row_is_named_once_by_why(
             continue
         nulls = {name for name, number in value["measured"].items() if number is None}
         unreadable = set(value.get("unreadable", {}))
-        not_finite = set(value.get("not_finite", []))
-        assert failed | not_finite <= nulls
-        assert nulls <= failed | unreadable | not_finite
-        assert not failed & unreadable and not failed & not_finite and not unreadable & not_finite
+        assert failed <= nulls
+        assert nulls <= failed | unreadable
+        assert not failed & unreadable

@@ -1574,33 +1574,39 @@ def _printed_once(producer: Producer, solves: int) -> PrintedOnce:
     (recorded: log/meas_step_op, three steps). The line holds the first
     step's value: raw/step_op runs the same divider over the same steps, and
     its results file holds V(out) 0.8, 1.6 and 2.4, where the log printed
-    0.800000011921. Which generation wrote the log is :func:`which_ltspice`'s
-    answer, as for :func:`_zero_steps_reason`: a current build (24 and later)
-    prints as LTspice 26 does; for XVII, which printed no such line in the
-    recording, IV, and a log no evidence names, the step is not established.
-    The values of the other steps are not in the log either way."""
+    0.800000011921. Which build wrote the log is :func:`which_ltspice`'s
+    answer. Only LTspice 26 is recorded, so the step is established for it
+    alone: for another current release (24, 25 or later), XVII, which printed
+    no such line in the recording, IV, and a log no evidence names, it is
+    not. The values of the other steps are not in the log either way."""
     others = (
         f"The values of the other {solves - 1} steps are not in the log: read each "
         "step's from the run's results, with the 'value' recipe and all_steps=true "
         "for a trace, or a recipe over the measurement's own expression."
     )
     found = which_ltspice(producer.program, producer.build)
-    if found is not None and found.generation == "current":
+    if found is not None and found.generation == "current" and found.major == 26:
         return {
             "step_count": solves,
             "step": 0,
             "reason": (
                 f"The log printed this value once for a run of {solves} steps (its "
                 f"operating point was solved {solves} times, with no .step line). It "
-                "is the first step's: LTspice 24 and later print the first step's "
-                "value of a stepped .op (recorded: log/meas_step_op, compared with "
-                f"the results file of raw/step_op). {others}"
+                "is the first step's: LTspice 26 prints the first step's value of a "
+                "stepped .op (recorded: log/meas_step_op, compared with the results "
+                f"file of raw/step_op). {others}"
             ),
         }
     if found is None:
         who = (
             "the log does not show which LTspice wrote it, and a recording "
-            "establishes the step for LTspice 24 and later alone"
+            "establishes the step for LTspice 26 alone"
+        )
+    elif found.generation == "current":
+        release = f"LTspice {found.major}" if found.major is not None else "An LTspice 24 or later"
+        who = (
+            f"{release} wrote it, and a recording establishes the step for "
+            "LTspice 26 alone"
         )
     else:
         who = (
@@ -2020,7 +2026,7 @@ def parse_measurements(
             not_finite.add(name)
         unreadable_steps.setdefault(name, []).append(index)
 
-    def _coerce(values: list, name: str) -> list[float | None]:
+    def _coerce(values: list, name: str, *, metadata: bool = False) -> list[float | None]:
         out: list[float | None] = []
         for index, val in enumerate(values):
             number: float | None
@@ -2044,7 +2050,10 @@ def parse_measurements(
                     _unread(name, index, str(val), finite_text=True)
                     out.append(None)
                     continue
-            if not math.isfinite(number):
+            # A point or bound beside the result (``at``, ``from``, ``to``) that
+            # is not finite is not the result: it is kept as read, and the log
+            # section holds it as null and counts it, as before.
+            if not math.isfinite(number) and not metadata:
                 _unread(name, index, str(val), finite_text=False)
                 out.append(None)
                 continue
@@ -2059,10 +2068,15 @@ def parse_measurements(
         if name in skipped:
             parents[name] = _coerce([skipped[name]], name)
             continue
-        coerced = _coerce(reader.dataset.get(name.lower(), []), name)
         suffix_match = next(
             ((suffix, key) for suffix, key in _MEAS_METADATA_SUFFIXES if name.endswith(suffix)),
             None,
+        )
+        coerced = _coerce(
+            reader.dataset.get(name.lower(), []),
+            name,
+            metadata=suffix_match is not None
+            and name[: -len(suffix_match[0])] in measure_name_set,
         )
         if suffix_match:
             suffix, meta_key = suffix_match

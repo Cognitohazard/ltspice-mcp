@@ -2820,10 +2820,12 @@ async def operating_point(
     # the analyze path relays it as an observation, and a device parameter's
     # value names it in its refusal.
     unread = (
-        await services.device_table_unread(source, family=raw_dialect)
+        await services.device_table_unread(
+            source,
+            family=raw_dialect,
+            devices=has_active_device(op_data.get("currents", {})),
+        )
         if not op_data.get("device_op_points")
-        and raw_dialect != "ngspice"
-        and has_active_device(op_data.get("currents", {}))
         else None
     )
     if unread is not None:

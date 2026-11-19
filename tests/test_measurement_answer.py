@@ -596,7 +596,7 @@ async def test_one_value_printed_by_a_build_no_evidence_names_says_its_step_is_n
     state_no_sim: SessionState, work_dir: Path
 ):
     """The same log with its banner removed names no build: a recording
-    establishes the step for LTspice 24 and later alone, so the value keeps
+    establishes the step for LTspice 26 alone, so the value keeps
     no step. The recipe's row names none either, and each route says the run
     had three steps and how to read them."""
     log = work_dir / "meas_step_op.log"

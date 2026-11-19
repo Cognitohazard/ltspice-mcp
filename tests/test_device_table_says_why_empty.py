@@ -203,3 +203,35 @@ def test_every_reader_of_the_device_table_asks_why_it_may_be_empty():
         "These scopes read the log's device table without asking "
         f"services.device_table_unread why an empty one is empty: {silent}"
     )
+
+
+@pytest.mark.asyncio
+async def test_an_empty_table_that_means_no_devices_gets_no_reason(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """Where an empty table does mean "no such device", no route adds a
+    reason: an ngspice log, which never holds the table; an XVII log, which
+    prints it unasked; and, through the operating-point recipe, an LTspice
+    26 run of a divider, whose raw shows no semiconductor."""
+    api = SyncApi(state_no_sim)
+    for log in (
+        Path("tests/fixtures/ngspice_ac_no_meas.log"),
+        rec.recorded("ltspice17", "raw/op.log"),
+    ):
+        copy = work_dir / f"{log.parent.name}_{log.name}"
+        shutil.copyfile(log, copy)
+        ops = await asyncio.to_thread(lambda copy=copy: api.device_op_points(copy))
+        assert dict(ops) == {}, dict(ops)
+        assert not [o for o in ops.observations if o["code"] == "device_table_request_unknown"]
+    raw = work_dir / "divider.raw"
+    shutil.copyfile(rec.recorded("ltspice26", "raw/op.raw"), raw)
+    shutil.copyfile(rec.recorded("ltspice26", "raw/op.log"), raw.with_suffix(".log"))
+    reply = await dispatched(
+        state_no_sim,
+        "analyze_results",
+        sources=[{"path": str(raw), "label": "run"}],
+        recipes=[{"key": "op", "metric": "operating_point"}],
+    )
+    assert not [
+        line for line in _said(reply) if line.startswith("device_table_request_unknown")
+    ], reply
