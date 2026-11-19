@@ -292,20 +292,21 @@ def test_the_cancel_gate_holds_no_wait_on_the_loop_or_a_write():
 # ---------------------------------------------------------------------------
 
 #: Every place that uses ``experiment_store.save_job``. A job the registry
-#: keeps is written through its ordered writes (``JobRegistry._newest_write``),
-#: where an older write cannot land on top of a newer one; a write outside them
-#: could. Each other use writes a record no ordered write of the job can be in
+#: keeps is written through its writes, one at a time per job in the order
+#: asked for (``JobRegistry._persist_locks``), where an older write cannot land
+#: on top of a newer one; a write outside them could. Each other use writes a record no ordered write of the job can be in
 #: flight for, and says why. A new use fails here until it is listed.
 _SAVE_JOB_USES: dict[str, str] = {
     "lib/job_registry.py:JobRegistry._persist_async.persist": (
-        "The registry's ordered strict write, under its newest-wins guard."
+        "The registry's strict write, under the job's write lock."
     ),
     "lib/job_registry.py:JobRegistry._persist_sync": (
-        "The registry's ordered write, under its newest-wins guard."
+        "The registry's write: under the job's write lock on the loop "
+        "(``_persist_async``), or in line where there is no loop."
     ),
     "lib/experiment_resume.py:persist_reconciled": (
-        "Called only by the registry's ordered write, which holds the job's "
-        "guard across the whole re-read and save."
+        "Called only by the registry's write, under the job's write lock, "
+        "which it re-reads and saves inside."
     ),
     "lib/experiment_resume.py:_persist_discovery": (
         "A recoverable job's first record under its new owner, at admission, "

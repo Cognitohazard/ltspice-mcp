@@ -10,8 +10,7 @@ import contextlib
 import json
 import logging
 import secrets
-from collections.abc import Callable, Mapping
-from contextlib import AbstractContextManager
+from collections.abc import Mapping
 from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
@@ -289,21 +288,15 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
     )
 
 
-def save_job(
-    job: ExperimentJob,
-    *,
-    commit_guard: Callable[[], AbstractContextManager[bool]] | None = None,
-) -> Path:
-    """Persist an experiment at its validated working-store path; with
-    ``commit_guard``, only when it allows the rename (``JobRegistry``'s
-    newest-wins order for a job's writes)."""
+def save_job(job: ExperimentJob) -> Path:
+    """Persist an experiment at its validated working-store path."""
     validate_job_id(job.job_id)
     root = job.store_path.parent.resolve()
     expected = (root / f"{job.job_id}.json").resolve()
     if job.store_path.resolve() != expected or expected.parent != root:
         raise ValueError(f"Experiment store path is not contained: {job.store_path}")
     job.store_path = expected
-    atomic_write_json(expected, serialize_job(job), commit_guard=commit_guard)
+    atomic_write_json(expected, serialize_job(job))
     logger.debug("Persisted experiment job %s to %s", job.job_id, expected)
     return expected
 

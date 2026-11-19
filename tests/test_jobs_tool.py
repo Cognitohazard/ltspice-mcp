@@ -7,7 +7,7 @@ import copy
 from dataclasses import asdict, replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, get_args
+from typing import get_args
 from unittest.mock import AsyncMock
 
 import jsonschema
@@ -1479,10 +1479,10 @@ class TestCancellationAuthority:
     ):
         save_job = experiment_store.save_job
 
-        def save_as_foreign(job: ExperimentJob, **kwargs: Any) -> Path:
+        def save_as_foreign(job: ExperimentJob) -> Path:
             # The coordinator is real but runs in this test process. Keep its
             # simulated foreign identity on every durable checkpoint.
-            return save_job(replace(job, owner_pid=_FOREIGN_PID), **kwargs)
+            return save_job(replace(job, owner_pid=_FOREIGN_PID))
 
         monkeypatch.setattr(experiment_store, "save_job", save_as_foreign)
         monkeypatch.setattr(

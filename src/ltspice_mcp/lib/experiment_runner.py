@@ -191,7 +191,7 @@ def _launch_stopped(exc: BaseException) -> bool:
     return isinstance(cause, RecoveryError) and cause.code == "recovery_launch_cancelled"
 
 
-def _retrieve(task: asyncio.Task[Any]) -> None:
+def _retrieve(task: asyncio.Task[None]) -> None:
     """Mark a finished task's outcome read, for a write nobody awaits any more."""
     if not task.cancelled():
         task.exception()
@@ -947,10 +947,11 @@ class ExperimentRunner(RunnerBase):
     async def _record_index_note(request: ExperimentRunRequest, candidate: ExperimentJob) -> None:
         """Write the note that the circuit index failed onto the job's record.
 
-        Through the registry's ordered writes when it keeps records, so no
-        write of the job can land on top of a newer one
-        (``JobRegistry._newest_write``). With persistence off the registry
-        writes nothing, so this is the only writer of the record then. A
+        Through the registry's writes when it keeps records, which write a
+        job's record one at a time, in the order asked for
+        (``JobRegistry._persist_locks``), so this write cannot land on top of
+        a newer one. With persistence off the registry writes nothing, so
+        this is the only writer of the record then. A
         failure is logged: losing a note is no reason to fail a job that exists
         and can run, and the note still reaches this submission's receipt.
         """
@@ -1286,31 +1287,13 @@ class ExperimentRunner(RunnerBase):
         )
         self._request_stop(execution, "job_deadline")
 
-    async def _persist_job(self, execution: _Execution, job: ExperimentJob | None = None) -> bool:
-        """Await a recovery checkpoint of the live job, or of ``job``, a copy of
-        it; whether that write itself landed (``JobRegistry.persist_strict``).
-        A copy holding a state the live job has not taken goes through
-        ``_checkpoint_ahead`` instead."""
+    async def _persist_job(self, execution: _Execution, job: ExperimentJob | None = None) -> None:
+        """Await recovery checkpoints in the registry's existing per-job order."""
         if execution.job.recovery is None:
             execution.request.state.persist_job(execution.job)
-            return True
+            return
         try:
-            return await execution.request.state.job_registry.persist_strict(job or execution.job)
-        except Exception as exc:
-            execution.persistence_error = exc
-            raise
-
-    async def _checkpoint_ahead(
-        self,
-        execution: _Execution,
-        ahead: Callable[[], ExperimentJob],
-        take: Callable[[ExperimentJob], None],
-    ) -> None:
-        """Put a state on disk before the live job takes it, then take it
-        (``JobRegistry.persist_ahead``, which decides the order). A storage
-        failure is the execution's persistence error, as any checkpoint's."""
-        try:
-            await execution.request.state.job_registry.persist_ahead(execution.job, ahead, take)
+            await execution.request.state.job_registry.persist_strict(job or execution.job)
         except Exception as exc:
             execution.persistence_error = exc
             raise
@@ -1326,17 +1309,10 @@ class ExperimentRunner(RunnerBase):
                 raise InvalidTransitionError(
                     f"Illegal recovery transition {job.status} to {status}"
                 )
-            completed_at = now()
-
-            def take(snapshot: ExperimentJob) -> None:
-                execution.live.transition(status, **extra)
-                job.completed_at = snapshot.completed_at
-
-            await self._checkpoint_ahead(
-                execution,
-                lambda: replace(job, status=status, completed_at=completed_at),
-                take,
-            )
+            snapshot = replace(job, status=status, completed_at=now())
+            await self._persist_job(execution, snapshot)
+            execution.live.transition(status, **extra)
+            job.completed_at = snapshot.completed_at
         else:
             execution.live.transition(status, **extra)
             await self._persist_job(execution)
@@ -1406,8 +1382,8 @@ class ExperimentRunner(RunnerBase):
             adaptation,
         )
         case.recovery = replace(case.recovery, attempt=replace(attempt, launch=intent))
-        # Only this launch thread waits; the loop stays free for a cancel and for
-        # the write. Never hold launch_lock across this wait. This is a
+        # Only this launch thread waits; the loop stays free for a cancel and the
+        # ordered registry lock. Never hold launch_lock across this wait. This is a
         # thread of ``_LAUNCH_THREADS``, never of the default pool the write runs
         # on (see there), and a stop of the job ends the wait (``_record_launch``).
         asyncio.run_coroutine_threadsafe(self._record_launch(execution), self.loop).result()
@@ -1421,9 +1397,8 @@ class ExperimentRunner(RunnerBase):
 
         Every stop of a job (a cancel, its deadline, the process stopping) sets
         ``cancel_event`` through ``_request_stop``, so a stop ends the launch's
-        wait even while the write cannot get a thread. The write itself goes on,
-        lands only if no newer write of the job has landed first
-        (``JobRegistry._newest_write``), and is this runner's to settle. A
+        wait even while the write cannot get a thread. The write itself goes on
+        under the registry's per-job order and is this runner's to settle. A
         launch that stops here was refused before spicelib created its run, so
         no simulator starts, and the record it may leave (a launch intent with
         no outputs) is the one a crash between the record and the start leaves.
@@ -1759,7 +1734,6 @@ class ExperimentRunner(RunnerBase):
                             case.log_file,
                             lineage_root=case.recovery.inputs.lineage_root,
                         )
-                        assert case.recovery is not None
                         produced = replace(
                             case,
                             status="produced",
@@ -1769,31 +1743,18 @@ class ExperimentRunner(RunnerBase):
                                 attempt=replace(case.recovery.attempt, outputs=outputs),
                             ),
                         )
-
-                        def checkpoint(
-                            case: ExperimentCase = case, produced: ExperimentCase = produced
-                        ) -> ExperimentJob:
-                            ahead = replace(
-                                execution.job,
-                                cases=[
-                                    produced if item is case else item
-                                    for item in execution.job.cases
-                                ],
-                                completeness=replace(execution.job.completeness),
-                            )
-                            self._recount_completeness(ahead)
-                            return ahead
-
-                        def take(
-                            _ahead: ExperimentJob,
-                            case: ExperimentCase = case,
-                            produced: ExperimentCase = produced,
-                        ) -> None:
-                            case.recovery = produced.recovery
-                            self._mark_case(execution, case, "produced")
-                            case.completed_at = produced.completed_at
-
-                        await self._checkpoint_ahead(execution, checkpoint, take)
+                        checkpoint = replace(
+                            execution.job,
+                            cases=[
+                                produced if item is case else item for item in execution.job.cases
+                            ],
+                            completeness=replace(execution.job.completeness),
+                        )
+                        self._recount_completeness(checkpoint)
+                        await self._persist_job(execution, checkpoint)
+                        case.recovery = produced.recovery
+                        self._mark_case(execution, case, "produced")
+                        case.completed_at = produced.completed_at
                     else:
                         self._mark_case(execution, case, "produced")
                 else:

@@ -41,10 +41,10 @@ async def test_delayed_reader_cannot_erase_adopted_attempt(
     launch_entered, launch_release = threading.Event(), threading.Event()
     persist = observer._persist_sync
 
-    def delayed_read_write(job, *args):
+    def delayed_read_write(job):
         reader_entered.set()
         assert reader_release.wait(LIVENESS_S)
-        persist(job, *args)
+        persist(job)
 
     def launch_checkpoint(argv, kwargs):
         launch_entered.set()

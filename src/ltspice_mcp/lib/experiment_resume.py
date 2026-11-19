@@ -223,9 +223,8 @@ def _load_attempt(journal: RecoveryJournal, entry: JournalEntry, store: Store) -
     return job
 
 
-def persist_reconciled(job: ExperimentJob, store: Store) -> bool:
-    """Re-read an interrupted attempt under its lineage lock before saving it;
-    whether a record was saved."""
+def persist_reconciled(job: ExperimentJob, store: Store) -> None:
+    """Re-read an interrupted attempt under its lineage lock before saving it."""
     recovery = _required_recovery(job)
     with file_lock(store.recovery_lock(recovery.root_request_id)):
         journal = _required_journal(store, recovery.root_request_id)
@@ -236,11 +235,9 @@ def persist_reconciled(job: ExperimentJob, store: Store) -> bool:
             if _required_recovery(candidate).owner != _required_recovery(fresh).owner:
                 # Adoption committed a new owner before updating the derived
                 # record. A reader must not write its previous owner's view.
-                return False
+                return
         if fresh.restart_reconciled:
             experiment_store.save_job(fresh)
-            return True
-        return False
 
 
 def _simulator_for(job: ExperimentJob, state: SessionState) -> type:

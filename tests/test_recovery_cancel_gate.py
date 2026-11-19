@@ -107,28 +107,43 @@ def _case_task(runner: ExperimentRunner, job: ExperimentJob, case_id: str) -> as
     return runner._executions[job.job_id].case_tasks[case_id]
 
 
-async def test_a_held_record_write_does_not_hold_back_another_launch(state_no_sim, monkeypatch):
+async def test_a_held_record_write_does_not_keep_another_launch_from_the_gate(
+    state_no_sim, monkeypatch
+):
     """Two cases may run at once. While the first launch's record write is
-    held, the second launch records its own and its simulator starts."""
+    held, the second launch passes the gate: it is stamped submitted and
+    reaches its own record step, and neither fails nor is refused. Its record
+    write is the job's next one, so it waits for the first; once that is let
+    go, both launches are recorded and run."""
+    loop = asyncio.get_running_loop()
     state_no_sim.job_registry.persist_enabled = True
-    calls, started = _starts(monkeypatch)
+    calls, _started = _starts(monkeypatch)
     held = _HeldWrite(monkeypatch)
     job, request = _recoverable_job(
         state_no_sim, job_id="exp_gate_0001", request_id="request-gate-1", cases=2
     )
+    second = asyncio.Event()
+    record = ExperimentRunner._record_launch_intent
+
+    def recording(self, execution, case, copied: Path) -> None:
+        if held.case_id is not None and case.case_id != held.case_id:
+            loop.call_soon_threadsafe(second.set)
+        record(self, execution, case, copied)
+
+    monkeypatch.setattr(ExperimentRunner, "_record_launch_intent", recording)
     try:
         await _begin(_runner(state_no_sim, 2), request, job)
         await asyncio.wait_for(held.held.wait(), LIVENESS_S)
-        await asyncio.wait_for(started.wait(), LIVENESS_S)
+        await asyncio.wait_for(second.wait(), LIVENESS_S)
         other = next(case for case in job.cases if case.case_id != held.case_id)
-        assert len(calls) == 1
-        assert Path(calls[0][0][-1]).stem == other.run_token
-        persisted = experiment_store.load_job(job.job_id, state_no_sim.working_dir)
-        assert persisted is not None
-        assert other.case_id in _launched(persisted)
+        assert other.status == "submitted"
+        assert other.submitted_at is not None
+        assert other.failure_code is None
+        assert calls == []
     finally:
         held.release.set()
     await coordinator_returned(state_no_sim, job)
+    assert len(calls) == 2
     assert [case.status for case in job.cases] == ["produced", "produced"], [
         case.error for case in job.cases
     ]
