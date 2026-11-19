@@ -699,6 +699,7 @@ FROZEN_ERROR_CODES = (
     "sparse_sweep",
     "staging_collision",
     "startup_policy",
+    "step_not_found",
     "step_value_unavailable",
     "subcircuit_nodes_not_saved",
     "submission_committed",
@@ -721,6 +722,7 @@ FROZEN_ERROR_CODES = (
     "unwrap_warning",
     "widget_unavailable",
     "window_chosen",
+    "window_empty",
     "window_empty_steps",
     "window_not_chosen",
     "window_not_discarded",
@@ -765,3 +767,32 @@ class TestErrorCodeVocabulary:
 
     def test_frozen_list_is_sorted_and_unique(self):
         assert list(FROZEN_ERROR_CODES) == sorted(set(FROZEN_ERROR_CODES))
+
+
+def test_a_record_of_services_that_carries_a_code_takes_it_by_keyword():
+    """The vocabulary scan reads a code passed as ``code=`` (or in a ``code``
+    key); a code passed by position is invisible to it, which is how a code
+    once looked unemitted while it was. So each dataclass of ``lib/services.py``
+    with a ``code`` field is keyword-only, and a positional code cannot be
+    written there. The scan counts every ``code=`` such a record is built with.
+
+    Dataclasses elsewhere that carry a ``code`` (``analyze.Failure``,
+    ``analyze.Observation``, ``jobs._JobsError``, ``log_conditions._Rule`` and
+    others) predate this rule and are not held to it here."""
+    from tests._source_scan import PACKAGE, parsed
+
+    tree = parsed(PACKAGE / "lib" / "services.py")
+    positional: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        decorators = [d for d in node.decorator_list if "dataclass" in ast.unparse(d)]
+        fields = {
+            item.target.id
+            for item in node.body
+            if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name)
+        }
+        if decorators and "code" in fields and "kw_only=True" not in ast.unparse(decorators[0]):
+            positional.append(node.name)
+    assert positional == []
+
