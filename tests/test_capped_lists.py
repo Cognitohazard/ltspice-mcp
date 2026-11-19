@@ -110,6 +110,10 @@ _ALLOWED: dict[str, str] = {
     "lib/raw_parser.py:_ascii_plot_end": "bounds how much of an ASCII raw is scanned",
     "lib/raw_parser.py:_ascii_last_point": "bounds how much of an ASCII raw is scanned",
     "lib/runner_manager.py:_get_or_create": "bounds a cache, not a reply",
+    "tools/analyze.py:_bounded_evidence": (
+        "an observation's sample of the rows it was made of; row_count is the total, "
+        "and each row's index, with its cursor when the rows are cut, reads it"
+    ),
     "tools/analyze.py:_collapse_failures": "a row's sample of places; its count is the total",
     "tools/analyze.py:_no_rows_warning": "a sample of places, ending in 'and N more'",
     "tools/analyze.py:_relay_solve_failures": "a sample of runs; run_count is the total",

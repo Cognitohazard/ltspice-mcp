@@ -1851,7 +1851,7 @@ def _value_observations(key: str, records: list[Record]) -> list[Observation]:
     """
     grouped: dict[_Group, tuple[dict[str, Any], list[dict[str, Any]]]] = {}
     sites: list[tuple[Record, _Group | None, Any]] = []
-    for record in records:
+    for position, record in enumerate(records):
         found = record.value.get("observations") if isinstance(record.value, dict) else None
         for item in found or []:
             if not isinstance(item, Mapping) or item.get("kind") not in _LIFTED_KINDS:
@@ -1864,7 +1864,9 @@ def _value_observations(key: str, records: list[Record]) -> list[Observation]:
                 str(item.get("detail", "")),
                 json.dumps(evidence, sort_keys=True, default=str),
             )
-            where = {"source": record.source}
+            # The row's position in its recipe's rows, which a cut reply
+            # turns into the cursor that starts at it (say_what_was_cut).
+            where: dict[str, Any] = {"source": record.source, "index": position}
             for name in ("case_id", "step_index"):
                 if (value := getattr(record.identity, name)) is not None:
                     where[name] = value
@@ -3571,7 +3573,36 @@ def for_session(answer: Mapping[str, Any], served: Collection[str]) -> dict[str,
         ]
         rows = rows[:_FAILURE_CAP]
     data["failures"] = rows
+    data["observations"] = _bounded_evidence(data)
     return data
+
+
+def _bounded_evidence(answer: Mapping[str, Any]) -> list[Any]:
+    """The answer's observations, each lifted from a recipe's rows
+    (:func:`_value_observations`) naming at most :data:`not_shown.NAMED` of
+    them, with ``row_count`` the number it was made of; one every row of its
+    recipe carries names none. ``observations`` is never cut, so this is its
+    bound on an MCP reply; the Python API keeps every row."""
+    counts = {_recipe_of(pointer): len(rows) for pointer, rows in _row_lists(answer).items()}
+    bounded: list[Any] = []
+    for observation in answer.get("observations") or ():
+        evidence = observation.get("evidence") if isinstance(observation, Mapping) else None
+        if not isinstance(evidence, Mapping):
+            bounded.append(observation)
+            continue
+        rows, recipe = evidence.get("rows"), evidence.get("recipe")
+        if not isinstance(rows, list) or not isinstance(recipe, str):
+            bounded.append(observation)
+            continue
+        kept: dict[str, Any] = dict(evidence)
+        kept["row_count"] = len(rows)
+        if rows and len(rows) >= counts.get(recipe, len(rows) + 1):
+            kept.pop("rows")
+            kept["every_row"] = True
+        else:
+            kept["rows"] = rows[: not_shown.NAMED]
+        bounded.append({**observation, "evidence": kept})
+    return bounded
 
 
 @dataclass(frozen=True)
@@ -3678,7 +3709,7 @@ def _row_lists(answer: Mapping[str, Any]) -> dict[str, list[Any]]:
     """Each recipe's rows, by the pointer of the list that holds them."""
     found: dict[str, list[Any]] = {}
     results = answer.get("results")
-    for key, entry in (results.items() if isinstance(results, Mapping) else ()):
+    for key, entry in results.items() if isinstance(results, Mapping) else ():
         if not isinstance(entry, Mapping):
             continue
         per_run = entry.get("per_run")
@@ -3742,7 +3773,7 @@ def answer_caps(
     caps: dict[str, int] = {}
     limit = snapshot.get("per_run_limit")
     results = answer.get("results")
-    for key, entry in (results.items() if isinstance(results, Mapping) else ()):
+    for key, entry in results.items() if isinstance(results, Mapping) else ():
         if not isinstance(entry, Mapping):
             continue
         if isinstance(limit, int) and isinstance(entry.get("per_run"), Mapping):
@@ -3834,6 +3865,8 @@ def say_what_was_cut(
         left_out = part(cut, stored)
         if left_out:
             reply["rows_not_shown"] = left_out
+        if stored is not None:
+            _point_evidence_at_rows(reply, cut, stored)
         if read_on is not None:
             reply["cursor"] = read_on
             reply["next"] = {"result_set_id": reply["result_set_id"], "cursor": read_on}
@@ -3849,6 +3882,46 @@ def say_what_was_cut(
             ROWS_NOT_SHOWN_BOUND_TOKENS,
         )
     return annotate, ({"rows_not_shown": reserve} if reserve else {})
+
+
+def _point_evidence_at_rows(
+    reply: dict[str, Any], cut: Mapping[str, ListCut], stored: StoredAnswer
+) -> None:
+    """Give each row an observation names (``evidence.rows``) the cursor that
+    starts at it, when its recipe's rows are cut."""
+    lists = {_recipe_of(pointer): pointer for pointer in cut if pointer in _row_pointers(reply)}
+    if not lists:
+        return
+    observations = []
+    for observation in reply.get("observations") or ():
+        evidence = observation.get("evidence") if isinstance(observation, Mapping) else None
+        if not isinstance(evidence, Mapping):
+            observations.append(observation)
+            continue
+        pointer = lists.get(str(evidence.get("recipe")))
+        rows = evidence.get("rows")
+        if pointer is None or not isinstance(rows, list):
+            observations.append(observation)
+            continue
+        named = [
+            {**row, "cursor": stored_cursor(stored, pointer, row["index"])}
+            if isinstance(row, Mapping) and isinstance(row.get("index"), int)
+            else row
+            for row in rows
+        ]
+        observations.append({**observation, "evidence": {**evidence, "rows": named}})
+    reply["observations"] = observations
+
+
+def _row_pointers(reply: Mapping[str, Any]) -> set[str]:
+    """The pointers of the lists of rows a reply of this tool may hold."""
+    found: set[str] = set()
+    results = reply.get("results")
+    for key, entry in results.items() if isinstance(results, Mapping) else ():
+        if isinstance(entry, Mapping):
+            found.add(join_pointer(("results", key, "per_run", "items")))
+            found.add(join_pointer(("results", key, "values")))
+    return found
 
 
 def _owned(reply: dict[str, Any], pointer: str) -> dict[str, Any]:
