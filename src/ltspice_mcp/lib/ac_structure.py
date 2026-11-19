@@ -884,6 +884,7 @@ def analyze_ac_structure(freqs: np.ndarray, H: np.ndarray) -> AcStructureResult:
         observations.append(
             {
                 "code": "lf_integrator",
+                "kind": "description",
                 "detail": (
                     f"Low-frequency magnitude slope {lf_slope:.0f} dB/dec with phase near "
                     "-90° — a pole at the origin (integrator), as in a type-2/type-3 "
@@ -898,6 +899,7 @@ def analyze_ac_structure(freqs: np.ndarray, H: np.ndarray) -> AcStructureResult:
         observations.append(
             {
                 "code": "non_minimum_phase",
+                "kind": "description",
                 "detail": (
                     f"Phase lags what the magnitude alone predicts by up to {residual_deg:.0f}° "
                     "(excess lag the magnitude cannot account for) — an out-of-phase zero "
@@ -910,6 +912,7 @@ def analyze_ac_structure(freqs: np.ndarray, H: np.ndarray) -> AcStructureResult:
         observations.append(
             {
                 "code": "transport_delay",
+                "kind": "description",
                 "detail": (
                     f"Phase residual grows linearly with frequency — a transport delay of "
                     f"~{transport_delay_s * 1e6:.1f} us (group delay floor)."
@@ -928,6 +931,7 @@ def analyze_ac_structure(freqs: np.ndarray, H: np.ndarray) -> AcStructureResult:
         observations.append(
             {
                 "code": "rational_fit",
+                "kind": "description",
                 "detail": (
                     f"A rational B(s)/A(s) fit reproduced the sweep to a relative error of "
                     f"{fit_rel_err:.1e}; its roots give the poles and zeros directly."
@@ -951,6 +955,7 @@ def analyze_ac_structure(freqs: np.ndarray, H: np.ndarray) -> AcStructureResult:
             observations.append(
                 {
                     "code": "order_disagreement",
+                    "kind": "reconciliation",
                     "detail": (
                         f"The rational fit reports net order {net_order}, but the "
                         f"high-frequency magnitude asymptote implies net order {asym_order} "
@@ -972,6 +977,7 @@ def analyze_ac_structure(freqs: np.ndarray, H: np.ndarray) -> AcStructureResult:
         observations.append(
             {
                 "code": "asymptotic_reading",
+                "kind": "description",
                 "detail": (
                     "No low-order rational fit was faithful; structure was read off the "
                     "Bode asymptotes (magnitude-slope breakpoints, joint gain-phase corner "
@@ -984,6 +990,7 @@ def analyze_ac_structure(freqs: np.ndarray, H: np.ndarray) -> AcStructureResult:
         observations.append(
             {
                 "code": "merged_corners",
+                "kind": "value",
                 "detail": (
                     "Closely-spaced corners could not be separated at this sweep density and "
                     "are reported as one bracketing range. Re-sweep denser around the cluster "
@@ -993,11 +1000,12 @@ def analyze_ac_structure(freqs: np.ndarray, H: np.ndarray) -> AcStructureResult:
         )
 
     for w in phase_warn:
-        observations.append({"code": "unwrap_warning", "detail": w})
+        observations.append({"code": "unwrap_warning", "kind": "value", "detail": w})
 
     observations.append(
         {
             "code": "review_against_plot",
+            "kind": "description",
             "detail": (
                 "These facts are read from a finite sweep; closely-spaced features can merge "
                 "and a sparse sweep can blur a corner. Review against the Bode plot."

@@ -1078,6 +1078,9 @@ async def summary(
                 source_amplitudes=source_amplitudes,
                 producer=producer,
                 cards=cards,
+                # Whether the log's measurements can be read is the run
+                # row's answer, so the summary gives the same reason.
+                measurements_unread=services.source_measurements_unread(source, logs, producer),
             ),
         )
     except ResultError:
@@ -1160,9 +1163,9 @@ async def measurement_rows(
     printed value is not established as the result in ``not_established``.
     The deck and the build that wrote the run are read once for all of them."""
     logs = await services.load_logs(source, state)
-    decoded = logs.value("measurements")
-    if decoded is None or source.log is None:
-        raise ResultError("source has no log artifact for .MEAS results")
+    decoded = services.read_measurements(source, logs)
+    # A log was captured, or read_measurements refused: it is source's log.
+    assert source.log is not None
     whole = await services.answer_measurements(source, decoded)
     tables = [whole if step is None else measurements_at_step(whole, step) for step in steps]
 

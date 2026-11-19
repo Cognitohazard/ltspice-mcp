@@ -1,0 +1,1 @@
+A read of a run by job (`analyze_results`, `plot_waveform`, the Python API's `analyze_results` and `load_raw`) repeats the run's `raw_names_disagree` observation, so traces are no longer read by names the run itself flagged without saying so.
