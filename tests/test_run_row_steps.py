@@ -648,10 +648,8 @@ async def test_a_chart_of_a_cases_other_raw_is_not_compared_with_its_record(
         # raw (``raw_parser.other_raws``); the stand-in writes none itself.
         case.other_raws = ["fra_1"]
 
-    for arguments in (
-        {"runs": "all"},
-        {"run_index": 0},
-    ):
+    selections: list[dict[str, Any]] = [{"runs": "all"}, {"run_index": 0}]
+    for arguments in selections:
         result = await handle_plot_waveform(
             PlotWaveformInput(
                 job_id=job.job_id, other_raw="fra_1", signals="all", open=False, **arguments
@@ -661,7 +659,9 @@ async def test_a_chart_of_a_cases_other_raw_is_not_compared_with_its_record(
         reply = result.structured_content
         assert reply is not None and not result.is_error, result.content
         counts = (
-            [item["n_steps"] for item in reply["cases"]] if "cases" in reply else [reply["n_steps"]]
+            [item["n_steps"] for item in reply["cases"]]
+            if "cases" in reply
+            else [reply["n_steps"]]
         )
         assert set(counts) == {1}, arguments
         assert _steps_differ(reply) == [], arguments
