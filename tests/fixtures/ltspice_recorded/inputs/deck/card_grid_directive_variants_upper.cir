@@ -1,0 +1,15 @@
+* the other spellings of the directives the server acts on, in upper case
+.op
+.PARAMS pp=2k
+I01 0 n01 1
+R01 n01 0 {pp}
+.INC card_grid_inc.inc
+I02 0 n02 1
+R02 n02 0 {pinc2}
+I03 0 n03 1
+R03 n03 0 1k
+.MEASURE op m03 FIND V(n03)
+I04 0 n04 1
+R04 n04 0 1k tc1=0.01
+.OPT tnom=17
+.end

@@ -293,7 +293,7 @@ class TestExperimentTypesAndStore:
 
         assert loaded is not None
         assert loaded.analysis.result == public_result
-        assert analysis_snapshot.classify(public_result) == "legacy"
+        assert analysis_snapshot.classify(public_result) == "earlier"
 
     def test_a_record_from_an_unread_store_version_is_refused(
         self,

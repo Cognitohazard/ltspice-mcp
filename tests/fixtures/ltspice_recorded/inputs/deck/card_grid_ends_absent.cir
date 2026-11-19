@@ -1,0 +1,7 @@
+* a subcircuit with no .ends before the deck's .end
+.op
+I01 0 n01 1
+R01 n01 0 1k
+.subckt cgo a
+Rs a 0 1
+.end

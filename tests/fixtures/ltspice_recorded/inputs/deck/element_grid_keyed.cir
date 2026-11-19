@@ -1,0 +1,13 @@
+* controlled and behavioural sources keyed after their nodes
+.op
+Bb b_a b_b V=2
+Rb0 b_a 0 1k
+Rb1 b_b 0 1k
+Ve ek_ip 0 1
+Ek ek_op ek_on value={2*V(ek_ip)}
+Rk0 ek_on 0 1k
+Vg gk_ip 0 1
+Gk gk_op gk_on value={1m*V(gk_ip)}
+Rk1 gk_op 0 1k
+Rk2 gk_on 0 1k
+.end

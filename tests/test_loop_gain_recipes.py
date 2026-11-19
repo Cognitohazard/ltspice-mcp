@@ -476,7 +476,14 @@ async def test_stability_on_another_form_says_its_margin_is_not_ltspices(
     assert observation["kind"] == "reconciliation"
     evidence = observation["evidence"]
     assert evidence["recipe"] == "loop"
-    assert evidence["rows"] == [{"source": "exp_fra", "case_id": "case-0000", "step_index": 0}]
+    if "rows" in evidence:
+        # The Python API names every row it was made of, by its position too.
+        assert evidence["rows"] == [
+            {"source": "exp_fra", "index": 0, "case_id": "case-0000", "step_index": 0}
+        ]
+    else:
+        # An MCP reply gives the count alone when every row carries it.
+        assert (evidence["row_count"], evidence["every_row"]) == (1, True)
     assert evidence["printed"] == {
         "analyzer": "@1",
         "crossover_hz": 15900.0,

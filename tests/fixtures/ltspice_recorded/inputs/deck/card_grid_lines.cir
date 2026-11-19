@@ -1,0 +1,20 @@
+* which lines are cards: a plus line after its card, and the cards after a .ends with and without its name
+.op
+I01 0 n01 1
+R01 n01 0
++ 1k
+.subckt cgnamed a
+Rs a 0 1
+.ends cgnamed
+I02 0 n02 1
+R02 n02 0 2k
+.subckt cgbare a
+Rs a 0 1
+.ends
+I03 0 n03 1
+R03 n03 0 3k
+X1 n04 cgnamed
+I04 0 n04 1m
+X2 n05 cgbare
+I05 0 n05 1m
+.end

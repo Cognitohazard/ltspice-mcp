@@ -1,0 +1,10 @@
+* a .end inside a subcircuit's body
+.op
+.subckt cgs a
+Rs a 0 1k
+.end
+.ends cgs
+I01 0 n01 1
+R01 n01 0 1k
+X1 n01 cgs
+.end

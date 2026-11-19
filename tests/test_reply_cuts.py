@@ -232,11 +232,14 @@ def test_a_list_of_rows_names_key_fields_its_rows_carry():
 
 def test_lists_of_one_series_sit_in_one_object():
     # A series is thinned together, so its lists are siblings of one reply object.
-    parents: dict[tuple[str, str], set[str]] = {}
+    # One schema fragment used in two places (a recipe's per_run rows and
+    # its values) is one object: its lists are siblings in either place.
+    parents: dict[tuple[str, str], set[int]] = {}
     for name, item in _lists():
         if item.kind == "series":
             assert item.series is not None
-            parents.setdefault((name, item.series), set()).add(item.path.rpartition(".")[0])
+            parents.setdefault((name, item.series), set()).add(id(item.parent))
+    assert parents
     assert all(len(found) == 1 for found in parents.values()), parents
 
 
@@ -379,6 +382,28 @@ NEVER_BOUNDS: dict[tuple[str, str], str] = {
     ("analyze.handle_analyze_results", "failures[].wheres"): (
         "analyze._FAILURE_WHERE_CAP (10), with count the true number"
     ),
+    ("analyze.handle_analyze_results", "signals_available[].signals"): (
+        "the traces one raw file holds: the file bounds them, and the list of "
+        "sources they sit in is cut"
+    ),
+    ("analyze.handle_analyze_results", "results.*.reduced"): (
+        "one row per field and statistic the recipe asks for; never cut, so a "
+        "summary is never missing while its rows are shown"
+    ),
+    **{
+        ("analyze.handle_analyze_results", f"results.*.{rows}[].value.series[].*"): (
+            "a signal's samples, at most the recipe's max_points; thinned with the "
+            "series that holds them, never cut apart from its axis"
+        )
+        for rows in ("per_run.items", "values")
+    },
+    ("analyze.handle_analyze_results", "rows_not_shown.*.rows"): (
+        "not_shown.NAMED (3) rows over every recipe, and the whole part "
+        "analyze.ROWS_NOT_SHOWN_BOUND_TOKENS"
+    ),
+    ("analyze.handle_analyze_results", "rows_not_shown.*.rows[].kinds"): (
+        "not_shown.KINDS_PER_ENTRY (2)"
+    ),
     ("verify.handle_verify_circuit", "failures"): "one per check that failed",
     # What a check looked at, what a write did, and fixed shapes.
     ("verify.handle_verify_circuit", "checks_run"): "one per check verify_circuit has",
@@ -455,6 +480,19 @@ NEVER_BOUNDS: dict[tuple[str, str], str] = {
     ("schematic_edit.handle_edit_schematic", "views.preexisting.items[].refs"): _UNBOUNDED,
     ("schematic_edit.handle_edit_schematic", "views.preexisting.items[].points"): _UNBOUNDED,
 }
+
+
+#: The analysis attached to a run is an answer of analyze_results, declared
+#: by that tool's schema: each list in it is bounded as that tool's is.
+_ATTACHED = "analysis.result."
+NEVER_BOUNDS.update(
+    {
+        (handler, _ATTACHED + path): bound
+        for handler in ("experiments.handle_run_experiments", "jobs.handle_jobs")
+        for (tool, path), bound in list(NEVER_BOUNDS.items())
+        if tool == "analyze.handle_analyze_results"
+    }
+)
 
 
 def test_every_list_sent_whole_states_its_bound():
@@ -577,7 +615,9 @@ def test_a_list_sent_whole_carries_no_sign_of_a_cut():
 #: The modules whose code is the reply-size machinery. ``cursor_codec`` also
 #: holds the canonical hash, so only its cursor names count. ``presenter`` is
 #: the reply layer's own, which ``tools/_base.py`` calls.
-_MACHINERY_MODULES = frozenset({"response_budget", "pagination", "cursor_codec", "presenter"})
+_MACHINERY_MODULES = frozenset(
+    {"response_budget", "pagination", "cursor_codec", "presenter", "not_shown"}
+)
 _WHOLLY_MACHINERY = frozenset({"response_budget", "pagination", "presenter"})
 
 #: Names of the machinery: the response budget, the shared page schema, the
@@ -603,6 +643,25 @@ _MACHINERY_NAMES = frozenset(
         "CursorError",
     }
 )
+
+#: The attached analysis's page objects, cut as analyze_results cuts them, in
+#: a run receipt and in each jobs reply that carries a receipt.
+_ATTACHED_BRANCHES = {
+    "experiments.handle_run_experiments": ("",),
+    "jobs.handle_jobs": ("<oneOf0>.", "<oneOf1>.", "<oneOf5>."),
+}
+CUT_TODAY.update(
+    {
+        (handler, f"{branch}{_ATTACHED}{place}"): tuple(
+            f"{branch}{_ATTACHED}{path}" for path in paths
+        )
+        for handler, branches in _ATTACHED_BRANCHES.items()
+        for branch in branches
+        for (tool, place), paths in list(CUT_TODAY.items())
+        if tool == "analyze.handle_analyze_results"
+    }
+)
+
 
 #: Names a cursor or a reply budget goes by, as a parameter, an argument, a
 #: field read or a variable. Matched whole: ``analysis_budget_s`` and the
@@ -735,29 +794,6 @@ REPLY_SIZE_SITES: dict[str, str] = {
     "tools/inspect_tools.py:_negotiate_inspect.build": "inspect",
     "tools/inspect_tools.py:_negotiate_inspect.render": "inspect",
     "lib/pin_legend.py:<module>": "edit_schematic",
-    "tools/analyze.py:<module>": "analyze_results",
-    "tools/analyze.py:PerRunInclude": "analyze_results",
-    "tools/analyze.py:ContinueInput": "analyze_results",
-    "tools/analyze.py:AnalyzeResultsInput": "analyze_results",
-    "tools/analyze.py:_page": "analyze_results",
-    "tools/analyze.py:_page_of": "analyze_results",
-    "tools/analyze.py:_assemble": "analyze_results",
-    "tools/analyze.py:_snapshot_from_assembly": "analyze_results",
-    "tools/analyze.py:_snapshot_from_assembly.coverage_cursor_base": "analyze_results",
-    "tools/analyze.py:_rebind_snapshot_cursors": "analyze_results",
-    "tools/analyze.py:_shrink_snapshot_page": "analyze_results",
-    "tools/analyze.py:render_attached_analysis": "analyze_results",
-    "tools/analyze.py:trim_analysis": "analyze_results",
-    "tools/analyze.py:fit_waveform_samples": "analyze_results",
-    "tools/analyze.py:fit_waveform_samples.fits": "analyze_results",
-    "tools/analyze.py:_degrade_analysis": "analyze_results",
-    "tools/analyze.py:_negotiate_analysis": "analyze_results",
-    "tools/analyze.py:_negotiate_analysis.candidate": "analyze_results",
-    "tools/analyze.py:_negotiate_analysis.render": "analyze_results",
-    "tools/analyze.py:_cursor_fields": "analyze_results",
-    "tools/analyze.py:_resolve_drive_start": "analyze_results",
-    "tools/analyze.py:handle_analyze_results": "analyze_results",
-    "lib/result_store.py:<module>": "analyze_results",
     "tools/schematic_edit.py:<module>": "edit_schematic",
     "tools/schematic_edit.py:EditSchematicInput": "edit_schematic",
     "tools/schematic_edit.py:_preexisting_block": "edit_schematic",
@@ -777,38 +813,35 @@ _HANDS_BUDGET_ON = (
     "hands the call's budget to the reply layer (tools/_base.present_job_answer); "
     "kept with the argument until the next breaking release"
 )
-_ATTACHED_ANALYSIS = (
-    "the attached analysis keeps analyze_results' own trimming (response_budget's "
-    "rungs) until analyze_results moves onto the presenter"
+_READS_ON = (
+    "the cursor argument, which now takes the presenter's cursor; kept until the "
+    "next breaking release"
+)
+_PAGE_FIELDS = (
+    "the page fields of per_run, coverage.missing_cases and spec.fail_cases, which "
+    "the cut fills; kept until the next breaking release"
 )
 
 #: Each function of a tool already on the presenter that still names a cursor
-#: or a budget, with why. Each goes at the next breaking release, or, for the
-#: attached analysis, when analyze_results moves onto the presenter.
+#: or a budget, with why. Each goes at the next breaking release.
 KEPT_UNTIL_BREAKING: dict[str, str] = {
     "tools/experiments.py:<module>": (
-        "imports the budget argument's type and resolver, and the rungs the attached "
-        "analysis is trimmed at; " + _ATTACHED_ANALYSIS
+        "imports the budget argument's type and resolver; " + _BUDGET_ARGUMENT
     ),
     "tools/experiments.py:AnalysisPerRun": (
-        "the attached analysis's per_run cursor, which is analyze_results'; " + _ATTACHED_ANALYSIS
+        "the attached analysis's per_run cursor, refused at submission; " + _READS_ON
     ),
     "tools/experiments.py:RunExperimentsInput": _BUDGET_ARGUMENT,
     "tools/experiments.py:handle_run_experiments": _HANDS_BUDGET_ON,
     "tools/experiments.py:_dwell_and_respond": _HANDS_BUDGET_ON,
-    "tools/experiments.py:_dwell_and_respond.build": (
-        "renders the attached analysis at a rung; " + _ATTACHED_ANALYSIS
-    ),
     "tools/experiments.py:_render_static_run_receipt": _HANDS_BUDGET_ON,
     "tools/experiments.py:_error_response": _HANDS_BUDGET_ON,
     "tools/experiments.py:_routing_failure_response": _HANDS_BUDGET_ON,
     "tools/experiments.py:_post_submit_error_response": _HANDS_BUDGET_ON,
     "tools/receipts.py:<module>": (
         "the run rows' record and the shared page schema of the runs block, which "
-        "keeps its page fields until the next breaking release; " + _ATTACHED_ANALYSIS
+        "keeps its page fields until the next breaking release"
     ),
-    "tools/receipts.py:_degrade_receipt": _ATTACHED_ANALYSIS,
-    "tools/receipts.py:trim_attached_analysis": _ATTACHED_ANALYSIS,
     "tools/jobs.py:<module>": (
         "the record cursor of the runs action and the list's stored pages, and the "
         "page schema of its page fields; kept until the next breaking release"
@@ -835,8 +868,21 @@ KEPT_UNTIL_BREAKING: dict[str, str] = {
         "until the next breaking release"
     ),
     "tools/jobs.py:_present_jobs": _HANDS_BUDGET_ON,
-    "tools/jobs.py:render_jobs_data": (
-        "renders the attached analysis at a rung; " + _ATTACHED_ANALYSIS
+    "tools/analyze.py:<module>": (
+        "imports the budget argument's type and resolver, the shared page schema of "
+        "its page fields and the presenter's types; kept until the next breaking release"
+    ),
+    "tools/analyze.py:PerRunInclude": _READS_ON,
+    "tools/analyze.py:ContinueInput": _READS_ON,
+    "tools/analyze.py:AnalyzeResultsInput": _BUDGET_ARGUMENT,
+    "tools/analyze.py:_page_of": _PAGE_FIELDS,
+    "tools/analyze.py:_read_on": (
+        "hands the call's cursor and budget to the presenter's page reader "
+        "(tools/_base.py); kept with the arguments until the next breaking release"
+    ),
+    "tools/analyze.py:handle_analyze_results": (
+        "hands the call's budget to the reply layer, and a cursor to _read_on; kept "
+        "with the arguments until the next breaking release"
     ),
     "tools/verify.py:VerifyCircuitInput": (
         "the findings_cursor argument, which now takes the presenter's cursor; "
@@ -872,7 +918,7 @@ def test_each_allowed_site_waits_for_an_operation():
 
 
 def test_a_tool_on_the_presenter_waits_for_no_move():
-    moved = {"verify_circuit", "run_experiments", "jobs"}
+    moved = {"verify_circuit", "run_experiments", "jobs", "analyze_results"}
     assert not moved & set(REPLY_SIZE_SITES.values())
     assert not set(KEPT_UNTIL_BREAKING) & set(REPLY_SIZE_SITES)
 
@@ -894,6 +940,58 @@ def test_a_job_answer_is_computed_whole():
         "tools/jobs.py:evaluate_jobs",
     )
     assert not [site for site in _sites() if site.startswith(whole)]
+
+
+def test_no_function_that_evaluates_a_recipe_knows_a_cursor_a_page_or_a_budget():
+    # One evaluation gives the complete answer; what a reply holds of it, and
+    # how the rest is read, is the reply layer's.
+    evaluating = tuple(
+        f"tools/analyze.py:{name}"
+        for name in (
+            "evaluate_analysis",
+            "_evaluate_unit",
+            "_evaluate_item",
+            "_assemble",
+            "_result_entry",
+            "_spec",
+            "_group_values",
+            "complete_analysis",
+            "capture_attached_analysis",
+            "render_attached_analysis",
+            "for_session",
+            "for_api",
+        )
+    )
+    assert not [site for site in _sites() if site.startswith(evaluating)]
+    import inspect
+
+    import ltspice_mcp.tools.analyze as analyze
+
+    for name in evaluating:
+        function = getattr(analyze, name.rsplit(":", 1)[1])
+        taken = set(inspect.signature(function).parameters)
+        assert not taken & {"cursor", "budget", "limit", "limits", "page_stop", "rung"}, name
+
+
+def test_one_builder_names_the_entries_a_reply_left_out():
+    # tools/receipts.py and tools/analyze.py both call lib/not_shown.py, and
+    # neither counts kinds of fact or bounds the part on its own.
+
+    for module in ("tools/receipts.py", "tools/analyze.py"):
+        tree = parsed(PACKAGE / module)
+        calls = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "not_shown"
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "not_shown"
+        ]
+        assert calls, f"{module} does not call not_shown.not_shown"
+        source = (PACKAGE / module).read_text(encoding="utf-8")
+        for own in ("NOT_SHOWN_NAMED - len(", "counts[kind] = counts.get(kind, 0) + 1"):
+            assert own not in source, f"{module} groups or bounds on its own: {own!r}"
 
 
 def test_nothing_outside_the_presenter_cuts_a_verify_circuit_list():
@@ -1054,7 +1152,7 @@ def test_every_continuation_names_arguments_the_tool_takes():
 
     problems: list[str] = []
     sites = list(_continuation_calls())
-    assert len(sites) >= 8
+    assert len(sites) >= 7
     for where, call in sites:
         tool, arguments = call.args
         if not isinstance(tool, ast.Constant) or not isinstance(tool.value, str):

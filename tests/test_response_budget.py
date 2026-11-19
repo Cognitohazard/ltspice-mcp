@@ -12,6 +12,7 @@ import ast
 import asyncio
 import copy
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +28,7 @@ from ltspice_mcp.tools import receipts as receipts_mod
 from ltspice_mcp.tools.analyze import (
     OUTPUT_SCHEMA,
     AnalyzeResultsInput,
-    _request_hash,
+    _request_digest,
     handle_analyze_results,
 )
 from ltspice_mcp.tools.inspect_tools import InspectInput, handle_inspect
@@ -51,7 +52,6 @@ from tests.test_analyze_results import _analyze
 # the coverage test below fails on any `_TRIM_*` constant declared anywhere in
 # the package that is not here, so a new allowlist cannot slip in unpinned.
 _TRIM_ALLOWLISTS: list[tuple[Any, str, dict[str, Any]]] = [
-    (analyze_mod, "_TRIM_EMPTY_ENVELOPE", OUTPUT_SCHEMA),
     (insp, "_TRIM_REMOVE_EXHAUSTED", insp._OUTPUT_SCHEMA["properties"]["results"]["items"]),
 ]
 
@@ -389,19 +389,21 @@ class TestAnalysisBudget:
         """The budget lives outside the hash a cursor is checked against, so two
         budgets over one analysis are the same request and share its cursors."""
         raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
-        plain = _request_hash(_wide_args(raw))
-        budgeted = _request_hash(_wide_args(raw, budget=600))
+        plain = _request_digest(_wide_args(raw))
+        budgeted = _request_digest(_wide_args(raw, budget=600))
         assert budgeted == plain
 
-    async def test_fields_view_is_not_part_of_per_run_request_identity(self, work_dir: Path):
+    async def test_the_row_view_is_part_of_the_request_a_cursor_reads(self, work_dir: Path):
+        """A stored answer holds rows in one view, so a cursor reads them only
+        for the request that gave it, include.fields included."""
         raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
-        first = _request_hash(
+        first = _request_digest(
             _wide_args(raw, include={"per_run": {"limit": 5}, "fields": ["value"]})
         )
-        second = _request_hash(
+        second = _request_digest(
             _wide_args(raw, include={"per_run": {"limit": 5}, "fields": ["case_id"]})
         )
-        assert first == second
+        assert first != second
 
     async def test_a_cursor_minted_under_a_budget_resumes_without_one(
         self, state_no_sim: SessionState, work_dir: Path
@@ -441,12 +443,10 @@ class TestAnalysisBudget:
         assert data["failures"], "a failing recipe's record is a fact, not presentation"
         assert data["coverage"]["runs_requested"] == 1
         assert data["coverage"]["runs_analyzed"] == 1
-        assert _observation(data, "budget_truncated") is not None
-        # The identity echo is emptied, so the reply leaves it out. Every
-        # recipe was evaluated, so there is nothing to continue: the reply has
-        # no continuation handle, and still names its result set.
-        assert "source_hashes" not in data
-        assert "next" not in data and "cursor" not in data
+        # A cut is said by cut, not by a ladder's note; the identity echo is a
+        # list like any other, cut to what fits and never below one entry.
+        assert _observation(data, "budget_truncated") is None
+        assert data["source_hashes"]
         assert data["result_set_id"]
 
     async def test_a_response_over_its_budget_says_so(
@@ -465,7 +465,7 @@ class TestAnalysisBudget:
         observation = _observation(data, "budget_not_met")
         if floor > response_budget.BUDGET_MIN_TOKENS:
             assert observation is not None
-            assert "over the budget instead" in observation["detail"]
+            assert "over its target of" in observation["detail"]
         else:
             assert observation is None
 
@@ -482,42 +482,34 @@ class TestAnalysisBudget:
             )
             jsonschema.Draft202012Validator(OUTPUT_SCHEMA).validate(data)
 
-    async def test_the_deepest_rung_applies_every_rung_above_it(
+    async def test_a_budget_cuts_lists_and_keeps_every_opt_in(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        """Rungs are cumulative, so the floor response is where all three show
-        at once: empty identity echo, revoked opt-ins, shrunk page."""
+        """A budget is a target the presenter cuts lists to; what the caller
+        asked to include stays included, cut like any list."""
         raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
         include = {"per_run": {"limit": 45}, "provenance": True, "signals_available": True}
-        # The undegraded reference this test measures the rungs against; the
-        # server's own default would already have applied rung 0 to it.
         state_no_sim.config.default_budget = 0
         plain = await _analysis(state_no_sim, raw, include=include)
         assert plain["source_hashes"][0].get("raw_sha256") is not None
-        assert "signals_available" in plain
-        assert isinstance(plain["results"]["loop"]["per_run"]["items"][0], dict)
 
         data = await _analysis(
             state_no_sim, raw, budget=response_budget.BUDGET_MIN_TOKENS, include=include
         )
-        detail = _observation(data, "budget_truncated")["detail"]  # type: ignore[index]
-        assert "rung 2 (shrink)" in detail
-        # rung 0: required identity echo emptied, never removed.
-        assert "source_hashes" not in data
-        # rung 1: the payload-growing opt-ins are revoked.
-        assert "signals_available" not in data
-        # rung 2: the page shrank, and it shrank before the cursor was minted —
-        # returned is what the page holds, and the cursor resumes after it.
+        assert _observation(data, "budget_truncated") is None
+        assert data["source_hashes"][0].get("raw_sha256") is not None
+        assert data["signals_available"]
         page = data["results"]["loop"]["per_run"]
         assert page["returned"] < plain["results"]["loop"]["per_run"]["returned"]
         assert page["returned"] == len(page["items"])
-        assert page["next_cursor"] is not None
+        assert page["next_cursor"] == data["cut"]["/results/loop/per_run/items"]["next"]
 
     async def test_shrunk_pages_still_reach_every_row(
         self, state_no_sim: SessionState, work_dir: Path
     ):
         """The point of shrinking before assembly: a cursor from a shrunk page
         resumes at the row after the last one shown — no gap, no repeat."""
+        state_no_sim.config.default_budget = 0
         raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
         plain = await _analysis(state_no_sim, raw, include={"per_run": {"limit": 45}})
         page = plain["results"]["loop"]["per_run"]
@@ -587,6 +579,7 @@ class TestAnalysisBudget:
         """spec.fail_cases used to sit at a fixed cap the ladder never touched,
         so a call whose size driver was its failing cases had nothing to give and
         degraded to budget_not_met. The page shrinks; the fail COUNT does not."""
+        state_no_sim.config.default_budget = 0
         raw = stage_recorded_fixture(work_dir, "ltspice_step_tran")
         plain = await _spec_analysis(state_no_sim, raw)
         wide = plain["results"]["vout"]["spec"]
@@ -600,12 +593,13 @@ class TestAnalysisBudget:
         assert spec["fail_count"] == wide["fail_count"], "a count is a fact, not a page"
         assert spec["verdict"] == wide["verdict"]
 
-    async def test_a_grouped_call_shrinks_its_groups_and_says_so(
+    async def test_a_grouped_call_leaves_groups_whole_that_a_cut_would_not_shorten(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        """A group list is an aggregate, not a page, so no cursor walks it — but
-        the shrink rung must still be able to reach it, and must state what it
-        dropped rather than hand back a silently shorter answer."""
+        """A group list is cut like any list, but three short groups cost
+        less than the ``cut`` entry that would replace two of them: the reply
+        sends them whole and cuts what does shorten it."""
+        state_no_sim.config.default_budget = 0
         raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
         plain = await _analysis(state_no_sim, raw, group_by=["r"])
         every_group = plain["results"]["loop"]["groups"]
@@ -615,8 +609,8 @@ class TestAnalysisBudget:
             state_no_sim, raw, group_by=["r"], budget=response_budget.BUDGET_MIN_TOKENS
         )
         entry = data["results"]["loop"]
-        assert len(entry["groups"]) < len(every_group)
-        assert any("group(s) omitted" in warning for warning in entry["warnings"])
+        assert entry["groups"] == every_group
+        assert "/results/loop/groups" not in data.get("cut", {})
 
     async def test_several_row_surfaces_share_the_budget_instead_of_each_taking_it(
         self, state_no_sim: SessionState, work_dir: Path
@@ -632,39 +626,14 @@ class TestAnalysisBudget:
             await _analysis(state_no_sim, raw, recipes=_SURFACE_RECIPES)
         )
 
-        for divisor in (2, 3, 6):
+        # A sixth of the whole is below the floor now that the identity echo
+        # keeps one entry where the trim rung emptied it.
+        for divisor in (2, 3, 4):
             budget = full // divisor
             data = await _analysis(state_no_sim, raw, recipes=_SURFACE_RECIPES, budget=budget)
             assert _observation(data, "budget_not_met") is None, budget
             assert response_budget.estimate_tokens(data) <= budget
             assert all(entry.get("values") for entry in data["results"].values()), budget
-
-    async def test_the_row_measurement_covers_every_surface_the_ladder_shrinks(self):
-        """The cost model's two halves have to name the same surfaces. One the
-        ladder shrinks but the measurement omits is billed to the fixed envelope,
-        so the shrink rung sizes its page against a cost that is not real; one
-        it counts but never shrinks — a recipe's reductions — prices the
-        envelope cheaper than it is. Each surface is its own list, because one
-        limit caps each of them."""
-        data = {
-            "results": {
-                "k": {
-                    "reduced": ["reduced-row"],
-                    "values": ["value-row"],
-                    "groups": ["group-row"],
-                    "per_run": {"items": ["per-run-row"]},
-                    "spec": {"fail_cases": {"items": ["fail-row"]}},
-                }
-            },
-            "coverage": {"missing_cases": {"items": ["missing-row"]}},
-        }
-        assert sorted(analyze_mod.analysis_surfaces(data)) == [
-            ["fail-row"],
-            ["group-row"],
-            ["missing-row"],
-            ["per-run-row"],
-            ["value-row"],
-        ]
 
     async def test_a_budget_below_the_floor_is_refused_at_the_edge(self):
         """Not a silent clamp: a number the ladder could never negotiate is a
@@ -735,25 +704,21 @@ class TestServerDefaultBudget:
     so it can cut no fact and revoke no detail the caller asked for.
     """
 
-    async def test_a_large_default_response_loses_the_identity_echo_only(
+    async def test_a_large_default_response_is_cut_with_a_cursor(
         self, state_no_sim: SessionState, work_dir: Path
     ):
         raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
         state_no_sim.config.default_budget = 500
         trimmed = await _analysis(state_no_sim, raw)
-
-        # Rung 0's own allowlist, and the whole of what the default may do: the
-        # identity echo emptied, the answer untouched.
-        assert "source_hashes" not in trimmed
         assert trimmed["results"]["loop"]["values"]
-        # No note claiming a budget the caller never set went unmet — the ladder
-        # stopped at rung 0 by policy, which is the policy working.
-        assert _observation(trimmed, "budget_not_met") is None
+        assert trimmed["cut"]["/results/loop/values"]["next"]
+        assert _observation(trimmed, "budget_truncated") is None
 
-    async def test_the_default_stops_at_rung_zero_where_a_caller_budget_would_not(
+    async def test_the_default_and_a_caller_budget_are_one_target(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        """Same tiny number, two sources of authority, two different ladders."""
+        """The same number from the config or the call gives the same reply:
+        there is no rung for the default to stop at."""
         raw = stage_recorded_fixture(work_dir, "ltspice_step_ac")
         state_no_sim.config.default_budget = 500
         defaulted = await _analysis(state_no_sim, raw, include={"per_run": {"limit": 20}})
@@ -761,20 +726,8 @@ class TestServerDefaultBudget:
         explicit = await _analysis(
             state_no_sim, raw, budget=500, include={"per_run": {"limit": 20}}
         )
-
-        # The explicit budget walks past rung 0 and shrinks what the caller
-        # asked for; the server's default leaves the requested page standing.
-        assert defaulted["results"]["loop"]["per_run"]["returned"] == 20
-        assert explicit["results"]["loop"]["per_run"]["returned"] < 20
-        assert _observation(explicit, "budget_truncated") is not None
-        # The default degraded too — at rung 0, emptying the identity echo —
-        # and says so. A caller who set no budget is not sent to raise one.
-        defaulted_note = _observation(defaulted, "budget_truncated")
-        assert defaulted_note is not None
-        assert "rung 0" in defaulted_note["detail"]
-        assert "Emptied: source_hashes." in defaulted_note["detail"]
-        assert "include.provenance" in defaulted_note["detail"]
-        assert "budget'" not in defaulted_note["detail"]
+        assert _stable(defaulted) == _stable(explicit)
+        assert defaulted["results"]["loop"]["per_run"]["returned"] < 20
 
     async def test_zero_disables_the_default_entirely(
         self, state_no_sim: SessionState, work_dir: Path
@@ -853,29 +806,39 @@ class TestWaveformSamplesFitTheBudget:
             assert min(after["y"]) == min(before["y"])
             assert max(after["y"]) == max(before["y"])
         (warning,) = _thinning_warnings(thinned["results"]["w"])
-        assert "max_points" in warning
-        # A caller who set no budget is not sent to raise one.
-        assert "'budget'" not in warning
+        assert "budget" in warning and "csv" in warning
         assert _observation(thinned, "budget_not_met") is None
 
-    async def test_an_explicit_max_points_stands_under_the_server_default(
+    async def test_a_reply_too_long_thins_an_explicit_max_points_too(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        """A point count the caller chose is an opt-in, which the server's
-        default budget never revokes, even when it is the default count."""
+        """max_points is the most points the answer holds; a reply too long for
+        its target shows fewer, and its cut gives the points held and shown."""
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         state_no_sim.config.default_budget = 2000
         data = await _waveform_reply(state_no_sim, raw, max_points=2000)
 
+        assert response_budget.estimate_tokens(data) <= 2000
         (value,) = _inline_values(data["results"]["w"])
-        assert value["points_returned"] == value["points_total"]
-        assert _thinning_warnings(data["results"]["w"]) == []
+        assert value["points_returned"] < value["points_total"]
+        cut = data["cut"]["/results/w/values/0/value/x"]
+        assert (cut["total"], cut["returned"]) == (value["points_total"], len(value["x"]))
+        assert "next" not in cut
+        (warning,) = _thinning_warnings(data["results"]["w"])
+        assert "csv" in warning
+        # The budget the warning names sends every point the caller asked for.
+        named = re.search(r"budget (\d+) sends every point", warning)
+        assert named is not None, warning
+        every = await _waveform_reply(
+            state_no_sim, raw, budget=int(named.group(1)), max_points=2000
+        )
+        (whole,) = _inline_values(every["results"]["w"])
+        assert whole["points_returned"] == whole["points_total"] == len(whole["x"])
+        assert "cut" not in every
 
-    async def test_a_caller_budget_thins_an_explicit_max_points_too(
+    async def test_a_caller_budget_thins_as_the_default_does(
         self, state_no_sim: SessionState, work_dir: Path
     ):
-        """The answer rung revokes the caller's payload-growing opt-ins, and a
-        point count is one."""
         raw = stage_recorded_fixture(work_dir, "ltspice_tran_rc")
         state_no_sim.config.default_budget = 0
         data = await _waveform_reply(state_no_sim, raw, budget=2000, max_points=2000)
@@ -884,15 +847,15 @@ class TestWaveformSamplesFitTheBudget:
         (value,) = _inline_values(data["results"]["w"])
         assert value["points_returned"] < value["points_total"]
         (warning,) = _thinning_warnings(data["results"]["w"])
-        assert "'budget'" in warning
-        assert _observation(data, "budget_truncated") is not None
+        assert "budget" in warning
+        assert _observation(data, "budget_truncated") is None
 
     async def test_receipts_thin_their_attached_waveform_to_fit(
         self, state_with_sim: SessionState, grid_deck: Path
     ):
-        """A receipt's rows preview what analyze_results over the job returns,
-        so its attached waveform is thinned under the server's default too,
-        whatever max_points the request set, and every case keeps its row."""
+        """A receipt's attached waveform is thinned under the server's default
+        too, whatever max_points the request set, and every case's row is
+        shown or reached by the cut's cursor."""
         budget = state_with_sim.config.default_budget
         recipe = {"key": "w", "metric": "waveform", "signals": ["V(in)", "V(out)"]}
         receipt = await _grid_receipt(state_with_sim, grid_deck, 4, None, recipes=[recipe])
@@ -902,11 +865,13 @@ class TestWaveformSamplesFitTheBudget:
             assert response_budget.estimate_tokens(data) <= budget
             entry = data["analysis"]["result"]["results"]["w"]
             values = _inline_values(entry)
-            assert len(values) == 4
+            cut = data["analysis"]["result"].get("cut", {}).get("/results/w/values")
+            assert len(values) == (4 if cut is None else cut["returned"])
+            assert cut is None or (cut["total"] == 4 and cut["next"])
             for value in values:
                 assert value["points_returned"] == len(value["x"]) < value["points_total"]
             (warning,) = _thinning_warnings(entry)
-            assert "analyze_results" in warning
+            assert "analyze_results with budget" in warning
 
 
 @pytest.mark.asyncio
@@ -1104,9 +1069,9 @@ class TestReceiptFloor:
         # there are; one row stays, and no per-run echo is inline.
         assert large["completeness"]["expanded"] == large["runs"]["total"] == 64
         assert large["runs"]["returned"] == large["cut"]["/runs/items"]["returned"] >= 1
-        assert "source_hashes" not in large["analysis"]["result"]
+        assert len(large["analysis"]["result"]["source_hashes"]) == 1
         assert large["analysis"]["result"]["coverage"]["runs_analyzed"] == 64
-        assert _observation(large, "budget_truncated") is not None
+        assert _observation(large, "budget_truncated") is None
         assert 'jobs(action="runs"' in large["hint"]
 
         # The cursor is the route back to every row, in order.
@@ -1207,26 +1172,24 @@ class TestReceiptFloor:
             receipt["runs"]["returned"],
         )
 
-    async def test_the_server_default_empties_the_attached_identity_echo(
+    async def test_the_server_default_cuts_the_receipt_beside_its_attached_analysis(
         self, state_with_sim: SessionState, grid_deck: Path
     ):
-        """Rung 0 empties the identity echo, the attached analysis's included,
-        and the note under the default says where it still is. The run rows
-        are the presenter's: cut as rows, at least one kept."""
+        """The attached analysis is cut under the receipt's target like its
+        run rows: each of its lists at least one entry, the rest behind the
+        cursor its cut names."""
         state_with_sim.config.default_budget = response_budget.BUDGET_MIN_TOKENS
 
         data = await _grid_receipt(state_with_sim, grid_deck, 4, None, recipes=_GRID_RECIPES[:1])
 
         attached = data["analysis"]["result"]
-        assert "source_hashes" not in attached
-        # The default stops at rung 0: the analysis rows the caller would read stand.
-        assert len(attached["results"]["v_100u"]["values"]) == 4
-        assert 1 <= data["runs"]["returned"] == data["cut"]["/runs/items"]["returned"] < 4
-        note = _observation(data, "budget_truncated")
-        assert note is not None
-        assert "emptied analysis.result.source_hashes" in note["detail"]
-        assert "include.provenance" in note["detail"]
-        assert "budget'" not in note["detail"]
+        assert attached["source_hashes"]
+        assert attached["results"]["v_100u"]["values"]
+        # A list of the analysis is cut where that shortens the reply, and
+        # each cut it names reads on.
+        assert all("next" in entry for entry in attached.get("cut", {}).values())
+        assert 1 <= data["runs"]["returned"] == data["cut"]["/runs/items"]["returned"] <= 4
+        assert _observation(data, "budget_truncated") is None
 
 
 # ---------------------------------------------------------------------------

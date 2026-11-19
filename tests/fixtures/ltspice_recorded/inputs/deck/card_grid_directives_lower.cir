@@ -1,0 +1,44 @@
+* each directive the server acts on, written in lower case
+.op
+.param pp=2k
+I01 0 n01 1
+R01 n01 0 {pp}
+.func ff(x) {x*3}
+I02 0 n02 1
+R02 n02 0 {ff(1k)}
+.model swm SW(Ron=4k Roff=1G Vt=0.5 Vh=0)
+V03 c03 0 1
+I03 0 n03 1m
+S03 n03 0 c03 0 swm
+.subckt cgsub a
+Rs a 0 5k
+.ends cgsub
+I04 0 n04 1
+X04 n04 cgsub
+.global gg
+.subckt cgglob a
+Rg a gg 1k
+.ends cgglob
+I05 0 n05 1
+X05 n05 cgglob
+R05 gg 0 1k
+.include card_grid_include.inc
+I06 0 n06 1
+R06 n06 0 {pinc}
+.lib card_grid_lib.lib
+I07 0 n07 1
+R07 n07 0 {plib}
+I08 0 n08 1
+R08 n08 0 1k
+.meas op m08 FIND V(n08)
+I09 0 n09 1
+R09 n09 0 1k tc1=0.01
+.options tnom=17
+.param ps=1k
+I10 0 n10 1
+R10 n10 0 {ps}
+.step param ps list 2k 3k
+I11 0 n11 1
+R11 n11 0 1k
+.end
+R12 n11 0 1k

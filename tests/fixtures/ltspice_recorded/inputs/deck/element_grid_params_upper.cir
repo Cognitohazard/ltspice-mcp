@@ -1,0 +1,8 @@
+* PARAMS: in upper case on a subcircuit call
+.subckt sub a b params: g=1
+R1 a b {g*1k}
+.ends
+I1 0 a 1
+X1 a 0 sub PARAMS: g=3
+.op
+.end

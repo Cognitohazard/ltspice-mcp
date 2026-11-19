@@ -1,4 +1,12 @@
-"""Consolidated, bounded analysis over immutable result-source manifests."""
+"""Consolidated analysis over immutable result-source manifests.
+
+One evaluation (:func:`evaluate_analysis`) runs every recipe of a request and
+gives its complete answer (:func:`_assemble`); nothing in it knows a page, a
+cursor or a reply size. The Python API returns that answer
+(:func:`complete_analysis`); an MCP reply is presented from it by the reply
+layer (``lib/presenter.py``), which stores a cut answer and reads its pages
+back without evaluating again (:func:`_read_on`).
+"""
 
 from __future__ import annotations
 
@@ -12,11 +20,12 @@ import os
 import re
 import statistics
 import time
-from collections.abc import Callable, Collection, Iterable, Mapping, MutableMapping, Sequence
+from collections.abc import Callable, Collection, Mapping, MutableMapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path, PurePath
-from typing import Annotated, Any, NamedTuple
+from stat import S_ISREG
+from typing import Annotated, Any, Final, NamedTuple
 from weakref import WeakValueDictionary
 
 import numpy as np
@@ -38,7 +47,7 @@ from ltspice_mcp.lib import (
     fsync_dir,
     fsync_fd,
     metrics,
-    pagination,
+    not_shown,
     replace_file,
     response_budget,
     result_store,
@@ -49,14 +58,30 @@ from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, PlotDescriptor
 from ltspice_mcp.lib.format import cap_note, format_spice_value, held_to_cap, unique_name
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key, printed_once_refusal
-from ltspice_mcp.lib.log_types import given_no_value, measurement_named, run_measurement_facts
-from ltspice_mcp.lib.pagination import retotal_page
+from ltspice_mcp.lib.log_types import (
+    NO_NUMBER_REASONS,
+    given_no_value,
+    measurement_named,
+    run_measurement_facts,
+)
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.points import RowIdentity, point_identity
+from ltspice_mcp.lib.presenter import (
+    Annotate,
+    Answer,
+    ListCut,
+    Series,
+    StoredAnswer,
+    cuttable_lists,
+    join_pointer,
+    not_sent,
+    resolve_pointer,
+    split_pointer,
+    stored_cursor,
+)
 from ltspice_mcp.lib.projection import (
     absent_path_warnings,
     keep_plan,
-    key_outline,
     project_row,
     resolve_field_paths,
 )
@@ -79,7 +104,8 @@ from ltspice_mcp.lib.recipes import (
     WaveformRecipe,
     validate_recipe,  # noqa: TID251 - recipe_of_request, its owner, is in this module
 )
-from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER, rows
+from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER, rows, series
+from ltspice_mcp.lib.response_budget import estimate_tokens
 from ltspice_mcp.lib.result_kinds import AC_SHAPED
 from ltspice_mcp.lib.result_observations import (
     coarse_waveform_observation,
@@ -92,29 +118,36 @@ from ltspice_mcp.lib.simulator_build import Producer
 from ltspice_mcp.lib.step_values import step_axis_key
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools._base import (
+    CUT_SCHEMA,
     DIAGNOSTICS_COVERAGE_SCHEMA,
     HINT_SCHEMA,
     MEASUREMENT_STATS_SCHEMA,
     NOT_ESTABLISHED_SCHEMA,
+    PAGE_OF_SCHEMA,
     PRINTED_ONCE_SCHEMA,
+    ROWS_WITHOUT_TARGET,
     RUN_DIAGNOSTICS_SCHEMA,
+    STORED_ANSWER_SCHEMA,
     UNREADABLE_SCHEMA,
     CaseSelection,
     NotedModel,
     OptionalRawSelectionFields,
     OtherRawFields,
-    ResponseBudget,
     RunsSelection,
     StrictModel,
     ToolInput,
     check_runs,
     format_response,
+    open_stored_page,
     outcome_of,
     page_schema,
+    presented,
     recovery_hint,
     registry,
     resolve_response_budget,
     sanitize_payload,
+    say_over_target,
+    stored_page,
 )
 from ltspice_mcp.tools.reference_index import validation_error_detail
 
@@ -140,19 +173,6 @@ def _no_rows_warning(failures: Sequence[Failure]) -> str:
         f" and {len(places) - _FAILURE_WHERE_CAP} more" if len(places) > _FAILURE_WHERE_CAP else ""
     )
     return _NO_ROWS_WARNING.format(places=shown + more)
-
-
-_GROUPS_OMITTED_WARNING = (
-    "{omitted} of {total} group(s) omitted to fit the response budget; "
-    "re-ask without 'budget' for every group."
-)
-_FAIL_CASES_ROUTE = (
-    "{omitted} more failing case(s); this list has no cursor of its own: request "
-    "include.per_run for callable pagination over every attributed value."
-)
-_VALUES_OMITTED_WARNING = (
-    "{omitted} value(s) omitted; request include.per_run for callable pagination."
-)
 
 
 def _names_a_log(path: str) -> bool:
@@ -233,6 +253,37 @@ class _PendingArtifact:
     final: Path
     content_type: str
     manifest_id: str
+    #: The written file's SHA-256 and size, taken as the recipe wrote it, so
+    #: publishing it needs no digest of its own.
+    sha256: str
+    size: int
+
+
+class _ArtifactNotWritten(Exception):
+    """A written artifact whose digest or size could not be read: a failure
+    to publish it (``artifact_publish_failed``), as when it is moved into
+    place."""
+
+
+async def _written(
+    pending: Path, final: Path, content_type: str, manifest_id: str
+) -> _PendingArtifact:
+    """The artifact a recipe just wrote at ``pending``, with its digest and
+    size, taken within the recipe's own deadline; the temp is removed when
+    they cannot be taken."""
+    try:
+        sha256, size = await services.bounded_parse(
+            pending,
+            lambda: (result_store.sha256_file(pending), pending.stat().st_size),
+            timeout_s=services.RAW_PARSE_TIMEOUT_S,
+        )
+    except BaseException as exc:
+        with contextlib.suppress(OSError):
+            await asyncio.to_thread(pending.unlink)
+        if isinstance(exc, OSError):
+            raise _ArtifactNotWritten(str(exc)) from exc
+        raise
+    return _PendingArtifact(pending, final, content_type, manifest_id, sha256, size)
 
 
 @dataclass(frozen=True)
@@ -297,15 +348,9 @@ class Failure:
 _FAILURE_WHERE_CAP = 10
 """How many places a collapsed failure row names before deferring to ``count``."""
 
-_DEFERRED_ROUTE: frozenset[str] = frozenset({"<shown later>"})
-"""``served`` for failure rows that are stored now and shown later (the attached
-analysis): which session will show them, and so where their ``api`` snippet
-runs, is not known yet. A row then keeps its plain message and marks itself
-under ``_ROUTE_KEY``, and the render that shows it adds the route."""
-
 _ROUTE_KEY = "python_route"
-"""Marks a stored failure row whose message ends in an ``api`` snippet, and a
-stored ``failures_truncated`` note, which names ``api.analyze_results``."""
+"""Marks a failure of a complete answer whose message ends in an ``api``
+snippet: each door words it for itself (``for_session``, ``for_api``)."""
 
 _DIGIT_RUN = re.compile(r"(\d+)")
 
@@ -329,16 +374,6 @@ def _failures_truncated_detail(counts: Mapping[str, int], served: Collection[str
         + cap_note(_FAILURE_CAP, rows, f"failure records{standing_for}", rest)
         + " Coverage and recipe result presence still reflect the full call."
     )
-
-
-def _marked_for_route(
-    observation: dict[str, Any], failure_counts: dict[str, int] | None
-) -> dict[str, Any]:
-    """A stored analysis's ``failures_truncated`` note, marked under
-    ``_ROUTE_KEY`` with the counts its render rebuilds the note from."""
-    if observation.get("code") == "failures_truncated" and failure_counts is not None:
-        return {**observation, _ROUTE_KEY: failure_counts}
-    return observation
 
 
 def _place_order(where: str) -> tuple[Any, ...]:
@@ -372,12 +407,9 @@ def _collapse_failures(
     for failure in failures:
         grouped.setdefault(failure.reason, []).append(failure)
     rows: list[dict[str, Any]] = []
-    deferred = served is _DEFERRED_ROUTE
     for members in grouped.values():
         ordered = sorted(members, key=lambda failure: _place_order(failure.where))
-        row = ordered[0].wire(None if deferred else served)
-        if deferred and ordered[0].python_route:
-            row[_ROUTE_KEY] = True
+        row = ordered[0].wire(served)
         if len(ordered) > 1:
             places = list(dict.fromkeys(failure.where for failure in ordered))
             row["wheres"] = places[:_FAILURE_WHERE_CAP]
@@ -440,8 +472,6 @@ class WorkUnit:
     failures: list[Failure]
     pending: list[_PendingArtifact]
     eligible_ids: set[str]
-    #: Row offset this unit's per_run page starts at (a resumed unit starts mid-list).
-    per_run_offset: int
     #: Index of this unit in the result set's work list.
     position: int
     observations: list[Observation]
@@ -506,8 +536,8 @@ class PerRunInclude(CappedPerRunLimit):
     cursor: str | None = Field(
         default=None,
         description=(
-            "Resume from per_run.next_cursor. It is bound to the request and its "
-            "include.fields view; an explicit conflicting view is rejected."
+            "Read on from per_run.next_cursor, with the request that gave it, "
+            "include.fields included; another request is refused."
         ),
     )
 
@@ -623,12 +653,13 @@ def coerce_include_flags(value: Any) -> Any:
 
 class ContinueInput(StrictModel):
     result_set_id: str = Field(
-        description="From the 'next' block of the partial response being resumed.",
+        description="The result_set_id of the cut reply being read on.",
     )
     cursor: str = Field(
         description=(
-            "From that same 'next' block, or coverage.missing_cases.next_cursor to "
-            "page missing cases. Resuming replays no completed work."
+            "A cut entry's next, a page's next_cursor or a rows_not_shown row's "
+            "cursor, from that reply. A page is read from the stored answer; "
+            "nothing is evaluated again."
         ),
     )
 
@@ -686,21 +717,20 @@ class AnalyzeResultsInput(StepSelectionFields, ToolInput, NotedModel):
         default=None,
         alias="continue",
         description=(
-            "Resume a budget-truncated response using its stored execution request "
-            "and cursor fields view. Request fields sent with it must match it."
+            "Read on in a cut reply: a page of the stored answer, evaluated once. "
+            "Request fields sent with it must be the whole request that gave it."
         ),
     )
 
     @model_validator(mode="after")
     def _new_or_continue(self) -> AnalyzeResultsInput:
-        # A continuation replays the execution request stored in the result set
-        # and takes its presentation view from the cursor. Fields sent with it
-        # are normalized like a new request's here and compared with that
-        # stored request once it is loaded (_continuation_echo_mismatch): an
-        # echo of the original call is accepted, and a change is refused rather
-        # than dropped, because raising include.per_run.limit on resume is the
-        # obvious thing to try and ignoring it hands back a page the caller did
-        # not ask for.
+        # A continuation reads a page of a stored answer. Fields sent with it
+        # are normalized like a new request's here and, when sent, compared
+        # with the request the stored answer answers (_read_on): an echo of the
+        # original call is accepted, and a change is refused rather than
+        # dropped, because raising include.per_run.limit on a page is the
+        # obvious thing to try and ignoring it hands back a page the caller
+        # did not ask for.
         if self.continuation is None and (not self.sources or not self.recipes):
             raise ValueError("a new analysis requires non-empty sources and recipes")
         sources = self.sources or []
@@ -781,41 +811,11 @@ class _ResolvedRun:
     job_id: str | None
 
 
-def _say_how_to_read_fail_cases(spec: dict[str, Any]) -> None:
-    """Put the route to the rest beside a cut ``spec.fail_cases``, and take it
-    away from one that is whole again (a budget can cut a page already cut)."""
-    fail_cases = spec["fail_cases"]
-    fail_cases.pop("next_cursor", None)
-    if fail_cases["truncated"]:
-        omitted = spec["fail_count"] - fail_cases["returned"]
-        fail_cases["hint"] = _FAIL_CASES_ROUTE.format(omitted=omitted)
-    else:
-        fail_cases.pop("hint", None)
-
-
-def _page(
-    items: list[Any], offset: int = 0, limit: int = MAX_PAGE_SIZE
-) -> tuple[dict[str, Any], int]:
-    """One page of ``items``, plus the offset the page after it starts at.
-
-    ``next_cursor`` starts null: every resumable view here (per_run,
-    coverage.missing_cases) needs a cursor carrying the work position too, so it
-    is minted during assembly from the offset this returns. A view that cannot
-    be resumed at all — spec.fail_cases — says how to read the rest in a hint
-    beside its flag instead (``_say_how_to_read_fail_cases``).
-
-    Slices rather than calling the guarded ``pagination.page``: the budget
-    ladder legitimately shrinks a limit to zero (that rung shows no rows at
-    all), and this tool's own cursor is what advances the caller, so the
-    never-advancing-loop guard that floors a caller-supplied limit at 1 does
-    not apply.
-    """
-    return (
-        pagination.page_of(
-            items[offset : offset + limit], offset=offset, total=len(items), cursor=None
-        ),
-        offset + len(items[offset : offset + limit]),
-    )
+def _whole_page(items: list[Any]) -> dict[str, Any]:
+    """``items`` whole, in the page shape a reply's ``per_run``,
+    ``coverage.missing_cases`` and ``spec.fail_cases`` keep until the next
+    breaking release; what a reply holds of it is said there when it is cut."""
+    return {"items": items, "total": len(items), "returned": len(items), "truncated": False}
 
 
 def _pick(source: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
@@ -823,11 +823,28 @@ def _pick(source: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
     return {key: source[key] for key in keys}
 
 
+#: The fields of a row's value that state a fact a row left out is named by
+#: (``rows_not_shown``): why a step has no number, read from the one list of
+#: those reasons (``log_types.NO_NUMBER_REASONS``), and this tool's own kinds,
+#: a value that is not a finite number and one printed once for several steps.
+_ROW_FACT_KINDS: tuple[str, ...] = (
+    *(reason.field for reason in NO_NUMBER_REASONS),
+    "not_finite",
+    "printed_once",
+)
+
+#: Every field of a row's value that states a fact: the kinds above, and the
+#: log's diagnostics and what of it was not read. A lean row and a projected
+#: row keep each one the value carries (:func:`_row_renderer`).
+_FACT_FIELDS: tuple[str, ...] = (*_ROW_FACT_KINDS, "diagnostics", "diagnostics_coverage")
+
+
 #: Nested value blocks the lean row keeps anyway. The rule is narrow on
 #: purpose: a block belongs here only when the caller cannot get it back from
 #: anything else in the response. An artifact handle names a file already
-#: written to disk — drop it and the file is unreachable.
-_LEAN_KEPT_BLOCKS: frozenset[str] = frozenset({"artifact"})
+#: written to disk — drop it and the file is unreachable; a fact about the row
+#: (``_FACT_FIELDS``) is what a reader must not miss.
+_LEAN_KEPT_BLOCKS: frozenset[str] = frozenset({"artifact", *_FACT_FIELDS})
 
 
 def _scalar_leaves(value: dict[str, Any]) -> dict[str, Any]:
@@ -889,11 +906,27 @@ def _row_renderer(
     lean_value = _LEAN_VALUES.get(metric, _scalar_leaves)
 
     def render(row: dict[str, Any]) -> dict[str, Any]:
-        if plan is not None:
-            return project_row(row, plan)
-        return _lean_row(row, lean_value)
+        if plan is None:
+            return _lean_row(row, lean_value)
+        projected = project_row(row, plan)
+        return _with_facts(projected, row)
 
     return render
+
+
+def _with_facts(projected: dict[str, Any], row: Mapping[str, Any]) -> dict[str, Any]:
+    """A projected row with every fact its value states (``_FACT_FIELDS``),
+    whatever ``include.fields`` named: a projection chooses the numbers a
+    reply carries, never whether a fact about the row is said."""
+    value = row.get("value")
+    if not isinstance(value, Mapping):
+        return projected
+    facts = {key: value[key] for key in _FACT_FIELDS if value.get(key)}
+    if not facts:
+        return projected
+    kept = projected.get("value")
+    kept = dict(kept) if isinstance(kept, Mapping) else {}
+    return {**projected, "value": {**kept, **{k: v for k, v in facts.items() if k not in kept}}}
 
 
 def _projection_warnings(records: list[dict[str, Any]], fields: list[str]) -> list[str]:
@@ -1368,7 +1401,8 @@ def _work_items(recipes: list[Any]) -> list[dict[str, Any]]:
 
 
 def _request_inputs(args: AnalyzeResultsInput) -> dict[str, Any]:
-    """The request as a result set stores it: what a continuation replays.
+    """The request as a result set records it, and what a request's
+    identity is read from (:func:`_request_digest`).
 
     ``work`` is the recipes as work items, and the per_run cursor is cleared,
     since it is a position in the result rather than part of the request.
@@ -1383,19 +1417,6 @@ def _request_inputs(args: AnalyzeResultsInput) -> dict[str, Any]:
         **StepSelection.of(args).as_inputs(),
         "include": include,
     }
-
-
-def _request_hash(args: AnalyzeResultsInput) -> str:
-    """The identity a per_run cursor is checked against.
-
-    The row view (``include.fields``) is left out: the cursor carries its own
-    view, so changing the projection is a different page of the same request,
-    not a different request.
-    """
-    assert args.sources is not None and args.recipes is not None
-    request = _request_inputs(args)
-    request["include"].pop("fields", None)
-    return result_store.canonical_hash(request)
 
 
 async def _create_result_set(args: AnalyzeResultsInput, state: SessionState, deadline: float):
@@ -1459,7 +1480,7 @@ async def _create_result_set(args: AnalyzeResultsInput, state: SessionState, dea
     inputs = {
         "working_dir": str(state.working_dir),
         **request,
-        "request_hash": _request_hash(args),
+        "request_hash": _request_digest(args),
         "resolved_runs": [_serialize_run(run) for run in runs],
         "missing": missing,
         "observations": [observation.wire() for observation in observations],
@@ -1757,7 +1778,7 @@ def _value_observations(key: str, records: list[Record]) -> list[Observation]:
     """
     grouped: dict[_Group, tuple[dict[str, Any], list[dict[str, Any]]]] = {}
     sites: list[tuple[Record, _Group | None, Any]] = []
-    for record in records:
+    for position, record in enumerate(records):
         found = record.value.get("observations") if isinstance(record.value, dict) else None
         for item in found or []:
             if not isinstance(item, Mapping) or item.get("kind") not in _LIFTED_KINDS:
@@ -1770,7 +1791,9 @@ def _value_observations(key: str, records: list[Record]) -> list[Observation]:
                 str(item.get("detail", "")),
                 json.dumps(evidence, sort_keys=True, default=str),
             )
-            where = {"source": record.source}
+            # The row's position in its recipe's rows, which a cut reply
+            # turns into the cursor that starts at it (say_what_was_cut).
+            where: dict[str, Any] = {"source": record.source, "index": position}
             for name in ("case_id", "step_index"):
                 if (value := getattr(record.identity, name)) is not None:
                     where[name] = value
@@ -2046,7 +2069,7 @@ async def _waveform(
                 plot_index=run.source.plot_index,
             ).wire(_IDENTITY_KEYS),
         },
-        [_PendingArtifact(pending, final, "text/csv", run.manifest_id)],
+        [await _written(pending, final, "text/csv", run.manifest_id)],
     )
 
 
@@ -2120,7 +2143,7 @@ async def _plot(
                 plot_index=run.source.plot_index,
             ).wire(_IDENTITY_KEYS),
         },
-        [_PendingArtifact(pending, final, "text/html", run.manifest_id)],
+        [await _written(pending, final, "text/html", run.manifest_id)],
     )
 
 
@@ -2442,7 +2465,6 @@ def _spec(
     *,
     incomplete: bool,
     include_outliers: bool,
-    fail_case_limit: int,
 ) -> dict[str, Any] | None:
     limits = getattr(recipe, "spec", None)
     if limits is None:
@@ -2479,26 +2501,21 @@ def _spec(
         "pass_count": pass_count,
         "fail_count": len(failed),
         "no_value_count": no_value,
-        # fail_cases is not resumable, so its next offset has no consumer.
-        "fail_cases": _page(failed, limit=fail_case_limit)[0],
+        "fail_cases": _whole_page(failed),
         "verdict": verdict,
         "allow_incomplete": limits.allow_incomplete,
     }
     if include_outliers:
-        result["outliers"] = failed[:fail_case_limit]
+        result["outliers"] = list(failed)
     return result
 
 
 def _group_values(
-    recipe: Recipe, records: list[Record], dimensions: list[str], limit: int | None = None
-) -> tuple[list[dict[str, Any]], int]:
-    """The first ``limit`` groups, reduced, and how many groups there are.
-
-    Groups keep first-appearance order, so the ones a limit leaves out are
-    never reduced: the budget's shrink rung renders a page per limit it tries.
-    """
+    recipe: Recipe, records: list[Record], dimensions: list[str]
+) -> list[dict[str, Any]]:
+    """Every group, reduced, in first-appearance order."""
     if not dimensions:
-        return [], 0
+        return []
     grouped: dict[tuple[tuple[str, Any], ...], list[Record]] = {}
     for record in records:
         identity = record.identity
@@ -2513,15 +2530,14 @@ def _group_values(
                 )
             values.append((dimension, value))
         grouped.setdefault(tuple(values), []).append(record)
-    kept = list(grouped.items())[:limit]
     return [
         {
             "by": dict(group),
             "reduced": _reduce(recipe, _tallies(recipe, group_records)),
             "count": len(group_records),
         }
-        for group, group_records in kept
-    ], len(grouped)
+        for group, group_records in grouped.items()
+    ]
 
 
 def _artifact_record(run: _ResolvedRun, value: dict[str, Any]) -> Record:
@@ -2678,15 +2694,17 @@ async def _evaluate_item(
                         )
                     )
                     pending.extend(artifacts)
-        except (LTSpiceMCPError, ValueError, OSError) as exc:
+        except (LTSpiceMCPError, ValueError, OSError, _ArtifactNotWritten) as exc:
             failures.append(
                 Failure(
                     code=(
                         "analysis_deadline"
                         if isinstance(exc, AnalysisDeadlineExceeded)
+                        else "artifact_publish_failed"
+                        if isinstance(exc, _ArtifactNotWritten)
                         else "recipe_failed"
                     ),
-                    stage="analyze",
+                    stage="publish" if isinstance(exc, _ArtifactNotWritten) else "analyze",
                     where=run.manifest_id,
                     message=str(exc),
                     python_route=getattr(exc, "python_route", False),
@@ -2698,11 +2716,6 @@ async def _evaluate_item(
 def _rename_artifacts(pending: list[_PendingArtifact]) -> None:
     for artifact in pending:
         artifact.final.parent.mkdir(parents=True, exist_ok=True)
-        # Match the repo's atomic-write durability: flush the fully-written temp
-        # to stable storage, then the rename metadata after, so a crash between
-        # digest and publish can't surface a truncated artifact under its final
-        # name. The digest was already taken on this same byte content.
-        # Opened for writing: Windows refuses to flush a read-only handle.
         fd = os.open(artifact.pending, os.O_RDWR | O_BINARY)
         try:
             fsync_fd(fd)
@@ -2712,29 +2725,72 @@ def _rename_artifacts(pending: list[_PendingArtifact]) -> None:
         fsync_dir(artifact.final.parent)
 
 
-async def _publish(
-    pending: list[_PendingArtifact],
-    deadline: float,
-) -> list[dict[str, Any]]:
-    """Digest every complete temp under budget, then publish with rename."""
+def _published_size(path: Path) -> int | None:
+    """The size of the regular file published at ``path``, or None."""
+    try:
+        status = path.stat()
+    except OSError:
+        return None
+    return status.st_size if S_ISREG(status.st_mode) else None
+
+
+#: The time, in seconds, the publish step of a whole call may spend comparing
+#: the files it writes with those a repeat of the request already published.
+#: It runs after the call's bound, ``[analysis] analysis_budget_s``, so one
+#: call takes at most that bound plus this allowance (and the renames). Past
+#: it, the comparisons not made are skipped and the new files replace the old.
+PUBLISH_ALLOWANCE_S: Final = 30.0
+
+
+async def _publish(pending: list[_PendingArtifact]) -> list[dict[str, Any]]:
+    """Publish each pending artifact at its final path, and its handle.
+
+    A final path holds only what :func:`_rename_artifacts` moved there: a
+    written and flushed file, renamed into place whole, so a file at a final
+    path is a complete earlier publish. Its name is a digest of the result
+    set (the request and the sources' digests), the recipe and the source,
+    so a repeat of the request writes to the same path. When the file there
+    already holds the bytes just written (same size, then same SHA-256) it is
+    kept as it is: never replaced or opened for writing, so a program holding
+    it open (a CSV in a spreadsheet, on Windows) does not fail the repeat.
+    When its bytes differ (a writer of another release, or a file changed
+    after it was published), or the comparison cannot finish (the file is
+    unreadable, its digest runs out of time, or the step's
+    :data:`PUBLISH_ALLOWANCE_S` is spent), it is replaced, as before this
+    check existed, and a refusal to replace it fails the recipe as before.
+    The new files' digests were taken as they were written (:func:`_written`)."""
     prepared: list[dict[str, Any]] = []
+    moved: list[_PendingArtifact] = []
+    kept: list[_PendingArtifact] = []
     loop = asyncio.get_running_loop()
+    allowance_ends = loop.time() + PUBLISH_ALLOWANCE_S
+
     for artifact in pending:
-        digest = await services.bounded_parse(
-            artifact.pending,
-            lambda path=artifact.pending: result_store.sha256_file(path),
-            timeout_s=max(_MIN_ITEM_DEADLINE_S, deadline - loop.time()),
-        )
-        size = await asyncio.to_thread(lambda path=artifact.pending: path.stat().st_size)
+        same = False
+        left = allowance_ends - loop.time()
+        if left > 0 and await asyncio.to_thread(_published_size, artifact.final) == artifact.size:
+            # The comparison only decides whether to keep the old file: one
+            # that cannot finish replaces it, as one that differs does.
+            with contextlib.suppress(OSError, AnalysisDeadlineExceeded):
+                same = (
+                    await services.bounded_parse(
+                        artifact.final,
+                        lambda path=artifact.final: result_store.sha256_file(path),
+                        timeout_s=left,
+                    )
+                    == artifact.sha256
+                )
+        (kept if same else moved).append(artifact)
         prepared.append(
             {
                 "path": str(artifact.final),
                 "content_type": artifact.content_type,
-                "sha256": digest,
-                "bytes": size,
+                "sha256": artifact.sha256,
+                "bytes": artifact.size,
             }
         )
-    await asyncio.to_thread(_rename_artifacts, pending)
+    await asyncio.to_thread(_rename_artifacts, moved)
+    await asyncio.to_thread(_remove_pending, kept)
     return prepared
 
 
@@ -2779,17 +2835,12 @@ def _result_entry(
     failures: list[Failure],
     group_by: list[str],
     missing: list[dict[str, Any]],
-    per_run_offset: int,
-    per_run_limit: int | None,
+    per_run: bool,
     include_outliers: bool,
     fields: list[str] | None = None,
-    *,
-    values_limit: int,
-    fail_case_limit: int,
-    groups_limit: int | None,
-) -> tuple[dict[str, Any], int]:
-    """The one result entry for ``recipe``, plus the offset its ``per_run``
-    page ends at — the caller turns that into the resume cursor."""
+) -> dict[str, Any]:
+    """The one complete result entry for ``recipe``: every row, group and
+    failing case. What a reply holds of it is the presenter's to decide."""
     incomplete = bool(failures or missing)
     # One tally serves the reduction and the spec.
     tallies = _tallies(recipe, records)
@@ -2798,19 +2849,8 @@ def _result_entry(
         "reduced": _reduce(recipe, tallies),
         "warnings": _record_warnings(records),
     }
-    groups, group_total = _group_values(recipe, records, group_by, groups_limit)
+    groups = _group_values(recipe, records, group_by)
     if groups:
-        if group_total > len(groups):
-            # Only a caller-set budget's shrink rung passes a limit here. A group
-            # is an aggregate answer rather than a page of a longer list, so the
-            # omission is stated rather than flagged — there is no cursor that
-            # walks the rest.
-            entry["warnings"].append(
-                _GROUPS_OMITTED_WARNING.format(
-                    omitted=group_total - len(groups),
-                    total=group_total,
-                )
-            )
         entry["groups"] = groups
     spec = _spec(
         recipe,
@@ -2818,25 +2858,14 @@ def _result_entry(
         len(records),
         incomplete=incomplete,
         include_outliers=include_outliers,
-        fail_case_limit=fail_case_limit,
     )
     if spec is not None:
         entry["spec"] = spec
-        _say_how_to_read_fail_cases(spec)
     render = _row_renderer(fields, metric=recipe.metric)
-
-    per_run_next = per_run_offset
-    if per_run_limit is not None:
-        page, per_run_next = _page(records, per_run_offset, per_run_limit)
-        page["items"] = [render(record.wire()) for record in page["items"]]
-        entry["per_run"] = page
+    if per_run:
+        entry["per_run"] = _whole_page([render(record.wire()) for record in records])
     elif not getattr(recipe, "reduce", []):
-        shown = records[:values_limit]
-        entry["values"] = [render(record.wire()) for record in shown]
-        if len(records) > values_limit:
-            entry["warnings"].append(
-                _VALUES_OMITTED_WARNING.format(omitted=len(records) - values_limit)
-            )
+        entry["values"] = [render(record.wire()) for record in records]
     # Only report unresolved paths where rows were actually emitted: a
     # reduce-only recipe has no row surface by construction, so its fields did
     # not fail to resolve — they had nothing to apply to.
@@ -2844,7 +2873,7 @@ def _result_entry(
         entry["warnings"].extend(
             _projection_warnings([record.wire() for record in records], fields)
         )
-    return entry, per_run_next
+    return entry
 
 
 # What a caller addresses a run by, versus the audit trail proving what it ran
@@ -2889,36 +2918,20 @@ def _page_of(item_schema: dict[str, Any], cut: Any) -> dict[str, Any]:
     silent pass. A fresh dict per call — the surfaces that share this shape
     each declare their own row type.
     """
+    page = page_schema({"type": "array", "items": item_schema, CUT: cut})
     return {
-        **page_schema({"type": "array", "items": item_schema, CUT: cut}),
+        **page,
+        # Beside truncated when the page has no cursor to give: the answer
+        # was not kept (stored_answer.not_kept).
+        "properties": {**page["properties"], "hint": HINT_SCHEMA},
         "additionalProperties": False,
     }
 
 
 _PAGE_SCHEMA: dict[str, Any] = _page_of({"type": "object"}, ITEMS)
 
-#: The call that continues a partial analysis: the reply's ``next`` is its
-#: ``continue`` argument.
-_CONTINUE_CALL = call_to_continue("analyze_results", {"continue": Unfilled("next")})
-
-#: What a reply says when its page of missing cases is cut.
-_MISSING_CASES_HINT = (
-    "coverage.missing_cases is truncated; read the next page of missing cases with "
-    + call_to_continue(
-        "analyze_results",
-        {
-            "continue": {
-                "result_set_id": Unfilled("result_set_id"),
-                "cursor": Unfilled("coverage.missing_cases.next_cursor"),
-            }
-        },
-    )
-    + " (no work is replayed)."
-)
-
-#: spec.fail_cases: a page with no cursor, because it is worked out in the call
-#: that returns it and never stored. Cut short, its hint names the view that
-#: pages every failing value.
+#: spec.fail_cases: a page with no next_cursor of its own. Cut short, its hint
+#: names the call that reads the rest from the stored answer.
 _FAIL_CASES_SCHEMA: dict[str, Any] = {
     **_PAGE_SCHEMA,
     "properties": {
@@ -3025,6 +3038,28 @@ _ATTRIBUTED_VALUE_SCHEMA: dict[str, Any] = {
                         "for a failed step: no number is given for those steps."
                     ),
                 },
+                # An inline waveform's samples: the axis and each signal's
+                # values, thinned together when a reply is too long for them.
+                "x": {
+                    "type": "array",
+                    "items": {"type": ["number", "null"]},
+                    CUT: series("waveform"),
+                },
+                "series": {
+                    "type": "array",
+                    CUT: series("waveform"),
+                    "items": {
+                        "type": "object",
+                        "properties": {"signal": {"type": "string"}},
+                        "additionalProperties": {
+                            "type": "array",
+                            "items": {"type": ["number", "null"]},
+                            CUT: NEVER,
+                        },
+                    },
+                },
+                "points_returned": {"type": "integer", "minimum": 0},
+                "points_total": {"type": "integer", "minimum": 0},
             },
         },
     },
@@ -3117,9 +3152,10 @@ _RESULT_ENTRY_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
         "metric": {"type": "string"},
-        "reduced": {"type": "array", "items": _REDUCED_SCHEMA, CUT: rows("field", "stat")},
+        # Never cut: the request bounds it (one row per field and stat it
+        # asks for), and a summary is never missing while its rows are shown.
+        "reduced": {"type": "array", "items": _REDUCED_SCHEMA, CUT: NEVER},
         "groups": {"type": "array", "items": {"type": "object"}, CUT: ITEMS},
-        "steps": {"type": "array", "items": {"type": "object"}, CUT: ITEMS},
         "spec": _SPEC_SCHEMA,
         "per_run": _page_of(_ATTRIBUTED_VALUE_SCHEMA, _ATTRIBUTED_ROWS_CUT),
         "values": {"type": "array", "items": _ATTRIBUTED_VALUE_SCHEMA, CUT: _ATTRIBUTED_ROWS_CUT},
@@ -3127,6 +3163,46 @@ _RESULT_ENTRY_SCHEMA: dict[str, Any] = {
     },
     "required": ["metric", "reduced", "warnings"],
     "additionalProperties": False,
+}
+
+#: ``rows_not_shown``: by recipe, what the rows a reply left out carry.
+ROWS_NOT_SHOWN_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "description": (
+        "Present when rows of a recipe were left out and some carry a fact: by "
+        "recipe key, counts per kind ('failed_measurements', 'unreadable', "
+        "'diagnostics.<code>', ...) over the rows after those sent, and rows naming "
+        "a few by source, case, run and step, each with a cursor that starts at it "
+        "(pass it as continue.cursor). A kind every row carries is given by its "
+        "count. '*' sums the recipes the part's bound left out "
+        "(analyze.ROWS_NOT_SHOWN_BOUND_TOKENS). Never cut."
+    ),
+    "additionalProperties": {
+        "type": "object",
+        "properties": {
+            "counts": {"type": "object", "additionalProperties": {"type": "integer"}},
+            "groups": {"type": "integer", "minimum": 1},
+            "rows": {
+                "type": "array",
+                CUT: NEVER,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "source": {"type": "string"},
+                        "case_id": {"type": ["string", "null"]},
+                        "run_index": {"type": ["integer", "null"]},
+                        "step_index": {"type": ["integer", "null"]},
+                        "kinds": {"type": "array", "items": {"type": "string"}, CUT: NEVER},
+                        "cursor": {"type": "string"},
+                    },
+                    "required": ["kinds"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["counts"],
+        "additionalProperties": False,
+    },
 }
 
 OUTPUT_SCHEMA: dict[str, Any] = {
@@ -3184,12 +3260,19 @@ OUTPUT_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
             },
         },
+        # One entry per source read, so the list is cut like any other:
+        # its count grows with the runs a request reads.
         "signals_available": {
-            "type": "object",
-            "additionalProperties": {
-                "type": "array",
-                "items": {"type": "string"},
-                CUT: ITEMS,
+            "type": "array",
+            CUT: ITEMS,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "manifest_id": {"type": "string"},
+                    # The traces one raw file holds: the file bounds them.
+                    "signals": {"type": "array", "items": {"type": "string"}, CUT: NEVER},
+                },
+                "required": ["manifest_id", "signals"],
             },
         },
         "source_hashes": {
@@ -3230,6 +3313,10 @@ OUTPUT_SCHEMA: dict[str, Any] = {
             },
         },
         "result_set_id": {"type": "string"},
+        "rows_not_shown": ROWS_NOT_SHOWN_SCHEMA,
+        "cut": CUT_SCHEMA,
+        "stored_answer": STORED_ANSWER_SCHEMA,
+        "page_of": PAGE_OF_SCHEMA,
         "cursor": {"type": ["string", "null"]},
         "next": {
             "type": ["object", "null"],
@@ -3242,10 +3329,10 @@ OUTPUT_SCHEMA: dict[str, Any] = {
         },
         "hint": {"type": "string"},
     },
+    # coverage and results are given by every first reply; a page (page_of)
+    # leaves them out where its list is not inside them.
     "required": [
         "outcome",
-        "coverage",
-        "results",
         "observations",
         "failures",
         "source_hashes",
@@ -3258,167 +3345,75 @@ OUTPUT_SCHEMA: dict[str, Any] = {
 
 
 @dataclass(frozen=True)
-class _Limits:
-    """The effective list limits one assembly renders at.
-
-    Held apart from the request because the budget ladder shrinks them, and a
-    shrunk page has to be decided BEFORE the entry and its cursor are built: a
-    cursor minted against the caller's limit and then handed back with fewer
-    rows would skip the difference on resume.
-    """
-
-    per_run: int | None
-    #: The cap on the unpaged row surfaces that start at one number — the values
-    #: list and the missing-cases page. One field because they are one number:
-    #: both start at MAX_PAGE_SIZE and both shrink against the same measurement.
-    rows: int
-    #: The cap on ``spec.fail_cases``. Its own field only because it starts at
-    #: its own constant; it shrinks with everything else.
-    fail_cases: int
-    #: The cap on a recipe's ``groups`` list. ``None`` is uncapped, which is what
-    #: every unbudgeted call gets: a group_by answer is not a page, so nothing
-    #: but a caller-set budget's shrink rung ever trims it.
-    groups: int | None = None
-
-    @classmethod
-    def of(cls, include: AnalyzeInclude) -> _Limits:
-        # Read here, not bound as field defaults: this is the one place the
-        # module's caps enter a render, so a test that moves a cap moves it for
-        # the whole path rather than for whichever call site happened to reread it.
-        return cls(
-            per_run=include.per_run.limit if include.per_run else None,
-            rows=MAX_PAGE_SIZE,
-            fail_cases=_FAIL_CASE_PAGE_CAP,
-        )
-
-    def capped(self, limit: int) -> _Limits:
-        """These limits, each lowered to ``limit`` — the shrink rung's one number.
-
-        Every surface capped here is also in :func:`analysis_surfaces`. That
-        pairing is the cost model: a surface this shrinks but the measurement
-        omits is charged to the fixed envelope, and one the measurement counts
-        but this cannot shrink makes the fixed envelope look smaller than it is.
-        """
-        return _Limits(
-            per_run=None if self.per_run is None else min(self.per_run, limit),
-            rows=min(self.rows, limit),
-            fail_cases=min(self.fail_cases, limit),
-            groups=limit if self.groups is None else min(self.groups, limit),
-        )
-
-
-@dataclass(frozen=True)
-class AnalysisContinuationPosition:
-    """Evaluator position between bounded drives, before cursor encoding."""
-
-    result_set_id: str
-    work_index: int
-    row_offset: int = 0
-    missing_offset: int = 0
-    view_fields: tuple[str, ...] | None = None
-
-
-@dataclass(frozen=True)
 class AnalysisEvaluation:
-    """Everything a response is built from, once the work behind it is done.
+    """Everything the complete answer is built from, once every recipe ran.
 
-    Assembly is a separate step from evaluation because the budget ladder
-    re-renders: reaching a smaller page by re-running the recipes would pay for
-    the budget in raw reads, and trimming an assembled page instead would
-    desync the cursor it already minted.
+    One evaluation runs every recipe of a request; nothing about it knows a
+    page, a cursor or a reply size. What a reply holds of the answer is the
+    reply layer's to decide (``tools/_base.presented``).
     """
 
     item: result_store.ResultSet
     processed: list[WorkUnit]
     runs: list[_ResolvedRun]
     #: Runs a source named but could not deliver, already in wire shape: they
-    #: are stored verbatim in the result set and paged straight into
-    #: ``coverage.missing_cases``, so they are never anything else.
+    #: are stored verbatim in the result set and go straight into
+    #: ``coverage.missing_cases``.
     missing: list[dict[str, Any]]
-    missing_offset: int
     #: Rejections, each with the work position it was rejected at.
     skipped: list[tuple[int, Failure]]
     base_observations: list[Observation]
     include: AnalyzeInclude
     group_by: list[str]
-    natural_position: int
-    natural_intra: int
-    deferred: bool
     signals: dict[str, list[str]] | None
-    #: The session's tools, set only when rendering an MCP page, so a failure
-    #: can say where its Python snippet runs; the neutral evaluation has none.
-    served: frozenset[str] | None = None
-    # What this call's arguments asked for that was read differently (a
-    # repeat read once; on an MCP page, a page size held to its cap), each
-    # said in the hint.
+    #: What this call's arguments asked for that was read differently (a
+    #: repeat read once, a page size held to its cap), each said in the hint.
     argument_notes: tuple[str, ...] = ()
+    #: The request's identity: a page read with ``include.per_run.cursor``
+    #: must name the same request.
+    request: str = ""
+    #: The steps of the call no recipe owns (the signal listing) that did
+    #: not finish, each named with what it left undone.
+    step_failures: tuple[Failure, ...] = ()
 
     @property
     def failure_inventory(self) -> tuple[Failure, ...]:
-        """Every failure produced by this drive, without the MCP failure cap."""
+        """Every failure of the evaluation, one per place."""
         failures = [failure for _position, failure in self.skipped]
         failures.extend(failure for unit in self.processed for failure in unit.failures)
+        failures.extend(self.step_failures)
         return tuple(failures)
 
-    @property
-    def continuation(self) -> AnalysisContinuationPosition | None:
-        """Where a later neutral drive resumes, if compute work remains."""
-        if self.natural_position >= len(self.item.work):
-            return None
-        return AnalysisContinuationPosition(
-            result_set_id=self.item.result_set_id,
-            work_index=self.natural_position,
-            row_offset=self.natural_intra,
-            missing_offset=self.missing_offset,
-            view_fields=(tuple(self.include.fields) if self.include.fields is not None else None),
-        )
+    def snapshot(self) -> dict[str, Any]:
+        """What the answer was computed from: the result set, the request,
+        and a digest of every source's manifest id and the parsed snapshot it
+        read, whose size does not grow with the sources. A page of a stored
+        answer carries it, so a caller can tell whether a source has changed
+        since: ``source_hashes`` with ``include.provenance`` names each."""
+        return {
+            "result_set_id": self.item.result_set_id,
+            "request": self.request,
+            "per_run_limit": self.include.per_run.limit if self.include.per_run else None,
+            "sources": result_store.canonical_hash(
+                [
+                    [str(manifest.get("manifest_id")), manifest.get("snapshot_id")]
+                    for manifest in self.item.source_manifests
+                ]
+            )[:32],
+        }
 
 
-def _assemble(
-    a: AnalysisEvaluation,
-    rung: response_budget.Rung | None,
-    limits: _Limits,
-) -> dict[str, Any]:
-    """Build the response from finished work, at ``limits`` and ``rung``.
-
-    ``rung`` is None when the caller set no budget, which is the only path that
-    existed before budgets and is byte-for-byte what it always produced.
-    """
-    answer_channel = rung is not None and rung.answer_channel
-    provenance = a.include.provenance and not answer_channel
-    outliers = a.include.outliers and not answer_channel
-    signals = None if answer_channel else a.signals
+def _assemble(a: AnalysisEvaluation) -> dict[str, Any]:
+    """The complete answer of one evaluation: every recipe's entry with every
+    row, every missing case and every failure, one per place, each marked
+    under ``_ROUTE_KEY`` when its message ends in an ``api`` snippet. Each
+    door gives it as it delivers (:func:`for_session`, :func:`for_api`)."""
     item = a.item
-
-    # Re-decide where this response stops, against the limit it is assembling
-    # at. A smaller page stops at the same recipe or an earlier one, so every
-    # unit it keeps was already evaluated; a unit it drops is re-evaluated on
-    # resume and rewrites its artifacts under the same deterministic names.
-    units = a.processed
-    paginating = -1
-    position, intra_item = a.natural_position, a.natural_intra
-    if limits.per_run is not None:
-        for index, unit in enumerate(a.processed):
-            offset = unit.per_run_offset
-            if (unit.records or not unit.failures) and offset + limits.per_run < len(unit.records):
-                units = a.processed[: index + 1]
-                paginating = index
-                position = unit.position
-                intra_item = offset + limits.per_run
-                break
-
-    # One resume point serves every cursor this call emits. The work list and
-    # the coverage list are paged independently, so each cursor has to carry
-    # BOTH offsets: one that dropped the work position would strand un-analyzed
-    # work, and one that dropped the coverage offset would replay missing cases
-    # already shown. Paged here, ahead of the cursors that have to quote it.
-    missing_page, missing_next = _page(a.missing, a.missing_offset, limits.rows)
-
-    # A rejection for work this response no longer reaches belongs to the call
-    # that resumes it, not to this one.
-    failures = [failure for at, failure in a.skipped if at < position]
     observations: list[Observation] = []
-    for observation in (*a.base_observations, *(o for unit in units for o in unit.observations)):
+    for observation in (
+        *a.base_observations,
+        *(o for unit in a.processed for o in unit.observations),
+    ):
         # A fact about a run, such as its compression, comes from each unit
         # that read it; it is said once.
         if observation not in observations:
@@ -3430,10 +3425,9 @@ def _assemble(
     # The entries that answered: rows, or no failure to explain their absence.
     delivered: list[str] = []
     analyzed_identities: set[tuple[Any, Any, Any]] = set()
+    per_run = a.include.per_run is not None
 
     for at, failure in a.skipped:
-        if at >= position:
-            continue
         # A recipe refused before it ran keeps an entry under the key it
         # asked for, so reading results[key] says what happened instead of
         # raising: one entry per recipe, whatever the reason it has no rows.
@@ -3442,11 +3436,7 @@ def _assemble(
         key = str(raw_recipe.get("key") or f"recipe_{work_item['index']}")
         if key in results:
             continue
-        empty_rows: dict[str, Any] = (
-            {"per_run": pagination.page_of([], offset=0, total=0)}
-            if limits.per_run is not None
-            else {"values": []}
-        )
+        empty_rows: dict[str, Any] = {"per_run": _whole_page([])} if per_run else {"values": []}
         results[key] = {
             "metric": str(raw_recipe.get("metric") or ""),
             "reduced": [],
@@ -3455,26 +3445,21 @@ def _assemble(
         }
         entry_at[key] = at
 
-    for index, unit in enumerate(units):
-        failures.extend(unit.failures)
+    for unit in a.processed:
         relevant_missing = [
             case
             for case in a.missing
             if unit.recipe.sources is None or case.get("label") in set(unit.recipe.sources)
         ]
-        entry, per_run_next = _result_entry(
+        entry = _result_entry(
             unit.recipe,
             unit.records,
             unit.failures,
             a.group_by,
             relevant_missing,
-            unit.per_run_offset,
-            limits.per_run,
-            outliers,
+            per_run,
+            a.include.outliers,
             a.include.fields,
-            values_limit=limits.rows,
-            fail_case_limit=limits.fail_cases,
-            groups_limit=limits.groups,
         )
         if unit.records or not unit.failures:
             delivered.append(unit.key)
@@ -3486,508 +3471,128 @@ def _assemble(
             analyzed_identities.add(
                 (record.source, record.identity.case_id, record.identity.run_index)
             )
-        if (
-            index == paginating
-            and unit.key in results
-            and a.include.per_run is not None
-            and entry["per_run"]["truncated"]
-        ):
-            entry["per_run"]["next_cursor"] = result_store.encode_cursor(
-                item,
-                unit.position,
-                intra_item=per_run_next,
-                missing_offset=missing_next,
-                view_fields=a.include.fields,
-            )
 
     results = {key: results[key] for key in sorted(results, key=entry_at.__getitem__)}
-    next_value: dict[str, str] | None = None
-    if position < len(item.work):
-        next_value = {
-            "result_set_id": item.result_set_id,
-            "cursor": result_store.encode_cursor(
-                item,
-                position,
-                intra_item=intra_item,
-                missing_offset=missing_next,
-                view_fields=a.include.fields,
-            ),
-        }
-    failure_rows = _collapse_failures(failures, a.served)
-    # Rows and records left out, for a note the render of a stored analysis
-    # rebuilds once it knows where the api snippet runs.
-    failure_counts: dict[str, int] | None = None
-    if len(failure_rows) > _FAILURE_CAP:
-        failure_counts = {"rows": len(failure_rows), "records": len(failures)}
-        deferred = a.served is _DEFERRED_ROUTE
-        observations.append(
-            Observation(
-                code="failures_truncated",
-                kind="coverage",
-                detail=_failures_truncated_detail(failure_counts, None if deferred else a.served),
-            )
-        )
-        failure_rows = failure_rows[:_FAILURE_CAP]
-    runs_requested = len(a.runs) + len(a.missing)
-    # A continuation handle is both a delivery (there is more to fetch, so the
-    # call did not come back empty-handed) and a shortfall (this page is not
-    # the whole answer).
-    outcome = outcome_of(
-        failures,
-        partial=bool(a.missing) or next_value is not None,
-        delivered=bool(delivered) or next_value is not None,
-    )
-    if missing_page["truncated"]:
-        # Carries the live work position, not the end of the work list: this
-        # cursor advances the coverage view, and pointing it past the work would
-        # discard whatever work the caller had left to resume.
-        missing_page["next_cursor"] = result_store.encode_cursor(
-            item,
-            position,
-            intra_item=intra_item,
-            missing_offset=missing_next,
-            view_fields=a.include.fields,
-        )
+    failures = a.failure_inventory
     coverage: dict[str, Any] = {
-        "runs_requested": runs_requested,
+        "runs_requested": len(a.runs) + len(a.missing),
         "runs_analyzed": len(analyzed_identities),
-        "missing_cases": missing_page,
+        "missing_cases": _whole_page(list(a.missing)),
     }
-    # Counted over every missing row, not this page of them: the one statement
-    # that a value over the runs read is not yet the result of the runs asked.
+    # Counted over every missing row: the one statement that a value over the
+    # runs read is not yet the result of the runs asked.
     running = sum(row.get("code") == "run_not_finished" for row in a.missing)
     if running:
         coverage["runs_running"] = running
     data: dict[str, Any] = {
-        "outcome": outcome,
+        "outcome": outcome_of(list(failures), partial=bool(a.missing), delivered=bool(delivered)),
         "coverage": coverage,
         "results": results,
-        "observations": [
-            _marked_for_route(observation.wire(), failure_counts)
-            if a.served is _DEFERRED_ROUTE
-            else observation.wire()
-            for observation in observations
-        ],
-        "failures": failure_rows,
-        "source_hashes": _source_hashes(item, provenance=provenance),
+        "observations": [observation.wire() for observation in observations],
+        "failures": [_stored_failure(failure) for failure in failures],
+        "source_hashes": _source_hashes(item, provenance=a.include.provenance),
         "result_set_id": item.result_set_id,
-        "cursor": next_value["cursor"] if next_value is not None else None,
-        "next": next_value,
+        "cursor": None,
+        "next": None,
     }
-    if signals is not None:
-        data["signals_available"] = signals
+    if a.signals is not None:
+        data["signals_available"] = [
+            {"manifest_id": manifest_id, "signals": names}
+            for manifest_id, names in a.signals.items()
+            if names
+        ]
     hints: list[str] = []
     if any(case.get("code") == PathSecurityError.code for case in a.missing):
         hints.append(
             "A source path was refused; its coverage.missing_cases row's "
             "hint says why and what to change."
         )
-    if next_value is not None:
-        reason = "an artifact item was deferred intact" if a.deferred else "the call budget ended"
-        hints.append(f"Analysis is partial because {reason}; continue with {_CONTINUE_CALL}.")
-    if missing_page["next_cursor"] is not None:
-        hints.append(_MISSING_CASES_HINT)
     hints.extend(a.argument_notes)
     if hints:
         data["hint"] = " ".join(hints)
     return data
 
 
-def _snapshot_from_assembly(a: AnalysisEvaluation) -> dict[str, Any]:
-    """Persist facts and bounded unprojected rows, never a rendered response."""
-    wide_include = a.include.model_copy(update={"fields": list(_ROW_KEYS)})
-    # Shown later, by a session not known yet: each failure row keeps whether
-    # its message ends in an api snippet, for the render to say where it runs.
-    wide = replace(a, include=wide_include, served=_DEFERRED_ROUTE)
-    top = _assemble(wide, None, _Limits.of(wide_include))
-    requested_results = top.pop("results")
+def _stored_failure(failure: Failure) -> dict[str, Any]:
+    """One failure of the complete answer: its plain message, marked when it
+    ends in an ``api`` snippet, which each door words for itself."""
+    row = failure.wire()
+    if failure.python_route:
+        row[_ROUTE_KEY] = True
+    return row
 
-    def coverage_cursor_base(view: dict[str, Any]) -> str:
-        missing_page = view["coverage"]["missing_cases"]
-        cursor = missing_page.get("next_cursor")
-        if not isinstance(cursor, str):
-            next_value = view.get("next")
-            cursor = next_value.get("cursor") if isinstance(next_value, dict) else None
-        if isinstance(cursor, str):
-            return cursor
-        return result_store.encode_cursor(
-            a.item,
-            a.natural_position,
-            intra_item=a.natural_intra,
-            missing_offset=a.missing_offset,
-            view_fields=wide_include.fields,
-        )
 
-    requested_coverage_cursor = coverage_cursor_base(top)
-    units = {unit.key: unit for unit in a.processed}
-    missing_next = min(a.missing_offset + MAX_PAGE_SIZE, len(a.missing))
-    natural_cursor_base = result_store.encode_cursor(
-        a.item,
-        a.natural_position,
-        intra_item=a.natural_intra,
-        missing_offset=missing_next,
-        view_fields=wide_include.fields,
-    )
-    results: dict[str, Any] = {}
-    for key, requested_entry in requested_results.items():
-        # A recipe refused before it ran has an entry and no unit: no rows.
-        unit = units.get(key)
-        entry = requested_entry
-        per_run = entry.pop("per_run", None)
-        had_values = "values" in entry
-        entry.pop("values", None)
-        rows = [record.wire() for record in unit.records] if unit is not None else []
-        reduces = unit is not None and getattr(unit.recipe, "reduce", [])
-        answer_rows = rows[:MAX_PAGE_SIZE] if not reduces else []
-        block: dict[str, Any] = {
-            "facts": entry,
-            "answer_rows": answer_rows,
-            "answer_total": len(rows),
-            "surface": ("per_run" if per_run is not None else "values" if had_values else "none"),
-            "projection_presence": key_outline(rows),
-        }
-        if per_run is not None:
-            block["per_run"] = per_run
-            block["per_run_offset"] = unit.per_run_offset if unit is not None else 0
-            block["per_run_cursor_base"] = result_store.encode_cursor(
-                a.item,
-                unit.position if unit is not None else a.natural_position,
-                intra_item=unit.per_run_offset if unit is not None else 0,
-                missing_offset=missing_next,
-                view_fields=wide_include.fields,
-            )
-        results[key] = block
-    return analysis_snapshot.envelope(
-        {
-            "top": top,
-            "results": results,
-            "missing_offset": a.missing_offset,
-            "coverage_cursor_base": requested_coverage_cursor,
-            "natural_cursor_base": natural_cursor_base,
-            "natural_has_next": a.natural_position < len(a.item.work),
-            "natural_deferred": a.deferred,
-        }
+def _failure_of(row: Mapping[str, Any]) -> Failure:
+    return Failure(
+        code=str(row["code"]),
+        stage=str(row["stage"]),
+        where=str(row["where"]),
+        message=str(row["message"]),
+        python_route=bool(row.get(_ROUTE_KEY)),
     )
 
 
-def _rebind_snapshot_cursors(data: dict[str, Any], fields: list[str] | None) -> None:
-    cursor = data.get("cursor")
-    if isinstance(cursor, str):
-        data["cursor"] = result_store.reencode_cursor(cursor, view_fields=fields)
-    next_value = data.get("next")
-    if isinstance(next_value, dict) and isinstance(next_value.get("cursor"), str):
-        next_value["cursor"] = result_store.reencode_cursor(
-            next_value["cursor"], view_fields=fields
-        )
-        data["cursor"] = next_value["cursor"]
-    coverage = data.get("coverage")
-    if isinstance(coverage, dict):
-        missing = coverage.get("missing_cases")
-        if isinstance(missing, dict) and isinstance(missing.get("next_cursor"), str):
-            missing["next_cursor"] = result_store.reencode_cursor(
-                missing["next_cursor"], view_fields=fields
-            )
-
-
-def _shrink_snapshot_page(
-    page: dict[str, Any],
-    limit: int,
-    *,
-    offset: int = 0,
-    cursor_base: str | None = None,
-    fields: list[str] | None = None,
-) -> None:
-    items = page["items"][:limit]
-    next_offset = retotal_page(page, items, offset)
-    page["next_cursor"] = (
-        result_store.reencode_cursor(
-            cursor_base,
-            view_fields=fields,
-            missing_offset=next_offset,
-        )
-        if page["truncated"] and cursor_base is not None
-        else None
-    )
-
-
-def _without_warnings(warnings: list[str], *substrings: str) -> list[str]:
-    return [
-        warning
-        for warning in warnings
-        if not any(substring in warning for substring in substrings)
+def for_api(answer: Mapping[str, Any]) -> dict[str, Any]:
+    """The complete answer as the Python API returns it: every failure, one
+    per place, each message as written."""
+    data = dict(answer)
+    data["failures"] = [
+        {key: value for key, value in row.items() if key != _ROUTE_KEY}
+        for row in answer.get("failures") or ()
     ]
-
-
-def render_attached_analysis(
-    stored: dict[str, Any],
-    *,
-    fields: list[str] | None,
-    answer_channel: bool = False,
-    row_limit: int | None = None,
-    served: Collection[str] | None = None,
-) -> dict[str, Any]:
-    """Render one public attached result from its stored neutral snapshot.
-
-    ``served`` is the tools of the MCP session showing it, so a failure whose
-    message ends in an ``api`` snippet says where that runs, as on an
-    ``analyze_results`` page; None, for the Python API, leaves the message as is.
-    """
-    snapshot_kind = analysis_snapshot.classify(stored)
-    if snapshot_kind != "snapshot":
-        raise ResultError(
-            "The attached analysis was stored by an earlier release in a shape this "
-            "build cannot render — re-run analyze_results against the job."
-        )
-
-    data = copy.deepcopy(stored["top"])
-    for row in data.get("failures") or []:
-        if row.pop(_ROUTE_KEY, False) and served is not None:
-            row["message"] = f"{row['message']} {python_route_text(served)}"
-    for observation in data.get("observations") or []:
-        counts = observation.pop(_ROUTE_KEY, None)
-        if isinstance(counts, dict) and served is not None:
-            observation["detail"] = _failures_truncated_detail(counts, served)
-    _rebind_snapshot_cursors(data, fields)
-    natural_cursor_base = stored.get("natural_cursor_base")
-    if answer_channel:
-        data.pop("hint", None)
-        if not isinstance(natural_cursor_base, str):
-            raise ResultError("The attached analysis snapshot lacks its continuation handle")
-        natural_cursor = result_store.reencode_cursor(
-            natural_cursor_base,
-            view_fields=fields,
-        )
-        if stored.get("natural_has_next"):
-            data["cursor"] = natural_cursor
-            data["next"] = {
-                "result_set_id": data["result_set_id"],
-                "cursor": natural_cursor,
-            }
-        else:
-            data["cursor"] = None
-            data["next"] = None
-        coverage = data.get("coverage")
-        if isinstance(coverage, dict):
-            missing = coverage.get("missing_cases")
-            if isinstance(missing, dict):
-                missing["next_cursor"] = (
-                    result_store.reencode_cursor(
-                        natural_cursor_base,
-                        view_fields=fields,
-                        missing_offset=int(stored["missing_offset"]) + int(missing["returned"]),
-                    )
-                    if missing.get("truncated")
-                    else None
-                )
-    rendered_results: dict[str, Any] = {}
-    for key, block in stored["results"].items():
-        entry = copy.deepcopy(block["facts"])
-        metric = entry.get("metric")
-        render_row = _row_renderer(fields, metric=metric)
-        rows_emitted = False
-        value_rows: list[dict[str, Any]] | None = None
-        if (answer_channel and block["answer_rows"]) or (
-            not answer_channel and block["surface"] == "values"
-        ):
-            value_rows = block["answer_rows"]
-        if value_rows is not None:
-            selected = value_rows if row_limit is None else value_rows[:row_limit]
-            rows = copy.deepcopy(selected)
-            entry["values"] = [render_row(row) for row in rows]
-            rows_emitted = bool(rows)
-            if answer_channel:
-                entry["warnings"] = _without_warnings(
-                    entry.get("warnings", []),
-                    " value(s) omitted; request include.per_run",
-                    " value(s) omitted to fit the response budget",
-                )
-                omitted = int(block["answer_total"]) - len(rows)
-                if omitted > 0:
-                    entry["warnings"].append(_VALUES_OMITTED_WARNING.format(omitted=omitted))
-        elif not answer_channel and block["surface"] == "per_run":
-            page = dict(block["per_run"])
-            stored_rows = page["items"]
-            selected = stored_rows if row_limit is None else stored_rows[:row_limit]
-            rows = copy.deepcopy(selected)
-            rendered_rows = [render_row(row) for row in rows]
-            offset = int(block["per_run_offset"])
-            next_offset = retotal_page(page, rendered_rows, offset)
-            page["next_cursor"] = (
-                result_store.reencode_cursor(
-                    block["per_run_cursor_base"],
-                    view_fields=fields,
-                    intra_item=next_offset,
-                )
-                if page["truncated"]
-                else None
-            )
-            entry["per_run"] = page
-            rows_emitted = bool(rows)
-            if page["next_cursor"] is not None:
-                data["cursor"] = page["next_cursor"]
-                data["next"] = {
-                    "result_set_id": data["result_set_id"],
-                    "cursor": page["next_cursor"],
-                }
-                data["outcome"] = outcome_of(data.get("failures") or [], partial=True)
-                response_budget.append_hint(
-                    data,
-                    "Analysis is partial because the response budget reduced the "
-                    f"per_run page; continue with {_CONTINUE_CALL}, or read the "
-                    "complete set through the Python API (ltspice_mcp.api).",
-                )
-        if row_limit is not None:
-            groups = entry.get("groups")
-            if isinstance(groups, list) and len(groups) > row_limit:
-                omitted = len(groups) - row_limit
-                entry["groups"] = groups[:row_limit]
-                entry.setdefault("warnings", []).append(
-                    _GROUPS_OMITTED_WARNING.format(
-                        omitted=omitted,
-                        total=len(groups),
-                    )
-                )
-            spec = entry.get("spec")
-            if isinstance(spec, dict) and isinstance(spec.get("fail_cases"), dict):
-                _shrink_snapshot_page(spec["fail_cases"], row_limit)
-                _say_how_to_read_fail_cases(spec)
-        if fields and rows_emitted:
-            entry.setdefault("warnings", []).extend(
-                _projection_warnings([block["projection_presence"]], fields)
-            )
-        if answer_channel:
-            spec = entry.get("spec")
-            if isinstance(spec, dict):
-                spec.pop("outliers", None)
-        rendered_results[key] = entry
-    data["results"] = rendered_results
-    if row_limit is not None:
-        coverage = data.get("coverage")
-        if isinstance(coverage, dict) and isinstance(coverage.get("missing_cases"), dict):
-            _shrink_snapshot_page(
-                coverage["missing_cases"],
-                row_limit,
-                offset=int(stored["missing_offset"]),
-                cursor_base=str(
-                    natural_cursor_base if answer_channel else stored["coverage_cursor_base"]
-                ),
-                fields=fields,
-            )
-            if coverage["missing_cases"]["next_cursor"] is not None:
-                response_budget.append_hint(data, _MISSING_CASES_HINT)
-    if answer_channel:
-        data.pop("signals_available", None)
-        hashes = data.get("source_hashes")
-        if isinstance(hashes, list):
-            data["source_hashes"] = [
-                _pick(item, _RUN_IDENTITY_KEYS) for item in hashes if isinstance(item, dict)
-            ]
-        if data["next"] is not None:
-            reason = (
-                "an artifact item was deferred intact"
-                if stored.get("natural_deferred")
-                else "the call budget ended"
-            )
-            response_budget.append_hint(
-                data,
-                f"Analysis is partial because {reason}; continue with {_CONTINUE_CALL}, "
-                "or read the complete set through the Python API (ltspice_mcp.api).",
-            )
-        coverage = data.get("coverage")
-        missing_page = coverage.get("missing_cases") if isinstance(coverage, dict) else None
-        if isinstance(missing_page, dict) and missing_page.get("next_cursor") is not None:
-            response_budget.append_hint(data, _MISSING_CASES_HINT)
-        failures = data.get("failures")
-        has_failures = isinstance(failures, list) and bool(failures)
-        missing_total = int(missing_page.get("total", 0)) if isinstance(missing_page, dict) else 0
-        data["outcome"] = outcome_of(
-            has_failures,
-            partial=bool(missing_total) or data["next"] is not None,
-            delivered=bool(rendered_results) or data["next"] is not None,
-        )
     return data
 
 
-def analysis_surfaces(data: dict[str, Any]) -> list[list[Any]]:
-    """Every row surface this response is showing, one row list apiece.
-
-    Every surface :meth:`_Limits.capped` shrinks appears here, and nothing else
-    does. A spec-heavy or group_by-heavy call is otherwise the size driver the
-    shrink rung neither measures nor touches, which degrades to budget_not_met
-    on a response the ladder could in fact have fitted. A recipe's ``reduced``
-    rows are not a surface: they are the answer, no limit shrinks them, and
-    counted as rows they would price the envelope cheaper than it is. An
-    attached analysis is shrunk by :func:`render_attached_analysis`'s
-    ``row_limit`` instead, over the same surfaces.
-    """
-    surfaces = [rows for entry in data["results"].values() for rows in _entry_surfaces(entry)]
-    surfaces.append(data["coverage"]["missing_cases"]["items"])
-    return surfaces
-
-
-def _entry_surfaces(entry: dict[str, Any]) -> list[list[Any]]:
-    """One recipe entry's row surfaces, as :func:`analysis_surfaces` counts them."""
-    surfaces: list[list[Any]] = [entry.get("values", []), entry.get("groups", [])]
-    per_run = entry.get("per_run")
-    if isinstance(per_run, dict):
-        surfaces.append(per_run["items"])
-    spec = entry.get("spec")
-    if isinstance(spec, dict):
-        surfaces.append(spec["fail_cases"]["items"])
-    return surfaces
+def for_session(answer: Mapping[str, Any], served: Collection[str]) -> dict[str, Any]:
+    """The complete answer as an MCP session receives it: its failures
+    collapsed to one row per reason and held to ``_FAILURE_CAP`` rows, with
+    the note that names the rest, and each ``api`` snippet's message saying
+    where it runs (``served``, the session's tools)."""
+    data = dict(answer)
+    failures = [_failure_of(row) for row in answer.get("failures") or ()]
+    rows = _collapse_failures(failures, served)
+    if len(rows) > _FAILURE_CAP:
+        counts = {"rows": len(rows), "records": len(failures)}
+        data["observations"] = [
+            *answer.get("observations", []),
+            Observation(
+                code="failures_truncated",
+                kind="coverage",
+                detail=_failures_truncated_detail(counts, served),
+            ).wire(),
+        ]
+        rows = rows[:_FAILURE_CAP]
+    data["failures"] = rows
+    data["observations"] = _bounded_evidence(data)
+    return data
 
 
-# Rung 0's allowlist, declared as data rather than spelled inside the ``if``
-# that applies it: a rung that exempts content is the one place a checker can
-# silently lose coverage, so it has to be a list a test can read. ``_EMPTY_``
-# names the blocks the rung empties, which the reply then leaves out — pinned
-# against this tool's own schema by tests/test_response_budget.py. A block that
-# is already empty needs no entry: every reply leaves it out.
-# The identity echo is the audit trail, not the way back — rows carry their own
-# source label and case_id, and a run is addressed by manifest_id and job_id.
-_TRIM_EMPTY_ENVELOPE: tuple[str, ...] = ("source_hashes",)
-
-
-def trim_analysis(data: dict[str, Any], *, keep_provenance: bool = False) -> list[str]:
-    """Rung 0 over one analysis envelope; returns the keys it emptied of content.
-
-    Public because an analysis attached to an experiment is this envelope too,
-    and the receipt carrying it trims it by this tool's own allowlists rather
-    than a copy of them. ``keep_provenance`` leaves the identity echo standing.
-    Nothing below touches failures, observations, warnings, completeness or
-    spec verdicts.
-
-    Idempotent, so the ladder may re-apply it to an envelope it already
-    degraded on the way down.
-    """
-    if keep_provenance:
-        return []
-    return response_budget.apply_trim(data, _TRIM_EMPTY_ENVELOPE)
-
-
-#: The fewest points a budget thins an inline series to: sixteen buckets, each
-#: its minimum and maximum, still draw the shape of a transient.
-THIN_FLOOR_POINTS = 32
-
-_THINNED_WARNING = (
-    "Inline series thinned to {shown} of {total} points per signal, keeping each "
-    "bucket's minimum and maximum, to fit the response budget. {route}"
-)
-
-
-def _sample_rows(entry: dict[str, Any]) -> list[dict[str, Any]]:
-    """The rows of one rendered waveform entry whose value carries inline samples."""
-    return [
-        row
-        for rows in _entry_surfaces(entry)
-        for row in rows
-        if isinstance(row, dict)
-        and isinstance(value := row.get("value"), dict)
-        and value.get("format") == "inline"
-        and isinstance(value.get("x"), list)
-        and value["x"]
-        and isinstance(value.get("series"), list)
-    ]
+def _bounded_evidence(answer: Mapping[str, Any]) -> list[Any]:
+    """The answer's observations, each lifted from a recipe's rows
+    (:func:`_value_observations`) naming at most :data:`not_shown.NAMED` of
+    them, with ``row_count`` the number it was made of; one every row of its
+    recipe carries names none. ``observations`` is never cut, so this is its
+    bound on an MCP reply; the Python API keeps every row."""
+    counts = {_recipe_of(pointer): len(rows) for pointer, rows in _row_lists(answer).items()}
+    bounded: list[Any] = []
+    for observation in answer.get("observations") or ():
+        evidence = observation.get("evidence") if isinstance(observation, Mapping) else None
+        if not isinstance(evidence, Mapping):
+            bounded.append(observation)
+            continue
+        rows, recipe = evidence.get("rows"), evidence.get("recipe")
+        if not isinstance(rows, list) or not isinstance(recipe, str):
+            bounded.append(observation)
+            continue
+        kept: dict[str, Any] = dict(evidence)
+        kept["row_count"] = len(rows)
+        if rows and len(rows) >= counts.get(recipe, len(rows) + 1):
+            kept.pop("rows")
+            kept["every_row"] = True
+        else:
+            kept["rows"] = rows[: not_shown.NAMED]
+        bounded.append({**observation, "evidence": kept})
+    return bounded
 
 
 @dataclass(frozen=True)
@@ -4030,213 +3635,436 @@ class _StoredSamples:
         return {**self.value, "x": kept.tolist(), "series": series, "points_returned": len(kept)}
 
 
-def fit_waveform_samples(
-    page: dict[str, Any],
-    results: dict[str, Any],
-    rung: response_budget.Rung,
-    keys: Iterable[str],
-    route: str,
-) -> None:
-    """Thin the inline waveform samples of ``results``' ``keys`` until ``page`` fits.
-
-    ``results`` is the results map of an analysis envelope inside ``page``: the
-    envelope itself, or a receipt's attached analysis. The samples of an inline
-    waveform are already a bounded min/max decimation, so drawing it with fewer
-    buckets is presentation, and cuts no fact; ``points_total`` still counts
-    every sample. One point limit caps every series, at the largest that fits
-    the rung's body budget, and never below :data:`THIN_FLOOR_POINTS`; the
-    search starts where :meth:`RowMeasure.affordable` prices it, each series
-    counted as a surface of points. A row's value is replaced, never edited,
-    because a rendered row shares its value with the record behind it. Each
-    recipe thinned says so in its warnings, with ``route`` to the rest.
-    """
-    found: list[tuple[dict[str, Any], list[dict[str, Any]]]] = []
-    for key in keys:
-        entry = results.get(key)
-        if (
-            isinstance(entry, dict)
-            and entry.get("metric") == "waveform"
-            and (rows := _sample_rows(entry))
-        ):
-            found.append((entry, rows))
-    if not found:
-        return
-    measured = response_budget.estimate_tokens(page)
-    if measured <= rung.body_budget:
-        return
-    held = [
-        (
-            entry,
-            list(entry.get("warnings", [])),
-            [(row, _StoredSamples.of(row["value"])) for row in rows],
-        )
-        for entry, rows in found
-    ]
-    stored = [samples for _entry, _warnings, rows in held for _row, samples in rows]
-    if max(len(samples.x) for samples in stored) <= THIN_FLOOR_POINTS:
-        return
-    measure = response_budget.RowMeasure(
-        tuple(
-            (
-                len(samples.x),
-                response_budget.estimate_tokens(
-                    [samples.value["x"], samples.value["series"]], as_sent=False
-                ),
-            )
-            for samples in stored
-        ),
-        page=measured,
-    )
-
-    @functools.cache
-    def thinned(limit: int) -> tuple[dict[str, Any], ...]:
-        return tuple(samples.at(limit) for samples in stored)
-
-    def fits(limit: int) -> bool:
-        values = iter(thinned(limit))
-        # The warning a thinned recipe carries is part of the page it fits.
-        for entry, warnings, rows in held:
-            entry["warnings"] = list(warnings)
-            for row, _samples in rows:
-                row["value"] = next(values)
-            if any(row["value"] is not samples.value for row, samples in rows):
-                entry["warnings"].append(
-                    _THINNED_WARNING.format(
-                        shown=max(row["value"]["points_returned"] for row, _samples in rows),
-                        total=max(samples.value["points_total"] for _row, samples in rows),
-                        route=route,
-                    )
-                )
-        return response_budget.estimate_tokens(page) <= rung.body_budget
-
-    start = max(THIN_FLOOR_POINTS, measure.affordable(rung))
-    fits(response_budget.largest_fitting(start, fits, floor=THIN_FLOOR_POINTS))
+# ---------------------------------------------------------------------------
+# What a reply says of the rows it left out
+# ---------------------------------------------------------------------------
 
 
-#: Where a caller reads more of a thinned waveform, by the rung that thinned it.
-#: Below the answer rung only an unsized waveform is thinned, and the caller
-#: may have set no budget, so the route is the recipe's own arguments.
-_THINNED_ROUTE_UNSIZED = "Set max_points to keep a count, or format 'csv' to write every sample."
-_THINNED_ROUTE_ANY = "A larger 'budget' keeps more, and format 'csv' writes every sample."
-
-
-def unsized_waveforms(recipes: Iterable[Recipe]) -> frozenset[str]:
-    """The keys of the inline waveform recipes whose call set no ``max_points``,
-    which a budget may thin below the answer rung.
-
-    A count the caller wrote, even the default one, is their opt-in. The result
-    set stores each recipe as the caller sent it, so a continuation still
-    knows which fields were written.
-    """
-    return frozenset(
-        recipe.key
-        for recipe in recipes
-        if isinstance(recipe, WaveformRecipe)
-        and recipe.format == "inline"
-        and "max_points" not in recipe.model_fields_set
-    )
-
-
-def _degrade_analysis(
-    data: dict[str, Any],
-    rung: response_budget.Rung,
-    *,
-    preserve_provenance: bool,
-    unsized: frozenset[str],
-) -> list[str]:
-    """Apply the budget ladder's in-place trim rung to this envelope.
-
-    Returns the keys it emptied of content, for the rung's note. The answer
-    rung and the shrink rung are not here: revoking an opt-in changes what gets
-    computed, and shrinking a page has to happen before its cursor is minted,
-    so both are inputs to :func:`_assemble` instead.
-
-    Then thins inline waveform samples until the page fits: below the answer
-    rung only the ``unsized`` ones, whose point count is the server's default
-    rather than the caller's, and from the answer rung on every one. Thinning a
-    row's samples moves no cursor, so it can follow assembly where shrinking a
-    page cannot.
-    """
-    if not rung.trim:
+def row_kinds(row: Mapping[str, Any]) -> list[str]:
+    """The kinds of fact a row's value states: each diagnostic's code, what
+    of its log was not read, and each field naming a measurement that gave no
+    value."""
+    value = row.get("value")
+    if not isinstance(value, Mapping):
         return []
-    # An explicit include.provenance is a caller opt-in, and the trim rung's
-    # charter is to revoke none — so below the answer rung (the rung whose
-    # documented job IS revoking opt-ins) an enriched identity echo survives.
-    # Once the answer rung has revoked the opt-in, emptying the echo is the
-    # ladder working as specified, not a second revocation.
-    keep = preserve_provenance and not rung.answer_channel
-    cut = trim_analysis(data, keep_provenance=keep)
-    results = data["results"]
-    if rung.answer_channel:
-        fit_waveform_samples(data, results, rung, list(results), _THINNED_ROUTE_ANY)
-    else:
-        fit_waveform_samples(data, results, rung, unsized, _THINNED_ROUTE_UNSIZED)
-    return cut
+    kinds = [
+        f"diagnostics.{entry.get('code')}"
+        for entry in value.get("diagnostics") or ()
+        if isinstance(entry, Mapping)
+    ]
+    if value.get("diagnostics_coverage"):
+        kinds.append(f"diagnostics_coverage.{value['diagnostics_coverage']}")
+    kinds.extend(key for key in _ROW_FACT_KINDS if value.get(key))
+    return kinds
 
 
-#: This tool's budget epilogue. No hint mirror: an analyze ``hint`` is the resume
-#: route for a partial call, and the ladder's own note reaches the caller on
-#: ``observations`` without displacing it.
-_BUDGET_NOTES = response_budget.Notes(
-    cut=(
-        "presentation was reduced; every recipe that produced a result "
-        "still has one, and its reductions and spec verdict are intact."
-    ),
-    # The ladder holds back room for a route of 160 characters
-    # (response_budget.NOTE_RESERVE_TOKENS).
-    route=f"Ask again with a larger 'budget', or continue with {_CONTINUE_CALL}.",
-    default_route=(
-        "Each row still names its source by manifest_id and label; "
-        "include.provenance keeps source_hashes."
-    ),
+def _row_identity(_index: int, row: Mapping[str, Any]) -> dict[str, Any]:
+    """What names a row left out: the source, case, run and step it reads."""
+    return {
+        key: row.get(key)
+        for key in ("source", "case_id", "run_index", "step_index")
+        if row.get(key) is not None
+    }
+
+
+def _kind_vocabulary() -> list[str]:
+    """Every kind :func:`row_kinds` can give an analysis row: a log's, and
+    the facts a row's value states."""
+    return [*not_shown.log_kinds(), *_ROW_FACT_KINDS]
+
+
+#: The most ``rows_not_shown`` takes, in estimated tokens: every kind counted
+#: in one recipe and in the recipes summed after it, and three rows named by
+#: identities and a cursor of ordinary length (``lib/not_shown.py``).
+ROWS_NOT_SHOWN_BOUND_TOKENS: int = not_shown.worst_bound(
+    _kind_vocabulary(),
+    identity={"source": "s" * 32, "case_id": "c" * 48, "run_index": 999_999, "step_index": 9999},
+    cursor="c" * 160,
+    field="rows_not_shown",
+    entries="rows",
+    group="k" * 32,
+    folded=True,
 )
 
 
-async def _negotiate_analysis(budget: ResponseBudget, a: AnalysisEvaluation) -> dict[str, Any]:
-    """Assemble this analysis at the mildest ladder rung that fits ``budget``.
+def _row_lists(answer: Mapping[str, Any]) -> dict[str, list[Any]]:
+    """Each recipe's rows, by the pointer of the list that holds them: its
+    ``per_run`` page when it has one, else its ``values``. The one answer to
+    which lists of this tool's answer hold rows (:func:`_is_row_list`)."""
+    found: dict[str, list[Any]] = {}
+    results = answer.get("results")
+    for key, entry in results.items() if isinstance(results, Mapping) else ():
+        if not isinstance(entry, Mapping):
+            continue
+        per_run = entry.get("per_run")
+        if isinstance(per_run, Mapping) and isinstance(per_run.get("items"), list):
+            found[join_pointer(("results", key, "per_run", "items"))] = per_run["items"]
+        elif isinstance(entry.get("values"), list):
+            found[join_pointer(("results", key, "values"))] = entry["values"]
+    return found
 
-    Assembly re-renders finished work, so the shrink rung checks the page its
-    estimate priced and searches below it when that page is still over.
-    """
-    base = _Limits.of(a.include)
-    rendered: dict[str, Any] = {}
-    degrade = functools.partial(
-        _degrade_analysis,
-        preserve_provenance=a.include.provenance,
-        # Rows projected by include.fields are the caller's own opt-in.
-        unsized=(
-            frozenset()
-            if a.include.fields is not None
-            else unsized_waveforms(unit.recipe for unit in a.processed)
-        ),
+
+def _is_row_list(pointer: str) -> bool:
+    """Whether ``pointer`` names a list :func:`_row_lists` may give: a
+    recipe's ``per_run`` page or its ``values``."""
+    keys = split_pointer(pointer)
+    return (
+        len(keys) >= 3 and keys[0] == "results" and keys[2:] in (["per_run", "items"], ["values"])
     )
 
-    def candidate(limits: _Limits, rung: response_budget.Rung) -> response_budget.Rendered:
-        data = _assemble(a, rung, limits)
-        return data, degrade(data, rung)
 
-    async def render(rung: response_budget.Rung) -> dict[str, Any]:
-        nonlocal rendered
-        if rung.shrink:
-            rendered, cut = response_budget.shrink_to_fit(
-                response_budget.RowMeasure.of(analysis_surfaces(rendered), page=rung.measured),
-                lambda limit: candidate(base.capped(limit), rung),
-                rung,
-                # Its per_run and missing-cases pages continue themselves.
-                floor=1,
+def _recipe_of(pointer: str) -> str:
+    """The recipe key a ``/results/<key>/...`` pointer names."""
+    return split_pointer(pointer)[1]
+
+
+# ---------------------------------------------------------------------------
+# How a reply of this tool is presented
+# ---------------------------------------------------------------------------
+
+TOOL = "analyze_results"
+
+#: The lists of a waveform's value the presenter thins together.
+_SERIES_KEYS = ("x", "series")
+
+#: How each list this tool cuts is said on the page object that holds it.
+_PAGED = ("/per_run/items", "/missing_cases/items", "/fail_cases/items")
+
+#: The call that reads the rest of a cut reply: a cut entry's next, with the
+#: reply's result_set_id.
+_READ_ON = call_to_continue(
+    "analyze_results",
+    {
+        "continue": {
+            "result_set_id": Unfilled("result_set_id"),
+            "cursor": Unfilled("a cut entry's next"),
+        }
+    },
+)
+
+_THINNED_WARNING = (
+    "Inline series thinned to {shown} of {total} points per signal, keeping each "
+    "bucket's minimum and maximum, to fit the reply. analyze_results with "
+    "budget {whole} sends every point, and format 'csv' writes every sample to a file."
+)
+
+
+def _say_how_to_read_fail_cases(entry: ListCut) -> str | None:
+    """What a cut ``spec.fail_cases``, which has no next_cursor of its own,
+    says beside its flag: the call that reads the rest, or why none does."""
+    if not entry.left_out:
+        return None
+    if entry.next is None:
+        # Cut with no cursor: the answer was not kept.
+        return not_sent({"failing cases": entry.after}, kept=False)
+    return f"{entry.after} more failing case(s); read them with {_READ_ON}."
+
+
+def answer_caps(
+    answer: Mapping[str, Any], snapshot: Mapping[str, Any], *, target: int | None
+) -> dict[str, int]:
+    """The most entries an MCP reply sends of each list of ``answer``: a
+    recipe's ``per_run`` page at the request's ``include.per_run.limit``
+    (``snapshot``), which is part of the question, and, with no target, a
+    ``per_run`` page at :data:`ROWS_WITHOUT_TARGET`, ``spec.fail_cases`` at
+    ``_FAIL_CASE_PAGE_CAP`` and every other list the presenter may cut at
+    :data:`MAX_PAGE_SIZE`, so no list of a reply with no target is unbounded
+    (every other list is declared never cut, with its bound)."""
+    caps: dict[str, int] = {}
+    limit = snapshot.get("per_run_limit")
+    results = answer.get("results")
+    for key, entry in results.items() if isinstance(results, Mapping) else ():
+        if not isinstance(entry, Mapping):
+            continue
+        if isinstance(limit, int) and isinstance(entry.get("per_run"), Mapping):
+            caps[join_pointer(("results", key, "per_run", "items"))] = limit
+        if target is None:
+            caps[join_pointer(("results", key, "values"))] = MAX_PAGE_SIZE
+            caps[join_pointer(("results", key, "spec", "fail_cases", "items"))] = (
+                _FAIL_CASE_PAGE_CAP
             )
-        elif rung.level == response_budget.RUNG_TRIM:
-            # The undegraded rung assembled this same page; degrade it in place.
-            cut = degrade(rendered, rung)
-        else:
-            rendered, cut = candidate(base, rung)
-        rung.cut.extend(cut)
-        return rendered
+            caps.setdefault(
+                join_pointer(("results", key, "per_run", "items")), ROWS_WITHOUT_TARGET
+            )
+    if target is None:
+        for pointer, _kind in cuttable_lists(answer, OUTPUT_SCHEMA):
+            caps.setdefault(pointer, MAX_PAGE_SIZE)
+    return caps
 
-    assert budget.tokens is not None  # the undegraded path never reaches here
-    result = await response_budget.negotiate(budget.tokens, render, max_rung=budget.max_rung)
-    response_budget.attach_notes(result, _BUDGET_NOTES)
-    return result.data
+
+def _row_facts(whole: Mapping[str, Any]) -> dict[str, not_shown.Facts]:
+    return {
+        pointer: not_shown.Facts.of(rows, row_kinds, _row_identity)
+        for pointer, rows in _row_lists(whole).items()
+    }
+
+
+def say_what_was_cut(
+    whole: Mapping[str, Any],
+) -> tuple[Annotate, dict[str, int]]:
+    """The words a cut of ``whole``, a complete answer of this tool, adds,
+    and the bound ``rows_not_shown`` reserves of the target.
+
+    Each page object (a recipe's ``per_run``, ``coverage.missing_cases``,
+    ``spec.fail_cases``) says what the cut holds of it; the reply's ``next``
+    and ``cursor`` name the first cut list's cursor; ``rows_not_shown``
+    names, by recipe, the rows left out that carry a fact, each with a
+    cursor that starts at it (``lib/not_shown.py``); a thinned series says
+    so on its recipe's warnings."""
+    facts = _row_facts(whole)
+
+    @functools.cache
+    def whole_size() -> int:
+        # The target at which the presenter sends this answer whole.
+        return estimate_tokens(dict(whole))
+
+    def part(cut: Mapping[str, ListCut], stored: StoredAnswer | None) -> dict[str, Any]:
+        groups: dict[str, not_shown.LeftOut] = {}
+        for pointer, table in facts.items():
+            entry = cut.get(pointer)
+            if entry is None or not entry.left_out:
+                continue
+            groups[_recipe_of(pointer)] = not_shown.LeftOut(
+                table,
+                entry.offset + entry.returned,
+                (lambda index, at=pointer: stored_cursor(stored, at, index))
+                if stored is not None
+                else (lambda _index: None),
+            )
+        return not_shown.not_shown(
+            groups, bound=ROWS_NOT_SHOWN_BOUND_TOKENS, field="rows_not_shown", entries="rows"
+        )
+
+    def annotate(
+        reply: dict[str, Any],
+        cut: Mapping[str, ListCut],
+        stored: StoredAnswer | None,
+        paged: str | None,
+    ) -> None:
+        # The reply's next: on a page, the cursor that reads on in the list it
+        # reads, absent on its last page, so following it ends; on a first
+        # reply, the first cut list's.
+        read_on: str | None = None
+        if paged is not None:
+            entry = cut.get(paged)
+            read_on = entry.next if entry is not None else None
+        else:
+            read_on = next((entry.next for entry in cut.values() if entry.next), None)
+        for pointer, entry in cut.items():
+            keys = split_pointer(pointer)
+            holder = join_pointer(keys[:-1])
+            if pointer.endswith(_PAGED):
+                page = resolve_pointer(reply, holder, default=None)
+                if isinstance(page, dict):
+                    page = _owned(reply, holder)
+                    page["returned"] = entry.returned
+                    page["truncated"] = entry.left_out
+                    if "next_cursor" in page or pointer.endswith(_PAGED[:2]):
+                        page["next_cursor"] = entry.next
+                    if pointer.endswith("/fail_cases/items"):
+                        said = _say_how_to_read_fail_cases(entry)
+                        if said:
+                            page["hint"] = said
+                        else:
+                            page.pop("hint", None)
+                    elif entry.left_out and entry.next is None:
+                        page["hint"] = not_sent({"entries": entry.after}, kept=False)
+            elif keys[-2:-1] == ["value"] and keys[-1] in _SERIES_KEYS:
+                # A series thinned: said once on its recipe.
+                recipe = _owned(reply, join_pointer(keys[:2]))
+                said = _THINNED_WARNING.format(
+                    shown=entry.returned, total=entry.total, whole=whole_size()
+                )
+                warnings = list(recipe.get("warnings", []))
+                if not any(text.startswith("Inline series thinned") for text in warnings):
+                    recipe["warnings"] = [*warnings, said]
+        left_out = part(cut, stored)
+        if left_out:
+            reply["rows_not_shown"] = left_out
+        if stored is not None:
+            _point_evidence_at_rows(reply, cut, stored)
+        if read_on is not None:
+            reply["cursor"] = read_on
+            reply["next"] = {"result_set_id": reply["result_set_id"], "cursor": read_on}
+            sentence = f"This reply is cut: read the rest with {_READ_ON}."
+            hint = reply.get("hint")
+            reply["hint"] = f"{sentence} {hint}" if hint else sentence
+
+    reserve = 0
+    first = part({p: ListCut(len(rows), 1) for p, rows in _row_lists(whole).items()}, None)
+    if first:
+        reserve = min(
+            estimate_tokens({"rows_not_shown": first}) + not_shown.RESERVE_MARGIN,
+            ROWS_NOT_SHOWN_BOUND_TOKENS,
+        )
+    return annotate, ({"rows_not_shown": reserve} if reserve else {})
+
+
+def _point_evidence_at_rows(
+    reply: dict[str, Any], cut: Mapping[str, ListCut], stored: StoredAnswer
+) -> None:
+    """Give each row an observation names (``evidence.rows``) the cursor that
+    starts at it, when its recipe's rows are cut."""
+    lists = {_recipe_of(pointer): pointer for pointer in cut if _is_row_list(pointer)}
+    if not lists:
+        return
+    observations = []
+    for observation in reply.get("observations") or ():
+        evidence = observation.get("evidence") if isinstance(observation, Mapping) else None
+        if not isinstance(evidence, Mapping):
+            observations.append(observation)
+            continue
+        pointer = lists.get(str(evidence.get("recipe")))
+        rows = evidence.get("rows")
+        if pointer is None or not isinstance(rows, list):
+            observations.append(observation)
+            continue
+        named = [
+            {**row, "cursor": stored_cursor(stored, pointer, row["index"])}
+            if isinstance(row, Mapping) and isinstance(row.get("index"), int)
+            else row
+            for row in rows
+        ]
+        observations.append({**observation, "evidence": {**evidence, "rows": named}})
+    reply["observations"] = observations
+
+
+def _owned(reply: dict[str, Any], pointer: str) -> dict[str, Any]:
+    """The object at ``pointer`` in ``reply``, copied with every object on
+    the way to it, so writing it leaves the answer it was cut from as it is."""
+    node = reply
+    for key in split_pointer(pointer):
+        node[key] = dict(node[key])
+        node = node[key]
+    return node
+
+
+def redraw_series(holder: dict[str, Any], points: int) -> dict[str, Any]:
+    """One inline waveform value at no more than ``points`` points, its axis
+    and every series thinned together, each bucket's minimum and maximum
+    kept (``Series``)."""
+    if not isinstance(holder.get("x"), list) or not isinstance(holder.get("series"), list):
+        return holder
+    return _StoredSamples.of(holder).at(points)
+
+
+#: The fewest points a reply thins an inline series to: sixteen buckets, each
+#: its minimum and maximum, still draw the shape of a transient.
+THIN_FLOOR_POINTS = 32
+
+#: How the presenter thins this tool's waveforms.
+SERIES = Series(redraw_series, THIN_FLOOR_POINTS)
+
+
+def analysis_answer(
+    answer: Mapping[str, Any],
+    snapshot: dict[str, Any],
+    *,
+    root: str = "",
+    target: int | None,
+    whole: bool = False,
+) -> Answer:
+    """``answer``, a complete answer of this tool as a session receives it,
+    as one answer the presenter presents at ``root``: its caps (none for the
+    Python API's ``whole``), its words and its reserve."""
+    annotate, apart = say_what_was_cut(answer)
+    return Answer(
+        root,
+        OUTPUT_SCHEMA,
+        TOOL,
+        snapshot,
+        annotate=annotate,
+        caps=None if whole else answer_caps(answer, snapshot, target=target),
+        apart=apart,
+    )
+
+
+@dataclass(frozen=True)
+class StoredAnalysis:
+    """An attached analysis as a job keeps it: the complete answer with its
+    rows unprojected, what it was computed from, and the request it answers
+    without its row view, which each delivery chooses."""
+
+    answer: dict[str, Any]
+    snapshot: dict[str, Any]
+    request: dict[str, Any]
+
+
+class AttachedAnalysisNotRendered(ResultError):
+    """A job's attached analysis this release does not render: one an
+    earlier release stored, told by its version."""
+
+    code = "attached_analysis_not_rendered"
+
+
+#: The code of the note that replaces such an analysis in a receipt.
+NOT_RENDERED_CODE: Final = AttachedAnalysisNotRendered.code
+
+#: What the receipt says of an attached analysis it does not render, by
+#: ``analysis_snapshot.classify``'s verdict.
+_NOT_RENDERED: Final = {
+    "earlier": "was stored by an earlier release",
+    "later": "was stored by a later release",
+    "damaged": "is damaged: its record is of this release but holds no answer it can render",
+}
+
+
+def stored_analysis(stored: Any) -> StoredAnalysis:
+    """The attached analysis a job's record holds, or
+    :class:`AttachedAnalysisNotRendered`, saying why, for one
+    ``analysis_snapshot.classify`` says this build does not render."""
+    verdict = analysis_snapshot.classify(stored)
+    if verdict != "snapshot":
+        raise AttachedAnalysisNotRendered(
+            f"The attached analysis {_NOT_RENDERED[verdict]}; this release does not render "
+            "it. Run analyze_results over the job with the same recipes for its answer."
+        )
+    return StoredAnalysis(
+        stored["answer"], dict(stored.get("snapshot") or {}), dict(stored.get("request") or {})
+    )
+
+
+def attached_snapshot(stored: Any, fields: list[str] | None) -> dict[str, Any]:
+    """What an attached analysis delivered in the row view ``fields`` was
+    computed from: its snapshot, naming the request an ``analyze_results``
+    call over the job with that view sends."""
+    held = stored_analysis(stored)
+    request = copy.deepcopy(held.request)
+    include = request.get("include")
+    if isinstance(include, dict):
+        include["fields"] = fields
+    return {**held.snapshot, "request": result_store.canonical_hash(request)[:32]}
+
+
+def render_attached_analysis(
+    stored: Any,
+    *,
+    fields: list[str] | None = None,
+    served: Collection[str] | None = None,
+) -> dict[str, Any]:
+    """The attached analysis a job's record holds, as a door gives it: its
+    rows in the row view ``fields`` (None: the lean rows), to an MCP session
+    (``served``, its tools) or, with None, to the Python API. It is the
+    complete answer a later ``analyze_results`` call with the same request
+    over the finished job gives."""
+    held = stored_analysis(stored)
+    answer = copy.deepcopy(held.answer)
+    for entry in (answer.get("results") or {}).values():
+        if not isinstance(entry, dict):
+            continue
+        render = _row_renderer(fields, metric=str(entry.get("metric") or ""))
+        per_run = entry.get("per_run")
+        rows = per_run.get("items") if isinstance(per_run, dict) else entry.get("values")
+        if not isinstance(rows, list):
+            continue
+        shown = [render(row) for row in rows]
+        if isinstance(per_run, dict):
+            per_run["items"] = shown
+        else:
+            entry["values"] = shown
+        if fields and rows:
+            entry["warnings"] = [*entry.get("warnings", []), *_projection_warnings(rows, fields)]
+    return for_api(answer) if served is None else for_session(answer, served)
 
 
 async def _evaluate_unit(
@@ -4253,7 +4081,6 @@ async def _evaluate_unit(
     steps: StepSelection,
     captures: MutableMapping[_CaptureKey, ParsedArtifacts],
     *,
-    per_run_offset: int,
     position: int,
 ) -> WorkUnit:
     """Evaluate one recipe over the runs that survived the source precheck.
@@ -4331,7 +4158,6 @@ async def _evaluate_unit(
         failures=failures,
         pending=pending,
         eligible_ids={run.manifest_id for run in eligible_runs},
-        per_run_offset=per_run_offset,
         position=position,
         observations=observations,
     )
@@ -4357,6 +4183,24 @@ def _discard_drifted(
         }
         if not relevant:
             continue
+        # An observation names its rows by their position in the unit's rows
+        # (_value_observations), so the positions follow the rows kept.
+        positions = {
+            old: new
+            for new, old in enumerate(
+                index
+                for index, record in enumerate(unit.records)
+                if record.manifest_id not in failed_ids
+            )
+        }
+        for observation in unit.observations:
+            evidence = observation.evidence
+            if isinstance(evidence, dict) and isinstance(evidence.get("rows"), list):
+                evidence["rows"] = [
+                    {**row, "index": positions[row["index"]]}
+                    for row in evidence["rows"]
+                    if isinstance(row, dict) and row.get("index") in positions
+                ]
         unit.records = [record for record in unit.records if record.manifest_id not in failed_ids]
         unit.failures.extend(
             Failure(
@@ -4371,7 +4215,7 @@ def _discard_drifted(
 
 
 async def _publish_unit_artifacts(
-    processed: list[WorkUnit], pending: list[_PendingArtifact], deadline: float
+    processed: list[WorkUnit], pending: list[_PendingArtifact]
 ) -> None:
     """Publish every surviving artifact once and hand each record its handle.
 
@@ -4381,7 +4225,7 @@ async def _publish_unit_artifacts(
     that fails takes the temps with it and marks only the units that had one.
     """
     try:
-        handles = await _publish(pending, deadline)
+        handles = await _publish(pending)
     except (LTSpiceMCPError, OSError) as exc:
         await asyncio.to_thread(_remove_pending, pending)
         code = (
@@ -4403,174 +4247,331 @@ async def _publish_unit_artifacts(
                 artifact.update(by_path[artifact["path"]])
 
 
-@dataclass(frozen=True)
-class _PageStop:
-    """Stop the drive once one per_run page of a recipe is filled.
+def _request_digest(args: AnalyzeResultsInput) -> str:
+    """The request a stored answer answers, by digest: its sources, recipes,
+    grouping, step selection and include options, row view included
+    (:func:`attached_snapshot` names an attached analysis' the same way)."""
+    return result_store.canonical_hash(_request_inputs(args))[:32]
 
-    One object rather than a flag plus a limit, because the limit means nothing
-    without the stop: a reservoir size handed to a drive that runs to
-    completion would silently change nothing. ``reservoir`` overrides the
-    caller's requested page size for THIS evaluation only — the result set
-    keeps the requested limit, so the cursor it mints resumes that view.
+
+async def evaluate_analysis(args: AnalyzeResultsInput, state: SessionState) -> AnalysisEvaluation:
+    """Evaluate every recipe of a new request over its sources.
+
+    ``[analysis] analysis_budget_s`` bounds the whole call: reading the
+    sources, the check before the reads, every recipe, the check after them
+    and the signal listing. A step gets what is left of the bound (at least
+    ``_MIN_ITEM_DEADLINE_S``, so a check of what was read always runs); a
+    recipe that runs out of it fails with ``analysis_deadline``, and each
+    recipe the bound leaves no time for fails alone with the same code,
+    saying to ask for it in a call of its own. Nothing here knows a page, a
+    cursor or a reply size.
     """
+    loop = asyncio.get_running_loop()
+    budget_s = state.config.analysis_budget_s
+    call_deadline = loop.time() + budget_s
 
-    reservoir: int | None = None
+    def step_deadline() -> float:
+        return loop.time() + max(_MIN_ITEM_DEADLINE_S, call_deadline - loop.time())
 
+    # RAW recipes share one resolved step plan per source per call.
+    step_plans: dict[tuple[_CaptureKey, int], _RawStepPlan] = {}
+    # Share only while the bounded result cache or an active reader owns it.
+    captures: WeakValueDictionary[_CaptureKey, ParsedArtifacts] = WeakValueDictionary()
 
-@dataclass
-class _DriveStart:
-    """Where a drive begins: the immutable set and the position within it."""
-
-    item: result_store.ResultSet
-    position: int
-    intra_item: int
-    missing_offset: int
-    include: AnalyzeInclude
-    #: Resumed from a cursor or continuation a caller handed back: the set may
-    #: have been written by an earlier call, so its sources are checked by
-    #: content where it recorded digests.
-    resumed: bool = False
-
-
-#: The request fields a ``continue`` call may echo, each with the key the
-#: result set stores it under; it replays them, so a copy is accepted only when
-#: it is the same request.
-_CONTINUATION_ECHO_KEYS = {
-    "sources": "sources",
-    "recipes": "work",
-    "include": "include",
-    "group_by": "group_by",
-    "step": "step",
-    "all_steps": "all_steps",
-}
-
-
-def _continuation_echo_mismatch(args: AnalyzeResultsInput, item: result_store.ResultSet) -> None:
-    """Refuse request fields sent with ``continue`` that differ from the stored request.
-
-    Each field is compared in the form the result set stored it, so the
-    original call resent with ``continue`` passes, and one that changes a
-    source, a recipe, the grouping, the step selection or an include option is
-    refused, naming what changed.
-    """
-    supplied = _CONTINUATION_ECHO_KEYS.keys() & args.model_fields_set
-    if not supplied:
-        return
-    sent = _request_inputs(args)
-    stored = {**item.inputs, "work": item.work}
-    changed = sorted(
-        name
-        for name in supplied
-        if sent[_CONTINUATION_ECHO_KEYS[name]] != stored.get(_CONTINUATION_ECHO_KEYS[name])
-    )
-    if changed:
-        raise ResultError(
-            "'continue' replays the stored request, and " + "/".join(changed) + " differ "
-            "from it. Resend them unchanged or leave them out; to change sources, "
-            "recipes, grouping, step selection or include options, start a new analysis."
-        )
-
-
-def _cursor_fields(cursor: str) -> list[str] | None:
-    """The row view a cursor was paged under, read as a request's
-    ``include.fields`` is, so a page continued from it projects what the page
-    that minted it did."""
-    fields = result_store.cursor_view(cursor)
-    if fields is None:
-        return None
-    try:
-        return list(dict.fromkeys(resolve_row_fields(fields)))
-    except ValueError as exc:
-        raise InvalidCursorError(f"Invalid analyze_results cursor: {exc}") from None
-
-
-async def _resolve_drive_start(
-    args: AnalyzeResultsInput,
-    state: SessionState,
-    continuation: AnalysisContinuationPosition | None,
-    loaded: result_store.ResultSet | None,
-    call_deadline: float,
-) -> _DriveStart:
-    """Load or create the result set this drive runs over, and find its start.
-
-    Four ways in — a neutral continuation, a fresh request, a caller cursor, and
-    a per_run page cursor — and each decides both the set and the position
-    inside it. Kept together because they are one decision: which of the four a
-    call is determines what may be validated (a page cursor must match the
-    request that minted it) and which view the drive inherits.
-    """
-    page_cursor = (
-        args.include.per_run.cursor
-        if args.continuation is None and args.include.per_run is not None
-        else None
-    )
-    cursor_fields: list[str] | None = None
-    inherited_view = False
-    resumed = False
-    if continuation is not None:
-        # The set is immutable, so a caller driving successive continuations can
-        # hand back the one it already holds instead of re-reading it per drive.
-        item = (
-            loaded
-            if loaded is not None and loaded.result_set_id == continuation.result_set_id
-            else await asyncio.to_thread(
-                result_store.load,
-                continuation.result_set_id,
-                state.working_dir,
-            )
-        )
-        position = continuation.work_index
-        intra_item = continuation.row_offset
-        missing_offset = continuation.missing_offset
-        inherited_view = True
-        cursor_fields = (
-            list(continuation.view_fields) if continuation.view_fields is not None else None
-        )
-    elif args.continuation is None and page_cursor is None:
-        item = await _create_result_set(args, state, call_deadline)
-        position = 0
-        intra_item = 0
-        missing_offset = 0
-    elif args.continuation is not None:
-        item = await asyncio.to_thread(
-            result_store.load,
-            args.continuation.result_set_id,
-            state.working_dir,
-        )
-        _continuation_echo_mismatch(args, item)
-        position, intra_item, missing_offset = result_store.decode_cursor(
-            args.continuation.cursor, item
-        )
-        inherited_view = True
-        resumed = True
-        cursor_fields = _cursor_fields(args.continuation.cursor)
-    else:
-        assert page_cursor is not None
-        item = await asyncio.to_thread(
-            result_store.load,
-            result_store.cursor_result_set_id(page_cursor),
-            state.working_dir,
-        )
-        inherited_view = True
-        resumed = True
-        cursor_fields = _cursor_fields(page_cursor)
-        if "fields" in args.include.model_fields_set and args.include.fields != cursor_fields:
-            raise InvalidCursorError(
-                "The per_run cursor carries a different include.fields view; replay "
-                "page 1 with the new fields projection instead of changing fields on "
-                "a cursor call."
-            )
-        if item.inputs.get("request_hash") != _request_hash(args):
-            raise InvalidCursorError(
-                "The per_run cursor does not match these sources, recipes, grouping, "
-                "and include options."
-            )
-        position, intra_item, missing_offset = result_store.decode_cursor(page_cursor, item)
-
+    item = await _create_result_set(args, state, call_deadline)
     include = AnalyzeInclude.model_validate(item.inputs.get("include", {}))
-    if inherited_view:
-        include = include.model_copy(update={"fields": cursor_fields})
-    return _DriveStart(item, position, intra_item, missing_offset, include, resumed)
+    runs = _deserialize_runs(item, state)
+    manifests = {str(manifest["manifest_id"]): manifest for manifest in item.source_manifests}
+    missing = list(item.inputs.get("missing", []))
+    skipped: list[tuple[int, Failure]] = []
+    observations = [Observation.of(data) for data in item.inputs.get("observations", [])]
+    group_by = list(item.inputs.get("group_by", []))
+    steps = StepSelection.from_inputs(item.inputs)
+    declared_labels = {
+        str(source.get("label"))
+        for source in item.inputs.get("sources", [])
+        if isinstance(source, dict)
+    }
+
+    # Source-drift precheck: verify every direct source before any recipe
+    # reads it. Recapture validates the stored parser identity, including
+    # console bytes and explicitly absent companions.
+    precheck = await _verify_direct_sources(
+        item.source_manifests,
+        {run.manifest_id for run in runs},
+        step_deadline(),
+        state=state,
+    )
+
+    processed: list[WorkUnit] = []
+    all_pending: list[_PendingArtifact] = []
+    evaluated_ids: set[str] = set()
+
+    for position, work_item in enumerate(item.work):
+        raw_recipe = work_item["recipe"]
+        key = str(raw_recipe.get("key") or f"recipe_{work_item['index']}")
+        try:
+            recipe = recipe_of_request(raw_recipe, declared_labels)
+        except (ValueError, TypeError) as exc:
+            skipped.append(
+                (
+                    position,
+                    Failure(
+                        code="recipe_invalid",
+                        stage="validate",
+                        where=f"recipes[{work_item['index']}]",
+                        message=validation_error_detail("analyze_results", exc),
+                    ),
+                )
+            )
+            continue
+        selected_runs = [
+            run for run in runs if recipe.sources is None or run.label in set(recipe.sources)
+        ]
+        if _artifact_estimate(recipe, selected_runs) > budget_s * _ARTIFACT_SAFETY_FACTOR:
+            skipped.append(
+                (
+                    position,
+                    Failure(
+                        code="artifact_too_large",
+                        stage="preflight",
+                        where=key,
+                        message=(
+                            "Artifact estimate exceeds the per-recipe safety bound. The "
+                            "bound uses raw file size and signal count rather than "
+                            "decoded sample counts, so request fewer signals or "
+                            "select fewer/smaller runs; narrowing the window or "
+                            "lowering max_points does not move it. A single large "
+                            "raw read for a single signal has no request-side lever "
+                            "— raise [analysis] analysis_budget_s "
+                            "(LTSPICE_MCP_ANALYSIS_BUDGET_S) instead."
+                        ),
+                    ),
+                )
+            )
+            continue
+        if loop.time() >= call_deadline:
+            skipped.append((position, _left_by_the_bound(key, budget_s)))
+            continue
+        unit = await _evaluate_unit(
+            recipe,
+            key,
+            selected_runs,
+            runs,
+            precheck,
+            manifests,
+            state,
+            item,
+            step_deadline(),
+            step_plans,
+            steps,
+            captures,
+            position=position,
+        )
+        evaluated_ids.update(unit.eligible_ids)
+        all_pending.extend(unit.pending)
+        processed.append(unit)
+
+    # Source-drift postcheck: verify every evaluated source before any
+    # artifact is published or results are returned. Drift discards the
+    # records and artifacts derived from that source across every recipe
+    # that used it.
+    postcheck_deadline = step_deadline()
+    checked_after = await _verify_direct_sources(
+        item.source_manifests,
+        evaluated_ids,
+        postcheck_deadline,
+        state=state,
+    )
+    # A source the check read and found changed loses what it gave. One the
+    # bound left the check no time to read again keeps its answered rows: the
+    # reply says it was not checked again (sources_not_rechecked).
+    postcheck = {
+        key: fault for key, fault in checked_after.items() if fault.code != "analysis_deadline"
+    }
+    not_rechecked = [
+        key for key, fault in checked_after.items() if fault.code == "analysis_deadline"
+    ]
+    if not_rechecked:
+        observations.append(_not_rechecked(runs, not_rechecked))
+    if postcheck:
+        failed_ids = set(postcheck)
+        await asyncio.to_thread(
+            _remove_pending,
+            [artifact for artifact in all_pending if artifact.manifest_id in failed_ids],
+        )
+        all_pending = _discard_drifted(processed, all_pending, postcheck)
+
+    await _publish_unit_artifacts(processed, all_pending)
+
+    signals: dict[str, list[str]] | None = None
+    step_failures: list[Failure] = []
+    if include.signals_available:
+        signals = {run.manifest_id: [] for run in runs}
+        covered = [
+            run
+            for run in runs
+            if run.manifest_id not in precheck and run.manifest_id not in postcheck
+        ]
+        listed = [run for run in covered if manifests[run.manifest_id].get("raw_present")]
+        # A source given as a log names no results file and has no signals to
+        # list; a run that names one that is not there is named.
+        without_results = [
+            run
+            for run in covered
+            if run.source.raw is not None and not manifests[run.manifest_id].get("raw_present")
+        ]
+        if without_results:
+            step_failures.append(_signals_without_results(without_results))
+        unread: list[_ResolvedRun] = []
+        unreadable: list[tuple[_ResolvedRun, LTSpiceMCPError]] = []
+        for index, run in enumerate(listed):
+            if loop.time() >= call_deadline:
+                unread = listed[index:]
+                break
+            try:
+                with services.analysis_deadline(call_deadline):
+                    source = await _captured_source(run.source, state, captures, require_raw=True)
+                    raw = await services.load_raw(source, state)
+                signals[run.manifest_id] = list(raw.get_trace_names())
+            except AnalysisDeadlineExceeded:
+                unread = listed[index:]
+                break
+            except LTSpiceMCPError as exc:
+                unreadable.append((run, exc))
+        if unreadable:
+            step_failures.append(_signals_not_read(unreadable))
+        if unread:
+            step_failures.append(_signals_left_by_the_bound(unread, len(listed), budget_s))
+
+    return AnalysisEvaluation(
+        item=item,
+        processed=processed,
+        runs=runs,
+        missing=missing,
+        skipped=skipped,
+        base_observations=observations,
+        include=include,
+        group_by=group_by,
+        signals=signals,
+        argument_notes=tuple(args.argument_notes()),
+        request=_request_digest(args),
+        step_failures=tuple(step_failures),
+    )
+
+
+def _not_rechecked(runs: Sequence[_ResolvedRun], manifest_ids: Sequence[str]) -> Observation:
+    """The observation that the call's bound ended the check after the reads
+    before it read these sources again: their rows stand, unconfirmed."""
+    missed = set(manifest_ids)
+    labels = list(dict.fromkeys(run.label for run in runs if run.manifest_id in missed))
+    named = ", ".join(labels[:_FAILURE_WHERE_CAP])
+    if len(labels) > _FAILURE_WHERE_CAP:
+        named += (
+            " ("
+            + cap_note(_FAILURE_WHERE_CAP, len(labels), "sources", "every source is counted")
+            + ")"
+        )
+    return Observation(
+        code="sources_not_rechecked",
+        kind="coverage",
+        detail=(
+            f"The call's work bound ([analysis] analysis_budget_s) ended the check after the "
+            f"reads before it read {len(missed)} source(s) again (sources {named}): their "
+            "rows are as read, not confirmed unchanged since. Ask again for those sources, "
+            "or with a larger analysis_budget_s, to check them."
+        ),
+    )
+
+
+def _signals_without_results(runs: Sequence[_ResolvedRun]) -> Failure:
+    """The failure of a signal listing for runs whose results file is not
+    there: the sources, so every run the call covers is listed or named."""
+    labels = list(dict.fromkeys(run.label for run in runs))
+    named = ", ".join(labels[:_FAILURE_WHERE_CAP])
+    if len(labels) > _FAILURE_WHERE_CAP:
+        named += (
+            " ("
+            + cap_note(_FAILURE_WHERE_CAP, len(labels), "sources", "every run not read is counted")
+            + ")"
+        )
+    return Failure(
+        code="results_missing",
+        stage="signals",
+        where="signals_available",
+        message=(
+            f"The results file of {len(runs)} run(s) is not there (sources {named}), so "
+            "their signals could not be listed. signals_available lists only the runs read."
+        ),
+    )
+
+
+def _signals_not_read(unreadable: Sequence[tuple[_ResolvedRun, LTSpiceMCPError]]) -> Failure:
+    """The failure of a signal listing that could not read some runs: the
+    sources, and why the first could not be read, with its code."""
+    labels = list(dict.fromkeys(run.label for run, _reason in unreadable))
+    named = ", ".join(labels[:_FAILURE_WHERE_CAP])
+    if len(labels) > _FAILURE_WHERE_CAP:
+        named += (
+            " ("
+            + cap_note(_FAILURE_WHERE_CAP, len(labels), "sources", "every run not read is counted")
+            + ")"
+        )
+    first = unreadable[0][1]
+    return Failure(
+        code=first.code,
+        stage="signals",
+        where="signals_available",
+        message=(
+            f"The signals of {len(unreadable)} run(s) could not be read (sources {named}): "
+            f"{str(first).rstrip('.')}. signals_available lists only the runs read."
+        ),
+    )
+
+
+def _signals_left_by_the_bound(
+    unread: Sequence[_ResolvedRun], listed: int, budget_s: float
+) -> Failure:
+    """The failure of a signal listing the call's bound ended: the sources
+    it did not read, and the call that reads them."""
+    labels = list(dict.fromkeys(run.label for run in unread))
+    named = ", ".join(labels[:_FAILURE_WHERE_CAP])
+    if len(labels) > _FAILURE_WHERE_CAP:
+        named += (
+            " ("
+            + cap_note(
+                _FAILURE_WHERE_CAP,
+                len(labels),
+                "sources",
+                "ask for the signals in a call of its own",
+            )
+            + ")"
+        )
+    return Failure(
+        code="analysis_deadline",
+        stage="signals",
+        where="signals_available",
+        message=(
+            f"The call's work bound ([analysis] analysis_budget_s, {budget_s:g} s) ended the "
+            f"signal listing before {len(unread)} of {listed} runs were read (sources "
+            f"{named}); signals_available lists only the runs read. Ask for the "
+            "signals in a call of its own."
+        ),
+    )
+
+
+def _left_by_the_bound(key: str, budget_s: float) -> Failure:
+    """The failure of a recipe the call's bound left no time for."""
+    return Failure(
+        code="analysis_deadline",
+        stage="deadline",
+        where=key,
+        message=(
+            f"The call's work bound ([analysis] analysis_budget_s, {budget_s:g} s) ended "
+            "before this recipe was evaluated. Ask for it in a call of its own; the "
+            "recipes before it are answered."
+        ),
+    )
 
 
 def recipe_of_request(raw_recipe: Any, labels: Collection[str]) -> Recipe:
@@ -4597,293 +4598,104 @@ def recipe_of_request(raw_recipe: Any, labels: Collection[str]) -> Recipe:
     return recipe
 
 
-async def _evaluate_analysis_drive(
-    args: AnalyzeResultsInput,
-    state: SessionState,
-    *,
-    continuation: AnalysisContinuationPosition | None = None,
-    loaded: result_store.ResultSet | None = None,
-    page_stop: _PageStop | None = None,
-) -> AnalysisEvaluation:
-    """Implementation shared by the neutral seam and MCP's paged presentation."""
-    loop = asyncio.get_running_loop()
-    call_deadline = loop.time() + state.config.analysis_budget_s
-    # RAW recipes share one resolved step plan per source per call.
-    step_plans: dict[tuple[_CaptureKey, int], _RawStepPlan] = {}
-    # Share only while the bounded result cache or an active reader owns it.
-    captures: WeakValueDictionary[_CaptureKey, ParsedArtifacts] = WeakValueDictionary()
-
-    start = await _resolve_drive_start(args, state, continuation, loaded, call_deadline)
-    item = start.item
-    position, intra_item, missing_offset = start.position, start.intra_item, start.missing_offset
-    include = start.include
-
-    runs = _deserialize_runs(item, state)
-    manifests = {str(manifest["manifest_id"]): manifest for manifest in item.source_manifests}
-    missing = list(item.inputs.get("missing", []))
-    # Skipped work carries the position it was skipped at: the budget ladder can
-    # stop this response short of where the loop ended, and a rejection for work
-    # that now resumes unread would be reported twice.
-    skipped: list[tuple[int, Failure]] = []
-    observations = [Observation.of(data) for data in item.inputs.get("observations", [])]
-    group_by = list(item.inputs.get("group_by", []))
-    # Read from the stored request, not from ``args``: a continuation carries
-    # no step arguments and must read the steps the first call did.
-    steps = StepSelection.from_inputs(item.inputs)
-    declared_labels = {
-        str(source.get("label"))
-        for source in item.inputs.get("sources", [])
-        if isinstance(source, dict)
-    }
-    work_done = False
-    deferred = False
-
-    def _skip(failure: Failure) -> None:
-        """Record a per-recipe rejection and advance past it (item is done)."""
-        nonlocal position, intra_item, work_done
-        skipped.append((position, failure))
-        position += 1
-        intra_item = 0
-        work_done = True
-
-    # Source-drift precheck (once per call): verify every direct source before
-    # any recipe reads it. Recapture validates the stored parser identity,
-    # including console bytes and explicitly absent companions.
-    precheck_deadline = loop.time() + max(_MIN_ITEM_DEADLINE_S, call_deadline - loop.time())
-    precheck = await _verify_direct_sources(
-        item.source_manifests,
-        {run.manifest_id for run in runs},
-        precheck_deadline,
-        state=state,
-    )
-
-    processed: list[WorkUnit] = []
-    all_pending: list[_PendingArtifact] = []
-    evaluated_ids: set[str] = set()
-
-    while position < len(item.work):
-        work_item = item.work[position]
-        raw_recipe = work_item["recipe"]
-        key = str(raw_recipe.get("key") or f"recipe_{work_item['index']}")
-        try:
-            recipe = recipe_of_request(raw_recipe, declared_labels)
-        except (ValueError, TypeError) as exc:
-            _skip(
-                Failure(
-                    code="recipe_invalid",
-                    stage="validate",
-                    where=f"recipes[{work_item['index']}]",
-                    message=validation_error_detail("analyze_results", exc),
-                )
-            )
-            continue
-
-        selected_runs = [
-            run for run in runs if recipe.sources is None or run.label in set(recipe.sources)
-        ]
-        estimate = _artifact_estimate(recipe, selected_runs)
-        remaining = call_deadline - loop.time()
-        if estimate > state.config.analysis_budget_s * _ARTIFACT_SAFETY_FACTOR:
-            _skip(
-                Failure(
-                    code="artifact_too_large",
-                    stage="preflight",
-                    where=key,
-                    message=(
-                        "Artifact estimate exceeds the per-call safety bound. The "
-                        "bound uses raw file size and signal count rather than "
-                        "decoded sample counts, so request fewer signals or "
-                        "select fewer/smaller runs; narrowing the window or "
-                        "lowering max_points does not move it. A single large "
-                        "raw read for a single signal has no request-side lever "
-                        "— raise [analysis] analysis_budget_s "
-                        "(LTSPICE_MCP_ANALYSIS_BUDGET_S) instead."
-                    ),
-                )
-            )
-            continue
-        if estimate > remaining and work_done:
-            deferred = True
-            break
-        if remaining <= 0 and work_done:
-            break
-        item_deadline = loop.time() + max(_MIN_ITEM_DEADLINE_S, remaining)
-        unit = await _evaluate_unit(
-            recipe,
-            key,
-            selected_runs,
-            runs,
-            precheck,
-            manifests,
-            state,
-            item,
-            item_deadline,
-            step_plans,
-            steps,
-            captures,
-            per_run_offset=intra_item,
-            position=position,
-        )
-        evaluated_ids.update(unit.eligible_ids)
-        all_pending.extend(unit.pending)
-        processed.append(unit)
-
-        # Per_run pagination: decided on record count so the break can stop the
-        # call here; the page and its cursor are built during assembly below,
-        # which re-decides this against whatever limit it assembles at.
-        per_run_limit = include.per_run.limit if include.per_run is not None else None
-        if page_stop is not None and page_stop.reservoir is not None and per_run_limit is not None:
-            per_run_limit = page_stop.reservoir
-        if (
-            page_stop is not None
-            and per_run_limit is not None
-            and (unit.records or not unit.failures)
-            and intra_item + per_run_limit < len(unit.records)
-        ):
-            intra_item += per_run_limit
-            work_done = True
-            break
-        position += 1
-        intra_item = 0
-        work_done = True
-
-    # Source-drift postcheck (once per call): verify every evaluated source
-    # before any artifact is published or results are returned. Drift discards
-    # the records and artifacts derived from that source across every recipe
-    # that used it.
-    postcheck_deadline = loop.time() + max(_MIN_ITEM_DEADLINE_S, call_deadline - loop.time())
-    postcheck = await _verify_direct_sources(
-        item.source_manifests,
-        evaluated_ids,
-        postcheck_deadline,
-        state=state,
-    )
-    if postcheck:
-        failed_ids = set(postcheck)
-        await asyncio.to_thread(
-            _remove_pending,
-            [artifact for artifact in all_pending if artifact.manifest_id in failed_ids],
-        )
-        all_pending = _discard_drifted(processed, all_pending, postcheck)
-
-    await _publish_unit_artifacts(processed, all_pending, postcheck_deadline)
-
-    signals: dict[str, list[str]] | None = None
-    if include.signals_available:
-        signals = {run.manifest_id: [] for run in runs}
-        for run in runs:
-            if loop.time() >= call_deadline:
-                break
-            if (
-                not manifests[run.manifest_id].get("raw_present")
-                or run.manifest_id in precheck
-                or run.manifest_id in postcheck
-            ):
-                continue
-            try:
-                with services.analysis_deadline(call_deadline):
-                    source = await _captured_source(run.source, state, captures, require_raw=True)
-                    raw = await services.load_raw(source, state)
-                signals[run.manifest_id] = list(raw.get_trace_names())
-            except AnalysisDeadlineExceeded:
-                break
-            except LTSpiceMCPError:
-                continue
-
-    return AnalysisEvaluation(
-        item=item,
-        processed=processed,
-        runs=runs,
-        missing=missing,
-        missing_offset=missing_offset,
-        skipped=skipped,
-        base_observations=observations,
-        include=include,
-        group_by=group_by,
-        natural_position=position,
-        natural_intra=intra_item,
-        deferred=deferred,
-        signals=signals,
-        argument_notes=tuple(args.argument_notes()),
-    )
-
-
-async def evaluate_analysis_results(
-    args: AnalyzeResultsInput,
-    state: SessionState,
-    *,
-    continuation: AnalysisContinuationPosition | None = None,
-    loaded: result_store.ResultSet | None = None,
-) -> AnalysisEvaluation:
-    """Run one bounded neutral analysis drive.
-
-    The returned rows, reductions, facts, failures, and missing cases are not
-    projected or capped.  ``continuation`` is the evaluator's internal position;
-    callers that need a complete result can pass it back repeatedly without
-    decoding or merging rendered MCP pages.  Passing the previous drive's
-    ``item`` as ``loaded`` skips re-reading the immutable set from disk.
-    """
-    return await _evaluate_analysis_drive(
-        args,
-        state,
-        continuation=continuation,
-        loaded=loaded,
-    )
-
-
-def complete_analysis_evaluations(drives: list[AnalysisEvaluation]) -> dict[str, Any]:
-    """Render complete Python API data from bounded neutral evaluator drives."""
-    if not drives:
-        raise ValueError("At least one analysis evaluation drive is required")
-
-    first = drives[0]
-    last = drives[-1]
-    processed = [unit for drive in drives for unit in drive.processed]
-    skipped = [failure for drive in drives for failure in drive.skipped]
-    signals: dict[str, list[str]] | None = None
-    if any(drive.signals is not None for drive in drives):
-        signals = {}
-        for drive in drives:
-            if drive.signals is not None:
-                signals.update(drive.signals)
-    combined = replace(
-        first,
-        processed=processed,
-        skipped=skipped,
-        natural_position=last.natural_position,
-        natural_intra=last.natural_intra,
-        deferred=any(drive.deferred for drive in drives),
-        signals=signals,
-    )
-    max_rows = max([len(combined.missing), *(len(unit.records) for unit in processed), 1])
-    limits = _Limits(
-        per_run=max_rows if combined.include.per_run is not None else None,
-        rows=max_rows,
-        fail_cases=max_rows,
-        groups=None,
-    )
-    data = _assemble(combined, None, limits)
-    # Every record, one per place: the page's collapse and cap are how a wire
-    # response stays bounded, and a complete result has no bound to keep.
-    data["failures"] = [failure.wire() for failure in combined.failure_inventory]
-    data["observations"] = [
-        observation
-        for observation in data["observations"]
-        if observation.get("code") != "failures_truncated"
-    ]
-    return data
+async def complete_analysis(args: AnalyzeResultsInput, state: SessionState) -> dict[str, Any]:
+    """The complete answer the Python API returns: every recipe, every row
+    and every failure, one per place."""
+    evaluation = await evaluate_analysis(args, state)
+    return for_api(await asyncio.to_thread(_assemble, evaluation))
 
 
 async def capture_attached_analysis(
     args: AnalyzeResultsInput, state: SessionState
 ) -> dict[str, Any]:
-    """Evaluate once and retain the neutral bounded snapshot for a job sidecar."""
-    assembly = await _evaluate_analysis_drive(
-        args,
-        state,
-        page_stop=_PageStop(reservoir=MAX_PAGE_SIZE),
+    """Evaluate an analysis attached to a run, for the job's record: its
+    complete answer, the one a later ``analyze_results`` call with the same
+    request over the job gives, and what it was computed from."""
+    evaluation = await evaluate_analysis(args, state)
+    # Its rows unprojected: each delivery renders them in the row view it
+    # asks for (render_attached_analysis), which is not part of the job.
+    wide = replace(
+        evaluation, include=evaluation.include.model_copy(update={"fields": list(_ROW_KEYS)})
     )
-    return await asyncio.to_thread(_snapshot_from_assembly, assembly)
+    answer = await asyncio.to_thread(_assemble, wide)
+    return attached_analysis_record(answer, evaluation.snapshot(), _request_inputs(args))
+
+
+def attached_analysis_record(
+    answer: dict[str, Any], snapshot: dict[str, Any], request: dict[str, Any]
+) -> dict[str, Any]:
+    """The attached analysis as a job's record holds it, at the version
+    ``analysis_snapshot.envelope`` writes."""
+    return analysis_snapshot.envelope({"answer": answer, "snapshot": snapshot, "request": request})
+
+
+#: What a cursor whose stored answer is gone adds: how to get the answer again.
+_GONE = "Send the request again without the cursor to evaluate it again."
+
+
+async def _read_on(args: AnalyzeResultsInput, state: SessionState) -> types.CallToolResult:
+    """A page of a stored answer: the list a cursor names, from its entry on,
+    sliced from the stored answer. Nothing is evaluated and no source is
+    read, so a page is never refused or emptied because a source moved: it
+    carries the snapshot of the sources its answer was computed from."""
+    by_page = args.continuation is None
+    if args.continuation is not None:
+        cursor = args.continuation.cursor
+    else:
+        assert args.include.per_run is not None and args.include.per_run.cursor is not None
+        cursor = args.include.per_run.cursor
+    stored, pointer, offset = await open_stored_page(
+        cursor, tool=TOOL, schema=OUTPUT_SCHEMA, state=state, gone=_GONE
+    )
+    if args.continuation is not None and (
+        args.continuation.result_set_id != stored.answer.get("result_set_id")
+    ):
+        raise InvalidCursorError(
+            "This cursor belongs to another analysis than result_set_id "
+            f"{args.continuation.result_set_id!r}; pass the result_set_id of the reply "
+            "that gave the cursor."
+        )
+    request = stored.snapshot.get("request")
+    if by_page or _REQUEST_ECHO & args.model_fields_set:
+        if not (args.sources and args.recipes):
+            raise ResultError(
+                "'continue' reads a page of the stored answer: send the whole request "
+                "with it (sources and recipes), or none of it."
+            )
+        if request != _request_digest(args.model_copy(update={"continuation": None})):
+            raise InvalidCursorError(
+                "The cursor reads the answer to another request: these sources, "
+                "recipes, grouping, step selection or include options (fields "
+                "included) differ from it. Send the request that gave the cursor, "
+                "or send this one without a cursor to evaluate it."
+            )
+    target = resolve_response_budget(args.budget, state).tokens
+    # Read over the whole stored answer, off the loop.
+    (annotate, apart), caps = await asyncio.to_thread(
+        lambda: (
+            say_what_was_cut(stored.answer),
+            answer_caps(stored.answer, stored.snapshot, target=target),
+        )
+    )
+    reply = await stored_page(
+        stored,
+        pointer,
+        offset,
+        schema=OUTPUT_SCHEMA,
+        state=state,
+        annotate=annotate,
+        cap=caps.get(pointer),
+        target=target,
+        over=say_over_target,
+        apart=apart,
+        series=SERIES,
+    )
+    return format_response(reply)
+
+
+#: The request fields a ``continue`` call may echo: the request that gave
+#: the cursor, sent again whole.
+_REQUEST_ECHO = frozenset({"sources", "recipes", "include", "group_by", "step", "all_steps"})
 
 
 @registry.tool(
@@ -4893,10 +4705,10 @@ async def capture_attached_analysis(
         "Measure finished simulation results: apply typed recipes to completed "
         "jobs, RAW or log files and get values, reductions, group splits and spec "
         "verdicts attributed to case, run and .step. One call spans many sources "
-        "and many metrics, so batch them instead of calling per metric. Work is "
-        "bounded by a compute budget; a partial response returns a result_set_id "
-        "and cursor to resume with 'continue'. On a wide sweep set include.fields "
-        "to return only the numbers you need. "
+        "and many metrics, so batch them instead of calling per metric. Every "
+        "recipe is evaluated in the call; a reply too long for its target is cut, "
+        "and 'continue' with a cut entry's next reads the rest. On a wide sweep "
+        "set include.fields to return only the numbers you need. "
         # The recipe roster, with the plain words a caller searches for. A host
         # matching a request against tool descriptions sees only this text, so a
         # metric absent from it is a metric nothing can route to; and the
@@ -4929,21 +4741,37 @@ async def capture_attached_analysis(
 async def handle_analyze_results(
     args: AnalyzeResultsInput, state: SessionState
 ) -> types.CallToolResult:
-    assembly = await _evaluate_analysis_drive(args, state, page_stop=_PageStop())
+    if args.continuation is not None or (
+        args.include.per_run is not None and args.include.per_run.cursor is not None
+    ):
+        return await _read_on(args, state)
+    evaluation = await evaluate_analysis(args, state)
     held = args.include.per_run.limit_note() if args.include.per_run else None
-    assembly = replace(
-        assembly,
-        served=frozenset(state.tool_dispatch),
-        argument_notes=(
-            *assembly.argument_notes,
-            *([f"include.per_run.{held} Page on with per_run.next_cursor."] if held else []),
-        ),
+    if held:
+        evaluation = replace(
+            evaluation,
+            argument_notes=(*evaluation.argument_notes, f"include.per_run.{held}"),
+        )
+    target = resolve_response_budget(args.budget, state).tokens
+    served = frozenset(state.tool_dispatch)
+
+    def delivered() -> tuple[dict[str, Any], tuple[Annotate, dict[str, int]], dict[str, Any]]:
+        # Work over the whole answer: off the loop.
+        answer = for_session(_assemble(evaluation), served)
+        return answer, say_what_was_cut(answer), evaluation.snapshot()
+
+    answer, (annotate, apart), snapshot = await asyncio.to_thread(delivered)
+    reply = await presented(
+        answer,
+        tool=TOOL,
+        schema=OUTPUT_SCHEMA,
+        snapshot=snapshot,
+        state=state,
+        annotate=annotate,
+        target=target,
+        caps=answer_caps(answer, snapshot, target=target),
+        over=say_over_target,
+        apart=apart,
+        series=SERIES,
     )
-    budget = resolve_response_budget(args.budget, state)
-    if budget.tokens is None:
-        data = _assemble(assembly, None, _Limits.of(assembly.include))
-    else:
-        data = await _negotiate_analysis(budget, assembly)
-    # Sources are identified by their stamps within a call; a set handed to the
-    # caller to resume gets content digests, which the resuming call compares.
-    return format_response(data)
+    return format_response(reply)

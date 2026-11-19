@@ -1,0 +1,6 @@
+* a C card with nothing after its nodes
+.op
+In 0 c_a 1m
+Rn0 c_a 0 1k
+Cn c_a c_b
+.end

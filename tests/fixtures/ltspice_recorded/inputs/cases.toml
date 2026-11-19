@@ -359,7 +359,7 @@ model = ["lib/schematic_scene.py", "lib/sheet.py", "lib/asc_document.py", "lib/s
 
 [behaviour.deck-encoding]
 summary = "How each build decodes a deck's bytes: a micro sign stored as cp1252, UTF-8 (with and without a byte order mark) and UTF-16, a Greek mu, a section sign in an instance name, the bytes cp1252 leaves undefined in a title and in node names, and byte 85 in a comment."
-model = ["lib/encoding.py", "lib/stored_values.py", "lib/spice_lex_ops.py", "lib/deck_staging.py", "lib/variations.py", "lib/simulator_build.py", "lib/services.py", "lib/lint_rules.py", "lib/format.py", "lib/format.py:parse_spice_value"]
+model = ["lib/encoding.py", "lib/stored_values.py", "lib/spice_lex_ops.py", "lib/deck_staging.py", "lib/variations.py", "lib/simulator_build.py", "lib/services.py", "lib/lint_rules.py", "lib/format.py", "lib/spice_lex.py", "lib/format.py:parse_spice_value", "lib/spice_lex.py:lex_deck"]
 inputs = [
     "deck/micro_utf8.cir",
     "deck/micro_cp1252.cir",
@@ -459,6 +459,94 @@ inputs = [
 ]
 pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
+[behaviour.card-grid]
+summary = "The cells of the deck-card grid (at the end of this file) that no other recording fills: a + line after its card, right after the title and first in an included file; a ; inside braces and inside quotes; a .end inside a subcircuit; a .ends naming its subcircuit, naming none, naming another, with none open and missing; a carriage return alone and a form feed between cards; a deck whose file name is not ASCII; and each directive the server acts on, in lower and upper case, in its standard spelling and in the other the code knows. What a cell declares where no recording shows its form is a prediction, which the recording settles."
+model = ["lib/spice_lex.py", "lib/spice_lex_views.py", "lib/spice_lex.py:lex_deck", "lib/spice_lex.py:directive_head", "lib/spice_lex_views.py:directive_args"]
+# Each card whose reading a cell asks about sets one node's voltage in the
+# .op raw, by a resistor or a source no other card touches, so the raw shows
+# whether LTspice read the line as that card; a measurement shows a .meas or
+# .measure card by its line in the log. A form either build may refuse, or that
+# may end the deck early, is in a deck of its own. card_grid_cr (lines that
+# end in a carriage return alone), card_grid_form_feed (a form feed byte) and
+# card_grid_path_é (a file name that is not ASCII) are about their bytes and
+# their name: keep them as they are. The included files are copied beside
+# every deck, and card_grid;quoted.inc is named with a semicolon on purpose.
+inputs = [
+    "deck/card_grid_lines.cir",
+    "deck/card_grid_plus_first.cir",
+    "deck/card_grid_plus_first_in_include.cir",
+    "deck/card_grid_semicolon_in_braces.cir",
+    "deck/card_grid_semicolon_in_quotes.cir",
+    "deck/card_grid_end_in_subckt.cir",
+    "deck/card_grid_ends_differs.cir",
+    "deck/card_grid_ends_absent.cir",
+    "deck/card_grid_ends_orphan.cir",
+    "deck/card_grid_cr.cir",
+    "deck/card_grid_form_feed.cir",
+    "deck/card_grid_path_é.cir",
+    "deck/card_grid_control_lower.cir",
+    "deck/card_grid_control_upper.cir",
+    "deck/card_grid_save_lower.cir",
+    "deck/card_grid_save_upper.cir",
+    "deck/card_grid_libfile_lower.cir",
+    "deck/card_grid_libfile_upper.cir",
+    "deck/card_grid_directives_lower.cir",
+    "deck/card_grid_directives_upper.cir",
+    "deck/card_grid_directive_variants_lower.cir",
+    "deck/card_grid_directive_variants_upper.cir",
+]
+extra = [
+    "deck/card_grid_plus_first.inc",
+    "deck/card_grid;quoted.inc",
+    "deck/card_grid_include.inc",
+    "deck/card_grid_inc.inc",
+    "deck/card_grid_lib.lib",
+    "deck/card_grid_libfile.lib",
+]
+pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
+
+[behaviour.element-grid]
+summary = "The cells of the element-node grid (at the end of this file) that no other recording fills: each element letter with a value, a model, a keyed value or nothing after its nodes where its syntax allows it; a BJT with four nodes and a MOSFET with three; a voltage- and a current-controlled switch with its state after its model; and PARAMS: in upper case on a subcircuit call. What a cell declares where no recording shows its form is a prediction, which the recording settles."
+model = ["lib/spice_lex_views.py", "lib/spice_validator.py", "lib/hierarchy.py", "lib/netlist_graph.py", "lib/spice_lex_views.py:ElementSpec", "lib/spice_lex_views.py:ELEMENT_SPECS", "lib/spice_lex_views.py:read_instance", "lib/spice_validator.py:_TERMINAL_COUNTS"]
+# Every node name in a deck belongs to one element card, so a word of the card
+# that the .op raw holds as a node voltage is a node LTspice gave it, and a
+# word that is no node is not in the raw. Each card that a build may refuse
+# (one with nothing after its nodes, a special-function A card) is in a deck
+# of its own.
+inputs = [
+    "deck/element_grid_values.cir",
+    "deck/element_grid_keyed.cir",
+    "deck/element_grid_models.cir",
+    "deck/element_grid_digital.cir",
+    "deck/element_grid_nothing_r.cir",
+    "deck/element_grid_nothing_c.cir",
+    "deck/element_grid_nothing_l.cir",
+    "deck/element_grid_nothing_v.cir",
+    "deck/element_grid_nothing_i.cir",
+    "deck/element_grid_node_counts.cir",
+    "deck/element_grid_switch_on.cir",
+    "deck/element_grid_switch_off.cir",
+    "deck/element_grid_cswitch_on.cir",
+    "deck/element_grid_cswitch_off.cir",
+    "deck/element_grid_params_upper.cir",
+]
+pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
+
+[behaviour.declaration-grid]
+summary = "The cells of the declaration grid (at the end of this file) that no other recording fills: a .param card of one assignment, of two, in braces, in quotes and with spaces round its sign; a .model card's parameters in parentheses and bare, its level as a number and computed; and a subcircuit whose default follows its ports with no params:, used and overridden. What a cell declares where no recording shows its form is a prediction, which the recording settles."
+model = ["lib/spice_lex_views.py", "lib/hierarchy.py", "lib/result_observations.py", "lib/variations.py", "lib/spice_lex_views.py:ParamCard", "lib/spice_lex_views.py:ModelCard", "lib/spice_lex_views.py:SubcktCard", "lib/spice_lex_views.py:assigned_params"]
+# Each parameter sets one source's voltage, each model parameter one switch's
+# resistance, and each default one subcircuit's resistor, so the node voltage
+# in the .op raw is the value LTspice read. The computed level is read
+# against the same transistor with level 1 and with the level written out.
+inputs = [
+    "deck/decl_grid_param.cir",
+    "deck/decl_grid_param_quotes.cir",
+    "deck/decl_grid_model.cir",
+    "deck/decl_grid_subckt.cir",
+]
+pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
+
 [behaviour.deck-structure]
 summary = "How a deck's lines are read: the title line, ; and $ comments, a $ inside a node name and at its start, + continuations, a ; comment on a line the card is continued past, inside a .model card's parentheses and outside them, cards after .end, a missing .end, CRLF line endings, case, and whether gnd is ground."
 model = [
@@ -479,6 +567,9 @@ model = [
     "lib/metrics.py",
     "lib/export_nets.py",
     "lib/services.py",
+    "lib/spice_lex.py:lex_deck",
+    "lib/spice_lex.py:directive_head",
+    "lib/spice_lex_views.py:directive_args",
 ]
 inputs = [
     "deck/comment_semicolon.cir",
@@ -508,7 +599,7 @@ inputs = ["deck/gnd_bang.cir", "deck/global_port.cir"]
 
 [behaviour.deck-forms]
 summary = "Card forms the lint and arity rules accept or refuse: B-source R= and P=, a spaced B expression, comma-separated IC= values, Q= and Flux=, a value keyed as R=, C= or L=, params: on a subcircuit, trailing area factors, device type names as models, .tran shorthands, two analyses in one deck."
-model = ["lib/spice_validator.py", "lib/lint_rules.py", "lib/spice_lex_views.py", "lib/spice_lex.py", "lib/component_value.py", "lib/netlist_graph.py", "lib/result_observations.py"]
+model = ["lib/spice_validator.py", "lib/lint_rules.py", "lib/spice_lex_views.py", "lib/spice_lex.py", "lib/component_value.py", "lib/netlist_graph.py", "lib/result_observations.py", "lib/spice_lex_views.py:ElementSpec", "lib/spice_lex_views.py:read_instance", "lib/spice_lex_views.py:SubcktCard"]
 inputs = [
     "deck/bsource_r.cir",
     "deck/bsource_p.cir",
@@ -586,6 +677,8 @@ model = [
     "lib/component_value.py",
     "lib/hierarchy.py",
     "lib/lint_rules.py",
+    "lib/spice_lex_views.py:ElementSpec",
+    "lib/spice_lex_views.py:read_instance",
 ]
 # Each deck runs .op with the element between a and b, or wired so that its
 # nodes set the voltages: 1 A through the lossy line's 10 ohms and the RC
@@ -633,7 +726,7 @@ inputs = [
 
 [behaviour.deck-semantics]
 summary = "What a deck means where the simulators differ: a parameter named temp, the caret operator, a subcircuit's header default against a .param in its body."
-model = ["lib/hierarchy.py", "lib/hierarchy_expr.py", "lib/lint_rules.py", "lib/hierarchy_expr.py:evaluate"]
+model = ["lib/hierarchy.py", "lib/hierarchy_expr.py", "lib/lint_rules.py", "lib/spice_lex_views.py", "lib/hierarchy_expr.py:evaluate", "lib/spice_lex_views.py:ParamCard", "lib/spice_lex_views.py:ModelCard", "lib/spice_lex_views.py:SubcktCard"]
 inputs = [
     "deck/param_temp.cir",
     "deck/options_temp.cir",
@@ -676,6 +769,10 @@ model = [
     "lib/experiment_inputs.py",
     "lib/variations.py",
     "lib/montecarlo.py",
+    "lib/spice_lex_views.py",
+    "lib/spice_lex.py:lex_deck",
+    "lib/spice_lex.py:directive_head",
+    "lib/spice_lex_views.py:directive_args",
 ]
 # The included file's first line is R1 (1k) and R2 (3k) follows its .end, so
 # 1 A into a gives 1000 V with R1 alone, 750 with both and 3000 with R2 alone.
@@ -687,7 +784,7 @@ extra = ["deck/ends_early.inc"]
 
 [behaviour.three-node-transistors]
 summary = "How a transistor card with three nodes is read, against the four nodes an export writes for a three-pin symbol: an M card's bulk (level 1 and VDMOS) and a Q card's substrate."
-model = ["lib/netlist_graph.py", "assets/guide/schematics.md"]
+model = ["lib/netlist_graph.py", "assets/guide/schematics.md", "lib/spice_lex_views.py", "lib/spice_lex_views.py:ElementSpec", "lib/spice_lex_views.py:read_instance"]
 # Each deck holds a three-node card, the four-node card an export would write
 # for it (bulk at the source, substrate at ground), and one with that node
 # elsewhere. The raw shows which of the two the three-node card ran as. A
@@ -1225,7 +1322,7 @@ inputs = ["deck/global_in_body.cir"]
 
 [behaviour.undefined-element-models]
 summary = "What a build does with a Z, O or U card naming a model no deck defines, run with .op: whether the run fails, and the message."
-model = ["lib/log_parser.py", "lib/log_conditions.py", "lib/lint_rules.py", "lib/log_conditions.py:_RULES", "lib/log_conditions.py:run_diagnostics"]
+model = ["lib/log_parser.py", "lib/log_conditions.py", "lib/lint_rules.py", "lib/spice_lex_views.py", "lib/log_conditions.py:_RULES", "lib/log_conditions.py:run_diagnostics", "lib/spice_lex_views.py:ElementSpec", "lib/spice_lex_views.py:read_instance"]
 inputs = ["deck/undefined_model_z.cir", "deck/undefined_model_o.cir", "deck/undefined_model_u.cir"]
 
 [behaviour.log-meas-when-step-table]
@@ -1422,7 +1519,7 @@ inputs = ["deck/ohm_utf8.cir", "deck/ohm_utf16le_bom.cir", "deck/ohm_cp1253.cir"
 
 [behaviour.params-without-space]
 summary = "Whether an X line's params:g=3, with no space after the colon, passes g."
-model = ["lib/spice_lex_views.py", "lib/hierarchy.py"]
+model = ["lib/spice_lex_views.py", "lib/hierarchy.py", "lib/spice_lex_views.py:ElementSpec", "lib/spice_lex_views.py:read_instance", "lib/spice_lex_views.py:SubcktCard"]
 # 1 A through the body's g*1k: v(a) is 3000 if g=3 is passed, 1000 if the
 # default is kept, and no raw if the line is refused.
 inputs = ["deck/params_no_space.cir"]
@@ -6923,3 +7020,723 @@ cases = ["deck/expr_grid_nested_braces"]
 cases = ["deck/expr_grid_bare"]
 [grid.expression-value.cell.items]
 "lpos+rpos" = { node = "e01", wrap = "bare", operands = "parameter", not_established = "No recording shows an expression written as an element's value with no braces." }
+
+# ---------------------------------------------------------------- the deck-card grid
+
+[grid.deck-card]
+question = "Which lines of a deck are cards, and which directive a card is: the cards LTspice reads from a deck's lines, and what it reads each directive card as."
+# The reading of a deck's lines (lex_deck, over lex, whose branches are the
+# title line, a + line and the comment and blank lines it may follow, a
+# comment's column, a .end at the top level or inside a subcircuit, a .ends
+# and the scope it closes, an opaque .control region, and the line breaks
+# str.splitlines takes), the name a directive card starts with
+# (directive_head), and the arguments after it (directive_args).
+functions = [
+    "lib/spice_lex.py:lex_deck",
+    "lib/spice_lex.py:directive_head",
+    "lib/spice_lex_views.py:directive_args",
+]
+item_axis = "card"
+# Keys of a cell beside its coordinates. The item is the element whose value
+# shows how the line was read (the subject, unless subject names another
+# thing: a parameter, a model's parameter, a subcircuit, a measurement), or,
+# for a directive, the card's first word as the deck writes it. node, the node
+# whose voltage shows the reading; volts, each reading the subject may have
+# (absent, or the number it takes) with the voltage it gives (a number, a list
+# of them, missing where the node is not in the results, refused where the
+# build stops on the deck); reads, the reading the form means (one, or one per
+# build); file, included where the subject's card is in a file the deck
+# includes; read_when, for a directive with a subject, whether the subject is
+# present or absent when the card is read; printed, a measurement whose printing in the log shows the directive was
+# read; not_established, why a cell's reading is a prediction no recording
+# shows; differs, a route that answers otherwise, with the reason.
+item_keys = ["subject", "node", "volts", "reads", "file", "read_when", "printed", "not_established", "differs"]
+behaviours = ["deck-structure", "include-end", "deck-encoding", "card-grid"]
+groups = [
+    ["first_line"],
+    ["plus_line"],
+    ["comment"],
+    ["end"],
+    ["ends"],
+    ["line_ending"],
+    ["path"],
+    ["directive", "spelling", "case"],
+]
+
+[grid.deck-card.outside]
+"deck/gnd_alias" = "Which name is ground: a node name's meaning, not which lines are cards."
+"deck/case_insensitive" = "Node names that differ only in case: a node name's meaning, not which lines are cards."
+"deck/micro_utf8" = "What number a micro sign is: the value-number grid's."
+"deck/micro_cp1252" = "What number a micro sign is: the value-number grid's."
+"deck/micro_utf8_bom" = "What number a micro sign is: the value-number grid's."
+"deck/micro_utf16le_bom" = "What number a micro sign is: the value-number grid's."
+"deck/micro_utf16le" = "What number a micro sign is: the value-number grid's."
+"deck/greek_mu_utf8" = "What number a Greek mu is: the value-number grid's."
+"deck/section_sign_utf8" = "Which part a section sign names: the trace-name grid's."
+"deck/section_sign_cp1252" = "Which part a section sign names: the trace-name grid's."
+"deck/bytes_in_node_names" = "Which bytes a node name holds: a node name's spelling, not which lines are cards."
+
+[grid.deck-card.axis]
+# Line 1, which lex(title=True) keeps as a comment whatever it holds: text,
+# a card, a directive, bytes that are not ASCII; and the first line of an
+# included file, which lex_deck(title=False) reads as a card.
+first_line = { values = ["text", "card", "directive", "non_ascii", "included_card"], default = "" }
+# A + line, which _is_continuation joins to the card before it across comment
+# and blank lines, and keeps as a comment when no card comes before it (right
+# after the title, or first in an included file).
+plus_line = { values = ["after_card", "after_comment", "after_blank", "first_in_deck", "first_in_include"], default = "" }
+# A comment: a line starting with * (_classify_line), a ; outside quotes and
+# braces, inside parentheses too, a $ standing alone (_lone_dollar), a $
+# inside a word or starting one, which is no comment, and a ; at the end of a
+# line the card is continued past.
+comment = { values = ["star_line", "semicolon", "semicolon_in_parens", "semicolon_in_braces", "semicolon_in_quotes", "dollar_alone", "dollar_in_word", "dollar_leading", "before_plus"], default = "" }
+# A .end: the deck's last card, one with cards after it (trailing), one in an
+# included file, one inside a subcircuit's body (seen_top_end only at the top
+# level), and none.
+end = { values = ["last", "followed_by_cards", "in_include", "inside_subckt", "absent"], default = "" }
+# A .ends: naming the subcircuit it closes, naming none, naming another
+# (closed anyway, with a warning), with none open, and none before .end.
+ends = { values = ["name_matches", "no_name", "name_differs", "orphan", "absent"], default = "" }
+# The line break between cards, as str.splitlines takes them: a line feed, a
+# carriage return and line feed, a carriage return alone, a form feed, and a
+# next-line character (U+0085, byte 85 in cp1252).
+line_ending = { values = ["lf", "crlf", "cr", "form_feed", "nel"], default = "" }
+# A deck whose file name is not ASCII.
+path = { values = ["non_ascii"], default = "" }
+# The directives whose reading the server acts on: the lexer's own kinds
+# (_classify_directive's .param .model .subckt .ends .end .meas, the
+# INCLUDE_HEADS, the opaque .control region) and the heads other modules
+# compare directive_head with (.func .save .global .options .step).
+directive = { values = ["param", "func", "model", "subckt", "ends", "end", "include", "lib", "meas", "save", "global", "options", "step", "control"], default = "" }
+# The spelling: the standard one, or the other the code knows (.params,
+# .inc, .libfile, .measure, .opt).
+spelling = { values = ["standard", "variant"], default = "" }
+case = { values = ["lower", "upper"], default = "" }
+
+[[grid.deck-card.exclude]]
+at = { spelling = ["variant"], directive = ["func", "model", "subckt", "ends", "end", "save", "global", "step", "control"] }
+reason = "The code knows no other spelling of these directives."
+
+# Recorded cells ------------------------------------------------------------
+
+[[grid.deck-card.cell]]
+cases = ["deck/title_card"]
+[grid.deck-card.cell.items]
+I1 = { first_line = "card", node = "a", volts = { "1" = 1000.0, "5" = 5000.0 }, reads = "1" }
+
+[[grid.deck-card.cell]]
+cases = ["deck/title_directive"]
+[grid.deck-card.cell.items]
+r = { first_line = "directive", subject = "param r", node = "a", volts = { "absent" = "refused", "2000" = 2000.0 }, reads = "absent", refused = { ltspice26 = "The title is the .param its resistor needs.", ltspice17 = "The title is the .param its resistor needs." } }
+
+[[grid.deck-card.cell]]
+cases = ["deck/bytes_outside_cp1252"]
+[grid.deck-card.cell.items]
+R2 = { first_line = "non_ascii", node = "b", volts = { "1000" = 0.5 }, reads = "1000" }
+
+[[grid.deck-card.cell]]
+cases = ["deck/continuation"]
+[grid.deck-card.cell.items]
+R1 = { plus_line = "after_comment", comment = "star_line", node = "a", volts = { "1000" = 1000.0 }, reads = "1000" }
+I2 = { plus_line = "after_blank", node = "b", volts = { "1" = 2000.0 }, reads = "1" }
+
+[[grid.deck-card.cell]]
+cases = ["deck/comment_semicolon"]
+[grid.deck-card.cell.items]
+R1 = { first_line = "text", comment = "semicolon", end = "last", line_ending = "lf", node = "a", volts = { "1000" = 1000.0, "2000" = 2000.0 }, reads = "1000" }
+
+[[grid.deck-card.cell]]
+cases = ["deck/comment_dollar"]
+[grid.deck-card.cell.items]
+R1 = { comment = "dollar_alone", node = "a", volts = { "1000" = 1000.0, "2000" = 2000.0 }, reads = "1000" }
+
+[[grid.deck-card.cell]]
+cases = ["deck/dollar_inside_a_name"]
+[grid.deck-card.cell.items]
+R1 = { comment = "dollar_in_word", node = "n$1", volts = { "1000" = 1000.0 }, reads = "1000" }
+
+[[grid.deck-card.cell]]
+cases = ["deck/dollar_leading_a_name"]
+[grid.deck-card.cell.items]
+R1 = { comment = "dollar_leading", node = "$n_0001", volts = { "1000" = 1000.0 }, reads = "1000" }
+
+# 1 mA through the diode: n=2 gives twice the n=1 voltage.
+[[grid.deck-card.cell]]
+cases = ["deck/comment_in_model_parens"]
+[grid.deck-card.cell.items]
+D1 = { comment = "semicolon_in_parens", subject = "model dx n", node = "a", volts = { "2" = 1.310238, "absent" = 0.655119 }, reads = "2" }
+
+[[grid.deck-card.cell]]
+cases = ["deck/comment_then_continuation"]
+[grid.deck-card.cell.items]
+D1 = { comment = "before_plus", subject = "model dx n", node = "a", volts = { "2" = 1.310238, "absent" = 0.655119 }, reads = "2" }
+
+[[grid.deck-card.cell]]
+cases = ["deck/after_end"]
+[grid.deck-card.cell.items]
+R2 = { end = "followed_by_cards", node = "a", volts = { "absent" = 1000.0, "1000" = 500.0 }, reads = "absent" }
+
+[[grid.deck-card.cell]]
+cases = ["deck/no_end"]
+[grid.deck-card.cell.items]
+R1 = { end = "absent", node = "a", volts = { "1000" = 1000.0 }, reads = "1000" }
+
+[[grid.deck-card.cell]]
+cases = ["deck/crlf"]
+[grid.deck-card.cell.items]
+R1 = { line_ending = "crlf", node = "a", volts = { "1000" = 1000.0 }, reads = "1000" }
+
+# R1 (1k) opens the included file and R2 (3k) follows its .end: 1 A into a
+# gives 1000 with R1 alone, 750 with both and 3000 with R2 alone. R3 follows
+# the .include line in the deck.
+[[grid.deck-card.cell]]
+cases = ["deck/include_end"]
+[grid.deck-card.cell.items]
+R1 = { first_line = "included_card", file = "included", node = "a", volts = { "1000" = [1000.0, 750.0], "absent" = 3000.0 }, reads = "1000" }
+R2 = { end = "in_include", file = "included", node = "a", volts = { "absent" = [1000.0], "3000" = [750.0, 3000.0] }, reads = "absent" }
+R3 = { node = "b", volts = { "1000" = 1000.0, "absent" = "missing" }, reads = "1000" }
+
+[[grid.deck-card.cell]]
+cases = ["deck/byte_85_in_comment"]
+[grid.deck-card.cell.items]
+R3 = { line_ending = "nel", node = "b", volts = { "absent" = 0.5, "1000" = 0.333333 }, reads = { ltspice26 = "1000", ltspice17 = "absent" }, differs = [{ build = "ltspice26", routes = ["lex_deck", "lex_for_edit", "lex_deck with its included files", "extract_netlist_info", "parse_netlist_graph", "load_hierarchy", "netlist_diff.read_deck", "spice_validator._instance_terminals", "variation targets", "inspect components", "api inspect components"], reason = "LTspice 26 ends a line at byte 85 inside a comment and reads the card after it; every route reads the deck in cp1252, where byte 85 is an ellipsis, and reads no card there. The lint warns of it (byte-85-comment), so the reply says so." }] }
+
+[[grid.deck-card.cell]]
+cases = ["deck/save_omits_meas"]
+[grid.deck-card.cell.items]
+".save" = { directive = "save", spelling = "standard", case = "lower", node = "out", volts = { "read" = "missing", "not_read" = "present" }, reads = "read" }
+
+# Cells of card-grid ---------------------------------------------------------
+
+[[grid.deck-card.cell]]
+cases = ["deck/card_grid_lines"]
+[grid.deck-card.cell.items]
+R01 = { plus_line = "after_card", node = "n01", volts = { "1000" = 1000.0, "absent" = "refused" }, reads = "1000" }
+R02 = { ends = "name_matches", node = "n02", volts = { "2000" = 2000.0, "absent" = "refused" }, reads = "2000" }
+R03 = { ends = "no_name", node = "n03", volts = { "3000" = 3000.0, "absent" = "refused" }, reads = "3000" }
+
+[[grid.deck-card.cell]]
+cases = ["deck/card_grid_plus_first"]
+[grid.deck-card.cell.items]
+R01 = { plus_line = "first_in_deck", node = "n01", volts = { "absent" = 2000.0, "2000" = 1000.0 }, not_established = "No recording shows a + line right after the title: it may continue the title, be read as a card, or stop the run." }
+
+[[grid.deck-card.cell]]
+cases = ["deck/card_grid_plus_first_in_include"]
+[grid.deck-card.cell.items]
+R01 = { plus_line = "first_in_include", file = "included", node = "n01", volts = { "absent" = 2000.0, "2000" = 1000.0 }, not_established = "No recording shows a + line first in an included file: it may be read as a card, left out, or stop the run." }
+
+[[grid.deck-card.cell]]
+cases = ["deck/card_grid_semicolon_in_braces"]
+[grid.deck-card.cell.items]
+R01 = { comment = "semicolon_in_braces", node = "n01", volts = { "2000" = 2000.0, "absent" = "refused" }, not_established = "No recording shows a ; inside braces: a comment there leaves {1k +1k}, which is 2000, and no comment leaves an expression no build reads." }
+
+[[grid.deck-card.cell]]
+cases = ["deck/card_grid_semicolon_in_quotes"]
+[grid.deck-card.cell.items]
+R01 = { comment = "semicolon_in_quotes", file = "included", node = "n01", volts = { "3000" = 3000.0, "absent" = "refused" }, not_established = "No recording shows a ; inside quotes: the included file is found only if the quoted name is read whole." }
+
+[[grid.deck-card.cell]]
+cases = ["deck/card_grid_end_in_subckt"]
+[grid.deck-card.cell.items]
+R01 = { end = "inside_subckt", node = "n01", volts = { "1000" = 500.0, "absent" = "refused" }, not_established = "No recording shows a .end inside a subcircuit: it may end the deck there, which leaves no circuit, or end nothing." }
+
+[[grid.deck-card.cell]]
+cases = ["deck/card_grid_ends_differs"]
+[grid.deck-card.cell.items]
+R01 = { ends = "name_differs", node = "n01", volts = { "1000" = 500.0, "absent" = "refused" }, not_established = "No recording shows a .ends naming another subcircuit: it may close the open one or stop the run." }
+
+[[grid.deck-card.cell]]
+cases = ["deck/card_grid_ends_absent"]
+[grid.deck-card.cell.items]
+R01 = { ends = "absent", node = "n01", volts = { "1000" = 1000.0, "absent" = "refused" }, not_established = "No recording shows a subcircuit left open at .end." }
+
+[[grid.deck-card.cell]]
+cases = ["deck/card_grid_ends_orphan"]
+[grid.deck-card.cell.items]
+R01 = { ends = "orphan", node = "n01", volts = { "1000" = 1000.0, "absent" = "refused" }, not_established = "No recording shows a .ends with no subcircuit open." }
+
+[[grid.deck-card.cell]]
+cases = ["deck/card_grid_cr"]
+[grid.deck-card.cell.items]
+R01 = { line_ending = "cr", node = "n01", volts = { "1000" = 1000.0, "absent" = "refused" }, not_established = "No recording shows a deck whose lines end in a carriage return alone." }
+
+[[grid.deck-card.cell]]
+cases = ["deck/card_grid_form_feed"]
+[grid.deck-card.cell.items]
+R02 = { line_ending = "form_feed", node = "n01", volts = { "absent" = 1000.0, "1000" = 500.0 }, not_established = "No recording shows a form feed between two cards: it may break the line, as str.splitlines does, or be a space inside R01's line." }
+
+[[grid.deck-card.cell]]
+cases = ["deck/card_grid_path_é"]
+[grid.deck-card.cell.items]
+R01 = { path = "non_ascii", node = "n01", volts = { "1000" = 1000.0, "absent" = "refused" }, not_established = "No recording shows a deck whose file name is not ASCII." }
+
+[[grid.deck-card.cell]]
+cases = ["deck/card_grid_control_lower"]
+[grid.deck-card.cell.items]
+".control" = { directive = "control", spelling = "standard", case = "lower", subject = "element R02", read_when = "absent", node = "n01", volts = { "read" = 1000.0, "not_read" = 500.0 }, not_established = "No recording shows LTspice meet a .control region: ngspice holds it as script, LTspice may read its cards or stop." }
+
+[[grid.deck-card.cell]]
+cases = ["deck/card_grid_control_upper"]
+[grid.deck-card.cell.items]
+".CONTROL" = { directive = "control", spelling = "standard", case = "upper", subject = "element R02", read_when = "absent", node = "n01", volts = { "read" = 1000.0, "not_read" = 500.0 }, not_established = "No recording shows LTspice meet a .control region: ngspice holds it as script, LTspice may read its cards or stop." }
+
+[[grid.deck-card.cell]]
+cases = ["deck/card_grid_save_lower"]
+[grid.deck-card.cell.items]
+".save" = { directive = "save", spelling = "standard", case = "lower", node = "n02", volts = { "read" = "missing", "not_read" = "present" }, reads = "read" }
+
+[[grid.deck-card.cell]]
+cases = ["deck/card_grid_save_upper"]
+[grid.deck-card.cell.items]
+".SAVE" = { directive = "save", spelling = "standard", case = "upper", node = "n02", volts = { "read" = "missing", "not_read" = "present" }, reads = "read" }
+
+[[grid.deck-card.cell]]
+cases = ["deck/card_grid_libfile_lower"]
+[grid.deck-card.cell.items]
+".libfile" = { directive = "lib", spelling = "variant", case = "lower", node = "n01", volts = { "read" = 9000.0, "not_read" = "refused" }, not_established = "No recording shows LTspice read .libfile, which the server's INCLUDE_HEADS names." }
+
+[[grid.deck-card.cell]]
+cases = ["deck/card_grid_libfile_upper"]
+[grid.deck-card.cell.items]
+".LIBFILE" = { directive = "lib", spelling = "variant", case = "upper", node = "n01", volts = { "read" = 9000.0, "not_read" = "refused" }, not_established = "No recording shows LTspice read .libfile, which the server's INCLUDE_HEADS names." }
+
+[[grid.deck-card.cell]]
+cases = ["deck/card_grid_directives_lower"]
+at = { spelling = "standard", case = "lower" }
+[grid.deck-card.cell.items]
+".param" = { directive = "param", subject = "param pp", node = "n01", volts = { "read" = 2000.0, "not_read" = "refused" }, reads = "read" }
+".func" = { directive = "func", node = "n02", volts = { "read" = 3000.0, "not_read" = "refused" }, reads = "read" }
+".model" = { directive = "model", subject = "model swm ron", node = "n03", volts = { "read" = 4.0, "not_read" = "refused" }, reads = "read" }
+".subckt" = { directive = "subckt", subject = "subckt cgsub", node = "n04", volts = { "read" = 5000.0, "not_read" = "refused" }, reads = "read" }
+".ends" = { directive = "ends", subject = "element X04", node = "n04", volts = { "read" = 5000.0, "not_read" = "refused" }, reads = "read" }
+".global" = { directive = "global", node = "n05", volts = { "read" = 2000.0, "not_read" = "refused" }, reads = "read" }
+".include" = { directive = "include", node = "n06", volts = { "read" = 6000.0, "not_read" = "refused" }, reads = "read" }
+".lib" = { directive = "lib", node = "n07", volts = { "read" = 8000.0, "not_read" = "refused" }, reads = "read" }
+".meas" = { directive = "meas", subject = "meas m08", printed = "m08", reads = "read" }
+".options" = { directive = "options", node = "n09", volts = { "read" = 1100.0, "not_read" = 1000.0 }, not_established = "No recording shows LTspice's tnom option: a resistor of tc1=0.01 at 27 degrees is 1100 ohms if tnom is 17." }
+".step" = { directive = "step", node = "n10", volts = { "read" = 2000.0, "not_read" = 1000.0 }, reads = "read" }
+".end" = { directive = "end", subject = "element R12", read_when = "absent", node = "n11", volts = { "read" = 1000.0, "not_read" = 500.0 }, reads = "read" }
+
+[[grid.deck-card.cell]]
+cases = ["deck/card_grid_directives_upper"]
+at = { spelling = "standard", case = "upper" }
+[grid.deck-card.cell.items]
+".PARAM" = { directive = "param", subject = "param pp", node = "n01", volts = { "read" = 2000.0, "not_read" = "refused" }, reads = "read" }
+".FUNC" = { directive = "func", node = "n02", volts = { "read" = 3000.0, "not_read" = "refused" }, reads = "read" }
+".MODEL" = { directive = "model", subject = "model swm ron", node = "n03", volts = { "read" = 4.0, "not_read" = "refused" }, reads = "read" }
+".SUBCKT" = { directive = "subckt", subject = "subckt cgsub", node = "n04", volts = { "read" = 5000.0, "not_read" = "refused" }, reads = "read" }
+".ENDS" = { directive = "ends", subject = "element X04", node = "n04", volts = { "read" = 5000.0, "not_read" = "refused" }, reads = "read" }
+".GLOBAL" = { directive = "global", node = "n05", volts = { "read" = 2000.0, "not_read" = "refused" }, reads = "read" }
+".INCLUDE" = { directive = "include", node = "n06", volts = { "read" = 6000.0, "not_read" = "refused" }, reads = "read" }
+".LIB" = { directive = "lib", node = "n07", volts = { "read" = 8000.0, "not_read" = "refused" }, reads = "read" }
+".MEAS" = { directive = "meas", subject = "meas m08", printed = "m08", reads = "read" }
+".OPTIONS" = { directive = "options", node = "n09", volts = { "read" = 1100.0, "not_read" = 1000.0 }, not_established = "No recording shows LTspice's tnom option: a resistor of tc1=0.01 at 27 degrees is 1100 ohms if tnom is 17." }
+".STEP" = { directive = "step", node = "n10", volts = { "read" = 2000.0, "not_read" = 1000.0 }, reads = "read" }
+".END" = { directive = "end", subject = "element R12", read_when = "absent", node = "n11", volts = { "read" = 1000.0, "not_read" = 500.0 }, reads = "read" }
+
+[[grid.deck-card.cell]]
+cases = ["deck/card_grid_directive_variants_lower"]
+at = { spelling = "variant", case = "lower" }
+[grid.deck-card.cell.items]
+".params" = { directive = "param", subject = "param pp", node = "n01", volts = { "read" = 2000.0, "not_read" = "refused" }, not_established = "No recording shows LTspice read .params, which the deck comparison takes for .param." }
+".inc" = { directive = "include", node = "n02", volts = { "read" = 7000.0, "not_read" = "refused" }, reads = "read" }
+".measure" = { directive = "meas", subject = "meas m03", printed = "m03", reads = "read" }
+".opt" = { directive = "options", node = "n04", volts = { "read" = 1100.0, "not_read" = 1000.0 }, not_established = "No recording shows LTspice read .opt, which the ngspice driver takes for .options." }
+
+[[grid.deck-card.cell]]
+cases = ["deck/card_grid_directive_variants_upper"]
+at = { spelling = "variant", case = "upper" }
+[grid.deck-card.cell.items]
+".PARAMS" = { directive = "param", subject = "param pp", node = "n01", volts = { "read" = 2000.0, "not_read" = "refused" }, not_established = "No recording shows LTspice read .params, which the deck comparison takes for .param." }
+".INC" = { directive = "include", node = "n02", volts = { "read" = 7000.0, "not_read" = "refused" }, reads = "read" }
+".MEASURE" = { directive = "meas", subject = "meas m03", printed = "m03", reads = "read" }
+".OPT" = { directive = "options", node = "n04", volts = { "read" = 1100.0, "not_read" = 1000.0 }, not_established = "No recording shows LTspice read .opt, which the ngspice driver takes for .options." }
+
+# ---------------------------------------------------------------- the element-node grid
+
+[grid.element-node]
+question = "How many nodes an element card takes, and what follows them: which words of the card LTspice wires as its nodes, and which it reads as its model."
+# The table of each letter's shape (ElementSpec, held in ELEMENT_SPECS) and the
+# view that splits a card by it (read_instance, over InstanceLine.from_card,
+# whose branches are a source's words after its two nodes, the exact node
+# count of _EXACT_NODE_COUNT, a value keyed after the nodes and the keys that
+# define a part (_DEFINING_KEYS), a switch's state, the area or OFF after a
+# device's model, a W switch's controlling source and a call's params:).
+functions = [
+    "lib/spice_lex_views.py:ElementSpec",
+    "lib/spice_lex_views.py:read_instance",
+]
+item_axis = "card"
+# Keys of a cell beside its coordinates: the item is the element's reference;
+# nodes, the words of its card the form makes its nodes, ground left out;
+# model, the word the form makes its model; not_established, why a cell is a
+# prediction no recording shows; differs, a route that answers otherwise.
+item_keys = ["nodes", "model", "not_established", "differs"]
+behaviours = ["element-terminals", "params-without-space", "three-node-transistors", "deck-forms", "element-grid"]
+groups = [
+    ["letter", "follows"],
+    ["node_count"],
+    ["switch_state"],
+    ["params_marker"],
+]
+
+[grid.element-node.outside]
+"export/elements" = "An export: which nodes a sheet's part is written with, not how a card is read."
+"deck/vdmos_three_node" = "A VDMOS card's three nodes beside four: what its bulk is wired to, which the raw of an AC run cannot show by node names."
+"deck/vdmos_bulk_elsewhere" = "A VDMOS card whose bulk is not its source, which a build refuses for its model, not for its nodes."
+"deck/op_and_tran" = "Two analyses in one deck: which analyses a deck may hold, not an element."
+"deck/ac_and_tran" = "Two analyses in one deck: which analyses a deck may hold, not an element."
+"deck/save_omits_meas" = "A .save card: the deck-card grid's."
+"deck/meas_functions" = "The functions a .meas may call: no element."
+"deck/meas_function_vdb" = "The functions a .meas may call: no element."
+"deck/meas_function_phase" = "The functions a .meas may call: no element."
+"deck/meas_function_group_delay" = "The functions a .meas may call: no element."
+"deck/tran_zero_step" = "The arguments of a .tran card: no element."
+"deck/tran_lone_stop" = "The arguments of a .tran card: no element."
+"deck/tran_modifiers" = "The arguments of a .tran card: no element."
+"deck/keyword_values" = "Kept with its log alone: no node voltage shows which words of its cards are nodes."
+"deck/ic_comma" = "Kept with its log alone: no node voltage shows which words of its cards are nodes."
+
+[grid.element-node.axis]
+# The element letters the code knows a shape for (ELEMENT_SPECS, D in
+# _EXACT_NODE_COUNT, S by its switch state), and A, LTspice's special
+# function, which it reads with the default shape.
+letter = { values = ["R", "C", "L", "V", "I", "E", "G", "F", "H", "B", "K", "D", "Q", "M", "J", "Z", "O", "U", "T", "W", "S", "X", "@", "A"], default = "" }
+# What follows the nodes: a positional value, a model, a keyed value, nothing.
+follows = { values = ["value", "model", "keyed", "nothing"], default = "" }
+# The node counts that vary: a BJT with three and four nodes, a MOSFET with
+# three and four, and an area after a device's model, which a node count
+# that is not fixed may take for a node.
+node_count = { values = ["q_three", "q_four", "m_three", "m_four", "area_after_model"], default = "" }
+# A switch's state after its model (_SWITCH_STATES), on S and W.
+switch_state = { values = ["s_on", "s_off", "w_on", "w_off"], default = "" }
+# A subcircuit call's params: (the view drops it as no node): written, left
+# out, in upper case, and with no space before the first assignment.
+params_marker = { values = ["present", "absent", "upper", "no_space"], default = "" }
+
+[[grid.element-node.exclude]]
+at = { follows = ["value"], letter = ["B", "D", "Q", "M", "J", "Z", "O", "U", "T", "W", "S", "X", "@", "A"] }
+reason = "These name a model after their nodes, or take their value keyed: no positional value follows their nodes."
+
+[[grid.element-node.exclude]]
+at = { follows = ["model"], letter = ["R", "C", "L", "V", "I", "E", "G", "F", "H", "B", "K", "T", "@"] }
+reason = "These take a value, or keyed parameters, after their nodes: no model follows them."
+
+[[grid.element-node.exclude]]
+at = { follows = ["keyed"], letter = ["F", "H", "K", "D", "Q", "M", "J", "Z", "O", "U", "W", "S", "X", "A"] }
+reason = "These take a controlling source, inductors or a model after their nodes: no keyed value comes first."
+
+[[grid.element-node.exclude]]
+at = { follows = ["nothing"], letter = ["E", "G", "F", "H", "B", "K", "D", "Q", "M", "J", "Z", "O", "U", "T", "W", "S", "X", "@", "A"] }
+reason = "A card of these with nothing after its nodes has no model, gain or parameter to read: only a two-terminal value element may lack one."
+
+[[grid.element-node.exclude]]
+at = { letter = ["@"] }
+builds = ["ltspice17"]
+reason = "LTspice XVII has no frequency response analyzer."
+
+# Recorded cells ------------------------------------------------------------
+
+[[grid.element-node.cell]]
+cases = ["deck/element_z"]
+[grid.element-node.cell.items]
+Z1 = { letter = "Z", follows = "model", nodes = ["d", "g", "s1"], model = "nmf" }
+Z2 = { node_count = "area_after_model", nodes = ["d", "g", "s2"], model = "nmf" }
+
+[[grid.element-node.cell]]
+cases = ["deck/element_o"]
+[grid.element-node.cell.items]
+O1 = { letter = "O", follows = "model", nodes = ["a", "b"], model = "lossy" }
+
+[[grid.element-node.cell]]
+cases = ["deck/element_u"]
+[grid.element-node.cell.items]
+U1 = { letter = "U", follows = "model", nodes = ["a", "b"], model = "rcline" }
+
+[[grid.element-node.cell]]
+cases = ["deck/element_t"]
+[grid.element-node.cell.items]
+T1 = { letter = "T", follows = "keyed", nodes = ["a", "b"] }
+
+[[grid.element-node.cell]]
+cases = ["deck/element_w"]
+[grid.element-node.cell.items]
+W1 = { letter = "W", follows = "model", nodes = ["a"], model = "sw" }
+
+[[grid.element-node.cell]]
+cases = ["deck/element_fra"]
+[grid.element-node.cell.items]
+"@1" = { letter = "@", follows = "keyed", nodes = ["a", "b"], on = { ltspice17 = { letter = "" } }, refused = { ltspice17 = "LTspice XVII has no frequency response analyzer." } }
+
+[[grid.element-node.cell]]
+cases = ["deck/keyed_r"]
+[grid.element-node.cell.items]
+R1 = { letter = "R", follows = "keyed", nodes = ["a"] }
+
+[[grid.element-node.cell]]
+cases = ["deck/keyed_c"]
+[grid.element-node.cell.items]
+C1 = { letter = "C", follows = "keyed", nodes = ["b"], refused = { ltspice26 = "Both builds refuse a value keyed C=: an unknown parameter.", ltspice17 = "Both builds refuse a value keyed C=: an unknown parameter." } }
+
+[[grid.element-node.cell]]
+cases = ["deck/keyed_l"]
+[grid.element-node.cell.items]
+L1 = { letter = "L", follows = "keyed", nodes = ["b"], refused = { ltspice26 = "Both builds refuse a value keyed L=: an unknown parameter.", ltspice17 = "Both builds refuse a value keyed L=: an unknown parameter." } }
+
+[[grid.element-node.cell]]
+cases = ["deck/bsource_r"]
+[grid.element-node.cell.items]
+B1 = { letter = "B", follows = "keyed", nodes = ["a"] }
+
+[[grid.element-node.cell]]
+cases = ["deck/bsource_p"]
+[grid.element-node.cell.items]
+B1 = { letter = "B", follows = "keyed", nodes = ["b"] }
+
+[[grid.element-node.cell]]
+cases = ["deck/bsource_spaced"]
+[grid.element-node.cell.items]
+B1 = { letter = "B", follows = "keyed", nodes = ["a"] }
+
+[[grid.element-node.cell]]
+cases = ["deck/device_area"]
+[grid.element-node.cell.items]
+Q1 = { node_count = "q_four", nodes = ["c", "b"], model = "qn" }
+Q2 = { node_count = "q_three", nodes = ["c2", "b2"], model = "qn" }
+D1 = { node_count = "area_after_model", nodes = ["d"], model = "dn" }
+
+[[grid.element-node.cell]]
+cases = ["deck/default_models"]
+refused = { ltspice26 = "M1 names the device type NMOS, which is no model: a node or model name expected.", ltspice17 = "M1 names the device type NMOS, which is no model: no definition of its model." }
+[grid.element-node.cell.items]
+M1 = { node_count = "m_four", nodes = ["d", "d"], model = "nmos", refused = { ltspice26 = "M1 names the device type NMOS, which is no model: a node or model name expected.", ltspice17 = "M1 names the device type NMOS, which is no model: no definition of its model." } }
+D1 = { letter = "D", follows = "model", nodes = ["a"], model = "d" }
+Q1 = { letter = "Q", follows = "model", nodes = ["c", "b"], model = "npn" }
+
+[[grid.element-node.cell]]
+cases = ["deck/params_keyword"]
+[grid.element-node.cell.items]
+X1 = { params_marker = "present", nodes = ["in", "mid"], model = "div" }
+X2 = { params_marker = "absent", nodes = ["in", "mid2"], model = "div" }
+X3 = { letter = "X", follows = "model", nodes = ["in", "mid3"], model = "div" }
+
+[[grid.element-node.cell]]
+cases = ["deck/params_no_space"]
+[grid.element-node.cell.items]
+X1 = { params_marker = "no_space", nodes = ["a"], model = "sub" }
+
+[[grid.element-node.cell]]
+cases = ["deck/mos_three_node"]
+refused = { ltspice26 = "LTspice 26 refuses an M card with three nodes and a level 1 model: a node or model name expected." }
+[grid.element-node.cell.items]
+M1 = { node_count = "m_three", nodes = ["vdd", "gn", "s1"], model = "nm", refused = { ltspice26 = "LTspice 26 refuses an M card with three nodes and a level 1 model: a node or model name expected." } }
+M2 = { node_count = "m_four", nodes = ["vdd", "gn", "s2", "s2"], model = "nm" }
+
+[[grid.element-node.cell]]
+cases = ["deck/bjt_three_node"]
+[grid.element-node.cell.items]
+Q1 = { node_count = "q_three", nodes = ["c1", "b1", "e1"], model = "qn", differs = [{ build = "ltspice26", routes = ["inspect components", "api inspect components"], reason = "inspect's components listing keys the deck's cards by reference across every scope (instances_by_ref with no scope), so the Q1 inside subcircuit CE4 replaces the top-level Q1: the row shows the body's nodes c, b, e and 0 under the top-level name, with no warning." }, { build = "ltspice17", routes = ["inspect components", "api inspect components"], reason = "inspect's components listing keys the deck's cards by reference across every scope (instances_by_ref with no scope), so the Q1 inside subcircuit CE4 replaces the top-level Q1: the row shows the body's nodes c, b, e and 0 under the top-level name, with no warning." }] }
+Q2 = { node_count = "q_four", nodes = ["c2", "b2", "e2"], model = "qn" }
+
+# Cells of element-grid ------------------------------------------------------
+
+[[grid.element-node.cell]]
+cases = ["deck/element_grid_values"]
+at = { follows = "value" }
+[grid.element-node.cell.items]
+Rr = { letter = "R", nodes = ["r_a", "r_b"] }
+Cc = { letter = "C", nodes = ["c_a", "c_b"] }
+Ll = { letter = "L", nodes = ["l_a", "l_b"] }
+Vv = { letter = "V", nodes = ["v_a", "v_b"] }
+Ii = { letter = "I", nodes = ["i_a", "i_b"] }
+Ee = { letter = "E", nodes = ["e_op", "e_on", "e_ip", "e_in"] }
+Gg = { letter = "G", nodes = ["g_op", "g_on", "g_ip", "g_in"] }
+Ff = { letter = "F", nodes = ["f_a", "f_b"] }
+Hh = { letter = "H", nodes = ["h_a", "h_b"] }
+Kk = { letter = "K", nodes = [] }
+
+[[grid.element-node.cell]]
+cases = ["deck/element_grid_keyed"]
+at = { follows = "keyed" }
+[grid.element-node.cell.items]
+Bb = { letter = "B", nodes = ["b_a", "b_b"] }
+Ek = { letter = "E", nodes = ["ek_op", "ek_on"] }
+Gk = { letter = "G", nodes = ["gk_op", "gk_on"] }
+
+[[grid.element-node.cell]]
+cases = ["deck/element_grid_models"]
+at = { follows = "model" }
+[grid.element-node.cell.items]
+Dd = { letter = "D", nodes = ["d_a", "d_b"], model = "dmod" }
+Qq = { letter = "Q", nodes = ["q_c", "q_b", "q_e"], model = "qmod" }
+Mm = { letter = "M", nodes = ["m_d", "m_g", "m_s", "m_b"], model = "mmod" }
+Jj = { letter = "J", nodes = ["j_d", "j_g", "j_s"], model = "jmod" }
+Ss = { letter = "S", nodes = ["s_a", "s_b", "s_cp", "s_cn"], model = "smod" }
+Xx = { letter = "X", nodes = ["x_a", "x_b"], model = "xsub" }
+
+[[grid.element-node.cell]]
+cases = ["deck/element_grid_digital"]
+[grid.element-node.cell.items]
+Aa = { letter = "A", follows = "model", nodes = ["a_1", "a_2", "a_3", "a_4", "a_5", "a_6", "a_7", "a_8"], model = "buf", not_established = "No recording shows a special-function A card." }
+
+[[grid.element-node.cell]]
+cases = ["deck/element_grid_nothing_r"]
+[grid.element-node.cell.items]
+Rn = { letter = "R", follows = "nothing", nodes = ["r_a", "r_b"], not_established = "No recording shows a resistor with no value: LTspice may refuse it, or read the second word as its value." }
+
+[[grid.element-node.cell]]
+cases = ["deck/element_grid_nothing_c"]
+[grid.element-node.cell.items]
+Cn = { letter = "C", follows = "nothing", nodes = ["c_a", "c_b"], not_established = "No recording shows a capacitor with no value." }
+
+[[grid.element-node.cell]]
+cases = ["deck/element_grid_nothing_l"]
+[grid.element-node.cell.items]
+Ln = { letter = "L", follows = "nothing", nodes = ["l_a", "l_b"], not_established = "No recording shows an inductor with no value." }
+
+[[grid.element-node.cell]]
+cases = ["deck/element_grid_nothing_v"]
+[grid.element-node.cell.items]
+Vn = { letter = "V", follows = "nothing", nodes = ["v_a", "v_b"], not_established = "No recording shows a voltage source with no value: LTspice may run it as 0 V." }
+
+[[grid.element-node.cell]]
+cases = ["deck/element_grid_nothing_i"]
+[grid.element-node.cell.items]
+In = { letter = "I", follows = "nothing", nodes = ["i_a", "i_b"], not_established = "No recording shows a current source with no value: LTspice may run it as 0 A." }
+
+[[grid.element-node.cell]]
+cases = ["deck/element_grid_node_counts"]
+[grid.element-node.cell.items]
+Qq = { node_count = "q_four", nodes = ["q_c", "q_b", "q_e", "q_s"], model = "qmod" }
+Mm = { node_count = "m_three", nodes = ["m_d", "m_g", "m_s"], model = "mmod" }
+
+[[grid.element-node.cell]]
+cases = ["deck/element_grid_switch_on"]
+[grid.element-node.cell.items]
+Ss = { switch_state = "s_on", nodes = ["s_a", "s_b", "s_cp", "s_cn"], model = "smod" }
+
+[[grid.element-node.cell]]
+cases = ["deck/element_grid_switch_off"]
+[grid.element-node.cell.items]
+Ss = { switch_state = "s_off", nodes = ["s_a", "s_b", "s_cp", "s_cn"], model = "smod" }
+
+[[grid.element-node.cell]]
+cases = ["deck/element_grid_cswitch_on"]
+[grid.element-node.cell.items]
+Ww = { switch_state = "w_on", nodes = ["w_a", "w_b"], model = "wmod" }
+
+[[grid.element-node.cell]]
+cases = ["deck/element_grid_cswitch_off"]
+[grid.element-node.cell.items]
+Ww = { switch_state = "w_off", nodes = ["w_a", "w_b"], model = "wmod" }
+
+[[grid.element-node.cell]]
+cases = ["deck/element_grid_params_upper"]
+[grid.element-node.cell.items]
+X1 = { params_marker = "upper", nodes = ["a"], model = "sub" }
+
+# ---------------------------------------------------------------- the declaration grid
+
+[grid.declaration]
+question = "What a .param, .model or .subckt card declares: the names it sets and the value LTspice gives each."
+# The views of the three cards (ParamCard, which reads one assignment;
+# ModelCard, its parameters inside parentheses or bare and its level as a
+# number; SubcktCard, its ports and the defaults after params: or after its
+# first assignment) and the reader of every assignment of a .param card
+# (assigned_params).
+functions = [
+    "lib/spice_lex_views.py:ParamCard",
+    "lib/spice_lex_views.py:ModelCard",
+    "lib/spice_lex_views.py:SubcktCard",
+    "lib/spice_lex_views.py:assigned_params",
+]
+item_axis = "name"
+# Keys of a cell beside its coordinates: the item is the name declared;
+# subject, the thing a route reads for it (param, model, level, default);
+# via, an element whose value is the declared value, so the routes that
+# evaluate an element answer too; node and volts, as the deck-card grid's;
+# reads, the reading the form means; not_established; differs.
+item_keys = ["subject", "via", "node", "volts", "reads", "not_established", "differs"]
+behaviours = ["deck-semantics", "declaration-grid"]
+groups = [
+    ["param_form"],
+    ["model_params"],
+    ["model_level"],
+    ["subckt_params"],
+]
+
+[grid.declaration.outside]
+"deck/param_temp" = "A parameter named temp: whether a name sets the temperature, not what the card declares."
+"deck/options_temp" = "The temperature an .options card sets: no declaration."
+"deck/caret_power" = "What an expression evaluates to: the expression-value grid's."
+"deck/subckt_param_precedence" = "Which of a subcircuit's defaults and body .param a name reads: the scope of a name, not what one card declares."
+
+[grid.declaration.axis]
+# How a .param card writes its assignments: one, several (the first and a
+# later one, which ParamCard does not read), in braces, in quotes, and with
+# spaces on both sides of its sign or on one.
+param_form = { values = ["one", "several_first", "several_later", "braces", "quotes", "spaced_both", "spaced_before", "spaced_after"], default = "" }
+# A .model card's parameters inside parentheses or bare after its type.
+model_params = { values = ["parens", "bare"], default = "" }
+# A .model card's level as a number, or computed in braces (ModelCard's
+# level is None then).
+model_level = { values = ["number", "computed"], default = "" }
+# A .subckt card's defaults after params:, or after its first assignment
+# with no params:.
+subckt_params = { values = ["params_marker", "first_assignment"], default = "" }
+
+# Recorded cells ------------------------------------------------------------
+
+[[grid.declaration.cell]]
+cases = ["deck/comment_in_model_parens"]
+[grid.declaration.cell.items]
+n = { model_params = "parens", subject = "model dx n", node = "a", volts = { "2" = 1.310238, "absent" = 0.655119 }, reads = "2" }
+
+[[grid.declaration.cell]]
+cases = ["deck/comment_then_continuation"]
+[grid.declaration.cell.items]
+n = { model_params = "bare", subject = "model dx n", node = "a", volts = { "2" = 1.310238, "absent" = 0.655119 }, reads = "2" }
+
+# X3 takes div's default: 3 V over r and 1k gives v(mid3) 1.5 with r=1k.
+[[grid.declaration.cell]]
+cases = ["deck/params_keyword"]
+[grid.declaration.cell.items]
+r = { subckt_params = "params_marker", subject = "default div r", node = "mid3", volts = { "1000" = 1.5 }, reads = "1000" }
+
+# Cells of declaration-grid --------------------------------------------------
+
+[[grid.declaration.cell]]
+cases = ["deck/decl_grid_param"]
+[grid.declaration.cell.items]
+pa = { param_form = "one", via = "V01", node = "n01", volts = { "1000" = 1000.0, "absent" = "refused" }, reads = "1000" }
+pb1 = { param_form = "several_first", via = "V02", node = "n02", volts = { "2000" = 2000.0, "absent" = "refused" }, reads = "2000" }
+pb2 = { param_form = "several_later", via = "V03", node = "n03", volts = { "3000" = 3000.0, "absent" = "refused" }, reads = "3000", differs = [{ build = "ltspice26", routes = ["ParamCard"], reason = "ParamCard reads a .param card's first assignment alone and leaves pb2 out; no module calls it outside the views today, and every caller of a card's parameters reads them with assigned_params." }, { build = "ltspice17", routes = ["ParamCard"], reason = "ParamCard reads a .param card's first assignment alone and leaves pb2 out; no module calls it outside the views today, and every caller of a card's parameters reads them with assigned_params." }] }
+pc = { param_form = "braces", via = "V04", node = "n04", volts = { "4000" = 4000.0, "absent" = "refused" }, reads = "4000" }
+pd = { param_form = "spaced_both", via = "V05", node = "n05", volts = { "5000" = 5000.0, "absent" = "refused" }, reads = "5000" }
+pe = { param_form = "spaced_before", via = "V06", node = "n06", volts = { "6000" = 6000.0, "absent" = "refused" }, reads = "6000" }
+pf = { param_form = "spaced_after", via = "V07", node = "n07", volts = { "7000" = 7000.0, "absent" = "refused" }, reads = "7000" }
+
+[[grid.declaration.cell]]
+cases = ["deck/decl_grid_param_quotes"]
+[grid.declaration.cell.items]
+pq = { param_form = "quotes", via = "V01", node = "n01", volts = { "8000" = 8000.0, "absent" = "refused" }, not_established = "No recording shows LTspice read a .param value in single quotes, which ngspice reads as an expression." }
+
+[[grid.declaration.cell]]
+cases = ["deck/decl_grid_model"]
+[grid.declaration.cell.items]
+swp = { model_params = "parens", subject = "model swp ron", node = "n01", volts = { "2000" = 2.0, "absent" = "refused" }, reads = "2000" }
+swb = { model_params = "bare", subject = "model swb ron", node = "n02", volts = { "3000" = 3.0, "absent" = "refused" }, reads = "3000" }
+mlit = { model_level = "number", subject = "level mlit", node = "n04", volts = { "8" = "!=n03", "1" = "=n03" }, reads = "8" }
+mcomp = { model_level = "computed", subject = "level mcomp", node = "n05", volts = { "8" = "=n04", "1" = "=n03" }, not_established = "No recording shows a level computed in braces." }
+
+[[grid.declaration.cell]]
+cases = ["deck/decl_grid_subckt"]
+[grid.declaration.cell.items]
+r = { subckt_params = "first_assignment", subject = "default simp r", node = "n01", volts = { "2000" = 2000.0, "absent" = "refused" }, not_established = "No recording shows a subcircuit default with no params: before it." }
+
+[[grid.element-node.cell]]
+cases = ["deck/wavefile_nodes"]
+at = { follows = "keyed" }
+[grid.element-node.cell.items]
+V1 = { letter = "V", nodes = ["a", "b"] }
+I1 = { letter = "I", nodes = ["d"] }

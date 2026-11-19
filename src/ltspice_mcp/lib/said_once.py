@@ -39,15 +39,17 @@ from ltspice_mcp.lib.continuation import mcp_call
 from ltspice_mcp.lib.cursor_codec import canonical_hash
 
 #: How a job's answer is delivered.
-Delivery = Literal["status", "wait", "run", "replay", "resume"]
+Delivery = Literal["status", "wait", "run", "replay", "resume", "analysis"]
 
 #: Which deliveries send a note already sent in full by its code. A status
 #: call sends every note in full, so a caller that lost its context reads
 #: them there; so does a replay by ``request_id``, which is how a caller
-#: recovers a reply it lost.
+#: recovers a reply it lost. ``analyze_results`` sends its answer in full; an
+#: analysis inside a receipt follows the receipt's delivery.
 SHORTENS: Final[Mapping[Delivery, bool]] = {
     "status": False,
     "replay": False,
+    "analysis": False,
     "wait": True,
     "run": True,
     "resume": True,
