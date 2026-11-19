@@ -894,14 +894,14 @@ def read_selected_case(
     """
     why = case_unreadable(case)
     if why is not None:
-        return CaseUnread("raw_not_produced", why)
+        return CaseUnread(code="raw_not_produced", detail=why)
     try:
         return case_run_context(job, case, state, require_raw=require_raw, other_raw=other_raw)
     except OtherRawNotWritten as exc:
         return CaseUnread(exc.code, str(exc))
     except ResultError as exc:
         # case_run_context refuses a case with no raw only where one is required.
-        return CaseUnread("raw_not_produced", str(exc))
+        return CaseUnread(code="raw_not_produced", detail=str(exc))
 
 
 def resolve_analysis_source(
