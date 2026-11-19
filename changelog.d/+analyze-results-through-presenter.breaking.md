@@ -1,0 +1,1 @@
+`analyze_results` evaluates every recipe it is asked for in one call and sends the answer through the same reply layer as the other tools: a reply too long for its target is cut, says what it cut through `cut`, and is read on with a cursor that slices the stored answer instead of evaluating again. A cursor from an earlier version is refused with the call that starts again.
