@@ -473,7 +473,18 @@ class JobRegistry:
 
     @staticmethod
     async def _await_persistence(task: asyncio.Future[None]) -> None:
-        """Finish a write before honoring cancellation, including repeated requests."""
+        """Finish a write before honoring cancellation, including repeated requests.
+
+        A write handed to a thread runs to its end whatever its waiter does, so
+        a waiter that left early would release the per-job lock while the write
+        still runs, and a later write of the job could reach the disk first.
+        Holding a cancel back is bounded by the write itself, which needs only
+        a thread of the default pool, and no thread of that pool waits on the
+        loop (``tests/test_loop_waits.py``). A waiter that must not wait for
+        the write, such as a launch whose job was stopped, races this wait
+        against the stop instead of cancelling it
+        (``ExperimentRunner._record_launch``).
+        """
         cancelled = False
         while not task.done():
             try:
