@@ -27,17 +27,19 @@ absent reading means the build reads the server's text.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass, replace
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import Any, Literal
 
+from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.encoding import (
     decode_spice_bytes_with_encoding,
     decode_windows_1252,
     latin1_reading,
 )
-from ltspice_mcp.lib.format import fold_micro_sign, parse_spice_value
+from ltspice_mcp.lib.format import cap_note, fold_micro_sign, parse_spice_value
 from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER
 from ltspice_mcp.lib.spice_lex import LexResult, SpiceCard, lex_deck
 from ltspice_mcp.lib.spice_lex_ops import ValueSuffixSite, value_suffix_sites
@@ -364,12 +366,21 @@ def _detail(group: Sequence[OtherReading]) -> str:
 
 
 def _listed_by(file: str) -> dict[str, Any]:
-    if file.casefold().endswith(".asc"):
+    if is_asc(PurePath(file)):
         return {
             "tool": "inspect",
             "arguments": {"queries": [{"kind": "components", "path": file}]},
         }
     return {"tool": "verify_circuit", "arguments": {"path": file, "checks": ["syntax"]}}
+
+
+def _rest(count: int, file: str) -> str:
+    """What a summary's detail says of the values its examples leave out."""
+    if count <= EXAMPLES:
+        return ""
+    call = _listed_by(file)
+    rest = f"{call['tool']} with {json.dumps(call['arguments'])} lists every one"
+    return f" Examples: {cap_note(EXAMPLES, count, 'values', rest)}."
 
 
 def summaries(readings: Iterable[OtherReading], builds: Collection[str]) -> list[dict[str, Any]]:
@@ -399,7 +410,7 @@ def summaries(readings: Iterable[OtherReading], builds: Collection[str]) -> list
                 "count": len(group),
                 "examples": [reading.example() for reading in group[:EXAMPLES]],
                 "evidence": sorted({item for reading in group for item in reading.evidence}),
-                "detail": _detail(group),
+                "detail": _detail(group) + _rest(len(group), file),
                 "listed_by": _listed_by(file),
             }
         )
