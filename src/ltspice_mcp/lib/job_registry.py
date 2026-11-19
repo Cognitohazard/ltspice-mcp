@@ -19,7 +19,7 @@ import threading
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from ltspice_mcp.lib import progress
 from ltspice_mcp.lib.background import BackgroundTasks
@@ -29,6 +29,8 @@ from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATU
 from ltspice_mcp.lib.observability import emit_job_event
 
 logger = logging.getLogger(__name__)
+
+_T = TypeVar("_T")
 
 
 def _cases_finished(job: ExperimentJob) -> tuple[int, int, str]:
@@ -485,16 +487,19 @@ class JobRegistry:
             loop=loop,
         )
 
-    async def persist_strict(self, job: ExperimentJob) -> None:
-        """Await a durable checkpoint and propagate storage failures.
+    async def persist_strict(self, job: ExperimentJob) -> bool:
+        """Await a durable checkpoint and propagate storage failures; whether
+        this write itself landed.
 
-        Returns once this write landed, or once a write of the job asked for
-        after it landed first. That one holds the live job's state as of this
-        call, so the wait answers for ``job`` when it is the live record. A
+        Returns once this write landed (``True``), or once a write of the job
+        asked for after it landed first and this one was refused (``False``).
+        When ``job`` is the live record, either way its state as of this call
+        is on disk: a later write of the live job was read after this call. A
         caller that writes a copy holding state the live job does not have yet
-        (a terminal snapshot) has that state on disk only if its own write
-        lands, as before writes ran side by side, when a later write of the
-        live job replaced it. It does not wait for the job's earlier writes.
+        (a terminal snapshot) has that state on disk only when this returns
+        ``True``, and writes again otherwise
+        (``ExperimentRunner._checkpoint_ahead``). It does not wait for the
+        job's earlier writes.
         """
         if not self.persist_enabled:
             raise RuntimeError("Recovery requires durable job persistence")
@@ -502,10 +507,10 @@ class JobRegistry:
             self._persist_async(job, self._next_generation(job.job_id), strict=True),
             key=job.job_id,
         )
-        await self._await_persistence(task)
+        return await self._await_persistence(task)
 
     @staticmethod
-    async def _await_persistence(task: asyncio.Future[None]) -> None:
+    async def _await_persistence(task: asyncio.Future[_T]) -> _T:
         """Finish a write before honoring cancellation, including repeated requests.
 
         A waiter learns its write's own outcome: a strict caller that left
@@ -524,16 +529,18 @@ class JobRegistry:
             except asyncio.CancelledError:
                 cancelled = True
         # A strict storage failure still propagates if its caller was cancelled.
-        task.result()
+        result = task.result()
         if cancelled:
             raise asyncio.CancelledError
+        return result
 
     def _next_generation(self, job_id: str) -> int:
-        """The next write generation of ``job_id``, where the write or deletion
-        is asked for: on the loop, or on the one thread of a registry with no
-        loop. Not thread-safe across the two."""
-        generation = self._persist_issued.get(job_id, 0) + 1
-        self._persist_issued[job_id] = generation
+        """The next write generation of ``job_id``, taken where the write or
+        deletion is asked for: on the loop, or on any thread of a registry used
+        without one. Thread-safe, so two never share a generation."""
+        with self._persist_guards_lock:
+            generation = self._persist_issued.get(job_id, 0) + 1
+            self._persist_issued[job_id] = generation
         return generation
 
     @contextlib.contextmanager
@@ -542,8 +549,11 @@ class JobRegistry:
 
         A write or deletion lands only when no step asked for after it has
         landed already. A write of the live job is the whole record as it
-        stood when its thread read it, after it was asked for, so a newer one
-        that landed holds every older write's state of the live job. Held only
+        stood when its thread read it, after it was asked for, so a newer
+        write of the live job that landed holds the state every older write
+        of the live job held. A newer write of a copy holds only its own
+        snapshot: a refused copy is written again by its caller
+        (``persist_strict``). Held only
         across the rename (and its directory flush), so a slow write never
         holds another write of the job back. A step that was allowed but
         wrote nothing says so (``wrote = False``) and leaves the order as it
@@ -566,27 +576,32 @@ class JobRegistry:
 
     async def _persist_async(
         self, job: ExperimentJob, generation: int, *, strict: bool = False
-    ) -> None:
-        """One write of a job, of the generation it was asked for in; strict
-        checkpoints propagate storage failures."""
+    ) -> bool:
+        """One write of a job, of the generation it was asked for in. A strict
+        one propagates storage failures and says whether it landed; any other
+        answers ``True`` and keeps its failure to the log."""
         if strict:
             from ltspice_mcp.lib import experiment_store
 
             # A launch checkpoint cannot retry a storage error as though
             # it were executor teardown, or hide a failed write.
             context = contextvars.copy_context()
+            landed = [False]
+
+            @contextlib.contextmanager
+            def guard() -> Iterator[bool]:
+                with self._newest_write(job.job_id, generation) as newest:
+                    yield newest
+                    landed[0] = newest
 
             def persist() -> None:
-                context.run(
-                    experiment_store.save_job,
-                    job,
-                    commit_guard=lambda: self._newest_write(job.job_id, generation),
-                )
+                context.run(experiment_store.save_job, job, commit_guard=guard)
 
             write = asyncio.get_running_loop().run_in_executor(None, persist)
             await self._await_persistence(write)
-        else:
-            await self._offload_persistence(lambda: self._persist_sync(job, generation))
+            return landed[0]
+        await self._offload_persistence(lambda: self._persist_sync(job, generation))
+        return True
 
     async def _offload_persistence(self, fn: Callable[[], None]) -> None:
         """Run one blocking persistence step off-loop, surviving teardown.

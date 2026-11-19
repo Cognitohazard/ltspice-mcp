@@ -285,3 +285,59 @@ def test_the_cancel_gate_holds_no_wait_on_the_loop_or_a_write():
             f"longer calls {sorted(allowed - calls)}; a launch or a cancel waits on whatever "
             "runs there"
         )
+
+
+# ---------------------------------------------------------------------------
+# The order of a job's writes
+# ---------------------------------------------------------------------------
+
+#: Every place that uses ``experiment_store.save_job``. A job the registry
+#: keeps is written through its ordered writes (``JobRegistry._newest_write``),
+#: where an older write cannot land on top of a newer one; a write outside them
+#: could. Each other use writes a record no ordered write of the job can be in
+#: flight for, and says why. A new use fails here until it is listed.
+_SAVE_JOB_USES: dict[str, str] = {
+    "lib/job_registry.py:JobRegistry._persist_async.persist": (
+        "The registry's ordered strict write, under its newest-wins guard."
+    ),
+    "lib/job_registry.py:JobRegistry._persist_sync": (
+        "The registry's ordered write, under its newest-wins guard."
+    ),
+    "lib/experiment_resume.py:persist_reconciled": (
+        "Called only by the registry's ordered write, which holds the job's "
+        "guard across the whole re-read and save."
+    ),
+    "lib/experiment_resume.py:_persist_discovery": (
+        "A recoverable job's first record under its new owner, at admission, "
+        "adoption or a resume's child, written before its coordinator starts: "
+        "no ordered write of it has been asked for yet."
+    ),
+    "lib/experiment_runner.py:ExperimentRunner._claim_request_id": (
+        "A job's first record, written at admission inside the request gate "
+        "before its coordinator starts: no ordered write of it exists yet."
+    ),
+    "lib/experiment_runner.py:ExperimentRunner._record_index_note.save": (
+        "Only with persistence off, when the registry writes nothing."
+    ),
+}
+
+
+def test_every_write_of_a_job_record_outside_the_registry_is_listed():
+    """A job's record is written by the registry's ordered writes, or by a
+    listed writer that no ordered write of the job can race."""
+    found = {
+        f"{module}:{scope}"
+        for module, tree in modules().items()
+        for scope, nodes in scopes(tree)
+        if any(
+            isinstance(node, (ast.Name, ast.Attribute)) and _name(node) == "save_job"
+            for node in nodes
+        )
+        and not (module == "lib/experiment_store.py" and scope == "save_job")
+    }
+    assert found - set(_SAVE_JOB_USES) == set(), (
+        "a job record is written outside the registry's ordered writes: write it "
+        "through JobRegistry.persist_job or persist_strict, or list why no ordered "
+        "write of the job can be in flight"
+    )
+    assert set(_SAVE_JOB_USES) - found == set(), "listed writers that no longer exist"

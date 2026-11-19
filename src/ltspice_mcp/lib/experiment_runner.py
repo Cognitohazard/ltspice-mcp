@@ -165,6 +165,11 @@ _DRIFT_REASONS = {
 
 _T = TypeVar("_T")
 
+#: How many times a state written ahead of the live job is built and written
+#: again when newer writes overtake it, before the live job takes the state
+#: and is written itself (``ExperimentRunner._checkpoint_ahead``).
+_AHEAD_TRIES = 3
+
 #: The threads that launch a case (``_submit_case_under_cancel_gate``). The rule
 #: for every thread that waits on the event loop: it is never a thread of the
 #: loop's default pool, because the loop answers it with work that runs on that
@@ -191,7 +196,7 @@ def _launch_stopped(exc: BaseException) -> bool:
     return isinstance(cause, RecoveryError) and cause.code == "recovery_launch_cancelled"
 
 
-def _retrieve(task: asyncio.Task[None]) -> None:
+def _retrieve(task: asyncio.Task[Any]) -> None:
     """Mark a finished task's outcome read, for a write nobody awaits any more."""
     if not task.cancelled():
         task.exception()
@@ -936,10 +941,38 @@ class ExperimentRunner(RunnerBase):
         # Outside the gate: the per-circuit index is discovery, not identity,
         # so a slow directory here holds up nothing but this submission.
         try:
-            await asyncio.to_thread(self._register_circuits, candidate, working_dir)
+            noted = await asyncio.to_thread(self._register_circuits, candidate, working_dir)
+            if noted:
+                await self._record_index_note(request, candidate)
         except Exception as exc:
             raise SubmissionCommitted(request.request_id, exc) from exc
         return AdmissionResult(candidate, replayed=False)
+
+    @staticmethod
+    async def _record_index_note(request: ExperimentRunRequest, candidate: ExperimentJob) -> None:
+        """Write the note that the circuit index failed onto the job's record.
+
+        Through the registry's ordered writes when it keeps records, so no
+        write of the job can land on top of a newer one
+        (``JobRegistry._newest_write``). With persistence off the registry
+        writes nothing, so this is the only writer of the record then. A
+        failure is logged: losing a note is no reason to fail a job that exists
+        and can run, and the note still reaches this submission's receipt.
+        """
+        registry = request.state.job_registry
+        if registry.persist_enabled:
+            registry.persist_job(candidate)
+            return
+
+        def save() -> None:
+            try:
+                experiment_store.save_job(candidate)
+            except OSError:
+                logger.warning(
+                    "could not record the circuit-index failure on %s", candidate.job_id
+                )
+
+        await asyncio.to_thread(save)
 
     def discard_staged_run_dir(self, request: ExperimentRunRequest, working_dir: Path) -> None:
         """Remove the run tree of a submission that staged and then failed.
@@ -1029,8 +1062,10 @@ class ExperimentRunner(RunnerBase):
         experiment_store.save_job(candidate)
 
     @staticmethod
-    def _register_circuits(candidate: ExperimentJob, working_dir: Path) -> None:
-        """Index the job under every circuit it ran; a failure is durable-but-noted."""
+    def _register_circuits(candidate: ExperimentJob, working_dir: Path) -> bool:
+        """Index the job under every circuit it ran; whether it failed, and so
+        added a note to the job that its record should carry
+        (``_record_index_note``)."""
         try:
             experiment_store.register_circuits(candidate, working_dir)
         except OSError as exc:
@@ -1044,16 +1079,8 @@ class ExperimentRunner(RunnerBase):
                     ),
                 }
             )
-            try:
-                experiment_store.save_job(candidate)
-            except OSError:
-                # The note about the index could not be persisted either. It
-                # still reaches this submission's receipt, and the record the
-                # claim wrote is the durable one — losing a note is no reason
-                # to fail a job that exists and can run.
-                logger.warning(
-                    "could not record the circuit-index failure on %s", candidate.job_id
-                )
+            return True
+        return False
 
     def case_capacity(self, request: ExperimentRunRequest) -> int:
         """One job's share of the runner's cap.
@@ -1264,16 +1291,47 @@ class ExperimentRunner(RunnerBase):
         )
         self._request_stop(execution, "job_deadline")
 
-    async def _persist_job(self, execution: _Execution, job: ExperimentJob | None = None) -> None:
-        """Await a recovery checkpoint: the job as it stands now, on disk."""
+    async def _persist_job(self, execution: _Execution, job: ExperimentJob | None = None) -> bool:
+        """Await a recovery checkpoint of the live job, or of ``job``, a copy of
+        it; whether that write itself landed (``JobRegistry.persist_strict``).
+        A write of the live job that did not land is on disk all the same; a
+        copy that did not land is not, so a copy goes through
+        ``_checkpoint_ahead``."""
         if execution.job.recovery is None:
             execution.request.state.persist_job(execution.job)
-            return
+            return True
         try:
-            await execution.request.state.job_registry.persist_strict(job or execution.job)
+            return await execution.request.state.job_registry.persist_strict(job or execution.job)
         except Exception as exc:
             execution.persistence_error = exc
             raise
+
+    async def _checkpoint_ahead(
+        self,
+        execution: _Execution,
+        ahead: Callable[[], ExperimentJob],
+        take: Callable[[ExperimentJob], None],
+    ) -> None:
+        """Put a state on disk before the live job takes it, then take it.
+
+        ``ahead()`` builds a copy of the live job as it is now, holding the
+        state; ``take`` gives the live job that copy's state. The copy's write
+        is refused when a newer write of the job landed first: that one holds
+        the live job, which has no such state yet, so the state is not on disk.
+        The copy is then built again from the live job and written again. Each
+        try is refused only if yet another write overtook it, so after
+        ``_AHEAD_TRIES`` the live job takes the state first and is written
+        itself: a write of the live job, landed or overtaken by a newer one of
+        it, leaves the state on disk. Either way this returns once the state is
+        on disk, so no finished job's record is left behind its live job.
+        """
+        for _ in range(_AHEAD_TRIES):
+            copy = ahead()
+            if await self._persist_job(execution, copy):
+                take(copy)
+                return
+        take(ahead())
+        await self._persist_job(execution)
 
     async def _transition_job(self, execution: _Execution, status: str, **extra: Any) -> None:
         """Publish terminal recovery state only after its durable checkpoint."""
@@ -1286,10 +1344,17 @@ class ExperimentRunner(RunnerBase):
                 raise InvalidTransitionError(
                     f"Illegal recovery transition {job.status} to {status}"
                 )
-            snapshot = replace(job, status=status, completed_at=now())
-            await self._persist_job(execution, snapshot)
-            execution.live.transition(status, **extra)
-            job.completed_at = snapshot.completed_at
+            completed_at = now()
+
+            def take(snapshot: ExperimentJob) -> None:
+                execution.live.transition(status, **extra)
+                job.completed_at = snapshot.completed_at
+
+            await self._checkpoint_ahead(
+                execution,
+                lambda: replace(job, status=status, completed_at=completed_at),
+                take,
+            )
         else:
             execution.live.transition(status, **extra)
             await self._persist_job(execution)
@@ -1712,6 +1777,7 @@ class ExperimentRunner(RunnerBase):
                             case.log_file,
                             lineage_root=case.recovery.inputs.lineage_root,
                         )
+                        assert case.recovery is not None
                         produced = replace(
                             case,
                             status="produced",
@@ -1721,18 +1787,31 @@ class ExperimentRunner(RunnerBase):
                                 attempt=replace(case.recovery.attempt, outputs=outputs),
                             ),
                         )
-                        checkpoint = replace(
-                            execution.job,
-                            cases=[
-                                produced if item is case else item for item in execution.job.cases
-                            ],
-                            completeness=replace(execution.job.completeness),
-                        )
-                        self._recount_completeness(checkpoint)
-                        await self._persist_job(execution, checkpoint)
-                        case.recovery = produced.recovery
-                        self._mark_case(execution, case, "produced")
-                        case.completed_at = produced.completed_at
+
+                        def checkpoint(
+                            case: ExperimentCase = case, produced: ExperimentCase = produced
+                        ) -> ExperimentJob:
+                            ahead = replace(
+                                execution.job,
+                                cases=[
+                                    produced if item is case else item
+                                    for item in execution.job.cases
+                                ],
+                                completeness=replace(execution.job.completeness),
+                            )
+                            self._recount_completeness(ahead)
+                            return ahead
+
+                        def take(
+                            _ahead: ExperimentJob,
+                            case: ExperimentCase = case,
+                            produced: ExperimentCase = produced,
+                        ) -> None:
+                            case.recovery = produced.recovery
+                            self._mark_case(execution, case, "produced")
+                            case.completed_at = produced.completed_at
+
+                        await self._checkpoint_ahead(execution, checkpoint, take)
                     else:
                         self._mark_case(execution, case, "produced")
                 else:
