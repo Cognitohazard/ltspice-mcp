@@ -26,6 +26,8 @@ expanding subcircuits. The `hierarchy` kind reads only netlists, so export a
 schematic first. It is read-only; to change a device, pass its instance list
 to a variation (below).
 
+### What a row holds
+
 Each row contains the device's `nodes`, each with the subcircuit it belongs to
 (`scope`) and the simulator's name for its voltage (`voltage_trace`); for an
 `X` row, the `ports` of the subcircuit and the nodes they connect to; the
@@ -34,6 +36,8 @@ Each row contains the device's `nodes`, each with the subcircuit it belongs to
 an `X` row, inside its subcircuit), each as written (`expression`) and
 evaluated (`value`); MOS W and L in metres under `geometry`; and the `address`
 that the simulator uses for the device (below).
+
+### Values discovery leaves unresolved, and decks it refuses
 
 When discovery cannot evaluate a number, it reports `status: "unresolved"`, no
 value and a `reason` instead of a guess. Discovery evaluates numbers with SI
@@ -57,6 +61,8 @@ definition, a name declared twice (a subcircuit, model, reference, port, or a
 `.param` outside ngspice `hsa` mode), more than 16 MiB of input, 100,000 cards,
 20,000 instances or 32 levels of nesting, and an explicit `.option scale` in an
 LTspice deck (use SI dimensions; the `mil` suffix is 25.4 µm).
+
+### Declaring the simulator and the ngspice mode
 
 Declare the simulator even when only inspecting. For ngspice, `ngbehavior`
 defaults to the configured mode. A deck with a sectioned

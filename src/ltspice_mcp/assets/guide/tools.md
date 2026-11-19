@@ -9,6 +9,8 @@ description: >
 
 # Using the tools
 
+## Which call does what
+
 Write the deck to a file and run it with `run_experiments`; attach
 `analyze.recipes` to get the numbers in the same response. Follow a receipt
 with `jobs`, and measure a finished job with `analyze_results`.
@@ -40,6 +42,8 @@ with `jobs`, and measure a finished job with `analyze_results`.
 | check a sheet against its netlist, or render it | `verify_circuit(path=…)` |
 | open a sheet in the user's own LTspice, when they ask to see it there | `verify_circuit(path=…, in_ltspice=true)` |
 
+## Watching a long run, and stopping it
+
 A case has no time limit unless `execution.run_timeout_s` (or the server's
 `[simulation] run_timeout`) sets one. While a job runs, each `jobs(status)` or
 `jobs(wait)` receipt contains a `run_progress` observation for each running
@@ -51,6 +55,8 @@ stopped case's raw is deleted unless the run set
 `execution.keep_partial_raw: true`. With that set, its results stay readable
 up to the point where the run stopped, and every read reports a `partial_raw`
 observation.
+
+## Finding a recipe, op or check and its fields
 
 `inspect(kind="reference")` finds a recipe, schematic op, variation kind,
 check or job action from plain words (`query="phase margin"`) and returns its
@@ -69,6 +75,8 @@ and native Windows. On native Windows it also supports one LTspice
 executable, the LTspice 26.0.2 build whose startup behavior was checked,
 matched by the SHA-256 hash of its file. Any other LTspice executable, a later
 version included, is refused (`recovery_startup_unsupported`).
+
+### What a recoverable request refuses
 
 A recoverable request is refused before submission, with an error code that
 names the reason, when a deck reads an include in place at run time
@@ -92,6 +100,8 @@ ngspice, `simulator_seed`, or a deck that fixes its own seed with
 writes one), allows `agauss`, `gauss`, `aunif`, `unif` and `limit` (guide
 section 'ngspice').
 
+### Recovery on LTspice
+
 For LTspice, use `execution={"simulator":"ltspice","recoverable":true}`.
 Each case starts LTspice with its own copy of an LTspice settings file, so the
 original is not changed. The file is `simulator.ltspice_ini` (environment
@@ -103,6 +113,8 @@ submission, at resume and before each case starts. A missing value returns
 `recovery_startup_unsupported`, and an older time `recovery_startup_stale`.
 Resolve startup prompts in LTspice first, because the server does not answer
 dialogs or write these values.
+
+### Resuming: the lineage, retried cases and reused results
 
 A resume creates a child job. The original job and its children form a
 lineage, and its head is the newest of them, which a resume reply returns as
@@ -232,6 +244,8 @@ refused. Step parameters are read at the same time as the RAW, from the RAW
 itself or the `.log` beside it, and are not read again later. Guide section
 'python' covers Python arrays and tables.
 
+### Reading a log without a RAW
+
 To read a log that has no RAW, use the `measurements` recipe:
 
 ```json
@@ -265,6 +279,8 @@ assigned to a plot or step. A log that reads without error does not show that
 the simulation finished. A read by `job_id` works once all the job's runs have
 finished, and only on a case that is `produced` or kept a partial raw
 (`execution.keep_partial_raw`).
+
+### When a page cursor or a first read stops working
 
 A page cursor works only with the same query, and only while the RAW, its
 `.log` and the simulator's console log (`.exe.log`) are unchanged, including
@@ -325,6 +341,8 @@ few hundred tokens, and the rows are sized against what it leaves. `failures`, `
 never cut: a target too small for them still returns them in full, with one
 `budget_not_met` observation saying the reply is over its target.
 
+### Notes sent once per session
+
 A note that describes the job or your request (a micro sign read as micro, an
 ngspice mode that could not be checked, results left in the job folder, the
 request's `lint` and `source`, the route to the `measurements` recipe) is sent
@@ -332,6 +350,8 @@ in full once per session. After that it comes back as its code with
 `said_before` in place of its text, and the hint names
 `jobs(action="status", job_id)`, which always sends every note in full, as
 does repeating a `run_experiments` call with the same `request_id`.
+
+### The reduction ladder
 
 `analyze_results`, `inspect` and a receipt's attached analysis apply the rungs
 of a fixed reduction ladder in order until the reply fits:

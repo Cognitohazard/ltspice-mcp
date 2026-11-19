@@ -114,6 +114,8 @@ To set a target σ instead of a technology coefficient, invert the formula to
 `2.24e-2`. Each instance is drawn independently, so a differential pair's
 input-referred offset σ is √2 × the per-device figure.
 
+### Parallel copies and `m`
+
 A device the simulator builds as m parallel copies from one card shares that
 card's one draw, so its area is `m·W·L`. LTspice ignores `m` on an X line, so
 there m is the device's own. On ngspice an X line's `m` reaches the cards of a
@@ -124,6 +126,8 @@ A subcircuit that declares `m` takes the X line's `m` as an ordinary
 parameter. On both, an inner `m={mult}` takes the value its X line gives. A device written as 12 fingers of 1 µm
 (`W=1u m=12`) gets the σ of a 12 µm device. An `m` that does not resolve to a
 positive number refuses the request with `mismatch_geometry_unresolved`.
+
+### Choosing the devices and their model parameters
 
 MOSFETs defined by a `.model` card, which an `.asc` with plain `nmos`/`pmos`
 symbols exports, take the same rule with `prefix: "M"`, and the mismatch

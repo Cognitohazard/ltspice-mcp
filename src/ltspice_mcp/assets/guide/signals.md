@@ -103,6 +103,8 @@ of `V(in)`, both read over the same whole periods: `amplitude` is the gain,
 quotient's real and imaginary parts; a ratio has no `dc`. A denominator with no
 component at the frequency is refused as singular.
 
+### A frequency per case of a sweep
+
 When each case of a sweep injects its own frequency, name the parameter that
 sets it instead of one frequency: `"frequency_param": "FINJ"` reads each run at
 its value of `FINJ`, the step's value in a stepped deck or else the case's
@@ -133,6 +135,8 @@ h = np.array(
 )
 margins = compute_stability_metrics(f, h)  # h as the loop gain your injection measures
 ```
+
+### LTspice's `.four` table
 
 LTspice's `.four <freq> [Nharmonics] [Nperiods] <trace>` prints a Fourier
 table to the log, and the `summary` recipe returns it as `fourier`, with each

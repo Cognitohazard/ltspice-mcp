@@ -199,6 +199,66 @@ class TestGuideStructure:
             guide.read("../guide/core")
 
 
+#: The longest a part of a section may run before its first subheading, in
+#: bytes of UTF-8: about 3 KB, some 900 tokens, so a read of one heading stays
+#: small. A part is what a reader cannot ask for alone without the text around
+#: it: a section's opening (no heading reads it alone), or a heading's own text
+#: before its first subheading.
+PART_BOUND_BYTES = 3_500
+
+#: The parts allowed to run longer, each with the reason a heading would not
+#: divide it. ``(section, heading)``; an empty heading is the section's opening.
+LONG_PARTS: dict[tuple[str, str], str] = {}
+
+
+def _undivided_parts(name: str) -> list[tuple[str, int]]:
+    """Each part of a section, its opening first, with its size in bytes."""
+    body = guide.read(name)
+    starts = []
+    position = 0
+    for heading in guide.headings(name):
+        position = body.index(heading.text, position)
+        starts.append((heading.name, position))
+    bounds = [("", 0), *starts]
+    ends = [start for _, start in starts] + [len(body)]
+    return [
+        (heading, len(body[start:end].encode("utf-8")))
+        for (heading, start), end in zip(bounds, ends, strict=True)
+    ]
+
+
+@pytest.mark.parametrize("name", guide.SECTION_ORDER)
+def test_every_long_part_of_a_section_has_a_heading(name: str):
+    """A heading read is only as small as the part it lands in. A part over
+    the bound that holds more than one topic gets a heading per topic; one
+    topic that cannot be divided is listed in ``LONG_PARTS`` with why."""
+    long = [
+        f"{heading or '(opening)'}: {size} bytes"
+        for heading, size in _undivided_parts(name)
+        if size > PART_BOUND_BYTES and (name, heading) not in LONG_PARTS
+    ]
+    assert not long, f"guide section {name!r} has parts no heading divides:\n" + "\n".join(long)
+
+
+def test_every_allowed_long_part_is_still_long():
+    """An entry in ``LONG_PARTS`` that a later edit divided, or a heading that
+    was renamed, would hold the door open for nothing."""
+    parts = {
+        (name, heading): size
+        for name in guide.SECTION_ORDER
+        for heading, size in _undivided_parts(name)
+    }
+    stale = [key for key in LONG_PARTS if parts.get(key, 0) <= PART_BOUND_BYTES]
+    assert not stale, f"no longer over {PART_BOUND_BYTES} bytes, or gone: {stale}"
+
+
+def test_the_parts_of_a_section_are_the_whole_section():
+    """The measure above leaves no text out: a section's parts add up to it."""
+    for name in guide.SECTION_ORDER:
+        total = sum(size for _, size in _undivided_parts(name))
+        assert total == len(guide.read(name).encode("utf-8")), name
+
+
 #: Where a pointer to a section can appear: the code that writes descriptions
 #: and hints, the guide itself, and the plugin's skill.
 _POINTER_SOURCES = (
