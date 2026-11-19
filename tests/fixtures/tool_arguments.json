@@ -24,6 +24,7 @@
       "recipes[].field",
       "recipes[].format",
       "recipes[].frequency_hz",
+      "recipes[].frequency_param",
       "recipes[].from",
       "recipes[].from.edge",
       "recipes[].from.level",

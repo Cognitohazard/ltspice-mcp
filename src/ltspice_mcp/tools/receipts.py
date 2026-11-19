@@ -54,7 +54,7 @@ from ltspice_mcp.lib.raw_parser import other_raw_path
 from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER, rows
 from ltspice_mcp.lib.response_budget import estimate_tokens
 from ltspice_mcp.lib.result_observations import measurements_failed_in_every_run
-from ltspice_mcp.lib.sheet_results import run_by_ltspice, sheets_reported
+from ltspice_mcp.lib.sheet_results import places_results, sheets_reported
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable
 from ltspice_mcp.state import SessionState
 from ltspice_mcp.tools import analyze
@@ -1762,7 +1762,7 @@ def snapshot_receipt(
             and str(case.circuit_path) not in reported
         }
     )
-    if sheets and run_by_ltspice(job.simulator):
+    if sheets and places_results(job.simulator):
         observations.append(_results_in_the_job_folder(job.job_id, sheets))
     observations.extend(_sample_observations(job.cases))
     observations.extend(_measurement_observations(job.cases))

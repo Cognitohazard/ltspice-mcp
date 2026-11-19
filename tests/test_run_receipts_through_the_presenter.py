@@ -630,3 +630,12 @@ async def test_a_receipt_over_the_default_says_an_explicit_budget_reduces_its_an
     (note,) = _observations(receipt, "budget_not_met")
     assert "Only the trim rung ran on the attached analysis" in note["detail"]
     assert "an explicit budget reduces it further" in note["detail"]
+
+
+def test_a_placement_that_describes_this_calls_outcome_is_never_shortened():
+    """What a placement of results did is about the call that made it, so no
+    delivery sends it by code; the standing note of where results are is."""
+    from ltspice_mcp.lib.said_once import STANDING_CODES
+
+    assert "results_not_beside_sheet" in STANDING_CODES
+    assert not {"results_placed_beside_sheet", "results_not_placed"} & STANDING_CODES

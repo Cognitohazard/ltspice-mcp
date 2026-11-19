@@ -94,7 +94,7 @@ starting a session.
   `api.wait(job_id)` or `jobs(action="wait")` reads it from anywhere.
 - To open a sheet's run in LTspice, pass
   `execution={"results_beside_sheet": True}`: the results are copied beside
-  the `.asc` under its name as the runs finish, instead of copying them with
+  the `.asc`, or a netlist, under its name as the runs finish, instead of copying them with
   the shell. For a case of a sweep, `api.jobs(action="place_beside_sheet",
   job_id=..., case_id=...)` copies that one. Guide section 'schematics' has
   the details.

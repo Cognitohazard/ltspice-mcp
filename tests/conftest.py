@@ -1083,7 +1083,7 @@ def make_experiment_job(
                 simulator="ltspice",
             )
         ],
-        simulator="ltspice",
+        simulator="LTspice",  # as a run records it: the class name
         completeness=Completeness(
             declared=count,
             expanded=count,
@@ -1104,16 +1104,23 @@ def copied_sheet(directory: Path, name: str = "amp") -> Path:
     return sheet
 
 
-def job_that_ran(state: SessionState, sheet: Path, work_dir: Path, **job: typing.Any) -> Path:
-    """A finished job ``placed`` that ran ``sheet`` as it is now, its results (a
-    recorded LTspice run) in a folder of the job's own under another name.
-    Returns the results file."""
+def job_that_ran(
+    state: SessionState,
+    sheet: Path,
+    work_dir: Path,
+    *,
+    job_id: str = "placed",
+    **job: typing.Any,
+) -> Path:
+    """A finished job ``job_id`` that ran ``sheet`` (or a netlist) as it is now,
+    its results (a recorded LTspice run) in a folder of the job's own under
+    another name. Returns the results file."""
     from ltspice_mcp.lib.deck_staging import sha256_file
 
-    kept = work_dir / "runs" / "placed"
+    kept = work_dir / "runs" / job_id
     kept.mkdir(parents=True)
     raw = stage_recorded_fixture(kept, "ltspice_tran_rc")
-    made = make_experiment_job(state, job_id="placed", raw=raw, **job)
+    made = make_experiment_job(state, job_id=job_id, raw=raw, **job)
     for case in made.cases:
         case.circuit_path = sheet
     made.sources[0].path = sheet

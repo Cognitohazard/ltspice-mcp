@@ -77,6 +77,15 @@ class _Fourier(_Record):
     harmonics: list[_Harmonic]
 
 
+class _FraMargin(_Record):
+    analyzer: str
+    step: int = Field(ge=0)
+    crossover_hz: float
+    crossover_digit_hz: float
+    phase_margin_deg: float
+    phase_margin_digit_deg: float
+
+
 class _Manifest(_Record):
     version: int = Field(ge=1, le=1)
     capture_facts: CapturedInputs
@@ -89,6 +98,7 @@ class _Manifest(_Record):
     temperatures: _Section[_Temperatures]
     fourier: _Section[list[_Fourier]]
     native_tables: _Section[list[NativeTableBlock]]
+    fra_margins: _Section[list[_FraMargin]]
     error_context: _Section[str]
 
 
@@ -120,7 +130,7 @@ def _check_json(value: Any, active: set[int]) -> None:
 
 
 def _numeric_nulls(name: LogSectionName, value: Any) -> int:
-    if value is None or name in ("diagnostics", "op_iterations", "error_context"):
+    if value is None or name in ("diagnostics", "op_iterations", "error_context", "fra_margins"):
         return 0
     if name in ("device_op", "temperatures"):
         return sum(item is None for item in value.values())
@@ -233,7 +243,7 @@ def _check_sections(facts: dict[str, Any], captured: CapturedInputs) -> None:
             raise ValueError(f"{name} successful/absent section cannot carry an error")
         if status == "absent" and count:
             raise ValueError(f"{name} absent section cannot count nonfinite observations")
-        if name in ("diagnostics", "op_iterations", "error_context") and count:
+        if name in ("diagnostics", "op_iterations", "error_context", "fra_margins") and count:
             raise ValueError(f"{name} cannot contain nonfinite numeric facts")
         has_input = (
             bool(present & {"log", "console"}) if name == "diagnostics" else "log" in present
@@ -294,6 +304,13 @@ def _check_sections(facts: dict[str, Any], captured: CapturedInputs) -> None:
                     raise ValueError("Absent error_context input requires null value")
             elif status != "parsed" or value is None:
                 raise ValueError("error_context requires a parsed excerpt for present input")
+        elif name == "fra_margins":
+            if not has_input:
+                if value is not None:
+                    raise ValueError("Absent FRA margin input requires null value")
+                continue
+            if value is None or (status == "parsed") != bool(value):
+                raise ValueError("FRA margin status contradicts its printed lines")
         elif name == "native_tables":
             if not has_input:
                 if value is not None:
