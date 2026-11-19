@@ -3259,7 +3259,10 @@ shows. The same list rides on `verify_circuit`'s and `edit_schematic`'s
 `comparison`, and on a run's receipt as a `value_read_otherwise` observation.
 Only files the caller stored are stated: the server's export of a sheet is
 not, since how a build reads the export's bytes says nothing of how it reads
-the sheet.
+the sheet. Where the export holds such a sign, the sheet was not checked, and
+the reply says so: the comparison lists the sheet under
+`values_read_otherwise_not_checked`, and a run's receipt carries a
+`value_read_otherwise` observation whose evidence has `not_checked`.
 
 When an ngspice executable is available, `data.ngspice_check` reports how the
 values discovery resolved compare with the ones ngspice reads

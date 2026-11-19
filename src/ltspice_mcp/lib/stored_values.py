@@ -198,10 +198,18 @@ STATEMENTS_SCHEMA: dict[str, Any] = {
 }
 
 
+#: The elements whose own value the bare-number recordings show.
+_VALUE_ELEMENTS = frozenset("RCLVI")
+
+
 def _is_the_value(site: ValueSuffixSite) -> bool:
     """The site is an instance's own value, written alone outside braces: the
     position the recordings show a build's bare number for."""
     if site.card.kind != "instance" or site.in_braces or site.after_equals:
+        return False
+    # The recordings show a two-terminal part's value; the word after a
+    # transistor's model is its area, a position none shows.
+    if (site.card.name or "")[:1].upper() not in _VALUE_ELEMENTS:
         return False
     line = read_instance(site.card)
     return line is not None and line.value == site.token
@@ -325,3 +333,29 @@ def statements(readings: Sequence[OtherReading]) -> list[dict[str, Any]]:
             seen.add(key)
             stated.append(reading.statement())
     return stated
+
+
+#: Why a sheet read as the server's export of it is not checked: a build's
+#: reading of the export's bytes is not its reading of the sheet's, and no
+#: reply here reads the sheet's own value bytes.
+SHEET_NOT_CHECKED = (
+    "read as the server's export of the sheet, whose micro signs a recorded build "
+    "reads otherwise; how a build reads the values stored in the sheet itself was "
+    "not checked. Write 'u' for micro in the sheet: every build reads it alike."
+)
+
+#: A reply's list of stored files whose values were not checked, sent whole:
+#: one entry per sheet a reply reads as its export.
+NOT_CHECKED_SCHEMA: dict[str, Any] = {
+    "type": "array",
+    CUT: NEVER,
+    "description": (
+        "Each sheet read as the server's export of it whose values were not checked "
+        "for another build's reading; absent when every file read was checked."
+    ),
+    "items": {
+        "type": "object",
+        "properties": {"file": {"type": "string"}, "reason": {"type": "string"}},
+        "required": ["file", "reason"],
+    },
+}

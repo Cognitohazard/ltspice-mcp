@@ -184,7 +184,7 @@ def _run_statements(reply: dict[str, Any]) -> list[dict[str, Any]]:
         statement
         for item in reply.get("observations", [])
         if item["code"] == CODE
-        for statement in item["evidence"]["values"]
+        for statement in item["evidence"].get("values", ())
     ]
 
 
@@ -256,11 +256,12 @@ def test_a_sign_outside_an_instances_own_value_is_not_established():
     a source function's argument is a position no recording shows."""
     from ltspice_mcp.lib.stored_values import readings_of_bytes
 
-    deck = "* t\nC1 a 0 1µ Rser=1µ\nV1 a 0 SIN(0 1 1µ)\n.end\n".encode()
+    deck = "* t\nC1 a 0 1µ Rser=1µ\nV1 a 0 SIN(0 1 1µ)\nQ1 c b 0 QN 1µ\n.end\n".encode()
     assert [(r.line, r.offset, r.build_number) for r in readings_of_bytes(deck, root=True)] == [
         (2, 8, 1.0),
         (2, 16, None),
         (3, 16, None),
+        (4, 13, None),
     ]
 
 
@@ -288,6 +289,10 @@ def test_a_comparison_states_no_reading_of_the_servers_export_of_a_sheet(
     assert [(s["file"], s["build"]) for s in comparison["values_read_otherwise"]] == [
         (str(reference), "LTspice XVII")
     ]
+    # Not checking the sheet is said, since an absent statement reads as checked.
+    assert [entry["file"] for entry in comparison["values_read_otherwise_not_checked"]] == [
+        str(sheet)
+    ]
 
 
 def test_a_comparison_states_only_the_sections_of_a_library_the_deck_reads(work_dir: Path):
@@ -309,3 +314,30 @@ def test_a_comparison_states_only_the_sections_of_a_library_the_deck_reads(work_
 
     compared = {(r.value, r.build) for r in graph.readings}
     assert compared == {(r.value, r.build) for r in hierarchy.readings} == {("2µ", "LTspice XVII")}
+
+
+def test_staging_says_a_sheet_run_as_its_export_was_not_checked(tmp_path: Path):
+    """A sheet is run as the server's export of it, which is not a file the
+    caller stored: staging states no reading of the export's bytes, and says
+    the sheet's own values were not checked; an include the export names is
+    the caller's file and is stated."""
+    from ltspice_mcp.lib.deck_staging import stage_deck
+
+    root = tmp_path / "project"
+    root.mkdir()
+    sheet = root / "sheet.asc"
+    sheet.write_text("Version 4\nSHEET 1 880 680\n", encoding="ascii")
+    (root / "part.inc").write_bytes("C2 a 0 2µ\n".encode())
+    export = root / "sheet.net"
+    export.write_bytes("* sheet\nR1 a 0 1µ\n.include part.inc\n.op\n.end\n".encode())
+
+    staged = stage_deck(export, tmp_path / "stage", [root], origin=sheet, dialect=None)
+
+    observed = {
+        item["evidence"]["file"]: item["evidence"]
+        for item in staged.observations
+        if item["code"] == CODE
+    }
+    assert set(observed) == {str(sheet.resolve()), str((root / "part.inc").resolve())}
+    assert set(observed[str(sheet.resolve())]) == {"file", "not_checked"}
+    assert [s["value"] for s in observed[str((root / "part.inc").resolve())]["values"]] == ["2µ"]

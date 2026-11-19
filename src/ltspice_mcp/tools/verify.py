@@ -159,6 +159,8 @@ from ltspice_mcp.lib.spice_validator import (
 )
 from ltspice_mcp.lib.stored_values import (
     CP1252_BUILD,
+    NOT_CHECKED_SCHEMA,
+    SHEET_NOT_CHECKED,
     STATEMENTS_SCHEMA,
     OtherReading,
     readings_of_sites,
@@ -777,6 +779,7 @@ COMPARISON_SCHEMA: dict[str, Any] = {
     ),
     "properties": {
         "values_read_otherwise": STATEMENTS_SCHEMA,
+        "values_read_otherwise_not_checked": NOT_CHECKED_SCHEMA,
         "mode": {
             "type": "string",
             "enum": ["equivalence", "structural_diff"],
@@ -2356,14 +2359,19 @@ def compare_netlists(
         # of how it reads the sheet, so only the files the caller stored are
         # stated (an export's includes are the caller's own files).
         exports = {
-            str(side)
+            str(side): own
             for side, own in ((reference, ref_source), (candidate, cand_source))
             if isinstance(side, Path) and side != own
         }
+        stated = comparison["values_read_otherwise"]
         comparison["values_read_otherwise"] = [
-            statement
-            for statement in comparison["values_read_otherwise"]
-            if statement.get("file") not in exports
+            statement for statement in stated if statement.get("file") not in exports
+        ]
+        # Not checked is said, since an absent statement reads as checked.
+        comparison["values_read_otherwise_not_checked"] = [
+            {"file": str(own), "reason": SHEET_NOT_CHECKED}
+            for export, own in exports.items()
+            if any(statement.get("file") == export for statement in stated)
         ]
     return compared
 

@@ -283,6 +283,16 @@ NEVER_BOUNDS: dict[tuple[str, str], str] = {
         )
         for tail, bound in (("", _READ_OTHERWISE), ("[].evidence", _READ_OTHERWISE_EVIDENCE))
     },
+    **{
+        (handler, f"{at}_not_checked"): "one per side of a comparison: at most two"
+        for handler, at in (
+            ("verify.handle_verify_circuit", "comparison.values_read_otherwise"),
+            (
+                "schematic_edit.handle_edit_schematic",
+                "verification.comparison.values_read_otherwise",
+            ),
+        )
+    },
     ("verify.handle_verify_circuit", "comparison.not_compared"): _NOT_COMPARED,
     ("verify.handle_verify_circuit", "export.diff_vs_prior.not_compared"): _NOT_COMPARED,
     ("schematic_edit.handle_edit_schematic", "verification.comparison.not_compared"): (

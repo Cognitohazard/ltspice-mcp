@@ -40,6 +40,7 @@ from ltspice_mcp.lib.spice_lex_ops import (
 from ltspice_mcp.lib.spice_lex_views import WAVEFILE
 from ltspice_mcp.lib.stored_values import (
     CP1252_BUILD,
+    SHEET_NOT_CHECKED,
     OtherReading,
     readings_of_cards,
     statements,
@@ -187,6 +188,17 @@ def _read_otherwise_observation(path: Path, readings: Sequence[OtherReading]) ->
             "recorded LTspice build than by this run; each names the build and its number."
         ),
         "evidence": {"file": str(path), "values": stated},
+    }
+
+
+def _sheet_not_checked_observation(sheet: Path) -> dict[str, Any]:
+    """That a sheet run as the server's export was not checked for another
+    build's reading of its values (``stored_values.SHEET_NOT_CHECKED``)."""
+    return {
+        "code": "value_read_otherwise",  # stored_values.CODE
+        "kind": "provenance",
+        "detail": f"{sheet.name} was {SHEET_NOT_CHECKED}",
+        "evidence": {"file": str(sheet), "not_checked": SHEET_NOT_CHECKED},
     }
 
 
@@ -582,7 +594,9 @@ def stage_deck(
             # A sheet's export is the server's file, not one the caller stored:
             # how a build reads its bytes says nothing of how it reads the sheet.
             readings = readings_of_cards(parsed.read, encoding, file=resolved)
-            if readings and not (exported and resolved == source):
+            if readings and exported and resolved == source:
+                observations.append(_sheet_not_checked_observation(authored))
+            elif readings:
                 observations.append(_read_otherwise_observation(resolved, readings))
             folded = fold_micro_suffix_cards(parsed.read)
             if folded:
