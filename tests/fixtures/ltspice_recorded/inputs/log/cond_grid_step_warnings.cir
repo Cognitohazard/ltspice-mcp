@@ -1,0 +1,14 @@
+* over two steps: a MOSFET with no drain area, a lossy line, a resistor whose pins are one node and a node with one connection
+Vdd vdd 0 1.8
+Vg g 0 {vg}
+M1 vdd g 0 0 N4 W=1u L=1u
+.model N4 NMOS level=54 vth0=0.5 u0=0.04
+I1 0 a 1m
+O1 a 0 b 0 lossy
+R1 b 0 1k
+.model lossy LTRA(len=1 R=10 L=1u C=1p)
+R2 0 0 1k
+V3 c 0 5
+.step param vg list 1 1.2
+.op
+.end

@@ -1,0 +1,7 @@
+* an element card with too few fields, over two steps
+V1 a 0 1
+R1 a 0 {r}
+R2 a
+.step param r list 1k 2k
+.op
+.end

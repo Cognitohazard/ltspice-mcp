@@ -1,0 +1,7 @@
+* a model that is not defined, over two steps
+V1 a 0 1
+R1 a b {r}
+D1 b 0 NOSUCHMODEL
+.step param r list 1k 2k
+.op
+.end

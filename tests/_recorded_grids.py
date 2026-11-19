@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from tests.ltspice_recorder import CASES_FILE, INPUTS
+from tests.ltspice_recorder import CASES_FILE, INPUTS, recorded_builds
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -41,12 +41,18 @@ class Axis:
 @dataclass(frozen=True)
 class Exclusion:
     """Coordinates no cell can have: those whose value on each named axis is
-    one of the values listed, with the reason."""
+    one of the values listed, with the reason. With ``builds``, only on those
+    builds: a rule of the code that claims one LTspice build has no
+    coordinate on the other."""
 
     at: Mapping[str, tuple[str, ...]]
     reason: str
+    builds: frozenset[str] = frozenset()
 
-    def covers(self, coordinates: Mapping[str, str]) -> bool:
+    def covers(self, coordinates: Mapping[str, str], build: str) -> bool:
+        """Whether the exclusion holds ``coordinates`` on ``build``."""
+        if self.builds and build not in self.builds:
+            return False
         return all(
             axis in coordinates and coordinates[axis] in values for axis, values in self.at.items()
         )
@@ -89,15 +95,21 @@ class Grid:
     expect: Mapping[str, Mapping[str, Any]]
     item_keys: frozenset[str]
     cells: tuple[Cell, ...]
+    #: The behaviours whose every case is a cell's case or is listed in
+    #: ``outside`` with the reason; empty for a grid that declares none.
+    behaviours: tuple[str, ...] = ()
+    outside: Mapping[str, str] = field(default_factory=dict)
 
-    def required(self) -> Iterator[tuple[int, tuple[str, ...]]]:
-        """Every coordinate a cell must fill, as (group index, values in the
-        order of the group's axes): each group's cross less its exclusions."""
+    def required(self, build: str | None = None) -> Iterator[tuple[int, tuple[str, ...]]]:
+        """Every coordinate a cell must fill on ``build``, as (group index,
+        values in the order of the group's axes): each group's cross less its
+        exclusions. With no build, every coordinate some recorded build
+        requires."""
+        builds = [build] if build is not None else list(recorded_builds())
         for index, group in enumerate(self.groups):
             for values in itertools.product(*(self.axes[axis].values for axis in group)):
-                if not any(
-                    rule.covers(dict(zip(group, values, strict=True))) for rule in self.exclusions
-                ):
+                at = dict(zip(group, values, strict=True))
+                if any(not any(rule.covers(at, b) for rule in self.exclusions) for b in builds):
                     yield index, values
 
     def covered(self, cell: Cell, build: str) -> Iterator[tuple[int, tuple[str, ...]]]:
@@ -132,7 +144,7 @@ class Grid:
             if cell.case in recorded
             for coordinate in self.covered(cell, build)
         }
-        return [coordinate for coordinate in self.required() if coordinate not in filled]
+        return [coordinate for coordinate in self.required(build) if coordinate not in filled]
 
     def cells_of(self, case: str) -> list[Cell]:
         return [cell for cell in self.cells if cell.case == case]
@@ -180,12 +192,18 @@ def _grid(key: str, data: Mapping[str, Any]) -> Grid:
         axes=axes,
         groups=tuple(tuple(group) for group in data["groups"]),
         exclusions=tuple(
-            Exclusion({k: tuple(v) for k, v in rule["at"].items()}, rule["reason"])
+            Exclusion(
+                {k: tuple(v) for k, v in rule["at"].items()},
+                rule["reason"],
+                frozenset(rule.get("builds", ())),
+            )
             for rule in data.get("exclude", ())
         ),
         expect={axis: dict(values) for axis, values in data.get("expect", {}).items()},
         item_keys=frozenset(data.get("item_keys", ())),
         cells=tuple(cells),
+        behaviours=tuple(data.get("behaviours", ())),
+        outside=dict(data.get("outside", {})),
     )
 
 
