@@ -1,0 +1,1 @@
+`inspect(kind="symbol")` takes `rotation` to return the pins and bounding box at that one rotation, and `inspect(kind="guide")` takes `heading` to return one heading of a section instead of the whole section.
