@@ -236,22 +236,32 @@ async def test_a_cancel_at_each_point_of_a_launch_starts_no_simulator(
 
 async def test_a_deadline_while_a_launch_is_recorded_says_so(state_no_sim, monkeypatch):
     """The job's deadline passes while a launch's record write is held: the
-    case fails with the deadline and says its simulator was not started."""
+    case fails with the deadline and says its simulator was not started.
+
+    The deadline's clock is replaced by a handshake, so it passes only once
+    the record write is held; the deadline's own code then runs as it does
+    when its time is up. With a real short deadline the launch could reach
+    its gate after the deadline had passed and be refused there, before any
+    record, which is a different case."""
     state_no_sim.job_registry.persist_enabled = True
     calls, _started = _starts(monkeypatch)
     held = _HeldWrite(monkeypatch)
+    passes = asyncio.Event()
+    watch = ExperimentRunner._deadline_watch
+
+    async def deadline_on_handshake(self, execution, _deadline_s: float) -> None:
+        await passes.wait()
+        await watch(self, execution, 0)
+
+    monkeypatch.setattr(ExperimentRunner, "_deadline_watch", deadline_on_handshake)
     job, request = _recoverable_job(
-        state_no_sim,
-        job_id="exp_gate_0005",
-        request_id="request-gate-5",
-        cases=1,
-        # timing: the deadline is the stop under test; the write is held until it has fired
-        job_deadline_s=0.2,
+        state_no_sim, job_id="exp_gate_0005", request_id="request-gate-5", cases=1
     )
     runner = _runner(state_no_sim, 1)
     try:
         await _begin(runner, request, job)
         await asyncio.wait_for(held.held.wait(), LIVENESS_S)
+        passes.set()
         case_task = _case_task(runner, job, job.cases[0].case_id)
         await asyncio.wait_for(asyncio.shield(case_task), LIVENESS_S)
         assert calls == []
