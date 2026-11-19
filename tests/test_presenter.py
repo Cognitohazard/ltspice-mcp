@@ -635,3 +635,43 @@ def test_a_snapshot_function_is_read_only_when_the_answer_is_stored(tmp_path):
     )
     assert read == [1]
     assert cut.stored is not None and cut.stored.snapshot == {"sha256": "f" * 64}
+
+
+def test_a_fit_is_found_when_a_note_on_the_entries_left_out_shrinks_as_more_are_kept(tmp_path):
+    """An annotation can say more the fewer entries a reply keeps (a note on
+    each entry left out), so the reply's size is not monotone in the count:
+    keeping one entry can be over the target while keeping several fits."""
+    rows = [f"row {index:03d} " + "y" * 40 for index in range(40)]
+
+    def note_on_the_rest(reply, cut, _stored, _paged):
+        # A note per entry left out among the first twelve: a reply that
+        # keeps ten says two, and one that keeps twelve says none.
+        entry = cut.get("/rows")
+        if entry is not None:
+            reply["left_out"] = ["x" * 400] * max(0, 12 - entry.returned)
+
+    record = {"/rows": Record("rows", "r1")}
+    plain = present(
+        {"rows": rows},
+        _SCHEMA,
+        target=estimate_tokens({"rows": rows[:15]}, as_sent=False) + 80,
+        tool="tool",
+        snapshot={},
+        store=_store(tmp_path),
+        ttl_hours=1.0,
+        records=record,
+    )
+    assert plain.met and 12 <= plain.cut["/rows"].returned < 20, "the premise"
+    shown = present(
+        {"rows": rows},
+        _SCHEMA,
+        target=plain.target,
+        tool="tool",
+        snapshot={},
+        store=_store(tmp_path),
+        ttl_hours=1.0,
+        records=record,
+        annotate=note_on_the_rest,
+    )
+    assert shown.met, shown.size
+    assert shown.cut["/rows"].returned > 1

@@ -302,10 +302,39 @@ def _fit(
                 best, low = middle, middle + 1
             else:
                 high = middle - 1
+        if best is None:
+            best = _first_fit(
+                lambda count, at=largest: _size(build({**keep, at: count})) <= target,
+                keep[largest] - 1,
+            )
         if best is not None:
             keep[largest] = best
             return keep
         keep[largest] = 1
+
+
+#: How many small counts :func:`_first_fit` tries one by one.
+_SMALL_COUNTS = 32
+
+
+def _first_fit(fits: Callable[[int], bool], most: int) -> int | None:
+    """The largest count up to ``most`` that fits, found when the binary
+    search missed it: what an annotation adds can shrink as entries are kept
+    (a note on the entries left out, such as ``runs_not_shown``), so a small
+    count can be over while a larger one fits. The small counts are tried in
+    turn, from 2, up to :data:`_SMALL_COUNTS`; from the first that fits, the
+    reply grows with each entry kept, and the rest is a binary search."""
+    first = next((count for count in range(2, min(most, _SMALL_COUNTS) + 1) if fits(count)), None)
+    if first is None:
+        return None
+    low, high, best = first + 1, most, first
+    while low <= high:
+        middle = (low + high) // 2
+        if fits(middle):
+            best, low = middle, middle + 1
+        else:
+            high = middle - 1
+    return best
 
 
 # ---------------------------------------------------------------------------

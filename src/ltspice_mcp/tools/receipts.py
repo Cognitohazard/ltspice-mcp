@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import dataclasses
 import functools
 import json
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Literal, get_args
 
 from ltspice_mcp.errors import PathSecurityError
@@ -333,7 +335,14 @@ RUN_RECORD_SCHEMA: dict[str, Any] = {
 RUN_ROWS_CUT: dict[str, Any] = rows("case_id", "run_index", projected_by="run_fields")
 
 RUNS_PAGE_SCHEMA: dict[str, Any] = page_schema(
-    {"type": "array", "items": RUN_RECORD_SCHEMA, CUT: RUN_ROWS_CUT}
+    {"type": "array", "items": RUN_RECORD_SCHEMA, CUT: RUN_ROWS_CUT},
+    hint={
+        "type": "string",
+        "description": (
+            "Present when the rows were cut and no cursor reads the rest (a "
+            "receipt with no job): where the rest is."
+        ),
+    },
 )
 
 #: Every top-level key a run row can carry, read off its schema: the roots a
@@ -756,25 +765,24 @@ _NOT_SHOWN_SENTENCE = (
 
 
 def _say_where_the_runs_are(
-    run_fields: list[str] | None, facts: FactIndex | None
+    run_fields: list[str] | None, rows: Callable[[], Sequence[Mapping[str, Any]]]
 ) -> Callable[
     [str | None, Mapping[str, Any]],
     Callable[[dict[str, Any], Mapping[str, ListCut], Any, str | None], None],
 ]:
     """The words a receipt adds when its run rows are cut: its ``runs`` page
     fields set from the cut, what the rows left out carry (``runs_not_shown``)
-    and the way to read the rest, first in its hint. ``facts`` is the job's
-    whole table's (:func:`fact_index`); without it, the answer's own rows are
-    read, which no ``run_fields`` projected."""
+    and the way to read the rest, first in its hint. ``rows`` gives the job's
+    whole table before any ``run_fields`` projection, read once, off the loop
+    where the presentation runs."""
+    index: list[FactIndex] = []
 
     def for_job(
-        job_id: str | None, answer: Mapping[str, Any]
+        job_id: str | None, _answer: Mapping[str, Any]
     ) -> Callable[[dict[str, Any], Mapping[str, ListCut], Any, str | None], None]:
-        index = facts
-        if index is None:
-            runs = answer.get("runs")
-            items = runs.get("items") if isinstance(runs, Mapping) else None
-            index = fact_index(items if isinstance(items, list) else [])
+        if not index:
+            index.append(fact_index(rows()))
+        facts = index[0]
         record = run_rows_record(job_id) if job_id is not None else None
 
         def annotate(
@@ -790,7 +798,13 @@ def _say_where_the_runs_are(
             if entry.next is None:
                 return
             said = [_the_rest_of_the_rows(entry, job_id, run_fields, stored)]
-            left_out = runs_not_shown(index, entry.offset + entry.returned, record)
+            if job_id is None:
+                # Rows with no job are stored, and no tool's cursor argument
+                # reads a stored receipt: the stored file is the way to them.
+                runs["next_cursor"] = None
+                runs["hint"] = said[0]
+                reply["cut"][RUN_ROWS].pop("next", None)
+            left_out = runs_not_shown(facts, entry.offset + entry.returned, record)
             if left_out:
                 reply["runs_not_shown"] = left_out
                 said.append(_NOT_SHOWN_SENTENCE)
@@ -820,21 +834,29 @@ def _the_rest_of_the_rows(
 
 
 def receipt_parts(
-    run_fields: list[str] | None = None, snapshot: ReceiptSnapshot | None = None
+    run_fields: list[str] | None = None,
+    snapshot: ReceiptSnapshot | None = None,
+    rows: Sequence[Mapping[str, Any]] | None = None,
 ) -> JobAnswerParts:
     """What the reply layer needs to deliver a job's answer
     (``tools/_base.present_job_answer``): where its run rows are and the
     record they are read back from, the words a cut of them adds, the
     attached analysis's own trimming, and the measurements routes, which are
-    standing notes. ``snapshot`` gives the facts on every row whatever
-    ``run_fields`` keeps."""
-    # The rows as the job holds them, before any projection or native
-    # evidence is rendered: every fact a row carries is on them.
-    facts = None if snapshot is None else fact_index(list(snapshot.runs_by_key.values()))
+    standing notes. ``snapshot``, or ``rows`` for a receipt built without one,
+    is the whole table before any ``run_fields`` projection: the facts on
+    every row are read from it whatever ``run_fields`` keeps."""
+
+    def whole() -> Sequence[Mapping[str, Any]]:
+        # The rows as the job holds them, before any projection or native
+        # evidence is rendered: every fact a row carries is on them.
+        if snapshot is not None:
+            return list(snapshot.runs_by_key.values())
+        return rows or ()
+
     return JobAnswerParts(
         rows=RUN_ROWS,
         record=run_rows_record,
-        annotate=_say_where_the_runs_are(run_fields, facts),
+        annotate=_say_where_the_runs_are(run_fields, whole),
         trim_attached=trim_attached_analysis,
         attached=lambda data: _attached_result(dict(data)) is not None,
         route=measurements_routes,
@@ -1589,7 +1611,6 @@ def snapshot_receipt(
     control_token: str | None = None,
     lint_by_circuit: dict[str, list[dict[str, Any]]] | None = None,
     live_progress: Mapping[str, dict[str, Any]] | None = None,
-    measures: bool = False,
 ) -> ReceiptSnapshot:
     """Copy a job's complete receipt state without suspending the event loop.
 
@@ -1683,7 +1704,6 @@ def snapshot_receipt(
         analysis_observations=tuple(copy.deepcopy(analysis.observations)),
         analysis_request=copy.deepcopy(analysis.request),
         simulator_executable=job.simulator_executable,
-        measures=measures,
         lineage=(
             {
                 "root_job_id": job.recovery.root_job_id,
@@ -1715,22 +1735,27 @@ async def snapshot_receipt_live(
     does not. Every receipt that reports on a job in flight is taken here.
     """
     live_progress = await live_run_progress(job)
-    measures = await asyncio.to_thread(_requests_measures, job)
-    return snapshot_receipt(
+    snapshot = snapshot_receipt(
         job,
         state,
         control_token=control_token,
         lint_by_circuit=lint_by_circuit,
         live_progress=live_progress,
-        measures=measures,
+    )
+    # The decks of the cases the snapshot holds as produced, collected in the
+    # same loop step as its rows; their files are read after, off the loop.
+    decks = {case.staged_deck for case in job.cases if case.status == "produced"}
+    if not decks:
+        return snapshot
+    return dataclasses.replace(
+        snapshot, measures=await asyncio.to_thread(_requests_measures, decks)
     )
 
 
-def _requests_measures(job: ExperimentJob) -> bool:
-    """Whether a deck a finished case of ``job`` ran requests a ``.meas``,
-    read as every reader of a deck's requested outputs reads it
+def _requests_measures(decks: Collection[Path]) -> bool:
+    """Whether one of ``decks`` requests a ``.meas``, read as every reader of a
+    deck's requested outputs reads it
     (``result_observations.deck_observation_inputs``, kept per deck)."""
-    decks = {case.staged_deck for case in list(job.cases) if case.status == "produced"}
     for deck in decks:
         requested, _ = deck_observation_inputs(deck)
         if requested and requested.get("meas"):
@@ -1815,7 +1840,7 @@ def say_which_rows(
     read from the job's record as it stands now, what the rows after it carry
     (``runs_not_shown``), and the call that reads on."""
     job_id = snapshot.job_id
-    facts = fact_index(list(snapshot.runs_by_key.values()))
+    index: list[FactIndex] = []
 
     def annotate(
         reply: dict[str, Any], cut: Mapping[str, ListCut], _stored: Any, _paged: str | None
@@ -1835,8 +1860,11 @@ def say_which_rows(
             said.append("A row of a job still running may change between pages.")
         if entry.next is not None:
             said.append(_the_rest_of_the_rows(entry, job_id, run_fields))
+            if not index:
+                # Read once, where the presentation runs: off the loop.
+                index.append(fact_index(list(snapshot.runs_by_key.values())))
             left_out = runs_not_shown(
-                facts, entry.offset + entry.returned, run_rows_record(job_id)
+                index[0], entry.offset + entry.returned, run_rows_record(job_id)
             )
             if left_out:
                 reply["runs_not_shown"] = left_out

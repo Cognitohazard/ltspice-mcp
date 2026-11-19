@@ -1038,13 +1038,17 @@ async def _render_static_run_receipt(
     is_error: bool = False,
     run_fields: list[str] | None = None,
     delivery: Delivery = "run",
+    rows: list[dict[str, Any]] | None = None,
 ) -> types.CallToolResult:
     """A receipt built without a snapshot (a failure's), through the
     presenter: one with a job keeps its run rows behind the job's record, and
     one with none stores its cut rows."""
     reply = await present_job_answer(
         lambda _rung, _rows: copy.deepcopy(data),
-        receipt_parts(run_fields),
+        receipt_parts(
+            run_fields,
+            rows=rows if rows is not None else data.get("runs", {}).get("items", []),
+        ),
         tool="run_experiments",
         schema=RUN_EXPERIMENTS_OUTPUT_SCHEMA,
         budget=budget,
@@ -1742,7 +1746,14 @@ async def _routing_failure_response(
     finalize_receipt(data)
     # No job holds these cases, so a cut of their rows is stored and named by
     # its file, as every receipt is presented.
-    return await _render_static_run_receipt(data, budget, state, run_fields=args.run_fields)
+    return await _render_static_run_receipt(
+        data,
+        budget,
+        state,
+        run_fields=args.run_fields,
+        # The facts on each case, which run_fields may project out of the rows.
+        rows=runs_page(cases)["items"],
+    )
 
 
 def submission_error_payload(

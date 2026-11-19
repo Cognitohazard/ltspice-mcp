@@ -275,6 +275,34 @@ async def test_a_routing_failure_receipt_is_presented_like_every_receipt(
     cut = data["cut"]["/runs/items"]
     assert (cut["total"], cut["returned"]) == (120, 50)
     assert data["stored_answer"]["path"] in data["hint"]
+    # No tool reads a stored receipt by cursor: the reply offers none.
+    assert "next" not in cut
+    assert "next_cursor" not in data["runs"]
+
+
+@pytest.mark.asyncio
+async def test_a_projected_routing_failure_still_names_the_failed_runs_it_left_out(
+    state_with_sim: SessionState, grid_deck: Path, monkeypatch: pytest.MonkeyPatch
+):
+    def refuse(*_args: Any, **_kwargs: Any) -> Any:
+        raise experiments_module.DeckStagingError(
+            "artifact_route_unavailable", "No Windows-native temp directory is available."
+        )
+
+    monkeypatch.setattr(experiments_module, "resolve_experiment_paths", refuse)
+    state_with_sim.config.default_budget = 0
+    result = await experiments_module.handle_run_experiments(
+        experiments_module.RunExperimentsInput.model_validate(
+            _grid(grid_deck, 120, "routed-projected", run_fields=["case_id"])
+        ),
+        state_with_sim,
+    )
+    data = result.structured_content
+    assert data is not None
+    assert all(set(row) == {"case_id"} for row in data["runs"]["items"])
+    entry = data["runs_not_shown"]["status.failed"]
+    assert entry["count"] == 70
+    assert all("cursor" not in run for run in entry["runs"])
     assert experiment_runner is not None
 
 
