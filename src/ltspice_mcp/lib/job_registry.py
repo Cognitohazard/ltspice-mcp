@@ -153,7 +153,7 @@ class JobRegistry:
     """Per-job locks held only across the rename that lands a write (or the
     deletion), never across the write itself."""
     _persist_guards_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
-    # The three per-job tables are kept after eviction: a few integers per job
+    # The three per-job tables are kept after eviction: two integers and a lock per job
     # ever run, and the landed generation must outlive a deletion.
 
     # ------------------------------------------------------------------
