@@ -1,0 +1,5 @@
+* a deck whose file name is not ASCII
+I01 0 n01 1
+R01 n01 0 1k
+.op
+.end

@@ -1,0 +1,5 @@
+* a V card with nothing after its nodes
+.op
+Rn0 v_a 0 1k
+Vn v_a v_b
+.end

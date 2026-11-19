@@ -1,0 +1,44 @@
+* each two-terminal and controlled element with a value after its nodes
+* Every node name belongs to one element, so a word the raw holds as a
+* node voltage is a node of that element's card.
+.op
+Ir 0 r_a 1m
+Rr r_a r_b 1k
+Rr0 r_b 0 1k
+Ic 0 c_a 1m
+Cc c_a c_b 1n
+Rc0 c_a 0 1k
+Rc1 c_b 0 1k
+Il 0 l_a 1m
+Ll l_a l_b 1u
+Rl0 l_b 0 1k
+Vv v_a v_b 2
+Rv0 v_a 0 1k
+Rv1 v_b 0 1k
+Ii i_a i_b 1m
+Ri0 i_a 0 1k
+Ri1 i_b 0 1k
+Ve e_ip e_in 1
+Re0 e_in 0 1k
+Ee e_op e_on e_ip e_in 3
+Re1 e_on 0 1k
+Vg g_ip g_in 1
+Rg0 g_in 0 1k
+Gg g_op g_on g_ip g_in 1m
+Rg1 g_op 0 1k
+Rg2 g_on 0 1k
+Vfs f_s 0 0
+Ifs 0 f_s 1m
+Ff f_a f_b Vfs 2
+Rf0 f_a 0 1k
+Rf1 f_b 0 1k
+Vhs h_s 0 0
+Ihs 0 h_s 1m
+Hh h_a h_b Vhs 1k
+Rh0 h_a 0 1k
+Rh1 h_b 0 1k
+Ik 0 k_a 1m
+Lk1 k_a 0 1u
+Lk2 k_b 0 1u
+Kk Lk1 Lk2 0.5
+.end

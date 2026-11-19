@@ -1,0 +1,16 @@
+* the forms of a .param card's assignments, each read by the source it sets
+.op
+.param pa=1k
+V01 n01 0 {pa}
+.param pb1=2k pb2=3k
+V02 n02 0 {pb1}
+V03 n03 0 {pb2}
+.param pc={4k}
+V04 n04 0 {pc}
+.param pd = 5k
+V05 n05 0 {pd}
+.param pe =6k
+V06 n06 0 {pe}
+.param pf= 7k
+V07 n07 0 {pf}
+.end

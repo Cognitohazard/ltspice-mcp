@@ -86,7 +86,28 @@ GRIDS = grids()
 #: sign of its operands, every base and exponent of ** and the caret, the
 #: unary operators, the chains but two powers, every wrap but braces, and an
 #: expression of parameters.
+#:
+#: deck-card: the decks of behaviour card-grid fill every coordinate no
+#: recording does: a + line after its card, right after the title and first
+#: in an included file; a ; inside braces and inside quotes; a .end inside a
+#: subcircuit; every .ends form; a carriage return alone and a form feed; a
+#: file name that is not ASCII; and every directive in each spelling and case
+#: but .save in lower case.
+#:
+#: element-node: the decks of behaviour element-grid fill every coordinate no
+#: recording does: a value after the nodes of every letter that takes one, a
+#: model after those of D, Q, M, J, S, X and A, a keyed value after those of
+#: E and G, nothing after a two-terminal value element, a BJT with its
+#: substrate node of its own and a MOSFET with three nodes, each switch state,
+#: and PARAMS: in upper case.
+#:
+#: declaration: the decks of behaviour declaration-grid fill every coordinate
+#: but a .model card's parameters in parentheses and bare and a subcircuit's
+#: params:: every form of a .param card, and a .model card's level.
 UNRECORDED: dict[str, dict[str, int]] = {
+    "deck-card": {"ltspice26": 51, "ltspice17": 51},
+    "element-node": {"ltspice26": 28, "ltspice17": 28},
+    "declaration": {"ltspice26": 11, "ltspice17": 11},
     "value-number": {"ltspice26": 162, "ltspice17": 162},
     "expression-value": {"ltspice26": 76, "ltspice17": 76},
     "printed-measurement": {"ltspice26": 416, "ltspice17": 415},
