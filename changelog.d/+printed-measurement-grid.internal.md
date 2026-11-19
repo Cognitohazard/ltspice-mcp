@@ -1,0 +1,1 @@
+The recorded LTspice behaviour of printed measurements is indexed as a grid of cells (measurement form, analysis, stepping, outcome), and one test checks every recorded cell through every route that reads a measurement.
