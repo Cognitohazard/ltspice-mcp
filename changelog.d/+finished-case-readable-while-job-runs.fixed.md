@@ -1,0 +1,1 @@
+A finished case of a job is now read while another case of the same job still runs: `inspect(kind="results")`, `plot_waveform`, `analyze_results` and the Python API's result and log reads refuse only the cases that cannot be read yet, each with its own reason, instead of every case of a job that has not ended.
