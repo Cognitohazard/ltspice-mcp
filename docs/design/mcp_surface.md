@@ -306,9 +306,12 @@ The target is one number: the tool's `budget` argument where it has one
 `budget` is no target: every answer is sent whole, except the lists an MCP
 reply still caps by count, each named in `cut` and continued by its cursor,
 so no reply carries an unbounded collection: a job's run rows at 50, and an
-`analyze_results` recipe's `per_run` page at its `limit` (50 by default), its
-`values` and `spec.fail_cases` and `coverage.missing_cases` at 100. The
-Python API's automatic mode returns every row.
+`analyze_results` recipe's `per_run` page at its `limit` (50 by default) and
+every other list of its answer the presenter may cut (`values`, `groups`,
+`spec.fail_cases`, `spec.outliers`, `coverage.missing_cases`,
+`signals_available`, `source_hashes`) at 100 (`analyze.answer_caps`). Every
+other list is declared never cut, with its bound (`tests/test_reply_cuts.py`).
+The Python API's automatic mode returns every row.
 
 - An answer within the target is sent exactly as "Fields left out" makes it.
   It carries neither field below, and nothing is stored.
@@ -318,7 +321,12 @@ Python API's automatic mode returns every row.
   from, so the same answer of the same inputs is one file.
 - Then the lists the schema declares `items` or `rows` (`x-cut`,
   `lib/reply_cuts.py`) are cut from the end, whole entries only, the largest
-  list first, until the reply fits or each holds one entry. A list declared
+  list first, until the reply fits or each holds one entry; a list whose cut
+  to one entry would not shorten the reply (a short list, whose `cut` entry
+  costs more than its entries) is left whole, and a list that is over at one
+  entry is held there while the next is cut. A reply is over its target only
+  when the lists, each at the least the search cuts it to, are over it
+  together. A list declared
   `never` is sent whole, and nothing inside a list's entries is cut apart from
   its entry: a list inside a row goes with the row. A reply that still does
   not fit goes out over the target.
@@ -346,7 +354,16 @@ A cut reply carries two fields, declared once in `tools/_base.py`:
   for 0; `next` is the cursor for the entries after them, absent on the last.
 - `stored_answer`: `{id, path, snapshot}`. `path` is the stored JSON file,
   whose `answer` is the complete answer; `snapshot` is what it was computed
-  from, such as a file's `sha256`.
+  from, such as a file's `sha256`. When the file cannot be written (a full
+  disk), the reply is still sent, cut as it would be: `stored_answer` holds
+  only `not_kept` (`{code: "stored_answer_not_kept", message}`, saying why
+  and to ask again with a larger budget, a narrower request or, for a
+  waveform, the CSV format), and no `cut` entry carries a cursor.
+
+A stored answer's file has its expiry as its modification time, so deciding
+which have expired reads none of them. A cut reply sweeps the expired ones
+at most once every `presenter.SWEEP_INTERVAL_S` (10 minutes): it spends one
+stat on the sweep, or, when one is due, one stat per stored answer.
 
 **A list the server already keeps.** A list a record of the server holds
 whole, a job's run rows in its record, is a second kind of source. When it is
@@ -366,9 +383,16 @@ it slices the stored file: nothing is computed again and no request is
 replayed, so a page is never refused as stale. It carries `stored_answer`, so
 the caller compares the snapshot with the file to tell whether the page
 predates a change. A page holds the list it reads from the offset on, cut to
-the target the same way, and the answer's other fields as stored; each other
-cuttable list is named in `cut` with none returned and the cursor that reads
-it from its start. A cursor for an answer that has expired or is missing is
+the target the same way, and what identifies it: `page_of`, the pointer of
+that list, so a field the page leaves out is read as given by the first reply
+and not as absent; `cut`, naming only that list (where the page starts, how
+many it holds, the cursor for the rest); and `stored_answer`. Of the rest of
+the answer it keeps only the objects on the way to the list, each with its
+text, number and flag fields and the objects its schema requires in their
+least form (`presenter.page_skeleton`): no other list, no observations, no
+notes the first reply gave. Each other list is read on from the first
+reply's own `cut` entry. The rows of a job read with `jobs(action="runs")`
+are the precedent: the rows and their counts. A cursor for an answer that has expired or is missing is
 refused with `invalid_cursor`, saying the stored answer is gone and how to
 compute a fresh one. The tool's `hint` names three ways to read the rest: the
 stored file, the call with the cursor, and the same call through the Python
@@ -1686,7 +1710,8 @@ answers, so a page reads the steps its first reply read.
 Output: `outcome, coverage {runs_requested, runs_analyzed, runs_running?, missing_cases: Page},
 results {key -> {metric, units, reduced[], groups?, spec?,
 per_run?: Page, values?, warnings}}, observations[],
-failures[] {code, stage, where, message, wheres?, count?}, signals_available?,
+failures[] {code, stage, where, message, wheres?, count?},
+signals_available? [{manifest_id, signals[]}],
 source_hashes, result_set_id, rows_not_shown?, cut?, stored_answer?, cursor?,
 next?, hint`.
 

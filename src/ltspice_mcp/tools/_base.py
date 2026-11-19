@@ -608,16 +608,34 @@ CUT_SCHEMA: dict[str, Any] = {
     },
 }
 
+#: ``page_of``: present on a page read from a stored answer
+#: (``presenter.present_page``).
+PAGE_OF_SCHEMA: dict[str, Any] = {
+    "type": "string",
+    "description": (
+        "Present on a page: the JSON Pointer of the list this page reads. A page holds "
+        "that list's entries and what identifies it; every other field the first reply "
+        "gave is left out, not absent."
+    ),
+}
+
 #: ``stored_answer``: where the complete answer behind a cut reply is kept.
 STORED_ANSWER_SCHEMA: dict[str, Any] = {
     "type": "object",
     "description": (
         "Present beside cut: the complete answer, kept as JSON under 'answer' in the "
-        "file at path until it expires, and what it was computed from."
+        "file at path until it expires, and what it was computed from; or, when it "
+        "could not be written, only not_kept, and the cut entries carry no cursor."
     ),
     "properties": {
         "id": {"type": "string"},
         "path": {"type": "string"},
+        "not_kept": {
+            "type": "object",
+            "description": "Why the answer could not be kept, and what to ask instead.",
+            "properties": {"code": {"type": "string"}, "message": {"type": "string"}},
+            "required": ["code", "message"],
+        },
         "snapshot": {
             "type": "object",
             "description": (
@@ -626,7 +644,6 @@ STORED_ANSWER_SCHEMA: dict[str, Any] = {
             ),
         },
     },
-    "required": ["id", "path", "snapshot"],
 }
 
 # Output-schema fragment for the optional ``hint`` key: caller guidance a

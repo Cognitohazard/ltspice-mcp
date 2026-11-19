@@ -42,6 +42,21 @@ KINDS_PER_ENTRY: Final = 2
 #: The group the groups the bound left out are summed into.
 FOLDED: Final = "*"
 
+#: What a longer case id or count of a later page may add to the reserve a
+#: caller makes for the part (``presenter._fit``'s ``apart``).
+RESERVE_MARGIN: Final = 16
+
+
+def log_kinds() -> list[str]:
+    """The kinds of fact a run's log gives a row, whoever lists the row: each
+    diagnostic code and each coverage value (``lib/log_conditions.py``)."""
+    from ltspice_mcp.lib import log_conditions
+
+    return [
+        *(f"diagnostics.{code}" for code in sorted(log_conditions.diagnostic_codes())),
+        *(f"diagnostics_coverage.{value}" for value in log_conditions.COVERAGE),
+    ]
+
 
 @dataclass(frozen=True)
 class Facts:

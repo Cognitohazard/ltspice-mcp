@@ -336,8 +336,8 @@ target. If you omit it, the server's default (`[analysis] default_budget`,
 4000 tokens) is the target. With the config value set to `0` and no `budget`
 there is no target: a reply is sent whole, except that a reply about a job
 holds at most 50 run rows, and an `analyze_results` reply at most a `per_run`
-page's `limit` (50 by default) and 100 rows of each other list. The Python API
-returns every row.
+page's `limit` (50 by default) and 100 entries of each other list it can cut.
+The Python API returns every row.
 
 `run_experiments` and `jobs` cut a reply over its target by run rows, whole
 rows from the end, keeping at least one. The reply's `cut` names what it left
@@ -366,7 +366,8 @@ list with its `next`; pass it as `continue: {result_set_id, cursor}` (the
 reply's `next` holds the first) to read the rest, sliced from the stored
 answer: nothing is evaluated again, so a page shows the rows as computed even
 if a source changed since, and its `stored_answer.snapshot` says which
-snapshot they are of. A cursor lasts as long as the stored answer
+snapshot they are of. A page holds only its list (`page_of`); read each
+other list from the first reply's `cut`. A cursor lasts as long as the stored answer
 (`result_set_ttl_hours`, 24 hours by default); after that, send the request
 again. `rows_not_shown` names, per recipe, the rows left out that carry a fact
 (`failed_measurements`, `unreadable`, `diagnostics.<code>`, ...), up to 3 of

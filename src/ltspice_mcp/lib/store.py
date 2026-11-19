@@ -874,6 +874,11 @@ class Store:
             f"Invalid stored answer id: {answer_id!r}",
         )
 
+    def stored_answers_swept(self) -> Path:
+        """The empty file whose modification time is when the stored answers
+        were last swept (``lib/presenter.py``)."""
+        return self.results_dir / ".stored_answers_swept"
+
     def result_artifacts(self, result_set_id: str) -> Path:
         """Files one result set points at, deleted with it."""
         return self.results_dir / "artifacts" / _validate_name(result_set_id, "result_set_id")

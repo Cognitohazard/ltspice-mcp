@@ -71,6 +71,7 @@ from ltspice_mcp.tools._base import (
     ENVELOPE_ERROR_SCHEMA,
     HINT_SCHEMA,
     OUTCOME_SCHEMA,
+    PAGE_OF_SCHEMA,
     REPEATABLE_CHANGE_ANNOTATIONS,
     STORED_ANSWER_SCHEMA,
     ToolInput,
@@ -658,6 +659,7 @@ def _jobs_page_schema(
     }
     if action == "list":
         properties["stored_answer"] = STORED_ANSWER_SCHEMA
+        properties["page_of"] = PAGE_OF_SCHEMA
     required = [*_JOBS_COMMON_REQUIRED, *page["required"]]
     if addressed:
         properties.update(

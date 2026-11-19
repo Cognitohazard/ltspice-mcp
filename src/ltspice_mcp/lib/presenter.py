@@ -43,13 +43,14 @@ import contextlib
 import functools
 import json
 import logging
+import os
 import re
 import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from ltspice_mcp.errors import InvalidCursorError
 from ltspice_mcp.lib import now, parse_iso_datetime, read_text_file
@@ -301,7 +302,9 @@ def _fit(
     A list starts at its cap, when ``caps`` names one (a count the caller set,
     such as a page size). The largest list still holding more than one entry
     is cut first, to the most entries that let the reply fit; when none does,
-    to one entry, and the next largest is cut.
+    to one entry, and the next largest is cut. A list whose cut to one entry
+    would make the reply no shorter (a short list, whose ``cut`` entry costs
+    more than its entries) is left as it is.
 
     ``apart`` names, by JSON Pointer, the fields of a reply that are sized
     apart, each with the bound it reserves: a note the annotation adds on the
@@ -309,9 +312,11 @@ def _fit(
     against the target less those bounds, without those fields, so the size
     grows with every entry kept and a binary search is right. The reserve is
     a first estimate: the whole reply at the count found decides, and while it
-    is over, one entry comes off. Where the search finds no count, every count
-    that fits without the reserve is tried whole, from the largest. A reply is
-    over its target only when one entry is.
+    is over, one entry comes off; a list that is over at one entry is held
+    there and the search goes on to the next. Where the search finds no
+    count, every count that fits without the reserve is tried whole, from
+    the largest. A reply is over its target only when the lists, each at the
+    least this search would cut it to, are over it together.
     """
     apart = apart or {}
     reserve = sum(apart.values())
@@ -326,16 +331,21 @@ def _fit(
         pointer: min(len(entries), max(1, (caps or {}).get(pointer, len(entries))))
         for pointer, entries in sources.items()
     }
-    if whole(keep) <= target:
+    current = whole(keep)
+    if current <= target:
         return keep
+    settled: set[str] = set()
     while True:
-        open_lists = [pointer for pointer, count in keep.items() if count > 1]
+        open_lists = [
+            pointer for pointer, count in keep.items() if count > 1 and pointer not in settled
+        ]
         if not open_lists:
             return keep
         largest = max(
             open_lists,
             key=lambda p: len(json.dumps(sources[p][: keep[p]], default=str)),
         )
+        settled.add(largest)
         best = _largest(
             lambda count, at=largest: bare({**keep, at: count}) + reserve <= target,
             keep[largest] - 1,
@@ -363,9 +373,15 @@ def _fit(
         while best is not None and best > 1 and whole({**keep, largest: best}) > target:
             best -= 1
         if best is not None:
-            keep[largest] = best
-            return keep
-        keep[largest] = 1
+            size = whole({**keep, largest: best})
+            if size <= target:
+                keep[largest] = best
+                return keep
+        # No count of this list fits with the others as they are: it is held
+        # at one entry, when that shortens the reply, and the next is cut.
+        size = whole({**keep, largest: 1})
+        if size < current:
+            keep[largest], current = 1, size
 
 
 def _largest(fits: Callable[[int], bool], most: int) -> int | None:
@@ -415,28 +431,58 @@ def _expired(data: Mapping[str, Any]) -> bool:
     return expires is None or expires <= now()
 
 
+#: The least time, in seconds, between two sweeps a cut reply runs.
+SWEEP_INTERVAL_S: Final = 600.0
+
 def cleanup(store: Store) -> int:
-    """Delete the stored answers past their expiry; how many were deleted."""
+    """Delete the stored answers past their expiry; how many were deleted.
+
+    A stored answer's file has its expiry as its modification time
+    (:func:`_store_answer`), so the sweep reads no answer: one stat per file.
+    """
     removed = 0
     try:
         paths = list(store.results_dir.glob(f"{STORED_PREFIX}*.json"))
     except OSError:
         return 0
+    moment = now().timestamp()
     for path in paths:
         try:
-            data = json.loads(read_text_file(path))
-            if not isinstance(data, dict) or _expired(data):
+            if path.stat().st_mtime <= moment:
                 path.unlink()
                 removed += 1
-        except (OSError, ValueError):
+        except OSError:
             continue
     return removed
 
 
-def _store_answer(store: Store, stored: StoredAnswer, ttl_hours: float) -> None:
-    """Write ``stored`` to its file, sweeping the expired ones first."""
+def _sweep_if_due(store: Store) -> None:
+    """Sweep when the last sweep is :data:`SWEEP_INTERVAL_S` old or more: a
+    cut reply spends one stat here, and on a due sweep one more per stored
+    answer, reading none."""
+    marker = store.stored_answers_swept()
+    moment = now().timestamp()
+    try:
+        last = marker.stat().st_mtime
+    except OSError:
+        last = None
+    if last is not None and moment - last < SWEEP_INTERVAL_S:
+        return
+    try:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch()
+        os.utime(marker, (moment, moment))
+    except OSError:
+        return
     cleanup(store)
+
+
+def _store_answer(store: Store, stored: StoredAnswer, ttl_hours: float) -> None:
+    """Write ``stored`` to its file, with its expiry as the file's
+    modification time, after a sweep when one is due."""
+    _sweep_if_due(store)
     created = now()
+    expires = created + timedelta(hours=ttl_hours)
     store.ensure_root()
     stored.path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(
@@ -446,11 +492,31 @@ def _store_answer(store: Store, stored: StoredAnswer, ttl_hours: float) -> None:
             id=stored.id,
             tool=stored.tool,
             created_at=created.isoformat(),
-            expires_at=(created + timedelta(hours=ttl_hours)).isoformat(),
+            expires_at=expires.isoformat(),
             snapshot=stored.snapshot,
             answer=stored.answer,
         ),
     )
+    stamp = expires.timestamp()
+    os.utime(stored.path, (stamp, stamp))
+
+
+#: The code of the note a cut reply carries when its answer was not kept.
+NOT_KEPT_CODE: Final = "stored_answer_not_kept"
+
+
+def not_kept_note(reason: str) -> dict[str, str]:
+    """What a cut reply says when its complete answer could not be written:
+    it cannot be read on, why, and what to ask instead."""
+    return {
+        "code": NOT_KEPT_CODE,
+        "message": (
+            f"The complete answer could not be kept ({reason}), so this cut reply "
+            "cannot be read on and its cut entries carry no cursor. Ask again with a "
+            "larger budget or a narrower request; analyze_results can also write a "
+            "waveform's every sample to a file with format 'csv'."
+        ),
+    }
 
 
 def _cursor(answer_id: str, pointer: str, offset: int) -> str:
@@ -517,6 +583,8 @@ class _Placed:
 
     answer: Answer
     stored: StoredAnswer | None = None
+    #: Why the stored copy could not be written, when it could not.
+    not_kept: str | None = None
     records: dict[str, Record] = field(default_factory=dict)
     caps: dict[str, int] = field(default_factory=dict)
     apart: dict[str, int] = field(default_factory=dict)
@@ -706,6 +774,7 @@ def _present_lists(
     paged: str | None,
     fixed: Mapping[str, ListCut] | None = None,
     over: Over | None = None,
+    counts: Mapping[str, int] | None = None,
 ) -> Presented:
     """``base`` with each list of ``sources`` cut to fit ``target``. A list
     is named in ``cut`` of the answer that owns it when the reply holds less
@@ -713,15 +782,20 @@ def _present_lists(
     ``fixed`` names lists the reply leaves out whole or thinned. A list in
     its answer's ``records`` continues by a record cursor; every other by a
     cursor into its answer's stored copy. Every pointer here is global: each
-    answer's ``cut`` names its lists relative to its root."""
+    answer's ``cut`` names its lists relative to its root. ``counts``, when
+    given, is the count of each list the reply keeps, decided already."""
     owners = {pointer: _owner(pointer, placed) for pointer in [*sources, *(fixed or {})]}
     caps = {pointer: cap for part in placed for pointer, cap in part.caps.items()}
     apart = {pointer: bound for part in placed for pointer, bound in part.apart.items()}
 
-    def next_cursor(pointer: str, end: int) -> str:
+    def next_cursor(pointer: str, end: int) -> str | None:
         part = owners[pointer]
         if pointer in part.records:
             return record_cursor(part.records[pointer], end)
+        if part.not_kept is not None:
+            # No copy to read on from: the entry says how many it holds, and
+            # the answer's stored_answer says why there is no cursor.
+            return None
         assert part.stored is not None, f"{pointer} is cut and is neither stored nor a record"
         return _cursor(part.stored.id, _relative(pointer, part.answer.root), end)
 
@@ -765,6 +839,8 @@ def _present_lists(
             node["cut"] = {pointer: entry.as_reply() for pointer, entry in mine.items()}
             if part.stored is not None:
                 node["stored_answer"] = part.stored.as_reply()
+            elif part.not_kept is not None:
+                node["stored_answer"] = {"not_kept": not_kept_note(part.not_kept)}
             if part.answer.annotate is not None:
                 part.answer.annotate(
                     node,
@@ -774,7 +850,7 @@ def _present_lists(
                 )
         return reply
 
-    keep = _fit(sources, build, target, caps, apart)
+    keep = dict(counts) if counts is not None else _fit(sources, build, target, caps, apart)
     reply = build(keep)
     size = _size(reply)
     if size > target and over is not None:
@@ -868,7 +944,11 @@ def present_many(
 
     totals = {pointer: len(resolve_pointer(reply, pointer)) for pointer in pointers}
 
-    def presented(document: dict[str, Any], thinned: Mapping[str, ListCut]) -> Presented:
+    def presented(
+        document: dict[str, Any],
+        thinned: Mapping[str, ListCut],
+        counts: Mapping[str, int] | None = None,
+    ) -> Presented:
         sources = {pointer: resolve_pointer(document, pointer) for pointer in pointers}
         return _present_lists(
             document,
@@ -880,6 +960,7 @@ def present_many(
             paged=None,
             fixed=thinned,
             over=over,
+            counts=counts,
         )
 
     def measured(document: dict[str, Any], thinned: Mapping[str, ListCut]) -> int:
@@ -924,13 +1005,25 @@ def present_many(
             for pointer, entry in shown.cut.items()
             if _owner(pointer, placed) is part and pointer not in part.records
         ):
-            _store_answer(store, part.stored, ttl_hours)
+            try:
+                _store_answer(store, part.stored, ttl_hours)
+            except OSError as exc:
+                logger.warning("stored answer %s not kept: %s", part.stored.id, exc)
+                part.stored, part.not_kept = None, f"{type(exc).__name__}: {exc}"
+                redo = True
         else:
             # Every list of this answer that is not a record went out whole.
             part.stored = None
             redo = True
     if redo:
-        shown = presented(document, thinned)
+        # The same counts, without the stored copy no list continues from:
+        # a search again could cut a list the reply now has no copy of.
+        counts = {
+            pointer: shown.cut[pointer].returned if pointer in shown.cut else len(entries)
+            for pointer in pointers
+            if isinstance(entries := resolve_pointer(document, pointer), list)
+        }
+        shown = presented(document, thinned, counts)
     return replace(shown, target=target)
 
 
@@ -950,29 +1043,25 @@ def present_page(
     """The entries of the list at ``pointer`` from ``offset`` on, read from
     ``stored`` and cut to fit ``target``, and to ``cap`` entries when given.
 
-    The page carries the stored answer's other fields as they are, but none of
-    its other cuttable lists: each is named in ``cut`` with none returned and
-    the cursor that reads it from the start. Its series are thinned as a
-    first reply's are (``series``).
+    A page holds its list's entries and what identifies it, and nothing the
+    first reply already gave (:func:`page_skeleton`): ``page_of`` names the
+    list, ``cut`` names only it (where it starts, how many it holds, the
+    cursor for the rest) and ``stored_answer`` the answer it reads. Its
+    series are thinned as a first reply's are (``series``).
     """
     answer = stored.answer
     whole = resolve_pointer(answer, pointer)
-    others = {
-        other: resolve_pointer(answer, other)
-        for other, _ in cuttable_lists(answer, schema)
-        if other != pointer
-    }
     placed = _place(
         [Answer("", schema, stored.tool, stored.snapshot, annotate, None, None, apart)]
     )
     placed[0].stored = stored
     if cap is not None:
         placed[0].caps[pointer] = cap
-    base = _with_lists(answer, {**dict.fromkeys(others), pointer: whole[offset:]})
-    left_out = {
-        other: ListCut(total=len(entries), returned=0, next=_cursor(stored.id, other, 0))
-        for other, entries in others.items()
+    base = {
+        **_with_lists(page_skeleton(answer, schema, pointer), {pointer: whole[offset:]}),
+        PAGE_OF: pointer,
     }
+    left_out: dict[str, ListCut] = {}
 
     def page(
         document: dict[str, Any], thinned: Mapping[str, ListCut], aim: int, said: Over | None
@@ -1003,6 +1092,49 @@ def present_page(
         document, thinned = _thin(sliced, placed, series, target, measured)
         shown = page(document, thinned, aim, over)
     return shown
+
+
+#: The field a page carries: the JSON Pointer of the list it is a page of, so
+#: a field it leaves out is read as given by the first reply, not as absent.
+PAGE_OF: Final = "page_of"
+
+
+def page_skeleton(answer: Mapping[str, Any], schema: Mapping[str, Any], pointer: str) -> dict:
+    """What a page of the list at ``pointer`` keeps of ``answer``: the objects
+    on the way to the list, each with its text, number and flag fields and
+    the objects its schema requires in their own least form, and the list. Everything else the first reply gave, and the page leaves out."""
+    keys = split_pointer(pointer)
+
+    def child_schema(node_schema: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+        properties = node_schema.get("properties") or {}
+        if key in properties:
+            return properties[key]
+        extra = node_schema.get("additionalProperties")
+        return extra if isinstance(extra, Mapping) else {}
+
+    def least(node: Mapping[str, Any], node_schema: Mapping[str, Any]) -> dict[str, Any]:
+        # Its text, number and flag fields as they are (a tool's action, a
+        # recipe's metric, a page's counts), each object its schema requires
+        # in its own least form; every list and every other object is left
+        # out.
+        required = set(node_schema.get("required") or ())
+        kept: dict[str, Any] = {}
+        for key, value in node.items():
+            if isinstance(value, str | int | float):
+                kept[key] = value
+            elif isinstance(value, Mapping) and key in required:
+                kept[key] = least(value, child_schema(node_schema, key))
+        return kept
+
+    def keep(node: Any, node_schema: Mapping[str, Any], rest: list[str]) -> Any:
+        if not rest or not isinstance(node, Mapping):
+            return node
+        kept = least({k: v for k, v in node.items() if k != rest[0]}, node_schema)
+        if rest[0] in node:
+            kept[rest[0]] = keep(node[rest[0]], child_schema(node_schema, rest[0]), rest[1:])
+        return kept
+
+    return keep(answer, schema, keys)
 
 
 def present_record_page(

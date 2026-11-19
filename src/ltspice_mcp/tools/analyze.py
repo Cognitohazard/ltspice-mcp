@@ -25,7 +25,7 @@ from collections.abc import Set as AbstractSet
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path, PurePath
 from stat import S_ISREG
-from typing import Annotated, Any, NamedTuple
+from typing import Annotated, Any, Final, NamedTuple
 from weakref import WeakValueDictionary
 
 import numpy as np
@@ -67,6 +67,7 @@ from ltspice_mcp.lib.presenter import (
     ListCut,
     Series,
     StoredAnswer,
+    cuttable_lists,
     join_pointer,
     resolve_pointer,
     split_pointer,
@@ -115,6 +116,7 @@ from ltspice_mcp.tools._base import (
     DIAGNOSTICS_COVERAGE_SCHEMA,
     HINT_SCHEMA,
     NOT_ESTABLISHED_SCHEMA,
+    PAGE_OF_SCHEMA,
     PRINTED_ONCE_SCHEMA,
     ROWS_WITHOUT_TARGET,
     RUN_DIAGNOSTICS_SCHEMA,
@@ -3205,12 +3207,19 @@ OUTPUT_SCHEMA: dict[str, Any] = {
                 "additionalProperties": False,
             },
         },
+        # One entry per source read, so the list is cut like any other:
+        # its count grows with the runs a request reads.
         "signals_available": {
-            "type": "object",
-            "additionalProperties": {
-                "type": "array",
-                "items": {"type": "string"},
-                CUT: ITEMS,
+            "type": "array",
+            CUT: ITEMS,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "manifest_id": {"type": "string"},
+                    # The traces one raw file holds: the file bounds them.
+                    "signals": {"type": "array", "items": {"type": "string"}, CUT: NEVER},
+                },
+                "required": ["manifest_id", "signals"],
             },
         },
         "source_hashes": {
@@ -3254,6 +3263,7 @@ OUTPUT_SCHEMA: dict[str, Any] = {
         "rows_not_shown": ROWS_NOT_SHOWN_SCHEMA,
         "cut": CUT_SCHEMA,
         "stored_answer": STORED_ANSWER_SCHEMA,
+        "page_of": PAGE_OF_SCHEMA,
         "cursor": {"type": ["string", "null"]},
         "next": {
             "type": ["object", "null"],
@@ -3266,10 +3276,10 @@ OUTPUT_SCHEMA: dict[str, Any] = {
         },
         "hint": {"type": "string"},
     },
+    # coverage and results are given by every first reply; a page (page_of)
+    # leaves them out where its list is not inside them.
     "required": [
         "outcome",
-        "coverage",
-        "results",
         "observations",
         "failures",
         "source_hashes",
@@ -3429,7 +3439,11 @@ def _assemble(a: AnalysisEvaluation) -> dict[str, Any]:
         "next": None,
     }
     if a.signals is not None:
-        data["signals_available"] = a.signals
+        data["signals_available"] = [
+            {"manifest_id": manifest_id, "signals": names}
+            for manifest_id, names in a.signals.items()
+            if names
+        ]
     hints: list[str] = []
     if any(case.get("code") == PathSecurityError.code for case in a.missing):
         hints.append(
@@ -3597,14 +3611,9 @@ def _row_identity(_index: int, row: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _kind_vocabulary() -> list[str]:
-    """Every kind :func:`row_kinds` can give a row."""
-    from ltspice_mcp.lib import log_conditions
-
-    return [
-        *(f"diagnostics.{code}" for code in sorted(log_conditions.diagnostic_codes())),
-        *(f"diagnostics_coverage.{value}" for value in log_conditions.COVERAGE),
-        *_FACT_FIELDS[:6],
-    ]
+    """Every kind :func:`row_kinds` can give an analysis row: a log's, and
+    the facts a row's value states."""
+    return [*not_shown.log_kinds(), *_FACT_FIELDS[:6]]
 
 
 #: The most ``rows_not_shown`` takes, in estimated tokens: every kind counted
@@ -3620,12 +3629,11 @@ ROWS_NOT_SHOWN_BOUND_TOKENS: int = not_shown.worst_bound(
     folded=True,
 )
 
-#: What a longer case id or count of a later page may add to a reserve.
-_RESERVE_MARGIN = 16
-
 
 def _row_lists(answer: Mapping[str, Any]) -> dict[str, list[Any]]:
-    """Each recipe's rows, by the pointer of the list that holds them."""
+    """Each recipe's rows, by the pointer of the list that holds them: its
+    ``per_run`` page when it has one, else its ``values``. The one answer to
+    which lists of this tool's answer hold rows (:func:`_is_row_list`)."""
     found: dict[str, list[Any]] = {}
     results = answer.get("results")
     for key, entry in results.items() if isinstance(results, Mapping) else ():
@@ -3637,6 +3645,15 @@ def _row_lists(answer: Mapping[str, Any]) -> dict[str, list[Any]]:
         elif isinstance(entry.get("values"), list):
             found[join_pointer(("results", key, "values"))] = entry["values"]
     return found
+
+
+def _is_row_list(pointer: str) -> bool:
+    """Whether ``pointer`` names a list :func:`_row_lists` may give: a
+    recipe's ``per_run`` page or its ``values``."""
+    keys = split_pointer(pointer)
+    return (
+        len(keys) >= 3 and keys[0] == "results" and keys[2:] in (["per_run", "items"], ["values"])
+    )
 
 
 def _recipe_of(pointer: str) -> str:
@@ -3689,9 +3706,11 @@ def answer_caps(
 ) -> dict[str, int]:
     """The most entries an MCP reply sends of each list of ``answer``: a
     recipe's ``per_run`` page at the request's ``include.per_run.limit``
-    (``snapshot``), which is part of the question, and, with no target, each
-    other list of rows at :data:`MAX_PAGE_SIZE`, so a reply with no target
-    still has a bound."""
+    (``snapshot``), which is part of the question, and, with no target, a
+    ``per_run`` page at :data:`ROWS_WITHOUT_TARGET`, ``spec.fail_cases`` at
+    ``_FAIL_CASE_PAGE_CAP`` and every other list the presenter may cut at
+    :data:`MAX_PAGE_SIZE`, so no list of a reply with no target is unbounded
+    (every other list is declared never cut, with its bound)."""
     caps: dict[str, int] = {}
     limit = snapshot.get("per_run_limit")
     results = answer.get("results")
@@ -3709,7 +3728,8 @@ def answer_caps(
                 join_pointer(("results", key, "per_run", "items")), ROWS_WITHOUT_TARGET
             )
     if target is None:
-        caps["/coverage/missing_cases/items"] = MAX_PAGE_SIZE
+        for pointer, _kind in cuttable_lists(answer, OUTPUT_SCHEMA):
+            caps.setdefault(pointer, MAX_PAGE_SIZE)
     return caps
 
 
@@ -3813,7 +3833,7 @@ def say_what_was_cut(
     first = part({p: ListCut(len(rows), 1) for p, rows in _row_lists(whole).items()}, None)
     if first:
         reserve = min(
-            estimate_tokens({"rows_not_shown": first}) + _RESERVE_MARGIN,
+            estimate_tokens({"rows_not_shown": first}) + not_shown.RESERVE_MARGIN,
             ROWS_NOT_SHOWN_BOUND_TOKENS,
         )
     return annotate, ({"rows_not_shown": reserve} if reserve else {})
@@ -3824,7 +3844,7 @@ def _point_evidence_at_rows(
 ) -> None:
     """Give each row an observation names (``evidence.rows``) the cursor that
     starts at it, when its recipe's rows are cut."""
-    lists = {_recipe_of(pointer): pointer for pointer in cut if pointer in _row_pointers(reply)}
+    lists = {_recipe_of(pointer): pointer for pointer in cut if _is_row_list(pointer)}
     if not lists:
         return
     observations = []
@@ -3846,17 +3866,6 @@ def _point_evidence_at_rows(
         ]
         observations.append({**observation, "evidence": {**evidence, "rows": named}})
     reply["observations"] = observations
-
-
-def _row_pointers(reply: Mapping[str, Any]) -> set[str]:
-    """The pointers of the lists of rows a reply of this tool may hold."""
-    found: set[str] = set()
-    results = reply.get("results")
-    for key, entry in results.items() if isinstance(results, Mapping) else ():
-        if isinstance(entry, Mapping):
-            found.add(join_pointer(("results", key, "per_run", "items")))
-            found.add(join_pointer(("results", key, "values")))
-    return found
 
 
 def _owned(reply: dict[str, Any], pointer: str) -> dict[str, Any]:
@@ -3920,16 +3929,32 @@ class StoredAnalysis:
     request: dict[str, Any]
 
 
+class AttachedAnalysisNotRendered(ResultError):
+    """A job's attached analysis this release does not render: one an
+    earlier release stored, told by its version."""
+
+    code = "attached_analysis_not_rendered"
+
+
+#: The code of the note that replaces such an analysis in a receipt.
+NOT_RENDERED_CODE: Final = AttachedAnalysisNotRendered.code
+
+_NOT_RENDERED = (
+    "The attached analysis was stored by an earlier release (no answer version "
+    "{version}); this release does not render it. Run analyze_results over the job "
+    "with the same recipes for its answer."
+)
+
+
 def stored_analysis(stored: Any) -> StoredAnalysis:
-    """The attached analysis a job's record holds, or ``ResultError`` for one
-    an earlier release stored in another shape."""
-    if analysis_snapshot.classify(stored) != "snapshot" or not isinstance(
-        stored.get("answer"), dict
+    """The attached analysis a job's record holds, or
+    :class:`AttachedAnalysisNotRendered` for one of another version."""
+    if (
+        analysis_snapshot.classify(stored) != "snapshot"
+        or stored.get("answer_version") != ANSWER_VERSION
+        or not isinstance(stored.get("answer"), dict)
     ):
-        raise ResultError(
-            "The attached analysis was stored by an earlier release in a shape this "
-            "build cannot render — re-run analyze_results against the job."
-        )
+        raise AttachedAnalysisNotRendered(_NOT_RENDERED.format(version=ANSWER_VERSION))
     return StoredAnalysis(
         stored["answer"], dict(stored.get("snapshot") or {}), dict(stored.get("request") or {})
     )
@@ -4400,9 +4425,29 @@ async def capture_attached_analysis(
         evaluation, include=evaluation.include.model_copy(update={"fields": list(_ROW_KEYS)})
     )
     answer = await asyncio.to_thread(_assemble, wide)
-    request = _request_inputs(args)
+    return attached_analysis_record(answer, evaluation.snapshot(), _request_inputs(args))
+
+
+#: The version of the attached analysis a job's record holds: its complete
+#: answer, the snapshot it was computed from and its request. An earlier
+#: release stored a snapshot of its own assembly under the same store
+#: version, with no such field; :func:`stored_analysis` tells the two apart
+#: by this, never by the shape failing.
+ANSWER_VERSION: Final = 2
+
+
+def attached_analysis_record(
+    answer: dict[str, Any], snapshot: dict[str, Any], request: dict[str, Any]
+) -> dict[str, Any]:
+    """The attached analysis as a job's record holds it, at
+    :data:`ANSWER_VERSION`."""
     return analysis_snapshot.envelope(
-        {"answer": answer, "snapshot": evaluation.snapshot(), "request": request}
+        {
+            "answer_version": ANSWER_VERSION,
+            "answer": answer,
+            "snapshot": snapshot,
+            "request": request,
+        }
     )
 
 

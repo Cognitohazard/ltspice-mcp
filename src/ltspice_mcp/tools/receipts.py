@@ -20,7 +20,7 @@ from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, get_args
 
-from ltspice_mcp.errors import PathSecurityError, ResultError
+from ltspice_mcp.errors import PathSecurityError
 from ltspice_mcp.lib import not_shown, services
 from ltspice_mcp.lib.asc_document import is_asc
 from ltspice_mcp.lib.continuation import call_to_continue
@@ -727,12 +727,10 @@ class RowFacts:
         if not note:
             return 0
         return min(
-            estimate_tokens({"runs_not_shown": note}) + _RESERVE_MARGIN, NOT_SHOWN_BOUND_TOKENS
+            estimate_tokens({"runs_not_shown": note}) + not_shown.RESERVE_MARGIN,
+            NOT_SHOWN_BOUND_TOKENS,
         )
 
-
-#: What a longer case id or count of a later page may add to a reserve.
-_RESERVE_MARGIN = 16
 
 #: The one group of ``runs_not_shown``: a job's run rows.
 _RUNS_GROUP = "runs"
@@ -768,12 +766,10 @@ def _no_cursor(_index: int) -> None:
 
 
 def _kind_vocabulary() -> list[str]:
-    """Every kind :func:`row_facts` can give a row."""
-    from ltspice_mcp.lib import log_conditions
-
+    """Every kind :func:`row_facts` can give a run row: a log's, and what a
+    run's measurements and status state."""
     return [
-        *(f"diagnostics.{code}" for code in sorted(log_conditions.diagnostic_codes())),
-        *(f"diagnostics_coverage.{value}" for value in log_conditions.COVERAGE),
+        *not_shown.log_kinds(),
         "failed_measurements",
         "measurements_not_established",
         "measurements_not_printed",
@@ -1267,17 +1263,25 @@ def render_receipt_snapshot(
     if snapshot.analysis_status != "not_requested":
         rendered_result: dict[str, Any] | None = None
         analysis_error = snapshot.analysis_error
+        not_rendered: dict[str, Any] | None = None
         if snapshot.analysis_result is not None:
             try:
                 rendered_result = analyze.render_attached_analysis(
                     snapshot.analysis_result, fields=analysis_fields, served=analysis_served
                 )
-            except ResultError as exc:
-                # An analysis an earlier release stored in another shape: only
-                # this part is replaced, by the note naming the call that reads
-                # it, and the receipt and its run rows still answer.
+            except analyze.AttachedAnalysisNotRendered as exc:
+                # An analysis an earlier release stored, told by its version:
+                # only this part is replaced, by the note naming the call that
+                # reads it, and the receipt and its run rows still answer.
                 analysis_error = str(exc)
+                not_rendered = {
+                    "code": analyze.NOT_RENDERED_CODE,
+                    "kind": "coverage",
+                    "detail": str(exc),
+                }
         analysis_observations = list(snapshot.analysis_observations)
+        if not_rendered is not None:
+            analysis_observations.append(not_rendered)
         data["analysis"] = {
             "status": snapshot.analysis_status,
             "result": rendered_result,
