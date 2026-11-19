@@ -44,7 +44,12 @@ def redirect_below(path: Path, root: Path) -> Path | None:
     exist yet redirects nowhere, so another thread creating or removing it at
     that moment changes nothing here. ``root`` itself may redirect; what lies
     above it is not looked at. A path with a ``..`` part, or one that does not
-    lie under ``root``, is answered with ``path`` itself, as a redirect is.
+    lie under ``root``, is answered with ``path`` itself, as a redirect is. A
+    component that cannot be looked at (access denied, a cloud provider that
+    is not running) is answered with that component: what it is is not known.
+    ``path`` is expected to be spelled from ``root``, as every caller builds
+    it; a path reaching the same folder through another link is matched by
+    identity once it reaches it.
 
     Nothing here compares the text of a resolved path: on Windows,
     ``Path.resolve`` of a path whose folder another thread creates or removes

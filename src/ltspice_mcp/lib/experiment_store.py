@@ -37,7 +37,7 @@ from ltspice_mcp.lib.job_types import NON_TERMINAL_LIVE_STATUSES, TERMINAL_STATU
 from ltspice_mcp.lib.native_records import NativeCaseRecord
 from ltspice_mcp.lib.raw_parser import has_valid_raw_header, other_raws, result_digest
 from ltspice_mcp.lib.recovery_records import CaseRecovery, JobRecovery, RecoveryError
-from ltspice_mcp.lib.redirect import redirect_below
+from ltspice_mcp.lib.redirect import redirect_below, same_location
 from ltspice_mcp.lib.simulator import dialect_for_simulator_name, raw_extension_for
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable, reported_build
 from ltspice_mcp.lib.store import (
@@ -296,7 +296,9 @@ def serialize_job(job: ExperimentJob) -> dict[str, Any]:
 def save_job(job: ExperimentJob) -> Path:
     """Persist an experiment at its validated working-store path."""
     validate_job_id(job.job_id)
-    root = job.store_path.parent.resolve()
+    # Not resolved: the record's folder exists, and on Windows resolving it
+    # while a peer creates the store can keep the ``\\?\`` prefix on.
+    root = job.store_path.parent.absolute()
     expected = root / f"{job.job_id}.json"
     # Whether the record redirects is answered from what is on disk: a writer
     # of the same job may create or replace the file at this moment, which on
@@ -725,8 +727,11 @@ def _record_owner(data: Mapping[str, Any]) -> tuple[int | None, str | None]:
 def load_job_from_path(path: Path, working_dir: Path) -> ExperimentJob | None:
     """Load one coordinator record after validating store-root containment."""
     store = Store(working_dir)
-    resolved = path.resolve()
-    if resolved.parent != store.experiments_dir:
+    resolved = store.experiments_dir / path.name
+    if (
+        not same_location(path.parent.absolute(), store.experiments_dir)
+        or redirect_below(resolved, store.experiments_dir) is not None
+    ):
         raise ValueError(f"Experiment record is outside the working store: {path}")
     validate_job_id(resolved.stem)
     data = _read_job_record(resolved)

@@ -25,7 +25,7 @@ import pytest
 
 from ltspice_mcp.lib.redirect import redirect_below, same_location
 from ltspice_mcp.lib.store import Store, parser_file_in
-from tests._source_scan import modules
+from tests._source_scan import modules, scopes
 from tests.conftest import LIVENESS_S, symlink_or_skip
 
 windows_only = pytest.mark.skipif(
@@ -48,13 +48,15 @@ def _between_lookups(
 
     Every lookup still goes to the system; only the moment another thread acts
     is chosen. When the code under test never makes such a lookup, ``change``
-    runs once it returns, so the folder ends in the same state either way.
+    does not run: the code answered without asking the system the question
+    whose answer the window changes.
     """
     import ntpath
 
     real = ntpath._getfinalpathname  # pyright: ignore[reportAttributeAccessIssue]
     asked = threading.Event()
     done = threading.Event()
+    closing = threading.Event()
     failures: list[BaseException] = []
 
     def hold(path: str) -> None:
@@ -76,7 +78,7 @@ def _between_lookups(
 
     def other() -> None:
         try:
-            if asked.wait(LIVENESS_S):
+            if asked.wait(LIVENESS_S) and not closing.is_set():
                 change()
         except BaseException as exc:  # reported on the asking thread
             failures.append(exc)
@@ -89,6 +91,7 @@ def _between_lookups(
     try:
         yield
     finally:
+        closing.set()
         asked.set()
         thread.join(LIVENESS_S)
     assert not thread.is_alive()
@@ -109,8 +112,7 @@ def test_parser_dir_whose_folder_appears_between_the_two_lookups(
     with _between_lookups(monkeypatch, "probe", found=False, change=parsing.mkdir):
         directory = store.parser_dir("probe")
 
-    assert directory.name == "probe"
-    assert directory.parent.samefile(parsing)
+    assert same_location(directory, parsing / "probe")
 
 
 def _parse_at_once(store: Store, threads: int) -> list[BaseException]:
@@ -133,6 +135,7 @@ def _parse_at_once(store: Store, threads: int) -> list[BaseException]:
         worker.start()
     for worker in workers:
         worker.join(LIVENESS_S)
+        assert not worker.is_alive(), "a parse never finished"
     return failures
 
 
@@ -404,6 +407,29 @@ _RESOLVED_COMPARISONS_ALLOWED = {
     ("lib/native_inputs.py", "item.path == variant.path.resolve()"),
     # A lookup by a resolved key, compared with a digest, not with a path.
     ("lib/native_inputs.py", "expected.get(variant.path.resolve()) != variant.sha256"),
+    # Deck staging names each source by its strict resolve (a file that
+    # exists and that staging reads, never one being created or removed), and
+    # these ask whether two such names are one source: whether the deck was
+    # exported from another, which source a staged copy came from, and
+    # whether two sources would land on one staged name.
+    ("lib/deck_staging.py", "source != authored"),
+    ("lib/deck_staging.py", "owner != resolved"),
+    ("lib/deck_staging.py", "resolved == source"),
+    ("lib/deck_staging.py", "entry.path == source"),
+    ("lib/deck_staging.py", "path != source"),
+    # Native inputs: which original capture a staged file came from, and
+    # whether a dependency is the root deck, by the same strict names.
+    ("lib/native_inputs.py", "previous != original"),
+    ("lib/native_inputs.py", "identity == root_identity"),
+    # Whether two staged dependencies are one file: a count, not a location.
+    ("lib/pdk_native.py", "len(set(dependency_paths)) != len(dependency_paths)"),
+    # The recent-circuits list, keyed by a circuit's resolved name; a
+    # mismatch keeps a duplicate entry, never a wrong file.
+    ("lib/recent.py", "e.get('path') != resolved"),
+    # Whether a path lies on a WSL drive mount: the form of a path.
+    ("lib/wsl.py", "parts[0] == '/'"),
+    ("lib/wsl.py", "parts[1] == 'mnt'"),
+    ("lib/wsl.py", "len(parts[2]) == 1"),
     # Which of a circuit's jobs ran it: both sides name a circuit file that
     # exists, so neither is being created or removed by the server meanwhile.
     (
@@ -413,21 +439,36 @@ _RESOLVED_COMPARISONS_ALLOWED = {
 }
 
 
+def _resolves(node: ast.AST, names: set[str]) -> bool:
+    """Whether ``node`` holds a ``resolve()`` call, or a name bound to one."""
+    return any(
+        (
+            isinstance(inner, ast.Call)
+            and isinstance(inner.func, ast.Attribute)
+            and inner.func.attr == "resolve"
+        )
+        or (isinstance(inner, ast.Name) and inner.id in names)
+        for inner in ast.walk(node)
+    )
+
+
 def test_no_check_compares_the_text_of_a_resolved_path():
+    """Every ``==`` or ``!=`` with a ``resolve()`` result on one side, called
+    there or bound to a name earlier in the same function."""
     found: set[tuple[str, str]] = set()
     for module, tree in modules().items():
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Compare) or not all(
-                isinstance(op, (ast.Eq, ast.NotEq)) for op in node.ops
-            ):
-                continue
-            sides = [node.left, *node.comparators]
-            if any(
-                isinstance(call, ast.Call)
-                and isinstance(call.func, ast.Attribute)
-                and call.func.attr == "resolve"
-                for side in sides
-                for call in ast.walk(side)
-            ):
-                found.add((module, ast.unparse(node)))
+        for _scope, nodes in scopes(tree):
+            names: set[str] = set()
+            for node in nodes:
+                if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+                    targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                    if _resolves(node.value, set()):
+                        names.update(t.id for t in targets if isinstance(t, ast.Name))
+            for node in nodes:
+                if (
+                    isinstance(node, ast.Compare)
+                    and all(isinstance(op, (ast.Eq, ast.NotEq)) for op in node.ops)
+                    and any(_resolves(side, names) for side in [node.left, *node.comparators])
+                ):
+                    found.add((module, ast.unparse(node)))
     assert found == _RESOLVED_COMPARISONS_ALLOWED
