@@ -363,6 +363,13 @@ NEVER_BOUNDS: dict[tuple[str, str], str] = {
         "the signals the call asks for in that panel; no cap"
     ),
     ("analysis.handle_plot_waveform", "ltspice.saved_panes"): _UNBOUNDED,
+    ("analysis.handle_plot_waveform", "cases_not_drawn"): (
+        "one per run the runs selection names, bounded by the job's cases"
+    ),
+    ("analysis.handle_plot_waveform", "signals_not_in_cases"): "one per signal drawn",
+    ("analysis.handle_plot_waveform", "signals_not_in_cases[].case_ids"): (
+        "one per case drawn, bounded by the job's cases"
+    ),
     ("analysis.handle_plot_waveform", "ltspice.saved_panes[].traces"): _UNBOUNDED,
     ("inspect_tools.handle_inspect", "results"): "one per query in the call, at most 64",
     ("inspect_tools.handle_inspect", "results[].error.supported"): (

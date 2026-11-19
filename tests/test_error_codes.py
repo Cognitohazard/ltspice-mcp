@@ -695,6 +695,7 @@ FROZEN_ERROR_CODES = (
     "sparse_sweep",
     "staging_collision",
     "startup_policy",
+    "step_not_found",
     "step_value_unavailable",
     "subcircuit_nodes_not_saved",
     "submission_committed",

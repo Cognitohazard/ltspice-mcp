@@ -169,6 +169,15 @@ deck. If the deck restricts what it saves, `.save` every signal a `.meas` uses;
 lint blocks a mismatch. A case that produced nothing is counted in
 `completeness`, and `outcome` is `"partial"`.
 
+### A sweep's cases in one chart
+
+`plot_waveform` with `runs` beside `job_id`, as an `analyze_results` source
+takes it (`"all"`, `[0, 2]`, `{case_ids: [...]}`), draws those cases in one
+chart. Each trace is labelled by the assignments that differ among the cases
+and by its step, each trace summary names its `case_id`, and
+`cases_not_drawn` names each case it left out and why. Cases of different
+analyses go in separate calls, and `in_ltspice` takes one case.
+
 ## Notes per tool
 
 - `run_experiments`: a reused `request_id` returns `idempotency_conflict` when

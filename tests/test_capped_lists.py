@@ -84,6 +84,10 @@ _ALLOWED: dict[str, str] = {
     "lib/step_values.py:listed": (
         "a refusal's sample of steps, step values or axes, ending in '(N in all)'"
     ),
+    "lib/points.py:label_assignments": (
+        "names a case by its id in a legend label where too many assignments differ; "
+        "the reply's cases list gives every assignment, so no list is cut"
+    ),
     "lib/signal_analysis.py:window_span": (
         "reads an axis a block of _WINDOW_CHUNK points at a time, every block; cuts nothing"
     ),

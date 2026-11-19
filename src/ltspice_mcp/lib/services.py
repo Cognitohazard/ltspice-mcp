@@ -17,7 +17,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, TypeVar
+from typing import TYPE_CHECKING, Any, Literal, Protocol, TypeVar
 
 import numpy as np
 
@@ -368,6 +368,13 @@ def compression_drops_points(source: AnalysisSource, raw: DecodedRaw) -> bool:
     )
     found = which_ltspice(producer.program, producer.build)
     return found is not None and found.generation == "xvii"
+
+
+class CaseIds(Protocol):
+    """A selection of a job's cases by id (``{case_ids: [...]}``)."""
+
+    @property
+    def case_ids(self) -> list[str]: ...
 
 
 #: Which of its solver's time points a transient's file holds, as
@@ -749,6 +756,47 @@ def experiment_case(
         selector = f"case_id={case_id!r}" if case_id is not None else f"run_index={run_index}"
         raise ResultError(f"Experiment job {job.job_id!r} has no case matching {selector}")
     return matches[0]
+
+
+@dataclass(frozen=True)
+class UnmatchedRun:
+    """A run a selection named that its job does not hold: a case id
+    (``case_not_found``) or a run index (``run_not_found``)."""
+
+    case_id: str | None
+    run_index: int | None
+    code: Literal["case_not_found", "run_not_found"]
+
+
+def select_cases(
+    job: ExperimentJob, runs: Literal["all"] | Sequence[int] | CaseIds
+) -> tuple[list[ExperimentCase], list[UnmatchedRun]]:
+    """The cases of ``job`` that a ``runs`` value names, in the job's order,
+    and each run it names that the job does not hold.
+
+    The one reading of the ``runs`` grammar of a job's source: ``"all"``, a
+    list of run indices, or ``{case_ids: [...]}`` (any object with a
+    ``case_ids`` list). ``analyze_results`` and ``plot_waveform`` both select
+    a job's cases through it, so one selection reads the same cases in both.
+    Whether each selected case can be read is the case's own answer
+    (``case_unreadable``), asked by the caller.
+    """
+    if isinstance(runs, str):
+        return list(job.cases), []
+    if isinstance(runs, Sequence):
+        wanted_indices = set(runs)
+        selected = [case for case in job.cases if case.run_index in wanted_indices]
+        found_indices = {case.run_index for case in selected}
+        return selected, [
+            UnmatchedRun(None, index, "run_not_found")
+            for index in sorted(wanted_indices - found_indices)
+        ]
+    wanted = set(runs.case_ids)
+    selected = [case for case in job.cases if case.case_id in wanted]
+    found = {case.case_id for case in selected}
+    return selected, [
+        UnmatchedRun(case_id, None, "case_not_found") for case_id in sorted(wanted - found)
+    ]
 
 
 def case_run_context(
