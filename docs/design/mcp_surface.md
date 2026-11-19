@@ -1059,8 +1059,10 @@ carries, shown or not (a coverage value such as
 its count alone. The whole note is held to one bound,
 `receipts.NOT_SHOWN_BOUND_TOKENS` (668 estimated tokens), whatever the number
 of kinds and runs, and rows are sized against the target less what the note
-reserves, so the search keeps every row that fits beside it; when none does,
-counts are tried whole before the reply says it is over. Rows keep their
+reserves (its size at one row, a first estimate). The whole reply at the
+count found decides: the note can be larger there, and while the reply is
+over, a row comes off. When no count fits beside the reserve, counts are tried
+whole; a reply says it is over its target only when one row is. Rows keep their
 order, so a cursor names a row by its index. It is absent when no row is left
 out or none left out carries such a fact, and it is never cut and never
 shortened. A receipt with no job (a routing failure) has no record: its cut
