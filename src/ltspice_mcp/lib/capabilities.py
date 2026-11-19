@@ -222,7 +222,8 @@ CAPABILITIES: tuple[Capability, ...] = (
     Capability(
         "results_beside_sheet",
         "refinement",
-        "Put a run's results where the simulator's window finds them for the sheet.",
+        "Put a run's results where the simulator keeps them for its circuit file, a sheet "
+        "or a netlist.",
         "ltspice_mcp.lib.sheet_results",
     ),
 )
@@ -568,8 +569,20 @@ ENTRIES: tuple[Entry, ...] = (
         "ltspice",
         "results_beside_sheet",
         "supported",
-        ("recorded:sheet-results-command",),
-        mechanism="A copy of the run's files beside the sheet, under the sheet's name.",
+        (
+            "recorded:results-beside-a-netlist",
+            "recorded:plot-settings",
+            "recorded:window-run",
+            "recorded:sheet-results-command",
+        ),
+        mechanism=(
+            "A copy of the run's files beside the circuit file, under its name. Established: "
+            "LTspice keeps a run's results and log there, a netlist's batch run and a "
+            "sheet's run in the window, on LTspice 26 and XVII. LTspice's window opening "
+            "them from a sheet is recorded on LTspice 26 and not on XVII. What the window "
+            "does with results beside a netlist is not recorded, and a reply that put "
+            "results there says so."
+        ),
     ),
 )
 

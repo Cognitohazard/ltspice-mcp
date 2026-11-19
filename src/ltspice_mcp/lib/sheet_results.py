@@ -1,38 +1,62 @@
-"""A run's results beside its sheet, where LTspice keeps a sheet's own.
+"""A run's results beside its circuit file, where LTspice keeps them.
 
-LTspice writes a sheet's results beside it under its name (``<sheet>.raw``,
-``<sheet>.log``, and ``<sheet>.op.raw`` or ``<sheet>.fra_1.raw`` where the run
-wrote one) and opens them from there, so a click on a net in the sheet plots
-it. The server's runs write theirs to the job folder instead, which LTspice
-never looks in. This module copies one run's there on request, from
+LTspice writes a circuit's results beside it under its name (``<name>.raw``,
+``<name>.log``, and ``<name>.op.raw`` or ``<name>.fra_1.raw`` where the run
+wrote one), a sheet's and a netlist's alike: the batch runs recorded under
+``raw/`` on both builds leave each netlist's there. LTspice's window opens a
+sheet's from there, so a click on a net in the sheet plots it (recorded on
+LTspice 26); what the window does with results beside a netlist is not
+recorded. The server's runs write theirs to the job folder instead. This
+module copies one run's beside its circuit on request, from
 ``jobs(action="place_beside_sheet")`` or, when a job asked for it with
 ``execution.results_beside_sheet``, as the job's runs finish. Both ask the
-same questions here (``check_case``, ``place_case``): the results in the job
-folder stay where they are, and remain what every read of the job takes.
+same questions here (``check_request``, ``check_case``, ``place_case``): the
+results in the job folder stay where they are, and remain what every read of
+the job takes.
+
+Which files beside a circuit its run goes to is decided once, by
+``files_beside``; whose run a results file there holds, by ``results_owner``.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import shutil
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from ltspice_mcp.errors import NetlistError
 from ltspice_mcp.lib import atomic_write
+from ltspice_mcp.lib import filelock as filelock_mod
 from ltspice_mcp.lib.asc_document import is_asc
+from ltspice_mcp.lib.capabilities import entry
 from ltspice_mcp.lib.deck_staging import sha256_file
 from ltspice_mcp.lib.experiment_types import OWNER_STOPPED, ExperimentCase, ExperimentJob
-from ltspice_mcp.lib.filelock import circuit_file_lock
-from ltspice_mcp.lib.ltspice_window import results_beside
+from ltspice_mcp.lib.filelock import async_file_lock, circuit_file_lock
+from ltspice_mcp.lib.ltspice_window import results_beside  # noqa: TID251 - the one caller
 from ltspice_mcp.lib.raw_parser import other_raw_path
-from ltspice_mcp.lib.simulator import dialect_for_simulator_name
+from ltspice_mcp.lib.simulator import dialect_for_simulator_name, simulator_family
+from ltspice_mcp.lib.store import Store, file_key
+
+#: The capability the request check and the case check ask the table about.
+CAPABILITY = "results_beside_sheet"
+
+#: What has not been recorded of LTspice's window and a netlist, said in every
+#: reply that put results beside a netlist (``tests/fixtures/ltspice_recorded/
+#: inputs/cases.toml``, behaviour ``netlist-results-in-window``).
+NETLIST_WINDOW_UNCHECKED = (
+    "What LTspice's window does with results put beside a netlist has not been "
+    "checked: which of its commands open them, and whether a plot opened from the "
+    "netlist is tied to it."
+)
 
 
 class NotPlaced(Exception):
-    """Why a run's results cannot stand as its sheet's own; ``code`` is the
+    """Why a run's results cannot stand as its circuit's own; ``code`` is the
     wire code the caller reports."""
 
     def __init__(self, code: str, message: str) -> None:
@@ -40,23 +64,115 @@ class NotPlaced(Exception):
         self.code = code
 
 
+@dataclass(frozen=True)
+class ResultFiles:
+    """The files beside ``circuit`` that a run of it goes to, under its name,
+    as LTspice writes them for a sheet and for a netlist."""
+
+    circuit: Path
+    #: The results file (``ltspice_window.results_beside``).
+    raw: Path
+    log: Path
+
+    def other_raw(self, kind: str) -> Path:
+        """Where the run's raw of ``kind`` (``op``, ``fra_1``) goes."""
+        return other_raw_path(self.raw, kind)
+
+
+def files_beside(circuit: Path) -> ResultFiles:
+    """Which files beside ``circuit`` its run goes to: the results, the log, and
+    (``ResultFiles.other_raw``) the operating-point and frequency-response
+    files where a run wrote one. The request check, the placement and its lock
+    ask this; nothing else names those files."""
+    return ResultFiles(circuit, results_beside(circuit), circuit.with_suffix(".log"))
+
+
+def results_owner(circuit: Path) -> Path:
+    """The circuit whose run the results file beside ``circuit`` holds as its
+    own: a sheet beside it whose results file it is, else ``circuit`` itself.
+
+    A sheet's results file is what LTspice's window shows as that sheet's run,
+    and the server cannot check that a netlist is that sheet as it stands, so
+    the sheet owns the file even when a netlist of its name ran. This is the
+    one place that decides it. Blocking: it lists ``circuit``'s folder.
+    """
+    if is_asc(circuit):
+        return circuit
+    wanted = files_beside(circuit).raw.name.casefold()
+    try:
+        names = sorted(os.listdir(circuit.parent))
+    except OSError:
+        return circuit
+    for name in names:
+        candidate = circuit.parent / name
+        if (
+            is_asc(candidate)
+            and files_beside(candidate).raw.name.casefold() == wanted
+            and candidate.is_file()
+        ):
+            return candidate
+    return circuit
+
+
+def places_results(simulator: str | None) -> bool:
+    """Whether a run on ``simulator`` (a job's recorded class name)
+    has its results put beside its circuit: the capability table's answer.
+
+    A record that names no simulator passes, as it did before the table was
+    asked: such a record predates the field, when every job that could ask for
+    this ran on LTspice, and refusing it would refuse the user's own run.
+    """
+    if simulator is None or simulator == "":
+        return True
+    # The family maps know this platform's class names; a record written on
+    # WSL (LTspiceWSL) and read elsewhere is known to the dialect map.
+    family = simulator_family(simulator) or dialect_for_simulator_name(simulator)
+    found = entry(family, CAPABILITY) if family is not None else None
+    return found is not None and found.status == "supported"
+
+
+@contextlib.asynccontextmanager
+async def placement_lock(circuit: Path) -> AsyncIterator[None]:
+    """The locks a copy beside ``circuit`` holds: the circuit's own
+    (``circuit_file_lock``), then its results file's (``Store.results_file_lock``).
+
+    Two circuits whose runs go to one results file hold different circuit
+    locks, and without the second their copies could interleave. The order is
+    always circuit, then results file. A wait that runs out raises
+    ``NetlistError`` in the caller's terms, as the circuit's lock does.
+    """
+    raw = files_beside(circuit).raw
+    async with circuit_file_lock(circuit):
+        timeout = filelock_mod.DEFAULT_TIMEOUT
+        target = await asyncio.to_thread(Store.results_file_lock, raw)
+        async with contextlib.AsyncExitStack() as stack:
+            try:
+                await stack.enter_async_context(async_file_lock(target, acquire_timeout=timeout))
+            except TimeoutError as exc:
+                raise NetlistError(
+                    f"{raw.name} is being written by another ltspice-mcp process "
+                    f"(waited {timeout:.0f}s). Retry once it finishes."
+                ) from exc
+            yield
+
+
 def place_beside_sheet(
-    sheet: Path,
+    circuit: Path,
     raw: Path,
     log: Path | None,
     other_raws: Mapping[str, Path] | None = None,
 ) -> list[dict[str, Any]]:
-    """Copy a run's results beside ``sheet`` under its name, as a run in
-    LTspice leaves them; what is there is replaced, each file whole or not at
-    all. Returns one ``{from, to, replaced}`` per file copied.
+    """Copy a run's results beside ``circuit`` under its name (``files_beside``),
+    as a run in LTspice leaves them; what is there is replaced, each file
+    whole or not at all. Returns one ``{from, to, replaced}`` per file copied.
 
-    A file of the sheet's that this run has no counterpart for (an
+    A file of the circuit's that this run has no counterpart for (an
     ``.op.raw`` an earlier run left, say) is left where it is, and a file that
-    already is the one beside the sheet is neither copied nor listed.
+    already is the one beside the circuit is neither copied nor listed.
     """
-    beside = results_beside(sheet)
-    pairs = [(raw, beside), (log, sheet.with_suffix(".log"))]
-    pairs += [(path, other_raw_path(beside, kind)) for kind, path in (other_raws or {}).items()]
+    beside = files_beside(circuit)
+    pairs = [(raw, beside.raw), (log, beside.log)]
+    pairs += [(path, beside.other_raw(kind)) for kind, path in (other_raws or {}).items()]
     placed: list[dict[str, Any]] = []
     for source, target in pairs:
         if source is None or not source.is_file():
@@ -70,81 +186,112 @@ def place_beside_sheet(
     return placed
 
 
-def run_by_ltspice(simulator: str | None) -> bool:
-    """Whether a run recorded as made by ``simulator`` can stand as a sheet's
-    own in LTspice's window: an LTspice's, or one whose simulator is unknown.
-    An ``.asc`` run on another simulator was only exported by LTspice."""
-    return dialect_for_simulator_name(simulator) in (None, "ltspice")
+def _names(paths: Sequence[Path]) -> str:
+    """Each spelling in ``paths`` once, in order, as ``a`` or ``a and b``: by
+    file name, or by full path where two spellings share a name."""
+    spellings = list(dict.fromkeys(str(path) for path in paths))
+    shown = [Path(spelling).name for spelling in spellings]
+    if len(set(shown)) < len(shown):
+        shown = spellings
+    return shown[0] if len(shown) == 1 else f"{', '.join(shown[:-1])} and {shown[-1]}"
 
 
-def check_request(sheets: Sequence[tuple[Path, int]], simulator: str) -> None:
+def _belongs_to_sheet(circuit: Path, sheet: Path) -> NotPlaced:
+    raw = files_beside(circuit).raw.name
+    return NotPlaced(
+        "results_belong_to_sheet",
+        f"{raw} beside {circuit.name} is the results file of the sheet {sheet.name}: "
+        "LTspice's window shows what it holds as that sheet's run, and the server cannot "
+        f"check that {circuit.name} is that sheet as it stands. Run the sheet, or copy "
+        f"{circuit.name} under another name and run that.",
+    )
+
+
+def check_request(circuits: Sequence[tuple[Path, int]], simulator: str) -> None:
     """Refuse, before a job exists, a request to put its runs' results beside
-    their sheets (``execution.results_beside_sheet``) that could not end with
-    each sheet holding its own run: ``sheets`` pairs each circuit's path with
-    the number of cases it runs, and ``simulator`` is the class the job runs on.
+    their circuits (``execution.results_beside_sheet``) that could not end
+    with each results file holding one run of its own circuit: ``circuits``
+    pairs each circuit's path with the number of cases it runs, and
+    ``simulator`` is the class name the job runs on and will record, judged
+    as ``check_case`` judges the record, so the two cannot disagree.
 
-    A sheet holds one run's results, so a sheet that would run several cases
-    (a sweep, or the same sheet named twice) is refused, with the action that
-    copies a chosen case afterwards.
+    A results file holds one run's results, so a file that would receive
+    several cases (a sweep, one circuit named twice by any spelling, or
+    ``foo.asc`` and ``foo.net``, both ``foo.raw``) is refused, with the action
+    that copies a chosen case afterwards; so is a netlist whose results file
+    is a sheet's (``results_owner``). Blocking: run it off the loop.
     """
-    for path, _count in sheets:
-        if not is_asc(path):
-            raise NotPlaced(
-                "not_a_sheet",
-                f"execution.results_beside_sheet copies a sheet's results beside it, and "
-                f"{path.name} is a netlist. Run it in a job of its own, or leave the option off.",
-            )
-    if not run_by_ltspice(simulator):
+    if not places_results(simulator):
         raise NotPlaced(
             "not_ltspice",
-            "execution.results_beside_sheet needs an LTspice run: LTspice's window opens a "
-            f"sheet's results only as LTspice writes them, and this job runs on {simulator}. "
-            "Leave the option off.",
+            "execution.results_beside_sheet puts a run's results beside its circuit "
+            f"where LTspice keeps them, and this job runs on {simulator}, whose "
+            "results the server does not put there. Leave the option off.",
         )
-    counts: dict[Path, int] = {}
-    for path, count in sheets:
-        counts[path] = counts.get(path, 0) + count
-    for path, count in counts.items():
+    by_file: dict[str, tuple[list[Path], int]] = {}
+    for path, count in circuits:
+        key = file_key(files_beside(path).raw)
+        paths, total = by_file.get(key, ([], 0))
+        by_file[key] = ([*paths, path], total + count)
+    for paths, count in by_file.values():
         if count > 1:
+            raw = files_beside(paths[0]).raw.name
+            names = _names(paths)
+            spellings = len({str(path) for path in paths})
+            said = (
+                f"{names} runs {count} cases in this job, and its results go to {raw}"
+                if spellings == 1
+                else f"{names} {'both' if spellings == 2 else 'all'} put their results in {raw}"
+            )
             raise NotPlaced(
                 "several_cases_per_sheet",
-                f"A sheet holds one run's results, and {path.name} runs {count} cases in this "
-                "job. Leave execution.results_beside_sheet off, and copy the case you want "
-                "afterwards with jobs(action='place_beside_sheet', job_id=..., case_id=...).",
+                f"{said}, and one results file holds one run. Leave "
+                "execution.results_beside_sheet off, and copy the case you want afterwards "
+                "with jobs(action='place_beside_sheet', job_id=..., case_id=...).",
             )
+    for path, _count in circuits:
+        owner = results_owner(path)
+        if owner != path:
+            raise _belongs_to_sheet(path, owner)
 
 
 def check_case(job: ExperimentJob, case: ExperimentCase) -> None:
-    """Refuse, from the job's record alone, a case whose results LTspice's
-    window could not take as its sheet's own: a case with no results, a
-    netlist's run, and a run of another simulator."""
+    """Refuse, from the job's record alone, a case whose results cannot be put
+    beside its circuit: a case with no results, and a run on a simulator whose
+    results the server does not put there (``places_results``)."""
     if case.status != "produced" or case.raw_file is None:
         raise NotPlaced(
             "case_not_produced",
             f"Case {case.case_id} of job {job.job_id} has no results to place (status "
             f"{case.status}).",
         )
-    if not is_asc(case.circuit_path):
-        raise NotPlaced(
-            "not_a_sheet",
-            f"Case {case.case_id} ran {case.circuit_path.name}, a netlist. LTspice keeps "
-            "results beside a sheet; read a netlist's from the job.",
-        )
-    if not run_by_ltspice(job.simulator):
+    if not places_results(job.simulator):
         raise NotPlaced(
             "not_ltspice",
-            f"Job {job.job_id} ran on {job.simulator}; LTspice's window opens a sheet's "
-            "results only as LTspice writes them.",
+            f"Job {job.job_id} ran on {job.simulator}; the server puts only an LTspice "
+            "run's results beside its circuit, where LTspice keeps them.",
         )
 
 
-def place_case(job: ExperimentJob, case: ExperimentCase, sheet: Path) -> list[dict[str, Any]]:
-    """Copy ``case``'s results beside ``sheet``, the sheet it ran
-    (``place_beside_sheet``), or raise ``NotPlaced``. Besides ``check_case``,
-    refused when the results or the sheet are gone, and when the sheet has
-    changed since the job read it, since the results would not match it.
+@dataclass
+class Placement:
+    """What ``place_case`` copied, and what it did not check."""
 
-    Blocking: run it off the loop, under the sheet's ``circuit_file_lock``.
+    files: list[dict[str, Any]]
+    #: Each thing the placement did not check, said in full.
+    not_checked: list[str] = field(default_factory=list)
+
+
+def place_case(job: ExperimentJob, case: ExperimentCase, circuit: Path) -> Placement:
+    """Copy ``case``'s results beside ``circuit``, the circuit it ran
+    (``place_beside_sheet``), or raise ``NotPlaced``. Besides ``check_case``,
+    refused when the results or the circuit are gone, when the circuit has
+    changed since the job read it (by the digest taken at submission: the
+    sheet's, or the netlist's own deck), since the results would not match
+    it, and when the results file is a sheet's and the circuit is not that
+    sheet (``results_owner``).
+
+    Blocking: run it off the loop, under ``placement_lock(circuit)``.
     """
     check_case(job, case)
     raw = case.raw_file
@@ -153,44 +300,62 @@ def place_case(job: ExperimentJob, case: ExperimentCase, sheet: Path) -> list[di
         raise NotPlaced(
             "results_missing", f"Case {case.case_id}'s results are not there any more ({raw})."
         )
-    if not sheet.is_file():
-        raise NotPlaced("sheet_missing", f"{sheet} is not there any more.")
+    if not circuit.is_file():
+        raise NotPlaced("sheet_missing", f"{circuit} is not there any more.")
+    owner = results_owner(circuit)
+    if owner != circuit:
+        raise _belongs_to_sheet(circuit, owner)
+    not_checked: list[str] = []
     ran = next((source.sha256 for source in job.sources if source.circuit == case.circuit), None)
-    if ran is not None and sha256_file(sheet) != ran:
+    if ran is None:
+        not_checked.append(
+            f"{circuit.name} was not compared with the file job {job.job_id} ran: the "
+            "job holds no record of that file's digest."
+        )
+    elif sha256_file(circuit) != ran:
         raise NotPlaced(
             "sheet_changed",
-            f"{sheet.name} has changed since job {job.job_id} ran it, so these results "
-            "would not match it. Run the sheet again and place that run's.",
+            f"{circuit.name} has changed since job {job.job_id} ran it, so these results "
+            f"would not match it. Run {circuit.name} again and place that run's.",
         )
+    if not is_asc(circuit):
+        not_checked.append(NETLIST_WINDOW_UNCHECKED)
+        if "." in circuit.stem:
+            not_checked.append(
+                f"Where LTspice writes the results of a netlist with more than one dot in its "
+                f"name has not been recorded; they were copied to "
+                f"{files_beside(circuit).raw.name}."
+            )
     others = {kind: other_raw_path(raw, kind) for kind in case.other_raws}
-    return place_beside_sheet(sheet, raw, case.log_file, others)
+    return Placement(place_beside_sheet(circuit, raw, case.log_file, others), not_checked)
 
 
 async def place_job_beside_sheets(job: ExperimentJob) -> list[dict[str, Any]]:
-    """Copy each produced case's results beside the sheet it ran, as
+    """Copy each produced case's results beside the circuit it ran, as
     ``execution.results_beside_sheet`` asks once the job's runs are done, and
-    return one observation per sheet: what was copied, or why not.
+    return one observation per circuit: what was copied, or why not.
 
-    ``check_request`` has already held the job to one case per sheet and to
-    sheets run in LTspice. A case that produced nothing leaves its sheet alone,
-    as its own row already says. A refusal or a failed copy costs only its own
-    sheet.
+    ``check_request`` has already held the job to one case per results file
+    and to runs the table puts beside their circuits. A case that produced
+    nothing leaves its circuit alone, as its own row already says. A refusal
+    or a failed copy costs only its own circuit.
     """
     observations: list[dict[str, Any]] = []
     for case in job.cases:
         if case.status != "produced":
             continue
-        sheet = case.circuit_path
+        circuit = case.circuit_path
         try:
-            async with circuit_file_lock(sheet):
+            async with placement_lock(circuit):
                 # Shielded as the jobs action's copy is: a job stopped now
-                # cannot leave a sheet with some of a run's files.
-                files = await asyncio.shield(asyncio.to_thread(place_case, job, case, sheet))
+                # cannot leave a circuit with some of a run's files.
+                placed = await asyncio.shield(asyncio.to_thread(place_case, job, case, circuit))
         except NotPlaced as exc:
             observations.append(_not_placed(job, case, str(exc), code=exc.code))
             continue
         except NetlistError as exc:
-            # Another server process held the sheet past the lock's wait.
+            # Another server process held the circuit or its results file
+            # past the lock's wait.
             reason = f"{exc} {_place_later(job, case)}"
             observations.append(_not_placed(job, case, reason, code="sheet_locked"))
             continue
@@ -198,7 +363,7 @@ async def place_job_beside_sheets(job: ExperimentJob) -> list[dict[str, Any]]:
             reason = f"The copy failed ({exc}). {_place_later(job, case)}"
             observations.append(_not_placed(job, case, reason, code="copy_failed"))
             continue
-        observations.append(_placed(case, sheet, files))
+        observations.append(_placed(case, circuit, placed))
     return observations
 
 
@@ -206,7 +371,7 @@ def not_placed_for_owner_stop(job: ExperimentJob) -> list[dict[str, Any]]:
     """One ``results_not_placed`` per produced case, for a job whose process
     began to stop before the copy ``execution.results_beside_sheet`` asked for.
 
-    The copy is not made then: it waits on each sheet's lock and copies whole
+    The copy is not made then: it waits on each circuit's locks and copies whole
     raws, which can outlast the bound a stopping process gives its jobs
     (``JobRegistry.cancel_running``), and the results stay in the job folder,
     where the jobs action copies them from at any time.
@@ -225,7 +390,7 @@ def not_placed_for_owner_stop(job: ExperimentJob) -> list[dict[str, Any]]:
 
 
 def _place_call(job: ExperimentJob, case: ExperimentCase) -> str:
-    """The call that copies ``case``'s results beside its sheet."""
+    """The call that copies ``case``'s results beside its circuit."""
     return f"jobs(action='place_beside_sheet', job_id='{job.job_id}', case_id='{case.case_id}')"
 
 
@@ -235,8 +400,8 @@ def _place_later(job: ExperimentJob, case: ExperimentCase) -> str:
 
 
 def sheets_reported(observations: Sequence[Mapping[str, Any]]) -> set[str]:
-    """The sheets, as paths, that ``place_job_beside_sheets`` already reported
-    on in a job's ``observations``, placed or not."""
+    """The circuits, as paths, that ``place_job_beside_sheets`` already
+    reported on in a job's ``observations``, placed or not."""
     return {
         str(observation["evidence"]["sheet"])
         for observation in observations
@@ -244,24 +409,46 @@ def sheets_reported(observations: Sequence[Mapping[str, Any]]) -> set[str]:
     }
 
 
-def _placed(case: ExperimentCase, sheet: Path, files: list[dict[str, Any]]) -> dict[str, Any]:
-    """The observation that ``case``'s results now sit beside ``sheet``."""
-    names = ", ".join(Path(placed["to"]).name for placed in files)
+def where_placed(circuit: Path) -> str:
+    """Why the files beside ``circuit`` are where a run's results belong: for a
+    sheet, LTspice's window opens them there (recorded on LTspice 26); for a
+    netlist, LTspice writes them there (the batch runs recorded on both
+    builds), and the window has not been checked (``NETLIST_WINDOW_UNCHECKED``,
+    which a reply carries in ``not_checked``)."""
+    if is_asc(circuit):
+        return "where LTspice's window opens them"
+    return "where LTspice writes a netlist's own results and log"
+
+
+def _placed(case: ExperimentCase, circuit: Path, placement: Placement) -> dict[str, Any]:
+    """The observation that ``case``'s results now sit beside ``circuit``."""
+    names = ", ".join(Path(placed["to"]).name for placed in placement.files)
     detail = (
-        f"Case {case.case_id}'s results were copied beside {sheet.name}, under its name, "
-        f"where LTspice's window opens them: {names}."
+        f"Case {case.case_id}'s results were copied beside {circuit.name}, under its name, "
+        f"{where_placed(circuit)}: {names}."
     )
-    evidence: dict[str, Any] = {"sheet": str(sheet), "case_id": case.case_id, "files": files}
+    evidence: dict[str, Any] = {
+        "sheet": str(circuit),
+        "case_id": case.case_id,
+        "files": placement.files,
+    }
     if case.assignments:
         values = ", ".join(f"{name}={value}" for name, value in case.assignments.items())
-        detail += f" The run used values the sheet does not show: {values}."
+        detail += f" The run used values the {_kind(circuit)} does not show: {values}."
         evidence["assignments"] = dict(case.assignments)
+    if placement.not_checked:
+        detail += " " + " ".join(placement.not_checked)
+        evidence["not_checked"] = list(placement.not_checked)
     return {
         "code": "results_placed_beside_sheet",
         "kind": "provenance",
         "detail": detail,
         "evidence": evidence,
     }
+
+
+def _kind(circuit: Path) -> str:
+    return "sheet" if is_asc(circuit) else "netlist"
 
 
 def _not_placed(

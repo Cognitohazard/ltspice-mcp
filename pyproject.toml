@@ -193,6 +193,7 @@ known-first-party = ["ltspice_mcp"]
 "ltspice_mcp.lib.runner_base.SimRunner".msg = "Launch a simulator through RunnerBase.submit_netlist, which passes ngspice NGSPICE_NO_USER_INIT so no user startup file changes its mode."
 "ltspice_mcp.lib.simulator.current_ngbehavior".msg = "Ask simulator.run_ngbehavior for the mode a run passes ngspice and reads its deck in; current_ngbehavior is the session's configured mode, for showing it."
 "ltspice_mcp.lib.spice_lex.cards_from_path".msg = "Read a deck with spice_lex.lex_deck, or spice_lex.lex_for_edit for an edit; a file's every card reads its title and the cards after .END as cards."
+"ltspice_mcp.lib.ltspice_window.results_beside".msg = "Ask sheet_results.files_beside which files beside a circuit its run goes to; it names the results, the log and the other raws together."
 "spicelib.utils.file_search.search_file_in_containers".msg = "Find a file a sheet names with the sheet's SymbolResolver (state.symbols.for_sheet); spicelib's search walks folders LTspice does not look in, the server's working directory among them."
 "spicelib.utils.file_search.find_file_in_directory".msg = "Find a file a sheet names with the sheet's SymbolResolver (state.symbols.for_sheet); spicelib's search walks folders LTspice does not look in, the server's working directory among them."
 "ltspice_mcp.lib.symbol_library.find_symbol".msg = "Ask the sheet's SymbolResolver (state.symbols.for_sheet), which searches the sheet's folder and the session's libraries, each once, in their order."

@@ -931,11 +931,22 @@ that copies its results. A job settled without its coordinator (one whose
 process crashed, or whose stop outlasted that bound) keeps no record that a
 copy was asked for, so its receipt carries only the general
 `results_not_beside_sheet` note, which names the same action.
-The request is refused before it runs (`commit_state: "not_started"`) when a
-circuit is a netlist (`not_a_sheet`), when the job does not run on LTspice
-(`not_ltspice`), and when a sheet would run more than one case, by a
-variation or by being named twice (`several_cases_per_sheet`): a sheet holds
-one run's results, so the caller copies the case it wants afterwards. It
+A netlist's results are copied beside it the same way, under its name, where
+LTspice's batch run writes them; its `results_placed_beside_sheet` adds
+`evidence.not_checked`, saying that what LTspice's window does with results
+beside a netlist has not been checked. The same list says when a circuit was
+not compared with the file that ran because the job holds no digest for it.
+The request is refused before it runs (`commit_state: "not_started"`) when the
+capability table does not put the job's simulator's results beside a circuit
+(`not_ltspice`); when one results file, counted by its resolved path with
+case folded, would receive more than one case, by a variation, by one circuit
+named twice or by two circuits of one name such as `foo.asc` and `foo.net`
+(`several_cases_per_sheet`, naming the circuits and the file): a results file
+holds one run's results, so the caller copies the case it wants afterwards;
+and when a netlist has a sheet of its name beside it, in the job or not
+(`results_belong_to_sheet`): that results file is what LTspice's window shows
+as the sheet's run, so the caller runs the sheet or copies the netlist under
+another name. It
 cannot be combined with `recoverable`, since a resumed job's runs would
 finish without it. Left false, it is not part of the request's identity.
 
@@ -1083,19 +1094,22 @@ the echoed `action`:
   activity first, each `{job_id, status, request_id, finished_at}`, and
   `recent_jobs_total` counts them all.
 - `runs` returns a page of `RunRecord` rows.
-- `place_beside_sheet` copies one case's results beside the `.asc` it ran,
-  under the sheet's name, where LTspice keeps a sheet's own results and opens
-  them from: the raw, the log, and each other raw the run wrote
-  (`<sheet>.op.raw`). It returns `{case_id, sheet, files, assignments}`, with
+- `place_beside_sheet` copies one case's results beside the circuit it ran,
+  sheet or netlist, under its name, where LTspice keeps them
+  (`sheet_results.files_beside`): the raw, the log, and each other raw the run
+  wrote (`<name>.op.raw`). It returns `{case_id, sheet, files, assignments,
+  not_checked}`, `sheet` naming the circuit and `not_checked` what the copy did
+  not check, with
   one `{from, to, replaced}` per file copied; `assignments` is what the
   case's variations set, which the sheet does not show. `case_id` may be left
   out of a job that ran one case (otherwise `case_id_required`). The copy is
-  made under the sheet's lock, and the job keeps its own. A case that
+  made under the circuit's lock and then the results file's, and the job
+  keeps its own. A case that
   produced no results (`case_not_produced`) or whose results are no longer
   there (`results_missing`), a case of a job whose runs are not all terminal
   yet (`job_not_terminal`, as every read of a job's runs is refused until
-  then), a netlist's run (`not_a_sheet`),
-  another simulator's run (`not_ltspice`), and a sheet that is missing
+  then), another simulator's run (`not_ltspice`), a netlist whose results
+  file is a sheet's (`results_belong_to_sheet`), and a circuit that is missing
   (`sheet_missing`) or changed since the job read it (`sheet_changed`) are
   refused, and nothing is written. The sheet's `.plt` is left as it is.
 
