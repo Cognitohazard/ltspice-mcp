@@ -238,3 +238,11 @@ async def test_a_device_of_an_xvii_sheet_run_is_selected_by_the_sheets_name(
             held = {name.lower() for name in value["currents"]}
             assert "id(mb1:m1)" in held and "id(mb2:m1)" not in held, (build, device, held)
             assert not any("xmb2" in name for name in held), held
+            if build == "ltspice17":
+                # XVII prints the device table without logopinfo (LTspice 26
+                # does not, and says so): MB1's values are its own too, and
+                # nothing says they are missing.
+                params = {name.lower() for name in value["device_op_points"]}
+                assert params, reply
+                assert all("mb1" in n and "mb2" not in n for n in params), params
+                assert "logopinfo" not in str(reply), reply

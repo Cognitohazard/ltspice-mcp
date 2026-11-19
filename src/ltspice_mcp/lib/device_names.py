@@ -309,15 +309,35 @@ def device_param_name(names: Iterable[str], signal: str, *, xvii: bool) -> str |
     return find_device_param(by_lower.values(), *parsed, xvii=xvii)
 
 
-def _param_owner(name: str, *, xvii: bool) -> _Owner | None:
+def _param_owner(name: str, *, xvii: bool, schematic: bool = False) -> _Owner | None:
     """The device a ``@device[param]`` name holds a parameter of, as the log's
     table, written as ``xvii`` says (:func:`table_device_path`), or ngspice
-    spells it; None for any other name."""
+    spells it; None for any other name.
+
+    ``path`` reads each instance as its card. On a run of a schematic
+    (``schematic``) the table's own spelling of an instance is a reading too,
+    as :func:`trace_keys` reads a trace: XVII writes part MB1 (card ``XMB1``)
+    ``m:mb1:1``, which is ``mb1`` or the card ``xmb1``, and LTspice 26 writes
+    it ``mb1:m1`` (``export/sheet_part_names``, ``export/hier_device_logopinfo``)."""
     parsed = parse_device_param(name)
     if parsed is None:
         return None
     device, param = parsed
-    return _Owner(device, table_device_path(device, xvii=xvii), param=param)
+    path = table_device_path(device, xvii=xvii)
+    readings: tuple[DevicePath, ...] = ()
+    low = fold_name(device)
+    if schematic and ":" in low:
+        if xvii:
+            first, *instances, last = low.split(":")
+            own = first + last
+            readings = tuple(
+                (*reading, own)
+                for reading in itertools.product(*((i, f"x{i}") for i in instances))
+            )
+        else:
+            *instances, last = low.split(":")
+            readings = tuple(dict.fromkeys(((*instances, last), path)))
+    return _Owner(device, path, param=param, readings=readings)
 
 
 def _owner(name: str, *, xvii: bool, schematic: bool = False) -> _Owner | None:
@@ -326,7 +346,7 @@ def _owner(name: str, *, xvii: bool, schematic: bool = False) -> _Owner | None:
     schematic). ``path`` is the reading of each instance as its card, the one
     a deck's run has and the one the log's device table is read in
     (:func:`table_device_path`); ``readings`` holds every reading."""
-    if (owner := _param_owner(name, xvii=xvii)) is not None:
+    if (owner := _param_owner(name, xvii=xvii, schematic=schematic)) is not None:
         return owner
     current = _CURRENT.match(name)
     if current is None:
