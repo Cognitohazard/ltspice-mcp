@@ -355,6 +355,10 @@ def test_symbol_rotation_takes_exactly_the_rotations_table():
     schema = insp.SymbolQuery.model_json_schema()["properties"]["rotation"]
     enums = [branch["enum"] for branch in schema.get("anyOf", [schema]) if "enum" in branch]
     assert enums == [list(insp.ROTATIONS)]
+    # edit_schematic places with the same type, so the two cannot drift apart.
+    from ltspice_mcp.lib import asc_document, schematic_ops
+
+    assert schematic_ops._RotationLiteral is asc_document.Rotation
     for bad in ("r0", "R45", "M360", "R0 "):
         with pytest.raises(ValueError, match="rotation") as caught:
             insp._validate_query({"kind": "symbol", "name": "res", "rotation": bad})

@@ -191,10 +191,51 @@ class GuideHeading:
     level, so its subheadings come with it."""
 
 
-#: A Markdown heading below the section's own title. The title (``#``) is the
-#: section itself, so it is not one of its parts.
-_HEADING = re.compile(r"^(#{2,6})[ \t]+(.+?)[ \t]*#*[ \t]*$")
-_FENCE = re.compile(r"^[ \t]*(```|~~~)")
+#: An ATX heading: up to three spaces, one to six ``#``, then its text, with
+#: an optional closing run of ``#`` set off by a space (so ``## C#`` is "C#").
+_HEADING = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$")
+#: A code fence: up to three spaces, then three or more backticks or tildes.
+_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+
+#: The refusal of a heading named without the section it is in.
+HEADING_NEEDS_SECTION = "a heading needs the section it is in: pass 'section' too"
+
+
+def split_headings(body: str) -> tuple[GuideHeading, ...]:
+    """The headings of a Markdown body below its title, each with its text.
+
+    A ``#`` line inside a fenced code block is code, not a heading; a fence
+    closes on a line of at least as many of the same marks and nothing else.
+    A part ends at the next heading of the same or a higher level, the title's
+    ``#`` included, though the title is the section itself and not one of its
+    parts.
+    """
+    lines = body.splitlines(keepends=True)
+    marks: list[tuple[int, int, str]] = []
+    fence: str | None = None
+    for number, line in enumerate(lines):
+        line_text = line.rstrip("\n")
+        opened = _FENCE.match(line_text)
+        if opened:
+            marker, rest = opened.groups()
+            if fence is None:
+                fence = marker
+            elif marker[0] == fence[0] and len(marker) >= len(fence) and not rest.strip():
+                fence = None
+            continue
+        if fence is None and (match := _HEADING.match(line_text)):
+            marks.append((number, len(match.group(1)), (match.group(2) or "").strip()))
+    found = []
+    for position, (start, level, name) in enumerate(marks):
+        if level == 1:
+            continue
+        end = next(
+            (later for later, higher, _ in marks[position + 1 :] if higher <= level),
+            len(lines),
+        )
+        text = "".join(lines[start:end]).rstrip("\n") + "\n"
+        found.append(GuideHeading(name=name, level=level, text=text))
+    return tuple(found)
 
 
 @functools.cache
@@ -202,32 +243,11 @@ def headings(section: str) -> tuple[GuideHeading, ...]:
     """Which headings a section has, and which text belongs to each.
 
     The one answer to that question: ``read`` with a ``heading``, the
-    ``inspect`` guide kind and ``Api.guide`` all ask it. A ``#`` line inside a
-    fenced code block is code, not a heading. Raises
-    :class:`UnknownGuideSection` for a name the guide does not have.
+    ``inspect`` guide kind and ``Api.guide`` all ask it (``split_headings``
+    reads the body). Raises :class:`UnknownGuideSection` for a name the guide
+    does not have.
     """
-    lines = _find(section).body.splitlines(keepends=True)
-    marks: list[tuple[int, int, str]] = []
-    fence: str | None = None
-    for number, line in enumerate(lines):
-        opened = _FENCE.match(line)
-        if opened:
-            if fence is None:
-                fence = opened.group(1)
-            elif opened.group(1) == fence:
-                fence = None
-            continue
-        if fence is None and (match := _HEADING.match(line.rstrip("\n"))):
-            marks.append((number, len(match.group(1)), match.group(2)))
-    found = []
-    for position, (start, level, name) in enumerate(marks):
-        end = next(
-            (later for later, deeper, _ in marks[position + 1 :] if deeper <= level),
-            len(lines),
-        )
-        text = "".join(lines[start:end]).rstrip("\n") + "\n"
-        found.append(GuideHeading(name=name, level=level, text=text))
-    return tuple(found)
+    return split_headings(_find(section).body)
 
 
 def _key(name: str) -> str:
@@ -257,7 +277,7 @@ def read(section: str | None = None, heading: str | None = None) -> str:
     """
     if heading is not None:
         if section is None:
-            raise ValueError("a heading needs the section it is in: pass 'section' too")
+            raise ValueError(HEADING_NEEDS_SECTION)
         return find_heading(section, heading).text
     return core() if section is None else _find(section).body
 

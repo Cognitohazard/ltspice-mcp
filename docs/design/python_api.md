@@ -403,8 +403,8 @@ server serves. With no argument it returns the core, which a session reads
 first, and the core's index of topic sections and task playbooks. Given a name
 from that index, it returns that part. Given a `heading` of that section too,
 it returns that heading's part, as `inspect(kind: "guide")` does with its
-`heading`; an unknown heading raises `UnknownGuideHeading`, a `ValueError`
-listing the section's headings. It is a staticmethod for the same reason as
+`heading`. An unknown heading raises a `ValueError` listing the section's
+headings, and a `heading` with no `section` raises a `ValueError` too. It is a staticmethod for the same reason as
 `reference()`, and returns the same text as `inspect(kind: "guide")` and the
 `spice://guide` resources. Its `python` section covers this interface.
 

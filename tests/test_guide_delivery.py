@@ -164,6 +164,24 @@ class TestGuideStructure:
             assert heading.text.startswith("#" * heading.level + " " + heading.name)
             assert heading.text.strip() in body
 
+    def test_a_hash_line_in_a_code_fence_is_no_heading(self):
+        body = (
+            "# Title\n\n## One\n\n```python\n## not a heading\n~~~\n## still code\n```\n"
+            "text\n\n~~~~\n## code\n```\n~~~ not a close\n~~~~\n\n## Two #\n\n## C#\n"
+        )
+        listed = guide.split_headings(body)
+        assert [(h.name, h.level) for h in listed] == [("One", 2), ("Two", 2), ("C#", 2)]
+        assert "## still code" in listed[0].text and "## code" in listed[0].text
+
+    def test_a_part_ends_at_a_heading_of_its_level_or_higher(self):
+        body = "# T\n\n## A\n\n### B\n\nb\n\n#### C\n\nc\n\n## D\n\nd\n\n# E\n\ne\n"
+        parts = {h.name: h.text for h in guide.split_headings(body)}
+        assert set(parts) == {"A", "B", "C", "D"}
+        assert parts["A"] == "## A\n\n### B\n\nb\n\n#### C\n\nc\n"
+        assert parts["B"] == "### B\n\nb\n\n#### C\n\nc\n"
+        # A first-level heading ends a part too, though it is no part itself.
+        assert parts["D"] == "## D\n\nd\n"
+
     def test_an_unknown_heading_lists_the_sections_headings(self):
         with pytest.raises(guide.UnknownGuideHeading) as caught:
             guide.read("schematics", heading="nope")
@@ -203,6 +221,7 @@ _POINTER_PATTERNS = (
 _HEADING_POINTER_PATTERNS = (
     r"guide section\s+'([^'<]+)',\s*heading\s+'([^'<]+)'",
     r'"section":\s*"([^"<]+)",\s*"heading":\s*"([^"<]+)"',
+    r"""guide\(["']([^"'<]+)["'],\s*heading=["']([^"'<]+)["']\)""",
 )
 
 
@@ -252,6 +271,8 @@ def test_a_pointer_to_a_heading_resolves_the_heading_too():
     assert _dangling_pointers('{"section": "tools", "heading": "Nope"}') == [
         "'tools', heading 'Nope'"
     ]
+    assert _dangling_pointers("api.guide('tools', heading='The response budget')") == []
+    assert _dangling_pointers('api.guide("tools", heading="Nope")') == ["'tools', heading 'Nope'"]
 
 
 def _config_keys() -> set[str]:

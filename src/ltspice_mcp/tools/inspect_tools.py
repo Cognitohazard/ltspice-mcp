@@ -910,7 +910,7 @@ class GuideQuery(StrictModel):
     @model_validator(mode="after")
     def _heading_in_a_section(self) -> GuideQuery:
         if self.heading is not None and self.section is None:
-            raise ValueError("heading needs section, the guide section the heading is in")
+            raise ValueError(guide.HEADING_NEEDS_SECTION)
         return self
 
 
