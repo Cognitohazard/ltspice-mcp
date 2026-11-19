@@ -2404,7 +2404,8 @@ def _steps_not_as_recorded(
     results file is not the one the run wrote, or the record was wrong. Each
     case's ``n_steps`` is the plot drawn; this says where the record differs,
     so the difference is never silent. A record of another plot than the one
-    drawn, or one with no number, is not compared."""
+    drawn (a plot_index past the first, or another raw of the case's), or one
+    with no number, is not compared."""
     if plot_index != 0:
         return []
     differs = [
@@ -2802,8 +2803,12 @@ async def _plot_several(args: PlotWaveformInput, state: SessionState, chosen: _S
                 "signals": [sig.name for sig in cols],
             },
             not_drawn=not_drawn,
-            notes=_steps_not_as_recorded(
-                [(case, raw) for case, _, raw, _ in stepped], args.plot_index or 0
+            notes=(
+                _steps_not_as_recorded(
+                    [(case, raw) for case, _, raw, _ in stepped], args.plot_index or 0
+                )
+                if args.other_raw is None
+                else []
             ),
             show=None,
             rest=lambda: _rest_of_summary(
