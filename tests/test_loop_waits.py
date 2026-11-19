@@ -192,3 +192,154 @@ def test_own_thread_runners_never_use_the_default_pool():
                 for call in ast.walk(node)
             ), f"{node.name} runs its work on the default pool"
     assert seen == runners
+
+
+# ---------------------------------------------------------------------------
+# The cancel gate
+# ---------------------------------------------------------------------------
+
+#: Every place that holds a job's cancellation lock, with every call made while
+#: it is held. The lock is the gate between a launch and a cancel from another
+#: process, so whatever runs under it holds every launch of the job and every
+#: cancel back: nothing under it may wait on the event loop or on a write of
+#: the job's record. A new call under the lock fails here until it is listed.
+_CANCEL_GATE: dict[str, tuple[frozenset[str], str]] = {
+    "lib/experiment_runner.py:ExperimentRunner._submit_case_under_cancel_gate": (
+        frozenset({"cancellation_requested", "is_set", "now"}),
+        "A launch's decision: no cancel marker and no stop, then its submitted "
+        "stamp. Its launch, launch record and simulator start come after.",
+    ),
+    "lib/experiment_store.py:request_cancellation": (
+        frozenset(
+            {
+                "PermissionError",
+                "atomic_write_json",
+                "cancellation",
+                "control_authorized",
+                "ensure_root",
+                "envelope",
+                "isoformat",
+                "load_job",
+                "now",
+            }
+        ),
+        "A cancel from another process: it reads the record to authorize the "
+        "cancel and writes the marker, the gate's own small record; it waits on "
+        "no launch and no loop.",
+    ),
+    "lib/experiment_store.py:_delete_unretained_job": (
+        frozenset({"cancellation", "suppress", "unlink"}),
+        "Removing a finished job's record and marker.",
+    ),
+}
+
+_LOCKS = frozenset({"file_lock", "async_file_lock"})
+
+
+def _cancel_gates() -> dict[str, tuple[set[str], bool]]:
+    """Each scope holding a cancellation lock: the calls made under it, and
+    whether anything under it is awaited."""
+    found: dict[str, tuple[set[str], bool]] = {}
+    for module, tree in modules().items():
+        for scope, nodes in scopes(tree):
+            for node in nodes:
+                if not isinstance(node, (ast.With, ast.AsyncWith)):
+                    continue
+                if not any(
+                    isinstance(item.context_expr, ast.Call)
+                    and _name(item.context_expr.func) in _LOCKS
+                    and any(
+                        isinstance(inner, ast.Call) and _name(inner.func) == "cancellation_lock"
+                        for inner in ast.walk(item.context_expr)
+                    )
+                    for item in node.items
+                ):
+                    continue
+                inside = [inner for statement in node.body for inner in ast.walk(statement)]
+                calls = {
+                    name
+                    for inner in inside
+                    if isinstance(inner, ast.Call) and (name := _name(inner.func)) is not None
+                }
+                awaited = any(isinstance(inner, ast.Await) for inner in inside)
+                site = f"{module}:{scope}"
+                previous, previously_awaited = found.get(site, (set(), False))
+                found[site] = (previous | calls, previously_awaited or awaited)
+    return found
+
+
+def test_the_cancel_gate_holds_no_wait_on_the_loop_or_a_write():
+    """Under a job's cancellation lock run only the listed calls, and nothing
+    is awaited, so the gate never waits for a launch record, a write of the
+    job's record or the loop."""
+    found = _cancel_gates()
+    assert set(found) == set(_CANCEL_GATE), (
+        "places that hold a job's cancellation lock changed; list each with its calls "
+        "and why none of them waits on a write or the loop"
+    )
+    for site, (calls, awaited) in found.items():
+        allowed, _reason = _CANCEL_GATE[site]
+        assert not awaited, f"{site} awaits under the cancellation lock"
+        assert calls == allowed, (
+            f"{site} calls {sorted(calls - allowed)} under the cancellation lock and no "
+            f"longer calls {sorted(allowed - calls)}; a launch or a cancel waits on whatever "
+            "runs there"
+        )
+
+
+# ---------------------------------------------------------------------------
+# The order of a job's writes
+# ---------------------------------------------------------------------------
+
+#: Every place that uses ``experiment_store.save_job``. A job the registry
+#: keeps is written through its writes, one at a time per job in the order
+#: asked for (``JobRegistry._persist_locks``), where an older write cannot land
+#: on top of a newer one; a write outside them could. Each other use writes a
+#: record no ordered write of the job can be in flight for, and says why. A new
+#: use fails here until it is listed.
+_SAVE_JOB_USES: dict[str, str] = {
+    "lib/job_registry.py:JobRegistry._persist_async.persist": (
+        "The registry's strict write, under the job's write lock."
+    ),
+    "lib/job_registry.py:JobRegistry._persist_sync": (
+        "The registry's write: under the job's write lock on the loop "
+        "(``_persist_async``), or in line where there is no loop."
+    ),
+    "lib/experiment_resume.py:persist_reconciled": (
+        "Called only by the registry's write, under the job's write lock, "
+        "which it re-reads and saves inside."
+    ),
+    "lib/experiment_resume.py:_persist_discovery": (
+        "A recoverable job's first record under its new owner, at admission, "
+        "adoption or a resume's child, written before its coordinator starts, "
+        "so this owner has asked for no ordered write of it yet. On adoption the "
+        "registry may still hold the dead owner's reconciled record; its write "
+        "(``persist_reconciled``) re-reads under the lineage's recovery lock and "
+        "skips the save once the owner has changed."
+    ),
+    "lib/experiment_runner.py:ExperimentRunner._claim_request_id": (
+        "A job's first record, written at admission inside the request gate "
+        "before its coordinator starts: no ordered write of it exists yet."
+    ),
+}
+
+
+def test_every_write_of_a_job_record_outside_the_registry_is_listed():
+    """A job's record is written by the registry's ordered writes, or by a
+    listed writer that no ordered write of the job can race."""
+    found = {
+        f"{module}:{scope}"
+        for module, tree in modules().items()
+        for scope, nodes in scopes(tree)
+        if any(
+            isinstance(node, (ast.Name, ast.Attribute)) and _name(node) == "save_job"
+            for node in nodes
+        )
+        and not (module == "lib/experiment_store.py" and scope == "save_job")
+    }
+    assert found - set(_SAVE_JOB_USES) == set(), (
+        "a job record is written outside the registry's ordered writes: write it "
+        "through JobRegistry.persist_job or persist_strict, or list why no ordered "
+        "write of the job can be in flight"
+    )
+    assert set(_SAVE_JOB_USES) - found == set(), "listed writers that no longer exist"
