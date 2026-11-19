@@ -279,3 +279,62 @@ async def test_every_page_of_a_cut_list_rebuilds_it_and_matches_the_schema(
     assert read == whole["items"]
     # The last page says it holds the end of the list.
     assert page.get("truncated") is not True
+
+
+# ---------------------------------------------------------------------------
+# A measurement's stats.no_number through a cut reply, a page and a lean row
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_measurements_no_number_counts_pass_through_cuts_and_pages(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """``stats.no_number`` is a map of counts, not a list: a cut reply, each
+    page and the lean row of a stepped run carry it as the complete answer
+    does (LTspice XVII's ``log/meas_step``, whose 0s are not established)."""
+    import asyncio
+    import shutil
+
+    from tests import _ltspice_recorded as rec
+    from tests.conftest import SyncApi, make_experiment_job
+
+    log = work_dir / "case.log"
+    shutil.copyfile(rec.recorded("ltspice17", "log/meas_step.log"), log)
+    job = make_experiment_job(
+        state_no_sim, job_id="exp_no_number", count=30, raw=work_dir / "case.raw"
+    )
+    request = {
+        "sources": [{"job_id": job.job_id, "label": "dut"}],
+        "recipes": [{"key": "m", "metric": "measurements"}],
+    }
+    api = SyncApi(state_no_sim)
+    whole = await asyncio.to_thread(lambda: api.analyze_results(**request))
+    expected = [row["value"] for row in whole["results"]["m"]["values"]]
+    assert any(
+        entry.get("no_number") for value in expected for entry in value["stats"].values()
+    ), "the premise: a stepped row counts steps with no number"
+
+    first = await _analyze(state_no_sim, {**request, "budget": 1500})
+    entry = first["cut"]["/results/m/values"]
+    read = [row["value"] for row in first["results"]["m"]["values"]]
+    cursor = entry.get("next")
+    while cursor:
+        page = await _analyze(
+            state_no_sim, {"continue": {"result_set_id": first["result_set_id"], "cursor": cursor}}
+        )
+        read.extend(row["value"] for row in page["results"]["m"]["values"])
+        cursor = page["cut"]["/results/m/values"].get("next")
+
+    def counts(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        # A reply leaves an empty map out; the Python API keeps it.
+        return [
+            {
+                name: {k: v for k, v in entry.items() if v != {}}
+                for name, entry in value["stats"].items()
+            }
+            for value in values
+        ]
+
+    assert "/results/m/values" in first["cut"], "the premise: the reply is cut"
+    assert counts(read) == counts(expected)

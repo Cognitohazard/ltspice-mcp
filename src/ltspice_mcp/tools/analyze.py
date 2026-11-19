@@ -58,7 +58,12 @@ from ltspice_mcp.lib.decoded_log import DecodedLog
 from ltspice_mcp.lib.decoded_raw import DecodedRaw, PlotDescriptor
 from ltspice_mcp.lib.format import cap_note, format_spice_value, held_to_cap, unique_name
 from ltspice_mcp.lib.log_parser import diagnostic_collapse_key, printed_once_refusal
-from ltspice_mcp.lib.log_types import given_no_value, measurement_named, run_measurement_facts
+from ltspice_mcp.lib.log_types import (
+    NO_NUMBER_REASONS,
+    given_no_value,
+    measurement_named,
+    run_measurement_facts,
+)
 from ltspice_mcp.lib.parsed_artifacts import ParsedArtifacts
 from ltspice_mcp.lib.points import RowIdentity, point_identity
 from ltspice_mcp.lib.presenter import (
@@ -786,21 +791,20 @@ def _pick(source: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
     return {key: source[key] for key in keys}
 
 
-#: The fields of a row's value that state a fact about the row: a
-#: measurement that gave no value and why, and what the simulator said about
-#: the run. A lean row and a projected row keep each one the value carries
-#: (:func:`_row_renderer`), and a row left out is named for each
-#: (``rows_not_shown``).
-_FACT_FIELDS: tuple[str, ...] = (
-    "failed_measurements",
+#: The fields of a row's value that state a fact a row left out is named by
+#: (``rows_not_shown``): why a step has no number, read from the one list of
+#: those reasons (``log_types.NO_NUMBER_REASONS``), and this tool's own kinds,
+#: a value that is not a finite number and one printed once for several steps.
+_ROW_FACT_KINDS: tuple[str, ...] = (
+    *(reason.field for reason in NO_NUMBER_REASONS),
     "not_finite",
-    "unreadable",
-    "answer_unknown",
-    "not_established",
     "printed_once",
-    "diagnostics",
-    "diagnostics_coverage",
 )
+
+#: Every field of a row's value that states a fact: the kinds above, and the
+#: log's diagnostics and what of it was not read. A lean row and a projected
+#: row keep each one the value carries (:func:`_row_renderer`).
+_FACT_FIELDS: tuple[str, ...] = (*_ROW_FACT_KINDS, "diagnostics", "diagnostics_coverage")
 
 
 #: Nested value blocks the lean row keeps anyway. The rule is narrow on
@@ -3613,7 +3617,7 @@ def row_kinds(row: Mapping[str, Any]) -> list[str]:
     ]
     if value.get("diagnostics_coverage"):
         kinds.append(f"diagnostics_coverage.{value['diagnostics_coverage']}")
-    kinds.extend(key for key in _FACT_FIELDS[:6] if value.get(key))
+    kinds.extend(key for key in _ROW_FACT_KINDS if value.get(key))
     return kinds
 
 
@@ -3629,7 +3633,7 @@ def _row_identity(_index: int, row: Mapping[str, Any]) -> dict[str, Any]:
 def _kind_vocabulary() -> list[str]:
     """Every kind :func:`row_kinds` can give an analysis row: a log's, and
     the facts a row's value states."""
-    return [*not_shown.log_kinds(), *_FACT_FIELDS[:6]]
+    return [*not_shown.log_kinds(), *_ROW_FACT_KINDS]
 
 
 #: The most ``rows_not_shown`` takes, in estimated tokens: every kind counted
