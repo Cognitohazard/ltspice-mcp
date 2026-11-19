@@ -1,0 +1,1 @@
+Two more grids of recorded LTspice inputs: what number a value is (its suffix, case, unit letters and mantissa) and what a parameter expression evaluates to (each operator by the signs of its operands). Each cell is checked against LTspice's own reading wherever it is recorded, and the cells not yet recorded are counted per build.
