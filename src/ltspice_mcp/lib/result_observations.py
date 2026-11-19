@@ -613,14 +613,31 @@ _OBSERVATION_INPUTS: FileCache[tuple[dict[str, list[str]] | None, dict[str, floa
 )
 
 
-def relay_observations(summary: dict) -> list[Observation]:
+def relay_observations(
+    summary: dict, said: Sequence[Mapping[str, Any]] = ()
+) -> list[Observation]:
     """Promote the simulator's own error diagnostics to surfaced observations.
 
     These are the highest-authority facts — the simulator classified them, we
     only relay. They are also the gap (b) fix: a ``completed`` run with a
     ``singular matrix`` line now surfaces it prominently instead of leaving it
     buried in ``errors`` while the headline says success.
+
+    Each carries the ``severity`` the simulator wrote on its line, read off
+    the run's condition that holds it (``said``, the run row's diagnostics),
+    or none where no condition names one: a line relayed without its
+    condition (a solve-failure line) carries none rather than one the server
+    made up.
     """
+    severity = {
+        str(c["first_text"]): c["severity"] for c in said if isinstance(c.get("severity"), str)
+    }
+
+    def with_severity(item: Observation, text: str) -> Observation:
+        if text in severity:
+            item["severity"] = severity[text]
+        return item
+
     obs: list[Observation] = []
     seen: set[str] = set()
     for err in summary.get("errors", []) or []:
@@ -629,24 +646,23 @@ def relay_observations(summary: dict) -> list[Observation]:
             continue
         seen.add(first_line)
         obs.append(
-            {
-                "code": "log_error",
-                "kind": "relay",
-                "severity": "error",
-                "detail": first_line,
-                "evidence": {"log": err},
-            }
+            with_severity(
+                {"code": "log_error", "kind": "relay", "detail": first_line, "evidence": {"log": err}},
+                err,
+            )
         )
     for entry in summary.get("meas_errors", []) or []:
         directive = entry.get("directive", "") if isinstance(entry, dict) else str(entry)
         obs.append(
-            {
-                "code": "meas_parse_error",
-                "kind": "relay",
-                "severity": "error",
-                "detail": f".meas failed to parse: {directive}",
-                "evidence": entry if isinstance(entry, dict) else {"directive": directive},
-            }
+            with_severity(
+                {
+                    "code": "meas_parse_error",
+                    "kind": "relay",
+                    "detail": f".meas failed to parse: {directive}",
+                    "evidence": entry if isinstance(entry, dict) else {"directive": directive},
+                },
+                str(entry.get("raw_block", "")) if isinstance(entry, dict) else "",
+            )
         )
     return obs
 
@@ -964,7 +980,7 @@ def measurements_not_read_observation(
 
 
 def reconciliation_observations(
-    summary: dict, requested: dict[str, list[str]]
+    summary: dict, requested: dict[str, list[str]], said: Sequence[Mapping[str, Any]] = ()
 ) -> list[Observation]:
     """Surface requested ``.meas``/``.four`` outputs that were not produced.
 
@@ -984,9 +1000,12 @@ def reconciliation_observations(
     facts = run_measurement_facts(summary, requested.get("meas") or [])
     no_value = given_no_value(facts)
     failed = facts.get("failed") or []
-    warns = " ".join(summary.get("warnings") or []).lower()
-    meas_batch_skipped = "batch mode" in warns and "meas" in warns
-    four_batch_skipped = ".fourier line ignored" in warns or "skips .four" in warns
+    # Whether ngspice skipped a .meas or .four in batch mode is read off the
+    # run's conditions by their codes (``said``), not the warnings list: its
+    # lines saying so carry no severity word (log_conditions).
+    skipped = {str(c.get("code")) for c in said}
+    meas_batch_skipped = "measurement_skipped_batch" in skipped
+    four_batch_skipped = "fourier_skipped_batch" in skipped
 
     for name in requested.get("meas", []):
         if measurement_named(name, no_value) is None:
@@ -1195,6 +1214,7 @@ def surface_observations(
     source_amplitudes: dict[str, float] | None = None,
     node_voltages: Collection[str] | None = None,
     measurements_unread: str | None = None,
+    said: Sequence[Mapping[str, Any]] = (),
 ) -> list[Observation]:
     """Assemble the full observation list for a result summary.
 
@@ -1212,7 +1232,7 @@ def surface_observations(
     traces ``node_voltages`` names (``value_observations``).
     """
     obs: list[Observation] = []
-    obs.extend(relay_observations(summary))
+    obs.extend(relay_observations(summary, said))
     if measurements_unread is not None and (
         requested.get("meas")
         if requested is not None
@@ -1226,7 +1246,7 @@ def surface_observations(
         if requested is not None:
             requested = {**requested, "meas": []}
     if requested:
-        obs.extend(reconciliation_observations(summary, requested))
+        obs.extend(reconciliation_observations(summary, requested, said))
         abort = meas_batch_abort_observation(obs)
         if abort is not None:
             obs.append(abort)

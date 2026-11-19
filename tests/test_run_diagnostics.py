@@ -88,15 +88,16 @@ EXPECTED = {
     },
 }
 
-# What the summary recipe's ``errors`` held for the same logs before runs
-# carried diagnostics; it holds the same.
+# What the summary recipe's ``errors`` hold for the same logs: each condition
+# of the run row the simulator wrote an error word on, as the row holds it
+# (``log_conditions.said_as``). LTspice 26 writes none on the ignored
+# parameter, so its summary has no errors.
 SUMMARY_ERRORS = {
-    "ltspice26": [
-        "C:\\recording\\unknown_model_param.cir(5): Ignoring unknown model parameter. "
-        "This may or may not be a problem.\n.model DX D(Is=1e-14 Bogus=3)\n"
-        "^^^^^^^ (repeated 3 times)"
+    "ltspice26": None,
+    "ltspice17": [
+        "Error on line 5 : .model dx d(is=1e-14 bogus=3)\n"
+        '\t* Unrecognized parameter "bogus" -- ignored'
     ],
-    "ltspice17": ["Error on line 5 : .model dx d(is=1e-14 bogus=3)"],
 }
 
 # The program each build runs as: XVII is known by its stock name, 26 by the
@@ -234,7 +235,7 @@ async def test_the_recorded_unknown_model_parameter_on_every_path(
 
     summary = await _summary(state, reply["job_id"])
     assert _row_diagnostics(summary) == expected
-    assert summary["errors"] == SUMMARY_ERRORS[build]
+    assert summary.get("errors") == SUMMARY_ERRORS[build]
     assert "warnings" not in summary or not any(
         "unknown model parameter" in warning.lower() for warning in summary["warnings"]
     )

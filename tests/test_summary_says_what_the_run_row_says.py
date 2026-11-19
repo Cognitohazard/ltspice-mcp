@@ -218,3 +218,100 @@ async def test_an_operating_point_found_by_stepping_is_no_error_and_says_no_demo
         assert not any("surfaced as a warning" in line for line in value.get("warnings", [])), (
             route
         )
+
+
+# --------------------------------------------------------------------------
+# The guards
+# --------------------------------------------------------------------------
+
+#: The scopes that read the ``errors`` or ``warnings`` the log decoder's line
+#: classifier (``log_parser.extract_log_diagnostics``) gives, and why each
+#: may: none of them tells a reader how severe the simulator called a line.
+_LINE_CLASSIFIER_READERS = {
+    ("lib/runner_base.py", "collect_run_outcome"): "whether the run failed, not a severity shown",
+    ("lib/log_decode.py", "decode_logs"): "whether the simulator refused the deck before it ran",
+    ("lib/log_parser.py", "empty_measurements"): "the reason a refused run has no measurements",
+    ("lib/services.py", "solve_failure_lines"): "solve-failure lines by phrase, on both lists",
+    ("lib/metrics.py", "read_log_warnings"): "unrecognized-variable lines by phrase",
+}
+
+
+def test_only_the_named_readers_read_the_line_classifiers_lists():
+    """No code outside ``log_conditions`` decides whether a log line is an
+    error or a warning for a reply: the summary and its relays read the run's
+    conditions (``log_conditions.said_as``), and the line classifier's lists
+    are read only by the scopes listed, each for a question that is not a
+    severity."""
+    import ast
+
+    from tests._source_scan import modules
+
+    readers = set()
+    for path, tree in modules().items():
+        for scope in ast.walk(tree):
+            if not isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for node in ast.walk(scope):
+                key = base = None
+                if (
+                    isinstance(node, ast.Subscript)
+                    and isinstance(node.slice, ast.Constant)
+                    and node.slice.value in ("errors", "warnings", "meas_errors")
+                ):
+                    key, base = node.slice.value, ast.unparse(node.value)
+                elif (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "get"
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and node.args[0].value in ("errors", "warnings", "meas_errors")
+                ):
+                    key, base = node.args[0].value, ast.unparse(node.func.value)
+                if key is not None and base is not None and "diag" in base.casefold():
+                    readers.add((path, scope.name))
+    assert readers == set(_LINE_CLASSIFIER_READERS)
+
+
+def _recorded_logs() -> list[tuple[str, str]]:
+    found = []
+    for build in rec.BUILDS:
+        folder = rec.recorded(build, "log")
+        for log in sorted(Path(folder).glob("*.log")):
+            found.append((build, f"log/{log.stem}"))
+    return found
+
+
+@pytest.mark.parametrize(("build", "case"), _recorded_logs())
+def test_every_recorded_log_gives_the_summary_the_run_rows_errors_and_warnings(
+    build: str, case: str, tmp_path: Path
+):
+    """On every recorded log of both builds, the summary's errors are the
+    run's conditions the simulator called errors, its log warnings those it
+    called warnings, and no other line is either."""
+    import numpy as np
+
+    from ltspice_mcp.lib.log_conditions import run_diagnostics, said_as
+    from ltspice_mcp.lib.raw_parser import build_simulation_summary
+    from ltspice_mcp.lib.simulator_build import Producer
+    from tests.conftest import make_raw_mock
+
+    producer = Producer(
+        "ltspice",
+        "LTspice 26.1.1 for Windows" if build == "ltspice26" else None,
+        "LTspice.exe" if build == "ltspice26" else "XVIIx64.exe",
+    )
+    logs = rec.decode_log(build, case, tmp_path)
+    axis = np.linspace(0.0, 1e-3, 5)
+    raw = make_raw_mock(["time", "V(out)"], axis, {"time": axis, "V(out)": np.ones(5)})
+    summary = build_simulation_summary(raw, logs, producer=producer)
+    section = logs.value("diagnostics")
+    said = (run_diagnostics(section["conditions"], producer) if section else {}).get(
+        "diagnostics", []
+    )
+    errors = [c["first_text"] for c in said if said_as(c) == "error"]
+    warnings = [c["first_text"] for c in said if said_as(c) == "warning"]
+    assert summary.get("errors", []) == errors
+    assert [
+        w for w in summary.get("warnings", []) if w in {c["first_text"] for c in said}
+    ] == warnings

@@ -729,6 +729,17 @@ def extract_log_diagnostics(log_path: Path) -> LogDiagnostics:
     of rules ``log_conditions`` has, without knowing who wrote them; a reader
     picks its producer's set with ``log_conditions.run_diagnostics``.
 
+    How severe the simulator called a line, as any reply shows it, is the
+    conditions' answer (``log_conditions.said_as``): the ``summary`` recipe's
+    errors, warnings and ``meas_errors`` and its relays read them. The
+    ``errors`` and ``warnings`` lists here are kept for readers that ask
+    something else of the lines, each named in
+    ``tests/test_summary_says_what_the_run_row_says.py``: whether a run failed
+    (``runner_base.collect_run_outcome``), whether the simulator refused the
+    deck before it ran (``log_decode.decode_logs``, ``empty_measurements``),
+    and which lines name a failed solve or an unrecognized variable
+    (``services.solve_failure_lines``, ``metrics.read_log_warnings``).
+
     Detects all known LTspice diagnostic patterns:
     - filepath(line): message + source line + ^^^ caret blocks
     - "Error on line N:" component errors

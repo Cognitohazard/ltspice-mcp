@@ -1054,87 +1054,57 @@ class TestComputeAcBandwidthMetrics:
         assert metrics["unity_gain_freq"] == pytest.approx(fc * np.sqrt(gain**2 - 1), rel=1e-4)
 
 
-class TestOpSteppingFailureRawGate:
-    """An OP 'gmin/source stepping failed' error is a recoverable ladder rung.
-    The log-only converged-check keys on LTspice's success wording, so an
-    ngspice run that recovered via an unannounced fallback leaves a false hard
-    error — gated on raw validity: finite node data demotes it to a warning, a
-    rail-pinned/NaN raw keeps it an error, and always-terminal failures don't
-    qualify at all."""
-
-    def _summary(self, tmp_path: Path, node_wave: np.ndarray, phrase: str) -> dict:
-        log = tmp_path / "op.log"
-        # No recognized LTspice success line follows, so extract_log_diagnostics
-        # classifies the phrase as an error before the raw gate runs.
-        log.write_text(f"ngspice-42\n{phrase}\n")
-        axis = np.array([0.0, 1e-3, 2e-3])
-        raw = make_raw_mock(["time", "v(out)"], axis, {"time": axis, "v(out)": node_wave})
-        return build_simulation_summary(raw, captured_log_facts(tmp_path, log))
+class TestOpSteppingRungsByTheSimulatorsWord:
+    """A rung of the bias-point search (``operating_point_fallback``) is an
+    error in the summary only where the simulator wrote an error word on it
+    (``log_conditions.said_as``). No recorded build does: LTspice writes the
+    rungs bare, ngspice opens them with a ``Note``. So whatever the raw holds,
+    finite or railed, none is an error and none is demoted to a warning; the
+    run's ``diagnostics`` hold the condition."""
 
     @staticmethod
-    def _op_raw(trace: str) -> DecodedRaw:
-        # A real .op raw has no axis.
+    def _raw(node_wave: np.ndarray) -> DecodedRaw:
+        axis = np.array([0.0, 1e-3, 2e-3])
+        return make_raw_mock(["time", "v(out)"], axis, {"time": axis, "v(out)": node_wave})
+
+    @pytest.mark.parametrize(
+        "lines",
+        [
+            # ngspice (fixture ngspice_runs/op_source_stepping)
+            "Note: Starting dynamic gmin stepping\nWarning: Dynamic gmin stepping failed\n",
+            # LTspice 26 (recorded: log/err_timestep)
+            "Gmin stepping failed to find operating point.\n",
+            # Both LTspice builds: the iteration limit, also written bare
+            "Simulation Failed: Iteration limit reached\n",
+        ],
+    )
+    @pytest.mark.parametrize("node", [[1.0, 1.01, 0.99], [1e30, 1e30, 1e30]])
+    def test_a_rung_is_no_error_whatever_the_raw_holds(
+        self, tmp_path: Path, lines: str, node: list[float]
+    ):
+        s = build_simulation_summary(
+            self._raw(np.array(node)), captured_log_facts(tmp_path, text=f"Circuit: t\n{lines}")
+        )
+        assert "errors" not in s
+        assert not any("OP solve recovered" in w for w in s.get("warnings", []))
+
+    def test_a_stepped_op_still_says_it_is_stepped(self, tmp_path: Path):
+        # LTspice's stepped .op writes one "Direct Newton iteration" line per
+        # step and one bias point to the raw.
         raw = make_raw_mock(
-            [trace], np.array([0.0]), {trace: np.array([1.0])}, plotname="Operating Point"
+            ["v(out)"], np.array([0.0]), {"v(out)": np.array([1.0])}, plotname="Operating Point"
         )
-        return raw
-
-    def test_finite_data_demotes_to_warning(self, tmp_path: Path):
-        s = self._summary(tmp_path, np.array([1.0, 1.01, 0.99]), "gmin stepping failed")
-        assert "errors" not in s
-        assert any("gmin stepping failed" in w for w in s.get("warnings", []))
-
-    def test_railed_data_keeps_error(self, tmp_path: Path):
-        s = self._summary(tmp_path, np.array([1e30, 1e30, 1e30]), "source stepping failed")
-        assert any("source stepping failed" in e for e in s.get("errors", []))
-        assert not any("source stepping failed" in w for w in s.get("warnings", []))
-
-    def test_iteration_limit_never_demoted(self, tmp_path: Path):
-        # Always-terminal — not a stepping-failure candidate even with clean data.
-        s = self._summary(tmp_path, np.array([1.0, 1.0, 1.0]), "iteration limit reached")
-        assert any("iteration limit" in e for e in s.get("errors", []))
-
-    def test_stepped_op_keeps_error_for_later_step(self, tmp_path: Path):
-        # A stepped .op solves the bias point per step but LTspice writes only
-        # step 0 to the .raw. Step 0's finite data can't clear a stepping failure
-        # that belongs to a later step the raw never carries — keep it an error.
-        log = tmp_path / "op.log"
-        log.write_text(".step v1=1\n.step v1=2\nngspice-42\ngmin stepping failed\n")
-        s = build_simulation_summary(self._op_raw("v(out)"), captured_log_facts(tmp_path, log))
-        assert any("gmin stepping failed" in e for e in s.get("errors", []))
+        s = build_simulation_summary(
+            raw,
+            captured_log_facts(
+                tmp_path,
+                text=(
+                    "Direct Newton iteration succeeded in finding operating point.\n"
+                    "Direct Newton iteration failed to find operating point.\n"
+                ),
+            ),
+        )
         assert any("Stepped .op detected" in w for w in s.get("warnings", []))
-
-    def test_stepped_op_later_step_fails_without_step_markers(self, tmp_path: Path):
-        # LTspice stepped .op emits no ".step name=value" markers — the only
-        # signal is the per-step "Direct Newton iteration" line. Step 0 succeeds
-        # (one line) and step 1 fails (a second attempt + gmin failure): two
-        # solve blocks, so step 0's finite raw can't vouch for step 1's failure.
-        log = tmp_path / "op.log"
-        log.write_text(
-            "Direct Newton iteration succeeded in finding operating point.\n"
-            "Direct Newton iteration failed to find operating point.\n"
-            "gmin stepping failed\n"
-        )
-        s = build_simulation_summary(self._op_raw("v(out)"), captured_log_facts(tmp_path, log))
-        assert any("gmin stepping failed" in e for e in s.get("errors", []))
-
-    def test_current_only_raw_keeps_error(self, tmp_path: Path):
-        # A finite branch current can't vouch for a solved bias point: a failing
-        # .op may still write i(V1) while the node voltage sits at NaN/rail. Only
-        # a finite node VOLTAGE demotes; a current-only raw keeps the error.
-        log = tmp_path / "op.log"
-        log.write_text("ngspice-42\ngmin stepping failed\n")
-        s = build_simulation_summary(self._op_raw("i(v1)"), captured_log_facts(tmp_path, log))
-        assert any("gmin stepping failed" in e for e in s.get("errors", []))
-
-    def test_single_step_op_still_demotes(self, tmp_path: Path):
-        # An unstepped .op (one bias point) with finite data and no success line
-        # still demotes — the guard must not over-suppress the single-block case.
-        log = tmp_path / "op.log"
-        log.write_text("ngspice-42\ngmin stepping failed\n")
-        s = build_simulation_summary(self._op_raw("v(out)"), captured_log_facts(tmp_path, log))
-        assert "errors" not in s
-        assert any("gmin stepping failed" in w for w in s.get("warnings", []))
 
 
 class TestBuildSimulationSummary:
@@ -1248,7 +1218,8 @@ class TestBuildSimulationSummary:
         assert "warnings" not in summary
 
     def test_summary_with_log_warnings(self, work_dir: Path):
-        """Summary includes warnings from log file."""
+        """Summary includes warnings from log file: one per condition the
+        simulator called a warning, as the run row's diagnostics count it."""
         axis = np.linspace(0, 0.01, 100)
         raw = make_raw_mock(
             ["time", "V(out)"],
@@ -1266,9 +1237,16 @@ class TestBuildSimulationSummary:
 
         summary = build_simulation_summary(raw, captured_log_facts(work_dir, log))
 
-        assert len(summary["warnings"]) == 2
-        assert any("N001" in w for w in summary["warnings"])
-        assert any("VCC" in w for w in summary["warnings"])
+        # Both lines are one condition (simulator_warning), counted twice.
+        assert summary["warnings"] == ["Warning: node N001 is floating"]
+        (said,) = [
+            c
+            for c in captured_log_facts(work_dir, log).value("diagnostics")["conditions"][
+                "wording"
+            ]
+            if c["code"] == "simulator_warning"
+        ]
+        assert said["count"] == 2
 
     def test_summary_multi_step(self):
         axis = np.linspace(0, 0.01, 100)

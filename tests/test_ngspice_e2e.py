@@ -1037,10 +1037,15 @@ async def test_tran_meas_in_batch_mode_runs_and_reports_the_skip(
             {"key": "vout", "metric": "signal_stats", "signal": "V(out)"},
         ],
     )
+    # ngspice writes "No .measure possible in batch mode" with no severity
+    # word, so it is in the summary's diagnostics, not its warnings
+    # (log_conditions.said_as), and the .meas is reported skipped for it.
     assert any(
-        "No .measure possible in batch mode" in warning
-        for warning in data["results"]["sum"]["warnings"]
-    )
+        o["code"] == "unmet_request"
+        and o.get("evidence", {}).get("reason") == "skipped_in_batch_mode"
+        for o in data.get("observations", [])
+    ), data.get("observations")
+
     measured = data["results"]["measured"]
     assert (
         not measured.get("values")

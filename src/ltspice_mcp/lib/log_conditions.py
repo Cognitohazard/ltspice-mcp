@@ -405,6 +405,16 @@ _RULES: tuple[_Rule, ...] = (
         _ONLY_17,
     ),
     _Rule("source_value_assumed", _re(r"^Note: \S+: has no value, DC 0 assumed$"), _ONLY_NG),
+    # ngspice run with a rawfile in batch mode evaluates no top-level .meas
+    # and no .four, and says so with no word for how severe (ngspice-42,
+    # measured: "No .measure possible in batch mode (-b) with -r rawfile
+    # set!", ".fourier line ignored since rawfile was produced.").
+    _Rule("measurement_skipped_batch", _re(r"^No \.measure possible in batch mode\b"), _ONLY_NG),
+    _Rule(
+        "fourier_skipped_batch",
+        _re(r"^\.fourier line ignored since rawfile was produced\.$"),
+        _ONLY_NG,
+    ),
     _Rule(
         "simulator_note",
         _re(r"^lossy: using linear interpolation because trytocompact option specified$"),
@@ -772,6 +782,26 @@ def decoded_run_diagnostics(
     if section["status"] != "parsed":
         return {"coverage": "log_unread"}
     return run_diagnostics(section["value"]["conditions"], producer)
+
+
+#: The words a simulator writes on a line (``severity``), by what a reader of
+#: its conditions calls the line: the one decision whether a line is an error
+#: or a warning. A condition whose line carries no such word, or a ``Note``, is
+#: neither.
+_SAID_AS: dict[str, Literal["error", "warning"]] = {
+    "fatal error": "error",
+    "error": "error",
+    "warning": "warning",
+}
+
+
+def said_as(condition: Mapping[str, Any]) -> Literal["error", "warning"] | None:
+    """Whether the simulator called ``condition`` (a :class:`LogCondition`)
+    an error or a warning, by the word it wrote on its line; None where it
+    wrote neither. Every reader that lists a run's errors or warnings asks
+    this, so none decides it otherwise."""
+    severity = condition.get("severity")
+    return _SAID_AS.get(severity.casefold()) if isinstance(severity, str) else None
 
 
 def reply_fields(found: Mapping[str, Any]) -> dict[str, Any]:
