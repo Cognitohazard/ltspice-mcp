@@ -365,10 +365,16 @@ NEVER_BOUNDS: dict[tuple[str, str], str] = {
     ),
     ("jobs.handle_jobs", "files"): "one per file the run wrote beside its results",
     **{
-        (handler, "runs_not_shown.*.runs"): (
-            "receipts.NOT_SHOWN_CAP (5) per kind of fact, with count the true number"
-        )
+        (handler, path): bound
         for handler in ("experiments.handle_run_experiments", "jobs.handle_jobs")
+        for path, bound in (
+            (
+                "runs_not_shown.runs",
+                "receipts.NOT_SHOWN_NAMED (3) runs over every kind, and the whole note "
+                "receipts.NOT_SHOWN_BOUND_TOKENS",
+            ),
+            ("runs_not_shown.runs[].kinds", "receipts.NOT_SHOWN_KINDS_PER_RUN (2)"),
+        )
     },
     # What a job's request named, which a standing note's said_before shortens.
     **{

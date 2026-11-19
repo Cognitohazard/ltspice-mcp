@@ -13,14 +13,11 @@ needs, without ever observing a later job transition.
 
 from __future__ import annotations
 
-import asyncio
 import copy
-import dataclasses
 import functools
 import json
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
 from typing import Any, Literal, get_args
 
 from ltspice_mcp.errors import PathSecurityError
@@ -55,10 +52,8 @@ from ltspice_mcp.lib.projection import (
 )
 from ltspice_mcp.lib.raw_parser import other_raw_path
 from ltspice_mcp.lib.reply_cuts import CUT, ITEMS, NEVER, rows
-from ltspice_mcp.lib.result_observations import (
-    deck_observation_inputs,
-    measurements_failed_in_every_run,
-)
+from ltspice_mcp.lib.response_budget import estimate_tokens
+from ltspice_mcp.lib.result_observations import measurements_failed_in_every_run
 from ltspice_mcp.lib.sheet_results import run_by_ltspice, sheets_reported
 from ltspice_mcp.lib.simulator_build import SimulatorExecutable
 from ltspice_mcp.state import SessionState
@@ -425,43 +420,46 @@ LINEAGE_SCHEMA: dict[str, Any] = {
 }
 
 
-#: How many runs ``runs_not_shown`` names for one kind of fact; ``count`` is
-#: the true number.
-NOT_SHOWN_CAP = 5
+#: How many kinds of fact ``runs_not_shown`` names a run for, over all kinds:
+#: the first run of each of the first kinds, each run naming at most
+#: :data:`NOT_SHOWN_KINDS_PER_RUN` of them. Every kind keeps its count.
+NOT_SHOWN_NAMED = 3
+
+#: How many kinds one named run is named for.
+NOT_SHOWN_KINDS_PER_RUN = 2
 
 #: The schema of ``runs_not_shown``: never cut and never shortened.
 RUNS_NOT_SHOWN_SCHEMA: dict[str, Any] = {
     "type": "object",
     "description": (
-        "Present when run rows were left out and some of them carry a fact about "
-        "their run's outcome: per kind ('diagnostics.<code>', 'failed_measurements', "
-        "'measurements_not_established', 'measurements_not_printed', "
-        "'measurements_coverage.<value>', 'diagnostics_coverage.<value>', "
-        "'status.<status>'), how many of the runs after the rows sent carry it, up to "
-        f"{NOT_SHOWN_CAP} of them with the cursor that reads that run's row, and how "
-        "many more."
+        "Present when run rows were left out and some of the runs after the rows "
+        "sent carry a fact about their outcome. counts: per kind "
+        "('diagnostics.<code>', 'failed_measurements', 'measurements_not_established', "
+        "'measurements_not_printed', 'measurements_coverage.<value>', "
+        "'diagnostics_coverage.<value>', 'status.<status>'), how many of those runs "
+        f"carry it. runs: the first run of each of the first {NOT_SHOWN_NAMED} kinds "
+        "that not every run of the job carries, with the cursor that reads its row "
+        "when the job has a record. Bounded by itself, whatever the number of kinds "
+        "and runs (receipts.NOT_SHOWN_BOUND_TOKENS)."
     ),
-    "additionalProperties": {
-        "type": "object",
-        "properties": {
-            "count": {"type": "integer", "minimum": 1},
-            "runs": {
-                "type": "array",
-                CUT: NEVER,
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "case_id": {"type": "string"},
-                        "run_index": {"type": "integer"},
-                        "cursor": {"type": "string"},
-                    },
-                    "required": ["case_id", "run_index"],
+    "properties": {
+        "counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 1}},
+        "runs": {
+            "type": "array",
+            CUT: NEVER,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "case_id": {"type": "string"},
+                    "run_index": {"type": "integer"},
+                    "kinds": {"type": "array", "items": {"type": "string"}, CUT: NEVER},
+                    "cursor": {"type": "string"},
                 },
+                "required": ["case_id", "run_index", "kinds"],
             },
-            "more": {"type": "integer", "minimum": 1},
         },
-        "required": ["count", "runs"],
     },
+    "required": ["counts"],
 }
 
 
@@ -537,6 +535,10 @@ RUN_EXPERIMENTS_OUTPUT_SCHEMA: dict[str, Any] = {
                             "type": "array",
                             "items": FINDING_SCHEMA,
                             CUT: FINDING_LIST_CUT,
+                            # Lint lists only the circuits with findings; the
+                            # reply rule would otherwise let a whole entry
+                            # leave them out.
+                            "minItems": 1,
                         },
                     },
                     "required": ["circuit", "findings"],
@@ -731,59 +733,149 @@ def fact_index(rows: Sequence[Mapping[str, Any]]) -> FactIndex:
     )
 
 
+@dataclass(frozen=True)
+class RowFacts:
+    """The facts on a job's whole table, and the kinds every run carries:
+    what ``runs_not_shown`` is made from, whatever page a reply holds."""
+
+    facts: FactIndex
+    #: The kinds every run of the job carries, shown or not: given by count.
+    every: frozenset[str]
+
+    @classmethod
+    def of(cls, rows: Sequence[Mapping[str, Any]]) -> RowFacts:
+        facts = fact_index(rows)
+        every: frozenset[str] = frozenset()
+        if rows and len(facts) == len(rows):
+            every = frozenset.intersection(*(frozenset(kinds) for *_, kinds in facts))
+        return cls(facts, every)
+
+    def not_shown(
+        self, start: int, record: Record | None, *, statuses: bool = True
+    ) -> dict[str, Any]:
+        """``runs_not_shown`` for the rows from ``start`` on (:func:`runs_not_shown`)."""
+        return runs_not_shown(self, start, record, statuses=statuses)
+
+    def reserve(self, start: int, record: Record | None, *, statuses: bool = True) -> int:
+        """The most ``runs_not_shown`` takes in a reply that holds rows from
+        ``start - 1`` on: its size when one row is kept, which no larger count
+        exceeds, within the margin of a longer name, and never above
+        :data:`NOT_SHOWN_BOUND_TOKENS`."""
+        note = self.not_shown(start, record, statuses=statuses)
+        if not note:
+            return 0
+        return min(
+            estimate_tokens({"runs_not_shown": note}) + _RESERVE_MARGIN, NOT_SHOWN_BOUND_TOKENS
+        )
+
+
+#: What a longer case id or count of a later page may add to a reserve.
+_RESERVE_MARGIN = 16
+
+
 def runs_not_shown(
-    facts: FactIndex, start: int, record: Record | None
-) -> dict[str, dict[str, Any]]:
-    """Per kind of fact, the runs from ``start`` on that carry it: the count,
-    up to :data:`NOT_SHOWN_CAP` of them by ``case_id`` and ``run_index`` with a
-    record cursor that starts at that run's row, and how many more. Rows keep
-    their order, so a cursor names a row by its index."""
-    found: dict[str, dict[str, Any]] = {}
-    for index, case_id, run_index, kinds in facts:
+    table: RowFacts, start: int, record: Record | None, *, statuses: bool = True
+) -> dict[str, Any]:
+    """What the runs from ``start`` on carry, bounded by
+    :data:`NOT_SHOWN_BOUND_TOKENS`: every kind's count, and the first run of
+    each of the first :data:`NOT_SHOWN_NAMED` kinds that not every run carries,
+    with a record cursor that starts at its row. Rows keep their order, so a
+    cursor names a row by its index. ``statuses`` False leaves out the kinds
+    a reply's failures already name (a receipt with no job)."""
+    counts: dict[str, int] = {}
+    runs: list[dict[str, Any]] = []
+    named: set[str] = set()
+    for index, case_id, run_index, kinds in table.facts:
         if index < start:
             continue
-        for kind in kinds:
-            entry = found.setdefault(kind, {"count": 0, "runs": []})
-            entry["count"] += 1
-            if len(entry["runs"]) < NOT_SHOWN_CAP:
-                run: dict[str, Any] = {"case_id": case_id, "run_index": run_index}
-                if record is not None:
-                    run["cursor"] = record_cursor(record, index)
-                entry["runs"].append(run)
-    for entry in found.values():
-        if entry["count"] > len(entry["runs"]):
-            entry["more"] = entry["count"] - len(entry["runs"])
-    return found
+        kept = [kind for kind in kinds if statuses or not kind.startswith("status.")]
+        for kind in kept:
+            counts[kind] = counts.get(kind, 0) + 1
+        fresh = [kind for kind in kept if kind not in table.every and kind not in named]
+        room = NOT_SHOWN_NAMED - len(named)
+        if fresh and room > 0:
+            fresh = fresh[: min(room, NOT_SHOWN_KINDS_PER_RUN)]
+            named.update(fresh)
+            run: dict[str, Any] = {"case_id": case_id, "run_index": run_index, "kinds": fresh}
+            if record is not None:
+                run["cursor"] = record_cursor(record, index)
+            runs.append(run)
+    if not counts:
+        return {}
+    note: dict[str, Any] = {"counts": counts}
+    if runs:
+        note["runs"] = runs
+    # Long names can take a named run past the bound; the counts never do.
+    while runs and estimate_tokens({"runs_not_shown": note}) > NOT_SHOWN_BOUND_TOKENS:
+        runs.pop()
+        if not runs:
+            note.pop("runs")
+    return note
 
 
-#: Names the facts on the rows a reply left out.
-_NOT_SHOWN_SENTENCE = (
-    "runs_not_shown names the runs after these that carry a diagnostic, a "
-    "measurement that gave no value or was not read, or a status other than "
-    "produced, each with a cursor that reads its row."
-)
+def _kind_vocabulary() -> list[str]:
+    """Every kind :func:`row_facts` can give a row."""
+    from ltspice_mcp.lib import log_conditions
+
+    return [
+        *(f"diagnostics.{code}" for code in sorted(log_conditions.diagnostic_codes())),
+        *(f"diagnostics_coverage.{value}" for value in log_conditions.COVERAGE),
+        "failed_measurements",
+        "measurements_not_established",
+        "measurements_not_printed",
+        *(f"measurements_coverage.{value}" for value in MEASUREMENTS_COVERAGE),
+        *(f"status.{status}" for status in _ENDED_WITHOUT_OUTPUT),
+    ]
+
+
+def _worst_note() -> dict[str, Any]:
+    """``runs_not_shown`` at its largest for ids of ordinary length: every
+    kind counted in the hundreds of thousands, and every named run with a 48-character case id
+    and a cursor for a 48-character job id."""
+    vocabulary = _kind_vocabulary()
+    longest = sorted(vocabulary, key=len, reverse=True)
+    record = Record(JOB_RUNS, "j" * 48)
+    return {
+        "counts": dict.fromkeys(vocabulary, 999_999),
+        "runs": [
+            {
+                "case_id": "c" * 48,
+                "run_index": 999_999,
+                "kinds": longest[:NOT_SHOWN_KINDS_PER_RUN],
+                "cursor": record_cursor(record, 999_999),
+            }
+            for _ in range(NOT_SHOWN_NAMED)
+        ],
+    }
 
 
 def _say_where_the_runs_are(
     run_fields: list[str] | None, rows: Callable[[], Sequence[Mapping[str, Any]]]
 ) -> Callable[
     [str | None, Mapping[str, Any]],
-    Callable[[dict[str, Any], Mapping[str, ListCut], Any, str | None], None],
+    tuple[
+        Callable[[dict[str, Any], Mapping[str, ListCut], Any, str | None], None], dict[str, int]
+    ],
 ]:
     """The words a receipt adds when its run rows are cut: its ``runs`` page
     fields set from the cut, what the rows left out carry (``runs_not_shown``)
-    and the way to read the rest, first in its hint. ``rows`` gives the job's
-    whole table before any ``run_fields`` projection, read once, off the loop
-    where the presentation runs."""
-    index: list[FactIndex] = []
+    and the way to read the rest, first in its hint; and the bound
+    ``runs_not_shown`` reserves of the target. ``rows`` gives the job's whole
+    table before any ``run_fields`` projection, read once, off the loop where
+    the presentation runs."""
+    table: list[RowFacts] = []
 
     def for_job(
         job_id: str | None, _answer: Mapping[str, Any]
-    ) -> Callable[[dict[str, Any], Mapping[str, ListCut], Any, str | None], None]:
-        if not index:
-            index.append(fact_index(rows()))
-        facts = index[0]
+    ) -> tuple[
+        Callable[[dict[str, Any], Mapping[str, ListCut], Any, str | None], None], dict[str, int]
+    ]:
+        if not table:
+            table.append(RowFacts.of(rows()))
+        facts = table[0]
         record = run_rows_record(job_id) if job_id is not None else None
+        # A receipt with no job names every failed case in its failures.
+        statuses = job_id is not None
 
         def annotate(
             reply: dict[str, Any], cut: Mapping[str, ListCut], stored: Any, _paged: str | None
@@ -804,16 +896,16 @@ def _say_where_the_runs_are(
                 runs["next_cursor"] = None
                 runs["hint"] = said[0]
                 reply["cut"][RUN_ROWS].pop("next", None)
-            left_out = runs_not_shown(facts, entry.offset + entry.returned, record)
+            left_out = facts.not_shown(entry.offset + entry.returned, record, statuses=statuses)
             if left_out:
                 reply["runs_not_shown"] = left_out
-                said.append(_NOT_SHOWN_SENTENCE)
             hint = reply.get("hint")
             if isinstance(hint, str) and hint:
                 said.append(hint)
             reply["hint"] = " ".join(said)
 
-        return annotate
+        reserve = facts.reserve(1, record, statuses=statuses)
+        return annotate, ({"runs_not_shown": reserve} if reserve else {})
 
     return for_job
 
@@ -1110,8 +1202,8 @@ class ReceiptSnapshot:
     simulator_executable: SimulatorExecutable | None = None
     lineage: dict[str, Any] | None = None
     measures: bool = False
-    """Whether a deck the job ran requests a ``.meas`` (read off the loop by
-    :func:`snapshot_receipt_live`; False where it was not read)."""
+    """Whether a finished job's deck requests a ``.meas``, as the runner kept
+    it on its cases (:func:`_requests_measures`)."""
     path_denied_hint: str | None = None
     """The session's sandbox guidance, which a ``path_denied`` failure row
     carries as its hint. Not a job fact: the remedy is the sandbox setting as
@@ -1704,6 +1796,7 @@ def snapshot_receipt(
         analysis_observations=tuple(copy.deepcopy(analysis.observations)),
         analysis_request=copy.deepcopy(analysis.request),
         simulator_executable=job.simulator_executable,
+        measures=_requests_measures(job),
         lineage=(
             {
                 "root_job_id": job.recovery.root_job_id,
@@ -1735,32 +1828,28 @@ async def snapshot_receipt_live(
     does not. Every receipt that reports on a job in flight is taken here.
     """
     live_progress = await live_run_progress(job)
-    snapshot = snapshot_receipt(
+    return snapshot_receipt(
         job,
         state,
         control_token=control_token,
         lint_by_circuit=lint_by_circuit,
         live_progress=live_progress,
     )
-    # The decks of the cases the snapshot holds as produced, collected in the
-    # same loop step as its rows; their files are read after, off the loop.
-    decks = {case.staged_deck for case in job.cases if case.status == "produced"}
-    if not decks:
-        return snapshot
-    return dataclasses.replace(
-        snapshot, measures=await asyncio.to_thread(_requests_measures, decks)
+
+
+def _requests_measures(job: ExperimentJob) -> bool:
+    """Whether a finished job's deck requests a ``.meas``: what the runner
+    kept on a produced case when its run ended (``measurement_facts``'
+    ``requested``, from ``result_observations.deck_observation_inputs``). No
+    file is read. A running job has no route to name yet, so it is not read."""
+    if job.status not in TERMINAL_STATUSES:
+        return False
+    return any(
+        case.status == "produced"
+        and isinstance(case.measurement_facts, dict)
+        and bool(case.measurement_facts.get("requested"))
+        for case in job.cases
     )
-
-
-def _requests_measures(decks: Collection[Path]) -> bool:
-    """Whether one of ``decks`` requests a ``.meas``, read as every reader of a
-    deck's requested outputs reads it
-    (``result_observations.deck_observation_inputs``, kept per deck)."""
-    for deck in decks:
-        requested, _ = deck_observation_inputs(deck)
-        if requested and requested.get("meas"):
-            return True
-    return False
 
 
 def render_jobs_receipt_snapshot(
@@ -1833,14 +1922,18 @@ RUNS_PAGE_ROWS = "/items"
 
 
 def say_which_rows(
-    snapshot: ReceiptSnapshot, run_fields: list[str] | None
-) -> Callable[[dict[str, Any], Mapping[str, ListCut], Any, str | None], None]:
+    snapshot: ReceiptSnapshot, run_fields: list[str] | None, offset: int
+) -> tuple[
+    Callable[[dict[str, Any], Mapping[str, ListCut], Any, str | None], None], dict[str, int]
+]:
     """The words a ``jobs(action="runs")`` reply carries when its rows are
     cut: its page fields set from the cut, which rows it holds, that they were
     read from the job's record as it stands now, what the rows after it carry
-    (``runs_not_shown``), and the call that reads on."""
+    (``runs_not_shown``), and the call that reads on; and the bound
+    ``runs_not_shown`` reserves of the target for a page from ``offset``."""
     job_id = snapshot.job_id
-    index: list[FactIndex] = []
+    record = run_rows_record(job_id)
+    facts = RowFacts.of(list(snapshot.runs_by_key.values()))
 
     def annotate(
         reply: dict[str, Any], cut: Mapping[str, ListCut], _stored: Any, _paged: str | None
@@ -1860,15 +1953,15 @@ def say_which_rows(
             said.append("A row of a job still running may change between pages.")
         if entry.next is not None:
             said.append(_the_rest_of_the_rows(entry, job_id, run_fields))
-            if not index:
-                # Read once, where the presentation runs: off the loop.
-                index.append(fact_index(list(snapshot.runs_by_key.values())))
-            left_out = runs_not_shown(
-                index[0], entry.offset + entry.returned, run_rows_record(job_id)
-            )
+            left_out = facts.not_shown(entry.offset + entry.returned, record)
             if left_out:
                 reply["runs_not_shown"] = left_out
-                said.append(_NOT_SHOWN_SENTENCE)
         reply["hint"] = " ".join(said)
 
-    return annotate
+    reserve = facts.reserve(offset + 1, record)
+    return annotate, ({"runs_not_shown": reserve} if reserve else {})
+
+
+#: The most ``runs_not_shown`` takes, in estimated tokens, whatever the number
+#: of kinds and runs (:func:`runs_not_shown` holds it to this).
+NOT_SHOWN_BOUND_TOKENS: int = estimate_tokens({"runs_not_shown": _worst_note()})

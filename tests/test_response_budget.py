@@ -1055,11 +1055,15 @@ async def _grid_receipt(
 
 def _assert_floor_flat(small: dict[str, Any], large: dict[str, Any]) -> None:
     """Two floors that differ by the digits of their counts, nothing per case.
-    ``runs_not_shown`` names at most ``NOT_SHOWN_CAP`` runs per kind of fact,
-    so it is bounded on its own and measured apart."""
+    ``runs_not_shown`` is bounded on its own (``NOT_SHOWN_BOUND_TOKENS``), so
+    it is measured apart."""
     for floor in (small, large):
-        for entry in floor.get("runs_not_shown", {}).values():
-            assert len(entry["runs"]) <= receipts_mod.NOT_SHOWN_CAP
+        note = floor.get("runs_not_shown")
+        if note is not None:
+            assert (
+                response_budget.estimate_tokens({"runs_not_shown": note})
+                <= receipts_mod.NOT_SHOWN_BOUND_TOKENS
+            )
     lean = [{k: v for k, v in floor.items() if k != "runs_not_shown"} for floor in (small, large)]
     sizes = (response_budget.estimate_tokens(lean[0]), response_budget.estimate_tokens(lean[1]))
     assert sizes[1] - sizes[0] <= _FLOOR_DIGIT_SLACK, sizes

@@ -114,7 +114,7 @@ async def test_the_over_target_note_names_runs_not_shown(state_no_sim: SessionSt
     for index, case in enumerate(job.cases):
         case.log_diagnostics = _diagnosed(_CODES[: 1 + index % len(_CODES)])
     data = await _jobs(state_no_sim, action="status", job_id=job.job_id, budget=500)
-    (over,) = [item for item in data["observations"] if item["code"] == "budget_not_met"]
+    (over,) = [item for item in data.get("observations", []) if item["code"] == "budget_not_met"]
     assert "runs_not_shown" in over["detail"]
 
 
@@ -133,7 +133,7 @@ async def test_rows_that_fit_beside_a_large_note_are_kept(state_no_sim: SessionS
         job.cases[index].log_diagnostics = _diagnosed(_CODES)
     data = await _jobs(state_no_sim, action="status", job_id=job.job_id, budget=budget)
 
-    assert not [item for item in data["observations"] if item["code"] == "budget_not_met"]
+    assert not [item for item in data.get("observations", []) if item["code"] == "budget_not_met"]
     assert estimate_tokens(data) <= budget
     assert len(data["runs"]["items"]) > 20
 

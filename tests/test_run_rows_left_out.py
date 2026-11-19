@@ -72,8 +72,9 @@ def _job_with_one_diagnosed_run(state: SessionState, *, count: int, at: int) -> 
 
 
 def _named(data: dict[str, Any], kind: str) -> list[dict[str, Any]]:
-    entry = data.get("runs_not_shown", {}).get(kind)
-    return [] if entry is None else entry["runs"]
+    """The runs ``runs_not_shown`` names for ``kind``."""
+    runs = data.get("runs_not_shown", {}).get("runs", [])
+    return [run for run in runs if kind in run["kinds"]]
 
 
 async def _row_by_cursor(state: SessionState, job_id: str, cursor: str) -> dict[str, Any]:
@@ -96,9 +97,8 @@ async def test_a_diagnostic_on_a_run_left_out_is_named_under_the_default(
     assert len(rows) < at, "the premise: the default target cuts the rows"
     name = f"case-{at:04d}"
     assert all(row["case_id"] != name for row in rows)
-    entry = data["runs_not_shown"]["diagnostics.timestep_too_small"]
-    assert entry["count"] == 1
-    (named,) = entry["runs"]
+    assert data["runs_not_shown"]["counts"] == {"diagnostics.timestep_too_small": 1}
+    (named,) = _named(data, "diagnostics.timestep_too_small")
     assert (named["case_id"], named["run_index"]) == (name, at)
     row = await _row_by_cursor(state_no_sim, job_id, named["cursor"])
     assert row["case_id"] == name
@@ -121,7 +121,7 @@ async def test_a_small_budget_names_the_one_run_with_a_failed_measurement(
         for kind in ("failed_measurements", "diagnostics.timestep_too_small"):
             (named,) = _named(data, kind)
             assert named["case_id"] == "case-0017", (delivery, kind)
-        assert set(data["runs_not_shown"]) == {
+        assert set(data["runs_not_shown"]["counts"]) == {
             "failed_measurements",
             "diagnostics.timestep_too_small",
         }
@@ -281,7 +281,7 @@ async def test_a_routing_failure_receipt_is_presented_like_every_receipt(
 
 
 @pytest.mark.asyncio
-async def test_a_projected_routing_failure_still_names_the_failed_runs_it_left_out(
+async def test_a_routing_failure_leaves_the_failed_runs_to_its_failures(
     state_with_sim: SessionState, grid_deck: Path, monkeypatch: pytest.MonkeyPatch
 ):
     def refuse(*_args: Any, **_kwargs: Any) -> Any:
@@ -300,9 +300,11 @@ async def test_a_projected_routing_failure_still_names_the_failed_runs_it_left_o
     data = result.structured_content
     assert data is not None
     assert all(set(row) == {"case_id"} for row in data["runs"]["items"])
-    entry = data["runs_not_shown"]["status.failed"]
-    assert entry["count"] == 70
-    assert all("cursor" not in run for run in entry["runs"])
+    # Every case failed, and the never-cut failures say so: no row left out
+    # carries a fact they do not already name.
+    assert len(data["failures"]) == 120
+    assert "runs_not_shown" not in data
+    assert "cursor" not in data["hint"].split("complete receipt")[0]
     assert experiment_runner is not None
 
 

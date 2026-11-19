@@ -672,6 +672,8 @@ def test_a_fit_is_found_when_a_note_on_the_entries_left_out_shrinks_as_more_are_
         ttl_hours=1.0,
         records=record,
         annotate=note_on_the_rest,
+        # The note is declared apart, with the bound it reserves.
+        apart={"left_out": estimate_tokens({"left_out": ["x" * 400] * 11})},
     )
     assert shown.met, shown.size
     assert shown.cut["/rows"].returned > 1

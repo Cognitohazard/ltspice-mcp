@@ -1734,7 +1734,8 @@ async def _routing_failure_response(
             # completeness reconciliation did report.
             "outcome": outcome_of(failures),
             "completeness": completeness,
-            "lint": [{"circuit": circuit.circuit_id, "findings": []} for circuit in circuits],
+            # Lint lists only the circuits with findings, and this pass found none.
+            "lint": [],
             "failures": failures,
             "hint": (
                 "Configure an available Windows-native temp directory before "

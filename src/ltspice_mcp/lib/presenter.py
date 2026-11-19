@@ -272,6 +272,7 @@ def _fit(
     build: Callable[[Mapping[str, int]], dict[str, Any]],
     target: int,
     caps: Mapping[str, int] | None = None,
+    apart: Mapping[str, int] | None = None,
 ) -> dict[str, int]:
     """How many entries of each list in ``sources`` the reply keeps.
 
@@ -279,12 +280,30 @@ def _fit(
     such as a page size). The largest list still holding more than one entry
     is cut first, to the most entries that let the reply fit; when none does,
     to one entry, and the next largest is cut.
+
+    ``apart`` names, by key, the top-level fields of a reply that are sized
+    apart, each with the bound it reserves: a note the annotation adds on the
+    entries left out, which shrinks as more are kept. The entries are sized
+    against the target less those bounds, without those fields, so the size
+    grows with every entry kept and a binary search is right. Where that finds
+    no count, the counts that fit without the reserve are tried whole, from
+    the largest, so a reply never says it is over its target while one fits.
     """
+    apart = apart or {}
+    reserve = sum(apart.values())
+
+    def bare(keep: Mapping[str, int]) -> int:
+        reply = build(keep)
+        return _size({key: value for key, value in reply.items() if key not in apart})
+
+    def whole(keep: Mapping[str, int]) -> int:
+        return _size(build(keep))
+
     keep = {
         pointer: min(len(entries), max(1, (caps or {}).get(pointer, len(entries))))
         for pointer, entries in sources.items()
     }
-    if _size(build(keep)) <= target:
+    if whole(keep) <= target:
         return keep
     while True:
         open_lists = [pointer for pointer, count in keep.items() if count > 1]
@@ -294,18 +313,21 @@ def _fit(
             open_lists,
             key=lambda p: len(json.dumps(sources[p][: keep[p]], default=str)),
         )
-        low, high = 1, keep[largest] - 1
-        best: int | None = None
-        while low <= high:
-            middle = (low + high) // 2
-            if _size(build({**keep, largest: middle})) <= target:
-                best, low = middle, middle + 1
-            else:
-                high = middle - 1
-        if best is None:
-            best = _first_fit(
-                lambda count, at=largest: _size(build({**keep, at: count})) <= target,
-                keep[largest] - 1,
+        best = _largest(
+            lambda count, at=largest: bare({**keep, at: count}) + reserve <= target,
+            keep[largest] - 1,
+        )
+        if best is None and apart:
+            most = _largest(
+                lambda count, at=largest: bare({**keep, at: count}) <= target, keep[largest] - 1
+            )
+            best = next(
+                (
+                    count
+                    for count in range(most or 0, 0, -1)[:_WHOLE_TRIES]
+                    if whole({**keep, largest: count}) <= target
+                ),
+                None,
             )
         if best is not None:
             keep[largest] = best
@@ -313,21 +335,14 @@ def _fit(
         keep[largest] = 1
 
 
-#: How many small counts :func:`_first_fit` tries one by one.
-_SMALL_COUNTS = 32
+#: How many counts the fallback of :func:`_fit` sizes whole, from the largest.
+_WHOLE_TRIES = 64
 
 
-def _first_fit(fits: Callable[[int], bool], most: int) -> int | None:
-    """The largest count up to ``most`` that fits, found when the binary
-    search missed it: what an annotation adds can shrink as entries are kept
-    (a note on the entries left out, such as ``runs_not_shown``), so a small
-    count can be over while a larger one fits. The small counts are tried in
-    turn, from 2, up to :data:`_SMALL_COUNTS`; from the first that fits, the
-    reply grows with each entry kept, and the rest is a binary search."""
-    first = next((count for count in range(2, min(most, _SMALL_COUNTS) + 1) if fits(count)), None)
-    if first is None:
-        return None
-    low, high, best = first + 1, most, first
+def _largest(fits: Callable[[int], bool], most: int) -> int | None:
+    """The largest count from 1 to ``most`` that fits, for a ``fits`` that
+    holds up to some count and fails above it; None when 1 does not."""
+    low, high, best = 1, most, None
     while low <= high:
         middle = (low + high) // 2
         if fits(middle):
@@ -431,6 +446,7 @@ def _present_lists(
     records: Mapping[str, Record] | None = None,
     caps: Mapping[str, int] | None = None,
     over: Over | None = None,
+    apart: Mapping[str, int] | None = None,
 ) -> Presented:
     """``base`` with each list of ``sources`` cut to fit ``target``. A list
     is named in ``cut`` when the reply holds less than all of it, or when it
@@ -474,7 +490,7 @@ def _present_lists(
             annotate(reply, made, stored, paged)
         return reply
 
-    keep = _fit(sources, build, target, caps)
+    keep = _fit(sources, build, target, caps, apart)
     reply = build(keep)
     size = _size(reply)
     if size > target and over is not None:
@@ -495,6 +511,7 @@ def present(
     records: Mapping[str, Record] | None = None,
     caps: Mapping[str, int] | None = None,
     over: Over | None = None,
+    apart: Mapping[str, int] | None = None,
 ) -> Presented:
     """Send ``answer`` whole when it fits ``target`` tokens, or cut its
     cuttable lists to fit, storing it when a list that is not a record is cut.
@@ -505,7 +522,9 @@ def present(
     ``records`` names, by pointer, the lists the server already keeps, which
     continue from their record and are never stored. ``caps`` names, by
     pointer, the most entries a list may send, whatever the target. ``over``
-    says, once, that the reply sent is still over the target.
+    says, once, that the reply sent is still over the target. ``apart`` names
+    the fields an annotation adds that are sized apart, with their bounds
+    (:func:`_fit`).
     """
     caps = caps or {}
     records = records or {}
@@ -544,6 +563,7 @@ def present(
         records=records,
         caps=caps,
         over=over,
+        apart=apart,
     )
     if stored is not None and any(
         entry.next is not None for pointer, entry in shown.cut.items() if pointer not in records
@@ -563,6 +583,7 @@ def present(
             records=records,
             caps=caps,
             over=over,
+            apart=apart,
         )
     return replace(shown, target=target)
 
@@ -620,9 +641,11 @@ def present_record_page(
     annotate: Annotate | None = None,
     over: Over | None = None,
     cap: int | None = None,
+    apart: Mapping[str, int] | None = None,
 ) -> Presented:
     """The entries of the record's list at ``pointer`` from ``offset`` on, cut
-    to fit ``target``, and to ``cap`` entries when given.
+    to fit ``target``, and to ``cap`` entries when given; ``apart`` as for
+    :func:`present`.
 
     ``answer`` is the complete answer read from the record now, as the tool
     makes it, so a page carries the record as it stands when it is read.
@@ -647,6 +670,7 @@ def present_record_page(
         records={pointer: record},
         over=over,
         caps={} if cap is None else {pointer: cap},
+        apart=apart,
     )
 
 

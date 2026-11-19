@@ -341,6 +341,7 @@ async def record_page(
     target: int | None,
     annotate: presenter.Annotate | None = None,
     over: presenter.Over | None = None,
+    apart: Mapping[str, int] | None = None,
 ) -> dict[str, Any]:
     """One page of a list the server keeps in a record, as the reply to send:
     ``data`` is the complete answer read from the record now, cut from
@@ -357,6 +358,7 @@ async def record_page(
         annotate=annotate,
         over=over,
         cap=cap,
+        apart=apart,
     )
     return shown.reply
 
@@ -405,8 +407,12 @@ class JobAnswerParts:
     #: The record a job's run rows are read back from, by job id.
     record: Callable[[str], presenter.Record]
     #: The words a cut of the run rows adds, by job id (None for an answer that
-    #: names no job) and the complete answer before the cut.
-    annotate: Callable[[str | None, Mapping[str, Any]], presenter.Annotate]
+    #: names no job) and the complete answer before the cut, with the fields
+    #: it adds that are sized apart and the bound each reserves
+    #: (``presenter.present``'s ``apart``).
+    annotate: Callable[
+        [str | None, Mapping[str, Any]], tuple[presenter.Annotate, Mapping[str, int]]
+    ]
     #: Fits the attached part to a rung, in place: ``(answer, rung, rows, target)``.
     trim_attached: Callable[[dict[str, Any], response_budget.Rung, int | None, int], None]
     #: Whether an answer carries an attached part to fit at all.
@@ -432,6 +438,16 @@ def say_over_target(reply: dict[str, Any], size: int, target: int, *, more: str 
         if isinstance(cut, dict)
         else {}
     )
+    if "runs_not_shown" in reply:
+        # Never cut, so part of what the target could not hold.
+        more = " ".join(
+            part
+            for part in (
+                "runs_not_shown, which is never cut, is part of what the target could not hold.",
+                more,
+            )
+            if part
+        )
     reply["observations"] = [
         *reply.get("observations", []),
         response_budget.over_target_observation(size, target, held, more=more),
@@ -568,6 +584,7 @@ def _present_job_answer(
         if rung is not None and budget.tokens is not None:
             parts.trim_attached(data, rung, rows, budget.tokens)
         named = isinstance(job_id, str)
+        annotate, apart = parts.annotate(job_id if named else None, data)
         shown = presenter.present(
             reply_payload(data),
             schema,
@@ -576,7 +593,8 @@ def _present_job_answer(
             snapshot={"request_id": data.get("request_id")},
             store=state.store,
             ttl_hours=state.config.result_set_ttl_hours,
-            annotate=parts.annotate(job_id if named else None, data),
+            annotate=annotate,
+            apart=apart,
             records={parts.rows: parts.record(job_id)} if named else None,
             caps=caps,
             over=functools.partial(

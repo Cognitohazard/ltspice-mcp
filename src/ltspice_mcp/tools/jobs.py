@@ -1759,6 +1759,9 @@ async def _present_jobs(
                 if isinstance(args, JobsStatusInput)
                 else "wait"
                 if isinstance(args, JobsWaitInput)
+                # A replayed resume recovers a reply the caller lost: in full.
+                else "replay"
+                if evaluation.replayed
                 else "resume"
             ),
         )
@@ -1823,12 +1826,14 @@ async def _runs_page(
                 f"{data['total']}: pass a cut entry's next unchanged."
             )
             raise InvalidCursorError(refused)
+    annotate, apart = say_which_rows(evaluation.snapshot, args.run_fields, offset)
     return await record_page(
         data,
         RUNS_PAGE_ROWS,
         offset,
         run_rows_record(job_id),
         target=target,
-        annotate=say_which_rows(evaluation.snapshot, args.run_fields),
+        annotate=annotate,
+        apart=apart,
         over=say_over_target,
     )
