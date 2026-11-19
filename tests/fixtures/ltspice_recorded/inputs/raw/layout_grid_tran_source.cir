@@ -1,0 +1,7 @@
+* an rc charge over two values of its source, stepped by the source's own name
+V1 in 0 PULSE(0 1 0 1u 1u 1 2)
+R1 in out 1k
+C1 out 0 100n
+.step V1 list 1 2
+.tran 0 200u 0 20u
+.end

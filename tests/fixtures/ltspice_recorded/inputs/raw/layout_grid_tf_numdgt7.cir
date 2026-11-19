@@ -1,0 +1,7 @@
+* divider transfer function, under numdgt above 6
+V1 in 0 5
+R1 in out 1k
+R2 out 0 4k
+.options numdgt=7
+.tf V(out) V1
+.end

@@ -1,0 +1,8 @@
+* divider swept with a second source stepped by its own name
+V1 in 0 0
+R1 in out 1k
+R2 out bias 1k
+V2 bias 0 0
+.step V2 list 1 2
+.dc V1 0 4 1
+.end

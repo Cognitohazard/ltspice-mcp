@@ -1,0 +1,14 @@
+* the noise of resistors at the top, in a block and in a block in a block
+V1 in 0 AC 1
+R1 in top 1k
+Xa top out stage
+C1 out 0 100n
+.subckt stage top out
+Rd top n1 1k
+Xin n1 out inner
+.ends
+.subckt inner p n
+Rin p n 1k
+.ends
+.noise V(out) V1 dec 2 10 100k
+.end

@@ -1,0 +1,6 @@
+* section sign in an instance name, in a noise analysis
+V1 in 0 AC 1
+R1 in a 1k
+R§Load a 0 1k
+.noise V(a) V1 dec 2 10 100k
+.end

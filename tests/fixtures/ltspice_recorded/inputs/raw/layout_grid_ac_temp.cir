@@ -1,0 +1,7 @@
+* rc low-pass frequency response over three temperatures
+V1 in 0 AC 1
+R1 in out 1k tc1=0.01
+C1 out 0 159.154943n
+.step temp list -40 27 125
+.ac dec 5 10 100k
+.end

@@ -1,0 +1,8 @@
+* noise of a biased diode over two saturation currents, a model parameter stepped
+V1 in 0 1 AC 1
+R1 in out 1k
+D1 out 0 DM
+.model DM D(Is=1e-14)
+.step D DM(Is) list 1e-14 1e-13
+.noise V(out) V1 dec 5 10 100k
+.end
