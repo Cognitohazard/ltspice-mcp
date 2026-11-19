@@ -1,0 +1,5 @@
+* section sign in an instance name, in a DC sweep
+I1 0 a 1
+R§Load a 0 1k
+.dc I1 1 2 0.5
+.end

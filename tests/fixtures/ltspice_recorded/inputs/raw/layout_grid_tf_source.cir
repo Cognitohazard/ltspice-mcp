@@ -1,0 +1,9 @@
+* transfer function of a diode stage over three bias currents, stepped by the bias source's own name
+V1 in 0 1
+R1 in out 1k
+D1 out 0 DM
+I1 0 out 1m
+.model DM D(Is=1e-14)
+.step I1 list 1m 2m 3m
+.tf V(out) V1
+.end

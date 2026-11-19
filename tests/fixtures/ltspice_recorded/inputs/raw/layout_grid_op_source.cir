@@ -1,0 +1,7 @@
+* divider operating point over three source voltages, stepped by the source's own name
+V1 in 0 1
+R1 in out 1k
+R2 out 0 4k
+.step V1 list 1 2 3
+.op
+.end

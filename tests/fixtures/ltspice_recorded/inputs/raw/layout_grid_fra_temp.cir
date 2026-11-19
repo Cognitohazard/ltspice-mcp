@@ -1,0 +1,9 @@
+* frequency response analysis of one loop over three temperatures
+V1 ref 0 1
+E1 a 0 ref c 100
+@1 a b fstart=4k fend=32k oct=1 tsettle=50u
+R1 b c 1k tc1=0.01
+C1 c 0 1u
+.step temp list -40 125
+.fra
+.end

@@ -1,0 +1,18 @@
+* every kind of trace at the top, in a block and in a block in a block, in a DC sweep
+V1 vdd 0 3
+R1 vdd top 1k
+M1 top top 0 0 NM W=10u L=2u
+Xa vdd outa stage
+.subckt stage top out
+Rd top n1 5k
+Rd2 n1 out 5k
+Mdrv out out 0 0 NM W=20u L=2u
+Xin top out inner
+.ends
+.subckt inner p n
+Rin p mid 100k
+Mtail mid mid n n NM W=10u L=2u
+.ends
+.model NM NMOS(VTO=0.7 KP=100u)
+.dc V1 2 3 0.5
+.end
