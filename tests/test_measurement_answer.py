@@ -10,11 +10,16 @@ crossing of a WHEN included (``log/meas_when_threshold_tran_step``).
 
 ``log_parser.measurement_answer`` answers which field that is, from the
 printed form, the build that printed it and, where the run's deck is known,
-its card; every reader asks it. These tests send each recorded measurement
-through every route that reads one and require one answer from all of them:
-the measurements recipe over a bare log path and over a job, the summary's
-``measurements``, the Python API's ``measurements()`` and ``inspect``'s
-measurements view.
+its card; every reader asks it.
+
+The question is the printed-measurement grid's (``[grid.printed-measurement]``
+in ``inputs/cases.toml``, ``docs/TESTING.md``, "Grids"): what does this log
+say a measurement's result is. ``test_every_recorded_cell_of_the_grid_reads_as_its_form_means``
+reads every recorded cell of the grid, on each build, through all eight
+routes that read a measurement (the measurements recipe, the summary recipe,
+``inspect``'s measurements view and the Python API's ``measurements()``, each
+over the log's path and over a job), and requires the result its form means.
+The tests after it pin the decision itself on inputs no recording holds.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ import asyncio
 import math
 import re
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
 
@@ -34,6 +40,7 @@ from ltspice_mcp.lib.log_parser import (
     measurement_answer,
     measurement_cards,
     parse_measurements,
+    printed_form,
     printed_measurements,
     read_log_text,
     result_unreadable,
@@ -41,37 +48,14 @@ from ltspice_mcp.lib.log_parser import (
 from ltspice_mcp.lib.simulator_build import Producer, log_banner_build
 from ltspice_mcp.state import SessionState
 from tests import _ltspice_recorded as rec
+from tests._recorded_grids import Cell, grid
 from tests.conftest import FIXTURES_DIR, SyncApi, dispatched, make_experiment_job
 from tests.ltspice_recorder import INPUTS
-
-#: An unstepped result line whose point follows an uppercase ``AT``: the
-#: point is the result.
-_UPPER_AT = re.compile(
-    r"^(\w[\w.-]*): [^\r\n]*=[^\r\n]*? AT ([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)\s*$", re.M
-)
 
 #: What a route gives for a step whose result it names as not established.
 NOT_ESTABLISHED = "not established"
 
 Answer = list[float | str | None] | str
-
-
-def _measurement_logs() -> list[tuple[str, str]]:
-    """Every recorded log that prints a measurement, with a deck in the
-    recording's inputs, as ``(build, case_id)``."""
-    found = []
-    for build in rec.BUILDS:
-        root = rec.recorded(build, "")
-        for path in sorted(root.rglob("*.log")):
-            case_id = path.relative_to(root).with_suffix("").as_posix()
-            if not (INPUTS / f"{case_id}.cir").exists():
-                continue
-            if path.stat().st_size and printed_measurements(read_log_text(path)):
-                found.append((build, case_id))
-    return found
-
-
-_LOGS = _measurement_logs()
 
 
 def _stage(build: str, case_id: str, directory: Path) -> tuple[Path, Path, Path]:
@@ -82,7 +66,7 @@ def _stage(build: str, case_id: str, directory: Path) -> tuple[Path, Path, Path]
     directory.mkdir(parents=True, exist_ok=True)
     name = Path(case_id).name
     deck = directory / f"{name}.cir"
-    shutil.copyfile(INPUTS / f"{case_id}.cir", deck)
+    shutil.copyfile(INPUTS / rec.CASES.case(case_id).source, deck)
     log = deck.with_suffix(".log")
     shutil.copyfile(rec.recorded(build, f"{case_id}.log"), log)
     raw = deck.with_suffix(".raw")
@@ -116,11 +100,12 @@ def _entry_answer(entry: dict[str, Any]) -> Answer:
 
 def _recipe_answers(reply: dict[str, Any]) -> dict[str, Answer]:
     """Each measurement's result per step from an ``all_steps`` recipe reply."""
-    rows = {row["step_index"]: row["value"] for row in reply["results"]["m"]["values"]}
+    # A log that prints no measurement gives no row.
+    rows = {row["step_index"]: row["value"] for row in reply["results"]["m"].get("values", [])}
     answers: dict[str, Answer] = {}
     for step in sorted(rows):
         value = rows[step]
-        for name, number in value["measured"].items():
+        for name, number in value.get("measured", {}).items():
             if name in value.get("answer_unknown", {}):
                 answers[name] = "unknown"
             else:
@@ -136,7 +121,7 @@ def _recipe_answers(reply: dict[str, Any]) -> dict[str, Answer]:
 def _inspect_answers(item: dict[str, Any]) -> dict[str, Answer]:
     assert item["ok"], item
     answers: dict[str, Answer] = {}
-    for row in sorted(item["data"]["measurements"], key=lambda row: row["value_index"]):
+    for row in sorted(item["data"].get("measurements", []), key=lambda row: row["value_index"]):
         name = row["measurement"]
         if "answer_unknown" in row:
             answers[name] = "unknown"
@@ -169,11 +154,29 @@ _RECIPE = [{"key": "m", "metric": "measurements"}]
 _EACH_STEP = {"fields": ["value", "step_index"]}
 
 
+#: The field each route that names one says holds a measurement's result:
+#: route -> measurement -> ``value`` or ``at``. Filled by :func:`_every_route`.
+Fields = dict[str, dict[str, str | None]]
+
+
+def _entry_fields(entries: dict[str, Any]) -> dict[str, str | None]:
+    return {name: entry.get("answer") for name, entry in entries.items()}
+
+
+def _inspect_fields(item: dict[str, Any]) -> dict[str, str | None]:
+    return {row["measurement"]: row.get("answer") for row in item["data"].get("measurements", [])}
+
+
 async def _every_route(
-    build: str, case_id: str, state: SessionState, directory: Path
+    build: str, case_id: str, state: SessionState, directory: Path, fields: Fields | None = None
 ) -> dict[str, dict[str, Answer]]:
+    """Each measurement's result per step, by route: the measurements recipe,
+    the summary recipe, ``inspect``'s measurements view and the Python API,
+    each over the log's path and over a job. ``fields``, when given, gets the
+    field each route that names one says holds the result."""
     deck, raw, log = _stage(build, case_id, directory)
     routes: dict[str, dict[str, Answer]] = {}
+    named: Fields = {} if fields is None else fields
     routes["recipe, by path"] = _recipe_answers(
         await dispatched(
             state,
@@ -193,17 +196,20 @@ async def _every_route(
     )
     (row,) = summary["results"]["s"]["values"]
     routes["summary, by path"] = {
-        name: _entry_answer(entry) for name, entry in row["value"]["measurements"].items()
+        name: _entry_answer(entry) for name, entry in row["value"].get("measurements", {}).items()
     }
+    named["summary, by path"] = _entry_fields(row["value"].get("measurements", {}))
     page = await dispatched(
         state, "inspect", queries=[{"kind": "results", "view": "measurements", "path": str(log)}]
     )
     routes["inspect, by path"] = _inspect_answers(page["results"][0])
+    named["inspect, by path"] = _inspect_fields(page["results"][0])
     api = SyncApi(state)
     read = await asyncio.to_thread(lambda: api.measurements(path=log))
     routes["api measurements, by path"] = {
         name: _entry_answer(entry) for name, entry in read["measurements"].items()
     }
+    named["api measurements, by path"] = _entry_fields(read["measurements"])
 
     job_id = "exp_" + re.sub(r"\W", "_", f"{build}_{case_id}")
     job = make_experiment_job(state, job_id=job_id, raw=raw, netlist=deck)
@@ -229,71 +235,273 @@ async def _every_route(
     )
     (row,) = by_job["results"]["s"]["values"]
     routes["summary, by job"] = {
-        name: _entry_answer(entry) for name, entry in row["value"]["measurements"].items()
+        name: _entry_answer(entry) for name, entry in row["value"].get("measurements", {}).items()
     }
+    named["summary, by job"] = _entry_fields(row["value"].get("measurements", {}))
     page = await dispatched(
         state, "inspect", queries=[{"kind": "results", "view": "measurements", "job_id": job_id}]
     )
     routes["inspect, by job"] = _inspect_answers(page["results"][0])
+    named["inspect, by job"] = _inspect_fields(page["results"][0])
     read = await asyncio.to_thread(lambda: api.measurements(job_id=job_id))
     routes["api measurements, by job"] = {
         name: _entry_answer(entry) for name, entry in read["measurements"].items()
     }
+    named["api measurements, by job"] = _entry_fields(read["measurements"])
     return routes
 
 
-@pytest.mark.parametrize(("build", "case_id"), _LOGS, ids=[f"{b}/{c}" for b, c in _LOGS])
-async def test_every_route_reads_a_measurement_from_the_same_field(
+# The printed-measurement grid --------------------------------------------------
+
+GRID = grid("printed-measurement")
+
+#: A number as LTspice prints one in a ``.meas`` result.
+_NUMBER = r"[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?"
+
+#: What a printed result's text is, read as LTspice's formats mean it: a
+#: number; ``(<dB>dB,<angle>°)`` by default and ``(<magnitude>,<angle>°)``
+#: under ``meascplxfmt=polar``, a complex result, real when its angle is 0 or
+#: 180 degrees; ``(<re>,<im>)`` under ``meascplxfmt=cartesian``, real when its
+#: imaginary part is 0; a number with its unit (``90.6295°``, ``infdB``).
+_POLAR = re.compile(rf"\(({_NUMBER}|[-+]?inf)(dB)?,({_NUMBER})\W*\)", re.IGNORECASE)
+_CARTESIAN = re.compile(rf"\(({_NUMBER}),({_NUMBER})\)", re.IGNORECASE)
+_WITH_UNIT = re.compile(rf"({_NUMBER}|[-+]?inf)(?:°|dB)", re.IGNORECASE)
+
+
+def _printed_number(text: str, complex_format: str) -> float:
+    text = text.strip()
+    if complex_format == "cartesian" and (match := _CARTESIAN.fullmatch(text)):
+        re_part, im_part = float(match[1]), float(match[2])
+        return re_part if im_part == 0 else abs(complex(re_part, im_part))
+    if match := _POLAR.fullmatch(text):
+        magnitude = 10 ** (float(match[1]) / 20) if match[2] else float(match[1])
+        angle = float(match[3]) % 360
+        if math.isclose(angle, 0, abs_tol=1e-6) or math.isclose(angle, 360, abs_tol=1e-6):
+            return magnitude
+        if math.isclose(angle, 180, abs_tol=1e-6):
+            return -magnitude
+        return magnitude
+    if match := _WITH_UNIT.fullmatch(text):
+        return float(match[1])
+    return float(text)
+
+
+@dataclass(frozen=True)
+class _Printed:
+    """How a log printed one measurement, read by its name: on a line (the
+    text after its last ``=``, and the point after ``AT``/``at``), on a
+    TRIG/TARG's line with no colon, as a stepped table (each row's first
+    column), or as FAIL'ed; None where the log does not print it."""
+
+    printed: str
+    value: str | None = None
+    point: str | None = None
+    rows: tuple[str, ...] = ()
+
+
+def _printed(text: str, name: str) -> _Printed | None:
+    lines = text.splitlines()
+    escaped = re.escape(name)
+    found: list[_Printed] = []
+    for index, line in enumerate(lines):
+        line = line.rstrip()
+        if re.fullmatch(rf'Measurement "{escaped}" FAIL\'ed', line, re.IGNORECASE):
+            found.append(_Printed("failed"))
+        elif re.fullmatch(rf"Measurement: {escaped}", line, re.IGNORECASE):
+            rows = []
+            for row in lines[index + 2 :]:
+                cells = row.strip().split("\t")
+                if not row.strip() or not cells[0].isdigit():
+                    break
+                rows.append(cells[1])
+            assert re.match(r"\s*step\t", lines[index + 1]), lines[index + 1]
+            found.append(_Printed("table", rows=tuple(rows)))
+        elif match := re.fullmatch(
+            rf"{escaped}=(\S+) FROM {_NUMBER} TO {_NUMBER}", line, re.IGNORECASE
+        ):
+            found.append(_Printed("line_bare", value=match[1]))
+        elif match := re.fullmatch(
+            rf"{escaped}: .*=(?P<value>.*?)"
+            rf"(?: FROM {_NUMBER} TO {_NUMBER}| (?:at|AT) (?P<point>{_NUMBER}))?",
+            line,
+            re.IGNORECASE,
+        ):
+            found.append(_Printed("line", value=match["value"], point=match["point"]))
+    assert len(found) <= 1, (name, found)
+    return found[0] if found else None
+
+
+def _expected(cell: Cell, build: str, shown: _Printed) -> Answer:
+    """The result per step the log gives ``cell``, read as its form means:
+    the value after ``=`` or the point after ``AT`` on a line, the first
+    column of each row of a table. A row XVII prints 0 in is not established
+    (it prints 0 both for a step that failed and for a result of 0), and a
+    row LTspice 26 prints ``failed`` in has no result."""
+    at = cell.at(build)
+    result = GRID.expected(cell, build)
+    complex_format = at.get("complex_format", "")
+    if shown.printed == "failed":
+        return "failed"
+    if shown.printed == "table":
+        numbers: list[float | str | None] = []
+        for row in shown.rows:
+            if row == "failed":
+                numbers.append(None)
+            elif rec.generation(build) == "xvii" and _printed_number(row, complex_format) == 0:
+                numbers.append(NOT_ESTABLISHED)
+            else:
+                numbers.append(_printed_number(row, complex_format))
+        return numbers
+    text = shown.point if result == "point" else shown.value
+    assert text is not None, (cell.id, shown)
+    return [_printed_number(text, complex_format)]
+
+
+def _check_outcome(cell: Cell, build: str, shown: _Printed) -> None:
+    """The log shows the outcome the cell declares on ``build``."""
+    at = cell.at(build)
+    outcome = at["outcome"]
+    steps = [step - 1 for step in cell.extra.get("steps", ())]
+    assert shown.printed == at["printed"], (cell.id, build, shown)
+    if outcome == "failed":
+        assert shown.printed == "failed", (cell.id, build)
+        return
+    assert shown.printed != "failed", (cell.id, build)
+    if shown.printed != "table":
+        assert outcome == "value", (cell.id, build)
+        return
+    for step, row in enumerate(shown.rows):
+        zero = row != "failed" and _printed_number(row, at.get("complex_format", "")) == 0
+        if step not in steps:
+            assert row != "failed" and not zero, (cell.id, build, step, row)
+        elif outcome == "step_zero":
+            assert zero, (cell.id, build, step, row)
+        elif rec.generation(build) == "xvii":
+            # XVII prints a step whose measurement failed as 0
+            # (log/meas_when_step_fails).
+            assert zero, (cell.id, build, step, row)
+        else:
+            assert row == "failed", (cell.id, build, step, row)
+
+
+#: LTspice 26 prints a stepped .fra run's gain margin as ``infdB`` where the
+#: loop's phase never crosses (``raw/fra_step``). Every route reads it as
+#: null: the measurements recipe names it under ``not_finite``, the summary
+#: warns of non-finite values, ``inspect`` counts them, and the Python API's
+#: ``measurements`` gives the null and no reason
+#: (``test_an_infinite_margin_reads_as_null_and_the_api_says_nothing_of_why``).
+PRINTED_INFINITE_READS_AS_NULL = frozenset({("raw/fra_step", "gainmargin_1")})
+
+
+def _grid_runs() -> list[Any]:
+    """Every (build, case) of the grid; a case waiting for its recording
+    skips with its behaviour's ``pending``."""
+    runs = []
+    for case_id in sorted({cell.case for cell in GRID.cells}):
+        pending = rec.CASES.behaviours[rec.CASES.case(case_id).behaviour].pending
+        for build in rec.BUILDS:
+            if rec.has(build, f"{case_id}.log"):
+                runs.append(pytest.param(build, case_id, id=f"{build}/{case_id}"))
+            elif pending:
+                runs.append(
+                    pytest.param(
+                        build, case_id, id=f"{build}/{case_id}", marks=pytest.mark.skip(pending)
+                    )
+                )
+    return runs
+
+
+@pytest.mark.parametrize(("build", "case_id"), _grid_runs())
+async def test_every_recorded_cell_of_the_grid_reads_as_its_form_means(
     build: str, case_id: str, state_no_sim: SessionState, work_dir: Path
 ):
-    """Every route gives the same answer per step, a DERIV ... WHEN's
-    derivative included (``log/meas_deriv_when``), whether it knows the
-    run's deck or reads the log alone."""
-    routes = await _every_route(build, case_id, state_no_sim, work_dir)
-    first_route, first = next(iter(routes.items()))
-    for route, answers in routes.items():
-        assert set(answers) == set(first), (route, first_route)
-        for name, answer in answers.items():
-            assert _same(answer, first[name]), (name, route, answer, first_route, first[name])
-    # Every form both builds print has a recorded reading, so no route leaves
-    # a recorded measurement's field unknown.
-    assert "unknown" not in first.values(), first
-    # A crossing printed after an uppercase AT is the result on every route.
+    """Each cell of the printed-measurement grid in this case, through all
+    eight routes: the measurement is read under its printed name; its result
+    is what its form means (the value after ``=``, the point after ``AT``,
+    a table's first column), in the field the form names on each route that
+    names one; the outcome is the cell's (a result, ``failed``, or not
+    established); and a measurement a build refuses is read on no route."""
     text = read_log_text(rec.recorded(build, f"{case_id}.log"))
-    for name, point in _UPPER_AT.findall(text):
-        assert first[name.lower()] == [float(point)], (name, first[name.lower()])
-    data = cast(dict[str, Any], parse_measurements(rec.recorded(build, f"{case_id}.log")))
-    for name, entry in data["measurements"].items():
-        # A DERIV ... WHEN prints its derivative after '=' and the point after a
-        # lowercase 'at', as a DERIV ... AT does: the derivative is the result.
-        if name == "d_when":
-            assert _same(first[name], entry["values"]), (name, first[name])
-        # XVII prints 0 in a stepped table's row for a step whose measurement
-        # failed (log/meas_when_step_fails, log/meas_step): no route gives
-        # that 0 as the result.
-        if rec.generation(build) == "xvii" and entry.get("printed_form", "").startswith("table"):
-            for step, number in enumerate(entry["values"]):
-                if number == 0:
-                    assert first[name][step] == NOT_ESTABLISHED, (name, step, first[name])
+    cells = GRID.cells_of(case_id)
+    printed = printed_measurements(text)
+    expected: dict[str, Answer] = {}
+    for cell in cells:
+        shown = _printed(text, cell.item)
+        if build in cell.refused:
+            assert shown is None, (cell.id, build, cell.refused[build])
+            assert cell.item.lower() not in printed, cell.id
+            continue
+        assert shown is not None, f"{cell.id}: {build}'s log does not print it"
+        _check_outcome(cell, build, shown)
+        expected[cell.item.lower()] = _expected(cell, build, shown)
+        # The reader recognises the line the cell declares.
+        form = printed_form(printed[cell.item.lower()])
+        assert form is not None and form.startswith(
+            {"line": "line", "line_bare": "line_from_to", "table": "table", "failed": "failed"}[
+                cell.at(build)["printed"]
+            ]
+        ), (cell.id, form)
 
-
-@pytest.mark.parametrize(
-    ("build", "case_id", "name"),
-    [
-        ("ltspice26", "log/meas_name_dot", "t.rise"),
-        ("ltspice17", "log/meas_name_dot", "t.rise"),
-        ("ltspice17", "log/meas_name_dash", "t-fall"),
-    ],
-)
-async def test_every_route_reads_a_measurement_named_with_punctuation(
-    build: str, case_id: str, name: str, state_no_sim: SessionState, work_dir: Path
-):
-    """A name holding a dot or a dash, printed as written, reads on every
-    route under that name, its crossing the result."""
-    routes = await _every_route(build, case_id, state_no_sim, work_dir)
-    point = float(_UPPER_AT.findall(read_log_text(rec.recorded(build, f"{case_id}.log")))[0][1])
+    fields: Fields = {}
+    routes = await _every_route(build, case_id, state_no_sim, work_dir, fields)
     for route, answers in routes.items():
-        assert answers == {name: [point]}, route
+        assert set(answers) == set(expected), (route, set(answers) ^ set(expected))
+    for cell in cells:
+        name = cell.item.lower()
+        if name not in expected:
+            continue
+        want: Answer = expected[name]
+        if (case_id, name) in PRINTED_INFINITE_READS_AS_NULL:
+            assert isinstance(want, list) and any(
+                math.isinf(v) for v in want if isinstance(v, float)
+            )
+            want = [None if isinstance(v, float) and math.isinf(v) else v for v in want]
+        line = cell.at(build)["printed"] in ("line", "line_bare")
+        field = "at" if line and GRID.expected(cell, build) == "point" else "value"
+        for route, answers in routes.items():
+            got = answers[name]
+            assert got != "unknown", (cell.id, route)
+            if want == "failed":
+                assert isinstance(got, list) and got and all(v is None for v in got), (
+                    cell.id,
+                    route,
+                    got,
+                )
+            else:
+                assert _same(got, want), (cell.id, route, got, want)
+        for route, named in fields.items():
+            assert named[name] == field, (cell.id, route, named[name], field)
+
+
+async def test_an_infinite_margin_reads_as_null_and_the_api_says_nothing_of_why(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """Pinned: LTspice 26 prints an infinite gain margin (``infdB`` at
+    ``inf``, ``raw/fra_step``). The measurements recipe gives it as null and
+    names it under ``not_finite``; the Python API's ``measurements`` gives the
+    null with nothing that says why, though an absent reason means nothing
+    to report."""
+    text = read_log_text(rec.recorded("ltspice26", "raw/fra_step.log"))
+    assert "     1\tinfdB\tinf" in text.splitlines()
+    _deck, _raw, log = _stage("ltspice26", "raw/fra_step", work_dir)
+    reply = await dispatched(
+        state_no_sim,
+        "analyze_results",
+        sources=[{"path": str(log), "label": "log"}],
+        recipes=_RECIPE,
+        all_steps=True,
+        include=_EACH_STEP,
+    )
+    for row in reply["results"]["m"]["values"]:
+        assert row["value"]["measured"]["gainmargin_1"] is None
+        assert row["value"]["not_finite"] == ["gainmargin_1"]
+    read = await asyncio.to_thread(lambda: SyncApi(state_no_sim).measurements(path=log))
+    assert read["measurements"]["gainmargin_1"] == {
+        "at": None,
+        "values": [None, None],
+        "answer": "value",
+    }
+    assert read.observations == []
 
 
 # ngspice -------------------------------------------------------------------

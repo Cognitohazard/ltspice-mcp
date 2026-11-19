@@ -1,0 +1,11 @@
+* a FIND with no point of a signal the run does not save, in a DC sweep
+V1 in 0 0
+R1 in out 1k
+R2 out 0 1k
+R9 in unsaved 1k
+R10 unsaved 0 1k
+.save V(in) V(out)
+.dc V1 0 5 0.1
+.meas dc find_f FIND V(unsaved)
+.meas dc param_f PARAM find_f*2
+.end

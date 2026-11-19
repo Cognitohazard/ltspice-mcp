@@ -89,7 +89,12 @@ def _readers() -> dict[str, frozenset[str]]:
 
 
 def _modelled() -> set[str]:
-    return {name for behaviour in rec.CASES.behaviours.values() for name in behaviour.model}
+    # A module, or a function of it (``lib/log_parser.py:printed_form``).
+    return {
+        name.partition(":")[0]
+        for behaviour in rec.CASES.behaviours.values()
+        for name in behaviour.model
+    }
 
 
 def test_the_definition_finds_the_readers_of_each_format():

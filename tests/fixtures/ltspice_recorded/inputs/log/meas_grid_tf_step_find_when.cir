@@ -1,0 +1,11 @@
+* FIND WHEN in a transfer function, stepped: a deck of its own, since a build may refuse the form there
+V1 in 0 1
+R1 in out 1k
+R2 out 0 4k
+.step param s list 1 2
+.tf V(out) V1
+.meas tf find_when_v FIND V(in) WHEN V(out)=0.8
+.meas tf find_when_f FIND V(in) WHEN V(out)=99
+.meas tf find_when_sf FIND V(in) WHEN V(out)={0.8*s}
+.meas tf find_when_sz FIND V(in)*(2-s) WHEN V(out)=0.8
+.end

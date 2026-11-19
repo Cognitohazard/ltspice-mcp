@@ -1,0 +1,8 @@
+* a FIND with no point, and a PARAM of it, in a transfer function
+V1 in 0 1
+R1 in out 1k
+R2 out 0 4k
+.tf V(out) V1
+.meas tf find_v FIND V(out)
+.meas tf param_v PARAM find_v*2
+.end

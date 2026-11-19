@@ -770,19 +770,19 @@ evidence = "every recorded log; a stepped temperature writes the one non-ASCII c
 
 [behaviour.log-meas]
 summary = "How each .meas form is printed: MAX/MIN/PP/AVG/RMS/INTEG with FROM and TO, FIND AT, WHEN, TRIG/TARG, PARAM, complex AC results, the tables of a stepped run, and a stepped .op, whose log has no .step lines and which neither build prints a table for."
-model = ["lib/log_parser.py", "lib/log_types.py", "lib/metrics.py", "lib/log_decode.py", "lib/result_observations.py", "lib/raw_parser.py", "lib/services.py", "lib/spice_lex_views.py", "api/_primitives.py", "tools/analyze.py", "tools/inspect_tools.py"]
+model = ["lib/log_parser.py", "lib/log_types.py", "lib/metrics.py", "lib/log_decode.py", "lib/result_observations.py", "lib/raw_parser.py", "lib/services.py", "lib/spice_lex_views.py", "api/_primitives.py", "tools/analyze.py", "tools/inspect_tools.py", "lib/log_parser.py:printed_measurements", "lib/log_parser.py:printed_form", "lib/log_parser.py:parse_measurements", "lib/log_parser.py:measurement_cards", "lib/log_parser.py:measurement_answer", "lib/log_parser.py:answered_measurements", "lib/spice_lex_views.py:MeasCard"]
 inputs = ["log/meas_forms.cir", "log/meas_ac.cir", "log/meas_step.cir", "log/meas_step_op.cir"]
 keep = ["log"]
 
 [behaviour.log-meas-deriv-when]
 summary = "How a DERIV ... WHEN measurement is printed, alone and stepped: whether its point follows an uppercase AT, as a WHEN with no FIND's crossing does, or a lowercase at, as a DERIV ... AT's does. Both builds print a lowercase at, so its result is the derivative printed after =."
-model = ["lib/log_parser.py", "lib/spice_lex_views.py"]
+model = ["lib/log_parser.py", "lib/spice_lex_views.py", "lib/log_parser.py:measurement_cards", "lib/log_parser.py:measurement_answer", "lib/spice_lex_views.py:MeasCard"]
 inputs = ["log/meas_deriv_when.cir", "log/meas_deriv_when_step.cir"]
 keep = ["log"]
 
 [behaviour.log-meas-failed]
 summary = "What the log says of a measurement that cannot be taken or does not parse, and what happens to the measurements around it."
-model = ["lib/log_parser.py", "lib/log_types.py", "lib/metrics.py", "lib/result_observations.py", "lib/raw_parser.py", "lib/lint_rules.py", "lib/spice_validator.py", "tools/analyze.py", "tools/inspect_tools.py", "tools/receipts.py", "lib/experiment_runner.py", "lib/log_conditions.py"]
+model = ["lib/log_parser.py", "lib/log_types.py", "lib/metrics.py", "lib/result_observations.py", "lib/raw_parser.py", "lib/lint_rules.py", "lib/spice_validator.py", "tools/analyze.py", "tools/inspect_tools.py", "tools/receipts.py", "lib/experiment_runner.py", "lib/log_conditions.py", "lib/log_parser.py:printed_measurements", "lib/log_parser.py:parse_measurements"]
 inputs = ["log/meas_failed.cir", "log/meas_bad_syntax.cir"]
 keep = ["log"]
 
@@ -796,13 +796,13 @@ inputs = ["log/meas_trig.cir"]
 
 [behaviour.log-meas-db]
 summary = "db() in an AC .meas: of a complex voltage it is the complex logarithm, printed as a complex result; of mag() it is the gain in dB, printed as a real one; a WHEN on either finds the dB crossing."
-model = ["lib/log_parser.py", "assets/guide/fundamentals.md"]
+model = ["lib/log_parser.py", "assets/guide/fundamentals.md", "lib/log_parser.py:parse_measurements"]
 inputs = ["log/meas_db.cir"]
 keep = ["log"]
 
 [behaviour.log-meas-when-threshold]
 summary = "How a WHEN is printed when its threshold is not a plain number: a parameter, an expression, a braced expression and another measurement, in a transient and an AC analysis, alone and in the tables of a stepped run. The stepped decks step a parameter written Rv, whose name both builds write in lower case in the log (.step rv=1000)."
-model = ["lib/log_parser.py", "lib/log_decode.py", "lib/metrics.py", "lib/step_values.py", "tools/analyze.py", "tools/inspect_tools.py", "api/_primitives.py"]
+model = ["lib/log_parser.py", "lib/log_decode.py", "lib/metrics.py", "lib/step_values.py", "tools/analyze.py", "tools/inspect_tools.py", "api/_primitives.py", "lib/log_parser.py:printed_measurements", "lib/log_parser.py:parse_measurements"]
 inputs = [
     "log/meas_when_threshold_tran.cir",
     "log/meas_when_threshold_ac.cir",
@@ -813,13 +813,13 @@ keep = ["log"]
 
 [behaviour.log-meas-complex-format]
 summary = "How .options meascplxfmt=polar and =cartesian change the way the log prints an AC .meas result: a complex one, a magnitude, a negative real, a phase and a real part."
-model = ["lib/log_parser.py", "assets/guide/fundamentals.md"]
+model = ["lib/log_parser.py", "assets/guide/fundamentals.md", "lib/log_parser.py:parse_measurements"]
 inputs = ["log/meas_cplxfmt_polar.cir", "log/meas_cplxfmt_cartesian.cir"]
 keep = ["log"]
 
 [behaviour.log-meas-reserved-name]
 summary = "A .meas named for a constant of the expression evaluator (e, k, pi, q): LTspice 26 refuses the deck, XVII reports the name and takes the other measurements. Names such as time, temp and boltz are not reserved."
-model = ["lib/spice_validator.py", "lib/log_parser.py"]
+model = ["lib/spice_validator.py", "lib/log_parser.py", "lib/log_parser.py:printed_measurements"]
 # One deck per name: LTspice 26 stops at the first refusal.
 inputs = [
     "log/meas_name_e.cir",
@@ -1103,15 +1103,123 @@ inputs = ["deck/undefined_model_z.cir", "deck/undefined_model_o.cir", "deck/unde
 
 [behaviour.log-meas-when-step-table]
 summary = "Whether the table of a stepped WHEN ever prints a level column beside an at column: with RISE, FALL, CROSS=LAST and TD, a WHEN of an expression, a FIND ... WHEN, and a WHEN crossed in only one step, whose other step XVII prints as 0, as it prints a crossing at 0 s."
-model = ["lib/log_parser.py", "lib/log_decode.py", "lib/services.py", "lib/metrics.py", "tools/analyze.py", "tools/inspect_tools.py", "lib/log_types.py", "tools/receipts.py"]
+model = ["lib/log_parser.py", "lib/log_decode.py", "lib/services.py", "lib/metrics.py", "tools/analyze.py", "tools/inspect_tools.py", "lib/log_types.py", "tools/receipts.py", "lib/log_parser.py:printed_form", "lib/log_parser.py:answered_measurements"]
 inputs = ["log/meas_when_step_forms.cir", "log/meas_when_step_fails.cir"]
 keep = ["log"]
 
 [behaviour.log-meas-name-punctuation]
 summary = "Whether a .meas named with a dot (t.rise) or a dash (t-fall) is taken, and how the log prints its name."
-model = ["lib/log_parser.py", "lib/log_conditions.py", "lib/spice_lex_views.py"]
+model = ["lib/log_parser.py", "lib/log_conditions.py", "lib/spice_lex_views.py", "lib/log_parser.py:printed_measurements"]
 inputs = ["log/meas_name_dot.cir", "log/meas_name_dash.cir"]
 keep = ["log"]
+
+[behaviour.log-meas-grid]
+summary = "The cells of the printed-measurement grid (at the end of this file) that no other recording fills: each .meas form in each analysis (.tran, .ac, .dc, .noise, .op, .tf), alone and stepped, with a result, failing whole, failing in one step, and with a result of 0 in one step (beside a failure in the same step, which XVII may print as the same 0); and names with a dot, with a dash, in upper case and reserved, printed on a line with and without a colon, in a table and as FAIL'ed. A form a build may refuse in an analysis (any form but a FIND with no point or a PARAM where there is no sweep, a FIND with no point where there is one, a signal the run does not save) has a deck of its own, since a refusal stops the run."
+model = ["lib/log_parser.py", "lib/spice_lex_views.py", "lib/log_parser.py:printed_measurements", "lib/log_parser.py:printed_form", "lib/log_parser.py:parse_measurements", "lib/log_parser.py:measurement_cards", "lib/log_parser.py:measurement_answer", "lib/log_parser.py:answered_measurements", "lib/spice_lex_views.py:MeasCard"]
+inputs = [
+    "log/meas_grid_ac_failed.cir",
+    "log/meas_grid_ac_find.cir",
+    "log/meas_grid_ac_find_failed.cir",
+    "log/meas_grid_ac_step_failed.cir",
+    "log/meas_grid_ac_step_find.cir",
+    "log/meas_grid_ac_step_find_failed.cir",
+    "log/meas_grid_ac_step_step_outcomes.cir",
+    "log/meas_grid_ac_step_value.cir",
+    "log/meas_grid_ac_value.cir",
+    "log/meas_grid_dc_failed.cir",
+    "log/meas_grid_dc_find.cir",
+    "log/meas_grid_dc_find_failed.cir",
+    "log/meas_grid_dc_step_failed.cir",
+    "log/meas_grid_dc_step_find.cir",
+    "log/meas_grid_dc_step_find_failed.cir",
+    "log/meas_grid_dc_step_step_outcomes.cir",
+    "log/meas_grid_dc_step_value.cir",
+    "log/meas_grid_dc_value.cir",
+    "log/meas_grid_name_dash.cir",
+    "log/meas_grid_name_dash_step.cir",
+    "log/meas_grid_name_dot.cir",
+    "log/meas_grid_name_dot_step.cir",
+    "log/meas_grid_name_reserved_bare.cir",
+    "log/meas_grid_name_reserved_failed.cir",
+    "log/meas_grid_name_reserved_step.cir",
+    "log/meas_grid_name_upper.cir",
+    "log/meas_grid_name_upper_step.cir",
+    "log/meas_grid_noise_failed.cir",
+    "log/meas_grid_noise_find.cir",
+    "log/meas_grid_noise_find_failed.cir",
+    "log/meas_grid_noise_step_failed.cir",
+    "log/meas_grid_noise_step_find.cir",
+    "log/meas_grid_noise_step_find_failed.cir",
+    "log/meas_grid_noise_step_step_outcomes.cir",
+    "log/meas_grid_noise_step_value.cir",
+    "log/meas_grid_noise_value.cir",
+    "log/meas_grid_op_avg.cir",
+    "log/meas_grid_op_deriv_at.cir",
+    "log/meas_grid_op_deriv_when.cir",
+    "log/meas_grid_op_find.cir",
+    "log/meas_grid_op_find_at.cir",
+    "log/meas_grid_op_find_failed.cir",
+    "log/meas_grid_op_find_when.cir",
+    "log/meas_grid_op_integ.cir",
+    "log/meas_grid_op_max.cir",
+    "log/meas_grid_op_min.cir",
+    "log/meas_grid_op_pp.cir",
+    "log/meas_grid_op_rms.cir",
+    "log/meas_grid_op_step_avg.cir",
+    "log/meas_grid_op_step_deriv_at.cir",
+    "log/meas_grid_op_step_deriv_when.cir",
+    "log/meas_grid_op_step_find.cir",
+    "log/meas_grid_op_step_find_at.cir",
+    "log/meas_grid_op_step_find_failed.cir",
+    "log/meas_grid_op_step_find_when.cir",
+    "log/meas_grid_op_step_integ.cir",
+    "log/meas_grid_op_step_max.cir",
+    "log/meas_grid_op_step_min.cir",
+    "log/meas_grid_op_step_pp.cir",
+    "log/meas_grid_op_step_rms.cir",
+    "log/meas_grid_op_step_trig_targ.cir",
+    "log/meas_grid_op_step_when.cir",
+    "log/meas_grid_op_trig_targ.cir",
+    "log/meas_grid_op_when.cir",
+    "log/meas_grid_tf_avg.cir",
+    "log/meas_grid_tf_deriv_at.cir",
+    "log/meas_grid_tf_deriv_when.cir",
+    "log/meas_grid_tf_find.cir",
+    "log/meas_grid_tf_find_at.cir",
+    "log/meas_grid_tf_find_failed.cir",
+    "log/meas_grid_tf_find_when.cir",
+    "log/meas_grid_tf_integ.cir",
+    "log/meas_grid_tf_max.cir",
+    "log/meas_grid_tf_min.cir",
+    "log/meas_grid_tf_pp.cir",
+    "log/meas_grid_tf_rms.cir",
+    "log/meas_grid_tf_step_avg.cir",
+    "log/meas_grid_tf_step_deriv_at.cir",
+    "log/meas_grid_tf_step_deriv_when.cir",
+    "log/meas_grid_tf_step_find.cir",
+    "log/meas_grid_tf_step_find_at.cir",
+    "log/meas_grid_tf_step_find_failed.cir",
+    "log/meas_grid_tf_step_find_when.cir",
+    "log/meas_grid_tf_step_integ.cir",
+    "log/meas_grid_tf_step_max.cir",
+    "log/meas_grid_tf_step_min.cir",
+    "log/meas_grid_tf_step_pp.cir",
+    "log/meas_grid_tf_step_rms.cir",
+    "log/meas_grid_tf_step_trig_targ.cir",
+    "log/meas_grid_tf_step_when.cir",
+    "log/meas_grid_tf_trig_targ.cir",
+    "log/meas_grid_tf_when.cir",
+    "log/meas_grid_tran_failed.cir",
+    "log/meas_grid_tran_find.cir",
+    "log/meas_grid_tran_find_failed.cir",
+    "log/meas_grid_tran_step_failed.cir",
+    "log/meas_grid_tran_step_find.cir",
+    "log/meas_grid_tran_step_find_failed.cir",
+    "log/meas_grid_tran_step_step_outcomes.cir",
+    "log/meas_grid_tran_step_value.cir",
+]
+keep = ["log"]
+pending = "Written where no LTspice runs: record on Windows with scripts/record_ltspice_fixtures.py, then remove this key."
 
 [behaviour.step-temp-upper-case]
 summary = "How the log and the raw name a temperature stepped as TEMP in upper case, beside raw/step_temp, which writes temp."
@@ -2082,3 +2190,1537 @@ kind = "run"
 source = "export/hier_device_plain.asc"
 extra = ["export/hier_device.asc", "export/hier_device.asy"]
 keep = ["net", "log", "raw"]
+
+# ---------------------------------------------------------------------- grids
+#
+# A grid is an index over the cases above for one question that a short list
+# of functions decides: the full cross of the input forms those functions
+# depend on, so that each function is tested on every cell rather than on the
+# cases someone happened to write. It names no file of its own: a cell is one
+# item of a case (here a measurement of a deck) with its coordinates, and the
+# tests read the case's recordings. docs/TESTING.md ("Grids") says how to add a
+# cell and a grid.
+#
+# A grid gives its `question`, the `functions` that decide it (module:name,
+# each also named by the `model` of a behaviour above), its axes, and its
+# groups: the axes of a group are crossed, and each group stands apart from the
+# others. Every coordinate of every group has a cell unless an `exclude` entry
+# says why it cannot. An axis may give a `default`, which a cell that names no
+# value takes; a default that is not one of the axis's values ("") marks a cell
+# the axis does not apply to, and such a cell covers no coordinate of a group
+# holding that axis. `item_axis` names the axis a cell's item gives by a bare
+# string. `expect` gives what the grid's test expects, by axis value.
+#
+# A cell table names its `cases` and its `items`; `at` holds the coordinates
+# its items share, and an item gives its own as a string (its `item_axis`
+# value) or a table. A cell or an item may give, per build, other coordinates
+# (`on = { ltspice17 = { outcome = "failed" } }`) and `refused = { <build> =
+# "<why>" }` for a build that does not take the item at all, which the test
+# checks as such. Further keys are the grid's own (here `steps`: the steps,
+# from 1, an outcome in one step concerns).
+
+[grid.printed-measurement]
+question = "What does this log say a measurement's result is."
+functions = [
+    "lib/log_parser.py:printed_measurements",
+    "lib/log_parser.py:printed_form",
+    "lib/log_parser.py:parse_measurements",
+    "lib/log_parser.py:measurement_cards",
+    "lib/log_parser.py:measurement_answer",
+    "lib/log_parser.py:answered_measurements",
+    "lib/spice_lex_views.py:MeasCard",
+]
+item_axis = "form"
+groups = [
+    ["form", "analysis", "stepped", "outcome"],
+    ["name", "printed"],
+    ["level", "stepped"],
+    ["complex_format"],
+    ["card"],
+]
+
+[grid.printed-measurement.axis]
+# The form of the .meas card: what MeasCard.bare_when tells apart from the
+# rest, and what printed_form reads off the line it prints. `find` is a FIND
+# with no point, the form a sweepless analysis (.op, .tf) is measured with.
+form = { values = ["max", "min", "pp", "avg", "rms", "integ", "find", "find_at", "find_when", "when", "deriv_at", "deriv_when", "trig_targ", "param"], default = "" }
+# The analysis the deck runs: an AC and a noise result is complex
+# (_complex_measurement), a sweepless one prints a point of its own.
+analysis = { values = ["tran", "ac", "dc", "noise", "op", "tf"], default = "" }
+# A stepped run prints a table (printed_form's table_* forms) where an
+# unstepped one prints a line.
+stepped = { values = ["no", "yes"] }
+# What the measurement came to: a result in every step, a failure of the whole
+# measurement (FAIL'ed), a failure in one step (failed in a row, or XVII's 0:
+# answered_measurements' not_established), a result of 0 in one step.
+outcome = { values = ["value", "failed", "step_fails", "step_zero"] }
+# How the name is spelled: _MEAS_NAME reads a dot or a dash only before ": ";
+# names are keyed in lower case; a reserved name is refused.
+name = { values = ["plain", "punctuation", "reserved", "upper"], default = "plain" }
+# The line the name is printed on: "name: expr=value ...", a TRIG/TARG's
+# "name=value FROM a TO b" with no colon, a stepped table's heading, and
+# 'Measurement "name" FAIL'ed'.
+printed = { values = ["line", "line_bare", "table", "failed"] }
+# How a WHEN's level is written: one that is not a number is printed as
+# written, which spicelib's reader cuts short or skips (unreadable, skipped).
+level = { values = ["number", "parameter", "expression", "braced", "measurement"], default = "" }
+# .options meascplxfmt, for a complex (AC) result.
+complex_format = { values = ["default", "polar", "cartesian"], default = "" }
+# Which card printed the measurement: a .meas, or a stepped .fra run, which
+# prints its loop margins as measurement tables (with their units).
+card = { values = ["meas", "fra"], default = "meas" }
+
+[[grid.printed-measurement.exclude]]
+at = { stepped = ["no"], outcome = ["step_fails", "step_zero"] }
+reason = "A run with no .step has one step."
+
+[[grid.printed-measurement.exclude]]
+at = { form = ["when"], analysis = ["ac", "noise"], outcome = ["step_zero"] }
+reason = "An AC or noise sweep starts above 0 Hz, so a WHEN never crosses at 0."
+
+[[grid.printed-measurement.exclude]]
+at = { form = ["when"], analysis = ["op", "tf"], outcome = ["step_zero"] }
+reason = "A sweepless analysis has no axis for a WHEN to cross at 0 on."
+
+[[grid.printed-measurement.exclude]]
+at = { form = ["find"], outcome = ["step_fails"] }
+reason = "A FIND with no point reads the one value its signal has: no card makes it fail in one step and not in another."
+
+# What each form's result is, from what the form means: the value printed
+# after "=" or the point printed after AT. In a stepped table each row prints
+# the result alone, in its first column, so this says which field of the reply
+# holds it only for a line. A .fra margin is the value printed.
+[grid.printed-measurement.expect.form]
+max = "value"
+min = "value"
+pp = "value"
+avg = "value"
+rms = "value"
+integ = "value"
+find = "value"
+find_at = "value"
+find_when = "value"
+when = "point"
+deriv_at = "value"
+deriv_when = "value"
+trig_targ = "value"
+param = "value"
+
+[grid.printed-measurement.expect.card]
+fra = "value"
+
+# Recorded cells -----------------------------------------------------------
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_forms"]
+at = { analysis = "tran", stepped = "no", outcome = "value", printed = "line" }
+[grid.printed-measurement.cell.items]
+m_max = "max"
+m_min = "min"
+m_pp = "pp"
+m_avg = "avg"
+m_rms = "rms"
+m_integ = "integ"
+m_find = "find_at"
+m_when = { form = "when", level = "number" }
+m_findwhen = "find_when"
+m_trigtarg = { form = "trig_targ", printed = "line_bare" }
+m_param = "param"
+m_deriv = "deriv_at"
+m_nokind = "max"
+m_expr = "find_at"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_ac"]
+at = { analysis = "ac", stepped = "no", outcome = "value", printed = "line", complex_format = "default" }
+[grid.printed-measurement.cell.items]
+g1k = "find_at"
+gmax = "max"
+fc = { form = "when", level = "number" }
+bw = { form = "trig_targ", printed = "line_bare" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_step"]
+at = { analysis = "tran", stepped = "yes", outcome = "value", printed = "table" }
+[grid.printed-measurement.cell.items]
+s_max = "max"
+s_avg = "avg"
+s_find = "find_at"
+s_when = { form = "when", level = "number", outcome = "step_fails", steps = [3] }
+s_rise = "trig_targ"
+s_param = "param"
+
+# LTspice 26 prints one line for the three steps; XVII prints nothing.
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_step_op"]
+at = { analysis = "op", stepped = "yes", outcome = "value", printed = "line" }
+refused = { ltspice17 = "XVII prints no measurement of a stepped .op." }
+[grid.printed-measurement.cell.items]
+vout = "find"
+iin = "find"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_deriv_when"]
+at = { analysis = "tran", stepped = "no", outcome = "value", printed = "line" }
+[grid.printed-measurement.cell.items]
+d_when = "deriv_when"
+d_at = "deriv_at"
+t_when = { form = "when", level = "number" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_deriv_when_step"]
+at = { analysis = "tran", stepped = "yes", outcome = "value", printed = "table" }
+[grid.printed-measurement.cell.items]
+d_when = "deriv_when"
+d_at = "deriv_at"
+t_when = { form = "when", level = "number" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_failed"]
+at = { analysis = "tran", stepped = "no", outcome = "value", printed = "line" }
+[grid.printed-measurement.cell.items]
+before = "max"
+never = { form = "when", level = "number", outcome = "failed", printed = "failed" }
+depends = { form = "param", outcome = "failed", printed = "failed" }
+after = "min"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_bad_syntax"]
+at = { analysis = "tran", stepped = "no", outcome = "value", printed = "line" }
+refused = { ltspice26 = "LTspice 26 refuses the deck: the card of broken does not parse." }
+[grid.printed-measurement.cell.items]
+before = "max"
+broken = { form = "find_at", refused = { ltspice17 = "XVII reports that the card's FIND cannot be evaluated over an interval and takes the others." } }
+after = "min"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_when_threshold_tran"]
+at = { analysis = "tran", stepped = "no", outcome = "value", printed = "line" }
+[grid.printed-measurement.cell.items]
+t_number = { form = "when", level = "number" }
+t_param = { form = "when", level = "parameter" }
+t_expr = { form = "when", level = "expression" }
+t_braced = { form = "when", level = "braced" }
+vmax = "max"
+t_meas = { form = "when", level = "measurement" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_when_threshold_tran_step"]
+at = { analysis = "tran", stepped = "yes", outcome = "value", printed = "table" }
+[grid.printed-measurement.cell.items]
+t_number = { form = "when", level = "number" }
+t_param = { form = "when", level = "parameter" }
+t_expr = { form = "when", level = "expression" }
+t_braced = { form = "when", level = "braced" }
+vmax = "max"
+t_meas = { form = "when", level = "measurement" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_when_threshold_ac"]
+at = { analysis = "ac", stepped = "no", outcome = "value", printed = "line", complex_format = "default" }
+[grid.printed-measurement.cell.items]
+f_number = { form = "when", level = "number" }
+f_param = { form = "when", level = "parameter", on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+f_expr = { form = "when", level = "expression" }
+g0 = "find_at"
+f_meas = { form = "when", level = "measurement" }
+
+# XVII fails a WHEN against a parameter in an AC run, alone and stepped, where
+# LTspice 26 finds its crossing.
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_when_threshold_ac_step"]
+at = { analysis = "ac", stepped = "yes", outcome = "value", printed = "table", complex_format = "default" }
+[grid.printed-measurement.cell.items]
+f_number = { form = "when", level = "number" }
+f_param = { form = "when", level = "parameter", on = { ltspice17 = { outcome = "failed", printed = "failed" } } }
+f_expr = { form = "when", level = "expression" }
+g0 = "find_at"
+f_meas = { form = "when", level = "measurement" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_cplxfmt_polar"]
+at = { analysis = "ac", stepped = "no", outcome = "value", printed = "line", complex_format = "polar" }
+[grid.printed-measurement.cell.items]
+g = "find_at"
+g_mag = "find_at"
+g_neg = "find_at"
+g_ph = "find_at"
+g_re = "find_at"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_cplxfmt_cartesian"]
+at = { analysis = "ac", stepped = "no", outcome = "value", printed = "line", complex_format = "cartesian" }
+[grid.printed-measurement.cell.items]
+g = "find_at"
+g_mag = "find_at"
+g_neg = "find_at"
+g_ph = "find_at"
+g_re = "find_at"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_db"]
+at = { analysis = "ac", stepped = "no", outcome = "value", printed = "line", complex_format = "default" }
+[grid.printed-measurement.cell.items]
+g_db = "find_at"
+g_db_mag = "find_at"
+g_re_db = "find_at"
+g_mag = "find_at"
+f_db_mag = { form = "when", level = "number" }
+f_db = { form = "when", level = "number" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_phase", "log/meas_phase_radian"]
+at = { analysis = "ac", stepped = "no", outcome = "value", printed = "line", complex_format = "default" }
+[grid.printed-measurement.cell.items]
+g_ph = "find_at"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_trig", "log/meas_trig_radian"]
+at = { analysis = "tran", stepped = "no", outcome = "value", printed = "line" }
+[grid.printed-measurement.cell.items]
+m_cos = "integ"
+m_sin = "integ"
+m_sin_fo = "integ"
+m_sin_30 = "param"
+m_cos_pi = "param"
+m_tan_45 = "param"
+m_asin = "param"
+m_acos = "param"
+m_atan = "param"
+m_atan2 = "param"
+m_atan2_deg = "param"
+m_sinh = "param"
+m_tanh = "param"
+m_pi = "param"
+m_time = "find_at"
+b_cos = "integ"
+b_sin = "integ"
+b_atan2 = "find_at"
+b_cos_pi = "find_at"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_name_e"]
+at = { analysis = "tran", stepped = "no", outcome = "value", printed = "line" }
+refused = { ltspice26 = "LTspice 26 refuses the deck: e is a reserved name." }
+[grid.printed-measurement.cell.items]
+e = { form = "max", name = "reserved", refused = { ltspice17 = "XVII reports e as a reserved name and takes the other measurements." } }
+after = "min"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_name_k"]
+at = { analysis = "tran", stepped = "no", outcome = "value", printed = "line" }
+refused = { ltspice26 = "LTspice 26 refuses the deck: k is a reserved name." }
+[grid.printed-measurement.cell.items]
+k = { form = "max", name = "reserved", refused = { ltspice17 = "XVII reports k as a reserved name and takes the other measurements." } }
+after = "min"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_name_pi"]
+at = { analysis = "tran", stepped = "no", outcome = "value", printed = "line" }
+refused = { ltspice26 = "LTspice 26 refuses the deck: pi is a reserved name." }
+[grid.printed-measurement.cell.items]
+pi = { form = "max", name = "reserved", refused = { ltspice17 = "XVII reports pi as a reserved name and takes the other measurements." } }
+after = "min"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_name_q"]
+at = { analysis = "tran", stepped = "no", outcome = "value", printed = "line" }
+refused = { ltspice26 = "LTspice 26 refuses the deck: q is a reserved name." }
+[grid.printed-measurement.cell.items]
+q = { form = "max", name = "reserved", refused = { ltspice17 = "XVII reports q as a reserved name and takes the other measurements." } }
+after = "min"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_name_other"]
+at = { analysis = "tran", stepped = "no", outcome = "value", printed = "line" }
+[grid.printed-measurement.cell.items]
+time = "max"
+temp = "max"
+freq = "max"
+boltz = "max"
+echarge = "max"
+kelvin = "max"
+gmin = "max"
+meg = "max"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_name_dot"]
+at = { analysis = "tran", stepped = "no", outcome = "value", printed = "line", name = "punctuation" }
+[grid.printed-measurement.cell.items]
+"t.rise" = { form = "when", level = "number" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_name_dash"]
+at = { analysis = "tran", stepped = "no", outcome = "value", printed = "line", name = "punctuation" }
+refused = { ltspice26 = "LTspice 26 refuses the deck: a name may not hold a dash." }
+[grid.printed-measurement.cell.items]
+t-fall = { form = "when", level = "number" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_when_step_forms"]
+at = { analysis = "tran", stepped = "yes", outcome = "value", printed = "table" }
+[grid.printed-measurement.cell.items]
+w_rise = { form = "when", level = "number" }
+w_fall = { form = "when", level = "number" }
+w_last = { form = "when", level = "number" }
+w_td = { form = "when", level = "number" }
+w_expr = { form = "when", level = "number", outcome = "step_zero", steps = [1, 2] }
+w_find = "find_when"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_when_step_fails"]
+at = { analysis = "tran", stepped = "yes", outcome = "step_fails", printed = "table" }
+[grid.printed-measurement.cell.items]
+w_one = { form = "when", level = "number", steps = [2] }
+
+# The measurements of decks that record other behaviours.
+
+[[grid.printed-measurement.cell]]
+cases = ["deck/keyword_values"]
+at = { analysis = "tran", stepped = "no", outcome = "value", printed = "line" }
+[grid.printed-measurement.cell.items]
+vb = "find_at"
+vc = "find_at"
+
+[[grid.printed-measurement.cell]]
+cases = ["deck/meas_function_vdb", "deck/meas_function_phase", "deck/meas_function_group_delay"]
+at = { analysis = "ac", stepped = "no", outcome = "value", printed = "line", complex_format = "default" }
+refused = { ltspice26 = "LTspice 26 refuses the deck: it has no such function." }
+[grid.printed-measurement.cell.items]
+before = "find_at"
+asked = { form = "find_at", outcome = "failed", printed = "failed" }
+after = "find_at"
+
+[[grid.printed-measurement.cell]]
+cases = ["deck/meas_functions"]
+at = { analysis = "ac", stepped = "no", outcome = "value", printed = "line", complex_format = "default" }
+[grid.printed-measurement.cell.items]
+g_mag = "find_at"
+g_ph = "find_at"
+g_re = "find_at"
+g_im = "find_at"
+g_db = "find_at"
+
+[[grid.printed-measurement.cell]]
+cases = ["deck/meas_subckt_node_x", "deck/meas_subckt_node_no_x"]
+at = { analysis = "tran", stepped = "no", outcome = "failed", printed = "failed" }
+refused = { ltspice26 = "LTspice 26 stops at a .meas of a voltage the run did not save." }
+[grid.printed-measurement.cell.items]
+vmid = "find_at"
+
+# With subcircuit node voltages saved, each build reads the node under its
+# own spelling and fails the other.
+[[grid.printed-measurement.cell]]
+cases = ["deck/meas_subckt_node_x_saved"]
+at = { analysis = "tran", stepped = "no", outcome = "value", printed = "line" }
+on = { ltspice17 = { outcome = "failed", printed = "failed" } }
+[grid.printed-measurement.cell.items]
+vmid = "find_at"
+
+[[grid.printed-measurement.cell]]
+cases = ["deck/meas_subckt_node_no_x_saved"]
+at = { analysis = "tran", stepped = "no", outcome = "value", printed = "line" }
+refused = { ltspice26 = "LTspice 26 stops at a .meas of a voltage the run did not save." }
+[grid.printed-measurement.cell.items]
+vmid = "find_at"
+
+[[grid.printed-measurement.cell]]
+cases = ["deck/save_in_include"]
+at = { analysis = "tran", stepped = "no", outcome = "failed", printed = "failed" }
+refused = { ltspice26 = "LTspice 26 stops at a .meas of a voltage the run did not save." }
+[grid.printed-measurement.cell.items]
+vout = "find_at"
+
+[[grid.printed-measurement.cell]]
+cases = ["deck/save_omits_meas"]
+at = { analysis = "tran", stepped = "no", outcome = "failed", printed = "failed" }
+refused = { ltspice26 = "LTspice 26 stops at a .meas of a voltage the run did not save." }
+[grid.printed-measurement.cell.items]
+vfinal = "find_at"
+
+[[grid.printed-measurement.cell]]
+cases = ["deck/save_pair_to_ground"]
+at = { analysis = "tran", stepped = "no", outcome = "failed", printed = "failed" }
+refused = { ltspice26 = "LTspice 26 stops at a .meas of a voltage the run did not save." }
+[grid.printed-measurement.cell.items]
+vground = "find_at"
+
+[[grid.printed-measurement.cell]]
+cases = ["deck/save_pair_as_pair", "deck/save_pair_both_nodes"]
+at = { analysis = "tran", stepped = "no", outcome = "value", printed = "line" }
+[grid.printed-measurement.cell.items]
+vpair = "find_at"
+
+[[grid.printed-measurement.cell]]
+cases = ["deck/save_pattern_i"]
+at = { analysis = "tran", stepped = "no", outcome = "value", printed = "line" }
+[grid.printed-measurement.cell.items]
+ir1 = "find_at"
+
+[[grid.printed-measurement.cell]]
+cases = ["deck/save_pattern_prefix", "deck/save_pattern_v"]
+at = { analysis = "tran", stepped = "no", outcome = "value", printed = "line" }
+[grid.printed-measurement.cell.items]
+vout = "find_at"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/step_temp"]
+at = { analysis = "tran", stepped = "yes", outcome = "value", printed = "table" }
+[grid.printed-measurement.cell.items]
+ir = "avg"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/step_two_params"]
+at = { analysis = "tran", stepped = "yes", outcome = "value", printed = "table" }
+[grid.printed-measurement.cell.items]
+vend = "find_at"
+
+[[grid.printed-measurement.cell]]
+cases = ["raw/step_tran"]
+at = { analysis = "tran", stepped = "yes", outcome = "value", printed = "table" }
+[grid.printed-measurement.cell.items]
+vfinal = "find_at"
+
+[[grid.printed-measurement.cell]]
+cases = ["raw/ac", "raw/ac_as_text"]
+at = { analysis = "ac", stepped = "no", outcome = "value", printed = "line", complex_format = "default" }
+[grid.printed-measurement.cell.items]
+fc = { form = "when", level = "number" }
+gain1k = "find_at"
+
+[[grid.printed-measurement.cell]]
+cases = ["raw/ac_numdgt15", "raw/ac_numdgt7"]
+at = { analysis = "ac", stepped = "no", outcome = "value", printed = "line", complex_format = "default" }
+[grid.printed-measurement.cell.items]
+gain1k = "find_at"
+
+[[grid.printed-measurement.cell]]
+cases = ["raw/compress_1mv", "raw/compress_1mv_off", "raw/compress_1mv_maxstep", "raw/compress_1mv_wide_maxstep", "raw/compress_1v"]
+at = { analysis = "tran", stepped = "no", outcome = "value", printed = "line" }
+[grid.printed-measurement.cell.items]
+vavg = "avg"
+vat = "find_at"
+
+[[grid.printed-measurement.cell]]
+cases = ["raw/dc"]
+at = { analysis = "dc", stepped = "no", outcome = "value", printed = "line" }
+[grid.printed-measurement.cell.items]
+vmid = "find_at"
+
+[[grid.printed-measurement.cell]]
+cases = ["raw/step_ac"]
+at = { analysis = "ac", stepped = "yes", outcome = "value", printed = "table", complex_format = "default" }
+[grid.printed-measurement.cell.items]
+fc = { form = "when", level = "number" }
+
+[[grid.printed-measurement.cell]]
+cases = ["raw/tran", "raw/tran_as_text", "raw/tran_as_text_setting"]
+at = { analysis = "tran", stepped = "no", outcome = "value", printed = "line" }
+[grid.printed-measurement.cell.items]
+vfinal = "find_at"
+vmax = "max"
+
+# A stepped .fra run's loop margins, which LTspice 26 prints as measurement
+# tables of their own (no .meas card asks for them), with their units.
+[[grid.printed-measurement.cell]]
+cases = ["raw/fra_step"]
+at = { stepped = "yes", outcome = "value", printed = "table", card = "fra" }
+[grid.printed-measurement.cell.items]
+PhaseMargin_1 = {}
+GainMargin_1 = {}
+
+# Cells written to be recorded (behaviour log-meas-grid, pending) -------------
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tran_failed"]
+at = { analysis = "tran", stepped = "no", printed = "line", outcome = "failed" }
+[grid.printed-measurement.cell.items]
+max_f = { form = "max", printed = "failed" }
+min_f = { form = "min", printed = "failed" }
+pp_f = { form = "pp", printed = "failed" }
+avg_f = { form = "avg", printed = "failed" }
+rms_f = { form = "rms", printed = "failed" }
+integ_f = { form = "integ", printed = "failed" }
+find_at_f = { form = "find_at", printed = "failed" }
+find_when_f = { form = "find_when", printed = "failed" }
+when_f = { form = "when", printed = "failed", level = "number" }
+deriv_at_f = { form = "deriv_at", printed = "failed" }
+deriv_when_f = { form = "deriv_when", printed = "failed" }
+trig_targ_f = { form = "trig_targ", printed = "failed" }
+param_f = { form = "param", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tran_step_value"]
+at = { analysis = "tran", stepped = "yes", printed = "table", outcome = "value" }
+[grid.printed-measurement.cell.items]
+min_v = "min"
+pp_v = "pp"
+rms_v = "rms"
+integ_v = "integ"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tran_step_failed"]
+at = { analysis = "tran", stepped = "yes", printed = "table", outcome = "failed" }
+[grid.printed-measurement.cell.items]
+max_f = { form = "max", printed = "failed" }
+min_f = { form = "min", printed = "failed" }
+pp_f = { form = "pp", printed = "failed" }
+avg_f = { form = "avg", printed = "failed" }
+rms_f = { form = "rms", printed = "failed" }
+integ_f = { form = "integ", printed = "failed" }
+find_at_f = { form = "find_at", printed = "failed" }
+find_when_f = { form = "find_when", printed = "failed" }
+when_f = { form = "when", printed = "failed", level = "number" }
+deriv_at_f = { form = "deriv_at", printed = "failed" }
+deriv_when_f = { form = "deriv_when", printed = "failed" }
+trig_targ_f = { form = "trig_targ", printed = "failed" }
+param_f = { form = "param", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tran_step_step_outcomes"]
+at = { analysis = "tran", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+max_sf = { form = "max", outcome = "step_fails", steps = [2] }
+min_sf = { form = "min", outcome = "step_fails", steps = [2] }
+pp_sf = { form = "pp", outcome = "step_fails", steps = [2] }
+avg_sf = { form = "avg", outcome = "step_fails", steps = [2] }
+rms_sf = { form = "rms", outcome = "step_fails", steps = [2] }
+integ_sf = { form = "integ", outcome = "step_fails", steps = [2] }
+find_at_sf = { form = "find_at", outcome = "step_fails", steps = [2] }
+find_when_sf = { form = "find_when", outcome = "step_fails", steps = [2] }
+when_sf = { form = "when", outcome = "step_fails", steps = [2], level = "braced" }
+deriv_at_sf = { form = "deriv_at", outcome = "step_fails", steps = [2] }
+deriv_when_sf = { form = "deriv_when", outcome = "step_fails", steps = [2] }
+trig_targ_sf = { form = "trig_targ", outcome = "step_fails", steps = [2] }
+param_sf = { form = "param", outcome = "step_fails", steps = [2] }
+max_sz = { form = "max", outcome = "step_zero", steps = [2] }
+min_sz = { form = "min", outcome = "step_zero", steps = [2] }
+pp_sz = { form = "pp", outcome = "step_zero", steps = [2] }
+avg_sz = { form = "avg", outcome = "step_zero", steps = [2] }
+rms_sz = { form = "rms", outcome = "step_zero", steps = [2] }
+integ_sz = { form = "integ", outcome = "step_zero", steps = [2] }
+find_at_sz = { form = "find_at", outcome = "step_zero", steps = [2] }
+find_when_sz = { form = "find_when", outcome = "step_zero", steps = [2] }
+when_sz = { form = "when", outcome = "step_zero", steps = [1], level = "braced" }
+deriv_at_sz = { form = "deriv_at", outcome = "step_zero", steps = [2] }
+deriv_when_sz = { form = "deriv_when", outcome = "step_zero", steps = [2] }
+trig_targ_sz = { form = "trig_targ", outcome = "step_zero", steps = [2] }
+param_sz = { form = "param", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tran_find"]
+at = { analysis = "tran", stepped = "no", printed = "line", outcome = "value" }
+[grid.printed-measurement.cell.items]
+find_v = "find"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tran_step_find"]
+at = { analysis = "tran", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+find_v = { form = "find", outcome = "value" }
+find_sz = { form = "find", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_ac_value"]
+at = { analysis = "ac", stepped = "no", printed = "line", complex_format = "default", outcome = "value" }
+[grid.printed-measurement.cell.items]
+min_v = "min"
+pp_v = "pp"
+avg_v = "avg"
+rms_v = "rms"
+integ_v = "integ"
+find_when_v = "find_when"
+deriv_at_v = "deriv_at"
+deriv_when_v = "deriv_when"
+param_v = "param"
+max_v = "max"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_ac_failed"]
+at = { analysis = "ac", stepped = "no", printed = "line", complex_format = "default", outcome = "failed" }
+[grid.printed-measurement.cell.items]
+max_f = { form = "max", printed = "failed" }
+min_f = { form = "min", printed = "failed" }
+pp_f = { form = "pp", printed = "failed" }
+avg_f = { form = "avg", printed = "failed" }
+rms_f = { form = "rms", printed = "failed" }
+integ_f = { form = "integ", printed = "failed" }
+find_at_f = { form = "find_at", printed = "failed" }
+find_when_f = { form = "find_when", printed = "failed" }
+when_f = { form = "when", printed = "failed", level = "number" }
+deriv_at_f = { form = "deriv_at", printed = "failed" }
+deriv_when_f = { form = "deriv_when", printed = "failed" }
+trig_targ_f = { form = "trig_targ", printed = "failed" }
+param_f = { form = "param", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_ac_step_value"]
+at = { analysis = "ac", stepped = "yes", printed = "table", complex_format = "default", outcome = "value" }
+[grid.printed-measurement.cell.items]
+max_v = "max"
+min_v = "min"
+pp_v = "pp"
+avg_v = "avg"
+rms_v = "rms"
+integ_v = "integ"
+find_when_v = "find_when"
+deriv_at_v = "deriv_at"
+deriv_when_v = "deriv_when"
+trig_targ_v = "trig_targ"
+param_v = "param"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_ac_step_failed"]
+at = { analysis = "ac", stepped = "yes", printed = "table", complex_format = "default", outcome = "failed" }
+[grid.printed-measurement.cell.items]
+max_f = { form = "max", printed = "failed" }
+min_f = { form = "min", printed = "failed" }
+pp_f = { form = "pp", printed = "failed" }
+avg_f = { form = "avg", printed = "failed" }
+rms_f = { form = "rms", printed = "failed" }
+integ_f = { form = "integ", printed = "failed" }
+find_at_f = { form = "find_at", printed = "failed" }
+find_when_f = { form = "find_when", printed = "failed" }
+when_f = { form = "when", printed = "failed", level = "number" }
+deriv_at_f = { form = "deriv_at", printed = "failed" }
+deriv_when_f = { form = "deriv_when", printed = "failed" }
+trig_targ_f = { form = "trig_targ", printed = "failed" }
+param_f = { form = "param", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_ac_step_step_outcomes"]
+at = { analysis = "ac", stepped = "yes", printed = "table", complex_format = "default" }
+[grid.printed-measurement.cell.items]
+max_sf = { form = "max", outcome = "step_fails", steps = [2] }
+min_sf = { form = "min", outcome = "step_fails", steps = [2] }
+pp_sf = { form = "pp", outcome = "step_fails", steps = [2] }
+avg_sf = { form = "avg", outcome = "step_fails", steps = [2] }
+rms_sf = { form = "rms", outcome = "step_fails", steps = [2] }
+integ_sf = { form = "integ", outcome = "step_fails", steps = [2] }
+find_at_sf = { form = "find_at", outcome = "step_fails", steps = [2] }
+find_when_sf = { form = "find_when", outcome = "step_fails", steps = [2] }
+when_sf = { form = "when", outcome = "step_fails", steps = [2], level = "braced" }
+deriv_at_sf = { form = "deriv_at", outcome = "step_fails", steps = [2] }
+deriv_when_sf = { form = "deriv_when", outcome = "step_fails", steps = [2] }
+trig_targ_sf = { form = "trig_targ", outcome = "step_fails", steps = [2] }
+param_sf = { form = "param", outcome = "step_fails", steps = [2] }
+max_sz = { form = "max", outcome = "step_zero", steps = [2] }
+min_sz = { form = "min", outcome = "step_zero", steps = [2] }
+pp_sz = { form = "pp", outcome = "step_zero", steps = [2] }
+avg_sz = { form = "avg", outcome = "step_zero", steps = [2] }
+rms_sz = { form = "rms", outcome = "step_zero", steps = [2] }
+integ_sz = { form = "integ", outcome = "step_zero", steps = [2] }
+find_at_sz = { form = "find_at", outcome = "step_zero", steps = [2] }
+find_when_sz = { form = "find_when", outcome = "step_zero", steps = [2] }
+deriv_at_sz = { form = "deriv_at", outcome = "step_zero", steps = [2] }
+deriv_when_sz = { form = "deriv_when", outcome = "step_zero", steps = [2] }
+trig_targ_sz = { form = "trig_targ", outcome = "step_zero", steps = [2] }
+param_sz = { form = "param", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_ac_find"]
+at = { analysis = "ac", stepped = "no", printed = "line", complex_format = "default", outcome = "value" }
+[grid.printed-measurement.cell.items]
+find_v = "find"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_ac_step_find"]
+at = { analysis = "ac", stepped = "yes", printed = "table", complex_format = "default" }
+[grid.printed-measurement.cell.items]
+find_v = { form = "find", outcome = "value" }
+find_sz = { form = "find", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_dc_value"]
+at = { analysis = "dc", stepped = "no", printed = "line", outcome = "value" }
+[grid.printed-measurement.cell.items]
+max_v = "max"
+min_v = "min"
+pp_v = "pp"
+avg_v = "avg"
+rms_v = "rms"
+integ_v = "integ"
+find_when_v = "find_when"
+when_v = { form = "when", level = "number" }
+deriv_at_v = "deriv_at"
+deriv_when_v = "deriv_when"
+trig_targ_v = { form = "trig_targ", printed = "line_bare" }
+param_v = "param"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_dc_failed"]
+at = { analysis = "dc", stepped = "no", printed = "line", outcome = "failed" }
+[grid.printed-measurement.cell.items]
+max_f = { form = "max", printed = "failed" }
+min_f = { form = "min", printed = "failed" }
+pp_f = { form = "pp", printed = "failed" }
+avg_f = { form = "avg", printed = "failed" }
+rms_f = { form = "rms", printed = "failed" }
+integ_f = { form = "integ", printed = "failed" }
+find_at_f = { form = "find_at", printed = "failed" }
+find_when_f = { form = "find_when", printed = "failed" }
+when_f = { form = "when", printed = "failed", level = "number" }
+deriv_at_f = { form = "deriv_at", printed = "failed" }
+deriv_when_f = { form = "deriv_when", printed = "failed" }
+trig_targ_f = { form = "trig_targ", printed = "failed" }
+param_f = { form = "param", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_dc_step_value"]
+at = { analysis = "dc", stepped = "yes", printed = "table", outcome = "value" }
+[grid.printed-measurement.cell.items]
+max_v = "max"
+min_v = "min"
+pp_v = "pp"
+avg_v = "avg"
+rms_v = "rms"
+integ_v = "integ"
+find_at_v = "find_at"
+find_when_v = "find_when"
+when_v = { form = "when", level = "number" }
+deriv_at_v = "deriv_at"
+deriv_when_v = "deriv_when"
+trig_targ_v = "trig_targ"
+param_v = "param"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_dc_step_failed"]
+at = { analysis = "dc", stepped = "yes", printed = "table", outcome = "failed" }
+[grid.printed-measurement.cell.items]
+max_f = { form = "max", printed = "failed" }
+min_f = { form = "min", printed = "failed" }
+pp_f = { form = "pp", printed = "failed" }
+avg_f = { form = "avg", printed = "failed" }
+rms_f = { form = "rms", printed = "failed" }
+integ_f = { form = "integ", printed = "failed" }
+find_at_f = { form = "find_at", printed = "failed" }
+find_when_f = { form = "find_when", printed = "failed" }
+when_f = { form = "when", printed = "failed", level = "number" }
+deriv_at_f = { form = "deriv_at", printed = "failed" }
+deriv_when_f = { form = "deriv_when", printed = "failed" }
+trig_targ_f = { form = "trig_targ", printed = "failed" }
+param_f = { form = "param", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_dc_step_step_outcomes"]
+at = { analysis = "dc", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+max_sf = { form = "max", outcome = "step_fails", steps = [2] }
+min_sf = { form = "min", outcome = "step_fails", steps = [2] }
+pp_sf = { form = "pp", outcome = "step_fails", steps = [2] }
+avg_sf = { form = "avg", outcome = "step_fails", steps = [2] }
+rms_sf = { form = "rms", outcome = "step_fails", steps = [2] }
+integ_sf = { form = "integ", outcome = "step_fails", steps = [2] }
+find_at_sf = { form = "find_at", outcome = "step_fails", steps = [2] }
+find_when_sf = { form = "find_when", outcome = "step_fails", steps = [2] }
+when_sf = { form = "when", outcome = "step_fails", steps = [2], level = "braced" }
+deriv_at_sf = { form = "deriv_at", outcome = "step_fails", steps = [2] }
+deriv_when_sf = { form = "deriv_when", outcome = "step_fails", steps = [2] }
+trig_targ_sf = { form = "trig_targ", outcome = "step_fails", steps = [2] }
+param_sf = { form = "param", outcome = "step_fails", steps = [2] }
+max_sz = { form = "max", outcome = "step_zero", steps = [2] }
+min_sz = { form = "min", outcome = "step_zero", steps = [2] }
+pp_sz = { form = "pp", outcome = "step_zero", steps = [2] }
+avg_sz = { form = "avg", outcome = "step_zero", steps = [2] }
+rms_sz = { form = "rms", outcome = "step_zero", steps = [2] }
+integ_sz = { form = "integ", outcome = "step_zero", steps = [2] }
+find_at_sz = { form = "find_at", outcome = "step_zero", steps = [2] }
+find_when_sz = { form = "find_when", outcome = "step_zero", steps = [2] }
+when_sz = { form = "when", outcome = "step_zero", steps = [1], level = "braced" }
+deriv_at_sz = { form = "deriv_at", outcome = "step_zero", steps = [2] }
+deriv_when_sz = { form = "deriv_when", outcome = "step_zero", steps = [2] }
+trig_targ_sz = { form = "trig_targ", outcome = "step_zero", steps = [2] }
+param_sz = { form = "param", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_dc_find"]
+at = { analysis = "dc", stepped = "no", printed = "line", outcome = "value" }
+[grid.printed-measurement.cell.items]
+find_v = "find"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_dc_step_find"]
+at = { analysis = "dc", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+find_v = { form = "find", outcome = "value" }
+find_sz = { form = "find", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_noise_value"]
+at = { analysis = "noise", stepped = "no", printed = "line", outcome = "value" }
+[grid.printed-measurement.cell.items]
+max_v = "max"
+min_v = "min"
+pp_v = "pp"
+avg_v = "avg"
+rms_v = "rms"
+integ_v = "integ"
+find_at_v = "find_at"
+find_when_v = "find_when"
+when_v = { form = "when", level = "number" }
+deriv_at_v = "deriv_at"
+deriv_when_v = "deriv_when"
+trig_targ_v = { form = "trig_targ", printed = "line_bare" }
+param_v = "param"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_noise_failed"]
+at = { analysis = "noise", stepped = "no", printed = "line", outcome = "failed" }
+[grid.printed-measurement.cell.items]
+max_f = { form = "max", printed = "failed" }
+min_f = { form = "min", printed = "failed" }
+pp_f = { form = "pp", printed = "failed" }
+avg_f = { form = "avg", printed = "failed" }
+rms_f = { form = "rms", printed = "failed" }
+integ_f = { form = "integ", printed = "failed" }
+find_at_f = { form = "find_at", printed = "failed" }
+find_when_f = { form = "find_when", printed = "failed" }
+when_f = { form = "when", printed = "failed", level = "number" }
+deriv_at_f = { form = "deriv_at", printed = "failed" }
+deriv_when_f = { form = "deriv_when", printed = "failed" }
+trig_targ_f = { form = "trig_targ", printed = "failed" }
+param_f = { form = "param", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_noise_step_value"]
+at = { analysis = "noise", stepped = "yes", printed = "table", outcome = "value" }
+[grid.printed-measurement.cell.items]
+max_v = "max"
+min_v = "min"
+pp_v = "pp"
+avg_v = "avg"
+rms_v = "rms"
+integ_v = "integ"
+find_at_v = "find_at"
+find_when_v = "find_when"
+when_v = { form = "when", level = "number" }
+deriv_at_v = "deriv_at"
+deriv_when_v = "deriv_when"
+trig_targ_v = "trig_targ"
+param_v = "param"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_noise_step_failed"]
+at = { analysis = "noise", stepped = "yes", printed = "table", outcome = "failed" }
+[grid.printed-measurement.cell.items]
+max_f = { form = "max", printed = "failed" }
+min_f = { form = "min", printed = "failed" }
+pp_f = { form = "pp", printed = "failed" }
+avg_f = { form = "avg", printed = "failed" }
+rms_f = { form = "rms", printed = "failed" }
+integ_f = { form = "integ", printed = "failed" }
+find_at_f = { form = "find_at", printed = "failed" }
+find_when_f = { form = "find_when", printed = "failed" }
+when_f = { form = "when", printed = "failed", level = "number" }
+deriv_at_f = { form = "deriv_at", printed = "failed" }
+deriv_when_f = { form = "deriv_when", printed = "failed" }
+trig_targ_f = { form = "trig_targ", printed = "failed" }
+param_f = { form = "param", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_noise_step_step_outcomes"]
+at = { analysis = "noise", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+max_sf = { form = "max", outcome = "step_fails", steps = [2] }
+min_sf = { form = "min", outcome = "step_fails", steps = [2] }
+pp_sf = { form = "pp", outcome = "step_fails", steps = [2] }
+avg_sf = { form = "avg", outcome = "step_fails", steps = [2] }
+rms_sf = { form = "rms", outcome = "step_fails", steps = [2] }
+integ_sf = { form = "integ", outcome = "step_fails", steps = [2] }
+find_at_sf = { form = "find_at", outcome = "step_fails", steps = [2] }
+find_when_sf = { form = "find_when", outcome = "step_fails", steps = [2] }
+when_sf = { form = "when", outcome = "step_fails", steps = [2], level = "braced" }
+deriv_at_sf = { form = "deriv_at", outcome = "step_fails", steps = [2] }
+deriv_when_sf = { form = "deriv_when", outcome = "step_fails", steps = [2] }
+trig_targ_sf = { form = "trig_targ", outcome = "step_fails", steps = [2] }
+param_sf = { form = "param", outcome = "step_fails", steps = [2] }
+max_sz = { form = "max", outcome = "step_zero", steps = [2] }
+min_sz = { form = "min", outcome = "step_zero", steps = [2] }
+pp_sz = { form = "pp", outcome = "step_zero", steps = [2] }
+avg_sz = { form = "avg", outcome = "step_zero", steps = [2] }
+rms_sz = { form = "rms", outcome = "step_zero", steps = [2] }
+integ_sz = { form = "integ", outcome = "step_zero", steps = [2] }
+find_at_sz = { form = "find_at", outcome = "step_zero", steps = [2] }
+find_when_sz = { form = "find_when", outcome = "step_zero", steps = [2] }
+deriv_at_sz = { form = "deriv_at", outcome = "step_zero", steps = [2] }
+deriv_when_sz = { form = "deriv_when", outcome = "step_zero", steps = [2] }
+trig_targ_sz = { form = "trig_targ", outcome = "step_zero", steps = [2] }
+param_sz = { form = "param", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_noise_find"]
+at = { analysis = "noise", stepped = "no", printed = "line", outcome = "value" }
+[grid.printed-measurement.cell.items]
+find_v = "find"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_noise_step_find"]
+at = { analysis = "noise", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+find_v = { form = "find", outcome = "value" }
+find_sz = { form = "find", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_max"]
+at = { analysis = "op", stepped = "no", printed = "line" }
+[grid.printed-measurement.cell.items]
+max_v = { form = "max", outcome = "value" }
+max_f = { form = "max", outcome = "failed", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_min"]
+at = { analysis = "op", stepped = "no", printed = "line" }
+[grid.printed-measurement.cell.items]
+min_v = { form = "min", outcome = "value" }
+min_f = { form = "min", outcome = "failed", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_pp"]
+at = { analysis = "op", stepped = "no", printed = "line" }
+[grid.printed-measurement.cell.items]
+pp_v = { form = "pp", outcome = "value" }
+pp_f = { form = "pp", outcome = "failed", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_avg"]
+at = { analysis = "op", stepped = "no", printed = "line" }
+[grid.printed-measurement.cell.items]
+avg_v = { form = "avg", outcome = "value" }
+avg_f = { form = "avg", outcome = "failed", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_rms"]
+at = { analysis = "op", stepped = "no", printed = "line" }
+[grid.printed-measurement.cell.items]
+rms_v = { form = "rms", outcome = "value" }
+rms_f = { form = "rms", outcome = "failed", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_integ"]
+at = { analysis = "op", stepped = "no", printed = "line" }
+[grid.printed-measurement.cell.items]
+integ_v = { form = "integ", outcome = "value" }
+integ_f = { form = "integ", outcome = "failed", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_find_at"]
+at = { analysis = "op", stepped = "no", printed = "line" }
+[grid.printed-measurement.cell.items]
+find_at_v = { form = "find_at", outcome = "value" }
+find_at_f = { form = "find_at", outcome = "failed", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_find_when"]
+at = { analysis = "op", stepped = "no", printed = "line" }
+[grid.printed-measurement.cell.items]
+find_when_v = { form = "find_when", outcome = "value" }
+find_when_f = { form = "find_when", outcome = "failed", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_when"]
+at = { analysis = "op", stepped = "no", printed = "line" }
+[grid.printed-measurement.cell.items]
+when_v = { form = "when", outcome = "value", level = "number" }
+when_f = { form = "when", outcome = "failed", printed = "failed", level = "number" }
+param_f = { form = "param", outcome = "failed", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_deriv_at"]
+at = { analysis = "op", stepped = "no", printed = "line" }
+[grid.printed-measurement.cell.items]
+deriv_at_v = { form = "deriv_at", outcome = "value" }
+deriv_at_f = { form = "deriv_at", outcome = "failed", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_deriv_when"]
+at = { analysis = "op", stepped = "no", printed = "line" }
+[grid.printed-measurement.cell.items]
+deriv_when_v = { form = "deriv_when", outcome = "value" }
+deriv_when_f = { form = "deriv_when", outcome = "failed", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_trig_targ"]
+at = { analysis = "op", stepped = "no", printed = "line" }
+[grid.printed-measurement.cell.items]
+trig_targ_v = { form = "trig_targ", outcome = "value", printed = "line_bare" }
+trig_targ_f = { form = "trig_targ", outcome = "failed", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_find"]
+at = { analysis = "op", stepped = "no", printed = "line", outcome = "value" }
+[grid.printed-measurement.cell.items]
+find_v = "find"
+param_v = "param"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_step_max"]
+at = { analysis = "op", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+max_v = { form = "max", outcome = "value" }
+max_f = { form = "max", outcome = "failed", printed = "failed" }
+max_sf = { form = "max", outcome = "step_fails", steps = [2] }
+max_sz = { form = "max", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_step_min"]
+at = { analysis = "op", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+min_v = { form = "min", outcome = "value" }
+min_f = { form = "min", outcome = "failed", printed = "failed" }
+min_sf = { form = "min", outcome = "step_fails", steps = [2] }
+min_sz = { form = "min", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_step_pp"]
+at = { analysis = "op", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+pp_v = { form = "pp", outcome = "value" }
+pp_f = { form = "pp", outcome = "failed", printed = "failed" }
+pp_sf = { form = "pp", outcome = "step_fails", steps = [2] }
+pp_sz = { form = "pp", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_step_avg"]
+at = { analysis = "op", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+avg_v = { form = "avg", outcome = "value" }
+avg_f = { form = "avg", outcome = "failed", printed = "failed" }
+avg_sf = { form = "avg", outcome = "step_fails", steps = [2] }
+avg_sz = { form = "avg", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_step_rms"]
+at = { analysis = "op", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+rms_v = { form = "rms", outcome = "value" }
+rms_f = { form = "rms", outcome = "failed", printed = "failed" }
+rms_sf = { form = "rms", outcome = "step_fails", steps = [2] }
+rms_sz = { form = "rms", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_step_integ"]
+at = { analysis = "op", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+integ_v = { form = "integ", outcome = "value" }
+integ_f = { form = "integ", outcome = "failed", printed = "failed" }
+integ_sf = { form = "integ", outcome = "step_fails", steps = [2] }
+integ_sz = { form = "integ", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_step_find_at"]
+at = { analysis = "op", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+find_at_v = { form = "find_at", outcome = "value" }
+find_at_f = { form = "find_at", outcome = "failed", printed = "failed" }
+find_at_sf = { form = "find_at", outcome = "step_fails", steps = [2] }
+find_at_sz = { form = "find_at", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_step_find_when"]
+at = { analysis = "op", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+find_when_v = { form = "find_when", outcome = "value" }
+find_when_f = { form = "find_when", outcome = "failed", printed = "failed" }
+find_when_sf = { form = "find_when", outcome = "step_fails", steps = [2] }
+find_when_sz = { form = "find_when", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_step_when"]
+at = { analysis = "op", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+when_v = { form = "when", outcome = "value", level = "number" }
+when_f = { form = "when", outcome = "failed", printed = "failed", level = "number" }
+when_sf = { form = "when", outcome = "step_fails", steps = [2], level = "braced" }
+param_f = { form = "param", outcome = "failed", printed = "failed" }
+param_sf = { form = "param", outcome = "step_fails", printed = "table", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_step_deriv_at"]
+at = { analysis = "op", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+deriv_at_v = { form = "deriv_at", outcome = "value" }
+deriv_at_f = { form = "deriv_at", outcome = "failed", printed = "failed" }
+deriv_at_sf = { form = "deriv_at", outcome = "step_fails", steps = [2] }
+deriv_at_sz = { form = "deriv_at", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_step_deriv_when"]
+at = { analysis = "op", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+deriv_when_v = { form = "deriv_when", outcome = "value" }
+deriv_when_f = { form = "deriv_when", outcome = "failed", printed = "failed" }
+deriv_when_sf = { form = "deriv_when", outcome = "step_fails", steps = [2] }
+deriv_when_sz = { form = "deriv_when", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_step_trig_targ"]
+at = { analysis = "op", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+trig_targ_v = { form = "trig_targ", outcome = "value" }
+trig_targ_f = { form = "trig_targ", outcome = "failed", printed = "failed" }
+trig_targ_sf = { form = "trig_targ", outcome = "step_fails", steps = [2] }
+trig_targ_sz = { form = "trig_targ", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_step_find"]
+at = { analysis = "op", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+find_v = { form = "find", outcome = "value" }
+param_v = { form = "param", outcome = "value" }
+find_sz = { form = "find", outcome = "step_zero", steps = [2] }
+param_sz = { form = "param", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_max"]
+at = { analysis = "tf", stepped = "no", printed = "line" }
+[grid.printed-measurement.cell.items]
+max_v = { form = "max", outcome = "value" }
+max_f = { form = "max", outcome = "failed", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_min"]
+at = { analysis = "tf", stepped = "no", printed = "line" }
+[grid.printed-measurement.cell.items]
+min_v = { form = "min", outcome = "value" }
+min_f = { form = "min", outcome = "failed", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_pp"]
+at = { analysis = "tf", stepped = "no", printed = "line" }
+[grid.printed-measurement.cell.items]
+pp_v = { form = "pp", outcome = "value" }
+pp_f = { form = "pp", outcome = "failed", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_avg"]
+at = { analysis = "tf", stepped = "no", printed = "line" }
+[grid.printed-measurement.cell.items]
+avg_v = { form = "avg", outcome = "value" }
+avg_f = { form = "avg", outcome = "failed", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_rms"]
+at = { analysis = "tf", stepped = "no", printed = "line" }
+[grid.printed-measurement.cell.items]
+rms_v = { form = "rms", outcome = "value" }
+rms_f = { form = "rms", outcome = "failed", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_integ"]
+at = { analysis = "tf", stepped = "no", printed = "line" }
+[grid.printed-measurement.cell.items]
+integ_v = { form = "integ", outcome = "value" }
+integ_f = { form = "integ", outcome = "failed", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_find_at"]
+at = { analysis = "tf", stepped = "no", printed = "line" }
+[grid.printed-measurement.cell.items]
+find_at_v = { form = "find_at", outcome = "value" }
+find_at_f = { form = "find_at", outcome = "failed", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_find_when"]
+at = { analysis = "tf", stepped = "no", printed = "line" }
+[grid.printed-measurement.cell.items]
+find_when_v = { form = "find_when", outcome = "value" }
+find_when_f = { form = "find_when", outcome = "failed", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_when"]
+at = { analysis = "tf", stepped = "no", printed = "line" }
+[grid.printed-measurement.cell.items]
+when_v = { form = "when", outcome = "value", level = "number" }
+when_f = { form = "when", outcome = "failed", printed = "failed", level = "number" }
+param_f = { form = "param", outcome = "failed", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_deriv_at"]
+at = { analysis = "tf", stepped = "no", printed = "line" }
+[grid.printed-measurement.cell.items]
+deriv_at_v = { form = "deriv_at", outcome = "value" }
+deriv_at_f = { form = "deriv_at", outcome = "failed", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_deriv_when"]
+at = { analysis = "tf", stepped = "no", printed = "line" }
+[grid.printed-measurement.cell.items]
+deriv_when_v = { form = "deriv_when", outcome = "value" }
+deriv_when_f = { form = "deriv_when", outcome = "failed", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_trig_targ"]
+at = { analysis = "tf", stepped = "no", printed = "line" }
+[grid.printed-measurement.cell.items]
+trig_targ_v = { form = "trig_targ", outcome = "value", printed = "line_bare" }
+trig_targ_f = { form = "trig_targ", outcome = "failed", printed = "failed" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_find"]
+at = { analysis = "tf", stepped = "no", printed = "line", outcome = "value" }
+[grid.printed-measurement.cell.items]
+find_v = "find"
+param_v = "param"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_step_max"]
+at = { analysis = "tf", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+max_v = { form = "max", outcome = "value" }
+max_f = { form = "max", outcome = "failed", printed = "failed" }
+max_sf = { form = "max", outcome = "step_fails", steps = [2] }
+max_sz = { form = "max", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_step_min"]
+at = { analysis = "tf", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+min_v = { form = "min", outcome = "value" }
+min_f = { form = "min", outcome = "failed", printed = "failed" }
+min_sf = { form = "min", outcome = "step_fails", steps = [2] }
+min_sz = { form = "min", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_step_pp"]
+at = { analysis = "tf", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+pp_v = { form = "pp", outcome = "value" }
+pp_f = { form = "pp", outcome = "failed", printed = "failed" }
+pp_sf = { form = "pp", outcome = "step_fails", steps = [2] }
+pp_sz = { form = "pp", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_step_avg"]
+at = { analysis = "tf", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+avg_v = { form = "avg", outcome = "value" }
+avg_f = { form = "avg", outcome = "failed", printed = "failed" }
+avg_sf = { form = "avg", outcome = "step_fails", steps = [2] }
+avg_sz = { form = "avg", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_step_rms"]
+at = { analysis = "tf", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+rms_v = { form = "rms", outcome = "value" }
+rms_f = { form = "rms", outcome = "failed", printed = "failed" }
+rms_sf = { form = "rms", outcome = "step_fails", steps = [2] }
+rms_sz = { form = "rms", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_step_integ"]
+at = { analysis = "tf", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+integ_v = { form = "integ", outcome = "value" }
+integ_f = { form = "integ", outcome = "failed", printed = "failed" }
+integ_sf = { form = "integ", outcome = "step_fails", steps = [2] }
+integ_sz = { form = "integ", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_step_find_at"]
+at = { analysis = "tf", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+find_at_v = { form = "find_at", outcome = "value" }
+find_at_f = { form = "find_at", outcome = "failed", printed = "failed" }
+find_at_sf = { form = "find_at", outcome = "step_fails", steps = [2] }
+find_at_sz = { form = "find_at", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_step_find_when"]
+at = { analysis = "tf", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+find_when_v = { form = "find_when", outcome = "value" }
+find_when_f = { form = "find_when", outcome = "failed", printed = "failed" }
+find_when_sf = { form = "find_when", outcome = "step_fails", steps = [2] }
+find_when_sz = { form = "find_when", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_step_when"]
+at = { analysis = "tf", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+when_v = { form = "when", outcome = "value", level = "number" }
+when_f = { form = "when", outcome = "failed", printed = "failed", level = "number" }
+when_sf = { form = "when", outcome = "step_fails", steps = [2], level = "braced" }
+param_f = { form = "param", outcome = "failed", printed = "failed" }
+param_sf = { form = "param", outcome = "step_fails", printed = "table", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_step_deriv_at"]
+at = { analysis = "tf", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+deriv_at_v = { form = "deriv_at", outcome = "value" }
+deriv_at_f = { form = "deriv_at", outcome = "failed", printed = "failed" }
+deriv_at_sf = { form = "deriv_at", outcome = "step_fails", steps = [2] }
+deriv_at_sz = { form = "deriv_at", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_step_deriv_when"]
+at = { analysis = "tf", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+deriv_when_v = { form = "deriv_when", outcome = "value" }
+deriv_when_f = { form = "deriv_when", outcome = "failed", printed = "failed" }
+deriv_when_sf = { form = "deriv_when", outcome = "step_fails", steps = [2] }
+deriv_when_sz = { form = "deriv_when", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_step_trig_targ"]
+at = { analysis = "tf", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+trig_targ_v = { form = "trig_targ", outcome = "value" }
+trig_targ_f = { form = "trig_targ", outcome = "failed", printed = "failed" }
+trig_targ_sf = { form = "trig_targ", outcome = "step_fails", steps = [2] }
+trig_targ_sz = { form = "trig_targ", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_step_find"]
+at = { analysis = "tf", stepped = "yes", printed = "table" }
+[grid.printed-measurement.cell.items]
+find_v = { form = "find", outcome = "value" }
+param_v = { form = "param", outcome = "value" }
+find_sz = { form = "find", outcome = "step_zero", steps = [2] }
+param_sz = { form = "param", outcome = "step_zero", steps = [2] }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tran_find_failed"]
+at = { analysis = "tran", stepped = "no", printed = "failed", outcome = "failed" }
+[grid.printed-measurement.cell.items]
+find_f = "find"
+param_f = "param"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tran_step_find_failed"]
+at = { analysis = "tran", stepped = "yes", printed = "failed", outcome = "failed" }
+[grid.printed-measurement.cell.items]
+find_f = "find"
+param_f = "param"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_ac_find_failed"]
+at = { analysis = "ac", stepped = "no", printed = "failed", outcome = "failed" }
+[grid.printed-measurement.cell.items]
+find_f = "find"
+param_f = "param"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_ac_step_find_failed"]
+at = { analysis = "ac", stepped = "yes", printed = "failed", outcome = "failed" }
+[grid.printed-measurement.cell.items]
+find_f = "find"
+param_f = "param"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_dc_find_failed"]
+at = { analysis = "dc", stepped = "no", printed = "failed", outcome = "failed" }
+[grid.printed-measurement.cell.items]
+find_f = "find"
+param_f = "param"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_dc_step_find_failed"]
+at = { analysis = "dc", stepped = "yes", printed = "failed", outcome = "failed" }
+[grid.printed-measurement.cell.items]
+find_f = "find"
+param_f = "param"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_noise_find_failed"]
+at = { analysis = "noise", stepped = "no", printed = "failed", outcome = "failed" }
+[grid.printed-measurement.cell.items]
+find_f = "find"
+param_f = "param"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_noise_step_find_failed"]
+at = { analysis = "noise", stepped = "yes", printed = "failed", outcome = "failed" }
+[grid.printed-measurement.cell.items]
+find_f = "find"
+param_f = "param"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_find_failed"]
+at = { analysis = "op", stepped = "no", printed = "failed", outcome = "failed" }
+[grid.printed-measurement.cell.items]
+find_f = "find"
+param_f = "param"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_op_step_find_failed"]
+at = { analysis = "op", stepped = "yes", printed = "failed", outcome = "failed" }
+[grid.printed-measurement.cell.items]
+find_f = "find"
+param_f = "param"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_find_failed"]
+at = { analysis = "tf", stepped = "no", printed = "failed", outcome = "failed" }
+[grid.printed-measurement.cell.items]
+find_f = "find"
+param_f = "param"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_tf_step_find_failed"]
+at = { analysis = "tf", stepped = "yes", printed = "failed", outcome = "failed" }
+[grid.printed-measurement.cell.items]
+find_f = "find"
+param_f = "param"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_name_dot"]
+at = { analysis = "tran", stepped = "no", outcome = "value", name = "punctuation" }
+[grid.printed-measurement.cell.items]
+"t.bare" = { form = "trig_targ", printed = "line_bare" }
+"t.never" = { form = "when", outcome = "failed", printed = "failed", level = "number" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_name_dot_step"]
+at = { analysis = "tran", stepped = "yes", outcome = "value", name = "punctuation", printed = "table" }
+[grid.printed-measurement.cell.items]
+"t.max" = "max"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_name_dash"]
+at = { analysis = "tran", stepped = "no", outcome = "value", name = "punctuation" }
+[grid.printed-measurement.cell.items]
+"t-bare" = { form = "trig_targ", printed = "line_bare" }
+"t-never" = { form = "when", outcome = "failed", printed = "failed", level = "number" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_name_dash_step"]
+at = { analysis = "tran", stepped = "yes", outcome = "value", name = "punctuation", printed = "table" }
+[grid.printed-measurement.cell.items]
+"t-max" = "max"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_name_upper"]
+at = { analysis = "tran", stepped = "no", outcome = "value", name = "upper" }
+[grid.printed-measurement.cell.items]
+T_UP = { form = "when", printed = "line", level = "number" }
+T_BARE = { form = "trig_targ", printed = "line_bare" }
+T_NEVER = { form = "when", outcome = "failed", printed = "failed", level = "number" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_name_upper_step"]
+at = { analysis = "tran", stepped = "yes", outcome = "value", name = "upper", printed = "table" }
+[grid.printed-measurement.cell.items]
+T_MAX = "max"
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_name_reserved_bare"]
+at = { analysis = "tran", stepped = "no", outcome = "value", name = "reserved" }
+[grid.printed-measurement.cell.items]
+e = { form = "trig_targ", printed = "line_bare" }
+after = { form = "min", name = "plain", printed = "line" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_name_reserved_failed"]
+at = { analysis = "tran", stepped = "no", outcome = "value", name = "reserved" }
+[grid.printed-measurement.cell.items]
+e = { form = "when", outcome = "failed", printed = "failed", level = "number" }
+after = { form = "min", name = "plain", printed = "line" }
+
+[[grid.printed-measurement.cell]]
+cases = ["log/meas_grid_name_reserved_step"]
+at = { analysis = "tran", stepped = "yes", outcome = "value", name = "reserved" }
+[grid.printed-measurement.cell.items]
+e = { form = "max", printed = "table" }
+after = { form = "min", name = "plain", printed = "table" }

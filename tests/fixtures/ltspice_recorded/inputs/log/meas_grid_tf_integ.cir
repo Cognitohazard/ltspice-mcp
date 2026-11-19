@@ -1,0 +1,8 @@
+* INTEG in a transfer function: a deck of its own, since a build may refuse the form there
+V1 in 0 1
+R1 in out 1k
+R2 out 0 4k
+.tf V(out) V1
+.meas tf integ_v INTEG V(out) FROM 0 TO 1
+.meas tf integ_f INTEG V(out) FROM 2 TO 3
+.end

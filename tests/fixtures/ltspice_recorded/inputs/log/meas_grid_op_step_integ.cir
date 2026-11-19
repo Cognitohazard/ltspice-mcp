@@ -1,0 +1,11 @@
+* INTEG in an operating point, stepped: a deck of its own, since a build may refuse the form there
+V1 in 0 1
+R1 in out 1k
+R2 out 0 4k
+.step param s list 1 2
+.op
+.meas op integ_v INTEG V(out) FROM 0 TO 1
+.meas op integ_f INTEG V(out) FROM 2 TO 3
+.meas op integ_sf INTEG V(out) FROM {5*(s-1)} TO {5*(s-1)+1}
+.meas op integ_sz INTEG V(out)*(2-s) FROM 0 TO 1
+.end
