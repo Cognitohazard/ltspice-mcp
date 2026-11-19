@@ -774,7 +774,7 @@ def test_every_observation_a_run_can_carry_is_either_read_by_job_or_says_why_not
     from ltspice_mcp.lib.result_observations import NOT_READ_BY_JOB, READ_BY_JOB
     from tests._source_scan import modules
 
-    codes: set[str] = {"subcircuit_nodes_not_saved"}
+    codes: set[str] = {"subcircuit_nodes_not_saved", "saves_not_stored"}
     trees = modules()
     for path in _CASE_OBSERVATION_SOURCES:
         for node in ast.walk(trees[path]):
@@ -843,3 +843,261 @@ def test_the_end_of_run_checks_run_in_one_place():
         "ExperimentRunner._stop_active_case",
         "ExperimentRunner._retire_late_exit",
     }
+
+
+# --------------------------------------------------------------------------
+# A recipe's observation that qualifies its number reaches a default reply
+# --------------------------------------------------------------------------
+
+
+async def test_a_constant_window_is_said_in_a_reply_that_leaves_the_value_out(
+    config: ServerConfig, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """``V(in)`` of ``raw/tran_uncompressed`` holds 1 V after its 1 us edge:
+    ``signal_stats`` over a later window gives a peak-to-peak of 0 and says the
+    signal is constant there. A default reply, which leaves the row's value
+    out, carries that statement at its top level once, naming the recipe, by
+    MCP and by the Python API; one that shows the value carries it once too."""
+    state = SessionState.create(config, available={"ltspice": type("LTspice", (FakeSim,), {})})
+    deck, raw, log = _recorded_run("log/meas_failed", "raw/tran_uncompressed", work_dir)
+    replaying_simulator(monkeypatch, raw, log)
+    receipt = await _run(state, deck, "constant-window")
+    job = [{"job_id": receipt["job_id"]}]
+    stats = {
+        "key": "flat",
+        "metric": "signal_stats",
+        "signal": "V(in)",
+        "window": {"start": 1e-4, "end": 5e-4},
+    }
+    api = SyncApi(state)
+    replies = {
+        "tool": await dispatched(state, "analyze_results", sources=job, recipes=[stats]),
+        "api": await asyncio.to_thread(lambda: api.analyze_results(sources=job, recipes=[stats])),
+        "tool with the value": await dispatched(
+            state,
+            "analyze_results",
+            sources=job,
+            recipes=[stats],
+            include={"fields": ["value"]},
+        ),
+    }
+    for route, data in replies.items():
+        said = [o for o in _observations(data) if o["code"] == "constant_window"]
+        assert len(said) == 1, (route, data)
+        assert said[0]["evidence"]["recipe"] == "flat", route
+        assert said in [[o] for o in data.get("observations", [])], route
+
+
+def test_every_recipe_observation_has_a_kind_the_lift_rule_places():
+    """Every observation a recipe's metric can put in a row's value has a
+    literal kind, and that kind is one ``analyze._value_observations``
+    either lifts to the reply's top level or keeps in the value, with why."""
+    import ast
+
+    from ltspice_mcp.tools.analyze import _KEPT_KINDS, _LIFTED_KINDS
+    from tests._source_scan import modules
+
+    placed = _LIFTED_KINDS | _KEPT_KINDS.keys()
+    assert not _LIFTED_KINDS & _KEPT_KINDS.keys()
+    trees = modules()
+    unplaced = []
+    for path in (
+        "lib/metrics.py",
+        "lib/ac_structure.py",
+        "lib/result_observations.py",
+        "lib/signal_analysis.py",
+        "lib/ac_analysis.py",
+    ):
+        for node in ast.walk(trees[path]):
+            if isinstance(node, ast.Dict):
+                fields = {
+                    k.value: v
+                    for k, v in zip(node.keys, node.values, strict=True)
+                    if isinstance(k, ast.Constant)
+                }
+                if "code" not in fields or "detail" not in fields:
+                    continue
+                kind = fields.get("kind")
+            elif isinstance(node, ast.Call) and getattr(node.func, "id", None) == "Observation":
+                kind = next((kw.value for kw in node.keywords if kw.arg == "kind"), None)
+            else:
+                continue
+            if not (isinstance(kind, ast.Constant) and kind.value in placed):
+                unplaced.append((path, node.lineno))
+    assert unplaced == []
+
+
+# --------------------------------------------------------------------------
+# After a run, which .save entries the results do not hold
+# --------------------------------------------------------------------------
+
+
+def _saves_said(observations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [item for item in observations if item["code"] == "saves_not_stored"]
+
+
+async def test_a_run_names_each_save_its_results_do_not_hold(
+    config: ServerConfig, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """``raw/save_subckt_names_no_x`` on LTspice 26: the deck spells its
+    ``.save`` paths as XVII does, and LTspice 26 stores nothing for them
+    (recorded). The run names each, with why, on the receipt, ``jobs``, a
+    read by job and the Python API; a deck with no ``.save`` card gets no
+    such observation."""
+    state = SessionState.create(config, available={"ltspice": type("LTspice", (FakeSim,), {})})
+    case = "raw/save_subckt_names_no_x"
+    deck = work_dir / "no_x.cir"
+    shutil.copyfile(INPUTS / f"{case}.cir", deck)
+    replaying_simulator(
+        monkeypatch,
+        rec.recorded("ltspice26", f"{case}.raw"),
+        rec.recorded("ltspice26", f"{case}.log"),
+    )
+    receipt = await _run(state, deck, "saves-not-stored")
+    job_id = receipt["job_id"]
+    case_id = receipt["runs"]["items"][0]["case_id"]
+    api = SyncApi(state)
+    job = [{"job_id": job_id}]
+    found = {
+        "receipt": receipt.get("observations", []),
+        "jobs": (await dispatched(state, "jobs", action="status", job_id=job_id)).get(
+            "observations", []
+        ),
+        "analyze_results": (
+            await dispatched(
+                state, "analyze_results", sources=job, recipes=[{"key": "s", "metric": "summary"}]
+            )
+        ).get("observations", []),
+        "api jobs": (
+            await asyncio.to_thread(lambda: api.jobs(action="status", job_id=job_id))
+        ).get("observations", []),
+        "api load_raw": list(
+            (
+                await asyncio.to_thread(lambda: api.load_raw(job_id=job_id, case_id=case_id))
+            ).observations
+        ),
+    }
+    for route, observations in found.items():
+        (said,) = _saves_said(observations)
+        missing = {item["save"] for item in said["evidence"]["not_stored"]}
+        assert missing == {"I(a:in:Rin)", "V(a:in:mid)", "I(a:Rd)"}, (route, said)
+        assert "not_checked" not in said["evidence"], route
+        assert "V(a:in:mid)" in said["detail"], route
+
+    plain = work_dir / "plain.cir"
+    shutil.copyfile(INPUTS / "raw/subckt_names_tran.cir", plain)
+    replaying_simulator(
+        monkeypatch,
+        rec.recorded("ltspice26", "raw/subckt_names_tran.raw"),
+        rec.recorded("ltspice26", "raw/subckt_names_tran.log"),
+    )
+    receipt = await _run(state, plain, "no-save")
+    assert _saves_said(receipt.get("observations", [])) == []
+
+
+@pytest.mark.skipif(shutil.which("ngspice") is None, reason="ngspice not on PATH")
+async def test_ngspice_names_a_save_it_stored_nothing_for_and_one_it_did_not_check_live(
+    work_dir: Path,
+):
+    """On the ngspice on PATH: a ``.save`` of a colon path stores nothing
+    (measured), so the run names it; a pattern is said to be not checked,
+    never guessed; a saved top-level node is held and not named."""
+    from ltspice_mcp.lib.simulator import detect_simulators
+    from tests.conftest import terminal_experiment
+
+    deck = work_dir / "nested.cir"
+    deck.write_text(
+        _SUBCIRCUIT_DECK.replace(".save v(outa)", ".save v(outa) v(xa:xin:mid) v(xa.*)"),
+        encoding="utf-8",
+        newline="\n",
+    )
+    config = ServerConfig(working_dir=work_dir, allowed_paths=[work_dir], simulator="ngspice")
+    state = SessionState.create(config, available=detect_simulators(config))
+    reply = await terminal_experiment(
+        state,
+        {
+            "request_id": "ngspice-saves",
+            "circuits": [{"path": str(deck), "id": "dut"}],
+            "execution": {"wait_s": 60},
+            "lint": "off",
+        },
+    )
+    assert reply["status"] == "completed", reply
+    (said,) = _saves_said(reply.get("observations", []))
+    assert [item["save"] for item in said["evidence"]["not_stored"]] == ["v(xa:xin:mid)"]
+    assert [item["save"] for item in said["evidence"]["not_checked"]] == ["v(xa.*)"]
+
+
+# --------------------------------------------------------------------------
+# What the simulator said, and how severe: one answer
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Pending a decision on the summary's published errors and warnings lists: "
+        "deriving them from the run row's diagnostics changes what they hold (one "
+        "entry per condition instead of one per line, and lines with no severity "
+        "of the simulator's own move). See the pull request."
+    ),
+)
+@pytest.mark.parametrize("build", rec.BUILDS)
+async def test_the_summary_says_what_the_run_row_says_the_simulator_said(
+    build: str, config: ServerConfig, work_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """``log/meas_bad_syntax``: each build prints an error for the ``.meas``
+    it cannot evaluate, and the run produces. The summary recipe's errors and warnings, and the severity
+    of each observation it relays, are derived from the diagnostics the run
+    row gives: no error the row does not name, and no severity the simulator
+    did not write. By MCP and by the Python API."""
+    state = SessionState.create(config, available={"ltspice": type("LTspice", (FakeSim,), {})})
+    case = "log/meas_bad_syntax"
+    deck = work_dir / "timestep.cir"
+    shutil.copyfile(INPUTS / f"{case}.cir", deck)
+    replaying_simulator(
+        monkeypatch,
+        rec.recorded(build, "raw/tran_uncompressed.raw"),
+        rec.recorded(build, f"{case}.log"),
+    )
+    receipt = await dispatched(
+        state,
+        "run_experiments",
+        request_id=f"said-{build}",
+        circuits=[{"path": str(deck), "id": "timestep"}],
+        execution={"wait_s": LIVENESS_S},
+        lint="off",
+    )
+    (row,) = receipt["runs"]["items"]
+    diagnostics = row.get("diagnostics", [])
+    severe = {d["first_text"] for d in diagnostics if "severity" in d}
+    severities = {d["severity"] for d in diagnostics if "severity" in d}
+    job = [{"job_id": receipt["job_id"]}]
+    api = SyncApi(state)
+    summary = {"key": "s", "metric": "summary"}
+    for route, data in (
+        (
+            "tool",
+            await dispatched(
+                state,
+                "analyze_results",
+                sources=job,
+                recipes=[summary],
+                include={"fields": ["value"]},
+            ),
+        ),
+        (
+            "api",
+            await asyncio.to_thread(
+                lambda: api.analyze_results(
+                    sources=job, recipes=[summary], include={"fields": ["value"]}
+                )
+            ),
+        ),
+    ):
+        (value,) = [v["value"] for v in data["results"]["s"].get("values", [])] or [None]
+        assert value is not None, (route, data)
+        assert set(value.get("errors", [])) <= severe, (route, value.get("errors"), diagnostics)
+        for item in _observations(data):
+            if item.get("kind") == "relay" and "severity" in item:
+                assert item["severity"] in severities, (route, item)
