@@ -259,6 +259,12 @@ class _PendingArtifact:
     size: int
 
 
+class _ArtifactNotWritten(Exception):
+    """A written artifact whose digest or size could not be read: a failure
+    to publish it (``artifact_publish_failed``), as when it is moved into
+    place."""
+
+
 async def _written(
     pending: Path, final: Path, content_type: str, manifest_id: str
 ) -> _PendingArtifact:
@@ -271,9 +277,11 @@ async def _written(
             lambda: (result_store.sha256_file(pending), pending.stat().st_size),
             timeout_s=services.RAW_PARSE_TIMEOUT_S,
         )
-    except BaseException:
+    except BaseException as exc:
         with contextlib.suppress(OSError):
             await asyncio.to_thread(pending.unlink)
+        if isinstance(exc, OSError):
+            raise _ArtifactNotWritten(str(exc)) from exc
         raise
     return _PendingArtifact(pending, final, content_type, manifest_id, sha256, size)
 
@@ -2688,15 +2696,17 @@ async def _evaluate_item(
                         )
                     )
                     pending.extend(artifacts)
-        except (LTSpiceMCPError, ValueError, OSError) as exc:
+        except (LTSpiceMCPError, ValueError, OSError, _ArtifactNotWritten) as exc:
             failures.append(
                 Failure(
                     code=(
                         "analysis_deadline"
                         if isinstance(exc, AnalysisDeadlineExceeded)
+                        else "artifact_publish_failed"
+                        if isinstance(exc, _ArtifactNotWritten)
                         else "recipe_failed"
                     ),
-                    stage="analyze",
+                    stage="publish" if isinstance(exc, _ArtifactNotWritten) else "analyze",
                     where=run.manifest_id,
                     message=str(exc),
                     python_route=getattr(exc, "python_route", False),

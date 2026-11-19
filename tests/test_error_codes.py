@@ -697,6 +697,7 @@ FROZEN_ERROR_CODES = (
     "source_not_found",
     "source_unavailable",
     "source_unavailable_after_staging",
+    "sources_not_rechecked",
     "sparse_sweep",
     "staging_collision",
     "startup_policy",
