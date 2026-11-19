@@ -186,10 +186,11 @@ async def test_a_port_current_is_a_current_in_amperes_on_every_route(
         assert [t.get("unit") for t in plotted["traces"]] == ["A"]
 
 
-def test_ngspice_declares_no_port_current_and_every_type_it_declares_is_known(tmp_path: Path):
-    """ngspice writes no block's port current: the grid's deck, run with
-    every node and current saved, holds no ``Ix`` trace, and a name of one
-    finds nothing. Every type it declares is one the server knows."""
+def test_an_ngspice_transient_holds_no_port_current_and_only_known_types(tmp_path: Path):
+    """ngspice writes no block's port current: the grid's transient deck
+    holds no ``Ix`` trace, and every type it declares is one the server
+    knows. Other ngspice analyses declare types it does not (a ``.dc`` of a
+    temperature declares ``temp-sweep``), which their descriptors say."""
     raw = run_ngspice(rec.INPUTS / "raw/trace_grid_tran.cir", tmp_path / "run", text=True)
     found = _declared_types(raw)
     names = [

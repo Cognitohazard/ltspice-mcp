@@ -73,6 +73,10 @@ async def test_two_runs_of_one_sheet_pair_every_trace(
     assert not result.get("only_there"), result
     assert not result.get("ambiguous"), result
     assert sorted(result["signals"]) == sorted(_signals(here, case_id))
+    # Paired with the trace that holds the same value: an operating point of
+    # one circuit, solved by either build.
+    for name, compared in result["signals"].items():
+        assert compared["max_abs"] <= 1e-6 + 1e-4 * abs(compared["value"]), (name, compared)
 
 
 @pytest.mark.asyncio
@@ -165,3 +169,72 @@ def test_two_ngspice_runs_pair_every_trace(state_no_sim: SessionState, tmp_path:
     assert len(result["signals"]) == len(ours.signals) - 1
     (asked,) = trace_keys("V(xa:xin:mid)", xvii=False, schematic=False)
     assert asked in trace_keys("v(xa.xin.mid)", xvii=False, schematic=False)
+
+
+def _xvii_sheet_raw(path: Path, title: str, command: str, traces: list[str]) -> Path:
+    lines = [
+        f"Title: {title}",
+        "Date: Thu Jan 15 00:00:00 2026",
+        "Plotname: Operating Point",
+        "Flags: real",
+        f"No. Variables: {len(traces)}",
+        "No. Points: 1",
+        f"Command: {command}",
+        "Variables:",
+        *(f"\t{i}\t{name}\tsubckt_current" for i, name in enumerate(traces)),
+        "Values:",
+        "0" + "".join(f"\t{i + 1}e-3\n" for i in range(len(traces))),
+    ]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return path
+
+
+@pytest.mark.asyncio
+async def test_compare_lists_a_trace_that_could_be_two_as_ambiguous(
+    state_no_sim: SessionState, tmp_path: Path
+):
+    """An XVII run of a schematic's ``Ix(mb1:D)`` could be LTspice 26's
+    ``Ix(mb1:d)`` (part MB1) or ``Ix(xmb1:d)`` (a card XMB1): compare pairs
+    neither, lists it under ambiguous with both, and calls none of the three
+    only one result's."""
+    here = _xvii_sheet_raw(
+        tmp_path / "xvii.raw",
+        "* C:\\work\\sheet.asc",
+        "Linear Technology Corporation LTspice XVII",
+        ["Ix(mb1:D)"],
+    )
+    there = _xvii_sheet_raw(
+        tmp_path / "26.raw",
+        "C:\\work\\sheet.net",
+        "Linear Technology Corporation LTspice",
+        ["Ix(mb1:d)", "Ix(xmb1:d)"],
+    )
+    result = await _compare(state_no_sim, here, there)
+    assert result["signals"] == {}
+    assert result["ambiguous"] == {"Ix(mb1:D)": ["Ix(mb1:d)", "Ix(xmb1:d)"]}
+    assert not result.get("only_here") and not result.get("only_there"), result
+
+
+@pytest.mark.asyncio
+async def test_a_device_of_an_xvii_sheet_run_is_selected_by_the_sheets_name(
+    state_no_sim: SessionState, work_dir: Path
+):
+    """The operating point of part MB1 is selected as ``mb1``, the name the
+    sheet and LTspice 26 give it, on either build, and as its card ``xmb1``
+    on XVII, whose export writes ``XMB1`` (``export/sheet_part_names``)."""
+    from tests.conftest import dispatched
+
+    for build, devices in (("ltspice26", ["mb1"]), ("ltspice17", ["mb1", "xmb1"])):
+        staged = rec.stage_run(build, "export/sheet_part_names", work_dir / build)
+        for device in devices:
+            reply = await dispatched(
+                state_no_sim,
+                "analyze_results",
+                sources=[{"path": str(staged), "label": "dut"}],
+                recipes=[{"key": "k", "metric": "operating_point", "device": device}],
+            )
+            assert not reply.get("failures"), (build, device, reply)
+            (value,) = [entry["value"] for entry in reply["results"]["k"]["values"]]
+            held = {name.lower() for name in value["currents"]}
+            assert "id(mb1:m1)" in held and "id(mb2:m1)" not in held, (build, device, held)
+            assert not any("xmb2" in name for name in held), held

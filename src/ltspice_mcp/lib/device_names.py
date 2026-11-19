@@ -264,6 +264,10 @@ class _Owner:
     port: bool = False
     #: The parameter of a ``@device[param]`` name.
     param: str | None = None
+    #: Every path the name may stand for (:func:`trace_keys`): ``path`` alone
+    #: but on an XVII run of a schematic, where ``path`` is the reading of
+    #: each instance as its card and the others read some as the sheet's parts.
+    readings: tuple[DevicePath, ...] = ()
 
 
 def parse_device_param(name: str) -> tuple[str, str] | None:
@@ -316,18 +320,25 @@ def _param_owner(name: str, *, xvii: bool) -> _Owner | None:
     return _Owner(device, table_device_path(device, xvii=xvii), param=param)
 
 
-def _owner(name: str, *, xvii: bool) -> _Owner | None:
+def _owner(name: str, *, xvii: bool, schematic: bool = False) -> _Owner | None:
+    """What the value ``name`` belongs to, its instances read as
+    :func:`trace_keys` reads them (``schematic`` for a result of a run of a
+    schematic). ``path`` is the reading of each instance as its card, the one
+    a deck's run has and the one the log's device table is read in
+    (:func:`table_device_path`); ``readings`` holds every reading."""
     if (owner := _param_owner(name, xvii=xvii)) is not None:
         return owner
     current = _CURRENT.match(name)
     if current is None:
         return None
     text = current.group(2)
-    path = _raw_path(text, xvii=xvii)
-    if fold_name(current.group(1)) == "ix" and len(path) > 1:
+    # The last reading reads every instance as its card (trace_keys).
+    readings = tuple(path for _, path in trace_keys(name, xvii=xvii, schematic=schematic))
+    if fold_name(current.group(1)) == "ix" and len(readings[-1]) > 1:
         # The port's name follows the instance's path.
-        return _Owner(text, path[:-1], port=True)
-    return _Owner(text, path)
+        instances = tuple(path[:-1] for path in readings)
+        return _Owner(text, instances[-1], port=True, readings=instances)
+    return _Owner(text, readings[-1], readings=readings)
 
 
 def _raw_path(text: str, *, xvii: bool) -> DevicePath:
@@ -510,7 +521,9 @@ def _own(segment: str, which: int) -> str:
     return names[which] if names else segment
 
 
-def device_query(wanted: str, *, xvii: bool, among: Iterable[str]) -> Callable[[str], bool]:
+def device_query(
+    wanted: str, *, xvii: bool, schematic: bool, among: Iterable[str]
+) -> Callable[[str], bool]:
     """A test of whether an operating-point value's name belongs to what
     ``wanted`` names: the device as the simulator spells it (``m.xa.xleaf.m0``,
     which ``inspect``'s hierarchy addresses use), its path or part of it
@@ -521,7 +534,11 @@ def device_query(wanted: str, *, xvii: bool, among: Iterable[str]) -> Callable[[
     one of its names (:func:`section_sign_spellings`) that a name of ``among``,
     every name of the result, belongs to: ``Load`` in LTspice's results,
     ``RLoad`` in ngspice's. Where both are there, they are two parts and the
-    name answers to neither, as ``trace_names.find_trace`` refuses it."""
+    name answers to neither, as ``trace_names.find_trace`` refuses it.
+
+    On an XVII run of a schematic (``schematic``) an instance is read both
+    as the sheet's part and as a directive's card (:func:`trace_keys`), so
+    ``mb1`` and ``xmb1`` both name part MB1 there (``export/sheet_part_names``)."""
     names = list(among)
 
     def query(spelled: str) -> Callable[[str], bool]:
@@ -529,9 +546,10 @@ def device_query(wanted: str, *, xvii: bool, among: Iterable[str]) -> Callable[[
         want = split_path(spelled)
 
         def belongs(name: str) -> bool:
-            owner = _owner(name, xvii=xvii)
+            owner = _owner(name, xvii=xvii, schematic=schematic)
             return owner is not None and (
-                fold_name(owner.text) == literal or _within(owner.path, want)
+                fold_name(owner.text) == literal
+                or any(_within(path, want) for path in owner.readings or (owner.path,))
             )
 
         return belongs

@@ -162,6 +162,7 @@ from ltspice_mcp.lib.trace_names import (
     find_trace,  # noqa: TID251 - an op-point value's name, read against the .log's names
     is_input_noise,
     naming_note,
+    titled_from_schematic,
 )
 from ltspice_mcp.state import SessionState
 
@@ -706,20 +707,20 @@ def signal_stats_defined(analysis: str, *, windowed: bool = False) -> bool:
 OP_BUCKETS = ("voltages", "currents", "device_op_points", "other")
 
 
-def filter_operating_point(op_data: dict, device: str, *, xvii: bool) -> bool:
+def filter_operating_point(op_data: dict, device: str, *, xvii: bool, schematic: bool) -> bool:
     """Narrow ``op_data`` (in place) to one device's operating-point params +
     terminal currents. Returns whether anything matched.
 
     Each name is read back to the device path it belongs to
     (``device_names.device_query``; ``xvii`` for a build that names devices as
-    XVII does), so ``device`` matches a device as the simulator spells it, a
+    XVII does, ``schematic`` for a run of a schematic), so ``device`` matches a device as the simulator spells it, a
     top-level device (``m1``), a device in a subcircuit by its own name or
     path (``mtail``, ``xin.mtail``, ``xa.xin.mtail``) whichever build or
     simulator wrote it, or an instance, which keeps everything inside it and
     its port currents.
     """
     every = [name for bucket in OP_BUCKETS for name in op_data.get(bucket, {})]
-    names_device = device_query(device, xvii=xvii, among=every)
+    names_device = device_query(device, xvii=xvii, schematic=schematic, among=every)
     matched = False
     for bucket in OP_BUCKETS:
         kept = {}
@@ -2808,7 +2809,8 @@ async def operating_point(
                 if (path := owner_path(name, xvii=xvii)) is not None
             }
         )
-        if not filter_operating_point(op_data, recipe.device, xvii=xvii):
+        schematic = titled_from_schematic(raw.raw_params)
+        if not filter_operating_point(op_data, recipe.device, xvii=xvii, schematic=schematic):
             dev_list = ", ".join(available_devs) if available_devs else "none found"
             raise ResultError(
                 f"No operating-point params or terminal currents for device "

@@ -204,3 +204,15 @@ def test_only_run_log_path_names_the_log_of_a_results_file():
                 ):
                     found.add((path, scope.rsplit(".", 1)[-1]))
     assert found <= set(_LOG_NAMERS), sorted(found - set(_LOG_NAMERS))
+
+
+def test_a_log_of_the_files_own_name_is_its_runs(tmp_path: Path):
+    """A circuit named ``amp.op`` writes ``amp.op.raw`` and ``amp.op.log``: its
+    own-named log is its run's, not ``amp.log`` of another circuit beside it.
+    No run writes a log of an other raw's own name, so one that is there
+    belongs to that file's run."""
+    for name in ("amp.op.raw", "amp.op.log", "amp.raw", "amp.log"):
+        (tmp_path / name).write_bytes(b"")
+    assert run_log_path(tmp_path / "amp.op.raw") == tmp_path / "amp.op.log"
+    (tmp_path / "amp.op.log").unlink()
+    assert run_log_path(tmp_path / "amp.op.raw") == tmp_path / "amp.log"
